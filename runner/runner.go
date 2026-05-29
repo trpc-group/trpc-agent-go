@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -44,8 +46,11 @@ import (
 const (
 	authorUser = "user"
 
-	errMsgEmptyRequestID = "runner: empty request id"
-	errMsgNilCancelFunc  = "runner: nil cancel function"
+	errMsgEmptyRequestID               = "runner: empty request id"
+	errMsgNilCancelFunc                = "runner: nil cancel function"
+	interruptedAssistantFinishReason   = "cancelled"
+	interruptedAssistantExtensionKey   = "trpc_agent.runner.interrupted_assistant"
+	cancelledSessionPersistenceTimeout = time.Second
 )
 
 var (
@@ -77,10 +82,7 @@ func WithSessionService(service session.Service) Option {
 //
 // This enables request-scoped agent construction (for example, building the
 // agent with a prompt/model/sandbox that depends on the current request).
-type AgentFactory func(
-	ctx context.Context,
-	ro agent.RunOptions,
-) (agent.Agent, error)
+type AgentFactory func(ctx context.Context, ro agent.RunOptions) (agent.Agent, error)
 
 // WithMemoryService sets the memory service to use.
 func WithMemoryService(service memory.Service) Option {
@@ -148,6 +150,19 @@ func WithPlugins(plugins ...plugin.Plugin) Option {
 func WithAwaitUserReplyRouting(enabled bool) Option {
 	return func(opts *Options) {
 		opts.awaitUserReplyRouting = enabled
+	}
+}
+
+// WithPersistInterruptedAssistant sets the runner default for whether a
+// cancelled streaming run persists already-emitted assistant text as a final
+// assistant message.
+//
+// The default is false to preserve cancellation semantics for callers that
+// expect cancelled partial text not to affect later turns. A single run can
+// override this default with agent.WithPersistInterruptedAssistant.
+func WithPersistInterruptedAssistant(enabled bool) Option {
+	return func(opts *Options) {
+		opts.persistInterruptedAssistantDefault = enabled
 	}
 }
 
@@ -223,17 +238,18 @@ type RunStatus struct {
 
 // runner runs agents.
 type runner struct {
-	appName               string
-	defaultAgentName      string
-	agents                map[string]agent.Agent
-	agentFactories        map[string]AgentFactory
-	sessionService        session.Service
-	memoryService         memory.Service
-	ingestor              session.Ingestor
-	artifactService       artifact.Service
-	pluginManager         agent.PluginManager
-	ralphLoop             *RalphLoopConfig
-	awaitUserReplyRouting bool
+	appName                            string
+	defaultAgentName                   string
+	agents                             map[string]agent.Agent
+	agentFactories                     map[string]AgentFactory
+	sessionService                     session.Service
+	memoryService                      memory.Service
+	ingestor                           session.Ingestor
+	artifactService                    artifact.Service
+	pluginManager                      agent.PluginManager
+	ralphLoop                          *RalphLoopConfig
+	awaitUserReplyRouting              bool
+	persistInterruptedAssistantDefault bool
 
 	// Resource management fields.
 	ownedSessionService bool      // Indicates if sessionService was created by this runner.
@@ -253,15 +269,16 @@ type runHandle struct {
 
 // Options is the options for the Runner.
 type Options struct {
-	sessionService        session.Service
-	memoryService         memory.Service
-	ingestor              session.Ingestor
-	artifactService       artifact.Service
-	agents                map[string]agent.Agent
-	agentFactories        map[string]AgentFactory
-	plugins               []plugin.Plugin
-	ralphLoop             *RalphLoopConfig
-	awaitUserReplyRouting bool
+	sessionService                     session.Service
+	memoryService                      memory.Service
+	ingestor                           session.Ingestor
+	artifactService                    artifact.Service
+	agents                             map[string]agent.Agent
+	agentFactories                     map[string]AgentFactory
+	plugins                            []plugin.Plugin
+	ralphLoop                          *RalphLoopConfig
+	awaitUserReplyRouting              bool
+	persistInterruptedAssistantDefault bool
 }
 
 // newOptions creates a new Options.
@@ -301,18 +318,19 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		appid.RegisterRunner(appName, a.Info().Name)
 	}
 	return &runner{
-		appName:               appName,
-		defaultAgentName:      ag.Info().Name,
-		agents:                agents,
-		agentFactories:        options.agentFactories,
-		sessionService:        options.sessionService,
-		memoryService:         options.memoryService,
-		ingestor:              options.ingestor,
-		artifactService:       options.artifactService,
-		pluginManager:         pm,
-		ralphLoop:             options.ralphLoop,
-		awaitUserReplyRouting: options.awaitUserReplyRouting,
-		ownedSessionService:   ownedSessionService,
+		appName:                            appName,
+		defaultAgentName:                   ag.Info().Name,
+		agents:                             agents,
+		agentFactories:                     options.agentFactories,
+		sessionService:                     options.sessionService,
+		memoryService:                      options.memoryService,
+		ingestor:                           options.ingestor,
+		artifactService:                    options.artifactService,
+		pluginManager:                      pm,
+		ralphLoop:                          options.ralphLoop,
+		awaitUserReplyRouting:              options.awaitUserReplyRouting,
+		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
+		ownedSessionService:                ownedSessionService,
 	}
 }
 
@@ -353,18 +371,19 @@ func NewRunnerWithAgentFactory(
 	}
 
 	return &runner{
-		appName:               appName,
-		defaultAgentName:      defaultAgentName,
-		agents:                options.agents,
-		agentFactories:        options.agentFactories,
-		sessionService:        options.sessionService,
-		memoryService:         options.memoryService,
-		ingestor:              options.ingestor,
-		artifactService:       options.artifactService,
-		pluginManager:         pm,
-		ralphLoop:             options.ralphLoop,
-		awaitUserReplyRouting: options.awaitUserReplyRouting,
-		ownedSessionService:   ownedSessionService,
+		appName:                            appName,
+		defaultAgentName:                   defaultAgentName,
+		agents:                             options.agents,
+		agentFactories:                     options.agentFactories,
+		sessionService:                     options.sessionService,
+		memoryService:                      options.memoryService,
+		ingestor:                           options.ingestor,
+		artifactService:                    options.artifactService,
+		pluginManager:                      pm,
+		ralphLoop:                          options.ralphLoop,
+		awaitUserReplyRouting:              options.awaitUserReplyRouting,
+		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
+		ownedSessionService:                ownedSessionService,
 	}
 }
 
@@ -435,6 +454,7 @@ func (r *runner) Run(
 	if ro.RequestID == "" {
 		ro.RequestID = uuid.NewString()
 	}
+	r.applyRunnerRunDefaults(&ro)
 
 	// Resolve per-request app name override. When the caller provides an
 	// AppName via RunOption, it takes precedence over the runner default so
@@ -516,6 +536,16 @@ func (r *runner) Run(
 			rootLookupName,
 		)
 	}
+	currentTurnSession, err := sessionroute.ResolveCurrentTurnSession(
+		execCtx,
+		r.sessionService,
+		sess,
+		ag,
+	)
+	if err != nil {
+		execCancel()
+		return nil, err
+	}
 
 	queuedUserMessages := steer.NewQueue()
 	steer.Attach(invocation, queuedUserMessages)
@@ -539,7 +569,7 @@ func (r *runner) Run(
 
 	if err := r.persistCurrentTurnMessages(
 		execCtx,
-		sess,
+		currentTurnSession,
 		invocation,
 		ag,
 		message,
@@ -565,7 +595,14 @@ func (r *runner) Run(
 		if e == nil {
 			return nil
 		}
-		return r.sessionService.AppendEvent(ctx, sess, e)
+		persistSession, ok := sessionroute.RouteEvent(
+			invocation,
+			e,
+		)
+		if !ok || persistSession == nil {
+			persistSession = sess
+		}
+		return r.sessionService.AppendEvent(ctx, persistSession, e)
 	})
 	barrier.Enable(invocation)
 
@@ -583,7 +620,7 @@ func (r *runner) Run(
 		ensureErrorEventContent(errorEvent)
 		errorEvent = r.applyEventPlugins(execCtx, invocation, errorEvent)
 
-		appendErr := r.sessionService.AppendEvent(execCtx, sess, errorEvent)
+		appendErr := r.sessionService.AppendEvent(execCtx, currentTurnSession, errorEvent)
 		if appendErr != nil {
 			log.Errorf("failed to append agent run error event: %v", appendErr)
 		}
@@ -604,6 +641,14 @@ func (r *runner) Run(
 		flushChan,
 		handle,
 	), nil
+}
+
+func (r *runner) applyRunnerRunDefaults(ro *agent.RunOptions) {
+	if ro == nil || ro.PersistInterruptedAssistant != nil {
+		return
+	}
+	persistInterruptedAssistant := r.persistInterruptedAssistantDefault
+	ro.PersistInterruptedAssistant = &persistInterruptedAssistant
 }
 
 // seedSessionHistory persists caller-supplied history messages into an empty
@@ -917,12 +962,30 @@ type eventLoopContext struct {
 	visibleCompletionChoiceSignatures  map[string]struct{}
 	sawTerminalError                   bool
 	streamFilter                       graph.StreamModeFilter
+	interruptedAssistants              map[string]*interruptedAssistantAccumulator
+	interruptedAssistantSequence       int64
 	// emittedAssistantResponseIDs tracks response IDs that already produced a
 	// non-partial assistant message event during this run.
 	//
 	// It is used to avoid echoing the same final assistant message again in the
 	// runner-completion event when graph final model responses are emitted.
 	emittedAssistantResponseIDs map[string]struct{}
+}
+
+type interruptedAssistantAccumulator struct {
+	sess                               *session.Session
+	sequence                           int64
+	responseID                         string
+	author                             string
+	invocationID                       string
+	parentInvocationID                 string
+	branch                             string
+	filterKey                          string
+	requestID                          string
+	created                            int64
+	choiceContent                      map[int]*strings.Builder
+	persistedAssistantResponseIDs      map[string]struct{}
+	persistedAssistantChoiceSignatures map[string]struct{}
 }
 
 // processAgentEvents consumes agent events, persists to session, and emits.
@@ -962,6 +1025,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		}
 		// Agent event stream completed.
 		steer.Close(loop.invocation)
+		r.safePersistInterruptedAssistant(ctx, loop)
 		r.safeEmitRunnerCompletion(ctx, loop)
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
@@ -1011,18 +1075,29 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		log.Errorf("agentEvent is nil")
 		return nil
 	}
-
+	routeEvent := sessionroute.SnapshotEventIdentity(agentEvent)
+	persistSession, routedEvent := sessionroute.RouteEvent(
+		loop.invocation,
+		routeEvent,
+	)
+	if shouldPersistInterruptedAssistant(loop) {
+		r.recordInterruptedAssistantDelta(loop, agentEvent, persistSession)
+	}
 	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
 	if agentEvent == nil {
 		return nil
 	}
-
-	// Capture graph-level completion snapshot for final event.
-	if isGraphCompletionSnapshotEvent(agentEvent) {
-		loop.graphCompletionSeen = true
-		loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
+	excludeRootCompletion := routedEvent && !sameSession(persistSession, loop.sess)
+	if excludeRootCompletion {
+		r.captureRoutedCompletionError(loop, agentEvent)
+	} else {
+		// Capture graph-level completion snapshot for final event.
+		if isGraphCompletionSnapshotEvent(agentEvent) {
+			loop.graphCompletionSeen = true
+			loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
+		}
+		r.captureCompletionFallback(loop, agentEvent)
 	}
-	r.captureCompletionFallback(loop, agentEvent)
 	r.markCompletionSnapshotOnly(loop, agentEvent)
 	if shouldSuppressGraphCompletionEvent(loop, agentEvent) {
 		return nil
@@ -1037,9 +1112,23 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	shouldForwardEvent := loop.streamFilter.Allows(agentEvent)
 
 	// Append qualifying events to session and trigger summarization.
-	persisted := r.handleEventPersistence(ctx, loop.invocation, loop.sess, agentEvent)
-	r.recordPersistedAssistantEvent(
+	persisted := r.handleEventPersistence(
+		ctx,
+		loop.invocation,
+		loop.sess,
+		persistSession,
+		agentEvent,
+	)
+	if !excludeRootCompletion {
+		r.recordPersistedAssistantEvent(
+			loop,
+			agentEvent,
+			persisted,
+		)
+	}
+	r.recordPersistedInterruptedAssistantSessionEvent(
 		loop,
+		persistSession,
 		agentEvent,
 		persisted,
 	)
@@ -1055,8 +1144,10 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 		return nil
 	}
 
-	r.recordEmittedAssistantResponseID(loop, agentEvent)
-	r.recordVisibleCompletionEmission(loop, agentEvent)
+	if !excludeRootCompletion {
+		r.recordEmittedAssistantResponseID(loop, agentEvent)
+		r.recordVisibleCompletionEmission(loop, agentEvent)
+	}
 
 	// Emit event to output channel.
 	if err := event.EmitEvent(ctx, loop.processedEventCh, agentEvent); err != nil {
@@ -1105,6 +1196,58 @@ func (r *runner) recordPersistedAssistantEvent(
 		loop.persistedAssistantChoiceSignatures = make(map[string]struct{})
 	}
 	loop.persistedAssistantChoiceSignatures[signature] = struct{}{}
+}
+
+func (r *runner) recordPersistedInterruptedAssistantSessionEvent(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+	agentEvent *event.Event,
+	persisted bool,
+) {
+	acc := getInterruptedAssistantAccumulatorForEvent(loop, persistSession, agentEvent)
+	if acc == nil {
+		return
+	}
+	recordPersistedAssistantOnAccumulator(acc, agentEvent, persisted)
+}
+
+func recordPersistedAssistantOnAccumulator(
+	acc *interruptedAssistantAccumulator,
+	agentEvent *event.Event,
+	persisted bool,
+) {
+	if acc == nil || agentEvent == nil || !persisted {
+		return
+	}
+	if isGraphCompletionEvent(agentEvent) {
+		return
+	}
+	if !eventHasAssistantMessageContent(agentEvent) || agentEvent.Response == nil {
+		return
+	}
+	if acc.persistedAssistantResponseIDs == nil {
+		acc.persistedAssistantResponseIDs = make(map[string]struct{})
+	}
+	if agentEvent.Response.ID != "" {
+		acc.persistedAssistantResponseIDs[agentEvent.Response.ID] = struct{}{}
+	}
+	if graph.IsVisibleGraphCompletionEvent(agentEvent) {
+		if responseID := finalResponseIDFromStateDelta(agentEvent.StateDelta); responseID != "" {
+			acc.persistedAssistantResponseIDs[responseID] = struct{}{}
+		}
+	}
+	signature := interruptedAssistantSignatureKey(
+		acc.requestID,
+		acc.invocationID,
+		agentEvent.Response.Choices,
+	)
+	if signature == "" {
+		return
+	}
+	if acc.persistedAssistantChoiceSignatures == nil {
+		acc.persistedAssistantChoiceSignatures = make(map[string]struct{})
+	}
+	acc.persistedAssistantChoiceSignatures[signature] = struct{}{}
 }
 
 func (r *runner) recordVisibleCompletionEmission(
@@ -1256,6 +1399,562 @@ func eventHasAssistantMessageContent(e *event.Event) bool {
 	return false
 }
 
+type interruptedAssistantMetadata struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+func interruptedAssistantAccumulatorForSession(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+) *interruptedAssistantAccumulator {
+	return interruptedAssistantAccumulatorForLineage(loop, persistSession, "")
+}
+
+func interruptedAssistantAccumulatorForEvent(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+	agentEvent *event.Event,
+) *interruptedAssistantAccumulator {
+	return interruptedAssistantAccumulatorForLineage(
+		loop,
+		persistSession,
+		interruptedAssistantLineageKey(loop, agentEvent),
+	)
+}
+
+func interruptedAssistantAccumulatorForLineage(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+	lineageKey string,
+) *interruptedAssistantAccumulator {
+	if loop == nil {
+		return nil
+	}
+	if persistSession == nil {
+		persistSession = loop.sess
+	}
+	key := interruptedAssistantAccumulatorKey(persistSession, lineageKey)
+	if loop.interruptedAssistants == nil {
+		loop.interruptedAssistants = make(map[string]*interruptedAssistantAccumulator)
+	}
+	if acc := loop.interruptedAssistants[key]; acc != nil {
+		return acc
+	}
+	loop.interruptedAssistantSequence++
+	acc := &interruptedAssistantAccumulator{
+		sequence: loop.interruptedAssistantSequence,
+		sess:     persistSession,
+		persistedAssistantResponseIDs: collectPriorAssistantResponseIDsForLineage(
+			loop,
+			persistSession,
+			lineageKey,
+		),
+		persistedAssistantChoiceSignatures: collectPriorAssistantChoiceSignaturesForLineage(
+			loop,
+			persistSession,
+			lineageKey,
+		),
+	}
+	loop.interruptedAssistants[key] = acc
+	return acc
+}
+
+func getInterruptedAssistantAccumulatorForEvent(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+	agentEvent *event.Event,
+) *interruptedAssistantAccumulator {
+	if loop == nil || len(loop.interruptedAssistants) == 0 {
+		return nil
+	}
+	if persistSession == nil {
+		persistSession = loop.sess
+	}
+	key := interruptedAssistantAccumulatorKey(
+		persistSession,
+		interruptedAssistantLineageKey(loop, agentEvent),
+	)
+	return loop.interruptedAssistants[key]
+}
+
+func getInterruptedAssistantAccumulator(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+) *interruptedAssistantAccumulator {
+	if loop == nil || len(loop.interruptedAssistants) == 0 {
+		return nil
+	}
+	if persistSession == nil {
+		persistSession = loop.sess
+	}
+	prefix := interruptedAssistantAccumulatorKeyPrefix(persistSession)
+	var matched *interruptedAssistantAccumulator
+	for key, acc := range loop.interruptedAssistants {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if matched != nil {
+			return nil
+		}
+		matched = acc
+	}
+	return matched
+}
+
+func defaultInterruptedAssistantAccumulator(
+	loop *eventLoopContext,
+) *interruptedAssistantAccumulator {
+	return getInterruptedAssistantAccumulator(loop, nil)
+}
+
+func interruptedAssistantSessionKey(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	return sess.AppName + "\x00" + sess.UserID + "\x00" + sess.ID
+}
+
+func interruptedAssistantAccumulatorKeyPrefix(sess *session.Session) string {
+	return interruptedAssistantSessionKey(sess) + "\x00"
+}
+
+func interruptedAssistantAccumulatorKey(sess *session.Session, lineageKey string) string {
+	return interruptedAssistantAccumulatorKeyPrefix(sess) + lineageKey
+}
+
+func interruptedAssistantLineageKey(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) string {
+	if agentEvent == nil {
+		return ""
+	}
+	responseID := ""
+	if agentEvent.Response != nil {
+		responseID = agentEvent.Response.ID
+	}
+	invocationID := agentEvent.InvocationID
+	parentInvocationID := agentEvent.ParentInvocationID
+	branch := agentEvent.Branch
+	filterKey := agentEvent.FilterKey
+	requestID := agentEvent.RequestID
+	author := agentEvent.Author
+	if loop != nil && loop.invocation != nil {
+		inv := loop.invocation
+		if invocationID == "" {
+			invocationID = inv.InvocationID
+		}
+		if parentInvocationID == "" {
+			if parent := inv.GetParentInvocation(); parent != nil {
+				parentInvocationID = parent.InvocationID
+			}
+		}
+		if branch == "" {
+			branch = inv.Branch
+		}
+		if filterKey == "" {
+			filterKey = inv.GetEventFilterKey()
+		}
+		if requestID == "" {
+			requestID = inv.RunOptions.RequestID
+		}
+		if author == "" {
+			author = inv.AgentName
+		}
+	}
+	if responseID != "" {
+		return strings.Join([]string{
+			"response",
+			responseID,
+			requestID,
+			invocationID,
+			parentInvocationID,
+			branch,
+			filterKey,
+		}, "\x00")
+	}
+	return strings.Join([]string{
+		"fallback",
+		requestID,
+		invocationID,
+		parentInvocationID,
+		branch,
+		filterKey,
+		author,
+	}, "\x00")
+}
+
+func (r *runner) recordInterruptedAssistantDelta(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+	persistSession *session.Session,
+) {
+	if loop == nil || agentEvent == nil || agentEvent.Response == nil {
+		return
+	}
+	rsp := agentEvent.Response
+	if !rsp.IsPartial || rsp.IsToolCallResponse() || rsp.IsToolResultResponse() {
+		return
+	}
+	if !interruptedAssistantHasTextDelta(rsp) {
+		return
+	}
+	acc := interruptedAssistantAccumulatorForEvent(loop, persistSession, agentEvent)
+	if acc == nil {
+		return
+	}
+	responseID := rsp.ID
+	if responseID == "" {
+		responseID = acc.responseID
+	}
+	if responseID == "" {
+		responseID = "interrupted-assistant-" + uuid.NewString()
+	}
+	recorded := false
+	for _, choice := range rsp.Choices {
+		if choice.Delta.Role != "" && choice.Delta.Role != model.RoleAssistant {
+			continue
+		}
+		if choice.Delta.Content == "" {
+			continue
+		}
+		if acc.choiceContent == nil {
+			acc.choiceContent = make(map[int]*strings.Builder)
+		}
+		content := acc.choiceContent[choice.Index]
+		if content == nil {
+			content = &strings.Builder{}
+			acc.choiceContent[choice.Index] = content
+		}
+		content.WriteString(choice.Delta.Content)
+		recorded = true
+	}
+	if !recorded {
+		return
+	}
+	acc.responseID = responseID
+	acc.author = agentEvent.Author
+	captureInterruptedAssistantEventIdentity(acc, agentEvent)
+	fillInterruptedAssistantRequestID(acc, loop)
+	if rsp.Created > 0 {
+		acc.created = rsp.Created
+	}
+}
+
+func interruptedAssistantHasTextDelta(rsp *model.Response) bool {
+	if rsp == nil {
+		return false
+	}
+	for _, choice := range rsp.Choices {
+		if choice.Delta.Role != "" && choice.Delta.Role != model.RoleAssistant {
+			continue
+		}
+		if choice.Delta.Content != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func captureInterruptedAssistantEventIdentity(
+	acc *interruptedAssistantAccumulator,
+	agentEvent *event.Event,
+) {
+	if acc == nil || agentEvent == nil {
+		return
+	}
+	if agentEvent.InvocationID != "" {
+		acc.invocationID = agentEvent.InvocationID
+	}
+	if agentEvent.ParentInvocationID != "" {
+		acc.parentInvocationID = agentEvent.ParentInvocationID
+	}
+	if agentEvent.Branch != "" {
+		acc.branch = agentEvent.Branch
+	}
+	if agentEvent.FilterKey != "" {
+		acc.filterKey = agentEvent.FilterKey
+	}
+	if agentEvent.RequestID != "" {
+		acc.requestID = agentEvent.RequestID
+	}
+}
+
+func fillInterruptedAssistantRequestID(
+	acc *interruptedAssistantAccumulator,
+	loop *eventLoopContext,
+) {
+	if acc == nil || acc.requestID != "" || loop == nil || loop.invocation == nil {
+		return
+	}
+	acc.requestID = loop.invocation.RunOptions.RequestID
+}
+
+func injectInterruptedAssistantEventIdentity(
+	inv *agent.Invocation,
+	acc *interruptedAssistantAccumulator,
+	evt *event.Event,
+) {
+	if evt == nil || acc == nil {
+		return
+	}
+	if acc.invocationID != "" {
+		evt.InvocationID = acc.invocationID
+	}
+	if acc.parentInvocationID != "" {
+		evt.ParentInvocationID = acc.parentInvocationID
+	}
+	if acc.branch != "" {
+		evt.Branch = acc.branch
+	}
+	if acc.filterKey != "" {
+		evt.FilterKey = acc.filterKey
+	}
+	if evt.RequestID != "" {
+		return
+	}
+	if acc.requestID != "" {
+		evt.RequestID = acc.requestID
+		return
+	}
+	if inv == nil {
+		return
+	}
+	evt.RequestID = inv.RunOptions.RequestID
+}
+
+// safePersistInterruptedAssistant guards cancellation-time partial persistence
+// against panics from session services.
+func (r *runner) safePersistInterruptedAssistant(ctx context.Context, loop *eventLoopContext) {
+	defer func() {
+		if rr := recover(); rr != nil {
+			log.Errorf("panic persisting interrupted assistant: %v\n%s", rr, string(debug.Stack()))
+		}
+	}()
+	r.persistInterruptedAssistant(ctx, loop)
+}
+
+func (r *runner) persistInterruptedAssistant(ctx context.Context, loop *eventLoopContext) {
+	if ctx.Err() == nil ||
+		loop == nil ||
+		!shouldPersistInterruptedAssistant(loop) {
+		return
+	}
+	persistCtx, cancel := sessionPersistenceContext(ctx)
+	defer cancel()
+	type persistTarget struct {
+		key string
+		acc *interruptedAssistantAccumulator
+	}
+	targets := make([]persistTarget, 0, len(loop.interruptedAssistants))
+	for key, acc := range loop.interruptedAssistants {
+		if acc == nil {
+			continue
+		}
+		targets = append(targets, persistTarget{key: key, acc: acc})
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].acc.sequence != targets[j].acc.sequence {
+			return targets[i].acc.sequence < targets[j].acc.sequence
+		}
+		return targets[i].key < targets[j].key
+	})
+	for _, target := range targets {
+		acc := target.acc
+		persistSession := acc.sess
+		if persistSession == nil {
+			persistSession = loop.sess
+		}
+		if persistSession == nil {
+			continue
+		}
+		interruptedEvent := r.interruptedAssistantEventForAccumulator(ctx, loop, acc)
+		if interruptedEvent == nil {
+			continue
+		}
+		interruptedEvent = r.applyEventPlugins(
+			persistCtx,
+			loop.invocation,
+			interruptedEvent,
+		)
+		if interruptedEvent == nil {
+			continue
+		}
+		if interruptedEvent.Response != nil &&
+			r.interruptedAssistantAlreadyPersistedForAccumulator(
+				acc,
+				interruptedEvent.Response.Choices,
+			) {
+			continue
+		}
+		if !r.handleEventPersistence(
+			persistCtx,
+			loop.invocation,
+			loop.sess,
+			persistSession,
+			interruptedEvent,
+		) {
+			continue
+		}
+		recordPersistedAssistantOnAccumulator(acc, interruptedEvent, true)
+		if sameSession(persistSession, loop.sess) {
+			r.recordPersistedAssistantEvent(loop, interruptedEvent, true)
+		}
+	}
+}
+
+func (r *runner) interruptedAssistantEvent(
+	ctx context.Context,
+	loop *eventLoopContext,
+) *event.Event {
+	return r.interruptedAssistantEventForAccumulator(
+		ctx,
+		loop,
+		defaultInterruptedAssistantAccumulator(loop),
+	)
+}
+
+func (r *runner) interruptedAssistantEventForAccumulator(
+	ctx context.Context,
+	loop *eventLoopContext,
+	acc *interruptedAssistantAccumulator,
+) *event.Event {
+	choices := interruptedAssistantChoicesFromAccumulator(acc)
+	if len(choices) == 0 {
+		return nil
+	}
+	if r.interruptedAssistantAlreadyPersistedForAccumulator(acc, choices) {
+		return nil
+	}
+	created := acc.created
+	if created == 0 {
+		created = time.Now().Unix()
+	}
+	author := acc.author
+	if author == "" && loop.invocation != nil {
+		author = loop.invocation.AgentName
+	}
+	invocationID := acc.invocationID
+	if invocationID == "" && loop.invocation != nil {
+		invocationID = loop.invocation.InvocationID
+	}
+	evt := event.NewResponseEvent(
+		invocationID,
+		author,
+		&model.Response{
+			ID:        acc.responseID,
+			Object:    model.ObjectTypeChatCompletion,
+			Created:   created,
+			Done:      true,
+			IsPartial: false,
+			Choices:   choices,
+		},
+	)
+	injectInterruptedAssistantEventIdentity(loop.invocation, acc, evt)
+	if reason := contextDoneReason(ctx); reason != "" {
+		if payload, err := json.Marshal(
+			interruptedAssistantMetadata{Reason: reason},
+		); err == nil {
+			evt.Extensions = map[string]json.RawMessage{
+				interruptedAssistantExtensionKey: payload,
+			}
+		}
+	}
+	return evt
+}
+
+func interruptedAssistantChoices(loop *eventLoopContext) []model.Choice {
+	return interruptedAssistantChoicesFromAccumulator(
+		defaultInterruptedAssistantAccumulator(loop),
+	)
+}
+
+func interruptedAssistantChoicesFromAccumulator(
+	acc *interruptedAssistantAccumulator,
+) []model.Choice {
+	if acc == nil || len(acc.choiceContent) == 0 {
+		return nil
+	}
+	indexes := make([]int, 0, len(acc.choiceContent))
+	for index := range acc.choiceContent {
+		indexes = append(indexes, index)
+	}
+	sort.Ints(indexes)
+	finishReason := interruptedAssistantFinishReason
+	choices := make([]model.Choice, 0, len(indexes))
+	for _, index := range indexes {
+		content := acc.choiceContent[index]
+		if content == nil || content.Len() == 0 {
+			continue
+		}
+		choices = append(choices, model.Choice{
+			Index:        index,
+			Message:      model.NewAssistantMessage(content.String()),
+			FinishReason: &finishReason,
+		})
+	}
+	return choices
+}
+
+func (r *runner) interruptedAssistantAlreadyPersisted(
+	loop *eventLoopContext,
+	choices []model.Choice,
+) bool {
+	return r.interruptedAssistantAlreadyPersistedForAccumulator(
+		defaultInterruptedAssistantAccumulator(loop),
+		choices,
+	)
+}
+
+func (r *runner) interruptedAssistantAlreadyPersistedForAccumulator(
+	acc *interruptedAssistantAccumulator,
+	choices []model.Choice,
+) bool {
+	if acc == nil {
+		return false
+	}
+	if acc.responseID != "" {
+		if _, ok := acc.persistedAssistantResponseIDs[acc.responseID]; ok {
+			return true
+		}
+	}
+	signature := interruptedAssistantSignatureKey(
+		acc.requestID,
+		acc.invocationID,
+		choices,
+	)
+	if signature == "" {
+		return false
+	}
+	_, ok := acc.persistedAssistantChoiceSignatures[signature]
+	return ok
+}
+
+func shouldPersistInterruptedAssistant(loop *eventLoopContext) bool {
+	if loop == nil || loop.invocation == nil {
+		return false
+	}
+	enabled := loop.invocation.RunOptions.PersistInterruptedAssistant
+	return enabled != nil && *enabled
+}
+
+func contextDoneReason(ctx context.Context) string {
+	if cause := context.Cause(ctx); cause != nil {
+		return cause.Error()
+	}
+	return ""
+}
+
+func sessionPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx.Err() == nil {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(
+		context.WithoutCancel(ctx),
+		cancelledSessionPersistenceTimeout,
+	)
+}
+
 // safeEmitRunnerCompletion guards emitRunnerCompletion against panics from session services.
 func (r *runner) safeEmitRunnerCompletion(ctx context.Context, loop *eventLoopContext) {
 	defer func() {
@@ -1293,6 +1992,7 @@ func (r *runner) handleEventPersistence(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	sess *session.Session,
+	persistSession *session.Session,
 	agentEvent *event.Event,
 ) bool {
 	// Ensure error events have content so they are valid for persistence.
@@ -1301,6 +2001,9 @@ func (r *runner) handleEventPersistence(
 	// Append event to session if it's complete (not partial).
 	if !r.shouldPersistEvent(agentEvent) {
 		return false
+	}
+	if persistSession == nil {
+		persistSession = sess
 	}
 
 	persistEvent := agentEvent
@@ -1316,7 +2019,7 @@ func (r *runner) handleEventPersistence(
 
 	if err := r.sessionService.AppendEvent(
 		ctx,
-		sess,
+		persistSession,
 		persistEvent,
 	); err != nil {
 		log.Errorf("Failed to append event to session: %v", err)
@@ -1356,7 +2059,7 @@ func (r *runner) handleEventPersistence(
 	// Use EnqueueSummaryJob for true asynchronous processing.
 	// Prefer filter-specific summarization to avoid scanning all filters.
 	if err := r.sessionService.EnqueueSummaryJob(
-		ctx, sess, agentEvent.FilterKey, false,
+		ctx, persistSession, agentEvent.FilterKey, false,
 	); err != nil {
 		log.DebugfContext(ctx, "Auto summarize after append skipped or failed: %v.", err)
 	}
@@ -1462,6 +2165,29 @@ func (r *runner) captureCompletionFallback(
 	// the terminal outcome seen by the runner.
 	loop.finalError = cloneResponseError(agentEvent.Response.Error)
 	loop.sawTerminalError = agentEvent.IsTerminalError()
+}
+
+func (r *runner) captureRoutedCompletionError(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) {
+	if loop == nil || agentEvent == nil {
+		return
+	}
+	if agentEvent.Response == nil || agentEvent.IsPartial {
+		return
+	}
+	if agentEvent.Response.Error != nil {
+		loop.finalError = cloneResponseError(agentEvent.Response.Error)
+	}
+	loop.sawTerminalError = agentEvent.IsTerminalError()
+}
+
+func sameSession(a *session.Session, b *session.Session) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.AppName == b.AppName && a.UserID == b.UserID && a.ID == b.ID
 }
 
 func mergeCompletionFallbackStateDelta(
@@ -1647,16 +2373,31 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			persistRunnerCompletionEvent.StateDelta,
 		)
 	}
-	if err := r.sessionService.AppendEvent(
-		ctx,
-		loop.sess,
-		persistRunnerCompletionEvent,
-	); err != nil {
-		log.Errorf("Failed to append runner completion event to session: %v", err)
-	}
+	func() {
+		persistCtx, persistCancel := sessionPersistenceContext(ctx)
+		defer persistCancel()
+		if err := r.sessionService.AppendEvent(
+			persistCtx,
+			loop.sess,
+			persistRunnerCompletionEvent,
+		); err != nil {
+			log.Errorf("Failed to append runner completion event to session: %v", err)
+		}
+	}()
 
-	// Send the runner completion event to output channel.
-	agent.EmitEvent(ctx, loop.invocation, loop.processedEventCh, runnerCompletionEvent)
+	// Use a context to deliver runner-completion after cancellation without blocking cleanup indefinitely.
+	func() {
+		emitCtx, emitCancel := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			time.Second,
+		)
+		defer emitCancel()
+		if err := agent.EmitEvent(
+			emitCtx, loop.invocation, loop.processedEventCh, runnerCompletionEvent,
+		); err != nil {
+			log.Errorf("Failed to emit runner completion event: %v", err)
+		}
+	}()
 
 	// Enqueue auto memory extraction job if memory service is configured.
 	r.enqueueAutoMemoryJob(ctx, loop.sess)
@@ -1995,7 +2736,7 @@ func collectPriorAssistantResponseIDs(sess *session.Session) map[string]struct{}
 	var responseIDs map[string]struct{}
 	for i := range sess.Events {
 		evt := &sess.Events[i]
-		if evt == nil || evt.Response == nil || evt.IsPartial {
+		if evt.Response == nil || evt.IsPartial {
 			continue
 		}
 		if isGraphCompletionEvent(evt) {
@@ -2019,6 +2760,132 @@ func collectPriorAssistantResponseIDs(sess *session.Session) map[string]struct{}
 		responseIDs[responseID] = struct{}{}
 	}
 	return responseIDs
+}
+
+func collectPriorAssistantResponseIDsForLineage(
+	loop *eventLoopContext,
+	sess *session.Session,
+	lineageKey string,
+) map[string]struct{} {
+	if sess == nil || len(sess.Events) == 0 {
+		return nil
+	}
+	var responseIDs map[string]struct{}
+	for i := range sess.Events {
+		evt := &sess.Events[i]
+		if interruptedAssistantLineageKey(loop, evt) != lineageKey {
+			continue
+		}
+		if evt.Response == nil || evt.IsPartial {
+			continue
+		}
+		if isGraphCompletionEvent(evt) {
+			continue
+		}
+		if !eventHasAssistantMessageContent(evt) {
+			continue
+		}
+		responseID := evt.Response.ID
+		if graph.IsVisibleGraphCompletionEvent(evt) {
+			if visibleResponseID := finalResponseIDFromStateDelta(evt.StateDelta); visibleResponseID != "" {
+				responseID = visibleResponseID
+			}
+		}
+		if responseID == "" {
+			continue
+		}
+		if responseIDs == nil {
+			responseIDs = make(map[string]struct{})
+		}
+		responseIDs[responseID] = struct{}{}
+	}
+	return responseIDs
+}
+
+func collectPriorAssistantChoiceSignatures(sess *session.Session) map[string]struct{} {
+	if sess == nil || len(sess.Events) == 0 {
+		return nil
+	}
+	var signatures map[string]struct{}
+	for i := range sess.Events {
+		evt := &sess.Events[i]
+		if evt.Response == nil || evt.IsPartial {
+			continue
+		}
+		if isGraphCompletionEvent(evt) || !eventHasAssistantMessageContent(evt) {
+			continue
+		}
+		signature := interruptedAssistantSignatureKey(
+			evt.RequestID,
+			evt.InvocationID,
+			evt.Response.Choices,
+		)
+		if signature == "" {
+			continue
+		}
+		if signatures == nil {
+			signatures = make(map[string]struct{})
+		}
+		signatures[signature] = struct{}{}
+	}
+	return signatures
+}
+
+func collectPriorAssistantChoiceSignaturesForLineage(
+	loop *eventLoopContext,
+	sess *session.Session,
+	lineageKey string,
+) map[string]struct{} {
+	if sess == nil || len(sess.Events) == 0 {
+		return nil
+	}
+	var signatures map[string]struct{}
+	for i := range sess.Events {
+		evt := &sess.Events[i]
+		if interruptedAssistantLineageKey(loop, evt) != lineageKey {
+			continue
+		}
+		if evt.Response == nil || evt.IsPartial {
+			continue
+		}
+		if isGraphCompletionEvent(evt) || !eventHasAssistantMessageContent(evt) {
+			continue
+		}
+		signature := interruptedAssistantSignatureKey(
+			evt.RequestID,
+			evt.InvocationID,
+			evt.Response.Choices,
+		)
+		if signature == "" {
+			continue
+		}
+		if signatures == nil {
+			signatures = make(map[string]struct{})
+		}
+		signatures[signature] = struct{}{}
+	}
+	return signatures
+}
+
+func interruptedAssistantSignatureKey(
+	requestID string,
+	invocationID string,
+	choices []model.Choice,
+) string {
+	signature := assistantChoiceSignature(choices)
+	if signature == "" {
+		return ""
+	}
+	switch {
+	case requestID != "" && invocationID != "":
+		return requestID + "\x00" + invocationID + "\x00" + signature
+	case requestID != "":
+		return requestID + "\x00" + signature
+	case invocationID != "":
+		return invocationID + "\x00" + signature
+	default:
+		return signature
+	}
 }
 
 func baselineFinalResponseIDFromRuntimeState(runtimeState map[string]any) string {

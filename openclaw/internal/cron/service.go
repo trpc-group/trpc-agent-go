@@ -26,7 +26,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -44,10 +46,13 @@ const (
 		"needed instead of blindly following old shell " +
 		"snippets. Do not create, update, remove, clear, or " +
 		"run cron jobs from within this scheduled run. " +
-		"Do not use message unless you need an additional " +
-		"side message beyond the final result. The final " +
-		"answer will be delivered automatically to the job " +
-		"target. Do not ask for confirmation unless blocked. " +
+		"Prefer the final answer for normal job delivery. " +
+		"Use message only when you intentionally need to " +
+		"send the scheduled task text yourself. A successful " +
+		"text message sent to the job target counts as the " +
+		"job delivery, so the final answer will be kept as " +
+		"the run result instead of delivered again. Do not " +
+		"ask for confirmation unless blocked. " +
 		"Do not return only a statement of what you will do; " +
 		"perform the scheduled task and report the result or " +
 		"the exact blocker."
@@ -62,13 +67,17 @@ const (
 	scheduledRunTaskPrefix = "\nTask:\n"
 
 	scheduledRunTemplateMarker = "{{"
+
+	debugTraceSourceCron = "cron"
 )
 
 // Service runs and persists scheduled jobs.
 type Service struct {
-	path   string
-	runner runner.Runner
-	router *outbound.Router
+	path     string
+	runner   runner.Runner
+	router   *outbound.Router
+	profiles runtimeprofile.Resolver
+	recorder *debugrecorder.Recorder
 
 	tickInterval time.Duration
 	clock        func() time.Time
@@ -119,6 +128,20 @@ func WithClock(fn func() time.Time) Option {
 		if fn != nil {
 			s.clock = fn
 		}
+	}
+}
+
+// WithRuntimeProfileResolver resolves captured scheduled-job profile refs.
+func WithRuntimeProfileResolver(resolver runtimeprofile.Resolver) Option {
+	return func(s *Service) {
+		s.profiles = resolver
+	}
+}
+
+// WithDebugRecorder records scheduled runs into the runtime debug dir.
+func WithDebugRecorder(recorder *debugrecorder.Recorder) Option {
+	return func(s *Service) {
+		s.recorder = recorder
 	}
 }
 
@@ -522,6 +545,8 @@ func (s *Service) executeJob(
 		defer cancel()
 	}
 
+	sentTextRecorder := outbound.NewSentTextRecorder()
+	runCtx = outbound.WithSentTextRecorder(runCtx, sentTextRecorder)
 	runtimeState := scheduledRunRuntimeState(job)
 	runOpts := make([]agent.RunOption, 0, 3)
 	if runtimeState != nil {
@@ -538,6 +563,47 @@ func (s *Service) executeJob(
 
 	sessionID := freshRunSessionID(job.ID, now)
 	s.setRunMetadata(job.ID, runToken, sessionID, requestID)
+	var runErr error
+	var deliveryErr error
+	trace, traceStartedAt := s.startDebugTrace(
+		runCtx,
+		job,
+		sessionID,
+		requestID,
+		scheduledAt,
+		reschedule,
+	)
+	if trace != nil {
+		runCtx = debugrecorder.WithTrace(runCtx, trace)
+		defer func() {
+			closeCronDebugTrace(
+				trace,
+				traceStartedAt,
+				runErr,
+				deliveryErr,
+			)
+		}()
+	}
+
+	profile, err := s.resolveRuntimeProfile(runCtx, job)
+	if err != nil {
+		runErr = err
+		s.finishRun(
+			job.ID,
+			runToken,
+			scheduledAt,
+			now,
+			"",
+			err,
+			nil,
+			reschedule,
+		)
+		return
+	}
+	if runtimeprofile.HasProfile(profile) {
+		runCtx = runtimeprofile.WithProfile(runCtx, profile)
+		runOpts = append(runOpts, runtimeprofile.RunOptions(profile)...)
+	}
 	events, err := s.runner.Run(
 		runCtx,
 		job.UserID,
@@ -545,34 +611,57 @@ func (s *Service) executeJob(
 		model.NewUserMessage(buildScheduledRunMessage(job)),
 		runOpts...,
 	)
+	runErr = err
 
 	result := cronReplyAccumulator{}
-	if err == nil {
+	if runErr == nil {
 		for evt := range events {
+			if trace != nil && evt != nil {
+				_ = trace.Record(debugrecorder.KindRunnerEvent, evt)
+			}
 			result.consume(evt)
 		}
 		if result.err != nil {
-			err = result.err
+			runErr = result.err
 		}
 	}
+	if trace != nil && runErr != nil {
+		_ = trace.RecordError(runErr)
+	}
 
-	deliveryErr := error(nil)
 	output := sanitizeStoredOutput(result.text)
-	if err == nil &&
+	if trace != nil && output != "" {
+		_ = trace.RecordText(output)
+	}
+	deliveryAttempted := false
+	deliverySkipReason := ""
+	if runErr == nil &&
 		s.deliveryAllowed(job.ID, runToken) &&
 		job.Delivery.Channel != "" &&
 		job.Delivery.Target != "" &&
 		strings.TrimSpace(result.text) != "" {
-		if s.router == nil {
-			deliveryErr = fmt.Errorf("cron: nil outbound router")
+		if sentTextRecorder.ContainsTarget(job.Delivery) {
+			deliverySkipReason = cronDeliverySkipMessageToolTarget
 		} else {
-			deliveryErr = s.router.SendText(
-				runCtx,
-				job.Delivery,
-				result.text,
-			)
+			deliveryAttempted = true
+			if s.router == nil {
+				deliveryErr = fmt.Errorf("cron: nil outbound router")
+			} else {
+				deliveryErr = s.router.SendText(
+					runCtx,
+					job.Delivery,
+					result.text,
+				)
+			}
 		}
 	}
+	recordCronDeliveryTrace(
+		trace,
+		job,
+		deliveryAttempted,
+		deliverySkipReason,
+		deliveryErr,
+	)
 
 	s.finishRun(
 		job.ID,
@@ -580,9 +669,197 @@ func (s *Service) executeJob(
 		scheduledAt,
 		now,
 		output,
-		err,
+		runErr,
 		deliveryErr,
 		reschedule,
+	)
+}
+
+func (s *Service) startDebugTrace(
+	ctx context.Context,
+	job *Job,
+	sessionID string,
+	requestID string,
+	scheduledAt time.Time,
+	reschedule bool,
+) (*debugrecorder.Trace, time.Time) {
+	recorder := s.recorder
+	if recorder == nil {
+		recorder = debugrecorder.RecorderFromContext(ctx)
+	}
+	if recorder == nil || job == nil {
+		return nil, time.Time{}
+	}
+
+	startedAt := time.Now()
+	trace, err := recorder.Start(debugrecorder.TraceStart{
+		Channel:   job.Delivery.Channel,
+		UserID:    job.UserID,
+		SessionID: sessionID,
+		Thread:    job.Delivery.Target,
+		RequestID: requestID,
+		Source:    debugTraceSourceCron,
+	})
+	if err != nil {
+		log.Warnf("cron: start debug trace: %v", err)
+		return nil, time.Time{}
+	}
+
+	_ = trace.Record(
+		debugrecorder.KindCronRun,
+		cronDebugRunRecord(job, scheduledAt, reschedule),
+	)
+	return trace, startedAt
+}
+
+func cronDebugRunRecord(
+	job *Job,
+	scheduledAt time.Time,
+	reschedule bool,
+) map[string]any {
+	record := map[string]any{
+		"job_id":           strings.TrimSpace(job.ID),
+		"job_name":         strings.TrimSpace(job.Name),
+		"schedule":         ScheduleSummary(job.Schedule),
+		"reschedule":       reschedule,
+		"delivery_channel": strings.TrimSpace(job.Delivery.Channel),
+		"delivery_target":  strings.TrimSpace(job.Delivery.Target),
+		"timeout_sec":      job.TimeoutSec,
+		"message":          strings.TrimSpace(job.Message),
+	}
+	runContext := scheduledRunContext(job)
+	record["run_index"] = runContext.RunIndex
+	record["has_max_runs"] = runContext.HasMaxRuns
+	record["max_runs"] = runContext.MaxRuns
+	record["remaining_runs"] = runContext.RemainingRuns
+	record["is_final_run"] = runContext.IsFinalRun
+	if !scheduledAt.IsZero() {
+		record["scheduled_at"] = scheduledAt
+	}
+	return record
+}
+
+func recordCronDeliveryTrace(
+	trace *debugrecorder.Trace,
+	job *Job,
+	attempted bool,
+	skipReason string,
+	err error,
+) {
+	if trace == nil || job == nil {
+		return
+	}
+	record := map[string]any{
+		"attempted": attempted,
+		"channel":   strings.TrimSpace(job.Delivery.Channel),
+		"target":    strings.TrimSpace(job.Delivery.Target),
+	}
+	if err != nil {
+		record["error"] = err.Error()
+	}
+	if skipReason != "" {
+		record["skip_reason"] = skipReason
+	}
+	_ = trace.Record(debugrecorder.KindCronDelivery, record)
+}
+
+func closeCronDebugTrace(
+	trace *debugrecorder.Trace,
+	startedAt time.Time,
+	runErr error,
+	deliveryErr error,
+) {
+	if trace == nil {
+		return
+	}
+	end := debugrecorder.TraceEnd{
+		Duration: time.Since(startedAt),
+		Status:   cronDebugTraceStatus(runErr, deliveryErr),
+		Error:    cronDebugTraceError(runErr, deliveryErr),
+	}
+	_ = trace.Close(end)
+}
+
+func cronDebugTraceStatus(runErr error, deliveryErr error) string {
+	switch {
+	case runErr != nil:
+		return StatusFailed
+	case deliveryErr != nil:
+		return StatusDeliveryFailed
+	default:
+		return StatusSucceeded
+	}
+}
+
+func cronDebugTraceError(runErr error, deliveryErr error) string {
+	switch {
+	case runErr != nil:
+		return runErr.Error()
+	case deliveryErr != nil:
+		return deliveryErr.Error()
+	default:
+		return ""
+	}
+}
+
+func (s *Service) resolveRuntimeProfile(
+	ctx context.Context,
+	job *Job,
+) (runtimeprofile.Profile, error) {
+	if job == nil || !job.Profile.hasProfile() {
+		return runtimeprofile.Profile{}, nil
+	}
+	if strings.TrimSpace(job.Profile.ID) == "" {
+		return job.Profile.profile(), nil
+	}
+	if s == nil || s.profiles == nil {
+		return runtimeprofile.Profile{}, fmt.Errorf(
+			"cron: runtime profile resolver is not configured",
+		)
+	}
+	req := runtimeprofile.Request{
+		Channel:   job.Profile.Channel,
+		ProfileID: job.Profile.ID,
+		TenantID:  job.Profile.TenantID,
+		UserID:    job.UserID,
+		SessionID: job.Profile.SessionID,
+	}
+	if strings.TrimSpace(req.Channel) == "" {
+		req.Channel = job.Delivery.Channel
+	}
+	profile, err := s.profiles.Resolve(ctx, req)
+	if err != nil {
+		return runtimeprofile.Profile{}, err
+	}
+	if !runtimeprofile.HasProfile(profile) {
+		return runtimeprofile.Profile{}, runtimeprofile.ErrProfileNotFound
+	}
+	if err := checkRuntimeProfileVersion(job.Profile, profile); err != nil {
+		return runtimeprofile.Profile{}, err
+	}
+	return profile, nil
+}
+
+func checkRuntimeProfileVersion(
+	ref *RuntimeProfileRef,
+	profile runtimeprofile.Profile,
+) error {
+	if ref == nil {
+		return nil
+	}
+	want := strings.TrimSpace(ref.Version)
+	if want == "" {
+		return nil
+	}
+	got := strings.TrimSpace(profile.Version)
+	if got == want {
+		return nil
+	}
+	return fmt.Errorf(
+		"cron: runtime profile version mismatch for %s: want %s, got %s",
+		strings.TrimSpace(ref.ID),
+		want,
+		got,
 	)
 }
 

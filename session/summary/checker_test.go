@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -57,17 +58,18 @@ func TestCheckEventThreshold(t *testing.T) {
 		assert.False(t, checker(sess))
 	})
 
-	t.Run("delta filtering with lastIncludedTs", func(t *testing.T) {
+	t.Run("delta filtering with last included boundary", func(t *testing.T) {
 		baseTime := time.Now()
 		sess := &session.Session{
 			Events: []event.Event{
-				{Timestamp: baseTime.Add(-3 * time.Hour)},
-				{Timestamp: baseTime.Add(-2 * time.Hour)},
-				{Timestamp: baseTime.Add(-1 * time.Hour)},
-				{Timestamp: baseTime},
+				{ID: "event-1", Timestamp: baseTime.Add(-3 * time.Hour)},
+				{ID: "event-2", Timestamp: baseTime.Add(-2 * time.Hour)},
+				{ID: "event-3", Timestamp: baseTime.Add(-1 * time.Hour)},
+				{ID: "event-4", Timestamp: baseTime},
 			},
 			State: session.StateMap{
-				lastIncludedTsKey: []byte(baseTime.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)),
+				lastIncludedTsKey:      []byte(baseTime.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)),
+				lastIncludedEventIDKey: []byte("event-2"),
 			},
 		}
 
@@ -77,6 +79,46 @@ func TestCheckEventThreshold(t *testing.T) {
 
 		checker = CheckEventThreshold(1)
 		assert.True(t, checker(sess))
+	})
+
+	t.Run("legacy timestamp boundary keeps same timestamp events", func(t *testing.T) {
+		baseTime := time.Now()
+		sess := &session.Session{
+			Events: []event.Event{
+				{ID: "covered", Timestamp: baseTime},
+				{ID: "same-time-tail", Timestamp: baseTime},
+				{ID: "later", Timestamp: baseTime.Add(time.Second)},
+			},
+			State: session.StateMap{
+				lastIncludedTsKey: []byte(baseTime.UTC().Format(time.RFC3339Nano)),
+			},
+		}
+
+		delta := filterDeltaEvents(sess)
+		assert.Len(t, delta, 3)
+		assert.Equal(t, "covered", delta[0].ID)
+	})
+
+	t.Run("event id boundary wins when timestamp is invalid", func(t *testing.T) {
+		const (
+			includedEventID = "event-1"
+			deltaEventID    = "event-2"
+			invalidTS       = "invalid-timestamp"
+		)
+		sess := &session.Session{
+			Events: []event.Event{
+				{ID: includedEventID, Timestamp: time.Now().Add(-time.Minute)},
+				{ID: deltaEventID, Timestamp: time.Now()},
+			},
+			State: session.StateMap{
+				lastIncludedTsKey:      []byte(invalidTS),
+				lastIncludedEventIDKey: []byte(includedEventID),
+			},
+		}
+
+		delta := filterDeltaEvents(sess)
+		require.Len(t, delta, 1)
+		assert.Equal(t, deltaEventID, delta[0].ID)
 	})
 
 	t.Run("lastIncludedTs in future yields no delta events", func(t *testing.T) {
@@ -334,6 +376,29 @@ func TestCheckTokenThreshold(t *testing.T) {
 		assert.False(t, checker(sess))
 	})
 
+	t.Run("reasoning content counts toward token threshold", func(t *testing.T) {
+		defer SetTokenCounter(nil)
+		counter := &testCaptureTokenCounter{}
+		SetTokenCounter(counter)
+
+		checker := CheckTokenThreshold(100)
+		reasoning := strings.Repeat("r", 800)
+		sess := &session.Session{Events: []event.Event{
+			{
+				Author:    "assistant",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						Content:          "short answer",
+						ReasoningContent: reasoning,
+					},
+				}}},
+			},
+		}}
+		assert.True(t, checker(sess))
+		assert.Equal(t, reasoning, counter.lastMessage.ReasoningContent)
+	})
+
 	t.Run("tokens equal threshold does not trigger", func(t *testing.T) {
 		const contentLen = 200
 		sess := &session.Session{Events: []event.Event{
@@ -358,13 +423,14 @@ func TestCheckTokenThreshold(t *testing.T) {
 		assert.False(t, checker(sess))
 	})
 
-	t.Run("delta filtering with lastIncludedTs", func(t *testing.T) {
+	t.Run("delta filtering with last included boundary", func(t *testing.T) {
 		const threshold = 50
 		baseTime := time.Now()
 
 		sess := &session.Session{
 			Events: []event.Event{
 				{
+					ID:        "event-1",
 					Author:    "user",
 					Timestamp: baseTime.Add(-2 * time.Hour),
 					Response: &model.Response{Choices: []model.Choice{{
@@ -372,6 +438,7 @@ func TestCheckTokenThreshold(t *testing.T) {
 					}}},
 				},
 				{
+					ID:        "event-2",
 					Author:    "assistant",
 					Timestamp: baseTime,
 					Response: &model.Response{Choices: []model.Choice{{
@@ -380,7 +447,8 @@ func TestCheckTokenThreshold(t *testing.T) {
 				},
 			},
 			State: session.StateMap{
-				lastIncludedTsKey: []byte(baseTime.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)),
+				lastIncludedTsKey:      []byte(baseTime.Add(-2 * time.Hour).UTC().Format(time.RFC3339Nano)),
+				lastIncludedEventIDKey: []byte("event-1"),
 			},
 		}
 
@@ -706,6 +774,38 @@ func (c testFixedTokenCounter) CountTokensRange(
 		return 0, nil
 	}
 	return c.tokens * (end - start), nil
+}
+
+type testCaptureTokenCounter struct {
+	lastMessage model.Message
+}
+
+func (c *testCaptureTokenCounter) CountTokens(_ context.Context, message model.Message) (int, error) {
+	c.lastMessage = message
+	if strings.TrimSpace(message.ReasoningContent) != "" {
+		return 1000, nil
+	}
+	return 0, nil
+}
+
+func (c *testCaptureTokenCounter) CountTokensRange(
+	ctx context.Context,
+	messages []model.Message,
+	start,
+	end int,
+) (int, error) {
+	if start >= end {
+		return 0, nil
+	}
+	total := 0
+	for i := start; i < end; i++ {
+		tokens, err := c.CountTokens(ctx, messages[i])
+		if err != nil {
+			return 0, err
+		}
+		total += tokens
+	}
+	return total, nil
 }
 
 type testContextTokenCounter struct {
@@ -1087,8 +1187,31 @@ func TestResolveContextWindowFromCtx_KnownModel(t *testing.T) {
 		Model: &fakeModelWithName{name: "gpt-4o-mini"},
 	}
 	ctx := agent.NewInvocationContext(context.Background(), inv)
-	// gpt-4o-mini → 200000.
-	assert.Equal(t, 200000, resolveContextWindowFromCtx(ctx, 0))
+	// gpt-4o-mini → 128000.
+	assert.Equal(t, 128000, resolveContextWindowFromCtx(ctx, 0))
+}
+
+func TestResolveContextWindowFromCtx_ModelInstanceWindow(t *testing.T) {
+	inv := &agent.Invocation{
+		Model: &fakeModelWithContextWindow{
+			fakeModelWithName: fakeModelWithName{name: "unknown-private-model"},
+			window:            204800,
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	assert.Equal(t, 204800, resolveContextWindowFromCtx(ctx, 0))
+}
+
+func TestResolveContextWindowFromCtx_RunOptionOverridesModelWindow(t *testing.T) {
+	inv := &agent.Invocation{
+		Model: &fakeModelWithContextWindow{
+			fakeModelWithName: fakeModelWithName{name: "unknown-private-model"},
+			window:            204800,
+		},
+		RunOptions: agent.NewRunOptions(agent.WithModelContextWindow(32768)),
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	assert.Equal(t, 32768, resolveContextWindowFromCtx(ctx, 0))
 }
 
 func TestResolveContextWindowFromCtx_ZeroFallback(t *testing.T) {
@@ -1169,6 +1292,65 @@ func TestWithContextThreshold_SummarizerModelFallback(t *testing.T) {
 	assert.False(t, result)
 }
 
+func TestWithContextThreshold_ExplicitFallbackWindowPreserved(t *testing.T) {
+	defer SetTokenCounter(nil)
+	SetTokenCounter(testFixedTokenCounter{tokens: 5000})
+
+	fakeModel := &fakeModelWithName{name: "deepseek-chat"}
+	sum := NewSummarizer(fakeModel, WithContextThreshold(
+		WithContextThresholdFallbackWindow(defaultContextThresholdFallbackWindow),
+	))
+
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "hello"},
+				}}},
+			},
+		},
+	}
+
+	// Explicit fallback=8192 gives threshold=4096, so 5000 triggers.
+	// If it were treated as "unset", the deepseek-chat window fallback would
+	// raise the threshold to 65536 and this would not trigger.
+	result := sum.ShouldSummarize(sess)
+	assert.True(t, result)
+}
+
+func TestWithContextThreshold_ReusedOptionDoesNotLeakResolvedFallback(t *testing.T) {
+	defer SetTokenCounter(nil)
+	SetTokenCounter(testFixedTokenCounter{tokens: 5000})
+
+	opt := WithContextThreshold()
+	_ = NewSummarizer(&fakeModelWithContextWindow{
+		fakeModelWithName: fakeModelWithName{name: "private-large-model"},
+		window:            200000,
+	}, opt)
+
+	sum := NewSummarizer(
+		&fakeModelWithName{name: "totally-unknown-model-xyz"},
+		opt,
+	)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "hello"},
+				}}},
+			},
+		},
+	}
+
+	// The second summarizer must use the default fallback window, not the
+	// first summarizer's resolved model window.
+	assert.True(t, sum.ShouldSummarize(sess))
+}
+
 func TestWithContextThreshold_UnknownSummarizerModel(t *testing.T) {
 	defer SetTokenCounter(nil)
 	SetTokenCounter(testFixedTokenCounter{tokens: 5000})
@@ -1238,4 +1420,16 @@ func (m *fakeModelWithName) GenerateContent(
 
 func (m *fakeModelWithName) Info() model.Info {
 	return model.Info{Name: m.name}
+}
+
+type fakeModelWithContextWindow struct {
+	fakeModelWithName
+	window int
+}
+
+func (m *fakeModelWithContextWindow) Info() model.Info {
+	return model.Info{
+		Name:          m.name,
+		ContextWindow: m.window,
+	}
 }

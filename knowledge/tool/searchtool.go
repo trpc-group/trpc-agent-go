@@ -30,6 +30,57 @@ const (
 	defaultMaxResults        = 10
 	defaultMinScore          = 0.0
 	agenticFilterPromptIntro = "You are a helpful assistant that can search for relevant information in the knowledge base."
+
+	// metadataFilterHint is appended to the tool description when no explicit
+	// agenticFilterInfo is provided. It teaches the LLM that metadata fields
+	// from search results can be used to construct filter conditions.
+	metadataFilterHint = `Each search result contains two types of filterable fields:
+
+  1. Document text — shown as "text" in results, but use field name
+     "content" when constructing filters. Use the "like" operator for
+     substring matching against the original document content.
+
+  2. "metadata.*" — structured metadata fields. Keys in results appear
+     without prefix (e.g. "source", "topic"), but when constructing
+     filters, prefix them with "metadata." (e.g. "metadata.source").
+
+You can use these field names and values from previous search results
+to construct filter conditions for more precise subsequent searches.
+
+Example — given a search result like:
+  {
+    "text": "Graph state is the core mechanism...",
+    "metadata": {"source": "docs/graph.md", "topic": "architecture"},
+    "score": 0.87
+  }
+
+  Filter by document text (use "content" as field name, not "text";
+  use %% wildcards for substring matching):
+    {"field": "content", "operator": "like", "value": "%graph state%"}
+
+  Filter by metadata (note the "metadata." prefix):
+    {"field": "metadata.topic", "operator": "eq", "value": "architecture"}
+
+  Filter by metadata (multiple values):
+    {"field": "metadata.topic", "operator": "in", "value": ["architecture", "api"]}
+
+  Combine content and metadata:
+    {"operator": "and", "value": [
+      {"field": "content", "operator": "like", "value": "%graph state%"},
+      {"field": "metadata.source", "operator": "eq", "value": "docs/graph.md"}
+    ]}
+
+Available operators:
+  eq, ne, gt, gte, lt, lte, in, not in, like, not like, between, and, or
+
+Usage modes:
+  - query + filter: use together for semantic search narrowed by metadata constraints.
+  - filter only: omit query and use filter alone for pure metadata-based retrieval.
+  - query only: omit filter for standard semantic search.
+  At least one of query or filter must be provided.
+
+Note:
+  For logical operators (and/or), use "value" to specify an array of sub-conditions.`
 )
 
 // KnowledgeSearchRequest represents the input for the knowledge search tool.
@@ -45,6 +96,7 @@ type KnowledgeSearchResponse struct {
 
 // DocumentResult represents a single document result with metadata and score.
 type DocumentResult struct {
+	ID       string         `json:"id,omitempty"`
 	Text     string         `json:"text"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 	Score    float64        `json:"score"`
@@ -68,6 +120,7 @@ type options struct {
 	minScore            float64
 	excludeMetadataKeys map[string]struct{}
 	postProcessor       ResultPostProcessor
+	includeContent      bool
 }
 
 // WithToolName sets the name of the knowledge search tool.
@@ -160,13 +213,20 @@ func WithResultPostProcessor(p ResultPostProcessor) Option {
 	}
 }
 
+func withIncludeContentDefault(include bool) Option {
+	return func(opts *options) {
+		opts.includeContent = include
+	}
+}
+
 // NewKnowledgeSearchTool creates a function tool for knowledge search using
 // the Knowledge interface.
 // This tool allows agents to search for relevant information in the knowledge base.
 func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 	opt := &options{
-		maxResults: defaultMaxResults,
-		minScore:   defaultMinScore,
+		maxResults:     defaultMaxResults,
+		minScore:       defaultMinScore,
+		includeContent: true,
 	}
 	for _, o := range opts {
 		o(opt)
@@ -206,7 +266,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 			return nil, fmt.Errorf("search failed: %w", err)
 		}
 
-		resp, err := convertSearchResults(result, opt.excludeMetadataKeys)
+		resp, err := convertSearchResults(result, opt.excludeMetadataKeys, opt.includeContent)
 		if err != nil {
 			return nil, err
 		}
@@ -231,8 +291,9 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 
 // KnowledgeSearchRequestWithFilter represents the input with filter for the knowledge search tool.
 type KnowledgeSearchRequestWithFilter struct {
-	Query  string                                 `json:"query,omitempty" jsonschema:"description=The search query to find relevant information in the knowledge base. Can be empty when using only filters."`
-	Filter *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions to apply to the search query. Use lowercase operators eq ne gt gte lt lte in not in like not like between and or."`
+	Query          string                                 `json:"query,omitempty" jsonschema:"description=The search query to find relevant information in the knowledge base. Can be empty when using only filters."`
+	Filter         *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions to apply to the search query. Use lowercase operators eq ne gt gte lt lte in not in like not like between and or."`
+	IncludeContent *bool                                  `json:"include_content,omitempty" jsonschema:"description=Whether to include full document content in the response. Default depends on the tool; graph tools default to false to keep responses compact."`
 }
 
 // NewAgenticFilterSearchTool creates a knowledge search tool with dynamic agent-controlled filtering.
@@ -248,8 +309,9 @@ func NewAgenticFilterSearchTool(
 	opts ...Option,
 ) tool.Tool {
 	opt := &options{
-		maxResults: defaultMaxResults,
-		minScore:   defaultMinScore,
+		maxResults:     defaultMaxResults,
+		minScore:       defaultMinScore,
+		includeContent: true,
 	}
 	for _, o := range opts {
 		o(opt)
@@ -294,7 +356,11 @@ func NewAgenticFilterSearchTool(
 			return nil, fmt.Errorf("search failed: %w", err)
 		}
 
-		resp, err := convertSearchResults(result, opt.excludeMetadataKeys)
+		includeContent := opt.includeContent
+		if req.IncludeContent != nil {
+			includeContent = *req.IncludeContent
+		}
+		resp, err := convertSearchResults(result, opt.excludeMetadataKeys, includeContent)
 		if err != nil {
 			return nil, err
 		}
@@ -318,19 +384,17 @@ func composeAgenticToolDescription(toolDescription, filterInfo string) string {
 	toolDescription = strings.TrimSpace(toolDescription)
 	filterInfo = strings.TrimSpace(filterInfo)
 
-	switch {
-	case toolDescription == "":
-		return filterInfo
-	case filterInfo == "":
-		return toolDescription
+	base := toolDescription
+	if base == "" {
+		base = agenticFilterPromptIntro
 	}
 
 	filterAppendix := strings.TrimSpace(strings.TrimPrefix(filterInfo, agenticFilterPromptIntro))
 	if filterAppendix == "" {
-		return toolDescription
+		filterAppendix = metadataFilterHint
 	}
 
-	return fmt.Sprintf("%s\n\n== FILTER GUIDANCE ==\n\n%s", toolDescription, filterAppendix)
+	return fmt.Sprintf("%s\n\n== FILTER GUIDANCE ==\n\n%s", base, filterAppendix)
 }
 
 // applyPostProcessor runs the optional ResultPostProcessor on resp. Passing a
@@ -348,6 +412,7 @@ func applyPostProcessor(ctx context.Context, resp *KnowledgeSearchResponse, p Re
 func convertSearchResults(
 	result *knowledge.SearchResult,
 	excludeKeys map[string]struct{},
+	includeContent bool,
 ) (*KnowledgeSearchResponse, error) {
 	if result == nil || len(result.Documents) == 0 {
 		return nil, errors.New("no relevant information found")
@@ -355,8 +420,13 @@ func convertSearchResults(
 
 	documents := make([]*DocumentResult, 0, len(result.Documents))
 	for _, doc := range result.Documents {
+		text := ""
+		if includeContent {
+			text = doc.Document.Content
+		}
 		documents = append(documents, &DocumentResult{
-			Text:     doc.Document.Content,
+			ID:       doc.Document.ID,
+			Text:     text,
 			Metadata: filterMetadata(doc.Document.Metadata, excludeKeys),
 			Score:    doc.Score,
 		})

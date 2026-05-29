@@ -31,28 +31,30 @@ const (
 
 // Server exposes a control-plane HTTP API for a single PromptIter target app.
 type Server struct {
-	appName       string
-	basePath      string
-	structurePath string
-	runsPath      string
-	asyncRunsPath string
-	timeout       time.Duration
-	engine        engine.Engine
-	manager       manager.Manager
-	handler       http.Handler
+	appName                string
+	basePath               string
+	structurePath          string
+	runsPath               string
+	asyncRunsPath          string
+	timeout                time.Duration
+	engine                 engine.Engine
+	manager                manager.Manager
+	responseResultSlimming engine.RunResultSlimming
+	handler                http.Handler
 }
 
 // New creates a new PromptIter HTTP server.
 func New(opts ...Option) (*Server, error) {
 	options := newOptions(opts...)
-	if strings.TrimSpace(options.appName) == "" {
+	appName := strings.TrimSpace(options.appName)
+	if appName == "" {
 		return nil, errors.New("promptiter server: app name must not be empty")
 	}
 	if options.engine == nil {
 		return nil, errors.New("promptiter server: engine must not be nil")
 	}
 	basePath := normalizeBasePath(options.basePath)
-	appBasePath, err := joinURLPath(basePath, options.appName)
+	appBasePath, err := joinURLPath(basePath, appName)
 	if err != nil {
 		return nil, fmt.Errorf("promptiter server: join app base path: %w", err)
 	}
@@ -69,14 +71,15 @@ func New(opts ...Option) (*Server, error) {
 		return nil, fmt.Errorf("promptiter server: join async runs path: %w", err)
 	}
 	server := &Server{
-		appName:       options.appName,
-		basePath:      appBasePath,
-		structurePath: structurePath,
-		runsPath:      runsPath,
-		asyncRunsPath: asyncRunsPath,
-		timeout:       options.timeout,
-		engine:        options.engine,
-		manager:       options.manager,
+		appName:                appName,
+		basePath:               appBasePath,
+		structurePath:          structurePath,
+		runsPath:               runsPath,
+		asyncRunsPath:          asyncRunsPath,
+		timeout:                options.timeout,
+		engine:                 options.engine,
+		manager:                options.manager,
+		responseResultSlimming: options.responseResultSlimming,
 	}
 	server.setupHandler()
 	return server, nil

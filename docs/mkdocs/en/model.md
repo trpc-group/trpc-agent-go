@@ -396,6 +396,55 @@ func main() {
 }
 ```
 
+### Structured Output
+
+When calling `model.GenerateContent` directly, use `model.NewRequest` and
+`model.WithStructuredOutputJSON` to generate a JSON schema from a Go struct and
+pass it to model adapters that support provider-native structured output.
+
+```go
+type StageParseResult struct {
+    Stage  string `json:"stage"`
+    Reason string `json:"reason"`
+}
+
+request := model.NewRequest(
+    []model.Message{
+        model.NewUserMessage("Classify the current user intent stage."),
+    },
+    model.WithStructuredOutputJSON(
+        new(StageParseResult),
+        true,
+        "Return stage parse result as JSON.",
+    ),
+)
+
+responseChan, err := llm.GenerateContent(ctx, request)
+if err != nil {
+    return err
+}
+
+var final string
+for response := range responseChan {
+    if response.Error != nil {
+        return fmt.Errorf("model error: %s", response.Error.Message)
+    }
+    if len(response.Choices) > 0 {
+        final = response.Choices[0].Message.Content
+    }
+}
+
+var result StageParseResult
+if err := json.Unmarshal([]byte(final), &result); err != nil {
+    return err
+}
+```
+
+`WithStructuredOutputJSON` only configures the model request. Direct `model`
+callers still receive normal `model.Response` values and should unmarshal the
+final JSON content themselves. If you already have a hand-written schema, set
+`request.StructuredOutput` directly.
+
 ### Streaming Output
 
 ```go
@@ -618,7 +667,7 @@ adapters ignore the field unless they add an explicit provider-specific mapping.
 
 #### 2. Model Switching
 
-Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
+Model switching allows dynamically changing the LLM model used by an Agent at runtime. This section shows static switching for OpenAI and OpenAI-compatible model instances at the agent level and per-request level. To select a model separately for each LLM call within the same `runner.Run(...)`, use [ModelSelector](#modelselector).
 
 ##### Agent-level Switching
 
@@ -666,18 +715,16 @@ import (
 )
 
 // Create multiple model instances.
-gpt4 := openai.New("gpt-4o")
-gpt4mini := openai.New("gpt-4o-mini")
-deepseek := openai.New("deepseek-v4-flash")
+strong := openai.New("gpt-4o")
+fast := openai.New("gpt-4o-mini")
 
 // Register all models when creating the Agent.
 agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
-        "smart": gpt4,
-        "fast":  gpt4mini,
-        "cheap": deepseek,
+        "smart": strong,
+        "fast":  fast,
     }),
-    llmagent.WithModel(gpt4mini), // Specify initial model.
+    llmagent.WithModel(fast), // Specify initial model.
     llmagent.WithInstruction("You are an intelligent assistant."),
 )
 
@@ -688,7 +735,7 @@ if err != nil {
 }
 
 // Switch to another model.
-err = agent.SetModelByName("cheap")
+err = agent.SetModelByName("fast")
 if err != nil {
     log.Fatal(err)
 }
@@ -709,11 +756,11 @@ if err := agent.SetModelByName(modelName); err != nil {
 // Select model based on time of day (cost optimization).
 hour := time.Now().Hour()
 if hour >= 22 || hour < 8 {
-    // Use cheap model at night.
-    agent.SetModelByName("cheap")
-} else {
-    // Use fast model during the day.
+    // Use fast model at night.
     agent.SetModelByName("fast")
+} else {
+    // Use smart model during the day.
+    agent.SetModelByName("smart")
 }
 ```
 
@@ -745,9 +792,9 @@ Use `agent.WithModelName` to specify a pre-registered model name for a single re
 // Pre-register multiple models when creating the Agent.
 agent := llmagent.New("my-agent",
     llmagent.WithModels(map[string]model.Model{
-        "smart": openai.New("gpt-4o"),
-        "fast":  openai.New("gpt-4o-mini"),
-        "cheap": openai.New("deepseek-v4-flash"),
+        "smart":  openai.New("gpt-4o"),
+        "fast":   openai.New("gpt-4o-mini"),
+        "vision": openai.New("gpt-4o"),
     }),
     llmagent.WithModel(openai.New("gpt-4o-mini")), // Default model.
 )
@@ -774,9 +821,9 @@ if isComplexQuery(message) {
 
 eventChan, err := runner.Run(ctx, userID, sessionID, message, opts...)
 
-// Use specialized reasoning model for reasoning tasks.
-eventChan, err := runner.Run(ctx, userID, sessionID, reasoningMessage,
-    agent.WithModelName("deepseek-v4-pro"),
+// Use a specialized model for a specific task.
+eventChan, err := runner.Run(ctx, userID, sessionID, visionMessage,
+    agent.WithModelName("vision"),
 )
 ```
 
@@ -1397,7 +1444,13 @@ The Token Counter is used to estimate the token count of text content. The frame
 
 **Estimation Principle:**
 
-Uses heuristic rules: approximately `N` UTF-8 characters per token, where `N` can be configured via `WithApproxRunesPerToken`.
+Uses heuristic rules: approximately `N` UTF-8 characters per token, where `N` can be configured via `WithApproxRunesPerToken`. `N` is a divisor, not a multiplier:
+
+```text
+estimatedTokens = countedUTF8Runes / N
+```
+
+Therefore, `WithApproxRunesPerToken(1.5)` means approximately `1.5` characters per token. Passing `2.0/3.0` means approximately `0.67` characters per token, which is about `1.5` tokens per character.
 
 **Usage:**
 
@@ -1426,6 +1479,7 @@ counter := model.NewSimpleTokenCounter(
 - **Type**: float64
 - **Default Value**: 4.0 (approx. 4 characters per token, suitable for English scenarios)
 - **Value Constraint**: Values <= 0 will be ignored, keeping the default value
+- **Formula**: estimated tokens = counted UTF-8 characters / `v`; for example, `v=1.5` means approximately `1.5` characters per token
 
 **Recommended Values for Common Languages:**
 
@@ -1570,7 +1624,7 @@ for request-scoped output limits and tool definitions:
 
 > **Context Window Registration**
 >
-> Both Token Tailoring and session summary `WithContextThreshold` rely on the framework's built-in model context window registry. The registry covers many popular models, but may not include every model — especially private deployments or newer releases. If your model is not recognized, register it at startup with `model.RegisterModelContextWindow("my-model", 32768)` or `model.RegisterModelContextWindows(map[string]int{...})`. See the [Session Summary documentation](session/summary.md) for a full example.
+> Token Tailoring and session summary `WithContextThreshold` both need a model context window. Built-in model names are resolved automatically. For private deployments, tenant-provided models, or endpoint IDs, prefer model-instance configuration such as `openai.WithContextWindow(32768)` or the unified `provider.WithContextWindow(32768)`. For one-off runs, use `agent.WithModelContextWindow(32768)`. Use `model.RegisterModelContextWindow("my-model", 32768)` only when the name has a stable process-wide meaning. See the [Session Summary documentation](session/summary.md) for a full example.
 
 ```text
 outputReserve = max(ReserveOutputTokens, request.MaxTokens, request.ThinkingTokens)
@@ -1964,6 +2018,57 @@ request := &model.Request{
 }
 ```
 
+### Multimodal Input
+
+The Anthropic Model supports images and files in `user` messages:
+
+- Images: Provide an image URL or raw image data. Supported MIME types are `image/jpeg`, `image/png`, `image/gif`, and `image/webp`. Images are sent as Anthropic image blocks.
+- PDFs: Provide a URL that Claude can access or raw data, using `application/pdf`. PDFs are sent as Anthropic document blocks.
+- Text content: Use raw data only. `text/plain` is sent as an Anthropic document block; text-based MIME types such as `text/csv` or `text/html` are sent as Anthropic text blocks.
+- Other formats: Office documents, JSON, and other formats are not parsed automatically. Convert them to text or PDF first. Audio and `FileID` are not supported. Non-PDF file URLs are sent as URL text only.
+
+```go
+import (
+    "context"
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/anthropic"
+)
+
+func main() {
+    llm := anthropic.New("claude-sonnet-4-6")
+    imageData, _ := os.ReadFile("diagram.png")
+    request := &model.Request{
+        Messages: []model.Message{
+            model.NewSystemMessage("You are a professional document and image analysis assistant."),
+            {
+                Role:    model.RoleUser,
+                Content: "Summarize the key information from the image and PDF.",
+                ContentParts: []model.ContentPart{
+                    {
+                        Type: model.ContentTypeImage,
+                        Image: &model.Image{
+                            Data:   imageData,
+                            Format: "png",
+                        },
+                    },
+                    {
+                        Type: model.ContentTypeFile,
+                        File: &model.File{
+                            Name:     "report.pdf",
+                            URL:      "https://example.com/report.pdf",
+                            MimeType: "application/pdf",
+                        },
+                    },
+                },
+            },
+        },
+    }
+    _, _ = llm.GenerateContent(context.Background(), request)
+}
+```
+
 ### Advanced features
 
 #### 1. Callback Functions
@@ -2001,7 +2106,7 @@ model := anthropic.New(
 
 #### 2. Model Switching
 
-Model switching allows dynamically changing the LLM model used by an Agent at runtime. The framework provides two approaches: agent-level switching (affects all subsequent requests) and per-request switching (affects only a single request).
+Model switching allows dynamically changing the LLM model used by an Agent at runtime. This section shows static switching for Anthropic model instances at the agent level and per-request level. To select a model separately for each LLM call within the same `runner.Run(...)`, use [ModelSelector](#modelselector).
 
 ##### Agent-level Switching
 
@@ -2553,7 +2658,7 @@ if err != nil {
 }
 ```
 
-`hedge.New(...)` also returns a regular `model.Model`, so it can be passed directly to places that accept `model.Model`, such as `llmagent.WithModel(...)`. This quick start uses the package default delay. Use `WithDelay(...)` or `WithDelays(...)` when you need explicit launch scheduling. For a complete example, see [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge).
+`hedge.New(...)` also returns a regular `model.Model`, so it can be passed directly to places that accept `model.Model`, such as `llmagent.WithModel(...)`. This quick start uses the package default delay. Use `WithDelay(...)` or `WithDelays(...)` when you need explicit launch scheduling. If the hedge wrapper is used with context-threshold summary or token tailoring and the candidates have different or unknown context windows, set a stable wrapper window with `hedge.WithContextWindow(...)`; otherwise the wrapper reports the shared candidate window only when all candidates expose the same positive value. For a complete example, see [examples/model/hedge](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/hedge).
 
 **Scheduling And Commit Rules**:
 
@@ -2609,3 +2714,41 @@ This configuration means:
 - `candidate[2]` starts at `0ms`.
 
 This is the all-at-once case where every candidate launches immediately when the request begins. In fixed-interval form, the same setup can be written as `WithDelay(0)`.
+
+## ModelSelector
+
+`ModelSelector` dynamically selects a model for each framework-managed LLM call within the same `runner.Run(...)`.
+
+```go
+selectModel := func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+    if shouldUseAnotherModel(inv) {
+        return anotherModel, nil
+    }
+    return nil, nil
+}
+
+events, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithModelSelector(selectModel),
+)
+```
+
+If an `LLMAgent` has its own fixed model selection policy, configure it when creating the agent:
+
+```go
+a := llmagent.New(
+    "assistant",
+    llmagent.WithModel(defaultModel),
+    llmagent.WithModelSelector(selectModel),
+)
+```
+
+Notes:
+
+- When both are configured, `agent.WithModelSelector(...)` takes precedence over `llmagent.WithModelSelector(...)`.
+- If selector returns `nil, nil`, the model is not switched and the current `inv.Model` is kept; returning an error terminates the current LLM call.
+
+For a complete example, see [examples/model/selector](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/model/selector).

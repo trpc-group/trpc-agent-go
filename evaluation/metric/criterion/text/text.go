@@ -47,6 +47,8 @@ const (
 	TextMatchStrategyContains TextMatchStrategy = "contains"
 	// TextMatchStrategyRegex matches strings that match the regex.
 	TextMatchStrategyRegex TextMatchStrategy = "regex"
+	// TextMatchStrategySkip skips built-in string matching.
+	TextMatchStrategySkip TextMatchStrategy = "skip"
 )
 
 // New creates a new TextCriterion with the provided options.
@@ -78,6 +80,9 @@ func (t *TextCriterion) Match(source, target string) (bool, error) {
 		if !ok {
 			return false, fmt.Errorf("length mismatch")
 		}
+	}
+	if t.MatchStrategy == TextMatchStrategySkip {
+		return true, nil
 	}
 	if t.CaseInsensitive {
 		source = strings.ToLower(source)

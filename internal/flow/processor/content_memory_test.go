@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -148,6 +150,8 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				"date=2024-05-07",
 				"with=Alice, Bob",
 				"at=Kyoto",
+			},
+			excludes: []string{
 				"topics=travel, hiking",
 			},
 		},
@@ -1081,4 +1085,103 @@ func TestProcessRequest_MergesSummary(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, systemCount)
+}
+
+func TestContentRequestProcessor_UsesSummaryBoundaryCutoff(t *testing.T) {
+	cutoff := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	updatedAt := cutoff.Add(2 * time.Minute)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				FilterKey: "branch",
+				Timestamp: cutoff.Add(-time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "covered by summary",
+				}}}},
+			},
+			{
+				FilterKey: "branch",
+				Timestamp: cutoff.Add(time.Minute),
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "after boundary",
+				}}}},
+			},
+		},
+		Summaries: map[string]*session.Summary{
+			"branch": {
+				Summary:   "summary text",
+				UpdatedAt: updatedAt,
+				Boundary: session.NewSummaryBoundary(
+					"branch",
+					cutoff,
+				),
+			},
+		},
+	}
+	p := NewContentRequestProcessor(WithAddSessionSummary(true))
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("branch"),
+	)
+
+	summaryText, summaryCutoff := p.getSessionSummaryText(inv)
+	require.Equal(t, "summary text", summaryText)
+	require.True(t, summaryCutoff.CutoffTime().Equal(cutoff))
+
+	messages := p.getIncrementMessagesAfterCutoff(inv, summaryCutoff)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "after boundary", messages[0].Content)
+}
+
+func TestContentRequestProcessor_AggregatePrefixSummariesUsesEarliestCutoff(t *testing.T) {
+	baseTime := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	p := NewContentRequestProcessor()
+	t.Run("uses earliest cutoff", func(t *testing.T) {
+		text, cutoff := p.aggregatePrefixSummaries(
+			map[string]*session.Summary{
+				"root/a": {
+					Summary: "summary a",
+					Boundary: session.NewSummaryBoundary(
+						"root/a",
+						baseTime,
+					),
+				},
+				"root/b": {
+					Summary: "summary b",
+					Boundary: session.NewSummaryBoundary(
+						"root/b",
+						baseTime.Add(10*time.Minute),
+					),
+				},
+			},
+			"root",
+		)
+
+		require.Contains(t, text, "summary a")
+		require.Contains(t, text, "summary b")
+		assert.True(t, cutoff.CutoffTime().Equal(baseTime))
+	})
+	t.Run("returns zero cutoff when metadata is missing", func(t *testing.T) {
+		text, cutoff := p.aggregatePrefixSummaries(
+			map[string]*session.Summary{
+				"root/a": {
+					Summary: "summary a",
+					Boundary: session.NewSummaryBoundary(
+						"root/a",
+						baseTime,
+					),
+				},
+				"root/b": {
+					Summary: "summary b",
+				},
+			},
+			"root",
+		)
+
+		require.Contains(t, text, "summary a")
+		require.Contains(t, text, "summary b")
+		assert.True(t, cutoff.IsZero())
+	})
 }

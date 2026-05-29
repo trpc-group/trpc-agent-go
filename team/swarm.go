@@ -9,7 +9,14 @@
 
 package team
 
-import "time"
+import (
+	"context"
+	"net/url"
+	"strings"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/model"
+)
 
 // SwarmConfig defines optional safety limits for swarm-style handoffs.
 //
@@ -32,6 +39,50 @@ type SwarmConfig struct {
 	RepetitiveHandoffMinUnique int
 }
 
+// SwarmHandoffInputArgs describes one Swarm handoff input rewrite.
+type SwarmHandoffInputArgs struct {
+	FromAgentName   string
+	ToAgentName     string
+	RootInput       model.Message
+	ParentInput     model.Message
+	TransferMessage string
+}
+
+// SwarmHandoffInputBuilder builds the target agent input message for a
+// Swarm handoff.
+type SwarmHandoffInputBuilder func(
+	ctx context.Context,
+	args SwarmHandoffInputArgs,
+) (model.Message, error)
+
+type swarmSessionIDArgs struct {
+	ParentSessionID string
+	TeamName        string
+	EntryAgentName  string
+	ToAgentName     string
+}
+
+type swarmSessionScope int
+
+const (
+	swarmSessionScopeDefault swarmSessionScope = iota
+	swarmSessionScopeShared
+	swarmSessionScopePerAgent
+)
+
+type swarmTurnRouting int
+
+const (
+	swarmTurnRoutingDefault swarmTurnRouting = iota
+	swarmTurnRoutingEntry
+	swarmTurnRoutingTargetTakesOver
+)
+
+type swarmHandoffPolicy struct {
+	sessionScope swarmSessionScope
+	turnRouting  swarmTurnRouting
+}
+
 // DefaultSwarmConfig returns conservative defaults that prevent unbounded
 // transfer loops while keeping behavior predictable.
 func DefaultSwarmConfig() SwarmConfig {
@@ -40,4 +91,53 @@ func DefaultSwarmConfig() SwarmConfig {
 		RepetitiveHandoffWindow:    8,
 		RepetitiveHandoffMinUnique: 3,
 	}
+}
+
+func defaultSwarmSessionID(args swarmSessionIDArgs) string {
+	if strings.TrimSpace(args.ToAgentName) != "" &&
+		strings.TrimSpace(args.ToAgentName) == strings.TrimSpace(args.EntryAgentName) {
+		return strings.TrimSpace(args.ParentSessionID)
+	}
+	parts := []string{
+		encodeSwarmSessionIDPart(args.ParentSessionID),
+		encodeSwarmSessionIDPart(args.TeamName),
+		encodeSwarmSessionIDPart(args.ToAgentName),
+	}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return strings.Join(out, "/")
+}
+
+func encodeSwarmSessionIDPart(part string) string {
+	return url.PathEscape(strings.TrimSpace(part))
+}
+
+func (p swarmHandoffPolicy) normalizedSessionScope() swarmSessionScope {
+	if p.sessionScope == swarmSessionScopeDefault {
+		return swarmSessionScopeShared
+	}
+	return p.sessionScope
+}
+
+func (p swarmHandoffPolicy) normalizedTurnRouting() swarmTurnRouting {
+	if p.turnRouting == swarmTurnRoutingDefault {
+		return swarmTurnRoutingEntry
+	}
+	return p.turnRouting
+}
+
+func (p swarmHandoffPolicy) usesIsolatedSession() bool {
+	return p.normalizedSessionScope() != swarmSessionScopeShared
+}
+
+func (p swarmHandoffPolicy) targetTakesOver() bool {
+	return p.normalizedTurnRouting() == swarmTurnRoutingTargetTakesOver
+}
+
+func (p swarmHandoffPolicy) needsRootState() bool {
+	return p.usesIsolatedSession() || p.targetTakesOver()
 }

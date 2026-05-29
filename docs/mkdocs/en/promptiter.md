@@ -159,8 +159,16 @@ targetScore := 1.0
 targetSurfaceID := astructure.SurfaceID(candidateAgentName, astructure.SurfaceTypeInstruction)
 
 result, err := engineInstance.Run(ctx, &engine.RunRequest{
-	TrainEvalSetIDs:      []string{"nba-commentary-train"},
-	ValidationEvalSetIDs: []string{"nba-commentary-validation"},
+	Train: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-train",
+		},
+	},
+	Validation: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-validation",
+		},
+	},
 	EvaluationOptions: engine.EvaluationOptions{
 		EvalCaseParallelism:               8,
 		EvalCaseParallelInferenceEnabled:  true,
@@ -441,18 +449,107 @@ import (
 )
 
 type RunRequest struct {
-	TrainEvalSetIDs      []string            // TrainEvalSetIDs is the list of train EvalSet IDs.
-	ValidationEvalSetIDs []string            // ValidationEvalSetIDs is the list of validation EvalSet IDs.
+	Train                []EvalSetInput      // Train identifies evaluation data used to generate gradients.
+	Validation           []EvalSetInput      // Validation identifies evaluation data used for patch acceptance checks.
 	InitialProfile       *promptiter.Profile // InitialProfile is the initial candidate version before round one starts.
 	Teacher              runner.Runner       // Teacher is the Runner used to generate reference answers when needed.
 	Judge                runner.Runner       // Judge is the Runner used by judge-style metrics when needed.
 	EvaluationOptions    EvaluationOptions   // EvaluationOptions defines evaluation execution parameters.
+	BackwardOptions      BackwardOptions     // BackwardOptions defines backward-stage execution parameters.
+	AggregationOptions   AggregationOptions  // AggregationOptions defines aggregation-stage execution parameters.
+	OptimizerOptions     OptimizerOptions    // OptimizerOptions defines optimizer-stage execution parameters.
 	AcceptancePolicy     AcceptancePolicy    // AcceptancePolicy defines how acceptance is decided.
 	StopPolicy           StopPolicy          // StopPolicy defines when the run should stop.
 	MaxRounds            int                 // MaxRounds is the maximum number of optimization rounds.
 	TargetSurfaceIDs     []string            // TargetSurfaceIDs lists editable positions that may be changed in this run.
 }
 ```
+
+#### Train And Validation
+
+`Train` drives the training loop: PromptIter extracts losses from train evaluation results and uses them to generate gradients. `Validation` drives the validation loop: PromptIter computes the accepted baseline, decides whether a patch should be accepted, and participates in stop decisions.
+
+Both fields use `[]EvalSetInput` to describe the selected evaluation data:
+
+```go
+type EvalSetInput struct {
+	EvalSetID   string     // EvalSetID identifies the evaluation set to execute.
+	EvalCaseIDs []string   // EvalCaseIDs limits evaluation to the specified cases when present.
+	LossHints   []LossHint // LossHints provides operator-written failure reasons.
+}
+
+type LossHint struct {
+	EvalCaseID string                  // EvalCaseID identifies the case to annotate.
+	MetricName string                  // MetricName identifies the failed metric to annotate.
+	Severity   promptiter.LossSeverity // Severity marks the priority of the hint.
+	Reason     string                  // Reason describes the operator-written failure cause.
+}
+```
+
+When `EvalCaseIDs` is omitted, PromptIter runs all cases in the corresponding eval set:
+
+```go
+request := &engine.RunRequest{
+	Train: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-train",
+		},
+	},
+	Validation: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-validation",
+		},
+	},
+}
+```
+
+To run only selected cases for a train or validation set, set `EvalCaseIDs` on the corresponding `EvalSetInput`:
+
+```go
+request := &engine.RunRequest{
+	Train: []engine.EvalSetInput{
+		{
+			EvalSetID:   "nba-commentary-train",
+			EvalCaseIDs: []string{"case_1", "case_2"},
+		},
+	},
+	Validation: []engine.EvalSetInput{
+		{
+			EvalSetID:   "nba-commentary-validation",
+			EvalCaseIDs: []string{"case_3"},
+		},
+	},
+}
+```
+
+Omitting `EvalCaseIDs` or passing an empty slice runs all cases in that eval set. Passing a non-empty slice runs only the listed cases.
+
+If you already know why some bad cases failed, set `LossHints` on the corresponding `EvalSetInput`. Callers only need to provide the case, metric, and reason; PromptIter handles trace and step details internally.
+
+```go
+request := &engine.RunRequest{
+	Train: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-train",
+			LossHints: []engine.LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "answer_quality",
+					Severity:   promptiter.LossSeverityP1,
+					Reason:     "The answer missed the key defensive strategy constraint.",
+				},
+			},
+		},
+	},
+	Validation: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-validation",
+		},
+	},
+}
+```
+
+`LossHints` only supplements training optimization signals. It does not change evaluation scores or validation acceptance decisions. PromptIter uses a hint only when the corresponding case and metric fail in the current round; passing results are not forced into failures. A misspelled case or metric returns an argument error.
 
 #### EvaluationOptions
 
@@ -467,6 +564,45 @@ type EvaluationOptions struct {
 ```
 
 Its semantics stay aligned with Evaluation. PromptIter directly reuses the Evaluation concurrency model and fixes execution to a single run internally.
+
+#### BackwardOptions
+
+`BackwardOptions` controls concurrency in the backward stage. By default, train cases run backward serially.
+
+```go
+type BackwardOptions struct {
+	CaseParallelismEnabled bool // CaseParallelismEnabled controls whether train cases run backward in parallel.
+	CaseParallelism        int  // CaseParallelism is the upper bound of parallel backward cases.
+}
+```
+
+When `CaseParallelismEnabled` is enabled, PromptIter runs backward in parallel across train cases. A `CaseParallelism` value of `0` uses `GOMAXPROCS` as the default parallelism; a negative value makes `Engine` return an argument error.
+
+#### AggregationOptions
+
+`AggregationOptions` controls concurrency in the gradient aggregation stage. By default, target surfaces are aggregated serially.
+
+```go
+type AggregationOptions struct {
+	SurfaceParallelismEnabled bool // SurfaceParallelismEnabled controls whether target surfaces are aggregated in parallel.
+	SurfaceParallelism        int  // SurfaceParallelism is the upper bound of parallel aggregation surfaces.
+}
+```
+
+When `SurfaceParallelismEnabled` is enabled, PromptIter aggregates gradients in parallel across target surfaces. A `SurfaceParallelism` value of `0` uses `GOMAXPROCS` as the default parallelism; a negative value makes `Engine` return an argument error.
+
+#### OptimizerOptions
+
+`OptimizerOptions` controls concurrency in the optimizer stage that generates patch candidates. By default, target surfaces are optimized serially.
+
+```go
+type OptimizerOptions struct {
+	SurfaceParallelismEnabled bool // SurfaceParallelismEnabled controls whether target surfaces are optimized in parallel.
+	SurfaceParallelism        int  // SurfaceParallelism is the upper bound of parallel optimization surfaces.
+}
+```
+
+When `SurfaceParallelismEnabled` is enabled, PromptIter generates patch candidates in parallel across target surfaces. A `SurfaceParallelism` value of `0` uses `GOMAXPROCS` as the default parallelism; a negative value makes `Engine` return an argument error.
 
 #### AcceptancePolicy And StopPolicy
 
@@ -523,6 +659,7 @@ import (
 )
 
 type RunResult struct {
+	AppName            string               // AppName is the app that owns this run.
 	ID                 string               // ID is the run identifier.
 	Status             RunStatus            // Status is the current run status.
 	CurrentRound       int                  // CurrentRound is the current round number.
@@ -805,7 +942,7 @@ The minimal usage is:
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/manager"
 
-managerInstance, err := manager.New(engineInstance)
+managerInstance, err := manager.New(appName, engineInstance)
 if err != nil {
 	return err
 }
@@ -842,9 +979,9 @@ import (
 )
 
 type Store interface {
-	Create(ctx context.Context, run *engine.RunResult) error
-	Get(ctx context.Context, runID string) (*engine.RunResult, error)
-	Update(ctx context.Context, run *engine.RunResult) error
+	Create(ctx context.Context, appName string, run *engine.RunResult) error
+	Get(ctx context.Context, appName, runID string) (*engine.RunResult, error)
+	Update(ctx context.Context, appName string, run *engine.RunResult) error
 	Close() error
 }
 ```
@@ -857,7 +994,7 @@ type Store interface {
 
 `store/mysql` fits cross-process persistence and platform queries. It serializes `RunResult` into MySQL and supports both manual schema initialization and automatic table creation.
 
-The current implementation uses a single table to store run records. Core fields include `run_id`, `status`, serialized `run_result`, and timestamps such as `created_at` and `updated_at`. The full schema is available in [schema.sql](https://github.com/trpc-group/trpc-agent-go/tree/main/evaluation/workflow/promptiter/store/mysql/schema.sql).
+The current implementation uses a single table to store run records. Core fields include `app_name`, `run_id`, `status`, serialized `run_result`, and timestamps such as `created_at` and `updated_at`. `app_name` and `run_id` form the unique key that isolates run records across apps. The full schema is available in [schema.sql](https://github.com/trpc-group/trpc-agent-go/tree/main/evaluation/workflow/promptiter/store/mysql/schema.sql).
 
 ### HTTP APIs
 

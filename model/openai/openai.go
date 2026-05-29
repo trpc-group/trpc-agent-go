@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +32,8 @@ import (
 	"github.com/openai/openai-go/packages/ssestream"
 	"github.com/openai/openai-go/shared"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modeltelemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -238,6 +239,7 @@ type Model struct {
 	chatResponseCallback       ChatResponseCallbackFunc
 	chatChunkCallback          ChatChunkCallbackFunc
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
+	chatTelemetry              bool
 	extraFields                map[string]any
 	variant                    Variant
 	variantConfig              variantConfig
@@ -247,6 +249,7 @@ type Model struct {
 	batchBaseURL               string
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
+	contextWindow              int                     // Context window for this model instance.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	// Token tailoring budget parameters (instance-level overrides).
@@ -321,6 +324,7 @@ func New(name string, opts ...Option) *Model {
 		chatResponseCallback:       o.ChatResponseCallback,
 		chatChunkCallback:          o.ChatChunkCallback,
 		chatStreamCompleteCallback: o.ChatStreamCompleteCallback,
+		chatTelemetry:              o.ChatTelemetry,
 		extraFields:                o.ExtraFields,
 		variant:                    o.Variant,
 		variantConfig:              variantConfigs[o.Variant],
@@ -329,6 +333,7 @@ func New(name string, opts ...Option) *Model {
 		batchMetadata:              o.BatchMetadata,
 		batchBaseURL:               o.BatchBaseURL,
 		enableTokenTailoring:       o.EnableTokenTailoring,
+		contextWindow:              o.ContextWindow,
 		tokenCounter:               o.TokenCounter,
 		tailoringStrategy:          o.TailoringStrategy,
 		maxInputTokens:             o.MaxInputTokens,
@@ -366,7 +371,8 @@ func isDeepSeekBaseURL(raw string) bool {
 // Info implements the model.Model interface.
 func (m *Model) Info() model.Info {
 	return model.Info{
-		Name: m.name,
+		Name:          m.name,
+		ContextWindow: m.contextWindow,
 	}
 }
 
@@ -455,6 +461,7 @@ func (m *Model) GenerateContent(
 	if err != nil {
 		return nil, err
 	}
+	reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
 	// Execute callback synchronously before starting the goroutine
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
@@ -463,10 +470,20 @@ func (m *Model) GenerateContent(
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {
 		defer close(responseChan)
+		defer reporter.End()
+		emit := func(resp *model.Response) bool {
+			reporter.TrackResponse(resp)
+			select {
+			case responseChan <- resp:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
 		if request.Stream {
-			m.handleStreamingResponse(ctx, *chatRequest, responseChan, opts...)
+			m.handleStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
 		} else {
-			m.handleNonStreamingResponse(ctx, *chatRequest, responseChan, opts...)
+			m.handleNonStreamingResponseWithEmitter(ctx, *chatRequest, emit, opts...)
 		}
 	}()
 	return responseChan, nil
@@ -482,12 +499,15 @@ func (m *Model) GenerateContentIter(
 		return nil, err
 	}
 	return func(yield func(*model.Response) bool) {
+		reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
+		defer reporter.End()
 		m.runChatRequestCallback(ctx, chatRequest)
 		m.runChatRequestJSONCallback(ctx, chatRequest)
 		emit := func(resp *model.Response) bool {
 			if ctx.Err() != nil {
 				return false
 			}
+			reporter.TrackResponse(resp)
 			return yield(resp)
 		}
 		if request.Stream {
@@ -535,7 +555,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Determine max input tokens using priority: user config > auto calculation > default.
 	maxInputTokens := m.maxInputTokens
 	outputReserveTokens := m.effectiveOutputReserveTokens(request)
-	contextWindow := imodel.ResolveContextWindow(m.name)
+	contextWindow := m.contextWindow
+	if contextWindow <= 0 {
+		contextWindow = imodel.ResolveContextWindow(m.name)
+	}
 	autoBudget := maxInputTokens <= 0
 	if autoBudget {
 		// Auto-calculate based on model context window with custom or default parameters.
@@ -590,6 +613,15 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
+		if len(tailored) > 0 {
+			log.WarnContext(
+				ctx,
+				"token tailoring returned best-effort messages in openai.Model",
+				err,
+			)
+			request.Messages = tailored
+			return
+		}
 		log.WarnContext(
 			ctx,
 			"token tailoring failed in openai.Model",
@@ -1014,6 +1046,16 @@ func onlyInternalFileContentParts(parts []model.ContentPart) bool {
 	return true
 }
 
+func fileURLFallbackText(file *model.File) string {
+	if file == nil ||
+		strings.TrimSpace(file.URL) == "" ||
+		len(file.Data) != 0 ||
+		isProviderFileID(file.FileID) {
+		return ""
+	}
+	return model.FileURLText(file)
+}
+
 func userTextPart(text string) openai.ChatCompletionContentPartUnionParam {
 	return openai.ChatCompletionContentPartUnionParam{
 		OfText: &openai.ChatCompletionContentPartTextParam{
@@ -1022,16 +1064,24 @@ func userTextPart(text string) openai.ChatCompletionContentPartUnionParam {
 	}
 }
 
+func appendFileURLFallbackText(
+	dst *[]openai.ChatCompletionContentPartUnionParam,
+	file *model.File,
+) bool {
+	text := fileURLFallbackText(file)
+	if text == "" {
+		return false
+	}
+	*dst = append(*dst, userTextPart(text))
+	return true
+}
+
 func (m *Model) appendUserContentParts(
 	dst *[]openai.ChatCompletionContentPartUnionParam,
 	parts []model.ContentPart,
 ) map[string]any {
 	var extraFields map[string]any
 	for _, part := range parts {
-		if m.variantConfig.textOnlyMessageContent &&
-			part.Type != model.ContentTypeText {
-			continue
-		}
 		if part.Type == model.ContentTypeFile &&
 			m.omitFileContentParts {
 			continue
@@ -1041,8 +1091,18 @@ func (m *Model) appendUserContentParts(
 			isInternalOnlyFile(part.File) {
 			continue
 		}
+		if m.variantConfig.textOnlyMessageContent &&
+			part.Type != model.ContentTypeText {
+			if part.Type == model.ContentTypeFile {
+				appendFileURLFallbackText(dst, part.File)
+			}
+			continue
+		}
 		if part.Type == model.ContentTypeFile &&
 			m.variantConfig.skipFileTypeInContent {
+			if appendFileURLFallbackText(dst, part.File) {
+				continue
+			}
 			extraFields = appendFileID(extraFields, part)
 			continue
 		}
@@ -1068,6 +1128,9 @@ func (m *Model) omittedContentHint(parts []model.ContentPart) string {
 		case model.ContentTypeAudio:
 			audioCount++
 		case model.ContentTypeFile:
+			if fileURLFallbackText(part.File) != "" {
+				continue
+			}
 			fileCount++
 		}
 	}
@@ -1256,6 +1319,13 @@ func (m *Model) convertContentPart(part model.ContentPart) *openai.ChatCompletio
 		if part.File != nil {
 			params, ok := fileToParamsOK(part.File)
 			if !ok {
+				if text := fileURLFallbackText(part.File); text != "" {
+					return &openai.ChatCompletionContentPartUnionParam{
+						OfText: &openai.ChatCompletionContentPartTextParam{
+							Text: text,
+						},
+					}
+				}
 				return nil
 			}
 			return &openai.ChatCompletionContentPartUnionParam{
@@ -1292,7 +1362,8 @@ func isInternalOnlyFile(file *model.File) bool {
 		return false
 	}
 	return fileref.IsInternalFileRef(file.FileID) &&
-		len(file.Data) == 0
+		len(file.Data) == 0 &&
+		strings.TrimSpace(file.URL) == ""
 }
 
 func safeFileHintName(file *model.File) string {
@@ -1368,18 +1439,9 @@ func (m *Model) convertToolCalls(toolCalls []model.ToolCall) []openai.ChatComple
 }
 
 func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletionToolParam {
-	// Extract and sort tool names for stable ordering to improve cache hit rate
-	toolNames := make([]string, 0, len(tools))
-	for name := range tools {
-		toolNames = append(toolNames, name)
-	}
-	sort.Strings(toolNames)
-
-	// Build tools in sorted order
 	var result []openai.ChatCompletionToolParam
-	for _, name := range toolNames {
-		tool := tools[name]
-		declaration := tool.Declaration()
+	for _, t := range toolorder.SortedTools(tools) {
+		declaration := t.Declaration()
 		// Convert the InputSchema to JSON to correctly map to OpenAI's expected format
 		schemaBytes, err := json.Marshal(declaration.InputSchema)
 		if err != nil {
@@ -1423,24 +1485,6 @@ func buildToolDescription(declaration *tool.Declaration) string {
 	}
 	desc += "\nOutput schema: " + string(schemaJSON)
 	return desc
-}
-
-// handleStreamingResponse handles streaming chat completion responses.
-func (m *Model) handleStreamingResponse(
-	ctx context.Context,
-	chatRequest openai.ChatCompletionNewParams,
-	responseChan chan<- *model.Response,
-	opts ...openaiopt.RequestOption,
-) {
-	emitter := func(resp *model.Response) bool {
-		select {
-		case responseChan <- resp:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}
-	m.handleStreamingResponseWithEmitter(ctx, chatRequest, emitter, opts...)
 }
 
 // responseEmitter emits a response and returns false to stop streaming.
@@ -2443,23 +2487,6 @@ func (m *Model) createFinalResponse(
 	}
 
 	return finalResponse
-}
-
-// handleNonStreamingResponse handles non-streaming chat completion responses.
-func (m *Model) handleNonStreamingResponse(
-	ctx context.Context,
-	chatRequest openai.ChatCompletionNewParams,
-	responseChan chan<- *model.Response,
-	opts ...openaiopt.RequestOption,
-) {
-	m.handleNonStreamingResponseWithEmitter(ctx, chatRequest, func(resp *model.Response) bool {
-		select {
-		case responseChan <- resp:
-			return true
-		case <-ctx.Done():
-			return false
-		}
-	}, opts...)
 }
 
 // handleNonStreamingResponseWithEmitter handles non-streaming chat completion responses.

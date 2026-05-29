@@ -102,6 +102,8 @@ type options struct {
 	maxInputTokens int
 	// explicitMaxTokens overrides the auto-calculated MaxTokens value sent to the API.
 	explicitMaxTokens *int
+	// contextWindow is the model context window size in tokens.
+	contextWindow int
 	// tokenTailoringConfig allows customization of token tailoring parameters.
 	tokenTailoringConfig *model.TokenTailoringConfig
 
@@ -312,6 +314,16 @@ func WithMaxInputTokens(limit int) Option {
 func WithMaxTokens(limit int) Option {
 	return func(opts *options) {
 		opts.explicitMaxTokens = &limit
+	}
+}
+
+// WithContextWindow sets the model context window size in tokens for this
+// model instance.
+func WithContextWindow(tokens int) Option {
+	return func(opts *options) {
+		if tokens > 0 {
+			opts.contextWindow = tokens
+		}
 	}
 }
 

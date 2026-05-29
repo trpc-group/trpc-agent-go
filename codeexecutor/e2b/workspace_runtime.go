@@ -14,7 +14,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -75,7 +77,8 @@ type workspaceRuntime struct {
 }
 
 type runtimeConfig struct {
-	runBase string
+	runBase              string
+	workspacePersistence WorkspacePersistenceMode
 }
 
 func newWorkspaceRuntime(c *CodeExecutor) *workspaceRuntime {
@@ -83,7 +86,10 @@ func newWorkspaceRuntime(c *CodeExecutor) *workspaceRuntime {
 	if base == "" {
 		base = defaultSandboxRunBase
 	}
-	return &workspaceRuntime{ce: c, cfg: runtimeConfig{runBase: base}}
+	return &workspaceRuntime{ce: c, cfg: runtimeConfig{
+		runBase:              base,
+		workspacePersistence: c.workspacePersistence,
+	}}
 }
 
 // CreateWorkspace creates a per-execution directory inside the sandbox.
@@ -103,11 +109,23 @@ func (r *workspaceRuntime) CreateWorkspace(
 		)
 	}
 
+	if r.cfg.workspacePersistence == WorkspacePersistencePerSession && execID == "" {
+		return codeexecutor.Workspace{}, errors.New(
+			"e2b: execID must not be empty when using WorkspacePersistencePerSession",
+		)
+	}
+
 	safe := sanitize(execID)
-	suf := time.Now().UnixNano()
-	wsPath := path.Join(
-		r.cfg.runBase, fmt.Sprintf("ws_%s_%d", safe, suf),
-	)
+	var wsPath string
+	if r.cfg.workspacePersistence == WorkspacePersistencePerSession {
+		// Use a stable hash of the raw exec ID to avoid collisions from
+		// sanitize() (e.g. "a/b" and "a_b" both sanitize to "a_b").
+		h := stableWorkspaceHash(execID)
+		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s", h))
+	} else {
+		suf := time.Now().UnixNano()
+		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s_%d", safe, suf))
+	}
 
 	var sb strings.Builder
 	sb.WriteString("set -e; mkdir -p ")
@@ -270,6 +288,9 @@ func (r *workspaceRuntime) Collect(
 		if rel == full {
 			rel = filepath.ToSlash(full)
 		}
+		if codeexecutor.IsRootMetadataTempPath(rel) {
+			continue
+		}
 		if seen[rel] {
 			continue
 		}
@@ -294,6 +315,20 @@ func (r *workspaceRuntime) Collect(
 
 // StageInputs maps external inputs into the sandbox workspace.
 func (r *workspaceRuntime) StageInputs(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	specs []codeexecutor.InputSpec,
+) error {
+	return codeexecutor.WithWorkspaceMetadataLock(
+		ctx,
+		ws.Path,
+		func(ctx context.Context) error {
+			return r.stageInputsLocked(ctx, ws, specs)
+		},
+	)
+}
+
+func (r *workspaceRuntime) stageInputsLocked(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
@@ -498,6 +533,10 @@ func (r *workspaceRuntime) CollectOutputs(
 			mf.LimitsHit = true
 			break
 		}
+		rel := strings.TrimPrefix(full, ws.Path+"/")
+		if codeexecutor.IsRootMetadataTempPath(rel) {
+			continue
+		}
 		limit := maxFileBytes
 		if int64(limit) > left {
 			limit = left
@@ -518,7 +557,6 @@ func (r *workspaceRuntime) CollectOutputs(
 			)
 		}
 		left -= int64(len(data))
-		rel := strings.TrimPrefix(full, ws.Path+"/")
 		ref := codeexecutor.FileRef{
 			Name:      rel,
 			MIMEType:  mime,
@@ -1149,6 +1187,9 @@ func (r *workspaceRuntime) loadWorkspaceMetadata(
 		return md, nil
 	}
 	if err := json.Unmarshal(data, &md); err != nil {
+		if codeexecutor.IsMetadataCorruptError(err) {
+			return codeexecutor.NewWorkspaceMetadata(), nil
+		}
 		return codeexecutor.WorkspaceMetadata{}, err
 	}
 	if md.Version == 0 {
@@ -1184,8 +1225,74 @@ func (r *workspaceRuntime) saveWorkspaceMetadata(
 	if err != nil {
 		return err
 	}
-	dest := path.Join(ws.Path, codeexecutor.MetaFileName)
-	return r.writeBytesToSandbox(ctx, dest, buf, metadataFileMode)
+	tmpFile := codeexecutor.MetadataTempFileName()
+	tmpPath := path.Join(ws.Path, tmpFile)
+	destPath := path.Join(ws.Path, codeexecutor.MetaFileName)
+	committed := false
+	defer r.cleanupMetadataTemp(ctx, tmpPath, &committed)
+	if err := r.writeBytesToSandbox(
+		ctx, tmpPath, buf, metadataFileMode,
+	); err != nil {
+		return err
+	}
+	var script strings.Builder
+	script.WriteString("set -e; tmp=")
+	script.WriteString(shellQuote(tmpPath))
+	script.WriteString("; dest=")
+	script.WriteString(shellQuote(destPath))
+	script.WriteString("; trap 'rm -f \"$tmp\"' EXIT; ")
+	script.WriteString("if [ -d \"$dest\" ]; then ")
+	script.WriteString("echo \"metadata path is a directory\" >&2; exit 1; ")
+	script.WriteString("fi; mv -f \"$tmp\" \"$dest\"")
+	script.WriteString("; trap - EXIT")
+	res, err := r.RunProgram(
+		ctx,
+		ws,
+		codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-lc", script.String()},
+			Env:     map[string]string{},
+			Cwd:     ".",
+			Timeout: defaultStageTimeout,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf(
+			"workspace metadata commit failed: exit code %d: %s",
+			res.ExitCode,
+			strings.TrimSpace(res.Stderr),
+		)
+	}
+	committed = true
+	return nil
+}
+
+func (r *workspaceRuntime) cleanupMetadataTemp(
+	ctx context.Context,
+	tmpPath string,
+	committed *bool,
+) {
+	if committed != nil && *committed {
+		return
+	}
+	if tmpPath == "" {
+		return
+	}
+	cleanupCtx := context.WithoutCancel(ctx)
+	_, _ = r.RunProgram(
+		cleanupCtx,
+		codeexecutor.Workspace{Path: path.Dir(tmpPath)},
+		codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-lc", "rm -f " + shellQuote(tmpPath)},
+			Env:     map[string]string{},
+			Cwd:     ".",
+			Timeout: defaultStageTimeout,
+		},
+	)
 }
 
 // Input scheme prefixes mirrored from the container runtime.
@@ -1228,6 +1335,15 @@ func sanitize(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// stableWorkspaceHash returns a collision-free, filesystem-safe identifier
+// derived from the raw exec/session ID. It uses the first 16 hex characters of
+// a SHA-256 hash (64 bits), which is sufficient for workspace deduplication
+// within a single sandbox while keeping directory names short.
+func stableWorkspaceHash(id string) string {
+	h := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(h[:8])
 }
 
 func shellQuote(s string) string {

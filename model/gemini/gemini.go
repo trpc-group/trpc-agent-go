@@ -12,16 +12,16 @@ package gemini
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"google.golang.org/genai"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -36,6 +36,8 @@ import (
 // message, injecting "[orphan_tool_result]" noise into the conversation history.
 var geminiCallSeq uint64
 
+const geminiThoughtSignatureKey = "thought_signature"
+
 // Model implements the model.Model interface for Gemini API.
 type Model struct {
 	client                     Client
@@ -47,6 +49,7 @@ type Model struct {
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
+	contextWindow              int                     // Context window for this model instance.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	// Token tailoring budget parameters (instance-level overrides).
@@ -81,6 +84,7 @@ func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
 		safetyMarginRatio:          o.tokenTailoringConfig.SafetyMarginRatio,
 		maxInputTokensRatio:        o.tokenTailoringConfig.MaxInputTokensRatio,
 		maxInputTokens:             o.maxInputTokens,
+		contextWindow:              o.contextWindow,
 		chatRequestCallback:        o.chatRequestCallback,
 		chatResponseCallback:       o.chatResponseCallback,
 		chatChunkCallback:          o.chatChunkCallback,
@@ -91,7 +95,8 @@ func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
 // Info implements the model.Model interface.
 func (m *Model) Info() model.Info {
 	return model.Info{
-		Name: m.name,
+		Name:          m.name,
+		ContextWindow: m.contextWindow,
 	}
 }
 
@@ -432,6 +437,7 @@ func (m *Model) convertContentBlock(candidates []*genai.Candidate) (model.Messag
 		reasoningBuilder strings.Builder
 		toolCalls        []model.ToolCall
 		finishReason     string
+		reasoningSig     string
 	)
 	for _, candidate := range candidates {
 		if candidate.FinishReason != "" {
@@ -460,22 +466,31 @@ func (m *Model) convertContentBlock(candidates []*genai.Candidate) (model.Messag
 					if id == "" {
 						id = fmt.Sprintf("gemini_call_%d", atomic.AddUint64(&geminiCallSeq, 1))
 					}
-					toolCalls = append(toolCalls, model.ToolCall{
+					toolCall := model.ToolCall{
 						ID: id,
 						Function: model.FunctionDefinitionParam{
 							Name:      part.FunctionCall.Name,
 							Arguments: args,
 						},
-					})
+					}
+					if len(part.ThoughtSignature) > 0 {
+						toolCall.ExtraFields = map[string]any{
+							geminiThoughtSignatureKey: append([]byte(nil), part.ThoughtSignature...),
+						}
+					}
+					toolCalls = append(toolCalls, toolCall)
+				} else if len(part.ThoughtSignature) > 0 {
+					reasoningSig = base64.StdEncoding.EncodeToString(part.ThoughtSignature)
 				}
 			}
 		}
 	}
 	return model.Message{
-		Role:             model.RoleAssistant,
-		Content:          textBuilder.String(),
-		ReasoningContent: reasoningBuilder.String(),
-		ToolCalls:        toolCalls,
+		Role:               model.RoleAssistant,
+		Content:            textBuilder.String(),
+		ReasoningContent:   reasoningBuilder.String(),
+		ReasoningSignature: reasoningSig,
+		ToolCalls:          toolCalls,
 	}, finishReason
 }
 
@@ -578,7 +593,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	maxInputTokens := m.maxInputTokens
 	if maxInputTokens <= 0 {
 		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := imodel.ResolveContextWindow(m.name)
+		contextWindow := m.contextWindow
+		if contextWindow <= 0 {
+			contextWindow = imodel.ResolveContextWindow(m.name)
+		}
 		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
 			// Use custom parameters if any are set.
 			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
@@ -606,9 +624,18 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
+		if len(tailored) > 0 {
+			log.WarnContext(
+				ctx,
+				"token tailoring returned best-effort messages in gemini.Model",
+				err,
+			)
+			request.Messages = tailored
+			return
+		}
 		log.WarnContext(
 			ctx,
-			"token tailoring failed in openai.Model",
+			"token tailoring failed in gemini.Model",
 			err,
 		)
 		return
@@ -717,13 +744,19 @@ func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentCo
 // buildThinkingConfig converts our Request to Gemini request ThinkingConfig
 func (m *Model) buildThinkingConfig(request *model.Request) *genai.ThinkingConfig {
 	res := &genai.ThinkingConfig{}
-	if request.ThinkingTokens != nil {
+	if request.ThinkingLevel != nil {
+		res.ThinkingLevel = normalizeThinkingLevel(*request.ThinkingLevel)
+	} else if request.ThinkingTokens != nil {
 		res.ThinkingBudget = genai.Ptr(int32(*request.ThinkingTokens))
 	}
 	if request.ThinkingEnabled != nil {
 		res.IncludeThoughts = *request.ThinkingEnabled
 	}
 	return res
+}
+
+func normalizeThinkingLevel(level string) genai.ThinkingLevel {
+	return genai.ThinkingLevel(strings.TrimSpace(level))
 }
 
 // convertMessages converts our Message format to OpenAI's format.
@@ -768,10 +801,20 @@ func (m *Model) convertMessageContent(
 	}
 	// Add Content as a text part if present.
 	if msg.Content != "" {
-		contentParts = append(
-			contentParts,
-			genai.NewContentFromText(msg.Content, genai.Role(role)),
-		)
+		if signature := thoughtSignatureFromString(msg.ReasoningSignature); len(signature) > 0 {
+			contentParts = append(
+				contentParts,
+				genai.NewContentFromParts([]*genai.Part{{
+					Text:             msg.Content,
+					ThoughtSignature: signature,
+				}}, genai.Role(role)),
+			)
+		} else {
+			contentParts = append(
+				contentParts,
+				genai.NewContentFromText(msg.Content, genai.Role(role)),
+			)
+		}
 	}
 	for _, part := range msg.ContentParts {
 		contentPart := m.convertContentPart(part)
@@ -781,7 +824,69 @@ func (m *Model) convertMessageContent(
 		// For non-file or non-skipped file types, add to contentParts.
 		contentParts = append(contentParts, genai.NewContentFromParts([]*genai.Part{contentPart}, genai.Role(role)))
 	}
+	for _, toolCall := range msg.ToolCalls {
+		contentPart := m.convertToolCallPart(toolCall)
+		if contentPart == nil {
+			continue
+		}
+		contentParts = append(contentParts, genai.NewContentFromParts([]*genai.Part{contentPart}, genai.Role(role)))
+	}
 	return contentParts
+}
+
+func (m *Model) convertToolCallPart(toolCall model.ToolCall) *genai.Part {
+	if toolCall.Function.Name == "" {
+		return nil
+	}
+	args := map[string]any{}
+	if len(toolCall.Function.Arguments) > 0 {
+		if err := json.Unmarshal(toolCall.Function.Arguments, &args); err != nil {
+			args = map[string]any{}
+		}
+	}
+	part := &genai.Part{
+		FunctionCall: &genai.FunctionCall{
+			ID:   toolCall.ID,
+			Name: toolCall.Function.Name,
+			Args: args,
+		},
+	}
+	if signature := thoughtSignatureFromExtraFields(toolCall.ExtraFields); len(signature) > 0 {
+		part.ThoughtSignature = signature
+	}
+	return part
+}
+
+func thoughtSignatureFromExtraFields(extraFields map[string]any) []byte {
+	if len(extraFields) == 0 {
+		return nil
+	}
+	raw, ok := extraFields[geminiThoughtSignatureKey]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []byte:
+		return append([]byte(nil), v...)
+	case string:
+		if decoded, err := base64.StdEncoding.DecodeString(v); err == nil {
+			return decoded
+		}
+		return []byte(v)
+	default:
+		return nil
+	}
+}
+
+func thoughtSignatureFromString(signature string) []byte {
+	signature = strings.TrimSpace(signature)
+	if signature == "" {
+		return nil
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(signature); err == nil {
+		return decoded
+	}
+	return []byte(signature)
 }
 
 func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
@@ -791,11 +896,8 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 	if len(tools) == 0 {
 		return nil
 	}
-	// Sort keys for deterministic declaration order across runs.
-	keys := slices.Sorted(maps.Keys(tools))
 	decls := make([]*genai.FunctionDeclaration, 0, len(tools))
-	for _, k := range keys {
-		t := tools[k]
+	for _, t := range toolorder.SortedTools(tools) {
 		decl := t.Declaration()
 		funcDeclaration := &genai.FunctionDeclaration{
 			Description: decl.Description,
@@ -888,6 +990,14 @@ func (m *Model) convertContentPart(part model.ContentPart) *genai.Part {
 	case model.ContentTypeFile:
 		if part.File == nil {
 			return nil
+		}
+		if len(part.File.Data) == 0 {
+			if text := model.FileURLText(part.File); text != "" {
+				return &genai.Part{
+					Text: text,
+				}
+			}
+			return genai.NewPartFromBytes(part.File.Data, part.File.MimeType)
 		}
 		return genai.NewPartFromBytes(part.File.Data, part.File.MimeType)
 	}

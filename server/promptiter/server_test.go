@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	enginepkg "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	managerpkg "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/manager"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 type fakeEngine struct {
@@ -59,6 +61,32 @@ type fakeManager struct {
 
 type failingWriter struct{}
 
+type stubLogger struct {
+	warnfCalls []string
+}
+
+func (s *stubLogger) Debug(args ...any) {}
+
+func (s *stubLogger) Debugf(format string, args ...any) {}
+
+func (s *stubLogger) Info(args ...any) {}
+
+func (s *stubLogger) Infof(format string, args ...any) {}
+
+func (s *stubLogger) Warn(args ...any) {}
+
+func (s *stubLogger) Warnf(format string, args ...any) {
+	s.warnfCalls = append(s.warnfCalls, fmt.Sprintf(format, args...))
+}
+
+func (s *stubLogger) Error(args ...any) {}
+
+func (s *stubLogger) Errorf(format string, args ...any) {}
+
+func (s *stubLogger) Fatal(args ...any) {}
+
+func (s *stubLogger) Fatalf(format string, args ...any) {}
+
 func (f *fakeManager) Start(ctx context.Context, request *enginepkg.RunRequest) (*enginepkg.RunResult, error) {
 	if f.start != nil {
 		return f.start(ctx, request)
@@ -82,6 +110,14 @@ func (f *fakeManager) Cancel(ctx context.Context, runID string) error {
 
 func (f *fakeManager) Close() error {
 	return nil
+}
+
+func testEvalSetInputs(evalSetID string) []enginepkg.EvalSetInput {
+	return []enginepkg.EvalSetInput{
+		{
+			EvalSetID: evalSetID,
+		},
+	}
 }
 
 func (failingWriter) Header() http.Header {
@@ -159,6 +195,12 @@ func TestDefaultAndCustomPaths(t *testing.T) {
 	assert.Equal(t, "/api/promptiter/demo-app/background-executions", customServer.AsyncRunsPath())
 }
 
+func TestNewTrimsAppName(t *testing.T) {
+	srv := newTestServer(t, WithAppName(" demo-app "))
+	assert.Equal(t, "demo-app", srv.appName)
+	assert.Equal(t, "/promptiter/v1/apps/demo-app", srv.BasePath())
+}
+
 func TestHandleStructure(t *testing.T) {
 	srv := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, srv.StructurePath(), nil)
@@ -205,10 +247,10 @@ func TestHandleRunsPassesRequestThrough(t *testing.T) {
 	)
 	body, err := json.Marshal(&RunRequest{
 		Run: &enginepkg.RunRequest{
-			TrainEvalSetIDs:      []string{"train"},
-			ValidationEvalSetIDs: []string{"validation"},
-			TargetSurfaceIDs:     []string{"candidate#instruction"},
-			MaxRounds:            1,
+			Train:            testEvalSetInputs("train"),
+			Validation:       testEvalSetInputs("validation"),
+			TargetSurfaceIDs: []string{"candidate#instruction"},
+			MaxRounds:        1,
 		},
 	})
 	require.NoError(t, err)
@@ -217,14 +259,152 @@ func TestHandleRunsPassesRequestThrough(t *testing.T) {
 	srv.Handler().ServeHTTP(recorder, req)
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.NotNil(t, captured)
-	assert.Equal(t, []string{"train"}, captured.TrainEvalSetIDs)
-	assert.Equal(t, []string{"validation"}, captured.ValidationEvalSetIDs)
+	assert.Equal(t, testEvalSetInputs("train"), captured.Train)
+	assert.Equal(t, testEvalSetInputs("validation"), captured.Validation)
 	assert.Equal(t, []string{"candidate#instruction"}, captured.TargetSurfaceIDs)
 	assert.Equal(t, 1, captured.MaxRounds)
 	var resp RunResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Result)
+	assert.Equal(t, "demo-app", resp.Result.AppName)
 	assert.Equal(t, enginepkg.RunStatusSucceeded, resp.Result.Status)
+}
+
+func TestHandleRunsAppliesResponseResultSlimming(t *testing.T) {
+	srv := newTestServer(t,
+		WithResponseResultSlimming(enginepkg.RunResultSlimming{OmitStructure: true}),
+		WithEngine(&fakeEngine{
+			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
+				_ = ctx
+				return &astructure.Snapshot{
+					StructureID: "struct_1",
+					EntryNodeID: "node_1",
+					Nodes: []astructure.Node{
+						{NodeID: "node_1", Name: "candidate", Kind: astructure.NodeKindLLM},
+					},
+					Surfaces: []astructure.Surface{
+						{
+							SurfaceID: "candidate#instruction",
+							NodeID:    "node_1",
+							Type:      astructure.SurfaceTypeInstruction,
+						},
+					},
+				}, nil
+			},
+			run: func(ctx context.Context, request *enginepkg.RunRequest, opts ...enginepkg.Option) (*enginepkg.RunResult, error) {
+				_ = ctx
+				_ = request
+				_ = opts
+				return &enginepkg.RunResult{
+					Structure: &astructure.Snapshot{StructureID: "struct_1", EntryNodeID: "node_1"},
+					Status:    enginepkg.RunStatusSucceeded,
+				}, nil
+			},
+		}),
+	)
+	body, err := json.Marshal(&RunRequest{
+		Run: &enginepkg.RunRequest{
+			Train:            testEvalSetInputs("train"),
+			Validation:       testEvalSetInputs("validation"),
+			TargetSurfaceIDs: []string{"candidate#instruction"},
+			MaxRounds:        1,
+		},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var resp RunResponse
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Result)
+	assert.Nil(t, resp.Result.Structure)
+}
+
+func TestHandleRunsDecodesEvalSetInputs(t *testing.T) {
+	var captured *enginepkg.RunRequest
+	logger := &stubLogger{}
+	originalLogger := agentlog.Default
+	agentlog.Default = logger
+	defer func() {
+		agentlog.Default = originalLogger
+	}()
+	srv := newTestServer(t,
+		WithEngine(&fakeEngine{
+			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
+				_ = ctx
+				return &astructure.Snapshot{
+					StructureID: "struct_1",
+					EntryNodeID: "node_1",
+					Nodes: []astructure.Node{
+						{NodeID: "node_1", Name: "candidate", Kind: astructure.NodeKindLLM},
+					},
+					Surfaces: []astructure.Surface{
+						{
+							SurfaceID: "candidate#instruction",
+							NodeID:    "node_1",
+							Type:      astructure.SurfaceTypeInstruction,
+						},
+					},
+				}, nil
+			},
+			run: func(ctx context.Context, request *enginepkg.RunRequest, opts ...enginepkg.Option) (*enginepkg.RunResult, error) {
+				_ = ctx
+				_ = opts
+				captured = request
+				return &enginepkg.RunResult{Status: enginepkg.RunStatusSucceeded}, nil
+			},
+		}),
+	)
+	body := `{
+		"run": {
+			"train": [{
+				"evalSetId": "train",
+				"evalCaseIds": ["train_case_1"],
+				"lossHints": [{
+					"evalCaseId": "train_case_1",
+					"metricName": "quality",
+					"severity": "P1",
+					"reason": "business reason",
+					"unknownHintField": "ignored"
+				}],
+				"unknownEvalSetField": "ignored"
+			}],
+			"validation": [{"evalSetId": "validation", "evalCaseIds": ["validation_case_1", "validation_case_2"]}],
+			"TargetSurfaceIDs": ["candidate#instruction"],
+			"MaxRounds": 1,
+			"unknownRunField": "ignored"
+		},
+		"unknownRootField": "ignored"
+	}`
+	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewBufferString(body))
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.NotNil(t, captured)
+	assert.Equal(t, []enginepkg.EvalSetInput{
+		{
+			EvalSetID:   "train",
+			EvalCaseIDs: []string{"train_case_1"},
+			LossHints: []enginepkg.LossHint{
+				{
+					EvalCaseID: "train_case_1",
+					MetricName: "quality",
+					Severity:   "P1",
+					Reason:     "business reason",
+				},
+			},
+		},
+	}, captured.Train)
+	assert.Equal(t, []enginepkg.EvalSetInput{
+		{
+			EvalSetID:   "validation",
+			EvalCaseIDs: []string{"validation_case_1", "validation_case_2"},
+		},
+	}, captured.Validation)
+	require.Len(t, logger.warnfCalls, 1)
+	assert.Contains(t, logger.warnfCalls[0], "ignored unknown request field")
+	assert.Contains(t, logger.warnfCalls[0], "json: unknown field")
 }
 
 func TestHandleRunsRejectsInvalidRequest(t *testing.T) {
@@ -234,6 +414,41 @@ func TestHandleRunsRejectsInvalidRequest(t *testing.T) {
 	srv.Handler().ServeHTTP(recorder, req)
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), "run must not be nil")
+}
+
+func TestHandleRunsRejectsInvalidLossHints(t *testing.T) {
+	called := false
+	srv := newTestServer(t,
+		WithEngine(&fakeEngine{
+			run: func(ctx context.Context, request *enginepkg.RunRequest, opts ...enginepkg.Option) (*enginepkg.RunResult, error) {
+				_ = ctx
+				_ = request
+				_ = opts
+				called = true
+				return &enginepkg.RunResult{Status: enginepkg.RunStatusSucceeded}, nil
+			},
+		}),
+	)
+	body := `{
+		"run": {
+			"train": [{
+				"evalSetId": "train",
+				"lossHints": [{
+					"evalCaseId": "case_1",
+					"metricName": "quality",
+					"reason": " "
+				}]
+			}],
+			"validation": [{"evalSetId": "validation"}],
+			"MaxRounds": 1
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewBufferString(body))
+	recorder := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "loss hint reason")
+	assert.False(t, called)
 }
 
 func TestHandleRunsSupportsOptions(t *testing.T) {
@@ -249,10 +464,10 @@ func TestHandleRunsRejectsUnknownTargetSurfaceID(t *testing.T) {
 	srv := newTestServer(t)
 	body, err := json.Marshal(&RunRequest{
 		Run: &enginepkg.RunRequest{
-			TrainEvalSetIDs:      []string{"train"},
-			ValidationEvalSetIDs: []string{"validation"},
-			TargetSurfaceIDs:     []string{"unknown#instruction"},
-			MaxRounds:            1,
+			Train:            testEvalSetInputs("train"),
+			Validation:       testEvalSetInputs("validation"),
+			TargetSurfaceIDs: []string{"unknown#instruction"},
+			MaxRounds:        1,
 		},
 	})
 	require.NoError(t, err)
@@ -275,23 +490,25 @@ func TestHandleAsyncRunsIsNotExposedWithoutManager(t *testing.T) {
 func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 	var captured *enginepkg.RunRequest
 	srv := newTestServer(t,
+		WithResponseResultSlimming(enginepkg.RunResultSlimming{OmitStructure: true}),
 		WithManager(&fakeManager{
 			start: func(ctx context.Context, request *enginepkg.RunRequest) (*enginepkg.RunResult, error) {
 				_ = ctx
 				captured = request
 				return &enginepkg.RunResult{
-					ID:     "run_1",
-					Status: enginepkg.RunStatusQueued,
+					ID:        "run_1",
+					Status:    enginepkg.RunStatusQueued,
+					Structure: &astructure.Snapshot{StructureID: "struct_1", EntryNodeID: "node_1"},
 				}, nil
 			},
 		}),
 	)
 	body, err := json.Marshal(&RunRequest{
 		Run: &enginepkg.RunRequest{
-			TrainEvalSetIDs:      []string{"train"},
-			ValidationEvalSetIDs: []string{"validation"},
-			TargetSurfaceIDs:     []string{"candidate#instruction"},
-			MaxRounds:            1,
+			Train:            testEvalSetInputs("train"),
+			Validation:       testEvalSetInputs("validation"),
+			TargetSurfaceIDs: []string{"candidate#instruction"},
+			MaxRounds:        1,
 		},
 	})
 	require.NoError(t, err)
@@ -300,13 +517,15 @@ func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 	srv.Handler().ServeHTTP(recorder, req)
 	require.Equal(t, http.StatusCreated, recorder.Code)
 	require.NotNil(t, captured)
-	assert.Equal(t, []string{"train"}, captured.TrainEvalSetIDs)
+	assert.Equal(t, testEvalSetInputs("train"), captured.Train)
 	assert.Equal(t, "/promptiter/v1/apps/demo-app/async-runs/run_1", recorder.Header().Get("Location"))
 	var resp RunResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Result)
+	assert.Equal(t, "demo-app", resp.Result.AppName)
 	assert.Equal(t, "run_1", resp.Result.ID)
 	assert.Equal(t, enginepkg.RunStatusQueued, resp.Result.Status)
+	assert.Nil(t, resp.Result.Structure)
 }
 
 func TestHandleAsyncRunsRejectsInvalidMethodWhenManagerIsConfigured(t *testing.T) {
@@ -336,10 +555,10 @@ func TestHandleAsyncRunsSupportsOptionsAndMapsStartErrors(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, optionsRecorder.Code)
 	body, err := json.Marshal(&RunRequest{
 		Run: &enginepkg.RunRequest{
-			TrainEvalSetIDs:      []string{"train"},
-			ValidationEvalSetIDs: []string{"validation"},
-			TargetSurfaceIDs:     []string{"candidate#instruction"},
-			MaxRounds:            1,
+			Train:            testEvalSetInputs("train"),
+			Validation:       testEvalSetInputs("validation"),
+			TargetSurfaceIDs: []string{"candidate#instruction"},
+			MaxRounds:        1,
 		},
 	})
 	require.NoError(t, err)
@@ -352,6 +571,7 @@ func TestHandleAsyncRunsSupportsOptionsAndMapsStartErrors(t *testing.T) {
 
 func TestHandleGetRunReturnsRun(t *testing.T) {
 	srv := newTestServer(t,
+		WithResponseResultSlimming(enginepkg.RunResultSlimming{OmitStructure: true}),
 		WithManager(&fakeManager{
 			get: func(ctx context.Context, runID string) (*enginepkg.RunResult, error) {
 				_ = ctx
@@ -359,6 +579,7 @@ func TestHandleGetRunReturnsRun(t *testing.T) {
 					ID:           runID,
 					Status:       enginepkg.RunStatusRunning,
 					CurrentRound: 2,
+					Structure:    &astructure.Snapshot{StructureID: "struct_1", EntryNodeID: "node_1"},
 				}, nil
 			},
 		}),
@@ -370,9 +591,11 @@ func TestHandleGetRunReturnsRun(t *testing.T) {
 	var resp RunResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Result)
+	assert.Equal(t, "demo-app", resp.Result.AppName)
 	assert.Equal(t, "run_1", resp.Result.ID)
 	assert.Equal(t, enginepkg.RunStatusRunning, resp.Result.Status)
 	assert.Equal(t, 2, resp.Result.CurrentRound)
+	assert.Nil(t, resp.Result.Structure)
 }
 
 func TestHandleCancelRunCancelsAsyncRun(t *testing.T) {
@@ -470,10 +693,10 @@ func TestHandleRunsMethodAndExecutionErrors(t *testing.T) {
 	assert.Equal(t, http.MethodPost, getRecorder.Header().Get(headerAllow))
 	body, err := json.Marshal(&RunRequest{
 		Run: &enginepkg.RunRequest{
-			TrainEvalSetIDs:      []string{"train"},
-			ValidationEvalSetIDs: []string{"validation"},
-			TargetSurfaceIDs:     []string{"candidate#instruction"},
-			MaxRounds:            1,
+			Train:            testEvalSetInputs("train"),
+			Validation:       testEvalSetInputs("validation"),
+			TargetSurfaceIDs: []string{"candidate#instruction"},
+			MaxRounds:        1,
 		},
 	})
 	require.NoError(t, err)
@@ -627,6 +850,12 @@ func TestNewExecutionContext(t *testing.T) {
 
 func TestDecodeJSONBodyRejectsInvalidPayloads(t *testing.T) {
 	respondCalls := make([]int, 0, 2)
+	logger := &stubLogger{}
+	originalLogger := agentlog.Default
+	agentlog.Default = logger
+	defer func() {
+		agentlog.Default = originalLogger
+	}()
 	respond := func(w http.ResponseWriter, r *http.Request, statusCode int, payload any) {
 		_ = w
 		_ = r
@@ -639,13 +868,173 @@ func TestDecodeJSONBodyRejectsInvalidPayloads(t *testing.T) {
 	extraReq := httptest.NewRequest(http.MethodPost, "/runs", bytes.NewBufferString(`{} {}`))
 	_, err = decodeJSONBody[RunRequest](httptest.NewRecorder(), extraReq, respond)
 	assert.Error(t, err)
+	unknownReq := httptest.NewRequest(http.MethodPost, "/runs", bytes.NewBufferString(`{"unknown":true}`))
+	_, err = decodeJSONBody[RunRequest](httptest.NewRecorder(), unknownReq, respond)
+	assert.NoError(t, err)
+	require.Len(t, logger.warnfCalls, 1)
+	assert.Contains(t, logger.warnfCalls[0], "unknown")
 	assert.Equal(t, []int{http.StatusBadRequest, http.StatusBadRequest}, respondCalls)
 }
 
 func TestValidateRunRequest(t *testing.T) {
 	assert.EqualError(t, validateRunRequest(nil), "request must not be nil")
 	assert.EqualError(t, validateRunRequest(&RunRequest{}), "run must not be nil")
-	assert.NoError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{}}))
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{}}), "train evaluation sets are empty")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: testEvalSetInputs("train"),
+	}}), "validation evaluation sets are empty")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "",
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), "train evaluation set id is empty")
+	assert.NoError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+			},
+			{
+				EvalSetID: "train",
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}))
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: testEvalSetInputs("train"),
+		Validation: []enginepkg.EvalSetInput{
+			{
+				EvalSetID:   "validation",
+				EvalCaseIDs: []string{""},
+			},
+		},
+		MaxRounds: 1,
+	}}), `validation eval case id for eval set "validation" is empty`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []enginepkg.LossHint{
+					{
+						EvalCaseID: " ",
+						MetricName: "quality",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss hint eval case id for eval set "train" is empty`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []enginepkg.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: " ",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss hint metric name for eval set "train" case "case_1" is empty`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []enginepkg.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: "quality",
+						Reason:     " ",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss hint reason for eval set "train" case "case_1" metric "quality" is empty`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID: "train",
+				LossHints: []enginepkg.LossHint{
+					{
+						EvalCaseID: "case_1",
+						MetricName: "quality",
+						Severity:   "P4",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss hint severity "P4" for eval set "train" case "case_1" metric "quality" is invalid`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train: []enginepkg.EvalSetInput{
+			{
+				EvalSetID:   "train",
+				EvalCaseIDs: []string{"case_1"},
+				LossHints: []enginepkg.LossHint{
+					{
+						EvalCaseID: "case_2",
+						MetricName: "quality",
+						Reason:     "business reason",
+					},
+				},
+			},
+		},
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}), `train loss hint eval case "case_2" is not selected for eval set "train"`)
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+	}}), "max rounds must be greater than 0")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{},
+	}}), "target surface ids must not be empty")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+		BackwardOptions: enginepkg.BackwardOptions{
+			CaseParallelism: -1,
+		},
+	}}), "backward case parallelism must be non-negative")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+		AggregationOptions: enginepkg.AggregationOptions{
+			SurfaceParallelism: -1,
+		},
+	}}), "aggregation surface parallelism must be non-negative")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+		OptimizerOptions: enginepkg.OptimizerOptions{
+			SurfaceParallelism: -1,
+		},
+	}}), "optimizer surface parallelism must be non-negative")
+	assert.NoError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:      testEvalSetInputs("train"),
+		Validation: testEvalSetInputs("validation"),
+		MaxRounds:  1,
+	}}))
 }
 
 var _ managerpkg.Manager = (*fakeManager)(nil)

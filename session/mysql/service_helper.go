@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,6 +22,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+const userAnchorSearchBatchSize = 64
 
 // getSession retrieves a single session with its events and summaries.
 func (s *Service) getSession(
@@ -85,7 +88,7 @@ func (s *Service) getSession(
 	}
 
 	// Batch load events for all sessions
-	eventsList, err := s.getEventsList(ctx, []session.Key{key}, []time.Time{sessState.CreatedAt}, limit, afterTime, page)
+	eventsList, err := s.getSessionEvents(ctx, key, sessState.CreatedAt, limit, afterTime, page)
 	if err != nil {
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
@@ -128,12 +131,42 @@ func (s *Service) getSession(
 	return mergeState(appState, userState, sess), nil
 }
 
+// getSessionEvents loads events for GetSession. For non-paged GetSession with
+// an event limit, it pushes the window down to SQL and only unmarshals the
+// selected rows plus an optional user-message anchor.
+func (s *Service) getSessionEvents(
+	ctx context.Context,
+	key session.Key,
+	sessionCreatedAt time.Time,
+	limit int,
+	afterTime time.Time,
+	page *session.EventPage,
+) ([][]event.Event, error) {
+	if page != nil {
+		return s.getEventsList(ctx, []session.Key{key}, []time.Time{sessionCreatedAt}, limit, afterTime, page)
+	}
+	// WithEventTime is based on event.Timestamp, not the DB created_at column.
+	if !afterTime.IsZero() {
+		return s.getEventsList(ctx, []session.Key{key}, []time.Time{sessionCreatedAt}, limit, afterTime, nil)
+	}
+	effectiveLimit := limit
+	if effectiveLimit <= 0 {
+		effectiveLimit = s.opts.sessionEventLimit
+	}
+	if effectiveLimit <= 0 {
+		return s.getEventsList(ctx, []session.Key{key}, []time.Time{sessionCreatedAt}, limit, afterTime, nil)
+	}
+	return s.getLimitedSessionEvents(ctx, key, sessionCreatedAt, effectiveLimit, afterTime)
+}
+
 // listSessions lists all sessions for a user.
 func (s *Service) listSessions(
 	ctx context.Context,
 	key session.UserKey,
 	limit int,
 	afterTime time.Time,
+	listOnlyMeta bool,
+	page *session.ListSessionPage,
 ) ([]*session.Session, error) {
 	// Query app state
 	appState, err := s.ListAppStates(ctx, key.AppName)
@@ -153,8 +186,12 @@ func (s *Service) listSessions(
 		WHERE app_name = ? AND user_id = ?
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL
-		ORDER BY updated_at DESC`, s.tableSessionStates)
+		ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
 	listArgs := []any{key.AppName, key.UserID, time.Now()}
+	if page != nil && page.Limit > 0 {
+		listQuery += " LIMIT ? OFFSET ?"
+		listArgs = append(listArgs, page.Limit, page.Offset)
+	}
 
 	err = s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		// rows.Next() is already called by the Query loop
@@ -177,6 +214,20 @@ func (s *Service) listSessions(
 
 	if err != nil {
 		return nil, fmt.Errorf("list session states failed: %w", err)
+	}
+
+	if listOnlyMeta {
+		sessions := make([]*session.Session, 0, len(sessStates))
+		for _, sessState := range sessStates {
+			sess := session.NewSession(
+				key.AppName, key.UserID, sessState.ID,
+				session.WithSessionState(sessState.State),
+				session.WithSessionCreatedAt(sessState.CreatedAt),
+				session.WithSessionUpdatedAt(sessState.UpdatedAt),
+			)
+			sessions = append(sessions, mergeState(appState, userState, sess))
+		}
+		return sessions, nil
 	}
 
 	// Build session keys and created_at times for batch loading
@@ -546,11 +597,14 @@ func (s *Service) getEventsList(
 		afterTime = time.Now().Add(-s.opts.sessionTTL)
 	}
 
-	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event, created_at FROM %s
+	// TDSQL proxy cannot extract shardkey from tuple comparison;
+	// add explicit user_id for shard routing. Harmless on MySQL.
+	query := fmt.Sprintf(`SELECT id, app_name, user_id, session_id, event, created_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
-		AND deleted_at IS NULL
-		ORDER BY app_name, user_id, session_id, created_at ASC, id ASC`,
+		AND user_id = ?
+		AND deleted_at IS NULL`,
 		s.tableSessionEvents, strings.Join(placeholders, ","))
+	args = append(args, sessionKeys[0].UserID)
 
 	sessionCreatedAtMap := make(map[string]time.Time, len(sessionKeys))
 	for i, key := range sessionKeys {
@@ -558,13 +612,19 @@ func (s *Service) getEventsList(
 		sessionCreatedAtMap[keyStr] = sessionCreatedAts[i]
 	}
 
-	eventsMap := make(map[string][]event.Event)
+	type eventWithOrder struct {
+		evt       event.Event
+		createdAt time.Time
+		id        int64
+	}
+	eventsMap := make(map[string][]eventWithOrder)
 
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var rowID int64
 		var appName, userID, sessionID string
 		var eventBytes []byte
 		var eventCreatedAt time.Time
-		if err := rows.Scan(&appName, &userID, &sessionID, &eventBytes, &eventCreatedAt); err != nil {
+		if err := rows.Scan(&rowID, &appName, &userID, &sessionID, &eventBytes, &eventCreatedAt); err != nil {
 			return err
 		}
 		keyStr := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
@@ -579,7 +639,7 @@ func (s *Service) getEventsList(
 		if err := json.Unmarshal(eventBytes, &evt); err != nil {
 			return fmt.Errorf("unmarshal event failed: %w", err)
 		}
-		eventsMap[keyStr] = append(eventsMap[keyStr], evt)
+		eventsMap[keyStr] = append(eventsMap[keyStr], eventWithOrder{evt: evt, createdAt: eventCreatedAt, id: rowID})
 		return nil
 	}, query, args...)
 
@@ -590,7 +650,23 @@ func (s *Service) getEventsList(
 	result := make([][]event.Event, len(sessionKeys))
 	for i, key := range sessionKeys {
 		keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
-		events := eventsMap[keyStr]
+		items := eventsMap[keyStr]
+		slices.SortFunc(items, func(a, b eventWithOrder) int {
+			if cmp := a.createdAt.Compare(b.createdAt); cmp != 0 {
+				return cmp
+			}
+			if a.id < b.id {
+				return -1
+			}
+			if a.id > b.id {
+				return 1
+			}
+			return 0
+		})
+		events := make([]event.Event, len(items))
+		for j, item := range items {
+			events[j] = item.evt
+		}
 		sess := session.Session{
 			Events: events,
 		}
@@ -601,6 +677,279 @@ func (s *Service) getEventsList(
 	return result, nil
 }
 
+type eventRef struct {
+	id        int64
+	createdAt time.Time
+}
+
+// getLimitedSessionEvents loads a bounded event window for GetSession while
+// preserving ApplyEventFiltering's user-message anchoring behavior.
+func (s *Service) getLimitedSessionEvents(
+	ctx context.Context,
+	key session.Key,
+	sessionCreatedAt time.Time,
+	limit int,
+	afterTime time.Time,
+) ([][]event.Event, error) {
+	filterAfterTime := afterTime
+	if filterAfterTime.IsZero() && s.opts.sessionTTL > 0 {
+		filterAfterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+	queryAfterTime := filterAfterTime
+	if sessionCreatedAt.After(queryAfterTime) {
+		queryAfterTime = sessionCreatedAt
+	}
+
+	refs, err := s.getRecentEventRefs(ctx, key, queryAfterTime, limit)
+	if err != nil {
+		return nil, err
+	}
+	events, err := s.getEventsByRefs(ctx, key, refs)
+	if err != nil {
+		return nil, err
+	}
+	if len(refs) == 0 && filterAfterTime.IsZero() {
+		return [][]event.Event{[]event.Event{}}, nil
+	}
+	filteredEvents := filterEventsByTimestamp(events, filterAfterTime)
+	if idx := firstUserEventIndex(filteredEvents); idx >= 0 {
+		return [][]event.Event{filteredEvents[idx:]}, nil
+	}
+	if anchor, ok := lastUserEvent(events); ok {
+		return [][]event.Event{append([]event.Event{anchor}, filteredEvents...)}, nil
+	}
+
+	anchor, ok, err := s.getLastUserEventBeforeRefs(ctx, key, sessionCreatedAt, refs)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return [][]event.Event{[]event.Event{}}, nil
+	}
+	return [][]event.Event{append([]event.Event{anchor}, filteredEvents...)}, nil
+}
+
+// getRecentEventRefs fetches lightweight event ordering metadata before
+// materializing full event JSON payloads.
+func (s *Service) getRecentEventRefs(
+	ctx context.Context,
+	key session.Key,
+	afterTime time.Time,
+	limit int,
+) ([]eventRef, error) {
+	query := fmt.Sprintf(`SELECT id, created_at FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND created_at >= ?
+		AND deleted_at IS NULL
+		ORDER BY created_at DESC, id DESC
+		LIMIT ?`,
+		s.tableSessionEvents)
+
+	refs := make([]eventRef, 0, limit)
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var ref eventRef
+		if err := rows.Scan(&ref.id, &ref.createdAt); err != nil {
+			return err
+		}
+		refs = append(refs, ref)
+		return nil
+	}, query, key.AppName, key.UserID, key.SessionID, afterTime, limit)
+	if err != nil {
+		return nil, fmt.Errorf("batch get events failed: %w", err)
+	}
+	return refs, nil
+}
+
+// getEventsByRefs materializes events for previously selected refs and restores
+// ascending conversation order.
+func (s *Service) getEventsByRefs(
+	ctx context.Context,
+	key session.Key,
+	refs []eventRef,
+) ([]event.Event, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(refs))
+	args := make([]any, len(refs))
+	for i, ref := range refs {
+		placeholders[i] = "?"
+		args[i] = ref.id
+	}
+
+	// TDSQL PK is (id, user_id); include user_id for shard routing.
+	eventsQuery := fmt.Sprintf(`SELECT id, event FROM %s WHERE id IN (%s)
+		AND user_id = ?
+		AND deleted_at IS NULL`,
+		s.tableSessionEvents, strings.Join(placeholders, ","))
+	args = append(args, key.UserID)
+
+	eventsByID := make(map[int64]event.Event, len(refs))
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var id int64
+		var eventBytes []byte
+		if err := rows.Scan(&id, &eventBytes); err != nil {
+			return err
+		}
+		var evt event.Event
+		if err := json.Unmarshal(eventBytes, &evt); err != nil {
+			return fmt.Errorf("unmarshal event failed: %w", err)
+		}
+		eventsByID[id] = evt
+		return nil
+	}, eventsQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch get events failed: %w", err)
+	}
+
+	slices.SortFunc(refs, func(a, b eventRef) int {
+		if cmp := a.createdAt.Compare(b.createdAt); cmp != 0 {
+			return cmp
+		}
+		if a.id < b.id {
+			return -1
+		}
+		if a.id > b.id {
+			return 1
+		}
+		return 0
+	})
+	events := make([]event.Event, 0, len(refs))
+	for _, ref := range refs {
+		evt, ok := eventsByID[ref.id]
+		if !ok {
+			continue
+		}
+		events = append(events, evt)
+	}
+	return events, nil
+}
+
+// getLastUserEventBeforeRefs fetches the nearest older user event to anchor a
+// limited event window that otherwise contains no user message.
+func (s *Service) getLastUserEventBeforeRefs(
+	ctx context.Context,
+	key session.Key,
+	sessionCreatedAt time.Time,
+	refs []eventRef,
+) (event.Event, bool, error) {
+	var before *eventRef
+	if len(refs) > 0 {
+		oldest := oldestEventRef(refs)
+		before = &oldest
+	}
+	for {
+		batch, err := s.getPreviousEventRefs(
+			ctx,
+			key,
+			sessionCreatedAt,
+			before,
+			userAnchorSearchBatchSize,
+		)
+		if err != nil {
+			return event.Event{}, false, err
+		}
+		if len(batch) == 0 {
+			return event.Event{}, false, nil
+		}
+		events, err := s.getEventsByRefs(ctx, key, batch)
+		if err != nil {
+			return event.Event{}, false, err
+		}
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i].IsUserMessage() {
+				return events[i], true, nil
+			}
+		}
+		oldest := oldestEventRef(batch)
+		before = &oldest
+	}
+}
+
+func (s *Service) getPreviousEventRefs(
+	ctx context.Context,
+	key session.Key,
+	sessionCreatedAt time.Time,
+	before *eventRef,
+	limit int,
+) ([]eventRef, error) {
+	query := fmt.Sprintf(`SELECT id, created_at FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND created_at >= ?
+		AND deleted_at IS NULL`,
+		s.tableSessionEvents)
+	args := []any{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
+	if before != nil {
+		query += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
+		args = append(args, before.createdAt, before.createdAt, before.id)
+	}
+	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
+	args = append(args, limit)
+
+	refs := make([]eventRef, 0, limit)
+	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
+		var ref eventRef
+		if err := rows.Scan(&ref.id, &ref.createdAt); err != nil {
+			return err
+		}
+		refs = append(refs, ref)
+		return nil
+	}, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch get events failed: %w", err)
+	}
+	return refs, nil
+}
+
+// oldestEventRef returns the earliest ref in the current bounded event window.
+func oldestEventRef(refs []eventRef) eventRef {
+	oldest := refs[0]
+	for _, ref := range refs[1:] {
+		if ref.createdAt.Before(oldest.createdAt) ||
+			(ref.createdAt.Equal(oldest.createdAt) && ref.id < oldest.id) {
+			oldest = ref
+		}
+	}
+	return oldest
+}
+
+// firstUserEventIndex returns the first event index whose response contains a
+// user message.
+func firstUserEventIndex(events []event.Event) int {
+	for i := range events {
+		if events[i].IsUserMessage() {
+			return i
+		}
+	}
+	return -1
+}
+
+// lastUserEvent returns the last user event from a loaded event set.
+func lastUserEvent(events []event.Event) (event.Event, bool) {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].IsUserMessage() {
+			return events[i], true
+		}
+	}
+	return event.Event{}, false
+}
+
+// filterEventsByTimestamp applies session event-time filtering using the event
+// timestamp, matching Session.ApplyEventFiltering semantics.
+func filterEventsByTimestamp(events []event.Event, afterTime time.Time) []event.Event {
+	if afterTime.IsZero() {
+		return events
+	}
+	for i, evt := range events {
+		if evt.Timestamp.After(afterTime) || evt.Timestamp.Equal(afterTime) {
+			return events[i:]
+		}
+	}
+	return nil
+}
+
+// getPagedEvents loads one explicit event page using two-phase ID then payload
+// fetches to avoid sorting large JSON payloads in MySQL.
 func (s *Service) getPagedEvents(
 	ctx context.Context,
 	key session.Key,
@@ -615,42 +964,35 @@ func (s *Service) getPagedEvents(
 		afterTime = sessionCreatedAt
 	}
 
-	query := fmt.Sprintf(`
-		SELECT app_name, user_id, session_id, event, created_at FROM (
-			SELECT app_name, user_id, session_id, event, created_at, id
-			FROM %s
-			WHERE app_name = ? AND user_id = ? AND session_id = ?
-			AND created_at >= ?
-			AND deleted_at IS NULL
-			ORDER BY created_at DESC, id DESC
-			LIMIT ? OFFSET ?
-		) page
-		ORDER BY created_at ASC, id ASC`,
+	// Phase 1: fetch only ordering metadata with ORDER BY + LIMIT/OFFSET.
+	// Sorting lightweight rows avoids sort buffer overflow on large event JSON.
+	idsQuery := fmt.Sprintf(`SELECT id, created_at FROM %s
+		WHERE app_name = ? AND user_id = ? AND session_id = ?
+		AND created_at >= ?
+		AND deleted_at IS NULL
+		ORDER BY created_at DESC, id DESC
+		LIMIT ? OFFSET ?`,
 		s.tableSessionEvents)
 
-	rowsBySession := make(map[string][]event.Event, 1)
+	var refs []eventRef
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		var appName, userID, sessionID string
-		var eventBytes []byte
-		var eventCreatedAt time.Time
-		if err := rows.Scan(&appName, &userID, &sessionID, &eventBytes, &eventCreatedAt); err != nil {
+		var id int64
+		var createdAt time.Time
+		if err := rows.Scan(&id, &createdAt); err != nil {
 			return err
 		}
-
-		var evt event.Event
-		if err := json.Unmarshal(eventBytes, &evt); err != nil {
-			return fmt.Errorf("unmarshal event failed: %w", err)
-		}
-		keyStr := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
-		rowsBySession[keyStr] = append(rowsBySession[keyStr], evt)
+		refs = append(refs, eventRef{id: id, createdAt: createdAt})
 		return nil
-	}, query, key.AppName, key.UserID, key.SessionID, afterTime, page.Limit, page.Offset)
+	}, idsQuery, key.AppName, key.UserID, key.SessionID, afterTime, page.Limit, page.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("batch get events failed: %w", err)
 	}
 
-	keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
-	return [][]event.Event{rowsBySession[keyStr]}, nil
+	events, err := s.getEventsByRefs(ctx, key, refs)
+	if err != nil {
+		return nil, err
+	}
+	return [][]event.Event{events}, nil
 }
 
 // getTrackEvents loads track events for multiple sessions in batch.
@@ -767,10 +1109,13 @@ func (s *Service) getSummariesList(
 		args = append(args, key.AppName, key.UserID, key.SessionID)
 	}
 
-	args = append(args, time.Now())
+	// TDSQL proxy cannot extract shardkey from tuple comparison;
+	// add explicit user_id for shard routing. Harmless on MySQL.
+	args = append(args, sessionKeys[0].UserID, time.Now())
 
 	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, filter_key, summary, updated_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
+		AND user_id = ?
 		AND (expires_at IS NULL OR expires_at > ?)
 		AND deleted_at IS NULL`,
 		s.tableSessionSummaries, strings.Join(placeholders, ","))

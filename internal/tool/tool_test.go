@@ -58,6 +58,34 @@ func (s *skipperTool) Declaration() *tool.Declaration {
 
 func (s *skipperTool) SkipSummarization() bool { return s.skip }
 
+type metadataPolicyTool struct {
+	name             string
+	metadata         tool.ToolMetadata
+	deferTool        bool
+	decision         tool.PermissionDecision
+	permissionCalled bool
+}
+
+func (m *metadataPolicyTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: m.name}
+}
+
+func (m *metadataPolicyTool) ToolMetadata() tool.ToolMetadata {
+	return m.metadata
+}
+
+func (m *metadataPolicyTool) ShouldDefer(context.Context) bool {
+	return m.deferTool
+}
+
+func (m *metadataPolicyTool) CheckPermission(
+	_ context.Context,
+	_ *tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	m.permissionCalled = true
+	return m.decision, nil
+}
+
 // fakeToolSet implements tool.ToolSet.
 type fakeToolSet struct {
 	name   string
@@ -105,6 +133,7 @@ func TestNamedTool_OriginalAndCloseAndName(t *testing.T) {
 	nt, ok := got[0].(*NamedTool)
 	require.True(t, ok, "expected NamedTool, got %T", got[0])
 	require.Equal(t, t1, nt.Original())
+	require.Equal(t, "fs", nt.ToolSetName())
 	require.Equal(t, "fs", nts.Name())
 	require.NoError(t, nts.Close())
 	require.True(t, base.closed, "underlying Close() not called")
@@ -157,6 +186,47 @@ func TestNamedTool_SkipSummarizationDelegation(t *testing.T) {
 	})
 	t2 := nts2.Tools(context.Background())[0].(*NamedTool)
 	require.False(t, t2.SkipSummarization())
+}
+
+func TestNamedTool_MetadataAndPermissionDelegation(t *testing.T) {
+	const denyReason = "blocked"
+	ctx := context.Background()
+	original := &metadataPolicyTool{
+		name: "raw",
+		metadata: tool.ToolMetadata{
+			ReadOnly:        true,
+			ConcurrencySafe: true,
+			SearchOrRead:    true,
+			MaxResultSize:   128,
+		},
+		deferTool: true,
+		decision:  tool.DenyPermission(denyReason),
+	}
+	nts := NewNamedToolSet(&fakeToolSet{
+		name:  "fs",
+		tools: []tool.Tool{original},
+	})
+	nt := nts.Tools(ctx)[0].(*NamedTool)
+
+	require.Equal(t, original.metadata, nt.ToolMetadata())
+	require.True(t, nt.IsConcurrencySafe())
+	require.True(t, nt.ShouldDefer(ctx))
+	decision, err := nt.CheckPermission(ctx, &tool.PermissionRequest{})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Equal(t, denyReason, decision.Reason)
+	require.True(t, original.permissionCalled)
+
+	plain := NewNamedToolSet(&fakeToolSet{
+		name:  "fs",
+		tools: []tool.Tool{&simpleTool{name: "plain"}},
+	}).Tools(ctx)[0].(*NamedTool)
+	require.Equal(t, tool.ToolMetadata{}, plain.ToolMetadata())
+	require.False(t, plain.IsConcurrencySafe())
+	require.False(t, plain.ShouldDefer(ctx))
+	decision, err = plain.CheckPermission(ctx, &tool.PermissionRequest{})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
 }
 
 func TestGenerateJSONSchema_Primitives(t *testing.T) {

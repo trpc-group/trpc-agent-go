@@ -24,8 +24,10 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/extension"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/workspaceio"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
@@ -36,6 +38,7 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/planner"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
@@ -61,6 +64,7 @@ type LLMAgent struct {
 	mu                      sync.RWMutex
 	model                   model.Model
 	models                  map[string]model.Model // Registered models for switching
+	modelSelector           agent.ModelSelector
 	description             string
 	instruction             prompt.Text
 	systemPrompt            prompt.Text
@@ -72,6 +76,8 @@ type LLMAgent struct {
 	userToolNames           map[string]bool // Names of tools explicitly registered
 	// via WithTools and WithToolSets.
 	codeExecutor         codeexecutor.CodeExecutor
+	workspaceRegistry    *codeexecutor.WorkspaceRegistry
+	workspaceRegistries  map[workspaceRegistryKey]*codeexecutor.WorkspaceRegistry
 	planner              planner.Planner
 	subAgents            []agent.Agent // Sub-agents that can be delegated to
 	agentCallbacks       *agent.Callbacks
@@ -98,6 +104,26 @@ func New(name string, opts ...Option) *LLMAgent {
 	prepareSkillsRepository(&options)
 	applySkillsExecutorFallback(&options)
 
+	// Wire agent-scoped extensions (WithExtensions) before any
+	// consumer of the callback fields runs. Order matters here:
+	//
+	//   - applyExtensionContributions must rewrite options.AgentCallbacks
+	//     / ModelCallbacks / ToolCallbacks BEFORE we copy them into
+	//     a.agentCallbacks, flowOpts.ModelCallbacks and the
+	//     FunctionCallResponseProcessor below — otherwise extension
+	//     hooks would silently no-op for this agent.
+	//   - extensionContributedTools is cached on Options so the
+	//     tool-surface builders can re-apply the same set after user
+	//     and framework tools (including per-invocation framework
+	//     tools such as transfer_to_agent). Extension callbacks are
+	//     static once merged; only tools need to flow through the
+	//     surface builders more than once.
+	extContrib, err := extension.Collect(options.extensions)
+	if err != nil {
+		panic(err)
+	}
+	applyExtensionContributions(&options, extContrib)
+
 	// Validate output_schema configuration before registering tools.
 	if options.OutputSchema != nil {
 		if options.EnableAwaitUserReplyTool {
@@ -105,6 +131,18 @@ func New(name string, opts ...Option) *LLMAgent {
 		}
 		if len(options.Tools) > 0 || len(options.ToolSets) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty")
+		}
+		// Extension-contributed tools (WithExtensions →
+		// extension.Registry.Tools) must be covered by the same
+		// guard. They are appended to the outbound tool surface
+		// alongside WithTools/WithToolSets, so allowing them
+		// through would let an extension silently break the
+		// "structured output ⇒ no callable tools" contract.
+		// Hook-only extensions (no Tools(...) call inside Register)
+		// leave this slice empty and remain compatible with
+		// WithOutputSchema.
+		if len(options.extensionContributedTools) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, extension-contributed tools (WithExtensions → Registry.Tools) must be empty")
 		}
 		if options.Knowledge != nil {
 			panic("Invalid LLMAgent configuration: if output_schema is set, knowledge must be empty")
@@ -116,7 +154,7 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
 	// Also track which tools are user-registered (via WithTools) for filtering purposes.
-	tools, userToolNames := registerTools(&options)
+	tools, userToolNames, wsReg := registerTools(&options, nil)
 
 	// Initialize models map and determine the initial model.
 	initialModel, models := initializeModels(&options)
@@ -126,6 +164,7 @@ func New(name string, opts ...Option) *LLMAgent {
 		name:              name,
 		model:             initialModel,
 		models:            models,
+		modelSelector:     options.ModelSelector,
 		description:       options.Description,
 		instruction:       newTextPrompt(options.Instruction),
 		systemPrompt:      newTextPrompt(options.GlobalInstruction),
@@ -135,6 +174,8 @@ func New(name string, opts ...Option) *LLMAgent {
 		),
 		genConfig:            options.GenerationConfig,
 		codeExecutor:         options.codeExecutor,
+		workspaceRegistry:    wsReg,
+		workspaceRegistries:  workspaceRegistryMap(options.codeExecutor, wsReg),
 		tools:                tools,
 		userToolNames:        userToolNames,
 		planner:              options.Planner,
@@ -205,6 +246,8 @@ func New(name string, opts ...Option) *LLMAgent {
 	flowOpts := llmflow.Options{
 		ChannelBufferSize:               options.ChannelBufferSize,
 		ModelCallbacks:                  options.ModelCallbacks,
+		BaseModelResolver:               a.resolveFlowBaseModel,
+		ModelSelector:                   a.modelSelector,
 		SyncSummaryIntraRun:             options.SyncSummaryIntraRun,
 		EnableContextCompaction:         options.EnableContextCompaction,
 		ContextCompactionThresholdRatio: options.ContextCompactionThresholdRatio,
@@ -389,6 +432,22 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			),
 		),
 		processor.WithFewShotResolver(a.fewShotForInvocation),
+	}
+	if options.ToolResultCompactionConfig != nil {
+		contentOpts = append(
+			contentOpts,
+			processor.WithContextCompactionForceCleanToolNames(
+				options.ToolResultCompactionConfig.ForceCleanToolNames...,
+			),
+			processor.WithContextCompactionKeepToolNames(
+				options.ToolResultCompactionConfig.KeepToolNames...,
+			),
+			processor.WithContextCompactionSkipRecentFunc(
+				processor.ContextCompactionSkipRecentFunc(
+					options.ToolResultCompactionConfig.SkipRecentFunc,
+				),
+			),
+		)
 	}
 	if options.ReasoningContentMode != "" {
 		contentOpts = append(contentOpts,
@@ -627,31 +686,61 @@ func initializeModels(options *Options) (model.Model, map[string]model.Model) {
 	return nil, models
 }
 
-func registerTools(options *Options) ([]tool.Tool, map[string]bool) {
+// registerTools assembles the full tool list for an LLMAgent from user-
+// registered tools, knowledge tools, skill tools, and workspace tools.
+//
+// existingReg, when non-nil, is a WorkspaceRegistry carried over from a
+// previous call (e.g. agent construction or tool refresh). Reusing it
+// ensures that successive invocations share the same workspace cache
+// instead of creating duplicate directories. The returned registry
+// should be stored on the agent for future reuse.
+func registerTools(
+	options *Options,
+	existingReg *codeexecutor.WorkspaceRegistry,
+) ([]tool.Tool, map[string]bool, *codeexecutor.WorkspaceRegistry) {
+	// Step 1: collect user-registered tools (WithTools + WithToolSets)
+	// and knowledge search tools.
 	userToolNames := collectUserToolNames(options.Tools)
 	allTools := append([]tool.Tool(nil), options.Tools...)
-	allTools, userToolNames = appendStaticToolSetTools(
-		allTools, userToolNames, options,
-	)
+	allTools, userToolNames = appendStaticToolSetTools(allTools, userToolNames, options)
 	allTools = appendKnowledgeTools(allTools, options)
+
+	// Step 2: determine workspace registry and skill_run tool based on
+	// which capabilities the caller configured.
+	//
+	// Three scenarios:
+	//   a) skills + executor → shared registry for both skill_run and
+	//      workspace_exec; create one only if not inherited.
+	//   b) skills only (no executor) → skill_run gets nil registry and
+	//      builds its own internally; workspace_exec is not wired.
+	//   c) executor only (no skills) → registry for workspace_exec;
+	//      no skill_run needed.
 	var runTool *toolskill.RunTool
-	var workspaceRegistry *codeexecutor.WorkspaceRegistry
+	workspaceRegistry := existingReg
 	if options.skillsRepository != nil {
-		if options.codeExecutor != nil {
+		if options.codeExecutor != nil && workspaceRegistry == nil {
 			workspaceRegistry = buildWorkspaceRegistry()
 		}
 		runTool = buildSkillRunTool(options, workspaceRegistry)
 	} else if executorSupportsWorkspaceExec(options) {
-		workspaceRegistry = buildWorkspaceRegistry()
+		if workspaceRegistry == nil {
+			workspaceRegistry = buildWorkspaceRegistry()
+		}
 	}
+
+	// Step 3: wire workspace_exec (and session companions) when an
+	// executor with EngineProvider is available.
 	allTools = appendWorkspaceExecTool(
 		allTools,
 		options,
 		workspaceRegistry,
 		nil,
 	)
+
+	// Step 4: wire skill tools (skill_load, skill_run, etc.) when a
+	// skill repository is configured.
 	allTools = appendSkillTools(allTools, options, runTool)
-	return allTools, userToolNames
+	return allTools, userToolNames, workspaceRegistry
 }
 
 func collectUserToolNames(tools []tool.Tool) map[string]bool {
@@ -927,6 +1016,22 @@ func appendWorkspaceExecToolWithExecutor(
 		toolOpts,
 		workspacePrepOptions(options, loadedSkillsRepo)...,
 	)
+	if options != nil &&
+		len(options.workspaceExecAllowedCommands) > 0 {
+		toolOpts = append(toolOpts,
+			toolworkspaceexec.WithAllowedCommands(
+				options.workspaceExecAllowedCommands...,
+			),
+		)
+	}
+	if options != nil &&
+		len(options.workspaceExecDeniedCommands) > 0 {
+		toolOpts = append(toolOpts,
+			toolworkspaceexec.WithDeniedCommands(
+				options.workspaceExecDeniedCommands...,
+			),
+		)
+	}
 	execTool := toolworkspaceexec.NewExecTool(exec, toolOpts...)
 	allTools = append(
 		allTools,
@@ -969,6 +1074,85 @@ func appendOnDemandSessionTools(
 
 func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {
 	return codeexecutor.NewWorkspaceRegistry()
+}
+
+type workspaceRegistryKey struct {
+	exec codeexecutor.CodeExecutor
+}
+
+func workspaceRegistryKeyForExecutor(
+	exec codeexecutor.CodeExecutor,
+) (workspaceRegistryKey, bool) {
+	if exec == nil {
+		return workspaceRegistryKey{}, false
+	}
+	if !reflect.TypeOf(exec).Comparable() {
+		return workspaceRegistryKey{}, false
+	}
+	return workspaceRegistryKey{exec: exec}, true
+}
+
+func workspaceRegistryMap(
+	exec codeexecutor.CodeExecutor,
+	reg *codeexecutor.WorkspaceRegistry,
+) map[workspaceRegistryKey]*codeexecutor.WorkspaceRegistry {
+	if reg == nil {
+		return nil
+	}
+	key, ok := workspaceRegistryKeyForExecutor(exec)
+	if !ok {
+		return nil
+	}
+	return map[workspaceRegistryKey]*codeexecutor.WorkspaceRegistry{
+		key: reg,
+	}
+}
+
+func (a *LLMAgent) ensureWorkspaceRegistryForExecutor(
+	exec codeexecutor.CodeExecutor,
+) (*codeexecutor.WorkspaceRegistry, bool) {
+	key, ok := workspaceRegistryKeyForExecutor(exec)
+	if !ok {
+		return nil, false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.workspaceRegistryForKeyLocked(key), true
+}
+
+func (a *LLMAgent) workspaceRegistryForKeyLocked(
+	key workspaceRegistryKey,
+) *codeexecutor.WorkspaceRegistry {
+	if a.workspaceRegistries == nil {
+		a.workspaceRegistries = make(map[workspaceRegistryKey]*codeexecutor.WorkspaceRegistry)
+		if a.workspaceRegistry != nil {
+			if defaultKey, ok := workspaceRegistryKeyForExecutor(a.codeExecutor); ok {
+				a.workspaceRegistries[defaultKey] = a.workspaceRegistry
+			}
+		}
+	}
+	if reg := a.workspaceRegistries[key]; reg != nil {
+		return reg
+	}
+	reg := codeexecutor.NewWorkspaceRegistry()
+	a.workspaceRegistries[key] = reg
+	if a.workspaceRegistry == nil {
+		a.workspaceRegistry = reg
+	}
+	return reg
+}
+
+func (a *LLMAgent) workspaceRegistryForInvocation(
+	inv *agent.Invocation,
+	exec codeexecutor.CodeExecutor,
+) *codeexecutor.WorkspaceRegistry {
+	if inv == nil || inv.Session == nil || inv.Session.ID == "" {
+		return buildWorkspaceRegistry()
+	}
+	if reg, ok := a.ensureWorkspaceRegistryForExecutor(exec); ok {
+		return reg
+	}
+	return buildWorkspaceRegistry()
 }
 
 // workspacePrepOptions translates llmagent-level workspace options
@@ -1139,6 +1323,29 @@ func codeExecutorSupportsWorkspaceExec(exec codeexecutor.CodeExecutor) bool {
 	return eng.Manager() != nil && eng.FS() != nil && eng.Runner() != nil
 }
 
+// codeExecutorHasLiveWorkspace reports whether exec exposes an Engine
+// with Manager + FS — enough to drive Workspace.Collect / PutFiles /
+// StageInputs / SaveArtifact. Looser than
+// codeExecutorSupportsWorkspaceExec, which additionally requires
+// Runner for the workspace_exec LLM tool. Workspace.RunProgram still
+// surfaces a targeted "no program runner" error when Runner is nil,
+// so executors that intentionally omit ProgramRunner can keep the
+// other facade methods usable from callbacks.
+func codeExecutorHasLiveWorkspace(exec codeexecutor.CodeExecutor) bool {
+	if exec == nil {
+		return false
+	}
+	ep, ok := exec.(codeexecutor.EngineProvider)
+	if !ok || ep == nil {
+		return false
+	}
+	eng := ep.Engine()
+	if eng == nil {
+		return false
+	}
+	return eng.Manager() != nil && eng.FS() != nil
+}
+
 // executorSupportsWorkspaceExecSessions reports whether workspace_exec can
 // expose interactive session helpers such as workspace_write_stdin.
 func executorSupportsWorkspaceExecSessions(options *Options) bool {
@@ -1177,6 +1384,7 @@ func codeExecutorSupportsWorkspaceExecSessions(
 // It executes the LLM agent flow and returns a channel of events.
 func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-chan *event.Event, err error) {
 	a.setupInvocation(invocation)
+	ctx = a.withWorkspace(ctx, invocation)
 
 	// Check if the parent context already carries an invoke_agent span
 	// (created by NewAgentNodeFunc). If so, enrich the existing span
@@ -1184,7 +1392,6 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 	// and may be lost during batch flushes, causing phantom parent IDs
 	// in Langfuse and broken DAG visualizations.
 	ctx, span, ownsSpan := resolveOrCreateInvokeAgentSpan(ctx, invocation, a.name)
-
 	effectiveGenConfig := a.genConfig
 	effectiveGenConfig.Stream = iagent.ResolveInvokeAgentStream(invocation, &effectiveGenConfig)
 	promptText := a.systemPromptForInvocation(invocation) +
@@ -1305,34 +1512,54 @@ func (e *haveCustomResponseError) Error() string {
 	return "custom response provided, returning early"
 }
 
-// setupInvocation sets up the invocation
+type baseModelResolution struct {
+	Model              model.Model
+	AllowAgentSelector bool
+}
+
+func (a *LLMAgent) resolveFlowBaseModel(inv *agent.Invocation) llmflow.ModelBaseResolution {
+	resolution := a.resolveBaseModel(inv)
+	return llmflow.ModelBaseResolution{
+		Model:              resolution.Model,
+		AllowAgentSelector: resolution.AllowAgentSelector,
+	}
+}
+
+func (a *LLMAgent) resolveBaseModel(inv *agent.Invocation) baseModelResolution {
+	if patchedModel, ok := a.modelSurfaceForInvocation(inv); ok {
+		return baseModelResolution{Model: patchedModel}
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if inv != nil && inv.RunOptions.Model != nil {
+		return baseModelResolution{Model: inv.RunOptions.Model}
+	}
+	if inv != nil && inv.RunOptions.ModelName != "" {
+		if m, ok := a.models[inv.RunOptions.ModelName]; ok {
+			return baseModelResolution{Model: m}
+		}
+		log.Warnf(
+			"Model name %q not found for agent %s; falling back to default model",
+			inv.RunOptions.ModelName,
+			a.name,
+		)
+		return baseModelResolution{Model: a.model}
+	}
+	return baseModelResolution{
+		Model:              a.model,
+		AllowAgentSelector: true,
+	}
+}
+
+// setupInvocation sets up the invocation.
 func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// Set agent identity before resolving node-scoped surfaces.
 	invocation.Agent = a
 	invocation.AgentName = a.name
 
-	// Set model: prioritize RunOptions.Model, then RunOptions.ModelName, then agent's default model.
-	a.mu.RLock()
-	if patchedModel, ok := a.modelSurfaceForInvocation(invocation); ok {
-		invocation.Model = patchedModel
-	} else if invocation.RunOptions.Model != nil {
-		// Check if a per-request model is specified.
-		// Use the model directly from RunOptions.
-		invocation.Model = invocation.RunOptions.Model
-	} else if invocation.RunOptions.ModelName != "" {
-		// Look up model by name from registered models.
-		if m, ok := a.models[invocation.RunOptions.ModelName]; ok {
-			invocation.Model = m
-		} else {
-			// If model name not found, fall back to agent's default model.
-			// Log a warning but don't fail the request.
-			invocation.Model = a.model
-		}
-	} else {
-		// Use agent's default model.
-		invocation.Model = a.model
-	}
-	a.mu.RUnlock()
+	// Set the base model once for compatibility with existing callbacks.
+	resolution := a.resolveBaseModel(invocation)
+	invocation.Model = resolution.Model
 
 	// Lift run-scoped structured output into the current invocation once.
 	if invocation.StructuredOutput == nil {
@@ -1355,6 +1582,41 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// treat them as "no limit", preserving existing behavior.
 	invocation.MaxLLMCalls = a.option.MaxLLMCalls
 	invocation.MaxToolIterations = a.option.MaxToolIterations
+}
+
+// withWorkspace installs a workspaceio.Workspace into ctx so that
+// AgentCallbacks (BeforeAgent/AfterAgent/BeforeTool/AfterTool) observe
+// the same invocation workspace as workspace_exec.
+//
+// The helper resolves the effective executor and registry the same
+// way InvocationToolSurface does — honoring an invocation-scoped
+// RunOptions.CodeExecutor override and only installing a facade when
+// the executor actually supports workspace execution. This keeps the
+// callback view and the workspace_exec tool view in lockstep across
+// run-options overrides; otherwise callbacks could read or write a
+// stale executor while the LLM tool uses the override.
+func (a *LLMAgent) withWorkspace(
+	ctx context.Context,
+	inv *agent.Invocation,
+) context.Context {
+	if a == nil {
+		return ctx
+	}
+	if _, ok := workspaceio.WorkspaceFromContext(ctx); ok {
+		return ctx
+	}
+	exec := a.codeExecutorForInvocation(inv)
+	// Gate on "live workspace" (Manager + FS) rather than
+	// "workspace_exec" (Manager + FS + Runner). Executors that
+	// intentionally omit ProgramRunner can still serve Collect /
+	// PutFiles / StageInputs / SaveArtifact through the facade;
+	// RunProgram itself returns a targeted error when Runner is nil.
+	if !codeExecutorHasLiveWorkspace(exec) {
+		return ctx
+	}
+	reg := a.workspaceRegistryForInvocation(inv, exec)
+	ws := workspaceio.New(exec, reg)
+	return workspaceio.WithWorkspace(ctx, ws)
 }
 
 // wrapEventChannel wraps the event channel to apply after agent callbacks.
@@ -1615,7 +1877,7 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 	}
 
 	if len(a.subAgents) == 0 {
-		return base
+		return appendExtensionTools(base, &a.option)
 	}
 
 	agentInfos := make([]agent.Info, len(a.subAgents))
@@ -1624,7 +1886,8 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 	}
 
 	transferTool := transfer.New(agentInfos)
-	return append(base, transferTool)
+	base = append(base, transferTool)
+	return appendExtensionTools(base, &a.option)
 }
 
 // Tools implements the agent.Agent interface.
@@ -1777,9 +2040,18 @@ func (a *LLMAgent) SetSubAgents(subAgents []agent.Agent) {
 // refreshToolsLocked recomputes the aggregated tool list and user tool
 // tracking map from the current options. Caller must hold a.mu.Lock.
 func (a *LLMAgent) refreshToolsLocked() {
-	tools, userToolNames := registerTools(&a.option)
+	reg := a.workspaceRegistry
+	if key, ok := workspaceRegistryKeyForExecutor(a.option.codeExecutor); ok {
+		reg = a.workspaceRegistryForKeyLocked(key)
+	}
+	tools, userToolNames, reg := registerTools(
+		&a.option, reg,
+	)
 	a.tools = tools
 	a.userToolNames = userToolNames
+	if a.workspaceRegistry == nil {
+		a.workspaceRegistry = reg
+	}
 }
 
 // AddToolSet adds or replaces a tool set at runtime in a

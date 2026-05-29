@@ -15,9 +15,12 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -28,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/envscrub"
 	"trpc.group/trpc-go/trpc-agent-go/internal/fileref"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillstage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcache"
@@ -127,13 +131,16 @@ const (
 const (
 	skillDirInputs = "inputs"
 	skillDirVenv   = ".venv"
+	skillDirBin    = "bin"
 )
 
 const (
-	envPath       = "PATH"
-	envVirtualEnv = "VIRTUAL_ENV"
-	envEditor     = "EDITOR"
-	envVisual     = "VISUAL"
+	envPath            = "PATH"
+	envVirtualEnv      = "VIRTUAL_ENV"
+	envEditor          = "EDITOR"
+	envVisual          = "VISUAL"
+	posixPathListSep   = ":"
+	windowsPathListSep = ";"
 )
 
 const (
@@ -146,8 +153,6 @@ const (
 )
 
 const workspaceMetadataFileMode uint32 = 0o600
-
-const workspaceMetadataTmpFile = ".metadata.tmp"
 
 const (
 	editorHelperDir     = ".trpc_agent"
@@ -243,7 +248,7 @@ func (t *RunTool) setAllowedCommands(cmds []string) {
 		t.allowedCmds = make(map[string]struct{}, len(cmds))
 	}
 	for _, c := range cmds {
-		s := strings.TrimSpace(c)
+		s := normalizeCommandForList(c)
 		if s == "" {
 			continue
 		}
@@ -271,7 +276,7 @@ func (t *RunTool) setDeniedCommands(cmds []string) {
 		t.deniedCmds = make(map[string]struct{}, len(cmds))
 	}
 	for _, c := range cmds {
-		s := strings.TrimSpace(c)
+		s := normalizeCommandForList(c)
 		if s == "" {
 			continue
 		}
@@ -493,7 +498,12 @@ func (t *RunTool) Call(
 	}
 
 	autoFiles := t.autoExportWorkspaceOut(ctxIO, eng, ws, in)
-	files, manifest, err := t.prepareOutputs(ctxIO, eng, ws, in)
+	files, manifest, outputWarn, err := t.prepareOutputs(
+		ctxIO,
+		eng,
+		ws,
+		in,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -515,6 +525,9 @@ func (t *RunTool) Call(
 	}
 	if len(filteredOutputs.warnings) > 0 {
 		out.Warnings = append(out.Warnings, filteredOutputs.warnings...)
+	}
+	if len(outputWarn) > 0 {
+		out.Warnings = append(out.Warnings, outputWarn...)
 	}
 	out.StagedInputs = staged
 	if len(stageWarn) > 0 {
@@ -1134,20 +1147,64 @@ func (t *RunTool) buildRunProgramSpec(
 		return codeexecutor.RunProgramSpec{}, err
 	}
 
-	venvRel, venvBinRel := venvRelPaths(cwd, skillRoot)
+	venvRel, venvBinRel, skillBinRel := skillLocalRelPaths(
+		cwd,
+		skillRoot,
+	)
 
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
-		injectVenvEnv(env, venvRel, venvBinRel)
+		// Policy mode: scrub the merged env before building PATH
+		// so a caller-supplied PATH / BASH_ENV / LD_PRELOAD /
+		// BASH_FUNC_* cannot survive into the spawn. Without
+		// this, a model-supplied `env: {"PATH": "./bin"}` is
+		// prepended to PATH ahead of skillBin by
+		// injectSkillLocalEnvWithSep, so an allowed bare command
+		// (`curl`, `python`, `git`, …) resolves at the attacker
+		// controlled directory rather than the vetted binary -
+		// the same vulnerability class that PR #1800 closed for
+		// `workspace_exec`. The scrub mirrors what
+		// tool/workspaceexec already does for its own policy
+		// mode; on Windows the comparison is case-insensitive so
+		// "Path" / "Home" cannot survive by varying case.
+		env = scrubPolicyEnv(env)
+		injectSkillLocalEnvWithSep(
+			env,
+			venvRel,
+			venvBinRel,
+			skillBinRel,
+			pathListSeparatorForEngine(eng),
+		)
 		argv, err := splitCommandLine(in.Command)
 		if err != nil {
 			return codeexecutor.RunProgramSpec{}, err
 		}
 		cmd := argv[0]
-		if len(t.allowedCmds) > 0 && !cmdInList(t.allowedCmds, cmd) {
+		if _, ok := matchSkillLocalCommand(
+			t.deniedCmds,
+			cmd,
+			venvBinRel,
+			"",
+		); ok {
 			return codeexecutor.RunProgramSpec{}, fmt.Errorf(
-				"skill_run: command %q is not allowed by allowed_commands",
+				"skill_run: command %q is denied by denied_commands",
 				cmd,
 			)
+		}
+		if len(t.allowedCmds) > 0 && !cmdInList(t.allowedCmds, cmd) {
+			if rel, ok := matchSkillLocalCommand(
+				t.allowedCmds,
+				cmd,
+				venvBinRel,
+				skillBinRel,
+			); ok {
+				cmd = rel
+			} else {
+				return codeexecutor.RunProgramSpec{}, fmt.Errorf(
+					"skill_run: command %q is not allowed by "+
+						"allowed_commands",
+					cmd,
+				)
+			}
 		}
 		if cmdInList(t.deniedCmds, cmd) {
 			return codeexecutor.RunProgramSpec{}, fmt.Errorf(
@@ -1156,16 +1213,22 @@ func (t *RunTool) buildRunProgramSpec(
 			)
 		}
 		return codeexecutor.RunProgramSpec{
-			Cmd:     cmd,
-			Args:    argv[1:],
-			Env:     env,
-			Cwd:     cwd,
-			Stdin:   in.Stdin,
-			Timeout: timeout,
+			Cmd:      cmd,
+			Args:     argv[1:],
+			Env:      env,
+			CleanEnv: true,
+			Cwd:      cwd,
+			Stdin:    in.Stdin,
+			Timeout:  timeout,
 		}, nil
 	}
 
-	cmd := wrapWithVenvPrefix(in.Command, venvRel, venvBinRel)
+	cmd := wrapWithSkillLocalPrefix(
+		in.Command,
+		venvRel,
+		venvBinRel,
+		skillBinRel,
+	)
 	return codeexecutor.RunProgramSpec{
 		Cmd:     "bash",
 		Args:    []string{"-c", cmd},
@@ -1177,6 +1240,14 @@ func (t *RunTool) buildRunProgramSpec(
 }
 
 func venvRelPaths(cwd string, skillRoot string) (string, string) {
+	venvRel, venvBinRel, _ := skillLocalRelPaths(cwd, skillRoot)
+	return venvRel, venvBinRel
+}
+
+func skillLocalRelPaths(
+	cwd string,
+	skillRoot string,
+) (string, string, string) {
 	base := path.Clean(strings.TrimSpace(cwd))
 	if base == "" {
 		base = "."
@@ -1186,11 +1257,13 @@ func venvRelPaths(cwd string, skillRoot string) (string, string) {
 		skillRoot = "."
 	}
 	venv := path.Join(skillRoot, skillDirVenv)
-	venvBin := path.Join(venv, "bin")
+	venvBin := path.Join(venv, skillDirBin)
+	skillBin := path.Join(skillRoot, skillDirBin)
 
 	relVenv := slashRel(base, venv)
 	relBin := slashRel(base, venvBin)
-	return relVenv, relBin
+	relSkillBin := slashRel(base, skillBin)
+	return relVenv, relBin, relSkillBin
 }
 
 func (t *RunTool) maybeInjectSkillEnv(
@@ -1308,22 +1381,106 @@ func slashRel(base string, target string) string {
 }
 
 func injectVenvEnv(env map[string]string, venv string, venvBin string) {
+	injectSkillLocalEnv(env, venv, venvBin, "")
+}
+
+func injectSkillLocalEnv(
+	env map[string]string,
+	venv string,
+	venvBin string,
+	skillBin string,
+) {
+	injectSkillLocalEnvWithSep(
+		env,
+		venv,
+		venvBin,
+		skillBin,
+		posixPathListSep,
+	)
+}
+
+// scrubPolicyEnv returns the env that should be passed to the
+// runtime when a skill_run command policy is active. It filters the
+// input through internal/envscrub so shell start-up vars (HOME,
+// BASH_ENV, ENV, SHELL, …), executable resolution vars (PATH,
+// LD_PRELOAD, DYLD_*, IFS, CDPATH, …), BASH_FUNC_* Shellshock
+// entries and non-POSIX keys are dropped before the per-call PATH
+// is rebuilt by injectSkillLocalEnvWithSep. A nil / empty result
+// is normalised to an empty non-nil map so the subsequent assign
+// of env[PATH] / env[VIRTUAL_ENV] does not panic.
+//
+// The same envscrub package backs the equivalent scrub in
+// tool/workspaceexec so the two policy modes stay in sync.
+func scrubPolicyEnv(env map[string]string) map[string]string {
+	out := envscrub.Scrub(env, runtime.GOOS == "windows")
+	if out == nil {
+		out = map[string]string{}
+	}
+	return out
+}
+
+func injectSkillLocalEnvWithSep(
+	env map[string]string,
+	venv string,
+	venvBin string,
+	skillBin string,
+	sep string,
+) {
 	if env == nil {
 		return
+	}
+	if sep == "" {
+		sep = posixPathListSep
 	}
 	if _, ok := env[envVirtualEnv]; !ok && strings.TrimSpace(venv) != "" {
 		env[envVirtualEnv] = venv
 	}
-	basePATH := strings.TrimSpace(env[envPath])
+	pathKey := pathEnvKey(env, sep)
+	basePATH := strings.TrimSpace(env[pathKey])
 	if basePATH == "" {
 		basePATH = strings.TrimSpace(os.Getenv(envPath))
 	}
-	sep := string(os.PathListSeparator)
-	if basePATH == "" {
-		env[envPath] = venvBin
-		return
+	pathParts := make([]string, 0, 3)
+	for _, dir := range []string{venvBin, basePATH, skillBin} {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		pathParts = append(pathParts, dir)
 	}
-	env[envPath] = venvBin + sep + basePATH
+	env[pathKey] = strings.Join(pathParts, sep)
+}
+
+func pathEnvKey(env map[string]string, sep string) string {
+	if _, ok := env[envPath]; ok {
+		return envPath
+	}
+	if sep != windowsPathListSep {
+		return envPath
+	}
+	for key := range env {
+		if strings.EqualFold(key, envPath) {
+			return key
+		}
+	}
+	return envPath
+}
+
+type pathListSeparatorProvider interface {
+	PathListSeparator() string
+}
+
+func pathListSeparatorForEngine(eng codeexecutor.Engine) string {
+	if eng == nil || eng.Runner() == nil {
+		return posixPathListSep
+	}
+	provider, ok := eng.Runner().(pathListSeparatorProvider)
+	if !ok {
+		return posixPathListSep
+	}
+	if sep := provider.PathListSeparator(); sep != "" {
+		return sep
+	}
+	return posixPathListSep
 }
 
 func cloneStringMap(src map[string]string) map[string]string {
@@ -1412,14 +1569,21 @@ func buildEditorWrapperScript(contentPath string) string {
 }
 
 func wrapWithVenvPrefix(cmd string, venv string, venvBin string) string {
+	return wrapWithSkillLocalPrefix(cmd, venv, venvBin, "")
+}
+
+func wrapWithSkillLocalPrefix(
+	cmd string,
+	venv string,
+	venvBin string,
+	skillBin string,
+) string {
 	var sb strings.Builder
 	sb.WriteString("export ")
 	sb.WriteString(envPath)
 	sb.WriteString("=")
-	sb.WriteString(shellQuote(venvBin))
-	sb.WriteString(":\"$")
-	sb.WriteString(envPath)
-	sb.WriteString("\"; ")
+	writeShellSkillPATH(&sb, venvBin, skillBin)
+	sb.WriteString("; ")
 	sb.WriteString("if [ -z \"$")
 	sb.WriteString(envVirtualEnv)
 	sb.WriteString("\" ]; then export ")
@@ -1429,6 +1593,80 @@ func wrapWithVenvPrefix(cmd string, venv string, venvBin string) string {
 	sb.WriteString("; fi; ")
 	sb.WriteString(cmd)
 	return sb.String()
+}
+
+func writeShellSkillPATH(
+	sb *strings.Builder,
+	venvBin string,
+	skillBin string,
+) {
+	if strings.TrimSpace(venvBin) == "" {
+		sb.WriteString("\"$")
+		sb.WriteString(envPath)
+		sb.WriteString("\"")
+	} else {
+		sb.WriteString(shellQuote(venvBin))
+		sb.WriteString("${")
+		sb.WriteString(envPath)
+		sb.WriteString(":+\":$")
+		sb.WriteString(envPath)
+		sb.WriteString("\"}")
+	}
+	if strings.TrimSpace(skillBin) == "" {
+		return
+	}
+	sb.WriteString("; export ")
+	sb.WriteString(envPath)
+	sb.WriteString("=\"${")
+	sb.WriteString(envPath)
+	sb.WriteString(":+$")
+	sb.WriteString(envPath)
+	sb.WriteString(":}\"")
+	sb.WriteString(shellQuote(skillBin))
+}
+
+func isBareCommandName(cmd string) bool {
+	cmd = strings.TrimSpace(cmd)
+	return cmd != "" && cmd == path.Base(cmd) && cmd == filepath.Base(cmd)
+}
+
+func matchSkillLocalCommand(
+	list map[string]struct{},
+	cmd string,
+	venvBinRel string,
+	skillBinRel string,
+) (string, bool) {
+	if len(list) == 0 || !isBareCommandName(cmd) {
+		return "", false
+	}
+	for _, dir := range []string{venvBinRel, skillBinRel} {
+		candidate := skillLocalCommandPath(dir, cmd)
+		if candidate == "" {
+			continue
+		}
+		if cmdInList(list, candidate) {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func skillLocalCommandPath(dirRel string, cmd string) string {
+	if strings.TrimSpace(dirRel) == "" {
+		return ""
+	}
+	return forceExplicitRelativeCommand(path.Join(dirRel, cmd))
+}
+
+func forceExplicitRelativeCommand(rel string) string {
+	out := path.Clean(filepath.ToSlash(rel))
+	if out == "." || out == "" {
+		return out
+	}
+	if out == path.Base(out) {
+		return "./" + out
+	}
+	return out
 }
 
 const (
@@ -1450,9 +1688,23 @@ func cmdInList(list map[string]struct{}, cmd string) bool {
 	if _, ok := list[cmd]; ok {
 		return true
 	}
+	if normalized := normalizeCommandForList(cmd); normalized != cmd {
+		if _, ok := list[normalized]; ok {
+			return true
+		}
+	}
 	base := filepathBase(cmd)
 	_, ok := list[base]
 	return ok
+}
+
+func normalizeCommandForList(cmd string) string {
+	cmd = strings.TrimSpace(filepath.ToSlash(cmd))
+	cmd = strings.TrimPrefix(cmd, "./")
+	if cmd == "" {
+		return ""
+	}
+	return path.Clean(cmd)
 }
 
 func splitCommandLine(s string) ([]string, error) {
@@ -1541,33 +1793,47 @@ func (t *RunTool) prepareOutputs(
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 	in runInput,
-) ([]codeexecutor.File, *codeexecutor.OutputManifest, error) {
+) ([]codeexecutor.File, *codeexecutor.OutputManifest, []string, error) {
 	var files []codeexecutor.File
 	var manifest *codeexecutor.OutputManifest
 	if in.Outputs != nil && len(in.OutputFiles) == 0 {
 		m, err := eng.FS().CollectOutputs(ctx, ws, *in.Outputs)
-		if err != nil {
-			return nil, nil, err
+		if err != nil &&
+			!errors.Is(err, codeexecutor.ErrPartialOutputCommit) {
+			return nil, nil, nil, err
 		}
 		manifest = &m
 		if in.Outputs.Inline {
-			for _, fr := range m.Files {
-				files = append(files, codeexecutor.File{
-					Name:      fr.Name,
-					Content:   fr.Content,
-					MIMEType:  fr.MIMEType,
-					SizeBytes: fr.SizeBytes,
-					Truncated: fr.Truncated,
-				})
-			}
+			files = outputFilesFromManifest(m)
 		}
-		return files, manifest, nil
+		if err != nil {
+			return files, manifest, []string{
+				warnPartialOutputCommit,
+			}, nil
+		}
+		return files, manifest, nil, nil
 	}
 	fs, err := t.collectFiles(ctx, eng, ws, in.OutputFiles)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return fs, nil, nil
+	return fs, nil, nil, nil
+}
+
+func outputFilesFromManifest(
+	manifest codeexecutor.OutputManifest,
+) []codeexecutor.File {
+	files := make([]codeexecutor.File, 0, len(manifest.Files))
+	for _, fr := range manifest.Files {
+		files = append(files, codeexecutor.File{
+			Name:      fr.Name,
+			Content:   fr.Content,
+			MIMEType:  fr.MIMEType,
+			SizeBytes: fr.SizeBytes,
+			Truncated: fr.Truncated,
+		})
+	}
+	return files
 }
 
 // buildRunOutput converts a RunResult and files into runOutput.
@@ -1738,8 +2004,10 @@ const (
 )
 
 const (
-	warnStdoutTruncated           = "stdout truncated"
-	warnStderrTruncated           = "stderr truncated"
+	warnStdoutTruncated     = "stdout truncated"
+	warnStderrTruncated     = "stderr truncated"
+	warnPartialOutputCommit = "output files were collected, but " +
+		"workspace metadata could not be updated"
 	warnFailedRunEmptyOutputFiles = "empty output_files omitted " +
 		"because command failed; shell redirections can create " +
 		"empty files before execution fails"

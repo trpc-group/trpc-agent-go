@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -124,6 +125,36 @@ func TestWithContextCompactionOptions(t *testing.T) {
 	require.Same(t, counter, opts.ContextCompactionTokenCounter)
 	WithContextCompactionTokenCounter(nil)(opts)
 	require.Same(t, counter, opts.ContextCompactionTokenCounter)
+}
+
+func TestWithToolResultCompactionConfig(t *testing.T) {
+	opts := &Options{}
+	cfg := &ToolResultCompactionConfig{
+		ForceCleanToolNames: []string{"shell", "grep"},
+		KeepToolNames:       []string{"session_load"},
+		SkipRecentFunc:      func([]event.Event) int { return 2 },
+	}
+
+	WithToolResultCompactionConfig(cfg)(opts)
+	require.NotNil(t, opts.ToolResultCompactionConfig)
+	require.Equal(t, []string{"shell", "grep"},
+		opts.ToolResultCompactionConfig.ForceCleanToolNames)
+	require.Equal(t, []string{"session_load"},
+		opts.ToolResultCompactionConfig.KeepToolNames)
+	require.Equal(t, 2,
+		opts.ToolResultCompactionConfig.SkipRecentFunc(nil))
+
+	cfg.ForceCleanToolNames[0] = "changed"
+	cfg.KeepToolNames[0] = "changed"
+	require.Equal(t, []string{"shell", "grep"},
+		opts.ToolResultCompactionConfig.ForceCleanToolNames)
+	require.Equal(t, []string{"session_load"},
+		opts.ToolResultCompactionConfig.KeepToolNames)
+	require.Equal(t, 2,
+		opts.ToolResultCompactionConfig.SkipRecentFunc(nil))
+
+	WithToolResultCompactionConfig(nil)(opts)
+	require.NotNil(t, opts.ToolResultCompactionConfig)
 }
 
 func TestWithMessageFilterMode(t *testing.T) {
@@ -356,6 +387,20 @@ func TestNew_DefaultGenerationConfigKeepsLegacyNonStreaming(t *testing.T) {
 	require.False(t, a.genConfig.Stream)
 }
 
+func TestWithModelSelector(t *testing.T) {
+	selector := func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+		return inv.Model, nil
+	}
+	a := New("test-agent", WithModelSelector(selector))
+	require.NotNil(t, a.modelSelector)
+	expected := newDummyModel()
+	got, err := a.modelSelector(context.Background(), &agent.Invocation{
+		Model: expected,
+	})
+	require.NoError(t, err)
+	require.Same(t, expected, got)
+}
+
 func TestLLMAgent_Run_DefaultGenerationConfigUsesPublicStreamingBehavior(
 	t *testing.T,
 ) {
@@ -544,6 +589,30 @@ func TestWithSkillRunDeniedCommands_CopiesSlice(t *testing.T) {
 
 	in[0] = "rm"
 	require.Equal(t, []string{"echo", "ls"}, opts.skillRunDeniedCommands)
+}
+
+func TestWithWorkspaceExecAllowedCommands_CopiesSlice(t *testing.T) {
+	in := []string{"echo", "ls"}
+	opts := &Options{}
+	WithWorkspaceExecAllowedCommands(in...)(opts)
+
+	in[0] = "rm"
+	require.Equal(t,
+		[]string{"echo", "ls"},
+		opts.workspaceExecAllowedCommands,
+	)
+}
+
+func TestWithWorkspaceExecDeniedCommands_CopiesSlice(t *testing.T) {
+	in := []string{"curl", "wget"}
+	opts := &Options{}
+	WithWorkspaceExecDeniedCommands(in...)(opts)
+
+	in[0] = "ssh"
+	require.Equal(t,
+		[]string{"curl", "wget"},
+		opts.workspaceExecDeniedCommands,
+	)
 }
 
 func TestWithSkillRunForceSaveArtifacts(t *testing.T) {

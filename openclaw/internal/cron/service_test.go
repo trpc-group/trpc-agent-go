@@ -11,6 +11,9 @@ package cron
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -21,7 +24,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -77,6 +83,63 @@ func (s *stubRunner) messagesSnapshot() []string {
 	out := make([]string, len(s.messages))
 	copy(out, s.messages)
 	return out
+}
+
+type toolCallingRunner struct {
+	mu         sync.Mutex
+	router     *outbound.Router
+	args       []byte
+	reply      string
+	toolResult any
+	toolErr    error
+}
+
+func (r *toolCallingRunner) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	message model.Message,
+	opts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	var runOpts agent.RunOptions
+	for _, opt := range opts {
+		opt(&runOpts)
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			session.NewSession("app", userID, sessionID),
+		),
+		agent.WithInvocationRunOptions(runOpts),
+	)
+	toolCtx := agent.NewInvocationContext(ctx, inv)
+	result, err := outbound.NewTool(r.router).Call(toolCtx, r.args)
+
+	r.mu.Lock()
+	r.toolResult = result
+	r.toolErr = err
+	r.mu.Unlock()
+
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage(r.reply),
+			}},
+		},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (r *toolCallingRunner) Close() error { return nil }
+
+func (r *toolCallingRunner) resultSnapshot() (any, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.toolResult, r.toolErr
 }
 
 type blockingRunner struct {
@@ -187,9 +250,20 @@ func (r *replaceAwareRunner) ctxAt(index int) context.Context {
 }
 
 type stubSender struct {
-	mu     sync.Mutex
+	mu      sync.Mutex
+	target  string
+	text    string
+	files   []channel.OutboundFile
+	err     error
+	errs    []error
+	count   int
+	records []sendRecord
+}
+
+type sendRecord struct {
 	target string
 	text   string
+	files  []channel.OutboundFile
 }
 
 func (s *stubSender) ID() string { return "telegram" }
@@ -208,7 +282,62 @@ func (s *stubSender) SendText(
 	defer s.mu.Unlock()
 	s.target = target
 	s.text = text
-	return nil
+	s.records = append(s.records, sendRecord{
+		target: target,
+		text:   text,
+	})
+	s.count++
+	return s.nextErrLocked()
+}
+
+func (s *stubSender) SendMessage(
+	_ context.Context,
+	target string,
+	msg channel.OutboundMessage,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.target = target
+	s.text = msg.Text
+	s.files = append([]channel.OutboundFile(nil), msg.Files...)
+	s.records = append(s.records, sendRecord{
+		target: target,
+		text:   msg.Text,
+		files:  append([]channel.OutboundFile(nil), msg.Files...),
+	})
+	s.count++
+	return s.nextErrLocked()
+}
+
+func (s *stubSender) nextErrLocked() error {
+	if len(s.errs) == 0 {
+		return s.err
+	}
+	err := s.errs[0]
+	s.errs = s.errs[1:]
+	return err
+}
+
+func (s *stubSender) countSnapshot() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.count
+}
+
+func (s *stubSender) recordsSnapshot() []sendRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	records := make([]sendRecord, len(s.records))
+	for i, record := range s.records {
+		records[i] = sendRecord{
+			target: record.target,
+			text:   record.text,
+			files:  append([]channel.OutboundFile(nil), record.files...),
+		}
+	}
+	return records
 }
 
 func TestServiceRunNowSendsToDeliveryTarget(t *testing.T) {
@@ -278,6 +407,625 @@ func TestServiceRunNowSendsToDeliveryTarget(t *testing.T) {
 		job.ID,
 		runner.runOpts.RuntimeState[runtimeStateJobID],
 	)
+}
+
+func TestServiceRunNowSuppressesFinalAfterMessageToolSend(
+	t *testing.T,
+) {
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	runner := &toolCallingRunner{
+		router: router,
+		args: []byte(
+			`{"text":"提醒 wineguo：现在喝点水。"}`,
+		),
+		reply: "已在当前聊天中提醒 wineguo：现在喝点水。",
+	}
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		router,
+		WithDebugRecorder(rec),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "drink water",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "remind wineguo to drink water",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitForJobStatus(t, svc, job.ID, StatusSucceeded)
+
+	result, toolErr := runner.resultSnapshot()
+	require.NoError(t, toolErr)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Equal(t, "100", sender.target)
+	require.Equal(t, "提醒 wineguo：现在喝点水。", sender.text)
+	require.Equal(t, 1, sender.count)
+
+	traceDir := waitForCronTrace(t, rec.Dir())
+	events, err := debugrecorder.ReadEventsFile(traceDir)
+	require.NoError(t, err)
+	require.Contains(t, string(events), "duplicate_message_tool_text")
+	require.Contains(t, string(events), cronDeliverySkipMessageToolTarget)
+}
+
+func TestServiceRunNowDeliversFinalTextWhenMessageToolFails(
+	t *testing.T,
+) {
+	router := outbound.NewRouter()
+	sender := &stubSender{
+		errs: []error{context.DeadlineExceeded, nil},
+	}
+	router.RegisterSender(sender)
+
+	runner := &toolCallingRunner{
+		router: router,
+		args:   []byte(`{"text":"report ready"}`),
+		reply:  "report ready",
+	}
+	svc, err := NewService(t.TempDir(), runner, router)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "send report",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitFor(t, func() bool {
+		return sender.countSnapshot() == 2
+	})
+
+	result, toolErr := runner.resultSnapshot()
+	require.Nil(t, result)
+	require.ErrorIs(t, toolErr, context.DeadlineExceeded)
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Equal(t, "100", sender.target)
+	require.Equal(t, "report ready", sender.text)
+	require.Equal(t, 2, sender.count)
+}
+
+func TestServiceRunNowDeliversSameTextWhenMessageToolSendsFile(
+	t *testing.T,
+) {
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+	router.RegisterMessageSender(sender)
+
+	runner := &toolCallingRunner{
+		router: router,
+		args: []byte(
+			`{"text":"report ready","file":"report.pdf"}`,
+		),
+		reply: "report ready",
+	}
+	svc, err := NewService(t.TempDir(), runner, router)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "send report",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitFor(t, func() bool {
+		return sender.countSnapshot() == 2
+	})
+
+	result, toolErr := runner.resultSnapshot()
+	require.NoError(t, toolErr)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Equal(t, "100", sender.target)
+	require.Equal(t, "report ready", sender.text)
+	require.Equal(t, 2, sender.count)
+}
+
+func TestServiceRunNowSuppressesWhitespaceDifferentFinalText(
+	t *testing.T,
+) {
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	runner := &toolCallingRunner{
+		router: router,
+		args:   []byte(`{"text":"report ready"}`),
+		reply:  "report ready\n",
+	}
+	svc, err := NewService(t.TempDir(), runner, router)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "send report",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitForJobStatus(t, svc, job.ID, StatusSucceeded)
+
+	result, toolErr := runner.resultSnapshot()
+	require.NoError(t, toolErr)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Equal(t, "100", sender.target)
+	require.Equal(t, "report ready", sender.text)
+	require.Equal(t, 1, sender.count)
+}
+
+func TestServiceRunNowDeliversFinalAfterDifferentTargetToolSend(
+	t *testing.T,
+) {
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	runner := &toolCallingRunner{
+		router: router,
+		args: []byte(
+			`{"text":"preparing report","channel":"telegram","target":"200"}`,
+		),
+		reply: "report ready",
+	}
+	svc, err := NewService(t.TempDir(), runner, router)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "prepare report",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitFor(t, func() bool {
+		return sender.countSnapshot() == 2
+	})
+
+	result, toolErr := runner.resultSnapshot()
+	require.NoError(t, toolErr)
+	require.Equal(t, true, result.(map[string]any)["ok"])
+
+	sender.mu.Lock()
+	require.Equal(t, "100", sender.target)
+	require.Equal(t, "report ready", sender.text)
+	require.Equal(t, 2, sender.count)
+	sender.mu.Unlock()
+
+	records := sender.recordsSnapshot()
+	require.Len(t, records, 2)
+	require.Equal(t, "200", records[0].target)
+	require.Equal(t, "preparing report", records[0].text)
+	require.Equal(t, "100", records[1].target)
+	require.Equal(t, "report ready", records[1].text)
+}
+
+func TestServiceRunNowWritesDebugTrace(t *testing.T) {
+	router := outbound.NewRouter()
+	sender := &stubSender{}
+	router.RegisterSender(sender)
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	runner := &stubRunner{reply: "resource report"}
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		router,
+		WithDebugRecorder(rec),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	traceDir := waitForCronTrace(t, rec.Dir())
+	events, err := debugrecorder.ReadEventsFile(traceDir)
+	require.NoError(t, err)
+	rawEvents := string(events)
+	require.Contains(t, rawEvents, debugrecorder.KindCronRun)
+	require.Contains(t, rawEvents, debugrecorder.KindRunnerEvent)
+	require.Contains(t, rawEvents, debugrecorder.KindCronDelivery)
+	require.Contains(t, rawEvents, "resource report")
+
+	meta := readCronTraceMeta(t, traceDir)
+	require.Equal(t, "cron", meta.Start.Source)
+	require.Equal(t, "telegram", meta.Start.Channel)
+	require.Equal(t, "telegram:user", meta.Start.UserID)
+	require.True(t, strings.HasPrefix(meta.Start.SessionID, cronSessionPrefix))
+	require.Empty(t, meta.Start.TraceID)
+
+	result := readCronTraceResult(t, traceDir)
+	require.Equal(t, StatusSucceeded, result.Status)
+	require.Empty(t, result.Error)
+}
+
+func TestServiceRunNowDebugTraceRecordsDeliveryFailure(t *testing.T) {
+	router := outbound.NewRouter()
+	sender := &stubSender{err: context.DeadlineExceeded}
+	router.RegisterSender(sender)
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+
+	runner := &stubRunner{reply: "resource report"}
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		router,
+		WithDebugRecorder(rec),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Delivery: outbound.DeliveryTarget{
+			Channel: "telegram",
+			Target:  "100",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	waitFor(t, func() bool {
+		got := svc.Get(job.ID)
+		return got != nil && got.LastStatus == StatusDeliveryFailed
+	})
+
+	traceDir := waitForCronTrace(t, rec.Dir())
+	events, err := debugrecorder.ReadEventsFile(traceDir)
+	require.NoError(t, err)
+	rawEvents := string(events)
+	require.Contains(t, rawEvents, debugrecorder.KindCronDelivery)
+	require.Contains(t, rawEvents, context.DeadlineExceeded.Error())
+
+	result := readCronTraceResult(t, traceDir)
+	require.Equal(t, StatusDeliveryFailed, result.Status)
+	require.Equal(t, context.DeadlineExceeded.Error(), result.Error)
+}
+
+func TestServiceRunNowAppliesRuntimeProfile(t *testing.T) {
+	runner := &stubRunner{reply: "ok"}
+	resolver := runtimeprofile.NewMapResolver(runtimeprofile.Config{
+		Profiles: map[string]runtimeprofile.Profile{
+			"retail": {
+				AppName: "retail-app",
+				Version: "v2",
+				Prompt: runtimeprofile.Prompt{
+					Instruction: "retail instruction",
+				},
+			},
+		},
+	})
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		nil,
+		WithRuntimeProfileResolver(resolver),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Profile: &RuntimeProfileRef{
+			ID: "retail",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+	waitFor(t, func() bool {
+		runner.mu.Lock()
+		defer runner.mu.Unlock()
+		return len(runner.messages) > 0
+	})
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Equal(t, "retail-app", runner.runOpts.AppName)
+	require.Equal(t, "retail instruction", runner.runOpts.Instruction)
+	require.Equal(
+		t,
+		"retail",
+		runner.runOpts.RuntimeState[runtimeprofile.RuntimeStateProfileID],
+	)
+	require.Equal(
+		t,
+		"v2",
+		runner.runOpts.RuntimeState[runtimeprofile.RuntimeStateProfileVersion],
+	)
+}
+
+func TestServiceRunNowResolvesRuntimeProfileWithRequestMetadata(
+	t *testing.T,
+) {
+	runner := &stubRunner{reply: "ok"}
+	requests := make(chan runtimeprofile.Request, 1)
+	resolver := runtimeprofile.ResolverFunc(func(
+		ctx context.Context,
+		req runtimeprofile.Request,
+	) (runtimeprofile.Profile, error) {
+		requests <- req
+		return runtimeprofile.Profile{
+			ID:      req.ProfileID,
+			AppName: "retail-app",
+		}, nil
+	})
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		nil,
+		WithRuntimeProfileResolver(resolver),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Profile: &RuntimeProfileRef{
+			ID:        "retail",
+			Channel:   "wecom",
+			TenantID:  "tenant-a",
+			SessionID: "session-a",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+
+	var got runtimeprofile.Request
+	select {
+	case got = <-requests:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime profile request was not observed")
+	}
+	require.Equal(t, "retail", got.ProfileID)
+	require.Equal(t, "wecom", got.Channel)
+	require.Equal(t, "tenant-a", got.TenantID)
+	require.Equal(t, "telegram:user", got.UserID)
+	require.Equal(t, "session-a", got.SessionID)
+}
+
+func TestJobProfileJSONOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(Job{ID: "job-1"})
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), `"profile"`)
+}
+
+func TestServiceRunNowFailsClosedForMissingRuntimeProfile(
+	t *testing.T,
+) {
+	runner := &stubRunner{reply: "ok"}
+	svc, err := NewService(t.TempDir(), runner, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Profile: &RuntimeProfileRef{
+			ID:      "retail",
+			Version: "v1",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+	waitFor(t, func() bool {
+		got := svc.Get(job.ID)
+		return got != nil && got.LastStatus == StatusFailed
+	})
+
+	runner.mu.Lock()
+	defer runner.mu.Unlock()
+	require.Empty(t, runner.messages)
+}
+
+func TestServiceRunNowFailsOnRuntimeProfileVersionMismatch(
+	t *testing.T,
+) {
+	runner := &stubRunner{reply: "ok"}
+	resolver := runtimeprofile.NewMapResolver(runtimeprofile.Config{
+		Profiles: map[string]runtimeprofile.Profile{
+			"retail": {
+				AppName: "retail-app",
+				Version: "v2",
+			},
+		},
+	})
+	svc, err := NewService(
+		t.TempDir(),
+		runner,
+		nil,
+		WithRuntimeProfileResolver(resolver),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	job, err := svc.Add(&Job{
+		Name:    "report",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "collect system resources",
+		UserID:  "telegram:user",
+		Profile: &RuntimeProfileRef{
+			ID:      "retail",
+			Version: "v1",
+		},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.RunNow(job.ID)
+	require.NoError(t, err)
+	waitFor(t, func() bool {
+		got := svc.Get(job.ID)
+		return got != nil && got.LastStatus == StatusFailed &&
+			strings.Contains(got.LastError, "version mismatch")
+	})
 }
 
 func TestToolAddUsesCurrentSessionDelivery(t *testing.T) {
@@ -1105,6 +1853,8 @@ func TestServiceNormalizeAndAccumulatorHelpers(t *testing.T) {
 		},
 	})
 	require.Equal(t, true, runtimeState[runtimeStateScheduledRun])
+	require.Equal(t, "telegram", runtimeState["openclaw.delivery.channel"])
+	require.Equal(t, "1", runtimeState["openclaw.delivery.target"])
 	require.Equal(t, "job-1", runtimeState[runtimeStateJobID])
 	require.Equal(t, 2, runtimeState[runtimeStateRunIndex])
 	require.Equal(t, true, runtimeState[runtimeStateHasMaxRuns])
@@ -1236,6 +1986,11 @@ func TestRunContextPromptRequiresScheduledExecution(t *testing.T) {
 		runContextPrompt,
 		"perform the scheduled task and report the result",
 	)
+	require.Contains(
+		t,
+		runContextPrompt,
+		"counts as the job delivery",
+	)
 }
 
 func waitFor(t *testing.T, fn func() bool) {
@@ -1249,6 +2004,68 @@ func waitFor(t *testing.T, fn func() bool) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("condition was not met")
+}
+
+func waitForJobStatus(
+	t *testing.T,
+	svc *Service,
+	jobID string,
+	status string,
+) {
+	t.Helper()
+
+	waitFor(t, func() bool {
+		got := svc.Get(jobID)
+		return got != nil && got.LastStatus == status
+	})
+}
+
+type cronTraceMeta struct {
+	Start debugrecorder.TraceStart `json:"start"`
+}
+
+func waitForCronTrace(t *testing.T, root string) string {
+	t.Helper()
+
+	var matches []string
+	waitFor(t, func() bool {
+		var err error
+		matches, err = filepath.Glob(
+			filepath.Join(root, "*", "*", "result.json"),
+		)
+		require.NoError(t, err)
+		if len(matches) == 0 {
+			return false
+		}
+		_, err = debugrecorder.ReadEventsFile(filepath.Dir(matches[0]))
+		return err == nil
+	})
+	return filepath.Dir(matches[0])
+}
+
+func readCronTraceMeta(t *testing.T, traceDir string) cronTraceMeta {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(traceDir, "meta.json"))
+	require.NoError(t, err)
+
+	var meta cronTraceMeta
+	require.NoError(t, json.Unmarshal(data, &meta))
+	return meta
+}
+
+func readCronTraceResult(
+	t *testing.T,
+	traceDir string,
+) debugrecorder.TraceEnd {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(traceDir, "result.json"))
+	require.NoError(t, err)
+
+	var result debugrecorder.TraceEnd
+	require.NoError(t, json.Unmarshal(data, &result))
+	return result
 }
 
 func timePointer(ts time.Time) *time.Time {

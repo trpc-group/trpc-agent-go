@@ -47,6 +47,10 @@ const (
 	// KeyTRPCAgentGoClientTimeToFirstToken is the attribute key for time to first token metric.
 	KeyTRPCAgentGoClientTimeToFirstToken = "trpc_agent_go.client.time_to_first_token" // #nosec G101 - this is a metric key name, not a credential.
 
+	// KeyGenAIAppName is the attribute key for GenAI application name.
+	KeyGenAIAppName = "gen_ai.app.name"
+	// KeyGenAIUserID is the attribute key for GenAI user ID.
+	KeyGenAIUserID = "gen_ai.user.id"
 	// KeyGenAIOperationName is the attribute key for GenAI operation name.
 	KeyGenAIOperationName = "gen_ai.operation.name"
 	// KeyGenAISystem is the attribute key for GenAI system identifier.
@@ -58,10 +62,20 @@ const (
 	KeyGenAIRequestIsStream = "gen_ai.request.is_stream"
 	// KeyGenAIRequestChoiceCount is the attribute key for the number of choices in the request.
 	KeyGenAIRequestChoiceCount = "gen_ai.request.choice.count"
-	// KeyGenAIInputMessages is the attribute key for input messages.
+	// KeyGenAIInputMessages is the deprecated compatibility attribute key for
+	// framework-shaped input messages. New integrations should prefer
+	// KeyGenAIInputMessagesOTel.
 	KeyGenAIInputMessages = "gen_ai.input.messages"
-	// KeyGenAIOutputMessages is the attribute key for output messages.
+	// KeyGenAIInputMessagesOTel is the attribute key for OpenTelemetry-aligned
+	// input messages encoded with role+parts.
+	KeyGenAIInputMessagesOTel = "gen_ai.input.messages.otel"
+	// KeyGenAIOutputMessages is the deprecated compatibility attribute key for
+	// framework-shaped output messages. New integrations should prefer
+	// KeyGenAIOutputMessagesOTel.
 	KeyGenAIOutputMessages = "gen_ai.output.messages"
+	// KeyGenAIOutputMessagesOTel is the attribute key for OpenTelemetry-aligned
+	// output messages encoded with role+parts.
+	KeyGenAIOutputMessagesOTel = "gen_ai.output.messages.otel"
 	// KeyGenAIAgentName is the attribute key for agent name.
 	KeyGenAIAgentName = "gen_ai.agent.name"
 	// KeyGenAIAgentID is the attribute key for agent ID.

@@ -16,6 +16,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -196,6 +197,10 @@ type Node struct {
 	// sub-agent. This provides a concise way to implement "pass only the
 	// result" pipelines between agent nodes without extra glue nodes.
 	agentInputFromLastResponse bool
+
+	// traceTransparent marks framework-owned agent nodes that may elide the
+	// parent wrapper step from execution trace when all runtime guards pass.
+	traceTransparent bool
 }
 
 // Edge represents an edge in the graph.
@@ -481,6 +486,8 @@ type ExecutionContext struct {
 	Graph        *Graph
 	EventChan    chan<- *event.Event
 	InvocationID string
+	// startTime is the root workflow start time for elapsed-time metrics.
+	startTime time.Time
 	// Invocation is the per-run invocation context. Nodes may use it to
 	// read invocation-scoped state (for example, {invocation:*} placeholders).
 	Invocation *agent.Invocation
@@ -517,10 +524,12 @@ type ExecutionContext struct {
 	traceChannelSources map[string][]string
 	// traceChannelSourceSteps tracks the step number for last-value/ephemeral provenance.
 	traceChannelSourceSteps map[string]int
-	// traceBarrierChannelSources tracks the latest source step id for each barrier sender.
-	traceBarrierChannelSources map[string]map[string]string
-	// traceStepIDByTaskID tracks the real trace step created for each task.
-	traceStepIDByTaskID map[string]string
+	// traceBarrierChannelSources tracks the latest source step ids for each barrier sender.
+	traceBarrierChannelSources map[string]map[string][]string
+	// traceSourceStepIDsByTaskID tracks the trace source steps produced by each task.
+	traceSourceStepIDsByTaskID map[string][]string
+	// traceAgentNodeTasksByNodeID tracks transparent agent-node candidates.
+	traceAgentNodeTasksByNodeID map[string]*traceTaskRegistryEntry
 }
 
 func (e *ExecutionContext) setCompletionIdentity(text, identity string) {

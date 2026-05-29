@@ -15,10 +15,11 @@ import (
 )
 
 type options struct {
-	description          string
-	memberTools          memberToolOptions
-	swarm                SwarmConfig
-	crossRequestTransfer bool
+	description       string
+	memberTools       memberToolOptions
+	swarm             SwarmConfig
+	swarmHandoff      swarmHandoffPolicy
+	swarmHandoffInput SwarmHandoffInputBuilder
 }
 
 // HistoryScope controls whether and how member AgentTools inherit parent
@@ -168,7 +169,52 @@ func WithSwarmConfig(cfg SwarmConfig) Option {
 // This only applies to swarm teams.
 func WithCrossRequestTransfer(enabled bool) Option {
 	return func(o *options) {
-		o.crossRequestTransfer = enabled
+		if enabled {
+			o.swarmHandoff.turnRouting = swarmTurnRoutingTargetTakesOver
+			return
+		}
+		o.swarmHandoff.turnRouting = swarmTurnRoutingEntry
+	}
+}
+
+// WithSwarmIndependentAgents makes Swarm members keep private history.
+//
+// The entry member continues to use the root session. Non-entry members use
+// stable member sessions derived from the root session, team name, and member
+// name. Member events are still emitted to callers, but isolated member
+// transcript events are not persisted into the root session.
+//
+// This option only controls member session isolation. It does not make the
+// last transfer target receive future user turns; combine it with
+// WithCrossRequestTransfer(true) when the active target should take over the
+// next runner.Run call.
+// Runner turn-end memory and session ingestor lifecycle still runs for the
+// root session only.
+//
+// This only applies to swarm teams.
+func WithSwarmIndependentAgents() Option {
+	return func(o *options) {
+		o.swarmHandoff.sessionScope = swarmSessionScopePerAgent
+	}
+}
+
+// WithSwarmHandoffInputBuilder sets the target input builder used by Swarm
+// handoffs.
+//
+// The builder runs after the transfer target invocation is created and after
+// the transfer message is installed as the default target input, but before
+// the target member starts. It can replace that default input with a
+// business-specific message, for example one rendered from the root user input
+// and a template. If the returned message has content but no role, the role is
+// normalized to user.
+//
+// When no builder is configured, the target member receives the
+// transfer_to_agent message as a user message.
+//
+// This only applies to swarm teams.
+func WithSwarmHandoffInputBuilder(builder SwarmHandoffInputBuilder) Option {
+	return func(o *options) {
+		o.swarmHandoffInput = builder
 	}
 }
 

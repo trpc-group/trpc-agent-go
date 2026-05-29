@@ -336,6 +336,9 @@ func TestBuildRequestProcessors_ContextCompactionWiring(t *testing.T) {
 	WithContextCompactionToolResultMaxTokens(2048)(opts)
 	counter := model.NewSimpleTokenCounter(model.WithApproxRunesPerToken(1))
 	WithContextCompactionTokenCounter(counter)(opts)
+	WithToolResultCompactionConfig(&ToolResultCompactionConfig{
+		SkipRecentFunc: func([]event.Event) int { return 3 },
+	})(opts)
 
 	procs := buildRequestProcessors("test-agent", opts)
 	var crp *processor.ContentRequestProcessor
@@ -349,6 +352,8 @@ func TestBuildRequestProcessors_ContextCompactionWiring(t *testing.T) {
 	require.Equal(t, 2, crp.ContextCompactionConfig.KeepRecentRequests)
 	require.Equal(t, 2048, crp.ContextCompactionConfig.ToolResultMaxTokens)
 	require.Same(t, counter, crp.ContextCompactionConfig.TokenCounter)
+	require.NotNil(t, crp.ContextCompactionConfig.SkipRecentFunc)
+	require.Equal(t, 3, crp.ContextCompactionConfig.SkipRecentFunc(nil))
 }
 
 // Test that buildRequestProcessors wires PreserveSameBranch into
@@ -993,6 +998,38 @@ func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 				)
 			},
 		)
+	})
+
+	// An extension that contributes tools through
+	// extension.Registry.Tools must be rejected too: those tools
+	// land on the same outbound surface as WithTools / WithToolSets
+	// and so violate the same "structured output ⇒ no callable
+	// tools" contract.
+	t.Run("with tool-contributing extension", func(t *testing.T) {
+		extTool := dummyTool{decl: &tool.Declaration{Name: "from_extension"}}
+		ext := &fakeExt{name: "ext", tools: []tool.Tool{extTool}}
+		require.PanicsWithValue(t,
+			"Invalid LLMAgent configuration: if output_schema is set, extension-contributed tools (WithExtensions → Registry.Tools) must be empty",
+			func() {
+				_ = New("test",
+					WithOutputSchema(schema),
+					WithExtensions(ext),
+				)
+			},
+		)
+	})
+
+	// A hook-only extension (Register that never calls r.Tools)
+	// leaves extensionContributedTools empty and must remain
+	// compatible with WithOutputSchema — the guard reaches the
+	// tools branch only via len(...) > 0.
+	t.Run("with hook-only extension is allowed", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			_ = New("test",
+				WithOutputSchema(schema),
+				WithExtensions(&hookOnlyExt{name: "h"}),
+			)
+		})
 	})
 }
 
@@ -2248,6 +2285,30 @@ func TestLLMAgent_RunWithModelName_NotFound(t *testing.T) {
 
 	llmAgent.setupInvocation(inv)
 	require.Equal(t, defaultModel, inv.Model)
+}
+
+func TestLLMAgent_BaseModelForInvocation_MissingModelNameSuppressesAgentSelector(t *testing.T) {
+	defaultModel := &mockModelWithResponse{}
+	selectorModel := &mockModelWithResponse{}
+	llmAgent := New(
+		"test-agent",
+		WithModel(defaultModel),
+		WithModelSelector(func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+			return selectorModel, nil
+		}),
+	)
+	inv := &agent.Invocation{
+		InvocationID: "test-1",
+		AgentName:    "test-agent",
+		Message:      model.NewUserMessage("Test message"),
+		RunOptions: agent.RunOptions{
+			ModelName: "non-existent-model",
+		},
+	}
+	resolution := llmAgent.resolveFlowBaseModel(inv)
+	require.Same(t, defaultModel, resolution.Model)
+	require.NotSame(t, selectorModel, resolution.Model)
+	require.False(t, resolution.AllowAgentSelector)
 }
 
 // TestLLMAgent_RunWithModel_Priority tests that WithModel takes priority over WithModelName.

@@ -70,6 +70,20 @@ func TestComputeNextRunVariants(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, nextPtr)
 
+	next, err = computeNextRun(Schedule{
+		Kind: ScheduleKindAfter,
+		At:   "2026-03-06T10:05:00Z",
+	}, now)
+	require.NoError(t, err)
+	require.Equal(t, now.Add(5*time.Minute), next)
+
+	nextPtr, err = computeNextAfterRun(Schedule{
+		Kind: ScheduleKindAfter,
+		At:   "2026-03-06T10:05:00Z",
+	}, now, now.Add(time.Minute))
+	require.NoError(t, err)
+	require.Nil(t, nextPtr)
+
 	nextPtr, err = computeNextAfterRun(Schedule{
 		Kind:  ScheduleKindEvery,
 		Every: "1m",

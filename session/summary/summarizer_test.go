@@ -509,6 +509,29 @@ func TestSessionSummarizer_ExtractConversationText_WithAuthor(t *testing.T) {
 	assert.Contains(t, text, "assistant:")
 }
 
+func TestSessionSummarizer_ExtractConversationText_LeavesOutReasoningContent(t *testing.T) {
+	s := NewSummarizer(&fakeModel{})
+	sess := &session.Session{
+		ID: "test-reasoning-content",
+		Events: []event.Event{
+			{
+				Author: "assistant",
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ReasoningContent: "I should inspect the user request first.",
+						Content:          "Here is the final answer.",
+					},
+				}}},
+			},
+		},
+	}
+
+	text, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	assert.NotContains(t, text, "I should inspect the user request first.")
+	assert.Contains(t, text, "assistant: Here is the final answer.")
+}
+
 func TestSessionSummarizer_ExtractConversationText_WithToolCalls(t *testing.T) {
 	s := NewSummarizer(&fakeModel{})
 
@@ -1600,13 +1623,14 @@ func TestSessionSummarizer_SummarizeWithSkipRecent(t *testing.T) {
 	})
 }
 
-func TestSessionSummarizer_RecordLastIncludedTimestamp(t *testing.T) {
+func TestSessionSummarizer_RecordLastIncludedBoundary(t *testing.T) {
 	now := time.Now().UTC()
 	keepTs := now.Add(-2 * time.Minute)
 	sess := &session.Session{
 		ID: "ts-session",
 		Events: []event.Event{
 			{
+				ID:        "keep-event",
 				Author:    "user",
 				Timestamp: keepTs,
 				Response: &model.Response{Choices: []model.Choice{{
@@ -1634,18 +1658,19 @@ func TestSessionSummarizer_RecordLastIncludedTimestamp(t *testing.T) {
 	got, err := time.Parse(time.RFC3339Nano, string(raw))
 	require.NoError(t, err)
 	assert.True(t, got.Equal(keepTs))
+	assert.Equal(t, "keep-event", string(sess.State[lastIncludedEventIDKey]))
 }
 
-func TestSessionSummarizer_RecordLastIncludedTimestamp_NoStateOrEvents(t *testing.T) {
+func TestSessionSummarizer_RecordLastIncludedBoundary_NoStateOrEvents(t *testing.T) {
 	s := &sessionSummarizer{}
 
 	t.Run("nil session", func(t *testing.T) {
-		s.recordLastIncludedTimestamp(nil, nil)
+		s.recordLastIncludedBoundary(nil, nil)
 	})
 
 	t.Run("empty events does nothing", func(t *testing.T) {
 		sess := &session.Session{}
-		s.recordLastIncludedTimestamp(sess, []event.Event{})
+		s.recordLastIncludedBoundary(sess, []event.Event{})
 		assert.Nil(t, sess.State)
 	})
 }
@@ -1682,6 +1707,32 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 		raw, ok := checkSess.GetState(tokenThresholdConversationTextStateKey)
 		require.True(t, ok)
 		assert.Empty(t, string(raw))
+	})
+
+	t.Run("injects reasoning content only for token threshold checks", func(t *testing.T) {
+		s := &sessionSummarizer{}
+		reasoning := "thinking through the answer"
+		sess := &session.Session{
+			Events: []event.Event{
+				{
+					Author:    "assistant",
+					Timestamp: time.Now(),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Content:          "final answer",
+							ReasoningContent: reasoning,
+						},
+					}}},
+				},
+			},
+		}
+
+		checkSess := s.buildCheckSession(sess)
+		require.NotNil(t, checkSess)
+
+		raw, ok := checkSess.GetState(tokenThresholdReasoningContentStateKey)
+		require.True(t, ok)
+		assert.Equal(t, reasoning, string(raw))
 	})
 
 	t.Run("uses branch scope when building injected token text", func(t *testing.T) {

@@ -118,6 +118,9 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	if err := initInvokeAgentMetrics(mp); err != nil {
 		return err
 	}
+	if err := initWorkflowMetrics(mp); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -138,6 +141,8 @@ func SetHistogramBuckets(meterName string, metricName string, boundaries []float
 		return setExecuteToolHistogramBuckets(metricName, boundaries)
 	case metrics.MeterNameInvokeAgent:
 		return setInvokeAgentHistogramBuckets(metricName, boundaries)
+	case metrics.MeterNameWorkflow:
+		return setWorkflowHistogramBuckets(metricName, boundaries)
 	default:
 		return fmt.Errorf("unknown or unsupported meter name: %s", meterName)
 	}
@@ -214,6 +219,23 @@ func setInvokeAgentHistogramBuckets(metricName string, boundaries []float64) err
 	}
 }
 
+func setWorkflowHistogramBuckets(metricName string, boundaries []float64) error {
+	switch metricName {
+	case metrics.MetricGenAIClientOperationDuration:
+		if itelemetry.WorkflowMetricGenAIClientOperationDuration == nil {
+			return fmt.Errorf("workflow metric %s not initialized", metricName)
+		}
+		return itelemetry.WorkflowMetricGenAIClientOperationDuration.SetBuckets(boundaries)
+	case metrics.MetricGenAIWorkflowElapsedTime:
+		if itelemetry.WorkflowMetricGenAIWorkflowElapsedTime == nil {
+			return fmt.Errorf("workflow metric %s not initialized", metricName)
+		}
+		return itelemetry.WorkflowMetricGenAIWorkflowElapsedTime.SetBuckets(boundaries)
+	default:
+		return fmt.Errorf("unknown or unsupported workflow histogram metric: %s", metricName)
+	}
+}
+
 func initInvokeAgentMetrics(mp metric.MeterProvider) error {
 	if mp == nil {
 		return fmt.Errorf("invoke agent meter provider is nil")
@@ -255,6 +277,36 @@ func initInvokeAgentMetrics(mp metric.MeterProvider) error {
 		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIClientOperationDuration, err)
+	}
+
+	return nil
+}
+
+func initWorkflowMetrics(mp metric.MeterProvider) error {
+	if mp == nil {
+		return fmt.Errorf("workflow meter provider is nil")
+	}
+
+	itelemetry.WorkflowMeter = mp.Meter(metrics.MeterNameWorkflow)
+	meterName := metrics.MeterNameWorkflow
+	var err error
+	if itelemetry.WorkflowMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(
+		mp,
+		metrics.MeterNameWorkflow,
+		metrics.MetricGenAIClientOperationDuration,
+		metric.WithDescription("Duration of graph workflow/node execution"),
+		metric.WithUnit("s"),
+	); err != nil {
+		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIClientOperationDuration, err)
+	}
+	if itelemetry.WorkflowMetricGenAIWorkflowElapsedTime, err = histogram.NewDynamicFloat64Histogram(
+		mp,
+		metrics.MeterNameWorkflow,
+		metrics.MetricGenAIWorkflowElapsedTime,
+		metric.WithDescription("Elapsed time from root workflow start to current workflow end"),
+		metric.WithUnit("s"),
+	); err != nil {
+		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIWorkflowElapsedTime, err)
 	}
 
 	return nil

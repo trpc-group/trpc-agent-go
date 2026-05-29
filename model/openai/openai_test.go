@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,9 +30,18 @@ import (
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/respjson"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+	semconvmetrics "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/metrics"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
+	telemetrytrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 
 	"github.com/stretchr/testify/assert"
@@ -470,6 +480,257 @@ func TestModel_GenerateContentIter_Streaming(t *testing.T) {
 	require.True(t, sawHello)
 }
 
+func TestModel_ChatTelemetry_DefaultDisabledAndExplicitFalse(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		opts []Option
+	}{
+		{name: "default disabled"},
+		{name: "explicit false", opts: []Option{WithChatTelemetry(false)}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := useOpenAIChatTelemetrySpanRecorder(t)
+			server := newOpenAIChatTelemetryNonStreamingServer(t)
+			defer server.Close()
+
+			opts := []Option{WithBaseURL(server.URL), WithAPIKey("test-key")}
+			opts = append(opts, tt.opts...)
+			m := New("gpt-3.5-turbo", opts...)
+
+			ch, err := m.GenerateContent(context.Background(), &model.Request{
+				Messages: []model.Message{model.NewUserMessage("hi")},
+			})
+			require.NoError(t, err)
+			for range ch {
+			}
+
+			require.Empty(t, recorder.Ended())
+		})
+	}
+}
+
+func TestModel_ChatTelemetry_OptInNonStreamingTraceAndMetrics(t *testing.T) {
+	recorder := useOpenAIChatTelemetrySpanRecorder(t)
+	reader := useOpenAIChatTelemetryMeter(t)
+	server := newOpenAIChatTelemetryNonStreamingServer(t)
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithChatTelemetry(true),
+	)
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	})
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, itelemetry.NewChatSpanName("gpt-3.5-turbo"), spans[0].Name())
+	attrs := spanAttributes(spans[0].Attributes())
+	require.Equal(t, itelemetry.OperationChat, attrs[semconvtrace.KeyGenAIOperationName].AsString())
+	require.Equal(t, "gpt-3.5-turbo", attrs[semconvtrace.KeyGenAIRequestModel].AsString())
+	require.Equal(t, "telemetry-non-stream", attrs[semconvtrace.KeyGenAIResponseID].AsString())
+	require.Equal(t, int64(3), attrs[semconvtrace.KeyGenAIUsageInputTokens].AsInt64())
+	require.Equal(t, int64(2), attrs[semconvtrace.KeyGenAIUsageOutputTokens].AsInt64())
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	require.True(t, metricContainsRequestCount(rm))
+}
+
+func TestModel_ChatTelemetry_OptInStreamingTrace(t *testing.T) {
+	recorder := useOpenAIChatTelemetrySpanRecorder(t)
+	server := newOpenAIChatTelemetryStreamingServer(t)
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithChatTelemetry(true),
+	)
+	ch, err := m.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			Stream: true,
+		},
+	})
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, itelemetry.NewChatSpanName("gpt-3.5-turbo"), spans[0].Name())
+	attrs := spanAttributes(spans[0].Attributes())
+	require.Equal(t, itelemetry.OperationChat, attrs[semconvtrace.KeyGenAIOperationName].AsString())
+	require.Equal(t, "gpt-3.5-turbo", attrs[semconvtrace.KeyGenAIRequestModel].AsString())
+	require.Equal(t, "telemetry-stream", attrs[semconvtrace.KeyGenAIResponseID].AsString())
+	require.True(t, attrs[semconvtrace.KeyGenAIRequestIsStream].AsBool())
+}
+
+func TestModel_ChatTelemetry_OptInGenerateContentIterTrace(t *testing.T) {
+	recorder := useOpenAIChatTelemetrySpanRecorder(t)
+	server := newOpenAIChatTelemetryNonStreamingServer(t)
+	defer server.Close()
+
+	m := New("gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithChatTelemetry(true),
+	)
+	seq, err := m.GenerateContentIter(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+	})
+	require.NoError(t, err)
+	seq(func(resp *model.Response) bool {
+		return true
+	})
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	require.Equal(t, itelemetry.NewChatSpanName("gpt-3.5-turbo"), spans[0].Name())
+	attrs := spanAttributes(spans[0].Attributes())
+	require.Equal(t, itelemetry.OperationChat, attrs[semconvtrace.KeyGenAIOperationName].AsString())
+	require.Equal(t, "telemetry-non-stream", attrs[semconvtrace.KeyGenAIResponseID].AsString())
+}
+
+func newOpenAIChatTelemetryNonStreamingServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{
+			"id": "telemetry-non-stream",
+			"object": "chat.completion",
+			"created": 1699200000,
+			"model": "gpt-3.5-turbo",
+			"choices": [
+				{
+					"index": 0,
+					"message": {"role": "assistant", "content": "ok"},
+					"finish_reason": "stop"
+				}
+			],
+			"usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+		}`)
+	}))
+}
+
+func newOpenAIChatTelemetryStreamingServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		chunks := []string{
+			`data: {"id":"telemetry-stream","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"},"finish_reason":null}]}`,
+			`data: {"id":"telemetry-stream","object":"chat.completion.chunk","created":1699200000,"model":"gpt-3.5-turbo","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+		for _, chunk := range chunks {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		}
+	}))
+}
+
+func useOpenAIChatTelemetrySpanRecorder(t *testing.T) *tracetest.SpanRecorder {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	originalProvider := telemetrytrace.TracerProvider
+	originalTracer := telemetrytrace.Tracer
+	telemetrytrace.TracerProvider = provider
+	telemetrytrace.Tracer = provider.Tracer(itelemetry.InstrumentName)
+	t.Cleanup(func() {
+		telemetrytrace.TracerProvider = originalProvider
+		telemetrytrace.Tracer = originalTracer
+		_ = provider.Shutdown(context.Background())
+	})
+	return recorder
+}
+
+func useOpenAIChatTelemetryMeter(t *testing.T) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	originalProvider := itelemetry.MeterProvider
+	originalChatMeter := itelemetry.ChatMeter
+	originalRequestCnt := itelemetry.ChatMetricTRPCAgentGoClientRequestCnt
+	originalTokenUsage := itelemetry.ChatMetricGenAIClientTokenUsage
+	originalOperationDuration := itelemetry.ChatMetricGenAIClientOperationDuration
+	originalServerTTFT := itelemetry.ChatMetricGenAIServerTimeToFirstToken
+	originalClientTTFT := itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken
+	originalTimePerToken := itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken
+	originalTokenPerTime := itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime
+	t.Cleanup(func() {
+		itelemetry.MeterProvider = originalProvider
+		itelemetry.ChatMeter = originalChatMeter
+		itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = originalRequestCnt
+		itelemetry.ChatMetricGenAIClientTokenUsage = originalTokenUsage
+		itelemetry.ChatMetricGenAIClientOperationDuration = originalOperationDuration
+		itelemetry.ChatMetricGenAIServerTimeToFirstToken = originalServerTTFT
+		itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = originalClientTTFT
+		itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = originalTimePerToken
+		itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = originalTokenPerTime
+		_ = provider.Shutdown(context.Background())
+	})
+	itelemetry.MeterProvider = provider
+	itelemetry.ChatMeter = provider.Meter(semconvmetrics.MeterNameChat)
+	requestCnt, err := itelemetry.ChatMeter.Int64Counter(semconvmetrics.MetricTRPCAgentGoClientRequestCnt)
+	require.NoError(t, err)
+	itelemetry.ChatMetricTRPCAgentGoClientRequestCnt = requestCnt
+	itelemetry.ChatMetricGenAIClientTokenUsage = nil
+	itelemetry.ChatMetricGenAIClientOperationDuration = nil
+	itelemetry.ChatMetricGenAIServerTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimeToFirstToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientTimePerOutputToken = nil
+	itelemetry.ChatMetricTRPCAgentGoClientOutputTokenPerTime = nil
+	return reader
+}
+
+func spanAttributes(attrs []attribute.KeyValue) map[string]attribute.Value {
+	out := make(map[string]attribute.Value, len(attrs))
+	for _, attr := range attrs {
+		out[string(attr.Key)] = attr.Value
+	}
+	return out
+}
+
+func metricContainsRequestCount(rm metricdata.ResourceMetrics) bool {
+	for _, sm := range rm.ScopeMetrics {
+		for _, metric := range sm.Metrics {
+			if metric.Name != semconvmetrics.MetricTRPCAgentGoClientRequestCnt {
+				continue
+			}
+			sum, ok := metric.Data.(metricdata.Sum[int64])
+			if !ok {
+				return false
+			}
+			for _, point := range sum.DataPoints {
+				if point.Value == 1 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func TestModel_StreamingSkipsProviderSpecificNonJSONEvents(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
@@ -645,6 +906,14 @@ func TestOptions_Validation(t *testing.T) {
 			assert.Equal(t, o.BaseURL, m.baseURL, "expected base url %s, got %s", o.BaseURL, m.baseURL)
 		})
 	}
+}
+
+func TestWithContextWindow(t *testing.T) {
+	m := New("test-model", WithContextWindow(204800))
+	require.Equal(t, 204800, m.Info().ContextWindow)
+
+	m = New("test-model", WithContextWindow(0))
+	require.Zero(t, m.Info().ContextWindow)
 }
 
 // stubTool implements tool.Tool for testing purposes.
@@ -1999,6 +2268,18 @@ func (testStubStrategy) TailorMessages(ctx context.Context, messages []model.Mes
 	return append([]model.Message{messages[0]}, messages[2:]...), nil
 }
 
+type overflowTailoringStrategy struct {
+	tailored []model.Message
+}
+
+func (s overflowTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return s.tailored, errors.New("minimal protected context exceeds token budget")
+}
+
 type captureMaxTokensStrategy struct {
 	maxTokens int
 	called    bool
@@ -2045,6 +2326,27 @@ func TestWithTokenTailoring(t *testing.T) {
 	require.NotNil(t, captured, "expected request callback to capture request")
 	// After tailoring, OpenAI messages should be 1 user message (system omitted in this test).
 	require.Len(t, captured.Messages, 1, "expected 1 message after tailoring, got %d", len(captured.Messages))
+}
+
+func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
+	tailored := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("q"),
+	}
+	m := New("test-model",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(1),
+		WithTailoringStrategy(overflowTailoringStrategy{tailored: tailored}),
+	)
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("old"),
+		model.NewUserMessage("q"),
+	}}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.Equal(t, tailored, req.Messages)
 }
 
 func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
@@ -2214,7 +2516,7 @@ func TestWithTokenTailoring_ClampsExplicitLimitToHardBudget(t *testing.T) {
 func TestWithEnableTokenTailoring_SimpleMode(t *testing.T) {
 	// Capture the built OpenAI request to check messages count reflects tailoring.
 	var captured *openaigo.ChatCompletionNewParams
-	m := New("gpt-4o-mini", // Known model with 200000 context window
+	m := New("gpt-4o-mini", // Known model with 128000 context window
 		WithEnableTokenTailoring(true),
 		WithChatRequestCallback(func(ctx context.Context, req *openaigo.ChatCompletionNewParams) {
 			captured = req
@@ -2222,9 +2524,9 @@ func TestWithEnableTokenTailoring_SimpleMode(t *testing.T) {
 	)
 
 	// Create many messages to trigger tailoring.
-	// With gpt-4o-mini (contextWindow=200000), maxInputTokens calculated as:
-	// safetyMargin = 200000 * 0.10 = 20000
-	// maxInputTokens = 200000 - 2048 - 512 - 20000 = 177440 (~88.7% of context)
+	// With gpt-4o-mini (contextWindow=128000), maxInputTokens calculated as:
+	// safetyMargin = 128000 * 0.10 = 12800
+	// maxInputTokens = 128000 - 2048 - 512 - 12800 = 112640 (88% of context)
 	// Need ~600 messages * 300 tokens each = ~180000 tokens to exceed limit.
 	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
 	for i := 0; i < 600; i++ {
@@ -8245,6 +8547,112 @@ func TestAppendUserContentParts_SkipsInternalFiles(t *testing.T) {
 	})
 	require.Nil(t, fields)
 	require.Empty(t, dst)
+}
+
+func TestConvertContentPart_FileURLFallsBackToText(t *testing.T) {
+	m := &Model{}
+	part := model.ContentPart{
+		Type: model.ContentTypeFile,
+		File: &model.File{
+			Name:     "report.pdf",
+			URL:      "https://example.com/report.pdf",
+			MimeType: "application/pdf",
+		},
+	}
+	got := m.convertContentPart(part)
+	require.NotNil(t, got)
+	require.NotNil(t, got.OfText)
+	require.Nil(t, got.OfFile)
+	require.Equal(t, "File URL: report.pdf (application/pdf): https://example.com/report.pdf", got.OfText.Text)
+}
+
+func TestAppendUserContentParts_FileURLPreservedForTextOnlyVariant(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{textOnlyMessageContent: true}}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Len(t, dst, 1)
+	require.NotNil(t, dst[0].OfText)
+	require.Equal(t, "File URL: report.pdf (application/pdf): https://example.com/report.pdf", dst[0].OfText.Text)
+}
+
+func TestAppendUserContentParts_FileURLWithDataSkippedForTextOnlyVariant(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{textOnlyMessageContent: true}}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				Data:     []byte("pdf"),
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Empty(t, dst)
+}
+
+func TestAppendUserContentParts_FileURLPreservedForSkipFileTypeVariant(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{skipFileTypeInContent: true}}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Len(t, dst, 1)
+	require.NotNil(t, dst[0].OfText)
+	require.Equal(t, "File URL: report.pdf (application/pdf): https://example.com/report.pdf", dst[0].OfText.Text)
+}
+
+func TestAppendUserContentParts_FileURLWithDataSkippedForSkipFileTypeVariant(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{skipFileTypeInContent: true}}
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				Data:     []byte("pdf"),
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Nil(t, fields)
+	require.Empty(t, dst)
+}
+
+func TestOmittedContentHint_FileURLFallbackNotCounted(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{textOnlyMessageContent: true}}
+	got := m.omittedContentHint([]model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Empty(t, got)
 }
 
 // TestChatRequestCallbackSynchronous verifies that

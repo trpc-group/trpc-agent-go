@@ -130,7 +130,7 @@ func matchContentAsText(actual, expected string, criterion *text.TextCriterion) 
 	return nil
 }
 
-// matchContentAsJSON parses and compares two JSON strings using a JSONCriterion.
+// matchContentAsJSON validates or compares JSON content using a JSONCriterion.
 func matchContentAsJSON(actual, expected string, criterion *cjson.JSONCriterion) error {
 	if criterion == nil || criterion.Ignore {
 		return nil

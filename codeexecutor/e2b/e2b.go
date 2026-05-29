@@ -42,6 +42,14 @@ func WithDomain(domain string) Option {
 	return func(c *CodeExecutor) { c.domain = domain }
 }
 
+// WithAPIURL overrides the full base URL of the E2B management API
+// (e.g. "https://api.e2b.app" or "http://127.0.0.1:8080"). When set it
+// takes precedence over WithDomain/WithDebug URL construction. Falls back
+// to the E2B_API_URL env var when empty.
+func WithAPIURL(apiURL string) Option {
+	return func(c *CodeExecutor) { c.apiURL = apiURL }
+}
+
 // WithDebug toggles debug mode (plain HTTP to local sandboxes).
 func WithDebug(debug bool) Option {
 	return func(c *CodeExecutor) { c.debug = debug }
@@ -105,6 +113,29 @@ func WithSandboxRunBase(dir string) Option {
 	return func(c *CodeExecutor) { c.sandboxRunBase = dir }
 }
 
+// WorkspacePersistenceMode controls how long a sandbox workspace is reused.
+type WorkspacePersistenceMode int
+
+const (
+	// WorkspacePersistencePerTurn creates a fresh workspace for each turn.
+	// Files written during one turn are not visible to later turns through the
+	// session workspace.
+	WorkspacePersistencePerTurn WorkspacePersistenceMode = iota
+
+	// WorkspacePersistencePerSession reuses one deterministic workspace for all
+	// turns in the same session. Files written during one turn remain visible to
+	// later turns in that session.
+	WorkspacePersistencePerSession
+)
+
+// WithWorkspacePersistence sets the workspace persistence mode. The default is
+// WorkspacePersistencePerTurn (a fresh workspace per CreateWorkspace call). Use
+// WorkspacePersistencePerSession when multi-turn agents should keep files and
+// intermediate state across turns.
+func WithWorkspacePersistence(mode WorkspacePersistenceMode) Option {
+	return func(c *CodeExecutor) { c.workspacePersistence = mode }
+}
+
 // CodeExecutor executes code inside an E2B code-interpreter sandbox.
 type CodeExecutor struct {
 	mu sync.Mutex
@@ -113,6 +144,7 @@ type CodeExecutor struct {
 	apiKey         string
 	accessToken    string
 	domain         string
+	apiURL         string
 	debug          bool
 	template       string
 	sandboxTimeout time.Duration
@@ -128,8 +160,9 @@ type CodeExecutor struct {
 	defaultLanguage  ci.RunCodeLanguage
 
 	// Workspace integration (runs entirely inside the sandbox).
-	sandboxRunBase string
-	rt             *workspaceRuntime
+	sandboxRunBase       string
+	workspacePersistence WorkspacePersistenceMode
+	rt                   *workspaceRuntime
 
 	// Sandbox instance.
 	sbx *ci.Sandbox
@@ -161,6 +194,7 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 		APIKey:         c.apiKey,
 		AccessToken:    c.accessToken,
 		Domain:         c.domain,
+		APIURL:         c.apiURL,
 		Debug:          c.debug,
 		RequestTimeout: c.requestTimeout,
 		Timeout:        c.sandboxTimeout,

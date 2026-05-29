@@ -218,11 +218,16 @@ func backwardStructuredOutput(request *Request) agent.RunOption {
 func backwardResultSchema(request *Request) map[string]any {
 	surfaceIDs := requestAllowedGradientSurfaceIDs(request)
 	predecessorStepIDs := requestPredecessorStepIDs(request)
+	gradientsSchema := backwardGradientArraySchema(surfaceIDs)
+	upstreamSchema := backwardPropagationArraySchema(predecessorStepIDs)
+	if len(surfaceIDs) == 0 && len(predecessorStepIDs) > 0 {
+		upstreamSchema["minItems"] = 1
+	}
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"Gradients": backwardGradientArraySchema(surfaceIDs),
-			"Upstream":  backwardPropagationArraySchema(predecessorStepIDs),
+			"Gradients": gradientsSchema,
+			"Upstream":  upstreamSchema,
 		},
 		"required":             []string{"Gradients", "Upstream"},
 		"additionalProperties": false,
@@ -255,7 +260,9 @@ func requestAllowedGradientSurfaceIDs(request *Request) []string {
 	if request.AllowedGradientSurfaceIDs == nil {
 		return requestSurfaceIDs(request)
 	}
-	return append([]string(nil), request.AllowedGradientSurfaceIDs...)
+	cloned := make([]string, len(request.AllowedGradientSurfaceIDs))
+	copy(cloned, request.AllowedGradientSurfaceIDs)
+	return cloned
 }
 
 func requestPredecessorStepIDs(request *Request) []string {
@@ -323,7 +330,8 @@ func backwardPropagationArraySchema(predecessorStepIDs []string) map[string]any 
 				"enum": predecessorStepIDs,
 			},
 			"Gradients": map[string]any{
-				"type": "array",
+				"type":     "array",
+				"minItems": 1,
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -443,7 +451,7 @@ func sanitizeBackwardResult(request *Request, result *Result) (*Result, error) {
 	if len(predecessorIndex) == 0 && len(result.Upstream) > 0 {
 		return nil, errors.New("upstream propagations are not allowed without predecessors")
 	}
-	seenPredecessors := make(map[string]struct{}, len(result.Upstream))
+	upstreamIndex := make(map[string]int, len(result.Upstream))
 	for _, propagation := range result.Upstream {
 		sanitizedPropagation, keep, err := sanitizePropagation(request, predecessorIndex, propagation)
 		if err != nil {
@@ -452,13 +460,14 @@ func sanitizeBackwardResult(request *Request, result *Result) (*Result, error) {
 		if !keep {
 			continue
 		}
-		if _, ok := seenPredecessors[sanitizedPropagation.PredecessorStepID]; ok {
-			return nil, fmt.Errorf(
-				"duplicate propagation for predecessor step id %q",
-				sanitizedPropagation.PredecessorStepID,
+		if existingIndex, ok := upstreamIndex[sanitizedPropagation.PredecessorStepID]; ok {
+			sanitized.Upstream[existingIndex].Gradients = append(
+				sanitized.Upstream[existingIndex].Gradients,
+				sanitizedPropagation.Gradients...,
 			)
+			continue
 		}
-		seenPredecessors[sanitizedPropagation.PredecessorStepID] = struct{}{}
+		upstreamIndex[sanitizedPropagation.PredecessorStepID] = len(sanitized.Upstream)
 		sanitized.Upstream = append(sanitized.Upstream, sanitizedPropagation)
 	}
 	if len(sanitized.Gradients) == 0 && len(sanitized.Upstream) == 0 {

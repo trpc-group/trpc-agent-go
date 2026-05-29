@@ -14,6 +14,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -445,6 +446,56 @@ func TestSessionSQLite_ListSessions_And_Delete_Soft(t *testing.T) {
 
 	require.NoError(t, svc.DeleteSession(ctx, key1))
 	list, err = svc.ListSessions(ctx, userKey)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+}
+
+func TestSessionSQLite_ListSessions_WithListSessionOnlyMeta(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app", UserID: "u1"}
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+
+	sess, err := svc.CreateSession(ctx, key, session.StateMap{"k": []byte("v")})
+	require.NoError(t, err)
+	require.NoError(t, svc.AppendEvent(ctx, sess, newUserEvent("hi")))
+	require.NoError(t, svc.AppendTrackEvent(ctx, sess, newTrackEvent("t1", 1)))
+
+	list, err := svc.ListSessions(ctx, userKey, session.WithListSessionOnlyMeta())
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	require.Equal(t, key.SessionID, list[0].ID)
+	require.Empty(t, list[0].Events)
+	require.Nil(t, list[0].Tracks)
+	require.Equal(t, []byte("v"), list[0].State["k"])
+}
+
+func TestSessionSQLite_ListSessions_WithListSessionPage(t *testing.T) {
+	db, _, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := session.UserKey{AppName: "app", UserID: "u1"}
+
+	for i := 0; i < 3; i++ {
+		key := session.Key{AppName: "app", UserID: "u1", SessionID: fmt.Sprintf("s%d", i)}
+		s, createErr := svc.CreateSession(ctx, key, nil)
+		require.NoError(t, createErr)
+		require.NoError(t, svc.AppendEvent(ctx, s, newUserEvent("msg")))
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	list, err := svc.ListSessions(ctx, userKey, session.WithListSessionPage(1, 1))
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 }

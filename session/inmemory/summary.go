@@ -83,8 +83,7 @@ func (s *SessionService) writeSummaryUnderLock(app *appSessions, key session.Key
 		cur.Summaries = make(map[string]*session.Summary)
 	}
 	// Copy the summary to preserve UpdatedAt calculated by isummary.SummarizeSession.
-	sumCopy := *sum
-	cur.Summaries[filterKey] = &sumCopy
+	cur.Summaries[filterKey] = sum.Clone()
 	cur.UpdatedAt = sum.UpdatedAt
 	swt.session = cur
 	swt.expiredAt = calculateExpiredAt(s.opts.sessionTTL)
@@ -128,9 +127,10 @@ func (s *SessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Se
 		return s.asyncWorker.EnqueueJob(ctx, sess, filterKey, force)
 	}
 
-	// Fallback to synchronous processing.
+	// Fallback to synchronous processing with the same detached context that
+	// async workers use.
 	return isummary.CreateSessionSummaryWithCascade(
-		ctx,
+		isummary.DetachContext(ctx),
 		sess,
 		filterKey,
 		force,

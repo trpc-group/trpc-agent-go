@@ -28,6 +28,19 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 )
 
+func TestConvertToIntIgnoresNilValues(t *testing.T) {
+	if value, ok := convertToInt(nil); ok || value != 0 {
+		t.Fatalf("convertToInt(nil) = %d, %v; want 0, false", value, ok)
+	}
+	if value, ok := convertToInt("<nil>"); ok || value != 0 {
+		t.Fatalf("convertToInt(\"<nil>\") = %d, %v; want 0, false", value, ok)
+	}
+	var p *int
+	if value, ok := convertToInt(p); ok || value != 0 {
+		t.Fatalf("convertToInt((*int)(nil)) = %d, %v; want 0, false", value, ok)
+	}
+}
+
 // mockSource is a simple mock source for testing.
 type mockSource struct {
 	name     string

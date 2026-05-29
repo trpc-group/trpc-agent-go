@@ -80,7 +80,7 @@ func TestKnowledgeSearchTool(t *testing.T) {
 		kb := stubKnowledge{result: &knowledge.SearchResult{
 			Documents: []*knowledge.Result{
 				{
-					Document: &document.Document{Content: "foo", Metadata: map[string]any{"source": "test"}},
+					Document: &document.Document{ID: "doc-1", Content: "foo", Metadata: map[string]any{"source": "test"}},
 					Score:    0.9,
 				},
 			},
@@ -90,6 +90,7 @@ func TestKnowledgeSearchTool(t *testing.T) {
 		require.NoError(t, err)
 		rsp := res.(*KnowledgeSearchResponse)
 		require.Len(t, rsp.Documents, 1)
+		require.Equal(t, "doc-1", rsp.Documents[0].ID)
 		require.Equal(t, "foo", rsp.Documents[0].Text)
 		require.Equal(t, 0.9, rsp.Documents[0].Score)
 		require.Equal(t, "test", rsp.Documents[0].Metadata["source"])
@@ -582,6 +583,60 @@ func TestGenerateAgenticFilterPrompt(t *testing.T) {
 	})
 }
 
+func TestComposeAgenticToolDescription(t *testing.T) {
+	t.Parallel()
+
+	sampleFilterInfo := generateAgenticFilterPrompt(map[string][]any{
+		"metadata.topic": {"architecture", "api"},
+	})
+
+	t.Run("with description and filterInfo", func(t *testing.T) {
+		desc := composeAgenticToolDescription("Search docs.", sampleFilterInfo)
+		require.Contains(t, desc, "Search docs.")
+		require.Contains(t, desc, "== FILTER GUIDANCE ==")
+		require.Contains(t, desc, "metadata.topic")
+		require.NotContains(t, desc, metadataFilterHint)
+	})
+
+	t.Run("with description and nil filterInfo", func(t *testing.T) {
+		nilFilterInfo := generateAgenticFilterPrompt(nil)
+		desc := composeAgenticToolDescription("Search docs.", nilFilterInfo)
+		require.Contains(t, desc, "Search docs.")
+		require.Contains(t, desc, "== FILTER GUIDANCE ==")
+		require.Contains(t, desc, metadataFilterHint)
+		require.Contains(t, desc, `"content"`)
+		require.Contains(t, desc, `"metadata.*"`)
+		require.Contains(t, desc, `"like"`)
+	})
+
+	t.Run("no description with filterInfo", func(t *testing.T) {
+		desc := composeAgenticToolDescription("", sampleFilterInfo)
+		require.Contains(t, desc, agenticFilterPromptIntro)
+		require.Contains(t, desc, "== FILTER GUIDANCE ==")
+		require.Contains(t, desc, "metadata.topic")
+		require.NotContains(t, desc, metadataFilterHint)
+	})
+
+	t.Run("no description and nil filterInfo", func(t *testing.T) {
+		nilFilterInfo := generateAgenticFilterPrompt(nil)
+		desc := composeAgenticToolDescription("", nilFilterInfo)
+		require.Contains(t, desc, agenticFilterPromptIntro)
+		require.Contains(t, desc, "== FILTER GUIDANCE ==")
+		require.Contains(t, desc, metadataFilterHint)
+	})
+
+	t.Run("metadata filter hint contains content and metadata examples", func(t *testing.T) {
+		require.Contains(t, metadataFilterHint, `"content"`)
+		require.Contains(t, metadataFilterHint, `"metadata.*"`)
+		require.Contains(t, metadataFilterHint, `metadata.topic`)
+		require.Contains(t, metadataFilterHint, `metadata.source`)
+		require.Contains(t, metadataFilterHint, `"like"`)
+		require.Contains(t, metadataFilterHint, `"eq"`)
+		require.Contains(t, metadataFilterHint, `"in"`)
+		require.Contains(t, metadataFilterHint, `"and"`)
+	})
+}
+
 func TestAgenticFilterSearchToolWithAdvancedFilter(t *testing.T) {
 	t.Run("successful search with simple filter", func(t *testing.T) {
 		kb := stubKnowledge{
@@ -753,7 +808,7 @@ func TestSearchToolAdditionalOptionCoverage(t *testing.T) {
 	t.Run("option helpers handle conditioned filter exclude keys and nil post processor", func(t *testing.T) {
 		opts := &options{}
 		condition := &searchfilter.UniversalFilterCondition{
-			Field:    "metadata.kind",
+			Field:    "metadata.category",
 			Operator: searchfilter.OperatorEqual,
 			Value:    "api",
 		}
@@ -786,7 +841,7 @@ func TestSearchToolAdditionalOptionCoverage(t *testing.T) {
 			},
 		}
 		condition := &searchfilter.UniversalFilterCondition{
-			Field:    "metadata.kind",
+			Field:    "metadata.category",
 			Operator: searchfilter.OperatorEqual,
 			Value:    "api",
 		}

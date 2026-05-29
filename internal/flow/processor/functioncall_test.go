@@ -17,6 +17,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -102,6 +103,40 @@ func (m *mockCallableTool) Call(ctx context.Context, args []byte) (any, error) {
 	return m.callFn(ctx, args)
 }
 
+type permissionMockTool struct {
+	*mockCallableTool
+	metadata         tool.ToolMetadata
+	decision         tool.PermissionDecision
+	stateDelta       map[string][]byte
+	stateDeltaCalled bool
+	skipSummarize    bool
+}
+
+func (m *permissionMockTool) ToolMetadata() tool.ToolMetadata {
+	return m.metadata
+}
+
+func (m *permissionMockTool) CheckPermission(
+	_ context.Context,
+	_ *tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	return m.decision, nil
+}
+
+func (m *permissionMockTool) StateDeltaForInvocation(
+	_ *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	m.stateDeltaCalled = true
+	return m.stateDelta
+}
+
+func (m *permissionMockTool) SkipSummarization() bool {
+	return m.skipSummarize
+}
+
 type delayedLoadTool struct {
 	*skilltool.LoadTool
 	delays map[string]time.Duration
@@ -177,6 +212,61 @@ func TestExecuteSingleToolCallSequential_DisableTracingSkipsSpanCreation(t *test
 	require.NoError(t, err)
 	require.NotNil(t, toolEvent)
 	require.Empty(t, recorder.Ended())
+}
+
+func TestExecuteSingleToolCallSequential_AddsToolCallArgsExtension(t *testing.T) {
+	const (
+		originalArgs = `{"action":"query"}`
+		modifiedArgs = `{"action":"set"}`
+	)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		args *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(modifiedArgs),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	invocation := agent.NewInvocation()
+	invocation.AgentName = "test-agent"
+	response := &model.Response{Model: "mock-model"}
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "gametime",
+			Arguments: []byte(originalArgs),
+		},
+	}
+	tools := map[string]tool.Tool{
+		"gametime": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "gametime"},
+			callFn: func(_ context.Context, args []byte) (any, error) {
+				require.Equal(t, modifiedArgs, string(args))
+				return "ok", nil
+			},
+		},
+	}
+
+	toolEvent, err := p.executeSingleToolCallSequential(
+		context.Background(),
+		invocation,
+		response,
+		tools,
+		nil,
+		0,
+		toolCall,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, toolEvent)
+	argsByID, ok, err := event.GetExtension[map[string]string](
+		toolEvent,
+		event.ToolCallArgsExtensionKey,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, modifiedArgs, argsByID["call-1"])
 }
 
 func TestExecuteToolCallsInParallel_DisableTracingSkipsSpanCreation(t *testing.T) {
@@ -293,6 +383,251 @@ func (t *sessionReadingStateDeltaTool) StateDeltaForInvocation(
 	}
 	return map[string][]byte{
 		t.writeKey: append([]byte(nil), value...),
+	}
+}
+
+type invocationStateRoundTripTool struct {
+	declaration *tool.Declaration
+	stateKey    string
+	stateValue  []byte
+	deltaKey    string
+}
+
+func (t *invocationStateRoundTripTool) Declaration() *tool.Declaration {
+	if t.declaration != nil {
+		return t.declaration
+	}
+	return &tool.Declaration{Name: "invocation-state-round-trip"}
+}
+
+func (t *invocationStateRoundTripTool) Call(
+	ctx context.Context,
+	_ []byte,
+) (any, error) {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
+		return false, nil
+	}
+	inv.SetState(t.stateKey, append([]byte(nil), t.stateValue...))
+	return true, nil
+}
+
+func (t *invocationStateRoundTripTool) StateDeltaForInvocation(
+	inv *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	if inv == nil {
+		return nil
+	}
+	value, ok := inv.GetState(t.stateKey)
+	if !ok {
+		return nil
+	}
+	payload, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return map[string][]byte{
+		t.deltaKey: append([]byte(nil), payload...),
+	}
+}
+
+type stateAndSessionDeltaTool struct {
+	declaration *tool.Declaration
+	stateKey    string
+	stateValue  []byte
+	sessionKey  string
+	deltaKey    string
+}
+
+func (t *stateAndSessionDeltaTool) Declaration() *tool.Declaration {
+	if t.declaration != nil {
+		return t.declaration
+	}
+	return &tool.Declaration{Name: "state-and-session"}
+}
+
+func (t *stateAndSessionDeltaTool) Call(
+	ctx context.Context,
+	_ []byte,
+) (any, error) {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if ok && inv != nil {
+		inv.SetState(t.stateKey, append([]byte(nil), t.stateValue...))
+	}
+	return true, nil
+}
+
+func (t *stateAndSessionDeltaTool) StateDeltaForInvocation(
+	inv *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	if inv == nil || inv.Session == nil {
+		return nil
+	}
+	value, ok := inv.GetState(t.stateKey)
+	if !ok {
+		return nil
+	}
+	payload, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	sessionValue, ok := inv.Session.GetState(t.sessionKey)
+	if !ok {
+		return nil
+	}
+	delta := append([]byte(nil), payload...)
+	delta = append(delta, ':')
+	delta = append(delta, sessionValue...)
+	return map[string][]byte{t.deltaKey: delta}
+}
+
+type sessionMutatingTool struct {
+	declaration  *tool.Declaration
+	sessionKey   string
+	sessionValue []byte
+}
+
+func (t *sessionMutatingTool) Declaration() *tool.Declaration {
+	if t.declaration != nil {
+		return t.declaration
+	}
+	return &tool.Declaration{Name: "session-mutating"}
+}
+
+func (t *sessionMutatingTool) Call(
+	ctx context.Context,
+	_ []byte,
+) (any, error) {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if ok && inv != nil && inv.Session != nil {
+		inv.Session.SetState(
+			t.sessionKey,
+			append([]byte(nil), t.sessionValue...),
+		)
+	}
+	return true, nil
+}
+
+type sessionMutatingStateDeltaTool struct {
+	declaration  *tool.Declaration
+	sessionKey   string
+	sessionValue []byte
+	deltaKey     string
+}
+
+func (t *sessionMutatingStateDeltaTool) Declaration() *tool.Declaration {
+	if t.declaration != nil {
+		return t.declaration
+	}
+	return &tool.Declaration{Name: "session-mutating-state-delta"}
+}
+
+func (t *sessionMutatingStateDeltaTool) Call(
+	ctx context.Context,
+	_ []byte,
+) (any, error) {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if ok && inv != nil && inv.Session != nil {
+		inv.Session.SetState(
+			t.sessionKey,
+			append([]byte(nil), t.sessionValue...),
+		)
+	}
+	return true, nil
+}
+
+func (t *sessionMutatingStateDeltaTool) StateDeltaForInvocation(
+	inv *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	if inv == nil || inv.Session == nil {
+		return nil
+	}
+	value, ok := inv.Session.GetState(t.sessionKey)
+	if !ok {
+		return nil
+	}
+	return map[string][]byte{
+		t.deltaKey: append([]byte(nil), value...),
+	}
+}
+
+type coordinatedInvocationStateTool struct {
+	declaration      *tool.Declaration
+	stateKey         string
+	stateValue       []byte
+	deltaKey         string
+	waitBeforeWrite  <-chan struct{}
+	wrote            chan<- struct{}
+	waitBeforeReturn <-chan struct{}
+}
+
+func (t *coordinatedInvocationStateTool) Declaration() *tool.Declaration {
+	if t.declaration != nil {
+		return t.declaration
+	}
+	return &tool.Declaration{Name: "coordinated-invocation-state"}
+}
+
+func (t *coordinatedInvocationStateTool) Call(
+	ctx context.Context,
+	_ []byte,
+) (any, error) {
+	if err := waitForTestSignal(ctx, t.waitBeforeWrite); err != nil {
+		return nil, err
+	}
+	inv, ok := agent.InvocationFromContext(ctx)
+	if ok && inv != nil {
+		inv.SetState(t.stateKey, append([]byte(nil), t.stateValue...))
+	}
+	if t.wrote != nil {
+		close(t.wrote)
+	}
+	if err := waitForTestSignal(ctx, t.waitBeforeReturn); err != nil {
+		return nil, err
+	}
+	return true, nil
+}
+
+func (t *coordinatedInvocationStateTool) StateDeltaForInvocation(
+	inv *agent.Invocation,
+	_ string,
+	_ []byte,
+	_ []byte,
+) map[string][]byte {
+	value, ok := inv.GetState(t.stateKey)
+	if !ok {
+		return nil
+	}
+	payload, ok := value.([]byte)
+	if !ok {
+		return nil
+	}
+	return map[string][]byte{
+		t.deltaKey: append([]byte(nil), payload...),
+	}
+}
+
+func waitForTestSignal(ctx context.Context, ch <-chan struct{}) error {
+	if ch == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -464,6 +799,760 @@ func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
 	}
 	p.attachStateDelta(inv, tl2, args, choice, ev2)
 	require.Equal(t, []byte(deltaVal2), ev2.StateDelta[deltaKey2])
+}
+
+func TestExecuteSingleToolCallSequential_PreservesCustomInvocationState(
+	t *testing.T,
+) {
+	const (
+		agentName       = "tester"
+		toolName        = "stateful"
+		toolCallID      = "call-1"
+		stateKey        = "custom:payload"
+		stateValue      = "business-data"
+		stateDeltaKey   = "business_payload"
+		emptyJSONObject = `{}`
+	)
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: agentName, Model: &mockModel{}}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	rsp := &model.Response{Choices: []model.Choice{{}}}
+	toolCall := model.ToolCall{
+		ID: toolCallID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(emptyJSONObject),
+		},
+	}
+	stateTool := &invocationStateRoundTripTool{
+		declaration: &tool.Declaration{Name: toolName},
+		stateKey:    stateKey,
+		stateValue:  []byte(stateValue),
+		deltaKey:    stateDeltaKey,
+	}
+	tools := map[string]tool.Tool{toolName: stateTool}
+
+	ev, err := p.executeSingleToolCallSequential(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		nil,
+		0,
+		toolCall,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(t, []byte(stateValue), ev.StateDelta[stateDeltaKey])
+}
+
+func TestExecuteSingleToolCallSequential_UsesCallbackInvocationState(
+	t *testing.T,
+) {
+	const (
+		agentName       = "tester"
+		toolName        = "stateful"
+		toolCallID      = "call-1"
+		stateKey        = "custom:payload"
+		stateValue      = "business-data"
+		stateDeltaKey   = "business_payload"
+		emptyJSONObject = `{}`
+	)
+	callbackInv := agent.NewInvocation()
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		context.Context,
+		*tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			Context: agent.NewInvocationContext(
+				context.Background(),
+				callbackInv,
+			),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{AgentName: agentName, Model: &mockModel{}}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	rsp := &model.Response{Choices: []model.Choice{{}}}
+	toolCall := model.ToolCall{
+		ID: toolCallID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(emptyJSONObject),
+		},
+	}
+	stateTool := &invocationStateRoundTripTool{
+		declaration: &tool.Declaration{Name: toolName},
+		stateKey:    stateKey,
+		stateValue:  []byte(stateValue),
+		deltaKey:    stateDeltaKey,
+	}
+	tools := map[string]tool.Tool{toolName: stateTool}
+
+	ev, err := p.executeSingleToolCallSequential(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		nil,
+		0,
+		toolCall,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(t, []byte(stateValue), ev.StateDelta[stateDeltaKey])
+	_, ok := inv.GetState(stateKey)
+	require.False(t, ok)
+}
+
+func TestExecuteSingleToolCallSequential_CallbackStateKeepsSession(
+	t *testing.T,
+) {
+	const (
+		agentName       = "tester"
+		toolName        = "stateful"
+		toolCallID      = "call-1"
+		stateKey        = "custom:payload"
+		sessionKey      = "session:payload"
+		stateValue      = "business-data"
+		sessionValue    = "session-data"
+		stateDeltaKey   = "business_payload"
+		expectedDelta   = "business-data:session-data"
+		emptyJSONObject = `{}`
+	)
+	callbackInv := agent.NewInvocation()
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		context.Context,
+		*tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			Context: agent.NewInvocationContext(
+				context.Background(),
+				callbackInv,
+			),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{
+		AgentName: agentName,
+		Model:     &mockModel{},
+		Session: &session.Session{
+			State: session.StateMap{
+				sessionKey: []byte(sessionValue),
+			},
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	rsp := &model.Response{Choices: []model.Choice{{}}}
+	toolCall := model.ToolCall{
+		ID: toolCallID,
+		Function: model.FunctionDefinitionParam{
+			Name:      toolName,
+			Arguments: []byte(emptyJSONObject),
+		},
+	}
+	stateTool := &stateAndSessionDeltaTool{
+		declaration: &tool.Declaration{Name: toolName},
+		stateKey:    stateKey,
+		stateValue:  []byte(stateValue),
+		sessionKey:  sessionKey,
+		deltaKey:    stateDeltaKey,
+	}
+	tools := map[string]tool.Tool{toolName: stateTool}
+
+	ev, err := p.executeSingleToolCallSequential(
+		ctx,
+		inv,
+		rsp,
+		tools,
+		nil,
+		0,
+		toolCall,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(t, []byte(expectedDelta), ev.StateDelta[stateDeltaKey])
+}
+
+func TestHandleFunctionCalls_SequentialKeepsCallbackSession(t *testing.T) {
+	const (
+		agentName       = "tester"
+		sessionKey      = "session:payload"
+		firstToolName   = "session_first"
+		secondToolName  = "session_second"
+		firstCallID     = "call-1"
+		secondCallID    = "call-2"
+		baseValue       = "base-session"
+		callbackValue   = "callback-session"
+		firstDeltaKey   = "first_payload"
+		secondDeltaKey  = "second_payload"
+		emptyJSONObject = `{}`
+	)
+	callbackInv := agent.NewInvocation(agent.WithInvocationSession(
+		&session.Session{
+			State: session.StateMap{
+				sessionKey: []byte(callbackValue),
+			},
+		},
+	))
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		ctx context.Context,
+		args *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		if args.ToolName != secondToolName {
+			return nil, nil
+		}
+		return &tool.BeforeToolResult{
+			Context: agent.NewInvocationContext(ctx, callbackInv),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{
+		AgentName: agentName,
+		Model:     &mockModel{},
+		Session: &session.Session{
+			State: session.StateMap{
+				sessionKey: []byte(baseValue),
+			},
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	tools := map[string]tool.Tool{
+		firstToolName: &sessionReadingStateDeltaTool{
+			declaration: &tool.Declaration{Name: firstToolName},
+			readKey:     sessionKey,
+			writeKey:    firstDeltaKey,
+		},
+		secondToolName: &sessionReadingStateDeltaTool{
+			declaration: &tool.Declaration{Name: secondToolName},
+			readKey:     sessionKey,
+			writeKey:    secondDeltaKey,
+		},
+	}
+	toolCalls := []model.ToolCall{
+		{
+			ID: firstCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      firstToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+		{
+			ID: secondCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      secondToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+	}
+
+	ev, err := p.handleFunctionCalls(
+		ctx,
+		inv,
+		newToolCallResponseWithCalls(toolCalls),
+		tools,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(t, []byte(baseValue), ev.StateDelta[firstDeltaKey])
+	require.Equal(t, []byte(callbackValue), ev.StateDelta[secondDeltaKey])
+}
+
+func TestHandleFunctionCalls_SequentialSnapshotsSession(t *testing.T) {
+	const (
+		agentName       = "tester"
+		sessionKey      = "session:payload"
+		firstToolName   = "session_reader"
+		secondToolName  = "session_writer"
+		firstCallID     = "call-1"
+		secondCallID    = "call-2"
+		initialValue    = "initial-session"
+		laterValue      = "later-session"
+		firstDeltaKey   = "first_payload"
+		emptyJSONObject = `{}`
+	)
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{
+		AgentName: agentName,
+		Model:     &mockModel{},
+		Session: &session.Session{
+			State: session.StateMap{
+				sessionKey: []byte(initialValue),
+			},
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	tools := map[string]tool.Tool{
+		firstToolName: &sessionReadingStateDeltaTool{
+			declaration: &tool.Declaration{Name: firstToolName},
+			readKey:     sessionKey,
+			writeKey:    firstDeltaKey,
+		},
+		secondToolName: &sessionMutatingTool{
+			declaration:  &tool.Declaration{Name: secondToolName},
+			sessionKey:   sessionKey,
+			sessionValue: []byte(laterValue),
+		},
+	}
+	toolCalls := []model.ToolCall{
+		{
+			ID: firstCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      firstToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+		{
+			ID: secondCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      secondToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+	}
+
+	ev, err := p.handleFunctionCalls(
+		ctx,
+		inv,
+		newToolCallResponseWithCalls(toolCalls),
+		tools,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(t, []byte(initialValue), ev.StateDelta[firstDeltaKey])
+}
+
+func TestHandleFunctionCalls_SequentialKeepsCurrentSessionMutation(
+	t *testing.T,
+) {
+	const (
+		agentName       = "tester"
+		sessionKey      = "session:payload"
+		firstToolName   = "session_delta_writer"
+		secondToolName  = "session_direct_writer"
+		firstCallID     = "call-1"
+		secondCallID    = "call-2"
+		initialValue    = "initial-session"
+		priorValue      = "prior-session"
+		currentValue    = "current-session"
+		secondDeltaKey  = "second_payload"
+		emptyJSONObject = `{}`
+	)
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{
+		AgentName: agentName,
+		Model:     &mockModel{},
+		Session: &session.Session{
+			State: session.StateMap{
+				sessionKey: []byte(initialValue),
+			},
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	tools := map[string]tool.Tool{
+		firstToolName: &mockInvocationStateDeltaTool{
+			declaration: &tool.Declaration{Name: firstToolName},
+			delta: map[string][]byte{
+				sessionKey: []byte(priorValue),
+			},
+		},
+		secondToolName: &sessionMutatingStateDeltaTool{
+			declaration:  &tool.Declaration{Name: secondToolName},
+			sessionKey:   sessionKey,
+			sessionValue: []byte(currentValue),
+			deltaKey:     secondDeltaKey,
+		},
+	}
+	toolCalls := []model.ToolCall{
+		{
+			ID: firstCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      firstToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+		{
+			ID: secondCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      secondToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+	}
+
+	ev, err := p.handleFunctionCalls(
+		ctx,
+		inv,
+		newToolCallResponseWithCalls(toolCalls),
+		tools,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(t, []byte(currentValue), ev.StateDelta[secondDeltaKey])
+}
+
+func TestHandleFunctionCalls_SequentialReplaysCallbackSessionDeltas(
+	t *testing.T,
+) {
+	const (
+		agentName       = "tester"
+		sessionKey      = "session:payload"
+		firstToolName   = "session_writer"
+		secondToolName  = "session_reader"
+		firstCallID     = "call-1"
+		secondCallID    = "call-2"
+		initialValue    = "initial-session"
+		updatedValue    = "updated-session"
+		secondDeltaKey  = "second_payload"
+		emptyJSONObject = `{}`
+	)
+	callbackInv := agent.NewInvocation(agent.WithInvocationSession(
+		&session.Session{
+			State: session.StateMap{
+				sessionKey: []byte(initialValue),
+			},
+		},
+	))
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		ctx context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			Context: agent.NewInvocationContext(ctx, callbackInv),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{
+		AgentName: agentName,
+		Model:     &mockModel{},
+		Session: &session.Session{
+			State: session.StateMap{},
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	tools := map[string]tool.Tool{
+		firstToolName: &mockInvocationStateDeltaTool{
+			declaration: &tool.Declaration{Name: firstToolName},
+			delta: map[string][]byte{
+				sessionKey: []byte(updatedValue),
+			},
+		},
+		secondToolName: &sessionReadingStateDeltaTool{
+			declaration: &tool.Declaration{Name: secondToolName},
+			readKey:     sessionKey,
+			writeKey:    secondDeltaKey,
+		},
+	}
+	toolCalls := []model.ToolCall{
+		{
+			ID: firstCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      firstToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+		{
+			ID: secondCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      secondToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+	}
+
+	ev, err := p.handleFunctionCalls(
+		ctx,
+		inv,
+		newToolCallResponseWithCalls(toolCalls),
+		tools,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(t, []byte(updatedValue), ev.StateDelta[secondDeltaKey])
+}
+
+func TestHandleFunctionCalls_SequentialReplaysFallbackSessionDeltas(
+	t *testing.T,
+) {
+	const (
+		agentName       = "tester"
+		sessionKey      = "session:payload"
+		firstToolName   = "session_writer"
+		secondToolName  = "session_reader"
+		firstCallID     = "call-1"
+		secondCallID    = "call-2"
+		initialValue    = "initial-session"
+		updatedValue    = "updated-session"
+		secondDeltaKey  = "second_payload"
+		emptyJSONObject = `{}`
+	)
+	callbackInv := agent.NewInvocation()
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		ctx context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			Context: agent.NewInvocationContext(ctx, callbackInv),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{
+		AgentName: agentName,
+		Model:     &mockModel{},
+		Session: &session.Session{
+			State: session.StateMap{
+				sessionKey: []byte(initialValue),
+			},
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	tools := map[string]tool.Tool{
+		firstToolName: &mockInvocationStateDeltaTool{
+			declaration: &tool.Declaration{Name: firstToolName},
+			delta: map[string][]byte{
+				sessionKey: []byte(updatedValue),
+			},
+		},
+		secondToolName: &sessionReadingStateDeltaTool{
+			declaration: &tool.Declaration{Name: secondToolName},
+			readKey:     sessionKey,
+			writeKey:    secondDeltaKey,
+		},
+	}
+	toolCalls := []model.ToolCall{
+		{
+			ID: firstCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      firstToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+		{
+			ID: secondCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      secondToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+	}
+
+	ev, err := p.handleFunctionCalls(
+		ctx,
+		inv,
+		newToolCallResponseWithCalls(toolCalls),
+		tools,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(t, []byte(updatedValue), ev.StateDelta[secondDeltaKey])
+}
+
+func TestStateDeltaSessionHelpers_EdgeCases(t *testing.T) {
+	const (
+		baseKey    = "base"
+		removedKey = "removed"
+		changedKey = "changed"
+	)
+	baseInv := &agent.Invocation{
+		Session: &session.Session{
+			State: session.StateMap{
+				baseKey:    []byte("base"),
+				removedKey: []byte("old"),
+				changedKey: []byte("old"),
+			},
+		},
+	}
+	callbackInv := agent.NewInvocation()
+	var ctx context.Context
+	ctx = agent.NewInvocationContext(context.Background(), callbackInv)
+	ctx = withStateDeltaSessionBaseline(ctx, baseInv)
+	require.Equal(
+		t,
+		[]byte("base"),
+		stateDeltaSessionBaseline(ctx)[baseKey],
+	)
+	ctx = withStateDeltaSessionBaseline(context.Background(), baseInv)
+	require.Equal(
+		t,
+		[]byte("base"),
+		stateDeltaSessionBaseline(ctx)[baseKey],
+	)
+	require.Nil(t, stateDeltaSessionBaseline(context.Background()))
+	require.Nil(t, stateDeltaBaselineSession(context.Background(), nil))
+	require.Nil(t, newStateDeltaSnapshot(nil, nil))
+	require.Nil(t, invocationView(nil))
+	preserveStateDeltaInvocationDefaults(nil, baseInv)
+	preserveStateDeltaInvocationDefaults(agent.NewInvocation(), nil)
+
+	current := session.StateMap{
+		baseKey:    []byte("base"),
+		changedKey: []byte("new"),
+	}
+	changed := changedSessionKeys(baseInv.Session.SnapshotState(), current)
+	require.False(t, changed[baseKey])
+	require.True(t, changed[removedKey])
+	require.True(t, changed[changedKey])
+
+	sess := &session.Session{State: session.StateMap{}}
+	applyPriorStateDeltas(nil, nil, nil)
+	applyReplayableStateDelta(sess, map[string]bool{}, nil)
+	applyReplayableStateDelta(
+		sess,
+		map[string]bool{changedKey: true},
+		&event.Event{
+			StateDelta: map[string][]byte{
+				baseKey:    []byte("applied"),
+				changedKey: []byte("skipped"),
+			},
+		},
+	)
+	value, ok := sess.GetState(baseKey)
+	require.True(t, ok)
+	require.Equal(t, []byte("applied"), value)
+	_, ok = sess.GetState(changedKey)
+	require.False(t, ok)
+}
+
+func TestHandleFunctionCalls_SequentialStateSnapshots(t *testing.T) {
+	const (
+		agentName       = "tester"
+		stateKey        = "custom:payload"
+		firstToolName   = "stateful_first"
+		secondToolName  = "stateful_second"
+		firstCallID     = "call-1"
+		secondCallID    = "call-2"
+		firstValue      = "first-data"
+		secondValue     = "second-data"
+		firstDeltaKey   = "first_payload"
+		secondDeltaKey  = "second_payload"
+		emptyJSONObject = `{}`
+	)
+	p := NewFunctionCallResponseProcessor(false, nil)
+	inv := &agent.Invocation{AgentName: agentName, Model: &mockModel{}}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	tools := map[string]tool.Tool{
+		firstToolName: &invocationStateRoundTripTool{
+			declaration: &tool.Declaration{Name: firstToolName},
+			stateKey:    stateKey,
+			stateValue:  []byte(firstValue),
+			deltaKey:    firstDeltaKey,
+		},
+		secondToolName: &invocationStateRoundTripTool{
+			declaration: &tool.Declaration{Name: secondToolName},
+			stateKey:    stateKey,
+			stateValue:  []byte(secondValue),
+			deltaKey:    secondDeltaKey,
+		},
+	}
+	toolCalls := []model.ToolCall{
+		{
+			ID: firstCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      firstToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+		{
+			ID: secondCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      secondToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+	}
+
+	ev, err := p.handleFunctionCalls(
+		ctx,
+		inv,
+		newToolCallResponseWithCalls(toolCalls),
+		tools,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(t, []byte(firstValue), ev.StateDelta[firstDeltaKey])
+	require.Equal(t, []byte(secondValue), ev.StateDelta[secondDeltaKey])
+}
+
+func TestHandleFunctionCalls_ParallelIsolatesInvocationState(t *testing.T) {
+	const (
+		agentName       = "tester"
+		stateKey        = "custom:payload"
+		firstToolName   = "stateful_first"
+		secondToolName  = "stateful_second"
+		firstCallID     = "call-1"
+		secondCallID    = "call-2"
+		firstValue      = "first-data"
+		secondValue     = "second-data"
+		firstDeltaKey   = "first_payload"
+		secondDeltaKey  = "second_payload"
+		emptyJSONObject = `{}`
+	)
+	firstWrote := make(chan struct{})
+	secondWrote := make(chan struct{})
+	p := NewFunctionCallResponseProcessor(true, nil)
+	inv := &agent.Invocation{AgentName: agentName, Model: &mockModel{}}
+	baseCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ctx := agent.NewInvocationContext(baseCtx, inv)
+	tools := map[string]tool.Tool{
+		firstToolName: &coordinatedInvocationStateTool{
+			declaration:      &tool.Declaration{Name: firstToolName},
+			stateKey:         stateKey,
+			stateValue:       []byte(firstValue),
+			deltaKey:         firstDeltaKey,
+			wrote:            firstWrote,
+			waitBeforeReturn: secondWrote,
+		},
+		secondToolName: &coordinatedInvocationStateTool{
+			declaration:     &tool.Declaration{Name: secondToolName},
+			stateKey:        stateKey,
+			stateValue:      []byte(secondValue),
+			deltaKey:        secondDeltaKey,
+			waitBeforeWrite: firstWrote,
+			wrote:           secondWrote,
+		},
+	}
+	toolCalls := []model.ToolCall{
+		{
+			ID: firstCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      firstToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+		{
+			ID: secondCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      secondToolName,
+				Arguments: []byte(emptyJSONObject),
+			},
+		},
+	}
+
+	ev, err := p.handleFunctionCalls(
+		ctx,
+		inv,
+		newToolCallResponseWithCalls(toolCalls),
+		tools,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.Equal(t, []byte(firstValue), ev.StateDelta[firstDeltaKey])
+	require.Equal(t, []byte(secondValue), ev.StateDelta[secondDeltaKey])
+	_, ok := inv.GetState(stateKey)
+	require.False(t, ok)
 }
 
 func TestAttachStateDeltaToToolResults_ReplaysPendingStateDeltas(
@@ -774,6 +1863,7 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Nil_NoOverride(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
 	assert.Equal(t, pc.ID, choices[0].Message.ToolID)
+	assert.Equal(t, "echo", choices[0].Message.ToolName)
 	assert.Equal(t, string(wantBytes), choices[0].Message.Content)
 }
 
@@ -867,6 +1957,7 @@ func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithMultipleMessages
 
 	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
 	assert.Equal(t, pc.ID, choices[0].Message.ToolID)
+	assert.Equal(t, "echo", choices[0].Message.ToolName)
 	assert.Equal(t, `{"ok":true}`, choices[0].Message.Content)
 
 	assert.Equal(t, model.RoleUser, choices[1].Message.Role)
@@ -1172,6 +2263,146 @@ func TestFunctionCallResponseProcessor_ToolExecutionFilter_AllDeferred(
 		t.Fatalf("unexpected tool response event")
 	default:
 	}
+	require.True(t, inv.EndInvocation)
+}
+
+func TestFunctionCallResponseProcessor_WithExternalTools_AllDeferred(
+	t *testing.T,
+) {
+	const (
+		toolName = "external_tool"
+		callID   = "call-1"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	var callCount atomic.Int32
+	externalTool := &mockTool{
+		name: toolName,
+		callHook: func() {
+			callCount.Add(1)
+		},
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-external-tool",
+		AgentName:    "test-agent",
+		RunOptions: agent.NewRunOptions(
+			agent.WithExternalTools([]tool.Tool{externalTool}),
+		),
+	}
+
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			toolName: externalTool,
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   callID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      toolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case <-ch:
+		t.Fatalf("unexpected tool response event")
+	default:
+	}
+	assert.Zero(t, callCount.Load())
+	require.True(t, inv.EndInvocation)
+}
+
+func TestFunctionCallResponseProcessor_WithExternalTools_UnknownStops(
+	t *testing.T,
+) {
+	const (
+		externalToolName = "external_tool"
+		unknownToolName  = "unknown_tool"
+		externalCallID   = "call-external"
+		unknownCallID    = "call-unknown"
+	)
+
+	ctx := context.Background()
+	p := NewFunctionCallResponseProcessor(false, nil)
+	var callCount atomic.Int32
+	externalTool := &mockTool{
+		name: externalToolName,
+		callHook: func() {
+			callCount.Add(1)
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID: "inv-external-tool-unknown",
+		AgentName:    "test-agent",
+		Model:        &mockModel{},
+		RunOptions: agent.NewRunOptions(
+			agent.WithExternalTools([]tool.Tool{externalTool}),
+		),
+	}
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			externalToolName: externalTool,
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{
+			{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{
+						{
+							ID:   externalCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      externalToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+						{
+							ID:   unknownCallID,
+							Type: "function",
+							Function: model.FunctionDefinitionParam{
+								Name:      unknownToolName,
+								Arguments: []byte(`{}`),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	select {
+	case ev := <-ch:
+		require.NotNil(t, ev.Response)
+		require.Len(t, ev.Response.Choices, 1)
+		msg := ev.Response.Choices[0].Message
+		require.Equal(t, model.RoleTool, msg.Role)
+		require.Equal(t, unknownCallID, msg.ToolID)
+	case <-time.After(time.Second):
+		t.Fatalf("expected a tool error response event")
+	}
+	assert.Zero(t, callCount.Load())
 	require.True(t, inv.EndInvocation)
 }
 
@@ -2250,6 +3481,7 @@ type mockTool struct {
 	shouldPanic bool
 	delay       time.Duration
 	result      any
+	callHook    func()
 }
 
 func (m *mockTool) Declaration() *tool.Declaration {
@@ -2260,6 +3492,10 @@ func (m *mockTool) Declaration() *tool.Declaration {
 }
 
 func (m *mockTool) Call(ctx context.Context, args []byte) (any, error) {
+	if m.callHook != nil {
+		m.callHook()
+	}
+
 	// Add delay to simulate processing time
 	if m.delay > 0 {
 		select {
@@ -2421,6 +3657,120 @@ func TestRunParallelToolCall_LongRunningToolNoImmediateResult(t *testing.T) {
 	assert.Equal(t, 0, res.index)
 	assert.Nil(t, res.event)
 	assert.NoError(t, res.err)
+}
+
+func TestRunParallelToolCall_PanicUsesModifiedArgsExtension(t *testing.T) {
+	const (
+		originalArgs = `{"action":"query"}`
+		modifiedArgs = `{"action":"set"}`
+	)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(modifiedArgs),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(true, callbacks)
+	tools := map[string]tool.Tool{
+		"panic": &mockTool{name: "panic", shouldPanic: true},
+	}
+	tc := model.ToolCall{
+		ID: "call-panic",
+		Function: model.FunctionDefinitionParam{
+			Name:      "panic",
+			Arguments: []byte(originalArgs),
+		},
+	}
+	inv := &agent.Invocation{AgentName: "panic-agent"}
+	llmResp := &model.Response{Model: "mock"}
+	resultChan := make(chan toolResult, 1)
+
+	err := p.runParallelToolCall(
+		context.Background(),
+		inv,
+		llmResp,
+		tools,
+		nil,
+		resultChan,
+		0,
+		tc,
+	)
+	require.NoError(t, err)
+	close(resultChan)
+
+	res, ok := <-resultChan
+	require.True(t, ok)
+	require.NotNil(t, res.event)
+	argsByID, found, err := event.GetExtension[map[string]string](
+		res.event,
+		event.ToolCallArgsExtensionKey,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, modifiedArgs, argsByID["call-panic"])
+}
+
+func TestHandleFunctionCalls_ParallelLongRunningNilResultUsesModifiedArgs(
+	t *testing.T,
+) {
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		args *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(fmt.Sprintf(
+				`{"call_id":%q,"action":"set"}`,
+				args.ToolCallID,
+			)),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(true, callbacks)
+	tools := map[string]tool.Tool{
+		"long-a": &mockNilLongRunningTool{name: "long-a"},
+		"long-b": &mockNilLongRunningTool{name: "long-b"},
+	}
+	toolCalls := []model.ToolCall{
+		{
+			ID: "call-a",
+			Function: model.FunctionDefinitionParam{
+				Name:      "long-a",
+				Arguments: []byte(`{"action":"query"}`),
+			},
+		},
+		{
+			ID: "call-b",
+			Function: model.FunctionDefinitionParam{
+				Name:      "long-b",
+				Arguments: []byte(`{"action":"query"}`),
+			},
+		},
+	}
+	llmResp := &model.Response{Model: "mock", Choices: []model.Choice{{
+		Message: model.Message{ToolCalls: toolCalls},
+	}}}
+	inv := &agent.Invocation{InvocationID: "inv-long", AgentName: "agent"}
+
+	ev, err := p.handleFunctionCalls(
+		context.Background(),
+		inv,
+		llmResp,
+		tools,
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	argsByID, found, err := event.GetExtension[map[string]string](
+		ev,
+		event.ToolCallArgsExtensionKey,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, `{"call_id":"call-a","action":"set"}`, argsByID["call-a"])
+	require.Equal(t, `{"call_id":"call-b","action":"set"}`, argsByID["call-b"])
 }
 
 func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
@@ -3950,6 +5300,33 @@ func TestMergeParallelToolCallResponseEvents_MergesStateDelta(t *testing.T) {
 	require.NotNil(t, merged)
 	require.Equal(t, []byte("override"), merged.StateDelta["k1"])
 	require.Equal(t, []byte("v2"), merged.StateDelta["k2"])
+}
+
+func TestMergeParallelToolCallResponseEvents_MergesToolCallArgs(t *testing.T) {
+	e1 := event.New("inv1", "author", event.WithResponse(&model.Response{Model: "m"}))
+	require.NoError(t, event.SetExtension(
+		e1,
+		event.ToolCallArgsExtensionKey,
+		map[string]string{"call-1": `{"action":"query"}`},
+	))
+
+	e2 := event.New("inv2", "author", event.WithResponse(&model.Response{Model: "m"}))
+	require.NoError(t, event.SetExtension(
+		e2,
+		event.ToolCallArgsExtensionKey,
+		map[string]string{"call-2": `{"action":"set"}`},
+	))
+
+	merged := mergeParallelToolCallResponseEvents([]*event.Event{e1, e2})
+	require.NotNil(t, merged)
+	argsByID, ok, err := event.GetExtension[map[string]string](
+		merged,
+		event.ToolCallArgsExtensionKey,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, `{"action":"query"}`, argsByID["call-1"])
+	require.Equal(t, `{"action":"set"}`, argsByID["call-2"])
 }
 
 func TestMergeParallelToolCallResponseEvents_FallbackWithoutBaseEvent(t *testing.T) {
@@ -6476,6 +7853,332 @@ func TestExecuteTool_NamedTool(t *testing.T) {
 	require.JSONEq(t, string(b), string(mustJSON(res)))
 }
 
+func TestExecuteToolWithCallbacks_ToolPermissionPolicyDenySkipsExecution(
+	t *testing.T,
+) {
+	const (
+		toolName       = "delete_file"
+		toolCallID     = "call-deny"
+		denyReason     = "write access is disabled"
+		originalArgs   = `{"path":"unsafe"}`
+		rewrittenArgs  = `{"path":"safe"}`
+		permissionJSON = `{"status":"denied","tool":"delete_file","reason":"write access is disabled"}`
+	)
+
+	var (
+		calledTool     bool
+		calledCallback bool
+	)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterBeforeTool(func(
+		_ context.Context,
+		_ *tool.BeforeToolArgs,
+	) (*tool.BeforeToolResult, error) {
+		calledCallback = true
+		return &tool.BeforeToolResult{
+			ModifiedArguments: []byte(rewrittenArgs),
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: toolName},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			calledTool = true
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	inv := &agent.Invocation{
+		RunOptions: agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(
+			func(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+				require.Equal(t, toolName, req.ToolName)
+				require.Equal(t, toolCallID, req.ToolCallID)
+				require.JSONEq(t, rewrittenArgs, string(req.Arguments))
+				return tool.DenyPermission(denyReason), nil
+			},
+		)),
+	}
+
+	_, res, modifiedArgs, suppressDefault, _, err := p.executeToolWithCallbacks(
+		context.Background(),
+		inv,
+		model.ToolCall{
+			ID: toolCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      toolName,
+				Arguments: []byte(originalArgs),
+			},
+		},
+		tl,
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, suppressDefault)
+	require.False(t, calledTool)
+	require.True(t, calledCallback)
+	require.JSONEq(t, rewrittenArgs, string(modifiedArgs))
+	require.JSONEq(t, permissionJSON, string(mustJSON(res)))
+}
+
+func TestExecuteToolCall_ToolPermissionResultSkipsToolResultMessagesCallback(
+	t *testing.T,
+) {
+	const (
+		toolName       = "delete_file"
+		toolCallID     = "call-deny-message"
+		denyReason     = "write access is disabled"
+		permissionJSON = `{"status":"denied","tool":"delete_file","reason":"write access is disabled"}`
+	)
+
+	var (
+		calledTool           bool
+		calledResultMessages bool
+	)
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		_ context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		calledResultMessages = true
+		return model.Message{
+			Role:    model.RoleUser,
+			Content: "overridden",
+		}, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	tl := &mockCallableTool{
+		declaration: &tool.Declaration{Name: toolName},
+		callFn: func(_ context.Context, _ []byte) (any, error) {
+			calledTool = true
+			return map[string]any{"ok": true}, nil
+		},
+	}
+	inv := &agent.Invocation{
+		RunOptions: agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(
+			func(_ context.Context, _ *tool.PermissionRequest) (tool.PermissionDecision, error) {
+				return tool.DenyPermission(denyReason), nil
+			},
+		)),
+	}
+
+	_, choices, _, _, _, err := p.executeToolCall(
+		context.Background(),
+		inv,
+		model.ToolCall{
+			ID: toolCallID,
+			Function: model.FunctionDefinitionParam{
+				Name:      toolName,
+				Arguments: []byte(`{}`),
+			},
+		},
+		map[string]tool.Tool{toolName: tl},
+		0,
+		nil,
+	)
+	require.NoError(t, err)
+	require.False(t, calledTool)
+	require.False(t, calledResultMessages)
+	require.Len(t, choices, 1)
+	require.Equal(t, model.RoleTool, choices[0].Message.Role)
+	require.Equal(t, toolCallID, choices[0].Message.ToolID)
+	require.Equal(t, toolName, choices[0].Message.ToolName)
+	require.JSONEq(t, permissionJSON, choices[0].Message.Content)
+}
+
+func TestExecuteSingleToolCallSequential_ToolPermissionResultSkipsStateDelta(
+	t *testing.T,
+) {
+	const (
+		toolName       = "delete_file"
+		toolCallID     = "call-deny-delta"
+		denyReason     = "write access is disabled"
+		stateDeltaKey  = "denied_delta"
+		permissionJSON = `{"status":"denied","tool":"delete_file","reason":"write access is disabled"}`
+	)
+
+	var calledTool bool
+	tl := &permissionMockTool{
+		mockCallableTool: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				calledTool = true
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		decision: tool.DenyPermission(denyReason),
+		stateDelta: map[string][]byte{
+			stateDeltaKey: []byte("should-not-persist"),
+		},
+	}
+	ev, err := NewFunctionCallResponseProcessor(false, nil).
+		executeSingleToolCallSequential(
+			context.Background(),
+			&agent.Invocation{AgentName: "a", Model: &mockModel{}},
+			&model.Response{Choices: []model.Choice{{}}},
+			map[string]tool.Tool{toolName: tl},
+			make(chan *event.Event, 1),
+			0,
+			model.ToolCall{
+				ID: toolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			},
+		)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.False(t, calledTool)
+	require.False(t, tl.stateDeltaCalled)
+	require.NotContains(t, ev.StateDelta, stateDeltaKey)
+	require.Len(t, ev.Choices, 1)
+	require.JSONEq(t, permissionJSON, ev.Choices[0].Message.Content)
+}
+
+func TestExecuteSingleToolCallSequential_ToolPermissionResultIgnoresToolSkipSummarization(
+	t *testing.T,
+) {
+	const (
+		toolName       = "delete_file"
+		toolCallID     = "call-deny-skip"
+		denyReason     = "write access is disabled"
+		permissionJSON = `{"status":"denied","tool":"delete_file","reason":"write access is disabled"}`
+	)
+
+	tl := &permissionMockTool{
+		mockCallableTool: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		decision:      tool.DenyPermission(denyReason),
+		skipSummarize: true,
+	}
+	ev, err := NewFunctionCallResponseProcessor(false, nil).
+		executeSingleToolCallSequential(
+			context.Background(),
+			&agent.Invocation{AgentName: "a", Model: &mockModel{}},
+			&model.Response{Choices: []model.Choice{{}}},
+			map[string]tool.Tool{toolName: tl},
+			make(chan *event.Event, 1),
+			0,
+			model.ToolCall{
+				ID: toolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			},
+		)
+	require.NoError(t, err)
+	require.NotNil(t, ev)
+	require.False(t, ev.Actions != nil && ev.Actions.SkipSummarization)
+	require.Len(t, ev.Choices, 1)
+	require.JSONEq(t, permissionJSON, ev.Choices[0].Message.Content)
+}
+
+func TestExecuteToolWithCallbacks_ToolPermissionCheckerAskSkipsRunPolicy(
+	t *testing.T,
+) {
+	const (
+		toolName       = "shell"
+		askReason      = "shell commands require review"
+		permissionJSON = `{"status":"approval_required","tool":"shell","reason":"shell commands require review"}`
+	)
+
+	var (
+		calledTool      bool
+		calledRunPolicy bool
+	)
+	tl := &permissionMockTool{
+		mockCallableTool: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				calledTool = true
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		decision: tool.AskPermission(askReason),
+	}
+	inv := &agent.Invocation{
+		RunOptions: agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(
+			func(_ context.Context, _ *tool.PermissionRequest) (tool.PermissionDecision, error) {
+				calledRunPolicy = true
+				return tool.AllowPermission(), nil
+			},
+		)),
+	}
+
+	_, res, _, _, _, err := NewFunctionCallResponseProcessor(false, nil).
+		executeToolWithCallbacks(
+			context.Background(),
+			inv,
+			model.ToolCall{
+				ID: "call-ask",
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			},
+			tl,
+			nil,
+		)
+	require.NoError(t, err)
+	require.False(t, calledTool)
+	require.False(t, calledRunPolicy)
+	require.JSONEq(t, permissionJSON, string(mustJSON(res)))
+}
+
+func TestExecuteToolWithCallbacks_ToolPermissionReceivesMetadata(
+	t *testing.T,
+) {
+	const toolName = "web_search"
+	var calledRunPolicy bool
+	tl := &permissionMockTool{
+		mockCallableTool: &mockCallableTool{
+			declaration: &tool.Declaration{Name: toolName},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		metadata: tool.ToolMetadata{
+			ReadOnly:     true,
+			SearchOrRead: true,
+			OpenWorld:    true,
+		},
+		decision: tool.AllowPermission(),
+	}
+	inv := &agent.Invocation{
+		RunOptions: agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(
+			func(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+				calledRunPolicy = true
+				require.True(t, req.Metadata.ReadOnly)
+				require.True(t, req.Metadata.SearchOrRead)
+				require.True(t, req.Metadata.OpenWorld)
+				return tool.AllowPermission(), nil
+			},
+		)),
+	}
+
+	_, res, _, _, _, err := NewFunctionCallResponseProcessor(false, nil).
+		executeToolWithCallbacks(
+			context.Background(),
+			inv,
+			model.ToolCall{
+				ID: "call-allow",
+				Function: model.FunctionDefinitionParam{
+					Name:      toolName,
+					Arguments: []byte(`{}`),
+				},
+			},
+			tl,
+			nil,
+		)
+	require.NoError(t, err)
+	require.True(t, calledRunPolicy)
+	require.JSONEq(t, `{"ok":true}`, string(mustJSON(res)))
+}
+
 func TestExecuteToolCall_StreamableFinalStateOnlyResultAfterToolContextReplacementStillSkipsDefaultMessage(t *testing.T) {
 	ctx := context.Background()
 	callbacks := tool.NewCallbacks()
@@ -7066,4 +8769,187 @@ func TestExecuteCallableTool_DoesNotRetryStopError(t *testing.T) {
 	_, ok := agent.AsStopError(err)
 	require.True(t, ok)
 	require.Equal(t, 1, toolCalls)
+}
+
+// =============================================================================
+// Regression tests for marshalJSONNoHTMLEscape and its callers.
+// These verify that <, >, & in tool results are NOT HTML-escaped,
+// which previously caused LLMs to see \u003c instead of < in code output.
+// =============================================================================
+
+func TestMarshalJSONNoHTMLEscape_PreservesSpecialChars(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+		want  string // expected substring that must appear un-escaped
+	}{
+		{
+			name:  "less than in Go channel receive",
+			input: map[string]string{"output": "<-done"},
+			want:  `"output":"<-done"`,
+		},
+		{
+			name:  "angle brackets in generic type",
+			input: map[string]string{"type": "map[string]<Value>"},
+			want:  `"type":"map[string]<Value>"`,
+		},
+		{
+			name:  "ampersand in shell command",
+			input: map[string]string{"cmd": "a && b"},
+			want:  `"cmd":"a && b"`,
+		},
+		{
+			name:  "greater than comparison",
+			input: map[string]string{"expr": "if x > 0"},
+			want:  `"expr":"if x > 0"`,
+		},
+		{
+			name:  "all three special chars together",
+			input: map[string]string{"code": "for i := 0; i < len(s) && s[i] > 0; i++ { <-ch }"},
+			want:  `< len(s) && s[i] > 0`,
+		},
+		{
+			name:  "HTML-like content preserved as-is",
+			input: map[string]string{"html": "<script>alert('x')</script>"},
+			want:  `<script>alert('x')</script>`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := marshalJSONNoHTMLEscape(tt.input)
+			require.NoError(t, err)
+			assert.Contains(t, string(got), tt.want,
+				"expected un-escaped chars, got: %s", string(got))
+			// Also verify the old json.Marshal WOULD have escaped them.
+			stdBytes, _ := json.Marshal(tt.input)
+			assert.NotContains(t, string(stdBytes), tt.want,
+				"std json.Marshal should escape these chars (sanity check)")
+		})
+	}
+}
+
+func TestMarshalJSONNoHTMLEscape_ValidJSON(t *testing.T) {
+	inputs := []any{
+		map[string]string{"k": "<value>"},
+		map[string]any{"nested": map[string]int{"a": 1}},
+		[]string{"<a>", "&b", ">c"},
+		"hello <world>",
+		42,
+		true,
+		nil,
+	}
+	for _, input := range inputs {
+		got, err := marshalJSONNoHTMLEscape(input)
+		require.NoError(t, err)
+		// Must be valid JSON — round-trip through json.Unmarshal.
+		var decoded any
+		err = json.Unmarshal(got, &decoded)
+		assert.NoError(t, err, "output is not valid JSON: %s", string(got))
+	}
+}
+
+func TestMarshalJSONNoHTMLEscape_MatchesMarshalForSafeInputs(t *testing.T) {
+	// For inputs without <, >, & the output must be byte-identical to json.Marshal.
+	inputs := []any{
+		map[string]string{"name": "hello", "value": "world"},
+		map[string]int{"a": 1, "b": 2},
+		"plain string",
+		123,
+		true,
+		[]int{1, 2, 3},
+		nil,
+	}
+	for _, input := range inputs {
+		got, err := marshalJSONNoHTMLEscape(input)
+		require.NoError(t, err)
+		stdBytes, err := json.Marshal(input)
+		require.NoError(t, err)
+		assert.Equal(t, string(stdBytes), string(got),
+			"for safe input %v, output should match json.Marshal", input)
+	}
+}
+
+func TestMarshalJSONNoHTMLEscape_ErrorOnNonSerializable(t *testing.T) {
+	_, err := marshalJSONNoHTMLEscape(func() {})
+	assert.Error(t, err, "function values should not be serializable")
+}
+
+func TestMarshalJSONNoHTMLEscape_Unicode(t *testing.T) {
+	input := map[string]string{"msg": "你好世界 <-ch"}
+	got, err := marshalJSONNoHTMLEscape(input)
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "<-ch", "angle bracket must not be escaped")
+	// Unicode CJK characters are preserved (not ASCII-escaped) by json.Encoder default.
+	assert.Contains(t, string(got), "你好世界")
+}
+
+func TestBuildDefaultToolMessage_NoHTMLEscape(t *testing.T) {
+	// End-to-end test: tool returning Go source code with channel ops.
+	result := map[string]any{
+		"exit_code": 0,
+		"output":    "    <-done\n    for i := 0; i < 10; i++ {\n        fmt.Println(i)\n    }",
+		"status":    "exited",
+	}
+	msg, err := buildDefaultToolMessage("call-123", result)
+	require.NoError(t, err)
+	assert.Equal(t, "call-123", msg.ToolID)
+	assert.Contains(t, msg.Content, "<-done",
+		"channel receive must not be escaped to \\u003c-done")
+	assert.Contains(t, msg.Content, "i < 10",
+		"less-than in loop must not be escaped")
+	assert.NotContains(t, msg.Content, `\u003c`,
+		"must not contain HTML-escaped less-than")
+	assert.NotContains(t, msg.Content, `\u003e`,
+		"must not contain HTML-escaped greater-than")
+	assert.NotContains(t, msg.Content, `\u0026`,
+		"must not contain HTML-escaped ampersand")
+}
+
+func TestBuildDefaultToolMessage_BackwardCompat(t *testing.T) {
+	// Verify that normal tool results (without special chars) produce the
+	// exact same output as the old json.Marshal path would have.
+	tests := []struct {
+		name   string
+		result any
+	}{
+		{"string result", "success"},
+		{"map result", map[string]any{"message": "done", "count": 42}},
+		{"nil result", nil},
+		{"bool result", true},
+		{"nested result", map[string]any{
+			"todos": []map[string]string{
+				{"content": "step 1", "status": "completed"},
+				{"content": "step 2", "status": "pending"},
+			},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := buildDefaultToolMessage("id-1", tt.result)
+			require.NoError(t, err)
+			// Compare with what json.Marshal would produce (they should
+			// be identical for inputs without < > &).
+			expected, err := json.Marshal(tt.result)
+			require.NoError(t, err)
+			assert.Equal(t, string(expected), msg.Content)
+		})
+	}
+}
+
+func TestMarshalChunkToText_NoHTMLEscape(t *testing.T) {
+	// marshalChunkToText with a non-string value containing special chars.
+	chunk := map[string]string{"output": "<-ch && x > 0"}
+	text := marshalChunkToText(chunk)
+	assert.Contains(t, text, "<-ch",
+		"less-than must be preserved in streaming chunk")
+	assert.Contains(t, text, "&& x > 0",
+		"ampersand and greater-than must be preserved")
+	assert.NotContains(t, text, `\u003c`)
+	assert.NotContains(t, text, `\u0026`)
+}
+
+func TestMarshalChunkToText_StringPassthrough(t *testing.T) {
+	// String values bypass JSON marshaling entirely.
+	input := "<-done && x > 0"
+	assert.Equal(t, input, marshalChunkToText(input))
 }

@@ -246,6 +246,68 @@ application needs to distinguish different summary entry points, annotate the
 context before calling the session APIs and read the value inside your
 `ContextChecker`.
 
+## Dynamic Summarizer
+
+Use `NewDynamicSummarizer` when the session service should be reused, but the
+summary model, prompt, or checks must vary per request. This is useful for
+multi-tenant systems and custom model routing. Keep the session service
+long-lived, especially for database-backed services such as MySQL, so the
+underlying connection pool can be reused.
+
+```go
+type summaryCfgKey struct{}
+
+type SummaryCfg struct {
+    ModelName string
+    Prompt    string
+}
+
+func WithSummaryCfg(ctx context.Context, cfg SummaryCfg) context.Context {
+    return context.WithValue(ctx, summaryCfgKey{}, cfg)
+}
+
+func SummaryCfgFromContext(ctx context.Context) (SummaryCfg, bool) {
+    cfg, ok := ctx.Value(summaryCfgKey{}).(SummaryCfg)
+    return cfg, ok
+}
+
+summarizer := summary.NewDynamicSummarizer(func(
+    ctx context.Context,
+    sess *session.Session,
+) (summary.SessionSummarizer, error) {
+    cfg, ok := SummaryCfgFromContext(ctx)
+    if !ok {
+        return nil, nil // Skip automatic summary for this call.
+    }
+    return BuildSummarizer(cfg)
+})
+
+sessionService, err := mysql.NewService(
+    mysql.WithMySQLClientDSN(dsn),
+    mysql.WithSummarizer(summarizer),
+)
+```
+
+Before running the request, attach the request-scoped configuration to `ctx`:
+
+```go
+ctx = WithSummaryCfg(ctx, SummaryCfg{
+    ModelName: req.SummaryModel,
+    Prompt:    req.SummaryPrompt,
+})
+```
+
+The resolver should be cheap and deterministic for the same `ctx` and session.
+During non-forced summary, it may be called once for the summary gate and once
+for actual summary generation. If constructing the summarizer is expensive,
+store the already-built summarizer in `ctx` and let the resolver only read it.
+Returning nil from the resolver skips automatic summary checks. Direct
+`Summarize` calls, or forced summary calls without a resolved summarizer, return
+an error. If the resolver returns an error while `ShouldSummarizeWithContext`
+is checking an automatic, non-forced summary, the gate treats it as `false` and
+skips summary generation; direct `Summarize` calls propagate resolver errors to
+the caller.
+
 ## Summarizer Options
 
 ### Trigger Conditions
@@ -263,12 +325,47 @@ model is serving the request. The threshold is captured in the summarizer
 configuration and does not change when your application switches models.
 
 Use `WithContextThreshold` when the summary trigger should follow the active
-model's context window. It resolves the current invocation's
-`Model.Info().Name` at summary-check time, looks up that name in the model
-context-window registry, and computes `contextWindow * ratio` (default 50%).
-This is the recommended option for agents that can switch models within a
-session. For private deployments, endpoint IDs, fine-tuned models, or newly
-released models, register the runtime model name first:
+model's context window. This is the recommended option for agents that can
+switch models within a session. At summary-check time, the framework resolves
+the context window in this order:
+
+1. Per-run override from `agent.WithModelContextWindow(tokens)`
+2. Model instance configuration from providers such as `openai.WithContextWindow(tokens)` or `provider.WithContextWindow(tokens)`
+3. Process-wide model-name registry from `model.RegisterModelContextWindow(name, tokens)`
+
+The threshold is then computed as `contextWindow * ratio` (default 50%). For
+private deployments, endpoint IDs, fine-tuned models, newly released models, or
+multi-tenant custom model configuration, prefer the instance or per-run option
+so different users do not overwrite a process-wide registry entry:
+
+```go
+modelInstance := openai.New(
+    "my-custom-model",
+    openai.WithAPIKey(apiKey),
+    openai.WithBaseURL(apiURI),
+    openai.WithContextWindow(204800),
+)
+
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithModel(modelInstance),
+)
+
+eventChan, err = r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithModelName("my-custom-model"),
+    agent.WithModelContextWindow(204800),
+)
+```
+
+Use global registration only when the model name has a stable process-wide
+meaning:
 
 ```go
 model.RegisterModelContextWindow("my-custom-model", 32768)
@@ -475,6 +572,8 @@ Notes:
 
 By default, `CheckTokenThreshold` uses a built-in `SimpleTokenCounter` that estimates token count based on text length. To customize token counting behavior, use `summary.SetTokenCounter` to set a global token counter:
 
+For `SimpleTokenCounter`, `WithApproxRunesPerToken(v)` means roughly `v` UTF-8 characters per token. The formula is `estimatedTokens = countedUTF8Runes / v`. For example, `v=1.5` means about `1.5` characters per token; do not treat it as a token multiplier.
+
 ```go
 import (
     "context"
@@ -520,6 +619,7 @@ summary.SetTokenCounter(&MyCustomCounter{})
 
 - **Global effect**: `SetTokenCounter` affects all `CheckTokenThreshold` evaluations in the current process; set it once during application initialization
 - **Default counter**: If not set, the default `SimpleTokenCounter` is used (approximately 4 characters per token)
+- **Parameter meaning**: `v` in `WithApproxRunesPerToken(v)` is characters per token. Passing `2.0/3.0` means about `0.67` characters per token, which is about `1.5` tokens per character
 
 ## Skip Recent Events
 
@@ -825,6 +925,7 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 
 - Tool results from **older** requests that exceed the threshold are replaced entirely with a short placeholder while keeping `ToolID` and `ToolName`
 - The current request and the latest `ContextCompactionKeepRecentRequests` completed requests are never affected
+- If `ToolResultCompactionConfig.SkipRecentFunc` returns a positive number, the request/invocation units that own those tail events are also treated as recent and skipped by Pass 1
 - This cleans up accumulated long tool outputs from earlier conversation turns
 
 **Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, **default 0 / disabled**):
@@ -837,6 +938,14 @@ The two passes have different roles: Pass 1 aggressively cleans old history (low
 
 Pass 2 is disabled by default (`0`). It only fires when both (1) `WithEnableContextCompaction(true)` is set and (2) `ContextCompactionOversizedToolResultMaxTokens > 0` (recommended opt-in value: `8192`, exposed as the constant `processor.DefaultContextCompactionOversizedToolResultMaxTokens`). This guarantees that `EnableContextCompaction=false` always means "the framework will not modify any tool result".
 
+Use `WithToolResultCompactionConfig(...)` when you need tool-name or recency policy:
+
+- `ForceCleanToolNames`: historical results from these tools are replaced with a policy placeholder whenever context compaction is enabled, after current/recent protection is applied. This is useful for noisy tools such as shell, grep, or log dump tools.
+- `KeepToolNames`: results from these tools are left untouched by context compaction. This is useful for recovery tools such as `session_load` and `session_search` when the model may need to read the exact payload.
+- `SkipRecentFunc`: customizes how many tail events are considered recent. It affects Pass 0 force-clean and Pass 1 historical classification; Pass 2 can still truncate oversized recent/current tool results.
+
+If the same tool name appears in both `ForceCleanToolNames` and `KeepToolNames`, `KeepToolNames` wins.
+
 Additionally:
 
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model
@@ -848,7 +957,7 @@ Additionally:
 
 ```go
 counter := model.NewSimpleTokenCounter(
-    model.WithApproxRunesPerToken(1.6), // Example for Chinese-heavy content.
+    model.WithApproxRunesPerToken(1.6), // About 1.6 chars/token; this value is a divisor, not a multiplier.
 )
 
 modelInstance := openai.New(
@@ -867,8 +976,24 @@ agent := llmagent.New(
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail
     llmagent.WithContextCompactionKeepRecentRequests(1),
     llmagent.WithContextCompactionTokenCounter(counter),
+    llmagent.WithToolResultCompactionConfig(&llmagent.ToolResultCompactionConfig{
+        ForceCleanToolNames: []string{"shell", "grep"},
+        KeepToolNames:       []string{"session_load", "session_search"},
+        SkipRecentFunc: func(events []event.Event) int {
+            // For example, protect the request/invocation units that own the
+            // last 3 events so an in-flight tool chain is not treated as old
+            // history by Pass 1.
+            return 3
+        },
+    }),
 )
 ```
+
+See
+[examples/context_compaction](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/context_compaction)
+for a full example. It calls a real model and prints the exact request sent to
+the model by default with `-debug=true`, which makes it easy to verify whether
+large historical `tool result` payloads were replaced with placeholders.
 
 **Context structure**:
 
@@ -1112,7 +1237,7 @@ sessionService, err := mysql.NewService(
 
 ## Best Practices
 
-1. **Choose appropriate thresholds**: Use `WithContextThreshold` for agents whose model can change at runtime, and use `WithTokenThreshold` when you intentionally want a fixed token budget. For custom model names, register their context window before relying on context-aware triggers
+1. **Choose appropriate thresholds**: Use `WithContextThreshold` for agents whose model can change at runtime, and use `WithTokenThreshold` when you intentionally want a fixed token budget. For custom or tenant-provided models, prefer per-model `WithContextWindow` or per-run `agent.WithModelContextWindow`; use global registration only for stable process-wide model names
 2. **Use async processing**: Always use `EnqueueSummaryJob` instead of `CreateSessionSummary` in production to avoid blocking conversation flow
 3. **Monitor queue size**: If you frequently see "queue is full" warnings, increase `WithSummaryQueueSize` or `WithAsyncSummaryNum`
 4. **Customize prompts**: Tailor summary prompts to your application needs. For example, if building a customer support Agent, focus on key issues and solutions

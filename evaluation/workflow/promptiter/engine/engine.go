@@ -13,7 +13,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
+	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
@@ -35,10 +38,10 @@ type Engine interface {
 
 // RunRequest carries the inputs required to start PromptIter optimization.
 type RunRequest struct {
-	// TrainEvalSetIDs identifies evaluation sets used to generate gradients.
-	TrainEvalSetIDs []string
-	// ValidationEvalSetIDs identifies evaluation sets used for patch acceptance checks.
-	ValidationEvalSetIDs []string
+	// Train identifies evaluation data used to generate gradients.
+	Train []EvalSetInput `json:"train"`
+	// Validation identifies evaluation data used for patch acceptance checks.
+	Validation []EvalSetInput `json:"validation"`
 	// InitialProfile is the baseline profile for round one optimization.
 	InitialProfile *promptiter.Profile
 	// Teacher executes trace generation requests for evaluation.
@@ -47,6 +50,12 @@ type RunRequest struct {
 	Judge runner.Runner
 	// EvaluationOptions configures how training and validation runs are executed.
 	EvaluationOptions EvaluationOptions
+	// BackwardOptions configures backward-stage execution.
+	BackwardOptions BackwardOptions
+	// AggregationOptions configures aggregation-stage execution.
+	AggregationOptions AggregationOptions
+	// OptimizerOptions configures optimizer-stage execution.
+	OptimizerOptions OptimizerOptions
 	// AcceptancePolicy controls minimum quality gain required to accept patching.
 	AcceptancePolicy AcceptancePolicy
 	// StopPolicy controls termination conditions between rounds.
@@ -55,6 +64,28 @@ type RunRequest struct {
 	MaxRounds int
 	// TargetSurfaceIDs limits this run to optimizing only the listed surfaces.
 	TargetSurfaceIDs []string
+}
+
+// EvalSetInput identifies one evaluation set and optional case filters for a PromptIter run.
+type EvalSetInput struct {
+	// EvalSetID identifies the eval set to execute.
+	EvalSetID string `json:"evalSetId"`
+	// EvalCaseIDs limits this eval set to specific eval cases when set.
+	EvalCaseIDs []string `json:"evalCaseIds,omitempty"`
+	// LossHints stores operator-provided loss reasons keyed by failed eval case and metric.
+	LossHints []LossHint `json:"lossHints,omitempty"`
+}
+
+// LossHint carries operator-provided context for one failed metric on one eval case.
+type LossHint struct {
+	// EvalCaseID identifies the eval case to receive this hint.
+	EvalCaseID string `json:"evalCaseId"`
+	// MetricName identifies the failed metric to receive this hint.
+	MetricName string `json:"metricName"`
+	// Severity indicates how urgently this hint should influence optimization when set.
+	Severity promptiter.LossSeverity `json:"severity,omitempty"`
+	// Reason stores the manual loss text used by gradient computation.
+	Reason string `json:"reason"`
 }
 
 // RunStatus identifies the lifecycle state of one PromptIter run view.
@@ -75,6 +106,8 @@ const (
 
 // RunResult stores the state and historical trace of one PromptIter execution.
 type RunResult struct {
+	// AppName identifies the PromptIter target app that owns this run.
+	AppName string
 	// ID uniquely identifies this run when the caller uses manager-backed execution.
 	ID string
 	// Status stores the lifecycle state of the run.
@@ -151,14 +184,15 @@ func New(ctx context.Context,
 		return nil, errors.New("aggregator is nil")
 	case optimizer == nil:
 		return nil, errors.New("optimizer is nil")
+	default:
+		return &engine{
+			targetAgent:    targetAgent,
+			backwarder:     backwarder,
+			aggregator:     aggregator,
+			optimizer:      optimizer,
+			agentEvaluator: agentEvaluator,
+		}, nil
 	}
-	return &engine{
-		targetAgent:    targetAgent,
-		backwarder:     backwarder,
-		aggregator:     aggregator,
-		optimizer:      optimizer,
-		agentEvaluator: agentEvaluator,
-	}, nil
 }
 
 // Describe returns the structure snapshot used for the current optimization session.
@@ -207,7 +241,7 @@ func (e *engine) run(
 	acceptedProfile := initialProfile
 	acceptedValidationScore := 0.0
 	baselineValidation, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
-		request.ValidationEvalSetIDs,
+		request.Validation,
 		acceptedProfile,
 		request.Teacher,
 		request.Judge,
@@ -295,17 +329,26 @@ func (e *engine) run(
 }
 
 func (e *engine) validateRunRequest(request *RunRequest) error {
-	switch {
-	case request == nil:
+	if request == nil {
 		return errors.New("run request is nil")
-	case len(request.TrainEvalSetIDs) == 0:
-		return errors.New("train evaluation set ids are empty")
-	case len(request.ValidationEvalSetIDs) == 0:
-		return errors.New("validation evaluation set ids are empty")
+	}
+	if err := validateEvalSetInputs("train", request.Train); err != nil {
+		return err
+	}
+	if err := validateEvalSetInputs("validation", request.Validation); err != nil {
+		return err
+	}
+	switch {
 	case request.MaxRounds <= 0:
 		return errors.New("max rounds must be greater than 0")
 	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
 		return errors.New("target surface ids must not be empty")
+	case request.BackwardOptions.CaseParallelism < 0:
+		return errors.New("backward case parallelism must be non-negative")
+	case request.AggregationOptions.SurfaceParallelism < 0:
+		return errors.New("aggregation surface parallelism must be non-negative")
+	case request.OptimizerOptions.SurfaceParallelism < 0:
+		return errors.New("optimizer surface parallelism must be non-negative")
 	case e.targetAgent == nil:
 		return errors.New("target agent is nil")
 	case e.agentEvaluator == nil:
@@ -345,7 +388,7 @@ func (e *engine) executeRound(
 		InputProfile: iprofile.Clone(acceptedProfile),
 	}
 	trainResult, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
-		request.TrainEvalSetIDs,
+		request.Train,
 		acceptedProfile,
 		request.Teacher,
 		request.Judge,
@@ -362,11 +405,23 @@ func (e *engine) executeRound(
 	if err != nil {
 		return nil, 0, fmt.Errorf("extract train losses round %d: %w", roundNumber, err)
 	}
+	losses, err = mergeLossHints(losses, trainResult, request.Train)
+	if err != nil {
+		return nil, 0, fmt.Errorf("merge train loss hints round %d: %w", roundNumber, err)
+	}
 	roundResult.Losses = losses
 	if err := appendRunEvent(ctx, observer, EventKindRoundLosses, roundNumber, losses); err != nil {
 		return nil, 0, err
 	}
-	backwardResult, err := e.backward(ctx, structure, acceptedProfile, trainResult, losses, targetSurfaceSet)
+	backwardResult, err := e.backward(
+		ctx,
+		structure,
+		acceptedProfile,
+		trainResult,
+		losses,
+		targetSurfaceSet,
+		request.BackwardOptions,
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("backward round %d: %w", roundNumber, err)
 	}
@@ -374,7 +429,13 @@ func (e *engine) executeRound(
 	if err := appendRunEvent(ctx, observer, EventKindRoundBackward, roundNumber, backwardResult); err != nil {
 		return nil, 0, err
 	}
-	aggregationResult, err := e.aggregate(ctx, structure, backwardResult, targetSurfaceSet)
+	aggregationResult, err := e.aggregate(
+		ctx,
+		structure,
+		backwardResult,
+		targetSurfaceSet,
+		request.AggregationOptions,
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("aggregate round %d: %w", roundNumber, err)
 	}
@@ -382,7 +443,14 @@ func (e *engine) executeRound(
 	if err := appendRunEvent(ctx, observer, EventKindRoundAggregation, roundNumber, aggregationResult); err != nil {
 		return nil, 0, err
 	}
-	patchSet, err := e.optimize(ctx, structure, acceptedProfile, aggregationResult, targetSurfaceSet)
+	patchSet, err := e.optimize(
+		ctx,
+		structure,
+		acceptedProfile,
+		aggregationResult,
+		targetSurfaceSet,
+		request.OptimizerOptions,
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("optimize round %d: %w", roundNumber, err)
 	}
@@ -399,7 +467,7 @@ func (e *engine) executeRound(
 		return nil, 0, err
 	}
 	validationResult, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
-		request.ValidationEvalSetIDs,
+		request.Validation,
 		outputProfile,
 		request.Teacher,
 		request.Judge,
@@ -427,20 +495,135 @@ func (e *engine) executeRound(
 }
 
 func (e *engine) newEvaluationRequest(
-	evalSetIDs []string,
+	inputs []EvalSetInput,
 	profile *promptiter.Profile,
 	teacher runner.Runner,
 	judge runner.Runner,
 	options EvaluationOptions,
 ) *EvaluationRequest {
 	return &EvaluationRequest{
-		EvalSetIDs: append(
-			[]string(nil),
-			evalSetIDs...,
-		),
-		Profile: profile,
-		Teacher: teacher,
-		Judge:   judge,
-		Options: options,
+		EvalSets: inputs,
+		Profile:  profile,
+		Teacher:  teacher,
+		Judge:    judge,
+		Options:  options,
 	}
+}
+
+func validateEvalSetInputs(role string, inputs []EvalSetInput) error {
+	prefix := ""
+	if role != "" {
+		prefix = role + " "
+	}
+	if len(inputs) == 0 {
+		return fmt.Errorf("%sevaluation sets are empty", prefix)
+	}
+	for _, input := range inputs {
+		if input.EvalSetID == "" {
+			return fmt.Errorf("%sevaluation set id is empty", prefix)
+		}
+		if slices.Contains(input.EvalCaseIDs, "") {
+			return fmt.Errorf("%seval case id for eval set %q is empty", prefix, input.EvalSetID)
+		}
+		selectedCaseIDs := make(map[string]struct{}, len(input.EvalCaseIDs))
+		for _, evalCaseID := range input.EvalCaseIDs {
+			selectedCaseIDs[evalCaseID] = struct{}{}
+		}
+		for _, hint := range input.LossHints {
+			hintEvalCaseID := strings.TrimSpace(hint.EvalCaseID)
+			switch {
+			case hintEvalCaseID == "":
+				return fmt.Errorf("%sloss hint eval case id for eval set %q is empty", prefix, input.EvalSetID)
+			case strings.TrimSpace(hint.MetricName) == "":
+				return fmt.Errorf(
+					"%sloss hint metric name for eval set %q case %q is empty",
+					prefix,
+					input.EvalSetID,
+					hint.EvalCaseID,
+				)
+			case strings.TrimSpace(hint.Reason) == "":
+				return fmt.Errorf(
+					"%sloss hint reason for eval set %q case %q metric %q is empty",
+					prefix,
+					input.EvalSetID,
+					hint.EvalCaseID,
+					hint.MetricName,
+				)
+			case !isValidLossHintSeverity(hint.Severity):
+				return fmt.Errorf(
+					"%sloss hint severity %q for eval set %q case %q metric %q is invalid",
+					prefix,
+					hint.Severity,
+					input.EvalSetID,
+					hint.EvalCaseID,
+					hint.MetricName,
+				)
+			}
+			if len(selectedCaseIDs) > 0 {
+				if _, ok := selectedCaseIDs[hintEvalCaseID]; !ok {
+					return fmt.Errorf(
+						"%sloss hint eval case %q is not selected for eval set %q",
+						prefix,
+						hint.EvalCaseID,
+						input.EvalSetID,
+					)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func isValidLossHintSeverity(severity promptiter.LossSeverity) bool {
+	switch severity {
+	case "",
+		promptiter.LossSeverityP0,
+		promptiter.LossSeverityP1,
+		promptiter.LossSeverityP2,
+		promptiter.LossSeverityP3:
+		return true
+	default:
+		return false
+	}
+}
+
+func runIndexedParallel(
+	ctx context.Context,
+	count int,
+	parallelism int,
+	fn func(context.Context, int) error,
+) error {
+	if parallelism <= 1 || count <= 1 {
+		for index := range count {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := fn(ctx, index); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	group, groupCtx := errgroup.WithContext(ctx)
+	indexErrors := make([]error, count)
+	group.SetLimit(parallelism)
+	for index := range count {
+		if err := groupCtx.Err(); err != nil {
+			break
+		}
+		index := index
+		group.Go(func() error {
+			if err := groupCtx.Err(); err != nil {
+				return err
+			}
+			if err := fn(groupCtx, index); err != nil {
+				indexErrors[index] = err
+				return err
+			}
+			return nil
+		})
+	}
+	waitErr := group.Wait()
+	indexErrors = append(indexErrors, waitErr, ctx.Err())
+	return errors.Join(indexErrors...)
 }

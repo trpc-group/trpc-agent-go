@@ -10,10 +10,13 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,7 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/jsonschema"
+	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -31,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -128,6 +132,7 @@ type Invocation struct {
 	parent *Invocation
 	// traceCapture stores the shared execution trace capture for one root run.
 	traceCapture *tracecapture.Capture
+	traceMu      sync.Mutex
 	// entryPredecessorStepIDs stores the predecessor step ids passed to this invocation entry.
 	entryPredecessorStepIDs []string
 	// traceNodeID stores the mounted static root node id for this invocation.
@@ -201,6 +206,27 @@ func NewWaitNoticeTimeoutError(message string) *WaitNoticeTimeoutError {
 
 // RunOption is a function that configures a RunOptions.
 type RunOption func(*RunOptions)
+
+// ModelSelector selects the model for one framework-managed LLM call.
+// The invocation's Model is the base model for this call when the selector is
+// invoked. Returning nil with nil error keeps that base model. Returning an
+// error fails the current call before the request is built. A selector may be
+// called concurrently by different runs and must protect any shared state it
+// owns.
+type ModelSelector func(ctx context.Context, inv *Invocation) (model.Model, error)
+
+// AvailableSkillsRenderRequest contains inputs for rendering the request-scoped
+// Available skills section.
+type AvailableSkillsRenderRequest struct {
+	// Summaries are the skills visible to the current request.
+	Summaries []skill.Summary
+}
+
+// AvailableSkillsRenderer renders the request-scoped Available skills section.
+type AvailableSkillsRenderer func(
+	ctx context.Context,
+	req AvailableSkillsRenderRequest,
+) string
 
 type runControlConfig struct {
 	DisableGraphCompletionEvent bool
@@ -387,6 +413,18 @@ func WithUserMessageRewriter(rewriter UserMessageRewriter) RunOption {
 func WithResume(enabled bool) RunOption {
 	return func(opts *RunOptions) {
 		opts.Resume = enabled
+	}
+}
+
+// WithPersistInterruptedAssistant controls whether a cancelled streaming run
+// persists already-emitted assistant text as a final assistant message.
+//
+// By default this is not set, so the Runner uses its own default. The built-in
+// Runner default is false to preserve the "cancel discards partial text"
+// session semantics.
+func WithPersistInterruptedAssistant(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.PersistInterruptedAssistant = &enabled
 	}
 }
 
@@ -613,6 +651,35 @@ func WithModelName(name string) RunOption {
 	}
 }
 
+// WithModelContextWindow sets the model context window for this specific run.
+// This is useful for user-defined or private models whose names should not be
+// registered in the process-wide model registry.
+func WithModelContextWindow(tokens int) RunOption {
+	return func(opts *RunOptions) {
+		if tokens > 0 {
+			opts.ModelContextWindow = tokens
+		}
+	}
+}
+
+// ModelContextWindowFromRunOptions returns the context window configured by
+// WithModelContextWindow.
+func ModelContextWindowFromRunOptions(opts *RunOptions) (int, bool) {
+	if opts == nil || opts.ModelContextWindow <= 0 {
+		return 0, false
+	}
+	return opts.ModelContextWindow, true
+}
+
+// WithModelSelector sets the model selector for this specific run.
+// The selector is called before each framework-managed LLM call and takes
+// precedence over any agent-level selector.
+func WithModelSelector(selector ModelSelector) RunOption {
+	return func(opts *RunOptions) {
+		opts.ModelSelector = selector
+	}
+}
+
 // WithCodeExecutor sets the code executor for this specific run.
 // If set, it temporarily overrides the agent's default code executor for this
 // request only.
@@ -650,24 +717,36 @@ func WithGlobalInstruction(instruction string) RunOption {
 	}
 }
 
+// WithWorkspaceExecGuidance sets request-scoped workspace_exec guidance.
+// Empty guidance leaves the built-in default guidance in use.
+func WithWorkspaceExecGuidance(guidance string) RunOption {
+	return func(opts *RunOptions) {
+		opts.WorkspaceExecGuidance = guidance
+	}
+}
+
+// WithAvailableSkillsRenderer sets a request-scoped renderer for the
+// Available skills section.
+//
+// Returning a blank string omits the Available skills section.
+func WithAvailableSkillsRenderer(renderer AvailableSkillsRenderer) RunOption {
+	return func(opts *RunOptions) {
+		opts.AvailableSkillsRenderer = renderer
+	}
+}
+
 // WithStructuredOutputJSONSchema sets a JSON schema structured output for this run.
 func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict bool, description string) RunOption {
 	return func(opts *RunOptions) {
 		if schema == nil {
 			return
 		}
-		if name == "" {
-			name = "output"
-		}
-		opts.StructuredOutput = &model.StructuredOutput{
-			Type: model.StructuredOutputJSONSchema,
-			JSONSchema: &model.JSONSchemaConfig{
-				Name:        name,
-				Schema:      schema,
-				Strict:      strict,
-				Description: description,
-			},
-		}
+		opts.StructuredOutput = newStructuredOutput(
+			structuredoutput.Name(name),
+			schema,
+			strict,
+			description,
+		)
 	}
 }
 
@@ -675,36 +754,27 @@ func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict b
 // The schema is constructed automatically from the provided example type.
 func WithStructuredOutputJSON(examplePtr any, strict bool, description string) RunOption {
 	return func(opts *RunOptions) {
-		// Infer reflect.Type from examplePtr.
-		var t reflect.Type
-		if examplePtr == nil {
+		name, schema, t := structuredoutput.FromType(examplePtr, strict)
+		if schema == nil {
 			return
 		}
-		if rt := reflect.TypeOf(examplePtr); rt.Kind() == reflect.Pointer {
-			t = rt
-		} else {
-			t = reflect.PointerTo(rt)
-		}
-		genOpts := make([]jsonschema.Option, 0, 1)
-		if strict {
-			genOpts = append(genOpts, jsonschema.WithStrict())
-		}
-		gen := jsonschema.New(genOpts...)
-		schema := gen.Generate(t.Elem())
-		name := t.Elem().Name()
-		if name == "" {
-			name = "output"
-		}
-		opts.StructuredOutput = &model.StructuredOutput{
-			Type: model.StructuredOutputJSONSchema,
-			JSONSchema: &model.JSONSchemaConfig{
-				Name:        name,
-				Schema:      schema,
-				Strict:      strict,
-				Description: description,
-			},
-		}
+		opts.StructuredOutput = newStructuredOutput(name, schema, strict, description)
 		opts.StructuredOutputType = t
+	}
+}
+
+func newStructuredOutput(name string, schema map[string]any, strict bool, description string) *model.StructuredOutput {
+	if schema == nil {
+		return nil
+	}
+	return &model.StructuredOutput{
+		Type: model.StructuredOutputJSONSchema,
+		JSONSchema: &model.JSONSchemaConfig{
+			Name:        name,
+			Schema:      schema,
+			Strict:      strict,
+			Description: description,
+		},
 	}
 }
 
@@ -753,6 +823,37 @@ func WithToolFilter(filter tool.FilterFunc) RunOption {
 	}
 }
 
+// WithAdditionalTools appends tools that are visible only for this run.
+//
+// Additional tools are treated as user tools, so WithToolFilter can still
+// hide them. If an additional tool has the same name as an already available
+// tool, the already available tool wins for that run.
+func WithAdditionalTools(tools []tool.Tool) RunOption {
+	return func(opts *RunOptions) {
+		appendRunTools(opts, tools)
+	}
+}
+
+// WithExternalTools appends caller-executed tools for this run.
+//
+// External tools are visible to the model like additional tools, but the
+// framework will not execute them. When the model calls one, the run stops
+// after the assistant tool_call response. The caller should execute the tool
+// externally and continue with model.NewToolMessage.
+func WithExternalTools(tools []tool.Tool) RunOption {
+	return func(opts *RunOptions) {
+		if opts == nil {
+			return
+		}
+		for _, tl := range tools {
+			if declarationName(tl) == "" {
+				continue
+			}
+			opts.ExternalTools = append(opts.ExternalTools, tl)
+		}
+	}
+}
+
 // WithToolExecutionFilter sets which tools the framework will execute.
 //
 // This is different from WithToolFilter:
@@ -768,6 +869,56 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 	return func(opts *RunOptions) {
 		opts.ToolExecutionFilter = filter
 	}
+}
+
+// WithToolPermissionPolicy sets a per-run policy that is checked after
+// before-tool callbacks finalize arguments and immediately before the
+// framework executes a tool call.
+//
+// The policy is intentionally separate from WithToolFilter and
+// WithToolExecutionFilter:
+//   - WithToolFilter controls which tools are visible to the model.
+//   - WithToolExecutionFilter controls whether the framework auto-executes
+//     a visible tool or leaves it to the caller.
+//   - WithToolPermissionPolicy executes a permission check for tools the
+//     framework is about to run.
+//
+// When no per-run policy is configured, tools without their own checker keep
+// the legacy allow behavior. When a per-run policy is configured, it is applied
+// to every tool the framework is about to execute, including tools that do not
+// implement tool.PermissionChecker.
+func WithToolPermissionPolicy(policy tool.PermissionPolicy) RunOption {
+	return func(opts *RunOptions) {
+		opts.ToolPermissionPolicy = policy
+	}
+}
+
+// WithToolPermissionPolicyFunc adapts fn into a per-run tool permission policy.
+func WithToolPermissionPolicyFunc(fn tool.PermissionPolicyFunc) RunOption {
+	return WithToolPermissionPolicy(fn)
+}
+
+func appendRunTools(opts *RunOptions, tools []tool.Tool) {
+	if opts == nil || len(tools) == 0 {
+		return
+	}
+	for _, tl := range tools {
+		if declarationName(tl) == "" {
+			continue
+		}
+		opts.AdditionalTools = append(opts.AdditionalTools, tl)
+	}
+}
+
+func declarationName(tl tool.Tool) string {
+	if tl == nil {
+		return ""
+	}
+	decl := tl.Declaration()
+	if decl == nil {
+		return ""
+	}
+	return decl.Name
 }
 
 // WithToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
@@ -905,6 +1056,14 @@ type RunOptions struct {
 	// LLM request.
 	Resume bool
 
+	// PersistInterruptedAssistant controls whether Runner persists already
+	// emitted assistant text as a final assistant message when a streaming run
+	// is cancelled before a normal final assistant response is produced.
+	//
+	// nil means the Runner default applies. The built-in Runner default is
+	// false to preserve the legacy cancellation semantics.
+	PersistInterruptedAssistant *bool
+
 	// GraphEmitFinalModelResponses controls event emission for graph-based
 	// Large Language Model (LLM) nodes.
 	//
@@ -1006,6 +1165,13 @@ type RunOptions struct {
 	// The agent will look up the model by name from its registered models.
 	// If both Model and ModelName are set, Model takes precedence.
 	ModelName string
+	// ModelSelector selects the model before each framework-managed LLM call.
+	ModelSelector ModelSelector
+
+	// ModelContextWindow is the model context window for this specific run.
+	// If set, it takes precedence over model instance configuration and the
+	// process-wide model registry.
+	ModelContextWindow int
 
 	// ModelRequestExtraFields contains provider-specific top-level request body
 	// fields for model calls made during this run.
@@ -1036,6 +1202,14 @@ type RunOptions struct {
 	// this request only.
 	GlobalInstruction string
 
+	// WorkspaceExecGuidance overrides workspace_exec guidance for this run.
+	// If empty, the built-in guidance is used.
+	WorkspaceExecGuidance string
+	// AvailableSkillsRenderer renders the Available skills section for this run.
+	// If nil, the built-in renderer is used. If it returns blank text, the section
+	// is omitted.
+	AvailableSkillsRenderer AvailableSkillsRenderer
+
 	// StructuredOutput defines how the model should produce structured output for this run.
 	StructuredOutput *model.StructuredOutput
 
@@ -1063,6 +1237,23 @@ type RunOptions struct {
 	//   })
 	ToolFilter tool.FilterFunc
 
+	// AdditionalTools contains tools that are visible only for this run.
+	//
+	// These tools are treated as user tools and are therefore affected by
+	// ToolFilter. They are appended to the effective tool surface without
+	// mutating the agent's registered tools.
+	AdditionalTools []tool.Tool
+
+	// ExternalTools contains caller-executed tools that are visible only for
+	// this run. The framework exposes them to the model, but does not execute
+	// them after the model returns a tool call.
+	ExternalTools []tool.Tool
+
+	// ExternalToolNames contains the accepted caller-executed tool names for
+	// this run. LLM flows set it after the invocation tool surface rejects
+	// collisions with existing tools.
+	ExternalToolNames map[string]bool
+
 	// ToolExecutionFilter controls which tools are executed by the
 	// framework when the model returns tool calls.
 	//
@@ -1077,12 +1268,66 @@ type RunOptions struct {
 	// assistant tool_call response so the caller can execute the tool
 	// externally and later provide tool results (RoleTool messages).
 	ToolExecutionFilter tool.FilterFunc
+
+	// ToolPermissionPolicy checks whether a tool call may run after the model
+	// has requested it, after argument repair, and after before-tool callbacks
+	// have finalized arguments.
+	//
+	// This policy does not change the visible tool surface. Use ToolFilter for
+	// that. It also does not replace callbacks or guardrail plugins; before-tool
+	// callbacks can still normalize arguments before the policy sees them. A deny
+	// or ask decision skips tool execution and returns a structured permission
+	// result to the model.
+	ToolPermissionPolicy tool.PermissionPolicy
+
 	// ToolCallArgumentsJSONRepairEnabled enables best-effort JSON repair for tool call arguments.
 	// When nil, JSON repair is disabled by default.
 	ToolCallArgumentsJSONRepairEnabled *bool
 
 	// runControlConfig stores internal event and buffering controls.
 	runControlConfig runControlConfig
+}
+
+// ShouldExecuteTool reports whether the framework should execute a tool call.
+//
+// External tools are always caller-executed and therefore return false. The
+// ToolExecutionFilter is evaluated only for non-external tools.
+func (opts RunOptions) ShouldExecuteTool(
+	ctx context.Context,
+	tl tool.Tool,
+) bool {
+	if opts.isExternalTool(tl) {
+		return false
+	}
+	if opts.ToolExecutionFilter == nil {
+		return true
+	}
+	return opts.ToolExecutionFilter(ctx, tl)
+}
+
+func (opts RunOptions) isExternalTool(tl tool.Tool) bool {
+	name := declarationName(tl)
+	if opts.ExternalToolNames != nil {
+		return name != "" && opts.ExternalToolNames[name]
+	}
+	for _, external := range opts.ExternalTools {
+		if sameRunTool(tl, external) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameRunTool(a tool.Tool, b tool.Tool) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	av := reflect.ValueOf(a)
+	bv := reflect.ValueOf(b)
+	if av.Type() == bv.Type() && av.Type().Comparable() {
+		return a == b
+	}
+	return false
 }
 
 // IsGraphCompletionEventDisabled reports whether this invocation hides terminal graph completion events.
@@ -1167,7 +1412,6 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 		noticeChannels:  inv.noticeChannels,
 		eventFilterKey:  inv.eventFilterKey,
 		parent:          inv,
-		traceCapture:    inv.traceCapture,
 		state:           inv.cloneState(),
 	}
 
@@ -1188,6 +1432,10 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	if newInv.eventFilterKey == "" && newInv.AgentName != "" {
 		newInv.eventFilterKey = newInv.AgentName
 	}
+	if newInv.RunOptions.ExecutionTraceEnabled && inv.RunOptions.ExecutionTraceEnabled {
+		inv.initializeExecutionTrace()
+		newInv.traceCapture = inv.executionTraceCapture()
+	}
 	if newInv.traceCapture == nil {
 		newInv.initializeExecutionTrace()
 	}
@@ -1204,6 +1452,7 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 	if inv == nil {
 		return nil
 	}
+	traceCapture, traceNodeID := inv.executionTraceFields()
 	view := &Invocation{
 		Agent:                inv.Agent,
 		AgentName:            inv.AgentName,
@@ -1225,12 +1474,12 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 		noticeMu:             inv.noticeMu,
 		eventFilterKey:       inv.eventFilterKey,
 		parent:               inv.parent,
-		traceCapture:         inv.traceCapture,
+		traceCapture:         traceCapture,
 		entryPredecessorStepIDs: cloneStringSlice(
 			inv.entryPredecessorStepIDs,
 		),
-		traceNodeID:        inv.traceNodeID,
-		state:              inv.cloneState(),
+		traceNodeID:        traceNodeID,
+		state:              inv.cloneViewState(),
 		MaxLLMCalls:        inv.MaxLLMCalls,
 		MaxToolIterations:  inv.MaxToolIterations,
 		timingInfo:         inv.timingInfo,
@@ -1267,47 +1516,335 @@ func (inv *Invocation) SyncView(view *Invocation) {
 	inv.noticeMu = view.noticeMu
 	inv.eventFilterKey = view.eventFilterKey
 	inv.parent = view.parent
-	inv.traceCapture = view.traceCapture
+	traceCapture, traceNodeID := view.executionTraceFields()
+	inv.traceMu.Lock()
+	inv.traceCapture = traceCapture
+	inv.traceNodeID = traceNodeID
+	inv.traceMu.Unlock()
 	inv.entryPredecessorStepIDs = cloneStringSlice(
 		view.entryPredecessorStepIDs,
 	)
-	inv.traceNodeID = view.traceNodeID
 	inv.MaxLLMCalls = view.MaxLLMCalls
 	inv.MaxToolIterations = view.MaxToolIterations
 	inv.timingInfo = view.timingInfo
 	inv.llmCallCount = view.llmCallCount
 	inv.toolIterationCount = view.toolIterationCount
 	inv.stateMu.Lock()
-	inv.state = view.cloneState()
+	inv.state = view.cloneViewState()
 	inv.stateMu.Unlock()
 }
 
 func (inv *Invocation) cloneState() map[string]any {
-	if inv == nil || inv.state == nil {
+	return inv.cloneStateByFilter(isCloneStateKey, keepStateValue)
+}
+
+func (inv *Invocation) cloneViewState() map[string]any {
+	return inv.cloneStateByFilter(includeAllStateKeys, cloneViewStateValue)
+}
+
+func (inv *Invocation) cloneStateByFilter(
+	include func(string) bool,
+	cloneValue func(string, any) any,
+) map[string]any {
+	if inv == nil {
 		return nil
 	}
 	inv.stateMu.RLock()
 	defer inv.stateMu.RUnlock()
-	copied := make(map[string]any)
-	if holder, ok := inv.state[flusherStateKey]; ok {
-		copied[flusherStateKey] = holder
+	if inv.state == nil {
+		return nil
 	}
-	if barrier, ok := inv.state[barrierStateKey]; ok {
-		copied[barrierStateKey] = barrier
-	}
-	if holder, ok := inv.state[appenderStateKey]; ok {
-		copied[appenderStateKey] = holder
-	}
-	if hub, ok := inv.state[streamHubStateKey]; ok {
-		copied[streamHubStateKey] = hub
-	}
-	if nodeID, ok := inv.state[surfaceRootNodeIDStateKey]; ok {
-		copied[surfaceRootNodeIDStateKey] = nodeID
-	}
-	if rootNodeID, ok := inv.state[teamMemberTraceRootStateKey]; ok {
-		copied[teamMemberTraceRootStateKey] = rootNodeID
+	copied := make(map[string]any, len(inv.state))
+	for key, value := range inv.state {
+		if !include(key) {
+			continue
+		}
+		copied[key] = cloneValue(key, value)
 	}
 	return copied
+}
+
+func includeAllStateKeys(string) bool {
+	return true
+}
+
+func keepStateValue(_ string, value any) any {
+	return value
+}
+
+func cloneViewStateValue(key string, value any) any {
+	if isCloneStateKey(key) {
+		return value
+	}
+	return cloneStateValue(value)
+}
+
+func isCloneStateKey(key string) bool {
+	switch key {
+	case flusherStateKey,
+		barrierStateKey,
+		appenderStateKey,
+		streamHubStateKey,
+		surfaceRootNodeIDStateKey,
+		teamMemberTraceRootStateKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// cloneStateValue isolates common mutable custom state for invocation views.
+// Known mutable types such as bytes.Buffer, strings.Builder, and big.Int are
+// copied explicitly. Maps, slices, pointers, arrays, and fully exported
+// structs are cloned recursively. Opaque structs with unexported fields are
+// kept by reference to avoid unsafe copies of no-copy state such as locks.
+func cloneStateValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	cloned, ok := cloneStateReflectValue(
+		reflect.ValueOf(value),
+		map[reflectVisit]reflect.Value{},
+	)
+	if !ok {
+		return value
+	}
+	return cloned.Interface()
+}
+
+type reflectVisit struct {
+	typ      reflect.Type
+	ptr      uintptr
+	length   int
+	capacity int
+}
+
+func cloneStateReflectValue(
+	value reflect.Value,
+	visited map[reflectVisit]reflect.Value,
+) (reflect.Value, bool) {
+	if value.IsValid() && value.CanInterface() {
+		if cloned, ok := cloneKnownStateValue(value.Interface()); ok {
+			return reflect.ValueOf(cloned), true
+		}
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return value, true
+		}
+		return cloneStateReflectValue(value.Elem(), visited)
+	case reflect.Pointer:
+		return cloneStatePointerValue(value, visited)
+	case reflect.Map:
+		return cloneStateMapValue(value, visited)
+	case reflect.Slice:
+		return cloneStateSliceValue(value, visited)
+	case reflect.Array:
+		return cloneStateArrayValue(value, visited)
+	case reflect.Struct:
+		return cloneStateStructValue(value, visited)
+	default:
+		return value, true
+	}
+}
+
+func cloneKnownStateValue(value any) (any, bool) {
+	switch v := value.(type) {
+	case *bytes.Buffer:
+		if v == nil {
+			return v, true
+		}
+		return bytes.NewBuffer(cloneBytes(v.Bytes())), true
+	case bytes.Buffer:
+		return *bytes.NewBuffer(cloneBytes(v.Bytes())), true
+	case *strings.Builder:
+		if v == nil {
+			return v, true
+		}
+		var cloned strings.Builder
+		_, _ = cloned.WriteString(v.String())
+		return &cloned, true
+	case *big.Int:
+		if v == nil {
+			return v, true
+		}
+		return new(big.Int).Set(v), true
+	case big.Int:
+		return *new(big.Int).Set(&v), true
+	default:
+		return nil, false
+	}
+}
+
+func cloneBytes(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	cloned := make([]byte, len(value))
+	copy(cloned, value)
+	return cloned
+}
+
+func cloneStatePointerValue(
+	value reflect.Value,
+	visited map[reflectVisit]reflect.Value,
+) (reflect.Value, bool) {
+	if value.IsNil() {
+		return value, true
+	}
+	visit := reflectVisit{
+		typ: value.Type(),
+		ptr: value.Pointer(),
+	}
+	if cloned, ok := visited[visit]; ok {
+		return cloned, true
+	}
+	cloned := reflect.New(value.Type().Elem())
+	visited[visit] = cloned
+	elem, ok := cloneStateReflectValue(value.Elem(), visited)
+	if !ok {
+		delete(visited, visit)
+		return value, false
+	}
+	if elem.Type().AssignableTo(cloned.Elem().Type()) {
+		cloned.Elem().Set(elem)
+		return cloneStateAsType(cloned, value.Type())
+	}
+	if elem.Type().ConvertibleTo(cloned.Elem().Type()) {
+		cloned.Elem().Set(elem.Convert(cloned.Elem().Type()))
+		return cloneStateAsType(cloned, value.Type())
+	}
+	return value, false
+}
+
+func cloneStateAsType(
+	value reflect.Value,
+	typ reflect.Type,
+) (reflect.Value, bool) {
+	if value.Type().AssignableTo(typ) {
+		return value, true
+	}
+	if value.Type().ConvertibleTo(typ) {
+		return value.Convert(typ), true
+	}
+	return value, false
+}
+
+func cloneStateMapValue(
+	value reflect.Value,
+	visited map[reflectVisit]reflect.Value,
+) (reflect.Value, bool) {
+	if value.IsNil() {
+		return value, true
+	}
+	visit := reflectVisit{
+		typ: value.Type(),
+		ptr: value.Pointer(),
+	}
+	if cloned, ok := visited[visit]; ok {
+		return cloned, true
+	}
+	cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+	visited[visit] = cloned
+	iter := value.MapRange()
+	for iter.Next() {
+		// Keep keys unchanged; cloning pointer keys changes lookup identity.
+		cloned.SetMapIndex(
+			iter.Key(),
+			cloneStateElement(iter.Value(), value.Type().Elem(), visited),
+		)
+	}
+	return cloned, true
+}
+
+func cloneStateElement(
+	value reflect.Value,
+	elemType reflect.Type,
+	visited map[reflectVisit]reflect.Value,
+) reflect.Value {
+	cloned, ok := cloneStateReflectValue(value, visited)
+	if !ok {
+		return value
+	}
+	if cloned.Type().AssignableTo(elemType) {
+		return cloned
+	}
+	if cloned.Type().ConvertibleTo(elemType) {
+		return cloned.Convert(elemType)
+	}
+	return value
+}
+
+func cloneStateSliceValue(
+	value reflect.Value,
+	visited map[reflectVisit]reflect.Value,
+) (reflect.Value, bool) {
+	if value.IsNil() {
+		return value, true
+	}
+	visit := reflectVisit{
+		typ:      value.Type(),
+		ptr:      value.Pointer(),
+		length:   value.Len(),
+		capacity: value.Cap(),
+	}
+	if cloned, ok := visited[visit]; ok {
+		return cloned, true
+	}
+	cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+	visited[visit] = cloned
+	for i := 0; i < value.Len(); i++ {
+		cloned.Index(i).Set(
+			cloneStateElement(
+				value.Index(i),
+				value.Type().Elem(),
+				visited,
+			),
+		)
+	}
+	return cloned, true
+}
+
+func cloneStateArrayValue(
+	value reflect.Value,
+	visited map[reflectVisit]reflect.Value,
+) (reflect.Value, bool) {
+	cloned := reflect.New(value.Type()).Elem()
+	for i := 0; i < value.Len(); i++ {
+		cloned.Index(i).Set(
+			cloneStateElement(
+				value.Index(i),
+				value.Type().Elem(),
+				visited,
+			),
+		)
+	}
+	return cloned, true
+}
+
+func cloneStateStructValue(
+	value reflect.Value,
+	visited map[reflectVisit]reflect.Value,
+) (reflect.Value, bool) {
+	for i := 0; i < value.NumField(); i++ {
+		if value.Type().Field(i).PkgPath != "" {
+			// Opaque structs may carry no-copy state such as locks.
+			return value, false
+		}
+	}
+	cloned := reflect.New(value.Type()).Elem()
+	for i := 0; i < value.NumField(); i++ {
+		target := cloned.Field(i)
+		target.Set(
+			cloneStateElement(
+				value.Field(i),
+				target.Type(),
+				visited,
+			),
+		)
+	}
+	return cloned, true
 }
 
 // GetEventFilterKey get event filter key.

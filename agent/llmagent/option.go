@@ -14,11 +14,12 @@ import (
 	"reflect"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/extension"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
-	"trpc.group/trpc-go/trpc-agent-go/internal/jsonschema"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
+	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -120,6 +121,26 @@ type EventMessageProjector func(
 	msg model.Message,
 ) model.Message
 
+// ToolResultCompactionSkipRecentFunc determines how many recent events should
+// be protected from historical tool-result compaction.
+type ToolResultCompactionSkipRecentFunc func(events []event.Event) int
+
+// ToolResultCompactionConfig declares tool-name based compaction rules.
+type ToolResultCompactionConfig struct {
+	// ForceCleanToolNames lists tool names whose results should always be
+	// compacted to a placeholder when context compaction is enabled.
+	ForceCleanToolNames []string
+	// KeepToolNames lists tool names whose results should be left untouched by
+	// context compaction. Model-level token tailoring may still remove older
+	// rounds if the final request is too large.
+	KeepToolNames []string
+	// SkipRecentFunc returns how many tail events should be treated as recent
+	// and protected from historical tool-result compaction. It only affects
+	// historical placeholder replacement; oversized tool-result truncation can
+	// still apply to recent events.
+	SkipRecentFunc ToolResultCompactionSkipRecentFunc
+}
+
 var (
 	defaultOptions = Options{
 		ChannelBufferSize:                    defaultChannelBufferSize,
@@ -176,6 +197,8 @@ type Options struct {
 	Model model.Model
 	// Models is a map of models that can be switched by name at runtime.
 	Models map[string]model.Model
+	// ModelSelector selects the default model for each LLMAgent LLM call.
+	ModelSelector agent.ModelSelector
 	// Description is a description of the agent.
 	Description string
 	// Instruction is the instruction template for the agent.
@@ -332,9 +355,13 @@ type Options struct {
 	// Default is 0; the recommended value to pass when opting in is
 	// processor.DefaultContextCompactionOversizedToolResultMaxTokens (8192).
 	ContextCompactionOversizedToolResultMaxTokens int
-	// ContextCompactionTokenCounter estimates tool-result size for context
-	// compaction. When nil, SimpleTokenCounter is used.
+	// ContextCompactionTokenCounter estimates request and tool-result size for
+	// context compaction. Compaction thresholds are compared against this
+	// estimate, not provider-reported usage tokens. When nil,
+	// SimpleTokenCounter is used.
 	ContextCompactionTokenCounter model.TokenCounter
+	// ToolResultCompactionConfig declares tool-name based compaction rules.
+	ToolResultCompactionConfig *ToolResultCompactionConfig
 	// summaryFormatter allows custom formatting of session summary content.
 	// When nil (default), uses the default formatSummaryContent function.
 	summaryFormatter func(summary string) string
@@ -466,6 +493,22 @@ type Options struct {
 	// skillRunStager overrides how skill_run materializes a skill in
 	// the workspace.
 	skillRunStager toolskill.SkillStager
+	// workspaceExecAllowedCommands restricts workspace_exec to
+	// allowlisted commands. When non-empty the user's command is
+	// parsed by internal/shellsafe before execution and only simple
+	// commands joined by safe operators (|, &&, ||, ;) whose
+	// executable is in the list are accepted.
+	workspaceExecAllowedCommands []string
+	// workspaceExecDeniedCommands rejects denylisted commands for
+	// workspace_exec. The same shellsafe structural rules apply,
+	// plus an unconditional built-in deny set of shell wrappers and
+	// re-executing builtins (sh, bash, zsh, busybox, eval, exec,
+	// command, source, xargs, env, sudo, ...) that cannot be
+	// re-enabled via workspaceExecAllowedCommands; allow-list
+	// entries for those names are ignored. Precedence is
+	// explicit Deny > implicit deny > explicit Allow > implicit
+	// allow.
+	workspaceExecDeniedCommands []string
 	// workspaceBootstrap declares static files and commands that
 	// must be present/executed in the workspace before user
 	// commands run. When non-empty it is converted into a Provider
@@ -530,6 +573,27 @@ type Options struct {
 	// Set to a non-empty string to customize the guidance given to the
 	// model after tool calls.
 	PostToolPrompt string
+
+	// extensions holds the agent-scoped extensions registered via
+	// WithExtensions. They are folded into a single
+	// extension.Contributions during New() and their callbacks are
+	// merged into AgentCallbacks / ModelCallbacks / ToolCallbacks
+	// (after any user-provided callbacks); the tools they
+	// contribute via extension.Registry.Tools land in
+	// extensionContributedTools.
+	//
+	// Kept private so callers go through WithExtensions and the
+	// invariants documented there (de-dup by name, agent-scope
+	// semantics, …).
+	extensions []extension.Extension
+
+	// extensionContributedTools caches the tools harvested from
+	// the extensions' Register calls. Tool-surface builders append
+	// this cache after user/framework tools so hot-reload paths
+	// (AddToolSet → refreshToolsLocked) and per-invocation framework
+	// tools (transfer_to_agent, await_user_reply, ...) continue to
+	// share the same extension tool set.
+	extensionContributedTools []tool.Tool
 }
 
 // SkillToolProfile controls which framework-provided skill tools are enabled.
@@ -586,6 +650,16 @@ func WithModel(model model.Model) Option {
 func WithModels(models map[string]model.Model) Option {
 	return func(opts *Options) {
 		opts.Models = models
+	}
+}
+
+// WithModelSelector sets the default model selector for this LLMAgent.
+// The selector is used only when a run-level selector or explicit run/surface
+// model override is not present. Returning nil with nil error keeps the base
+// model for the call.
+func WithModelSelector(selector agent.ModelSelector) Option {
+	return func(opts *Options) {
+		opts.ModelSelector = selector
 	}
 }
 
@@ -960,8 +1034,24 @@ func WithSkillLoadToolDescription(
 	}
 }
 
-// WithSkillRunAllowedCommands restricts skill_run to a single,
-// allowlisted command (no shell syntax) when non-empty.
+// WithSkillRunAllowedCommands restricts skill_run to an
+// allowlisted set of commands (no shell syntax) when non-empty.
+//
+// When either an allow or deny list is configured the per-call env
+// is also scrubbed: every shell-startup variable (HOME, BASH_ENV,
+// ENV, SHELL, PROMPT_COMMAND, …), the executable search path
+// (PATH), the dynamic-linker hijack vars (LD_PRELOAD,
+// LD_LIBRARY_PATH, DYLD_*), the word-splitting vars (IFS, CDPATH,
+// GLOBIGNORE), every BASH_FUNC_* Shellshock entry and every key
+// that does not match the POSIX env-name grammar
+// (/^[A-Za-z_][A-Za-z0-9_]*$/) is dropped before the per-call
+// PATH is rebuilt. Without this scrub a model-supplied
+// `env: {"PATH": "./bin"}` would survive into the spawned skill
+// and cause an allowed bare command (curl, python, git, …) to
+// resolve at an attacker-controlled directory ahead of the
+// skill's vetted bin (issue #1862). The scrub uses
+// internal/envscrub - the same package tool/workspaceexec uses for
+// its own policy mode - so the two policies stay in sync.
 func WithSkillRunAllowedCommands(cmds ...string) Option {
 	return func(opts *Options) {
 		opts.skillRunAllowedCommands = append(
@@ -970,8 +1060,10 @@ func WithSkillRunAllowedCommands(cmds ...string) Option {
 	}
 }
 
-// WithSkillRunDeniedCommands rejects a single, denylisted command (no shell
-// syntax) when non-empty.
+// WithSkillRunDeniedCommands rejects a denylisted set of commands
+// (no shell syntax) when non-empty. See WithSkillRunAllowedCommands
+// for the env scrubbing that is enabled whenever either list is
+// configured.
 func WithSkillRunDeniedCommands(cmds ...string) Option {
 	return func(opts *Options) {
 		opts.skillRunDeniedCommands = append(
@@ -1014,6 +1106,117 @@ func WithSkillRunRequireSkillLoaded(enable bool) Option {
 func WithSkillRunStager(stager toolskill.SkillStager) Option {
 	return func(opts *Options) {
 		opts.skillRunStager = stager
+	}
+}
+
+// WithWorkspaceExecAllowedCommands restricts workspace_exec to
+// commands matching cmds.
+//
+// When non-empty the user's command is parsed by internal/shellsafe
+// (a conservative hand-rolled lexer) and only pipelines composed of
+// allowed commands joined by safe operators (|, &&, ||, ;) are
+// executed. Constructs that could bypass the policy - command and
+// parameter substitution, redirections, subshells and friends - are
+// rejected.
+//
+// Matching is intentionally asymmetric: an allow entry "echo" lets
+// through bare "echo" but does NOT match "./echo", "work/bin/echo"
+// or "/usr/bin/echo", so a workspace-controlled file with an
+// allowlisted basename cannot smuggle past the policy. If you want
+// to permit a specific absolute or relative path, list that exact
+// path here. Deny entries, by contrast, match both the verbatim
+// first word and its basename, so a deny of "curl" blocks "curl",
+// "/usr/bin/curl" and "./curl" alike.
+//
+// Precedence is explicit Deny > implicit deny > explicit Allow >
+// implicit allow. The unconditional built-in deny set covers
+// shell wrappers and re-executing builtins (sh, bash, zsh,
+// busybox, eval, exec, command, source, xargs, env, nohup,
+// timeout, sudo, time, nice, ionice, taskset, stdbuf, strace,
+// ltrace, script, flock, ...) together with the shell builtins
+// that can register code to run later or mutate later-segment
+// resolution (trap, alias, unalias, enable, export, unset,
+// readonly, local, declare, typeset, set, shopt, hash, cd,
+// pushd, popd) and the shell builtins that assign to a shell
+// variable, which on a single-process shell can rewrite PATH or
+// other resolution state before a later allowed segment runs
+// (printf, read, getopts, let, mapfile, readarray; the bash
+// extensions of this set matter because /bin/sh is bash on
+// macOS and on many container images). They are blocked
+// whenever a policy is active and cannot be re-enabled by listing
+// them here; allow-list entries for them are ignored. If you
+// legitimately need one of them, wrap the desired use in an
+// auditable workspace script and allow the script instead.
+//
+// Deny and the built-in deny set are case-folded on every OS
+// (matters on macOS's default case-insensitive APFS and on
+// Windows; on Linux the fold is defence-in-depth against a
+// workspace-controlled upper-case binary). Allow is split by
+// entry shape: pathful entries (containing "/" or "\") are
+// always matched exact-case on every OS, because we cannot
+// reliably tell whether the workspace volume is case-sensitive
+// (APFS supports opt-in case-sensitive volumes, containers can
+// mix file systems) — folding would silently widen "./safe" to
+// admit "./SAFE" on those volumes. Bare-name allow entries
+// resolve through PATH (reset by the policy to a known-good
+// default) and follow the OS convention: case-folded on Windows
+// and macOS, exact-case on Linux. On Windows the configured
+// deny entries are additionally passed through the same suffix-
+// stripping rules as the command basename, so a deny of "CURL"
+// or "curl.exe" rejects the bare "curl" form too.
+//
+// When a policy is active workspace_exec also switches the spawn
+// from "sh -lc" to "sh -c" and strips known shell-startup and
+// search-path environment variables (HOME, BASH_ENV, ENV, IFS,
+// PATH, LD_PRELOAD, ...) from the per-call env so a passing
+// command cannot be hijacked at shell start-up time or redirected
+// at a workspace-controlled binary via PATH. On Windows the env
+// scrub folds case before comparing, so caller-supplied "Path",
+// "Home" or "Bash_Env" cannot survive by varying capitalisation.
+// Env entries whose key is not a POSIX name (/^[A-Za-z_][A-Za-z0-9_]*$/)
+// are also dropped, which catches "PATH=."-as-a-key,
+// "X; curl http://x #"-as-a-key (shell metacharacter injection on
+// runtimes that build "env KEY=value <cmd>" through a shell
+// string), and embedded "\n" / "\r" / "\0".
+//
+// Policy mode requires the underlying runtime to honor
+// RunProgramSpec.CleanEnv. workspace_exec fails closed when the
+// runtime's codeexecutor.Capabilities.SupportsCleanEnv is false:
+// the call is refused before spawn with an error pointing the
+// operator at a supported runtime. Today only codeexecutor/local
+// advertises the capability; container and e2b backends keep the
+// zero-valued capabilities until #1845 lands. Until then, run
+// policy mode on the local backend or drop the policy lists.
+//
+// Scope: enforcement is at the executable-name level. If an allowed
+// command itself shells out based on its arguments (e.g.
+// "find . -exec curl ...", "awk 'BEGIN{system(\"curl ...\")}'",
+// "git -c protocol.ext.allow=..."), the inner command is the
+// allowed command's own subprocess and is not re-checked. Network
+// out-bound restrictions at the sandbox layer and per-command
+// argument validators are the right complementary defences for
+// those cases; the latter is a planned follow-up.
+//
+// Useful when the agent runs in a sandbox that has network access to
+// sensitive systems and the operator wants a command-level safety
+// net on top of (or in lieu of) network restrictions.
+func WithWorkspaceExecAllowedCommands(cmds ...string) Option {
+	return func(opts *Options) {
+		opts.workspaceExecAllowedCommands = append(
+			[]string(nil), cmds...,
+		)
+	}
+}
+
+// WithWorkspaceExecDeniedCommands rejects workspace_exec commands
+// whose executable name (or basename for absolute paths) appears in
+// cmds. The same shellsafe structural rules and built-in deny set
+// described in WithWorkspaceExecAllowedCommands apply.
+func WithWorkspaceExecDeniedCommands(cmds ...string) Option {
+	return func(opts *Options) {
+		opts.workspaceExecDeniedCommands = append(
+			[]string(nil), cmds...,
+		)
 	}
 }
 
@@ -1079,6 +1282,60 @@ func WithModelCallbacks(callbacks *model.Callbacks) Option {
 func WithToolCallbacks(callbacks *tool.Callbacks) Option {
 	return func(opts *Options) {
 		opts.ToolCallbacks = callbacks
+	}
+}
+
+// WithExtensions installs agent-scoped extensions on this
+// LLMAgent.
+//
+// An extension.Extension is a composable capability bundle that
+// can contribute any combination of tools and lifecycle callbacks
+// (agent / model / tool) to a single LLMAgent. Compared with
+// plugin.Plugin — which is runner-scoped and limited to callback
+// registration — extensions:
+//
+//   - are scoped per-agent, so multi-agent setups can wire
+//     different capabilities onto different agents without
+//     cross-talk;
+//   - can contribute tools directly through extension.Registry.Tools,
+//     not only callbacks, so a single install handles the common
+//     "tool + matching callback" pattern.
+//
+// What LLMAgent consumes from each extension:
+//
+//   - BeforeAgent / AfterAgent callbacks are merged into the
+//     agent's AgentCallbacks chain after any user-supplied
+//     callbacks (user → extension order), so user code keeps the
+//     first chance to short-circuit.
+//   - BeforeModel / AfterModel callbacks are merged into the
+//     agent's ModelCallbacks chain with the same user → extension
+//     ordering.
+//   - BeforeTool / AfterTool callbacks are merged into the agent's
+//     ToolCallbacks chain with the same user → extension ordering.
+//   - Tools contributed via extension.Registry.Tools are appended
+//     to the agent's tool list on equal footing with WithKnowledge
+//     / WithSkills auto-injected tools — they are framework-managed
+//     and NOT counted as user-registered for UserTools / FilterTools
+//     purposes. Name collisions against user or other framework
+//     tools resolve earlier-wins (the extension's copy is dropped).
+//
+// Extensions installed here are scoped to this LLMAgent only. They
+// do NOT propagate to sub-agents (chain / parallel / cycle / graph);
+// install an extension on each agent that needs it, or use
+// plugin.Plugin via runner.WithPlugins for cross-cutting concerns
+// that must observe every agent on a runner.
+//
+// Calling WithExtensions multiple times appends; nil entries are
+// silently skipped; duplicates by Name are rejected at New() time
+// (panic), matching runner-level plugin semantics.
+func WithExtensions(extensions ...extension.Extension) Option {
+	return func(opts *Options) {
+		for _, e := range extensions {
+			if e == nil {
+				continue
+			}
+			opts.extensions = append(opts.extensions, e)
+		}
 	}
 }
 
@@ -1157,18 +1414,12 @@ func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict b
 		if schema == nil {
 			return
 		}
-		if name == "" {
-			name = "output"
-		}
-		opts.StructuredOutput = &model.StructuredOutput{
-			Type: model.StructuredOutputJSONSchema,
-			JSONSchema: &model.JSONSchemaConfig{
-				Name:        name,
-				Schema:      schema,
-				Strict:      strict,
-				Description: description,
-			},
-		}
+		opts.StructuredOutput = newStructuredOutput(
+			structuredoutput.Name(name),
+			schema,
+			strict,
+			description,
+		)
 	}
 }
 
@@ -1177,37 +1428,27 @@ func WithStructuredOutputJSONSchema(name string, schema map[string]any, strict b
 // Provide a typed zero-value pointer like: new(MyStruct) or (*MyStruct)(nil) and we infer the type.
 func WithStructuredOutputJSON(examplePtr any, strict bool, description string) Option {
 	return func(opts *Options) {
-		// Infer reflect.Type from examplePtr.
-		var t reflect.Type
-		if examplePtr == nil {
+		name, schema, t := structuredoutput.FromType(examplePtr, strict)
+		if schema == nil {
 			return
 		}
-		if rt := reflect.TypeOf(examplePtr); rt.Kind() == reflect.Pointer {
-			t = rt
-		} else {
-			t = reflect.PointerTo(rt)
-		}
-		// Generate a robust JSON schema via the generator.
-		genOpts := make([]jsonschema.Option, 0, 1)
-		if strict {
-			genOpts = append(genOpts, jsonschema.WithStrict())
-		}
-		gen := jsonschema.New(genOpts...)
-		schema := gen.Generate(t.Elem())
-		name := t.Elem().Name()
-		if name == "" {
-			name = "output"
-		}
-		opts.StructuredOutput = &model.StructuredOutput{
-			Type: model.StructuredOutputJSONSchema,
-			JSONSchema: &model.JSONSchemaConfig{
-				Name:        name,
-				Schema:      schema,
-				Strict:      strict,
-				Description: description,
-			},
-		}
+		opts.StructuredOutput = newStructuredOutput(name, schema, strict, description)
 		opts.StructuredOutputType = t
+	}
+}
+
+func newStructuredOutput(name string, schema map[string]any, strict bool, description string) *model.StructuredOutput {
+	if schema == nil {
+		return nil
+	}
+	return &model.StructuredOutput{
+		Type: model.StructuredOutputJSONSchema,
+		JSONSchema: &model.JSONSchemaConfig{
+			Name:        name,
+			Schema:      schema,
+			Strict:      strict,
+			Description: description,
+		},
 	}
 }
 
@@ -1344,11 +1585,36 @@ func WithContextCompactionOversizedToolResultMaxTokens(tokens int) Option {
 }
 
 // WithContextCompactionTokenCounter sets the token counter used by context
-// compaction to decide whether tool results exceed configured budgets.
+// compaction to evaluate request thresholds and tool-result budgets. These
+// budgets use the counter's estimated token count, not provider-reported usage
+// tokens. For SimpleTokenCounter, WithApproxRunesPerToken is runes per token
+// (estimated tokens = counted runes / value).
 func WithContextCompactionTokenCounter(counter model.TokenCounter) Option {
 	return func(opts *Options) {
 		if counter != nil {
 			opts.ContextCompactionTokenCounter = counter
+		}
+	}
+}
+
+// WithToolResultCompactionConfig sets tool-name based compaction rules.
+func WithToolResultCompactionConfig(
+	config *ToolResultCompactionConfig,
+) Option {
+	return func(opts *Options) {
+		if config == nil {
+			return
+		}
+		opts.ToolResultCompactionConfig = &ToolResultCompactionConfig{
+			ForceCleanToolNames: append(
+				[]string(nil),
+				config.ForceCleanToolNames...,
+			),
+			KeepToolNames: append(
+				[]string(nil),
+				config.KeepToolNames...,
+			),
+			SkipRecentFunc: config.SkipRecentFunc,
 		}
 	}
 }

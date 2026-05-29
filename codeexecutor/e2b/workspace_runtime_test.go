@@ -300,6 +300,62 @@ func TestCreateAndCleanupWorkspace(t *testing.T) {
 	require.NoError(t, c.Cleanup(ctx, ws))
 }
 
+func TestCreateWorkspace_PerSessionPersistence(t *testing.T) {
+	srv := newMockE2BServer(t, func(code string) string { return "" })
+	defer srv.close()
+	c := newMockedExecutor(t, srv, WithWorkspacePersistence(WorkspacePersistencePerSession))
+	ctx := context.Background()
+
+	// First call creates the workspace with a deterministic hash-based path.
+	ws1, err := c.CreateWorkspace(ctx, "session-xyz", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	assert.Equal(t, "session-xyz", ws1.ID)
+	// SHA-256("session-xyz")[:16 hex] = "090d29dd6bd25e05"
+	assert.Equal(t, defaultSandboxRunBase+"/ws_090d29dd6bd25e05", ws1.Path)
+
+	// Second call with the same exec ID returns the exact same path.
+	ws2, err := c.CreateWorkspace(ctx, "session-xyz", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	assert.Equal(t, ws1.Path, ws2.Path)
+
+	// Different exec ID gets a different stable path.
+	ws3, err := c.CreateWorkspace(ctx, "other-session", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	// SHA-256("other-session")[:16 hex] = "5f711b23ee4fecbb"
+	assert.Equal(t, defaultSandboxRunBase+"/ws_5f711b23ee4fecbb", ws3.Path)
+	assert.NotEqual(t, ws1.Path, ws3.Path)
+
+	// Collision-prone inputs that sanitize() would merge are now distinct.
+	wsA, _ := c.CreateWorkspace(ctx, "a/b", codeexecutor.WorkspacePolicy{})
+	wsB, _ := c.CreateWorkspace(ctx, "a_b", codeexecutor.WorkspacePolicy{})
+	assert.NotEqual(t, wsA.Path, wsB.Path)
+}
+
+func TestCreateWorkspace_DefaultIsPerTurn(t *testing.T) {
+	srv := newMockE2BServer(t, func(code string) string { return "" })
+	defer srv.close()
+	c := newMockedExecutor(t, srv) // default: WorkspacePersistencePerTurn
+	ctx := context.Background()
+
+	ws1, err := c.CreateWorkspace(ctx, "same-id", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	ws2, err := c.CreateWorkspace(ctx, "same-id", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Default behavior: each call creates a unique path (timestamp suffix).
+	assert.NotEqual(t, ws1.Path, ws2.Path)
+}
+
+func TestCreateWorkspace_PerSessionRejectsEmptyID(t *testing.T) {
+	srv := newMockE2BServer(t, func(code string) string { return "" })
+	defer srv.close()
+	c := newMockedExecutor(t, srv, WithWorkspacePersistence(WorkspacePersistencePerSession))
+
+	_, err := c.CreateWorkspace(context.Background(), "", codeexecutor.WorkspacePolicy{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "execID must not be empty")
+}
+
 func TestPutFilesAndPutDirectory(t *testing.T) {
 	srv := newMockE2BServer(t, func(code string) string { return "" })
 	defer srv.close()
@@ -431,12 +487,14 @@ func TestCollect_ReadsFiles(t *testing.T) {
 
 func TestCollect_FiltersPathsOutsideWorkspace(t *testing.T) {
 	calls := 0
+	tmpName := codeexecutor.MetadataTempFileName()
 	srv := newMockE2BServer(t, func(code string) string {
 		calls++
 		if calls == 1 {
 			return ndjsonLines(stdoutMsg(
 				"__E2B_BASE__=/tmp/ws\n" +
 					"/tmp/ws/out/safe.txt\n" +
+					"/tmp/ws/" + tmpName + "\n" +
 					"/etc/passwd\n" +
 					"/tmp/wsmalicious/x.txt\n" +
 					"/tmp/ws/../escaped.txt\n"))
@@ -462,12 +520,14 @@ func TestCollect_FiltersPathsOutsideWorkspace(t *testing.T) {
 
 func TestCollectOutputs_FiltersPathsOutsideWorkspace(t *testing.T) {
 	calls := 0
+	tmpName := codeexecutor.MetadataTempFileName()
 	srv := newMockE2BServer(t, func(code string) string {
 		calls++
 		if calls == 1 {
 			return ndjsonLines(stdoutMsg(
 				"__E2B_BASE__=/tmp/ws\n" +
 					"/etc/passwd\n" +
+					"/tmp/ws/" + tmpName + "\n" +
 					"/tmp/ws/out/ok.txt\n"))
 		}
 		body := strings.Join([]string{
@@ -754,6 +814,84 @@ func TestPinnedArtifactVersion(t *testing.T) {
 	assert.Nil(t, pinnedArtifactVersion(md2, "name", "t"))
 }
 
+func TestSaveWorkspaceMetadata_ReturnsCommitExitError(t *testing.T) {
+	srv := newMockE2BServer(t, func(code string) string {
+		switch {
+		case strings.Contains(code, "base64 -d >"):
+			return ndjsonLines(stdoutMsg(""))
+		case strings.Contains(code, "mv -f"):
+			require.Contains(t, code, "metadata path is a directory")
+			stdout := strings.Join([]string{
+				sentinelStdoutBegin,
+				sentinelStdoutEnd,
+				sentinelExitPrefix + "1",
+			}, "\n") + "\n"
+			stderr := strings.Join([]string{
+				sentinelStderrBegin,
+				"mv failed",
+				sentinelStderrEnd,
+			}, "\n") + "\n"
+			return ndjsonLines(stdoutMsg(stdout), stderrMsg(stderr))
+		case strings.Contains(code, "rm -f"):
+			stdout := strings.Join([]string{
+				sentinelStdoutBegin,
+				sentinelStdoutEnd,
+				sentinelExitPrefix + "0",
+			}, "\n") + "\n"
+			stderr := strings.Join([]string{
+				sentinelStderrBegin,
+				sentinelStderrEnd,
+			}, "\n") + "\n"
+			return ndjsonLines(stdoutMsg(stdout), stderrMsg(stderr))
+		default:
+			return ndjsonLines(stdoutMsg(""))
+		}
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+
+	err := c.ensureRuntime().saveWorkspaceMetadata(
+		context.Background(),
+		codeexecutor.Workspace{ID: "w", Path: "/workspace"},
+		codeexecutor.WorkspaceMetadata{},
+	)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exit code 1")
+}
+
+func TestSaveWorkspaceMetadata_ReturnsWriteError(t *testing.T) {
+	srv := newMockE2BServer(t, func(code string) string {
+		if strings.Contains(code, "base64 -d >") {
+			return ndjsonLines(errorMsg(
+				"RuntimeError",
+				"write failed",
+				"",
+			))
+		}
+		return ndjsonLines(stdoutMsg(""))
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+
+	err := c.ensureRuntime().saveWorkspaceMetadata(
+		context.Background(),
+		codeexecutor.Workspace{ID: "w", Path: "/workspace"},
+		codeexecutor.WorkspaceMetadata{},
+	)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "write failed")
+}
+
+func TestCleanupMetadataTempEmptyPath(t *testing.T) {
+	c := &CodeExecutor{}
+	rt := c.ensureRuntime()
+	committed := false
+
+	rt.cleanupMetadataTemp(context.Background(), "", &committed)
+}
+
 func TestSanitize_Unicode(t *testing.T) {
 	assert.Equal(t, "_abc_",
 		sanitize("中abc中"),
@@ -838,6 +976,31 @@ func TestLoadWorkspaceMetadata_ParsesJSON(t *testing.T) {
 	err := c.StageInputs(context.Background(), ws,
 		[]codeexecutor.InputSpec{{From: "workspace://data.txt"}})
 	require.NoError(t, err)
+}
+
+func TestLoadWorkspaceMetadata_RecoversCorruptJSON(t *testing.T) {
+	srv := newMockE2BServer(t, func(code string) string {
+		if strings.Contains(code, "metadata.json") {
+			body := strings.Join([]string{
+				"__E2B_SIZE__=9",
+				"__E2B_B64_BEGIN__",
+				base64.StdEncoding.EncodeToString([]byte("not-json}")),
+				"__E2B_B64_END__",
+			}, "\n") + "\n"
+			return ndjsonLines(stdoutMsg(body))
+		}
+		return ""
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+
+	md, err := c.ensureRuntime().loadWorkspaceMetadata(
+		context.Background(),
+		codeexecutor.Workspace{ID: "x", Path: "/tmp/ws"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, md.Version)
+	require.NotNil(t, md.Skills)
 }
 
 func TestCollectOutputs_LimitsAndNameTemplate(t *testing.T) {

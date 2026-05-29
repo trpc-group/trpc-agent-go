@@ -36,6 +36,20 @@ func (s stubTool) Call(_ context.Context, _ []byte) (any, error) { return nil, n
 // Declaration returns the tool declaration.
 func (s stubTool) Declaration() *tool.Declaration { return s.decl }
 
+func TestConvertToolsSortsByKeyAndSkipsInvalidTools(t *testing.T) {
+	toolsMap := map[string]tool.Tool{
+		"b-key": stubTool{decl: &tool.Declaration{Name: "alpha"}},
+		"a-key": stubTool{decl: &tool.Declaration{Name: "zeta"}},
+		"c-key": stubTool{},
+		"skip":  nil,
+	}
+
+	result := convertTools(toolsMap)
+	require.Len(t, result, 2)
+	require.Equal(t, "zeta", result[0].Function.Name)
+	require.Equal(t, "alpha", result[1].Function.Name)
+}
+
 // testStubCounter is a stub TokenCounter for testing token tailoring.
 type testStubCounter struct{}
 
@@ -58,6 +72,14 @@ func (testStubStrategy) TailorMessages(ctx context.Context, messages []model.Mes
 		return messages, nil
 	}
 	return append([]model.Message{messages[0]}, messages[2:]...), nil
+}
+
+type overflowTailoringStrategy struct {
+	tailored []model.Message
+}
+
+func (s overflowTailoringStrategy) TailorMessages(ctx context.Context, messages []model.Message, maxTokens int) ([]model.Message, error) {
+	return s.tailored, fmt.Errorf("minimal protected context exceeds token budget")
 }
 
 // testErrorStrategy is a stub TailoringStrategy that returns an error.
@@ -1176,6 +1198,28 @@ func TestWithTokenTailoring(t *testing.T) {
 	if len(capturedReq.Messages) != 1 {
 		t.Errorf("Expected 1 message after tailoring, got %d", len(capturedReq.Messages))
 	}
+}
+
+func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
+	tailored := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("q"),
+	}
+	m := &Model{
+		name:                 "test-model",
+		enableTokenTailoring: true,
+		maxInputTokens:       1,
+		tailoringStrategy:    overflowTailoringStrategy{tailored: tailored},
+	}
+	req := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("old"),
+		model.NewUserMessage("q"),
+	}}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.Equal(t, tailored, req.Messages)
 }
 
 func TestWithEnableTokenTailoringDisabled(t *testing.T) {

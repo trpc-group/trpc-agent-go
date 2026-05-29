@@ -13,10 +13,14 @@ package anthropic
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"mime"
+	"net/http"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -25,6 +29,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -56,6 +61,7 @@ type Model struct {
 	chatStreamCompleteCallback ChatStreamCompleteCallbackFunc
 	enableTokenTailoring       bool                    // Enable automatic token tailoring.
 	maxInputTokens             int                     // Max input tokens for token tailoring.
+	contextWindow              int                     // Context window for this model instance.
 	tokenCounter               model.TokenCounter      // Token counter for token tailoring.
 	tailoringStrategy          model.TailoringStrategy // Tailoring strategy for token tailoring.
 	// Token tailoring budget parameters (instance-level overrides).
@@ -113,6 +119,7 @@ func New(name string, opts ...Option) *Model {
 		chatChunkCallback:          o.chatChunkCallback,
 		chatStreamCompleteCallback: o.chatStreamCompleteCallback,
 		enableTokenTailoring:       o.enableTokenTailoring,
+		contextWindow:              o.contextWindow,
 		tokenCounter:               o.tokenCounter,
 		tailoringStrategy:          o.tailoringStrategy,
 		maxInputTokens:             o.maxInputTokens,
@@ -136,7 +143,8 @@ func New(name string, opts ...Option) *Model {
 // Info returns the model information.
 func (m *Model) Info() model.Info {
 	return model.Info{
-		Name: m.name,
+		Name:          m.name,
+		ContextWindow: m.contextWindow,
 	}
 }
 
@@ -235,7 +243,10 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	maxInputTokens := m.maxInputTokens
 	if maxInputTokens <= 0 {
 		// Auto-calculate based on model context window with custom or default parameters.
-		contextWindow := imodel.ResolveContextWindow(m.name)
+		contextWindow := m.contextWindow
+		if contextWindow <= 0 {
+			contextWindow = imodel.ResolveContextWindow(m.name)
+		}
 		if m.protocolOverheadTokens > 0 || m.reserveOutputTokens > 0 {
 			// Use custom parameters if any are set.
 			maxInputTokens = imodel.CalculateMaxInputTokensWithParams(
@@ -263,6 +274,15 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	// Apply token tailoring.
 	tailored, err := m.tailoringStrategy.TailorMessages(ctx, request.Messages, maxInputTokens)
 	if err != nil {
+		if len(tailored) > 0 {
+			log.WarnContext(
+				ctx,
+				"token tailoring returned best-effort messages in anthropic.Model",
+				err,
+			)
+			request.Messages = tailored
+			return
+		}
 		log.WarnContext(
 			ctx,
 			"token tailoring failed in anthropic.Model",
@@ -1195,18 +1215,9 @@ func convertContentBlock(contents []anthropic.ContentBlockUnion) model.Message {
 
 // convertTools maps our tool declarations to Anthropic tool parameters.
 func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
-	// Extract and sort tool names for stable ordering to improve cache hit rate
-	toolNames := make([]string, 0, len(tools))
-	for name := range tools {
-		toolNames = append(toolNames, name)
-	}
-	sort.Strings(toolNames)
-
-	// Build tools in sorted order
 	var result []anthropic.ToolUnionParam
-	for _, name := range toolNames {
-		tool := tools[name]
-		declaration := tool.Declaration()
+	for _, t := range toolorder.SortedTools(tools) {
+		declaration := t.Declaration()
 		result = append(result, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
 				Name:        declaration.Name,
@@ -1247,15 +1258,31 @@ func convertMessages(messages []model.Message) ([]anthropic.MessageParam, []anth
 	for _, message := range messages {
 		switch message.Role {
 		case model.RoleSystem:
-			systemPrompts = append(systemPrompts, convertSystemMessageContent(message)...)
+			converted, err := convertSystemMessageContent(message)
+			if err != nil {
+				return nil, nil, err
+			}
+			systemPrompts = append(systemPrompts, converted...)
 		case model.RoleAssistant:
-			conversation = append(conversation, convertAssistantMessageContent(message))
+			converted, err := convertAssistantMessageContent(message)
+			if err != nil {
+				return nil, nil, err
+			}
+			conversation = append(conversation, converted)
 		case model.RoleTool:
 			conversation = append(conversation, convertToolResult(message))
 		case model.RoleUser:
-			conversation = append(conversation, convertUserMessage(message))
+			converted, err := convertUserMessage(message)
+			if err != nil {
+				return nil, nil, err
+			}
+			conversation = append(conversation, converted)
 		default:
-			conversation = append(conversation, convertUserMessage(message))
+			converted, err := convertUserMessage(message)
+			if err != nil {
+				return nil, nil, err
+			}
+			conversation = append(conversation, converted)
 		}
 	}
 	// Merge consecutive tool result messages into a single user message to support parallel tool invocation.
@@ -1293,30 +1320,260 @@ func convertMessages(messages []model.Message) ([]anthropic.MessageParam, []anth
 	return mergedConversation, systemPrompts, nil
 }
 
-// convertUserMessage converts a user message by keeping only supported text parts.
-func convertUserMessage(message model.Message) anthropic.MessageParam {
+// convertUserMessage converts a user message including supported multimodal parts.
+func convertUserMessage(message model.Message) (anthropic.MessageParam, error) {
 	blocks := make([]anthropic.ContentBlockParamUnion, 0, 1+len(message.ContentParts))
 	if message.Content != "" {
 		blocks = append(blocks, anthropic.NewTextBlock(message.Content))
 	}
-	for _, part := range message.ContentParts {
-		if part.Type == model.ContentTypeText && part.Text != nil {
-			blocks = append(blocks, anthropic.NewTextBlock(*part.Text))
+	for i, part := range message.ContentParts {
+		block, ok, err := convertUserContentPart(part)
+		if err != nil {
+			return anthropic.MessageParam{}, fmt.Errorf("anthropic: convert user content part %d: %w", i, err)
+		}
+		if ok {
+			blocks = append(blocks, block)
 		}
 	}
-	return anthropic.NewUserMessage(blocks...)
+	return anthropic.NewUserMessage(blocks...), nil
+}
+
+func convertUserContentPart(part model.ContentPart) (anthropic.ContentBlockParamUnion, bool, error) {
+	switch part.Type {
+	case model.ContentTypeText:
+		if part.Text == nil {
+			return anthropic.ContentBlockParamUnion{}, false, nil
+		}
+		return anthropic.NewTextBlock(*part.Text), true, nil
+	case model.ContentTypeImage:
+		block, err := convertImageContentPart(part.Image)
+		return block, true, err
+	case model.ContentTypeFile:
+		block, err := convertFileContentPart(part.File)
+		return block, true, err
+	case model.ContentTypeAudio:
+		return anthropic.ContentBlockParamUnion{}, false, fmt.Errorf("audio content is not supported")
+	default:
+		return anthropic.ContentBlockParamUnion{}, false, fmt.Errorf("unsupported content type %q", part.Type)
+	}
+}
+
+func convertImageContentPart(image *model.Image) (anthropic.ContentBlockParamUnion, error) {
+	if image == nil {
+		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("image payload is nil")
+	}
+	if imageURL := strings.TrimSpace(image.URL); imageURL != "" {
+		if imageURLMediaTypeUnsupported(image) {
+			return anthropic.NewTextBlock(imageURLText(image)), nil
+		}
+		return anthropic.NewImageBlock(anthropic.URLImageSourceParam{URL: imageURL}), nil
+	}
+	if len(image.Data) == 0 {
+		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("image data is empty")
+	}
+	mediaType, err := imageMediaType(image.Format, image.Data)
+	if err != nil {
+		return anthropic.ContentBlockParamUnion{}, err
+	}
+	return anthropic.NewImageBlockBase64(mediaType, base64.StdEncoding.EncodeToString(image.Data)), nil
+}
+
+func imageURLMediaTypeUnsupported(image *model.Image) bool {
+	mediaType := normalizeMediaType(image.Format)
+	if mediaType == "" {
+		mediaType = mediaTypeFromURL(image.URL)
+	}
+	if mediaType == "" {
+		return false
+	}
+	_, err := normalizeImageMediaType(mediaType)
+	return err != nil
+}
+
+func imageURLText(image *model.Image) string {
+	imageURL := strings.TrimSpace(image.URL)
+	format := strings.TrimSpace(image.Format)
+	if format == "" {
+		return "Image URL: " + imageURL
+	}
+	return fmt.Sprintf("Image URL (%s): %s", format, imageURL)
+}
+
+func convertFileContentPart(file *model.File) (anthropic.ContentBlockParamUnion, error) {
+	if file == nil {
+		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file payload is nil")
+	}
+	if file.FileID != "" {
+		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file_id content is not supported")
+	}
+	if len(file.Data) > 0 {
+		mediaType := fileMediaType(file)
+		if imageType, err := normalizeImageMediaType(mediaType); err == nil {
+			return anthropic.NewImageBlockBase64(imageType, base64.StdEncoding.EncodeToString(file.Data)), nil
+		}
+		switch mediaType {
+		case "application/pdf":
+			block := anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
+				Data: base64.StdEncoding.EncodeToString(file.Data),
+			})
+			return applyDocumentTitle(block, file.Name), nil
+		case "text/plain":
+			block := anthropic.NewDocumentBlock(anthropic.PlainTextSourceParam{
+				Data: string(file.Data),
+			})
+			return applyDocumentTitle(block, file.Name), nil
+		default:
+			if isTextLikeFileMediaType(mediaType) {
+				return anthropic.NewTextBlock(fileDataText(file, mediaType)), nil
+			}
+			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unsupported file media type %q", mediaType)
+		}
+	}
+	if fileURL := strings.TrimSpace(file.URL); fileURL != "" {
+		mediaType := fileURLMediaType(file)
+		if mediaType == "application/pdf" {
+			block := anthropic.NewDocumentBlock(anthropic.URLPDFSourceParam{
+				URL: fileURL,
+			})
+			return applyDocumentTitle(block, file.Name), nil
+		}
+		return anthropic.NewTextBlock(model.FileURLText(file)), nil
+	}
+	return anthropic.ContentBlockParamUnion{}, fmt.Errorf("file data is empty")
+}
+
+func isTextLikeFileMediaType(mediaType string) bool {
+	return mediaType != "" && strings.HasPrefix(mediaType, "text/")
+}
+
+func fileDataText(file *model.File, mediaType string) string {
+	data := string(file.Data)
+	name := strings.TrimSpace(file.Name)
+	if name != "" && mediaType != "" {
+		return fmt.Sprintf("File: %s (%s)\n\n%s", name, mediaType, data)
+	}
+	if name != "" {
+		return fmt.Sprintf("File: %s\n\n%s", name, data)
+	}
+	if mediaType != "" {
+		return fmt.Sprintf("File (%s)\n\n%s", mediaType, data)
+	}
+	return data
+}
+
+func applyDocumentTitle(block anthropic.ContentBlockParamUnion, name string) anthropic.ContentBlockParamUnion {
+	if block.OfDocument != nil && strings.TrimSpace(name) != "" {
+		block.OfDocument.Title = anthropic.String(name)
+	}
+	return block
+}
+
+func imageMediaType(format string, data []byte) (string, error) {
+	if mediaType, err := normalizeImageMediaType(format); err == nil {
+		return mediaType, nil
+	}
+	detected := ""
+	if len(data) > 0 {
+		detected = http.DetectContentType(data)
+	}
+	if mediaType, err := normalizeImageMediaType(detected); err == nil {
+		return mediaType, nil
+	}
+	return "", fmt.Errorf("unsupported image format %q", format)
+}
+
+func normalizeImageMediaType(value string) (string, error) {
+	switch normalizeMediaType(value) {
+	case "jpg", "jpeg", ".jpg", ".jpeg", "image/jpeg":
+		return "image/jpeg", nil
+	case "png", ".png", "image/png":
+		return "image/png", nil
+	case "gif", ".gif", "image/gif":
+		return "image/gif", nil
+	case "webp", ".webp", "image/webp":
+		return "image/webp", nil
+	default:
+		return "", fmt.Errorf("unsupported image media type %q", value)
+	}
+}
+
+func fileMediaType(file *model.File) string {
+	if mediaType := normalizeMediaType(file.MimeType); mediaType != "" {
+		return mediaType
+	}
+	if mediaType := mediaTypeFromName(file.Name); mediaType != "" {
+		return mediaType
+	}
+	if len(file.Data) > 0 {
+		return normalizeMediaType(http.DetectContentType(file.Data))
+	}
+	return ""
+}
+
+func fileURLMediaType(file *model.File) string {
+	if mediaType := normalizeMediaType(file.MimeType); mediaType != "" {
+		return mediaType
+	}
+	if mediaType := mediaTypeFromName(file.Name); mediaType != "" {
+		return mediaType
+	}
+	return mediaTypeFromURL(file.URL)
+}
+
+func mediaTypeFromURL(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	return mediaTypeFromName(u.Path)
+}
+
+func mediaTypeFromName(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".pdf":
+		return "application/pdf"
+	case ".txt":
+		return "text/plain"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	}
+	return normalizeMediaType(mime.TypeByExtension(filepath.Ext(name)))
+}
+
+func normalizeMediaType(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return ""
+	}
+	if mediaType, _, err := mime.ParseMediaType(value); err == nil {
+		return mediaType
+	}
+	mediaType, _, _ := strings.Cut(value, ";")
+	return strings.TrimSpace(mediaType)
 }
 
 // convertAssistantMessageContent converts an assistant message including tool calls into Anthropic format.
-func convertAssistantMessageContent(message model.Message) anthropic.MessageParam {
+func convertAssistantMessageContent(message model.Message) (anthropic.MessageParam, error) {
 	// Append text blocks.
 	blocks := make([]anthropic.ContentBlockParamUnion, 0, 1+len(message.ContentParts)+len(message.ToolCalls))
 	if message.Content != "" {
 		blocks = append(blocks, anthropic.NewTextBlock(message.Content))
 	}
-	for _, part := range message.ContentParts {
-		if part.Type == model.ContentTypeText && part.Text != nil {
+	for i, part := range message.ContentParts {
+		switch part.Type {
+		case model.ContentTypeText:
+			if part.Text == nil {
+				continue
+			}
 			blocks = append(blocks, anthropic.NewTextBlock(*part.Text))
+		default:
+			return anthropic.MessageParam{}, fmt.Errorf("anthropic: assistant content part %d: unsupported content type %q", i, part.Type)
 		}
 	}
 	// Append tool use blocks.
@@ -1328,7 +1585,7 @@ func convertAssistantMessageContent(message model.Message) anthropic.MessagePara
 		)
 		blocks = append(blocks, toolUse)
 	}
-	return anthropic.NewAssistantMessage(blocks...)
+	return anthropic.NewAssistantMessage(blocks...), nil
 }
 
 // decodeToolArguments parses JSON bytes into any, returning an empty object on failure.
@@ -1349,19 +1606,25 @@ func convertToolResult(message model.Message) anthropic.MessageParam {
 }
 
 // convertSystemMessageContent converts message content to system message content union.
-func convertSystemMessageContent(message model.Message) []anthropic.TextBlockParam {
+func convertSystemMessageContent(message model.Message) ([]anthropic.TextBlockParam, error) {
 	blocks := make([]anthropic.TextBlockParam, 0, 1+len(message.ContentParts))
 	if message.Content != "" {
 		blocks = append(blocks, anthropic.TextBlockParam{
 			Text: message.Content,
 		})
 	}
-	for _, part := range message.ContentParts {
-		if part.Type == model.ContentTypeText && part.Text != nil {
+	for i, part := range message.ContentParts {
+		switch part.Type {
+		case model.ContentTypeText:
+			if part.Text == nil {
+				continue
+			}
 			blocks = append(blocks, anthropic.TextBlockParam{
 				Text: *part.Text,
 			})
+		default:
+			return nil, fmt.Errorf("anthropic: system content part %d: unsupported content type %q", i, part.Type)
 		}
 	}
-	return blocks
+	return blocks, nil
 }

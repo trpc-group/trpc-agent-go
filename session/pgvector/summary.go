@@ -133,8 +133,10 @@ func (s *Service) EnqueueSummaryJob(
 			ctx, sess, filterKey, force,
 		)
 	}
+	// Fallback to synchronous processing with the same detached context that
+	// async workers use.
 	return isummary.CreateSessionSummaryWithCascade(
-		ctx,
+		isummary.DetachContext(ctx),
 		sess,
 		filterKey,
 		force,

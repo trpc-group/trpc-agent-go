@@ -41,7 +41,10 @@ func (m *mockSummarizerWithTs) Summarize(
 	if sess.State == nil {
 		sess.State = make(session.StateMap)
 	}
-	sess.State[lastIncludedTsKey] = []byte(m.last.UTC().Format(time.RFC3339Nano))
+	sess.State[session.SummaryLastIncludedTimestampStateKey] = []byte(m.last.UTC().Format(time.RFC3339Nano))
+	if len(sess.Events) > 0 {
+		sess.State[session.SummaryLastIncludedEventIDStateKey] = []byte(sess.Events[len(sess.Events)-1].ID)
+	}
 	return "ok", nil
 }
 
@@ -80,6 +83,124 @@ func TestSummarizeSession_UsesLastIncludedTimestamp(t *testing.T) {
 	assert.True(t, sum.UpdatedAt.Equal(t2.UTC()))
 }
 
+func TestSummarizeSession_WritesSummaryBoundary(t *testing.T) {
+	t1 := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Minute)
+	t3 := t2.Add(time.Minute)
+	sess := &session.Session{
+		ID: "s1",
+		Events: []event.Event{
+			{
+				ID:        "event-1",
+				FilterKey: "branch",
+				Timestamp: t1,
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "first",
+				}}}},
+			},
+			{
+				ID:        "event-2",
+				FilterKey: "branch",
+				Timestamp: t2,
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "second",
+				}}}},
+			},
+			{
+				ID:        "event-3",
+				FilterKey: "branch",
+				Timestamp: t3,
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "recent",
+				}}}},
+			},
+		},
+	}
+
+	updated, err := SummarizeSession(
+		context.Background(),
+		&fakeSummarizerWithTs{out: "summary", ts: t2},
+		sess,
+		"branch",
+		false,
+	)
+	require.NoError(t, err)
+	require.True(t, updated)
+
+	sess.SummariesMu.RLock()
+	sum := sess.Summaries["branch"]
+	sess.SummariesMu.RUnlock()
+	require.NotNil(t, sum)
+	require.NotNil(t, sum.Boundary)
+	assert.Equal(t, session.SummaryBoundaryVersion, sum.Boundary.Version)
+	assert.Equal(t, "branch", sum.Boundary.FilterKey)
+	assert.True(t, sum.Boundary.CutoffAt.Equal(t2.UTC()))
+	assert.Equal(t, "event-2", sum.Boundary.LastEventID)
+}
+
+func TestSummarizeSession_UsesPreviousBoundaryCutoff(t *testing.T) {
+	t1 := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Minute)
+	t3 := t2.Add(time.Minute)
+	sess := &session.Session{
+		ID: "s1",
+		Events: []event.Event{
+			{
+				ID:        "event-1",
+				Timestamp: t1,
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "covered",
+				}}}},
+			},
+			{
+				ID:        "event-2",
+				Timestamp: t2,
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "new delta",
+				}}}},
+			},
+		},
+		Summaries: map[string]*session.Summary{
+			"": {
+				Summary:   "old summary",
+				UpdatedAt: t3,
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					"",
+					t1,
+					"event-1",
+				),
+			},
+		},
+	}
+	summarizer := &recordingThresholdSummarizer{
+		out:     "new summary",
+		checker: func(*session.Session) bool { return true },
+	}
+
+	updated, err := SummarizeSession(
+		context.Background(),
+		summarizer,
+		sess,
+		"",
+		false,
+	)
+	require.NoError(t, err)
+	require.True(t, updated)
+	assert.Equal(t, 2, summarizer.summarizedEvents)
+
+	sess.SummariesMu.RLock()
+	sum := sess.Summaries[""]
+	sess.SummariesMu.RUnlock()
+	require.NotNil(t, sum)
+	require.NotNil(t, sum.Boundary)
+	assert.True(t, sum.CutoffTime().Equal(t2.UTC()))
+}
+
 func TestSelectUpdatedAt_Fallbacks(t *testing.T) {
 	prev := time.Date(2023, 1, 2, 9, 0, 0, 0, time.UTC)
 	latest := time.Date(2023, 1, 2, 10, 0, 0, 0, time.UTC)
@@ -91,7 +212,7 @@ func TestSelectUpdatedAt_Fallbacks(t *testing.T) {
 
 	t.Run("invalid ts falls back to latest", func(t *testing.T) {
 		tmp := &session.Session{State: session.StateMap{
-			lastIncludedTsKey: []byte("bad-ts"),
+			session.SummaryLastIncludedTimestampStateKey: []byte("bad-ts"),
 		}}
 		got := selectUpdatedAt(tmp, prev, latest, true)
 		assert.True(t, got.Equal(latest.UTC()))
@@ -125,6 +246,39 @@ func (f *fakeSummarizer) SetPrompt(prompt string)  {}
 func (f *fakeSummarizer) SetModel(m model.Model)   {}
 func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
 
+type blockingSummarizer struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingSummarizer) ShouldSummarize(*session.Session) bool { return true }
+
+func (b *blockingSummarizer) Summarize(context.Context, *session.Session) (string, error) {
+	b.mu.Lock()
+	b.calls++
+	call := b.calls
+	if call == 1 {
+		close(b.started)
+	}
+	b.mu.Unlock()
+	if call == 1 {
+		<-b.release
+	}
+	return "sum", nil
+}
+
+func (b *blockingSummarizer) SetPrompt(string)         {}
+func (b *blockingSummarizer) SetModel(model.Model)     {}
+func (b *blockingSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+func (b *blockingSummarizer) callCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.calls
+}
+
 type fakeSummarizerWithTs struct {
 	out string
 	ts  time.Time
@@ -136,7 +290,13 @@ func (f *fakeSummarizerWithTs) Summarize(ctx context.Context, sess *session.Sess
 		sess.State = make(session.StateMap)
 	}
 	if !f.ts.IsZero() {
-		sess.State[lastIncludedTsKey] = []byte(f.ts.UTC().Format(time.RFC3339Nano))
+		sess.State[session.SummaryLastIncludedTimestampStateKey] = []byte(f.ts.UTC().Format(time.RFC3339Nano))
+		for _, e := range sess.Events {
+			if e.Timestamp.Equal(f.ts) {
+				sess.State[session.SummaryLastIncludedEventIDStateKey] = []byte(e.ID)
+				break
+			}
+		}
 	}
 	return f.out, nil
 }
@@ -187,6 +347,7 @@ func (r *recordingThresholdSummarizer) Metadata() map[string]any { return map[st
 
 func makeEvent(content string, ts time.Time, filterKey string) event.Event {
 	return event.Event{
+		ID:        content,
 		Branch:    filterKey,
 		FilterKey: filterKey,
 		Timestamp: ts,
@@ -272,6 +433,88 @@ func TestSummarizeSession_EmptyDelta_NoForce(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, updated)
 	require.Equal(t, "sum1", base.Summaries["b1"].Summary)
+}
+
+func TestSummarizeSession_ConcurrentSameKeyRechecksDelta(t *testing.T) {
+	now := time.Now()
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("e1", now.Add(-1*time.Minute), "b1"),
+	}
+	s := &blockingSummarizer{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	results := make(chan bool, 2)
+	errs := make(chan error, 2)
+
+	go func() {
+		updated, err := SummarizeSession(context.Background(), s, base, "b1", false)
+		results <- updated
+		errs <- err
+	}()
+	<-s.started
+	go func() {
+		updated, err := SummarizeSession(context.Background(), s, base, "b1", false)
+		results <- updated
+		errs <- err
+	}()
+	close(s.release)
+
+	var updatedCount int
+	for i := 0; i < 2; i++ {
+		require.NoError(t, <-errs)
+		if <-results {
+			updatedCount++
+		}
+	}
+	require.Equal(t, 1, updatedCount)
+	require.Equal(t, 1, s.callCount())
+}
+
+func TestSummarizeSession_CanceledWhileWaitingForSameKey(t *testing.T) {
+	now := time.Now()
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("e1", now.Add(-1*time.Minute), "b1"),
+	}
+	s := &blockingSummarizer{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	firstDone := make(chan error, 1)
+
+	go func() {
+		_, err := SummarizeSession(context.Background(), s, base, "b1", false)
+		firstDone <- err
+	}()
+	<-s.started
+
+	ctx, cancel := context.WithCancel(context.Background())
+	secondDone := make(chan struct {
+		updated bool
+		err     error
+	}, 1)
+	go func() {
+		updated, err := SummarizeSession(ctx, s, base, "b1", false)
+		secondDone <- struct {
+			updated bool
+			err     error
+		}{updated: updated, err: err}
+	}()
+	cancel()
+
+	select {
+	case got := <-secondDone:
+		require.ErrorIs(t, got.err, context.Canceled)
+		require.False(t, got.updated)
+	case <-time.After(time.Second):
+		t.Fatal("canceled summary wait did not return")
+	}
+	require.Equal(t, 1, s.callCount())
+
+	close(s.release)
+	require.NoError(t, <-firstDone)
 }
 
 func TestSummarizeSession_EmptyDelta_WithForce(t *testing.T) {
@@ -380,6 +623,28 @@ func TestComputeDeltaSince_WithTime(t *testing.T) {
 	require.Equal(t, base.Events[2].Timestamp, latestTs)
 }
 
+func TestComputeDeltaAfterBoundary_UsesEventIDTieBreaker(t *testing.T) {
+	ts := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	base := &session.Session{ID: "s1"}
+	base.Events = []event.Event{
+		{ID: "covered", Timestamp: ts, Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "covered"}}}}},
+		{ID: "same-time", Timestamp: ts, Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "same time"}}}}},
+		{ID: "later", Timestamp: ts.Add(time.Second), Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "later"}}}}},
+	}
+
+	delta, latest := computeDeltaAfterBoundary(
+		base,
+		session.NewSummaryBoundaryWithEventID("", ts, "covered"),
+		"",
+	)
+
+	require.Len(t, delta, 2)
+	assert.Equal(t, "same-time", delta[0].ID)
+	assert.Equal(t, "later", delta[1].ID)
+	require.NotNil(t, latest)
+	assert.Equal(t, "later", latest.LastEventID)
+}
+
 func TestSummarizeSession_UsesLastIncludedTimestampWhenProvided(t *testing.T) {
 	now := time.Now()
 	t1 := now.Add(-3 * time.Minute)
@@ -395,7 +660,7 @@ func TestSummarizeSession_UsesLastIncludedTimestampWhenProvided(t *testing.T) {
 
 	s := &fakeSummarizerWithTs{
 		out: "sum",
-		ts:  t2, // simulate summarizer skipping the latest event and using t2 as last included
+		ts:  t2, // simulate summarizer skipping the latest event and using t2 as cutoff
 	}
 
 	updated, err := SummarizeSession(context.Background(), s, base, "", false)
@@ -1417,6 +1682,9 @@ func TestCopySummaryToKey(t *testing.T) {
 		require.Equal(t, "source summary", sess.Summaries["dst"].Summary)
 		// UpdatedAt is set to zero to mark as needing persistence.
 		require.True(t, sess.Summaries["dst"].UpdatedAt.IsZero())
+		require.NotNil(t, sess.Summaries["dst"].Boundary)
+		require.Equal(t, "dst", sess.Summaries["dst"].Boundary.FilterKey)
+		require.True(t, sess.Summaries["dst"].Boundary.CutoffAt.Equal(now.UTC()))
 	})
 
 	t.Run("overwrite existing destination", func(t *testing.T) {
@@ -1452,6 +1720,28 @@ func TestCopySummaryToKey(t *testing.T) {
 		// Verify Topics slice is a copy, not shared reference.
 		sess.Summaries["src"].Topics[0] = "modified"
 		require.Equal(t, "topic1", sess.Summaries["dst"].Topics[0])
+	})
+
+	t.Run("copies boundary and updates destination filter key", func(t *testing.T) {
+		cutoff := now.Add(-time.Minute)
+		sess := &session.Session{
+			ID: "s1",
+			Summaries: map[string]*session.Summary{
+				"src": {
+					Summary:   "summary with boundary",
+					UpdatedAt: now,
+					Boundary: session.NewSummaryBoundary(
+						"src",
+						cutoff,
+					),
+				},
+			},
+		}
+		copySummaryToKey(sess, "src", "dst")
+		require.NotNil(t, sess.Summaries["dst"])
+		require.NotNil(t, sess.Summaries["dst"].Boundary)
+		require.Equal(t, "dst", sess.Summaries["dst"].Boundary.FilterKey)
+		require.Equal(t, "src", sess.Summaries["src"].Boundary.FilterKey)
 	})
 
 	t.Run("handles nil Topics", func(t *testing.T) {
@@ -1511,6 +1801,8 @@ func TestSummarizeSession_NeedsPersistOnly(t *testing.T) {
 		require.NotNil(t, sum)
 		require.Equal(t, "copied summary", sum.Summary) // Summary unchanged.
 		require.False(t, sum.UpdatedAt.IsZero())        // UpdatedAt now set.
+		require.NotNil(t, sum.Boundary)
+		require.True(t, sum.Boundary.CutoffAt.Equal(now.Add(-1*time.Minute).UTC()))
 	})
 
 	t.Run("copied summary with no events uses current time", func(t *testing.T) {
@@ -1541,6 +1833,75 @@ func TestSummarizeSession_NeedsPersistOnly(t *testing.T) {
 			sum.UpdatedAt.Equal(before.Add(-time.Second)))
 		require.True(t, sum.UpdatedAt.Before(after.Add(time.Second)) ||
 			sum.UpdatedAt.Equal(after.Add(time.Second)))
+	})
+
+	t.Run("copied summary preserves existing boundary cutoff", func(t *testing.T) {
+		cutoff := now.Add(-2 * time.Minute)
+		base := &session.Session{
+			ID:      "s1",
+			AppName: "a",
+			UserID:  "u",
+			Events: []event.Event{
+				makeEvent("covered", cutoff, "branch"),
+				makeEvent("not covered", now.Add(-time.Minute), "branch"),
+			},
+			Summaries: map[string]*session.Summary{
+				"branch": {
+					Summary: "copied summary",
+					Boundary: session.NewSummaryBoundary(
+						"branch",
+						cutoff,
+					),
+				},
+			},
+		}
+
+		updated, err := SummarizeSession(context.Background(), nil, base, "branch", false)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		base.SummariesMu.RLock()
+		sum := base.Summaries["branch"]
+		base.SummariesMu.RUnlock()
+		require.NotNil(t, sum)
+		require.True(t, sum.UpdatedAt.Equal(cutoff.UTC()))
+		require.NotNil(t, sum.Boundary)
+		require.True(t, sum.Boundary.CutoffAt.Equal(cutoff.UTC()))
+	})
+
+	t.Run("copied summary backfills zero boundary cutoff", func(t *testing.T) {
+		latest := now.Add(-1 * time.Minute)
+		base := &session.Session{
+			ID:      "s1",
+			AppName: "a",
+			UserID:  "u",
+			Events: []event.Event{
+				makeEvent("covered", now.Add(-2*time.Minute), "branch"),
+				makeEvent("latest", latest, "branch"),
+			},
+			Summaries: map[string]*session.Summary{
+				"branch": {
+					Summary: "copied summary",
+					Boundary: &session.SummaryBoundary{
+						Version:   session.SummaryBoundaryVersion,
+						FilterKey: "old",
+					},
+				},
+			},
+		}
+
+		updated, err := SummarizeSession(context.Background(), nil, base, "branch", false)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		base.SummariesMu.RLock()
+		sum := base.Summaries["branch"]
+		base.SummariesMu.RUnlock()
+		require.NotNil(t, sum)
+		require.True(t, sum.UpdatedAt.Equal(latest.UTC()))
+		require.NotNil(t, sum.Boundary)
+		require.Equal(t, "branch", sum.Boundary.FilterKey)
+		require.True(t, sum.Boundary.CutoffAt.Equal(latest.UTC()))
 	})
 
 	t.Run("copied summary persists without summarizer", func(t *testing.T) {
@@ -1595,6 +1956,9 @@ func TestSummarizeSession_NeedsPersistOnly(t *testing.T) {
 		require.NotNil(t, sum)
 		require.Equal(t, "copied summary for b1", sum.Summary)
 		require.True(t, sum.UpdatedAt.Equal(now.Add(-2*time.Minute).UTC()))
+		require.NotNil(t, sum.Boundary)
+		require.Equal(t, "b1", sum.Boundary.FilterKey)
+		require.True(t, sum.Boundary.CutoffAt.Equal(now.Add(-2*time.Minute).UTC()))
 	})
 
 	t.Run("normal summary with non-zero UpdatedAt follows normal path", func(t *testing.T) {

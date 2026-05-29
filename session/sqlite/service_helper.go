@@ -141,6 +141,8 @@ func (s *Service) listSessions(
 	key session.UserKey,
 	limit int,
 	afterTime time.Time,
+	listOnlyMeta bool,
+	page *session.ListSessionPage,
 ) ([]*session.Session, error) {
 	appState, err := s.ListAppStates(ctx, key.AppName)
 	if err != nil {
@@ -151,20 +153,18 @@ func (s *Service) listSessions(
 		return nil, err
 	}
 
-	const listSQL = `SELECT session_id, state, created_at, updated_at FROM %s
+	listSQL := fmt.Sprintf(`SELECT session_id, state, created_at, updated_at FROM %s
 WHERE app_name = ? AND user_id = ?
 AND (expires_at IS NULL OR expires_at > ?)
 AND deleted_at IS NULL
-ORDER BY updated_at DESC`
-	query := fmt.Sprintf(listSQL, s.tableSessionStates)
+ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
+	listArgs := []any{key.AppName, key.UserID, time.Now().UTC().UnixNano()}
+	if page != nil && page.Limit > 0 {
+		listSQL += " LIMIT ? OFFSET ?"
+		listArgs = append(listArgs, page.Limit, page.Offset)
+	}
 
-	rows, err := s.db.QueryContext(
-		ctx,
-		query,
-		key.AppName,
-		key.UserID,
-		time.Now().UTC().UnixNano(),
-	)
+	rows, err := s.db.QueryContext(ctx, listSQL, listArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("list session states: %w", err)
 	}
@@ -197,6 +197,22 @@ ORDER BY updated_at DESC`
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate session states: %w", err)
+	}
+
+	if listOnlyMeta {
+		out := make([]*session.Session, 0, len(sessStates))
+		for _, st := range sessStates {
+			sess := session.NewSession(
+				key.AppName,
+				key.UserID,
+				st.ID,
+				session.WithSessionState(st.State),
+				session.WithSessionCreatedAt(st.CreatedAt),
+				session.WithSessionUpdatedAt(st.UpdatedAt),
+			)
+			out = append(out, mergeState(appState, userState, sess))
+		}
+		return out, nil
 	}
 
 	sessionKeys := make([]session.Key, 0, len(sessStates))

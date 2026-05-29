@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -249,6 +250,7 @@ func WithToolResultFormatter(f ToolResultFormatter) Option {
 //	    summary.WithContextThresholdRatio(0.6)))
 func WithContextThreshold(opts ...ContextThresholdOption) Option {
 	return func(s *sessionSummarizer) {
+		effectiveOpts := append([]ContextThresholdOption(nil), opts...)
 		// If no explicit fallback window is configured, try to resolve one
 		// from the summarizer's own model. This ensures that when invocation
 		// context is unavailable (e.g. manual CreateSessionSummary calls),
@@ -257,15 +259,14 @@ func WithContextThreshold(opts ...ContextThresholdOption) Option {
 		o := contextThresholdOptions{
 			fallbackContextWindow: defaultContextThresholdFallbackWindow,
 		}
-		for _, opt := range opts {
+		for _, opt := range effectiveOpts {
 			opt(&o)
 		}
-		if o.fallbackContextWindow == defaultContextThresholdFallbackWindow && s.model != nil {
-			name := s.model.Info().Name
-			if w, ok := model.LookupModelContextWindow(name); ok {
-				opts = append(opts, WithContextThresholdFallbackWindow(w))
+		if !o.fallbackContextWindowSet && s.model != nil {
+			if w, ok := modelcontext.ResolveContextWindow(s.model); ok {
+				effectiveOpts = append(effectiveOpts, WithContextThresholdFallbackWindow(w))
 			}
 		}
-		s.checks = append(s.checks, CheckContextThreshold(opts...))
+		s.checks = append(s.checks, CheckContextThreshold(effectiveOpts...))
 	}
 }

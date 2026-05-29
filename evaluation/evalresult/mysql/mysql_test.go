@@ -152,7 +152,7 @@ func TestSave_GeneratesDefaultsAndStores(t *testing.T) {
 
 	pattern := fmt.Sprintf(`(?s)INSERT INTO %s.*ON DUPLICATE KEY UPDATE`, regexp.QuoteMeta(m.tables.EvalSetResults))
 	mock.ExpectExec(pattern).
-		WithArgs("app", sqlmock.AnyArg(), "set", sqlmock.AnyArg(), sqlmock.AnyArg(), nil).
+		WithArgs("app", sqlmock.AnyArg(), "set", sqlmock.AnyArg(), "[]", nil).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	id, err := m.Save(ctx, "app", &evalresult.EvalSetResult{EvalSetID: "set"})
@@ -160,7 +160,7 @@ func TestSave_GeneratesDefaultsAndStores(t *testing.T) {
 	assert.True(t, strings.HasPrefix(id, "app_set_"))
 
 	mock.ExpectExec(pattern).
-		WithArgs("app", "rid", "set", "rname", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs("app", "rid", "set", "rname", "[]", `{"numRuns":1}`).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	id, err = m.Save(ctx, "app", &evalresult.EvalSetResult{
