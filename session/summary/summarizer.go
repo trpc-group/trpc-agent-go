@@ -245,6 +245,9 @@ type sessionSummarizer struct {
 	// preserveUserMessages appends a framework-generated verbatim user-message
 	// appendix to the summary and carries it across rolling summaries.
 	preserveUserMessages bool
+	// userMessagesProvider customizes how verbatim user messages are
+	// collected. If nil, the summarizer falls back to default extraction.
+	userMessagesProvider UserMessagesProvider
 
 	// modelCallbacks configures before/after model callbacks for summarization.
 	modelCallbacks *model.Callbacks
@@ -340,35 +343,13 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		eventsForModel, userMessages = prepareSummaryEventsAndUserMessages(
 			eventsToSummarize,
 		)
+		userMessages = s.collectUserMessages(eventsForModel, userMessages)
 	}
 
 	conversationText := s.extractConversationText(eventsForModel)
-	if s.preHook != nil {
-		hookCtx := &PreSummaryHookContext{
-			Ctx:          ctx,
-			Session:      sess,
-			Events:       eventsForModel,
-			Text:         conversationText,
-			UserMessages: userMessages,
-		}
-		hookErr := s.preHook(hookCtx)
-		if hookErr != nil && s.hookAbortOnError {
-			return "", fmt.Errorf("pre-summary hook failed: %w", hookErr)
-		}
-		if hookErr == nil {
-			// Propagate context modifications from pre-hook to subsequent operations.
-			if hookCtx.Ctx != nil {
-				ctx = hookCtx.Ctx
-			}
-			if hookCtx.Text != "" {
-				conversationText = hookCtx.Text
-			} else if len(hookCtx.Events) > 0 {
-				conversationText = s.extractConversationText(hookCtx.Events)
-			}
-			if s.preserveUserMessages && hookCtx.UserMessages != nil {
-				userMessages = hookCtx.UserMessages
-			}
-		}
+	ctx, conversationText, err := s.runPreSummaryHook(ctx, sess, eventsForModel, conversationText)
+	if err != nil {
+		return "", err
 	}
 	if conversationText == "" {
 		return "", fmt.Errorf("no conversation text extracted for session %s (events=%d)", sess.ID, len(eventsForModel))
@@ -387,24 +368,96 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 
 	s.recordLastIncludedTimestamp(sess, eventsToSummarize)
 
-	if s.postHook != nil {
-		hookCtx := &PostSummaryHookContext{
-			Ctx:     ctx,
-			Session: sess,
-			Summary: summaryText,
-		}
-		hookErr := s.postHook(hookCtx)
-		if hookErr != nil && s.hookAbortOnError {
-			return "", fmt.Errorf("post-summary hook failed: %w", hookErr)
-		}
-		if hookErr == nil && hookCtx.Summary != "" {
-			summaryText = hookCtx.Summary
-		}
+	summaryText, err = s.runPostSummaryHook(ctx, sess, summaryText)
+	if err != nil {
+		return "", err
 	}
 	if s.preserveUserMessages {
 		summaryText = appendPreservedUserMessages(summaryText, userMessages)
 	}
 
+	return summaryText, nil
+}
+
+// collectUserMessages combines messages carried from previous summary
+// appendices with the current round's user messages. The current round comes
+// from the configured UserMessagesProvider when set, otherwise the
+// framework's default per-event extractor.
+func (s *sessionSummarizer) collectUserMessages(events []event.Event, carried []string) []string {
+	var current []string
+	if s.userMessagesProvider != nil {
+		current = s.userMessagesProvider(events)
+		if current == nil {
+			// Provider opted out for this round; keep only carried messages.
+			return carried
+		}
+	} else {
+		current = extractUserMessages(events)
+	}
+	if len(current) == 0 {
+		return carried
+	}
+	return append(carried, current...)
+}
+
+// runPreSummaryHook invokes the configured PreSummaryHook (if any) and
+// returns the possibly-modified context and conversation text.
+func (s *sessionSummarizer) runPreSummaryHook(
+	ctx context.Context,
+	sess *session.Session,
+	events []event.Event,
+	conversationText string,
+) (context.Context, string, error) {
+	if s.preHook == nil {
+		return ctx, conversationText, nil
+	}
+	hookCtx := &PreSummaryHookContext{
+		Ctx:     ctx,
+		Session: sess,
+		Events:  events,
+		Text:    conversationText,
+	}
+	if err := s.preHook(hookCtx); err != nil {
+		if s.hookAbortOnError {
+			return ctx, conversationText, fmt.Errorf("pre-summary hook failed: %w", err)
+		}
+		return ctx, conversationText, nil
+	}
+	if hookCtx.Ctx != nil {
+		ctx = hookCtx.Ctx
+	}
+	if hookCtx.Text != "" {
+		conversationText = hookCtx.Text
+	} else if len(hookCtx.Events) > 0 {
+		conversationText = s.extractConversationText(hookCtx.Events)
+	}
+	return ctx, conversationText, nil
+}
+
+// runPostSummaryHook invokes the configured PostSummaryHook (if any) and
+// returns the possibly-modified summary text.
+func (s *sessionSummarizer) runPostSummaryHook(
+	ctx context.Context,
+	sess *session.Session,
+	summaryText string,
+) (string, error) {
+	if s.postHook == nil {
+		return summaryText, nil
+	}
+	hookCtx := &PostSummaryHookContext{
+		Ctx:     ctx,
+		Session: sess,
+		Summary: summaryText,
+	}
+	if err := s.postHook(hookCtx); err != nil {
+		if s.hookAbortOnError {
+			return summaryText, fmt.Errorf("post-summary hook failed: %w", err)
+		}
+		return summaryText, nil
+	}
+	if hookCtx.Summary != "" {
+		summaryText = hookCtx.Summary
+	}
 	return summaryText, nil
 }
 

@@ -660,7 +660,7 @@ func TestPreSummaryHookUsesConversationProjection(t *testing.T) {
 	require.Contains(t, ctx.Text, "Alice: hello")
 	require.Contains(t, ctx.Text, "Assistant: hi")
 	require.NotContains(t, ctx.Text, "fallback")
-	require.Equal(t, []string{"Alice: hello"}, ctx.UserMessages)
+	require.Equal(t, []string{"Alice: hello"}, UserMessagesProvider(events))
 }
 
 func TestBuildSummaryUserMessages(t *testing.T) {

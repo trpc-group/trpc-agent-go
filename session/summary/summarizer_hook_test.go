@@ -392,3 +392,136 @@ func TestSessionSummarizer_ModelCallbacks_Before_Error(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "before model callback failed")
 }
+
+func TestSessionSummarizer_PreSummaryHook_AbortOnError(t *testing.T) {
+	t.Parallel()
+	s := NewSummarizer(
+		&staticResponseModel{content: "ok"},
+		WithSummaryHookAbortOnError(true),
+		WithPreSummaryHook(func(*PreSummaryHookContext) error {
+			return assert.AnError
+		}),
+	)
+	sess := &session.Session{
+		ID:     "abort",
+		Events: []event.Event{newEventWithContent("origin")},
+	}
+	_, err := s.Summarize(context.Background(), sess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pre-summary hook failed")
+}
+
+func TestSessionSummarizer_PreSummaryHook_HookErrorIgnored(t *testing.T) {
+	t.Parallel()
+	s := NewSummarizer(
+		&staticResponseModel{content: "ok"},
+		WithPreSummaryHook(func(*PreSummaryHookContext) error {
+			return assert.AnError
+		}),
+	)
+	sess := &session.Session{
+		ID:     "ignore",
+		Events: []event.Event{newEventWithContent("origin")},
+	}
+	out, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	assert.Equal(t, "ok", out)
+}
+
+func TestSessionSummarizer_PreSummaryHook_RebuildsTextFromEvents(t *testing.T) {
+	t.Parallel()
+	s := NewSummarizer(
+		&staticResponseModel{content: "ok"},
+		WithPreSummaryHook(func(in *PreSummaryHookContext) error {
+			in.Text = ""
+			in.Events = []event.Event{newEventWithContent("rebuilt")}
+			return nil
+		}),
+	)
+	sess := &session.Session{
+		ID:     "rebuild",
+		Events: []event.Event{newEventWithContent("origin")},
+	}
+	out, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	assert.Equal(t, "ok", out)
+}
+
+func TestSessionSummarizer_PostSummaryHook_AbortOnError(t *testing.T) {
+	t.Parallel()
+	s := NewSummarizer(
+		&staticResponseModel{content: "ok"},
+		WithSummaryHookAbortOnError(true),
+		WithPostSummaryHook(func(*PostSummaryHookContext) error {
+			return assert.AnError
+		}),
+	)
+	sess := &session.Session{
+		ID:     "abort-post",
+		Events: []event.Event{newEventWithContent("origin")},
+	}
+	_, err := s.Summarize(context.Background(), sess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "post-summary hook failed")
+}
+
+func TestSessionSummarizer_PostSummaryHook_OverridesSummary(t *testing.T) {
+	t.Parallel()
+	s := NewSummarizer(
+		&staticResponseModel{content: "raw"},
+		WithPostSummaryHook(func(in *PostSummaryHookContext) error {
+			in.Summary = "rewritten"
+			return nil
+		}),
+	)
+	sess := &session.Session{
+		ID:     "post-rewrite",
+		Events: []event.Event{newEventWithContent("origin")},
+	}
+	out, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	assert.Equal(t, "rewritten", out)
+}
+
+func TestSessionSummarizer_UserMessagesProvider_Replaces(t *testing.T) {
+	t.Parallel()
+	s := NewSummarizer(
+		&staticResponseModel{content: "ok"},
+		WithPreserveUserMessages(true),
+		WithUserMessagesProvider(func(events []event.Event) []string {
+			return []string{"redacted"}
+		}),
+	)
+	sess := &session.Session{
+		ID: "provider",
+		Events: []event.Event{
+			newEventWithContent("raw1"),
+			newEventWithContent("raw2"),
+		},
+	}
+	out, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"redacted"}, extractPreservedUserMessages(out))
+}
+
+func TestSessionSummarizer_UserMessagesProvider_NilOptsOut(t *testing.T) {
+	t.Parallel()
+	s := NewSummarizer(
+		&staticResponseModel{content: "ok"},
+		WithPreserveUserMessages(true),
+		WithUserMessagesProvider(func(events []event.Event) []string {
+			return nil
+		}),
+	)
+	sess := &session.Session{
+		ID: "provider-nil",
+		Events: []event.Event{
+			newEventWithContent("raw"),
+		},
+	}
+	out, err := s.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	// With provider returning nil and no carried messages, the appendix
+	// should be omitted entirely.
+	assert.NotContains(t, out, preservedUserMessagesStart)
+}

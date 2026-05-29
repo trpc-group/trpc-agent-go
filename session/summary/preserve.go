@@ -45,9 +45,8 @@ func formatDetailedSummaryOutput(text string) string {
 func prepareSummaryEventsAndUserMessages(
 	events []event.Event,
 ) ([]event.Event, []string) {
-	userMessages := extractPreservedUserMessagesFromEvents(events)
-	userMessages = append(userMessages, extractUserMessages(events)...)
-	return stripPreservedUserMessagesFromEvents(events), userMessages
+	carried := extractPreservedUserMessagesFromEvents(events)
+	return stripPreservedUserMessagesFromEvents(events), carried
 }
 
 func extractPreservedUserMessagesFromEvents(events []event.Event) []string {

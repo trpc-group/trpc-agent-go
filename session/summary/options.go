@@ -69,6 +69,27 @@ func WithPreserveUserMessages(preserve bool) Option {
 	}
 }
 
+// UserMessagesProvider returns the verbatim user messages that should be
+// preserved in the framework-generated summary appendix for the given events.
+// It runs before the model call when WithPreserveUserMessages is enabled.
+//
+// Implementations may return nil to defer to the framework's default
+// extraction (which renders user-authored events as their text content).
+// When a provider returns a non-nil slice, that slice is used as-is.
+type UserMessagesProvider func(events []event.Event) []string
+
+// WithUserMessagesProvider customizes how verbatim user messages are
+// collected for the framework-generated summary appendix. The provider sees
+// the events that will be summarized and can apply domain-specific rendering,
+// speaker labels, or redaction.
+//
+// This is a no-op unless WithPreserveUserMessages is also enabled.
+func WithUserMessagesProvider(provider UserMessagesProvider) Option {
+	return func(s *sessionSummarizer) {
+		s.userMessagesProvider = provider
+	}
+}
+
 // WithMaxSummaryWords sets the maximum word count for summaries.
 // A value <= 0 means no word limit. The word limit will be included in the
 // prompt to guide the model's generation rather than truncating the output.

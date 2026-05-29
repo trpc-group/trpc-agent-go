@@ -405,14 +405,13 @@ func TestSessionSummarizer_DetailedContinuityPrompt(t *testing.T) {
 		assert.NotContains(t, m.lastPrompt, preservedUserMessagesStart)
 	})
 
-	t.Run("honors hook-provided user messages", func(t *testing.T) {
+	t.Run("honors UserMessagesProvider", func(t *testing.T) {
 		s := NewSummarizer(
 			&staticResponseModel{content: "hook summary"},
 			WithPrompt(DetailedContinuityPrompt),
 			WithPreserveUserMessages(true),
-			WithPreSummaryHook(func(in *PreSummaryHookContext) error {
-				in.UserMessages = []string{"Speaker Alice: redacted request"}
-				return nil
+			WithUserMessagesProvider(func(events []event.Event) []string {
+				return []string{"Speaker Alice: redacted request"}
 			}),
 		)
 		sess := &session.Session{

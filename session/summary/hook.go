@@ -21,10 +21,6 @@ type PreSummaryHookContext struct {
 	Session *session.Session
 	Events  []event.Event
 	Text    string
-	// UserMessages contains the exact user messages that should be preserved
-	// in the framework-generated summary appendix. Hooks may replace this
-	// slice to apply domain-specific rendering, speaker labels, or redaction.
-	UserMessages []string
 }
 
 // PreSummaryHook adjusts or enriches input text before summarization, e.g. add tool-call info, redact, or reorder events.
