@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
 
@@ -96,6 +97,82 @@ func TestMCPTool_Declaration(t *testing.T) {
 			}
 			if decl.Description != tc.expectedDesc {
 				t.Errorf("expected description %q, got %q", tc.expectedDesc, decl.Description)
+			}
+		})
+	}
+}
+
+func TestMCPTool_ToolMetadata(t *testing.T) {
+	testCases := []struct {
+		name        string
+		annotations *mcp.ToolAnnotations
+		want        tool.ToolMetadata
+	}{
+		{
+			name: "nil annotations",
+			want: tool.ToolMetadata{},
+		},
+		{
+			name: "title only annotations",
+			annotations: &mcp.ToolAnnotations{
+				Title: "Human title",
+			},
+			want: tool.ToolMetadata{},
+		},
+		{
+			name: "explicit safety hints",
+			annotations: &mcp.ToolAnnotations{
+				ReadOnlyHint:    mcp.BoolPtr(true),
+				DestructiveHint: mcp.BoolPtr(true),
+				OpenWorldHint:   mcp.BoolPtr(true),
+			},
+			want: tool.ToolMetadata{
+				ReadOnly:    true,
+				Destructive: true,
+				OpenWorld:   true,
+			},
+		},
+		{
+			name: "partial safety hints",
+			annotations: &mcp.ToolAnnotations{
+				ReadOnlyHint: mcp.BoolPtr(true),
+			},
+			want: tool.ToolMetadata{
+				ReadOnly: true,
+			},
+		},
+		{
+			name: "title and idempotent are ignored",
+			annotations: &mcp.ToolAnnotations{
+				Title:          "Ignored title",
+				IdempotentHint: mcp.BoolPtr(true),
+			},
+			want: tool.ToolMetadata{},
+		},
+		{
+			name: "explicit false stays zero value",
+			annotations: &mcp.ToolAnnotations{
+				ReadOnlyHint:    mcp.BoolPtr(false),
+				DestructiveHint: mcp.BoolPtr(false),
+				OpenWorldHint:   mcp.BoolPtr(false),
+			},
+			want: tool.ToolMetadata{},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mcpTool := newMCPTool(mcp.Tool{
+				Name:        "metadata_tool",
+				Description: "Tool with metadata",
+				Annotations: tc.annotations,
+			}, &mcpSessionManager{})
+
+			if got := mcpTool.ToolMetadata(); got != tc.want {
+				t.Fatalf("expected metadata %+v, got %+v", tc.want, got)
+			}
+			if got := tool.MetadataOf(mcpTool); got != tc.want {
+				t.Fatalf("expected MetadataOf metadata %+v, got %+v", tc.want, got)
 			}
 		})
 	}
