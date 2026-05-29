@@ -17,20 +17,10 @@ import (
 // Option represents a functional option for configuring repository sources.
 type Option func(*Source)
 
-// WithRepository sets the single repository handled by this Source.
-//
-// Calling WithRepository more than once keeps the first repository value in
-// Source.repository, leaves Source.hasRepository set, and records the duplicate
-// configuration in Source.multiRepoError. The deferred error is surfaced by
-// Source.ReadDocuments rather than by the option itself.
+// WithRepository sets the repository handled by this Source.
 func WithRepository(repository Repository) Option {
 	return func(s *Source) {
-		if s.hasRepository {
-			s.multiRepoError = true
-			return
-		}
 		s.repository = repository
-		s.hasRepository = true
 	}
 }
 
@@ -85,5 +75,22 @@ func WithSkipSuffixes(suffixes []string) Option {
 func WithTransformers(transformers ...transform.Transformer) Option {
 	return func(s *Source) {
 		s.transformers = append(s.transformers, transformers...)
+	}
+}
+
+// WithDocExtensions sets the file extensions (e.g. ".md", ".txt") that will be
+// included as document nodes when ReadGraph is called.
+// By default no document files are included in graph output.
+func WithDocExtensions(extensions []string) Option {
+	return func(s *Source) {
+		s.docExtensions = append([]string(nil), extensions...)
+	}
+}
+
+// WithParseConcurrency sets the concurrency for code AST parsing in ReadGraph.
+// Zero or negative values mean use the parser's default.
+func WithParseConcurrency(n int) Option {
+	return func(s *Source) {
+		s.parseConcurrency = n
 	}
 }

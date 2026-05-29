@@ -39,10 +39,14 @@ type codeDedupStore struct {
 
 type dedupEntry struct {
 	mu   sync.Mutex
-	keys map[string]struct{}
+	keys map[string]dedupKeyState
 	// order tracks insertion order so that we can evict the oldest keys when
 	// the per-invocation cap is reached.
 	order []string
+}
+
+type dedupKeyState struct {
+	hasContent bool
 }
 
 func newCodeDedupStore() *codeDedupStore {
@@ -92,11 +96,17 @@ func (s *codeDedupStore) filter(ctx context.Context, resp *KnowledgeSearchRespon
 			kept = append(kept, doc)
 			continue
 		}
-		if _, seen := entry.keys[key]; seen {
+		hasContent := doc.Text != ""
+		if state, seen := entry.keys[key]; seen {
+			if hasContent && !state.hasContent {
+				entry.keys[key] = dedupKeyState{hasContent: true}
+				kept = append(kept, doc)
+				continue
+			}
 			skipped++
 			continue
 		}
-		entry.keys[key] = struct{}{}
+		entry.keys[key] = dedupKeyState{hasContent: hasContent}
 		entry.order = append(entry.order, key)
 		maxKeys := s.maxKeys
 		if maxKeys <= 0 {
@@ -142,18 +152,17 @@ func (s *codeDedupStore) loadOrCreate(invocation *agent.Invocation) *dedupEntry 
 			return entry
 		}
 	}
-	e := &dedupEntry{keys: make(map[string]struct{})}
+	e := &dedupEntry{keys: make(map[string]dedupKeyState)}
 	invocation.RunOptions.RuntimeState[codeDedupRuntimeStateKey] = e
 	return e
 }
 
 // codeDedupKey returns a stable key identifying the underlying code chunk.
 //
-// The repository name (trpc_ast_repo_name) is always prepended to every key
-// when present, so that the same full_name / file_path in different
-// repositories is never mistakenly deduplicated against each other.
+// Document ID is preferred because graph-backed code nodes use generated graph
+// IDs.
 //
-// Preference order (after the optional repo prefix):
+// Fallback preference order (after the optional repo prefix):
 //  1. AST fully-qualified symbol name (most specific for code entities).
 //  2. file_path + line range (covers chunks that have no full_name but still
 //     map to a unique span, e.g. markdown or raw text chunks).
@@ -164,6 +173,9 @@ func (s *codeDedupStore) loadOrCreate(invocation *agent.Invocation) *dedupEntry 
 func codeDedupKey(doc *DocumentResult) string {
 	if doc == nil {
 		return ""
+	}
+	if doc.ID != "" {
+		return "id:" + doc.ID
 	}
 	md := doc.Metadata
 	if md == nil {

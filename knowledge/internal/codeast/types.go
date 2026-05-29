@@ -102,8 +102,6 @@ type Scope string
 const (
 	// ScopeCode marks code entities intended for code-aware retrieval.
 	ScopeCode Scope = "code"
-	// ScopeDocument marks document-style content intended for document retrieval.
-	ScopeDocument Scope = "document"
 	// ScopeExample marks example or tutorial-style content.
 	ScopeExample Scope = "example"
 )

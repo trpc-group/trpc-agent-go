@@ -167,14 +167,6 @@ func TestNodeToDocumentPayloadRecomputesScopeWithBasePath(t *testing.T) {
 		t.Fatalf("unexpected example scope metadata: %v", got)
 	}
 
-	node.Scope = ScopeDocument
-	node.FilePath = filepath.Join(repoRoot, "pkg", "doc.go")
-	payload = NodeToDocumentPayload(node, NodeDocumentPayloadOptions{
-		ScopeBasePath: repoRoot,
-	})
-	if got := payload.Metadata[TrpcAstMetaPrefix+"scope"]; got != string(ScopeDocument) {
-		t.Fatalf("unexpected document scope metadata: %v", got)
-	}
 }
 
 func TestIsExamplePath(t *testing.T) {
