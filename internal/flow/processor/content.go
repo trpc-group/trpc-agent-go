@@ -1212,9 +1212,9 @@ func addToolCallIDToRestore(
 
 // compactCurrentInvocationEvent preserves the minimum structured state needed
 // for same-turn tool loops after a summary has already absorbed earlier
-// invocation history. Assistant tool-call messages are kept intact, while tool
-// results are replaced with a small placeholder that points the model at the
-// summary for details.
+// invocation history. Assistant tool-call messages are kept intact, while
+// oversized tool results are replaced with a small placeholder that points the
+// model at the summary for details.
 func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 	evt event.Event,
 	eventIndex int,
@@ -1239,11 +1239,12 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 		return event.Event{}, false
 	}
 
+	cfg := normalizeContextCompactionConfig(p.ContextCompactionConfig)
 	var compactedChoices []model.Choice
 	for _, choice := range evt.Choices {
 		msg, ok := compactedCurrentInvocationMessage(
 			choice.Message,
-			p.ContextCompactionConfig,
+			cfg,
 		)
 		if !ok {
 			continue
@@ -1283,6 +1284,9 @@ func compactedCurrentInvocationMessage(
 		if cfg.keepToolResult(msg) {
 			return msg, true
 		}
+		if !shouldCompactCurrentInvocationToolResult(msg, cfg) {
+			return msg, true
+		}
 		return model.Message{
 			Role:     msg.Role,
 			Content:  compactedToolResultPlaceholder,
@@ -1292,6 +1296,24 @@ func compactedCurrentInvocationMessage(
 	default:
 		return model.Message{}, false
 	}
+}
+
+func shouldCompactCurrentInvocationToolResult(
+	msg model.Message,
+	cfg ContextCompactionConfig,
+) bool {
+	if cfg.ToolResultMaxTokens <= 0 {
+		return false
+	}
+	counter := cfg.TokenCounter
+	if counter == nil {
+		counter = model.NewSimpleTokenCounter()
+	}
+	tokens, err := counter.CountTokens(context.Background(), msg)
+	if err != nil {
+		return false
+	}
+	return tokens > cfg.ToolResultMaxTokens
 }
 
 func annotateUserMessagesWithAttachedFiles(
@@ -1582,14 +1604,12 @@ func (p *ContentRequestProcessor) collectCurrentInvocationEvents(
 	inv *agent.Invocation,
 ) []event.Event {
 	var events []event.Event
-	inv.Session.EventMu.RLock()
-	for _, evt := range inv.Session.Events {
+	for _, evt := range sessionEventsSnapshot(inv.Session) {
 		if !isCurrentInvocationEligibleEvent(evt, inv.InvocationID) {
 			continue
 		}
 		events = append(events, normalizeCurrentInvocationEvent(evt))
 	}
-	inv.Session.EventMu.RUnlock()
 	return events
 }
 
@@ -2058,6 +2078,7 @@ func eventHasCompactedCurrentInvocationToolResult(
 	evt event.Event,
 	cfg ContextCompactionConfig,
 ) bool {
+	cfg = normalizeContextCompactionConfig(cfg)
 	for _, choice := range evt.Choices {
 		msg := choice.Message
 		if msg.Role != model.RoleTool || msg.ToolID == "" {
