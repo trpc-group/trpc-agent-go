@@ -128,6 +128,7 @@ autoSrc := autosource.New(
 
 ```go
 import (
+    _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang"
     reposource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo"
 )
 
@@ -142,6 +143,9 @@ repoSrc := reposource.New(
     reposource.WithFileExtensions([]string{".go", ".md"}),
 )
 ```
+
+Go AST reader 是可选模块。扫描 `.go` 文件时，需要手动 blank import
+`knowledge/document/reader/golang` 完成注册；Proto reader 默认注册。
 
 ### Repository 结构说明
 

@@ -26,15 +26,13 @@ import (
 
 // Parser parses proto files into internal codeast results.
 type Parser struct {
-	extractor codeast.Extractor[*extractInput]
-	analyzer  codeast.Analyzer[*analyzeInput]
+	extractor *defaultExtractor
 }
 
 // NewParser creates a new proto parser.
 func NewParser() *Parser {
 	return &Parser{
 		extractor: newDefaultExtractor(),
-		analyzer:  newDefaultAnalyzer(),
 	}
 }
 
@@ -95,11 +93,7 @@ func (p *Parser) ParseContent(name, content string) (*codeast.Result, error) {
 		fileInfo.Metadata["java_package"] = javaPackage
 	}
 
-	edges, err := p.analyzer.Analyze(&analyzeInput{}, nil)
-	if err != nil {
-		return nil, err
-	}
-	return &codeast.Result{File: fileInfo, Nodes: nodes, Edges: edges}, nil
+	return &codeast.Result{File: fileInfo, Nodes: nodes, Edges: []*codeast.Edge{}}, nil
 }
 
 // BuildRPCSignature builds a human-readable RPC signature.
