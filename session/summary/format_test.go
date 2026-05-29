@@ -52,6 +52,16 @@ func TestMessageContentForSummary(t *testing.T) {
 	assert.Contains(t, got, "[audio attachment]")
 	assert.Contains(t, got, "[file attachment: doc.txt]")
 	require.Empty(t, messageContentForSummary(model.Message{}))
+
+	// A text part mirroring Content must not be emitted twice.
+	mirror := "same text"
+	dedup := messageContentForSummary(model.Message{
+		Content: "same text",
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &mirror},
+		},
+	})
+	assert.Equal(t, "same text", dedup)
 }
 
 func TestFilePartSummary(t *testing.T) {
@@ -62,11 +72,22 @@ func TestFilePartSummary(t *testing.T) {
 	t.Run("name", func(t *testing.T) {
 		assert.Equal(t, "[file attachment: a.pdf]", filePartSummary(&model.File{Name: "a.pdf"}))
 	})
-	t.Run("url fallback", func(t *testing.T) {
-		assert.Equal(t, "[file attachment: https://x/y]", filePartSummary(&model.File{URL: "https://x/y"}))
+	t.Run("raw url is not persisted", func(t *testing.T) {
+		assert.Equal(
+			t,
+			"[file attachment]",
+			filePartSummary(&model.File{URL: "https://x/y?token=secret"}),
+		)
 	})
 	t.Run("file id fallback", func(t *testing.T) {
 		assert.Equal(t, "[file attachment: file-123]", filePartSummary(&model.File{FileID: "file-123"}))
+	})
+	t.Run("prefers file id over url", func(t *testing.T) {
+		assert.Equal(
+			t,
+			"[file attachment: file-123]",
+			filePartSummary(&model.File{URL: "https://x/y", FileID: "file-123"}),
+		)
 	})
 	t.Run("blank file", func(t *testing.T) {
 		assert.Equal(t, "[file attachment]", filePartSummary(&model.File{}))

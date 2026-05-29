@@ -36,15 +36,23 @@ func formatDetailedSummaryOutput(text string) string {
 
 func messageContentForSummary(msg model.Message) string {
 	parts := make([]string, 0, 1+len(msg.ContentParts))
-	if strings.TrimSpace(msg.Content) != "" {
+	content := strings.TrimSpace(msg.Content)
+	if content != "" {
 		parts = append(parts, msg.Content)
 	}
 	for _, part := range msg.ContentParts {
 		switch part.Type {
 		case model.ContentTypeText:
-			if part.Text != nil && strings.TrimSpace(*part.Text) != "" {
-				parts = append(parts, *part.Text)
+			if part.Text == nil {
+				continue
 			}
+			text := strings.TrimSpace(*part.Text)
+			// Skip text parts that merely mirror Content so the same
+			// utterance is not emitted twice into the summary input.
+			if text == "" || text == content {
+				continue
+			}
+			parts = append(parts, *part.Text)
 		case model.ContentTypeImage:
 			parts = append(parts, "[image attachment]")
 		case model.ContentTypeAudio:
@@ -64,9 +72,9 @@ func filePartSummary(file *model.File) string {
 	if name != "" {
 		return fmt.Sprintf("[file attachment: %s]", name)
 	}
-	if fileURL := strings.TrimSpace(file.URL); fileURL != "" {
-		return fmt.Sprintf("[file attachment: %s]", fileURL)
-	}
+	// Prefer the opaque file ID over the raw URL: URLs may carry presigned
+	// query strings or internal paths that should not be persisted into
+	// summaries or replayed into future prompts.
 	if fileID := strings.TrimSpace(file.FileID); fileID != "" {
 		return fmt.Sprintf("[file attachment: %s]", fileID)
 	}
