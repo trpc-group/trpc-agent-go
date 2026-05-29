@@ -35,7 +35,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
-	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/internal/spawnenv"
 )
 
 const (
@@ -426,14 +425,15 @@ func runProgramCaptureArgv(
 	return captured
 }
 
-// TestWorkspaceRuntime_RunProgram_CleanEnvUsesEnvIAndNoProfile guards
-// the container half of issue #1845: when spec.CleanEnv is set the
-// command must be spawned via `env -i ...` under a non-login
-// `bash --noprofile --norc`, so neither the inherited container
-// process env nor a sourced /etc/profile / ~/.bashrc can survive
-// into the spawned command. A minimal PATH is injected so `env -i`
-// can still resolve the command name.
-func TestWorkspaceRuntime_RunProgram_CleanEnvUsesEnvIAndNoProfile(
+// TestWorkspaceRuntime_RunProgram_CleanEnvLaunchesBashInEmptyEnv
+// guards the container half of issue #1845: when spec.CleanEnv is
+// set the *outer* bash must itself be launched through
+// `env -i PATH=<minimal>` (not merely the inner command), so a
+// container-supplied BASH_ENV / ENV / LD_PRELOAD cannot run code or
+// hijack the shell process at start-up before the command line
+// executes. --noprofile / --norc additionally skip profile/rc
+// files, and the inner `env -i ...` pins the command's own env.
+func TestWorkspaceRuntime_RunProgram_CleanEnvLaunchesBashInEmptyEnv(
 	t *testing.T,
 ) {
 	argv := runProgramCaptureArgv(t, codeexecutor.RunProgramSpec{
@@ -443,14 +443,17 @@ func TestWorkspaceRuntime_RunProgram_CleanEnvUsesEnvIAndNoProfile(
 		Timeout:  time.Duration(waitShortSec) * time.Second,
 	})
 	require.Equal(t,
-		[]string{"/bin/bash", "--noprofile", "--norc", "-c"},
+		[]string{
+			"env", "-i", "PATH=" + minimalCleanPATH,
+			"/bin/bash", "--noprofile", "--norc", "-c",
+		},
 		argv[:len(argv)-1],
-		"clean mode must use a non-login shell",
+		"clean mode must launch the outer bash from an empty env",
 	)
 	cmdline := argv[len(argv)-1]
 	require.Contains(t, cmdline, "env -i ",
 		"clean mode must start the command from an empty env")
-	require.Contains(t, cmdline, spawnenv.MinimalPATH,
+	require.Contains(t, cmdline, minimalCleanPATH,
 		"clean mode must inject a minimal PATH for env -i")
 	require.Contains(t, cmdline,
 		codeexecutor.WorkspaceEnvDirKey+"=",
@@ -472,7 +475,7 @@ func TestWorkspaceRuntime_RunProgram_CleanEnvKeepsSpecPATH(
 	})
 	cmdline := argv[len(argv)-1]
 	require.Contains(t, cmdline, "/opt/vetted/bin")
-	require.NotContains(t, cmdline, spawnenv.MinimalPATH,
+	require.NotContains(t, cmdline, minimalCleanPATH,
 		"caller PATH must suppress the MinimalPATH fallback")
 }
 
@@ -493,7 +496,7 @@ func TestWorkspaceRuntime_RunProgram_NoCleanEnvKeepsLoginShell(
 	cmdline := argv[len(argv)-1]
 	require.Contains(t, cmdline, "env ")
 	require.NotContains(t, cmdline, "env -i")
-	require.NotContains(t, cmdline, spawnenv.MinimalPATH)
+	require.NotContains(t, cmdline, minimalCleanPATH)
 }
 
 // TestContainer_EngineAdvertisesCleanEnv verifies the container

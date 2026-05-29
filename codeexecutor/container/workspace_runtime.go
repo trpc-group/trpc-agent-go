@@ -33,7 +33,6 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
-	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/internal/spawnenv"
 )
 
 const (
@@ -446,9 +445,7 @@ func (r *workspaceRuntime) RunProgram(
 	// environment plus the workspace base vars and a minimal PATH,
 	// honoring RunProgramSpec.CleanEnv on the container backend
 	// (issue #1845).
-	envPrefix := spawnenv.Prefix(
-		baseEnv, spec.Env, spec.CleanEnv, shellQuote,
-	)
+	envPrefix := envToken(baseEnv, spec.Env, spec.CleanEnv)
 	var cmdline strings.Builder
 	// Ensure run/output dirs exist before cd/exec.
 	cmdline.WriteString("mkdir -p ")
@@ -1234,16 +1231,26 @@ func shellQuote(s string) string {
 	return "'" + q + "'"
 }
 
-// programShellArgv selects the bash invocation used to run a
-// program. In CleanEnv (policy) mode the outer shell is started with
-// --noprofile --norc so /etc/profile and ~/.bashrc cannot execute
-// code or rewrite the environment at shell start-up; the inner
-// command is already pinned to a minimal env by the `env -i ...`
-// prefix. Otherwise the historical login shell (-lc) is preserved
-// so non-policy callers keep their profile-sourced environment.
+// programShellArgv selects the process argv used to run a program.
+//
+// In CleanEnv (policy) mode the outer bash is itself launched
+// through `env -i PATH=<minimal>`, so it starts from an empty
+// environment. This is required - not merely belt-and-suspenders -
+// because `docker exec` hands the outer shell the container process
+// environment, and a non-interactive bash sources $BASH_ENV (and is
+// subject to $LD_PRELOAD on its own process) *before* it runs the
+// command line. --noprofile / --norc only suppress profile and rc
+// files, not BASH_ENV, so without the `env -i` wrapper a
+// container-supplied BASH_ENV / ENV / LD_PRELOAD would execute or
+// hijack at shell start-up, ahead of the inner `env -i ...` that
+// isolates the command. PATH is set so the shell can still resolve
+// mkdir / cd / env. Without CleanEnv the historical login shell
+// (-lc) and inherited environment are preserved for non-policy
+// callers.
 func programShellArgv(clean bool, cmdline string) []string {
 	if clean {
 		return []string{
+			"env", "-i", "PATH=" + minimalCleanPATH,
 			"/bin/bash", "--noprofile", "--norc", "-c", cmdline,
 		}
 	}
