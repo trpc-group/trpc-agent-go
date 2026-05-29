@@ -140,7 +140,12 @@ func (s *Service) EndSession(ctx context.Context, sess *session.Session) error {
 	})
 	if err == nil {
 		clearBestEffortSyntheticTimestamp(sess)
-		s.clearSessionCheckpoint(sessionKey)
+		// Intentionally retain the service-level capture checkpoint until the
+		// service shuts down. It is the only reliable cursor for reloaded or
+		// cloned sessions, so dropping it here would let a framework session
+		// that keeps running after EndSession re-scan and resend transcript
+		// that was already captured. Keeping it is safe because new events
+		// always carry timestamps after the cursor.
 	}
 	s.finishSerialBarrier(sessionKey, barrier, nil)
 	return err
@@ -339,10 +344,4 @@ func (s *Service) finishSerialBarrier(sessionKey string, barrier *captureSerialS
 		delete(s.serialTail, sessionKey)
 	}
 	close(barrier.done)
-}
-
-func (s *Service) clearSessionCheckpoint(sessionKey string) {
-	s.cursorMu.Lock()
-	defer s.cursorMu.Unlock()
-	delete(s.lastCapture, sessionKey)
 }

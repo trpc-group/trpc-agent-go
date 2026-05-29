@@ -365,3 +365,69 @@ func TestServiceCheckpointSkipsReloadedSessionEvents(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+func TestEndSessionRetainsCaptureCheckpoint(t *testing.T) {
+	requests := make(chan captureRequest, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case pathCapture:
+			var req captureRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			requests <- req
+			_ = json.NewEncoder(w).Encode(captureResponse{L0Recorded: len(req.Messages)})
+		case pathEndSession:
+			_ = json.NewEncoder(w).Encode(endSessionResponse{Flushed: true})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	svc, err := NewService(
+		WithGatewayURL(server.URL),
+		WithIngestQueueSize(2),
+		WithIngestJobTimeout(time.Second),
+	)
+	require.NoError(t, err, "NewService")
+	defer func() {
+		assert.NoError(t, svc.Close())
+	}()
+
+	sess := captureReadySession()
+	require.NoError(t, svc.IngestSession(context.Background(), sess), "IngestSession")
+	_ = waitCaptureRequest(t, requests, "initial capture")
+
+	sessionKey := svc.sessionKey(sess)
+	waitForCondition(t, time.Second, func() bool {
+		svc.cursorMu.Lock()
+		defer svc.cursorMu.Unlock()
+		_, ok := svc.lastCapture[sessionKey]
+		return ok
+	})
+
+	require.NoError(t, svc.EndSession(context.Background(), sess), "EndSession")
+
+	svc.cursorMu.Lock()
+	_, retained := svc.lastCapture[sessionKey]
+	svc.cursorMu.Unlock()
+	assert.True(t, retained, "capture checkpoint should be retained after EndSession")
+
+	// A session that keeps running (here modeled as a reload without the
+	// in-state cursor) must not resend already captured transcript, because the
+	// service-level checkpoint survives EndSession.
+	reloaded := &session.Session{
+		ID:      sess.ID,
+		AppName: sess.AppName,
+		UserID:  sess.UserID,
+		Events:  sess.GetEvents(),
+		State:   session.StateMap{},
+	}
+	require.NoError(t, svc.IngestSession(context.Background(), reloaded), "reloaded IngestSession")
+	select {
+	case req := <-requests:
+		t.Fatalf("session resent captured events after EndSession: %#v", req)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
