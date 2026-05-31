@@ -466,7 +466,24 @@ func (s *Service) addEvent(
 
 func eventCreatedAtUTC(evt *event.Event, fallback time.Time) time.Time {
 	if evt != nil && !evt.Timestamp.IsZero() {
-		return evt.Timestamp.UTC()
+		return timestampUTC(evt.Timestamp, fallback)
+	}
+	return timestampUTC(time.Time{}, fallback)
+}
+
+func trackEventCreatedAtUTC(
+	trackEvent *session.TrackEvent,
+	fallback time.Time,
+) time.Time {
+	if trackEvent != nil && !trackEvent.Timestamp.IsZero() {
+		return timestampUTC(trackEvent.Timestamp, fallback)
+	}
+	return timestampUTC(time.Time{}, fallback)
+}
+
+func timestampUTC(ts time.Time, fallback time.Time) time.Time {
+	if !ts.IsZero() {
+		return ts.UTC()
 	}
 	return fallback.UTC()
 }
@@ -478,6 +495,8 @@ func (s *Service) addTrackEvent(
 	trackEvent *session.TrackEvent,
 ) error {
 	now := time.Now()
+	nowUTC := now.UTC()
+	trackCreatedAt := trackEventCreatedAtUTC(trackEvent, now)
 	eventBytes, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf(
@@ -549,7 +568,7 @@ func (s *Service) addTrackEvent(
 				return err
 			}
 			sessState.State = sess.SnapshotState()
-			sessState.UpdatedAt = sess.UpdatedAt
+			sessState.UpdatedAt = nowUTC
 			updatedStateBytes, err := json.Marshal(
 				&sessState,
 			)
@@ -592,8 +611,8 @@ func (s *Service) addTrackEvent(
 				),
 				key.AppName, key.UserID,
 				key.SessionID, trackEvent.Track,
-				eventBytes, trackEvent.Timestamp,
-				trackEvent.Timestamp, expiresAt,
+				eventBytes, trackCreatedAt,
+				nowUTC, expiresAt,
 			)
 			if err != nil {
 				return fmt.Errorf(

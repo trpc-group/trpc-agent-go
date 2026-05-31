@@ -3865,13 +3865,23 @@ func TestAddTrackEvent_Success(t *testing.T) {
 		).AddRow(stateBytes, nil))
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	eventTime := time.Date(
+		2026, 5, 31, 20, 25, 0, 123456000,
+		time.FixedZone("UTC+8", 8*60*60),
+	)
 	mock.ExpectExec("INSERT INTO session_track").
+		WithArgs(
+			"app", "user", "sess",
+			sqlmock.AnyArg(), sqlmock.AnyArg(),
+			exactUTCTimeArg{want: eventTime},
+			utcTimeArg{}, sqlmock.AnyArg(),
+		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	te := &session.TrackEvent{
 		Track:     "track1",
-		Timestamp: time.Now(),
+		Timestamp: eventTime,
 	}
 	err := s.addTrackEvent(
 		context.Background(), key, te,
