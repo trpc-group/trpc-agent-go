@@ -184,6 +184,38 @@ func TestAddEvent_StoresEventCreatedAtAsTimestampUTC(
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestCreatedAtUTCUsesTimestampOrFallback(t *testing.T) {
+	fallback := time.Date(
+		2026, 5, 31, 20, 25, 0, 0,
+		time.FixedZone("UTC+8", 8*60*60),
+	)
+	eventTime := fallback.Add(time.Minute)
+
+	assert.Equal(
+		t,
+		fallback.UTC(),
+		eventCreatedAtUTC(nil, fallback),
+	)
+	assert.Equal(
+		t,
+		eventTime.UTC(),
+		eventCreatedAtUTC(&event.Event{Timestamp: eventTime}, fallback),
+	)
+	assert.Equal(
+		t,
+		fallback.UTC(),
+		trackEventCreatedAtUTC(nil, fallback),
+	)
+	assert.Equal(
+		t,
+		eventTime.UTC(),
+		trackEventCreatedAtUTC(
+			&session.TrackEvent{Timestamp: eventTime},
+			fallback,
+		),
+	)
+}
+
 func TestAddEvent_QueryStateError(t *testing.T) {
 	s, mock, db := newTestService(t, nil)
 	defer db.Close()
