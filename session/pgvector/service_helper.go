@@ -332,6 +332,8 @@ func (s *Service) addEvent(
 	evt *event.Event,
 ) error {
 	now := time.Now()
+	nowUTC := now.UTC()
+	eventCreatedAt := eventCreatedAtUTC(evt, now)
 	eventBytes, err := json.Marshal(evt)
 	if err != nil {
 		return fmt.Errorf(
@@ -391,7 +393,7 @@ func (s *Service) addEvent(
 					key.AppName, key.UserID, key.SessionID,
 				)
 			}
-			sessState.UpdatedAt = now
+			sessState.UpdatedAt = nowUTC
 			if sessState.State == nil {
 				sessState.State = make(session.StateMap)
 			}
@@ -443,7 +445,7 @@ func (s *Service) addEvent(
 					),
 					key.AppName, key.UserID,
 					key.SessionID, eventBytes,
-					now, now, expiresAt,
+					eventCreatedAt, nowUTC, expiresAt,
 				)
 				if err != nil {
 					return fmt.Errorf(
@@ -460,6 +462,13 @@ func (s *Service) addEvent(
 		)
 	}
 	return nil
+}
+
+func eventCreatedAtUTC(evt *event.Event, fallback time.Time) time.Time {
+	if evt != nil && !evt.Timestamp.IsZero() {
+		return evt.Timestamp.UTC()
+	}
+	return fallback.UTC()
 }
 
 // addTrackEvent adds a track event to a session.
