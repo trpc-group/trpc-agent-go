@@ -1036,9 +1036,42 @@ func TestModel_convertMessageContent_PreservesFunctionCallThoughtSignature(t *te
 	assert.Equal(t, signature, part.ThoughtSignature)
 }
 
+func TestModel_convertMessageContent_InjectsSkipValidatorForCrossProviderFunctionCall(t *testing.T) {
+	args := []byte(`{"command":"echo hi"}`)
+	message := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{
+				ID: "call-1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "execute_series",
+					Arguments: args,
+				},
+			},
+			{
+				ID: "call-2",
+				Function: model.FunctionDefinitionParam{
+					Name:      "execute_series",
+					Arguments: args,
+				},
+			},
+		},
+	}
+
+	contents := (&Model{}).convertMessageContent(message)
+
+	require.Len(t, contents, 2)
+	first := contents[0].Parts[0]
+	second := contents[1].Parts[0]
+	require.NotNil(t, first.FunctionCall)
+	require.NotNil(t, second.FunctionCall)
+	assert.Equal(t, []byte(geminiSkipThoughtSignatureValidator), first.ThoughtSignature)
+	assert.Empty(t, second.ThoughtSignature)
+}
+
 func TestModel_convertToolCallPart_EdgeCases(t *testing.T) {
 	t.Run("empty function name returns nil", func(t *testing.T) {
-		assert.Nil(t, (&Model{}).convertToolCallPart(model.ToolCall{}))
+		assert.Nil(t, (&Model{}).convertToolCallPart(model.ToolCall{}, true))
 	})
 
 	t.Run("invalid json args falls back to empty args", func(t *testing.T) {
@@ -1048,7 +1081,7 @@ func TestModel_convertToolCallPart_EdgeCases(t *testing.T) {
 				Name:      "weather",
 				Arguments: []byte(`{"city"`),
 			},
-		})
+		}, true)
 
 		require.NotNil(t, part)
 		require.NotNil(t, part.FunctionCall)
