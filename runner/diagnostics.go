@@ -27,6 +27,8 @@ import (
 const (
 	runnerLatencySpanRun             = "runner.run"
 	runnerLatencySpanGetSession      = "runner.session.get_or_create"
+	runnerLatencySpanSessionRead     = "runner.session.read"
+	runnerLatencySpanSessionCreate   = "runner.session.create"
 	runnerLatencySpanAwaitRoute      = "runner.await_user_reply.route"
 	runnerLatencySpanSelectAgent     = "runner.agent.select"
 	runnerLatencySpanResolveMessages = "runner.messages.resolve_current_turn"
@@ -42,6 +44,10 @@ const (
 	runnerLatencySpanFlush           = "runner.flush"
 	runnerLatencySpanCompletion      = "runner.completion.emit"
 	runnerLatencySpanInterrupted     = "runner.interrupted.persist"
+
+	runnerAttrSessionHit         = "runner.session.hit"
+	runnerAttrSessionStateKeys   = "runner.session.state_keys"
+	runnerAttrSessionSummaryKeys = "runner.session.summary_keys"
 )
 
 func runnerLatencyEnabled(inv *agent.Invocation) bool {
@@ -134,9 +140,26 @@ func runnerSessionAttrs(key session.Key, sess *session.Session) []attribute.KeyV
 		attrs = append(
 			attrs,
 			attribute.Int("runner.session.events", sess.GetEventCount()),
+			attribute.Int(
+				runnerAttrSessionStateKeys,
+				len(sess.SnapshotState()),
+			),
+			attribute.Int(
+				runnerAttrSessionSummaryKeys,
+				runnerSessionSummaryCount(sess),
+			),
 		)
 	}
 	return attrs
+}
+
+func runnerSessionSummaryCount(sess *session.Session) int {
+	if sess == nil {
+		return 0
+	}
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
+	return len(sess.Summaries)
 }
 
 func runnerEventAttrs(evt *event.Event) []attribute.KeyValue {

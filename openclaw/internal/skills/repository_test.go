@@ -1431,6 +1431,31 @@ description: "Probe weather prerequisites"
 	require.Equal(t, "weather-probe", summaries[0].Name)
 }
 
+func TestRepositorySummaryCacheHit(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+---
+
+# weather-probe
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	hit, known := repo.SummaryCacheHit(context.Background())
+	require.True(t, known)
+	require.True(t, hit)
+
+	expireSummaryCache(t, repo)
+	hit, known = repo.SummaryCacheHit(context.Background())
+	require.True(t, known)
+	require.False(t, hit)
+}
+
 func TestRepositorySummaryFingerprintHelpers(t *testing.T) {
 	t.Parallel()
 

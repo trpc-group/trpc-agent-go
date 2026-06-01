@@ -4137,10 +4137,14 @@ func TestRunnerLatencyDiagnosticHelpers(t *testing.T) {
 	require.Nil(t, runnerInvocationAttrs(nil))
 
 	sess := session.NewSession("app", "user", "sess")
+	sess.SetState("state-key", []byte("value"))
+	sess.Summaries = map[string]*session.Summary{"default": {}}
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
 	sessionAttrs := runnerSessionAttrs(key, sess)
 	require.True(t, runnerHasAttr(sessionAttrs, "runner.session.app", "app"))
 	require.True(t, runnerHasAttr(sessionAttrs, "runner.session.events", 0))
+	require.True(t, runnerHasAttr(sessionAttrs, runnerAttrSessionStateKeys, 1))
+	require.True(t, runnerHasAttr(sessionAttrs, runnerAttrSessionSummaryKeys, 1))
 
 	evt := event.New(
 		inv.InvocationID,

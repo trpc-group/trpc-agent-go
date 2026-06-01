@@ -490,7 +490,7 @@ func (r *runner) Run(
 		runnerLatencySpanGetSession,
 		runnerSessionAttrs(sessionKey, nil)...,
 	)
-	sess, err := r.getOrCreateSession(sessionCtx, sessionKey)
+	sess, err := r.getOrCreateSession(sessionCtx, ro, sessionKey)
 	if sessionStarted && sess != nil {
 		sessionSpan.SetAttributes(runnerSessionAttrs(sessionKey, sess)...)
 	}
@@ -1039,16 +1039,48 @@ func (r *runner) wrapSelectedAgent(ag agent.Agent) agent.Agent {
 
 // getOrCreateSession returns an existing session or creates a new one.
 func (r *runner) getOrCreateSession(
-	ctx context.Context, key session.Key,
+	ctx context.Context,
+	ro agent.RunOptions,
+	key session.Key,
 ) (*session.Session, error) {
-	sess, err := r.sessionService.GetSession(ctx, key)
+	readCtx, readSpan, readStarted := startRunnerRunOptionsLatencySpan(
+		ctx,
+		ro,
+		runnerLatencySpanSessionRead,
+		runnerSessionAttrs(key, nil)...,
+	)
+	sess, err := r.sessionService.GetSession(readCtx, key)
+	if readStarted {
+		readSpan.SetAttributes(
+			attribute.Bool(runnerAttrSessionHit, err == nil && sess != nil),
+		)
+		if sess != nil {
+			readSpan.SetAttributes(runnerSessionAttrs(key, sess)...)
+		}
+	}
+	finishRunnerLatencySpan(readSpan, readStarted, err)
 	if err != nil {
 		return nil, err
 	}
 	if sess != nil {
 		return sess, nil
 	}
-	return r.sessionService.CreateSession(ctx, key, session.StateMap{})
+	createCtx, createSpan, createStarted := startRunnerRunOptionsLatencySpan(
+		ctx,
+		ro,
+		runnerLatencySpanSessionCreate,
+		runnerSessionAttrs(key, nil)...,
+	)
+	sess, err = r.sessionService.CreateSession(
+		createCtx,
+		key,
+		session.StateMap{},
+	)
+	if createStarted && sess != nil {
+		createSpan.SetAttributes(runnerSessionAttrs(key, sess)...)
+	}
+	finishRunnerLatencySpan(createSpan, createStarted, err)
+	return sess, err
 }
 
 // eventLoopContext bundles all channels and state required by the event loop.

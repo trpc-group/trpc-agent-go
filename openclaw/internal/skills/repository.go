@@ -171,6 +171,18 @@ func (r *Repository) Summaries() []skill.Summary {
 	return cloneSkillSummaries(r.summaries)
 }
 
+func (r *Repository) SummaryCacheHit(
+	_ context.Context,
+) (bool, bool) {
+	if r == nil {
+		return false, false
+	}
+	now := time.Now()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return !r.summaryCacheExpiredLocked(now), true
+}
+
 func (r *Repository) Get(name string) (*skill.Skill, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
