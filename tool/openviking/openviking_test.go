@@ -230,7 +230,16 @@ func TestStoreToolCreatesSessionAndCommits(t *testing.T) {
 }
 
 func TestStoreToolRejectsInvalidRole(t *testing.T) {
-	ts, _ := NewToolSet(WithBaseURL("http://127.0.0.1:1"))
+	// The role is validated before any remote write, so an invalid role with no
+	// session_id must error without auto-creating a (now stray) session.
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		okEnvelope(w, map[string]any{"session_id": "sess-1"})
+	}))
+	defer srv.Close()
+
+	ts, _ := NewToolSet(WithBaseURL(srv.URL))
 	defer ts.Close()
 
 	var store tool.CallableTool
@@ -244,11 +253,12 @@ func TestStoreToolRejectsInvalidRole(t *testing.T) {
 		t.Fatal("viking_store tool not found")
 	}
 
-	// Supply a session id so the call reaches role validation without first
-	// creating a session over HTTP; an invalid role must error, not coerce.
-	raw, _ := json.Marshal(storeArgs{Content: "hi", Role: "system", SessionID: "s1"})
+	raw, _ := json.Marshal(storeArgs{Content: "hi", Role: "system"})
 	if _, err := store.Call(context.Background(), raw); err == nil {
 		t.Error("viking_store should reject an unsupported role instead of rewriting it")
+	}
+	if hits.Load() != 0 {
+		t.Errorf("invalid role must not trigger any remote call, got %d", hits.Load())
 	}
 }
 

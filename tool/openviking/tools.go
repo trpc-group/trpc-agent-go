@@ -343,6 +343,15 @@ type storeOutput struct {
 
 func newStoreTool(c *client.Client) tool.Tool {
 	fn := func(ctx context.Context, a storeArgs) (storeOutput, error) {
+		// Validate the role before any remote write so an invalid request never
+		// leaves a stray auto-created session behind.
+		role := a.Role
+		if role == "" {
+			role = "user"
+		}
+		if role != "user" && role != "assistant" {
+			return storeOutput{}, fmt.Errorf("openviking: invalid role %q: must be user or assistant", a.Role)
+		}
 		sessionID := a.SessionID
 		if sessionID == "" {
 			raw, err := c.CreateSession(ctx, "")
@@ -353,13 +362,6 @@ func newStoreTool(c *client.Client) tool.Tool {
 			if sessionID == "" {
 				return storeOutput{}, fmt.Errorf("openviking: could not determine session_id from create response")
 			}
-		}
-		role := a.Role
-		if role == "" {
-			role = "user"
-		}
-		if role != "user" && role != "assistant" {
-			return storeOutput{}, fmt.Errorf("openviking: invalid role %q: must be user or assistant", a.Role)
 		}
 		if _, err := c.AddMessage(ctx, sessionID, role, a.Content); err != nil {
 			return storeOutput{}, err
