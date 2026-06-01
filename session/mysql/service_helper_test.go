@@ -1149,10 +1149,10 @@ func TestAddEvent_StoresAppendTimeAsTimestampUTC(t *testing.T) {
 	stateBytes, err := json.Marshal(sessState)
 	require.NoError(t, err)
 
-	eventTime := time.Date(
-		2026, 5, 31, 20, 25, 0, 123456000,
-		time.FixedZone("UTC+8", 8*60*60),
-	)
+	// event.Timestamp is logical event time; created_at stores the append time.
+	// Keep eventTime outside the append window so regressions cannot pass.
+	eventTime := time.Now().In(time.FixedZone("UTC+8", 8*60*60)).Add(-24 * time.Hour)
+	beforeAppend := time.Now().UTC()
 
 	expectLoadSessionStateForUpdate(mock, key).
 		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
@@ -1162,7 +1162,7 @@ func TestAddEvent_StoresAppendTimeAsTimestampUTC(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_events")).
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg(),
-			utcTimeNotEqualArg{not: eventTime}, utcTimeArg{}).
+			appendTimeUTCArg{notBefore: beforeAppend}, utcTimeArg{}).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 

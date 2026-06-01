@@ -66,15 +66,16 @@ func (a exactUTCTimeArg) Match(v driver.Value) bool {
 		t.Equal(a.want.UTC())
 }
 
-type utcTimeNotEqualArg struct {
-	not time.Time
+type appendTimeUTCArg struct {
+	notBefore time.Time
 }
 
-func (a utcTimeNotEqualArg) Match(v driver.Value) bool {
+func (a appendTimeUTCArg) Match(v driver.Value) bool {
 	t, ok := v.(time.Time)
 	return ok &&
 		t.Location() == time.UTC &&
-		!t.Equal(a.not.UTC())
+		!t.Before(a.notBefore.UTC()) &&
+		!t.After(time.Now().UTC().Add(time.Second))
 }
 
 // AnyStringSlice returns a custom matcher for []string arguments.
