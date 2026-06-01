@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -421,13 +422,24 @@ func (c *Client) setAuthHeaders(req *http.Request) {
 	}
 }
 
-// isRecoverable reports whether err is a transient error worth one retry.
+// isRecoverable reports whether err is a transient error worth one retry. It
+// deliberately matches the documented policy: only the UNAVAILABLE /
+// DEADLINE_EXCEEDED server codes and connection-level transport failures are
+// retried. Caller cancellation/deadline and deterministic local failures
+// (request build, JSON encode/decode) are never retried, so cancellation
+// propagates and non-transient bugs are not masked.
 func isRecoverable(err error) bool {
+	// Respect caller-driven cancellation and deadlines: do not retry.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	// Structured server errors: retry only the transient codes.
 	var apiErr *apiError
 	if errors.As(err, &apiErr) {
 		return apiErr.recoverable()
 	}
-	// Network/transport errors (connection refused, reset, timeout) are
-	// surfaced as wrapped errors here; treat them as recoverable.
-	return true
+	// Connection-level transport failures (refused, reset, timeout) surface as
+	// net.Error (including via *url.Error); retry those once.
+	var netErr net.Error
+	return errors.As(err, &netErr)
 }

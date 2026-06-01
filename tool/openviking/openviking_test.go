@@ -101,6 +101,32 @@ func TestWithToolNamesOverride(t *testing.T) {
 	}
 }
 
+func TestWithToolNamesRejectsUnknown(t *testing.T) {
+	if _, err := NewToolSet(WithToolNames("viking_bogus")); err == nil {
+		t.Error("NewToolSet should fail fast on an unknown tool name")
+	}
+}
+
+func TestWithToolNamesGatesForget(t *testing.T) {
+	gated, err := NewToolSet(WithToolNames(toolFind, toolForget))
+	if err != nil {
+		t.Fatalf("NewToolSet: %v", err)
+	}
+	defer gated.Close()
+	if contains(toolNames(gated), toolForget) {
+		t.Error("viking_forget must not be exposed without admin profile or WithAllowForget")
+	}
+
+	allowed, err := NewToolSet(WithToolNames(toolFind, toolForget), WithAllowForget(true))
+	if err != nil {
+		t.Fatalf("NewToolSet: %v", err)
+	}
+	defer allowed.Close()
+	if !contains(toolNames(allowed), toolForget) {
+		t.Error("viking_forget should be exposed when WithAllowForget is set")
+	}
+}
+
 func TestSearchTool(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/search/search" {
@@ -196,6 +222,29 @@ func TestStoreToolCreatesSessionAndCommits(t *testing.T) {
 	}
 	if !createdSession.Load() || !addedMessage.Load() || !committed.Load() {
 		t.Errorf("expected create+add+commit, got %v/%v/%v", createdSession.Load(), addedMessage.Load(), committed.Load())
+	}
+}
+
+func TestStoreToolRejectsInvalidRole(t *testing.T) {
+	ts, _ := NewToolSet(WithBaseURL("http://127.0.0.1:1"))
+	defer ts.Close()
+
+	var store tool.CallableTool
+	for _, tl := range ts.Tools(context.Background()) {
+		if tl.Declaration().Name == toolStore {
+			store = tl.(tool.CallableTool)
+			break
+		}
+	}
+	if store == nil {
+		t.Fatal("viking_store tool not found")
+	}
+
+	// Supply a session id so the call reaches role validation without first
+	// creating a session over HTTP; an invalid role must error, not coerce.
+	raw, _ := json.Marshal(storeArgs{Content: "hi", Role: "system", SessionID: "s1"})
+	if _, err := store.Call(context.Background(), raw); err == nil {
+		t.Error("viking_store should reject an unsupported role instead of rewriting it")
 	}
 }
 

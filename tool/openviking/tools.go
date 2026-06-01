@@ -36,11 +36,16 @@ const (
 
 const defaultRetrievalLimit = 8
 
-// buildTools constructs the requested tools in the given order.
-func buildTools(c *client.Client, names []string) []tool.Tool {
+// buildTools constructs the requested tools in the given order. It fails fast
+// on any unknown tool name so a typo in WithToolNames surfaces immediately
+// instead of silently shrinking the exposed capability set.
+func buildTools(c *client.Client, names []string) ([]tool.Tool, error) {
+	// hasRead controls whether retrieval tools advertise viking_read; the
+	// "search then read" hint must not point the model at an absent tool.
+	hasRead := contains(names, toolRead)
 	factories := map[string]func(*client.Client) tool.Tool{
-		toolFind:        newFindTool,
-		toolSearch:      newSearchTool,
+		toolFind:        func(c *client.Client) tool.Tool { return newFindTool(c, hasRead) },
+		toolSearch:      func(c *client.Client) tool.Tool { return newSearchTool(c, hasRead) },
 		toolBrowse:      newBrowseTool,
 		toolRead:        newReadTool,
 		toolGrep:        newGrepTool,
@@ -52,11 +57,13 @@ func buildTools(c *client.Client, names []string) []tool.Tool {
 	}
 	tools := make([]tool.Tool, 0, len(names))
 	for _, name := range names {
-		if factory, ok := factories[name]; ok {
-			tools = append(tools, factory(c))
+		factory, ok := factories[name]
+		if !ok {
+			return nil, fmt.Errorf("openviking: unknown tool name %q", name)
 		}
+		tools = append(tools, factory(c))
 	}
-	return tools
+	return tools, nil
 }
 
 // retrievalHit is a flattened retrieval result item returned to the model.
@@ -74,7 +81,7 @@ type retrievalOutput struct {
 	Hint string         `json:"hint,omitempty"`
 }
 
-func flatten(res *client.RetrievalResult) retrievalOutput {
+func flatten(res *client.RetrievalResult, hasRead bool) retrievalOutput {
 	out := retrievalOutput{}
 	add := func(typ string, items []client.Item) {
 		for _, it := range items {
@@ -90,10 +97,13 @@ func flatten(res *client.RetrievalResult) retrievalOutput {
 	add("memory", res.Memories)
 	add("resource", res.Resources)
 	add("skill", res.Skills)
-	if len(out.Hits) == 0 {
+	switch {
+	case len(out.Hits) == 0:
 		out.Hint = "No OpenViking contexts matched."
-	} else {
+	case hasRead:
 		out.Hint = "Use viking_read with a uri above to fetch full content."
+	default:
+		out.Hint = "Each hit includes a short summary above."
 	}
 	return out
 }
@@ -143,7 +153,7 @@ type findArgs struct {
 	MinScore  float64 `json:"min_score,omitempty" jsonschema:"description=Minimum relevance score threshold"`
 }
 
-func newFindTool(c *client.Client) tool.Tool {
+func newFindTool(c *client.Client, hasRead bool) tool.Tool {
 	fn := func(ctx context.Context, a findArgs) (retrievalOutput, error) {
 		res, err := c.Find(ctx, client.FindRequest{
 			Query:          a.Query,
@@ -154,13 +164,16 @@ func newFindTool(c *client.Client) tool.Tool {
 		if err != nil {
 			return retrievalOutput{}, err
 		}
-		return flatten(res), nil
+		return flatten(res, hasRead), nil
+	}
+	desc := "Quick semantic recall from OpenViking without session context. " +
+		"Returns matching viking:// URIs with short summaries (not full content)."
+	if hasRead {
+		desc += " Call viking_read on a URI to fetch full content."
 	}
 	return function.NewFunctionTool(fn,
 		function.WithName(toolFind),
-		function.WithDescription("Quick semantic recall from OpenViking without session context. "+
-			"Returns matching viking:// URIs with short summaries (not full content); "+
-			"call viking_read on a URI to fetch full content."))
+		function.WithDescription(desc))
 }
 
 // ===== viking_search =====
@@ -173,7 +186,7 @@ type searchArgs struct {
 	MinScore  float64 `json:"min_score,omitempty" jsonschema:"description=Minimum relevance score threshold"`
 }
 
-func newSearchTool(c *client.Client) tool.Tool {
+func newSearchTool(c *client.Client, hasRead bool) tool.Tool {
 	fn := func(ctx context.Context, a searchArgs) (retrievalOutput, error) {
 		res, err := c.Search(ctx, client.FindRequest{
 			Query:          a.Query,
@@ -185,12 +198,16 @@ func newSearchTool(c *client.Client) tool.Tool {
 		if err != nil {
 			return retrievalOutput{}, err
 		}
-		return flatten(res), nil
+		return flatten(res, hasRead), nil
+	}
+	desc := "Session-aware hierarchical retrieval over OpenViking memories, resources, and skills. " +
+		"Returns matching viking:// URIs with short summaries."
+	if hasRead {
+		desc += " Call viking_read on a URI to fetch full content."
 	}
 	return function.NewFunctionTool(fn,
 		function.WithName(toolSearch),
-		function.WithDescription("Session-aware hierarchical retrieval over OpenViking memories, resources, and skills. "+
-			"Returns matching viking:// URIs with short summaries; call viking_read on a URI to fetch full content."))
+		function.WithDescription(desc))
 }
 
 // ===== viking_browse =====
@@ -203,6 +220,7 @@ type browseArgs struct {
 
 func newBrowseTool(c *client.Client) tool.Tool {
 	fn := func(ctx context.Context, a browseArgs) (string, error) {
+
 		uri := a.URI
 		if uri == "" {
 			uri = "viking://"
@@ -328,8 +346,11 @@ func newStoreTool(c *client.Client) tool.Tool {
 			}
 		}
 		role := a.Role
-		if role != "assistant" {
+		if role == "" {
 			role = "user"
+		}
+		if role != "user" && role != "assistant" {
+			return storeOutput{}, fmt.Errorf("openviking: invalid role %q: must be user or assistant", a.Role)
 		}
 		if _, err := c.AddMessage(ctx, sessionID, role, a.Content); err != nil {
 			return storeOutput{}, err

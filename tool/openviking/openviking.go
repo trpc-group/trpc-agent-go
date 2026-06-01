@@ -40,8 +40,6 @@ const (
 	ProfileAdmin Profile = "admin"
 )
 
-const toolSetName = "openviking"
-
 // config holds resolved ToolSet configuration.
 type config struct {
 	baseURL     string
@@ -146,24 +144,35 @@ func NewToolSet(opts ...Option) (*ToolSet, error) {
 		HTTPClient: httpClient,
 	})
 
-	ts := &ToolSet{client: c}
-	ts.tools = buildTools(c, selectToolNames(cfg))
-	return ts, nil
+	tools, err := buildTools(c, selectToolNames(cfg))
+	if err != nil {
+		return nil, err
+	}
+	return &ToolSet{client: c, tools: tools}, nil
 }
 
 // Tools implements tool.ToolSet.
 func (s *ToolSet) Tools(_ context.Context) []tool.Tool { return s.tools }
 
-// Name implements tool.ToolSet.
-func (s *ToolSet) Name() string { return toolSetName }
+// Name implements tool.ToolSet. It returns an empty string on purpose so the
+// tools keep their native viking_* names without a toolset prefix; the agent
+// instructions, tool descriptions, and hints all reference these unprefixed
+// names, and a non-empty name would make llmagent register openviking_viking_*.
+func (s *ToolSet) Name() string { return "" }
 
 // Close implements tool.ToolSet.
 func (s *ToolSet) Close() error { return s.client.Close() }
 
 // selectToolNames resolves the final ordered tool name list from the config.
 func selectToolNames(cfg *config) []string {
+	// The destructive viking_forget tool is gated behind the admin profile or
+	// an explicit WithAllowForget(true), regardless of how tools are selected.
+	forgetAllowed := cfg.profile == ProfileAdmin || cfg.allowForget
 	if len(cfg.toolNames) > 0 {
-		return cfg.toolNames
+		if forgetAllowed {
+			return cfg.toolNames
+		}
+		return removeString(cfg.toolNames, toolForget)
 	}
 	retrieval := []string{
 		toolFind,
@@ -182,10 +191,21 @@ func selectToolNames(cfg *config) []string {
 	default: // ProfileAgent
 		names = append(retrieval, toolStore, toolAddResource, toolAddSkill)
 	}
-	if cfg.allowForget && !contains(names, toolForget) {
+	if forgetAllowed && !contains(names, toolForget) {
 		names = append(names, toolForget)
 	}
 	return names
+}
+
+// removeString returns items without any element equal to target.
+func removeString(items []string, target string) []string {
+	out := make([]string, 0, len(items))
+	for _, s := range items {
+		if s != target {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func contains(names []string, target string) bool {
