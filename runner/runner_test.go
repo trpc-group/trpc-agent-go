@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
@@ -4058,6 +4059,137 @@ func TestRunner_Run_AgentRunError(t *testing.T) {
 	require.Equal(t, model.ErrorTypeRunError, errorEvent.Error.Type)
 	require.Equal(t, requestID, errorEvent.RequestID)
 	require.Equal(t, filterKey, errorEvent.FilterKey)
+}
+
+func TestRunnerLatencyDiagnosticHelpers(t *testing.T) {
+	ctx := context.Background()
+	_, disabledSpan, disabledStarted := startRunnerLatencySpan(
+		ctx,
+		nil,
+		runnerLatencySpanRun,
+	)
+	require.False(t, disabledStarted)
+	require.NotNil(t, disabledSpan)
+	finishRunnerLatencySpan(disabledSpan, false, errors.New("ignored"))
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&noOpAgent{name: "a"}),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			LatencyDiagnosticsEnabled: true,
+			RequestID:                 "req-latency",
+		}),
+	)
+	require.True(t, runnerLatencyEnabled(inv))
+	require.False(t, runnerLatencyEnabled(nil))
+	require.True(t, runnerRunOptionsLatencyEnabled(agent.RunOptions{
+		LatencyDiagnosticsEnabled: true,
+	}))
+	require.False(t, runnerRunOptionsLatencyEnabled(agent.RunOptions{
+		LatencyDiagnosticsEnabled: true,
+		DisableTracing:            true,
+	}))
+
+	_, span, started := startRunnerLatencySpan(
+		ctx,
+		inv,
+		runnerLatencySpanProcessEvent,
+		attribute.String("test.attr", "value"),
+	)
+	require.True(t, started)
+	finishRunnerLatencySpan(span, started, errors.New("boom"))
+
+	_, optionSpan, optionStarted := startRunnerRunOptionsLatencySpan(
+		ctx,
+		agent.RunOptions{LatencyDiagnosticsEnabled: true},
+		runnerLatencySpanRun,
+		attribute.String("runner.option", "value"),
+	)
+	require.True(t, optionStarted)
+	finishRunnerLatencySpan(optionSpan, optionStarted, nil)
+
+	_, optionSpan, optionStarted = startRunnerRunOptionsLatencySpan(
+		ctx,
+		agent.RunOptions{LatencyDiagnosticsEnabled: true, DisableTracing: true},
+		runnerLatencySpanRun,
+	)
+	require.False(t, optionStarted)
+	finishRunnerLatencySpan(optionSpan, optionStarted, nil)
+
+	runAttrs := runnerRunAttrs(
+		"app",
+		"user",
+		"sess",
+		model.NewUserMessage("hello"),
+		agent.RunOptions{
+			RequestID: "req-latency",
+			Messages:  []model.Message{model.NewSystemMessage("seed")},
+		},
+	)
+	require.True(t, runnerHasAttr(runAttrs, "runner.app", "app"))
+	require.True(t, runnerHasAttr(runAttrs, "runner.request_id", "req-latency"))
+	require.True(t, runnerHasAttr(runAttrs, "runner.message.role", "user"))
+	require.True(t, runnerHasAttr(runAttrs, "runner.message.has_payload", true))
+	require.True(t, runnerHasAttr(runAttrs, "runner.options.seed_messages", 1))
+
+	invAttrs := runnerInvocationAttrs(inv)
+	require.True(t, runnerHasAttr(invAttrs, "runner.agent", "a"))
+	require.True(t, runnerHasAttr(invAttrs, "runner.request_id", "req-latency"))
+	require.Nil(t, runnerInvocationAttrs(nil))
+
+	sess := session.NewSession("app", "user", "sess")
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	sessionAttrs := runnerSessionAttrs(key, sess)
+	require.True(t, runnerHasAttr(sessionAttrs, "runner.session.app", "app"))
+	require.True(t, runnerHasAttr(sessionAttrs, "runner.session.events", 0))
+
+	evt := event.New(
+		inv.InvocationID,
+		"a",
+		event.WithResponse(&model.Response{
+			Object:  model.ObjectTypePreprocessingStatus,
+			Choices: []model.Choice{{Index: 1}},
+		}),
+		event.WithStateDelta(map[string][]byte{"k": []byte("v")}),
+	)
+	eventAttrs := runnerEventAttrs(evt)
+	require.True(
+		t,
+		runnerHasAttr(
+			eventAttrs,
+			"runner.event.object",
+			model.ObjectTypePreprocessingStatus,
+		),
+	)
+	require.True(t, runnerHasAttr(eventAttrs, "runner.event.choices", 1))
+	require.True(
+		t,
+		runnerHasAttr(eventAttrs, "runner.event.state_delta_keys", 1),
+	)
+	require.Nil(t, runnerEventAttrs(nil))
+
+	require.True(t, runnerTraceEventDetails(nil))
+	require.True(t, runnerTraceEventDetails(&event.Event{}))
+	require.False(t, runnerTraceEventDetails(&event.Event{
+		Response: &model.Response{},
+	}))
+	require.True(t, runnerTraceEventDetails(&event.Event{
+		Response: &model.Response{Done: true},
+	}))
+	require.True(t, runnerTraceEventDetails(&event.Event{
+		Response: &model.Response{
+			Error: &model.ResponseError{Type: model.ErrorTypeRunError},
+		},
+	}))
+}
+
+func runnerHasAttr(attrs []attribute.KeyValue, key string, want any) bool {
+	for _, kv := range attrs {
+		if string(kv.Key) == key &&
+			fmt.Sprint(kv.Value.AsInterface()) == fmt.Sprint(want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGetOrCreateSession_Existing(t *testing.T) {
