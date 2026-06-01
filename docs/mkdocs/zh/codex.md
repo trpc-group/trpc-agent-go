@@ -49,6 +49,8 @@ if err != nil {
 
 该 Agent 会强制为 `codex exec` 添加 `--json`，并按 JSONL 解析 stdout。除非需要控制参数顺序，否则不要手动追加 `--json`。
 
+Prompt 文本会通过 stdin 写入 Codex CLI，因此 `--help` 这类用户输入不会被解析成 Codex CLI flag。
+
 `WithExtraArgs` 会把参数追加到 `exec` 或 `exec resume` 之后，只适合传入同时被 `codex exec` 与 `codex exec resume` 接受的参数，例如 `--model`。
 
 `WithGlobalArgs` 会把参数追加到 `exec` 子命令之前，适合传入 `--ask-for-approval`、`--sandbox`、`--cd` 等 Codex 根级参数。
@@ -69,7 +71,7 @@ ag, err := codex.New(
 - `WithEnv("CODEX_HOME=/path/to/codex-home")` 选择隔离的 Codex home。
 - `WithGlobalArgs("-p", "profile-name")` 选择 Codex profile。
 - `WithGlobalArgs("-c", "key=value")` 传入 Codex config override。
-- `WithExtraArgs("--cd", "/path/to/workspace")` 或 `WithWorkDir("/path/to/workspace")` 选择 workspace context。
+- `WithGlobalArgs("--cd", "/path/to/workspace")` 或 `WithWorkDir("/path/to/workspace")` 选择 workspace context。
 
 如果该 Codex CLI 环境配置了多个外部 skill 仓库，该 Agent 不会过滤它们；但它也不会根据配置合成 skill 事件。当前 Codex CLI 更偏向通过 shell 命令处理 skill，而不是专门的 skill 工具，因此映射到框架事件时通常是 `command_execution`，而不是 `skill_run`。
 
@@ -94,8 +96,8 @@ MCP 工具调用会尽量归一化为与 Claude Code 兼容的工具名：`mcp__
 
 Codex 会自行创建 thread id。该 Agent 会把这个 id 存入 session state 的 `codex.StateKeyThreadID`，并在后续轮次使用：
 
-1. 首轮：`codex exec --json <prompt>`
-2. 后续轮次：`codex exec resume --json <thread-id> <prompt>`
+1. 首轮：把 prompt 写入 `codex exec --json` 的 stdin
+2. 后续轮次：把 prompt 写入 `codex exec resume --json <thread-id>` 的 stdin
 
 如果 resume 失败，该 Agent 会重新发起一次新的 `codex exec`；如果新执行返回了 thread id，则更新已保存的 thread id。如果 resume 与新建执行都失败，本次调用会返回 run error。
 
@@ -123,7 +125,7 @@ ag, err := codex.New(
 | `WithName(name)` | 设置 Agent 名称。该值会用作事件 author。 |
 | `WithBin(bin)` | 设置 CLI 可执行文件路径。默认值为 `codex`。 |
 | `WithGlobalArgs(args...)` | 在 `exec` 子命令前追加 Codex 根级 flags。 |
-| `WithExtraArgs(args...)` | 在 session id 与 prompt 前追加 `codex exec` flags。 |
+| `WithExtraArgs(args...)` | 在可选 resume session id 前追加 `codex exec` flags。 |
 | `WithEnv(env...)` | 追加 CLI 环境变量。格式为 `KEY=VALUE`。 |
 | `WithWorkDir(dir)` | 设置 CLI 进程工作目录。 |
 | `WithRawOutputHook(hook)` | 观测 raw stdout/stderr。回调会在 CLI 结束后、解析前调用。 |

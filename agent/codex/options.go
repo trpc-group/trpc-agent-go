@@ -80,7 +80,7 @@ func WithGlobalArgs(args ...string) Option {
 	}
 }
 
-// WithExtraArgs appends arguments after exec or exec resume before the session id and prompt.
+// WithExtraArgs appends arguments after exec or exec resume before the optional resume session id.
 // Use it only for flags accepted by both Codex exec forms.
 func WithExtraArgs(args ...string) Option {
 	return func(o *options) {

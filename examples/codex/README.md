@@ -20,10 +20,6 @@ Neither integration writes to the user's global Codex config.
 
 ## Run
 
-```bash
-cd examples/codex
-```
-
 Start the demo MCP server in one terminal:
 
 ```bash

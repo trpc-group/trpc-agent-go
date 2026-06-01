@@ -98,7 +98,12 @@ func (a *codexAgent) runInvocation(ctx context.Context, invocation *agent.Invoca
 	defer close(out)
 	resumeThreadID := sessionThreadID(invocation.Session)
 	stdout, stderr, runErr := a.runWithSession(ctx, resumeThreadID, invocation.Message.Content)
-	combined := bytes.TrimSpace(append(append([]byte(nil), stdout...), stderr...))
+	combinedRaw := append([]byte(nil), stdout...)
+	if len(stdout) > 0 && len(stderr) > 0 {
+		combinedRaw = append(combinedRaw, '\n')
+	}
+	combinedRaw = append(combinedRaw, stderr...)
+	combined := bytes.TrimSpace(combinedRaw)
 	observedThreadID := extractThreadID(stdout)
 	if hookErr := a.handleRawOutputHook(ctx, invocation, resumeThreadID, observedThreadID, stdout, stderr, runErr); hookErr != nil {
 		err := fmt.Errorf("raw output hook: %w", hookErr)
@@ -246,31 +251,32 @@ func (a *codexAgent) runWithSession(ctx context.Context, threadID, prompt string
 
 // runCreate starts a new Codex exec session.
 func (a *codexAgent) runCreate(ctx context.Context, prompt string) ([]byte, []byte, error) {
-	cmdArgs := make([]string, 0, len(a.globalArgs)+len(a.args)+2)
+	cmdArgs := make([]string, 0, len(a.globalArgs)+len(a.args)+1)
 	cmdArgs = append(cmdArgs, a.globalArgs...)
 	cmdArgs = append(cmdArgs, "exec")
 	cmdArgs = append(cmdArgs, a.args...)
-	cmdArgs = append(cmdArgs, prompt)
 	return a.commandRunner.Run(ctx, command{
-		bin:  a.bin,
-		args: cmdArgs,
-		env:  a.env,
-		dir:  a.workDir,
+		bin:   a.bin,
+		args:  cmdArgs,
+		stdin: []byte(prompt),
+		env:   a.env,
+		dir:   a.workDir,
 	})
 }
 
 // runResume resumes an existing Codex thread.
 func (a *codexAgent) runResume(ctx context.Context, threadID, prompt string) ([]byte, []byte, error) {
-	cmdArgs := make([]string, 0, len(a.globalArgs)+len(a.args)+4)
+	cmdArgs := make([]string, 0, len(a.globalArgs)+len(a.args)+3)
 	cmdArgs = append(cmdArgs, a.globalArgs...)
 	cmdArgs = append(cmdArgs, "exec", "resume")
 	cmdArgs = append(cmdArgs, a.args...)
-	cmdArgs = append(cmdArgs, threadID, prompt)
+	cmdArgs = append(cmdArgs, threadID)
 	return a.commandRunner.Run(ctx, command{
-		bin:  a.bin,
-		args: cmdArgs,
-		env:  a.env,
-		dir:  a.workDir,
+		bin:   a.bin,
+		args:  cmdArgs,
+		stdin: []byte(prompt),
+		env:   a.env,
+		dir:   a.workDir,
 	})
 }
 

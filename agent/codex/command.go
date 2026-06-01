@@ -23,6 +23,8 @@ type command struct {
 	bin string
 	// Args are the CLI arguments excluding argv[0].
 	args []string
+	// Stdin is the data written to the process standard input.
+	stdin []byte
 	// Env is the process environment in KEY=VALUE form.
 	env []string
 	// Dir is the working directory for the command.
@@ -51,6 +53,9 @@ func (execCommandRunner) Run(ctx context.Context, cmd command) ([]byte, []byte, 
 	c.Dir = cmd.dir
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	if len(cmd.stdin) > 0 {
+		c.Stdin = bytes.NewReader(cmd.stdin)
+	}
 	c.Stdout = &stdout
 	c.Stderr = &stderr
 	runErr := c.Run()

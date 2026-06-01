@@ -49,6 +49,8 @@ if err != nil {
 
 The agent forces `--json` on `codex exec` and parses stdout as JSONL. Do not append `--json` manually unless you need to control argument ordering.
 
+Prompt text is written to stdin so user input such as `--help` is not parsed as a Codex CLI flag.
+
 `WithExtraArgs` appends arguments after `exec` or `exec resume`. Use it only for flags accepted by both `codex exec` and `codex exec resume`, such as `--model`.
 
 `WithGlobalArgs` appends arguments before the `exec` subcommand. Use it for root-level Codex flags such as `--ask-for-approval`, `--sandbox`, or `--cd`.
@@ -69,7 +71,7 @@ Use the existing CLI configuration mechanisms to select skill sources:
 - `WithEnv("CODEX_HOME=/path/to/codex-home")` selects an isolated Codex home.
 - `WithGlobalArgs("-p", "profile-name")` selects a Codex profile.
 - `WithGlobalArgs("-c", "key=value")` passes a Codex config override.
-- `WithExtraArgs("--cd", "/path/to/workspace")` or `WithWorkDir("/path/to/workspace")` selects the workspace context.
+- `WithGlobalArgs("--cd", "/path/to/workspace")` or `WithWorkDir("/path/to/workspace")` selects the workspace context.
 
 If multiple external skill repositories are configured for that Codex CLI environment, this agent does not filter them. It also does not synthesize skill events from configuration. Current Codex CLI behavior tends to handle skills through shell commands instead of a dedicated skill tool, so skill usage is usually represented as `command_execution` events rather than `skill_run`.
 
@@ -94,8 +96,8 @@ Current Codex CLI skill usage is often injected as prompt context or handled thr
 
 Codex creates its own thread id. The agent persists that id in session state under `codex.StateKeyThreadID` and uses it on later turns:
 
-1. First turn: `codex exec --json <prompt>`
-2. Later turns: `codex exec resume --json <thread-id> <prompt>`
+1. First turn: write the prompt to stdin of `codex exec --json`
+2. Later turns: write the prompt to stdin of `codex exec resume --json <thread-id>`
 
 If resume fails, the agent starts a fresh `codex exec` run and updates the stored thread id when the new run reports one. If both resume and create fail, the invocation returns a run error.
 
@@ -123,7 +125,7 @@ ag, err := codex.New(
 | `WithName(name)` | Sets the agent name. This value is used as the event author. |
 | `WithBin(bin)` | Sets the CLI executable path. Default is `codex`. |
 | `WithGlobalArgs(args...)` | Appends root CLI flags before the `exec` subcommand. |
-| `WithExtraArgs(args...)` | Appends `codex exec` flags before the session id and prompt. |
+| `WithExtraArgs(args...)` | Appends `codex exec` flags before the optional resume session id. |
 | `WithEnv(env...)` | Adds CLI environment variables. Use `KEY=VALUE`. |
 | `WithWorkDir(dir)` | Sets the CLI process working directory. |
 | `WithRawOutputHook(hook)` | Observes raw stdout and stderr. The hook runs after the CLI finishes and before parsing. |

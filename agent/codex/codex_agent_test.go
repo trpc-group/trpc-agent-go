@@ -116,7 +116,8 @@ func TestCodexAgent_Run_CreateParsesEventsAndStoresThread(t *testing.T) {
 	calls := runner.Calls()
 	require.Len(t, calls, 1)
 	require.Equal(t, "codex", calls[0].bin)
-	require.Equal(t, []string{"exec", "--json", "Run printf."}, calls[0].args)
+	require.Equal(t, []string{"exec", "--json"}, calls[0].args)
+	require.Equal(t, "Run printf.", string(calls[0].stdin))
 }
 
 func TestCodexAgent_Run_ResumeFromSessionState(t *testing.T) {
@@ -140,7 +141,8 @@ func TestCodexAgent_Run_ResumeFromSessionState(t *testing.T) {
 	require.Empty(t, events[0].StateDelta)
 	calls := runner.Calls()
 	require.Len(t, calls, 1)
-	require.Equal(t, []string{"exec", "resume", "--json", "thread-1", "Hi."}, calls[0].args)
+	require.Equal(t, []string{"exec", "resume", "--json", "thread-1"}, calls[0].args)
+	require.Equal(t, "Hi.", string(calls[0].stdin))
 }
 
 func TestCodexAgent_Run_ResumeErrorFallsBackToCreate(t *testing.T) {
@@ -167,8 +169,10 @@ func TestCodexAgent_Run_ResumeErrorFallsBackToCreate(t *testing.T) {
 	require.Equal(t, []byte("thread-2"), events[0].StateDelta[StateKeyThreadID])
 	calls := runner.Calls()
 	require.Len(t, calls, 2)
-	require.Equal(t, []string{"exec", "resume", "--json", "stale-thread", "Hi."}, calls[0].args)
-	require.Equal(t, []string{"exec", "--json", "Hi."}, calls[1].args)
+	require.Equal(t, []string{"exec", "resume", "--json", "stale-thread"}, calls[0].args)
+	require.Equal(t, "Hi.", string(calls[0].stdin))
+	require.Equal(t, []string{"exec", "--json"}, calls[1].args)
+	require.Equal(t, "Hi.", string(calls[1].stdin))
 }
 
 func TestCodexAgent_Run_ResumeAndCreateErrorsReturnRunError(t *testing.T) {
@@ -195,8 +199,10 @@ func TestCodexAgent_Run_ResumeAndCreateErrorsReturnRunError(t *testing.T) {
 	require.Equal(t, "create unavailable", events[0].Error.Message)
 	calls := runner.Calls()
 	require.Len(t, calls, 2)
-	require.Equal(t, []string{"exec", "resume", "--json", "thread-1", "Hi."}, calls[0].args)
-	require.Equal(t, []string{"exec", "--json", "Hi."}, calls[1].args)
+	require.Equal(t, []string{"exec", "resume", "--json", "thread-1"}, calls[0].args)
+	require.Equal(t, "Hi.", string(calls[0].stdin))
+	require.Equal(t, []string{"exec", "--json"}, calls[1].args)
+	require.Equal(t, "Hi.", string(calls[1].stdin))
 }
 
 func TestCodexAgent_Run_RawOutputHook(t *testing.T) {
@@ -235,6 +241,43 @@ func TestCodexAgent_Run_RawOutputHook(t *testing.T) {
 	require.Equal(t, transcript, string(got.Stdout))
 	require.Equal(t, "warn\n", string(got.Stderr))
 	require.NoError(t, got.Error)
+}
+
+func TestCodexAgent_Run_RawOutputHookReceivesCommandError(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "sess-hook-err-1")
+	inv := newTestInvocation("inv-hook-err-1", sess, "--help")
+	runErr := errors.New("exit 1")
+	runner := &scriptedRunner{
+		run: func(cmd command) ([]byte, []byte, error) {
+			return []byte("stdout text"), []byte("stderr text"), runErr
+		},
+	}
+	var got RawOutputHookArgs
+	ag, err := New(
+		withCommandRunner(runner),
+		WithRawOutputHook(func(_ context.Context, args *RawOutputHookArgs) error {
+			got = *args
+			return nil
+		}),
+	)
+	require.NoError(t, err)
+	ch, err := ag.Run(ctx, inv)
+	require.NoError(t, err)
+	events := drainEvents(ch)
+	require.Len(t, events, 1)
+	require.ErrorIs(t, got.Error, runErr)
+	require.Equal(t, "--help", got.Prompt)
+	require.Equal(t, "stdout text", string(got.Stdout))
+	require.Equal(t, "stderr text", string(got.Stderr))
+	require.NotNil(t, events[0].Error)
+	require.Equal(t, model.ErrorTypeRunError, events[0].Error.Type)
+	require.Equal(t, "stdout text\nstderr text", events[0].Error.Message)
+	require.Equal(t, "stdout text\nstderr text", events[0].Choices[0].Message.Content)
+	calls := runner.Calls()
+	require.Len(t, calls, 1)
+	require.Equal(t, []string{"exec", "--json"}, calls[0].args)
+	require.Equal(t, "--help", string(calls[0].stdin))
 }
 
 func TestCodexAgent_Run_RawOutputHookError(t *testing.T) {
@@ -304,13 +347,28 @@ func TestCodexAgent_InfoAndRunnerArgs(t *testing.T) {
 	require.Equal(t, "codex-bin", calls[0].bin)
 	require.Equal(t, "/tmp", calls[0].dir)
 	require.Contains(t, calls[0].env, "CODEX_AGENT_TEST=1")
-	require.Equal(t, []string{"--ask-for-approval", "never", "exec", "--sandbox", "read-only", "--json", "Hi."}, calls[0].args)
+	require.Equal(t, []string{"--ask-for-approval", "never", "exec", "--sandbox", "read-only", "--json"}, calls[0].args)
+	require.Equal(t, "Hi.", string(calls[0].stdin))
 }
 
 func TestNew_ValidationErrors(t *testing.T) {
 	_, err := New(WithBin(""))
 	require.Error(t, err)
 	_, err = New(withCommandRunner(nil))
+	require.Error(t, err)
+}
+
+func TestCodexAgent_Run_ValidationErrors(t *testing.T) {
+	ctx := context.Background()
+	ag, err := New()
+	require.NoError(t, err)
+	_, err = ag.Run(ctx, nil)
+	require.Error(t, err)
+	_, err = ag.Run(ctx, &agent.Invocation{})
+	require.Error(t, err)
+	_, err = ag.Run(ctx, &agent.Invocation{Session: &session.Session{}})
+	require.Error(t, err)
+	_, err = ag.Run(ctx, newTestInvocation("inv-empty-prompt", session.NewSession("app", "user", "sess-empty"), ""))
 	require.Error(t, err)
 }
 
@@ -324,6 +382,14 @@ func TestExecCommandRunner_Run(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "bar", string(stdout))
+	require.Empty(t, string(stderr))
+	stdout, stderr, err = runner.Run(context.Background(), command{
+		bin:   "sh",
+		args:  []string{"-c", "cat"},
+		stdin: []byte("--help"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "--help", string(stdout))
 	require.Empty(t, string(stderr))
 	stdout, stderr, err = runner.Run(context.Background(), command{
 		bin:  "sh",
@@ -374,20 +440,25 @@ func TestParseTranscriptEvents_BuiltInToolMapping(t *testing.T) {
 {"type":"item.completed","item":{"id":"item_search","type":"web_search","query":"trpc agent","result":[{"title":"doc"}],"status":"completed"}}
 {"type":"item.started","item":{"id":"item_file","type":"file_change","changes":{"path":"main.go","kind":"update"}}}
 {"type":"item.completed","item":{"id":"item_file","type":"file_change","changes":{"path":"main.go","kind":"update"},"status":"completed"}}
+{"type":"item.started","item":{"id":"item_image_view","type":"image_view","path":"/tmp/input.png"}}
+{"type":"item.completed","item":{"id":"item_image_view","type":"image_view","result":{"width":64,"height":32},"status":"completed"}}
 {"type":"item.started","item":{"id":"item_image","type":"image_generation","prompt":"draw icon"}}
 {"type":"item.completed","item":{"id":"item_image","type":"image_generation","saved_path":"/tmp/icon.png","revised_prompt":"draw a clean icon","status":"completed"}}`
 	result, err := parseTranscriptEvents([]byte(transcript), "inv-parse-builtins-1", "codex")
 	require.NoError(t, err)
-	require.Len(t, result.Events, 6)
+	require.Len(t, result.Events, 8)
 	require.Equal(t, "web_search", result.Events[0].Choices[0].Message.ToolCalls[0].Function.Name)
 	require.JSONEq(t, `{"query":"trpc agent"}`, string(result.Events[0].Choices[0].Message.ToolCalls[0].Function.Arguments))
 	require.JSONEq(t, `[{"title":"doc"}]`, result.Events[1].Choices[0].Message.Content)
 	require.Equal(t, "file_change", result.Events[2].Choices[0].Message.ToolCalls[0].Function.Name)
 	require.JSONEq(t, `{"path":"main.go","kind":"update"}`, string(result.Events[2].Choices[0].Message.ToolCalls[0].Function.Arguments))
 	require.JSONEq(t, `{"path":"main.go","kind":"update"}`, result.Events[3].Choices[0].Message.Content)
-	require.Equal(t, "image_generation", result.Events[4].Choices[0].Message.ToolCalls[0].Function.Name)
-	require.JSONEq(t, `{"prompt":"draw icon"}`, string(result.Events[4].Choices[0].Message.ToolCalls[0].Function.Arguments))
-	require.JSONEq(t, `{"saved_path":"/tmp/icon.png","revised_prompt":"draw a clean icon","status":"completed"}`, result.Events[5].Choices[0].Message.Content)
+	require.Equal(t, "image_view", result.Events[4].Choices[0].Message.ToolCalls[0].Function.Name)
+	require.JSONEq(t, `{"path":"/tmp/input.png"}`, string(result.Events[4].Choices[0].Message.ToolCalls[0].Function.Arguments))
+	require.JSONEq(t, `{"width":64,"height":32}`, result.Events[5].Choices[0].Message.Content)
+	require.Equal(t, "image_generation", result.Events[6].Choices[0].Message.ToolCalls[0].Function.Name)
+	require.JSONEq(t, `{"prompt":"draw icon"}`, string(result.Events[6].Choices[0].Message.ToolCalls[0].Function.Arguments))
+	require.JSONEq(t, `{"saved_path":"/tmp/icon.png","revised_prompt":"draw a clean icon","status":"completed"}`, result.Events[7].Choices[0].Message.Content)
 }
 
 func TestParseTranscriptEvents_SkillToolMapping(t *testing.T) {
@@ -405,6 +476,28 @@ func TestParseTranscriptEvents_SkillToolMapping(t *testing.T) {
 	require.Equal(t, "debug", directArgs.Skill)
 	require.Equal(t, "", directArgs.Command)
 	require.Equal(t, "ok", result.Events[1].Choices[0].Message.Content)
+}
+
+func TestTranscriptHelpers_Fallbacks(t *testing.T) {
+	exitCode := 2
+	require.Equal(t, "mcp__server", mcpToolName("server", ""))
+	require.Equal(t, "tool", mcpToolName("", "tool"))
+	require.Equal(t, "mcp_tool_call", mcpToolName("", ""))
+	require.False(t, isToolItem("unknown"))
+	require.Equal(t, "custom", toolNameForItem(&codexItem{Type: " custom "}))
+	require.JSONEq(t, `{"raw":true}`, string(toolArgumentsFromRawOrFields(&codexItem{Arguments: json.RawMessage(`{"raw":true}`)}, "path")))
+	require.JSONEq(t, `{}`, string(toolArgumentsFromRawOrFields(&codexItem{}, "path")))
+	require.Equal(t, "aggregated", toolResultFromOutputFields(&codexItem{AggregatedOutput: "aggregated"}))
+	require.JSONEq(t, `{"status":"completed"}`, toolResultFromOutputFields(&codexItem{Status: "completed"}))
+	require.JSONEq(t, `{"exit_code":2,"status":"failed"}`, commandStatusResult(&codexItem{Status: "failed", ExitCode: &exitCode}))
+	require.Empty(t, commandStatusResult(&codexItem{}))
+	require.JSONEq(t, `{"skill":"deploy","command":""}`, string(skillArguments(&codexItem{Arguments: json.RawMessage(`"deploy"`)})))
+	require.JSONEq(t, `{"skill":"debug","command":"run"}`, string(skillArguments(&codexItem{Arguments: json.RawMessage(`{"skill":"debug","command":"run"}`)})))
+	require.JSONEq(t, `[1]`, string(skillArguments(&codexItem{Arguments: json.RawMessage(`[1]`)})))
+	require.JSONEq(t, `{}`, string(skillArguments(&codexItem{})))
+	require.JSONEq(t, `{}`, string(marshalArgs(func() {})))
+	require.Nil(t, (*codexUsage)(nil).toModelUsage())
+	require.Nil(t, (&codexUsage{}).toModelUsage())
 }
 
 func TestParseTranscriptEvents_EmptyAndInvalidOutput(t *testing.T) {
