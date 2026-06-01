@@ -38,7 +38,8 @@ func TestService_AppendEvent(t *testing.T) {
 	sess.CreatedAt = time.Now()
 
 	e := &event.Event{
-		ID: "evt1",
+		ID:        "evt1",
+		Timestamp: time.Date(2026, 5, 31, 20, 25, 0, 123456000, time.FixedZone("UTC+8", 8*60*60)),
 		Response: &model.Response{
 			Object: model.ObjectTypeChatCompletion,
 			Choices: []model.Choice{
@@ -68,12 +69,52 @@ func TestService_AppendEvent(t *testing.T) {
 		return newMockRows([][]any{{string(stateBytes), now}}), nil
 	}
 
+	var sawStateInsert bool
+	var sawEventInsert bool
+	before := time.Now().UTC()
 	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
+		if strings.Contains(query, "INSERT INTO session_states") {
+			sawStateInsert = true
+			createdAt, ok := args[5].(time.Time)
+			assert.True(t, ok)
+			assert.True(t, createdAt.Equal(now))
+			updatedAt, ok := args[6].(time.Time)
+			assert.True(t, ok)
+			assert.Equal(t, time.UTC, updatedAt.Location())
+		}
+		if strings.Contains(query, "INSERT INTO session_events") {
+			sawEventInsert = true
+			createdMicro, ok := args[6].(int64)
+			assert.True(t, ok)
+			assert.Equal(t, e.Timestamp.UTC().UnixMicro(), createdMicro)
+			updatedMicro, ok := args[7].(int64)
+			assert.True(t, ok)
+			updatedAt := time.UnixMicro(updatedMicro).UTC()
+			assert.False(t, updatedAt.Before(before.Add(-time.Second)))
+			assert.False(t, updatedAt.After(time.Now().UTC().Add(time.Second)))
+		}
 		return nil
 	}
 
 	err := s.AppendEvent(ctx, sess, e)
 	assert.NoError(t, err)
+	assert.True(t, sawStateInsert)
+	assert.True(t, sawEventInsert)
+}
+
+func TestEventCreatedAtUTCUsesTimestampOrFallback(t *testing.T) {
+	fallback := time.Date(
+		2026, 5, 31, 20, 25, 0, 0,
+		time.FixedZone("UTC+8", 8*60*60),
+	)
+	eventTime := fallback.Add(time.Minute)
+
+	assert.Equal(t, fallback.UTC(), eventCreatedAtUTC(nil, fallback))
+	assert.Equal(
+		t,
+		eventTime.UTC(),
+		eventCreatedAtUTC(&event.Event{Timestamp: eventTime}, fallback),
+	)
 }
 
 func TestService_AppendEvent_Error(t *testing.T) {

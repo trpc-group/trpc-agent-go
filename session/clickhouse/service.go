@@ -199,11 +199,12 @@ func (s *Service) CreateSession(
 	}
 
 	now := time.Now()
+	nowUTC := now.UTC()
 	sessState := &SessionState{
 		ID:        key.SessionID,
 		State:     make(session.StateMap),
-		UpdatedAt: now,
-		CreatedAt: now,
+		UpdatedAt: nowUTC,
+		CreatedAt: nowUTC,
 	}
 	for k, v := range state {
 		sessState.State[k] = v

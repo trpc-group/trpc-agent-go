@@ -93,6 +93,14 @@ func TestService_GetSession(t *testing.T) {
 
 	// Mock exec for insert
 	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
+		if strings.Contains(query, "INSERT INTO session_states") {
+			createdAt, ok := args[5].(time.Time)
+			assert.True(t, ok)
+			assert.Equal(t, time.UTC, createdAt.Location())
+			updatedAt, ok := args[6].(time.Time)
+			assert.True(t, ok)
+			assert.Equal(t, time.UTC, updatedAt.Location())
+		}
 		return nil
 	}
 
@@ -104,6 +112,8 @@ func TestService_GetSession(t *testing.T) {
 	assert.Equal(t, key.UserID, sess.UserID)
 	assert.Equal(t, key.SessionID, sess.ID)
 	assert.Equal(t, state, sess.State)
+	assert.Equal(t, time.UTC, sess.CreatedAt.Location())
+	assert.Equal(t, time.UTC, sess.UpdatedAt.Location())
 }
 
 func TestService_CreateSession_Exists(t *testing.T) {

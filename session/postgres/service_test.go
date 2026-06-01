@@ -48,6 +48,24 @@ func (s stringSliceValuer) Match(v driver.Value) bool {
 	return ok
 }
 
+type utcTimeArg struct{}
+
+func (a utcTimeArg) Match(v driver.Value) bool {
+	t, ok := v.(time.Time)
+	return ok && t.Location() == time.UTC
+}
+
+type exactUTCTimeArg struct {
+	want time.Time
+}
+
+func (a exactUTCTimeArg) Match(v driver.Value) bool {
+	t, ok := v.(time.Time)
+	return ok &&
+		t.Location() == time.UTC &&
+		t.Equal(a.want.UTC())
+}
+
 // AnyStringSlice returns a custom matcher for []string arguments.
 // WARNING: Due to database/sql driver limitations, this matcher cannot
 // prevent runtime type validation errors when actual queries execute.
@@ -429,7 +447,7 @@ func TestCreateSession_Success(t *testing.T) {
 	// Mock INSERT session state
 	mock.ExpectExec("INSERT INTO session_states").
 		WithArgs("test-app", "test-user", sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			utcTimeArg{}, utcTimeArg{}, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock SELECT app_states
@@ -451,6 +469,8 @@ func TestCreateSession_Success(t *testing.T) {
 	assert.Equal(t, "test-user", sess.UserID)
 	assert.NotEmpty(t, sess.ID)
 	assert.Equal(t, []byte("value1"), sess.State["key1"])
+	assert.Equal(t, time.UTC, sess.CreatedAt.Location())
+	assert.Equal(t, time.UTC, sess.UpdatedAt.Location())
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -2224,9 +2244,12 @@ func TestAddTrackEvent_ExpiredSessionWithTTL(t *testing.T) {
 		SessionID: "session-1",
 	}
 	trackEvent := &session.TrackEvent{
-		Track:     "alpha",
-		Payload:   json.RawMessage(`"ttl"`),
-		Timestamp: time.Now(),
+		Track:   "alpha",
+		Payload: json.RawMessage(`"ttl"`),
+		Timestamp: time.Date(
+			2026, 5, 31, 20, 25, 0, 123456000,
+			time.FixedZone("UTC+8", 8*60*60),
+		),
 	}
 
 	sessState := &SessionState{
@@ -2244,7 +2267,7 @@ func TestAddTrackEvent_ExpiredSessionWithTTL(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO session_track_events").
 		WithArgs("test-app", "test-user", "session-1", "alpha",
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg(), exactUTCTimeArg{want: trackEvent.Timestamp}, utcTimeArg{}, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 

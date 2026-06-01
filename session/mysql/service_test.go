@@ -32,6 +32,24 @@ import (
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 )
 
+type utcTimeArg struct{}
+
+func (a utcTimeArg) Match(v driver.Value) bool {
+	t, ok := v.(time.Time)
+	return ok && t.Location() == time.UTC
+}
+
+type exactUTCTimeArg struct {
+	want time.Time
+}
+
+func (a exactUTCTimeArg) Match(v driver.Value) bool {
+	t, ok := v.(time.Time)
+	return ok &&
+		t.Location() == time.UTC &&
+		t.Equal(a.want.UTC())
+}
+
 // mockMySQLClient implements storage.Client for testing with sqlmock
 type mockMySQLClient struct {
 	db *sql.DB
@@ -310,8 +328,8 @@ func TestCreateSession_Success(t *testing.T) {
 			key.UserID,
 			key.SessionID,
 			sqlmock.AnyArg(), // state (JSON)
-			sqlmock.AnyArg(), // created_at
-			sqlmock.AnyArg(), // updated_at
+			utcTimeArg{},     // created_at
+			utcTimeArg{},     // updated_at
 			sqlmock.AnyArg(), // expires_at
 		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -331,6 +349,8 @@ func TestCreateSession_Success(t *testing.T) {
 	assert.NotNil(t, sess)
 	assert.Equal(t, key.SessionID, sess.ID)
 	assert.Equal(t, state, sess.State)
+	assert.Equal(t, time.UTC, sess.CreatedAt.Location())
+	assert.Equal(t, time.UTC, sess.UpdatedAt.Location())
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

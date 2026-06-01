@@ -225,6 +225,8 @@ func (s *Service) listSessions(
 // addEvent adds an event to a session.
 func (s *Service) addEvent(ctx context.Context, key session.Key, evt *event.Event) error {
 	now := time.Now()
+	nowUTC := now.UTC()
+	eventCreatedAt := eventCreatedAtUTC(evt, now)
 
 	// Get current session state using FINAL
 	var stateStr string
@@ -252,7 +254,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, evt *event.Even
 		return fmt.Errorf("unmarshal session state failed: %w", err)
 	}
 
-	sessState.UpdatedAt = now
+	sessState.UpdatedAt = nowUTC
 	sessState.CreatedAt = createdAt
 	if sessState.State == nil {
 		sessState.State = make(session.StateMap)
@@ -283,17 +285,32 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, evt *event.Even
 	// Events do not have their own expires_at; they are filtered by session's created_at.
 	// Use UnixMicro to preserve microsecond precision (ClickHouse driver has precision loss issue #1545).
 	if evt.Response != nil && !evt.IsPartial && evt.IsValidContent() {
-		eventNowMicro := time.Now().UnixMicro()
+		eventCreatedMicro := eventCreatedAt.UnixMicro()
+		eventUpdatedMicro := nowUTC.UnixMicro()
 		err = s.chClient.Exec(ctx,
 			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, extra_data, created_at, updated_at)
 				VALUES (?, ?, ?, ?, ?, ?, fromUnixTimestamp64Micro(?), fromUnixTimestamp64Micro(?))`, s.tableSessionEvents),
-			key.AppName, key.UserID, key.SessionID, evt.ID, string(eventBytes), "{}", eventNowMicro, eventNowMicro)
+			key.AppName, key.UserID, key.SessionID, evt.ID, string(eventBytes), "{}", eventCreatedMicro, eventUpdatedMicro)
 		if err != nil {
 			return fmt.Errorf("insert event failed: %w", err)
 		}
 	}
 
 	return nil
+}
+
+func eventCreatedAtUTC(evt *event.Event, fallback time.Time) time.Time {
+	if evt != nil && !evt.Timestamp.IsZero() {
+		return timestampUTC(evt.Timestamp, fallback)
+	}
+	return timestampUTC(time.Time{}, fallback)
+}
+
+func timestampUTC(ts time.Time, fallback time.Time) time.Time {
+	if !ts.IsZero() {
+		return ts.UTC()
+	}
+	return fallback.UTC()
 }
 
 // deleteSessionState soft-deletes a session and its related data.

@@ -1136,6 +1136,69 @@ func TestAddEvent_ExpiredSession(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestAddEvent_StoresEventCreatedAtAsTimestampUTC(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+
+	sessState := SessionState{ID: key.SessionID, State: session.StateMap{}}
+	stateBytes, err := json.Marshal(sessState)
+	require.NoError(t, err)
+
+	eventTime := time.Date(
+		2026, 5, 31, 20, 25, 0, 123456000,
+		time.FixedZone("UTC+8", 8*60*60),
+	)
+
+	expectLoadSessionStateForUpdate(mock, key).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
+			AddRow(stateBytes, nil))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, updated_at = ?, expires_at = ?")).
+		WithArgs(sqlmock.AnyArg(), utcTimeArg{}, sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_events")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg(),
+			exactUTCTimeArg{want: eventTime}, utcTimeArg{}).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	evt := &event.Event{
+		Timestamp: eventTime,
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleUser, Content: "hello"},
+		}}},
+	}
+
+	err = s.addEvent(ctx, key, evt)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreatedAtUTCUsesTimestampOrFallback(t *testing.T) {
+	fallback := time.Date(
+		2026, 5, 31, 20, 25, 0, 0,
+		time.FixedZone("UTC+8", 8*60*60),
+	)
+	eventTime := fallback.Add(time.Minute)
+
+	assert.Equal(t, fallback.UTC(), eventCreatedAtUTC(nil, fallback))
+	assert.Equal(
+		t,
+		eventTime.UTC(),
+		eventCreatedAtUTC(&event.Event{Timestamp: eventTime}, fallback),
+	)
+	assert.Equal(t, fallback.UTC(), trackEventCreatedAtUTC(nil, fallback))
+	assert.Equal(
+		t,
+		eventTime.UTC(),
+		trackEventCreatedAtUTC(&session.TrackEvent{Timestamp: eventTime}, fallback),
+	)
+}
+
 func TestAddEvent_PartialEvent(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -1201,9 +1264,12 @@ func TestAddTrackEvent_PreservesExistingSkillMarker(t *testing.T) {
 	require.NoError(t, err)
 
 	trackEvent := &session.TrackEvent{
-		Track:     "agui",
-		Payload:   json.RawMessage(`{"delta":"hi"}`),
-		Timestamp: time.Now(),
+		Track:   "agui",
+		Payload: json.RawMessage(`{"delta":"hi"}`),
+		Timestamp: time.Date(
+			2026, 5, 31, 20, 25, 0, 123456000,
+			time.FixedZone("UTC+8", 8*60*60),
+		),
 	}
 
 	expectLoadSessionStateForUpdate(mock, key).
@@ -1230,7 +1296,7 @@ func TestAddTrackEvent_PreservesExistingSkillMarker(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_track_events")).
 		WithArgs(key.AppName, key.UserID, key.SessionID, "agui",
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg(), exactUTCTimeArg{want: trackEvent.Timestamp}, utcTimeArg{}, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 

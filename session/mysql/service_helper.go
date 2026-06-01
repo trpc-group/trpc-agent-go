@@ -308,6 +308,8 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			return err
 		}
 		now := time.Now()
+		nowUTC := now.UTC()
+		eventCreatedAt := eventCreatedAtUTC(event, now)
 
 		// Check if session is expired
 		if currentExpiresAt.Valid && currentExpiresAt.Time.Before(now) {
@@ -321,7 +323,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			)
 		}
 
-		sessState.UpdatedAt = now
+		sessState.UpdatedAt = nowUTC
 		if sessState.State == nil {
 			sessState.State = make(session.StateMap)
 		}
@@ -349,7 +351,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			_, err = tx.ExecContext(ctx,
 				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?)`, s.tableSessionEvents),
-				key.AppName, key.UserID, key.SessionID, string(eventBytes), now, now)
+				key.AppName, key.UserID, key.SessionID, string(eventBytes), eventCreatedAt, nowUTC)
 			if err != nil {
 				return fmt.Errorf("insert event failed: %w", err)
 			}
@@ -361,6 +363,27 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		return fmt.Errorf("store event failed: %w", err)
 	}
 	return nil
+}
+
+func eventCreatedAtUTC(evt *event.Event, fallback time.Time) time.Time {
+	if evt != nil && !evt.Timestamp.IsZero() {
+		return timestampUTC(evt.Timestamp, fallback)
+	}
+	return timestampUTC(time.Time{}, fallback)
+}
+
+func trackEventCreatedAtUTC(trackEvent *session.TrackEvent, fallback time.Time) time.Time {
+	if trackEvent != nil && !trackEvent.Timestamp.IsZero() {
+		return timestampUTC(trackEvent.Timestamp, fallback)
+	}
+	return timestampUTC(time.Time{}, fallback)
+}
+
+func timestampUTC(ts time.Time, fallback time.Time) time.Time {
+	if !ts.IsZero() {
+		return ts.UTC()
+	}
+	return fallback.UTC()
 }
 
 // addTrackEvent adds a track event to a session (MySQL syntax).
@@ -379,6 +402,8 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 			return err
 		}
 		now := time.Now()
+		nowUTC := now.UTC()
+		trackCreatedAt := trackEventCreatedAtUTC(trackEvent, now)
 
 		// Check if session is expired.
 		if currentExpiresAt.Valid && currentExpiresAt.Time.Before(now) {
@@ -399,7 +424,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 			return err
 		}
 		sessState.State = sess.SnapshotState()
-		sessState.UpdatedAt = now
+		sessState.UpdatedAt = nowUTC
 		updatedAt = sessState.UpdatedAt
 
 		updatedStateBytes, err = json.Marshal(sessState)
@@ -423,7 +448,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at, expires_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionTracks),
 			key.AppName, key.UserID, key.SessionID, trackEvent.Track, string(eventBytes),
-			trackEvent.Timestamp, trackEvent.Timestamp, expiresAt)
+			trackCreatedAt, nowUTC, expiresAt)
 		if err != nil {
 			return fmt.Errorf("insert track event failed: %w", err)
 		}
