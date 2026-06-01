@@ -215,7 +215,7 @@ func newSearchTool(c *client.Client, hasRead bool) tool.Tool {
 type browseArgs struct {
 	URI       string `json:"uri,omitempty" jsonschema:"description=viking:// URI to list (default viking://)"`
 	Recursive bool   `json:"recursive,omitempty" jsonschema:"description=List recursively"`
-	Pattern   string `json:"pattern,omitempty" jsonschema:"description=Optional glob pattern; when set a glob search is performed instead of ls"`
+	Pattern   string `json:"pattern,omitempty" jsonschema:"description=Optional glob pattern; when set a glob search is performed instead of ls and recursive is ignored"`
 }
 
 func newBrowseTool(c *client.Client) tool.Tool {
@@ -386,7 +386,9 @@ func newAddResourceTool(c *client.Client) tool.Tool {
 	}
 	return function.NewFunctionTool(fn,
 		function.WithName(toolAddResource),
-		function.WithDescription("Import a URL, remote path, or repository into OpenViking resources for later retrieval."))
+		function.WithDescription("Import a URL, remote path, or repository into OpenViking resources for later retrieval. "+
+			"For large imports leave wait=false (the default) to avoid the per-request timeout; the server keeps "+
+			"processing in the background after the call returns."))
 }
 
 // ===== viking_add_skill =====

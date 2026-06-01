@@ -96,13 +96,11 @@ func (c *Client) Close() error { return nil }
 // matched node's URI and its L0/L1 summary text, not the full L2 content; use
 // Read to fetch full content for a chosen URI.
 type Item struct {
-	URI         string  `json:"uri"`
-	Score       float64 `json:"score"`
-	Abstract    string  `json:"abstract"`
-	Overview    string  `json:"overview,omitempty"`
-	Level       int     `json:"level"`
-	ContextType string  `json:"context_type"`
-	Category    string  `json:"category"`
+	URI      string  `json:"uri"`
+	Score    float64 `json:"score"`
+	Abstract string  `json:"abstract"`
+	Overview string  `json:"overview,omitempty"`
+	Level    int     `json:"level"`
 }
 
 // RetrievalResult groups retrieval hits by context type.
@@ -261,8 +259,8 @@ func (c *Client) AddResource(ctx context.Context, path, to, parent string, wait 
 }
 
 // AddSkill registers a reusable skill (POST /skills). data is the skill
-// definition payload.
-func (c *Client) AddSkill(ctx context.Context, data any, wait bool) (json.RawMessage, error) {
+// definition payload (text or a path/URL accepted by OpenViking).
+func (c *Client) AddSkill(ctx context.Context, data string, wait bool) (json.RawMessage, error) {
 	return c.raw(ctx, http.MethodPost, "/api/v1/skills", map[string]any{
 		"data": data,
 		"wait": wait,
@@ -319,7 +317,19 @@ func (e *apiError) Error() string {
 }
 
 func (e *apiError) recoverable() bool {
-	return e.Code == codeUnavailable || e.Code == codeDeadlineExceeded
+	switch e.Code {
+	case codeUnavailable, codeDeadlineExceeded:
+		return true
+	// Transient HTTP statuses (rate limiting and gateway errors) surface with a
+	// numeric Code via the HTTP fallback in do(); retry these once too.
+	case strconv.Itoa(http.StatusTooManyRequests), // 429
+		strconv.Itoa(http.StatusBadGateway),         // 502
+		strconv.Itoa(http.StatusServiceUnavailable), // 503
+		strconv.Itoa(http.StatusGatewayTimeout):     // 504
+		return true
+	default:
+		return false
+	}
 }
 
 // call performs the HTTP request with a single retry for read-only operations
@@ -390,19 +400,22 @@ func (c *Client) do(
 	}
 
 	var env envelope
+	var parseErr error
 	if len(data) > 0 {
-		if err := json.Unmarshal(data, &env); err != nil {
-			if resp.StatusCode >= http.StatusBadRequest {
-				return nil, fmt.Errorf("openviking: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
-			}
-			return nil, fmt.Errorf("openviking: decode response: %w", err)
-		}
+		parseErr = json.Unmarshal(data, &env)
 	}
-	if env.Status == "error" && env.Error != nil {
+	// A structured envelope error carries the most specific code; prefer it.
+	if parseErr == nil && env.Status == "error" && env.Error != nil {
 		return nil, env.Error
 	}
+	// Any HTTP error surfaces as an apiError carrying the numeric status, so a
+	// gateway-level 429/503 with a non-JSON body still flows through the
+	// recoverable() retry check rather than becoming an opaque error.
 	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, &apiError{Code: strconv.Itoa(resp.StatusCode), Message: strings.TrimSpace(string(data))}
+	}
+	if parseErr != nil {
+		return nil, fmt.Errorf("openviking: decode response: %w", parseErr)
 	}
 	return env.Result, nil
 }

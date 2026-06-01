@@ -76,6 +76,50 @@ func TestNonRecoverableErrorIsNotRetried(t *testing.T) {
 	}
 }
 
+func TestReadOnlyRetriesOnTransientHTTPStatus(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			// Non-JSON gateway error: must still be classified as transient.
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("upstream overloaded"))
+			return
+		}
+		writeOK(w, "recovered")
+	}))
+	defer srv.Close()
+
+	c := New(Config{BaseURL: srv.URL})
+	content, err := c.Read(context.Background(), "viking://resources/a", 0, -1)
+	if err != nil {
+		t.Fatalf("Read after retry: %v", err)
+	}
+	if content != "recovered" {
+		t.Errorf("content = %q, want recovered", content)
+	}
+	if calls.Load() != 2 {
+		t.Errorf("transient 503 should retry once, calls = %d", calls.Load())
+	}
+}
+
+func TestNonTransientHTTPStatusNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("bad query"))
+	}))
+	defer srv.Close()
+
+	c := New(Config{BaseURL: srv.URL})
+	if _, err := c.Find(context.Background(), FindRequest{Query: "q"}); err == nil {
+		t.Fatal("expected error")
+	}
+	if calls.Load() != 1 {
+		t.Errorf("non-transient 400 should not retry, calls = %d", calls.Load())
+	}
+}
+
 func TestReadOnlyRetriesOnceThenFails(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

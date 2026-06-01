@@ -248,6 +248,41 @@ func TestStoreToolRejectsInvalidRole(t *testing.T) {
 	}
 }
 
+func TestBrowseGrepHealthTools(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/fs/ls":
+			if got := r.URL.Query().Get("uri"); got != "viking://resources" {
+				t.Errorf("ls uri = %q", got)
+			}
+			okEnvelope(w, []map[string]any{{"uri": "viking://resources/a", "isDir": true}})
+		case "/api/v1/search/grep":
+			okEnvelope(w, []map[string]any{{"uri": "viking://resources/a/x.go", "line": 12}})
+		case "/api/v1/system/status":
+			okEnvelope(w, map[string]any{"status": "healthy"})
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	ts, _ := NewToolSet(WithBaseURL(srv.URL))
+	defer ts.Close()
+
+	browse := callTool(t, ts, toolBrowse, browseArgs{URI: "viking://resources"}).(string)
+	if !strings.Contains(browse, "viking://resources/a") {
+		t.Errorf("browse output = %q", browse)
+	}
+	grep := callTool(t, ts, toolGrep, grepArgs{URI: "viking://resources", Pattern: "func"}).(string)
+	if !strings.Contains(grep, "x.go") {
+		t.Errorf("grep output = %q", grep)
+	}
+	health := callTool(t, ts, toolHealth, healthArgs{}).(string)
+	if !strings.Contains(health, "healthy") {
+		t.Errorf("health output = %q", health)
+	}
+}
+
 func TestFindToolRetriesOnUnavailable(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
