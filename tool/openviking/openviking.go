@@ -93,16 +93,16 @@ func WithTimeout(d time.Duration) Option {
 
 // WithProfile selects the tool profile (retrieval, agent, admin). It is the
 // primary way to choose which tools are exposed; use the exported Tool*
-// constants with WithTools only when a profile does not fit.
+// constants with WithSpecificTools only when a profile does not fit.
 //
-// Precedence: WithTools, when non-empty, fully overrides the profile's tool
+// Precedence: WithSpecificTools, when non-empty, fully overrides the profile's tool
 // list. The profile then only governs the viking_forget safety gate (see
-// WithTools). When WithTools is not set, the profile alone decides the tools.
+// WithSpecificTools). When WithSpecificTools is not set, the profile alone decides the tools.
 func WithProfile(p Profile) Option {
 	return func(c *config) { c.profile = p }
 }
 
-// WithTools explicitly selects the tools to expose, using the exported Tool*
+// WithSpecificTools explicitly selects the tools to expose, using the exported Tool*
 // constants (e.g. ToolSearch, ToolRead). When non-empty it takes precedence
 // over WithProfile and fully replaces the profile's tool list; unknown names
 // make NewToolSet fail fast.
@@ -110,7 +110,7 @@ func WithProfile(p Profile) Option {
 // The profile is not fully ignored: the destructive ToolForget is dropped
 // unless WithProfile(ProfileAdmin) is also set, so naming it here cannot bypass
 // the admin gate.
-func WithTools(names ...ToolName) Option {
+func WithSpecificTools(names ...ToolName) Option {
 	return func(c *config) { c.toolNames = names }
 }
 

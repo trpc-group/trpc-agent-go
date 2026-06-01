@@ -20,11 +20,11 @@ import (
 )
 
 // ToolName identifies an OpenViking tool. Use the exported Tool* constants
-// with WithTools; the string values use the viking_* prefix so models see the
+// with WithSpecificTools; the string values use the viking_* prefix so models see the
 // same operations exposed by OpenViking's MCP/plugin integrations.
 type ToolName string
 
-// Exported tool names for use with WithTools.
+// Exported tool names for use with WithSpecificTools.
 const (
 	ToolFind        ToolName = "viking_find"
 	ToolSearch      ToolName = "viking_search"
@@ -41,7 +41,7 @@ const (
 const defaultRetrievalLimit = 8
 
 // buildTools constructs the requested tools in the given order. It fails fast
-// on any unknown tool name so a typo in WithTools surfaces immediately
+// on any unknown tool name so a typo in WithSpecificTools surfaces immediately
 // instead of silently shrinking the exposed capability set.
 func buildTools(c *client.Client, names []ToolName) ([]tool.Tool, error) {
 	// hasRead controls whether retrieval tools advertise viking_read; the

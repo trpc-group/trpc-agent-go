@@ -97,22 +97,22 @@ func TestNonAdminProfilesExcludeForget(t *testing.T) {
 	}
 }
 
-func TestWithToolsOverride(t *testing.T) {
-	ts, _ := NewToolSet(WithTools(ToolRead))
+func TestWithSpecificToolsOverride(t *testing.T) {
+	ts, _ := NewToolSet(WithSpecificTools(ToolRead))
 	got := toolNames(ts)
 	if !equalToolSlices(got, []ToolName{ToolRead}) {
 		t.Errorf("tool names = %v, want [viking_read]", got)
 	}
 }
 
-func TestWithToolsRejectsUnknown(t *testing.T) {
-	if _, err := NewToolSet(WithTools("viking_bogus")); err == nil {
+func TestWithSpecificToolsRejectsUnknown(t *testing.T) {
+	if _, err := NewToolSet(WithSpecificTools("viking_bogus")); err == nil {
 		t.Error("NewToolSet should fail fast on an unknown tool name")
 	}
 }
 
-func TestWithToolsGatesForget(t *testing.T) {
-	gated, err := NewToolSet(WithTools(ToolFind, ToolForget))
+func TestWithSpecificToolsGatesForget(t *testing.T) {
+	gated, err := NewToolSet(WithSpecificTools(ToolFind, ToolForget))
 	if err != nil {
 		t.Fatalf("NewToolSet: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestWithToolsGatesForget(t *testing.T) {
 		t.Error("viking_forget must not be exposed without the admin profile")
 	}
 
-	allowed, err := NewToolSet(WithTools(ToolFind, ToolForget), WithProfile(ProfileAdmin))
+	allowed, err := NewToolSet(WithSpecificTools(ToolFind, ToolForget), WithProfile(ProfileAdmin))
 	if err != nil {
 		t.Fatalf("NewToolSet: %v", err)
 	}
