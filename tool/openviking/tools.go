@@ -247,7 +247,7 @@ func newBrowseTool(c *client.Client) tool.Tool {
 
 type readArgs struct {
 	URI         string `json:"uri" jsonschema:"description=viking:// URI to read"`
-	ContentMode string `json:"content_mode,omitempty" jsonschema:"description=One of abstract (L0 summary)|overview (L1)|read (L2 full content). Default read. abstract and overview only work on directory URIs (they return that directory's summary); for a file/leaf URI use read"`
+	ContentMode string `json:"content_mode,omitempty" jsonschema:"description=One of read (L2 full content, default)|overview (L1)|abstract (L0). overview/abstract require a DIRECTORY URI (isDir=true); never append a filename. A search/find hit ending in .abstract.md or .overview.md is itself the summary file - read it with read"`
 	Offset      int    `json:"offset,omitempty" jsonschema:"description=Start line for read mode (0-indexed)"`
 	Limit       int    `json:"limit,omitempty" jsonschema:"description=Number of lines for read mode (-1 reads to end)"`
 	MaxChars    int    `json:"max_chars,omitempty" jsonschema:"description=Truncate the returned content to this many characters (0 means no limit)"`
@@ -292,11 +292,13 @@ func newReadTool(c *client.Client) tool.Tool {
 	}
 	return function.NewFunctionTool(fn,
 		function.WithName(toolRead),
-		function.WithDescription("Read an OpenViking URI at a chosen level: abstract (L0), overview (L1), or read (L2 full content). "+
-			"abstract and overview apply to directory nodes only (they return that directory's .abstract.md/.overview.md); "+
-			"for a file/leaf URI use read. The isDir field from viking_browse and the level field from viking_search/"+
-			"viking_find tell you which a hit is. Prefer overview for large directories and use read with offset/limit to "+
-			"page through long files."))
+		function.WithDescription("Read content at an OpenViking URI. content_mode picks the level: "+
+			"read (default, L2 full content of any file/leaf) | overview (L1) | abstract (L0). "+
+			"overview/abstract resolve the summary OF A DIRECTORY, so pass a directory URI "+
+			"(isDir=true from viking_browse) and never append a filename to it. "+
+			"viking_search/viking_find hits frequently point at .abstract.md/.overview.md files: "+
+			"those files ARE the summary, so read them with read (the default), not overview/abstract. "+
+			"Use read with offset/limit to page through long files."))
 }
 
 // ===== viking_grep =====
