@@ -166,6 +166,24 @@ func (a anyVectorArg) Match(_ driver.Value) bool {
 	return true
 }
 
+type utcTimeArg struct{}
+
+func (a utcTimeArg) Match(v driver.Value) bool {
+	t, ok := v.(time.Time)
+	return ok && t.Location() == time.UTC
+}
+
+type exactUTCTimeArg struct {
+	want time.Time
+}
+
+func (a exactUTCTimeArg) Match(v driver.Value) bool {
+	t, ok := v.(time.Time)
+	return ok &&
+		t.Location() == time.UTC &&
+		t.Equal(a.want.UTC())
+}
+
 // sliceValueConverter converts []string to a
 // comma-separated driver.Value for go-sqlmock testing.
 // PostgreSQL drivers handle []string natively but
@@ -1094,6 +1112,11 @@ func TestCreateSession_Success(t *testing.T) {
 
 	// INSERT session.
 	mock.ExpectExec("INSERT INTO session_states").
+		WithArgs(
+			"app", "user", "sess",
+			sqlmock.AnyArg(), utcTimeArg{},
+			utcTimeArg{}, sqlmock.AnyArg(),
+		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// ListAppStates query.
@@ -1118,6 +1141,8 @@ func TestCreateSession_Success(t *testing.T) {
 	assert.Equal(t, "sess", sess.ID)
 	assert.Equal(t, "app", sess.AppName)
 	assert.Equal(t, "user", sess.UserID)
+	assert.Equal(t, time.UTC, sess.CreatedAt.Location())
+	assert.Equal(t, time.UTC, sess.UpdatedAt.Location())
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -3840,13 +3865,23 @@ func TestAddTrackEvent_Success(t *testing.T) {
 		).AddRow(stateBytes, nil))
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	eventTime := time.Date(
+		2026, 5, 31, 20, 25, 0, 123456000,
+		time.FixedZone("UTC+8", 8*60*60),
+	)
 	mock.ExpectExec("INSERT INTO session_track").
+		WithArgs(
+			"app", "user", "sess",
+			sqlmock.AnyArg(), sqlmock.AnyArg(),
+			exactUTCTimeArg{want: eventTime},
+			utcTimeArg{}, sqlmock.AnyArg(),
+		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	te := &session.TrackEvent{
 		Track:     "track1",
-		Timestamp: time.Now(),
+		Timestamp: eventTime,
 	}
 	err := s.addTrackEvent(
 		context.Background(), key, te,
