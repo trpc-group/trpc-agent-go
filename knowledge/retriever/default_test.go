@@ -17,6 +17,7 @@ import (
 	q "trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	r "trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker/topk"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/inmemory"
 )
 
@@ -206,9 +207,11 @@ func TestDefaultRetriever_WithNilEmbedder(t *testing.T) {
 type mockQueryEnhancer struct {
 	enhanced string
 	err      error
+	calls    int
 }
 
 func (m *mockQueryEnhancer) EnhanceQuery(ctx context.Context, req *q.Request) (*q.Enhanced, error) {
+	m.calls++
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -263,6 +266,38 @@ func TestDefaultRetriever_QueryEnhancerError(t *testing.T) {
 	}
 	if err != context.Canceled {
 		t.Fatalf("expected Canceled error, got: %v", err)
+	}
+}
+
+func TestDefaultRetriever_FilterOnlySkipsQueryEnhancer(t *testing.T) {
+	vs := inmemory.New()
+	doc := &document.Document{ID: "doc-filter", Content: "filter content"}
+	if err := vs.Add(context.Background(), doc, []float64{1, 0, 0}); err != nil {
+		t.Fatalf("add doc: %v", err)
+	}
+
+	enhancer := &mockQueryEnhancer{enhanced: "should not be used"}
+	d := New(
+		WithVectorStore(vs),
+		WithQueryEnhancer(enhancer),
+	)
+
+	res, err := d.Retrieve(context.Background(), &Query{
+		Text:       "",
+		Limit:      5,
+		SearchMode: vectorstore.SearchModeFilter,
+		Filter: &QueryFilter{
+			DocumentIDs: []string{"doc-filter"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("filter-only retrieve err: %v", err)
+	}
+	if enhancer.calls != 0 {
+		t.Fatalf("expected enhancer not called, got %d calls", enhancer.calls)
+	}
+	if len(res.Documents) != 1 || res.Documents[0].Document.ID != "doc-filter" {
+		t.Fatalf("unexpected filter-only results")
 	}
 }
 

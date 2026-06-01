@@ -18,10 +18,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	internaltool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	ctool "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -29,11 +33,15 @@ import (
 // It can be configured to return a predetermined result or error.
 
 type stubKnowledge struct {
-	result *knowledge.SearchResult
-	err    error
+	result  *knowledge.SearchResult
+	err     error
+	capture func(*knowledge.SearchRequest)
 }
 
 func (s stubKnowledge) Search(ctx context.Context, req *knowledge.SearchRequest) (*knowledge.SearchResult, error) {
+	if s.capture != nil {
+		s.capture(req)
+	}
 	return s.result, s.err
 }
 
@@ -49,6 +57,18 @@ func marshalArgsWithFilter(t *testing.T, query string, filter *searchfilter.Univ
 	bts, err := json.Marshal(&KnowledgeSearchRequestWithFilter{Query: query, Filter: filter})
 	require.NoError(t, err)
 	return bts
+}
+
+func historyEvent(message model.Message, partial bool) event.Event {
+	evt := event.NewResponseEvent(
+		"inv",
+		string(message.Role),
+		&model.Response{
+			IsPartial: partial,
+			Choices:   []model.Choice{{Message: message}},
+		},
+	)
+	return *evt
 }
 
 func TestKnowledgeSearchTool(t *testing.T) {
@@ -94,6 +114,48 @@ func TestKnowledgeSearchTool(t *testing.T) {
 		require.Equal(t, 0.9, rsp.Documents[0].Score)
 		require.Equal(t, "test", rsp.Documents[0].Metadata["source"])
 		require.Contains(t, rsp.Message, "Found 1 relevant document")
+	})
+
+	t.Run("passes invocation session context", func(t *testing.T) {
+		var captured *knowledge.SearchRequest
+		kb := stubKnowledge{
+			result: &knowledge.SearchResult{
+				Documents: []*knowledge.Result{
+					{Document: &document.Document{Content: "foo"}, Score: 0.9},
+				},
+			},
+			capture: func(req *knowledge.SearchRequest) {
+				captured = req
+			},
+		}
+		searchTool := NewKnowledgeSearchTool(kb)
+		sess := &session.Session{
+			ID:     "session-1",
+			UserID: "user-1",
+			Events: []event.Event{
+				historyEvent(model.NewUserMessage("oldest dropped"), false),
+				historyEvent(model.NewToolMessage("tool-1", "knowledge_search", "tool result"), false),
+				historyEvent(model.NewAssistantMessage(""), false),
+				historyEvent(model.NewUserMessage("partial skipped"), true),
+			},
+		}
+		for i := 0; i < defaultSearchHistorySize; i++ {
+			sess.Events = append(sess.Events, historyEvent(model.NewUserMessage("valid user"), false))
+		}
+		invocation := agent.NewInvocation(agent.WithInvocationSession(sess))
+		ctx := agent.NewInvocationContext(context.Background(), invocation)
+
+		_, err := searchTool.(ctool.CallableTool).Call(ctx, marshalArgs(t, "hello"))
+		require.NoError(t, err)
+		require.NotNil(t, captured)
+		require.Equal(t, "hello", captured.Query)
+		require.Equal(t, "user-1", captured.UserID)
+		require.Equal(t, "session-1", captured.SessionID)
+		require.Len(t, captured.History, defaultSearchHistorySize)
+		for _, msg := range captured.History {
+			require.Equal(t, "user", msg.Role)
+			require.Equal(t, "valid user", msg.Content)
+		}
 	})
 
 	t.Run("success with multiple documents", func(t *testing.T) {
@@ -301,6 +363,44 @@ func TestAgenticFilterSearchTool(t *testing.T) {
 		require.Equal(t, "unfiltered content", rsp.Documents[0].Text)
 		require.Equal(t, 0.75, rsp.Documents[0].Score)
 		require.Contains(t, rsp.Message, "Found 1 relevant document")
+	})
+
+	t.Run("passes invocation session context", func(t *testing.T) {
+		var captured *knowledge.SearchRequest
+		kb := stubKnowledge{
+			result: &knowledge.SearchResult{
+				Documents: []*knowledge.Result{
+					{Document: &document.Document{Content: "filtered content"}, Score: 0.85},
+				},
+			},
+			capture: func(req *knowledge.SearchRequest) {
+				captured = req
+			},
+		}
+		searchTool := NewAgenticFilterSearchTool(kb, agenticFilterInfo)
+		sess := &session.Session{
+			ID:     "session-2",
+			UserID: "user-2",
+			Events: []event.Event{
+				historyEvent(model.NewUserMessage("what is knowledge"), false),
+				historyEvent(model.NewAssistantMessage("knowledge is RAG"), false),
+			},
+		}
+		invocation := agent.NewInvocation(agent.WithInvocationSession(sess))
+		ctx := agent.NewInvocationContext(context.Background(), invocation)
+
+		filter := &searchfilter.UniversalFilterCondition{Field: "category", Operator: "eq", Value: "documentation"}
+		_, err := searchTool.(ctool.CallableTool).Call(ctx, marshalArgsWithFilter(t, "knowledge filter", filter))
+		require.NoError(t, err)
+		require.NotNil(t, captured)
+		require.Equal(t, "knowledge filter", captured.Query)
+		require.Equal(t, "user-2", captured.UserID)
+		require.Equal(t, "session-2", captured.SessionID)
+		require.Len(t, captured.History, 2)
+		require.Equal(t, []knowledge.ConversationMessage{
+			{Role: "user", Content: "what is knowledge", Timestamp: captured.History[0].Timestamp},
+			{Role: "assistant", Content: "knowledge is RAG", Timestamp: captured.History[1].Timestamp},
+		}, captured.History)
 	})
 
 	t.Run("verify declaration metadata", func(t *testing.T) {

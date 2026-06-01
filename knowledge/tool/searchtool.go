@@ -17,11 +17,13 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -29,6 +31,7 @@ import (
 const (
 	defaultMaxResults        = 10
 	defaultMinScore          = 0.0
+	defaultSearchHistorySize = 10
 	agenticFilterPromptIntro = "You are a helpful assistant that can search for relevant information in the knowledge base."
 
 	// metadataFilterHint is appended to the tool description when no explicit
@@ -229,7 +232,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 		invocation, ok := agent.InvocationFromContext(ctx)
 		var runnerFilter map[string]any
 		var runnerConditionedFilter *searchfilter.UniversalFilterCondition
-		if !ok {
+		if !ok || invocation == nil {
 			log.DebugfContext(ctx, "knowledge search tool: no invocation found in context")
 		} else {
 			runnerFilter = invocation.RunOptions.KnowledgeFilter
@@ -239,17 +242,18 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 		agentFilterCondition := convertMetadataToFilterCondition(opt.staticFilter)
 		runnerFilterCondition := convertMetadataToFilterCondition(runnerFilter)
 		finalFilter := mergeFilterConditions(agentFilterCondition, opt.conditionedFilter, runnerFilterCondition, runnerConditionedFilter)
+		history, userID, sessionID := searchContextFromInvocation(invocation)
 
-		// Create search request - for tools, we don't have conversation history yet.
-		// This could be enhanced in the future to extract context from the agent's session.
 		searchReq := &knowledge.SearchRequest{
-			Query: req.Query,
+			Query:     req.Query,
+			History:   history,
+			UserID:    userID,
+			SessionID: sessionID,
 			SearchFilter: &knowledge.SearchFilter{
 				FilterCondition: finalFilter,
 			},
 			MaxResults: opt.maxResults,
 			MinScore:   opt.minScore,
-			// History, UserID, SessionID could be filled from agent context in the future.
 		}
 
 		result, err := kb.Search(ctx, searchReq)
@@ -314,7 +318,7 @@ func NewAgenticFilterSearchTool(
 		invocation, ok := agent.InvocationFromContext(ctx)
 		var runnerFilter map[string]any
 		var runnerConditionedFilter *searchfilter.UniversalFilterCondition
-		if !ok {
+		if !ok || invocation == nil {
 			log.DebugfContext(ctx, "knowledge search tool: no invocation found in context")
 		} else {
 			runnerFilter = invocation.RunOptions.KnowledgeFilter
@@ -324,9 +328,13 @@ func NewAgenticFilterSearchTool(
 		agentMetadataCondition := convertMetadataToFilterCondition(opt.staticFilter)
 		runnerFilterCondition := convertMetadataToFilterCondition(runnerFilter)
 		finalFilter := mergeFilterConditions(agentMetadataCondition, opt.conditionedFilter, runnerFilterCondition, runnerConditionedFilter, req.Filter)
+		history, userID, sessionID := searchContextFromInvocation(invocation)
 
 		searchReq := &knowledge.SearchRequest{
-			Query: req.Query,
+			Query:     req.Query,
+			History:   history,
+			UserID:    userID,
+			SessionID: sessionID,
 			SearchFilter: &knowledge.SearchFilter{
 				FilterCondition: finalFilter,
 			},
@@ -363,6 +371,54 @@ func NewAgenticFilterSearchTool(
 		function.WithName(toolName),
 		function.WithDescription(description),
 	)
+}
+
+func searchContextFromInvocation(invocation *agent.Invocation) ([]knowledge.ConversationMessage, string, string) {
+	if invocation == nil || invocation.Session == nil {
+		return nil, "", ""
+	}
+	sess := invocation.Session
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	history := make([]knowledge.ConversationMessage, 0, defaultSearchHistorySize)
+	for i := len(sess.Events) - 1; i >= 0 && len(history) < defaultSearchHistorySize; i-- {
+		msg, ok := conversationMessageFromEvent(&sess.Events[i])
+		if !ok {
+			continue
+		}
+		history = append(history, msg)
+	}
+	for i, j := 0, len(history)-1; i < j; i, j = i+1, j-1 {
+		history[i], history[j] = history[j], history[i]
+	}
+	return history, sess.UserID, sess.ID
+}
+
+func conversationMessageFromEvent(evt *event.Event) (knowledge.ConversationMessage, bool) {
+	if evt == nil {
+		return knowledge.ConversationMessage{}, false
+	}
+	resp := evt.Response
+	if resp == nil || resp.IsPartial || resp.IsToolCallResponse() || resp.IsToolResultResponse() {
+		return knowledge.ConversationMessage{}, false
+	}
+	for _, choice := range resp.Choices {
+		msg := choice.Message
+		if msg.Role != model.RoleUser && msg.Role != model.RoleAssistant {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content == "" {
+			continue
+		}
+		return knowledge.ConversationMessage{
+			Role:      string(msg.Role),
+			Content:   content,
+			Timestamp: evt.Timestamp.Unix(),
+		}, true
+	}
+	return knowledge.ConversationMessage{}, false
 }
 
 func composeAgenticToolDescription(toolDescription, filterInfo string) string {
