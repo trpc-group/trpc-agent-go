@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -303,6 +304,220 @@ func TestFindToolRetriesOnUnavailable(t *testing.T) {
 	}
 	if len(out.Hits) != 0 {
 		t.Errorf("expected no hits, got %d", len(out.Hits))
+	}
+}
+
+func TestOptionsConfigureClientAndName(t *testing.T) {
+	var headers http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers = r.Header.Clone()
+		okEnvelope(w, map[string]any{"status": "healthy"})
+	}))
+	defer srv.Close()
+
+	ts, err := NewToolSet(
+		WithBaseURL(srv.URL),
+		WithAPIKey("k"),
+		WithAccount("acct"),
+		WithUser("u"),
+		WithAgent("ag"),
+		WithTimeout(5*time.Second),
+		WithProfile(ProfileAdmin),
+	)
+	if err != nil {
+		t.Fatalf("NewToolSet: %v", err)
+	}
+	defer ts.Close()
+
+	if ts.Name() != "" {
+		t.Errorf("Name() = %q, want empty to avoid the openviking_ prefix", ts.Name())
+	}
+	_ = callTool(t, ts, toolHealth, healthArgs{}).(string)
+	for h, want := range map[string]string{
+		"X-Api-Key":            "k",
+		"X-Openviking-Account": "acct",
+		"X-Openviking-User":    "u",
+		"X-Openviking-Agent":   "ag",
+	} {
+		if got := headers.Get(h); got != want {
+			t.Errorf("header %s = %q, want %q", h, got, want)
+		}
+	}
+}
+
+func TestWithHTTPClientOption(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		okEnvelope(w, map[string]any{"ok": true})
+	}))
+	defer srv.Close()
+
+	ts, err := NewToolSet(WithBaseURL(srv.URL), WithHTTPClient(&http.Client{Timeout: time.Second}))
+	if err != nil {
+		t.Fatalf("NewToolSet: %v", err)
+	}
+	defer ts.Close()
+	if _, err := ts.client.Status(context.Background()); err != nil {
+		t.Errorf("Status with custom http client: %v", err)
+	}
+}
+
+func TestAdminWriteTools(t *testing.T) {
+	var lastPath, lastMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastPath, lastMethod = r.URL.Path, r.Method
+		okEnvelope(w, map[string]any{"accepted": true})
+	}))
+	defer srv.Close()
+
+	ts, _ := NewToolSet(WithBaseURL(srv.URL), WithProfile(ProfileAdmin))
+	defer ts.Close()
+
+	if out := callTool(t, ts, toolAddResource, addResourceArgs{Path: "https://x", Wait: false}).(string); !strings.Contains(out, "accepted") {
+		t.Errorf("add_resource output = %q", out)
+	}
+	if lastPath != "/api/v1/resources" || lastMethod != http.MethodPost {
+		t.Errorf("add_resource hit %s %s", lastMethod, lastPath)
+	}
+	if out := callTool(t, ts, toolAddSkill, addSkillArgs{Data: "skill"}).(string); !strings.Contains(out, "accepted") {
+		t.Errorf("add_skill output = %q", out)
+	}
+	if lastPath != "/api/v1/skills" {
+		t.Errorf("add_skill hit %s", lastPath)
+	}
+	if out := callTool(t, ts, toolForget, forgetArgs{URI: "viking://x", Recursive: true}).(string); !strings.Contains(out, "accepted") {
+		t.Errorf("forget output = %q", out)
+	}
+	if lastPath != "/api/v1/fs" || lastMethod != http.MethodDelete {
+		t.Errorf("forget hit %s %s", lastMethod, lastPath)
+	}
+}
+
+func TestReadModes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/content/abstract":
+			okEnvelope(w, "L0 abstract")
+		case "/api/v1/content/overview":
+			okEnvelope(w, "L1 overview")
+		case "/api/v1/content/read":
+			okEnvelope(w, "0123456789")
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	ts, _ := NewToolSet(WithBaseURL(srv.URL))
+	defer ts.Close()
+
+	if out := callTool(t, ts, toolRead, readArgs{URI: "viking://d", ContentMode: "abstract"}).(readOutput); out.Content != "L0 abstract" {
+		t.Errorf("abstract = %q", out.Content)
+	}
+	if out := callTool(t, ts, toolRead, readArgs{URI: "viking://d", ContentMode: "overview"}).(readOutput); out.Content != "L1 overview" {
+		t.Errorf("overview = %q", out.Content)
+	}
+	// Default mode is read, and max_chars truncates by rune count.
+	out := callTool(t, ts, toolRead, readArgs{URI: "viking://d/f", MaxChars: 4}).(readOutput)
+	if out.Content != "0123" || !out.Truncated {
+		t.Errorf("read truncate = %q truncated=%v", out.Content, out.Truncated)
+	}
+
+	// An invalid content_mode must error rather than silently default.
+	var ct tool.CallableTool
+	for _, tl := range ts.Tools(context.Background()) {
+		if tl.Declaration().Name == toolRead {
+			ct = tl.(tool.CallableTool)
+		}
+	}
+	raw, _ := json.Marshal(readArgs{URI: "viking://d", ContentMode: "bogus"})
+	if _, err := ct.Call(context.Background(), raw); err == nil {
+		t.Error("invalid content_mode should error")
+	}
+}
+
+func TestBrowseGlob(t *testing.T) {
+	var hitPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitPath = r.URL.Path
+		okEnvelope(w, []map[string]any{{"uri": "viking://r/x.go"}})
+	}))
+	defer srv.Close()
+
+	ts, _ := NewToolSet(WithBaseURL(srv.URL))
+	defer ts.Close()
+
+	// A pattern routes to glob instead of ls.
+	out := callTool(t, ts, toolBrowse, browseArgs{URI: "viking://r", Pattern: "*.go"}).(string)
+	if hitPath != "/api/v1/search/glob" {
+		t.Errorf("browse with pattern hit %s, want glob", hitPath)
+	}
+	if !strings.Contains(out, "x.go") {
+		t.Errorf("glob output = %q", out)
+	}
+}
+
+func TestPureHelpers(t *testing.T) {
+	if scorePtr(0) != nil {
+		t.Error("scorePtr(0) should be nil")
+	}
+	if p := scorePtr(0.3); p == nil || *p != 0.3 {
+		t.Errorf("scorePtr(0.3) = %v", p)
+	}
+	if normalizeLimit(0) != defaultRetrievalLimit || normalizeLimit(7) != 7 {
+		t.Error("normalizeLimit")
+	}
+	if firstNonEmpty("", "", "x") != "x" || firstNonEmpty("", "") != "" {
+		t.Error("firstNonEmpty")
+	}
+	if s, trunc := truncateRunes("héllo", 0); s != "héllo" || trunc {
+		t.Errorf("truncateRunes no limit = %q %v", s, trunc)
+	}
+	if s, trunc := truncateRunes("héllo", 2); s != "hé" || !trunc {
+		t.Errorf("truncateRunes rune-safe = %q %v", s, trunc)
+	}
+	if extractSessionID([]byte(`{"session_id":"abc"}`)) != "abc" {
+		t.Error("extractSessionID valid")
+	}
+	if extractSessionID([]byte(`not json`)) != "" {
+		t.Error("extractSessionID invalid should be empty")
+	}
+}
+
+func TestToolsSurfaceServerErrors(t *testing.T) {
+	// Every tool must propagate a server error instead of swallowing it.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		errEnvelope(w, "INTERNAL", "boom")
+	}))
+	defer srv.Close()
+
+	ts, _ := NewToolSet(WithBaseURL(srv.URL), WithProfile(ProfileAdmin))
+	defer ts.Close()
+
+	byName := map[string]tool.CallableTool{}
+	for _, tl := range ts.Tools(context.Background()) {
+		byName[tl.Declaration().Name] = tl.(tool.CallableTool)
+	}
+
+	cases := []struct {
+		name string
+		args any
+	}{
+		{toolFind, findArgs{Query: "q"}},
+		{toolSearch, searchArgs{Query: "q"}},
+		{toolBrowse, browseArgs{URI: "viking://r"}},
+		{toolRead, readArgs{URI: "viking://r"}},
+		{toolGrep, grepArgs{URI: "viking://r", Pattern: "x"}},
+		{toolStore, storeArgs{Content: "hi"}}, // CreateSession fails
+		{toolAddResource, addResourceArgs{Path: "https://x"}},
+		{toolAddSkill, addSkillArgs{Data: "d"}},
+		{toolHealth, healthArgs{}},
+		{toolForget, forgetArgs{URI: "viking://x"}},
+	}
+	for _, tc := range cases {
+		raw, _ := json.Marshal(tc.args)
+		if _, err := byName[tc.name].Call(context.Background(), raw); err == nil {
+			t.Errorf("%s should surface the server error", tc.name)
+		}
 	}
 }
 
