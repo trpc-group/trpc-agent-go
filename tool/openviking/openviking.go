@@ -42,16 +42,14 @@ const (
 
 // config holds resolved ToolSet configuration.
 type config struct {
-	baseURL     string
-	apiKey      string
-	account     string
-	user        string
-	agent       string
-	httpClient  *http.Client
-	timeout     time.Duration
-	profile     Profile
-	toolNames   []string
-	allowForget bool
+	baseURL   string
+	apiKey    string
+	account   string
+	user      string
+	agent     string
+	timeout   time.Duration
+	profile   Profile
+	toolNames []ToolName
 }
 
 // Option configures a ToolSet.
@@ -82,13 +80,9 @@ func WithAgent(agent string) Option {
 	return func(c *config) { c.agent = agent }
 }
 
-// WithHTTPClient sets a custom HTTP client used to call OpenViking.
-func WithHTTPClient(hc *http.Client) Option {
-	return func(c *config) { c.httpClient = hc }
-}
-
-// WithTimeout sets the per-request timeout. Ignored when a custom HTTP client
-// is provided. Non-positive values are ignored.
+// WithTimeout sets the per-request timeout. The default is no timeout, so
+// long-running calls (e.g. viking_add_resource) rely on context cancellation
+// instead. Non-positive values are ignored.
 func WithTimeout(d time.Duration) Option {
 	return func(c *config) {
 		if d > 0 {
@@ -97,20 +91,27 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
-// WithProfile selects the tool profile (retrieval, agent, admin).
+// WithProfile selects the tool profile (retrieval, agent, admin). It is the
+// primary way to choose which tools are exposed; use the exported Tool*
+// constants with WithTools only when a profile does not fit.
+//
+// Precedence: WithTools, when non-empty, fully overrides the profile's tool
+// list. The profile then only governs the viking_forget safety gate (see
+// WithTools). When WithTools is not set, the profile alone decides the tools.
 func WithProfile(p Profile) Option {
 	return func(c *config) { c.profile = p }
 }
 
-// WithToolNames explicitly selects the tools to expose by name. When set, it
-// overrides the profile selection.
-func WithToolNames(names ...string) Option {
+// WithTools explicitly selects the tools to expose, using the exported Tool*
+// constants (e.g. ToolSearch, ToolRead). When non-empty it takes precedence
+// over WithProfile and fully replaces the profile's tool list; unknown names
+// make NewToolSet fail fast.
+//
+// The profile is not fully ignored: the destructive ToolForget is dropped
+// unless WithProfile(ProfileAdmin) is also set, so naming it here cannot bypass
+// the admin gate.
+func WithTools(names ...ToolName) Option {
 	return func(c *config) { c.toolNames = names }
-}
-
-// WithAllowForget additionally exposes the destructive viking_forget tool.
-func WithAllowForget(allow bool) Option {
-	return func(c *config) { c.allowForget = allow }
 }
 
 // ToolSet exposes OpenViking primitives as agent tools and implements
@@ -122,26 +123,20 @@ type ToolSet struct {
 
 // NewToolSet creates a ToolSet backed by an OpenViking server.
 func NewToolSet(opts ...Option) (*ToolSet, error) {
-	cfg := &config{
-		profile: ProfileAgent,
-		timeout: client.DefaultTimeout,
-	}
+	cfg := &config{profile: ProfileAgent}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
-	httpClient := cfg.httpClient
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: cfg.timeout}
-	}
-
+	// Default to no client-level timeout (cfg.timeout == 0); callers control
+	// cancellation via context, and WithTimeout can opt into a hard deadline.
 	c := client.New(client.Config{
 		BaseURL:    cfg.baseURL,
 		APIKey:     cfg.apiKey,
 		Account:    cfg.account,
 		User:       cfg.user,
 		Agent:      cfg.agent,
-		HTTPClient: httpClient,
+		HTTPClient: &http.Client{Timeout: cfg.timeout},
 	})
 
 	tools, err := buildTools(c, selectToolNames(cfg))
@@ -164,42 +159,36 @@ func (s *ToolSet) Name() string { return "" }
 func (s *ToolSet) Close() error { return s.client.Close() }
 
 // selectToolNames resolves the final ordered tool name list from the config.
-func selectToolNames(cfg *config) []string {
-	// The destructive viking_forget tool is gated behind the admin profile or
-	// an explicit WithAllowForget(true), regardless of how tools are selected.
-	forgetAllowed := cfg.profile == ProfileAdmin || cfg.allowForget
+func selectToolNames(cfg *config) []ToolName {
+	// The destructive viking_forget tool is gated behind the admin profile,
+	// regardless of how tools are selected.
 	if len(cfg.toolNames) > 0 {
-		if forgetAllowed {
+		if cfg.profile == ProfileAdmin {
 			return cfg.toolNames
 		}
-		return removeString(cfg.toolNames, toolForget)
+		return removeTool(cfg.toolNames, ToolForget)
 	}
-	retrieval := []string{
-		toolFind,
-		toolSearch,
-		toolBrowse,
-		toolRead,
-		toolGrep,
-		toolHealth,
+	retrieval := []ToolName{
+		ToolFind,
+		ToolSearch,
+		ToolBrowse,
+		ToolRead,
+		ToolGrep,
+		ToolHealth,
 	}
-	var names []string
 	switch cfg.profile {
 	case ProfileRetrieval:
-		names = retrieval
+		return retrieval
 	case ProfileAdmin:
-		names = append(retrieval, toolStore, toolAddResource, toolAddSkill, toolForget)
+		return append(retrieval, ToolStore, ToolAddResource, ToolAddSkill, ToolForget)
 	default: // ProfileAgent
-		names = append(retrieval, toolStore, toolAddResource, toolAddSkill)
+		return append(retrieval, ToolStore, ToolAddResource, ToolAddSkill)
 	}
-	if forgetAllowed && !contains(names, toolForget) {
-		names = append(names, toolForget)
-	}
-	return names
 }
 
-// removeString returns items without any element equal to target.
-func removeString(items []string, target string) []string {
-	out := make([]string, 0, len(items))
+// removeTool returns items without any element equal to target.
+func removeTool(items []ToolName, target ToolName) []ToolName {
+	out := make([]ToolName, 0, len(items))
 	for _, s := range items {
 		if s != target {
 			out = append(out, s)
@@ -208,7 +197,7 @@ func removeString(items []string, target string) []string {
 	return out
 }
 
-func contains(names []string, target string) bool {
+func containsTool(names []ToolName, target ToolName) bool {
 	for _, n := range names {
 		if n == target {
 			return true

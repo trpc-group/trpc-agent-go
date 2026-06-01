@@ -38,11 +38,11 @@ func errEnvelope(w http.ResponseWriter, code, message string) {
 }
 
 // callTool finds a tool by name and invokes it with the given args.
-func callTool(t *testing.T, ts *ToolSet, name string, args any) any {
+func callTool(t *testing.T, ts *ToolSet, name ToolName, args any) any {
 	t.Helper()
 	var target tool.CallableTool
 	for _, tl := range ts.Tools(context.Background()) {
-		if tl.Declaration().Name == name {
+		if tl.Declaration().Name == string(name) {
 			ct, ok := tl.(tool.CallableTool)
 			if !ok {
 				t.Fatalf("tool %s is not callable", name)
@@ -68,11 +68,11 @@ func callTool(t *testing.T, ts *ToolSet, name string, args any) any {
 func TestProfileToolSelection(t *testing.T) {
 	cases := []struct {
 		profile Profile
-		want    []string
+		want    []ToolName
 	}{
-		{ProfileRetrieval, []string{toolFind, toolSearch, toolBrowse, toolRead, toolGrep, toolHealth}},
-		{ProfileAgent, []string{toolFind, toolSearch, toolBrowse, toolRead, toolGrep, toolHealth, toolStore, toolAddResource, toolAddSkill}},
-		{ProfileAdmin, []string{toolFind, toolSearch, toolBrowse, toolRead, toolGrep, toolHealth, toolStore, toolAddResource, toolAddSkill, toolForget}},
+		{ProfileRetrieval, []ToolName{ToolFind, ToolSearch, ToolBrowse, ToolRead, ToolGrep, ToolHealth}},
+		{ProfileAgent, []ToolName{ToolFind, ToolSearch, ToolBrowse, ToolRead, ToolGrep, ToolHealth, ToolStore, ToolAddResource, ToolAddSkill}},
+		{ProfileAdmin, []ToolName{ToolFind, ToolSearch, ToolBrowse, ToolRead, ToolGrep, ToolHealth, ToolStore, ToolAddResource, ToolAddSkill, ToolForget}},
 	}
 	for _, tc := range cases {
 		ts, err := NewToolSet(WithProfile(tc.profile))
@@ -80,51 +80,54 @@ func TestProfileToolSelection(t *testing.T) {
 			t.Fatalf("NewToolSet: %v", err)
 		}
 		got := toolNames(ts)
-		if !equalStringSlices(got, tc.want) {
+		if !equalToolSlices(got, tc.want) {
 			t.Errorf("profile %s tools = %v, want %v", tc.profile, got, tc.want)
 		}
 		_ = ts.Close()
 	}
 }
 
-func TestRetrievalProfileExcludesForget(t *testing.T) {
-	ts, _ := NewToolSet(WithProfile(ProfileRetrieval), WithAllowForget(true))
-	if !contains(toolNames(ts), toolForget) {
-		t.Errorf("WithAllowForget should add viking_forget even for retrieval profile")
+func TestNonAdminProfilesExcludeForget(t *testing.T) {
+	for _, p := range []Profile{ProfileRetrieval, ProfileAgent} {
+		ts, _ := NewToolSet(WithProfile(p))
+		if containsTool(toolNames(ts), ToolForget) {
+			t.Errorf("profile %s must not expose viking_forget", p)
+		}
+		_ = ts.Close()
 	}
 }
 
-func TestWithToolNamesOverride(t *testing.T) {
-	ts, _ := NewToolSet(WithToolNames(toolRead))
+func TestWithToolsOverride(t *testing.T) {
+	ts, _ := NewToolSet(WithTools(ToolRead))
 	got := toolNames(ts)
-	if !equalStringSlices(got, []string{toolRead}) {
+	if !equalToolSlices(got, []ToolName{ToolRead}) {
 		t.Errorf("tool names = %v, want [viking_read]", got)
 	}
 }
 
-func TestWithToolNamesRejectsUnknown(t *testing.T) {
-	if _, err := NewToolSet(WithToolNames("viking_bogus")); err == nil {
+func TestWithToolsRejectsUnknown(t *testing.T) {
+	if _, err := NewToolSet(WithTools("viking_bogus")); err == nil {
 		t.Error("NewToolSet should fail fast on an unknown tool name")
 	}
 }
 
-func TestWithToolNamesGatesForget(t *testing.T) {
-	gated, err := NewToolSet(WithToolNames(toolFind, toolForget))
+func TestWithToolsGatesForget(t *testing.T) {
+	gated, err := NewToolSet(WithTools(ToolFind, ToolForget))
 	if err != nil {
 		t.Fatalf("NewToolSet: %v", err)
 	}
 	defer gated.Close()
-	if contains(toolNames(gated), toolForget) {
-		t.Error("viking_forget must not be exposed without admin profile or WithAllowForget")
+	if containsTool(toolNames(gated), ToolForget) {
+		t.Error("viking_forget must not be exposed without the admin profile")
 	}
 
-	allowed, err := NewToolSet(WithToolNames(toolFind, toolForget), WithAllowForget(true))
+	allowed, err := NewToolSet(WithTools(ToolFind, ToolForget), WithProfile(ProfileAdmin))
 	if err != nil {
 		t.Fatalf("NewToolSet: %v", err)
 	}
 	defer allowed.Close()
-	if !contains(toolNames(allowed), toolForget) {
-		t.Error("viking_forget should be exposed when WithAllowForget is set")
+	if !containsTool(toolNames(allowed), ToolForget) {
+		t.Error("viking_forget should be exposed under the admin profile")
 	}
 }
 
@@ -151,7 +154,7 @@ func TestSearchTool(t *testing.T) {
 	ts, _ := NewToolSet(WithBaseURL(srv.URL))
 	defer ts.Close()
 
-	out := callTool(t, ts, toolSearch, searchArgs{Query: "hello"}).(retrievalOutput)
+	out := callTool(t, ts, ToolSearch, searchArgs{Query: "hello"}).(retrievalOutput)
 	if len(out.Hits) != 1 {
 		t.Fatalf("hits = %d, want 1", len(out.Hits))
 	}
@@ -179,17 +182,17 @@ func TestReadToolContentModesAndTruncation(t *testing.T) {
 	ts, _ := NewToolSet(WithBaseURL(srv.URL))
 	defer ts.Close()
 
-	full := callTool(t, ts, toolRead, readArgs{URI: "viking://resources/a", ContentMode: "read"}).(readOutput)
+	full := callTool(t, ts, ToolRead, readArgs{URI: "viking://resources/a", ContentMode: "read"}).(readOutput)
 	if full.Content != "0123456789abcdef" || full.Truncated {
 		t.Errorf("full read = %+v", full)
 	}
 
-	truncated := callTool(t, ts, toolRead, readArgs{URI: "viking://resources/a", ContentMode: "read", MaxChars: 4}).(readOutput)
+	truncated := callTool(t, ts, ToolRead, readArgs{URI: "viking://resources/a", ContentMode: "read", MaxChars: 4}).(readOutput)
 	if truncated.Content != "0123" || !truncated.Truncated {
 		t.Errorf("truncated read = %+v", truncated)
 	}
 
-	ov := callTool(t, ts, toolRead, readArgs{URI: "viking://resources/a", ContentMode: "overview"}).(readOutput)
+	ov := callTool(t, ts, ToolRead, readArgs{URI: "viking://resources/a", ContentMode: "overview"}).(readOutput)
 	if ov.Content != "the overview" || ov.ContentMode != "overview" {
 		t.Errorf("overview read = %+v", ov)
 	}
@@ -217,7 +220,7 @@ func TestStoreToolCreatesSessionAndCommits(t *testing.T) {
 	ts, _ := NewToolSet(WithBaseURL(srv.URL))
 	defer ts.Close()
 
-	out := callTool(t, ts, toolStore, storeArgs{Content: "remember this", Commit: true}).(storeOutput)
+	out := callTool(t, ts, ToolStore, storeArgs{Content: "remember this", Commit: true}).(storeOutput)
 	if out.SessionID != "sess-1" || !out.Committed {
 		t.Errorf("store output = %+v", out)
 	}
@@ -232,7 +235,7 @@ func TestStoreToolRejectsInvalidRole(t *testing.T) {
 
 	var store tool.CallableTool
 	for _, tl := range ts.Tools(context.Background()) {
-		if tl.Declaration().Name == toolStore {
+		if tl.Declaration().Name == string(ToolStore) {
 			store = tl.(tool.CallableTool)
 			break
 		}
@@ -270,15 +273,15 @@ func TestBrowseGrepHealthTools(t *testing.T) {
 	ts, _ := NewToolSet(WithBaseURL(srv.URL))
 	defer ts.Close()
 
-	browse := callTool(t, ts, toolBrowse, browseArgs{URI: "viking://resources"}).(string)
+	browse := callTool(t, ts, ToolBrowse, browseArgs{URI: "viking://resources"}).(string)
 	if !strings.Contains(browse, "viking://resources/a") {
 		t.Errorf("browse output = %q", browse)
 	}
-	grep := callTool(t, ts, toolGrep, grepArgs{URI: "viking://resources", Pattern: "func"}).(string)
+	grep := callTool(t, ts, ToolGrep, grepArgs{URI: "viking://resources", Pattern: "func"}).(string)
 	if !strings.Contains(grep, "x.go") {
 		t.Errorf("grep output = %q", grep)
 	}
-	health := callTool(t, ts, toolHealth, healthArgs{}).(string)
+	health := callTool(t, ts, ToolHealth, healthArgs{}).(string)
 	if !strings.Contains(health, "healthy") {
 		t.Errorf("health output = %q", health)
 	}
@@ -298,7 +301,7 @@ func TestFindToolRetriesOnUnavailable(t *testing.T) {
 	ts, _ := NewToolSet(WithBaseURL(srv.URL))
 	defer ts.Close()
 
-	out := callTool(t, ts, toolFind, findArgs{Query: "q"}).(retrievalOutput)
+	out := callTool(t, ts, ToolFind, findArgs{Query: "q"}).(retrievalOutput)
 	if calls.Load() != 2 {
 		t.Errorf("expected 2 calls (1 retry), got %d", calls.Load())
 	}
@@ -332,7 +335,7 @@ func TestOptionsConfigureClientAndName(t *testing.T) {
 	if ts.Name() != "" {
 		t.Errorf("Name() = %q, want empty to avoid the openviking_ prefix", ts.Name())
 	}
-	_ = callTool(t, ts, toolHealth, healthArgs{}).(string)
+	_ = callTool(t, ts, ToolHealth, healthArgs{}).(string)
 	for h, want := range map[string]string{
 		"X-Api-Key":            "k",
 		"X-Openviking-Account": "acct",
@@ -342,22 +345,6 @@ func TestOptionsConfigureClientAndName(t *testing.T) {
 		if got := headers.Get(h); got != want {
 			t.Errorf("header %s = %q, want %q", h, got, want)
 		}
-	}
-}
-
-func TestWithHTTPClientOption(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		okEnvelope(w, map[string]any{"ok": true})
-	}))
-	defer srv.Close()
-
-	ts, err := NewToolSet(WithBaseURL(srv.URL), WithHTTPClient(&http.Client{Timeout: time.Second}))
-	if err != nil {
-		t.Fatalf("NewToolSet: %v", err)
-	}
-	defer ts.Close()
-	if _, err := ts.client.Status(context.Background()); err != nil {
-		t.Errorf("Status with custom http client: %v", err)
 	}
 }
 
@@ -372,19 +359,19 @@ func TestAdminWriteTools(t *testing.T) {
 	ts, _ := NewToolSet(WithBaseURL(srv.URL), WithProfile(ProfileAdmin))
 	defer ts.Close()
 
-	if out := callTool(t, ts, toolAddResource, addResourceArgs{Path: "https://x", Wait: false}).(string); !strings.Contains(out, "accepted") {
+	if out := callTool(t, ts, ToolAddResource, addResourceArgs{Path: "https://x", Wait: false}).(string); !strings.Contains(out, "accepted") {
 		t.Errorf("add_resource output = %q", out)
 	}
 	if lastPath != "/api/v1/resources" || lastMethod != http.MethodPost {
 		t.Errorf("add_resource hit %s %s", lastMethod, lastPath)
 	}
-	if out := callTool(t, ts, toolAddSkill, addSkillArgs{Data: "skill"}).(string); !strings.Contains(out, "accepted") {
+	if out := callTool(t, ts, ToolAddSkill, addSkillArgs{Data: "skill"}).(string); !strings.Contains(out, "accepted") {
 		t.Errorf("add_skill output = %q", out)
 	}
 	if lastPath != "/api/v1/skills" {
 		t.Errorf("add_skill hit %s", lastPath)
 	}
-	if out := callTool(t, ts, toolForget, forgetArgs{URI: "viking://x", Recursive: true}).(string); !strings.Contains(out, "accepted") {
+	if out := callTool(t, ts, ToolForget, forgetArgs{URI: "viking://x", Recursive: true}).(string); !strings.Contains(out, "accepted") {
 		t.Errorf("forget output = %q", out)
 	}
 	if lastPath != "/api/v1/fs" || lastMethod != http.MethodDelete {
@@ -410,14 +397,14 @@ func TestReadModes(t *testing.T) {
 	ts, _ := NewToolSet(WithBaseURL(srv.URL))
 	defer ts.Close()
 
-	if out := callTool(t, ts, toolRead, readArgs{URI: "viking://d", ContentMode: "abstract"}).(readOutput); out.Content != "L0 abstract" {
+	if out := callTool(t, ts, ToolRead, readArgs{URI: "viking://d", ContentMode: "abstract"}).(readOutput); out.Content != "L0 abstract" {
 		t.Errorf("abstract = %q", out.Content)
 	}
-	if out := callTool(t, ts, toolRead, readArgs{URI: "viking://d", ContentMode: "overview"}).(readOutput); out.Content != "L1 overview" {
+	if out := callTool(t, ts, ToolRead, readArgs{URI: "viking://d", ContentMode: "overview"}).(readOutput); out.Content != "L1 overview" {
 		t.Errorf("overview = %q", out.Content)
 	}
 	// Default mode is read, and max_chars truncates by rune count.
-	out := callTool(t, ts, toolRead, readArgs{URI: "viking://d/f", MaxChars: 4}).(readOutput)
+	out := callTool(t, ts, ToolRead, readArgs{URI: "viking://d/f", MaxChars: 4}).(readOutput)
 	if out.Content != "0123" || !out.Truncated {
 		t.Errorf("read truncate = %q truncated=%v", out.Content, out.Truncated)
 	}
@@ -425,7 +412,7 @@ func TestReadModes(t *testing.T) {
 	// An invalid content_mode must error rather than silently default.
 	var ct tool.CallableTool
 	for _, tl := range ts.Tools(context.Background()) {
-		if tl.Declaration().Name == toolRead {
+		if tl.Declaration().Name == string(ToolRead) {
 			ct = tl.(tool.CallableTool)
 		}
 	}
@@ -447,7 +434,7 @@ func TestBrowseGlob(t *testing.T) {
 	defer ts.Close()
 
 	// A pattern routes to glob instead of ls.
-	out := callTool(t, ts, toolBrowse, browseArgs{URI: "viking://r", Pattern: "*.go"}).(string)
+	out := callTool(t, ts, ToolBrowse, browseArgs{URI: "viking://r", Pattern: "*.go"}).(string)
 	if hitPath != "/api/v1/search/glob" {
 		t.Errorf("browse with pattern hit %s, want glob", hitPath)
 	}
@@ -493,25 +480,25 @@ func TestToolsSurfaceServerErrors(t *testing.T) {
 	ts, _ := NewToolSet(WithBaseURL(srv.URL), WithProfile(ProfileAdmin))
 	defer ts.Close()
 
-	byName := map[string]tool.CallableTool{}
+	byName := map[ToolName]tool.CallableTool{}
 	for _, tl := range ts.Tools(context.Background()) {
-		byName[tl.Declaration().Name] = tl.(tool.CallableTool)
+		byName[ToolName(tl.Declaration().Name)] = tl.(tool.CallableTool)
 	}
 
 	cases := []struct {
-		name string
+		name ToolName
 		args any
 	}{
-		{toolFind, findArgs{Query: "q"}},
-		{toolSearch, searchArgs{Query: "q"}},
-		{toolBrowse, browseArgs{URI: "viking://r"}},
-		{toolRead, readArgs{URI: "viking://r"}},
-		{toolGrep, grepArgs{URI: "viking://r", Pattern: "x"}},
-		{toolStore, storeArgs{Content: "hi"}}, // CreateSession fails
-		{toolAddResource, addResourceArgs{Path: "https://x"}},
-		{toolAddSkill, addSkillArgs{Data: "d"}},
-		{toolHealth, healthArgs{}},
-		{toolForget, forgetArgs{URI: "viking://x"}},
+		{ToolFind, findArgs{Query: "q"}},
+		{ToolSearch, searchArgs{Query: "q"}},
+		{ToolBrowse, browseArgs{URI: "viking://r"}},
+		{ToolRead, readArgs{URI: "viking://r"}},
+		{ToolGrep, grepArgs{URI: "viking://r", Pattern: "x"}},
+		{ToolStore, storeArgs{Content: "hi"}}, // CreateSession fails
+		{ToolAddResource, addResourceArgs{Path: "https://x"}},
+		{ToolAddSkill, addSkillArgs{Data: "d"}},
+		{ToolHealth, healthArgs{}},
+		{ToolForget, forgetArgs{URI: "viking://x"}},
 	}
 	for _, tc := range cases {
 		raw, _ := json.Marshal(tc.args)
@@ -521,15 +508,15 @@ func TestToolsSurfaceServerErrors(t *testing.T) {
 	}
 }
 
-func toolNames(ts *ToolSet) []string {
-	var names []string
+func toolNames(ts *ToolSet) []ToolName {
+	var names []ToolName
 	for _, tl := range ts.Tools(context.Background()) {
-		names = append(names, tl.Declaration().Name)
+		names = append(names, ToolName(tl.Declaration().Name))
 	}
 	return names
 }
 
-func equalStringSlices(a, b []string) bool {
+func equalToolSlices(a, b []ToolName) bool {
 	if len(a) != len(b) {
 		return false
 	}

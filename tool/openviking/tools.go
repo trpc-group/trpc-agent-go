@@ -19,41 +19,45 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/openviking/internal/client"
 )
 
-// Tool names. These intentionally use the viking_* prefix so models see the
+// ToolName identifies an OpenViking tool. Use the exported Tool* constants
+// with WithTools; the string values use the viking_* prefix so models see the
 // same operations exposed by OpenViking's MCP/plugin integrations.
+type ToolName string
+
+// Exported tool names for use with WithTools.
 const (
-	toolFind        = "viking_find"
-	toolSearch      = "viking_search"
-	toolBrowse      = "viking_browse"
-	toolRead        = "viking_read"
-	toolGrep        = "viking_grep"
-	toolStore       = "viking_store"
-	toolAddResource = "viking_add_resource"
-	toolAddSkill    = "viking_add_skill"
-	toolHealth      = "viking_health"
-	toolForget      = "viking_forget"
+	ToolFind        ToolName = "viking_find"
+	ToolSearch      ToolName = "viking_search"
+	ToolBrowse      ToolName = "viking_browse"
+	ToolRead        ToolName = "viking_read"
+	ToolGrep        ToolName = "viking_grep"
+	ToolStore       ToolName = "viking_store"
+	ToolAddResource ToolName = "viking_add_resource"
+	ToolAddSkill    ToolName = "viking_add_skill"
+	ToolHealth      ToolName = "viking_health"
+	ToolForget      ToolName = "viking_forget"
 )
 
 const defaultRetrievalLimit = 8
 
 // buildTools constructs the requested tools in the given order. It fails fast
-// on any unknown tool name so a typo in WithToolNames surfaces immediately
+// on any unknown tool name so a typo in WithTools surfaces immediately
 // instead of silently shrinking the exposed capability set.
-func buildTools(c *client.Client, names []string) ([]tool.Tool, error) {
+func buildTools(c *client.Client, names []ToolName) ([]tool.Tool, error) {
 	// hasRead controls whether retrieval tools advertise viking_read; the
 	// "search then read" hint must not point the model at an absent tool.
-	hasRead := contains(names, toolRead)
-	factories := map[string]func(*client.Client) tool.Tool{
-		toolFind:        func(c *client.Client) tool.Tool { return newFindTool(c, hasRead) },
-		toolSearch:      func(c *client.Client) tool.Tool { return newSearchTool(c, hasRead) },
-		toolBrowse:      newBrowseTool,
-		toolRead:        newReadTool,
-		toolGrep:        newGrepTool,
-		toolStore:       newStoreTool,
-		toolAddResource: newAddResourceTool,
-		toolAddSkill:    newAddSkillTool,
-		toolHealth:      newHealthTool,
-		toolForget:      newForgetTool,
+	hasRead := containsTool(names, ToolRead)
+	factories := map[ToolName]func(*client.Client) tool.Tool{
+		ToolFind:        func(c *client.Client) tool.Tool { return newFindTool(c, hasRead) },
+		ToolSearch:      func(c *client.Client) tool.Tool { return newSearchTool(c, hasRead) },
+		ToolBrowse:      newBrowseTool,
+		ToolRead:        newReadTool,
+		ToolGrep:        newGrepTool,
+		ToolStore:       newStoreTool,
+		ToolAddResource: newAddResourceTool,
+		ToolAddSkill:    newAddSkillTool,
+		ToolHealth:      newHealthTool,
+		ToolForget:      newForgetTool,
 	}
 	tools := make([]tool.Tool, 0, len(names))
 	for _, name := range names {
@@ -172,7 +176,7 @@ func newFindTool(c *client.Client, hasRead bool) tool.Tool {
 		desc += " Call viking_read on a URI to fetch full content."
 	}
 	return function.NewFunctionTool(fn,
-		function.WithName(toolFind),
+		function.WithName(string(ToolFind)),
 		function.WithDescription(desc))
 }
 
@@ -206,7 +210,7 @@ func newSearchTool(c *client.Client, hasRead bool) tool.Tool {
 		desc += " Call viking_read on a URI to fetch full content."
 	}
 	return function.NewFunctionTool(fn,
-		function.WithName(toolSearch),
+		function.WithName(string(ToolSearch)),
 		function.WithDescription(desc))
 }
 
@@ -239,7 +243,7 @@ func newBrowseTool(c *client.Client) tool.Tool {
 		return string(raw), nil
 	}
 	return function.NewFunctionTool(fn,
-		function.WithName(toolBrowse),
+		function.WithName(string(ToolBrowse)),
 		function.WithDescription("Browse OpenViking namespaces: list a viking:// URI, or glob when a pattern is provided."))
 }
 
@@ -291,7 +295,7 @@ func newReadTool(c *client.Client) tool.Tool {
 		return readOutput{URI: a.URI, ContentMode: mode, Content: content, Truncated: truncated}, nil
 	}
 	return function.NewFunctionTool(fn,
-		function.WithName(toolRead),
+		function.WithName(string(ToolRead)),
 		function.WithDescription("Read content at an OpenViking URI. content_mode picks the level: "+
 			"read (default, L2 full content of any file/leaf) | overview (L1) | abstract (L0). "+
 			"overview/abstract resolve the summary OF A DIRECTORY, so pass a directory URI "+
@@ -319,7 +323,7 @@ func newGrepTool(c *client.Client) tool.Tool {
 		return string(raw), nil
 	}
 	return function.NewFunctionTool(fn,
-		function.WithName(toolGrep),
+		function.WithName(string(ToolGrep)),
 		function.WithDescription("Grep-style content search within an OpenViking URI subtree."))
 }
 
@@ -368,7 +372,7 @@ func newStoreTool(c *client.Client) tool.Tool {
 		return storeOutput{SessionID: sessionID, Committed: a.Commit}, nil
 	}
 	return function.NewFunctionTool(fn,
-		function.WithName(toolStore),
+		function.WithName(string(ToolStore)),
 		function.WithDescription("Store a message into an OpenViking session, optionally committing to trigger memory extraction."))
 }
 
@@ -390,7 +394,7 @@ func newAddResourceTool(c *client.Client) tool.Tool {
 		return string(raw), nil
 	}
 	return function.NewFunctionTool(fn,
-		function.WithName(toolAddResource),
+		function.WithName(string(ToolAddResource)),
 		function.WithDescription("Import a URL, remote path, or repository into OpenViking resources for later retrieval. "+
 			"For large imports leave wait=false (the default) to avoid the per-request timeout; the server keeps "+
 			"processing in the background after the call returns."))
@@ -412,7 +416,7 @@ func newAddSkillTool(c *client.Client) tool.Tool {
 		return string(raw), nil
 	}
 	return function.NewFunctionTool(fn,
-		function.WithName(toolAddSkill),
+		function.WithName(string(ToolAddSkill)),
 		function.WithDescription("Register a reusable skill in OpenViking."))
 }
 
@@ -429,7 +433,7 @@ func newHealthTool(c *client.Client) tool.Tool {
 		return string(raw), nil
 	}
 	return function.NewFunctionTool(fn,
-		function.WithName(toolHealth),
+		function.WithName(string(ToolHealth)),
 		function.WithDescription("Check OpenViking server status."))
 }
 
@@ -449,8 +453,8 @@ func newForgetTool(c *client.Client) tool.Tool {
 		return string(raw), nil
 	}
 	return function.NewFunctionTool(fn,
-		function.WithName(toolForget),
-		function.WithDescription("Remove a URI from OpenViking. Destructive; only available with the admin profile or when explicitly allowed."))
+		function.WithName(string(ToolForget)),
+		function.WithDescription("Remove a URI from OpenViking. Destructive; only available with the admin profile."))
 }
 
 // extractSessionID pulls the session_id field from a CreateSession result.
