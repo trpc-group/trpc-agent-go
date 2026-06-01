@@ -594,13 +594,36 @@ func TestService_UpdateSessionState(t *testing.T) {
 	}
 	ctx := context.Background()
 	key := session.Key{AppName: "test-app", UserID: "test-user", SessionID: "test-session"}
+	createdAt := time.Date(2026, 5, 31, 20, 25, 0, 0, time.UTC)
+	updatedAt := createdAt.Add(time.Minute)
+	stateBytes, err := json.Marshal(&SessionState{
+		ID:        key.SessionID,
+		State:     session.StateMap{"existing": []byte("old")},
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	})
+	assert.NoError(t, err)
 
 	// Mock query for existing session
 	mockCli.queryFunc = func(ctx context.Context, query string, args ...any) (driver.Rows, error) {
-		return newMockRows([][]any{{"{}"}}), nil
+		return newMockRows([][]any{{string(stateBytes)}}), nil
+	}
+	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
+		if strings.Contains(query, "INSERT INTO session_states") {
+			var stored SessionState
+			assert.NoError(t, json.Unmarshal([]byte(args[3].(string)), &stored))
+			assert.Equal(t, createdAt, stored.CreatedAt)
+			assert.Equal(t, time.UTC, stored.UpdatedAt.Location())
+			assert.True(t, stored.UpdatedAt.After(updatedAt))
+
+			dbUpdatedAt, ok := args[6].(time.Time)
+			assert.True(t, ok)
+			assert.Equal(t, time.UTC, dbUpdatedAt.Location())
+		}
+		return nil
 	}
 
-	err := s.UpdateSessionState(ctx, key, session.StateMap{"k1": []byte("v1")})
+	err = s.UpdateSessionState(ctx, key, session.StateMap{"k1": []byte("v1")})
 	assert.NoError(t, err)
 }
 

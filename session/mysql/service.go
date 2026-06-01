@@ -618,6 +618,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 			return fmt.Errorf("mysql session service update session state failed: %w", err)
 		}
 		now := time.Now()
+		nowUTC := now.UTC()
 
 		if sessState.State == nil {
 			sessState.State = make(session.StateMap)
@@ -631,7 +632,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 			copy(copiedValue, v)
 			sessState.State[k] = copiedValue
 		}
-		sessState.UpdatedAt = now
+		sessState.UpdatedAt = nowUTC
 
 		updatedStateBytes, err := json.Marshal(sessState)
 		if err != nil {
@@ -642,7 +643,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
 		 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-			string(updatedStateBytes), now, expiresAt,
+			string(updatedStateBytes), nowUTC, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("mysql session service update session state failed: %w", err)

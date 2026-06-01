@@ -545,19 +545,21 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 	}
 
 	// Marshal updated state
+	now := time.Now()
+	nowUTC := now.UTC()
+	sessState.UpdatedAt = nowUTC
 	updatedStateBytes, err := json.Marshal(sessState)
 	if err != nil {
 		return fmt.Errorf("clickhouse session service update session state failed: marshal state: %w", err)
 	}
 
 	// Update session state in database (INSERT new version for ReplacingMergeTree)
-	now := time.Now()
 	expiresAt := calculateExpiresAt(s.opts.sessionTTL)
 
 	err = s.chClient.Exec(ctx,
 		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, state, extra_data, created_at, updated_at, expires_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID, string(updatedStateBytes), "{}", sessState.CreatedAt, now, expiresAt)
+		key.AppName, key.UserID, key.SessionID, string(updatedStateBytes), "{}", sessState.CreatedAt, nowUTC, expiresAt)
 
 	if err != nil {
 		return fmt.Errorf("clickhouse session service update session state failed: %w", err)

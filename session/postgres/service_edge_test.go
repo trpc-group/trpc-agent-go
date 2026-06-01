@@ -350,7 +350,7 @@ func TestAddEvent_InitializesNilState(t *testing.T) {
 				expectedID:    key.SessionID,
 				expectedState: session.StateMap{"marker": []byte("1")},
 			},
-			sqlmock.AnyArg(),
+			utcTimeArg{},
 			sqlmock.AnyArg(),
 			key.AppName,
 			key.UserID,

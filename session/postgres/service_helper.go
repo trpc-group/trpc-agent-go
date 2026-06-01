@@ -280,7 +280,6 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 
 		now := time.Now()
 		nowUTC := now.UTC()
-		eventCreatedAt := eventCreatedAtUTC(event, now)
 		if currentExpiresAt != nil && currentExpiresAt.Before(now) {
 			log.InfofContext(
 				ctx,
@@ -325,7 +324,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			_, err = tx.ExecContext(ctx,
 				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, created_at, updated_at)
 				 VALUES ($1, $2, $3, $4, $5, $6)`, s.tableSessionEvents),
-				key.AppName, key.UserID, key.SessionID, eventBytes, eventCreatedAt, nowUTC)
+				key.AppName, key.UserID, key.SessionID, eventBytes, nowUTC, nowUTC)
 			if err != nil {
 				return fmt.Errorf("insert event failed: %w", err)
 			}
@@ -337,13 +336,6 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		return fmt.Errorf("store event failed: %w", err)
 	}
 	return nil
-}
-
-func eventCreatedAtUTC(evt *event.Event, fallback time.Time) time.Time {
-	if evt != nil && !evt.Timestamp.IsZero() {
-		return timestampUTC(evt.Timestamp, fallback)
-	}
-	return timestampUTC(time.Time{}, fallback)
 }
 
 func trackEventCreatedAtUTC(trackEvent *session.TrackEvent, fallback time.Time) time.Time {

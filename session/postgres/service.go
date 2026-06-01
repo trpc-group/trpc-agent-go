@@ -579,6 +579,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		}
 
 		now := time.Now()
+		nowUTC := now.UTC()
 		if sessState.State == nil {
 			sessState.State = make(session.StateMap)
 		}
@@ -591,7 +592,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 			copy(copiedValue, v)
 			sessState.State[k] = copiedValue
 		}
-		sessState.UpdatedAt = now
+		sessState.UpdatedAt = nowUTC
 
 		updatedStateBytes, err := json.Marshal(sessState)
 		if err != nil {
@@ -607,7 +608,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
 		 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`, s.tableSessionStates),
-			updatedStateBytes, now, expiresAt,
+			updatedStateBytes, nowUTC, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("postgres session service update session state failed: %w", err)

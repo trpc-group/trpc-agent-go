@@ -86,7 +86,9 @@ func TestService_AppendEvent(t *testing.T) {
 			sawEventInsert = true
 			createdMicro, ok := args[6].(int64)
 			assert.True(t, ok)
-			assert.Equal(t, e.Timestamp.UTC().UnixMicro(), createdMicro)
+			createdAt := time.UnixMicro(createdMicro).UTC()
+			assert.False(t, createdAt.Before(before.Add(-time.Second)))
+			assert.False(t, createdAt.After(time.Now().UTC().Add(time.Second)))
 			updatedMicro, ok := args[7].(int64)
 			assert.True(t, ok)
 			updatedAt := time.UnixMicro(updatedMicro).UTC()
@@ -100,21 +102,6 @@ func TestService_AppendEvent(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, sawStateInsert)
 	assert.True(t, sawEventInsert)
-}
-
-func TestEventCreatedAtUTCUsesTimestampOrFallback(t *testing.T) {
-	fallback := time.Date(
-		2026, 5, 31, 20, 25, 0, 0,
-		time.FixedZone("UTC+8", 8*60*60),
-	)
-	eventTime := fallback.Add(time.Minute)
-
-	assert.Equal(t, fallback.UTC(), eventCreatedAtUTC(nil, fallback))
-	assert.Equal(
-		t,
-		eventTime.UTC(),
-		eventCreatedAtUTC(&event.Event{Timestamp: eventTime}, fallback),
-	)
 }
 
 func TestService_AppendEvent_Error(t *testing.T) {

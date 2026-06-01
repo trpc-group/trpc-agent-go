@@ -1136,7 +1136,7 @@ func TestAddEvent_ExpiredSession(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestAddEvent_StoresEventCreatedAtAsTimestampUTC(t *testing.T) {
+func TestAddEvent_StoresAppendTimeAsTimestampUTC(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -1162,7 +1162,7 @@ func TestAddEvent_StoresEventCreatedAtAsTimestampUTC(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_events")).
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg(),
-			exactUTCTimeArg{want: eventTime}, utcTimeArg{}).
+			utcTimeNotEqualArg{not: eventTime}, utcTimeArg{}).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -1178,19 +1178,13 @@ func TestAddEvent_StoresEventCreatedAtAsTimestampUTC(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestCreatedAtUTCUsesTimestampOrFallback(t *testing.T) {
+func TestTrackCreatedAtUTCUsesTimestampOrFallback(t *testing.T) {
 	fallback := time.Date(
 		2026, 5, 31, 20, 25, 0, 0,
 		time.FixedZone("UTC+8", 8*60*60),
 	)
 	eventTime := fallback.Add(time.Minute)
 
-	assert.Equal(t, fallback.UTC(), eventCreatedAtUTC(nil, fallback))
-	assert.Equal(
-		t,
-		eventTime.UTC(),
-		eventCreatedAtUTC(&event.Event{Timestamp: eventTime}, fallback),
-	)
 	assert.Equal(t, fallback.UTC(), trackEventCreatedAtUTC(nil, fallback))
 	assert.Equal(
 		t,
@@ -1287,7 +1281,7 @@ func TestAddTrackEvent_PreservesExistingSkillMarker(t *testing.T) {
 				createdAt:  createdAt,
 				previousAt: updatedAt,
 			},
-			sqlmock.AnyArg(),
+			utcTimeArg{},
 			sqlmock.AnyArg(),
 			key.AppName,
 			key.UserID,

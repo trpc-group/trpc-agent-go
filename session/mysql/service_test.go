@@ -50,6 +50,17 @@ func (a exactUTCTimeArg) Match(v driver.Value) bool {
 		t.Equal(a.want.UTC())
 }
 
+type utcTimeNotEqualArg struct {
+	not time.Time
+}
+
+func (a utcTimeNotEqualArg) Match(v driver.Value) bool {
+	t, ok := v.(time.Time)
+	return ok &&
+		t.Location() == time.UTC &&
+		!t.Equal(a.not.UTC())
+}
+
 // mockMySQLClient implements storage.Client for testing with sqlmock
 type mockMySQLClient struct {
 	db *sql.DB
@@ -269,6 +280,10 @@ func (m *sessionStateJSONMatcher) Match(v driver.Value) bool {
 	}
 	if stored.UpdatedAt.IsZero() {
 		m.t.Errorf("updatedAt should be set")
+		return false
+	}
+	if stored.UpdatedAt.Location() != time.UTC {
+		m.t.Errorf("updatedAt should be UTC, got %v", stored.UpdatedAt.Location())
 		return false
 	}
 	if !m.previousAt.IsZero() && !stored.UpdatedAt.After(m.previousAt) {
@@ -1900,7 +1915,7 @@ func TestUpdateSessionState_UnmarshalSessionEnvelope(t *testing.T) {
 				createdAt:     createdAt,
 				previousAt:    updatedAt,
 			},
-			sqlmock.AnyArg(),
+			utcTimeArg{},
 			sqlmock.AnyArg(),
 			key.AppName,
 			key.UserID,
@@ -1956,7 +1971,7 @@ func TestUpdateSessionState_UnmarshalNilState(t *testing.T) {
 				createdAt:     createdAt,
 				previousAt:    updatedAt,
 			},
-			sqlmock.AnyArg(),
+			utcTimeArg{},
 			sqlmock.AnyArg(),
 			key.AppName,
 			key.UserID,
@@ -2014,7 +2029,7 @@ func TestUpdateSessionState_CopiesStateValueAndKeepsNil(t *testing.T) {
 				createdAt:     createdAt,
 				previousAt:    updatedAt,
 			},
-			sqlmock.AnyArg(),
+			utcTimeArg{},
 			sqlmock.AnyArg(),
 			key.AppName,
 			key.UserID,
