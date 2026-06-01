@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
@@ -57,10 +58,10 @@ func Start(ctx context.Context, opts ...Option) (clean func(context.Context) err
 		otelOpts = append(otelOpts, otlptracehttp.WithInsecure())
 	}
 
-	return start(ctx, otelOpts...)
+	return start(ctx, config, otelOpts...)
 }
 
-func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(context.Context) error, err error) {
+func start(ctx context.Context, conf *config, opts ...otlptracehttp.Option) (clean func(context.Context) error, err error) {
 	p := atrace.TracerProvider
 	_, ok := p.(noop.TracerProvider)
 	var provider *sdktrace.TracerProvider
@@ -83,6 +84,8 @@ func start(ctx context.Context, opts ...otlptracehttp.Option) (clean func(contex
 				semconv.ServiceNamespace(semconvtrace.ResourceServiceNamespace),
 				semconv.ServiceName(semconvtrace.ResourceServiceName),
 				semconv.ServiceVersion(semconvtrace.ResourceServiceVersion),
+				semconv.DeploymentEnvironment(conf.environment),
+				attribute.String("environment", conf.environment),
 			),
 		)
 		if err != nil {
