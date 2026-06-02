@@ -289,6 +289,52 @@ func pathSpecificity(path string) int {
 	return len(strings.Split(path, "/"))
 }
 
+func globMayMatchUnder(pattern string, prefix string) bool {
+	patternParts := splitCleanRel(pattern)
+	prefixParts := splitCleanRel(prefix)
+	if len(prefixParts) == 0 {
+		return true
+	}
+	type state struct {
+		pattern int
+		prefix  int
+	}
+	seen := map[state]bool{}
+	var matchPrefix func(patternIdx, prefixIdx int) bool
+	matchPrefix = func(patternIdx, prefixIdx int) bool {
+		if prefixIdx == len(prefixParts) {
+			return true
+		}
+		if patternIdx == len(patternParts) {
+			return false
+		}
+		st := state{pattern: patternIdx, prefix: prefixIdx}
+		if seen[st] {
+			return false
+		}
+		seen[st] = true
+		part := patternParts[patternIdx]
+		if part == "**" {
+			return matchPrefix(patternIdx+1, prefixIdx) ||
+				matchPrefix(patternIdx, prefixIdx+1)
+		}
+		ok, err := ds.Match(part, prefixParts[prefixIdx])
+		if err != nil || !ok {
+			return false
+		}
+		return matchPrefix(patternIdx+1, prefixIdx+1)
+	}
+	return matchPrefix(0, 0)
+}
+
+func splitCleanRel(path string) []string {
+	path = strings.Trim(filepath.ToSlash(filepath.Clean(path)), "/")
+	if path == "" || path == "." {
+		return nil
+	}
+	return strings.Split(path, "/")
+}
+
 func (r *Runtime) matchRule(
 	ws codeexecutor.Workspace,
 	rel string,

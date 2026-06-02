@@ -44,7 +44,7 @@ func (r *Runtime) osSandboxCommand(
 	cwd string,
 	env []string,
 	spec codeexecutor.RunProgramSpec,
-) (*exec.Cmd, string, error) {
+) (*exec.Cmd, string, commandCleanup, error) {
 	_ = r
 	_ = ctx
 	_ = profile
@@ -52,7 +52,7 @@ func (r *Runtime) osSandboxCommand(
 	_ = cwd
 	_ = env
 	_ = spec
-	return nil, runtime.GOOS, backendError(
+	return nil, runtime.GOOS, nil, backendError(
 		ErrUnsupportedBackend,
 		runtime.GOOS,
 		errors.New("managed OS sandbox backend is not implemented for this platform"),

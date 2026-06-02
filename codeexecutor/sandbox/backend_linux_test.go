@@ -265,7 +265,7 @@ func TestLinuxNoAccessMaskArgsCoverPathGlobAndSpecial(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws.Path, "work", "app.env"), []byte("TOKEN=secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	profile := WorkspaceWriteProfile().
+	profile := ReadOnlyProfile().
 		WithNoAccessPaths("work/secret.txt").
 		WithNoAccessGlobs("work/*.env")
 	profile.fileSystem.Rules = append(profile.fileSystem.Rules, fileSystemRule{
@@ -289,9 +289,25 @@ func TestLinuxNoAccessMaskArgsCoverPathGlobAndSpecial(t *testing.T) {
 	}
 }
 
-func TestLinuxNoAccessMaskArgsSkipMissingPath(t *testing.T) {
+func TestLinuxNoAccessMaskArgsSkipMissingReadOnlyPath(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	ws, err := rt.CreateWorkspace(context.Background(), "none-mask-missing", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := ReadOnlyProfile().WithNoAccessPaths("work/missing.txt")
+	args, err := rt.denyReadMaskArgs(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(args) != 0 {
+		t.Fatalf("missing no-access path args = %#v, want empty", args)
+	}
+}
+
+func TestLinuxNoAccessMaskArgsMaskMissingPathUnderWritableMount(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "none-mask-missing-writable", codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,8 +316,45 @@ func TestLinuxNoAccessMaskArgsSkipMissingPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(args) != 0 {
-		t.Fatalf("missing no-access path args = %#v, want empty", args)
+	missing := filepath.Join(ws.Path, "work", "missing.txt")
+	if !hasArgSequence(args, "--perms", "000", "--ro-bind-data", denyReadBindDataFD, missing) {
+		t.Fatalf("missing writable no-access path args = %#v, missing placeholder mask", args)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("missing path placeholder should not be created before bwrap, stat err=%v", err)
+	}
+}
+
+func TestLinuxNoAccessMaskArgsMaskFirstMissingPathComponent(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "none-mask-first-missing", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile().WithNoAccessPaths("work/missing/secret.txt")
+	args, err := rt.denyReadMaskArgs(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstMissing := filepath.Join(ws.Path, "work", "missing")
+	if !hasArgSequence(args, "--perms", "000", "--ro-bind-data", denyReadBindDataFD, firstMissing) {
+		t.Fatalf("missing nested no-access path args = %#v, missing first-component placeholder mask", args)
+	}
+}
+
+func TestLinuxNoAccessMaskArgsRejectGlobUnderWritableMount(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "none-mask-glob-writable", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "work", "app.env"), []byte("TOKEN=secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")
+	_, err = rt.denyReadMaskArgs(profile, ws)
+	if !isKind(err, ErrPolicyViolation) {
+		t.Fatalf("writable no-access glob error = %v, want ErrPolicyViolation", err)
 	}
 }
 
@@ -399,7 +452,7 @@ func TestLinuxPreflightUnsupportedBackendAndProbeError(t *testing.T) {
 		t.Fatalf("linuxPreflight error = %v, want ErrUnsupportedBackend", err)
 	}
 	ws := codeexecutor.Workspace{ID: "unsupported", Path: t.TempDir()}
-	_, backend, err := rt.osSandboxCommand(
+	_, backend, _, err := rt.osSandboxCommand(
 		context.Background(),
 		WorkspaceWriteProfile(),
 		ws,
@@ -491,7 +544,7 @@ func TestLinuxSandboxCommandPrepareAndArgsErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	ws := codeexecutor.Workspace{ID: "bad", Path: wsPath}
-	_, backend, err := rt.osSandboxCommand(
+	_, backend, _, err := rt.osSandboxCommand(
 		context.Background(),
 		WorkspaceWriteProfile(),
 		ws,
@@ -617,6 +670,22 @@ func hasArg(args []string, want string) bool {
 func hasArgTriple(args []string, first, second, third string) bool {
 	for i := 0; i+2 < len(args); i++ {
 		if args[i] == first && args[i+1] == second && args[i+2] == third {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArgSequence(args []string, want ...string) bool {
+	for i := 0; i+len(want) <= len(args); i++ {
+		ok := true
+		for j, arg := range want {
+			if args[i+j] != arg {
+				ok = false
+				break
+			}
+		}
+		if ok {
 			return true
 		}
 	}

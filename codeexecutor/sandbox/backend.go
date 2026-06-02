@@ -19,6 +19,8 @@ const (
 	BackendLinuxBubblewrap BackendType = "linux-bubblewrap"
 )
 
+type commandCleanup func()
+
 // backendCapabilitiesInfo reports backend support above the generic engine
 // capabilities exposed by codeexecutor.Engine.
 type backendCapabilitiesInfo struct {

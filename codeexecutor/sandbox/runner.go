@@ -41,9 +41,12 @@ func (r *Runtime) RunProgram(
 	}
 	start := time.Now()
 	env := r.buildEnvironment(ws, spec)
-	cmd, backendName, err := r.commandForProfile(runCtx, prep.profile, ws, prep.cwd, env, spec)
+	cmd, backendName, cleanup, err := r.commandForProfile(runCtx, prep.profile, ws, prep.cwd, env, spec)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 	stdout := newLimitedBuffer(r.outputMaxBytes)
 	stderr := newLimitedBuffer(r.outputMaxBytes)
@@ -178,7 +181,7 @@ func (r *Runtime) commandForProfile(
 	cwd string,
 	env []string,
 	spec codeexecutor.RunProgramSpec,
-) (*exec.Cmd, string, error) {
+) (*exec.Cmd, string, commandCleanup, error) {
 	switch profile.enforcement() {
 	case enforcementDisabled:
 		// #nosec G204 -- RunProgram intentionally executes caller-provided
@@ -186,9 +189,9 @@ func (r *Runtime) commandForProfile(
 		cmd := exec.CommandContext(ctx, spec.Cmd, spec.Args...)
 		cmd.Dir = cwd
 		cmd.Env = env
-		return cmd, "disabled", nil
+		return cmd, "disabled", nil, nil
 	case enforcementExternal:
-		return nil, "external", backendError(
+		return nil, "external", nil, backendError(
 			ErrUnsupportedBackend,
 			"external",
 			errors.New("external sandbox profile cannot be executed by local sandbox runtime"),

@@ -84,7 +84,7 @@ clear message. The example never reads or prints key contents.
 - `file-system-policy-specificity`: verifies a more specific read rule can make
   a subtree read-only under a writable workspace.
 - `file-system-policy-glob-no-access`: verifies glob no-access policy blocks
-  file API and shell reads.
+  file API reads and writes for existing matches.
 - `file-system-policy-agent-enforcement`: uses a real LLMAgent and
   `workspace_exec` to verify no-access enforcement.
 - `file-system-policy-symlink-no-access`: uses a real LLMAgent to create a
@@ -102,6 +102,11 @@ clear message. The example never reads or prints key contents.
   staging rejects source symlinks instead of following them outside a grant.
 - `file-system-policy-directory-no-access-mask`: verifies directory-level
   no-access masks are not writable scratch space in the Linux sandbox.
+- `file-system-policy-missing-no-access-mask`: verifies missing concrete
+  no-access paths under writable mounts are protected by an inaccessible
+  placeholder mount.
+- `file-system-policy-glob-writable-reject`: verifies glob no-access rules that
+  overlap writable mounts fail closed before sandbox execution.
 - `session-workspace-id-sanitization`: verifies distinct session IDs that
   sanitize similarly, such as `user:a` and `user_a`, remain isolated.
 - `session-policy-explicit-zero`: uses a real LLMAgent to call a deterministic
@@ -111,7 +116,7 @@ clear message. The example never reads or prints key contents.
 ## Flags
 
 ```bash
--scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|network-policy-restricted|network-policy-enabled|network-policy-additional-permissions|network-policy-agent-enforcement|timeout|output-cap|additional-permissions|shell-environment-policy-default-all|shell-environment-policy-core|shell-environment-policy-none-set|shell-environment-policy-include-only|shell-environment-policy-exclude-set|shell-environment-policy-agent|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|file-system-policy-symlink-no-access|file-system-policy-stage-target-validation|file-system-policy-put-files-symlink-target|file-system-policy-host-stage-absolute-grant|file-system-policy-host-stage-source-symlink|file-system-policy-directory-no-access-mask|session-workspace-id-sanitization|session-policy-explicit-zero|all
+-scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|network-policy-restricted|network-policy-enabled|network-policy-additional-permissions|network-policy-agent-enforcement|timeout|output-cap|additional-permissions|shell-environment-policy-default-all|shell-environment-policy-core|shell-environment-policy-none-set|shell-environment-policy-include-only|shell-environment-policy-exclude-set|shell-environment-policy-agent|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|file-system-policy-symlink-no-access|file-system-policy-stage-target-validation|file-system-policy-put-files-symlink-target|file-system-policy-host-stage-absolute-grant|file-system-policy-host-stage-source-symlink|file-system-policy-directory-no-access-mask|file-system-policy-missing-no-access-mask|file-system-policy-glob-writable-reject|session-workspace-id-sanitization|session-policy-explicit-zero|all
 -model glm-4.7-flash
 -workspace-root /tmp/my-sandbox-root
 -keep-workspace

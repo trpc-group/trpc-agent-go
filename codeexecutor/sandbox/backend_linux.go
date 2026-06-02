@@ -50,21 +50,43 @@ func (r *Runtime) osSandboxCommand(
 	cwd string,
 	env []string,
 	spec codeexecutor.RunProgramSpec,
-) (*exec.Cmd, string, error) {
+) (*exec.Cmd, string, commandCleanup, error) {
 	_ = ctx
 	bwrap, mountProc, err := r.linuxPreflight()
 	if err != nil {
-		return nil, string(BackendLinuxBubblewrap), err
+		return nil, string(BackendLinuxBubblewrap), nil, err
 	}
 	if err := r.prepareProtectedMasks(profile, ws); err != nil {
-		return nil, string(BackendLinuxBubblewrap), err
+		return nil, string(BackendLinuxBubblewrap), nil, err
 	}
-	args, err := r.linuxSandboxArgs(profile, ws, cwd, env, spec, mountProc)
+	setup, err := r.linuxSandboxSetup(profile, ws, cwd, env, spec, mountProc)
 	if err != nil {
-		return nil, string(BackendLinuxBubblewrap), err
+		return nil, string(BackendLinuxBubblewrap), nil, err
 	}
-	cmd := exec.CommandContext(ctx, bwrap, args...)
-	return cmd, string(BackendLinuxBubblewrap), nil
+	cmd := exec.CommandContext(ctx, bwrap, setup.args...)
+	var cleanup commandCleanup
+	if setup.needsDenyReadDataFD {
+		nullFile, err := os.Open("/dev/null")
+		if err != nil {
+			return nil, string(BackendLinuxBubblewrap), nil, err
+		}
+		cmd.ExtraFiles = []*os.File{nullFile}
+		cleanup = func() {
+			_ = nullFile.Close()
+			cleanupSyntheticDenyReadMaskTargets(setup.syntheticDenyReadTargets)
+		}
+	} else if len(setup.syntheticDenyReadTargets) != 0 {
+		cleanup = func() {
+			cleanupSyntheticDenyReadMaskTargets(setup.syntheticDenyReadTargets)
+		}
+	}
+	return cmd, string(BackendLinuxBubblewrap), cleanup, nil
+}
+
+type linuxSandboxSetup struct {
+	args                     []string
+	syntheticDenyReadTargets []string
+	needsDenyReadDataFD      bool
 }
 
 func (r *Runtime) linuxSandboxArgs(
@@ -75,6 +97,21 @@ func (r *Runtime) linuxSandboxArgs(
 	spec codeexecutor.RunProgramSpec,
 	mountProc bool,
 ) ([]string, error) {
+	setup, err := r.linuxSandboxSetup(profile, ws, cwd, env, spec, mountProc)
+	if err != nil {
+		return nil, err
+	}
+	return setup.args, nil
+}
+
+func (r *Runtime) linuxSandboxSetup(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+	cwd string,
+	env []string,
+	spec codeexecutor.RunProgramSpec,
+	mountProc bool,
+) (linuxSandboxSetup, error) {
 	args := []string{
 		"--die-with-parent",
 		"--unshare-user",
@@ -93,29 +130,29 @@ func (r *Runtime) linuxSandboxArgs(
 	}
 	grantArgs, err := r.externalGrantArgs(profile, ws)
 	if err != nil {
-		return nil, err
+		return linuxSandboxSetup{}, err
 	}
 	args = append(args, grantArgs...)
 	writeArgs, err := r.workspaceWriteMountArgs(profile, ws)
 	if err != nil {
-		return nil, err
+		return linuxSandboxSetup{}, err
 	}
 	args = append(args, writeArgs...)
 	protectedArgs, err := r.protectedMaskArgs(profile, ws)
 	if err != nil {
-		return nil, err
+		return linuxSandboxSetup{}, err
 	}
 	args = append(args, protectedArgs...)
 	readOnlyArgs, err := r.workspaceReadOnlyMountArgs(profile, ws)
 	if err != nil {
-		return nil, err
+		return linuxSandboxSetup{}, err
 	}
 	args = append(args, readOnlyArgs...)
-	denyArgs, err := r.denyReadMaskArgs(profile, ws)
+	denySetup, err := r.denyReadMaskSetup(profile, ws)
 	if err != nil {
-		return nil, err
+		return linuxSandboxSetup{}, err
 	}
-	args = append(args, denyArgs...)
+	args = append(args, denySetup.args...)
 	args = append(args, "--clearenv")
 	for _, kv := range env {
 		k, v, ok := strings.Cut(kv, "=")
@@ -126,7 +163,11 @@ func (r *Runtime) linuxSandboxArgs(
 	}
 	args = append(args, "--chdir", cwd, "--", spec.Cmd)
 	args = append(args, spec.Args...)
-	return args, nil
+	return linuxSandboxSetup{
+		args:                     args,
+		syntheticDenyReadTargets: denySetup.syntheticTargets,
+		needsDenyReadDataFD:      denySetup.needsBindDataFD,
+	}, nil
 }
 
 func (r *Runtime) linuxPreflight() (string, bool, error) {
@@ -309,9 +350,31 @@ func (r *Runtime) denyReadMaskArgs(
 	profile PermissionProfile,
 	ws codeexecutor.Workspace,
 ) ([]string, error) {
-	matches, err := r.deniedReadMatches(profile, ws)
+	setup, err := r.denyReadMaskSetup(profile, ws)
 	if err != nil {
 		return nil, err
+	}
+	return setup.args, nil
+}
+
+const denyReadBindDataFD = "3"
+
+type denyReadMaskSetup struct {
+	args             []string
+	syntheticTargets []string
+	needsBindDataFD  bool
+}
+
+func (r *Runtime) denyReadMaskSetup(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+) (denyReadMaskSetup, error) {
+	if err := r.validateNoAccessMasksEnforceable(profile, ws); err != nil {
+		return denyReadMaskSetup{}, err
+	}
+	matches, err := r.deniedReadMatches(profile, ws)
+	if err != nil {
+		return denyReadMaskSetup{}, err
 	}
 	var args []string
 	for _, match := range matches {
@@ -320,7 +383,7 @@ func (r *Runtime) denyReadMaskArgs(
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, err
+			return denyReadMaskSetup{}, err
 		}
 		if info.IsDir() {
 			args = appendInaccessibleDirMaskArgs(args, match)
@@ -328,7 +391,18 @@ func (r *Runtime) denyReadMaskArgs(
 		}
 		args = append(args, "--ro-bind", denyReadMaskSource(ws), match)
 	}
-	return args, nil
+	syntheticTargets, err := r.missingNoAccessPathMaskTargets(profile, ws)
+	if err != nil {
+		return denyReadMaskSetup{}, err
+	}
+	for _, target := range syntheticTargets {
+		args = append(args, "--perms", "000", "--ro-bind-data", denyReadBindDataFD, target)
+	}
+	return denyReadMaskSetup{
+		args:             args,
+		syntheticTargets: syntheticTargets,
+		needsBindDataFD:  len(syntheticTargets) != 0,
+	}, nil
 }
 
 func appendInaccessibleDirMaskArgs(args []string, target string) []string {
@@ -341,6 +415,217 @@ func appendInaccessibleDirMaskArgs(args []string, target string) []string {
 
 func denyReadMaskSource(ws codeexecutor.Workspace) string {
 	return filepath.Join(ws.Path, ".trpc-agent-sandbox", "deny-read-mask")
+}
+
+func cleanupSyntheticDenyReadMaskTargets(targets []string) {
+	for i := len(targets) - 1; i >= 0; i-- {
+		info, err := os.Lstat(targets[i])
+		if err != nil || !info.Mode().IsRegular() || info.Size() != 0 {
+			continue
+		}
+		_ = os.Remove(targets[i])
+	}
+}
+
+func (r *Runtime) validateNoAccessMasksEnforceable(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+) error {
+	if err := validateFileSystemRules(profile); err != nil {
+		return err
+	}
+	writeTargets, err := r.linuxWriteMountTargets(profile, ws)
+	if err != nil {
+		return err
+	}
+	if len(writeTargets) == 0 {
+		return nil
+	}
+	wsAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		return err
+	}
+	writeRels := workspaceRelativeMounts(wsAbs, writeTargets)
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Access != accessNone {
+			continue
+		}
+		switch rule.Kind {
+		case ruleGlob:
+			glob := filepath.ToSlash(filepath.Clean(strings.TrimSpace(rule.Glob)))
+			if glob == "" || glob == "." {
+				continue
+			}
+			if strings.HasPrefix(glob, "../") || filepath.IsAbs(glob) {
+				return deniedf(
+					ErrPolicyViolation,
+					"no-access-glob",
+					rule.Glob,
+					"linux backend requires workspace-relative glob denials",
+				)
+			}
+			for _, writeRel := range writeRels {
+				if globMayMatchUnder(glob, writeRel) {
+					return deniedf(
+						ErrPolicyViolation,
+						"no-access-glob",
+						rule.Glob,
+						"glob denial overlaps writable mount %s and cannot be enforced after sandbox start",
+						writeRel,
+					)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (r *Runtime) missingNoAccessPathMaskTargets(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+) ([]string, error) {
+	writeTargets, err := r.linuxWriteMountTargets(profile, ws)
+	if err != nil {
+		return nil, err
+	}
+	if len(writeTargets) == 0 {
+		return nil, nil
+	}
+	seen := map[string]bool{}
+	var targets []string
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Access != accessNone || rule.Kind != rulePath {
+			continue
+		}
+		target, ok, err := r.missingNoAccessPathMaskTarget(ws, writeTargets, rule.Path)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || seen[target] {
+			continue
+		}
+		seen[target] = true
+		targets = append(targets, target)
+	}
+	return targets, nil
+}
+
+func (r *Runtime) missingNoAccessPathMaskTarget(
+	ws codeexecutor.Workspace,
+	writeTargets []string,
+	path string,
+) (string, bool, error) {
+	if path == "" {
+		return "", false, nil
+	}
+	target := path
+	if !filepath.IsAbs(target) {
+		resolved, _, err := r.resolveWorkspacePath(ws, target)
+		if err != nil {
+			return "", false, err
+		}
+		target = resolved
+	}
+	target, err := filepath.Abs(target)
+	if err != nil {
+		return "", false, err
+	}
+	firstMissing, ok, err := firstMissingPathComponent(target)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	for _, writeTarget := range writeTargets {
+		if sameOrChild(writeTarget, firstMissing) {
+			return firstMissing, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func firstMissingPathComponent(target string) (string, bool, error) {
+	target = filepath.Clean(target)
+	if _, err := os.Lstat(target); err == nil {
+		return "", false, nil
+	} else if !os.IsNotExist(err) {
+		return "", false, err
+	}
+
+	if !filepath.IsAbs(target) {
+		return "", false, deniedf(
+			ErrPathDenied,
+			"no-access-path",
+			target,
+			"missing path target must be absolute",
+		)
+	}
+	cur := string(os.PathSeparator)
+	parts := strings.Split(strings.TrimPrefix(target, string(os.PathSeparator)), string(os.PathSeparator))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		if _, err := os.Lstat(cur); err != nil {
+			if os.IsNotExist(err) {
+				return cur, true, nil
+			}
+			return "", false, err
+		}
+	}
+	return "", false, nil
+}
+
+func (r *Runtime) linuxWriteMountTargets(
+	profile PermissionProfile,
+	ws codeexecutor.Workspace,
+) ([]string, error) {
+	targets, err := r.workspaceMountTargets(profile, ws, accessWrite)
+	if err != nil {
+		return nil, err
+	}
+	wsAbs, err := filepath.Abs(ws.Path)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var all []string
+	for _, target := range targets {
+		target, err = filepath.Abs(target)
+		if err != nil {
+			return nil, err
+		}
+		seen[target] = true
+		all = append(all, target)
+	}
+	for _, rule := range profile.fileSystem.Rules {
+		if rule.Access != accessWrite || rule.Kind != rulePath || rule.Path == "" ||
+			!filepath.IsAbs(rule.Path) {
+			continue
+		}
+		target, err := filepath.Abs(rule.Path)
+		if err != nil {
+			return nil, err
+		}
+		if sameOrChild(wsAbs, target) || seen[target] {
+			continue
+		}
+		seen[target] = true
+		all = append(all, target)
+	}
+	return all, nil
+}
+
+func workspaceRelativeMounts(wsAbs string, targets []string) []string {
+	var rels []string
+	for _, target := range targets {
+		rel, err := filepath.Rel(wsAbs, target)
+		if err != nil || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
+			continue
+		}
+		rel = filepath.ToSlash(filepath.Clean(rel))
+		rels = append(rels, rel)
+	}
+	return rels
 }
 
 func (r *Runtime) externalGrantArgs(

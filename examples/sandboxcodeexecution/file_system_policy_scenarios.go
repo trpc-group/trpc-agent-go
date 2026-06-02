@@ -35,6 +35,8 @@ const (
 	fileSystemPolicyHostStageAbsoluteMarker     = "FILE_SYSTEM_POLICY_HOST_STAGE_ABSOLUTE_GRANT_OK"
 	fileSystemPolicyHostStageSymlinkMarker      = "FILE_SYSTEM_POLICY_HOST_STAGE_SOURCE_SYMLINK_OK"
 	fileSystemPolicyDirectoryNoAccessMarker     = "FILE_SYSTEM_POLICY_DIRECTORY_NO_ACCESS_MASK_OK"
+	fileSystemPolicyMissingNoAccessMarker       = "FILE_SYSTEM_POLICY_MISSING_NO_ACCESS_MASK_OK"
+	fileSystemPolicyGlobWritableRejectMarker    = "FILE_SYSTEM_POLICY_GLOB_WRITABLE_REJECT_OK"
 	sessionPolicyExplicitZeroMarker             = "SESSION_POLICY_EXPLICIT_ZERO_OK"
 	fileSystemPolicySecretSentinel              = "FILE_SYSTEM_POLICY_SECRET_SHOULD_NOT_APPEAR"
 )
@@ -172,15 +174,12 @@ func runFileSystemPolicyGlobNoAccess(ctx context.Context, cfg config) error {
 	if !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("glob no-access write was not denied: %v", err)
 	}
-	if err := maybeVerifyFileSystemPolicyShellMask(ctx, cfg, rt, ws); err != nil {
-		return err
-	}
 	fmt.Println(fileSystemPolicyGlobNoAccessMarker)
 	return nil
 }
 
 func runFileSystemPolicyAgentEnforcement(ctx context.Context, cfg config) error {
-	profile := sandbox.WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")
+	profile := sandbox.WorkspaceWriteProfile().WithNoAccessPaths("work/file-system-policy-secret.env")
 	manifest := &sandbox.Manifest{
 		Files: []sandbox.ManifestFile{{
 			Path:    "work/file-system-policy-secret.env",
@@ -543,6 +542,69 @@ func runFileSystemPolicyDirectoryNoAccessMask(ctx context.Context, cfg config) e
 		return fmt.Errorf("denied directory write appeared on host, stat err=%v", err)
 	}
 	fmt.Println(fileSystemPolicyDirectoryNoAccessMarker)
+	return nil
+}
+
+func runFileSystemPolicyMissingNoAccessMask(ctx context.Context, cfg config) error {
+	profile := sandbox.WorkspaceWriteProfile().WithNoAccessPaths("work/missing-secret.txt")
+	rt := newRuntime(cfg, profile, 1<<20, 3*time.Second)
+	if err := requireManagedSandbox(ctx, rt, cfg); err != nil {
+		return err
+	}
+	ws, err := rt.CreateWorkspace(ctx, "file-system-policy-missing-no-access-mask", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		return err
+	}
+	missing := filepath.Join(ws.Path, "work", "missing-secret.txt")
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		return fmt.Errorf("missing no-access target unexpectedly exists before run, stat err=%v", err)
+	}
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "bash",
+		Args: []string{
+			"-c",
+			"echo unexpected > missing-secret.txt 2>/dev/null || echo " + fileSystemPolicyMissingNoAccessMarker,
+		},
+		Cwd: codeexecutor.DirWork,
+	})
+	if err != nil {
+		return err
+	}
+	if strings.Contains(res.Stdout, "unexpected") {
+		return fmt.Errorf("missing no-access file was writable: result=%#v", res)
+	}
+	if err := expectContains(res.Stdout, fileSystemPolicyMissingNoAccessMarker); err != nil {
+		return err
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		return fmt.Errorf("missing no-access placeholder leaked to host, stat err=%v", err)
+	}
+	fmt.Println(fileSystemPolicyMissingNoAccessMarker)
+	return nil
+}
+
+func runFileSystemPolicyGlobWritableReject(ctx context.Context, cfg config) error {
+	profile := sandbox.WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")
+	rt := newRuntime(cfg, profile, 1<<20, 3*time.Second)
+	ws, err := rt.CreateWorkspace(ctx, "file-system-policy-glob-writable-reject", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		return err
+	}
+	_, err = rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "bash",
+		Args: []string{
+			"-c",
+			"echo unexpected > future.env",
+		},
+		Cwd: codeexecutor.DirWork,
+	})
+	if !isSandboxKind(err, sandbox.ErrPolicyViolation) {
+		return fmt.Errorf("writable-overlap glob no-access did not fail closed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ws.Path, "work", "future.env")); !os.IsNotExist(err) {
+		return fmt.Errorf("glob setup rejection still created matching file, stat err=%v", err)
+	}
+	fmt.Println(fileSystemPolicyGlobWritableRejectMarker)
 	return nil
 }
 

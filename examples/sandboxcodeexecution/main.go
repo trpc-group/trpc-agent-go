@@ -65,7 +65,8 @@ func main() {
 			"file-system-policy-agent-enforcement|file-system-policy-symlink-no-access|"+
 			"file-system-policy-stage-target-validation|file-system-policy-put-files-symlink-target|"+
 			"file-system-policy-host-stage-absolute-grant|file-system-policy-host-stage-source-symlink|"+
-			"file-system-policy-directory-no-access-mask|session-workspace-id-sanitization|"+
+			"file-system-policy-directory-no-access-mask|file-system-policy-missing-no-access-mask|"+
+			"file-system-policy-glob-writable-reject|session-workspace-id-sanitization|"+
 			"session-policy-explicit-zero|"+
 			"all",
 	)
@@ -139,6 +140,8 @@ func runScenarios(ctx context.Context, cfg config) error {
 		{"file-system-policy-host-stage-absolute-grant", runFileSystemPolicyHostStageAbsoluteGrant},
 		{"file-system-policy-host-stage-source-symlink", runFileSystemPolicyHostStageSourceSymlink},
 		{"file-system-policy-directory-no-access-mask", runFileSystemPolicyDirectoryNoAccessMask},
+		{"file-system-policy-missing-no-access-mask", runFileSystemPolicyMissingNoAccessMask},
+		{"file-system-policy-glob-writable-reject", runFileSystemPolicyGlobWritableReject},
 		{"session-workspace-id-sanitization", runSessionWorkspaceIDSanitization},
 		{"session-policy-explicit-zero", runSessionPolicyExplicitZero},
 	}
@@ -368,7 +371,7 @@ func runMetadataProtection(ctx context.Context, cfg config) error {
 }
 
 func runNoAccess(ctx context.Context, cfg config) error {
-	profile := sandbox.WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")
+	profile := sandbox.WorkspaceWriteProfile().WithNoAccessPaths("work/secret.env")
 	rt := newRuntime(cfg, profile, 1<<20, 3*time.Second)
 	if err := requireManagedSandbox(ctx, rt, cfg); err != nil {
 		return err
@@ -384,7 +387,7 @@ func runNoAccess(ctx context.Context, cfg config) error {
 	); err != nil {
 		return err
 	}
-	if _, err := rt.Collect(ctx, ws, []string{"work/*.env"}); !isSandboxKind(err, sandbox.ErrPathDenied) {
+	if _, err := rt.Collect(ctx, ws, []string{"work/secret.env"}); !isSandboxKind(err, sandbox.ErrPathDenied) {
 		return fmt.Errorf("file API no-access rule was not enforced: %v", err)
 	}
 	if err := rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{

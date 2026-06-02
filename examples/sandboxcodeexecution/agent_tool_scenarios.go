@@ -167,7 +167,7 @@ After the tool result, answer with the marker content you read.`)
 }
 
 func runAgentToolSecurity(ctx context.Context, cfg config) error {
-	profile := sandbox.WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")
+	profile := sandbox.WorkspaceWriteProfile().WithNoAccessPaths("work/secret.env")
 	manifest := &sandbox.Manifest{
 		Files: []sandbox.ManifestFile{{
 			Path:    "work/secret.env",
