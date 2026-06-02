@@ -96,8 +96,8 @@ type SearchSessionResponse struct {
 
 // LoadSessionRequest is the input for session_load.
 type LoadSessionRequest struct {
-	SessionID string `json:"session_id,omitempty" jsonschema:"description=Target session ID returned by session_search. Defaults to the current session when omitted."`
-	EventID   string `json:"event_id" jsonschema:"description=Anchor event ID returned by session_search."`
+	SessionID string `json:"session_id,omitempty" jsonschema:"description=Target session ID. Defaults to the current session when omitted."`
+	EventID   string `json:"event_id" jsonschema:"description=Anchor event ID to load around."`
 	Before    int    `json:"before,omitempty" jsonschema:"description=How many messages before the anchor to include. Defaults to 1."`
 	After     int    `json:"after,omitempty" jsonschema:"description=How many messages after the anchor to include. Defaults to 1."`
 }
@@ -139,9 +139,9 @@ func SupportsLoad(inv *agent.Invocation) bool {
 	return ok
 }
 
-// SupportsOnDemandSession reports whether both search and load are available.
+// SupportsOnDemandSession reports whether any on-demand session tool is available.
 func SupportsOnDemandSession(inv *agent.Invocation) bool {
-	return SupportsSearch(inv) && SupportsLoad(inv)
+	return SupportsSearch(inv) || SupportsLoad(inv)
 }
 
 func invocationFromContext(

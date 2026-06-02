@@ -29,6 +29,14 @@ func TestSupportChecks(t *testing.T) {
 	require.False(t, SupportsLoad(nil))
 	require.False(t, SupportsOnDemandSession(nil))
 
+	loadOnlyInv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(sessioninmemory.NewSessionService()),
+	)
+	require.False(t, SupportsSearch(loadOnlyInv))
+	require.True(t, SupportsLoad(loadOnlyInv))
+	require.True(t, SupportsOnDemandSession(loadOnlyInv))
+
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
 		agent.WithInvocationSessionService(&mockSessionService{
