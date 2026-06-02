@@ -226,7 +226,6 @@ func (s *server) handleGraph(w http.ResponseWriter, r *http.Request) {
 // Query params:
 //
 //	id        – required; the node's "id" property value
-//	depth     – optional; traversal depth (1-3, default 1)
 //	edge_type – optional; comma-separated edge labels to include (all if empty)
 //	node_limit / edge_limit – same semantics as /api/graph
 func (s *server) handleNeighbors(w http.ResponseWriter, r *http.Request) {
@@ -236,12 +235,11 @@ func (s *server) handleNeighbors(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "id is required", http.StatusBadRequest)
 		return
 	}
-	depth := queryInt(r, "depth", 1, 3)
 	maxNodes := queryInt(r, "node_limit", *nodeLimit, 5000)
 	maxEdges := queryInt(r, "edge_limit", *edgeLimit, 20000)
 	edgeTypes := parseCommaList(r.URL.Query().Get("edge_type"))
 
-	result, err := s.loadNeighbors(ctx, nodeID, depth, edgeTypes, maxNodes, maxEdges)
+	result, err := s.loadNeighbors(ctx, nodeID, edgeTypes, maxNodes, maxEdges)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -320,7 +318,6 @@ func (s *server) findPath(ctx context.Context, fromID, toID string) (*graphRespo
 func (s *server) loadNeighbors(
 	ctx context.Context,
 	nodeID string,
-	depth int,
 	edgeTypes []string,
 	maxNodes, maxEdges int,
 ) (*graphResponse, error) {
@@ -329,14 +326,13 @@ func (s *server) loadNeighbors(
 	seenEdges := make(map[string]struct{})
 
 	where := ""
-	if edgeFilter := buildEdgeTypeFilter("last(r)", edgeTypes); edgeFilter != "" {
+	if edgeFilter := buildEdgeTypeFilter("r", edgeTypes); edgeFilter != "" {
 		where = " WHERE " + edgeFilter
 	}
 
-	// Use variable-length path so depth > 1 works with a single query.
 	cypher := fmt.Sprintf(
-		`MATCH (n:Node {id: %s})-[r*1..%d]-(m:Node)%s RETURN n, last(r), m LIMIT %d`,
-		cypherString(nodeID), depth, where, maxEdges,
+		`MATCH (n:Node {id: %s})-[r]-(m:Node)%s RETURN n, r, m LIMIT %d`,
+		cypherString(nodeID), where, maxEdges,
 	)
 	conn, err := s.ageConn(ctx)
 	if err != nil {
@@ -462,8 +458,9 @@ func (s *server) loadDefaultGraph(
 ) (*graphResponse, error) {
 	var conditions []string
 	if metadata != "" {
-		f := buildMetadataFilter("n", metadata)
-		conditions = append(conditions, "("+f+" OR "+strings.Replace(f, "n.", "m.", 1)+")")
+		nFilter := buildMetadataFilter("n", metadata)
+		mFilter := buildMetadataFilter("m", metadata)
+		conditions = append(conditions, "("+nFilter+" OR "+mFilter+")")
 	}
 	if edgeFilter := buildEdgeTypeFilter("r", edgeTypes); edgeFilter != "" {
 		conditions = append(conditions, edgeFilter)

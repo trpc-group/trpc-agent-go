@@ -653,7 +653,6 @@
       try {
         const params = new URLSearchParams({
           id: propID,
-          depth: 1,
           node_limit: boundedNumber(nodeLimitEl.value, 100, 1, 5000),
           edge_limit: 200
         });
