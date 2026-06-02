@@ -140,7 +140,7 @@ func TestOptions(t *testing.T) {
 		assert.False(t, s.ShouldSummarize(sess))
 	})
 
-	t.Run("WithTokenThreshold honors summarizer tool result formatter", func(t *testing.T) {
+	t.Run("WithTokenThreshold ignores summarizer tool result formatter", func(t *testing.T) {
 		s := NewSummarizer(
 			&testModel{},
 			WithToolResultFormatter(func(model.Message) string { return "" }),
@@ -159,7 +159,7 @@ func TestOptions(t *testing.T) {
 				}}},
 			},
 		}}
-		assert.False(t, s.ShouldSummarize(sess))
+		assert.True(t, s.ShouldSummarize(sess))
 	})
 
 	t.Run("WithChecksAny token checker honors skipRecent-filtered input", func(t *testing.T) {
@@ -201,7 +201,7 @@ func TestOptions(t *testing.T) {
 		assert.False(t, s.ShouldSummarize(sess))
 	})
 
-	t.Run("WithChecksAny token checker honors summarizer tool result formatter", func(t *testing.T) {
+	t.Run("WithChecksAny token checker ignores summarizer tool result formatter", func(t *testing.T) {
 		s := NewSummarizer(
 			&testModel{},
 			WithToolResultFormatter(func(model.Message) string { return "" }),
@@ -220,7 +220,7 @@ func TestOptions(t *testing.T) {
 				}}},
 			},
 		}}
-		assert.False(t, s.ShouldSummarize(sess))
+		assert.True(t, s.ShouldSummarize(sess))
 	})
 
 	t.Run("effective empty input suppresses summarize even when custom checks pass", func(t *testing.T) {

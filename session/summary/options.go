@@ -200,6 +200,7 @@ func WithSummaryHookAbortOnError(abort bool) Option {
 // WithToolCallFormatter sets a custom formatter for tool calls in the summary input.
 // The formatter receives a ToolCall and returns a formatted string.
 // Return empty string to exclude the tool call from the summary.
+// This does not affect token threshold checks used by ShouldSummarize.
 //
 // Example:
 //
@@ -216,6 +217,7 @@ func WithToolCallFormatter(f ToolCallFormatter) Option {
 // WithToolResultFormatter sets a custom formatter for tool results in the summary input.
 // The formatter receives the Message containing the tool result and returns a formatted string.
 // Return empty string to exclude the tool result from the summary.
+// This does not affect token threshold checks used by ShouldSummarize.
 //
 // Example:
 //

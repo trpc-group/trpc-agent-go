@@ -370,11 +370,7 @@ func (s *sessionSummarizer) buildCheckSession(
 	delta := filterDeltaEvents(checkSess)
 	filtered := s.filterEventsForSummary(delta)
 	thresholdEvents := filterThresholdEventsForSession(filtered, checkSess)
-	thresholdMessage := extractTokenThresholdMessage(
-		thresholdEvents,
-		s.toolCallFormatter,
-		s.toolResultFormatter,
-	)
+	thresholdMessage := extractTokenThresholdMessage(thresholdEvents)
 	checkSess.SetState(
 		tokenThresholdConversationTextStateKey,
 		[]byte(thresholdMessage.Content),
@@ -621,17 +617,9 @@ func extractConversationText(
 	return strings.Join(parts, "\n")
 }
 
-func extractTokenThresholdMessage(
-	events []event.Event,
-	toolCallFmt ToolCallFormatter,
-	toolResultFmt ToolResultFormatter,
-) model.Message {
+func extractTokenThresholdMessage(events []event.Event) model.Message {
 	return model.Message{
-		Content: extractConversationText(
-			events,
-			toolCallFmt,
-			toolResultFmt,
-		),
+		Content:          extractConversationText(events, nil, nil),
 		ReasoningContent: extractReasoningContent(events),
 	}
 }
