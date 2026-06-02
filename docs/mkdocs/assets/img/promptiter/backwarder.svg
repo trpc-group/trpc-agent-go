@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="500" viewBox="0 0 1500 500" role="img" aria-label="backwarder input output">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#718096" />
+    </marker>
+    <marker id="back-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b6f47" />
+    </marker>
+    <marker id="surface-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="10" markerHeight="10" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d59b23" />
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .fn { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 1.4; }
+      .agent { fill: #eef6ff; stroke: #3f7fbf; stroke-width: 1.5; }
+      .surface { fill: #fff7df; stroke: #d59b23; stroke-width: 1.1; }
+      .step { fill: #173b63; font: 700 25px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .fn-step { fill: #334155; font: 700 23px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .node-name { fill: #64748b; font: 600 15px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .id { fill: #6f4a00; font: 600 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .label { fill: #334155; font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .branch { fill: #8b6f47; font: 700 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .edge { stroke: #718096; stroke-width: 1.7; fill: none; }
+      .back { stroke: #8b6f47; stroke-width: 1.8; stroke-dasharray: 7 5; fill: none; }
+      .gradient-edge { stroke: #d59b23; stroke-width: 1.8; fill: none; }
+      .gradient-arrow-head { fill: #d59b23; }
+      .edge-arrow { fill: #718096; }
+      .back-arrow-head { fill: #8b6f47; }
+    </style>
+  </defs>
+  <rect class="bg" width="1500" height="500" rx="18" />
+
+  <path class="edge" d="M 350 195 L 580 195" />
+  <polygon class="edge-arrow" points="580,195 566,187 566,203" />
+  <path class="edge" d="M 910 195 L 1140 195" />
+  <polygon class="edge-arrow" points="1140,195 1126,187 1126,203" />
+
+  <rect class="fn" x="90" y="135" width="260" height="120" rx="10" />
+  <text class="fn-step" x="220" y="177" text-anchor="middle">s1</text>
+  <text class="node-name" x="220" y="218" text-anchor="middle">candidate/merge</text>
+
+  <rect class="agent" x="590" y="120" width="320" height="150" rx="10" />
+  <text class="step" x="750" y="160" text-anchor="middle">s2</text>
+  <text class="node-name" x="750" y="202" text-anchor="middle">candidate/polish</text>
+  <rect class="surface" x="625" y="223" width="250" height="34" rx="7" />
+  <text class="id" x="750" y="245" text-anchor="middle">candidate/polish#instruction</text>
+
+  <rect class="agent" x="1150" y="135" width="260" height="120" rx="10" />
+  <text class="step" x="1280" y="177" text-anchor="middle">s3</text>
+  <text class="node-name" x="1280" y="218" text-anchor="middle">candidate/review</text>
+
+  <path class="back" d="M 1150 270 C 1040 430, 980 430, 910 280" />
+  <polygon class="back-arrow-head" points="910,280 922,292 911,297" />
+  <text class="branch" x="1092" y="438" text-anchor="middle">Incoming GradientPacket</text>
+
+  <path class="back" d="M 590 280 C 505 430, 430 430, 350 270" />
+  <polygon class="back-arrow-head" points="350,270 363,282 352,287" />
+  <text class="branch" x="407" y="438" text-anchor="middle">Upstream GradientPacket</text>
+
+  <path class="gradient-edge" d="M 750 270 L 750 356" />
+  <polygon class="gradient-arrow-head" points="750,356 742,342 758,342" />
+  <text class="label" x="750" y="388" text-anchor="middle">Gradients</text>
+</svg>
