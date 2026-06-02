@@ -4011,6 +4011,7 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 		assert.Contains(t, messages[2].Content, "event_id: tool-result-1")
 		assert.Contains(t, messages[2].Content, "tool_call_id: call_1")
 		assert.Contains(t, messages[2].Content, "tool_name: step_worker")
+		assert.NotContains(t, messages[2].Content, toolResult1.Content)
 		assert.Equal(t, toolCall2.Content, messages[3].Content)
 		assert.Equal(t, toolCall2.ToolCalls, messages[3].ToolCalls)
 		assert.True(t, model.MessagesEqual(toolResult2, messages[4]))

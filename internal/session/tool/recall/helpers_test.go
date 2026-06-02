@@ -12,6 +12,7 @@ package recall
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -351,6 +352,50 @@ func TestLoadToolResolvesToolCallIDFromSessionService(t *testing.T) {
 	assert.Equal(t, "evt-tool-result", svc.lastWindowReq.AnchorEventID)
 }
 
+func TestLoadToolEventIDIgnoresMismatchedToolCallID(t *testing.T) {
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		window: &session.EventWindow{
+			AnchorEventID: "evt-anchor",
+			Entries: []session.EventWindowEntry{{
+				Event: event.Event{
+					ID: "evt-anchor",
+					Response: &model.Response{
+						Choices: []model.Choice{{
+							Message: model.Message{
+								Role:    model.RoleTool,
+								ToolID:  "call-anchor",
+								Content: "0123456789",
+							},
+						}},
+					},
+				},
+			}},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		EventID:       "evt-anchor",
+		ToolCallID:    "call-other",
+		ContentOffset: 2,
+		ContentLimit:  3,
+	})
+	require.NoError(t, err)
+	result, err := NewLoadTool().Call(ctx, args)
+	require.NoError(t, err)
+
+	resp, ok := result.(*LoadSessionResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Messages, 1)
+	assert.Equal(t, "234", resp.Messages[0].Content)
+	assert.Equal(t, 2, resp.Messages[0].ContentOffset)
+}
+
 func TestLoadToolReturnsSessionServiceFallbackError(t *testing.T) {
 	svc := &mockSessionService{
 		Service: sessioninmemory.NewSessionService(),
@@ -462,6 +507,24 @@ func TestLoadedMessageFromModelMessageContentPartsAndSlicingEdges(t *testing.T) 
 	assert.Equal(t, 5, loaded.ReturnedBytes)
 	assert.False(t, loaded.ContentTruncated)
 
+	loaded, ok = loadedMessageFromModelMessage(
+		"evt-tool-parts",
+		time.Time{},
+		model.Message{
+			Role: model.RoleTool,
+			ContentParts: []model.ContentPart{
+				{Text: &part2},
+				{Text: &part3},
+			},
+			ToolID:   "call-parts",
+			ToolName: "parts_tool",
+		},
+		loadContentWindow{AnchorEventID: "evt-tool-parts", Limit: 64},
+	)
+	require.True(t, ok)
+	assert.Equal(t, "parts_tool: alpha\nbeta", loaded.Content)
+	assert.Equal(t, len("alpha\nbeta"), loaded.ContentBytes)
+
 	sliced, start, returned, truncated := sliceContentByBytes("你好", 100, 3)
 	assert.Empty(t, sliced)
 	assert.Equal(t, len("你好"), start)
@@ -469,9 +532,40 @@ func TestLoadedMessageFromModelMessageContentPartsAndSlicingEdges(t *testing.T) 
 	assert.True(t, truncated)
 
 	sliced, start, returned, truncated = sliceContentByBytes("你a", 2, 1)
-	assert.Equal(t, "", sliced)
+	assert.Equal(t, "你", sliced)
 	assert.Equal(t, 0, start)
-	assert.Equal(t, 0, returned)
+	assert.Equal(t, len("你"), returned)
+	assert.True(t, truncated)
+}
+
+func TestToolResultSnippetTruncationFollowsVisibleSnippet(t *testing.T) {
+	content := strings.Repeat("你", maxSnippetLength)
+	result := session.EventSearchResult{
+		Event: event.Event{
+			ID: "evt-tool",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  "call-1",
+						Content: content,
+					},
+				}},
+			},
+		},
+	}
+
+	_, _, contentBytes, isTool := toolResultMetadata(result.Event)
+	require.True(t, isTool)
+	require.Greater(t, contentBytes, maxSnippetLength)
+	snippet, truncated := resultSnippetWithTruncation(result, nil)
+	assert.Equal(t, content, snippet)
+	assert.False(t, truncated)
+
+	longResult := result
+	longResult.Event.Response.Choices[0].Message.Content += "超"
+	snippet, truncated = resultSnippetWithTruncation(longResult, nil)
+	assert.True(t, strings.HasSuffix(snippet, "..."))
 	assert.True(t, truncated)
 }
 

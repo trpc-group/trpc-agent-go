@@ -469,21 +469,7 @@ func extractSessionMessageText(
 		return "", "", false
 	}
 
-	text := strings.TrimSpace(msg.Content)
-	if text == "" && len(msg.ContentParts) > 0 {
-		var parts []string
-		for _, part := range msg.ContentParts {
-			if part.Text == nil {
-				continue
-			}
-			partText := strings.TrimSpace(*part.Text)
-			if partText == "" {
-				continue
-			}
-			parts = append(parts, partText)
-		}
-		text = strings.TrimSpace(strings.Join(parts, "\n"))
-	}
+	text := visibleMessageText(msg)
 	if text == "" {
 		return "", "", false
 	}
@@ -513,9 +499,10 @@ func toolResultMetadata(
 		msg := choice.Message
 		role := msg.Role
 		if msg.ToolID != "" || role == model.RoleTool {
+			text := visibleMessageText(msg)
 			return strings.TrimSpace(msg.ToolID),
 				strings.TrimSpace(msg.ToolName),
-				len(msg.Content),
+				len(text),
 				true
 		}
 	}
@@ -612,21 +599,7 @@ func loadedMessageFromModelMessage(
 		return LoadedSessionMessage{}, false
 	}
 
-	text := strings.TrimSpace(msg.Content)
-	if text == "" && len(msg.ContentParts) > 0 {
-		var parts []string
-		for _, part := range msg.ContentParts {
-			if part.Text == nil {
-				continue
-			}
-			partText := strings.TrimSpace(*part.Text)
-			if partText == "" {
-				continue
-			}
-			parts = append(parts, partText)
-		}
-		text = strings.TrimSpace(strings.Join(parts, "\n"))
-	}
+	text := visibleMessageText(msg)
 	if text == "" {
 		return LoadedSessionMessage{}, false
 	}
@@ -643,7 +616,7 @@ func loadedMessageFromModelMessage(
 
 	loaded.ToolCallID = strings.TrimSpace(msg.ToolID)
 	loaded.ToolName = strings.TrimSpace(msg.ToolName)
-	loaded.ContentBytes = len(msg.Content)
+	loaded.ContentBytes = len(text)
 	offset, limit, applyWindow := contentWindowForToolResult(
 		eventID,
 		loaded.ToolCallID,
@@ -651,14 +624,14 @@ func loadedMessageFromModelMessage(
 	)
 	if applyWindow {
 		sliced, offset, returned, truncated := sliceContentByBytes(
-			msg.Content,
+			text,
 			offset,
 			limit,
 		)
 		if truncated || offset > 0 {
 			loaded.Content = sliced
 		} else if loaded.ToolName != "" {
-			loaded.Content = loaded.ToolName + ": " + msg.Content
+			loaded.Content = loaded.ToolName + ": " + text
 		} else {
 			loaded.Content = sliced
 		}
@@ -668,9 +641,28 @@ func loadedMessageFromModelMessage(
 		return loaded, true
 	}
 	if loaded.ToolName != "" {
-		loaded.Content = loaded.ToolName + ": " + msg.Content
+		loaded.Content = loaded.ToolName + ": " + text
 	}
 	return loaded, true
+}
+
+func visibleMessageText(msg model.Message) string {
+	text := strings.TrimSpace(msg.Content)
+	if text != "" || len(msg.ContentParts) == 0 {
+		return text
+	}
+	var parts []string
+	for _, part := range msg.ContentParts {
+		if part.Text == nil {
+			continue
+		}
+		partText := strings.TrimSpace(*part.Text)
+		if partText == "" {
+			continue
+		}
+		parts = append(parts, partText)
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 func contentWindowForToolResult(
@@ -717,6 +709,9 @@ func sliceContentByBytes(
 		end = total
 	}
 	end = clampUTF8Boundary(content, end)
+	if end == start && end < total {
+		end = clampUTF8NextBoundary(content, start+limit)
+	}
 	if end < start {
 		end = start
 	}
@@ -733,6 +728,19 @@ func clampUTF8Boundary(s string, index int) int {
 	}
 	for index > 0 && !isUTF8Boundary(s, index) {
 		index--
+	}
+	return index
+}
+
+func clampUTF8NextBoundary(s string, index int) int {
+	if index <= 0 {
+		return 0
+	}
+	if index >= len(s) {
+		return len(s)
+	}
+	for index < len(s) && !isUTF8Boundary(s, index) {
+		index++
 	}
 	return index
 }

@@ -65,7 +65,7 @@ func toolResultRecoveryRefForMessage(
 }
 
 func recoverableToolResultPlaceholder(ref toolResultRecoveryRef) string {
-	if ref.EventID == "" {
+	if ref.EventID == "" && ref.ToolCallID == "" {
 		if ref.Reason == "current_invocation_summary" {
 			return compactedToolResultPlaceholder
 		}
@@ -87,7 +87,7 @@ func recoverableTruncationMarker(
 	ref toolResultRecoveryRef,
 	omittedChars int,
 ) string {
-	if ref.EventID == "" {
+	if ref.EventID == "" && ref.ToolCallID == "" {
 		return fmt.Sprintf("\n\n[... %d characters truncated ...]\n\n", omittedChars)
 	}
 	var b strings.Builder
@@ -108,7 +108,7 @@ func recoverableTruncationMarker(
 func writeRecoveryRefLines(b *strings.Builder, ref toolResultRecoveryRef) {
 	if ref.EventID != "" {
 		fmt.Fprintf(b, "\nevent_id: %s", ref.EventID)
-	} else {
+	} else if ref.ToolCallID == "" {
 		b.WriteString("\nrecoverable: false")
 	}
 	if ref.ToolCallID != "" {

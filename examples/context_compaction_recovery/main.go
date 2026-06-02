@@ -67,6 +67,7 @@ var (
 type requestCapture struct {
 	mu   sync.Mutex
 	raws []string
+	err  error
 }
 
 func (c *requestCapture) add(req *openaigo.ChatCompletionNewParams) {
@@ -79,7 +80,9 @@ func (c *requestCapture) add(req *openaigo.ChatCompletionNewParams) {
 	c.raws = append(c.raws, string(raw))
 	if *dumpRequestsDir != "" {
 		name := fmt.Sprintf("%s/request-%02d.json", strings.TrimRight(*dumpRequestsDir, "/"), len(c.raws)-1)
-		_ = os.WriteFile(name, raw, 0o644)
+		if err := os.WriteFile(name, raw, 0o644); err != nil && c.err == nil {
+			c.err = err
+		}
 	}
 }
 
@@ -87,6 +90,12 @@ func (c *requestCapture) snapshot() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.raws...)
+}
+
+func (c *requestCapture) writeErr() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
 }
 
 type emitLargeResultInput struct {
@@ -148,6 +157,9 @@ func run(ctx context.Context) error {
 	}
 	if err := verifyCapturedRequests(capture.snapshot()); err != nil {
 		return err
+	}
+	if err := capture.writeErr(); err != nil {
+		return fmt.Errorf("dump model requests: %w", err)
 	}
 
 	fmt.Println("PASS: recovered compacted tool result with context compaction and token tailoring enabled")
@@ -349,6 +361,8 @@ func findLargeToolResultEvent(
 	if sess == nil {
 		return event.Event{}, errors.New("session not found")
 	}
+	var match *event.Event
+	count := 0
 	for i := len(sess.Events) - 1; i >= 0; i-- {
 		evt := sess.Events[i]
 		if evt.Response == nil {
@@ -357,11 +371,21 @@ func findLargeToolResultEvent(
 		for _, choice := range evt.Response.Choices {
 			msg := choice.Message
 			if msg.Role == model.RoleTool && msg.ToolName == largeToolName {
-				return evt, nil
+				count++
+				if match == nil {
+					match = &evt
+				}
 			}
 		}
 	}
-	return event.Event{}, errors.New("large tool result event not found")
+	if count != 1 {
+		return event.Event{}, fmt.Errorf(
+			"expected exactly one %s event, got %d",
+			largeToolName,
+			count,
+		)
+	}
+	return *match, nil
 }
 
 func verifyOriginalToolResult(
@@ -456,10 +480,21 @@ func verifyCapturedRequests(raws []string) error {
 	if !strings.Contains(all, "event_id") || !strings.Contains(all, "tool_call_id") {
 		return errors.New("captured placeholder did not expose recovery references")
 	}
-	if strings.Contains(raws[len(raws)-2], repeatedBlock) {
+	postRecoveryIdx := -1
+	for i := len(raws) - 1; i >= 0; i-- {
+		if strings.Contains(raws[i], tailSentinel) {
+			postRecoveryIdx = i
+			break
+		}
+	}
+	if postRecoveryIdx < 1 {
+		return errors.New("could not locate post-session_load request")
+	}
+	preRecoveryReq := raws[postRecoveryIdx-1]
+	if strings.Contains(preRecoveryReq, repeatedBlock) {
 		return errors.New("pre-recovery model request still contained raw large payload")
 	}
-	finalReq := raws[len(raws)-1]
+	finalReq := raws[postRecoveryIdx]
 	if !strings.Contains(finalReq, tailSentinel) {
 		return fmt.Errorf(
 			"post-session_load request did not contain recovered tail sentinel; captured=%d contains_by_request=%v",

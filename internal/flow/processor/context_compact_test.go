@@ -54,6 +54,26 @@ func (c *sequenceTokenCounter) CountTokensRange(
 	return 0, nil
 }
 
+func TestRecoveryRefLinesKeepToolCallIDWithoutEventID(t *testing.T) {
+	placeholder := recoverableToolResultPlaceholder(
+		toolResultRecoveryRef{
+			ToolCallID: "call-1",
+			ToolName:   "worker",
+			Reason:     "policy",
+		},
+	)
+	require.Contains(t, placeholder, "tool_call_id: call-1")
+	require.Contains(t, placeholder, "tool_name: worker")
+	require.NotContains(t, placeholder, "recoverable: false")
+
+	marker := recoverableTruncationMarker(
+		toolResultRecoveryRef{ToolCallID: "call-1", ToolName: "worker"},
+		42,
+	)
+	require.Contains(t, marker, "tool_call_id=call-1")
+	require.Contains(t, marker, "tool_name=worker")
+}
+
 func TestCompactIncrementEvents_PreservesCurrentAndRecentRequests(t *testing.T) {
 	makeToolEvent := func(requestID, invocationID, content string, done bool) event.Event {
 		return event.Event{
@@ -90,8 +110,9 @@ func TestCompactIncrementEvents_PreservesCurrentAndRecentRequests(t *testing.T) 
 	)
 
 	require.Len(t, compacted, 3)
-	require.Equal(t, historicalToolResultPlaceholder,
-		compacted[0].Response.Choices[0].Message.Content)
+	require.Contains(t,
+		compacted[0].Response.Choices[0].Message.Content,
+		historicalToolResultPlaceholder)
 	require.Equal(t, "tool-call-req-old",
 		compacted[0].Response.Choices[0].Message.ToolID)
 	require.Equal(t, recentContent,
@@ -218,8 +239,9 @@ func TestCompactIncrementEvents_UsesInvocationFallbackWhenRequestIDMissing(t *te
 		},
 	)
 
-	require.Equal(t, historicalToolResultPlaceholder,
-		compacted[0].Response.Choices[0].Message.Content)
+	require.Contains(t,
+		compacted[0].Response.Choices[0].Message.Content,
+		historicalToolResultPlaceholder)
 	require.Equal(t, currentContent,
 		compacted[1].Response.Choices[0].Message.Content)
 	require.Equal(t, 1, stats.ToolResultsCompacted)
@@ -261,8 +283,9 @@ func TestCompactIncrementEvents_KeepRecentCompletedRequestsOnly(t *testing.T) {
 
 	require.Equal(t, completedContent,
 		compacted[0].Response.Choices[0].Message.Content)
-	require.Equal(t, historicalToolResultPlaceholder,
-		compacted[1].Response.Choices[0].Message.Content)
+	require.Contains(t,
+		compacted[1].Response.Choices[0].Message.Content,
+		historicalToolResultPlaceholder)
 	require.Equal(t, currentContent,
 		compacted[2].Response.Choices[0].Message.Content)
 	require.Equal(t, 1, stats.ToolResultsCompacted)
@@ -306,8 +329,9 @@ func TestCompactIncrementEvents_SkipRecentFuncProtectsHistoricalPass(t *testing.
 		},
 	)
 
-	require.Equal(t, historicalToolResultPlaceholder,
-		compacted[0].Response.Choices[0].Message.Content)
+	require.Contains(t,
+		compacted[0].Response.Choices[0].Message.Content,
+		historicalToolResultPlaceholder)
 	require.Equal(t, recentContent,
 		compacted[1].Response.Choices[0].Message.Content)
 	require.Equal(t, currentContent,
@@ -354,8 +378,9 @@ func TestCompactIncrementEvents_SkipRecentFuncDoesNotDisableOversizedPass(t *tes
 		},
 	)
 
-	require.Equal(t, historicalToolResultPlaceholder,
-		compacted[0].Response.Choices[0].Message.Content)
+	require.Contains(t,
+		compacted[0].Response.Choices[0].Message.Content,
+		historicalToolResultPlaceholder)
 	gotRecent := compacted[1].Response.Choices[0].Message.Content
 	require.NotEqual(t, recentContent, gotRecent)
 	require.Contains(t, gotRecent, "[... ")
@@ -541,8 +566,9 @@ func TestCompactIncrementEvents_KeepToolNameSkipsCompaction(t *testing.T) {
 	)
 
 	require.Equal(t, keptContent, compacted[0].Response.Choices[0].Message.Content)
-	require.Equal(t, historicalToolResultPlaceholder,
-		compacted[1].Response.Choices[0].Message.Content)
+	require.Contains(t,
+		compacted[1].Response.Choices[0].Message.Content,
+		historicalToolResultPlaceholder)
 	require.Equal(t, currentContent, compacted[2].Response.Choices[0].Message.Content)
 	require.Equal(t, 1, stats.ToolResultsCompacted)
 }
@@ -591,7 +617,7 @@ func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
 		},
 	)
 	require.True(t, baselineOK)
-	require.Equal(t, compactedToolResultPlaceholder, baseline.Content)
+	require.Contains(t, baseline.Content, compactedToolResultPlaceholder)
 
 	compacted, ok := compactedCurrentInvocationMessage(
 		msg,
@@ -1176,7 +1202,7 @@ func TestContentRequestProcessor_ProcessRequest_ContextCompactionWithoutSummary(
 
 	require.Len(t, req.Messages, 5)
 	require.Equal(t, model.RoleAssistant, req.Messages[0].Role)
-	require.Equal(t, historicalToolResultPlaceholder, req.Messages[1].Content)
+	require.Contains(t, req.Messages[1].Content, historicalToolResultPlaceholder)
 	require.Equal(t, "tool-call-old", req.Messages[1].ToolID)
 	require.Equal(t, model.RoleAssistant, req.Messages[2].Role)
 	require.Contains(t, req.Messages[3].Content, "recent-result")
@@ -1245,7 +1271,7 @@ func TestContentRequestProcessor_ProcessRequest_ContextCompactionWithInvocationF
 	require.Len(t, req.Messages, 3)
 	require.Equal(t, model.RoleAssistant, req.Messages[0].Role)
 	require.Equal(t, model.RoleTool, req.Messages[1].Role)
-	require.Equal(t, historicalToolResultPlaceholder, req.Messages[1].Content)
+	require.Contains(t, req.Messages[1].Content, historicalToolResultPlaceholder)
 	require.Equal(t, "tool-call-old", req.Messages[1].ToolID)
 	require.Equal(t, "worker", req.Messages[1].ToolName)
 	require.Equal(t, "hello", req.Messages[2].Content)
