@@ -410,7 +410,17 @@ func conversationMessageFromEvent(evt *event.Event) (knowledge.ConversationMessa
 		}
 		content := strings.TrimSpace(msg.Content)
 		if content == "" {
-			continue
+			for _, part := range msg.ContentParts {
+				if part.Type == model.ContentTypeText && part.Text != nil {
+					content = strings.TrimSpace(*part.Text)
+					if content != "" {
+						break
+					}
+				}
+			}
+			if content == "" {
+				continue
+			}
 		}
 		return knowledge.ConversationMessage{
 			Role:      string(msg.Role),

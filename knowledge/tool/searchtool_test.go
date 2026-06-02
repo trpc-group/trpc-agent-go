@@ -107,6 +107,11 @@ func TestConversationMessageFromEvent(t *testing.T) {
 			},
 		},
 	)
+	contentPartsText := "from content parts"
+	contentPartsEvent := historyEvent(model.Message{
+		Role:         model.RoleUser,
+		ContentParts: []model.ContentPart{{Type: model.ContentTypeText, Text: &contentPartsText}},
+	}, false)
 	validEvent := historyEvent(model.NewUserMessage(" question "), false)
 	tests := []struct {
 		name   string
@@ -148,6 +153,16 @@ func TestConversationMessageFromEvent(t *testing.T) {
 			name:   "empty content",
 			evt:    ptrEvent(historyEvent(model.NewAssistantMessage(" "), false)),
 			wantOK: false,
+		},
+		{
+			name: "empty content with text content parts",
+			evt:  &contentPartsEvent,
+			want: knowledge.ConversationMessage{
+				Role:      "user",
+				Content:   "from content parts",
+				Timestamp: contentPartsEvent.Timestamp.Unix(),
+			},
+			wantOK: true,
 		},
 		{
 			name: "multi choice uses first valid message",
