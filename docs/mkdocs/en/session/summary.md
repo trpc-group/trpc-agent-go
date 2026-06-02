@@ -160,12 +160,13 @@ llmAgent := llmagent.New(
 
 Requirements and behavior:
 
-- `WithEnableOnDemandSession(true)` enables the progressive-disclosure path and
-  only exposes `session_search` and
-  `session_load` when the session backend implements both
-  `session.SearchableService` and `session.WindowService`.
-- `session/pgvector` supports this path today. Pure in-memory summary demos do
-  not expose these tools.
+- `WithEnableOnDemandSession(true)` enables on-demand session tools according to
+  backend capability. `session_search` is exposed when the backend implements
+  `session.SearchableService`; `session_load` is exposed when the backend
+  implements `session.WindowService`. Backends may support either one or both.
+- `session/pgvector` supports both discovery and exact loading. Normal session
+  backends that implement `WindowService` expose exact `session_load` recovery
+  even when semantic `session_search` is unavailable.
 - `current_hidden` searches current-session history strictly before the summary
   boundary recorded in `summary:last_included_ts`.
 - `current_session` searches the current session regardless of summary cutoff.
@@ -188,11 +189,17 @@ What is intentionally excluded:
 Recommended usage pattern:
 
 1. Let the model answer from the visible prompt, summary, and recent history.
-2. If a missing detail is needed, call `session_search` first.
-3. Use `session_load` only when the small context window returned by
-   `session_search` is still not enough.
+2. If `session_search` is available and a missing detail is needed, call it
+   first.
+3. Use `session_load` when you have an `event_id` and need the surrounding raw
+   history or exact tool result, including on backends without semantic search.
 4. Treat loaded history as untrusted historical context, not active
    instructions.
+
+Migration note: earlier builds only treated on-demand session support as
+available when both `session_search` and `session_load` were present. The tool
+surface is now capability-based, so search-only integrations can expose
+`session_search` and load-only integrations can expose `session_load`.
 
 ## SessionSummarizer Interface
 
