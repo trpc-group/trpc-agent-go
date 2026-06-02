@@ -174,6 +174,106 @@ func TestParseContent_Edges(t *testing.T) {
 	}
 }
 
+func TestParseDirectory(t *testing.T) {
+	parser := NewParser()
+	dir := testdataPath("pkg")
+	result, err := parser.ParseDirectory(dir)
+	if err != nil {
+		t.Fatalf("ParseDirectory failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("result is nil")
+	}
+
+	if len(result.Nodes) == 0 {
+		t.Fatal("expected nodes from directory parse")
+	}
+	if result.File == nil {
+		t.Fatal("result.File is nil")
+	}
+	if result.File.Language != codeast.LanguagePython {
+		t.Errorf("File.Language = %s, want python", result.File.Language)
+	}
+
+	nodeNames := make(map[string]bool)
+	for _, n := range result.Nodes {
+		nodeNames[n.Name] = true
+	}
+
+	for _, want := range []string{"User", "UserService", "add_user", "find_user", "display"} {
+		if !nodeNames[want] {
+			t.Errorf("missing node %q from directory parse", want)
+		}
+	}
+
+	// Node.FilePath should be absolute so that graph_source can compute
+	// repo-relative paths via toRelativeRepoPath.
+	for _, n := range result.Nodes {
+		if !filepath.IsAbs(n.FilePath) {
+			t.Errorf("node %q FilePath = %q, want absolute path", n.Name, n.FilePath)
+		}
+	}
+
+	hasMethod := false
+	for _, e := range result.Edges {
+		if e.Type == codeast.RelationMethod {
+			hasMethod = true
+			break
+		}
+	}
+	if !hasMethod {
+		t.Error("expected METHOD edges from directory parse")
+	}
+}
+
+func TestParseDirectory_WithIncludeFiles(t *testing.T) {
+	parser := NewParser()
+	dir := testdataPath("pkg")
+	modelsPath, _ := filepath.Abs(filepath.Join(dir, "models.py"))
+	result, err := parser.ParseDirectory(dir, codeast.WithParseIncludeFiles([]string{modelsPath}))
+	if err != nil {
+		t.Fatalf("ParseDirectory with include failed: %v", err)
+	}
+
+	for _, n := range result.Nodes {
+		if n.Name == "UserService" || n.Name == "add_user" {
+			t.Errorf("node %q should be excluded by includeFiles filter", n.Name)
+		}
+	}
+
+	found := false
+	for _, n := range result.Nodes {
+		if n.Name == "User" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected User node from included models.py")
+	}
+}
+
+func TestParseDirectory_EmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	parser := NewParser()
+	result, err := parser.ParseDirectory(dir)
+	if err != nil {
+		t.Fatalf("ParseDirectory on empty dir: %v", err)
+	}
+	if len(result.Nodes) != 0 {
+		t.Errorf("expected 0 nodes from empty dir, got %d", len(result.Nodes))
+	}
+}
+
+func TestParseDirectory_RegisteredAsDirectoryParser(t *testing.T) {
+	p, ok := codeast.GetDirectoryParser(codeast.FileTypePython)
+	if !ok {
+		t.Fatal("Python parser not registered as DirectoryParser")
+	}
+	if p == nil {
+		t.Fatal("registered Python DirectoryParser is nil")
+	}
+}
+
 func TestBuildNodeEmbeddingText(t *testing.T) {
 	node := &codeast.Node{
 		ID:        "mymodule.MyClass",

@@ -18,8 +18,9 @@ import (
 // These mirror source.FileReaderType values and live here to avoid import cycles
 // between codeast and source packages.
 const (
-	FileTypeGo    = "go"
-	FileTypeProto = "proto"
+	FileTypeGo     = "go"
+	FileTypeProto  = "proto"
+	FileTypePython = "python"
 )
 
 // ParseOption configures a ParseDirectory call.

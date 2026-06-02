@@ -17,7 +17,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 )
@@ -48,6 +50,12 @@ func WithExtractImports(enabled bool) Option {
 	}
 }
 
+const defaultParseConcurrency = 4
+
+func init() {
+	codeast.RegisterDirectoryParser(codeast.FileTypePython, NewParser())
+}
+
 // NewParser creates a new Python AST parser.
 func NewParser(opts ...Option) *Parser {
 	p := &Parser{
@@ -58,6 +66,142 @@ func NewParser(opts ...Option) *Parser {
 		opt(p)
 	}
 	return p
+}
+
+// ParseDirectory walks dirPath, parses every .py file, and returns a merged
+// result containing all nodes and edges. It implements codeast.DirectoryParser.
+func (p *Parser) ParseDirectory(dirPath string, opts ...codeast.ParseOption) (*codeast.Result, error) {
+	absDir, err := filepath.Abs(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("get absolute path: %w", err)
+	}
+
+	includeSet := buildIncludeSet(codeast.ParseIncludeFiles(opts))
+	files, err := collectPythonFiles(absDir, includeSet)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) == 0 {
+		return &codeast.Result{}, nil
+	}
+
+	concurrency := codeast.ParseConcurrency(opts)
+	if concurrency <= 0 {
+		concurrency = defaultParseConcurrency
+	}
+
+	results := make([]parseFileResult, len(files))
+
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i, f := range files {
+		wg.Add(1)
+		go func(idx int, filePath string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			relPath, _ := filepath.Rel(absDir, filePath)
+			modulePath := fileToModule(relPath, "")
+			r, err := p.parseFile(filePath, modulePath, filePath)
+			results[idx] = parseFileResult{result: r, err: err}
+		}(i, f)
+	}
+	wg.Wait()
+
+	return mergeResults(results, absDir)
+}
+
+func buildIncludeSet(files []string) map[string]struct{} {
+	if len(files) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		set[filepath.Clean(f)] = struct{}{}
+	}
+	return set
+}
+
+func collectPythonFiles(absDir string, includeSet map[string]struct{}) ([]string, error) {
+	var files []string
+	err := filepath.Walk(absDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			base := filepath.Base(path)
+			if base == "__pycache__" || base == ".git" || base == "node_modules" || base == ".venv" || base == "venv" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".py" {
+			return nil
+		}
+		if strings.HasSuffix(info.Name(), "_test.py") || info.Name() == "setup.py" {
+			return nil
+		}
+		if includeSet != nil {
+			if _, ok := includeSet[filepath.Clean(path)]; !ok {
+				return nil
+			}
+		}
+		files = append(files, path)
+		return nil
+	})
+	return files, err
+}
+
+type parseFileResult struct {
+	result *codeast.Result
+	err    error
+}
+
+func mergeResults(results []parseFileResult, absDir string) (*codeast.Result, error) {
+	var allNodes []*codeast.Node
+	var allEdges []*codeast.Edge
+	importsSet := make(map[string]struct{})
+	var firstErr error
+
+	for _, r := range results {
+		if r.err != nil {
+			if firstErr == nil {
+				firstErr = r.err
+			}
+			continue
+		}
+		if r.result == nil {
+			continue
+		}
+		allNodes = append(allNodes, r.result.Nodes...)
+		allEdges = append(allEdges, r.result.Edges...)
+		if r.result.File != nil {
+			for _, imp := range r.result.File.Imports {
+				importsSet[imp] = struct{}{}
+			}
+		}
+	}
+
+	if len(allNodes) == 0 && firstErr != nil {
+		return nil, fmt.Errorf("parse directory %s: %w", absDir, firstErr)
+	}
+
+	imports := make([]string, 0, len(importsSet))
+	for imp := range importsSet {
+		imports = append(imports, imp)
+	}
+	sort.Strings(imports)
+
+	return &codeast.Result{
+		File: &codeast.FileInfo{
+			Name:     absDir,
+			Language: codeast.LanguagePython,
+			Imports:  imports,
+		},
+		Nodes: allNodes,
+		Edges: allEdges,
+	}, nil
 }
 
 // ParseContent parses Python source content and returns AST nodes and edges.
