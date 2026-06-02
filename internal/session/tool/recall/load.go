@@ -90,13 +90,9 @@ func NewLoadTool() tool.CallableTool {
 			req.ContentOffset,
 			req.ContentLimit,
 		)
-		toolCallID := strings.TrimSpace(req.ToolCallID)
-		if strings.TrimSpace(req.EventID) != "" {
-			toolCallID = ""
-		}
 		messages := loadedMessagesFromWindow(window, loadContentWindow{
 			AnchorEventID: anchorEventID,
-			ToolCallID:    toolCallID,
+			ToolCallID:    strings.TrimSpace(req.ToolCallID),
 			Offset:        contentOffset,
 			Limit:         contentLimit,
 		})

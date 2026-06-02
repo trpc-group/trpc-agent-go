@@ -565,6 +565,9 @@ func loadedMessageFromEvent(
 	}
 	for _, choice := range evt.Choices {
 		msg := choice.Message
+		if skipsSelectedAnchorToolResult(evt.ID, msg, contentWindow) {
+			continue
+		}
 		loaded, ok := loadedMessageFromModelMessage(
 			evt.ID,
 			createdAt,
@@ -576,6 +579,22 @@ func loadedMessageFromEvent(
 		}
 	}
 	return LoadedSessionMessage{}, false
+}
+
+func skipsSelectedAnchorToolResult(
+	eventID string,
+	msg model.Message,
+	contentWindow loadContentWindow,
+) bool {
+	if contentWindow.AnchorEventID == "" ||
+		eventID != contentWindow.AnchorEventID ||
+		contentWindow.ToolCallID == "" {
+		return false
+	}
+	if msg.ToolID == "" && msg.Role != model.RoleTool {
+		return false
+	}
+	return strings.TrimSpace(msg.ToolID) != contentWindow.ToolCallID
 }
 
 func loadedMessageFromModelMessage(

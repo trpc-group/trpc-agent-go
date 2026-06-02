@@ -352,7 +352,7 @@ func TestLoadToolResolvesToolCallIDFromSessionService(t *testing.T) {
 	assert.Equal(t, "evt-tool-result", svc.lastWindowReq.AnchorEventID)
 }
 
-func TestLoadToolEventIDIgnoresMismatchedToolCallID(t *testing.T) {
+func TestLoadToolEventIDSelectsMatchingToolCallID(t *testing.T) {
 	svc := &mockSessionService{
 		Service: sessioninmemory.NewSessionService(),
 		window: &session.EventWindow{
@@ -361,13 +361,22 @@ func TestLoadToolEventIDIgnoresMismatchedToolCallID(t *testing.T) {
 				Event: event.Event{
 					ID: "evt-anchor",
 					Response: &model.Response{
-						Choices: []model.Choice{{
-							Message: model.Message{
-								Role:    model.RoleTool,
-								ToolID:  "call-anchor",
-								Content: "0123456789",
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Role:    model.RoleTool,
+									ToolID:  "call-other",
+									Content: "wrong-tool-result",
+								},
 							},
-						}},
+							{
+								Message: model.Message{
+									Role:    model.RoleTool,
+									ToolID:  "call-anchor",
+									Content: "0123456789",
+								},
+							},
+						},
 					},
 				},
 			}},
@@ -381,7 +390,7 @@ func TestLoadToolEventIDIgnoresMismatchedToolCallID(t *testing.T) {
 
 	args, err := json.Marshal(&LoadSessionRequest{
 		EventID:       "evt-anchor",
-		ToolCallID:    "call-other",
+		ToolCallID:    "call-anchor",
 		ContentOffset: 2,
 		ContentLimit:  3,
 	})
