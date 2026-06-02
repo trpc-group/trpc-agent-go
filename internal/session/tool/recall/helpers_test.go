@@ -301,6 +301,180 @@ func TestLoadedMessagesFromWindow_SkipsUnusableEntries(t *testing.T) {
 	assert.Equal(t, "hello", messages[0].Content)
 }
 
+func TestLoadToolResolvesToolCallIDFromSessionService(t *testing.T) {
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{
+		{
+			ID: "evt-tool-result",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  "call-1",
+						Content: "tool result",
+					},
+				}},
+			},
+		},
+	}
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		getSessionFunc: func(
+			key session.Key,
+			_ ...session.Option,
+		) (*session.Session, error) {
+			assert.Equal(t, "sess", key.SessionID)
+			return sess, nil
+		},
+		window: &session.EventWindow{
+			AnchorEventID: "evt-tool-result",
+			Entries: []session.EventWindowEntry{{
+				Event:     sess.Events[0],
+				CreatedAt: time.Date(2025, 4, 7, 11, 0, 0, 0, time.UTC),
+			}},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{ToolCallID: " call-1 "})
+	require.NoError(t, err)
+	result, err := NewLoadTool().Call(ctx, args)
+	require.NoError(t, err)
+
+	resp, ok := result.(*LoadSessionResponse)
+	require.True(t, ok)
+	assert.Equal(t, "evt-tool-result", resp.EventID)
+	assert.Equal(t, "evt-tool-result", svc.lastWindowReq.AnchorEventID)
+}
+
+func TestLoadToolReturnsSessionServiceFallbackError(t *testing.T) {
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		getSessionFunc: func(
+			session.Key,
+			...session.Option,
+		) (*session.Session, error) {
+			return nil, assert.AnError
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{ToolCallID: "call-1"})
+	require.NoError(t, err)
+	_, err = NewLoadTool().Call(ctx, args)
+	require.ErrorIs(t, err, assert.AnError)
+}
+
+func TestToolCallIDLookupAndContentWindowBoundaries(t *testing.T) {
+	assert.Empty(t, toolResultEventIDByToolCallID(nil, " "))
+	assert.Empty(t, toolResultEventIDByToolCallID([]event.Event{
+		{
+			ID: "evt-partial",
+			Response: &model.Response{
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:   model.RoleTool,
+						ToolID: "call-1",
+					},
+				}},
+			},
+		},
+	}, "call-1"))
+
+	offset, limit := normalizeContentWindow(-10, maxContentLimit+1)
+	assert.Equal(t, 0, offset)
+	assert.Equal(t, maxContentLimit, limit)
+
+	offset, limit, apply := contentWindowForToolResult(
+		"evt-neighbor",
+		"call-neighbor",
+		loadContentWindow{ToolCallID: "call-anchor", Limit: 4},
+	)
+	assert.False(t, apply)
+	assert.Equal(t, 0, offset)
+	assert.Equal(t, 0, limit)
+
+	assert.False(t, isAnchorToolResult(
+		"evt-anchor",
+		"call-other",
+		loadContentWindow{ToolCallID: "call-anchor"},
+	))
+}
+
+func TestLoadedMessageFromModelMessageContentPartsAndSlicingEdges(t *testing.T) {
+	part1 := "  "
+	part2 := "alpha"
+	part3 := "beta"
+	loaded, ok := loadedMessageFromModelMessage(
+		"evt-parts",
+		time.Date(2025, 4, 7, 11, 0, 0, 0, time.UTC),
+		model.Message{
+			ContentParts: []model.ContentPart{
+				{},
+				{Text: &part1},
+				{Text: &part2},
+				{Text: &part3},
+			},
+		},
+		loadContentWindow{},
+	)
+	require.True(t, ok)
+	assert.Equal(t, model.RoleAssistant, loaded.Role)
+	assert.Equal(t, "alpha\nbeta", loaded.Content)
+
+	_, ok = loadedMessageFromModelMessage(
+		"evt-empty",
+		time.Time{},
+		model.Message{ContentParts: []model.ContentPart{{Text: &part1}}},
+		loadContentWindow{},
+	)
+	assert.False(t, ok)
+
+	_, ok = loadedMessageFromModelMessage(
+		"evt-system",
+		time.Time{},
+		model.Message{Role: model.RoleSystem, Content: "system"},
+		loadContentWindow{},
+	)
+	assert.False(t, ok)
+
+	loaded, ok = loadedMessageFromModelMessage(
+		"evt-tool",
+		time.Time{},
+		model.Message{
+			Role:    model.RoleTool,
+			ToolID:  "call-1",
+			Content: "short",
+		},
+		loadContentWindow{AnchorEventID: "evt-tool", Limit: maxContentLimit},
+	)
+	require.True(t, ok)
+	assert.Equal(t, "short", loaded.Content)
+	assert.Equal(t, 5, loaded.ReturnedBytes)
+	assert.False(t, loaded.ContentTruncated)
+
+	sliced, start, returned, truncated := sliceContentByBytes("你好", 100, 3)
+	assert.Empty(t, sliced)
+	assert.Equal(t, len("你好"), start)
+	assert.Equal(t, 0, returned)
+	assert.True(t, truncated)
+
+	sliced, start, returned, truncated = sliceContentByBytes("你a", 2, 1)
+	assert.Equal(t, "", sliced)
+	assert.Equal(t, 0, start)
+	assert.Equal(t, 0, returned)
+	assert.True(t, truncated)
+}
+
 func TestSearchHelperFunctions(t *testing.T) {
 	assert.Equal(t, ScopeCurrentHidden, normalizeScope("unknown"))
 	assert.Equal(t, ScopeCurrentSession, normalizeScope(" current_session "))
