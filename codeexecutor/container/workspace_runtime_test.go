@@ -365,15 +365,15 @@ func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {
 	require.Contains(t, joined, ws.Path)
 }
 
-// runProgramCaptureArgv runs spec through a fake-docker
-// workspaceRuntime and returns the bash argv handed to
-// ContainerExecCreate, so CleanEnv tests can assert how RunProgram
-// shapes the shell invocation without a real container.
-func runProgramCaptureArgv(
+// runProgramCaptureExec runs spec through a fake-docker
+// workspaceRuntime and returns the bash argv and the ExecCreate Env
+// handed to ContainerExecCreate, so CleanEnv tests can assert how
+// RunProgram shapes the shell invocation (and the wrapper exec env)
+// without a real container.
+func runProgramCaptureExec(
 	t *testing.T, spec codeexecutor.RunProgramSpec,
-) []string {
+) (argv []string, execEnv []string) {
 	t.Helper()
-	var captured []string
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPut &&
@@ -385,9 +385,11 @@ func runProgramCaptureArgv(
 				"/containers/"+testCID+"/exec"):
 			var payload struct {
 				Cmd []string `json:"Cmd"`
+				Env []string `json:"Env"`
 			}
 			_ = json.NewDecoder(r.Body).Decode(&payload)
-			captured = payload.Cmd
+			argv = payload.Cmd
+			execEnv = payload.Env
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
 		case r.Method == http.MethodPost &&
@@ -421,22 +423,24 @@ func runProgramCaptureArgv(
 		Path: path.Join(testRunBase, "wCE")}
 	_, err := rt.RunProgram(context.Background(), ws, spec)
 	require.NoError(t, err)
-	require.NotEmpty(t, captured)
-	return captured
+	require.NotEmpty(t, argv)
+	return argv, execEnv
 }
 
 // TestWorkspaceRuntime_RunProgram_CleanEnvLaunchesBashInEmptyEnv
 // guards the container half of issue #1845: when spec.CleanEnv is
-// set the *outer* bash must itself be launched through
-// `env -i PATH=<minimal>` (not merely the inner command), so a
-// container-supplied BASH_ENV / ENV / LD_PRELOAD cannot run code or
-// hijack the shell process at start-up before the command line
-// executes. --noprofile / --norc additionally skip profile/rc
-// files, and the inner `env -i ...` pins the command's own env.
+// set the *outer* bash must itself be launched through the trusted
+// absolute path `/usr/bin/env -i PATH=<minimal>` (not merely the
+// inner command), so a container-supplied BASH_ENV / ENV / LD_PRELOAD
+// cannot run code or hijack the shell process at start-up before the
+// command line executes. The exec is created with a minimal,
+// loader-hardened wrapper env so the `env` process itself cannot be
+// hijacked before its `env -i` runs. --noprofile / --norc skip
+// profile/rc files, and the inner `env -i ...` pins the command env.
 func TestWorkspaceRuntime_RunProgram_CleanEnvLaunchesBashInEmptyEnv(
 	t *testing.T,
 ) {
-	argv := runProgramCaptureArgv(t, codeexecutor.RunProgramSpec{
+	argv, execEnv := runProgramCaptureExec(t, codeexecutor.RunProgramSpec{
 		Cmd:      "echo",
 		Args:     []string{"hi"},
 		CleanEnv: true,
@@ -444,11 +448,27 @@ func TestWorkspaceRuntime_RunProgram_CleanEnvLaunchesBashInEmptyEnv(
 	})
 	require.Equal(t,
 		[]string{
-			"env", "-i", "PATH=" + minimalCleanPATH,
+			"/usr/bin/env", "-i", "PATH=" + minimalCleanPATH,
 			"/bin/bash", "--noprofile", "--norc", "-c",
 		},
 		argv[:len(argv)-1],
-		"clean mode must launch the outer bash from an empty env",
+		"clean mode must launch the outer bash from an empty env "+
+			"via the trusted absolute env path",
+	)
+	// The wrapper exec env constrains the `/usr/bin/env` process
+	// itself: PATH is pinned and the glibc loader hooks are blanked
+	// so a container-level LD_PRELOAD cannot inject code before the
+	// wrapper's `env -i` clears the environment (issue #1845).
+	require.Equal(t,
+		[]string{
+			"PATH=" + minimalCleanPATH,
+			"LD_PRELOAD=",
+			"LD_LIBRARY_PATH=",
+			"LD_AUDIT=",
+		},
+		execEnv,
+		"clean mode must hand ContainerExecCreate a minimal, "+
+			"loader-hardened wrapper env",
 	)
 	cmdline := argv[len(argv)-1]
 	require.Contains(t, cmdline, "env -i ",
@@ -467,7 +487,7 @@ func TestWorkspaceRuntime_RunProgram_CleanEnvLaunchesBashInEmptyEnv(
 func TestWorkspaceRuntime_RunProgram_CleanEnvKeepsSpecPATH(
 	t *testing.T,
 ) {
-	argv := runProgramCaptureArgv(t, codeexecutor.RunProgramSpec{
+	argv, _ := runProgramCaptureExec(t, codeexecutor.RunProgramSpec{
 		Cmd:      "echo",
 		CleanEnv: true,
 		Env:      map[string]string{"PATH": "/opt/vetted/bin"},
@@ -486,7 +506,7 @@ func TestWorkspaceRuntime_RunProgram_CleanEnvKeepsSpecPATH(
 func TestWorkspaceRuntime_RunProgram_NoCleanEnvKeepsLoginShell(
 	t *testing.T,
 ) {
-	argv := runProgramCaptureArgv(t, codeexecutor.RunProgramSpec{
+	argv, execEnv := runProgramCaptureExec(t, codeexecutor.RunProgramSpec{
 		Cmd:     "echo",
 		Env:     map[string]string{"FOO": "bar"},
 		Timeout: time.Duration(waitShortSec) * time.Second,
@@ -497,6 +517,9 @@ func TestWorkspaceRuntime_RunProgram_NoCleanEnvKeepsLoginShell(
 	require.Contains(t, cmdline, "env ")
 	require.NotContains(t, cmdline, "env -i")
 	require.NotContains(t, cmdline, minimalCleanPATH)
+	require.Empty(t, execEnv,
+		"non-clean mode must inherit the container env "+
+			"(no ExecCreate env override)")
 }
 
 // TestContainer_EngineAdvertisesCleanEnv verifies the container
