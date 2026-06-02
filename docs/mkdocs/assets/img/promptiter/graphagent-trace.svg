@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1760" height="760" viewBox="0 0 1760 760" role="img" aria-label="graph agent execution trace">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#718096" />
+    </marker>
+    <marker id="dash-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b6f47" />
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .fn { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 1.4; }
+      .agent { fill: #eef6ff; stroke: #3f7fbf; stroke-width: 1.5; }
+      .surface { fill: #fff7df; stroke: #d59b23; stroke-width: 1.1; }
+      .step { fill: #173b63; font: 700 25px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .fn-step { fill: #334155; font: 700 23px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .node-name { fill: #64748b; font: 600 15px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .id { fill: #6f4a00; font: 600 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .branch { fill: #8b6f47; font: 700 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .edge { stroke: #718096; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .cond { stroke: #8b6f47; stroke-width: 1.8; stroke-dasharray: 7 5; fill: none; marker-end: url(#dash-arrow); }
+    </style>
+  </defs>
+  <rect class="bg" width="1760" height="760" rx="18" />
+
+  <rect class="fn" x="48" y="340" width="165" height="84" rx="10" />
+  <text class="fn-step" x="130" y="372" text-anchor="middle">s1</text>
+  <text class="node-name" x="130" y="405" text-anchor="middle">candidate/prepare</text>
+
+  <rect class="agent" x="320" y="70" width="260" height="126" rx="10" />
+  <text class="step" x="450" y="104" text-anchor="middle">s2</text>
+  <text class="node-name" x="450" y="135" text-anchor="middle">candidate/title</text>
+  <rect class="surface" x="335" y="152" width="230" height="34" rx="7" />
+  <text class="id" x="450" y="174" text-anchor="middle">candidate/title#instruction</text>
+
+  <rect class="agent" x="320" y="318" width="260" height="126" rx="10" />
+  <text class="step" x="450" y="352" text-anchor="middle">s3</text>
+  <text class="node-name" x="450" y="383" text-anchor="middle">candidate/introduction</text>
+  <rect class="surface" x="335" y="400" width="230" height="34" rx="7" />
+  <text class="id" x="450" y="422" text-anchor="middle">candidate/introduction#instruction</text>
+
+  <rect class="agent" x="320" y="566" width="260" height="126" rx="10" />
+  <text class="step" x="450" y="600" text-anchor="middle">s4</text>
+  <text class="node-name" x="450" y="631" text-anchor="middle">candidate/highlight</text>
+  <rect class="surface" x="335" y="648" width="230" height="34" rx="7" />
+  <text class="id" x="450" y="670" text-anchor="middle">candidate/highlight#instruction</text>
+
+  <rect class="fn" x="690" y="340" width="145" height="84" rx="10" />
+  <text class="fn-step" x="763" y="372" text-anchor="middle">s5</text>
+  <text class="node-name" x="763" y="405" text-anchor="middle">candidate/merge</text>
+
+  <rect class="agent" x="930" y="270" width="250" height="126" rx="10" />
+  <text class="step" x="1055" y="304" text-anchor="middle">s6</text>
+  <text class="node-name" x="1055" y="335" text-anchor="middle">candidate/polish</text>
+  <rect class="surface" x="945" y="352" width="220" height="34" rx="7" />
+  <text class="id" x="1055" y="374" text-anchor="middle">candidate/polish#instruction</text>
+
+  <rect class="agent" x="1260" y="270" width="250" height="126" rx="10" />
+  <text class="step" x="1385" y="304" text-anchor="middle">s7</text>
+  <text class="node-name" x="1385" y="335" text-anchor="middle">candidate/review</text>
+  <rect class="surface" x="1275" y="352" width="220" height="34" rx="7" />
+  <text class="id" x="1385" y="374" text-anchor="middle">candidate/review#instruction</text>
+
+  <rect class="agent" x="930" y="542" width="250" height="126" rx="10" />
+  <text class="step" x="1055" y="576" text-anchor="middle">s8</text>
+  <text class="node-name" x="1055" y="607" text-anchor="middle">candidate/polish</text>
+  <rect class="surface" x="945" y="624" width="220" height="34" rx="7" />
+  <text class="id" x="1055" y="646" text-anchor="middle">candidate/polish#instruction</text>
+
+  <rect class="agent" x="1260" y="542" width="250" height="126" rx="10" />
+  <text class="step" x="1385" y="576" text-anchor="middle">s9</text>
+  <text class="node-name" x="1385" y="607" text-anchor="middle">candidate/review</text>
+  <rect class="surface" x="1275" y="624" width="220" height="34" rx="7" />
+  <text class="id" x="1385" y="646" text-anchor="middle">candidate/review#instruction</text>
+
+  <rect class="fn" x="1588" y="422" width="150" height="84" rx="10" />
+  <text class="fn-step" x="1663" y="454" text-anchor="middle">s10</text>
+  <text class="node-name" x="1663" y="487" text-anchor="middle">candidate/publish</text>
+
+  <path class="edge" d="M 213 382 C 262 382, 268 133, 320 133" />
+  <path class="edge" d="M 213 382 L 320 382" />
+  <path class="edge" d="M 213 382 C 262 382, 268 629, 320 629" />
+
+  <path class="edge" d="M 580 133 C 635 133, 635 356, 690 356" />
+  <path class="edge" d="M 580 382 L 690 382" />
+  <path class="edge" d="M 580 629 C 635 629, 635 408, 690 408" />
+
+  <path class="edge" d="M 835 382 L 930 333" />
+  <path class="edge" d="M 1180 333 L 1260 333" />
+
+  <path class="cond" d="M 1385 396 C 1385 482, 1055 482, 1055 542" />
+  <text class="branch" x="1232" y="462" text-anchor="middle">revise</text>
+  <path class="edge" d="M 1180 605 L 1260 605" />
+  <path class="cond" d="M 1510 605 C 1552 605, 1552 464, 1588 464" />
+  <text class="branch" x="1560" y="624" text-anchor="middle">pass</text>
+</svg>
