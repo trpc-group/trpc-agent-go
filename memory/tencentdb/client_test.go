@@ -123,7 +123,7 @@ func TestGatewayClientSendsAPIKeyHeader(t *testing.T) {
 	assert.Equal(t, "Bearer secret-key", captureAuth)
 	_, err = client.health(context.Background())
 	require.NoError(t, err, "health")
-	assert.Equal(t, "Bearer secret-key", healthAuth)
+	assert.Empty(t, healthAuth, "health should remain unauthenticated")
 
 	captureAuth = ""
 	noKey, err := newGatewayClient(Options{GatewayURL: server.URL})
@@ -156,5 +156,5 @@ func TestGatewayClientDecodeAndRequestEdges(t *testing.T) {
 	var out HealthResponse
 	require.NoError(t, client.doJSON(context.Background(), httpMethodGet, "/empty", nil, &out), "empty response should be accepted")
 	require.Error(t, client.doJSON(context.Background(), httpMethodGet, "/bad-json", nil, &out), "expected unmarshal error")
-	require.Error(t, client.doJSONOnce(context.Background(), httpMethodGet, "://bad", nil, nil), "expected request build error")
+	require.Error(t, client.doJSONOnce(context.Background(), httpMethodGet, "://bad", nil, nil, true), "expected request build error")
 }

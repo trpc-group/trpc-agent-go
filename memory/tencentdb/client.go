@@ -160,7 +160,7 @@ func (c *gatewayClient) doJSON(
 			return fmt.Errorf("tencentdb memory: marshal request failed: %w", err)
 		}
 	}
-	return c.doJSONOnce(ctx, method, c.baseURL+path, payload, out)
+	return c.doJSONOnce(ctx, method, c.baseURL+path, payload, out, path != pathHealth)
 }
 
 func (c *gatewayClient) doJSONOnce(
@@ -169,6 +169,7 @@ func (c *gatewayClient) doJSONOnce(
 	urlStr string,
 	payload []byte,
 	out any,
+	authorize bool,
 ) error {
 	var body io.Reader
 	if payload != nil {
@@ -182,7 +183,7 @@ func (c *gatewayClient) doJSONOnce(
 	if payload != nil {
 		req.Header.Set(httpHeaderContentType, httpContentTypeJSON)
 	}
-	if c.apiKey != "" {
+	if authorize && c.apiKey != "" {
 		req.Header.Set(httpHeaderAuthorization, httpAuthBearerPrefix+c.apiKey)
 	}
 	resp, err := c.hc.Do(req)

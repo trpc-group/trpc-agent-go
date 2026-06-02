@@ -122,6 +122,24 @@ func TestSafeDefaultsDisableCrossTenantReads(t *testing.T) {
 	assert.False(t, names["tdai_memory_search"], "memory search should be opt-in; tools=%#v", names)
 	assert.True(t, names["tdai_conversation_search"], "conversation search should be on by default; tools=%#v", names)
 
+	aliasOnly, err := NewService(
+		WithGatewayURL(server.URL),
+		WithStandardAliases(true),
+	)
+	require.NoError(t, err, "NewService alias only")
+	defer aliasOnly.Close()
+
+	aliasOnlyMgr, err := pluginpkg.NewManager(aliasOnly.Plugin())
+	require.NoError(t, err, "NewManager alias only")
+	assert.Nil(t, aliasOnlyMgr.ModelCallbacks(), "recall should remain disabled when only aliases are enabled")
+
+	aliasOnlyNames := map[string]bool{}
+	for _, tl := range aliasOnly.Tools() {
+		aliasOnlyNames[tl.Declaration().Name] = true
+	}
+	assert.False(t, aliasOnlyNames["tdai_memory_search"], "native memory search should stay opt-in; tools=%#v", aliasOnlyNames)
+	assert.False(t, aliasOnlyNames["memory_search"], "standard alias should require memory search to be enabled; tools=%#v", aliasOnlyNames)
+
 	enabled, err := NewService(
 		WithGatewayURL(server.URL),
 		WithRecallEnabled(true),
