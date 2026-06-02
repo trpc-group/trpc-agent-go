@@ -1747,9 +1747,16 @@ The boundary is intentionally different from built-in backends:
   recall, and search.
 - The Go adapter sends completed session turns through `session.Ingestor`.
 - A Runner plugin calls `/recall` before each model request and injects the
-  returned context.
-- Native tools expose read-oriented search through `tdai_memory_search` and
-  `tdai_conversation_search`.
+  returned context (opt-in via `WithRecallEnabled(true)`).
+- Native tools expose read-oriented search through `tdai_conversation_search`
+  (session-scoped, on by default) and `tdai_memory_search` (opt-in via
+  `WithMemorySearchTool(true)`).
+
+> **Multi-tenant note:** automatic recall and `tdai_memory_search` read from the
+> gateway's shared long-term store, which does not currently enforce
+> user/session scoping. They are therefore disabled by default; enable them only
+> when the gateway guarantees per-tenant isolation. Only session-scoped capture
+> and `tdai_conversation_search` are on by default.
 
 Even when the SDK uses local SQLite storage, the gateway is still required
 because it hosts the memory engine. Direct VectorDB or SQLite access only talks
@@ -1798,6 +1805,10 @@ if gatewayURL == "" {
 
 memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithGatewayURL(gatewayURL),
+    // Opt-in cross-session/user reads; enable only for a trusted/isolated gateway.
+    memorytencentdb.WithRecallEnabled(true),
+    memorytencentdb.WithMemorySearchTool(true),
+    // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
 if err != nil {
     panic(err)
@@ -1864,16 +1875,22 @@ tools even after conversation history is reset.
 | `WithIngestQueueSize(n)` | Queue size for async capture jobs. | `10` |
 | `WithIngestJobTimeout(d)` | Timeout for queued capture jobs. | `30s` |
 | `WithSessionKeyFunc(fn)` | Customize session to gateway `session_key` mapping. | `app:user:session` |
-| `WithRecallEnabled(bool)` | Enable automatic recall plugin behavior. | `true` |
+| `WithAPIKey(key)` | Send `Authorization: Bearer <key>` (gateway `TDAI_GATEWAY_API_KEY`). | none |
+| `WithRecallEnabled(bool)` | Enable automatic recall plugin behavior (opt-in; reads shared store). | `false` |
+| `WithMemorySearchTool(bool)` | Expose `tdai_memory_search` (opt-in; reads shared store). | `false` |
 | `WithConversationSearchTool(bool)` | Expose `tdai_conversation_search`. | `true` |
-| `WithStandardAliases(bool)` | Also expose standard `memory_search` alias. | `false` |
+| `WithStandardAliases(bool)` | Also expose standard `memory_search` alias (requires memory search enabled). | `false` |
 | `WithToolPrefix(prefix)` | Change native tool prefix. | `tdai` |
 
 ### Notes
 
 - The adapter forwards app, user, and session identifiers to the gateway, but
   hard multi-tenant isolation depends on the gateway and SDK honoring those
-  fields end-to-end.
+  fields end-to-end. Because of this, automatic recall and `tdai_memory_search`
+  are opt-in and disabled by default.
+- When the gateway is started with `TDAI_GATEWAY_API_KEY`, set `WithAPIKey(...)`
+  so requests carry `Authorization: Bearer <key>`; otherwise every non-health
+  route returns 401 while the health check still passes.
 - `tdai_memory_search` searches extracted long-term memory; extraction is
   asynchronous, so newly captured facts may take a short time to become
   searchable.

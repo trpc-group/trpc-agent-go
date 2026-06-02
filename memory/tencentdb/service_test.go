@@ -45,6 +45,7 @@ func TestServiceOptionsAndLifecycleEdges(t *testing.T) {
 			return "custom:" + sess.ID
 		}),
 		WithRecallEnabled(false),
+		WithMemorySearchTool(true),
 		WithConversationSearchTool(false),
 		WithStandardAliases(true),
 		WithToolPrefix("_custom_"),
@@ -65,6 +66,7 @@ func TestServiceOptionsAndLifecycleEdges(t *testing.T) {
 	assert.False(t, names["custom_conversation_search"], "conversation search should be disabled")
 	deduped, err := NewService(
 		WithGatewayURL(server.URL),
+		WithMemorySearchTool(true),
 		WithStandardAliases(true),
 		WithConversationSearchTool(false),
 		func(o *Options) { o.ToolPrefix = "" },
@@ -93,6 +95,51 @@ func TestServiceOptionsAndLifecycleEdges(t *testing.T) {
 	require.NoError(t, err, "NewService closed")
 	require.NoError(t, closed.Close(), "Close")
 	require.Error(t, closed.IngestSession(context.Background(), captureReadySession()), "expected closed service error")
+}
+
+func TestSafeDefaultsDisableCrossTenantReads(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(captureResponse{})
+	}))
+	defer server.Close()
+
+	svc, err := NewService(WithGatewayURL(server.URL))
+	require.NoError(t, err, "NewService")
+	defer svc.Close()
+
+	// Recall is opt-in: the plugin must not register a BeforeModel callback by
+	// default, since the shared gateway does not enforce user/session scoping.
+	mgr, err := pluginpkg.NewManager(svc.Plugin())
+	require.NoError(t, err, "NewManager")
+	assert.Nil(t, mgr.ModelCallbacks(), "recall should be disabled by default")
+
+	// memory_search is opt-in: only the session-scoped conversation search is
+	// exposed by default.
+	names := map[string]bool{}
+	for _, tl := range svc.Tools() {
+		names[tl.Declaration().Name] = true
+	}
+	assert.False(t, names["tdai_memory_search"], "memory search should be opt-in; tools=%#v", names)
+	assert.True(t, names["tdai_conversation_search"], "conversation search should be on by default; tools=%#v", names)
+
+	enabled, err := NewService(
+		WithGatewayURL(server.URL),
+		WithRecallEnabled(true),
+		WithMemorySearchTool(true),
+	)
+	require.NoError(t, err, "NewService enabled")
+	defer enabled.Close()
+
+	enabledMgr, err := pluginpkg.NewManager(enabled.Plugin())
+	require.NoError(t, err, "NewManager enabled")
+	require.NotNil(t, enabledMgr.ModelCallbacks(), "recall should register when enabled")
+	assert.Len(t, enabledMgr.ModelCallbacks().BeforeModel, 1)
+
+	enabledNames := map[string]bool{}
+	for _, tl := range enabled.Tools() {
+		enabledNames[tl.Declaration().Name] = true
+	}
+	assert.True(t, enabledNames["tdai_memory_search"], "memory search should be exposed when enabled; tools=%#v", enabledNames)
 }
 
 func TestEndSessionAndHealth(t *testing.T) {

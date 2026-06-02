@@ -78,7 +78,7 @@ func TestMemorySearchToolAndHelpers(t *testing.T) {
 	}))
 	defer server.Close()
 
-	svc, err := NewService(WithGatewayURL(server.URL), WithConversationSearchTool(false))
+	svc, err := NewService(WithGatewayURL(server.URL), WithConversationSearchTool(false), WithMemorySearchTool(true))
 	require.NoError(t, err, "NewService")
 	defer svc.Close()
 

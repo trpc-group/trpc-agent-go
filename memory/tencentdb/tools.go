@@ -68,12 +68,14 @@ func (s *Service) buildTools() []tool.Tool {
 		out = append(out, t)
 	}
 
-	add(s.newMemorySearchTool(s.nativeToolName("memory_search")))
+	if s.opts.EnableMemorySearchTool {
+		add(s.newMemorySearchTool(s.nativeToolName("memory_search")))
+		if s.opts.EnableStandardAliases {
+			add(s.newMemorySearchTool(memorypkg.SearchToolName))
+		}
+	}
 	if s.opts.EnableConversationSearchTool {
 		add(s.newConversationSearchTool(s.nativeToolName("conversation_search")))
-	}
-	if s.opts.EnableStandardAliases {
-		add(s.newMemorySearchTool(memorypkg.SearchToolName))
 	}
 	return out
 }

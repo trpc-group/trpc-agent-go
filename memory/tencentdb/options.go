@@ -13,6 +13,7 @@ package tencentdb
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -42,9 +43,15 @@ type Options struct {
 	IngestQueueSize  int
 	IngestJobTimeout time.Duration
 
+	// APIKey is sent as an "Authorization: Bearer <key>" header on gateway
+	// requests. It is required when the gateway is started with
+	// TDAI_GATEWAY_API_KEY.
+	APIKey string
+
 	SessionKeyFunc SessionKeyFunc
 
 	RecallEnabled                bool
+	EnableMemorySearchTool       bool
 	EnableConversationSearchTool bool
 	EnableStandardAliases        bool
 	ToolPrefix                   string
@@ -53,6 +60,11 @@ type Options struct {
 // Option configures Service.
 type Option func(*Options)
 
+// defaultOptions returns conservative defaults. Cross-session/user reads are
+// opt-in: automatic recall and the long-term memory_search tool stay disabled
+// because the shared gateway sidecar does not currently enforce user/session
+// scoping on those paths. Only session-scoped surfaces (capture and
+// conversation search) are enabled by default.
 func defaultOptions() Options {
 	return Options{
 		GatewayURL:                   defaultGatewayURL,
@@ -62,7 +74,8 @@ func defaultOptions() Options {
 		IngestQueueSize:              defaultIngestQueueSize,
 		IngestJobTimeout:             defaultIngestJobTimeout,
 		SessionKeyFunc:               defaultSessionKey,
-		RecallEnabled:                true,
+		RecallEnabled:                false,
+		EnableMemorySearchTool:       false,
 		EnableConversationSearchTool: true,
 		ToolPrefix:                   "tdai",
 	}
@@ -104,6 +117,18 @@ func WithMaxBodyBytes(max int64) Option {
 	}
 }
 
+// WithAPIKey sets the gateway API key. When the gateway is started with
+// TDAI_GATEWAY_API_KEY it requires an "Authorization: Bearer <key>" header on
+// every non-health route, so capture, recall, search, and session-end requests
+// return 401 without it even though the health check still passes.
+func WithAPIKey(key string) Option {
+	return func(o *Options) {
+		if k := strings.TrimSpace(key); k != "" {
+			o.APIKey = k
+		}
+	}
+}
+
 // WithIngestWorkers sets the number of async capture workers.
 func WithIngestWorkers(n int) Option {
 	return func(o *Options) {
@@ -141,9 +166,27 @@ func WithSessionKeyFunc(fn SessionKeyFunc) Option {
 }
 
 // WithRecallEnabled controls whether Plugin performs automatic recall.
+//
+// It is off by default: the gateway currently recalls from a shared long-term
+// store without enforcing the request's user/session scope, so on a shared
+// sidecar automatic recall can surface another user's or session's memories.
+// Only enable it when the gateway guarantees per-tenant isolation.
 func WithRecallEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.RecallEnabled = enabled
+	}
+}
+
+// WithMemorySearchTool controls whether the long-term memory_search tool
+// (tdai_memory_search, plus the standard alias when enabled) is exposed.
+//
+// It is off by default for the same reason as recall: the gateway memory search
+// does not enforce user/session scoping, so the tool can read a shared
+// long-term store. Only enable it when the gateway guarantees per-tenant
+// isolation. The session-scoped conversation search tool stays available.
+func WithMemorySearchTool(enabled bool) Option {
+	return func(o *Options) {
+		o.EnableMemorySearchTool = enabled
 	}
 }
 
@@ -157,7 +200,8 @@ func WithConversationSearchTool(enabled bool) Option {
 // WithStandardAliases exposes memory_search as an additional alias.
 //
 // This can conflict with the framework's built-in memory tools, so it is off by
-// default. TencentDB-native tdai_* names are always preferred.
+// default. TencentDB-native tdai_* names are always preferred. The alias is
+// only exposed when the memory search tool is enabled via WithMemorySearchTool.
 func WithStandardAliases(enabled bool) Option {
 	return func(o *Options) {
 		o.EnableStandardAliases = enabled

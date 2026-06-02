@@ -23,9 +23,11 @@ import (
 )
 
 const (
-	httpHeaderAccept      = "Accept"
-	httpHeaderContentType = "Content-Type"
-	httpContentTypeJSON   = "application/json"
+	httpHeaderAccept        = "Accept"
+	httpHeaderContentType   = "Content-Type"
+	httpHeaderAuthorization = "Authorization"
+	httpContentTypeJSON     = "application/json"
+	httpAuthBearerPrefix    = "Bearer "
 
 	httpMethodGet  = "GET"
 	httpMethodPost = "POST"
@@ -55,6 +57,7 @@ type gatewayClient struct {
 	hc           *http.Client
 	timeout      time.Duration
 	maxBodyBytes int64
+	apiKey       string
 }
 
 func newGatewayClient(opts Options) (*gatewayClient, error) {
@@ -82,6 +85,7 @@ func newGatewayClient(opts Options) (*gatewayClient, error) {
 		hc:           hc,
 		timeout:      opts.Timeout,
 		maxBodyBytes: maxBodyBytes,
+		apiKey:       strings.TrimSpace(opts.APIKey),
 	}, nil
 }
 
@@ -177,6 +181,9 @@ func (c *gatewayClient) doJSONOnce(
 	req.Header.Set(httpHeaderAccept, httpContentTypeJSON)
 	if payload != nil {
 		req.Header.Set(httpHeaderContentType, httpContentTypeJSON)
+	}
+	if c.apiKey != "" {
+		req.Header.Set(httpHeaderAuthorization, httpAuthBearerPrefix+c.apiKey)
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {

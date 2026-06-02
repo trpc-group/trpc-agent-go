@@ -55,7 +55,7 @@ func TestRecallPluginInjectsContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	svc, err := NewService(WithGatewayURL(server.URL))
+	svc, err := NewService(WithGatewayURL(server.URL), WithRecallEnabled(true))
 	require.NoError(t, err, "NewService")
 	defer svc.Close()
 

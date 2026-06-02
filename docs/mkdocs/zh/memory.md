@@ -1777,8 +1777,13 @@ tRPC-Agent-Go 侧继续负责 Runner、Session、Plugin 和 Tool 生命周期的
 
 - TencentDB Agent Memory gateway 负责 capture、提取、存储、recall 和 search。
 - Go adapter 通过 `session.Ingestor` 把每轮完成后的会话内容发送给 gateway。
-- Runner plugin 在每次模型调用前请求 `/recall`，并把返回的上下文注入模型请求。
-- 通过 `tdai_memory_search` 和 `tdai_conversation_search` 暴露只读检索工具。
+- Runner plugin 在每次模型调用前请求 `/recall`，并把返回的上下文注入模型请求（需通过 `WithRecallEnabled(true)` 显式开启）。
+- 通过 `tdai_conversation_search`（按 session 作用域，默认开启）和 `tdai_memory_search`（需 `WithMemorySearchTool(true)` 显式开启）暴露只读检索工具。
+
+> **多租户提示**：自动 recall 和 `tdai_memory_search` 会读取 gateway 的共享长期
+> 存储，而当前 gateway 并不会在这些路径上强制按 user/session 隔离，因此它们默认
+> 关闭，只有在 gateway 能保证按租户隔离时才应开启。默认只开启按 session 作用域的
+> capture 和 `tdai_conversation_search`。
 
 即使 SDK 配置为本地 SQLite 存储，gateway 仍然是必需的，因为记忆引擎运行在
 gateway/SDK 侧。直接访问 VectorDB 或 SQLite 只能访问存储层，不会执行 SDK 的
@@ -1826,6 +1831,10 @@ if gatewayURL == "" {
 
 memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithGatewayURL(gatewayURL),
+    // 跨 session/user 的读取属于 opt-in，仅在 gateway 可信/隔离时开启。
+    memorytencentdb.WithRecallEnabled(true),
+    memorytencentdb.WithMemorySearchTool(true),
+    // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
 if err != nil {
     panic(err)
@@ -1887,14 +1896,17 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 | `WithIngestQueueSize(n)` | 异步 capture 任务队列长度。 | `10` |
 | `WithIngestJobTimeout(d)` | 队列中 capture 任务的超时时间。 | `30s` |
 | `WithSessionKeyFunc(fn)` | 自定义 framework session 到 gateway `session_key` 的映射。 | `app:user:session` |
-| `WithRecallEnabled(bool)` | 是否启用自动 recall plugin。 | `true` |
+| `WithAPIKey(key)` | 发送 `Authorization: Bearer <key>`（对应 gateway 的 `TDAI_GATEWAY_API_KEY`）。 | 无 |
+| `WithRecallEnabled(bool)` | 是否启用自动 recall plugin（opt-in；读取共享存储）。 | `false` |
+| `WithMemorySearchTool(bool)` | 是否暴露 `tdai_memory_search`（opt-in；读取共享存储）。 | `false` |
 | `WithConversationSearchTool(bool)` | 是否暴露 `tdai_conversation_search`。 | `true` |
-| `WithStandardAliases(bool)` | 是否额外暴露标准 `memory_search` 别名。 | `false` |
+| `WithStandardAliases(bool)` | 是否额外暴露标准 `memory_search` 别名（需先启用 memory search）。 | `false` |
 | `WithToolPrefix(prefix)` | 修改原生工具名前缀。 | `tdai` |
 
 ### 注意事项
 
-- adapter 会把 app、user、session 标识传给 gateway，但强多租户隔离依赖 gateway 和 SDK 端完整遵守这些字段。
+- adapter 会把 app、user、session 标识传给 gateway，但强多租户隔离依赖 gateway 和 SDK 端完整遵守这些字段；正因如此，自动 recall 和 `tdai_memory_search` 默认关闭，需显式 opt-in。
+- 当 gateway 设置了 `TDAI_GATEWAY_API_KEY` 时，请用 `WithAPIKey(...)` 让请求携带 `Authorization: Bearer <key>`，否则除 `/health` 外的路由都会返回 401（health 仍可通过）。
 - `tdai_memory_search` 检索已提取的长期记忆；提取是异步的，新捕获的信息可能需要短暂等待后才可检索。
 - `tdai_conversation_search` 检索对话历史，默认使用当前 gateway `session_key`。
 - 使用完成后请调用 `Close()`，确保后台 capture worker 干净退出。

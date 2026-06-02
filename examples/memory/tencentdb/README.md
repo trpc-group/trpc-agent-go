@@ -14,10 +14,17 @@ The integration works in three parts:
    new session transcript to the gateway via `runner.WithSessionIngestor(...)`.
 2. **Automatic recall** — Before each model call, `runner.WithPlugins(...)`
    invokes the TencentDB recall endpoint and injects the returned context into
-   the model request.
+   the model request. Recall is opt-in (`WithRecallEnabled(true)`).
 3. **Read-only tools** — The agent can explicitly search memory through
-   `tdai_memory_search` and conversation history through
-   `tdai_conversation_search`.
+   `tdai_memory_search` (opt-in via `WithMemorySearchTool(true)`) and
+   conversation history through `tdai_conversation_search`.
+
+> **Multi-tenant note:** automatic recall and `tdai_memory_search` read from the
+> gateway's shared long-term store, which does not currently enforce
+> user/session scoping. They are therefore disabled by default. Only the
+> session-scoped capture and `tdai_conversation_search` surfaces are on by
+> default. This demo enables recall and memory search explicitly because it runs
+> a single trusted local sidecar.
 
 ### Architecture
 
@@ -89,6 +96,7 @@ example at another gateway URL with `-gateway`.
 | `OPENAI_API_KEY`                 | Yes      | API key for the chat model          |                          |
 | `OPENAI_BASE_URL`                | No       | Base URL for the model API endpoint | `https://api.openai.com/v1` |
 | `TENCENTDB_AGENT_MEMORY_GATEWAY` | No       | TencentDB Agent Memory gateway URL  | `http://127.0.0.1:8420`  |
+| `TDAI_GATEWAY_API_KEY`           | No       | Gateway API key (sent as `Authorization: Bearer`) when the gateway requires auth | |
 
 ## Command Line Arguments
 
@@ -100,6 +108,7 @@ example at another gateway URL with `-gateway`.
 | `-session`           | Session ID (auto-generated if empty)             | `tencentdb-<unix-time>`    |
 | `-gateway`           | TencentDB Agent Memory gateway URL               | env or `http://127.0.0.1:8420` |
 | `-gateway-timeout`   | Timeout for gateway calls, including session flush | `60s`                   |
+| `-gateway-api-key`   | Gateway API key sent as `Authorization: Bearer`  | env `TDAI_GATEWAY_API_KEY`  |
 | `-turn-wait`         | Delay after each turn for gateway capture/extraction | `0s`                   |
 | `-end-session`       | Call `/session/end` before exit                  | `false`                    |
 
@@ -174,8 +183,14 @@ import (
 )
 
 // 1. Create the TencentDB Agent Memory service.
+//    Recall and the long-term memory_search tool are opt-in; enable them only
+//    when the gateway enforces per-user/session isolation (e.g. a trusted local
+//    sidecar). Pass WithAPIKey when the gateway sets TDAI_GATEWAY_API_KEY.
 memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithGatewayURL("http://127.0.0.1:8420"),
+    memorytencentdb.WithRecallEnabled(true),
+    memorytencentdb.WithMemorySearchTool(true),
+    // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
 if err != nil {
     log.Fatalf("create memory service: %v", err)
@@ -202,14 +217,16 @@ defer r.Close()
 
 Key points:
 
-- `memSvc.Tools()` returns `tdai_memory_search` and
-  `tdai_conversation_search` by default.
+- `memSvc.Tools()` returns `tdai_conversation_search` by default;
+  `tdai_memory_search` is added only when `WithMemorySearchTool(true)` is set.
 - `runner.WithSessionIngestor(memSvc)` sends timestamped session transcript
   messages to the gateway after each turn.
 - `runner.WithPlugins(memSvc.Plugin())` performs automatic recall before model
-  calls and injects returned context into the request.
+  calls and injects returned context into the request, but only when
+  `WithRecallEnabled(true)` is set.
 - The adapter forwards app/user/session identifiers, but hard multi-tenant
-  isolation depends on the gateway and SDK honoring those fields end-to-end.
+  isolation depends on the gateway and SDK honoring those fields end-to-end, so
+  cross-session/user reads (recall and memory search) are opt-in.
 
 ## Configuration Options
 
@@ -221,9 +238,11 @@ Key points:
 | `WithIngestQueueSize(n)`       | Queue size for async capture jobs                   | `10`                    |
 | `WithIngestJobTimeout(d)`      | Timeout for queued capture jobs                     | `30s`                   |
 | `WithSessionKeyFunc(fn)`       | Custom framework session to gateway `session_key` mapping | app:user:session |
-| `WithRecallEnabled(bool)`      | Enable automatic recall plugin behavior             | `true`                  |
+| `WithAPIKey(key)`              | Send `Authorization: Bearer <key>` (gateway `TDAI_GATEWAY_API_KEY`) | none      |
+| `WithRecallEnabled(bool)`      | Enable automatic recall plugin behavior (opt-in; shared-store reads) | `false`        |
+| `WithMemorySearchTool(bool)`   | Expose `tdai_memory_search` (opt-in; shared-store reads) | `false`              |
 | `WithConversationSearchTool(bool)` | Expose `tdai_conversation_search`               | `true`                  |
-| `WithStandardAliases(bool)`    | Also expose standard `memory_search` alias          | `false`                 |
+| `WithStandardAliases(bool)`    | Also expose standard `memory_search` alias (needs memory search enabled) | `false` |
 | `WithToolPrefix(prefix)`       | Change native tool prefix                           | `tdai`                  |
 
 ## See Also

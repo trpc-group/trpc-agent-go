@@ -99,6 +99,45 @@ func TestGatewayClientEndpointsAndErrors(t *testing.T) {
 	require.NoError(t, nullable.doJSON(context.Background(), httpMethodGet, pathHealth, nil, nil), "nil output should be accepted")
 }
 
+func TestGatewayClientSendsAPIKeyHeader(t *testing.T) {
+	var captureAuth, healthAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case pathHealth:
+			healthAuth = r.Header.Get(httpHeaderAuthorization)
+			_ = json.NewEncoder(w).Encode(HealthResponse{Status: "ok"})
+		case pathCapture:
+			captureAuth = r.Header.Get(httpHeaderAuthorization)
+			_ = json.NewEncoder(w).Encode(captureResponse{})
+		default:
+			http.Error(w, "unexpected", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := newGatewayClient(Options{GatewayURL: server.URL, APIKey: "  secret-key  "})
+	require.NoError(t, err, "newGatewayClient")
+	assert.Equal(t, "secret-key", client.apiKey, "api key should be trimmed")
+	_, err = client.capture(context.Background(), captureRequest{SessionKey: "s"})
+	require.NoError(t, err, "capture")
+	assert.Equal(t, "Bearer secret-key", captureAuth)
+	_, err = client.health(context.Background())
+	require.NoError(t, err, "health")
+	assert.Equal(t, "Bearer secret-key", healthAuth)
+
+	captureAuth = ""
+	noKey, err := newGatewayClient(Options{GatewayURL: server.URL})
+	require.NoError(t, err, "newGatewayClient without key")
+	_, err = noKey.capture(context.Background(), captureRequest{SessionKey: "s"})
+	require.NoError(t, err, "capture without key")
+	assert.Empty(t, captureAuth, "no Authorization header without an API key")
+
+	svc, err := NewService(WithGatewayURL(server.URL), WithAPIKey("  k  "))
+	require.NoError(t, err, "NewService WithAPIKey")
+	defer svc.Close()
+	assert.Equal(t, "k", svc.client.apiKey, "WithAPIKey should trim and wire the key through")
+}
+
 func TestGatewayClientDecodeAndRequestEdges(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

@@ -61,6 +61,11 @@ var (
 		60*time.Second,
 		"Timeout for TencentDB Agent Memory gateway requests",
 	)
+	gatewayAPIKey = flag.String(
+		"gateway-api-key",
+		os.Getenv("TDAI_GATEWAY_API_KEY"),
+		"Gateway API key sent as Authorization: Bearer when the gateway sets TDAI_GATEWAY_API_KEY",
+	)
 	waitBeforeRecall = flag.Duration(
 		"turn-wait",
 		0,
@@ -84,11 +89,17 @@ func main() {
 		sid = fmt.Sprintf("tencentdb-%d", time.Now().Unix())
 	}
 
+	// Recall and the long-term memory_search tool are opt-in because the gateway
+	// does not enforce per-user/session scoping on those paths; enable them here
+	// for the demo, which runs a single trusted local sidecar.
 	memSvc, err := memorytencentdb.NewService(
 		memorytencentdb.WithGatewayURL(*gatewayURL),
 		memorytencentdb.WithTimeout(*gatewayTimeout),
 		memorytencentdb.WithIngestQueueSize(8),
 		memorytencentdb.WithIngestJobTimeout(30*time.Second),
+		memorytencentdb.WithAPIKey(*gatewayAPIKey),
+		memorytencentdb.WithRecallEnabled(true),
+		memorytencentdb.WithMemorySearchTool(true),
 	)
 	if err != nil {
 		log.Fatalf("create TencentDB Agent Memory service: %v", err)
