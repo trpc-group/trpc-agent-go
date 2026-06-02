@@ -71,6 +71,120 @@ func historyEvent(message model.Message, partial bool) event.Event {
 	return *evt
 }
 
+func TestSearchContextFromInvocationEmpty(t *testing.T) {
+	history, userID, sessionID := searchContextFromInvocation(nil)
+	require.Nil(t, history)
+	require.Empty(t, userID)
+	require.Empty(t, sessionID)
+
+	invocation := agent.NewInvocation()
+	history, userID, sessionID = searchContextFromInvocation(invocation)
+	require.Nil(t, history)
+	require.Empty(t, userID)
+	require.Empty(t, sessionID)
+}
+
+func TestConversationMessageFromEvent(t *testing.T) {
+	toolCallEvent := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:      model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{ID: "call-1"}},
+				},
+			}},
+		},
+	)
+	multiChoiceEvent := event.NewResponseEvent(
+		"inv",
+		"assistant",
+		&model.Response{
+			Choices: []model.Choice{
+				{Message: model.Message{Role: model.RoleSystem, Content: "system"}},
+				{Message: model.NewAssistantMessage(" answer ")},
+			},
+		},
+	)
+	validEvent := historyEvent(model.NewUserMessage(" question "), false)
+	tests := []struct {
+		name   string
+		evt    *event.Event
+		want   knowledge.ConversationMessage
+		wantOK bool
+	}{
+		{
+			name:   "nil event",
+			evt:    nil,
+			wantOK: false,
+		},
+		{
+			name:   "nil response",
+			evt:    &event.Event{},
+			wantOK: false,
+		},
+		{
+			name:   "partial response",
+			evt:    ptrEvent(historyEvent(model.NewUserMessage("partial"), true)),
+			wantOK: false,
+		},
+		{
+			name:   "tool call response",
+			evt:    toolCallEvent,
+			wantOK: false,
+		},
+		{
+			name:   "tool result response",
+			evt:    ptrEvent(historyEvent(model.NewToolMessage("tool-1", "knowledge_search", "result"), false)),
+			wantOK: false,
+		},
+		{
+			name:   "unsupported role",
+			evt:    ptrEvent(historyEvent(model.Message{Role: model.RoleSystem, Content: "system"}, false)),
+			wantOK: false,
+		},
+		{
+			name:   "empty content",
+			evt:    ptrEvent(historyEvent(model.NewAssistantMessage(" "), false)),
+			wantOK: false,
+		},
+		{
+			name: "multi choice uses first valid message",
+			evt:  multiChoiceEvent,
+			want: knowledge.ConversationMessage{
+				Role:      "assistant",
+				Content:   "answer",
+				Timestamp: multiChoiceEvent.Timestamp.Unix(),
+			},
+			wantOK: true,
+		},
+		{
+			name: "valid user message",
+			evt:  &validEvent,
+			want: knowledge.ConversationMessage{
+				Role:      "user",
+				Content:   "question",
+				Timestamp: validEvent.Timestamp.Unix(),
+			},
+			wantOK: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := conversationMessageFromEvent(tt.evt)
+			require.Equal(t, tt.wantOK, ok)
+			if tt.wantOK {
+				require.Equal(t, tt.want, got)
+			}
+		})
+	}
+}
+
+func ptrEvent(evt event.Event) *event.Event {
+	return &evt
+}
+
 func TestKnowledgeSearchTool(t *testing.T) {
 	t.Run("empty query", func(t *testing.T) {
 		kb := stubKnowledge{}
