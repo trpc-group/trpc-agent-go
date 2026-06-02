@@ -60,7 +60,10 @@ var (
 	errWindowUnavailable         = errors.New("session window loading is not available for this session service")
 )
 
-const summaryLastIncludedTsKey = "summary:last_included_ts"
+const (
+	summaryLastIncludedTsKey      = session.SummaryLastIncludedTimestampStateKey
+	summaryLastIncludedEventIDKey = session.SummaryLastIncludedEventIDStateKey
+)
 
 // SearchSessionRequest is the input for session_search.
 type SearchSessionRequest struct {
@@ -93,8 +96,8 @@ type SearchSessionResponse struct {
 
 // LoadSessionRequest is the input for session_load.
 type LoadSessionRequest struct {
-	SessionID string `json:"session_id,omitempty" jsonschema:"description=Target session ID returned by session_search. Defaults to the current session when omitted."`
-	EventID   string `json:"event_id" jsonschema:"description=Anchor event ID returned by session_search."`
+	SessionID string `json:"session_id,omitempty" jsonschema:"description=Target session ID. Defaults to the current session when omitted."`
+	EventID   string `json:"event_id" jsonschema:"description=Anchor event ID to load around."`
 	Before    int    `json:"before,omitempty" jsonschema:"description=How many messages before the anchor to include. Defaults to 1."`
 	After     int    `json:"after,omitempty" jsonschema:"description=How many messages after the anchor to include. Defaults to 1."`
 }
@@ -136,9 +139,9 @@ func SupportsLoad(inv *agent.Invocation) bool {
 	return ok
 }
 
-// SupportsOnDemandSession reports whether both search and load are available.
+// SupportsOnDemandSession reports whether any on-demand session tool is available.
 func SupportsOnDemandSession(inv *agent.Invocation) bool {
-	return SupportsSearch(inv) && SupportsLoad(inv)
+	return SupportsSearch(inv) || SupportsLoad(inv)
 }
 
 func invocationFromContext(
@@ -299,48 +302,111 @@ func normalizeWindowSize(
 func currentSummaryCutoff(
 	inv *agent.Invocation,
 ) time.Time {
-	if inv == nil || inv.Session == nil {
-		return time.Time{}
+	boundary := currentSummaryBoundary(inv)
+	if boundary != nil {
+		return boundary.CutoffTime()
 	}
-	if raw, ok := inv.Session.GetState(summaryLastIncludedTsKey); ok && len(raw) > 0 {
-		if parsed, err := time.Parse(time.RFC3339Nano, string(raw)); err == nil {
-			return parsed
-		}
+	return time.Time{}
+}
+
+func currentSummaryBoundary(
+	inv *agent.Invocation,
+) *session.SummaryBoundary {
+	if inv == nil || inv.Session == nil {
+		return nil
 	}
 
 	filterKey := strings.TrimSpace(inv.GetEventFilterKey())
-	inv.Session.SummariesMu.RLock()
-	defer inv.Session.SummariesMu.RUnlock()
+	if boundary, ok := summaryBoundaryForFilter(inv.Session, filterKey); ok {
+		return boundary
+	}
+	boundary := summaryBoundaryFromState(inv.Session)
+	if boundary == nil {
+		return nil
+	}
+	return boundary
+}
 
-	if len(inv.Session.Summaries) == 0 {
+func summaryBoundaryFromState(sess *session.Session) *session.SummaryBoundary {
+	cutoff := summaryCutoffFromState(sess)
+	if cutoff.IsZero() {
+		return nil
+	}
+	return session.NewSummaryBoundaryWithEventID(
+		"",
+		cutoff,
+		summaryLastIncludedEventIDFromState(sess),
+	)
+}
+
+func summaryCutoffFromState(sess *session.Session) time.Time {
+	if sess == nil {
 		return time.Time{}
 	}
+	raw, ok := sess.GetState(summaryLastIncludedTsKey)
+	if !ok || len(raw) == 0 {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, string(raw))
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
+}
 
-	if sum := inv.Session.Summaries[filterKey]; sum != nil && sum.Summary != "" {
-		return sum.UpdatedAt
+func summaryLastIncludedEventIDFromState(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	raw, ok := sess.GetState(summaryLastIncludedEventIDKey)
+	if !ok || len(raw) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+func summaryCutoffForFilter(
+	sess *session.Session,
+	filterKey string,
+) (time.Time, bool) {
+	boundary, ok := summaryBoundaryForFilter(sess, filterKey)
+	if !ok {
+		return time.Time{}, false
+	}
+	return boundary.CutoffTime(), true
+}
+
+func summaryBoundaryForFilter(
+	sess *session.Session,
+	filterKey string,
+) (*session.SummaryBoundary, bool) {
+	if sess == nil {
+		return nil, false
+	}
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
+
+	if len(sess.Summaries) == 0 {
+		return nil, false
+	}
+
+	if sum := sess.Summaries[filterKey]; sum != nil &&
+		strings.TrimSpace(sum.Summary) != "" {
+		return sum.CutoffBoundary(), true
 	}
 	if filterKey != "" {
-		var latest time.Time
-		prefix := filterKey + event.FilterKeyDelimiter
-		for key, sum := range inv.Session.Summaries {
-			if sum == nil || sum.Summary == "" {
-				continue
-			}
-			if key != filterKey && !strings.HasPrefix(key, prefix) {
-				continue
-			}
-			if sum.UpdatedAt.After(latest) {
-				latest = sum.UpdatedAt
-			}
-		}
-		if !latest.IsZero() {
-			return latest
+		if boundary, ok := session.SummaryPrefixBoundary(
+			sess.Summaries,
+			filterKey,
+		); ok {
+			return boundary, true
 		}
 	}
-	if sum := inv.Session.Summaries[session.SummaryFilterKeyAllContents]; sum != nil && sum.Summary != "" {
-		return sum.UpdatedAt
+	if sum := sess.Summaries[session.SummaryFilterKeyAllContents]; sum != nil &&
+		strings.TrimSpace(sum.Summary) != "" {
+		return sum.CutoffBoundary(), true
 	}
-	return time.Time{}
+	return nil, false
 }
 
 func extractSessionMessageText(

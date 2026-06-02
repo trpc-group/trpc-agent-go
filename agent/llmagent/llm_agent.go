@@ -22,6 +22,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/agent/extension"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/workspaceio"
@@ -101,6 +102,26 @@ func New(name string, opts ...Option) *LLMAgent {
 	prepareSkillsRepository(&options)
 	applySkillsExecutorFallback(&options)
 
+	// Wire agent-scoped extensions (WithExtensions) before any
+	// consumer of the callback fields runs. Order matters here:
+	//
+	//   - applyExtensionContributions must rewrite options.AgentCallbacks
+	//     / ModelCallbacks / ToolCallbacks BEFORE we copy them into
+	//     a.agentCallbacks, flowOpts.ModelCallbacks and the
+	//     FunctionCallResponseProcessor below — otherwise extension
+	//     hooks would silently no-op for this agent.
+	//   - extensionContributedTools is cached on Options so the
+	//     tool-surface builders can re-apply the same set after user
+	//     and framework tools (including per-invocation framework
+	//     tools such as transfer_to_agent). Extension callbacks are
+	//     static once merged; only tools need to flow through the
+	//     surface builders more than once.
+	extContrib, err := extension.Collect(options.extensions)
+	if err != nil {
+		panic(err)
+	}
+	applyExtensionContributions(&options, extContrib)
+
 	// Validate output_schema configuration before registering tools.
 	if options.OutputSchema != nil {
 		if options.EnableAwaitUserReplyTool {
@@ -108,6 +129,18 @@ func New(name string, opts ...Option) *LLMAgent {
 		}
 		if len(options.Tools) > 0 || len(options.ToolSets) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, tools and toolSets must be empty")
+		}
+		// Extension-contributed tools (WithExtensions →
+		// extension.Registry.Tools) must be covered by the same
+		// guard. They are appended to the outbound tool surface
+		// alongside WithTools/WithToolSets, so allowing them
+		// through would let an extension silently break the
+		// "structured output ⇒ no callable tools" contract.
+		// Hook-only extensions (no Tools(...) call inside Register)
+		// leave this slice empty and remain compatible with
+		// WithOutputSchema.
+		if len(options.extensionContributedTools) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, extension-contributed tools (WithExtensions → Registry.Tools) must be empty")
 		}
 		if options.Knowledge != nil {
 			panic("Invalid LLMAgent configuration: if output_schema is set, knowledge must be empty")
@@ -397,6 +430,22 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			),
 		),
 		processor.WithFewShotResolver(a.fewShotForInvocation),
+	}
+	if options.ToolResultCompactionConfig != nil {
+		contentOpts = append(
+			contentOpts,
+			processor.WithContextCompactionForceCleanToolNames(
+				options.ToolResultCompactionConfig.ForceCleanToolNames...,
+			),
+			processor.WithContextCompactionKeepToolNames(
+				options.ToolResultCompactionConfig.KeepToolNames...,
+			),
+			processor.WithContextCompactionSkipRecentFunc(
+				processor.ContextCompactionSkipRecentFunc(
+					options.ToolResultCompactionConfig.SkipRecentFunc,
+				),
+			),
+		)
 	}
 	if options.ReasoningContentMode != "" {
 		contentOpts = append(contentOpts,
@@ -965,6 +1014,22 @@ func appendWorkspaceExecToolWithExecutor(
 		toolOpts,
 		workspacePrepOptions(options, loadedSkillsRepo)...,
 	)
+	if options != nil &&
+		len(options.workspaceExecAllowedCommands) > 0 {
+		toolOpts = append(toolOpts,
+			toolworkspaceexec.WithAllowedCommands(
+				options.workspaceExecAllowedCommands...,
+			),
+		)
+	}
+	if options != nil &&
+		len(options.workspaceExecDeniedCommands) > 0 {
+		toolOpts = append(toolOpts,
+			toolworkspaceexec.WithDeniedCommands(
+				options.workspaceExecDeniedCommands...,
+			),
+		)
+	}
 	execTool := toolworkspaceexec.NewExecTool(exec, toolOpts...)
 	allTools = append(
 		allTools,
@@ -995,14 +1060,23 @@ func appendOnDemandSessionTools(
 		options.OutputSchema != nil {
 		return allTools
 	}
-	if inv != nil && !toolsessionrecall.SupportsOnDemandSession(inv) {
+	if inv == nil {
+		return append(
+			allTools,
+			toolsessionrecall.NewSearchTool(),
+			toolsessionrecall.NewLoadTool(),
+		)
+	}
+	if toolsessionrecall.SupportsSearch(inv) {
+		allTools = append(allTools, toolsessionrecall.NewSearchTool())
+	}
+	if toolsessionrecall.SupportsLoad(inv) {
+		allTools = append(allTools, toolsessionrecall.NewLoadTool())
+	}
+	if !toolsessionrecall.SupportsOnDemandSession(inv) {
 		return allTools
 	}
-	return append(
-		allTools,
-		toolsessionrecall.NewSearchTool(),
-		toolsessionrecall.NewLoadTool(),
-	)
+	return allTools
 }
 
 func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {
@@ -1762,7 +1836,7 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 	}
 
 	if len(a.subAgents) == 0 {
-		return base
+		return appendExtensionTools(base, &a.option)
 	}
 
 	agentInfos := make([]agent.Info, len(a.subAgents))
@@ -1771,7 +1845,8 @@ func (a *LLMAgent) getAllToolsLockedWithContext(
 	}
 
 	transferTool := transfer.New(agentInfos)
-	return append(base, transferTool)
+	base = append(base, transferTool)
+	return appendExtensionTools(base, &a.option)
 }
 
 // Tools implements the agent.Agent interface.

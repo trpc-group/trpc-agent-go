@@ -76,6 +76,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -140,6 +141,7 @@ type memoryChat struct {
 	memServiceName string
 	streaming      bool
 	runner         runner.Runner
+	memoryService  memory.Service
 	userID         string
 	sessionID      string
 }
@@ -151,6 +153,7 @@ func (c *memoryChat) run() error {
 		return fmt.Errorf("setup failed: %w", err)
 	}
 
+	defer c.memoryService.Close()
 	defer c.runner.Close()
 
 	return c.startChat(ctx)
@@ -165,6 +168,7 @@ func (c *memoryChat) setup(_ context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create memory service: %w", err)
 	}
+	c.memoryService = memoryService
 
 	c.userID = "user"
 	c.sessionID = fmt.Sprintf("memory-session-%d", time.Now().Unix())

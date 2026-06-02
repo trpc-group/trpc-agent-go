@@ -671,6 +671,10 @@ func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
 	)
 	require.NotNil(
 		t,
+		findToolDeclaration(bundle.tools, "subagents_wait"),
+	)
+	require.NotNil(
+		t,
 		findToolDeclaration(bundle.tools, "sessions_spawn"),
 	)
 	require.NotNil(
@@ -1285,6 +1289,17 @@ func TestMain_HelpReturnsUsageCode(t *testing.T) {
 	require.Equal(t, 0, Main([]string{"-h"}))
 }
 
+func TestMainWithOptionsAppliesRuntimeOptions(t *testing.T) {
+	t.Parallel()
+
+	observed := false
+	code := MainWithOptions([]string{"-h"}, func(*runtimeOptions) {
+		observed = true
+	})
+	require.Equal(t, 0, code)
+	require.True(t, observed)
+}
+
 func TestMain_HelpSkipsErrorLog(t *testing.T) {
 	t.Parallel()
 
@@ -1297,6 +1312,7 @@ func TestMain_InspectDispatches(t *testing.T) {
 	t.Parallel()
 
 	require.Equal(t, 0, Main([]string{subcmdInspect}))
+	require.Equal(t, 0, MainWithOptions([]string{subcmdInspect}, nil))
 }
 
 func TestMain_BootstrapDispatches(t *testing.T) {

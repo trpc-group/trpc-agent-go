@@ -214,6 +214,13 @@ func TestGetReadersWithChunkConfig(t *testing.T) {
 	require.Equal(t, len(readersDefault), len(readersZero))
 }
 
+func TestGetReadersDefaultRegistration(t *testing.T) {
+	readers := GetReaders()
+
+	require.Contains(t, readers, "proto")
+	require.NotContains(t, readers, "go")
+}
+
 func TestWithChunkSize(t *testing.T) {
 	config := &ReaderConfig{}
 	opt := WithChunkSize(100)

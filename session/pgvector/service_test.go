@@ -166,6 +166,24 @@ func (a anyVectorArg) Match(_ driver.Value) bool {
 	return true
 }
 
+type utcTimeArg struct{}
+
+func (a utcTimeArg) Match(v driver.Value) bool {
+	t, ok := v.(time.Time)
+	return ok && t.Location() == time.UTC
+}
+
+type exactUTCTimeArg struct {
+	want time.Time
+}
+
+func (a exactUTCTimeArg) Match(v driver.Value) bool {
+	t, ok := v.(time.Time)
+	return ok &&
+		t.Location() == time.UTC &&
+		t.Equal(a.want.UTC())
+}
+
 // sliceValueConverter converts []string to a
 // comma-separated driver.Value for go-sqlmock testing.
 // PostgreSQL drivers handle []string natively but
@@ -1094,6 +1112,11 @@ func TestCreateSession_Success(t *testing.T) {
 
 	// INSERT session.
 	mock.ExpectExec("INSERT INTO session_states").
+		WithArgs(
+			"app", "user", "sess",
+			sqlmock.AnyArg(), utcTimeArg{},
+			utcTimeArg{}, sqlmock.AnyArg(),
+		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// ListAppStates query.
@@ -1118,6 +1141,8 @@ func TestCreateSession_Success(t *testing.T) {
 	assert.Equal(t, "sess", sess.ID)
 	assert.Equal(t, "app", sess.AppName)
 	assert.Equal(t, "user", sess.UserID)
+	assert.Equal(t, time.UTC, sess.CreatedAt.Location())
+	assert.Equal(t, time.UTC, sess.UpdatedAt.Location())
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -1398,6 +1423,65 @@ func TestListSessions_Empty(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, sessions)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListSessions_EventPageValidation(t *testing.T) {
+	s, _, db := newTestService(t, nil)
+	defer db.Close()
+
+	userKey := session.UserKey{
+		AppName: "app", UserID: "user",
+	}
+
+	_, err := s.ListSessions(
+		context.Background(), userKey,
+		session.WithGetSessionEventPage(0, 10),
+	)
+	assert.ErrorIs(t, err, session.ErrEventPageOnlyForGetSession)
+}
+
+func TestListSessions_WithListSessionOnlyMeta(t *testing.T) {
+	s, mock, db := newTestService(t, nil)
+	defer db.Close()
+
+	userKey := session.UserKey{
+		AppName: "app", UserID: "user",
+	}
+
+	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery("SELECT key, value FROM user_states").
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+
+	tracks, err := json.Marshal([]session.Track{"alpha"})
+	require.NoError(t, err)
+	sessState := SessionState{
+		ID: "sess1",
+		State: session.StateMap{
+			"key1":   []byte(`"value1"`),
+			"tracks": tracks,
+		},
+	}
+	stateBytes, err := json.Marshal(sessState)
+	require.NoError(t, err)
+	now := time.Now()
+	mock.ExpectQuery("SELECT session_id, state").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{
+				"session_id", "state",
+				"created_at", "updated_at",
+			},
+		).AddRow("sess1", stateBytes, now, now))
+
+	sessions, err := s.ListSessions(
+		context.Background(), userKey, session.WithListSessionOnlyMeta(),
+	)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "sess1", sessions[0].ID)
+	assert.Empty(t, sessions[0].Events)
+	assert.Nil(t, sessions[0].Tracks)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -2541,9 +2625,9 @@ func TestGetSession_SuccessPath(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"session_id", "event"},
 		))
-	mock.ExpectQuery("SELECT session_id, filter_key, summary").
+	mock.ExpectQuery("SELECT session_id, filter_key").
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"session_id", "filter_key", "summary"},
+			[]string{"session_id", "filter_key", "summary", "updated_at"},
 		))
 
 	// refreshSessionTTL.
@@ -2600,9 +2684,9 @@ func TestGetSession_SuccessNoTTL(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"session_id", "event"},
 		))
-	mock.ExpectQuery("SELECT session_id, filter_key, summary").
+	mock.ExpectQuery("SELECT session_id, filter_key").
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"session_id", "filter_key", "summary"},
+			[]string{"session_id", "filter_key", "summary", "updated_at"},
 		))
 
 	sess, err := s.GetSession(
@@ -2679,8 +2763,9 @@ func TestGetSession_WithEventsAndSummaries(
 		WillReturnRows(sqlmock.NewRows(
 			[]string{
 				"session_id", "filter_key", "summary",
+				"updated_at",
 			},
-		).AddRow("sess", "all", sumBytes))
+		).AddRow("sess", "all", sumBytes, time.Now()))
 
 	// getTrackEvents - no tracks.
 
@@ -2762,8 +2847,9 @@ func TestGetSession_WithEventsAndTracks(
 		WillReturnRows(sqlmock.NewRows(
 			[]string{
 				"session_id", "filter_key", "summary",
+				"updated_at",
 			},
-		).AddRow("sess", "all", sumBytes))
+		).AddRow("sess", "all", sumBytes, time.Now()))
 
 	// Track events for "alpha".
 	te := session.TrackEvent{
@@ -3144,6 +3230,43 @@ func TestListSessions_WithSessions(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 	assert.Equal(t, "sess1", sessions[0].ID)
+}
+
+func TestListSessions_WithListSessionPage(t *testing.T) {
+	s, mock, db := newTestServiceWithSliceSupport(
+		t, nil,
+	)
+	defer db.Close()
+
+	userKey := session.UserKey{
+		AppName: "app", UserID: "user",
+	}
+
+	now := time.Now()
+	makeState := func(id string) []byte {
+		b, _ := json.Marshal(SessionState{ID: id, State: session.StateMap{}})
+		return b
+	}
+
+	mock.ExpectQuery("SELECT key, value FROM app_states").
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery("SELECT key, value FROM user_states").
+		WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))
+	mock.ExpectQuery("SELECT session_id, state").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"session_id", "state", "created_at", "updated_at"},
+		).AddRow("sess2", makeState("sess2"), now, now))
+	mock.ExpectQuery("SELECT session_id, event").
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "event"}))
+	mock.ExpectQuery("SELECT session_id, filter_key").
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "filter_key", "summary", "updated_at"}))
+
+	sessions, err := s.ListSessions(
+		context.Background(), userKey, session.WithListSessionPage(1, 1),
+	)
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "sess2", sessions[0].ID)
 }
 
 func TestListSessions_WithTracks(t *testing.T) {
@@ -3742,13 +3865,23 @@ func TestAddTrackEvent_Success(t *testing.T) {
 		).AddRow(stateBytes, nil))
 	mock.ExpectExec("UPDATE .* SET state").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	eventTime := time.Date(
+		2026, 5, 31, 20, 25, 0, 123456000,
+		time.FixedZone("UTC+8", 8*60*60),
+	)
 	mock.ExpectExec("INSERT INTO session_track").
+		WithArgs(
+			"app", "user", "sess",
+			sqlmock.AnyArg(), sqlmock.AnyArg(),
+			exactUTCTimeArg{want: eventTime},
+			utcTimeArg{}, sqlmock.AnyArg(),
+		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	te := &session.TrackEvent{
 		Track:     "track1",
-		Timestamp: time.Now(),
+		Timestamp: eventTime,
 	}
 	err := s.addTrackEvent(
 		context.Background(), key, te,
@@ -4572,9 +4705,9 @@ func TestGetSession_WithRefreshTTLError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(
 			[]string{"session_id", "event"},
 		))
-	mock.ExpectQuery("SELECT session_id, filter_key, summary").
+	mock.ExpectQuery("SELECT session_id, filter_key").
 		WillReturnRows(sqlmock.NewRows(
-			[]string{"session_id", "filter_key", "summary"},
+			[]string{"session_id", "filter_key", "summary", "updated_at"},
 		))
 
 	// refreshSessionTTL fails but should not cause

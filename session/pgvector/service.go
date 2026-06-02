@@ -277,11 +277,12 @@ func (s *Service) CreateSession(
 	}
 
 	now := time.Now()
+	nowUTC := now.UTC()
 	sessState := &SessionState{
 		ID:        key.SessionID,
 		State:     make(session.StateMap),
-		UpdatedAt: now,
-		CreatedAt: now,
+		UpdatedAt: nowUTC,
+		CreatedAt: nowUTC,
 	}
 	for k, v := range state {
 		if v == nil {
@@ -458,8 +459,16 @@ func (s *Service) ListSessions(
 		return nil, err
 	}
 	opt := applyOptions(opts...)
+	if err := session.ValidateListSessionsOptions(opt); err != nil {
+		return nil, err
+	}
 	sessList, err := s.listSessions(
-		ctx, userKey, opt.EventNum, opt.EventTime,
+		ctx,
+		userKey,
+		opt.EventNum,
+		opt.EventTime,
+		opt.ListSessionOnlyMeta,
+		opt.ListSessionPage,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(

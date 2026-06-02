@@ -49,6 +49,15 @@ cd tool/codeexec
 ./codeexec-demo -model deepseek-v4-flash -executor jupyter
 ```
 
+Run with CubeSandbox:
+
+```bash
+export E2B_API_KEY=dummy
+export E2B_API_URL=http://<your-sandbox-server>:3000
+export SSL_CERT_FILE=<caPATH>/rootCA.pem
+./codeexec-demo -model deepseek-v4-flash -executor e2b
+```
+
 > Note: The demo will start a local Jupyter Kernel Gateway subprocess and will call `Close()` on exit to clean it up.
 
 ### 4. Example Conversation

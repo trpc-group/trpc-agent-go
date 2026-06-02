@@ -29,6 +29,14 @@ func TestSupportChecks(t *testing.T) {
 	require.False(t, SupportsLoad(nil))
 	require.False(t, SupportsOnDemandSession(nil))
 
+	loadOnlyInv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(sessioninmemory.NewSessionService()),
+	)
+	require.False(t, SupportsSearch(loadOnlyInv))
+	require.True(t, SupportsLoad(loadOnlyInv))
+	require.True(t, SupportsOnDemandSession(loadOnlyInv))
+
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
 		agent.WithInvocationSessionService(&mockSessionService{
@@ -77,6 +85,9 @@ func TestCurrentSummaryCutoff_StateAndSummaryFallbacks(t *testing.T) {
 
 	updatedAt := time.Date(2025, 4, 7, 11, 0, 0, 0, time.UTC)
 	childUpdatedAt := updatedAt.Add(2 * time.Minute)
+	fullCutoff := updatedAt.Add(-2 * time.Minute)
+	earliestChildCutoff := updatedAt.Add(-time.Minute)
+	childCutoff := updatedAt.Add(time.Minute)
 	sess := session.NewSession(
 		"app",
 		"user",
@@ -85,10 +96,26 @@ func TestCurrentSummaryCutoff_StateAndSummaryFallbacks(t *testing.T) {
 			"team/child": {
 				Summary:   "team child summary",
 				UpdatedAt: childUpdatedAt,
+				Boundary: session.NewSummaryBoundary(
+					"team/child",
+					childCutoff,
+				),
+			},
+			"team/earlier": {
+				Summary:   "team earlier summary",
+				UpdatedAt: childUpdatedAt,
+				Boundary: session.NewSummaryBoundary(
+					"team/earlier",
+					earliestChildCutoff,
+				),
 			},
 			session.SummaryFilterKeyAllContents: {
 				Summary:   "full summary",
 				UpdatedAt: updatedAt,
+				Boundary: session.NewSummaryBoundary(
+					session.SummaryFilterKeyAllContents,
+					fullCutoff,
+				),
 			},
 		}),
 	)
@@ -98,21 +125,74 @@ func TestCurrentSummaryCutoff_StateAndSummaryFallbacks(t *testing.T) {
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationEventFilterKey("team"),
 	)
-	assert.Equal(t, childUpdatedAt, currentSummaryCutoff(inv))
+	assert.Equal(t, earliestChildCutoff, currentSummaryCutoff(inv))
+
+	otherInv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("other"),
+	)
+	assert.Equal(t, fullCutoff, currentSummaryCutoff(otherInv))
 
 	exactUpdatedAt := updatedAt.Add(4 * time.Minute)
+	exactCutoff := updatedAt.Add(3 * time.Minute)
 	sess.Summaries["team"] = &session.Summary{
 		Summary:   "team summary",
 		UpdatedAt: exactUpdatedAt,
+		Boundary: session.NewSummaryBoundary(
+			"team",
+			exactCutoff,
+		),
 	}
-	assert.Equal(t, exactUpdatedAt, currentSummaryCutoff(inv))
+	assert.Equal(t, exactCutoff, currentSummaryCutoff(inv))
 
 	lastIncludedAt := updatedAt.Add(-time.Minute)
 	sess.SetState(
 		summaryLastIncludedTsKey,
 		[]byte(lastIncludedAt.Format(time.RFC3339Nano)),
 	)
-	assert.Equal(t, lastIncludedAt, currentSummaryCutoff(inv))
+	assert.Equal(t, exactCutoff, currentSummaryCutoff(inv))
+
+	stateOnly := session.NewSession("app", "user", "state-only")
+	stateOnly.SetState(
+		summaryLastIncludedTsKey,
+		[]byte(lastIncludedAt.Format(time.RFC3339Nano)),
+	)
+	stateOnlyInv := agent.NewInvocation(
+		agent.WithInvocationSession(stateOnly),
+		agent.WithInvocationEventFilterKey("team"),
+	)
+	assert.Equal(t, lastIncludedAt, currentSummaryCutoff(stateOnlyInv))
+}
+
+func TestCurrentSummaryCutoff_PrefixMissingCutoff(t *testing.T) {
+	updatedAt := time.Date(2025, 4, 7, 11, 0, 0, 0, time.UTC)
+	sess := session.NewSession(
+		"app",
+		"user",
+		"sess",
+		session.WithSessionSummaries(map[string]*session.Summary{
+			"team/a": {
+				Summary: "team a summary",
+				Boundary: session.NewSummaryBoundary(
+					"team/a",
+					updatedAt,
+				),
+			},
+			"team/b": {
+				Summary: "team b summary",
+			},
+		}),
+	)
+	sess.SetState(
+		summaryLastIncludedTsKey,
+		[]byte(updatedAt.Format(time.RFC3339Nano)),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("team"),
+	)
+
+	assert.True(t, currentSummaryCutoff(inv).IsZero())
 }
 
 func TestExtractSessionMessageText(t *testing.T) {
@@ -502,7 +582,7 @@ func TestLexicalScanSessionEvents_HonorsCutoffAndTopK(t *testing.T) {
 		},
 		"budget planning friday",
 		"",
-		base.Add(90*time.Second),
+		session.NewSummaryBoundary("", base.Add(90*time.Second)),
 		1,
 	)
 	require.Len(t, results, 1)
@@ -548,7 +628,7 @@ func TestLexicalScanSessionEvents_HonorsFilterKey(t *testing.T) {
 		session.Key{AppName: "app", UserID: "user", SessionID: "sess"},
 		"budget planning",
 		"branch/a",
-		time.Time{},
+		nil,
 		5,
 	)
 	require.Len(t, results, 1)
@@ -835,8 +915,8 @@ func TestSearchHelpers_EdgeBranches(t *testing.T) {
 	assert.Empty(t, keywordSearchQuery("the and or"))
 	assert.Nil(t, keywordTokens("the and or"))
 
-	assert.Nil(t, lexicalScanSessionEvents(nil, session.Key{}, "alpha", "", time.Time{}, 1))
-	assert.Nil(t, lexicalScanSessionEvents(session.NewSession("app", "user", "sess"), session.Key{}, "", "", time.Time{}, 1))
+	assert.Nil(t, lexicalScanSessionEvents(nil, session.Key{}, "alpha", "", nil, 1))
+	assert.Nil(t, lexicalScanSessionEvents(session.NewSession("app", "user", "sess"), session.Key{}, "", "", nil, 1))
 
 	assert.Zero(
 		t,
@@ -955,7 +1035,7 @@ func TestSearchSessionHistory_AndScanErrorBranches(t *testing.T) {
 			},
 		},
 		&SearchSessionRequest{Query: "alpha"},
-		time.Time{},
+		nil,
 	)
 	require.Error(t, err)
 
@@ -974,7 +1054,7 @@ func TestSearchSessionHistory_AndScanErrorBranches(t *testing.T) {
 			},
 		},
 		&SearchSessionRequest{Query: "alpha"},
-		time.Time{},
+		nil,
 	)
 	require.Error(t, err)
 
@@ -993,7 +1073,7 @@ func TestSearchSessionHistory_AndScanErrorBranches(t *testing.T) {
 			},
 		},
 		&SearchSessionRequest{Query: "alpha"},
-		time.Time{},
+		nil,
 	)
 	require.NoError(t, err)
 	assert.Nil(t, results)

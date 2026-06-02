@@ -10,30 +10,45 @@
 package subagentrun
 
 import (
-	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
-	publicsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
+	"github.com/google/uuid"
+
+	coretaskrun "trpc.group/trpc-go/trpc-agent-go/agent/taskrun"
+	"trpc.group/trpc-go/trpc-agent-go/internal/gitworktree"
+	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 )
 
 const (
-	subagentDirName       = "subagents"
-	subagentRunsFileName  = "runs.json"
-	subagentSessionPrefix = "subagent:"
-	subagentRequestPrefix = "subagent:"
+	subagentDirName      = "subagents"
+	subagentRunsFileName = "runs.json"
+	subagentIDPrefix     = "subagent:"
+	worktreeDirName      = "worktrees"
+	worktreeBranchPrefix = "openclaw-worktree-"
 
-	runtimeStateSubagentRun      = "openclaw.subagent.run"
-	runtimeStateSubagentRunID    = "openclaw.subagent.run_id"
-	runtimeStateSubagentParentID = "openclaw.subagent.parent_session_id"
+	metadataDeliveryChannel = "openclaw.delivery.channel"
+	metadataDeliveryTarget  = "openclaw.delivery.target"
 
-	defaultStoredResultRunes  = 4000
-	defaultStoredSummaryRunes = 240
-	defaultNotifyTimeout      = 15 * time.Second
+	metadataIsolation           = "openclaw.subagent.isolation"
+	metadataWorktreePath        = "openclaw.subagent.worktree.path"
+	metadataWorktreeBranch      = "openclaw.subagent.worktree.branch"
+	metadataWorktreeRepoRoot    = "openclaw.subagent.worktree.repo_root"
+	metadataWorktreeBaseCommit  = "openclaw.subagent.worktree.base_commit"
+	metadataWorktreeCleanup     = "openclaw.subagent.worktree.cleanup"
+	metadataWorktreeCleanupNote = "openclaw.subagent.worktree.cleanup_note"
+
+	isolationWorktree = "worktree"
+
+	worktreeCleanupRemoved   = "removed"
+	worktreeCleanupPreserved = "preserved"
+	worktreeCleanupError     = "error"
+
+	defaultNotifyTimeout = 15 * time.Second
 
 	notificationPrefixCompleted = "✅ subagent 已完成"
 	notificationPrefixFailed    = "⚠️ subagent 失败"
-	notificationPrefixCanceled  = "🛑 subagent 已取消"
 
 	subagentRunPrompt = "You are running as an OpenClaw background " +
 		"subagent. Complete the delegated task once. The parent " +
@@ -49,83 +64,182 @@ type deliveryTarget struct {
 	Target  string `json:"target,omitempty"`
 }
 
-type runRecord struct {
-	publicsubagent.Run
-
-	OwnerUserID string         `json:"owner_user_id,omitempty"`
-	Delivery    deliveryTarget `json:"delivery,omitempty"`
-}
-
-type storeFile struct {
-	Version int         `json:"version"`
-	Runs    []runRecord `json:"runs,omitempty"`
-}
-
 type SpawnRequest struct {
-	OwnerUserID     string
-	ParentSessionID string
-	Task            string
-	TimeoutSeconds  int
-	Delivery        deliveryTarget
+	OwnerUserID                    string
+	ParentSessionID                string
+	Task                           string
+	TimeoutSeconds                 int
+	Isolation                      string
+	Delivery                       deliveryTarget
+	SuppressCompletionNotification bool
 }
 
-func (r *runRecord) clone() *runRecord {
-	if r == nil {
+func subagentStorePath(stateDir string) string {
+	return filepath.Join(
+		strings.TrimSpace(stateDir),
+		subagentDirName,
+		subagentRunsFileName,
+	)
+}
+
+func subagentWorktreeRoot(stateDir string) string {
+	return filepath.Join(
+		strings.TrimSpace(stateDir),
+		subagentDirName,
+		worktreeDirName,
+	)
+}
+
+func metadataForDelivery(target deliveryTarget) map[string]string {
+	if target.Channel == "" || target.Target == "" {
 		return nil
 	}
-	out := *r
-	if r.StartedAt != nil {
-		startedAt := *r.StartedAt
-		out.StartedAt = &startedAt
+	return map[string]string{
+		metadataDeliveryChannel: target.Channel,
+		metadataDeliveryTarget:  target.Target,
 	}
-	if r.FinishedAt != nil {
-		finishedAt := *r.FinishedAt
-		out.FinishedAt = &finishedAt
+}
+
+func mergeMetadata(values ...map[string]string) map[string]string {
+	var out map[string]string
+	for _, value := range values {
+		for key, item := range value {
+			key = strings.TrimSpace(key)
+			item = strings.TrimSpace(item)
+			if key == "" || item == "" {
+				continue
+			}
+			if out == nil {
+				out = make(map[string]string)
+			}
+			out[key] = item
+		}
 	}
-	return &out
+	return out
 }
 
-func (r *runRecord) publicView() publicsubagent.Run {
-	if r == nil {
-		return publicsubagent.Run{}
+func metadataForWorktreeLease(lease gitworktree.Lease) map[string]string {
+	return mergeMetadata(map[string]string{
+		metadataIsolation:          isolationWorktree,
+		metadataWorktreePath:       lease.Path,
+		metadataWorktreeBranch:     lease.Branch,
+		metadataWorktreeRepoRoot:   lease.RepoRoot,
+		metadataWorktreeBaseCommit: lease.BaseCommit,
+	})
+}
+
+func worktreeLeaseFromMetadata(metadata map[string]string) (gitworktree.Lease, bool) {
+	if strings.TrimSpace(metadata[metadataIsolation]) != isolationWorktree {
+		return gitworktree.Lease{}, false
 	}
-	return r.Run
-}
-
-func newChildSessionID(runID string, now time.Time) string {
-	return fmt.Sprintf(
-		"%s%s:%d",
-		subagentSessionPrefix,
-		strings.TrimSpace(runID),
-		now.UnixNano(),
-	)
-}
-
-func newRequestID(runID string, now time.Time) string {
-	return fmt.Sprintf(
-		"%s%s:%d",
-		subagentRequestPrefix,
-		strings.TrimSpace(runID),
-		now.UnixNano(),
-	)
-}
-
-func sanitizeStoredResult(text string) string {
-	return truncateRunes(text, defaultStoredResultRunes)
-}
-
-func summarizeResult(text string) string {
-	return truncateRunes(text, defaultStoredSummaryRunes)
-}
-
-func truncateRunes(text string, limit int) string {
-	trimmed := strings.TrimSpace(text)
-	if limit <= 0 {
-		return trimmed
+	lease := gitworktree.Lease{
+		Path:       strings.TrimSpace(metadata[metadataWorktreePath]),
+		Branch:     strings.TrimSpace(metadata[metadataWorktreeBranch]),
+		RepoRoot:   strings.TrimSpace(metadata[metadataWorktreeRepoRoot]),
+		BaseCommit: strings.TrimSpace(metadata[metadataWorktreeBaseCommit]),
 	}
-	runes := []rune(trimmed)
-	if len(runes) <= limit {
-		return trimmed
+	if lease.Path == "" || lease.Branch == "" ||
+		lease.RepoRoot == "" || lease.BaseCommit == "" {
+		return gitworktree.Lease{}, false
 	}
-	return string(runes[:limit])
+	return lease, true
+}
+
+func worktreeLeaseFromRun(run coretaskrun.Run) (gitworktree.Lease, bool) {
+	lease, ok := worktreeLeaseFromMetadata(run.Metadata)
+	if !ok {
+		return gitworktree.Lease{}, false
+	}
+	lease.ID = strings.TrimSpace(run.ID)
+	if lease.ID == "" {
+		return gitworktree.Lease{}, false
+	}
+	return lease, true
+}
+
+func deliveryFromRun(run coretaskrun.Run) deliveryTarget {
+	return deliveryTarget{
+		Channel: strings.TrimSpace(run.Metadata[metadataDeliveryChannel]),
+		Target:  strings.TrimSpace(run.Metadata[metadataDeliveryTarget]),
+	}
+}
+
+func timeoutDuration(seconds int) time.Duration {
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func newSubagentID() string {
+	return subagentIDPrefix + uuid.NewString()
+}
+
+func subagentRuntimeStateKeys() coretaskrun.RuntimeStateKeys {
+	return coretaskrun.RuntimeStateKeys{
+		Run:             openclawsubagent.RuntimeStateKeyRun,
+		RunID:           openclawsubagent.RuntimeStateKeyRunID,
+		ParentSessionID: openclawsubagent.RuntimeStateKeyParentSessionID,
+	}
+}
+
+func projectRun(run coretaskrun.Run) openclawsubagent.Run {
+	return openclawsubagent.Run{
+		ID:              run.ID,
+		ParentSessionID: run.ParentSessionID,
+		ChildSessionID:  run.ChildSessionID,
+		Task:            run.Task,
+		Status:          openclawsubagent.Status(run.Status),
+		Summary:         run.Summary,
+		Result:          run.Result,
+		Error:           run.Error,
+		CreatedAt:       run.CreatedAt,
+		UpdatedAt:       run.UpdatedAt,
+		StartedAt:       cloneTimePtr(run.StartedAt),
+		FinishedAt:      cloneTimePtr(run.FinishedAt),
+		Workspace:       workspaceFromMetadata(run.Metadata),
+	}
+}
+
+func workspaceFromMetadata(
+	metadata map[string]string,
+) *openclawsubagent.Workspace {
+	isolation := strings.TrimSpace(metadata[metadataIsolation])
+	if isolation == "" {
+		return nil
+	}
+	workspace := &openclawsubagent.Workspace{
+		Isolation: isolation,
+		Path:      strings.TrimSpace(metadata[metadataWorktreePath]),
+		Branch:    strings.TrimSpace(metadata[metadataWorktreeBranch]),
+		Cleanup:   strings.TrimSpace(metadata[metadataWorktreeCleanup]),
+	}
+	return workspace
+}
+
+func projectRunPtr(run *coretaskrun.Run) *openclawsubagent.Run {
+	if run == nil {
+		return nil
+	}
+	projected := projectRun(*run)
+	return &projected
+}
+
+func projectRuns(runs []coretaskrun.Run) []openclawsubagent.Run {
+	if len(runs) == 0 {
+		return nil
+	}
+	out := make([]openclawsubagent.Run, 0, len(runs))
+	for _, run := range runs {
+		out = append(out, projectRun(run))
+	}
+	return out
+}
+
+func cloneTimePtr(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
 }

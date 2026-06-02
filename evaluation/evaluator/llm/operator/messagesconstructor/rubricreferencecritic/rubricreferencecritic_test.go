@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -66,6 +67,13 @@ func TestConstructMessagesIncludesReferenceAnswer(t *testing.T) {
 	assert.Contains(t, messages[0].Content, "test_rubric_text")
 	assert.NotContains(t, messages[0].Content, "guessed basketball context")
 	assert.NotContains(t, messages[0].Content, "current play")
+	assert.Contains(t, messages[0].Content, "Produce exactly one rubricScores item")
+	assert.Contains(t, messages[0].Content, "Return a single valid JSON object")
+	assert.Contains(t, messages[0].Content, "rubricScores")
+	assert.NotContains(t, messages[0].Content, "Do not output JSON")
+	assert.Contains(t, messages[0].Content, "Output Format")
+	assert.Contains(t, messages[0].Content, "Output Rules")
+	assert.NotContains(t, messages[0].Content, "Verdict:")
 }
 
 func TestConstructMessagesRequiresReferenceAnswer(t *testing.T) {
@@ -93,6 +101,21 @@ func TestConstructMessagesRequiresLLMJudgeRubrics(t *testing.T) {
 	_, err := constructor.ConstructMessages(context.Background(), []*evalset.Invocation{actual}, []*evalset.Invocation{expected}, evalMetric)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "llm judge rubrics are required")
+}
+
+func TestStructuredOutputReturnsRubricSchema(t *testing.T) {
+	constructor, ok := New().(messagesconstructor.StructuredOutputMessagesConstructor)
+	require.True(t, ok)
+	output, err := constructor.StructuredOutput(context.Background(), nil, nil, newValidEvalMetric())
+	require.NoError(t, err)
+	require.NotNil(t, output)
+	require.NotNil(t, output.JSONSchema)
+	assert.Equal(t, "rubric_reference_critic_scores", output.JSONSchema.Name)
+	schema := output.JSONSchema.Schema
+	properties := schema["properties"].(map[string]any)
+	rubricScores := properties["rubricScores"].(map[string]any)
+	assert.Equal(t, 1, rubricScores["minItems"])
+	assert.Equal(t, 1, rubricScores["maxItems"])
 }
 
 func TestConstructMessagesRequiresLLMJudgeCriterion(t *testing.T) {
@@ -158,25 +181,4 @@ func TestConstructMessagesValidationErrors(t *testing.T) {
 			assert.ErrorContains(t, err, tt.wantErr)
 		})
 	}
-}
-
-func TestEffectiveRubricCount(t *testing.T) {
-	assert.Equal(t, 0, effectiveRubricCount(nil))
-	assert.Equal(t, 0, effectiveRubricCount(&metric.EvalMetric{}))
-	assert.Equal(t, 1, effectiveRubricCount(&metric.EvalMetric{
-		Criterion: &criterion.Criterion{
-			LLMJudge: &criterionllm.LLMCriterion{
-				Rubrics: []*criterionllm.Rubric{
-					nil,
-					{ID: "1"},
-					{
-						ID: "2",
-						Content: &criterionllm.RubricContent{
-							Text: "valid",
-						},
-					},
-				},
-			},
-		},
-	}))
 }

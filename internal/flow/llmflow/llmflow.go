@@ -129,9 +129,11 @@ type contextCompactionRebuildPlan struct {
 }
 
 type summarySnapshot struct {
-	exists    bool
-	summary   string
-	updatedAt time.Time
+	exists              bool
+	summary             string
+	updatedAt           time.Time
+	boundaryCutoff      time.Time
+	boundaryLastEventID string
 }
 
 // New creates a new basic flow instance with the provided processors.
@@ -1337,10 +1339,19 @@ func snapshotSummary(sess *session.Session, filterKey string) summarySnapshot {
 	if summary == nil {
 		return summarySnapshot{}
 	}
+	boundary := summary.CutoffBoundary()
+	var boundaryCutoff time.Time
+	var boundaryLastEventID string
+	if boundary != nil {
+		boundaryCutoff = boundary.CutoffTime()
+		boundaryLastEventID = boundary.LastEventID
+	}
 	return summarySnapshot{
-		exists:    true,
-		summary:   summary.Summary,
-		updatedAt: summary.UpdatedAt,
+		exists:              true,
+		summary:             summary.Summary,
+		updatedAt:           summary.UpdatedAt,
+		boundaryCutoff:      boundaryCutoff,
+		boundaryLastEventID: boundaryLastEventID,
 	}
 }
 
@@ -1349,6 +1360,13 @@ func (s summarySnapshot) advanced(next summarySnapshot) bool {
 		return false
 	}
 	if !s.exists {
+		return true
+	}
+	if next.boundaryCutoff.After(s.boundaryCutoff) {
+		return true
+	}
+	if next.boundaryCutoff.Equal(s.boundaryCutoff) &&
+		next.boundaryLastEventID != s.boundaryLastEventID {
 		return true
 	}
 	if next.updatedAt.After(s.updatedAt) {
@@ -1470,29 +1488,36 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 		allTools = invocation.Agent.Tools()
 	}
 
+	// Get user tools (if the agent supports it).
+	// User tools are those explicitly registered via WithTools and
+	// WithToolSets. Framework tools (Knowledge, SubAgents) are never filtered.
+	if invocation.RunOptions.ToolFilter != nil && !hasUserToolTracking {
+		if provider, ok := invocation.Agent.(UserToolsProvider); ok {
+			userTools := provider.UserTools()
+			hasUserToolTracking = true
+			userToolNames = make(map[string]bool, len(userTools))
+			for _, t := range userTools {
+				userToolNames[t.Declaration().Name] = true
+			}
+		}
+	}
+	allTools, userToolNames, hasUserToolTracking, externalToolNames :=
+		appendRunOptionTools(
+			allTools,
+			userToolNames,
+			hasUserToolTracking,
+			invocation.RunOptions,
+		)
+
 	// If no filter is specified, return all tools for this invocation.
 	if invocation.RunOptions.ToolFilter == nil {
+		setVisibleExternalToolNames(invocation, allTools, externalToolNames)
 		invocation.SetState(stateKeyToolsSnapshot, allTools)
 		invocation.SetState(
 			stateKeyHasFilteredUserTools,
 			hasTrackedUserTool(allTools, hasUserToolTracking, userToolNames),
 		)
 		return allTools
-	}
-
-	// Get user tools (if the agent supports it).
-	// User tools are those explicitly registered via WithTools and WithToolSets.
-	// Framework tools (Knowledge, SubAgents) are never filtered.
-	if !hasUserToolTracking {
-		if provider, ok := invocation.Agent.(UserToolsProvider); ok {
-			userTools := provider.UserTools()
-			hasUserToolTracking = true
-			// Build a map for fast lookup.
-			userToolNames = make(map[string]bool, len(userTools))
-			for _, t := range userTools {
-				userToolNames[t.Declaration().Name] = true
-			}
-		}
 	}
 
 	// Apply the filter function to each tool.
@@ -1523,6 +1548,7 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 		return filtered[i].Declaration().Name < filtered[j].Declaration().Name
 	})
 
+	setVisibleExternalToolNames(invocation, filtered, externalToolNames)
 	invocation.SetState(stateKeyToolsSnapshot, filtered)
 	invocation.SetState(
 		stateKeyHasFilteredUserTools,
@@ -1530,6 +1556,121 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 	)
 
 	return filtered
+}
+
+func appendRunOptionTools(
+	allTools []tool.Tool,
+	userToolNames map[string]bool,
+	hasUserToolTracking bool,
+	opts agent.RunOptions,
+) ([]tool.Tool, map[string]bool, bool, map[string]bool) {
+	if len(opts.AdditionalTools) == 0 && len(opts.ExternalTools) == 0 {
+		return allTools, userToolNames, hasUserToolTracking, nil
+	}
+	allTools = append([]tool.Tool(nil), allTools...)
+	if hasUserToolTracking {
+		userToolNames = copyToolNames(userToolNames)
+	}
+	serverNames := collectToolNames(allTools)
+	seen := copyToolNames(serverNames)
+	allTools, userToolNames = appendRunOptionToolList(
+		allTools,
+		userToolNames,
+		hasUserToolTracking,
+		seen,
+		opts.AdditionalTools,
+	)
+	externalNames := make(map[string]bool, len(opts.ExternalTools))
+	for _, tl := range opts.ExternalTools {
+		name := toolName(tl)
+		if name == "" || serverNames[name] {
+			continue
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		allTools = append(allTools, tl)
+		externalNames[name] = true
+		if hasUserToolTracking {
+			if userToolNames == nil {
+				userToolNames = make(map[string]bool)
+			}
+			userToolNames[name] = true
+		}
+	}
+	return allTools, userToolNames, hasUserToolTracking, externalNames
+}
+
+func appendRunOptionToolList(
+	allTools []tool.Tool,
+	userToolNames map[string]bool,
+	hasUserToolTracking bool,
+	seen map[string]bool,
+	tools []tool.Tool,
+) ([]tool.Tool, map[string]bool) {
+	for _, tl := range tools {
+		name := toolName(tl)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		allTools = append(allTools, tl)
+		if hasUserToolTracking {
+			if userToolNames == nil {
+				userToolNames = make(map[string]bool)
+			}
+			userToolNames[name] = true
+		}
+	}
+	return allTools, userToolNames
+}
+
+func collectToolNames(tools []tool.Tool) map[string]bool {
+	names := make(map[string]bool, len(tools))
+	for _, tl := range tools {
+		if name := toolName(tl); name != "" {
+			names[name] = true
+		}
+	}
+	return names
+}
+
+func copyToolNames(src map[string]bool) map[string]bool {
+	dst := make(map[string]bool, len(src))
+	for name, ok := range src {
+		dst[name] = ok
+	}
+	return dst
+}
+
+func setVisibleExternalToolNames(
+	invocation *agent.Invocation,
+	tools []tool.Tool,
+	externalNames map[string]bool,
+) {
+	if invocation == nil || externalNames == nil {
+		return
+	}
+	visible := make(map[string]bool, len(externalNames))
+	for _, tl := range tools {
+		name := toolName(tl)
+		if name != "" && externalNames[name] {
+			visible[name] = true
+		}
+	}
+	invocation.RunOptions.ExternalToolNames = visible
+}
+
+func toolName(tl tool.Tool) string {
+	if tl == nil {
+		return ""
+	}
+	decl := tl.Declaration()
+	if decl == nil {
+		return ""
+	}
+	return decl.Name
 }
 
 func hasTrackedUserTool(

@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -218,6 +219,19 @@ func TestWithResume(t *testing.T) {
 	require.False(t, ro.Resume)
 }
 
+func TestWithPersistInterruptedAssistant(t *testing.T) {
+	var ro RunOptions
+	require.Nil(t, ro.PersistInterruptedAssistant)
+
+	WithPersistInterruptedAssistant(true)(&ro)
+	require.NotNil(t, ro.PersistInterruptedAssistant)
+	require.True(t, *ro.PersistInterruptedAssistant)
+
+	WithPersistInterruptedAssistant(false)(&ro)
+	require.NotNil(t, ro.PersistInterruptedAssistant)
+	require.False(t, *ro.PersistInterruptedAssistant)
+}
+
 func TestWithGraphEmitFinalModelResponses(t *testing.T) {
 	var ro RunOptions
 	WithGraphEmitFinalModelResponses(true)(&ro)
@@ -271,6 +285,96 @@ func (s *stubTool) Declaration() *tool.Declaration {
 	return s.decl
 }
 
+func TestWithAdditionalTools(t *testing.T) {
+	const toolName = "runtime_tool"
+
+	runtimeTool := &stubTool{
+		decl: &tool.Declaration{Name: toolName},
+	}
+
+	var ro RunOptions
+	WithAdditionalTools([]tool.Tool{runtimeTool})(&ro)
+
+	require.Equal(t, []tool.Tool{runtimeTool}, ro.AdditionalTools)
+	require.Empty(t, ro.ExternalTools)
+	require.Empty(t, ro.ExternalToolNames)
+}
+
+func TestWithExternalTools(t *testing.T) {
+	const (
+		externalToolName = "external_tool"
+		internalToolName = "internal_tool"
+		deniedToolName   = "denied_tool"
+	)
+
+	externalTool := &stubTool{
+		decl: &tool.Declaration{Name: externalToolName},
+	}
+	internalTool := &stubTool{
+		decl: &tool.Declaration{Name: internalToolName},
+	}
+	deniedTool := &stubTool{
+		decl: &tool.Declaration{Name: deniedToolName},
+	}
+
+	ro := NewRunOptions(
+		WithExternalTools([]tool.Tool{externalTool}),
+		WithToolExecutionFilter(
+			tool.NewIncludeToolNamesFilter(internalToolName),
+		),
+	)
+
+	require.Equal(t, []tool.Tool{externalTool}, ro.ExternalTools)
+	require.Empty(t, ro.ExternalToolNames)
+
+	ctx := context.Background()
+	require.False(t, ro.ShouldExecuteTool(ctx, externalTool))
+	require.True(t, ro.ShouldExecuteTool(ctx, internalTool))
+	require.False(t, ro.ShouldExecuteTool(ctx, deniedTool))
+}
+
+func TestWithExternalTools_DoesNotShadowDifferentToolWithSameName(
+	t *testing.T,
+) {
+	const toolName = "client_tool"
+
+	externalTool := &stubTool{
+		decl: &tool.Declaration{Name: toolName},
+	}
+	registeredTool := &stubTool{
+		decl: &tool.Declaration{Name: toolName},
+	}
+
+	ro := NewRunOptions(
+		WithExternalTools([]tool.Tool{externalTool}),
+	)
+
+	ctx := context.Background()
+	require.False(t, ro.ShouldExecuteTool(ctx, externalTool))
+	require.True(t, ro.ShouldExecuteTool(ctx, registeredTool))
+
+	ro.ExternalToolNames = map[string]bool{toolName: true}
+	require.False(t, ro.ShouldExecuteTool(ctx, registeredTool))
+}
+
+func TestWithExternalTools_DoesNotUseDeclarationAsIdentity(
+	t *testing.T,
+) {
+	const toolName = "client_tool"
+
+	sharedDecl := &tool.Declaration{Name: toolName}
+	externalTool := &stubTool{decl: sharedDecl}
+	registeredTool := &stubTool{decl: sharedDecl}
+
+	ro := NewRunOptions(
+		WithExternalTools([]tool.Tool{externalTool}),
+	)
+
+	ctx := context.Background()
+	require.False(t, ro.ShouldExecuteTool(ctx, externalTool))
+	require.True(t, ro.ShouldExecuteTool(ctx, registeredTool))
+}
+
 func TestWithToolExecutionFilter(t *testing.T) {
 	const (
 		allowedToolName = "tool1"
@@ -306,4 +410,30 @@ func TestWithToolCallArgumentsJSONRepairEnabled_SetsRunOptions(t *testing.T) {
 	WithToolCallArgumentsJSONRepairEnabled(false)(&ro)
 	require.NotNil(t, ro.ToolCallArgumentsJSONRepairEnabled)
 	require.False(t, *ro.ToolCallArgumentsJSONRepairEnabled)
+}
+
+func TestWithPromptSectionOptions_SetsRunOptions(t *testing.T) {
+	renderer := func(
+		_ context.Context,
+		req AvailableSkillsRenderRequest,
+	) string {
+		require.Len(t, req.Summaries, 1)
+		return "- " + req.Summaries[0].Name + ": compact"
+	}
+	var ro RunOptions
+	WithWorkspaceExecGuidance("compact workspace guidance")(&ro)
+	WithAvailableSkillsRenderer(renderer)(&ro)
+	require.Equal(t, "compact workspace guidance", ro.WorkspaceExecGuidance)
+	require.NotNil(t, ro.AvailableSkillsRenderer)
+	got := ro.AvailableSkillsRenderer(
+		context.Background(),
+		AvailableSkillsRenderRequest{
+			Summaries: []skill.Summary{
+				{Name: "alpha", Description: "alpha skill"},
+			},
+		},
+	)
+	require.Equal(t, "- alpha: compact", got)
+	WithAvailableSkillsRenderer(nil)(&ro)
+	require.Nil(t, ro.AvailableSkillsRenderer)
 }

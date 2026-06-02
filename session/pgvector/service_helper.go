@@ -105,7 +105,9 @@ func (s *Service) getSession(
 
 	summaries := make(map[string]*session.Summary)
 	summariesList, err := s.getSummariesList(
-		ctx, []session.Key{key},
+		ctx,
+		[]session.Key{key},
+		[]time.Time{sessState.CreatedAt},
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -154,6 +156,8 @@ func (s *Service) listSessions(
 	key session.UserKey,
 	limit int,
 	afterTime time.Time,
+	listOnlyMeta bool,
+	page *session.ListSessionPage,
 ) ([]*session.Session, error) {
 	appState, err := s.ListAppStates(ctx, key.AppName)
 	if err != nil {
@@ -172,11 +176,15 @@ func (s *Service) listSessions(
 		WHERE app_name = $1 AND user_id = $2
 		AND (expires_at IS NULL OR expires_at > NOW() AT TIME ZONE 'localtime')
 		AND deleted_at IS NULL
-		ORDER BY updated_at DESC`,
+		ORDER BY updated_at DESC, session_id DESC`,
 		s.tableSessionStates,
 	)
 	listArgs := []any{
 		key.AppName, key.UserID,
+	}
+	if page != nil && page.Limit > 0 {
+		listQuery += fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(listArgs)+1, len(listArgs)+2)
+		listArgs = append(listArgs, page.Limit, page.Offset)
 	}
 
 	err = s.pgClient.Query(ctx,
@@ -213,8 +221,29 @@ func (s *Service) listSessions(
 		)
 	}
 
+	if listOnlyMeta {
+		sessions := make(
+			[]*session.Session, 0, len(sessStates),
+		)
+		for _, st := range sessStates {
+			sess := session.NewSession(
+				key.AppName, key.UserID, st.ID,
+				session.WithSessionState(st.State),
+				session.WithSessionCreatedAt(st.CreatedAt),
+				session.WithSessionUpdatedAt(st.UpdatedAt),
+			)
+			sessions = append(sessions,
+				mergeState(appState, userState, sess),
+			)
+		}
+		return sessions, nil
+	}
+
 	sessionKeys := make(
 		[]session.Key, 0, len(sessStates),
+	)
+	sessionCreatedAts := make(
+		[]time.Time, 0, len(sessStates),
 	)
 	for _, st := range sessStates {
 		sessionKeys = append(sessionKeys, session.Key{
@@ -222,6 +251,10 @@ func (s *Service) listSessions(
 			UserID:    key.UserID,
 			SessionID: st.ID,
 		})
+		sessionCreatedAts = append(
+			sessionCreatedAts,
+			st.CreatedAt,
+		)
 	}
 
 	eventsList, err := s.getEventsList(
@@ -234,7 +267,9 @@ func (s *Service) listSessions(
 	}
 
 	summariesList, err := s.getSummariesList(
-		ctx, sessionKeys,
+		ctx,
+		sessionKeys,
+		sessionCreatedAts,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -297,6 +332,8 @@ func (s *Service) addEvent(
 	evt *event.Event,
 ) error {
 	now := time.Now()
+	nowUTC := now.UTC()
+	eventCreatedAt := eventCreatedAtUTC(evt, now)
 	eventBytes, err := json.Marshal(evt)
 	if err != nil {
 		return fmt.Errorf(
@@ -356,7 +393,7 @@ func (s *Service) addEvent(
 					key.AppName, key.UserID, key.SessionID,
 				)
 			}
-			sessState.UpdatedAt = now
+			sessState.UpdatedAt = nowUTC
 			if sessState.State == nil {
 				sessState.State = make(session.StateMap)
 			}
@@ -408,7 +445,7 @@ func (s *Service) addEvent(
 					),
 					key.AppName, key.UserID,
 					key.SessionID, eventBytes,
-					now, now, expiresAt,
+					eventCreatedAt, nowUTC, expiresAt,
 				)
 				if err != nil {
 					return fmt.Errorf(
@@ -427,6 +464,30 @@ func (s *Service) addEvent(
 	return nil
 }
 
+func eventCreatedAtUTC(evt *event.Event, fallback time.Time) time.Time {
+	if evt != nil && !evt.Timestamp.IsZero() {
+		return timestampUTC(evt.Timestamp, fallback)
+	}
+	return timestampUTC(time.Time{}, fallback)
+}
+
+func trackEventCreatedAtUTC(
+	trackEvent *session.TrackEvent,
+	fallback time.Time,
+) time.Time {
+	if trackEvent != nil && !trackEvent.Timestamp.IsZero() {
+		return timestampUTC(trackEvent.Timestamp, fallback)
+	}
+	return timestampUTC(time.Time{}, fallback)
+}
+
+func timestampUTC(ts time.Time, fallback time.Time) time.Time {
+	if !ts.IsZero() {
+		return ts.UTC()
+	}
+	return fallback.UTC()
+}
+
 // addTrackEvent adds a track event to a session.
 func (s *Service) addTrackEvent(
 	ctx context.Context,
@@ -434,6 +495,8 @@ func (s *Service) addTrackEvent(
 	trackEvent *session.TrackEvent,
 ) error {
 	now := time.Now()
+	nowUTC := now.UTC()
+	trackCreatedAt := trackEventCreatedAtUTC(trackEvent, now)
 	eventBytes, err := json.Marshal(trackEvent)
 	if err != nil {
 		return fmt.Errorf(
@@ -505,7 +568,7 @@ func (s *Service) addTrackEvent(
 				return err
 			}
 			sessState.State = sess.SnapshotState()
-			sessState.UpdatedAt = sess.UpdatedAt
+			sessState.UpdatedAt = nowUTC
 			updatedStateBytes, err := json.Marshal(
 				&sessState,
 			)
@@ -548,8 +611,8 @@ func (s *Service) addTrackEvent(
 				),
 				key.AppName, key.UserID,
 				key.SessionID, trackEvent.Track,
-				eventBytes, trackEvent.Timestamp,
-				trackEvent.Timestamp, expiresAt,
+				eventBytes, trackCreatedAt,
+				nowUTC, expiresAt,
 			)
 			if err != nil {
 				return fmt.Errorf(
@@ -996,6 +1059,7 @@ func (s *Service) getTrackEvents(
 func (s *Service) getSummariesList(
 	ctx context.Context,
 	sessionKeys []session.Key,
+	sessionCreatedAts ...[]time.Time,
 ) ([]map[string]*session.Summary, error) {
 	if len(sessionKeys) == 0 {
 		return []map[string]*session.Summary{}, nil
@@ -1006,13 +1070,34 @@ func (s *Service) getSummariesList(
 		sessionIDs[i] = key.SessionID
 	}
 
+	sessionCreatedAtMap := map[string]time.Time(nil)
+	if len(sessionCreatedAts) > 0 {
+		if len(sessionKeys) != len(sessionCreatedAts[0]) {
+			return nil, fmt.Errorf(
+				"session keys and createdAts length mismatch",
+			)
+		}
+		sessionCreatedAtMap = make(
+			map[string]time.Time, len(sessionKeys),
+		)
+		for i, key := range sessionKeys {
+			sessionCreatedAtMap[key.SessionID] =
+				sessionCreatedAts[0][i]
+		}
+	}
+
+	summaryColumns := "session_id, filter_key, summary"
+	if sessionCreatedAtMap != nil {
+		summaryColumns += ", updated_at"
+	}
 	summaryQuery := fmt.Sprintf(
-		`SELECT session_id, filter_key, summary
+		`SELECT %s
 		FROM %s
 		WHERE app_name = $1 AND user_id = $2
 		AND session_id = ANY($3::varchar[])
 		AND (expires_at IS NULL OR expires_at > NOW() AT TIME ZONE 'localtime')
 		AND deleted_at IS NULL`,
+		summaryColumns,
 		s.tableSessionSummaries,
 	)
 
@@ -1024,11 +1109,27 @@ func (s *Service) getSummariesList(
 			for rows.Next() {
 				var sessionID, filterKey string
 				var summaryBytes []byte
-				if err := rows.Scan(
-					&sessionID, &filterKey,
-					&summaryBytes,
-				); err != nil {
-					return err
+				if sessionCreatedAtMap == nil {
+					if err := rows.Scan(
+						&sessionID, &filterKey,
+						&summaryBytes,
+					); err != nil {
+						return err
+					}
+				} else {
+					var updatedAt time.Time
+					if err := rows.Scan(
+						&sessionID, &filterKey,
+						&summaryBytes, &updatedAt,
+					); err != nil {
+						return err
+					}
+					createdAt, exists :=
+						sessionCreatedAtMap[sessionID]
+					if !exists ||
+						updatedAt.Before(createdAt) {
+						continue
+					}
 				}
 				var sum session.Summary
 				if err := json.Unmarshal(

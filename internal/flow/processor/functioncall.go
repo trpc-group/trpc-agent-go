@@ -82,6 +82,8 @@ type toolEventStateDelta struct {
 type resolvedToolContextKey struct{}
 type stateDeltaSessionBaselineContextKey struct{}
 type executingToolArgsContextKey struct{}
+type skipToolStateDeltaContextKey struct{}
+type skipToolSkipSummarizationContextKey struct{}
 
 // toolResult holds the result of a single tool execution.
 type toolResult struct {
@@ -210,7 +212,7 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		return
 	}
 
-	if deferred && !unknown {
+	if deferred {
 		invocation.EndInvocation = true
 	}
 
@@ -239,10 +241,6 @@ func (p *FunctionCallResponseProcessor) toolExecutionDecision(
 	if invocation == nil {
 		return false, true, false
 	}
-	filter := invocation.RunOptions.ToolExecutionFilter
-	if filter == nil {
-		return false, true, false
-	}
 	if req == nil || req.Tools == nil || rsp == nil {
 		return false, true, false
 	}
@@ -255,7 +253,7 @@ func (p *FunctionCallResponseProcessor) toolExecutionDecision(
 			unknown = true
 			continue
 		}
-		if filter(ctx, tl) {
+		if invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 			executable = true
 			continue
 		}
@@ -360,13 +358,10 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 		toolResults,
 	)
 
-	if len(toolCallResponsesEvents) == 0 &&
-		invocation != nil &&
-		invocation.RunOptions.ToolExecutionFilter != nil {
-		filter := invocation.RunOptions.ToolExecutionFilter
+	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
-			if ok && !filter(ctx, tl) {
+			if ok && !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 				return nil, nil
 			}
 		}
@@ -445,6 +440,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		}
 	}
 	toolEvent := p.buildToolCallResponseEvent(
+		ctx,
 		invocation,
 		llmResponse,
 		choices,
@@ -548,13 +544,10 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		invocation,
 		toolResults,
 	)
-	if len(toolCallResponsesEvents) == 0 &&
-		invocation != nil &&
-		invocation.RunOptions.ToolExecutionFilter != nil {
-		filter := invocation.RunOptions.ToolExecutionFilter
+	if len(toolCallResponsesEvents) == 0 && invocation != nil {
 		for _, tc := range toolCalls {
 			tl, ok := tools[tc.Function.Name]
-			if ok && !filter(ctx, tl) {
+			if ok && !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
 				return nil, nil
 			}
 		}
@@ -655,6 +648,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			tools,
 			tc,
 			skipSummarization,
+			!shouldSkipToolSkipSummarization(ctx),
 		)
 		// Only propagate the error if it's not ignorable (e.g., stop errors)
 		var returnErr error
@@ -672,6 +666,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 
 	// No error and at least one choice means we have tool result messages.
 	toolCallResponseEvent := p.buildToolCallResponseEvent(
+		ctx,
 		invocation,
 		llmResponse,
 		choices,
@@ -737,6 +732,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 }
 
 func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
+	ctx context.Context,
 	invocation *agent.Invocation,
 	llmResponse *model.Response,
 	choices []model.Choice,
@@ -761,6 +757,7 @@ func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
 			tools,
 			toolCall,
 			skipSummarization,
+			!shouldSkipToolSkipSummarization(ctx),
 		)
 	}
 	annotateToolChoicesWithName(choices, toolCall.Function.Name)
@@ -771,6 +768,7 @@ func (p *FunctionCallResponseProcessor) buildToolCallResponseEvent(
 		tools,
 		toolCall,
 		skipSummarization,
+		!shouldSkipToolSkipSummarization(ctx),
 	)
 }
 
@@ -827,6 +825,7 @@ func (p *FunctionCallResponseProcessor) decorateToolCallResponseEvent(
 	tools map[string]tool.Tool,
 	toolCall model.ToolCall,
 	skipSummarization bool,
+	allowToolSkipSummarization bool,
 ) *event.Event {
 	if ev == nil {
 		return nil
@@ -835,7 +834,12 @@ func (p *FunctionCallResponseProcessor) decorateToolCallResponseEvent(
 		ev.Tag = event.TransferTag
 	}
 	if tl, ok := tools[toolCall.Function.Name]; ok {
-		p.annotateSkipSummarization(ev, tl, skipSummarization)
+		p.annotateSkipSummarization(
+			ev,
+			tl,
+			skipSummarization,
+			allowToolSkipSummarization,
+		)
 	} else if skipSummarization {
 		markSkipSummarization(ev)
 	}
@@ -894,8 +898,9 @@ func (p *FunctionCallResponseProcessor) annotateSkipSummarization(
 	ev *event.Event,
 	tl tool.Tool,
 	dynamic bool,
+	allowToolPreference bool,
 ) {
-	if dynamic || toolPrefersSkipSummarization(tl) {
+	if dynamic || (allowToolPreference && toolPrefersSkipSummarization(tl)) {
 		markSkipSummarization(ev)
 	}
 }
@@ -906,7 +911,9 @@ func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
 	args []byte,
 	choices []model.Choice,
 ) *toolEventStateDelta {
-	if len(choices) == 0 || hasSyntheticStateOnlyToolChoice(ctx) {
+	if len(choices) == 0 ||
+		hasSyntheticStateOnlyToolChoice(ctx) ||
+		shouldSkipToolStateDelta(ctx) {
 		return nil
 	}
 	tl, ok := resolvedToolFromContext(ctx)
@@ -1067,6 +1074,36 @@ func resolvedToolFromContext(ctx context.Context) (tool.Tool, bool) {
 	}
 	tl, ok := ctx.Value(resolvedToolContextKey{}).(tool.Tool)
 	return tl, ok
+}
+
+func withSkippedToolStateDelta(ctx context.Context) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, skipToolStateDeltaContextKey{}, true)
+}
+
+func shouldSkipToolStateDelta(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	skip, _ := ctx.Value(skipToolStateDeltaContextKey{}).(bool)
+	return skip
+}
+
+func withSkippedToolSkipSummarization(ctx context.Context) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, skipToolSkipSummarizationContextKey{}, true)
+}
+
+func shouldSkipToolSkipSummarization(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	skip, _ := ctx.Value(skipToolSkipSummarizationContextKey{}).(bool)
+	return skip
 }
 
 func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
@@ -1315,15 +1352,9 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 			return ctx, nil, modifiedArgs, true, skipSummarization,
 				fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 		}
-		defaultChoices := []model.Choice{
-			{Index: index, Message: defaultMsg},
-		}
+		defaultMsg.ToolName = toolCall.Function.Name
 		ctx = markSyntheticStateOnlyToolChoice(ctx)
-		if p.toolCallbacks == nil || p.toolCallbacks.ToolResultMessages == nil {
-			return ctx, defaultChoices, modifiedArgs, true,
-				skipSummarization, nil
-		}
-		customChoices, overridden, cbErr := p.applyToolResultMessagesCallback(
+		choices, cbErr := p.buildToolResultChoices(
 			ctx,
 			toolCall,
 			tl,
@@ -1335,11 +1366,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		if cbErr != nil {
 			return ctx, nil, modifiedArgs, true, skipSummarization, cbErr
 		}
-		if overridden {
-			return ctx, customChoices, modifiedArgs, true,
-				skipSummarization, nil
-		}
-		return ctx, defaultChoices, modifiedArgs, true,
+		return ctx, choices, modifiedArgs, true,
 			skipSummarization, nil
 	}
 
@@ -1357,29 +1384,19 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		return ctx, nil, modifiedArgs, true, skipSummarization,
 			fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 	}
+	defaultMsg.ToolName = toolCall.Function.Name
 
-	choices := []model.Choice{
-		{Index: index, Message: defaultMsg},
-	}
-
-	if p.toolCallbacks != nil &&
-		p.toolCallbacks.ToolResultMessages != nil {
-		customChoices, overridden, cbErr :=
-			p.applyToolResultMessagesCallback(
-				ctx,
-				toolCall,
-				tl,
-				result,
-				modifiedArgs,
-				index,
-				defaultMsg,
-			)
-		if cbErr != nil {
-			return ctx, nil, modifiedArgs, true, skipSummarization, cbErr
-		}
-		if overridden {
-			choices = customChoices
-		}
+	choices, cbErr := p.buildToolResultChoices(
+		ctx,
+		toolCall,
+		tl,
+		result,
+		modifiedArgs,
+		index,
+		defaultMsg,
+	)
+	if cbErr != nil {
+		return ctx, nil, modifiedArgs, true, skipSummarization, cbErr
 	}
 
 	log.DebugfContext(
@@ -1390,6 +1407,62 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	)
 
 	return ctx, choices, modifiedArgs, true, skipSummarization, nil
+}
+
+func (p *FunctionCallResponseProcessor) buildToolResultChoices(
+	ctx context.Context,
+	toolCall model.ToolCall,
+	tl tool.Tool,
+	result any,
+	modifiedArgs []byte,
+	index int,
+	defaultMsg model.Message,
+) ([]model.Choice, error) {
+	defaultChoices := []model.Choice{
+		{Index: index, Message: defaultMsg},
+	}
+	if isPermissionResult(result) ||
+		p.toolCallbacks == nil ||
+		p.toolCallbacks.ToolResultMessages == nil {
+		return defaultChoices, nil
+	}
+	customChoices, overridden, err := p.applyToolResultMessagesCallback(
+		ctx,
+		toolCall,
+		tl,
+		result,
+		modifiedArgs,
+		index,
+		defaultMsg,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if overridden {
+		return customChoices, nil
+	}
+	return defaultChoices, nil
+}
+
+func isPermissionResult(result any) bool {
+	switch v := result.(type) {
+	case tool.PermissionResult:
+		return isPermissionResultStatus(v.Status)
+	case *tool.PermissionResult:
+		return v != nil && isPermissionResultStatus(v.Status)
+	default:
+		return false
+	}
+}
+
+func isPermissionResultStatus(status string) bool {
+	switch status {
+	case tool.PermissionResultStatusDenied,
+		tool.PermissionResultStatusApprovalRequired:
+		return true
+	default:
+		return false
+	}
 }
 
 // resolveToolCallTarget resolves the callable tool, applies compatibility remapping,
@@ -1423,10 +1496,9 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 			return toolCall, nil, true, fmt.Errorf("executeToolCall: %s", ErrorToolNotFound)
 		}
 	}
-	if invocation != nil && invocation.RunOptions.ToolExecutionFilter != nil {
-		if !invocation.RunOptions.ToolExecutionFilter(ctx, tl) {
-			return toolCall, nil, true, nil
-		}
+	if invocation != nil &&
+		!invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
+		return toolCall, nil, true, nil
 	}
 	return toolCall, tl, false, nil
 }
@@ -1479,6 +1551,7 @@ func (p *FunctionCallResponseProcessor) applyToolResultMessagesCallback(
 
 	customChoices := make([]model.Choice, 0, len(msgs))
 	for _, msg := range msgs {
+		msg = ensureToolResultMessageName(msg, toolCall)
 		customChoices = append(customChoices, model.Choice{
 			Index:   index,
 			Message: msg,
@@ -1487,6 +1560,19 @@ func (p *FunctionCallResponseProcessor) applyToolResultMessagesCallback(
 	// When a callback is provided and returns non-empty messages,
 	// the framework defers entirely to the callback for correctness.
 	return customChoices, true, nil
+}
+
+func ensureToolResultMessageName(
+	msg model.Message,
+	toolCall model.ToolCall,
+) model.Message {
+	if msg.Role != model.RoleTool ||
+		msg.ToolID != toolCall.ID ||
+		msg.ToolName != "" {
+		return msg
+	}
+	msg.ToolName = toolCall.Function.Name
+	return msg
 }
 
 // createErrorChoice creates an error choice for tool execution failures.
@@ -1779,6 +1865,22 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 		return ctx, customResult, toolCall.Function.Arguments, false,
 			false, nil
 	}
+	permissionResult, err := p.checkToolPermission(
+		ctx,
+		invocation,
+		toolCall,
+		tl,
+		toolDeclaration,
+	)
+	if err != nil {
+		return ctx, nil, toolCall.Function.Arguments, false, false, err
+	}
+	if permissionResult != nil {
+		ctx = withSkippedToolStateDelta(ctx)
+		ctx = withSkippedToolSkipSummarization(ctx)
+		return ctx, *permissionResult, toolCall.Function.Arguments, false,
+			false, nil
+	}
 	// Execute the actual tool.
 	ctx, toolResult, suppressDefaultToolMessage, toolErr := p.executeTool(
 		ctx,
@@ -1845,6 +1947,54 @@ func (p *FunctionCallResponseProcessor) executeToolWithCallbacks(
 	}
 	return ctx, toolResult, toolCall.Function.Arguments,
 		suppressDefaultToolMessage, skipSummarization || localSkip, toolErr
+}
+
+func (p *FunctionCallResponseProcessor) checkToolPermission(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	toolCall model.ToolCall,
+	tl tool.Tool,
+	decl *tool.Declaration,
+) (*tool.PermissionResult, error) {
+	req := &tool.PermissionRequest{
+		Tool:        tl,
+		ToolName:    toolCall.Function.Name,
+		ToolCallID:  toolCall.ID,
+		Declaration: decl,
+		Arguments:   toolCall.Function.Arguments,
+		Metadata:    tool.MetadataOf(tl),
+	}
+	if checker, ok := tl.(tool.PermissionChecker); ok {
+		decision, err := checker.CheckPermission(ctx, req)
+		result, err := normalizeToolPermissionResult(req, decision, err)
+		if result != nil || err != nil {
+			return result, err
+		}
+	}
+	if invocation == nil || invocation.RunOptions.ToolPermissionPolicy == nil {
+		return nil, nil
+	}
+	decision, err := invocation.RunOptions.ToolPermissionPolicy.CheckToolPermission(ctx, req)
+	return normalizeToolPermissionResult(req, decision, err)
+}
+
+func normalizeToolPermissionResult(
+	req *tool.PermissionRequest,
+	decision tool.PermissionDecision,
+	checkErr error,
+) (*tool.PermissionResult, error) {
+	if checkErr != nil {
+		return nil, checkErr
+	}
+	decision, err := tool.NormalizePermissionDecision(decision)
+	if err != nil {
+		return nil, err
+	}
+	if decision.Action == tool.PermissionActionAllow {
+		return nil, nil
+	}
+	result := tool.PermissionResultFor(req.ToolName, decision)
+	return &result, nil
 }
 
 func rememberExecutingToolArgs(ctx context.Context, args []byte) {
@@ -1979,7 +2129,10 @@ func buildDefaultToolMessage(
 	result any,
 ) (model.Message, error) {
 	// Preserve legacy tool message serialization for default fallback content.
-	resultBytes, err := json.Marshal(result)
+	// Use marshalJSONNoHTMLEscape so that <, >, & in tool output (e.g. Go source
+	// code containing "<-done") are preserved verbatim instead of being escaped
+	// to \u003c, \u003e, \u0026 which confuses LLMs reading the content.
+	resultBytes, err := marshalJSONNoHTMLEscape(result)
 	if err != nil {
 		return model.Message{}, err
 	}
@@ -1988,6 +2141,25 @@ func buildDefaultToolMessage(
 		Content: string(resultBytes),
 		ToolID:  toolCallID,
 	}, nil
+}
+
+// marshalJSONNoHTMLEscape serializes v to JSON without escaping <, >, & characters.
+// Standard json.Marshal escapes these for HTML safety, but tool results are never
+// embedded in HTML and the escaped sequences (\u003c, \u003e, \u0026) confuse LLMs
+// that read the output as source code (e.g. Go channel operations "<-done").
+func marshalJSONNoHTMLEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	// json.Encoder.Encode appends a trailing newline; trim it for Marshal parity.
+	b := buf.Bytes()
+	if len(b) > 0 && b[len(b)-1] == '\n' {
+		b = b[:len(b)-1]
+	}
+	return b, nil
 }
 
 type structuredStreamErrorOptIn interface {
@@ -2287,7 +2459,7 @@ func marshalChunkToText(content any) string {
 	case string:
 		return v
 	default:
-		if bts, e := json.Marshal(v); e == nil {
+		if bts, e := marshalJSONNoHTMLEscape(v); e == nil {
 			return string(bts)
 		}
 		return fmt.Sprintf("%v", v)

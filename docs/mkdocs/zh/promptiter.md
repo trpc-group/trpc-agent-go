@@ -473,8 +473,16 @@ type RunRequest struct {
 
 ```go
 type EvalSetInput struct {
-	EvalSetID   string   // EvalSetID 表示要执行的评估集。
-	EvalCaseIDs []string // EvalCaseIDs 表示按需限制执行的评估用例列表。
+	EvalSetID   string     // EvalSetID 表示要执行的评估集。
+	EvalCaseIDs []string   // EvalCaseIDs 表示按需限制执行的评估用例列表。
+	LossHints   []LossHint // LossHints 表示人工补充的失败原因提示。
+}
+
+type LossHint struct {
+	EvalCaseID string                  // EvalCaseID 表示要附加提示的评估用例。
+	MetricName string                  // MetricName 表示要附加提示的失败指标名称。
+	Severity   promptiter.LossSeverity // Severity 表示该提示的优先级。
+	Reason     string                  // Reason 表示人工补充的失败原因。
 }
 ```
 
@@ -515,6 +523,33 @@ request := &engine.RunRequest{
 ```
 
 `EvalCaseIDs` 省略或传空数组时，表示执行该评估集下的全部样本；传非空数组时，只执行指定样本。
+
+如果业务已经知道某些 badcase 的失败原因，可以在对应的 `EvalSetInput` 中设置 `LossHints`。调用方只需要填写 case、metric 和原因，不需要关心 trace 或 step 细节。
+
+```go
+request := &engine.RunRequest{
+	Train: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-train",
+			LossHints: []engine.LossHint{
+				{
+					EvalCaseID: "case_1",
+					MetricName: "answer_quality",
+					Severity:   promptiter.LossSeverityP1,
+					Reason:     "回答遗漏了球队关键防守策略的约束。",
+				},
+			},
+		},
+	},
+	Validation: []engine.EvalSetInput{
+		{
+			EvalSetID: "nba-commentary-validation",
+		},
+	},
+}
+```
+
+`LossHints` 只补充训练阶段的优化信号，不改变评测分数，也不影响 validation 接受判定。框架只会在对应 case 的对应 metric 本轮确实失败时使用 hint；如果本轮通过，则不会强行把它当作失败处理。case 或 metric 写错时会返回参数错误。
 
 #### EvaluationOptions
 
@@ -624,6 +659,7 @@ import (
 )
 
 type RunResult struct {
+	AppName            string               // AppName 表示本次运行所属的应用名。
 	ID                 string               // ID 表示运行标识。
 	Status             RunStatus            // Status 表示当前运行状态。
 	CurrentRound       int                  // CurrentRound 表示当前执行到第几轮。
@@ -902,7 +938,7 @@ type Manager interface {
 ```go
 import "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/manager"
 
-managerInstance, err := manager.New(engineInstance)
+managerInstance, err := manager.New(appName, engineInstance)
 if err != nil {
 	return err
 }
@@ -939,9 +975,9 @@ import (
 )
 
 type Store interface {
-	Create(ctx context.Context, run *engine.RunResult) error
-	Get(ctx context.Context, runID string) (*engine.RunResult, error)
-	Update(ctx context.Context, run *engine.RunResult) error
+	Create(ctx context.Context, appName string, run *engine.RunResult) error
+	Get(ctx context.Context, appName, runID string) (*engine.RunResult, error)
+	Update(ctx context.Context, appName string, run *engine.RunResult) error
 	Close() error
 }
 ```
@@ -954,7 +990,7 @@ type Store interface {
 
 `store/mysql` 适合跨进程持久化与平台查询。该实现会将 `RunResult` 序列化后存入 MySQL，并支持手工初始化 schema 或自动建表。
 
-当前实现使用单表保存运行记录，核心字段包括 `run_id`、`status`、序列化后的 `run_result`，以及 `created_at`、`updated_at` 等时间字段。完整表结构可参考 [schema.sql](https://github.com/trpc-group/trpc-agent-go/tree/main/evaluation/workflow/promptiter/store/mysql/schema.sql)。
+当前实现使用单表保存运行记录，核心字段包括 `app_name`、`run_id`、`status`、序列化后的 `run_result`，以及 `created_at`、`updated_at` 等时间字段。`app_name` 和 `run_id` 组成唯一键，用于隔离不同应用下的运行记录。完整表结构可参考 [schema.sql](https://github.com/trpc-group/trpc-agent-go/tree/main/evaluation/workflow/promptiter/store/mysql/schema.sql)。
 
 ### HTTP 接口
 

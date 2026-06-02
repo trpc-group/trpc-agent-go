@@ -128,6 +128,94 @@ func TestAddEvent_TransactionError(t *testing.T) {
 	assert.Contains(t, err.Error(), "store event failed")
 }
 
+func TestAddEvent_StoresEventCreatedAtAsTimestampUTC(
+	t *testing.T,
+) {
+	s, mock, db := newTestService(t, nil)
+	defer db.Close()
+
+	key := session.Key{
+		AppName: "app", UserID: "user", SessionID: "sess",
+	}
+
+	sessState := SessionState{
+		ID:    "sess",
+		State: session.StateMap{},
+	}
+	stateBytes, err := json.Marshal(sessState)
+	require.NoError(t, err)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT state, expires_at FROM").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{"state", "expires_at"},
+		).AddRow(stateBytes, nil))
+	mock.ExpectExec("UPDATE .* SET state").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	eventTime := time.Date(
+		2026, 5, 31, 20, 25, 0, 123456000,
+		time.FixedZone("UTC+8", 8*60*60),
+	)
+	mock.ExpectExec("INSERT INTO session_events").
+		WithArgs(
+			"app", "user", "sess",
+			sqlmock.AnyArg(),
+			exactUTCTimeArg{want: eventTime},
+			utcTimeArg{}, sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	evt := &event.Event{
+		Timestamp: eventTime,
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "hello",
+				}},
+			},
+		},
+	}
+
+	err = s.addEvent(context.Background(), key, evt)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreatedAtUTCUsesTimestampOrFallback(t *testing.T) {
+	fallback := time.Date(
+		2026, 5, 31, 20, 25, 0, 0,
+		time.FixedZone("UTC+8", 8*60*60),
+	)
+	eventTime := fallback.Add(time.Minute)
+
+	assert.Equal(
+		t,
+		fallback.UTC(),
+		eventCreatedAtUTC(nil, fallback),
+	)
+	assert.Equal(
+		t,
+		eventTime.UTC(),
+		eventCreatedAtUTC(&event.Event{Timestamp: eventTime}, fallback),
+	)
+	assert.Equal(
+		t,
+		fallback.UTC(),
+		trackEventCreatedAtUTC(nil, fallback),
+	)
+	assert.Equal(
+		t,
+		eventTime.UTC(),
+		trackEventCreatedAtUTC(
+			&session.TrackEvent{Timestamp: eventTime},
+			fallback,
+		),
+	)
+}
+
 func TestAddEvent_QueryStateError(t *testing.T) {
 	s, mock, db := newTestService(t, nil)
 	defer db.Close()
@@ -426,6 +514,66 @@ func TestGetSummariesList_Success(t *testing.T) {
 	assert.Equal(t, "test summary",
 		result[0]["all"].Summary,
 	)
+}
+
+func TestGetSummariesList_FiltersStaleAndPreservesBoundary(t *testing.T) {
+	s, mock, db := newTestServiceWithSliceSupport(
+		t, nil,
+	)
+	defer db.Close()
+
+	key := session.Key{
+		AppName: "app", UserID: "user",
+		SessionID: "sess",
+	}
+	createdAt := time.Date(2026, 5, 27, 10, 0, 0, 0, time.UTC)
+	cutoffAt := createdAt.Add(time.Minute)
+	fresh := session.Summary{
+		Summary:   "fresh",
+		UpdatedAt: cutoffAt,
+		Boundary: session.NewSummaryBoundaryWithEventID(
+			"all",
+			cutoffAt,
+			"event-fresh",
+		),
+	}
+	stale := session.Summary{
+		Summary:   "stale",
+		UpdatedAt: createdAt.Add(-time.Hour),
+		Boundary: session.NewSummaryBoundaryWithEventID(
+			"old",
+			createdAt.Add(-time.Hour),
+			"event-stale",
+		),
+	}
+	freshBytes, err := json.Marshal(fresh)
+	require.NoError(t, err)
+	staleBytes, err := json.Marshal(stale)
+	require.NoError(t, err)
+
+	mock.ExpectQuery("SELECT session_id, filter_key").
+		WillReturnRows(sqlmock.NewRows(
+			[]string{
+				"session_id",
+				"filter_key",
+				"summary",
+				"updated_at",
+			},
+		).
+			AddRow("sess", "all", freshBytes, cutoffAt).
+			AddRow("sess", "old", staleBytes, createdAt.Add(-time.Minute)))
+
+	result, err := s.getSummariesList(
+		context.Background(),
+		[]session.Key{key},
+		[]time.Time{createdAt},
+	)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.NotNil(t, result[0]["all"])
+	assert.Equal(t, "fresh", result[0]["all"].Summary)
+	assert.Equal(t, "event-fresh", result[0]["all"].Boundary.LastEventID)
+	assert.Nil(t, result[0]["old"])
 }
 
 func TestGetSummariesList_NoSummaries(t *testing.T) {

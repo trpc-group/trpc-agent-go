@@ -216,10 +216,11 @@ func TestSearchTool_CurrentHidden(t *testing.T) {
 	)
 }
 
-func TestSearchTool_CurrentHiddenUsesLastIncludedTimestamp(
+func TestSearchTool_CurrentHiddenPrefersSummaryCutoff(
 	t *testing.T,
 ) {
 	summaryUpdatedAt := time.Date(2025, 4, 7, 10, 0, 0, 0, time.UTC)
+	summaryCutoff := summaryUpdatedAt.Add(-2 * time.Minute)
 	lastIncludedAt := summaryUpdatedAt.Add(-3 * time.Minute)
 	svc := &mockSessionService{
 		Service: sessioninmemory.NewSessionService(),
@@ -257,6 +258,7 @@ func TestSearchTool_CurrentHiddenUsesLastIncludedTimestamp(
 			"": {
 				Summary:   "summary",
 				UpdatedAt: summaryUpdatedAt,
+				Boundary:  session.NewSummaryBoundary("", summaryCutoff),
 			},
 		}),
 	)
@@ -281,7 +283,203 @@ func TestSearchTool_CurrentHiddenUsesLastIncludedTimestamp(
 	require.True(t, ok)
 	require.Len(t, resp.Results, 1)
 	require.NotNil(t, svc.lastSearchReq.CreatedBefore)
-	assert.Equal(t, lastIncludedAt, *svc.lastSearchReq.CreatedBefore)
+	assert.Equal(t, summaryCutoff, *svc.lastSearchReq.CreatedBefore)
+}
+
+func TestSearchTool_CurrentHiddenFiltersSameTimestampAfterBoundary(
+	t *testing.T,
+) {
+	cutoff := time.Date(2025, 4, 7, 10, 0, 0, 0, time.UTC)
+	hiddenEvent := event.Event{
+		ID:        "covered",
+		Timestamp: cutoff,
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "hidden budget detail",
+				},
+			}},
+		},
+	}
+	visibleEvent := event.Event{
+		ID:        "visible",
+		Timestamp: cutoff,
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "visible budget detail",
+				},
+			}},
+		},
+	}
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	current := session.NewSession(
+		"app",
+		"user",
+		"sess",
+		session.WithSessionSummaries(map[string]*session.Summary{
+			"": {
+				Summary: "summary",
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					"",
+					cutoff,
+					"covered",
+				),
+			},
+		}),
+	)
+	current.Events = []event.Event{hiddenEvent, visibleEvent}
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		searchResults: []session.EventSearchResult{
+			{
+				SessionKey:       key,
+				EventCreatedAt:   cutoff,
+				Event:            visibleEvent,
+				Role:             model.RoleUser,
+				Text:             "visible budget detail",
+				Score:            0.9,
+				SessionCreatedAt: current.CreatedAt,
+			},
+			{
+				SessionKey:       key,
+				EventCreatedAt:   cutoff,
+				Event:            hiddenEvent,
+				Role:             model.RoleUser,
+				Text:             "hidden budget detail",
+				Score:            0.8,
+				SessionCreatedAt: current.CreatedAt,
+			},
+		},
+		window: &session.EventWindow{
+			SessionKey:    key,
+			AnchorEventID: "covered",
+			Entries: []session.EventWindowEntry{
+				{
+					Event:     hiddenEvent,
+					CreatedAt: cutoff,
+				},
+			},
+		},
+	}
+	inv := &agent.Invocation{Session: current, SessionService: svc}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&SearchSessionRequest{
+		Query: "budget detail",
+		Scope: ScopeCurrentHidden,
+	})
+	require.NoError(t, err)
+
+	result, err := NewSearchTool().Call(ctx, args)
+	require.NoError(t, err)
+
+	resp, ok := result.(*SearchSessionResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, "covered", resp.Results[0].EventID)
+}
+
+func TestSearchTool_CurrentHiddenStateFallbackKeepsEventBoundary(
+	t *testing.T,
+) {
+	cutoff := time.Date(2025, 4, 7, 10, 0, 0, 0, time.UTC)
+	hiddenEvent := event.Event{
+		ID:        "covered",
+		Timestamp: cutoff,
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "hidden state detail",
+				},
+			}},
+		},
+	}
+	visibleEvent := event.Event{
+		ID:        "visible",
+		Timestamp: cutoff,
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "visible state detail",
+				},
+			}},
+		},
+	}
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	current := session.NewSession("app", "user", "sess")
+	current.Events = []event.Event{hiddenEvent, visibleEvent}
+	current.SetState(
+		summaryLastIncludedTsKey,
+		[]byte(cutoff.Format(time.RFC3339Nano)),
+	)
+	current.SetState(summaryLastIncludedEventIDKey, []byte("covered"))
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		searchResults: []session.EventSearchResult{
+			{
+				SessionKey:       key,
+				EventCreatedAt:   cutoff,
+				Event:            visibleEvent,
+				Role:             model.RoleUser,
+				Text:             "visible state detail",
+				Score:            0.9,
+				SessionCreatedAt: current.CreatedAt,
+			},
+			{
+				SessionKey:       key,
+				EventCreatedAt:   cutoff,
+				Event:            hiddenEvent,
+				Role:             model.RoleUser,
+				Text:             "hidden state detail",
+				Score:            0.8,
+				SessionCreatedAt: current.CreatedAt,
+			},
+		},
+	}
+	inv := &agent.Invocation{Session: current, SessionService: svc}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&SearchSessionRequest{
+		Query: "state detail",
+		Scope: ScopeCurrentHidden,
+	})
+	require.NoError(t, err)
+
+	result, err := NewSearchTool().Call(ctx, args)
+	require.NoError(t, err)
+
+	resp, ok := result.(*SearchSessionResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, "covered", resp.Results[0].EventID)
+}
+
+func TestSummaryCutoffForFilterIgnoresWhitespaceSummaries(t *testing.T) {
+	updatedAt := time.Date(2025, 4, 7, 10, 0, 0, 0, time.UTC)
+	sess := session.NewSession(
+		"app",
+		"user",
+		"sess",
+		session.WithSessionSummaries(map[string]*session.Summary{
+			"branch": {
+				Summary:   " \t\n",
+				UpdatedAt: updatedAt,
+			},
+			session.SummaryFilterKeyAllContents: {
+				Summary:   "   ",
+				UpdatedAt: updatedAt,
+			},
+		}),
+	)
+
+	cutoff, ok := summaryCutoffForFilter(sess, "branch")
+	assert.False(t, ok)
+	assert.True(t, cutoff.IsZero())
 }
 
 func TestSearchTool_FallbackQuery(t *testing.T) {
@@ -444,6 +642,97 @@ func TestSearchTool_CurrentHiddenSessionScanFallback(t *testing.T) {
 	assert.Equal(t, "evt-before", resp.Results[0].EventID)
 	assert.Contains(t, resp.Results[0].Snippet, "David Hopkins")
 	assert.GreaterOrEqual(t, len(svc.searchReqs), 2)
+}
+
+func TestSearchTool_CurrentHiddenScanKeepsSameTimestampBoundary(
+	t *testing.T,
+) {
+	cutoff := time.Date(2025, 4, 7, 10, 0, 0, 0, time.UTC)
+	hiddenSession := session.NewSession("app", "user", "sess")
+	hiddenSession.Events = []event.Event{
+		{
+			ID:        "covered",
+			Timestamp: cutoff,
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: "covered budget detail",
+					},
+				}},
+			},
+		},
+		{
+			ID:        "visible",
+			Timestamp: cutoff,
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleUser,
+						Content: "visible budget detail",
+					},
+				}},
+			},
+		},
+	}
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		searchFunc: func(
+			req session.EventSearchRequest,
+		) ([]session.EventSearchResult, error) {
+			return nil, nil
+		},
+		getSessionFunc: func(
+			key session.Key,
+			_ ...session.Option,
+		) (*session.Session, error) {
+			return hiddenSession, nil
+		},
+		window: &session.EventWindow{
+			SessionKey:    key,
+			AnchorEventID: "covered",
+			Entries: []session.EventWindowEntry{
+				{
+					Event:     hiddenSession.Events[0],
+					CreatedAt: cutoff,
+				},
+			},
+		},
+	}
+	inv := &agent.Invocation{
+		Session: session.NewSession(
+			"app",
+			"user",
+			"sess",
+			session.WithSessionSummaries(map[string]*session.Summary{
+				"": {
+					Summary: "summary",
+					Boundary: session.NewSummaryBoundaryWithEventID(
+						"",
+						cutoff,
+						"covered",
+					),
+				},
+			}),
+		),
+		SessionService: svc,
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&SearchSessionRequest{
+		Query: "budget detail",
+		Scope: ScopeCurrentHidden,
+	})
+	require.NoError(t, err)
+
+	result, err := NewSearchTool().Call(ctx, args)
+	require.NoError(t, err)
+
+	resp, ok := result.(*SearchSessionResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, "covered", resp.Results[0].EventID)
 }
 
 func TestSearchTool_BroadensSparsePrimaryResults(t *testing.T) {
@@ -766,6 +1055,20 @@ func TestLoadTool_IncludesToolResults(t *testing.T) {
 	require.Len(t, resp.Messages, 2)
 	assert.Equal(t, model.RoleTool, resp.Messages[1].Role)
 	assert.Equal(t, "db_query: row_count=42", resp.Messages[1].Content)
+}
+
+func TestLoadToolDescriptionIsSearchNeutral(t *testing.T) {
+	desc := NewLoadTool().Declaration().Description
+	assert.Contains(t, desc, "anchor event_id")
+	assert.Contains(t, desc, "whether it came from session_search")
+	assert.NotContains(t, desc, "only after session_search")
+	assert.NotContains(t, desc, "session_search result")
+}
+
+func TestSearchToolDescriptionIsLoadNeutral(t *testing.T) {
+	desc := NewSearchTool().Declaration().Description
+	assert.Contains(t, desc, "Search relevant historical conversation details")
+	assert.NotContains(t, desc, "session_load")
 }
 
 func TestNormalizeWindowSize_PreservesExplicitZeroSide(t *testing.T) {

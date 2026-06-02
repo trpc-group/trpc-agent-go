@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
@@ -41,6 +42,11 @@ type Request struct {
 type Result struct {
 	// Patch is the proposed change for the requested surface.
 	Patch *promptiter.SurfacePatch
+}
+
+type surfacePatchProposal struct {
+	Value  astructure.SurfaceValue
+	Reason string
 }
 
 // optimizer is the default Optimizer implementation used by the engine.
@@ -128,16 +134,16 @@ func (o *optimizer) Optimize(ctx context.Context, request *Request) (*Result, er
 	if err != nil {
 		return nil, fmt.Errorf("capture runner output: %w", err)
 	}
-	patch, err := idecode.DecodeOutputJSON[promptiter.SurfacePatch](output)
+	proposal, err := idecode.DecodeOutputJSON[surfacePatchProposal](output)
 	if err != nil {
-		return nil, fmt.Errorf("decode surface patch: %w", err)
+		return nil, fmt.Errorf("decode surface patch proposal: %w", err)
 	}
-	if patch == nil {
-		return nil, errors.New("surface patch is empty")
+	if proposal == nil {
+		return nil, errors.New("surface patch proposal is empty")
 	}
-	patch, err = sanitizeSurfacePatch(normalizedRequest, patch)
+	patch, err := sanitizePatchProposal(normalizedRequest, proposal)
 	if err != nil {
-		return nil, fmt.Errorf("sanitize surface patch: %w", err)
+		return nil, fmt.Errorf("sanitize surface patch proposal: %w", err)
 	}
 	return &Result{Patch: patch}, nil
 }
@@ -196,33 +202,27 @@ func normalizeRequest(request *Request) (*Request, error) {
 	return request, nil
 }
 
-func sanitizeSurfacePatch(request *Request, patch *promptiter.SurfacePatch) (*promptiter.SurfacePatch, error) {
+func sanitizePatchProposal(request *Request, proposal *surfacePatchProposal) (*promptiter.SurfacePatch, error) {
 	if request == nil {
 		return nil, errors.New("request is nil")
 	}
 	if request.Surface == nil {
 		return nil, errors.New("surface is nil")
 	}
-	if patch == nil {
-		return nil, errors.New("surface patch is nil")
+	if proposal == nil {
+		return nil, errors.New("surface patch proposal is nil")
 	}
-	if surfaceID := patch.SurfaceID; surfaceID != "" && surfaceID != request.Surface.SurfaceID {
-		return nil, fmt.Errorf(
-			"patch surface id %q does not match surface id %q",
-			patch.SurfaceID,
-			request.Surface.SurfaceID,
-		)
-	}
-	if patch.Reason == "" {
+	reason := strings.TrimSpace(proposal.Reason)
+	if reason == "" {
 		return nil, errors.New("patch reason is empty")
 	}
-	value, err := isurface.SanitizeValue(request.Surface.Type, patch.Value)
+	value, err := isurface.SanitizeValue(request.Surface.Type, proposal.Value)
 	if err != nil {
 		return nil, fmt.Errorf("sanitize patch value: %w", err)
 	}
 	return &promptiter.SurfacePatch{
 		SurfaceID: request.Surface.SurfaceID,
 		Value:     value,
-		Reason:    patch.Reason,
+		Reason:    reason,
 	}, nil
 }

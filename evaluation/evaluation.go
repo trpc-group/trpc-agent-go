@@ -59,6 +59,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		appName:                           appName,
 		runner:                            runner,
 		judgeRunner:                       opts.judgeRunner,
+		judgeRunnerNumSamples:             opts.judgeRunnerNumSamples,
 		evalSetManager:                    opts.evalSetManager,
 		evalResultManager:                 opts.evalResultManager,
 		metricManager:                     opts.metricManager,
@@ -116,6 +117,7 @@ type agentEvaluator struct {
 	appName                           string
 	runner                            runner.Runner
 	judgeRunner                       runner.Runner
+	judgeRunnerNumSamples             *int
 	evalSetManager                    evalset.Manager
 	evalResultManager                 evalresult.Manager
 	metricManager                     metric.Manager
@@ -216,6 +218,8 @@ func (a *agentEvaluator) mergeCallOptions(opt ...Option) (*options, error) {
 		evalService:                       a.evalService,
 		callbacks:                         a.callbacks,
 		expectedRunner:                    a.expectedRunner,
+		judgeRunner:                       a.judgeRunner,
+		judgeRunnerNumSamples:             a.judgeRunnerNumSamples,
 		numRuns:                           a.numRuns,
 		evalCaseIDs:                       append([]string(nil), a.evalCaseIDs...),
 		numRunsParallelEnabled:            a.numRunsParallelEnabled,
@@ -329,12 +333,22 @@ func (a *agentEvaluator) runEvaluation(ctx context.Context, evalSetID string, op
 		if err != nil {
 			return nil, fmt.Errorf("get metric %s: %w", metricName, err)
 		}
-		if a.judgeRunner != nil && evalMetric != nil && evalMetric.Criterion != nil && evalMetric.Criterion.LLMJudge != nil {
-			evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &metricllm.JudgeRunnerOptions{
-				Runner: a.judgeRunner,
+		metricForRun := evalMetric
+		if opts.judgeRunner != nil && evalMetric != nil && evalMetric.Criterion != nil && evalMetric.Criterion.LLMJudge != nil {
+			metricCopy := *evalMetric
+			criterionCopy := *evalMetric.Criterion
+			llmJudgeCopy := *evalMetric.Criterion.LLMJudge
+			judgeRunnerOptions := &metricllm.JudgeRunnerOptions{Runner: opts.judgeRunner}
+			if opts.judgeRunnerNumSamples != nil {
+				numSamples := *opts.judgeRunnerNumSamples
+				judgeRunnerOptions.NumSamples = &numSamples
 			}
+			llmJudgeCopy.JudgeRunnerOptions = judgeRunnerOptions
+			criterionCopy.LLMJudge = &llmJudgeCopy
+			metricCopy.Criterion = &criterionCopy
+			metricForRun = &metricCopy
 		}
-		evalMetrics = append(evalMetrics, evalMetric)
+		evalMetrics = append(evalMetrics, metricForRun)
 	}
 	var runCaseResults [][]*evalresult.EvalCaseResult
 	if opts != nil && opts.numRunsParallelEnabled != nil && *opts.numRunsParallelEnabled {

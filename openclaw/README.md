@@ -398,6 +398,128 @@ Notes:
     custom binary. See `openclaw/INTEGRATIONS.md` and
     `openclaw/EXTENDING.md`.
 
+## Runtime profiles
+
+Use `runtime_profiles` when one OpenClaw deployment serves multiple users,
+tenants, or product surfaces that need different runtime behavior. A profile
+can override prompt text, app name, model name, tool policy, knowledge policy,
+workspace roots, credentials, skill visibility, isolation mode, runtime state,
+and model request extras.
+
+Static profiles can be configured in YAML:
+
+```yaml
+tools:
+  toolsets:
+    - type: "mcp"
+      name: "tenant-alpha-tools"
+      config:
+        transport: "stdio"
+        command: "tenant-alpha-mcp"
+
+runtime_profiles:
+  default: default
+  profiles:
+    default:
+      app_name: "default"
+      prompt:
+        instruction: "You are a helpful assistant."
+    tenant_alpha:
+      app_name: "tenant-alpha"
+      prompt:
+        instruction: "You are the tenant Alpha assistant."
+      workspace:
+        workdir: "/srv/openclaw/workspaces/tenant-alpha"
+        allowed_roots:
+          - "/srv/openclaw/workspaces/tenant-alpha"
+      skills:
+        roots:
+          - "/srv/openclaw/skills/tenant-alpha"
+        include: ["tenant-alpha-guide"]
+      knowledge:
+        indexes: ["tenant-alpha-faq"]
+        filter:
+          tenant: "tenant-alpha"
+      tools:
+        toolsets: ["tenant-alpha-tools"]
+      isolation:
+        mode: "profile_cache"
+        agent_cache: true
+        toolset_cache: true
+  selectors:
+    - profile_id: "tenant_alpha"
+      channels: ["wecom"]
+      users: ["replace-with-user-id"]
+    - profile_id: "tenant_alpha"
+      tenants: ["tenant-alpha"]
+```
+
+Selectors are matched in order. All non-empty fields in a selector must match
+the request before its `profile_id` is selected. When selectors are configured,
+profile selection fails closed: a request with no matching selector, an
+explicit profile that conflicts with the selected profile, or a selector that
+points at a missing profile fails the run instead of silently falling back.
+
+`channels`, `users`, and `sessions` match gateway metadata. `tenants` matches
+the `tenant_id` field in the `openclaw.runtime_profile` request extension, so
+custom channels or callers that use tenant selectors must pass an extension
+like this:
+
+```json
+{
+  "extensions": {
+    "openclaw.runtime_profile": {
+      "tenant_id": "tenant-alpha"
+    }
+  }
+}
+```
+
+Profile `tools.toolsets` selects from the globally configured `tools.toolsets`
+entries by `name`. It does not create a toolset by itself; it hides tools that
+do not come from the selected toolsets for that request. `tools.include` and
+`tools.exclude` still apply to concrete tool names inside the selected
+toolsets.
+
+Profile `knowledge.indexes` selects from `knowledges.providers` by `name`.
+Search tools for other knowledge providers are hidden for that request, and
+`knowledge.filter` still applies as metadata filter criteria when querying the
+selected knowledge provider.
+
+Profile `tools.credential_refs` maps a concrete tool name or toolset `name` to
+a credential reference. When `credentials.allowed_refs` is set, tools mapped to
+other credential references are hidden for that request. Allowed credential
+references are also copied into runtime state so custom tools can resolve
+their own secrets through the deployment's credential provider.
+
+When `isolation.mode` is `profile_cache` or `service` and `app_name` is not
+set, OpenClaw uses the profile id as the run app name. That isolates session,
+memory, and event filter keys for the profile. Deployments that need a
+separate process or sandbox boundary can read the isolation fields from
+runtime state and enforce that boundary in their custom runtime.
+
+For custom OpenClaw binaries, load profiles from code by passing runtime
+options to `app.MainWithOptions`:
+
+```go
+func main() {
+	store := runtimeprofile.StoreFunc(func(ctx context.Context) (
+		runtimeprofile.Config,
+		error,
+	) {
+		return loadRuntimeProfilesFromDB(ctx)
+	})
+	os.Exit(app.MainWithOptions(
+		os.Args[1:],
+		app.WithRuntimeProfileStore(store, true),
+	))
+}
+```
+
+The store can read from a database, config center, or control plane. Returning
+`Selectors` in the loaded `runtimeprofile.Config` gives code-loaded profiles
+the same fail-closed selector semantics as YAML.
+
 ## Expose OpenClaw as an A2A sub-agent
 
 OpenClaw can publish a native A2A surface alongside the HTTP gateway.
@@ -436,6 +558,29 @@ Notes:
   only when your caller needs per-tool card metadata.
 - A runnable example is available in
   [`./examples/a2a_subagent`](./examples/a2a_subagent/).
+
+## Subagent spawn modes
+
+OpenClaw exposes `subagents_spawn` and the compatibility alias
+`sessions_spawn` for delegated work. The `mode` argument controls whether the
+main agent continues immediately or waits:
+
+- `async`: default. Start the subagent and return a run id immediately.
+- `sync`: wait until the subagent reaches a terminal status, then return the
+  result to the main agent.
+- `review`: wait for the subagent result, then route the next user reply back
+  to the same main-agent continuation point so the user can review before the
+  main agent proceeds.
+
+`timeout_seconds` limits the subagent run. `wait_timeout_seconds` only limits
+how long `subagents_spawn` waits in `sync` or `review` mode.
+
+`isolation: "worktree"` is opt-in for coding tasks that should not edit the
+parent checkout directly. OpenClaw creates a managed Git worktree from the
+current runtime profile workspace, runs the subagent with that worktree as its
+default workspace, removes it when it stays clean, and preserves it when the
+subagent leaves file or commit changes. The source workspace must be a clean
+Git checkout so the isolated run starts from an explicit commit.
 
 ## Customize prompts
 

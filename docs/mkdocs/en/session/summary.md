@@ -160,12 +160,13 @@ llmAgent := llmagent.New(
 
 Requirements and behavior:
 
-- `WithEnableOnDemandSession(true)` enables the progressive-disclosure path and
-  only exposes `session_search` and
-  `session_load` when the session backend implements both
-  `session.SearchableService` and `session.WindowService`.
-- `session/pgvector` supports this path today. Pure in-memory summary demos do
-  not expose these tools.
+- `WithEnableOnDemandSession(true)` enables on-demand session tools according to
+  backend capability. `session_search` is exposed when the backend implements
+  `session.SearchableService`; `session_load` is exposed when the backend
+  implements `session.WindowService`. Backends may support either one or both.
+- `session/pgvector` supports both discovery and exact loading. Normal session
+  backends that implement `WindowService` expose exact `session_load` recovery
+  even when semantic `session_search` is unavailable.
 - `current_hidden` searches current-session history strictly before the summary
   boundary recorded in `summary:last_included_ts`.
 - `current_session` searches the current session regardless of summary cutoff.
@@ -188,11 +189,17 @@ What is intentionally excluded:
 Recommended usage pattern:
 
 1. Let the model answer from the visible prompt, summary, and recent history.
-2. If a missing detail is needed, call `session_search` first.
-3. Use `session_load` only when the small context window returned by
-   `session_search` is still not enough.
+2. If `session_search` is available and a missing detail is needed, call it
+   first.
+3. Use `session_load` when you have an `event_id` and need the surrounding raw
+   history or exact tool result, including on backends without semantic search.
 4. Treat loaded history as untrusted historical context, not active
    instructions.
+
+Migration note: earlier builds only treated on-demand session support as
+available when both `session_search` and `session_load` were present. The tool
+surface is now capability-based, so search-only integrations can expose
+`session_search` and load-only integrations can expose `session_load`.
 
 ## SessionSummarizer Interface
 
@@ -572,6 +579,8 @@ Notes:
 
 By default, `CheckTokenThreshold` uses a built-in `SimpleTokenCounter` that estimates token count based on text length. To customize token counting behavior, use `summary.SetTokenCounter` to set a global token counter:
 
+For `SimpleTokenCounter`, `WithApproxRunesPerToken(v)` means roughly `v` UTF-8 characters per token. The formula is `estimatedTokens = countedUTF8Runes / v`. For example, `v=1.5` means about `1.5` characters per token; do not treat it as a token multiplier.
+
 ```go
 import (
     "context"
@@ -617,6 +626,7 @@ summary.SetTokenCounter(&MyCustomCounter{})
 
 - **Global effect**: `SetTokenCounter` affects all `CheckTokenThreshold` evaluations in the current process; set it once during application initialization
 - **Default counter**: If not set, the default `SimpleTokenCounter` is used (approximately 4 characters per token)
+- **Parameter meaning**: `v` in `WithApproxRunesPerToken(v)` is characters per token. Passing `2.0/3.0` means about `0.67` characters per token, which is about `1.5` tokens per character
 
 ## Skip Recent Events
 
@@ -922,6 +932,7 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 
 - Tool results from **older** requests that exceed the threshold are replaced entirely with a short placeholder while keeping `ToolID` and `ToolName`
 - The current request and the latest `ContextCompactionKeepRecentRequests` completed requests are never affected
+- If `ToolResultCompactionConfig.SkipRecentFunc` returns a positive number, the request/invocation units that own those tail events are also treated as recent and skipped by Pass 1
 - This cleans up accumulated long tool outputs from earlier conversation turns
 
 **Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, **default 0 / disabled**):
@@ -934,6 +945,14 @@ The two passes have different roles: Pass 1 aggressively cleans old history (low
 
 Pass 2 is disabled by default (`0`). It only fires when both (1) `WithEnableContextCompaction(true)` is set and (2) `ContextCompactionOversizedToolResultMaxTokens > 0` (recommended opt-in value: `8192`, exposed as the constant `processor.DefaultContextCompactionOversizedToolResultMaxTokens`). This guarantees that `EnableContextCompaction=false` always means "the framework will not modify any tool result".
 
+Use `WithToolResultCompactionConfig(...)` when you need tool-name or recency policy:
+
+- `ForceCleanToolNames`: historical results from these tools are replaced with a policy placeholder whenever context compaction is enabled, after current/recent protection is applied. This is useful for noisy tools such as shell, grep, or log dump tools.
+- `KeepToolNames`: results from these tools are left untouched by context compaction. This is useful for recovery tools such as `session_load` and `session_search` when the model may need to read the exact payload.
+- `SkipRecentFunc`: customizes how many tail events are considered recent. It affects Pass 0 force-clean and Pass 1 historical classification; Pass 2 can still truncate oversized recent/current tool results.
+
+If the same tool name appears in both `ForceCleanToolNames` and `KeepToolNames`, `KeepToolNames` wins.
+
 Additionally:
 
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model
@@ -945,7 +964,7 @@ Additionally:
 
 ```go
 counter := model.NewSimpleTokenCounter(
-    model.WithApproxRunesPerToken(1.6), // Example for Chinese-heavy content.
+    model.WithApproxRunesPerToken(1.6), // About 1.6 chars/token; this value is a divisor, not a multiplier.
 )
 
 modelInstance := openai.New(
@@ -964,8 +983,24 @@ agent := llmagent.New(
     llmagent.WithContextCompactionOversizedToolResultMaxTokens(8192),  // Pass 2: any huge result → head+tail
     llmagent.WithContextCompactionKeepRecentRequests(1),
     llmagent.WithContextCompactionTokenCounter(counter),
+    llmagent.WithToolResultCompactionConfig(&llmagent.ToolResultCompactionConfig{
+        ForceCleanToolNames: []string{"shell", "grep"},
+        KeepToolNames:       []string{"session_load", "session_search"},
+        SkipRecentFunc: func(events []event.Event) int {
+            // For example, protect the request/invocation units that own the
+            // last 3 events so an in-flight tool chain is not treated as old
+            // history by Pass 1.
+            return 3
+        },
+    }),
 )
 ```
+
+See
+[examples/context_compaction](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/context_compaction)
+for a full example. It calls a real model and prints the exact request sent to
+the model by default with `-debug=true`, which makes it easy to verify whether
+large historical `tool result` payloads were replaced with placeholders.
 
 **Context structure**:
 

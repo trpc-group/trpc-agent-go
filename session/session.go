@@ -45,6 +45,8 @@ var (
 	ErrInvalidEventPage = errors.New("event page requires offset >= 0 and limit > 0")
 	// ErrEventPageConflictsWithEventFilters indicates paging cannot be mixed with context filters.
 	ErrEventPageConflictsWithEventFilters = errors.New("event page cannot be combined with EventNum or EventTime")
+	// ErrInvalidListSessionPage indicates list-session paging arguments are invalid.
+	ErrInvalidListSessionPage = errors.New("list session page requires offset >= 0 and limit >= 0")
 )
 
 // SummaryFilterKeyAllContents is the filter key representing
@@ -135,12 +137,9 @@ func (sess *Session) Clone() *Session {
 	if sess.Summaries != nil {
 		copiedSess.Summaries = make(map[string]*Summary, len(sess.Summaries))
 		for b, sum := range sess.Summaries {
-			if sum == nil {
-				continue
+			if copied := sum.Clone(); copied != nil {
+				copiedSess.Summaries[b] = copied
 			}
-			// Shallow copy is fine since Summary is immutable after write.
-			copied := *sum
-			copiedSess.Summaries[b] = &copied
 		}
 	}
 	sess.SummariesMu.RUnlock()
@@ -581,18 +580,208 @@ func applyOptions(opts ...Option) *Options {
 // Summary represents a concise, structured summary of a conversation branch.
 // It is stored on the session object rather than in the StateMap.
 type Summary struct {
-	Summary   string    `json:"summary"`          // Summary is the concise conversation summary.
-	Topics    []string  `json:"topics,omitempty"` // Topics is the optional topics list.
-	UpdatedAt time.Time `json:"updated_at"`       // UpdatedAt is the update timestamp in UTC.
+	Summary   string           `json:"summary"`            // Summary is the concise conversation summary.
+	Topics    []string         `json:"topics,omitempty"`   // Topics is the optional topics list.
+	UpdatedAt time.Time        `json:"updated_at"`         // UpdatedAt is the legacy cutoff timestamp in UTC.
+	Boundary  *SummaryBoundary `json:"boundary,omitempty"` // Boundary records the summarized history cutoff.
+}
+
+const (
+	// SummaryBoundaryVersion is the current summary boundary metadata version.
+	SummaryBoundaryVersion = 1
+	// SummaryLastIncludedTimestampStateKey stores the last summarized event timestamp.
+	SummaryLastIncludedTimestampStateKey = "summary:last_included_ts"
+	// SummaryLastIncludedEventIDStateKey stores the last summarized event ID.
+	SummaryLastIncludedEventIDStateKey = "summary:last_included_event_id"
+)
+
+// SummaryBoundary records the history cutoff represented by a summary.
+// Summary keeps semantic content; Boundary keeps the structural cutoff used by
+// request builders and storage backends. CutoffAt keeps compatibility with the
+// existing timestamp-based summary model, and LastEventID disambiguates events
+// that share the same timestamp when the writer can identify the last covered
+// transcript event.
+type SummaryBoundary struct {
+	Version     int       `json:"version"`
+	FilterKey   string    `json:"filter_key,omitempty"`
+	CutoffAt    time.Time `json:"cutoff_at,omitempty"`
+	LastEventID string    `json:"last_event_id,omitempty"`
+}
+
+// NewSummaryBoundary creates boundary metadata for a generated summary.
+func NewSummaryBoundary(filterKey string, cutoffAt time.Time) *SummaryBoundary {
+	return NewSummaryBoundaryWithEventID(filterKey, cutoffAt, "")
+}
+
+// NewSummaryBoundaryWithEventID creates boundary metadata anchored to a
+// specific last summarized event.
+func NewSummaryBoundaryWithEventID(
+	filterKey string,
+	cutoffAt time.Time,
+	lastEventID string,
+) *SummaryBoundary {
+	return &SummaryBoundary{
+		Version:     SummaryBoundaryVersion,
+		FilterKey:   filterKey,
+		CutoffAt:    cutoffAt.UTC(),
+		LastEventID: lastEventID,
+	}
+}
+
+// CutoffTime returns the timestamp cutoff represented by the boundary.
+func (b *SummaryBoundary) CutoffTime() time.Time {
+	if b == nil {
+		return time.Time{}
+	}
+	return b.CutoffAt.UTC()
+}
+
+// Clone returns a deep copy of the summary boundary.
+func (b *SummaryBoundary) Clone() *SummaryBoundary {
+	if b == nil {
+		return nil
+	}
+	copied := *b
+	return &copied
+}
+
+// CutoffBoundary returns normalized cutoff metadata represented by the summary.
+// Summaries written before boundary metadata existed fall back to UpdatedAt.
+func (s *Summary) CutoffBoundary() *SummaryBoundary {
+	if s == nil {
+		return nil
+	}
+	if boundary := s.Boundary.Clone(); boundary != nil {
+		if boundary.Version == 0 {
+			boundary.Version = SummaryBoundaryVersion
+		}
+		if boundary.CutoffAt.IsZero() {
+			boundary.CutoffAt = s.UpdatedAt.UTC()
+		} else {
+			boundary.CutoffAt = boundary.CutoffAt.UTC()
+		}
+		if !boundary.CutoffAt.IsZero() {
+			return boundary
+		}
+	}
+	if s.UpdatedAt.IsZero() {
+		return nil
+	}
+	return NewSummaryBoundary("", s.UpdatedAt)
+}
+
+// CutoffTime returns the event cutoff represented by the summary.
+// Summaries written before boundary metadata existed fall back to UpdatedAt.
+func (s *Summary) CutoffTime() time.Time {
+	boundary := s.CutoffBoundary()
+	if boundary == nil {
+		return time.Time{}
+	}
+	return boundary.CutoffTime()
+}
+
+// SummaryFilterKeyMatchesPrefix reports whether key belongs to prefix's
+// hierarchical summary scope.
+func SummaryFilterKeyMatchesPrefix(key, prefix string) bool {
+	filterPrefix := prefix + event.FilterKeyDelimiter
+	keyWithDelim := key + event.FilterKeyDelimiter
+	return key == prefix || strings.HasPrefix(keyWithDelim, filterPrefix)
+}
+
+// SummaryPrefixCutoff returns the effective cutoff for summaries matching a
+// hierarchical prefix. It returns ok=false when no non-empty summaries match.
+// The effective cutoff is Summary.CutoffTime: boundary cutoff when present,
+// otherwise legacy UpdatedAt. When any matching summary has a zero effective
+// cutoff, the returned cutoff is zero so callers keep raw history instead of
+// dropping potentially uncovered events.
+// Callers must hold the session summaries read lock when passing a live session
+// summary map.
+func SummaryPrefixCutoff(
+	summaries map[string]*Summary,
+	prefix string,
+) (time.Time, bool) {
+	boundary, ok := SummaryPrefixBoundary(summaries, prefix)
+	if !ok || boundary == nil {
+		return time.Time{}, ok
+	}
+	return boundary.CutoffTime(), true
+}
+
+// SummaryPrefixBoundary returns the effective boundary for summaries matching
+// a hierarchical prefix. Prefix aggregation clears LastEventID because one
+// branch-local event ID cannot represent the whole prefix scope.
+func SummaryPrefixBoundary(
+	summaries map[string]*Summary,
+	prefix string,
+) (*SummaryBoundary, bool) {
+	var boundary *SummaryBoundary
+	var matched bool
+	var hasMissingCutoff bool
+	for key, sum := range summaries {
+		if sum == nil || strings.TrimSpace(sum.Summary) == "" {
+			continue
+		}
+		if !SummaryFilterKeyMatchesPrefix(key, prefix) {
+			continue
+		}
+		matched = true
+		sumBoundary := sum.CutoffBoundary()
+		if sumBoundary == nil || sumBoundary.CutoffTime().IsZero() {
+			hasMissingCutoff = true
+			continue
+		}
+		sumBoundary.FilterKey = key
+		if boundary == nil || sumBoundary.CutoffAt.Before(boundary.CutoffAt) {
+			boundary = sumBoundary
+			continue
+		}
+		if sumBoundary.CutoffAt.Equal(boundary.CutoffAt) {
+			boundary.LastEventID = ""
+		}
+	}
+	if !matched {
+		return nil, false
+	}
+	if hasMissingCutoff {
+		return NewSummaryBoundary(prefix, time.Time{}), true
+	}
+	if boundary == nil {
+		return NewSummaryBoundary(prefix, time.Time{}), true
+	}
+	boundary.FilterKey = prefix
+	boundary.LastEventID = ""
+	return boundary, true
+}
+
+// Clone returns a deep copy of the summary.
+func (s *Summary) Clone() *Summary {
+	if s == nil {
+		return nil
+	}
+	copied := *s
+	if s.Topics != nil {
+		copied.Topics = make([]string, len(s.Topics))
+		copy(copied.Topics, s.Topics)
+	}
+	copied.Boundary = s.Boundary.Clone()
+	return &copied
 }
 
 // Options contains shared session-service options.
 // Not every field applies to every service method.
 type Options struct {
-	EventNum            int        // EventNum is the number of recent events (context-window mode).
-	EventTime           time.Time  // EventTime is the after time.
-	EventPage           *EventPage // EventPage enables GetSession-only offset pagination when non-nil.
-	ListSessionOnlyMeta bool       // ListSessionOnlyMeta is only honored by ListSessions.
+	EventNum            int              // EventNum is the number of recent events (context-window mode).
+	EventTime           time.Time        // EventTime is the after time.
+	EventPage           *EventPage       // EventPage enables GetSession-only offset pagination when non-nil.
+	ListSessionOnlyMeta bool             // ListSessionOnlyMeta is only honored by ListSessions.
+	ListSessionPage     *ListSessionPage // ListSessionPage enables ListSessions offset pagination when non-nil.
+}
+
+// ListSessionPage specifies offset-based pagination for ListSessions.
+// When non-nil in Options, the backend applies LIMIT/OFFSET to the session list.
+type ListSessionPage struct {
+	Offset int // Offset is the number of sessions to skip.
+	Limit  int // Limit is the maximum number of sessions to return per page.
 }
 
 // EventPage specifies GetSession-only offset-based pagination for session events.
@@ -622,10 +811,18 @@ func WithEventTime(time time.Time) Option {
 
 // WithListSessionOnlyMeta requests ListSessions to return only session metadata
 // without events or tracks. Callers should only use this option with ListSessions.
-// The optimization is currently implemented by the in-memory and redis session services.
 func WithListSessionOnlyMeta() Option {
 	return func(o *Options) {
 		o.ListSessionOnlyMeta = true
+	}
+}
+
+// WithListSessionPage enables offset/limit pagination for ListSessions.
+// This option is orthogonal to WithEventNum/WithEventTime: those control event-level
+// filtering within each session, while this controls session-level pagination.
+func WithListSessionPage(offset, limit int) Option {
+	return func(o *Options) {
+		o.ListSessionPage = &ListSessionPage{Offset: offset, Limit: limit}
 	}
 }
 
@@ -660,10 +857,16 @@ func ValidateGetSessionOptions(opts *Options, supportsEventPage bool) error {
 
 // ValidateListSessionsOptions validates ListSessions-only option semantics.
 func ValidateListSessionsOptions(opts *Options) error {
-	if opts == nil || opts.EventPage == nil {
+	if opts == nil {
 		return nil
 	}
-	return ErrEventPageOnlyForGetSession
+	if opts.EventPage != nil {
+		return ErrEventPageOnlyForGetSession
+	}
+	if opts.ListSessionPage != nil && (opts.ListSessionPage.Offset < 0 || opts.ListSessionPage.Limit <= 0) {
+		return ErrInvalidListSessionPage
+	}
+	return nil
 }
 
 // SummaryOption is the option for getting session summary.
