@@ -432,7 +432,6 @@ func (r *workspaceRuntime) RunProgram(
 		"run_"+time.Now().Format("20060102T150405.000"),
 	)
 	// Build env parts with defaults first, then overlay user env.
-	var envParts []string
 	baseEnv := map[string]string{
 		codeexecutor.WorkspaceEnvDirKey: ws.Path,
 		codeexecutor.EnvSkillsDir:       skillsDir,
@@ -440,16 +439,13 @@ func (r *workspaceRuntime) RunProgram(
 		codeexecutor.EnvOutputDir:       outDir,
 		codeexecutor.EnvRunDir:          runDir,
 	}
-	for k, v := range baseEnv {
-		if _, ok := spec.Env[k]; ok {
-			continue
-		}
-		envParts = append(envParts, k+"="+shellQuote(v))
-	}
-	for k, v := range spec.Env {
-		envParts = append(envParts, k+"="+shellQuote(v))
-	}
-	envStr := strings.Join(envParts, " ")
+	// envPrefix is the leading `env ...` token. When spec.CleanEnv
+	// is set (workspace_exec / skill_run policy mode) it becomes
+	// `env -i ...` so the spawned command starts from an empty
+	// environment plus the workspace base vars and a minimal PATH,
+	// honoring RunProgramSpec.CleanEnv on the container backend
+	// (issue #1845).
+	envPrefix := envToken(baseEnv, spec.Env, spec.CleanEnv)
 	var cmdline strings.Builder
 	// Ensure run/output dirs exist before cd/exec.
 	cmdline.WriteString("mkdir -p ")
@@ -459,22 +455,26 @@ func (r *workspaceRuntime) RunProgram(
 	cmdline.WriteString(" && cd ")
 	cmdline.WriteString(shellQuote(cwd))
 	cmdline.WriteString(" && ")
-	if envStr != "" {
-		cmdline.WriteString("env ")
-		cmdline.WriteString(envStr)
-		cmdline.WriteString(" ")
-	}
+	cmdline.WriteString(envPrefix)
 	cmdline.WriteString(shellQuote(spec.Cmd))
 	for _, a := range spec.Args {
 		cmdline.WriteString(" ")
 		cmdline.WriteString(shellQuote(a))
 	}
-	argv := []string{"/bin/bash", "-lc", cmdline.String()}
+	argv := programShellArgv(spec.CleanEnv, cmdline.String())
+	// In CleanEnv mode constrain the outer `env` wrapper's own
+	// process environment (blank the dynamic-loader hooks, pin
+	// PATH) so it cannot be hijacked before its `env -i` runs.
+	var execEnv []string
+	if spec.CleanEnv {
+		execEnv = cleanWrapperEnv()
+	}
 	out, errOut, code, timed, err := r.execCmdWithStdin(
 		ctx,
 		argv,
 		t,
 		spec.Stdin,
+		execEnv,
 	)
 	res := codeexecutor.RunResult{
 		Stdout:   out,
@@ -1156,19 +1156,27 @@ func (r *workspaceRuntime) execCmd(
 	argv []string,
 	timeout time.Duration,
 ) (string, string, int, bool, error) {
-	return r.execCmdWithStdin(ctx, argv, timeout, "")
+	return r.execCmdWithStdin(ctx, argv, timeout, "", nil)
 }
 
+// execCmdWithStdin runs argv in the container. execEnv, when
+// non-nil, is passed to ContainerExecCreate so docker overrides the
+// named keys on the exec process via ReplaceOrAppendEnvValues; a nil
+// execEnv preserves the historical behaviour of inheriting the
+// container environment verbatim. Only the CleanEnv RunProgram path
+// supplies execEnv (see cleanWrapperEnv).
 func (r *workspaceRuntime) execCmdWithStdin(
 	ctx context.Context,
 	argv []string,
 	timeout time.Duration,
 	stdin string,
+	execEnv []string,
 ) (string, string, int, bool, error) {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	ec := tcontainer.ExecOptions{
 		Cmd:          argv,
+		Env:          execEnv,
 		AttachStdout: true,
 		AttachStderr: true,
 		AttachStdin:  stdin != "",
@@ -1237,6 +1245,62 @@ func shellQuote(s string) string {
 	}
 	q := strings.ReplaceAll(s, "'", "'\\''")
 	return "'" + q + "'"
+}
+
+// programShellArgv selects the process argv used to run a program.
+//
+// In CleanEnv (policy) mode the outer bash is itself launched
+// through `env -i PATH=<minimal>`, so it starts from an empty
+// environment. This is required - not merely belt-and-suspenders -
+// because `docker exec` hands the outer shell the container process
+// environment, and a non-interactive bash sources $BASH_ENV (and is
+// subject to $LD_PRELOAD on its own process) *before* it runs the
+// command line. --noprofile / --norc only suppress profile and rc
+// files, not BASH_ENV, so without the `env -i` wrapper a
+// container-supplied BASH_ENV / ENV / LD_PRELOAD would execute or
+// hijack at shell start-up, ahead of the inner `env -i ...` that
+// isolates the command. PATH is set so the shell can still resolve
+// mkdir / cd.
+//
+// The wrapper is invoked by its trusted absolute path
+// (/usr/bin/env) rather than the bare name "env", so docker's argv
+// resolution does not depend on the inherited container PATH. The
+// `env` process itself is further constrained by the exec
+// environment built in cleanWrapperEnv (see RunProgram), which
+// blanks the dynamic-loader hooks that would otherwise execute code
+// inside the wrapper before its `env -i` runs.
+//
+// Without CleanEnv the historical login shell (-lc) and inherited
+// environment are preserved for non-policy callers.
+func programShellArgv(clean bool, cmdline string) []string {
+	if clean {
+		return []string{
+			"/usr/bin/env", "-i", "PATH=" + minimalCleanPATH,
+			"/bin/bash", "--noprofile", "--norc", "-c", cmdline,
+		}
+	}
+	return []string{"/bin/bash", "-lc", cmdline}
+}
+
+// cleanWrapperEnv is the environment handed to ContainerExecCreate
+// for a CleanEnv spawn. `docker exec` builds the exec process
+// environment as ReplaceOrAppendEnvValues(containerEnv, execEnv), so
+// every key listed here is overridden in place (or appended) on the
+// outer `/usr/bin/env` wrapper process. PATH is pinned to the
+// minimal search path and the glibc dynamic-loader hooks are blanked
+// so a container-level LD_PRELOAD / LD_LIBRARY_PATH / LD_AUDIT cannot
+// inject code into the wrapper at start-up, before its `env -i`
+// clears the environment for the shell. ReplaceOrAppendEnvValues
+// cannot delete container variables this list does not name, but the
+// loader hooks are the only ones that run code at process start-up;
+// everything else is cleared by the following `env -i`.
+func cleanWrapperEnv() []string {
+	return []string{
+		"PATH=" + minimalCleanPATH,
+		"LD_PRELOAD=",
+		"LD_LIBRARY_PATH=",
+		"LD_AUDIT=",
+	}
 }
 
 func tarFromFiles(files []codeexecutor.PutFile) (io.ReadCloser, error) {
