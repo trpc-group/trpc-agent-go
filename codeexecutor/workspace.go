@@ -165,9 +165,9 @@ type Capabilities struct {
 	//
 	// Defaults to false so any backend that has not been audited
 	// for CleanEnv support is treated as "does not support" until
-	// it opts in. local opts in via NewEngineWithCapabilities;
-	// container / e2b currently do not (tracked in
-	// https://github.com/trpc-group/trpc-agent-go/issues/1845).
+	// it opts in. The local, container and e2b backends opt in via
+	// NewEngineWithCapabilities (issue #1845); other backends keep
+	// the zero value and fail closed.
 	SupportsCleanEnv bool
 }
 
