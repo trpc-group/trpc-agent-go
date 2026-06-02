@@ -76,7 +76,7 @@ func TestRecallPluginInjectsContext(t *testing.T) {
 	_, err = callbacks.BeforeModel[0](ctx, &model.BeforeModelArgs{Request: req})
 	require.NoError(t, err)
 
-	assert.Equal(t, recallRequest{Query: "what did I say?", SessionKey: "app:user:s1", UserID: "user"}, got)
+	assert.Equal(t, recallRequest{Query: "what did I say?", SessionKey: defaultSessionKey(sess), UserID: "user"}, got)
 	require.Len(t, req.Messages, 3)
 	assert.Equal(t, "base\n\nremembered system", req.Messages[0].Content)
 	assert.Equal(t, "remembered user context", req.Messages[1].Content)

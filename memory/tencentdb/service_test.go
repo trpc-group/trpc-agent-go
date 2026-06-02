@@ -97,6 +97,15 @@ func TestServiceOptionsAndLifecycleEdges(t *testing.T) {
 	require.Error(t, closed.IngestSession(context.Background(), captureReadySession()), "expected closed service error")
 }
 
+func TestDefaultSessionKeyAvoidsDelimiterCollisions(t *testing.T) {
+	left := &session.Session{AppName: "app", UserID: "user:session", ID: "id"}
+	right := &session.Session{AppName: "app:user", UserID: "session", ID: "id"}
+
+	assert.NotEqual(t, defaultSessionKey(left), defaultSessionKey(right))
+	assert.Equal(t, "YXBw:dXNlcjpzZXNzaW9u:aWQ", defaultSessionKey(left))
+	assert.Equal(t, "YXBwOnVzZXI:c2Vzc2lvbg:aWQ", defaultSessionKey(right))
+}
+
 func TestSafeDefaultsDisableCrossTenantReads(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(captureResponse{})
@@ -182,7 +191,7 @@ func TestEndSessionAndHealth(t *testing.T) {
 	sess := &session.Session{ID: "s1", AppName: "app", UserID: "user"}
 	writeBestEffortSyntheticTimestamp(sess, 123)
 	require.NoError(t, svc.EndSession(context.Background(), sess), "EndSession")
-	assert.Equal(t, endSessionRequest{SessionKey: "app:user:s1", UserID: "user"}, ended)
+	assert.Equal(t, endSessionRequest{SessionKey: defaultSessionKey(sess), UserID: "user"}, ended)
 	assert.Zero(t, readBestEffortSyntheticTimestamp(sess))
 	health, err := svc.Health(context.Background())
 	require.NoError(t, err, "Health")

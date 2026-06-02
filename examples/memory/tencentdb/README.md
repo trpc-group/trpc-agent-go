@@ -237,7 +237,7 @@ Key points:
 | `WithIngestWorkers(n)`         | Number of async capture workers                     | `1`                     |
 | `WithIngestQueueSize(n)`       | Queue size for async capture jobs                   | `10`                    |
 | `WithIngestJobTimeout(d)`      | Timeout for queued capture jobs                     | `30s`                   |
-| `WithSessionKeyFunc(fn)`       | Custom framework session to gateway `session_key` mapping | app:user:session |
+| `WithSessionKeyFunc(fn)`       | Custom framework session to gateway `session_key` mapping | base64url(app):base64url(user):base64url(session) |
 | `WithAPIKey(key)`              | Send `Authorization: Bearer <key>` (gateway `TDAI_GATEWAY_API_KEY`) | none      |
 | `WithRecallEnabled(bool)`      | Enable automatic recall plugin behavior (opt-in; shared-store reads) | `false`        |
 | `WithMemorySearchTool(bool)`   | Expose `tdai_memory_search` (opt-in; shared-store reads) | `false`              |

@@ -11,6 +11,7 @@ package tencentdb
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -199,6 +200,9 @@ func defaultSessionKey(sess *session.Session) string {
 		strings.TrimSpace(sess.AppName),
 		strings.TrimSpace(sess.UserID),
 		strings.TrimSpace(sess.ID),
+	}
+	for i, part := range parts {
+		parts[i] = base64.RawURLEncoding.EncodeToString([]byte(part))
 	}
 	return strings.Join(parts, ":")
 }

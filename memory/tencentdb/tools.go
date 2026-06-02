@@ -47,10 +47,9 @@ type searchConversationsToolRequest struct {
 }
 
 type searchConversationsToolResponse struct {
-	Query      string `json:"query"`
-	SessionKey string `json:"session_key,omitempty"`
-	Results    string `json:"results"`
-	Total      int    `json:"total"`
+	Query   string `json:"query"`
+	Results string `json:"results"`
+	Total   int    `json:"total"`
 }
 
 func (s *Service) buildTools() []tool.Tool {
@@ -144,10 +143,9 @@ func (s *Service) newConversationSearchTool(name string) tool.CallableTool {
 			return nil, err
 		}
 		return &searchConversationsToolResponse{
-			Query:      strings.TrimSpace(req.Query),
-			SessionKey: sessionKey,
-			Results:    strings.TrimSpace(rsp.Results),
-			Total:      rsp.Total,
+			Query:   strings.TrimSpace(req.Query),
+			Results: strings.TrimSpace(rsp.Results),
+			Total:   rsp.Total,
 		}, nil
 	}
 	return function.NewFunctionTool(

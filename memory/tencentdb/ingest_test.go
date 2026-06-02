@@ -75,7 +75,7 @@ func TestIngestSessionCapturesTimestampedMessagesAndCursor(t *testing.T) {
 	require.NoError(t, svc.IngestSession(context.Background(), sess), "IngestSession")
 	require.NoError(t, svc.Close(), "Close")
 
-	assert.Equal(t, "app:user:sess-1", got.SessionKey)
+	assert.Equal(t, defaultSessionKey(sess), got.SessionKey)
 	assert.Equal(t, "remember this", got.UserContent)
 	assert.Equal(t, "stored", got.AssistantContent)
 	require.Len(t, got.Messages, 2)

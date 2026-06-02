@@ -1895,7 +1895,7 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 | `WithIngestWorkers(n)` | 异步 capture worker 数量。 | `1` |
 | `WithIngestQueueSize(n)` | 异步 capture 任务队列长度。 | `10` |
 | `WithIngestJobTimeout(d)` | 队列中 capture 任务的超时时间。 | `30s` |
-| `WithSessionKeyFunc(fn)` | 自定义 framework session 到 gateway `session_key` 的映射。 | `app:user:session` |
+| `WithSessionKeyFunc(fn)` | 自定义 framework session 到 gateway `session_key` 的映射。 | `base64url(app):base64url(user):base64url(session)` |
 | `WithAPIKey(key)` | 发送 `Authorization: Bearer <key>`（对应 gateway 的 `TDAI_GATEWAY_API_KEY`）。 | 无 |
 | `WithRecallEnabled(bool)` | 是否启用自动 recall plugin（opt-in；读取共享存储）。 | `false` |
 | `WithMemorySearchTool(bool)` | 是否暴露 `tdai_memory_search`（opt-in；读取共享存储）。 | `false` |

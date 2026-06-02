@@ -60,7 +60,10 @@ func TestConversationSearchToolUsesCurrentSessionKey(t *testing.T) {
 	rsp := raw.(*searchConversationsToolResponse)
 	assert.Equal(t, "hit", rsp.Results)
 	assert.Equal(t, 1, rsp.Total)
-	assert.Equal(t, "app:u1:s1", got.SessionKey)
+	responseJSON, err := json.Marshal(rsp)
+	require.NoError(t, err, "marshal tool response")
+	assert.NotContains(t, string(responseJSON), "session_key")
+	assert.Equal(t, "YXBw:dTE:czE", got.SessionKey)
 	assert.Equal(t, "u1", got.UserID)
 	assert.Equal(t, defaultSearchLimit, got.Limit)
 }
