@@ -12,16 +12,22 @@ package processor
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
 type onDemandSessionService struct {
+	session.Service
+}
+
+type onDemandSearchOnlyService struct {
 	session.Service
 }
 
@@ -37,6 +43,13 @@ func (s *onDemandSessionService) GetEventWindow(
 	session.EventWindowRequest,
 ) (*session.EventWindow, error) {
 	return &session.EventWindow{}, nil
+}
+
+func (s *onDemandSearchOnlyService) SearchEvents(
+	context.Context,
+	session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return nil, nil
 }
 
 func TestOnDemandSessionRequestProcessor_ProcessRequest(t *testing.T) {
@@ -70,13 +83,73 @@ func TestOnDemandSessionRequestProcessor_SkipsWithoutSupport(t *testing.T) {
 		},
 	}
 	inv := &agent.Invocation{
-		Session:        session.NewSession("app", "user", "sess"),
-		SessionService: sessioninmemory.NewSessionService(),
+		Session: session.NewSession("app", "user", "sess"),
 	}
 
 	p.ProcessRequest(context.Background(), inv, req, nil)
 	require.Len(t, req.Messages, 1)
 	assert.Equal(t, model.RoleUser, req.Messages[0].Role)
+}
+
+func TestOnDemandSessionRequestProcessor_LoadOnlyOverview(t *testing.T) {
+	p := NewOnDemandSessionRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hello"),
+		},
+	}
+	inv := &agent.Invocation{
+		Session:        session.NewSession("app", "user", "sess"),
+		SessionService: sessioninmemory.NewSessionService(),
+	}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.Len(t, req.Messages, 2)
+	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	assert.Contains(t, req.Messages[0].Content, "Exact session history loading is available.")
+	assert.NotContains(t, req.Messages[0].Content, "Use session_search before session_load")
+}
+
+func TestOnDemandSessionRequestProcessor_SearchOnlyOverview(t *testing.T) {
+	p := NewOnDemandSessionRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hello"),
+		},
+	}
+	inv := &agent.Invocation{
+		Session: session.NewSession("app", "user", "sess"),
+		SessionService: &onDemandSearchOnlyService{
+			Service: sessioninmemory.NewSessionService(),
+		},
+	}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.Len(t, req.Messages, 2)
+	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	assert.Contains(t, req.Messages[0].Content, "Use session_search")
+	assert.NotContains(t, req.Messages[0].Content, "Exact session history loading is available.")
+}
+
+func TestOnDemandSessionRequestProcessor_EmptySystemMessage(t *testing.T) {
+	p := NewOnDemandSessionRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage(""),
+			model.NewUserMessage("hello"),
+		},
+	}
+	inv := &agent.Invocation{
+		Session:        session.NewSession("app", "user", "sess"),
+		SessionService: sessioninmemory.NewSessionService(),
+	}
+
+	p.ProcessRequest(context.Background(), inv, req, nil)
+	require.Len(t, req.Messages, 2)
+	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	assert.Equal(t, onDemandSessionLoadOverview, req.Messages[0].Content)
+
+	p.ProcessRequest(context.Background(), nil, nil, nil)
 }
 
 func TestOnDemandSessionRequestProcessor_InsertsSystemMessage(t *testing.T) {
@@ -96,6 +169,32 @@ func TestOnDemandSessionRequestProcessor_InsertsSystemMessage(t *testing.T) {
 	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	assert.Contains(t, req.Messages[0].Content, "scope=current_session")
 	assert.Equal(t, model.RoleUser, req.Messages[1].Role)
+}
+
+func TestOnDemandSessionRequestProcessor_EmitsInstructionEvent(t *testing.T) {
+	p := NewOnDemandSessionRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewUserMessage("hello"),
+		},
+	}
+	inv := &agent.Invocation{
+		InvocationID:   "invocation",
+		AgentName:      "agent",
+		Session:        session.NewSession("app", "user", "sess"),
+		SessionService: sessioninmemory.NewSessionService(),
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessRequest(context.Background(), inv, req, ch)
+	require.Len(t, req.Messages, 2)
+	select {
+	case got := <-ch:
+		require.NotNil(t, got)
+		require.Equal(t, model.ObjectTypePreprocessingInstruction, got.Object)
+	case <-time.After(time.Second):
+		t.Fatal("expected preprocessing instruction event")
+	}
 }
 
 func TestOnDemandSessionRequestProcessor_RebuildForContextCompaction(t *testing.T) {
