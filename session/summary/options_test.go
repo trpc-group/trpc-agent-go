@@ -143,7 +143,7 @@ func TestOptions(t *testing.T) {
 	t.Run("WithTokenThreshold ignores summarizer tool result formatter", func(t *testing.T) {
 		s := NewSummarizer(
 			&testModel{},
-			WithToolResultFormatter(func(model.Message) string { return "" }),
+			WithToolResultFormatter(func(model.Message) string { return "[tool result]" }),
 			WithTokenThreshold(100),
 		)
 		sess := &session.Session{Events: []event.Event{
@@ -160,6 +160,28 @@ func TestOptions(t *testing.T) {
 			},
 		}}
 		assert.True(t, s.ShouldSummarize(sess))
+	})
+
+	t.Run("WithTokenThreshold skips empty summary input", func(t *testing.T) {
+		s := NewSummarizer(
+			&testModel{},
+			WithToolResultFormatter(func(model.Message) string { return "" }),
+			WithTokenThreshold(100),
+		)
+		sess := &session.Session{Events: []event.Event{
+			{
+				Author:    "tool",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ToolID:   "call-1",
+						ToolName: "read_file",
+						Content:  strings.Repeat("x", 2000),
+					},
+				}}},
+			},
+		}}
+		assert.False(t, s.ShouldSummarize(sess))
 	})
 
 	t.Run("WithChecksAny token checker honors skipRecent-filtered input", func(t *testing.T) {
@@ -204,7 +226,7 @@ func TestOptions(t *testing.T) {
 	t.Run("WithChecksAny token checker ignores summarizer tool result formatter", func(t *testing.T) {
 		s := NewSummarizer(
 			&testModel{},
-			WithToolResultFormatter(func(model.Message) string { return "" }),
+			WithToolResultFormatter(func(model.Message) string { return "[tool result]" }),
 			WithChecksAny(CheckTokenThreshold(100)),
 		)
 		sess := &session.Session{Events: []event.Event{

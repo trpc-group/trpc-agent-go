@@ -1683,7 +1683,7 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 
 	t.Run("injects token text without summary input formatter", func(t *testing.T) {
 		s := &sessionSummarizer{
-			toolResultFormatter: func(model.Message) string { return "" },
+			toolResultFormatter: func(model.Message) string { return "[tool result]" },
 		}
 		content := strings.Repeat("x", 2000)
 		sess := &session.Session{
