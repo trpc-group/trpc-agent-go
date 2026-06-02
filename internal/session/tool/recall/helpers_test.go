@@ -525,6 +525,22 @@ func TestLoadedMessageFromModelMessageContentPartsAndSlicingEdges(t *testing.T) 
 	assert.Equal(t, "parts_tool: alpha\nbeta", loaded.Content)
 	assert.Equal(t, len("alpha\nbeta"), loaded.ContentBytes)
 
+	loaded, ok = loadedMessageFromModelMessage(
+		"evt-slice",
+		time.Time{},
+		model.Message{
+			Role:    model.RoleTool,
+			ToolID:  "call-slice",
+			Content: "0123456789",
+		},
+		loadContentWindow{ToolCallID: "call-slice", Offset: 3, Limit: 4},
+	)
+	require.True(t, ok)
+	assert.Equal(t, "3456", loaded.Content)
+	assert.Equal(t, 3, loaded.ContentOffset)
+	assert.Equal(t, 4, loaded.ReturnedBytes)
+	assert.True(t, loaded.ContentTruncated)
+
 	sliced, start, returned, truncated := sliceContentByBytes("你好", 100, 3)
 	assert.Empty(t, sliced)
 	assert.Equal(t, len("你好"), start)
