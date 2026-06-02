@@ -43,6 +43,7 @@ nav:
           - Overview: knowledge/index.md
           - Embedder: knowledge/embedder.md
           - Reranker: knowledge/reranker.md
+          - Query Enhancer: knowledge/query-enhancer.md
           - Source: knowledge/source.md
           - Filter: knowledge/filter.md
           - Extractor: knowledge/extractor.md
@@ -127,6 +128,7 @@ plugins:
                     - 概述: knowledge/index.md
                     - Embedder: knowledge/embedder.md
                     - Reranker: knowledge/reranker.md
+                    - Query Enhancer: knowledge/query-enhancer.md
                     - 数据源: knowledge/source.md
                     - 内容提取器: knowledge/extractor.md
                     - 过滤器: knowledge/filter.md

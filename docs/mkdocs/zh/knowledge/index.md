@@ -178,7 +178,8 @@ knowledge/
 │   └── reader/          # 文档读取器（支持 txt/md/csv/json/docx/pdf 等格式）
 ├── query/                # 查询增强器
 │   ├── query.go         # QueryEnhancer 接口定义
-│   └── passthrough.go   # 默认透传增强器
+│   ├── passthrough.go   # 默认透传增强器
+│   └── llm.go           # LLM 查询改写增强器
 └── ocr/                  # OCR 文字识别
     ├── ocr.go           # Extractor 接口定义
     └── tesseract/       # Tesseract OCR 实现（独立 go.mod）
@@ -422,6 +423,7 @@ err := kb.Load(ctx,
 - [向量存储](vectorstore/index.md) - 配置各种向量数据库后端
 - [Embedder](embedder.md) - 文本向量化模型配置
 - [Reranker](reranker.md) - 检索结果精排
+- [Query Enhancer](query-enhancer.md) - 多轮对话查询改写与增强
 - [文档源](source.md) - 文件、目录、URL 等知识来源配置
 - [Extractor 内容提取](extractor.md) - 复杂文档和网页转 Markdown / 文本
 - [OCR 图片文字识别](ocr.md) - 配置 Tesseract OCR 提取文本

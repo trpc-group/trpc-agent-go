@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // DefaultRetriever implements the complete RAG pipeline.
@@ -86,6 +87,9 @@ func (dr *DefaultRetriever) Retrieve(ctx context.Context, q *Query) (*Result, er
 			return nil, err
 		}
 		finalQuery = enhanced.Enhanced
+		if finalQuery != q.Text {
+			log.DebugfContext(ctx, "query enhanced: %q -> %q", q.Text, finalQuery)
+		}
 	}
 
 	// Step 2: Generate embedding.
