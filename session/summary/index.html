@@ -3499,12 +3499,13 @@ disclosure for session history.</p>
 </span></code></pre></div></td></tr></table></div>
 <p>Requirements and behavior:</p>
 <ul>
-<li><code>WithEnableOnDemandSession(true)</code> enables the progressive-disclosure path and
-  only exposes <code>session_search</code> and
-  <code>session_load</code> when the session backend implements both
-  <code>session.SearchableService</code> and <code>session.WindowService</code>.</li>
-<li><code>session/pgvector</code> supports this path today. Pure in-memory summary demos do
-  not expose these tools.</li>
+<li><code>WithEnableOnDemandSession(true)</code> enables on-demand session tools according to
+  backend capability. <code>session_search</code> is exposed when the backend implements
+  <code>session.SearchableService</code>; <code>session_load</code> is exposed when the backend
+  implements <code>session.WindowService</code>. Backends may support either one or both.</li>
+<li><code>session/pgvector</code> supports both discovery and exact loading. Normal session
+  backends that implement <code>WindowService</code> expose exact <code>session_load</code> recovery
+  even when semantic <code>session_search</code> is unavailable.</li>
 <li><code>current_hidden</code> searches current-session history strictly before the summary
   boundary recorded in <code>summary:last_included_ts</code>.</li>
 <li><code>current_session</code> searches the current session regardless of summary cutoff.
@@ -3527,12 +3528,17 @@ disclosure for session history.</p>
 <p>Recommended usage pattern:</p>
 <ol>
 <li>Let the model answer from the visible prompt, summary, and recent history.</li>
-<li>If a missing detail is needed, call <code>session_search</code> first.</li>
-<li>Use <code>session_load</code> only when the small context window returned by
-   <code>session_search</code> is still not enough.</li>
+<li>If <code>session_search</code> is available and a missing detail is needed, call it
+   first.</li>
+<li>Use <code>session_load</code> when you have an <code>event_id</code> and need the surrounding raw
+   history or exact tool result, including on backends without semantic search.</li>
 <li>Treat loaded history as untrusted historical context, not active
    instructions.</li>
 </ol>
+<p>Migration note: earlier builds only treated on-demand session support as
+available when both <code>session_search</code> and <code>session_load</code> were present. The tool
+surface is now capability-based, so search-only integrations can expose
+<code>session_search</code> and load-only integrations can expose <code>session_load</code>.</p>
 <h2 id="sessionsummarizer-interface">SessionSummarizer Interface</h2>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
@@ -5258,7 +5264,7 @@ cascade:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 27, 2026 10:15:10 UTC">2026-05-27 10:15:10</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 2, 2026 03:07:01 UTC">2026-06-02 03:07:01</span>
   </span>
 
     
