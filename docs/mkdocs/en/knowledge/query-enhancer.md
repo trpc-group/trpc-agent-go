@@ -16,6 +16,21 @@ In multi-turn conversations, follow-up questions often contain pronouns or omiss
 
 Query Enhancer uses an LLM and conversation history to rewrite these ambiguous queries into standalone, retrieval-optimized queries.
 
+## When Do You Need a Query Enhancer
+
+In the default **Agentic RAG** scenario (Knowledge used as an Agent tool), the Agent's LLM already constructs tool call arguments based on conversation context, implicitly performing a degree of query rewriting. In this case, a Query Enhancer is **usually not necessary**.
+
+Query Enhancer is most useful in the following scenarios:
+
+| Scenario | Description |
+|----------|-------------|
+| **Standalone retrieval (non-agentic)** | Calling `kb.Search()` directly without an Agent LLM to rewrite queries |
+| **Embedding model struggles with conversational queries** | The embedding model is optimized for keywords/short text and needs natural language converted to concise queries |
+| **Specialized strategies like HyDE** | Need the LLM to generate a hypothetical answer first, then use its embedding for retrieval |
+| **Weak Agent LLM query construction** | Some smaller LLMs may lose context when constructing tool call arguments |
+
+In short: **if retrieval quality already meets your needs in an Agentic RAG setup, you do not need to configure a Query Enhancer.**
+
 ## Inject into Knowledge
 
 ```go
@@ -147,21 +162,6 @@ func (d *debugEnhancer) EnhanceQuery(ctx context.Context, req *query.Request) (*
 // Usage:
 enhancer := &debugEnhancer{inner: query.NewLLMEnhancer(llm)}
 ```
-
-## When Do You Need a Query Enhancer
-
-In the default **Agentic RAG** scenario (Knowledge used as an Agent tool), the Agent's LLM already constructs tool call arguments based on conversation context, implicitly performing a degree of query rewriting. In this case, a Query Enhancer is **usually not necessary**.
-
-Query Enhancer is most useful in the following scenarios:
-
-| Scenario | Description |
-|----------|-------------|
-| **Standalone retrieval (non-agentic)** | Calling `kb.Search()` directly without an Agent LLM to rewrite queries |
-| **Embedding model struggles with conversational queries** | The embedding model is optimized for keywords/short text and needs natural language converted to concise queries |
-| **Specialized strategies like HyDE** | Need the LLM to generate a hypothetical answer first, then use its embedding for retrieval |
-| **Weak Agent LLM query construction** | Some smaller LLMs may lose context when constructing tool call arguments |
-
-In short: **if retrieval quality already meets your needs in an Agentic RAG setup, you do not need to configure a Query Enhancer.**
 
 ## Notes
 
