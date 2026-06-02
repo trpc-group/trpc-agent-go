@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AGE Graph Viewer - developed by tRPC</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+  <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js" integrity="sha384-yxKDWWf0wwdUj/gPeuL11czrnKFQROnLgY8ll7En9NYoXibgg3C6NK/UDHNtUgWJ" crossorigin="anonymous"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --line: #d8dde6;
+      --text: #20242a;
+      --muted: #68707d;
+      --accent: #176b87;
+      --accent-2: #2d7d46;
+      --danger: #aa3f3f;
+      --code: #f0f3f7;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    body {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(180px, 260px) minmax(0, 1fr) minmax(120px, auto);
+      align-items: center;
+      gap: 14px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    h1 {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      margin: 0;
+      font-size: 17px;
+      font-weight: 650;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+
+    h1 small {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--muted);
+    }
+
+    input, button, select {
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+    }
+
+    .form-control, .form-select, .btn {
+      height: 36px;
+      min-height: 36px;
+      font-size: 13px;
+      line-height: 1.2;
+    }
+
+    .form-label {
+      margin-bottom: 3px;
+    }
+
+    input {
+      width: 100%;
+      padding: 0 10px;
+    }
+
+    input[type="number"] { min-width: 0; }
+
+    button {
+      padding: 0 13px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary {
+      --bs-btn-bg: var(--accent);
+      --bs-btn-border-color: var(--accent);
+      --bs-btn-hover-bg: #12576e;
+      --bs-btn-hover-border-color: #12576e;
+      --bs-btn-active-bg: #104d62;
+      --bs-btn-active-border-color: #104d62;
+    }
+
+    button.secondary {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: #fff;
+    }
+
+    .btn-outline-secondary {
+      --bs-btn-color: var(--accent);
+      --bs-btn-border-color: var(--accent);
+      --bs-btn-hover-bg: #eef7fb;
+      --bs-btn-hover-border-color: var(--accent);
+      --bs-btn-hover-color: var(--accent);
+      --bs-btn-active-bg: #dceff5;
+      --bs-btn-active-border-color: var(--accent);
+      --bs-btn-active-color: var(--accent);
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: .68;
+    }
+
+    .filter-controls {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .filter-controls.row {
+      margin-left: 0;
+      margin-right: 0;
+    }
+
+    .limit-input {
+      width: 88px;
+    }
+
+    .tools {
+      display: grid;
+      grid-template-columns: minmax(260px, 0.85fr) minmax(420px, 1.15fr);
+      align-items: center;
+      gap: 18px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+
+    .tool-group {
+      display: grid;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .tool-group.search-loaded {
+      grid-template-columns: auto minmax(180px, 1fr) auto;
+    }
+
+    .tool-group.find-path {
+      grid-template-columns: auto minmax(170px, 1fr) minmax(170px, 1fr) auto;
+      padding-left: 18px;
+      border-left: 1px solid var(--line);
+    }
+
+    .tool-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .field { min-width: 0; }
+
+    .field label {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+
+    main {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 380px;
+      position: relative;
+    }
+
+    #network {
+      min-width: 0;
+      min-height: 0;
+      background: #fbfcfd;
+    }
+
+    /* Loading overlay on the graph canvas */
+    #loading-overlay {
+      display: none;
+      position: absolute;
+      inset: 0 380px 0 0;
+      background: rgba(251,252,253,0.75);
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      color: var(--muted);
+      z-index: 10;
+    }
+    #loading-overlay.visible { display: flex; }
+    .spinner {
+      width: 22px; height: 22px;
+      border: 3px solid var(--line);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin-right: 10px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    aside {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      border-left: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1px;
+      border-bottom: 1px solid var(--line);
+      background: var(--line);
+    }
+
+    .stat {
+      padding: 12px;
+      background: var(--panel);
+    }
+
+    .stat strong {
+      display: block;
+      font-size: 20px;
+      line-height: 1.1;
+    }
+
+    .stat span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .summary {
+      max-height: 170px;
+      overflow: auto;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .summary-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid #edf0f4;
+      font-size: 12px;
+    }
+
+    .summary-row code {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .summary-row b {
+      color: var(--accent-2);
+      font-weight: 700;
+    }
+
+    .details {
+      min-height: 0;
+      overflow: auto;
+      padding: 14px;
+    }
+
+    .details h2 {
+      margin: 0 0 4px;
+      font-size: 18px;
+      line-height: 1.25;
+      letter-spacing: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 12px 0;
+    }
+
+    .pill {
+      padding: 3px 7px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #f8fafc;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    pre {
+      margin: 10px 0 0;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--code);
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .section-title {
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .expand-btn {
+      margin-top: 14px;
+      width: 100%;
+      height: 32px;
+      font-size: 12px;
+      border-color: var(--accent);
+      color: var(--accent);
+      background: #fff;
+    }
+
+    .expand-btn:hover { background: #eef7fb; }
+
+    .status {
+      min-width: 140px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: right;
+    }
+
+    .status.error { color: var(--danger); }
+
+    @media (max-width: 900px) {
+      body { grid-template-rows: auto auto minmax(0, 1fr); }
+      header, .tools, .tool-group.search-loaded, .tool-group.find-path {
+        grid-template-columns: 1fr;
+      }
+      .tool-group.find-path {
+        padding-left: 0;
+        padding-top: 8px;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+      main {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(360px, 1fr) 360px;
+      }
+      #loading-overlay { inset: 0 0 360px 0; }
+      aside {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+      .status { text-align: left; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>
+      <span>AGE Graph Viewer</span>
+      <small>double-click node to expand edges<br>developed by tRPC</small>
+    </h1>
+    <div class="filter-controls row g-2 align-items-end">
+      <div class="col-auto">
+        <div class="tool-label mb-1">Load / Filter</div>
+      </div>
+      <div class="field col-12 col-lg-2">
+        <label class="form-label" for="query-field">Field</label>
+        <select id="query-field" class="form-select form-select-sm" title="Field to search">
+          <optgroup label="Node fields">
+            <option value="name">name</option>
+            <option value="id">id (source key)</option>
+          </optgroup>
+          <optgroup label="Metadata — identity">
+            <option value="metadata.trpc_ast_name">trpc_ast_name</option>
+            <option value="metadata.trpc_ast_full_name">trpc_ast_full_name</option>
+            <option value="metadata.trpc_ast_signature">trpc_ast_signature</option>
+          </optgroup>
+          <optgroup label="Metadata — location">
+            <option value="metadata.trpc_ast_package">trpc_ast_package</option>
+            <option value="metadata.trpc_ast_file_path">trpc_ast_file_path</option>
+          </optgroup>
+          <optgroup label="Metadata — type / scope">
+            <option value="metadata.trpc_ast_type">trpc_ast_type</option>
+            <option value="metadata.trpc_ast_scope">trpc_ast_scope</option>
+          </optgroup>
+          <optgroup label="Content (slow)">
+            <option value="content">content</option>
+            <option value="metadata.trpc_ast_comment">trpc_ast_comment</option>
+          </optgroup>
+        </select>
+      </div>
+      <div class="field col-12 col-lg">
+        <label class="form-label" for="query">Value</label>
+        <input id="query" class="form-control form-control-sm" type="search" placeholder="Substring to match (case-insensitive)" autocomplete="off">
+      </div>
+      <div class="field col-6 col-lg-auto">
+        <label class="form-label" for="node-limit">Nodes</label>
+        <input id="node-limit" class="form-control form-control-sm limit-input" type="number" min="1" max="5000" value="100" title="Node limit">
+      </div>
+      <div class="field col-6 col-lg-auto">
+        <label class="form-label" for="edge-limit">Edges</label>
+        <input id="edge-limit" class="form-control form-control-sm limit-input" type="number" min="1" max="20000" value="1000" title="Edge limit">
+      </div>
+      <div class="field col-12 col-lg-2">
+        <label class="form-label" for="edge-type">Edge Type</label>
+        <select id="edge-type" class="form-select form-select-sm" title="Edge type">
+          <option value="">All edges</option>
+        </select>
+      </div>
+      <div class="col-12 col-lg-auto">
+        <button id="load" class="btn btn-primary btn-sm w-100" type="button">Load</button>
+      </div>
+    </div>
+    <div id="status" class="status">Ready</div>
+  </header>
+  <section class="tools">
+    <div class="tool-group search-loaded">
+      <div class="tool-label">Search Loaded Graph</div>
+      <input id="current-search" class="form-control form-control-sm" type="search" placeholder="Node name, id, content, or metadata" autocomplete="off">
+      <button id="clear-current-search" class="btn btn-outline-secondary btn-sm" type="button">Clear</button>
+    </div>
+    <div class="tool-group find-path">
+      <div class="tool-label">Find Path</div>
+      <input id="path-from" class="form-control form-control-sm" type="search" placeholder="From Node ID" autocomplete="off">
+      <input id="path-to" class="form-control form-control-sm" type="search" placeholder="To Node ID" autocomplete="off">
+      <button id="find-path" class="btn btn-outline-secondary btn-sm" type="button">Find</button>
+    </div>
+  </section>
+  <main>
+    <div id="network"></div>
+    <div id="loading-overlay">
+      <div class="spinner"></div>
+      <span id="loading-text">Loading…</span>
+    </div>
+    <aside>
+      <div class="stats">
+        <div class="stat"><strong id="node-count">0</strong><span>Nodes</span></div>
+        <div class="stat"><strong id="edge-count">0</strong><span>Edges</span></div>
+      </div>
+      <div id="summary" class="summary"></div>
+      <div id="details" class="details">
+        <h2>No node selected</h2>
+        <div class="muted">Click a node to inspect. Double-click to expand neighbours.</div>
+      </div>
+    </aside>
+  </main>
+  <script>
+    // ── vis-network setup ───────────────────────────────────────────────────
+    const nodeDS = new vis.DataSet();
+    const edgeDS = new vis.DataSet();
+    const detailsByVisID = new Map();   // vis internal id → node object
+    const detailsByPropID = new Map();  // node.properties.id → node object
+
+    const kindColors = {
+      Function:  { background: "#e8f4ff", border: "#176b87" },
+      Method:    { background: "#ddeeff", border: "#0d4f66" },
+      Struct:    { background: "#edfaed", border: "#2d7d46" },
+      Interface: { background: "#fffbe8", border: "#a07a20" },
+      Package:   { background: "#f3eeff", border: "#6b42b8" },
+      Variable:  { background: "#fff0f0", border: "#aa4444" },
+      Alias:     { background: "#f5f5f5", border: "#888" },
+      Service:   { background: "#e8f4ff", border: "#176b87" },
+      RPC:       { background: "#edfaed", border: "#2d7d46" },
+      Message:   { background: "#fffbe8", border: "#a07a20" },
+    };
+
+    function nodeColor(kind) {
+      return kindColors[kind] || { background: "#ffffff", border: "#97a3b3" };
+    }
+
+    const network = new vis.Network(
+      document.getElementById("network"),
+      { nodes: nodeDS, edges: edgeDS },
+      {
+        autoResize: true,
+        interaction: { hover: true, multiselect: false, navigationButtons: true },
+        physics: {
+          stabilization: { iterations: 120 },
+          barnesHut: { gravitationalConstant: -5200, springLength: 160, springConstant: 0.035 }
+        },
+        nodes: {
+          shape: "dot",
+          size: 18,
+          borderWidth: 2,
+          font: { size: 13, face: "-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif", color: "#20242a" }
+        },
+        edges: {
+          arrows: { to: { enabled: true, scaleFactor: 0.65 } },
+          color: { color: "#97a3b3", highlight: "#176b87" },
+          font: { size: 11, align: "middle", color: "#68707d", strokeWidth: 3, strokeColor: "#ffffff" },
+          smooth: { type: "dynamic" }
+        }
+      }
+    );
+
+    // ── element refs ────────────────────────────────────────────────────────
+    const statusEl    = document.getElementById("status");
+    const queryEl     = document.getElementById("query");
+    const queryFieldEl = document.getElementById("query-field");
+    const nodeLimitEl = document.getElementById("node-limit");
+    const edgeLimitEl = document.getElementById("edge-limit");
+    const edgeTypeEl  = document.getElementById("edge-type");
+    const currentSearchEl = document.getElementById("current-search");
+    const clearCurrentSearchEl = document.getElementById("clear-current-search");
+    const pathFromEl = document.getElementById("path-from");
+    const pathToEl   = document.getElementById("path-to");
+    const findPathEl = document.getElementById("find-path");
+    const loadEl      = document.getElementById("load");
+    const detailsEl   = document.getElementById("details");
+    const overlayEl   = document.getElementById("loading-overlay");
+    const loadingText = document.getElementById("loading-text");
+
+    // ── events ──────────────────────────────────────────────────────────────
+    const slowFields = new Set(["content", "metadata.trpc_ast_comment"]);
+    const metadataSlowFields = new Set([
+      "metadata.trpc_ast_package", "metadata.trpc_ast_file_path",
+      "metadata.trpc_ast_full_name", "metadata.trpc_ast_signature",
+      "metadata.trpc_ast_scope", "metadata.trpc_ast_name",
+    ]);
+
+    function updateQueryPlaceholder() {
+      const f = queryFieldEl.value;
+      if (slowFields.has(f)) {
+        queryEl.placeholder = "Substring to match — full text scan, may be slow";
+      } else if (metadataSlowFields.has(f)) {
+        queryEl.placeholder = "Substring to match — JSON metadata scan, may be slow";
+      } else {
+        queryEl.placeholder = "Substring to match (case-insensitive)";
+      }
+    }
+
+    let debounceTimer = null;
+    let graphLoadController = null;
+    function debounceLoad() {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => loadGraph(true), 350);
+    }
+
+    loadEl.addEventListener("click", () => loadGraph(true));
+    queryEl.addEventListener("keydown", e => { if (e.key === "Enter") { clearTimeout(debounceTimer); loadGraph(true); } });
+    queryEl.addEventListener("input", debounceLoad);
+    queryFieldEl.addEventListener("change", () => {
+      updateQueryPlaceholder();
+      if (queryEl.value.trim()) loadGraph(true);
+    });
+    edgeTypeEl.addEventListener("change", () => loadGraph(true));
+    currentSearchEl.addEventListener("input", () => searchCurrentGraph(currentSearchEl.value));
+    clearCurrentSearchEl.addEventListener("click", () => {
+      currentSearchEl.value = "";
+      resetHighlights();
+      setStatus(`${nodeDS.length} node(s) · ${edgeDS.length} edge(s)`, false);
+    });
+    findPathEl.addEventListener("click", findPath);
+    for (const el of [pathFromEl, pathToEl]) {
+      el.addEventListener("keydown", e => {
+        if (e.key === "Enter") findPath();
+      });
+    }
+    updateQueryPlaceholder();
+
+    network.on("click", params => {
+      if (!params.nodes.length) return;
+      renderDetails(detailsByVisID.get(params.nodes[0]));
+    });
+
+    network.on("doubleClick", async params => {
+      if (!params.nodes.length) return;
+      const nodeData = detailsByVisID.get(params.nodes[0]);
+      const propID = nodeData?.properties?.id;
+      if (!propID) return;
+      await expandNeighbors(propID);
+    });
+
+    // ── graph loading ────────────────────────────────────────────────────────
+    async function loadGraph(replace) {
+      if (graphLoadController) graphLoadController.abort();
+      const controller = new AbortController();
+      graphLoadController = controller;
+      setLoading("Loading…");
+      loadEl.disabled = true;
+      try {
+        const params = new URLSearchParams({
+          node_limit: boundedNumber(nodeLimitEl.value, 100, 1, 5000),
+          edge_limit: boundedNumber(edgeLimitEl.value, 1000, 1, 20000)
+        });
+        if (queryEl.value.trim()) {
+          params.set("query", queryEl.value.trim());
+          params.set("query_field", queryFieldEl.value);
+        }
+        if (edgeTypeEl.value.trim()) {
+          params.set("edge_type", edgeTypeEl.value.trim());
+        }
+        const response = await fetch(`/api/graph?${params}`, { signal: controller.signal });
+        if (!response.ok) throw new Error(await response.text());
+        const graph = await response.json();
+        if (controller !== graphLoadController) return;
+        applyGraph(graph, replace);
+        resetHighlights();
+        const msg = graph.message ? ` · ${graph.message}` : "";
+        setStatus(`${nodeDS.length} node(s) · ${edgeDS.length} edge(s)${msg}`, false);
+      } catch (err) {
+        if (err.name === "AbortError") return;
+        setStatus(err.message || String(err), true);
+      } finally {
+        if (controller === graphLoadController) {
+          loadEl.disabled = false;
+          clearLoading();
+        }
+      }
+    }
+
+    async function expandNeighbors(propID) {
+      setLoading("Expanding…");
+      try {
+        const params = new URLSearchParams({
+          id: propID,
+          node_limit: boundedNumber(nodeLimitEl.value, 100, 1, 5000),
+          edge_limit: 200
+        });
+        if (edgeTypeEl.value.trim()) {
+          params.set("edge_type", edgeTypeEl.value.trim());
+        }
+        const response = await fetch(`/api/neighbors?${params}`);
+        if (!response.ok) throw new Error(await response.text());
+        const graph = await response.json();
+        applyGraph(graph, false);   // incremental merge
+        setStatus(`${nodeDS.length} node(s) · ${edgeDS.length} edge(s)`, false);
+      } catch (err) {
+        setStatus(err.message || String(err), true);
+      } finally {
+        clearLoading();
+      }
+    }
+
+    async function findPath() {
+      const fromID = pathFromEl.value.trim();
+      const toID = pathToEl.value.trim();
+      if (!fromID || !toID) {
+        setStatus("from/to Node ID are required", true);
+        return;
+      }
+      setLoading("Finding path…");
+      findPathEl.disabled = true;
+      try {
+        const params = new URLSearchParams({ from_id: fromID, to_id: toID });
+        const response = await fetch(`/api/path?${params}`);
+        if (!response.ok) throw new Error(await response.text());
+        const graph = await response.json();
+        applyGraph(graph, false);
+        highlightPath(graph);
+        const msg = graph.message ? ` · ${graph.message}` : "";
+        setStatus(`${nodeDS.length} node(s) · ${edgeDS.length} edge(s)${msg}`, false);
+      } catch (err) {
+        setStatus(err.message || String(err), true);
+      } finally {
+        findPathEl.disabled = false;
+        clearLoading();
+      }
+    }
+
+    // ── incremental graph merge ──────────────────────────────────────────────
+    function applyGraph(graph, replace) {
+      if (replace) {
+        detailsByVisID.clear();
+        detailsByPropID.clear();
+        nodeDS.clear();
+        edgeDS.clear();
+      }
+
+      const addNodes = [];
+      const addEdges = [];
+
+      for (const n of (graph.nodes || [])) {
+        if (nodeDS.get(n.id) != null) continue;   // already present
+        const col = nodeColor(n.kind);
+        detailsByVisID.set(n.id, n);
+        if (n.properties?.id) detailsByPropID.set(n.properties.id, n);
+        addNodes.push({
+          id:    n.id,
+          label: n.name || n.label || n.id,
+          title: n.kind || n.label || "",
+          color: nodeColorConfig(col)
+        });
+      }
+
+      for (const e of (graph.edges || [])) {
+        if (edgeDS.get(e.id) != null) continue;
+        addEdges.push({ id: e.id, from: e.from, to: e.to, label: e.label, color: "#97a3b3", width: 1 });
+      }
+
+      nodeDS.add(addNodes);
+      edgeDS.add(addEdges);
+
+      document.getElementById("node-count").textContent = String(nodeDS.length);
+      document.getElementById("edge-count").textContent = String(edgeDS.length);
+
+      if (replace && nodeDS.length > 0) {
+        network.fit({ animation: { duration: 250, easingFunction: "easeInOutQuad" } });
+      }
+    }
+
+    function searchCurrentGraph(value) {
+      const needle = value.trim().toLowerCase();
+      resetHighlights();
+      if (!needle) {
+        setStatus(`${nodeDS.length} node(s) · ${edgeDS.length} edge(s)`, false);
+        return;
+      }
+      const matched = [];
+      for (const node of detailsByVisID.values()) {
+        if (!currentGraphText(node).includes(needle)) continue;
+        matched.push(node.id);
+      }
+      nodeDS.update(matched.map(id => ({
+        id,
+        borderWidth: 4,
+        color: { background: "#fff3b0", border: "#b7791f", highlight: { background: "#fff3b0", border: "#b7791f" } }
+      })));
+      if (matched.length > 0) {
+        network.selectNodes(matched);
+        network.fit({ nodes: matched, animation: { duration: 250, easingFunction: "easeInOutQuad" } });
+      }
+      setStatus(`${matched.length} match(es) in current graph`, false);
+    }
+
+    function currentGraphText(node) {
+      return [
+        node.id,
+        node.name,
+        node.kind,
+        node.label,
+        node.content,
+        node.properties?.id,
+        JSON.stringify(node.properties?.metadata || {})
+      ].filter(Boolean).join("\n").toLowerCase();
+    }
+
+    function highlightPath(graph) {
+      resetHighlights();
+      const nodeIDs = (graph.nodes || []).map(n => n.id);
+      const edgeIDs = (graph.edges || []).map(e => e.id);
+      nodeDS.update(nodeIDs.map(id => ({
+        id,
+        borderWidth: 4,
+        color: { background: "#e9f9ef", border: "#1f8f4d", highlight: { background: "#e9f9ef", border: "#1f8f4d" } }
+      })));
+      edgeDS.update(edgeIDs.map(id => ({ id, color: "#1f8f4d", width: 4 })));
+      if (nodeIDs.length > 0) {
+        network.selectNodes(nodeIDs);
+        network.fit({ nodes: nodeIDs, animation: { duration: 250, easingFunction: "easeInOutQuad" } });
+      }
+    }
+
+    function resetHighlights() {
+      const nodes = [];
+      for (const node of detailsByVisID.values()) {
+        const col = nodeColor(node.kind);
+        nodes.push({ id: node.id, borderWidth: 2, color: nodeColorConfig(col) });
+      }
+      if (nodes.length > 0) nodeDS.update(nodes);
+      const edges = edgeDS.getIds().map(id => ({ id, color: "#97a3b3", width: 1 }));
+      if (edges.length > 0) edgeDS.update(edges);
+      network.unselectAll();
+    }
+
+    function nodeColorConfig(col) {
+      return {
+        background: col.background,
+        border: col.border,
+        highlight: { background: col.background, border: col.border }
+      };
+    }
+
+    // ── summary ──────────────────────────────────────────────────────────────
+    async function loadSummary() {
+      try {
+        const response = await fetch("/api/summary");
+        if (!response.ok) return;
+        const rows = await response.json();
+        renderSummary(rows);
+        renderEdgeTypeOptions(rows);
+      } catch (err) {
+        console.warn("summary load failed:", err);
+      }
+    }
+
+    function renderEdgeTypeOptions(rows) {
+      const selected = edgeTypeEl.value;
+      const labels = Array.from(new Set((rows || []).map(row => row.edge_label).filter(Boolean))).sort();
+      edgeTypeEl.innerHTML = "";
+      const all = document.createElement("option");
+      all.value = "";
+      all.textContent = "All edges";
+      edgeTypeEl.appendChild(all);
+      for (const label of labels) {
+        const option = document.createElement("option");
+        option.value = label;
+        option.textContent = label;
+        edgeTypeEl.appendChild(option);
+      }
+      edgeTypeEl.value = labels.includes(selected) ? selected : "";
+    }
+
+    function renderSummary(rows) {
+      const container = document.getElementById("summary");
+      container.innerHTML = "";
+      for (const row of (rows || [])) {
+        const item = document.createElement("div");
+        item.className = "summary-row";
+        const code = document.createElement("code");
+        code.textContent = `${row.from_label} - ${row.edge_label} -> ${row.to_label}`;
+        const count = document.createElement("b");
+        count.textContent = row.count;
+        item.append(code, count);
+        container.appendChild(item);
+      }
+    }
+
+    // ── detail panel ─────────────────────────────────────────────────────────
+    function renderDetails(node) {
+      if (!node) return;
+      const metadata = (node.properties && node.properties.metadata) || {};
+      const propID   = node.properties?.id || "";
+      detailsEl.innerHTML = "";
+
+      const title = document.createElement("h2");
+      title.textContent = node.name || propID || node.id;
+
+      const pills = document.createElement("div");
+      pills.className = "pill-row";
+      for (const value of [node.label, node.kind, metadata.trpc_ast_package, metadata.trpc_ast_file_path].filter(Boolean)) {
+        const pill = document.createElement("span");
+        pill.className = "pill";
+        pill.textContent = String(value);
+        pills.appendChild(pill);
+      }
+
+      detailsEl.append(title, pills);
+      if (propID) appendSection("Node ID", propID);
+      appendSection("Name", node.name || "");
+      appendSection("Content", node.content || "");
+      appendSection("Metadata", JSON.stringify(metadata, null, 2));
+
+      if (propID) {
+        const btn = document.createElement("button");
+        btn.className = "expand-btn";
+        btn.textContent = "Expand neighbours (double-click also works)";
+        btn.addEventListener("click", () => expandNeighbors(propID));
+        detailsEl.appendChild(btn);
+      }
+    }
+
+    function appendSection(title, content) {
+      if (!content) return;
+      const label = document.createElement("div");
+      label.className = "section-title";
+      label.textContent = title;
+      const pre = document.createElement("pre");
+      pre.textContent = content;
+      detailsEl.append(label, pre);
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+    function setLoading(msg) {
+      loadingText.textContent = msg;
+      overlayEl.classList.add("visible");
+    }
+
+    function clearLoading() {
+      overlayEl.classList.remove("visible");
+    }
+
+    function setStatus(message, isError) {
+      statusEl.textContent = message;
+      statusEl.classList.toggle("error", Boolean(isError));
+    }
+
+    function boundedNumber(value, fallback, min, max) {
+      const parsed = Number.parseInt(value, 10);
+      if (!Number.isFinite(parsed)) return String(fallback);
+      return String(Math.min(Math.max(parsed, min), max));
+    }
+
+    // ── init ──────────────────────────────────────────────────────────────────
+    loadSummary();
+    loadGraph(true);
+  </script>
+</body>
+</html>
