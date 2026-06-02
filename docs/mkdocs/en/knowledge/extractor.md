@@ -16,7 +16,7 @@ This is useful for inputs such as PDFs, HTML, Office documents, and images that 
 
 - **Extractor**: converts complex formats into `markdown` or `text`; conceptually it is document conversion, and some implementations may also include OCR internally
 - **Reader**: reads `markdown`, `text`, `json`, `csv`, and other supported formats, then performs chunking
-- **OCR**: recognizes text from images or scanned pages, usually as an internal enhancement for PDF reading
+- **OCR**: recognizes text from images or scanned pages; the legacy API used it as an internal PDF Reader enhancement, while new code should put OCR in the Extractor path
 
 You can think of them like this:
 
@@ -69,9 +69,9 @@ Docling is a good fit for:
 - HTML pages -> Markdown
 - Office documents -> Markdown / text
 
-For scanned PDFs, image-based PDFs, and structurally complex HTML / Office documents, **Docling should generally be the preferred main processing path**.
+For scanned PDFs, image-based PDFs, images, and structurally complex HTML / Office documents, **Docling should generally be the preferred main processing path**.
 
-Also note that `Docling` already includes OCR capability internally, so in this kind of pipeline you usually **do not need to configure a separate OCR capability in addition to it**.
+`Docling` already includes OCR capability internally, so in this kind of pipeline you usually **do not need to configure a separate OCR capability in addition to it**. `docling.New()` enables OCR by default; pass `docling.WithOCR(false)` only when you need to disable it.
 
 ## Example
 
@@ -131,16 +131,11 @@ Cases where you may not need an `Extractor`:
 
 - the input is already `.md`, `.txt`, `.json`, or another directly readable format
 - you only need plain text extraction from PDF and do not care about Markdown structure
-- you only need OCR on image content rather than full document conversion
 
-Cases where `OCR` may be a better fit than an `Extractor`:
-
-- the input is a single image or a pure image stream
-- you only care about recognized plain text, not Markdown structure or layout preservation
-- you want OCR to be used as an internal enhancement for a Reader instead of introducing a full document conversion service
+The standalone `OCR` API is deprecated. For new code that needs OCR, prefer an `Extractor` with built-in OCR capability.
 
 ## Related documents
 
 - [Source](source.md) - Source types and configuration
-- [OCR](ocr.md) - OCR for scanned documents and images
+- [OCR](ocr.md) - Compatibility notes for the legacy OCR API
 - [Knowledge overview](index.md) - Overall Knowledge module architecture and capabilities

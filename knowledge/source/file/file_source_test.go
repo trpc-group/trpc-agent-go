@@ -53,6 +53,24 @@ func (m *mockOCRExtractor) Close() error {
 	return nil
 }
 
+type failOCRExtractor struct {
+	calls int
+}
+
+func (f *failOCRExtractor) ExtractText(ctx context.Context, imageData []byte, opts ...ocr.Option) (string, error) {
+	f.calls++
+	return "", errors.New("ocr should not be called")
+}
+
+func (f *failOCRExtractor) ExtractTextFromReader(ctx context.Context, reader io.Reader, opts ...ocr.Option) (string, error) {
+	f.calls++
+	return "", errors.New("ocr should not be called")
+}
+
+func (f *failOCRExtractor) Close() error {
+	return nil
+}
+
 type mockTransformer struct{}
 
 func (m *mockTransformer) Preprocess(docs []*document.Document) ([]*document.Document, error) {
@@ -378,6 +396,34 @@ func TestProcessFile_WithExtractorPreservesFileName(t *testing.T) {
 	}
 	if reader.lastName != "sample.pdf" {
 		t.Fatalf("expected extracted reader name sample.pdf, got %s", reader.lastName)
+	}
+}
+
+func TestProcessFile_WithExtractorTakesPrecedenceOverOCRExtractor(t *testing.T) {
+	ctx := context.Background()
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "sample.pdf")
+	if err := os.WriteFile(filePath, []byte("%PDF-test"), 0600); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	reader := &captureReader{}
+	ocr := &failOCRExtractor{}
+	src := New([]string{filePath},
+		WithExtractor(&recordingExtractor{format: extractor.FormatMarkdown}),
+		WithOCRExtractor(ocr),
+	)
+	src.readers[extractor.FormatMarkdown] = reader
+
+	_, err := src.processFile(ctx, filePath)
+	if err != nil {
+		t.Fatalf("processFile failed: %v", err)
+	}
+	if reader.lastName != "sample.pdf" {
+		t.Fatalf("expected extractor path to read sample.pdf, got %s", reader.lastName)
+	}
+	if ocr.calls != 0 {
+		t.Fatalf("expected OCR extractor not to be called, got %d calls", ocr.calls)
 	}
 }
 
