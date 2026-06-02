@@ -162,6 +162,31 @@ func TestOptions(t *testing.T) {
 		assert.True(t, s.ShouldSummarize(sess))
 	})
 
+	t.Run("WithTokenThreshold ignores summarizer tool call formatter", func(t *testing.T) {
+		s := NewSummarizer(
+			&testModel{},
+			WithToolCallFormatter(func(model.ToolCall) string { return "[tool call]" }),
+			WithTokenThreshold(100),
+		)
+		sess := &session.Session{Events: []event.Event{
+			{
+				Author:    "assistant",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{{
+							Function: model.FunctionDefinitionParam{
+								Name:      "read_file",
+								Arguments: []byte(`{"content":"` + strings.Repeat("x", 2000) + `"}`),
+							},
+						}},
+					},
+				}}},
+			},
+		}}
+		assert.True(t, s.ShouldSummarize(sess))
+	})
+
 	t.Run("WithTokenThreshold skips empty summary input", func(t *testing.T) {
 		s := NewSummarizer(
 			&testModel{},
@@ -238,6 +263,31 @@ func TestOptions(t *testing.T) {
 						ToolID:   "call-1",
 						ToolName: "read_file",
 						Content:  strings.Repeat("x", 2000),
+					},
+				}}},
+			},
+		}}
+		assert.True(t, s.ShouldSummarize(sess))
+	})
+
+	t.Run("WithChecksAny token checker ignores summarizer tool call formatter", func(t *testing.T) {
+		s := NewSummarizer(
+			&testModel{},
+			WithToolCallFormatter(func(model.ToolCall) string { return "[tool call]" }),
+			WithChecksAny(CheckTokenThreshold(100)),
+		)
+		sess := &session.Session{Events: []event.Event{
+			{
+				Author:    "assistant",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{{
+							Function: model.FunctionDefinitionParam{
+								Name:      "read_file",
+								Arguments: []byte(`{"content":"` + strings.Repeat("x", 2000) + `"}`),
+							},
+						}},
 					},
 				}}},
 			},
