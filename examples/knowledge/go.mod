@@ -4,6 +4,7 @@ go 1.24.6
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
+	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang => ../../knowledge/document/reader/golang
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf => ../../knowledge/document/reader/pdf
 	trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/gemini => ../../knowledge/embedder/gemini
 	trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age => ../../knowledge/graphstore/age
@@ -23,6 +24,7 @@ require (
 	github.com/getkin/kin-openapi v0.124.0
 	github.com/jackc/pgx/v5 v5.7.2
 	trpc.group/trpc-go/trpc-agent-go v1.8.2-0.20260429121222-b41f42aefbc5
+	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang v0.0.1-0.20260429130101-b1f1d9f169f0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf v0.5.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age v0.0.1-0.20260429130101-b1f1d9f169f0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/ocr/tesseract v0.0.0-20251203120347-0b4d62cb115d
@@ -195,10 +197,7 @@ require (
 	k8s.io/apimachinery v0.32.3 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
-	trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang v0.0.1-0.20260429130101-b1f1d9f169f0
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch v0.2.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/milvus v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/tcvector v0.0.4 // indirect
 )
-
-replace trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang => ../../knowledge/document/reader/golang

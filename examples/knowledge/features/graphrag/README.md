@@ -46,7 +46,6 @@ Example startup:
 ```text
 GraphRAG Chat Demo
 Model: claude-4-5-sonnet-20250929
-Streaming: true
 ==================================================
 Embedding: server:277357 (1024 dimensions)
 Skipped graph source loading; using existing AGE graph and pgvector data
@@ -219,7 +218,6 @@ go run . -recreate=false
 ```bash
 go run . \
   -recreate=false \
-  -streaming=true \
   -model=claude-4-5-sonnet-20250929 \
   -embedding-model=server:277357 \
   -embedding-dimension=1024
@@ -231,6 +229,7 @@ Key flags:
 - `-recreate=false`: skip loading and use existing indexed data.
 - `-query="..."`: run one initial question before entering interactive chat.
 - `-progress-step=100`: control graph loading progress logs.
+- `-debug-file=trace.jsonl`: write a JSONL tool trace.
 
 ## Graph Viewer
 

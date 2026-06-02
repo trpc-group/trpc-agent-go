@@ -8,7 +8,7 @@
 //
 
 // Package main demonstrates GraphRAG over repository code in a multi-turn chat.
-// It loads the trpc-agent-go repository through repo source, wires graph search,
+// It loads the trpc-go repository through repo source, wires graph search,
 // traversal, and path tools into an LLM agent, and prints tool calls and
 // tool responses during the conversation.
 //
@@ -76,10 +76,10 @@ import (
 )
 
 var (
-	defaultRepoURL = "https://github.com/trpc-group/trpc-agent-go"
-	defaultQuery   = "Find code related to agent execution in trpc-agent-go, traverse its callees, and explain the nearby call graph."
+	defaultRepoURL = "https://github.com/trpc-group/trpc-go"
+	defaultQuery   = "Find code related to client RPC invocation in trpc-go, traverse its callees, and explain the nearby call graph."
 	query          = flag.String("query", "", "Optional initial query to ask before entering chat")
-	modelName      = flag.String("model", util.GetEnvOrDefault("MODEL_NAME", "deepseek-v3,2"), "Model to use")
+	modelName      = flag.String("model", util.GetEnvOrDefault("MODEL_NAME", "deepseek-chat"), "Model to use")
 	embeddingModel = flag.String("embedding-model", util.GetEnvOrDefault("EMBEDDING_MODEL", "server:277357"), "Embedding model to use")
 	embeddingDim   = flag.Int("embedding-dimension", defaultEmbeddingDimension(), "Embedding dimension; <=0 probes once")
 	recreate       = flag.Bool("recreate", false, "Drop pgvector table and reload graph source; false reuses existing graph/vector data")
@@ -145,8 +145,8 @@ func main() {
 	graphToolSet := knowledgetool.NewCodeGraphSearchTool(
 		kb,
 		knowledgetool.WithCodeSearchRepoInfos([]knowledgetool.CodeRepoInfo{{
-			Name:        "trpc-agent-go",
-			Description: "The tRPC-Agent-Go framework repository used to demonstrate graph RAG over repo source.",
+			Name:        "trpc-go",
+			Description: "The tRPC-Go framework repository used to demonstrate graph RAG over repo source.",
 		}}),
 		knowledgetool.WithCodeSearchMaxResults(3),
 	)
@@ -185,7 +185,8 @@ func main() {
 	if strings.TrimSpace(*query) != "" {
 		fmt.Printf("\nInitial query: %s\n", *query)
 		if err := runTurn(ctx, r, "graph-demo-user", sessionID, *query, trace); err != nil {
-			log.Fatalf("run initial query: %v", err)
+			fmt.Printf("run initial query failed: %v\n", err)
+			return
 		}
 		fmt.Println()
 	}
@@ -321,21 +322,21 @@ func (s timedGraphSource) ReadGraph(ctx context.Context, opts ...source.ReadGrap
 	return data, nil
 }
 
-// loadGraphSource loads the trpc-agent-go repo into the graph knowledge base.
+// loadGraphSource loads the trpc-go repo into the graph knowledge base.
 func loadGraphSource(ctx context.Context, kb *knowledge.BuiltinGraphKnowledge) error {
 	repoSrc := repo.New(
 		repo.WithRepository(repo.Repository{
 			URL:         defaultRepoURL,
-			RepoName:    "trpc-agent-go",
+			RepoName:    "trpc-go",
 			RepoURL:     defaultRepoURL,
-			Description: "The tRPC-Agent-Go framework repository used to demonstrate graph RAG over repo source.",
+			Description: "The tRPC-Go framework repository used to demonstrate graph RAG over repo source.",
 		}),
-		repo.WithName("trpc-agent-go Repository"),
+		repo.WithName("trpc-go Repository"),
 		repo.WithFileExtensions([]string{".go"}),
 	)
 	err := kb.LoadGraphSource(
 		ctx,
-		timedGraphSource{name: "trpc-agent-go Repository", src: repoSrc},
+		timedGraphSource{name: "trpc-go Repository", src: repoSrc},
 		knowledge.WithGraphLoadProgress(true),
 		knowledge.WithGraphLoadProgressStepSize(*progressStep),
 		knowledge.WithGraphLoadConcurrency(knowledge.GraphLoadConcurrency{

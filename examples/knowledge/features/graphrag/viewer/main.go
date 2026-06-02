@@ -43,7 +43,10 @@ var (
 	searchTimeout = flag.Duration("search-timeout", 8*time.Second, "Statement timeout for seed search queries")
 )
 
-const ageSessionSQL = `LOAD 'age'; SET search_path = ag_catalog, "$user", public`
+const (
+	ageLoadSQL       = `LOAD 'age'`
+	ageSearchPathSQL = `SET search_path = ag_catalog, "$user", public`
+)
 
 // maxPoolConns is the connection pool size. Each connection initialises an AGE
 // session independently.
@@ -125,7 +128,15 @@ func main() {
 
 	log.Printf("AGE graph viewer listening on http://%s", *addr)
 	log.Printf("Graph: %s", *graphName)
-	if err := http.ListenAndServe(*addr, mux); err != nil {
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           mux,
+		ReadHeaderTimeout: *searchTimeout,
+		ReadTimeout:       *searchTimeout,
+		WriteTimeout:      *searchTimeout,
+		IdleTimeout:       time.Minute,
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -172,7 +183,11 @@ func (s *server) ageConn(ctx context.Context) (*sql.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := conn.ExecContext(ctx, ageSessionSQL); err != nil {
+	if _, err := conn.ExecContext(ctx, ageLoadSQL); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if _, err := conn.ExecContext(ctx, ageSearchPathSQL); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -883,11 +898,12 @@ func sqlString(value string) string {
 }
 
 func dollarQuote(value string) string {
-	tag := "$cypher$"
-	if !strings.Contains(value, tag) {
-		return tag + value + tag
+	for _, tag := range []string{"$cypher$", "$cypher_query$", "$cypher_q1$", "$cypher_q2$"} {
+		if !strings.Contains(value, tag) {
+			return tag + value + tag
+		}
 	}
-	return "$cypher_query$" + value + "$cypher_query$"
+	return "$cypher_q3$" + value + "$cypher_q3$"
 }
 
 func trimAgtypeString(value string) string {
