@@ -68,7 +68,9 @@ const (
 	envLastPDFName    = "OPENCLAW_LAST_PDF_NAME"
 	envLastPDFMIME    = "OPENCLAW_LAST_PDF_MIME"
 
-	envMemoryFile = "OPENCLAW_MEMORY_FILE"
+	envMemoryFile     = "OPENCLAW_MEMORY_FILE"
+	envUserMemoryFile = "OPENCLAW_USER_MEMORY_FILE"
+	envChatMemoryFile = "OPENCLAW_CHAT_MEMORY_FILE"
 
 	recentUploadsLimit = 6
 
@@ -215,9 +217,11 @@ func execToolDescription(hasMemoryFile bool) string {
 			"OPENCLAW_LAST_UPLOAD_PATH, OPENCLAW_LAST_UPLOAD_HOST_REF, " +
 			"OPENCLAW_LAST_UPLOAD_NAME, OPENCLAW_LAST_UPLOAD_MIME, " +
 			"kind-specific OPENCLAW_LAST_*_PATH vars, " +
-			"OPENCLAW_MEMORY_FILE, OPENCLAW_SESSION_UPLOADS_DIR, and " +
-			"OPENCLAW_RECENT_UPLOADS_JSON point to stable attachment " +
-			"metadata, memory-file paths, host refs, and host paths."
+			"OPENCLAW_MEMORY_FILE, OPENCLAW_USER_MEMORY_FILE, " +
+			"OPENCLAW_CHAT_MEMORY_FILE, OPENCLAW_SESSION_UPLOADS_DIR, " +
+			"and OPENCLAW_RECENT_UPLOADS_JSON point to stable " +
+			"attachment metadata, memory-file paths, host refs, " +
+			"and host paths."
 	}
 	parts = append(
 		parts,
@@ -227,14 +231,21 @@ func execToolDescription(hasMemoryFile bool) string {
 		parts = append(
 			parts,
 			"OPENCLAW_MEMORY_FILE is a visible MEMORY.md file for the "+
-				"current scope, not hidden internal state. If the user "+
-				"asks what you remember or asks to inspect that file, "+
-				"read it and quote or summarize the relevant lines.",
+				"current scope, and remains a compatibility alias. "+
+				"OPENCLAW_USER_MEMORY_FILE is this user's personal "+
+				"memory file. OPENCLAW_CHAT_MEMORY_FILE is the "+
+				"current chat's shared memory file. These are visible "+
+				"memory files, not hidden internal state. If the user "+
+				"asks what you remember or asks to inspect memory, read "+
+				"the relevant file and quote or summarize the relevant "+
+				"lines.",
 			"If the user explicitly says 'remember this' or asks you to "+
 				"remember a durable fact, preference, or workflow rule, "+
-				"update OPENCLAW_MEMORY_FILE with a short bullet.",
-			"Use OPENCLAW_MEMORY_FILE only for stable, cross-session "+
-				"facts, preferences, and working style.",
+				"update the narrowest relevant memory file with a short "+
+				"bullet.",
+			"Use memory files only for stable, cross-session facts, "+
+				"preferences, durable user tasks, reminder lists, and "+
+				"working style.",
 		)
 	}
 	parts = append(
@@ -753,22 +764,51 @@ func memoryFileEnvFromContext(
 
 	appName := strings.TrimSpace(inv.Session.AppName)
 	userID := strings.TrimSpace(inv.Session.UserID)
-	userID = conversationscope.StorageUserIDFromContext(ctx, userID)
 	if appName == "" || userID == "" {
 		return nil
 	}
 
+	storageUserID := conversationscope.StorageUserIDFromContext(
+		ctx,
+		userID,
+	)
+	personalUserID := conversationscope.UserStorageIDFromContext(
+		ctx,
+		userID,
+	)
+	currentPath := ensureMemoryEnvPath(store, appName, storageUserID)
+	personalPath := ensureMemoryEnvPath(store, appName, personalUserID)
+	if currentPath == "" {
+		return nil
+	}
+	env := map[string]string{
+		envMemoryFile:     currentPath,
+		envChatMemoryFile: currentPath,
+	}
+	if personalPath != "" {
+		env[envUserMemoryFile] = personalPath
+	}
+	return env
+}
+
+func ensureMemoryEnvPath(
+	store *memoryfile.Store,
+	appName string,
+	userID string,
+) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return ""
+	}
 	path, err := store.EnsureMemory(
 		context.Background(),
 		appName,
 		userID,
 	)
-	if err != nil || strings.TrimSpace(path) == "" {
-		return nil
+	if err != nil {
+		return ""
 	}
-	return map[string]string{
-		envMemoryFile: path,
-	}
+	return strings.TrimSpace(path)
 }
 
 func addLatestKindUploadEnv(

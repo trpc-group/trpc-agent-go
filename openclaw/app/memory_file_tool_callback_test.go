@@ -111,6 +111,68 @@ func TestMemoryFileToolCallback_SaveFileUsesStorageScopedMemory(
 	require.NotContains(t, string(userRaw), "- Shared rule")
 }
 
+func TestMemoryFileToolCallback_UsesExplicitMemoryScopes(t *testing.T) {
+	t.Parallel()
+
+	stateDir, store := newTestMemoryFileStore(t)
+	ctx := conversationscope.WithStorageUserID(
+		conversationscope.WithUserStorageID(
+			newTestMemoryToolContext(),
+			"wecom:dm:T123",
+		),
+		"wecom:chat:room-1",
+	)
+	callback := newMemoryFileToolCallback(store, stateDir)
+
+	result, err := callback(ctx, &tool.BeforeToolArgs{
+		ToolName: memoryToolSaveFileFS,
+		Arguments: []byte(
+			`{"file_name":"USER_MEMORY.md",` +
+				`"contents":"- Personal task\n",` +
+				`"overwrite":false}`,
+		),
+	})
+	require.NoError(t, err)
+	rsp, ok := result.CustomResult.(memorySaveFileResponse)
+	require.True(t, ok)
+	require.Equal(t, "Successfully saved: USER_MEMORY.md", rsp.Message)
+
+	result, err = callback(ctx, &tool.BeforeToolArgs{
+		ToolName: memoryToolSaveFileFS,
+		Arguments: []byte(
+			`{"file_name":"CHAT_MEMORY.md",` +
+				`"contents":"- Shared task\n",` +
+				`"overwrite":false}`,
+		),
+	})
+	require.NoError(t, err)
+	rsp, ok = result.CustomResult.(memorySaveFileResponse)
+	require.True(t, ok)
+	require.Equal(t, "Successfully saved: CHAT_MEMORY.md", rsp.Message)
+
+	userPath, err := store.EnsureMemory(
+		context.Background(),
+		testMemoryAppName,
+		"wecom:dm:T123",
+	)
+	require.NoError(t, err)
+	userRaw, err := os.ReadFile(userPath)
+	require.NoError(t, err)
+	require.Contains(t, string(userRaw), "- Personal task")
+	require.NotContains(t, string(userRaw), "- Shared task")
+
+	chatPath, err := store.EnsureMemory(
+		context.Background(),
+		testMemoryAppName,
+		"wecom:chat:room-1",
+	)
+	require.NoError(t, err)
+	chatRaw, err := os.ReadFile(chatPath)
+	require.NoError(t, err)
+	require.Contains(t, string(chatRaw), "- Shared task")
+	require.NotContains(t, string(chatRaw), "- Personal task")
+}
+
 func TestMemoryFileToolCallback_ReadFilePrefersScopedMemory(t *testing.T) {
 	t.Parallel()
 
@@ -622,6 +684,8 @@ func TestMemoryFileHelpers(t *testing.T) {
 
 	require.True(t, isMemoryFileAlias("./MEMORY.md"))
 	require.True(t, isMemoryFileAlias("././memory.md"))
+	require.True(t, isMemoryFileAlias("USER_MEMORY.md"))
+	require.True(t, isMemoryFileAlias("CHAT_MEMORY.md"))
 	require.False(t, isMemoryFileAlias("notes/MEMORY.md"))
 
 	next, err := nextMemorySaveContents("current", "replacement", true)

@@ -626,6 +626,8 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
+	require.Contains(t, decl.Description, "OPENCLAW_USER_MEMORY_FILE")
+	require.Contains(t, decl.Description, "OPENCLAW_CHAT_MEMORY_FILE")
 	require.Contains(
 		t,
 		decl.Description,

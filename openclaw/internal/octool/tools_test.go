@@ -372,7 +372,10 @@ func TestExecTool_UsesMemoryFileEnvFromContext(t *testing.T) {
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
 	args := mustJSON(t, map[string]any{
-		"command": "printf %s \"$OPENCLAW_MEMORY_FILE\"",
+		"command": "printf '%s\\n%s\\n%s' " +
+			"\"$OPENCLAW_MEMORY_FILE\" " +
+			"\"$OPENCLAW_USER_MEMORY_FILE\" " +
+			"\"$OPENCLAW_CHAT_MEMORY_FILE\"",
 		"yieldMs": 0,
 	})
 	out, err := execTool.Call(ctx, args)
@@ -384,6 +387,7 @@ func TestExecTool_UsesMemoryFileEnvFromContext(t *testing.T) {
 	path, err := store.MemoryPath("app", "u1")
 	require.NoError(t, err)
 	require.Contains(t, res.Output, path)
+	require.Equal(t, strings.Count(res.Output, path), 3)
 	require.FileExists(t, path)
 }
 
@@ -407,19 +411,29 @@ func TestExecTool_UsesStorageScopedMemoryFileEnvFromContext(t *testing.T) {
 
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(
-			sessionpkg.NewSession("app", "u1", "wecom:chat:room-1"),
+			sessionpkg.NewSession(
+				"app",
+				"wecom:dm:wineguo",
+				"wecom:chat:room-1",
+			),
 		),
 	)
 	ctx := agent.NewInvocationContext(
 		conversationscope.WithStorageUserID(
-			context.Background(),
+			conversationscope.WithUserStorageID(
+				context.Background(),
+				"wecom:dm:T123",
+			),
 			"wecom:chat:room-1",
 		),
 		inv,
 	)
 
 	args := mustJSON(t, map[string]any{
-		"command": "printf %s \"$OPENCLAW_MEMORY_FILE\"",
+		"command": "printf '%s\\n%s\\n%s' " +
+			"\"$OPENCLAW_MEMORY_FILE\" " +
+			"\"$OPENCLAW_USER_MEMORY_FILE\" " +
+			"\"$OPENCLAW_CHAT_MEMORY_FILE\"",
 		"yieldMs": 0,
 	})
 	out, err := execTool.Call(ctx, args)
@@ -432,6 +446,11 @@ func TestExecTool_UsesStorageScopedMemoryFileEnvFromContext(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, res.Output, path)
 	require.FileExists(t, path)
+	userPath, err := store.MemoryPath("app", "wecom:dm:T123")
+	require.NoError(t, err)
+	require.Contains(t, res.Output, userPath)
+	require.NotContains(t, res.Output, "wecom:dm:wineguo")
+	require.FileExists(t, userPath)
 }
 
 func TestMemoryFileEnvFromContext_EmptyScopeReturnsNil(t *testing.T) {
