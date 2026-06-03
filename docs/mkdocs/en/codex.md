@@ -99,7 +99,7 @@ Codex creates its own thread id. The agent persists that id in session state und
 1. First turn: write the prompt to stdin of `codex exec --json`
 2. Later turns: write the prompt to stdin of `codex exec resume --json <thread-id>`
 
-If resume fails, the agent starts a fresh `codex exec` run and updates the stored thread id when the new run reports one. If both resume and create fail, the invocation returns a run error.
+If resume reports a stale or missing thread before emitting JSONL output, the agent starts a fresh `codex exec` run and updates the stored thread id when the new run reports one. Other resume failures return a run error instead of replaying the same prompt.
 
 To keep context, use the same app name, user ID, and session ID in `runner`.
 

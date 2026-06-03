@@ -99,7 +99,7 @@ Codex 会自行创建 thread id。该 Agent 会把这个 id 存入 session state
 1. 首轮：把 prompt 写入 `codex exec --json` 的 stdin
 2. 后续轮次：把 prompt 写入 `codex exec resume --json <thread-id>` 的 stdin
 
-如果 resume 失败，该 Agent 会重新发起一次新的 `codex exec`；如果新执行返回了 thread id，则更新已保存的 thread id。如果 resume 与新建执行都失败，本次调用会返回 run error。
+如果 resume 在输出 JSONL 前明确报告 thread 已失效或不存在，该 Agent 会重新发起一次新的 `codex exec`；如果新执行返回了 thread id，则更新已保存的 thread id。其他 resume 失败会直接返回 run error，避免重放同一个 prompt。
 
 如需保持上下文，请在 `runner` 中持续使用相同的 app name、user ID、session ID。
 

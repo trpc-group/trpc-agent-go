@@ -153,7 +153,7 @@ func TestCodexAgent_Run_ResumeErrorFallsBackToCreate(t *testing.T) {
 	runner := &scriptedRunner{
 		run: func(cmd command) ([]byte, []byte, error) {
 			if len(cmd.args) > 1 && cmd.args[1] == "resume" {
-				return nil, []byte("resume unavailable"), errors.New("exit 1")
+				return nil, []byte("Error: thread/resume: thread/resume failed: no rollout found for thread id stale-thread (code -32600)"), errors.New("exit 1")
 			}
 			return []byte(`{"type":"thread.started","thread_id":"thread-2"}
 {"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"fresh"}}`), nil, nil
@@ -175,17 +175,14 @@ func TestCodexAgent_Run_ResumeErrorFallsBackToCreate(t *testing.T) {
 	require.Equal(t, "Hi.", string(calls[1].stdin))
 }
 
-func TestCodexAgent_Run_ResumeAndCreateErrorsReturnRunError(t *testing.T) {
+func TestCodexAgent_Run_ResumeErrorDoesNotReplayPrompt(t *testing.T) {
 	ctx := context.Background()
 	sess := session.NewSession("app", "user", "sess-4")
 	sess.SetState(StateKeyThreadID, []byte("thread-1"))
 	inv := newTestInvocation("inv-4", sess, "Hi.")
 	runner := &scriptedRunner{
 		run: func(cmd command) ([]byte, []byte, error) {
-			if len(cmd.args) > 1 && cmd.args[1] == "resume" {
-				return nil, []byte("resume unavailable"), errors.New("resume exit 1")
-			}
-			return nil, []byte("create unavailable"), errors.New("create exit 1")
+			return []byte(`{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"pwd"}}`), []byte("resume failed"), errors.New("resume exit 1")
 		},
 	}
 	ag, err := New(withCommandRunner(runner))
@@ -196,13 +193,12 @@ func TestCodexAgent_Run_ResumeAndCreateErrorsReturnRunError(t *testing.T) {
 	require.Len(t, events, 1)
 	require.NotNil(t, events[0].Error)
 	require.Equal(t, model.ErrorTypeRunError, events[0].Error.Type)
-	require.Equal(t, "create unavailable", events[0].Error.Message)
+	require.Contains(t, events[0].Error.Message, "command_execution")
+	require.Contains(t, events[0].Error.Message, "resume failed")
 	calls := runner.Calls()
-	require.Len(t, calls, 2)
+	require.Len(t, calls, 1)
 	require.Equal(t, []string{"exec", "resume", "--json", "thread-1"}, calls[0].args)
 	require.Equal(t, "Hi.", string(calls[0].stdin))
-	require.Equal(t, []string{"exec", "--json"}, calls[1].args)
-	require.Equal(t, "Hi.", string(calls[1].stdin))
 }
 
 func TestCodexAgent_Run_RawOutputHook(t *testing.T) {
