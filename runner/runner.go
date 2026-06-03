@@ -1087,6 +1087,7 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	if agentEvent == nil {
 		return nil
 	}
+	agentEvent = errorEventWithContent(agentEvent)
 	excludeRootCompletion := routedEvent && !sameSession(persistSession, loop.sess)
 	if excludeRootCompletion {
 		r.captureRoutedCompletionError(loop, agentEvent)
@@ -1996,7 +1997,7 @@ func (r *runner) handleEventPersistence(
 	agentEvent *event.Event,
 ) bool {
 	// Ensure error events have content so they are valid for persistence.
-	ensureErrorEventContent(agentEvent)
+	agentEvent = errorEventWithContent(agentEvent)
 
 	// Append event to session if it's complete (not partial).
 	if !r.shouldPersistEvent(agentEvent) {
@@ -3185,6 +3186,22 @@ func ensureErrorEventContent(e *event.Event) {
 		reason := "error"
 		e.Response.Choices[0].FinishReason = &reason
 	}
+}
+
+func errorEventWithContent(e *event.Event) *event.Event {
+	if e == nil || e.Response == nil || e.Response.Error == nil {
+		return e
+	}
+	if e.IsValidContent() {
+		return e
+	}
+
+	// Preserve event identity but repair content on an owned response copy.
+	eventCopy := *e
+	eventCopy.Response = e.Response.Clone()
+	ensureErrorEventContent(&eventCopy)
+
+	return &eventCopy
 }
 
 // RunWithMessages is a convenience helper that lets callers pass a full
