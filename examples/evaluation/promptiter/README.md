@@ -2,9 +2,9 @@
 
 This directory contains four PromptIter examples:
 
-- [syncrun](./syncrun): runs the full PromptIter optimization loop directly through `engine.Run`. Its initial candidate instruction intentionally stays simple so that PromptIter, rather than a strong hand-written seed, drives the gain.
-- [asyncrun](./asyncrun): runs the same PromptIter workflow through `manager.Start/Get`.
-- [server](./server): exposes the same PromptIter workflow through the HTTP control-plane service in `server/promptiter`.
+- [syncrun](./syncrun): runs the full PromptIter optimization loop directly through `engine.Run` against a single-agent sports recap candidate. Its initial instruction intentionally stays simple so that PromptIter, rather than a strong hand-written seed, drives the gain.
+- [asyncrun](./asyncrun): runs the single-agent sports recap workflow through `manager.Start/Get`.
+- [server](./server): exposes the single-agent sports recap workflow through the HTTP control-plane service in `server/promptiter`.
 - [multinode](./multinode): runs PromptIter against a multinode sports recap agent with regular function nodes, AgentNode fan-out/fan-in, and multiple optimized instruction surfaces.
 
 All examples evaluate against fixed static gold answers stored directly in the eval sets, so repeated runs stay comparable instead of regenerating expected answers online.

@@ -23,7 +23,6 @@ import (
 	evalresultlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator"
@@ -59,8 +58,14 @@ type syncRunConfig struct {
 	MaxRoundsWithoutAcceptance int
 	TargetScore                float64
 	EvalCaseParallelism        int
+	BackwardCaseParallelism    int
+	AggregationParallelism     int
+	OptimizerParallelism       int
 	ParallelInferenceEnabled   bool
 	ParallelEvaluationEnabled  bool
+	ParallelBackwardEnabled    bool
+	ParallelAggregationEnabled bool
+	ParallelOptimizerEnabled   bool
 	DebugIO                    bool
 	Logger                     *log.Logger
 }
@@ -156,18 +161,12 @@ func buildPromptIterRuntime(ctx context.Context, cfg syncRunConfig) (*promptIter
 		metric.WithLocator(&sharedMetricLocator{metricFileID: sharedMetricFileID}),
 	)
 	evalResultManager := evalresultlocal.New(evalresult.WithBaseDir(cfg.OutputDir))
-	registry := registry.New()
-	if err := registry.Register(commentaryLengthMetricName, newCommentaryLengthEvaluator()); err != nil {
-		closeAll()
-		return nil, fmt.Errorf("register commentary length evaluator: %w", err)
-	}
 	agentEvaluator, err := evaluation.New(
 		appName,
 		candidateLoggedRunner,
 		evaluation.WithEvalSetManager(evalSetManager),
 		evaluation.WithMetricManager(metricManager),
 		evaluation.WithEvalResultManager(evalResultManager),
-		evaluation.WithRegistry(registry),
 		evaluation.WithJudgeRunner(judgeLoggedRunner),
 		evaluation.WithNumRuns(1),
 	)
@@ -232,6 +231,18 @@ func buildRunRequest(cfg syncRunConfig, targetSurfaceID string) *promptiterengin
 			EvalCaseParallelism:               cfg.EvalCaseParallelism,
 			EvalCaseParallelInferenceEnabled:  cfg.ParallelInferenceEnabled,
 			EvalCaseParallelEvaluationEnabled: cfg.ParallelEvaluationEnabled,
+		},
+		BackwardOptions: promptiterengine.BackwardOptions{
+			CaseParallelismEnabled: cfg.ParallelBackwardEnabled,
+			CaseParallelism:        cfg.BackwardCaseParallelism,
+		},
+		AggregationOptions: promptiterengine.AggregationOptions{
+			SurfaceParallelismEnabled: cfg.ParallelAggregationEnabled,
+			SurfaceParallelism:        cfg.AggregationParallelism,
+		},
+		OptimizerOptions: promptiterengine.OptimizerOptions{
+			SurfaceParallelismEnabled: cfg.ParallelOptimizerEnabled,
+			SurfaceParallelism:        cfg.OptimizerParallelism,
 		},
 		AcceptancePolicy: promptiterengine.AcceptancePolicy{
 			MinScoreGain: cfg.MinScoreGain,

@@ -71,7 +71,7 @@ Useful flags:
 -parallel-optimization true
 -min-score-gain 0.01
 -max-rounds-without-acceptance 3
--target-score 1.01
+-target-score 1.0
 -poll-interval 30s
 ```
 
