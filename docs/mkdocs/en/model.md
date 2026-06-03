@@ -1624,7 +1624,7 @@ for request-scoped output limits and tool definitions:
 
 > **Context Window Registration**
 >
-> Token Tailoring and session summary `WithContextThreshold` both need a model context window. Built-in model names are resolved automatically. For private deployments, tenant-provided models, or endpoint IDs, prefer model-instance configuration such as `openai.WithContextWindow(32768)` or the unified `provider.WithContextWindow(32768)`. For one-off runs, use `agent.WithModelContextWindow(32768)`. Use `model.RegisterModelContextWindow("my-model", 32768)` only when the name has a stable process-wide meaning. See the [Session Summary documentation](session/summary.md) for a full example.
+> Token Tailoring and session summary `WithContextThreshold` both need a model context window. Built-in model names are resolved automatically. Token Tailoring uses a 128000-token fallback for unknown model names. For private deployments, tenant-provided models, endpoint IDs, or smaller unknown models, prefer model-instance configuration such as `openai.WithContextWindow(32768)` or the unified `provider.WithContextWindow(32768)`. For one-off runs, use `agent.WithModelContextWindow(32768)`. Use `model.RegisterModelContextWindow("my-model", 32768)` only when the name has a stable process-wide meaning. See the [Session Summary documentation](session/summary.md) for a full example.
 
 ```text
 outputReserve = max(ReserveOutputTokens, request.MaxTokens, request.ThinkingTokens)
