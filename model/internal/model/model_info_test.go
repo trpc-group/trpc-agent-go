@@ -24,7 +24,7 @@ func TestResolveContextWindow(t *testing.T) {
 		{
 			name:      "empty model name",
 			modelName: "",
-			expected:  defaultContextWindow,
+			expected:  128000,
 		},
 		{
 			name:      "exact match - GPT-4",
@@ -284,12 +284,12 @@ func TestResolveContextWindow(t *testing.T) {
 		{
 			name:      "no prefix match without separator boundary",
 			modelName: "gpt-5.4x",
-			expected:  defaultContextWindow,
+			expected:  128000,
 		},
 		{
 			name:      "unknown model fallback",
 			modelName: "unknown-model",
-			expected:  defaultContextWindow,
+			expected:  128000,
 		},
 	}
 

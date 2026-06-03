@@ -16,7 +16,7 @@ import (
 )
 
 // defaultContextWindow is the fallback context window size (tokens) when model is unknown.
-const defaultContextWindow = 8192
+const defaultContextWindow = 128000
 
 // ModelMutex guards modelContextWindows.
 var ModelMutex sync.RWMutex
