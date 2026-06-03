@@ -263,6 +263,79 @@ func (a *LLMAgent) InvocationToolSurface(
 	return allTools, userToolNames
 }
 
+// InvocationSkillRepository returns the skill repository effective for the
+// given invocation, honoring a surface-patch override first and then the
+// agent's configured repository.
+//
+// It exposes skillRepositoryForInvocation so that external presets (for
+// example agent/llmagent/builtin) can inherit a parent agent's skill
+// capability at run time, in the same invocation-scoped style as
+// InvocationToolSurface.
+func (a *LLMAgent) InvocationSkillRepository(
+	inv *agent.Invocation,
+) skill.Repository {
+	if a == nil {
+		return nil
+	}
+	return a.skillRepositoryForInvocation(inv)
+}
+
+// InvocationCodeExecutor returns the code executor effective for the given
+// invocation, honoring a run-scoped RunOptions.CodeExecutor override first
+// and then the agent's configured executor.
+//
+// It mirrors the resolution InvocationToolSurface uses so external presets
+// can inherit a parent agent's execution capability at run time.
+func (a *LLMAgent) InvocationCodeExecutor(
+	inv *agent.Invocation,
+) codeexecutor.CodeExecutor {
+	if a == nil {
+		return nil
+	}
+	return a.codeExecutorForInvocation(inv)
+}
+
+// InvocationKnowledgeOptions returns the options required to reproduce this
+// agent's knowledge-search surface on a derived agent.
+//
+// Built-in presets use it to inherit a parent agent's retrieval capability
+// without copying the parent's materialized (and possibly custom-named)
+// knowledge tools. The invocation argument is accepted for parity with the
+// other invocation-scoped accessors and reserved for future per-invocation
+// knowledge resolution; it is currently unused.
+func (a *LLMAgent) InvocationKnowledgeOptions(
+	_ *agent.Invocation,
+) []Option {
+	if a == nil {
+		return nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.option.Knowledge == nil {
+		return nil
+	}
+	opts := []Option{WithKnowledge(a.option.Knowledge)}
+	if a.option.KnowledgeFilter != nil {
+		opts = append(opts, WithKnowledgeFilter(a.option.KnowledgeFilter))
+	}
+	if a.option.KnowledgeConditionedFilter != nil {
+		opts = append(
+			opts,
+			WithKnowledgeConditionedFilter(a.option.KnowledgeConditionedFilter),
+		)
+	}
+	if a.option.EnableKnowledgeAgenticFilter {
+		opts = append(opts, WithEnableKnowledgeAgenticFilter(true))
+		if a.option.AgenticFilterInfo != nil {
+			opts = append(
+				opts,
+				WithKnowledgeAgenticFilterInfo(a.option.AgenticFilterInfo),
+			)
+		}
+	}
+	return opts
+}
+
 func (a *LLMAgent) userToolsForInvocation(
 	ctx context.Context,
 	patch surfacepatch.Patch,
