@@ -183,9 +183,9 @@ knowledge/
 ├── query/                # Query enhancers
 │   ├── query.go         # QueryEnhancer interface definition
 │   └── passthrough.go   # Default passthrough enhancer
-└── ocr/                  # OCR text recognition
-    ├── ocr.go           # Extractor interface definition
-    └── tesseract/       # Tesseract OCR implementation (separate go.mod)
+└── ocr/                  # Legacy OCR text recognition API (Deprecated)
+    ├── ocr.go           # Legacy OCR Extractor interface definition
+    └── tesseract/       # Tesseract OCR implementation (separate go.mod, Deprecated)
 ```
 
 ## Agent Integration
@@ -401,7 +401,7 @@ To ensure fair comparison, all four systems use identical configurations:
 - [Embedder](embedder.md) - Text vectorization model configuration
 - [Reranker](reranker.md) - Retrieval result reranking
 - [Document Sources](source.md) - File, directory, URL, and other knowledge source configuration
-- [OCR Text Recognition](ocr.md) - Configure OCR-based text extraction for images and scanned content
+- [OCR Text Recognition](ocr.md) - Compatibility notes for the legacy OCR API
 - [Filters](filter.md) - Basic filters and intelligent filters
 - [Knowledge Base Management](management.md) - Dynamic source management and status monitoring
 - [Common Issues](troubleshooting.md) - Common issues and solutions
