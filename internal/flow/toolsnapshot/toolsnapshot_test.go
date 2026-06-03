@@ -33,6 +33,9 @@ func TestSetGetCopiesToolSlice(t *testing.T) {
 	second := testTool{name: "second"}
 	tools := []tool.Tool{first}
 	Set(inv, tools, true)
+	hasFiltered, ok := HasFilteredUserTools(inv)
+	require.True(t, ok)
+	require.True(t, hasFiltered)
 	tools[0] = second
 	cached, ok := Get(inv)
 	require.True(t, ok)
@@ -41,4 +44,20 @@ func TestSetGetCopiesToolSlice(t *testing.T) {
 	cachedAgain, ok := Get(inv)
 	require.True(t, ok)
 	require.Equal(t, "first", cachedAgain[0].Declaration().Name)
+}
+
+func TestSnapshotMissingAndInvalidate(t *testing.T) {
+	_, ok := Get(nil)
+	require.False(t, ok)
+	Set(nil, []tool.Tool{testTool{name: "ignored"}}, true)
+	Invalidate(nil)
+	inv := &agent.Invocation{}
+	_, ok = Get(inv)
+	require.False(t, ok)
+	Set(inv, []tool.Tool{testTool{name: "first"}}, true)
+	Invalidate(inv)
+	_, ok = Get(inv)
+	require.False(t, ok)
+	_, ok = HasFilteredUserTools(inv)
+	require.False(t, ok)
 }

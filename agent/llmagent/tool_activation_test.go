@@ -634,6 +634,141 @@ func TestToolActivationSessionKeyEscapesSegmentsWithoutCollision(t *testing.T) {
 	)
 }
 
+func TestToolActivationValidationAndRecordEdgeCases(t *testing.T) {
+	require.NoError(t, validateAndNormalizeToolActivationOptions(nil))
+	_, err := collectActivatableToolSetNames([]tool.ToolSet{nil})
+	require.Error(t, err)
+	_, err = collectActivatableToolSetNames([]tool.ToolSet{
+		activationToolSet{name: " "},
+	})
+	require.Error(t, err)
+	trigger, err := normalizeToolActivationTrigger(toolActivationTrigger{
+		kind: toolActivationTriggerKind("unsupported"),
+	})
+	require.Error(t, err)
+	require.Empty(t, trigger)
+	require.Equal(
+		t,
+		"unsupported",
+		(toolActivationTrigger{kind: "unsupported"}).describe(),
+	)
+	require.Equal(t, []string{"a", "b"}, normalizeToolSetNames([]string{
+		" a ",
+		"",
+		"a",
+		"b",
+	}))
+	require.False(t, (toolActivationRule{
+		trigger: toolActivationTrigger{kind: "unsupported"},
+	}).matchesLoadedSkills(map[string]bool{"a": true}))
+	_, ok := newToolActivationRecord(
+		ToolActivationModeInclude,
+		ToolActivationLifetimeInvocation,
+		" ",
+	)
+	require.False(t, ok)
+	_, ok = newToolActivationRecord(
+		ToolActivationMode("append"),
+		ToolActivationLifetimeInvocation,
+		"x",
+	)
+	require.False(t, ok)
+	_, ok = newToolActivationRecord(
+		ToolActivationModeInclude,
+		ToolActivationLifetime("turn"),
+		"x",
+	)
+	require.False(t, ok)
+	record, ok := newToolActivationRecord(
+		ToolActivationModeInclude,
+		ToolActivationLifetimeInvocation,
+		"x",
+	)
+	require.True(t, ok)
+	require.False(t, addInvocationToolActivationRecords(nil, []toolActivationRecord{record}))
+	require.False(t, addInvocationToolActivationRecords(&agent.Invocation{}, nil))
+	inv := &agent.Invocation{}
+	require.True(t, addInvocationToolActivationRecords(inv, []toolActivationRecord{record}))
+	require.False(t, addInvocationToolActivationRecords(inv, []toolActivationRecord{record}))
+	require.False(t, sameToolActivationRecords(
+		[]toolActivationRecord{record},
+		[]toolActivationRecord{{
+			Mode:        ToolActivationModeInclude,
+			Lifetime:    ToolActivationLifetimeInvocation,
+			ToolSetName: "y",
+		}},
+	))
+	require.True(t, sameToolActivationRecords(
+		[]toolActivationRecord{record},
+		[]toolActivationRecord{record},
+	))
+}
+
+func TestSessionToolActivationRecordsSkipsInvalidState(t *testing.T) {
+	ctx := context.Background()
+	require.Empty(t, sessionToolActivationRecords(ctx, nil))
+	require.Empty(t, sessionToolActivationRecords(ctx, &agent.Invocation{}))
+	sess := session.NewSession("app", "user", "session")
+	inv := &agent.Invocation{AgentName: "agent", Session: sess}
+	require.Empty(t, sessionToolActivationRecords(ctx, inv))
+	prefix := toolActivationSessionPrefixForAgent("agent")
+	valid, ok := newToolActivationRecord(
+		ToolActivationModeInclude,
+		ToolActivationLifetimeSession,
+		"valid",
+	)
+	require.True(t, ok)
+	invalidLifetime := toolActivationRecord{
+		Mode:        ToolActivationModeInclude,
+		Lifetime:    ToolActivationLifetimeInvocation,
+		ToolSetName: "invalid",
+	}
+	sess.SetState(prefix+"empty", []byte{})
+	sess.SetState(prefix+"bad-json", []byte("{"))
+	sess.SetState(prefix+"invalid-lifetime", marshalToolActivationRecord(invalidLifetime))
+	sess.SetState(toolActivationSessionKey("agent", valid), marshalToolActivationRecord(valid))
+	require.Equal(t, []toolActivationRecord{valid}, sessionToolActivationRecords(ctx, inv))
+}
+
+func TestToolActivationExpansionSkipsDuplicatesAndFilteredTools(t *testing.T) {
+	ctx := context.Background()
+	toolSet := activationToolSet{
+		name: "safe",
+		tools: []tool.Tool{
+			activationTool{name: "browse"},
+			activationTool{name: "browse"},
+			activationTool{name: "skip"},
+		},
+	}
+	accepted := map[string]bool{}
+	tools := expandOneToolActivationSet(
+		ctx,
+		toolSet,
+		accepted,
+		func(_ context.Context, tl tool.Tool) bool {
+			return toolActivationToolName(tl) != "safe_skip"
+		},
+	)
+	require.Len(t, tools, 1)
+	require.Equal(t, "safe_browse", toolActivationToolName(tools[0]))
+	require.True(t, accepted["safe_browse"])
+	require.Empty(t, expandOneToolActivationSet(
+		ctx,
+		activationToolSet{
+			name:  "safe",
+			tools: []tool.Tool{activationTool{name: "browse"}},
+		},
+		accepted,
+		nil,
+	))
+	require.Empty(t, expandOneToolActivationSet(
+		ctx,
+		activationToolSet{name: "empty"},
+		map[string]bool{},
+		nil,
+	))
+}
+
 type activationSequenceModel struct {
 	mu        sync.Mutex
 	responses []*model.Response
