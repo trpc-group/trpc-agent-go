@@ -54,6 +54,13 @@ type Patch struct {
 	model             modelSlot
 	tools             toolsSlot
 	skillRepo         skillRepoSlot
+
+	// suppressSubAgentTransfer, when true, omits framework-managed sub-agent
+	// transfer (the transfer_to_agent tool, auto-added when the node's agent
+	// has sub-agents) from the node's tool surface. Unlike the tool slot it is
+	// not a value override: it only removes the framework tool, never a user
+	// tool, so it composes with SetTools.
+	suppressSubAgentTransfer bool
 }
 
 // SetInstruction sets the instruction surface override.
@@ -104,6 +111,14 @@ func (p *Patch) SetSkillRepository(repo skill.Repository) {
 	p.skillRepo.value = repo
 }
 
+// SetSuppressSubAgentTransfer requests that framework-managed sub-agent
+// transfer (transfer_to_agent) be omitted from the node's tool surface even
+// when the node's agent has sub-agents. The dynamic AgentTool uses this so a
+// short-lived sub-agent cannot hand control to another agent.
+func (p *Patch) SetSuppressSubAgentTransfer() {
+	p.suppressSubAgentTransfer = true
+}
+
 // Instruction returns the instruction surface override.
 func (p Patch) Instruction() (string, bool) {
 	return p.instruction.value, p.instruction.set
@@ -151,6 +166,12 @@ func (p Patch) SkillRepository() (skill.Repository, bool) {
 	return p.skillRepo.value, p.skillRepo.set
 }
 
+// SuppressSubAgentTransfer reports whether framework-managed sub-agent transfer
+// must be omitted from the node's tool surface.
+func (p Patch) SuppressSubAgentTransfer() bool {
+	return p.suppressSubAgentTransfer
+}
+
 // IsEmpty reports whether the patch carries any surface override.
 func (p Patch) IsEmpty() bool {
 	return !p.instruction.set &&
@@ -159,7 +180,8 @@ func (p Patch) IsEmpty() bool {
 		!p.model.set &&
 		!p.tools.set &&
 		len(p.tools.append) == 0 &&
-		!p.skillRepo.set
+		!p.skillRepo.set &&
+		!p.suppressSubAgentTransfer
 }
 
 // Merge returns a copy where values from other override the same surface type.
@@ -195,6 +217,9 @@ func (p Patch) Merge(other Patch) Patch {
 	if other.skillRepo.set {
 		out.skillRepo = other.skillRepo
 	}
+	if other.suppressSubAgentTransfer {
+		out.suppressSubAgentTransfer = true
+	}
 	return out
 }
 
@@ -213,7 +238,8 @@ func (p Patch) Clone() Patch {
 			value:  cloneTools(p.tools.value),
 			append: cloneTools(p.tools.append),
 		},
-		skillRepo: p.skillRepo,
+		skillRepo:                p.skillRepo,
+		suppressSubAgentTransfer: p.suppressSubAgentTransfer,
 	}
 }
 
