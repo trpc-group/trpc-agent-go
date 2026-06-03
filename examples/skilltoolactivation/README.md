@@ -23,7 +23,7 @@ From the `examples` module root:
 ```bash
 cd examples
 
-export OPENAI_BASE_URL="http://v2.open.venus.oa.com/llmproxy/"
+export OPENAI_BASE_URL="https://your-openai-compatible-endpoint/v1"
 export OPENAI_API_KEY="YOUR_API_KEY"
 
 go run ./skilltoolactivation

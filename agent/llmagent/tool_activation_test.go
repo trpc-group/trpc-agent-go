@@ -609,6 +609,31 @@ func TestToolActivationOutputSchemaIgnoresSessionRecords(t *testing.T) {
 	require.NotContains(t, requests[0].Tools, "browser_open")
 }
 
+func TestToolActivationSessionKeyEscapesSegmentsWithoutCollision(t *testing.T) {
+	slashRecord, ok := newToolActivationRecord(
+		ToolActivationModeInclude,
+		ToolActivationLifetimeSession,
+		"docs/a",
+	)
+	require.True(t, ok)
+	escapedRecord, ok := newToolActivationRecord(
+		ToolActivationModeInclude,
+		ToolActivationLifetimeSession,
+		"docs%2Fa",
+	)
+	require.True(t, ok)
+	require.NotEqual(
+		t,
+		toolActivationSessionKey("agent", slashRecord),
+		toolActivationSessionKey("agent", escapedRecord),
+	)
+	require.NotEqual(
+		t,
+		toolActivationSessionPrefixForAgent("agent/a"),
+		toolActivationSessionPrefixForAgent("agent%2Fa"),
+	)
+}
+
 type activationSequenceModel struct {
 	mu        sync.Mutex
 	responses []*model.Response

@@ -590,10 +590,7 @@ func sameToolActivationRecords(
 }
 
 func escapeToolActivationSegment(value string) string {
-	if strings.Contains(value, toolActivationSegmentDelimiter) {
-		return url.PathEscape(value)
-	}
-	return value
+	return url.PathEscape(value)
 }
 
 func parseSessionToolActivationRecord(

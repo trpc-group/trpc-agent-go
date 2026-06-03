@@ -25,7 +25,11 @@ const (
 
 // Get returns the cached tool snapshot for this invocation.
 func Get(inv *agent.Invocation) ([]tool.Tool, bool) {
-	return agent.GetStateValue[[]tool.Tool](inv, ToolsSnapshotKey)
+	tools, ok := agent.GetStateValue[[]tool.Tool](inv, ToolsSnapshotKey)
+	if !ok {
+		return nil, false
+	}
+	return copyTools(tools), true
 }
 
 // Set stores the cached tool snapshot for this invocation.
@@ -33,7 +37,7 @@ func Set(inv *agent.Invocation, tools []tool.Tool, hasFilteredUserTools bool) {
 	if inv == nil {
 		return
 	}
-	inv.SetState(ToolsSnapshotKey, tools)
+	inv.SetState(ToolsSnapshotKey, copyTools(tools))
 	inv.SetState(HasFilteredUserToolsKey, hasFilteredUserTools)
 }
 
@@ -49,4 +53,8 @@ func Invalidate(inv *agent.Invocation) {
 	}
 	inv.DeleteState(ToolsSnapshotKey)
 	inv.DeleteState(HasFilteredUserToolsKey)
+}
+
+func copyTools(tools []tool.Tool) []tool.Tool {
+	return append([]tool.Tool(nil), tools...)
 }

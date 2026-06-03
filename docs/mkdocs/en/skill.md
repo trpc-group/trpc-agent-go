@@ -1168,6 +1168,8 @@ agent := llmagent.New(
 `WithToolActivationOnSkillLoad(...)` establishes the activation relationship between a skill and candidate ToolSets. After the model successfully calls `skill_load` to load the corresponding skill, the activation result takes effect starting from the next model request. If the same `Runner.Run` continues into a tool loop, later model requests in that run use the updated tool set. When multiple rules match at the same time, the framework first
 merges activation records and keeps only one copy of each identical `(mode, lifetime, toolSetName)` record. It then expands ToolSets, and the final tool set handles duplicates and name conflicts by tool name.
 
+`WithToolActivationOnSkillLoad(...)` cannot be configured together with `WithOutputSchema(...)`.
+
 User tools include tools added through `WithTools(...)`, `WithToolSets(...)`, runtime `agent.WithAdditionalTools(...)`, and `agent.WithExternalTools(...)`. Framework tools are registered automatically by `LLMAgent` based on enabled capabilities, such as `skill_load`, `workspace_exec`, and `transfer_to_agent`.
 
 ### Activation Mode

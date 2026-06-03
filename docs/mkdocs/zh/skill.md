@@ -1118,6 +1118,8 @@ agent := llmagent.New(
 
 `WithToolActivationOnSkillLoad(...)` 建立 skill 与候选 ToolSet 的激活关系。模型成功调用 `skill_load` 加载对应 skill 后，激活结果从下一次模型请求开始生效。一次 `Runner.Run` 内若继续进入工具循环，后续模型请求会使用更新后的工具集合。多条规则同时命中时，框架先合并激活记录，完全相同的 `(mode, lifetime, toolSetName)` 记录只保留一条；随后展开 ToolSet，最终工具集合按工具名处理重复和同名冲突。
 
+`WithToolActivationOnSkillLoad(...)` 不能与 `WithOutputSchema(...)` 同时配置。
+
 用户工具包括通过 `WithTools(...)`、`WithToolSets(...)`、运行时 `agent.WithAdditionalTools(...)` 和 `agent.WithExternalTools(...)` 加入的工具。框架工具由 `LLMAgent` 根据已启用能力自动注册，例如 `skill_load`、`workspace_exec` 和 `transfer_to_agent`。
 
 ### 激活模式

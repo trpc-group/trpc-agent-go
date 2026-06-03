@@ -1506,6 +1506,13 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 			invocation.RunOptions,
 		)
 	if f.toolActivationApplier != nil {
+		allTools = append([]tool.Tool(nil), allTools...)
+		if userToolNames != nil {
+			userToolNames = copyToolNames(userToolNames)
+		}
+		if externalToolNames != nil {
+			externalToolNames = copyToolNames(externalToolNames)
+		}
 		allTools, userToolNames, externalToolNames =
 			f.toolActivationApplier(
 				ctx,
