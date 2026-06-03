@@ -25,6 +25,7 @@ class PythonASTParser(ast.NodeVisitor):
         self.import_map: Dict[str, str] = {}
         self.imports: List[str] = []
         self.chunk_index = 0
+        self.instance_type_map: Dict[str, str] = {}
 
     def _get_code_with_comments(self, node) -> Tuple[str, int]:
         """Extract source code including preceding comments and decorators."""
@@ -201,14 +202,19 @@ class PythonASTParser(ast.NodeVisitor):
 
         for base in node.bases:
             base_name = ast.unparse(base)
+            if '[' in base_name:
+                base_name = base_name.split('[')[0]
             resolved = self._resolve_symbol(base_name)
             rel_type = "IMPLEMENTS" if base_name in ("Protocol", "ABC") else "INHERITS"
             self.edges.append({"from_id": node_id, "to_id": resolved, "type": rel_type})
 
         old_class = self.current_class
+        old_instance_map = self.instance_type_map
         self.current_class = node.name
+        self.instance_type_map = self._build_instance_type_map(node)
         self.generic_visit(node)
         self.current_class = old_class
+        self.instance_type_map = old_instance_map
 
     def visit_FunctionDef(self, node: ast.FunctionDef):
         self._visit_function(node, is_async=False)
@@ -270,9 +276,8 @@ class PythonASTParser(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call):
         """Extract function call relationships."""
         if self.current_function:
-            callee = self._get_call_target(node)
-            if callee and not self._is_builtin(callee):
-                resolved = self._resolve_symbol(callee)
+            resolved = self._resolve_call(node)
+            if resolved:
                 self.edges.append({
                     "from_id": self.current_function,
                     "to_id": resolved,
@@ -335,6 +340,82 @@ class PythonASTParser(ast.NodeVisitor):
                 })
                 self.chunk_index += 1
         self.generic_visit(node)
+
+    def _resolve_call(self, node: ast.Call) -> Optional[str]:
+        """Resolve a call expression to a fully qualified callee ID."""
+        # Pattern: self.attr.method() — use instance_type_map to resolve type
+        if (isinstance(node.func, ast.Attribute) and
+                isinstance(node.func.value, ast.Attribute) and
+                isinstance(node.func.value.value, ast.Name) and
+                node.func.value.value.id == "self" and
+                self.current_class):
+            attr_name = node.func.value.attr
+            method_name = node.func.attr
+            if attr_name in self.instance_type_map:
+                type_name = self.instance_type_map[attr_name]
+                resolved_type = self._resolve_symbol(type_name)
+                return "{}.{}".format(resolved_type, method_name)
+
+        # Fallback to original logic
+        callee = self._get_call_target(node)
+        if callee and not self._is_builtin(callee):
+            return self._resolve_symbol(callee)
+        return None
+
+    def _build_instance_type_map(self, class_node: ast.ClassDef) -> Dict[str, str]:
+        """Build self.attr -> type mapping from __init__ and class body."""
+        type_map: Dict[str, str] = {}
+        init_method = None
+        for item in class_node.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "__init__":
+                init_method = item
+                break
+        if init_method is None:
+            return type_map
+
+        # Build param -> type from annotations
+        param_types: Dict[str, str] = {}
+        for arg in init_method.args.args:
+            if arg.arg == "self":
+                continue
+            if arg.annotation:
+                ann = ast.unparse(arg.annotation)
+                ann = self._unwrap_optional(ann)
+                param_types[arg.arg] = ann
+
+        # Walk __init__ body for self.x = ... assignments
+        for stmt in ast.walk(init_method):
+            if not isinstance(stmt, ast.Assign):
+                continue
+            for target in stmt.targets:
+                if not (isinstance(target, ast.Attribute) and
+                        isinstance(target.value, ast.Name) and
+                        target.value.id == "self"):
+                    continue
+                attr_name = target.attr
+                # Priority 1: self.x = ClassName(...)
+                if isinstance(stmt.value, ast.Call):
+                    call_func = stmt.value.func
+                    if isinstance(call_func, ast.Name):
+                        type_map[attr_name] = call_func.id
+                    elif isinstance(call_func, ast.Attribute):
+                        type_map[attr_name] = ast.unparse(call_func)
+                # Priority 2: self.x = param (where param has annotation)
+                elif isinstance(stmt.value, ast.Name) and stmt.value.id in param_types:
+                    if attr_name not in type_map:
+                        type_map[attr_name] = param_types[stmt.value.id]
+        return type_map
+
+    @staticmethod
+    def _unwrap_optional(ann: str) -> str:
+        """Unwrap Optional[X] or X | None to the inner type X."""
+        if ann.startswith("Optional[") and ann.endswith("]"):
+            return ann[len("Optional["):-1]
+        if " | None" in ann:
+            return ann.replace(" | None", "").strip()
+        if "None | " in ann:
+            return ann.replace("None | ", "").strip()
+        return ann
 
     def _get_call_target(self, node: ast.Call) -> Optional[str]:
         """Get the call target name."""

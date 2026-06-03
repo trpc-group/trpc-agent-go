@@ -139,7 +139,8 @@ func collectPythonFiles(absDir string, includeSet map[string]struct{}) ([]string
 		if filepath.Ext(path) != ".py" {
 			return nil
 		}
-		if strings.HasSuffix(info.Name(), "_test.py") || info.Name() == "setup.py" {
+		name := info.Name()
+		if strings.HasPrefix(name, "test_") || name == "conftest.py" || name == "setup.py" {
 			return nil
 		}
 		if includeSet != nil {

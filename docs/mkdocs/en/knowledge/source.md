@@ -114,21 +114,22 @@ The repo source targets code repository scenarios, suited for:
 
 - Loading a remote **Git URL** directly
 - Loading a locally checked-out **repository directory**
-- Uniformly processing Go / Proto / Markdown and other content within a single repository
+- Uniformly processing Go / Python / Proto / Markdown and other content within a single repository
 
-> **Current open-source status**: AST-aware code parsing is currently open-sourced for **Go** and **Proto / PB**. Support for `Python`, `C++`, `JavaScript`, and other languages is being progressively open-sourced. For languages not yet open-sourced, the repo source can still process text files via plain document readers, but without AST-level semantic entities.
+> **Current open-source status**: AST-aware code parsing is currently open-sourced for **Go**, **Python**, and **Proto / PB**. Support for `C++`, `JavaScript`, and other languages is being progressively open-sourced. For languages not yet open-sourced, the repo source can still process text files via plain document readers, but without AST-level semantic entities.
 
 ### Typical Use Cases
 
 - Loading a remote Git repository to build a code knowledge base
 - Loading a local repository restricted to a specific subdirectory
-- Unified ingest of Go + Markdown (and other supported types) within a single repository
+- Unified ingest of Go + Python + Markdown (and other supported types) within a single repository
 
 ### Basic Usage
 
 ```go
 import (
     _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang"
+    _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python"
     reposource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo"
 )
 
@@ -140,13 +141,18 @@ repoSrc := reposource.New(
         },
     ),
     reposource.WithName("Code Repository"),
-    reposource.WithFileExtensions([]string{".go", ".md"}),
+    reposource.WithFileExtensions([]string{".go", ".py", ".md"}),
 )
 ```
 
-The Go AST reader is an optional module. Import `knowledge/document/reader/golang`
-for side-effect registration when scanning `.go` files. Proto files are
-registered by default.
+The Go AST reader and Python AST reader are optional modules that require blank imports for registration:
+
+- Scanning `.go` files → `knowledge/document/reader/golang`
+- Scanning `.py` files → `knowledge/document/reader/python`
+
+The Proto reader is registered by default and needs no extra import.
+
+> **Note**: The Python reader uses an embedded Python script for AST parsing. It requires Python 3.8+ installed on the system (only uses the standard library `ast` module, no third-party dependencies).
 
 ### Repository Struct
 
@@ -221,98 +227,110 @@ Notes:
 The repo source does not parse code itself; it dispatches to the appropriate reader based on file type:
 
 - `.go` → Go AST reader
+- `.py` → Python AST reader
 - `.proto` → Proto AST reader
 - `.md` → Markdown reader
 - Other registered extensions → corresponding reader
 
 ### Parsed Output Example
 
-Below is a sample output from chunking a struct definition in a remote Go repository:
+For AST-aware files (`.go` / `.py` / `.proto`), the repo source chunks code by semantic entity. Each chunk contains three layers:
+
+- **content**: A semantically complete code fragment (e.g., a full struct/class/function definition), not character-truncated text
+- **embedding text**: A structured summary (name / signature / comment, etc.) optimized for vector retrieval
+- **metadata**: `trpc_ast_*` fields (type / full_name / language / file_path, etc.) for precise filtering and locating
+
+Below is an example chunk for a Go struct:
 
 ```text
-parsed content:
-index: 7
-name: Server
-content_length: 570
-
 content:
 // Server is a tRPC server.
 // One process, one server. A server may offer one or more services.
 type Server struct {
     MaxCloseWaitTime time.Duration
-
-    services map[string]Service
-
-    mux sync.Mutex
-    onShutdownHooks []func()
-
-    failedServices sync.Map
-    signalCh       chan os.Signal
-    closeCh        chan struct{}
-    closeOnce      sync.Once
+    services         map[string]Service
+    ...
 }
 
 embedding text:
-{
-  "comment": "Server is a tRPC server.\nOne process, one server. A server may offer one or more services.",
-  "file_path": "/tmp/trpc-agent-go-repo-483441217/server/server.go",
-  "full_name": "trpc.group/trpc-go/trpc-go/server.Server",
-  "id": "trpc.group/trpc-go/trpc-go/server.Server",
-  "name": "Server",
-  "package": "trpc.group/trpc-go/trpc-go/server",
-  "signature": "type Server struct",
-  "type": "Struct"
-}
+{"name": "Server", "signature": "type Server struct", "type": "Struct",
+ "full_name": "trpc.group/trpc-go/trpc-go/server.Server",
+ "comment": "Server is a tRPC server. ..."}
 
 metadata:
-trpc_agent_go_source: repo
-trpc_agent_go_file_path: server/server.go
-trpc_ast_repo_name: trpc-go
-trpc_ast_repo_url: https://github.com/trpc-group/trpc-go
-trpc_ast_file_path: server/server.go
-trpc_ast_full_name: trpc.group/trpc-go/trpc-go/server.Server
 trpc_ast_type: Struct
+trpc_ast_full_name: trpc.group/trpc-go/trpc-go/server.Server
 trpc_ast_signature: type Server struct
 trpc_ast_language: go
-...
+trpc_ast_file_path: server/server.go
+trpc_ast_repo_name: trpc-go
 ```
 
-The output has three layers:
+For Python files, chunking follows the same approach at Class / Function / Method granularity; for `.proto` files, it chunks by service / rpc / message / enum.
 
-#### 1. `content`: Raw chunk content
+### Code Graph (GraphRAG)
 
-The `content` field stores the final text written to the knowledge base. For AST-aware Go / Proto readers, content is not a character-truncated fragment but a **semantically complete code entity**.
+> **Example Code**: [examples/knowledge/features/graphrag](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/graphrag)
 
-In the example above, the entity is the `Server` struct, so the content includes the struct comment, `type Server struct { ... }`, and all field definitions.
+Beyond vector retrieval (embedding + vector store), the repo source also supports storing structural code relationships as a graph. AST readers extract edges between entities during parsing. Combined with a graph database (Apache AGE), this enables structural code navigation.
 
-#### 2. `embedding text`: Structured summary for vectorization
+![AGE Graph Viewer - Code Graph Visualization](../../assets/img/knowledge/viewer.png)
 
-`embedding text` is a compact summary optimized for semantic embedding, retaining fields such as `name`, `full_name`, `package`, `signature`, `comment`, and `file_path`. This helps embeddings focus on "what this entity is, which package it belongs to, and what it does."
+#### Edge Types
 
-#### 3. `metadata`: Filtering, locating, and display
+| Edge Type | Meaning | Example |
+|-----------|---------|---------|
+| `CALLS` | Function/method call | `main` → `server.Start` |
+| `METHOD` | Method of a class/struct | `Server` → `Server.Start` |
+| `FIELD` | Struct field | `Server` → `services` |
+| `PARAM` | Function parameter | `NewServer` → `opts` |
+| `RETURNS` | Function return type | `NewServer` → `Server` |
+| `INHERITS` | Inheritance/implementation | `MyRunner` → `BaseRunner` |
+| `CONTAINS` | Containment | `package server` → `Server` |
 
-`metadata` is primarily used for retrieval filtering, display, and source tracking — not for embedding.
+#### Usage
 
-##### `trpc_agent_go_*`
+```go
+import (
+    _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang"
+    _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge"
+    agegraphstore "trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo"
+    "trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector"
+    knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+)
 
-Framework-level metadata describing the document origin:
+// 1. Configure repo source
+repoSrc := repo.New(
+    repo.WithRepository(repo.Repository{URL: "https://github.com/example/repo"}),
+    repo.WithFileExtensions([]string{".go", ".py"}),
+)
 
-- `trpc_agent_go_source=repo`: document comes from a repo source
-- `trpc_agent_go_file_path`: repo-relative file path
-- `trpc_agent_go_repo_path`: local root of the cloned repository
-- `trpc_agent_go_uri`: actual file URI
+// 2. Create GraphKnowledge (graph + vector hybrid retrieval)
+gk := knowledge.NewGraphKnowledge(
+    knowledge.WithGraphStore(agegraphstore.New(db, agegraphstore.WithGraphName("my_graph"))),
+    knowledge.WithGraphVectorStore(pgvector.New(db)),
+    knowledge.WithGraphEmbedder(embedder),
+)
 
-##### `trpc_ast_*`
+// 3. Load graph data
+gk.LoadGraphSource(ctx, repoSrc)
 
-AST semantic metadata describing the code entity:
+// 4. Inject graph tools into the Agent
+toolSet := knowledgetool.NewCodeGraphSearchTool(gk)
+// Exposes code_graph_search / code_graph_traverse / code_graph_find_paths
+```
 
-- `trpc_ast_type=Struct`
-- `trpc_ast_full_name`
-- `trpc_ast_signature`
-- `trpc_ast_language=go`
-- `trpc_ast_repo_name` / `trpc_ast_repo_url`
+#### Agent Graph Tools
 
-These are used for precise filtering, such as retrieving all `Struct` types in a given package, or all `rpc` / `message` definitions in a proto service.
+| Tool | Function |
+|------|----------|
+| `code_graph_search` | Vector search for AST nodes, returns matching code entities |
+| `code_graph_traverse` | Traverse related nodes from a given start node along edges (e.g., find all callers of a function) |
+| `code_graph_find_paths` | Find paths between two code entities (e.g., trace a call chain) |
+
+By locating entry nodes through vector search and then exploring structural relationships via graph traversal, the Agent can understand code architecture without reading large amounts of source code.
 
 ## Combined Usage
 

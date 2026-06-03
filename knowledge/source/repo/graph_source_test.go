@@ -798,6 +798,73 @@ func TestGraphDataFromCodeASTEmptyAllowedPaths(t *testing.T) {
 	require.Empty(t, data.Edges)
 }
 
+func TestGraphDataFromCodeASTFuzzySymbolResolution(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "agent.py"), "class BaseAgent: pass\n")
+	writeRepoFile(t, filepath.Join(dir, "abc.py"), "class AgentABC: pass\n")
+
+	src := New(WithRepository(Repository{Dir: dir}))
+	result := &codeast.Result{
+		Nodes: []*codeast.Node{
+			{
+				ID: "pkg.agents._base_agent.BaseAgent", Type: codeast.EntityClass,
+				Name: "BaseAgent", FullName: "pkg.agents._base_agent.BaseAgent",
+				Language: codeast.LanguagePython, Scope: codeast.ScopeCode,
+				Code: "class BaseAgent(AgentABC): ...", FilePath: filepath.Join(dir, "agent.py"),
+				LineStart: 1, LineEnd: 1,
+			},
+			{
+				ID: "pkg.abc._agent.AgentABC", Type: codeast.EntityClass,
+				Name: "AgentABC", FullName: "pkg.abc._agent.AgentABC",
+				Language: codeast.LanguagePython, Scope: codeast.ScopeCode,
+				Code: "class AgentABC: ...", FilePath: filepath.Join(dir, "abc.py"),
+				LineStart: 1, LineEnd: 1,
+			},
+		},
+		Edges: []*codeast.Edge{
+			// Edge uses the re-export path (missing internal module segment)
+			{FromID: "pkg.agents._base_agent.BaseAgent", ToID: "pkg.abc.AgentABC", Type: codeast.RelationInherits},
+		},
+	}
+	allowed := map[string]struct{}{"agent.py": {}, "abc.py": {}}
+	data := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo"}, allowed)
+	require.Len(t, data.Nodes, 2)
+	require.Len(t, data.Edges, 1, "INHERITS edge should be resolved via prefix matching")
+	require.Equal(t, string(codeast.RelationInherits), data.Edges[0].Type)
+}
+
+func TestResolveSymbolIDExactMatch(t *testing.T) {
+	kept := map[string]struct{}{"pkg.foo.Bar": {}}
+	idx := buildShortNameIndex(kept)
+	require.Equal(t, "pkg.foo.Bar", resolveSymbolID("pkg.foo.Bar", kept, idx))
+}
+
+func TestResolveSymbolIDShortNameUnique(t *testing.T) {
+	kept := map[string]struct{}{"pkg.internal.UniqueClass": {}}
+	idx := buildShortNameIndex(kept)
+	require.Equal(t, "pkg.internal.UniqueClass", resolveSymbolID("UniqueClass", kept, idx))
+}
+
+func TestResolveSymbolIDPrefixMatch(t *testing.T) {
+	kept := map[string]struct{}{
+		"pkg.abc._agent.AgentABC":     {},
+		"pkg.models._types.AgentType": {},
+	}
+	idx := buildShortNameIndex(kept)
+	// "pkg.abc.AgentABC" should match "pkg.abc._agent.AgentABC" via prefix
+	require.Equal(t, "pkg.abc._agent.AgentABC", resolveSymbolID("pkg.abc.AgentABC", kept, idx))
+}
+
+func TestResolveSymbolIDAmbiguous(t *testing.T) {
+	kept := map[string]struct{}{
+		"pkg.a.run": {},
+		"pkg.b.run": {},
+	}
+	idx := buildShortNameIndex(kept)
+	// "run" has multiple candidates, no prefix to disambiguate
+	require.Equal(t, "", resolveSymbolID("run", kept, idx))
+}
+
 func TestReadDocumentNodesEmptyDocExtensions(t *testing.T) {
 	dir := t.TempDir()
 	writeRepoFile(t, filepath.Join(dir, "doc.md"), "# hello\n")
