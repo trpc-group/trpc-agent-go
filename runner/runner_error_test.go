@@ -27,6 +27,7 @@ type streamingErrorAgent struct {
 	name      string
 	errorMsg  string
 	errorType string
+	emitted   *event.Event
 }
 
 func (m *streamingErrorAgent) Info() agent.Info                     { return agent.Info{Name: m.name} }
@@ -38,6 +39,7 @@ func (m *streamingErrorAgent) Run(ctx context.Context, inv *agent.Invocation) (<
 	// Create an error event. By default, NewErrorEvent does NOT populate Choices/Content.
 	// This simulates the behavior of llmflow/other components emitting raw error events.
 	ev := event.NewErrorEvent(inv.InvocationID, m.name, m.errorType, m.errorMsg)
+	m.emitted = ev
 	ch <- ev
 	close(ch)
 	return ch, nil
@@ -95,6 +97,48 @@ func TestRunner_FixesStreamingErrorEvent(t *testing.T) {
 	assert.Equal(t, "An error occurred during execution. Please contact the service provider.",
 		errorEvent.Response.Choices[0].Message.Content)
 	assert.Equal(t, "error", *errorEvent.Response.Choices[0].FinishReason)
+}
+
+func TestRunner_DoesNotMutateStreamingErrorEventWhenAddingContent(t *testing.T) {
+	svc := sessioninmemory.NewSessionService()
+	ag := &streamingErrorAgent{
+		name:      "stream-error-agent",
+		errorMsg:  "stream failed",
+		errorType: model.ErrorTypeStreamError,
+	}
+	r := NewRunner("test-app", ag, WithSessionService(svc))
+
+	ch, err := r.Run(context.Background(), "user-race", "session-race", model.NewUserMessage("start"))
+	require.NoError(t, err)
+
+	var eventsFromCh []*event.Event
+	for e := range ch {
+		eventsFromCh = append(eventsFromCh, e)
+	}
+
+	require.NotNil(t, ag.emitted)
+	require.Len(t, eventsFromCh, 2)
+	repairedEvent := eventsFromCh[0]
+
+	require.NotSame(t, ag.emitted, repairedEvent)
+	assert.Equal(t, ag.emitted.ID, repairedEvent.ID)
+	assert.Empty(t, ag.emitted.Response.Choices)
+	require.NotEmpty(t, repairedEvent.Response.Choices)
+	assert.Equal(
+		t,
+		"An error occurred during execution. Please contact the service provider.",
+		repairedEvent.Response.Choices[0].Message.Content,
+	)
+
+	sess, err := svc.GetSession(context.Background(), session.Key{
+		AppName:   "test-app",
+		UserID:    "user-race",
+		SessionID: "session-race",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+	require.NotEmpty(t, sess.Events[1].Response.Choices)
 }
 
 // TestRunner_FixesDirectRunError verifies that the runner populates content for errors returned by agent.Run().
