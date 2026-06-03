@@ -636,13 +636,13 @@ and request extensions. It can return a new context plus additional
 
 This is useful for request-scoped controls such as:
 
-- caller-executed frontend tools via `agent.WithExternalTools`
+- request-scoped server tools via `agent.WithAdditionalTools`
 - temporary runtime state via `agent.MergeRuntimeState`
 - per-request instruction or model controls
 
-For frontend tools, keep the OpenClaw server as the orchestration layer and let
-the frontend execute only the tool calls it declared. Convert the frontend's
-tool declarations into `tool.Tool` values and pass them as external tools:
+For request-scoped tools, keep the OpenClaw server as the execution boundary.
+Convert channel-specific extension data into server-side `tool.Tool` values and
+pass them as additional tools:
 
 ```go
 package main
@@ -664,23 +664,23 @@ func main() {
 			ctx context.Context,
 			input app.GatewayRunOptionInput,
 		) (context.Context, []agent.RunOption, error) {
-			frontendTools, err := frontendToolsFromExtensions(
+			requestTools, err := requestToolsFromExtensions(
 				input.Extensions,
 			)
 			if err != nil {
 				return ctx, nil, err
 			}
-			if len(frontendTools) == 0 {
+			if len(requestTools) == 0 {
 				return ctx, nil, nil
 			}
 			return ctx, []agent.RunOption{
-				agent.WithExternalTools(frontendTools),
+				agent.WithAdditionalTools(requestTools),
 			}, nil
 		}),
 	))
 }
 
-func frontendToolsFromExtensions(
+func requestToolsFromExtensions(
 	extensions map[string]json.RawMessage,
 ) ([]tool.Tool, error) {
 	// Parse your channel or frontend-specific extension schema here.
@@ -688,10 +688,11 @@ func frontendToolsFromExtensions(
 }
 ```
 
-`agent.WithExternalTools` makes those tools visible to the model but leaves
-execution to the caller. When the model calls one, the run stops after the
-assistant tool-call response; the caller can execute the tool and continue by
-sending a tool result message.
+Do not use `agent.WithExternalTools` as a frontend tool-calling protocol with
+the stock OpenClaw gateway. External tools require the caller to receive full
+assistant tool-call data, execute it, and continue with a tool-result message;
+the gateway protocol currently exposes user-facing replies and progress events
+instead of that continuation surface.
 
 ## Memory backend plugin (centralized user memory storage)
 
