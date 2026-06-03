@@ -101,7 +101,35 @@ func recoverableTruncationMarker(
 	if ref.ToolName != "" {
 		fmt.Fprintf(&b, "; tool_name=%s", ref.ToolName)
 	}
-	b.WriteString("; use session_load with content_offset/content_limit for more ...]\n\n")
+	b.WriteString("; use session_load ...]\n\n")
+	return b.String()
+}
+
+func compactRecoverableTruncationMarker(
+	ref toolResultRecoveryRef,
+	omittedChars int,
+) string {
+	if ref.EventID == "" && ref.ToolCallID == "" {
+		return fmt.Sprintf("\n\n[... %d characters truncated ...]\n\n", omittedChars)
+	}
+	var b strings.Builder
+	b.WriteString("\n\n[... ")
+	wroteField := false
+	if ref.EventID != "" {
+		fmt.Fprintf(&b, "event_id=%s", ref.EventID)
+		wroteField = true
+	}
+	if ref.ToolCallID != "" {
+		if wroteField {
+			b.WriteString("; ")
+		}
+		fmt.Fprintf(&b, "tool_call_id=%s", ref.ToolCallID)
+		wroteField = true
+	}
+	if wroteField {
+		b.WriteString("; ")
+	}
+	b.WriteString("session_load]\n\n")
 	return b.String()
 }
 
@@ -723,14 +751,22 @@ func truncateMiddleWithRef(
 
 	removed := runeCount - maxChars
 	marker := fmt.Sprintf("\n\n[... %d characters truncated ...]\n\n", removed)
-	if ref.EventID != "" {
+	if ref.EventID != "" || ref.ToolCallID != "" {
 		marker = recoverableTruncationMarker(ref, removed)
 	}
 	markerLen := utf8.RuneCountInString(marker)
 
 	available := maxChars - markerLen
+	if available < 2 && (ref.EventID != "" || ref.ToolCallID != "") {
+		marker = compactRecoverableTruncationMarker(ref, removed)
+		markerLen = utf8.RuneCountInString(marker)
+		available = maxChars - markerLen
+	}
 	if available < 2 {
 		runes := []rune(s)
+		if ref.EventID != "" || ref.ToolCallID != "" {
+			return marker
+		}
 		return string(runes[:maxChars])
 	}
 	halfBudget := available / 2

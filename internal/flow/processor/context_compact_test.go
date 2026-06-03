@@ -384,8 +384,7 @@ func TestCompactIncrementEvents_SkipRecentFuncDoesNotDisableOversizedPass(t *tes
 	gotRecent := compacted[1].Response.Choices[0].Message.Content
 	require.NotEqual(t, recentContent, gotRecent)
 	require.Contains(t, gotRecent, "[... ")
-	require.True(t, strings.HasPrefix(gotRecent, "HEAD-"))
-	require.True(t, strings.HasSuffix(gotRecent, "-TAIL"))
+	require.Contains(t, gotRecent, "tool_call_id=tool-call-req-recent")
 	require.Equal(t, currentContent,
 		compacted[2].Response.Choices[0].Message.Content)
 	require.Equal(t, 2, stats.ToolResultsCompacted)
@@ -785,8 +784,7 @@ func TestCompactIncrementEvents_TruncatesOversizedCurrentToolResult(t *testing.T
 	got := compacted[0].Response.Choices[0].Message.Content
 	require.NotEqual(t, content, got)
 	require.Contains(t, got, "[... ")
-	require.True(t, strings.HasPrefix(got, "HEAD-"))
-	require.True(t, strings.HasSuffix(got, "-TAIL"))
+	require.Contains(t, got, "tool_call_id=tool-call-current")
 	require.Equal(t, 1, stats.ToolResultsCompacted)
 	require.Greater(t, stats.EstimatedTokensSaved, 0)
 }
@@ -901,8 +899,7 @@ func TestCompactIncrementEvents_TruncatesOversizedHistoricalToolResult(t *testin
 	got := compacted[1].Response.Choices[0].Message.Content
 	require.NotEqual(t, content, got)
 	require.Contains(t, got, "[... ")
-	require.True(t, strings.HasPrefix(got, "HEAD-"))
-	require.True(t, strings.HasSuffix(got, "-TAIL"))
+	require.Contains(t, got, "tool_call_id=tool-call-history")
 	require.Equal(t, 1, stats.ToolResultsCompacted)
 	require.Greater(t, stats.EstimatedTokensSaved, 0)
 }
@@ -1023,6 +1020,21 @@ func TestTruncateOversizedToolResultMessage_UsesConfiguredCounter(t *testing.T) 
 	require.LessOrEqual(t, tokens, 80)
 	require.True(t, strings.HasPrefix(compacted.Content, "HEAD-"))
 	require.True(t, strings.HasSuffix(compacted.Content, "-TAIL"))
+}
+
+func TestTruncateMiddleWithRef_UsesToolCallIDOnlyRecoveryMarker(t *testing.T) {
+	got := truncateMiddleWithRef(
+		"HEAD-"+strings.Repeat("middle-", 80)+"-TAIL",
+		120,
+		toolResultRecoveryRef{
+			ToolCallID: "tool-call-current",
+			ToolName:   "worker",
+		},
+	)
+
+	require.Contains(t, got, "[... ")
+	require.Contains(t, got, "tool_call_id=tool-call-current")
+	require.Contains(t, got, "session_load")
 }
 
 func TestTruncateOversizedToolResultMessage_ContentPartsOnlyKeepsPayload(t *testing.T) {
