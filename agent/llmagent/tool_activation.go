@@ -319,7 +319,7 @@ func (a *LLMAgent) applyToolActivation(
 	userToolNames map[string]bool,
 	externalToolNames map[string]bool,
 ) ([]tool.Tool, map[string]bool, map[string]bool) {
-	toolSets, filter := a.toolActivationInputs()
+	toolSets, rules, filter := a.toolActivationInputs()
 	return applyToolActivationRecords(
 		ctx,
 		inv,
@@ -327,17 +327,20 @@ func (a *LLMAgent) applyToolActivation(
 		userToolNames,
 		externalToolNames,
 		toolSets,
+		rules,
 		filter,
 	)
 }
 
 func (a *LLMAgent) toolActivationInputs() (
 	[]tool.ToolSet,
+	[]toolActivationRule,
 	func(context.Context, tool.Tool) bool,
 ) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return append([]tool.ToolSet(nil), a.option.activatableToolSets...),
+		append([]toolActivationRule(nil), a.option.toolActivationRules...),
 		a.option.toolFilter
 }
 
@@ -515,8 +518,9 @@ func marshalToolActivationRecord(record toolActivationRecord) []byte {
 func sessionToolActivationRecords(
 	ctx context.Context,
 	inv *agent.Invocation,
+	allowedRecordKeys map[string]bool,
 ) []toolActivationRecord {
-	if inv == nil || inv.Session == nil {
+	if inv == nil || inv.Session == nil || len(allowedRecordKeys) == 0 {
 		return nil
 	}
 	state := inv.Session.SnapshotState()
@@ -533,10 +537,24 @@ func sessionToolActivationRecords(
 	sort.Strings(keys)
 	records := make([]toolActivationRecord, 0, len(keys))
 	for _, key := range keys {
-		record, ok := parseSessionToolActivationRecord(ctx, key, state[key])
-		if ok {
-			records = append(records, record)
+		record, ok := parseSessionToolActivationRecord(
+			ctx,
+			inv.AgentName,
+			key,
+			state[key],
+		)
+		if !ok {
+			continue
 		}
+		if !allowedRecordKeys[toolActivationRecordKey(record)] {
+			log.WarnfContext(
+				ctx,
+				"Disallowed tool activation session record %s",
+				key,
+			)
+			continue
+		}
+		records = append(records, record)
 	}
 	return records
 }
@@ -595,6 +613,7 @@ func escapeToolActivationSegment(value string) string {
 
 func parseSessionToolActivationRecord(
 	ctx context.Context,
+	agentName string,
 	key string,
 	raw []byte,
 ) (toolActivationRecord, bool) {
@@ -624,6 +643,14 @@ func parseSessionToolActivationRecord(
 		)
 		return toolActivationRecord{}, false
 	}
+	if key != toolActivationSessionKey(agentName, normalized) {
+		log.WarnfContext(
+			ctx,
+			"Mismatched tool activation session record %s",
+			key,
+		)
+		return toolActivationRecord{}, false
+	}
 	return normalized, ok
 }
 
@@ -634,11 +661,16 @@ func applyToolActivationRecords(
 	userToolNames map[string]bool,
 	externalToolNames map[string]bool,
 	toolSets []tool.ToolSet,
+	rules []toolActivationRule,
 	filter func(context.Context, tool.Tool) bool,
 ) ([]tool.Tool, map[string]bool, map[string]bool) {
 	records := mergeToolActivationRecords(
 		invocationToolActivationRecords(inv),
-		sessionToolActivationRecords(ctx, inv),
+		sessionToolActivationRecords(
+			ctx,
+			inv,
+			allowedSessionToolActivationRecordKeys(rules),
+		),
 	)
 	if len(records) == 0 || len(toolSets) == 0 {
 		return tools, userToolNames, externalToolNames
@@ -669,6 +701,31 @@ func applyToolActivationRecords(
 		return out, userNames, externalNames
 	}
 	return applyOnly(out, userNames, externalNames, activatedToolsByName)
+}
+
+func allowedSessionToolActivationRecordKeys(
+	rules []toolActivationRule,
+) map[string]bool {
+	if len(rules) == 0 {
+		return nil
+	}
+	allowed := make(map[string]bool)
+	for _, rule := range rules {
+		if rule.lifetime != ToolActivationLifetimeSession {
+			continue
+		}
+		for _, toolSetName := range rule.toolSetNames {
+			record, ok := newToolActivationRecord(
+				rule.mode,
+				rule.lifetime,
+				toolSetName,
+			)
+			if ok {
+				allowed[toolActivationRecordKey(record)] = true
+			}
+		}
+	}
+	return allowed
 }
 
 func activeToolActivationSets(

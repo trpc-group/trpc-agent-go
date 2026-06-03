@@ -471,6 +471,7 @@ func TestToolActivationIncludeReplacesExternalToolWithSameName(t *testing.T) {
 			},
 		},
 		nil,
+		nil,
 	)
 	require.Len(t, out, 1)
 	activated, ok := out[0].(*itool.NamedTool)
@@ -559,6 +560,65 @@ func TestToolActivationWithoutRulesIgnoresSessionRecords(t *testing.T) {
 	requests := mockModel.Requests()
 	require.Len(t, requests, 1)
 	require.NotContains(t, requests[0].Tools, "browser_open")
+}
+
+func TestToolActivationSessionRecordsRequireCurrentRules(t *testing.T) {
+	mockModel := &activationSequenceModel{
+		responses: []*model.Response{activationFinalResponse("done")},
+	}
+	agt := New(
+		"agent",
+		WithModel(mockModel),
+		WithActivatableToolSets([]tool.ToolSet{
+			activationToolSet{
+				name:  "allowed",
+				tools: []tool.Tool{activationTool{name: "open"}},
+			},
+			activationToolSet{
+				name:  "stale",
+				tools: []tool.Tool{activationTool{name: "open"}},
+			},
+		}),
+		WithToolActivationOnSkillLoad(
+			"research",
+			[]string{"allowed"},
+			WithToolActivationLifetime(ToolActivationLifetimeSession),
+		),
+	)
+	sess := session.NewSession("app", "user", "session")
+	allowed, ok := newToolActivationRecord(
+		ToolActivationModeInclude,
+		ToolActivationLifetimeSession,
+		"allowed",
+	)
+	require.True(t, ok)
+	stale, ok := newToolActivationRecord(
+		ToolActivationModeInclude,
+		ToolActivationLifetimeSession,
+		"stale",
+	)
+	require.True(t, ok)
+	sess.SetState(
+		toolActivationSessionKey("agent", allowed),
+		marshalToolActivationRecord(allowed),
+	)
+	sess.SetState(
+		toolActivationSessionKey("agent", stale),
+		marshalToolActivationRecord(stale),
+	)
+	inv := &agent.Invocation{
+		InvocationID: "inv",
+		Session:      sess,
+		Message:      model.NewUserMessage("use research"),
+	}
+	events, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range events {
+	}
+	requests := mockModel.Requests()
+	require.Len(t, requests, 1)
+	require.Contains(t, requests[0].Tools, "allowed_open")
+	require.NotContains(t, requests[0].Tools, "stale_open")
 }
 
 func TestToolActivationOutputSchemaIgnoresSessionRecords(t *testing.T) {
@@ -706,11 +766,11 @@ func TestToolActivationValidationAndRecordEdgeCases(t *testing.T) {
 
 func TestSessionToolActivationRecordsSkipsInvalidState(t *testing.T) {
 	ctx := context.Background()
-	require.Empty(t, sessionToolActivationRecords(ctx, nil))
-	require.Empty(t, sessionToolActivationRecords(ctx, &agent.Invocation{}))
+	require.Empty(t, sessionToolActivationRecords(ctx, nil, nil))
+	require.Empty(t, sessionToolActivationRecords(ctx, &agent.Invocation{}, nil))
 	sess := session.NewSession("app", "user", "session")
 	inv := &agent.Invocation{AgentName: "agent", Session: sess}
-	require.Empty(t, sessionToolActivationRecords(ctx, inv))
+	require.Empty(t, sessionToolActivationRecords(ctx, inv, nil))
 	prefix := toolActivationSessionPrefixForAgent("agent")
 	valid, ok := newToolActivationRecord(
 		ToolActivationModeInclude,
@@ -727,7 +787,58 @@ func TestSessionToolActivationRecordsSkipsInvalidState(t *testing.T) {
 	sess.SetState(prefix+"bad-json", []byte("{"))
 	sess.SetState(prefix+"invalid-lifetime", marshalToolActivationRecord(invalidLifetime))
 	sess.SetState(toolActivationSessionKey("agent", valid), marshalToolActivationRecord(valid))
-	require.Equal(t, []toolActivationRecord{valid}, sessionToolActivationRecords(ctx, inv))
+	allowedKeys := allowedSessionToolActivationRecordKeys([]toolActivationRule{{
+		mode:         ToolActivationModeInclude,
+		lifetime:     ToolActivationLifetimeSession,
+		toolSetNames: []string{"valid"},
+	}})
+	require.Equal(t, []toolActivationRecord{valid}, sessionToolActivationRecords(ctx, inv, allowedKeys))
+}
+
+func TestSessionToolActivationRecordsFiltersCurrentRulesAndKeyPayload(t *testing.T) {
+	ctx := context.Background()
+	sess := session.NewSession("app", "user", "session")
+	inv := &agent.Invocation{AgentName: "agent", Session: sess}
+	allowed, ok := newToolActivationRecord(
+		ToolActivationModeInclude,
+		ToolActivationLifetimeSession,
+		"allowed",
+	)
+	require.True(t, ok)
+	stale, ok := newToolActivationRecord(
+		ToolActivationModeInclude,
+		ToolActivationLifetimeSession,
+		"stale",
+	)
+	require.True(t, ok)
+	modeMismatch, ok := newToolActivationRecord(
+		ToolActivationModeOnly,
+		ToolActivationLifetimeSession,
+		"allowed",
+	)
+	require.True(t, ok)
+	keyRecord, ok := newToolActivationRecord(
+		ToolActivationModeInclude,
+		ToolActivationLifetimeSession,
+		"key",
+	)
+	require.True(t, ok)
+	payloadRecord, ok := newToolActivationRecord(
+		ToolActivationModeInclude,
+		ToolActivationLifetimeSession,
+		"payload",
+	)
+	require.True(t, ok)
+	allowedKeys := allowedSessionToolActivationRecordKeys([]toolActivationRule{{
+		mode:         ToolActivationModeInclude,
+		lifetime:     ToolActivationLifetimeSession,
+		toolSetNames: []string{"allowed", "payload"},
+	}})
+	sess.SetState(toolActivationSessionKey("agent", allowed), marshalToolActivationRecord(allowed))
+	sess.SetState(toolActivationSessionKey("agent", stale), marshalToolActivationRecord(stale))
+	sess.SetState(toolActivationSessionKey("agent", modeMismatch), marshalToolActivationRecord(modeMismatch))
+	sess.SetState(toolActivationSessionKey("agent", keyRecord), marshalToolActivationRecord(payloadRecord))
+	require.Equal(t, []toolActivationRecord{allowed}, sessionToolActivationRecords(ctx, inv, allowedKeys))
 }
 
 func TestToolActivationExpansionSkipsDuplicatesAndFilteredTools(t *testing.T) {
