@@ -238,9 +238,6 @@ func (a *codexAgent) runWithSession(ctx context.Context, threadID, prompt string
 		if runErr == nil {
 			return stdout, stderr, nil
 		}
-		if !canCreateAfterResumeError(stdout, stderr) {
-			return stdout, stderr, fmt.Errorf("run resume %v: %w", threadID, runErr)
-		}
 		createStdout, createStderr, createErr := a.runCreate(ctx, prompt)
 		if createErr == nil {
 			return createStdout, createStderr, nil
@@ -250,15 +247,6 @@ func (a *codexAgent) runWithSession(ctx context.Context, threadID, prompt string
 		return createStdout, createStderr, overallErr
 	}
 	return a.runCreate(ctx, prompt)
-}
-
-// canCreateAfterResumeError reports whether a resume failure is known stale before Codex emitted JSONL output.
-func canCreateAfterResumeError(stdout, stderr []byte) bool {
-	if len(bytes.TrimSpace(stdout)) > 0 {
-		return false
-	}
-	msg := strings.ToLower(string(stderr))
-	return strings.Contains(msg, "thread/resume failed") && strings.Contains(msg, "no rollout found for thread id")
 }
 
 // runCreate starts a new Codex exec session.
