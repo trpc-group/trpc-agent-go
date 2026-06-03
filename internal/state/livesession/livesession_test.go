@@ -60,6 +60,24 @@ func TestLiveSession_Attach_Replaces(t *testing.T) {
 	require.Same(t, second, got)
 }
 
+func TestLiveSession_CloneWithSessionOverrideClearsAttachment(t *testing.T) {
+	inv := agent.NewInvocation()
+	original := session.NewSession("app", "user", "original")
+	replacement := session.NewSession("app", "user", "replacement")
+
+	Attach(inv, original)
+	clone := inv.Clone(agent.WithInvocationSession(replacement))
+
+	got, ok := Get(clone)
+	require.False(t, ok)
+	require.Nil(t, got)
+	require.Same(t, replacement, clone.Session)
+
+	got, ok = Get(inv)
+	require.True(t, ok)
+	require.Same(t, original, got)
+}
+
 func TestLiveSession_NilAndEmptyCases(t *testing.T) {
 	require.NotPanics(t, func() { Attach(nil, nil) })
 	require.NotPanics(t, func() { Clear(nil) })
