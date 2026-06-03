@@ -2527,17 +2527,17 @@ func TestWithEnableTokenTailoring_Disabled(t *testing.T) {
 func TestWithEnableTokenTailoring_UnknownModel(t *testing.T) {
 	// Capture the built Anthropic request.
 	var captured *anthropic.MessageNewParams
-	m := New("unknown-model-xyz", // Unknown model should fallback to default context window
+	m := New("unknown-model-xyz", // Unknown model should fallback to the 128000-token default context window
 		WithEnableTokenTailoring(true),
 		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
 			captured = req
 		}),
 	)
 
-	// Create many messages to trigger tailoring.
+	// Create messages large enough to trigger tailoring with the unknown-model fallback window.
 	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
 	for i := 0; i < 50; i++ {
-		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 50))))
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 1000))))
 	}
 
 	req := &model.Request{Messages: messages}
