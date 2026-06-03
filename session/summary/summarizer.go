@@ -259,10 +259,11 @@ func (s *sessionSummarizer) ShouldSummarizeWithContext(
 	if sess == nil || len(sess.Events) == 0 {
 		return false
 	}
-	if len(filterSummaryInputEventsForSession(
+	summaryInputEvents := filterSummaryInputEventsForSession(
 		s.filterEventsForSummary(sess.Events),
 		sess,
-	)) == 0 {
+	)
+	if !s.hasSummarizableContent(summaryInputEvents) {
 		return false
 	}
 

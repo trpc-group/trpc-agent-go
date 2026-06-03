@@ -29,7 +29,12 @@ func TestSessionSummarizer_ShouldSummarize(t *testing.T) {
 		s := NewSummarizer(&fakeModel{}, WithChecksAny(checks...))
 		sess := &session.Session{Events: make([]event.Event, 4)}
 		for i := range sess.Events {
-			sess.Events[i] = event.Event{Timestamp: time.Now()}
+			sess.Events[i] = event.Event{
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "message"},
+				}}},
+			}
 		}
 		assert.True(t, s.ShouldSummarize(sess))
 	})

@@ -16,10 +16,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 type contextKey string
+
+func contextTestMessageEvent() event.Event {
+	return event.Event{
+		Timestamp: time.Now(),
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Content: "message"},
+		}}},
+	}
+}
 
 func TestSessionSummarizer_WithChecksAnyContextReceivesContext(t *testing.T) {
 	s := NewSummarizer(&testModel{}, WithChecksAnyContext(func(
@@ -36,7 +46,7 @@ func TestSessionSummarizer_WithChecksAnyContextReceivesContext(t *testing.T) {
 	require.True(t, ok)
 
 	sess := &session.Session{
-		Events: []event.Event{{Timestamp: time.Now()}},
+		Events: []event.Event{contextTestMessageEvent()},
 	}
 	ctx := context.WithValue(context.Background(), contextKey("trace"), "trace-ctx")
 	assert.True(t, contextual.ShouldSummarizeWithContext(ctx, sess))
@@ -62,7 +72,7 @@ func TestSessionSummarizer_WithChecksAllContextAllMustPass(t *testing.T) {
 	require.True(t, ok)
 
 	sess := &session.Session{
-		Events: []event.Event{{Timestamp: time.Now()}},
+		Events: []event.Event{contextTestMessageEvent()},
 	}
 	ctx := context.WithValue(context.Background(), contextKey("trace"), "trace-ctx")
 	assert.True(t, contextual.ShouldSummarizeWithContext(ctx, sess))
@@ -92,7 +102,7 @@ func TestSessionSummarizer_WithChecksAllContextShortCircuits(t *testing.T) {
 	require.True(t, ok)
 
 	sess := &session.Session{
-		Events: []event.Event{{Timestamp: time.Now()}},
+		Events: []event.Event{contextTestMessageEvent()},
 	}
 	assert.False(t, contextual.ShouldSummarizeWithContext(context.Background(), sess))
 	assert.False(t, calledSecond)
@@ -119,7 +129,7 @@ func TestSessionSummarizer_WithChecksAnyContextShortCircuits(t *testing.T) {
 	require.True(t, ok)
 
 	sess := &session.Session{
-		Events: []event.Event{{Timestamp: time.Now()}},
+		Events: []event.Event{contextTestMessageEvent()},
 	}
 	assert.True(t, contextual.ShouldSummarizeWithContext(context.Background(), sess))
 	assert.False(t, calledSecond)
