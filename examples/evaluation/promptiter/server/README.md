@@ -106,6 +106,7 @@ python3 client.py \
   --backward-case-parallelism 16 \
   --aggregation-parallelism 16 \
   --optimizer-parallelism 16 \
+  --parallel-backward \
   --parallel-aggregation \
   --parallel-optimization
 ```
@@ -147,6 +148,8 @@ Run summary:
   Round 3 -> train 0.78, validation 0.84, accepted True, delta 0.07
   Round 4 -> train 0.84, validation 0.84, accepted False, delta 0.01
 ```
+
+Scores and deltas in this sample are rounded to two decimals; acceptance uses the unrounded internal delta.
 
 <details>
 <summary><code>candidate#instruction</code> accepted from <code>client.log</code></summary>
@@ -241,13 +244,13 @@ To restrict a run to selected eval cases, add `evalCaseIds` to the corresponding
     "train": [
       {
         "evalSetId": "nba-commentary-train",
-        "evalCaseIds": ["case_1", "case_2"]
+        "evalCaseIds": ["train_01_nba_nuggets_blowout", "train_08_cricket_last_over_chase"]
       }
     ],
     "validation": [
       {
         "evalSetId": "nba-commentary-validation",
-        "evalCaseIds": ["case_3"]
+        "evalCaseIds": ["validation_01_nba_empty_48"]
       }
     ]
   }

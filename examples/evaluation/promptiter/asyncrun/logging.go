@@ -144,5 +144,12 @@ func truncateForLog(value string) string {
 	if len(value) <= maxLoggedPayload {
 		return value
 	}
-	return strings.TrimSpace(value[:maxLoggedPayload]) + "...(truncated)"
+	truncateAt := 0
+	for index := range value {
+		if index > maxLoggedPayload {
+			break
+		}
+		truncateAt = index
+	}
+	return strings.TrimSpace(value[:truncateAt]) + "...(truncated)"
 }
