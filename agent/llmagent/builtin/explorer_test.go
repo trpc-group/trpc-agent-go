@@ -146,14 +146,17 @@ func TestNewExplorer_Defaults(t *testing.T) {
 }
 
 func TestNewExplorer_Overrides(t *testing.T) {
+	filter := tool.NewIncludeToolNamesFilter("read_file")
 	e := NewExplorer(
 		WithName("scout"),
 		WithDescription("a scout"),
 		WithInstruction("custom prompt"),
+		WithToolFilter(filter),
 	).(*explorer)
 	require.Equal(t, "scout", e.Info().Name)
 	require.Equal(t, "a scout", e.Info().Description)
 	require.Equal(t, "custom prompt", e.cfg.instruction)
+	require.NotNil(t, e.cfg.toolFilter)
 }
 
 func TestNewExplorer_EmptyOverridesFallBackToDefaults(t *testing.T) {
@@ -170,6 +173,22 @@ func TestNewExplorer_EmptyOverridesFallBackToDefaults(t *testing.T) {
 func TestExplorer_Run_NilInvocation(t *testing.T) {
 	_, err := NewExplorer().Run(context.Background(), nil)
 	require.Error(t, err)
+}
+
+func TestExplorer_Run_WithExplicitModelSucceeds(t *testing.T) {
+	explorerAgent := NewExplorer(
+		WithModel(&mockModel{name: "m"}),
+		WithTools([]tool.Tool{&mockTool{name: "read_file"}}),
+	)
+	inv := agent.NewInvocation(agent.WithInvocationAgent(explorerAgent))
+
+	ch, err := explorerAgent.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+
+	require.Equal(t, DefaultExplorerName, inv.AgentName)
+	require.NotSame(t, explorerAgent, inv.Agent)
 }
 
 func TestInheritParentUserTools_KeepsUserDropsFramework(t *testing.T) {
@@ -260,6 +279,23 @@ func TestSanitizeChildInvocation(t *testing.T) {
 	require.Len(t, inv.RunOptions.AdditionalTools, 1)
 }
 
+func TestApplyToolFilter_ExplicitTools(t *testing.T) {
+	got := applyToolFilter(
+		context.Background(),
+		[]tool.Tool{
+			nil,
+			&mockTool{name: "read_file"},
+			&mockTool{name: "write_file"},
+		},
+		tool.NewIncludeToolNamesFilter("read_file"),
+	)
+
+	names := toolNames(got)
+	require.True(t, names["read_file"])
+	require.False(t, names["write_file"])
+	require.Len(t, got, 1)
+}
+
 func TestResolveModel(t *testing.T) {
 	parentModel := &mockModel{name: "parent"}
 	explicit := &mockModel{name: "explicit"}
@@ -323,6 +359,21 @@ func TestBuildInner_NoParentExplicitModelAndTools(t *testing.T) {
 	names := toolNames(surface)
 	require.True(t, names["read_file"])
 	require.False(t, names[transfer.TransferToolName])
+}
+
+func TestBuildInner_WithLLMAgentOptionsAppliedLast(t *testing.T) {
+	m := &mockModel{name: "m"}
+	e := NewExplorer(
+		WithModel(m),
+		WithTools([]tool.Tool{&mockTool{name: "read_file"}}),
+		WithLLMAgentOptions(
+			llmagent.WithDescription("custom inner description"),
+		),
+	).(*explorer)
+
+	inner, err := e.buildInner(context.Background(), agent.NewInvocation())
+	require.NoError(t, err)
+	require.Equal(t, "custom inner description", inner.Info().Description)
 }
 
 func TestBuildInner_InheritsFromRealParent(t *testing.T) {
