@@ -1598,7 +1598,7 @@ func TestAttachStateDeltaToToolResults_ReplaysPendingStateDeltas(
 		},
 	}
 
-	events := p.attachStateDeltaToToolResults(inv, results)
+	events := p.attachStateDeltaToToolResults(context.Background(), inv, results)
 	require.Len(t, events, 2)
 	require.Equal(t, []byte("v1"), events[1].StateDelta[writeKey])
 }

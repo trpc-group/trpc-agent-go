@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/toolsnapshot"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
@@ -54,16 +55,6 @@ const (
 
 	flowRunPanicErrFmt = "flow panic: %v"
 
-	// stateKeyToolsSnapshot is the invocation state key used to cache the
-	// final tool list for a single Invocation. This ensures that the tool
-	// set (including ToolSet-based tools and filters) stays stable for the
-	// entire lifetime of an Invocation, even when underlying ToolSets are
-	// dynamic.
-	stateKeyToolsSnapshot = "llmflow:tools_snapshot"
-	// stateKeyHasFilteredUserTools caches whether the final filtered tool
-	// snapshot for this invocation still contains any user tool.
-	stateKeyHasFilteredUserTools = "llmflow:has_filtered_user_tools"
-
 	defaultContextCompactionThresholdRatio = 0.7
 	contextCompactionFallbackWindow        = 8192
 	contextCompactionMinTokens             = 2000
@@ -72,10 +63,7 @@ const (
 // InvocationHasFilteredUserTools reports whether the cached filtered tool
 // snapshot for this invocation still contains any user tool.
 func InvocationHasFilteredUserTools(invocation *agent.Invocation) (bool, bool) {
-	if invocation == nil {
-		return false, false
-	}
-	return agent.GetStateValue[bool](invocation, stateKeyHasFilteredUserTools)
+	return toolsnapshot.HasFilteredUserTools(invocation)
 }
 
 // Options contains configuration options for creating a Flow.
@@ -87,7 +75,17 @@ type Options struct {
 	SyncSummaryIntraRun             bool
 	EnableContextCompaction         bool
 	ContextCompactionThresholdRatio float64
+	ToolActivationApplier           ToolActivationApplier
 }
+
+// ToolActivationApplier applies invocation-specific tool activation.
+type ToolActivationApplier func(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	tools []tool.Tool,
+	userToolNames map[string]bool,
+	externalToolNames map[string]bool,
+) ([]tool.Tool, map[string]bool, map[string]bool)
 
 // ModelBaseResolution describes the base model for one LLM call.
 type ModelBaseResolution struct {
@@ -109,6 +107,7 @@ type Flow struct {
 	syncSummaryIntraRun             bool
 	enableContextCompaction         bool
 	contextCompactionThresholdRatio float64
+	toolActivationApplier           ToolActivationApplier
 }
 
 type contextCompactionTailProcessor interface {
@@ -152,6 +151,7 @@ func New(
 		modelSelector:           opts.ModelSelector,
 		syncSummaryIntraRun:     opts.SyncSummaryIntraRun,
 		enableContextCompaction: opts.EnableContextCompaction,
+		toolActivationApplier:   opts.ToolActivationApplier,
 		contextCompactionThresholdRatio: normalizeContextCompactionThresholdRatio(
 			opts.ContextCompactionThresholdRatio,
 		),
@@ -1466,10 +1466,7 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 		return nil
 	}
 
-	if cached, ok := agent.GetStateValue[[]tool.Tool](
-		invocation,
-		stateKeyToolsSnapshot,
-	); ok && cached != nil {
+	if cached, ok := toolsnapshot.Get(invocation); ok && cached != nil {
 		return cached
 	}
 
@@ -1508,13 +1505,24 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 			hasUserToolTracking,
 			invocation.RunOptions,
 		)
+	if f.toolActivationApplier != nil {
+		allTools, userToolNames, externalToolNames =
+			f.toolActivationApplier(
+				ctx,
+				invocation,
+				allTools,
+				userToolNames,
+				externalToolNames,
+			)
+		hasUserToolTracking = userToolNames != nil
+	}
 
 	// If no filter is specified, return all tools for this invocation.
 	if invocation.RunOptions.ToolFilter == nil {
 		setVisibleExternalToolNames(invocation, allTools, externalToolNames)
-		invocation.SetState(stateKeyToolsSnapshot, allTools)
-		invocation.SetState(
-			stateKeyHasFilteredUserTools,
+		toolsnapshot.Set(
+			invocation,
+			allTools,
 			hasTrackedUserTool(allTools, hasUserToolTracking, userToolNames),
 		)
 		return allTools
@@ -1549,9 +1557,9 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 	})
 
 	setVisibleExternalToolNames(invocation, filtered, externalToolNames)
-	invocation.SetState(stateKeyToolsSnapshot, filtered)
-	invocation.SetState(
-		stateKeyHasFilteredUserTools,
+	toolsnapshot.Set(
+		invocation,
+		filtered,
 		hasTrackedUserTool(filtered, hasUserToolTracking, userToolNames),
 	)
 

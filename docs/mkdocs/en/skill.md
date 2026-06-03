@@ -1128,6 +1128,173 @@ disable `workspace_exec`. To hide execution capability from the model,
 disable the workspace execution surface when creating the Agent, for
 example with `llmagent.WithWorkspaceExecSurfaceEnabled(false)`.
 
+## Tool Activation Based on Skill Loading
+
+ToolSets registered with `WithToolSets(...)` enter model requests together with the Agent. Tool activation provides another way to attach tools: first register ToolSets as candidates, then decide whether they enter later model requests based on the result of `skill_load`.
+
+For a complete example, see [examples/skilltoolactivation/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skilltoolactivation/README.md).
+
+The following example registers `example_file` as a candidate ToolSet and declares that loading `example-skill` activates that ToolSet. After the model successfully calls `skill_load`, later model requests include the tools expanded from `example_file`.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/file"
+)
+
+repo, _ := skill.NewFSRepository("./skills")
+exampleFiles, _ := file.NewToolSet(
+	file.WithName("example_file"),
+	file.WithBaseDir("./files"),
+)
+
+agent := llmagent.New(
+	"skills-assistant",
+	llmagent.WithSkills(repo),
+	llmagent.WithActivatableToolSets([]tool.ToolSet{exampleFiles}),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_file"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeInclude),
+		llmagent.WithToolActivationLifetime(llmagent.ToolActivationLifetimeInvocation),
+	),
+)
+```
+
+`WithActivatableToolSets(...)` registers candidate ToolSets. A candidate ToolSet uses `ToolSet.Name()` as its reference name and follows the normal ToolSet tool naming rules. Tools in the candidate set enter model requests only after an activation rule matches.
+
+`WithToolActivationOnSkillLoad(...)` establishes the activation relationship between a skill and candidate ToolSets. After the model successfully calls `skill_load` to load the corresponding skill, the activation result takes effect starting from the next model request. If the same `Runner.Run` continues into a tool loop, later model requests in that run use the updated tool set. When multiple rules match at the same time, the framework first
+merges activation records and keeps only one copy of each identical `(mode, lifetime, toolSetName)` record. It then expands ToolSets, and the final tool set handles duplicates and name conflicts by tool name.
+
+User tools include tools added through `WithTools(...)`, `WithToolSets(...)`, runtime `agent.WithAdditionalTools(...)`, and `agent.WithExternalTools(...)`. Framework tools are registered automatically by `LLMAgent` based on enabled capabilities, such as `skill_load`, `workspace_exec`, and `transfer_to_agent`.
+
+### Activation Mode
+
+`WithToolActivationMode(...)` sets how activated tools are composed with existing user tools.
+
+#### Include Mode
+
+`ToolActivationModeInclude` is the default mode. It adds activated tools on top of existing user tools.
+
+The following example configures two Include rules for the same skill.
+
+```go
+searchTool := function.NewFunctionTool(search, function.WithName("search"))
+calculatorTool := function.NewFunctionTool(calculator, function.WithName("calculator"))
+exampleSearch, _ := file.NewToolSet(
+	file.WithName("example_search"),
+	file.WithBaseDir("./search"),
+)
+
+agent := llmagent.New(
+	"skills-assistant",
+	llmagent.WithSkills(repo),
+	llmagent.WithTools([]tool.Tool{searchTool, calculatorTool}),
+	llmagent.WithActivatableToolSets([]tool.ToolSet{
+		exampleFiles,
+		exampleSearch,
+	}),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_file"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeInclude),
+	),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_search"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeInclude),
+	),
+)
+```
+
+After `example-skill` is loaded, later model requests include the existing `search` and `calculator` tools, and also include the tools expanded from `example_file` and `example_search`.
+
+#### Only Mode
+
+`ToolActivationModeOnly` makes the user tool set equal to the activated tool set, while framework tools remain available.
+
+The following example configures two Only rules for the same skill.
+
+```go
+searchTool := function.NewFunctionTool(search, function.WithName("search"))
+calculatorTool := function.NewFunctionTool(calculator, function.WithName("calculator"))
+exampleSearch, _ := file.NewToolSet(
+	file.WithName("example_search"),
+	file.WithBaseDir("./search"),
+)
+
+agent := llmagent.New(
+	"skills-assistant",
+	llmagent.WithSkills(repo),
+	llmagent.WithTools([]tool.Tool{searchTool, calculatorTool}),
+	llmagent.WithActivatableToolSets([]tool.ToolSet{
+		exampleFiles,
+		exampleSearch,
+	}),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_file"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeOnly),
+	),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_search"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeOnly),
+	),
+)
+```
+
+After `example-skill` is loaded, the user tools in later model requests come from the tools expanded from `example_file` and `example_search`; `search` and `calculator` are trimmed. Framework tools remain available.
+
+#### Include and Only Match Simultaneously
+
+When Include and Only activation results exist at the same time in one model request, the user tool set for that request is composed in Only mode. In other words, only user tools expanded from all Only rules are kept, while framework tools remain available.
+
+```go
+searchTool := function.NewFunctionTool(search, function.WithName("search"))
+calculatorTool := function.NewFunctionTool(calculator, function.WithName("calculator"))
+exampleSearch, _ := file.NewToolSet(
+	file.WithName("example_search"),
+	file.WithBaseDir("./search"),
+)
+
+agent := llmagent.New(
+	"skills-assistant",
+	llmagent.WithSkills(repo),
+	llmagent.WithTools([]tool.Tool{searchTool, calculatorTool}),
+	llmagent.WithActivatableToolSets([]tool.ToolSet{
+		exampleFiles,
+		exampleSearch,
+	}),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_file"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeInclude),
+	),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_search"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeOnly),
+	),
+)
+```
+
+After `example-skill` is loaded, the user tools in later model requests come from the tools expanded from `example_search`. `search`, `calculator`, and `example_file` from the Include rule do not enter the user tool set for that request.
+
+#### Same-name Tool Handling
+
+When an activated tool has the same name as an existing user tool, the activated tool is used in the final result. In Include mode, the same-name user tool is replaced. In Only mode, the final user tool set comes from the activated tools expanded by Only rules. When an activated tool has the same name as a framework tool, the framework tool remains visible and a warning
+is recorded.
+
+### Activation Lifetime
+
+`WithToolActivationLifetime(...)` sets the effective lifetime of activation results.
+
+- `ToolActivationLifetimeInvocation` is the default lifetime. The activation result is effective only within the current agent invocation. If this invocation continues to produce later model requests, those requests keep carrying the activated tools. The next invocation of the same agent needs to trigger activation again through `skill_load`.
+- `ToolActivationLifetimeSession` keeps the activation result effective within the same session. Later invocations of the same agent in that session keep carrying those activated tools.
+
 ## Troubleshooting
 
 - Unknown skill: verify name and repository path; ensure the overview

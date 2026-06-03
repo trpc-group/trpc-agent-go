@@ -1079,6 +1079,171 @@ events, err := r.Run(
 如果不希望暴露执行能力，请在创建 Agent 时关闭 workspace 执行
 surface，例如使用 `llmagent.WithWorkspaceExecSurfaceEnabled(false)`。
 
+## 基于 Skill 加载的工具激活
+
+`WithToolSets(...)` 注册的 ToolSet 会随 Agent 一起进入模型请求。工具激活提供另一种接入方式，先把 ToolSet 注册为候选集合，再由 `skill_load` 的结果决定是否进入后续模型请求。
+
+完整示例见 [examples/skilltoolactivation/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skilltoolactivation/README.md)。
+
+下面示例将 `example_file` 注册为候选 ToolSet，并声明加载 `example-skill` 后激活该 ToolSet。模型成功调用 `skill_load` 后，后续模型请求会包含 `example_file` 展开的工具。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/file"
+)
+
+repo, _ := skill.NewFSRepository("./skills")
+exampleFiles, _ := file.NewToolSet(
+	file.WithName("example_file"),
+	file.WithBaseDir("./files"),
+)
+
+agent := llmagent.New(
+	"skills-assistant",
+	llmagent.WithSkills(repo),
+	llmagent.WithActivatableToolSets([]tool.ToolSet{exampleFiles}),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_file"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeInclude),
+		llmagent.WithToolActivationLifetime(llmagent.ToolActivationLifetimeInvocation),
+	),
+)
+```
+
+`WithActivatableToolSets(...)` 注册候选 ToolSet。候选 ToolSet 使用 `ToolSet.Name()` 作为引用名，并沿用普通 `ToolSet` 的工具命名规则。候选集合中的工具只会在激活规则命中后进入模型请求。
+
+`WithToolActivationOnSkillLoad(...)` 建立 skill 与候选 ToolSet 的激活关系。模型成功调用 `skill_load` 加载对应 skill 后，激活结果从下一次模型请求开始生效。一次 `Runner.Run` 内若继续进入工具循环，后续模型请求会使用更新后的工具集合。多条规则同时命中时，框架先合并激活记录，完全相同的 `(mode, lifetime, toolSetName)` 记录只保留一条；随后展开 ToolSet，最终工具集合按工具名处理重复和同名冲突。
+
+用户工具包括通过 `WithTools(...)`、`WithToolSets(...)`、运行时 `agent.WithAdditionalTools(...)` 和 `agent.WithExternalTools(...)` 加入的工具。框架工具由 `LLMAgent` 根据已启用能力自动注册，例如 `skill_load`、`workspace_exec` 和 `transfer_to_agent`。
+
+### 激活模式
+
+`WithToolActivationMode(...)` 设置激活工具与已有用户工具的合成方式。
+
+#### Include 模式
+
+`ToolActivationModeInclude` 为默认模式，在已有用户工具基础上追加激活工具。
+
+下面示例为同一个 skill 配置两条 Include 规则。
+
+```go
+searchTool := function.NewFunctionTool(search, function.WithName("search"))
+calculatorTool := function.NewFunctionTool(calculator, function.WithName("calculator"))
+exampleSearch, _ := file.NewToolSet(
+	file.WithName("example_search"),
+	file.WithBaseDir("./search"),
+)
+
+agent := llmagent.New(
+	"skills-assistant",
+	llmagent.WithSkills(repo),
+	llmagent.WithTools([]tool.Tool{searchTool, calculatorTool}),
+	llmagent.WithActivatableToolSets([]tool.ToolSet{
+		exampleFiles,
+		exampleSearch,
+	}),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_file"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeInclude),
+	),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_search"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeInclude),
+	),
+)
+```
+
+加载 `example-skill` 后，后续模型请求包含原有的 `search`、`calculator`，并包含 `example_file` 和 `example_search` 展开的工具。
+
+#### Only 模式
+
+`ToolActivationModeOnly` 使用户工具集合等于激活工具集合，框架工具继续保留。
+
+下面示例为同一个 skill 配置两条 Only 规则。
+
+```go
+searchTool := function.NewFunctionTool(search, function.WithName("search"))
+calculatorTool := function.NewFunctionTool(calculator, function.WithName("calculator"))
+exampleSearch, _ := file.NewToolSet(
+	file.WithName("example_search"),
+	file.WithBaseDir("./search"),
+)
+
+agent := llmagent.New(
+	"skills-assistant",
+	llmagent.WithSkills(repo),
+	llmagent.WithTools([]tool.Tool{searchTool, calculatorTool}),
+	llmagent.WithActivatableToolSets([]tool.ToolSet{
+		exampleFiles,
+		exampleSearch,
+	}),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_file"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeOnly),
+	),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_search"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeOnly),
+	),
+)
+```
+
+加载 `example-skill` 后，后续模型请求中的用户工具来自 `example_file` 和 `example_search` 展开的工具，`search` 和 `calculator` 会被裁剪。框架工具继续保留。
+
+#### Include 与 Only 同时命中
+
+一次模型请求同时存在 Include 与 Only 激活结果时，按 Only 模式合成本次用户工具集合，也就是只保留所有 Only 规则展开后的用户工具，框架工具继续保留。
+
+```go
+searchTool := function.NewFunctionTool(search, function.WithName("search"))
+calculatorTool := function.NewFunctionTool(calculator, function.WithName("calculator"))
+exampleSearch, _ := file.NewToolSet(
+	file.WithName("example_search"),
+	file.WithBaseDir("./search"),
+)
+
+agent := llmagent.New(
+	"skills-assistant",
+	llmagent.WithSkills(repo),
+	llmagent.WithTools([]tool.Tool{searchTool, calculatorTool}),
+	llmagent.WithActivatableToolSets([]tool.ToolSet{
+		exampleFiles,
+		exampleSearch,
+	}),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_file"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeInclude),
+	),
+	llmagent.WithToolActivationOnSkillLoad(
+		"example-skill",
+		[]string{"example_search"},
+		llmagent.WithToolActivationMode(llmagent.ToolActivationModeOnly),
+	),
+)
+```
+
+加载 `example-skill` 后，后续模型请求中的用户工具来自 `example_search` 展开的工具。`search`、`calculator` 和 Include 规则中的 `example_file` 不进入本次用户工具集合。
+
+#### 同名工具处理
+
+激活工具与已有用户工具同名时，最终使用激活工具。在 Include 模式下，同名用户工具会被替换；在 Only 模式下，最终用户工具集合来自 Only 规则展开后的激活工具。激活工具与框架工具同名时，框架工具保持可见，并记录告警。
+
+### 激活生命周期
+
+`WithToolActivationLifetime(...)` 设置激活结果的生效周期。
+
+- `ToolActivationLifetimeInvocation` 为默认生命周期，激活结果仅在当前 agent 调用过程内生效。本次调用如果继续产生后续模型请求，这些请求会继续携带激活工具。下一次调用同一 agent 时，需要再次由 `skill_load` 触发。
+- `ToolActivationLifetimeSession` 使激活结果在同一 session 内持续生效。同一 session 后续调用该 agent 时，会继续携带这些激活工具。
+
 ## 故障排查
 
 - “unknown skill”：确认技能名与仓库路径；调用 `skill_load` 前
