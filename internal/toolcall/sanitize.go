@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -419,6 +420,12 @@ func splitToolResults(toolResults []model.Message, validIDs map[string]struct{},
 
 // downgradeInvalidToolCall converts an invalid tool call into a user message that preserves its payload.
 func downgradeInvalidToolCall(call model.ToolCall, reason string) model.Message {
+	log.Warnf(
+		"toolcall: downgraded invalid tool call to user message: name=%q id=%q reason=%q",
+		call.Function.Name,
+		call.ID,
+		reason,
+	)
 	content := fmt.Sprintf(
 		"%s Tool call arguments were downgraded to a user message (%s).\nname: %s\nid: %s\narguments:\n```text\n%s\n```",
 		invalidToolCallTag,
@@ -435,6 +442,11 @@ func downgradeInvalidToolCall(call model.ToolCall, reason string) model.Message 
 
 // downgradeOrphanToolCall converts a tool call without a matching tool result into a user message.
 func downgradeOrphanToolCall(call model.ToolCall) model.Message {
+	log.Warnf(
+		"toolcall: downgraded orphan tool call to user message: name=%q id=%q",
+		call.Function.Name,
+		call.ID,
+	)
 	content := fmt.Sprintf(
 		"%s Tool call was downgraded to a user message because no matching tool result exists.\nname: %s\nid: %s\narguments:\n```text\n%s\n```",
 		orphanToolCallTag,
@@ -450,6 +462,11 @@ func downgradeOrphanToolCall(call model.ToolCall) model.Message {
 
 // downgradeInvalidToolResult converts a tool result associated with an invalid tool call into a user message.
 func downgradeInvalidToolResult(msg model.Message) model.Message {
+	log.Warnf(
+		"toolcall: downgraded invalid tool result to user message: tool_name=%q tool_call_id=%q",
+		msg.ToolName,
+		msg.ToolID,
+	)
 	content := fmt.Sprintf(
 		"%s Tool result was downgraded to a user message.\ntool_call_id: %s\ntool_name: %s\ncontent:\n```text\n%s\n```",
 		invalidToolResultTag,
@@ -465,6 +482,11 @@ func downgradeInvalidToolResult(msg model.Message) model.Message {
 
 // downgradeOrphanToolResult converts an orphaned tool result into a user message.
 func downgradeOrphanToolResult(msg model.Message) model.Message {
+	log.Warnf(
+		"toolcall: downgraded orphan tool result to user message: tool_name=%q tool_call_id=%q",
+		msg.ToolName,
+		msg.ToolID,
+	)
 	content := fmt.Sprintf(
 		"%s Tool result was downgraded to a user message because it is orphaned.\ntool_call_id: %s\ntool_name: %s\ncontent:\n```text\n%s\n```",
 		orphanToolResultTag,

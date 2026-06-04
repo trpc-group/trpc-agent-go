@@ -12,10 +12,13 @@ package toolcall
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -26,6 +29,25 @@ type stubTool struct {
 }
 
 func (s stubTool) Declaration() *tool.Declaration { return s.decl }
+
+type sanitizeWarnLogger struct {
+	messages []string
+}
+
+func (l *sanitizeWarnLogger) Debug(args ...any)                 {}
+func (l *sanitizeWarnLogger) Debugf(format string, args ...any) {}
+func (l *sanitizeWarnLogger) Info(args ...any)                  {}
+func (l *sanitizeWarnLogger) Infof(format string, args ...any)  {}
+func (l *sanitizeWarnLogger) Warn(args ...any) {
+	l.messages = append(l.messages, fmt.Sprint(args...))
+}
+func (l *sanitizeWarnLogger) Warnf(format string, args ...any) {
+	l.messages = append(l.messages, fmt.Sprintf(format, args...))
+}
+func (l *sanitizeWarnLogger) Error(args ...any)                 {}
+func (l *sanitizeWarnLogger) Errorf(format string, args ...any) {}
+func (l *sanitizeWarnLogger) Fatal(args ...any)                 {}
+func (l *sanitizeWarnLogger) Fatalf(format string, args ...any) {}
 
 func TestSanitizeMessagesWithTools_DowngradesInvalidToolCallAndResult(t *testing.T) {
 	in := []model.Message{
@@ -61,6 +83,69 @@ func TestSanitizeMessagesWithTools_DowngradesInvalidToolCallAndResult(t *testing
 		assert.NotEqual(t, model.RoleTool, msg.Role)
 		assert.Empty(t, msg.ToolCalls)
 	}
+}
+
+func TestSanitizeMessagesWithTools_WarnsOnDowngradeWithoutPayload(t *testing.T) {
+	original := agentlog.Default
+	logger := &sanitizeWarnLogger{}
+	agentlog.Default = logger
+	defer func() {
+		agentlog.Default = original
+	}()
+	in := []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "call_invalid",
+					Function: model.FunctionDefinitionParam{
+						Name:      "invalid_tool",
+						Arguments: []byte("{SECRET_ARGS"),
+					},
+				},
+			},
+		},
+		{
+			Role:     model.RoleTool,
+			ToolID:   "call_invalid",
+			ToolName: "invalid_tool",
+			Content:  "SECRET_RESULT",
+		},
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "call_orphan",
+					Function: model.FunctionDefinitionParam{
+						Name:      "orphan_tool",
+						Arguments: []byte(`{"secret":"SECRET_ORPHAN_ARGS"}`),
+					},
+				},
+			},
+		},
+		{
+			Role:     model.RoleTool,
+			ToolID:   "call_orphan_result",
+			ToolName: "orphan_result_tool",
+			Content:  "SECRET_ORPHAN_RESULT",
+		},
+	}
+	out := SanitizeMessagesWithTools(in, nil)
+	assert.Len(t, out, 4)
+	assert.Len(t, logger.messages, 4)
+	allLogs := strings.Join(logger.messages, "\n")
+	assert.Contains(t, allLogs, "downgraded invalid tool call")
+	assert.Contains(t, allLogs, "downgraded invalid tool result")
+	assert.Contains(t, allLogs, "downgraded orphan tool call")
+	assert.Contains(t, allLogs, "downgraded orphan tool result")
+	assert.Contains(t, allLogs, "call_invalid")
+	assert.Contains(t, allLogs, "call_orphan")
+	assert.Contains(t, allLogs, "invalid_tool")
+	assert.Contains(t, allLogs, "orphan_tool")
+	assert.NotContains(t, allLogs, "SECRET_ARGS")
+	assert.NotContains(t, allLogs, "SECRET_RESULT")
+	assert.NotContains(t, allLogs, "SECRET_ORPHAN_ARGS")
+	assert.NotContains(t, allLogs, "SECRET_ORPHAN_RESULT")
 }
 
 func TestSanitizeMessagesWithTools_PreservesNilMessagesSlice(t *testing.T) {
