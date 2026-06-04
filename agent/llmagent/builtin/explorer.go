@@ -290,10 +290,10 @@ func (e *explorer) buildInner(
 		llmagent.WithInstruction(e.cfg.instruction),
 		llmagent.WithTools(e.resolveTools(ctx, parentInv)),
 	}
-	if repo := e.resolveSkills(parentInv); repo != nil {
+	if repo := e.resolveSkills(ctx, parentInv); repo != nil {
 		opts = append(opts, llmagent.WithSkills(repo))
 	}
-	if exec := e.resolveCodeExecutor(parentInv); exec != nil {
+	if exec := e.resolveCodeExecutor(ctx, parentInv); exec != nil {
 		opts = append(opts, llmagent.WithCodeExecutor(exec))
 	}
 	// Knowledge is inherited (capability replay) only on the inherit-tools
@@ -330,7 +330,10 @@ func (e *explorer) resolveTools(
 	return inheritParentUserTools(ctx, parentInv, e.cfg.toolFilter)
 }
 
-func (e *explorer) resolveSkills(parentInv *agent.Invocation) skill.Repository {
+func (e *explorer) resolveSkills(
+	ctx context.Context,
+	parentInv *agent.Invocation,
+) skill.Repository {
 	if e.cfg.skillsSet {
 		return e.cfg.skills
 	}
@@ -338,12 +341,13 @@ func (e *explorer) resolveSkills(parentInv *agent.Invocation) skill.Repository {
 		return nil
 	}
 	if p, ok := parentInv.Agent.(invocationSkillRepositoryProvider); ok {
-		return p.InvocationSkillRepository(parentInv)
+		return p.InvocationSkillRepository(ctx, parentInv)
 	}
 	return nil
 }
 
 func (e *explorer) resolveCodeExecutor(
+	ctx context.Context,
 	parentInv *agent.Invocation,
 ) codeexecutor.CodeExecutor {
 	if e.cfg.codeExecutor != nil {
@@ -353,7 +357,7 @@ func (e *explorer) resolveCodeExecutor(
 		return nil
 	}
 	if p, ok := parentInv.Agent.(invocationCodeExecutorProvider); ok {
-		return p.InvocationCodeExecutor(parentInv)
+		return p.InvocationCodeExecutor(ctx, parentInv)
 	}
 	return nil
 }
@@ -449,11 +453,17 @@ type invocationToolSurfaceProvider interface {
 }
 
 type invocationSkillRepositoryProvider interface {
-	InvocationSkillRepository(inv *agent.Invocation) skill.Repository
+	InvocationSkillRepository(
+		ctx context.Context,
+		inv *agent.Invocation,
+	) skill.Repository
 }
 
 type invocationCodeExecutorProvider interface {
-	InvocationCodeExecutor(inv *agent.Invocation) codeexecutor.CodeExecutor
+	InvocationCodeExecutor(
+		ctx context.Context,
+		inv *agent.Invocation,
+	) codeexecutor.CodeExecutor
 }
 
 type invocationKnowledgeOptionsProvider interface {

@@ -105,6 +105,9 @@ func (a *LLMAgent) InvocationSkillRepository(
 	_ context.Context,
 	inv *agent.Invocation,
 ) skill.Repository {
+	if a == nil {
+		return nil
+	}
 	return a.skillRepositoryForInvocation(inv)
 }
 
@@ -287,38 +290,6 @@ func (a *LLMAgent) InvocationToolSurface(
 	// from extension name collisions.
 	allTools = appendExtensionTools(allTools, &options)
 	return allTools, userToolNames
-}
-
-// InvocationSkillRepository returns the skill repository effective for the
-// given invocation, honoring a surface-patch override first and then the
-// agent's configured repository.
-//
-// It exposes skillRepositoryForInvocation so that external presets (for
-// example agent/llmagent/builtin) can inherit a parent agent's skill
-// capability at run time, in the same invocation-scoped style as
-// InvocationToolSurface.
-func (a *LLMAgent) InvocationSkillRepository(
-	inv *agent.Invocation,
-) skill.Repository {
-	if a == nil {
-		return nil
-	}
-	return a.skillRepositoryForInvocation(inv)
-}
-
-// InvocationCodeExecutor returns the code executor effective for the given
-// invocation, honoring a run-scoped RunOptions.CodeExecutor override first
-// and then the agent's configured executor.
-//
-// It mirrors the resolution InvocationToolSurface uses so external presets
-// can inherit a parent agent's execution capability at run time.
-func (a *LLMAgent) InvocationCodeExecutor(
-	inv *agent.Invocation,
-) codeexecutor.CodeExecutor {
-	if a == nil {
-		return nil
-	}
-	return a.codeExecutorForInvocation(inv)
 }
 
 // InvocationKnowledgeOptions returns the options required to reproduce this
