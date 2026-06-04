@@ -38,7 +38,7 @@ The example ships two modes; choose one with `-mode` (default `minimal`).
 
 The orchestrator registers the workspace tools **and** `dynamic_agent`:
 
-```
+```text
 orchestrator (main agent)
 ├── calculator        (function tool)
 ├── current_time      (function tool)
@@ -62,7 +62,7 @@ this mode is about the simplest possible onboarding.
 The orchestrator registers **only** `dynamic_agent`; the workspace tools live
 behind its capability surface:
 
-```
+```text
 orchestrator (main agent)
 └── dynamic_agent     (dynamic AgentTool)
         ├── capability tools: calculator, current_time, word_count
@@ -177,7 +177,7 @@ orchestrator := llmagent.New(
 
 ## Sample transcript
 
-```
+```text
 👤 You: Use one sub-agent to compute 50 * 12, and a separate sub-agent to count
         the words in "the quick brown fox jumps". Grant each only the tool it needs.
 🤖 Assistant: I'll create two separate sub-agents, each with only the tool they need.
