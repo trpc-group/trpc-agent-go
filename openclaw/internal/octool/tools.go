@@ -768,13 +768,13 @@ func memoryFileEnvFromContext(
 		return nil
 	}
 
-	storageUserID := conversationscope.StorageUserIDFromContext(
-		ctx,
-		userID,
-	)
 	personalUserID := conversationscope.UserStorageIDFromContext(
 		ctx,
 		userID,
+	)
+	storageUserID := conversationscope.StorageUserIDFromContext(
+		ctx,
+		personalUserID,
 	)
 	currentPath := ensureMemoryEnvPath(store, appName, storageUserID)
 	personalPath := ensureMemoryEnvPath(store, appName, personalUserID)

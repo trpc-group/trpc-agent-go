@@ -453,6 +453,67 @@ func TestExecTool_UsesStorageScopedMemoryFileEnvFromContext(t *testing.T) {
 	require.FileExists(t, userPath)
 }
 
+func TestExecTool_UsesUserStorageScopedMemoryFileEnvFallback(
+	t *testing.T,
+) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	const (
+		appName       = "app"
+		sessionUserID = "wecom:dm:wineguo"
+		storageUserID = "wecom:dm:T123"
+		sessionID     = "wecom:dm:wineguo:s1"
+	)
+
+	stateDir := t.TempDir()
+	root, err := memoryfile.DefaultRoot(stateDir)
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	mgr := NewManager()
+	execTool := NewExecCommandToolWithMemoryFileStore(
+		mgr,
+		nil,
+		store,
+	).(tool.CallableTool)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession(appName, sessionUserID, sessionID),
+		),
+	)
+	ctx := agent.NewInvocationContext(
+		conversationscope.WithUserStorageID(
+			context.Background(),
+			storageUserID,
+		),
+		inv,
+	)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf '%s\\n%s\\n%s' " +
+			"\"$OPENCLAW_MEMORY_FILE\" " +
+			"\"$OPENCLAW_USER_MEMORY_FILE\" " +
+			"\"$OPENCLAW_CHAT_MEMORY_FILE\"",
+		"yieldMs": 0,
+	})
+	out, err := execTool.Call(ctx, args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+
+	path, err := store.MemoryPath(appName, storageUserID)
+	require.NoError(t, err)
+	require.Contains(t, res.Output, path)
+	require.Equal(t, strings.Count(res.Output, path), 3)
+	require.NotContains(t, res.Output, sessionUserID)
+	require.FileExists(t, path)
+}
+
 func TestMemoryFileEnvFromContext_EmptyScopeReturnsNil(t *testing.T) {
 	t.Parallel()
 

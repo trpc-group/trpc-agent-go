@@ -212,7 +212,11 @@ func memoryToolScopeUserID(
 			fallback,
 		)
 	case memoryToolScopeCurrent, memoryToolScopeChat:
-		return conversationscope.StorageUserIDFromContext(ctx, fallback)
+		userFallback := conversationscope.UserStorageIDFromContext(
+			ctx,
+			fallback,
+		)
+		return conversationscope.StorageUserIDFromContext(ctx, userFallback)
 	default:
 		return strings.TrimSpace(fallback)
 	}
