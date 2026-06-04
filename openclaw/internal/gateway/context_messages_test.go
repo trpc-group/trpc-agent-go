@@ -72,6 +72,69 @@ func TestMemoryFileContextMessages_UsesStorageScopeWithUserFallback(
 	require.Contains(t, msgs[1].Content, "personal preference")
 }
 
+func TestMemoryFileContextMessages_UsesPersonalStorageScope(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	chatPath, err := store.EnsureMemory(
+		context.Background(),
+		"demo-app",
+		"wecom:chat:room-1",
+	)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		chatPath,
+		[]byte("# Memory\n\n- shared group note\n"),
+		0o600,
+	))
+
+	userPath, err := store.EnsureMemory(
+		context.Background(),
+		"demo-app",
+		"wecom:dm:T123",
+	)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		userPath,
+		[]byte("# Memory\n\n- private todo\n"),
+		0o600,
+	))
+
+	aliasPath, err := store.EnsureMemory(
+		context.Background(),
+		"demo-app",
+		"wecom:dm:wineguo",
+	)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		aliasPath,
+		[]byte("# Memory\n\n- alias-only note\n"),
+		0o600,
+	))
+
+	srv := &Server{
+		appName:         "demo-app",
+		memoryFileStore: store,
+	}
+	ctx := conversationscope.WithStorageUserID(
+		context.Background(),
+		"wecom:chat:room-1",
+	)
+	ctx = conversationscope.WithUserStorageID(ctx, "wecom:dm:T123")
+
+	msgs := srv.memoryFileContextMessages(ctx, "wecom:dm:wineguo")
+	require.Len(t, msgs, 2)
+	require.Contains(t, msgs[0].Content, "shared group note")
+	require.Contains(t, msgs[1].Content, "private todo")
+	require.NotContains(t, msgs[1].Content, "alias-only note")
+}
+
 func TestMemoryFileContextMessages_UsesRuntimeProfileAppName(
 	t *testing.T,
 ) {

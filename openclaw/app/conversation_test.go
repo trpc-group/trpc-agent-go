@@ -38,6 +38,7 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 		conversation.Annotation{
 			HistoryMode:   conversation.HistoryModeShared,
 			StorageUserID: "chat-scope",
+			UserStorageID: "personal-scope",
 			ActorID:       "user1",
 			ActorLabel:    "Alice",
 			ActorLabels: map[string]string{
@@ -89,6 +90,11 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 		"chat-scope",
 		conversationscope.StorageUserIDFromContext(ctx, ""),
 	)
+	require.Equal(
+		t,
+		"personal-scope",
+		conversationscope.UserStorageIDFromContext(ctx, ""),
+	)
 
 	require.Equal(
 		t,
@@ -105,6 +111,7 @@ func TestRunOptionResolversMergeRuntimeState(t *testing.T) {
 		conversation.Annotation{
 			HistoryMode:   conversation.HistoryModeShared,
 			StorageUserID: "chat-scope",
+			UserStorageID: "personal-scope",
 			ActorID:       "user1",
 			ActorLabel:    "Alice",
 			ActorLabels: map[string]string{

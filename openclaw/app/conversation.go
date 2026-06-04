@@ -48,6 +48,14 @@ func buildConversationRunOptionResolver(
 				storageUserID,
 			)
 		}
+		if personalUserID := strings.TrimSpace(
+			annotation.UserStorageID,
+		); personalUserID != "" {
+			ctx = conversationscope.WithUserStorageID(
+				ctx,
+				personalUserID,
+			)
+		}
 
 		runtimeState := conversation.RuntimeState(annotation)
 		runOpts := make([]agent.RunOption, 0, 2)

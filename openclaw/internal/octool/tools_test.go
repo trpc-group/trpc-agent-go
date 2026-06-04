@@ -372,7 +372,10 @@ func TestExecTool_UsesMemoryFileEnvFromContext(t *testing.T) {
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
 	args := mustJSON(t, map[string]any{
-		"command": "printf %s \"$OPENCLAW_MEMORY_FILE\"",
+		"command": "printf '%s\\n%s\\n%s' " +
+			"\"$OPENCLAW_MEMORY_FILE\" " +
+			"\"$OPENCLAW_USER_MEMORY_FILE\" " +
+			"\"$OPENCLAW_CHAT_MEMORY_FILE\"",
 		"yieldMs": 0,
 	})
 	out, err := execTool.Call(ctx, args)
@@ -384,6 +387,7 @@ func TestExecTool_UsesMemoryFileEnvFromContext(t *testing.T) {
 	path, err := store.MemoryPath("app", "u1")
 	require.NoError(t, err)
 	require.Contains(t, res.Output, path)
+	require.Equal(t, strings.Count(res.Output, path), 3)
 	require.FileExists(t, path)
 }
 
@@ -407,19 +411,29 @@ func TestExecTool_UsesStorageScopedMemoryFileEnvFromContext(t *testing.T) {
 
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(
-			sessionpkg.NewSession("app", "u1", "wecom:chat:room-1"),
+			sessionpkg.NewSession(
+				"app",
+				"wecom:dm:wineguo",
+				"wecom:chat:room-1",
+			),
 		),
 	)
 	ctx := agent.NewInvocationContext(
 		conversationscope.WithStorageUserID(
-			context.Background(),
+			conversationscope.WithUserStorageID(
+				context.Background(),
+				"wecom:dm:T123",
+			),
 			"wecom:chat:room-1",
 		),
 		inv,
 	)
 
 	args := mustJSON(t, map[string]any{
-		"command": "printf %s \"$OPENCLAW_MEMORY_FILE\"",
+		"command": "printf '%s\\n%s\\n%s' " +
+			"\"$OPENCLAW_MEMORY_FILE\" " +
+			"\"$OPENCLAW_USER_MEMORY_FILE\" " +
+			"\"$OPENCLAW_CHAT_MEMORY_FILE\"",
 		"yieldMs": 0,
 	})
 	out, err := execTool.Call(ctx, args)
@@ -431,6 +445,72 @@ func TestExecTool_UsesStorageScopedMemoryFileEnvFromContext(t *testing.T) {
 	path, err := store.MemoryPath("app", "wecom:chat:room-1")
 	require.NoError(t, err)
 	require.Contains(t, res.Output, path)
+	require.FileExists(t, path)
+	userPath, err := store.MemoryPath("app", "wecom:dm:T123")
+	require.NoError(t, err)
+	require.Contains(t, res.Output, userPath)
+	require.NotContains(t, res.Output, "wecom:dm:wineguo")
+	require.FileExists(t, userPath)
+}
+
+func TestExecTool_UsesUserStorageScopedMemoryFileEnvFallback(
+	t *testing.T,
+) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	const (
+		appName       = "app"
+		sessionUserID = "wecom:dm:wineguo"
+		storageUserID = "wecom:dm:T123"
+		sessionID     = "wecom:dm:wineguo:s1"
+	)
+
+	stateDir := t.TempDir()
+	root, err := memoryfile.DefaultRoot(stateDir)
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	mgr := NewManager()
+	execTool := NewExecCommandToolWithMemoryFileStore(
+		mgr,
+		nil,
+		store,
+	).(tool.CallableTool)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession(appName, sessionUserID, sessionID),
+		),
+	)
+	ctx := agent.NewInvocationContext(
+		conversationscope.WithUserStorageID(
+			context.Background(),
+			storageUserID,
+		),
+		inv,
+	)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf '%s\\n%s\\n%s' " +
+			"\"$OPENCLAW_MEMORY_FILE\" " +
+			"\"$OPENCLAW_USER_MEMORY_FILE\" " +
+			"\"$OPENCLAW_CHAT_MEMORY_FILE\"",
+		"yieldMs": 0,
+	})
+	out, err := execTool.Call(ctx, args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+
+	path, err := store.MemoryPath(appName, storageUserID)
+	require.NoError(t, err)
+	require.Contains(t, res.Output, path)
+	require.Equal(t, strings.Count(res.Output, path), 3)
+	require.NotContains(t, res.Output, sessionUserID)
 	require.FileExists(t, path)
 }
 
@@ -448,6 +528,26 @@ func TestMemoryFileEnvFromContext_EmptyScopeReturnsNil(t *testing.T) {
 		),
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	require.Nil(t, memoryFileEnvFromContext(ctx, store))
+}
+
+func TestMemoryFileEnvFromContext_CanceledContextReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("app", "u1", "telegram:dm:u1:s1"),
+		),
+	)
+	baseCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx := agent.NewInvocationContext(baseCtx, inv)
 
 	require.Nil(t, memoryFileEnvFromContext(ctx, store))
 }
