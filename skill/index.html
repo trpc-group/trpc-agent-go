@@ -1236,6 +1236,81 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#tool-activation-based-on-skill-loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tool Activation Based on Skill Loading
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tool Activation Based on Skill Loading">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#activation-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Activation Mode
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Activation Mode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#include-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Include Mode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#only-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Only Mode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#include-and-only-match-simultaneously" class="md-nav__link">
+    <span class="md-ellipsis">
+      Include and Only Match Simultaneously
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#same-name-tool-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Same-name Tool Handling
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#activation-lifetime" class="md-nav__link">
+    <span class="md-ellipsis">
+      Activation Lifetime
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#troubleshooting" class="md-nav__link">
     <span class="md-ellipsis">
       Troubleshooting
@@ -2811,6 +2886,81 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#tool-activation-based-on-skill-loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tool Activation Based on Skill Loading
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tool Activation Based on Skill Loading">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#activation-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Activation Mode
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Activation Mode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#include-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Include Mode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#only-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Only Mode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#include-and-only-match-simultaneously" class="md-nav__link">
+    <span class="md-ellipsis">
+      Include and Only Match Simultaneously
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#same-name-tool-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Same-name Tool Handling
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#activation-lifetime" class="md-nav__link">
+    <span class="md-ellipsis">
+      Activation Lifetime
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#troubleshooting" class="md-nav__link">
     <span class="md-ellipsis">
       Troubleshooting
@@ -4300,6 +4450,241 @@ not change which skill tools are available, and it does not replace
 disable <code>workspace_exec</code>. To hide execution capability from the model,
 disable the workspace execution surface when creating the Agent, for
 example with <code>llmagent.WithWorkspaceExecSurfaceEnabled(false)</code>.</p>
+<h2 id="tool-activation-based-on-skill-loading">Tool Activation Based on Skill Loading</h2>
+<p>ToolSets registered with <code>WithToolSets(...)</code> enter model requests together with the Agent. Tool activation provides another way to attach tools: first register ToolSets as candidates, then decide whether they enter later model requests based on the result of <code>skill_load</code>.</p>
+<p>For a complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/examples/skilltoolactivation/README.md">examples/skilltoolactivation/README.md</a>.</p>
+<p>The following example registers <code>example_file</code> as a candidate ToolSet and declares that loading <code>example-skill</code> activates that ToolSet. After the model successfully calls <code>skill_load</code>, later model requests include the tools expanded from <code>example_file</code>.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-20-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-20-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-20-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-20-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-20-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-20-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-20-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-20-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-20-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-20-10">10</a></span>
+<span class="normal"><a href="#__codelineno-20-11">11</a></span>
+<span class="normal"><a href="#__codelineno-20-12">12</a></span>
+<span class="normal"><a href="#__codelineno-20-13">13</a></span>
+<span class="normal"><a href="#__codelineno-20-14">14</a></span>
+<span class="normal"><a href="#__codelineno-20-15">15</a></span>
+<span class="normal"><a href="#__codelineno-20-16">16</a></span>
+<span class="normal"><a href="#__codelineno-20-17">17</a></span>
+<span class="normal"><a href="#__codelineno-20-18">18</a></span>
+<span class="normal"><a href="#__codelineno-20-19">19</a></span>
+<span class="normal"><a href="#__codelineno-20-20">20</a></span>
+<span class="normal"><a href="#__codelineno-20-21">21</a></span>
+<span class="normal"><a href="#__codelineno-20-22">22</a></span>
+<span class="normal"><a href="#__codelineno-20-23">23</a></span>
+<span class="normal"><a href="#__codelineno-20-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/skill&quot;</span>
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/file&quot;</span>
+</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6"></a><span class="p">)</span>
+</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7"></a>
+</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8"></a><span class="nx">repo</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">skill</span><span class="p">.</span><span class="nx">NewFSRepository</span><span class="p">(</span><span class="s">&quot;./skills&quot;</span><span class="p">)</span>
+</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9"></a><span class="nx">exampleFiles</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">file</span><span class="p">.</span><span class="nx">NewToolSet</span><span class="p">(</span>
+</span><span id="__span-20-10"><a id="__codelineno-20-10" name="__codelineno-20-10"></a><span class="w">    </span><span class="nx">file</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;example_file&quot;</span><span class="p">),</span>
+</span><span id="__span-20-11"><a id="__codelineno-20-11" name="__codelineno-20-11"></a><span class="w">    </span><span class="nx">file</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="s">&quot;./files&quot;</span><span class="p">),</span>
+</span><span id="__span-20-12"><a id="__codelineno-20-12" name="__codelineno-20-12"></a><span class="p">)</span>
+</span><span id="__span-20-13"><a id="__codelineno-20-13" name="__codelineno-20-13"></a>
+</span><span id="__span-20-14"><a id="__codelineno-20-14" name="__codelineno-20-14"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-20-15"><a id="__codelineno-20-15" name="__codelineno-20-15"></a><span class="w">    </span><span class="s">&quot;skills-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-20-16"><a id="__codelineno-20-16" name="__codelineno-20-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkills</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-20-17"><a id="__codelineno-20-17" name="__codelineno-20-17"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithActivatableToolSets</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolSet</span><span class="p">{</span><span class="nx">exampleFiles</span><span class="p">}),</span>
+</span><span id="__span-20-18"><a id="__codelineno-20-18" name="__codelineno-20-18"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationOnSkillLoad</span><span class="p">(</span>
+</span><span id="__span-20-19"><a id="__codelineno-20-19" name="__codelineno-20-19"></a><span class="w">        </span><span class="s">&quot;example-skill&quot;</span><span class="p">,</span>
+</span><span id="__span-20-20"><a id="__codelineno-20-20" name="__codelineno-20-20"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;example_file&quot;</span><span class="p">},</span>
+</span><span id="__span-20-21"><a id="__codelineno-20-21" name="__codelineno-20-21"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">ToolActivationModeInclude</span><span class="p">),</span>
+</span><span id="__span-20-22"><a id="__codelineno-20-22" name="__codelineno-20-22"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationLifetime</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">ToolActivationLifetimeInvocation</span><span class="p">),</span>
+</span><span id="__span-20-23"><a id="__codelineno-20-23" name="__codelineno-20-23"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-20-24"><a id="__codelineno-20-24" name="__codelineno-20-24"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>WithActivatableToolSets(...)</code> registers candidate ToolSets. A candidate ToolSet uses <code>ToolSet.Name()</code> as its reference name and follows the normal ToolSet tool naming rules. Tools in the candidate set enter model requests only after an activation rule matches.</p>
+<p><code>WithToolActivationOnSkillLoad(...)</code> establishes the activation relationship between a skill and candidate ToolSets. After the model successfully calls <code>skill_load</code> to load the corresponding skill, the activation result takes effect starting from the next model request. If the same <code>Runner.Run</code> continues into a tool loop, later model requests in that run use the updated tool set. When multiple rules match at the same time, the framework first
+merges activation records and keeps only one copy of each identical <code>(mode, lifetime, toolSetName)</code> record. It then expands ToolSets, and the final tool set handles duplicates and name conflicts by tool name.</p>
+<p><code>WithToolActivationOnSkillLoad(...)</code> cannot be configured together with <code>WithOutputSchema(...)</code>.</p>
+<p>User tools include tools added through <code>WithTools(...)</code>, <code>WithToolSets(...)</code>, runtime <code>agent.WithAdditionalTools(...)</code>, and <code>agent.WithExternalTools(...)</code>. Framework tools are registered automatically by <code>LLMAgent</code> based on enabled capabilities, such as <code>skill_load</code>, <code>workspace_exec</code>, and <code>transfer_to_agent</code>.</p>
+<h3 id="activation-mode">Activation Mode</h3>
+<p><code>WithToolActivationMode(...)</code> sets how activated tools are composed with existing user tools.</p>
+<h4 id="include-mode">Include Mode</h4>
+<p><code>ToolActivationModeInclude</code> is the default mode. It adds activated tools on top of existing user tools.</p>
+<p>The following example configures two Include rules for the same skill.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-21-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-21-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-21-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-21-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-21-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-21-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-21-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-21-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-21-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-21-10">10</a></span>
+<span class="normal"><a href="#__codelineno-21-11">11</a></span>
+<span class="normal"><a href="#__codelineno-21-12">12</a></span>
+<span class="normal"><a href="#__codelineno-21-13">13</a></span>
+<span class="normal"><a href="#__codelineno-21-14">14</a></span>
+<span class="normal"><a href="#__codelineno-21-15">15</a></span>
+<span class="normal"><a href="#__codelineno-21-16">16</a></span>
+<span class="normal"><a href="#__codelineno-21-17">17</a></span>
+<span class="normal"><a href="#__codelineno-21-18">18</a></span>
+<span class="normal"><a href="#__codelineno-21-19">19</a></span>
+<span class="normal"><a href="#__codelineno-21-20">20</a></span>
+<span class="normal"><a href="#__codelineno-21-21">21</a></span>
+<span class="normal"><a href="#__codelineno-21-22">22</a></span>
+<span class="normal"><a href="#__codelineno-21-23">23</a></span>
+<span class="normal"><a href="#__codelineno-21-24">24</a></span>
+<span class="normal"><a href="#__codelineno-21-25">25</a></span>
+<span class="normal"><a href="#__codelineno-21-26">26</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1"></a><span class="nx">searchTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span><span class="nx">search</span><span class="p">,</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;search&quot;</span><span class="p">))</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2"></a><span class="nx">calculatorTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span><span class="nx">calculator</span><span class="p">,</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;calculator&quot;</span><span class="p">))</span>
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3"></a><span class="nx">exampleSearch</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">file</span><span class="p">.</span><span class="nx">NewToolSet</span><span class="p">(</span>
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4"></a><span class="w">    </span><span class="nx">file</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;example_search&quot;</span><span class="p">),</span>
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5"></a><span class="w">    </span><span class="nx">file</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="s">&quot;./search&quot;</span><span class="p">),</span>
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6"></a><span class="p">)</span>
+</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7"></a>
+</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9"></a><span class="w">    </span><span class="s">&quot;skills-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkills</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">searchTool</span><span class="p">,</span><span class="w"> </span><span class="nx">calculatorTool</span><span class="p">}),</span>
+</span><span id="__span-21-12"><a id="__codelineno-21-12" name="__codelineno-21-12"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithActivatableToolSets</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolSet</span><span class="p">{</span>
+</span><span id="__span-21-13"><a id="__codelineno-21-13" name="__codelineno-21-13"></a><span class="w">        </span><span class="nx">exampleFiles</span><span class="p">,</span>
+</span><span id="__span-21-14"><a id="__codelineno-21-14" name="__codelineno-21-14"></a><span class="w">        </span><span class="nx">exampleSearch</span><span class="p">,</span>
+</span><span id="__span-21-15"><a id="__codelineno-21-15" name="__codelineno-21-15"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-21-16"><a id="__codelineno-21-16" name="__codelineno-21-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationOnSkillLoad</span><span class="p">(</span>
+</span><span id="__span-21-17"><a id="__codelineno-21-17" name="__codelineno-21-17"></a><span class="w">        </span><span class="s">&quot;example-skill&quot;</span><span class="p">,</span>
+</span><span id="__span-21-18"><a id="__codelineno-21-18" name="__codelineno-21-18"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;example_file&quot;</span><span class="p">},</span>
+</span><span id="__span-21-19"><a id="__codelineno-21-19" name="__codelineno-21-19"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">ToolActivationModeInclude</span><span class="p">),</span>
+</span><span id="__span-21-20"><a id="__codelineno-21-20" name="__codelineno-21-20"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-21-21"><a id="__codelineno-21-21" name="__codelineno-21-21"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationOnSkillLoad</span><span class="p">(</span>
+</span><span id="__span-21-22"><a id="__codelineno-21-22" name="__codelineno-21-22"></a><span class="w">        </span><span class="s">&quot;example-skill&quot;</span><span class="p">,</span>
+</span><span id="__span-21-23"><a id="__codelineno-21-23" name="__codelineno-21-23"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;example_search&quot;</span><span class="p">},</span>
+</span><span id="__span-21-24"><a id="__codelineno-21-24" name="__codelineno-21-24"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">ToolActivationModeInclude</span><span class="p">),</span>
+</span><span id="__span-21-25"><a id="__codelineno-21-25" name="__codelineno-21-25"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-21-26"><a id="__codelineno-21-26" name="__codelineno-21-26"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>After <code>example-skill</code> is loaded, later model requests include the existing <code>search</code> and <code>calculator</code> tools, and also include the tools expanded from <code>example_file</code> and <code>example_search</code>.</p>
+<h4 id="only-mode">Only Mode</h4>
+<p><code>ToolActivationModeOnly</code> makes the user tool set equal to the activated tool set, while framework tools remain available.</p>
+<p>The following example configures two Only rules for the same skill.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-22-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-22-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-22-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-22-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-22-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-22-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-22-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-22-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-22-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-22-10">10</a></span>
+<span class="normal"><a href="#__codelineno-22-11">11</a></span>
+<span class="normal"><a href="#__codelineno-22-12">12</a></span>
+<span class="normal"><a href="#__codelineno-22-13">13</a></span>
+<span class="normal"><a href="#__codelineno-22-14">14</a></span>
+<span class="normal"><a href="#__codelineno-22-15">15</a></span>
+<span class="normal"><a href="#__codelineno-22-16">16</a></span>
+<span class="normal"><a href="#__codelineno-22-17">17</a></span>
+<span class="normal"><a href="#__codelineno-22-18">18</a></span>
+<span class="normal"><a href="#__codelineno-22-19">19</a></span>
+<span class="normal"><a href="#__codelineno-22-20">20</a></span>
+<span class="normal"><a href="#__codelineno-22-21">21</a></span>
+<span class="normal"><a href="#__codelineno-22-22">22</a></span>
+<span class="normal"><a href="#__codelineno-22-23">23</a></span>
+<span class="normal"><a href="#__codelineno-22-24">24</a></span>
+<span class="normal"><a href="#__codelineno-22-25">25</a></span>
+<span class="normal"><a href="#__codelineno-22-26">26</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1"></a><span class="nx">searchTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span><span class="nx">search</span><span class="p">,</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;search&quot;</span><span class="p">))</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2"></a><span class="nx">calculatorTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span><span class="nx">calculator</span><span class="p">,</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;calculator&quot;</span><span class="p">))</span>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3"></a><span class="nx">exampleSearch</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">file</span><span class="p">.</span><span class="nx">NewToolSet</span><span class="p">(</span>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4"></a><span class="w">    </span><span class="nx">file</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;example_search&quot;</span><span class="p">),</span>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5"></a><span class="w">    </span><span class="nx">file</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="s">&quot;./search&quot;</span><span class="p">),</span>
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6"></a><span class="p">)</span>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7"></a>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9"></a><span class="w">    </span><span class="s">&quot;skills-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-22-10"><a id="__codelineno-22-10" name="__codelineno-22-10"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkills</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-22-11"><a id="__codelineno-22-11" name="__codelineno-22-11"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">searchTool</span><span class="p">,</span><span class="w"> </span><span class="nx">calculatorTool</span><span class="p">}),</span>
+</span><span id="__span-22-12"><a id="__codelineno-22-12" name="__codelineno-22-12"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithActivatableToolSets</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolSet</span><span class="p">{</span>
+</span><span id="__span-22-13"><a id="__codelineno-22-13" name="__codelineno-22-13"></a><span class="w">        </span><span class="nx">exampleFiles</span><span class="p">,</span>
+</span><span id="__span-22-14"><a id="__codelineno-22-14" name="__codelineno-22-14"></a><span class="w">        </span><span class="nx">exampleSearch</span><span class="p">,</span>
+</span><span id="__span-22-15"><a id="__codelineno-22-15" name="__codelineno-22-15"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-22-16"><a id="__codelineno-22-16" name="__codelineno-22-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationOnSkillLoad</span><span class="p">(</span>
+</span><span id="__span-22-17"><a id="__codelineno-22-17" name="__codelineno-22-17"></a><span class="w">        </span><span class="s">&quot;example-skill&quot;</span><span class="p">,</span>
+</span><span id="__span-22-18"><a id="__codelineno-22-18" name="__codelineno-22-18"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;example_file&quot;</span><span class="p">},</span>
+</span><span id="__span-22-19"><a id="__codelineno-22-19" name="__codelineno-22-19"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">ToolActivationModeOnly</span><span class="p">),</span>
+</span><span id="__span-22-20"><a id="__codelineno-22-20" name="__codelineno-22-20"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-22-21"><a id="__codelineno-22-21" name="__codelineno-22-21"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationOnSkillLoad</span><span class="p">(</span>
+</span><span id="__span-22-22"><a id="__codelineno-22-22" name="__codelineno-22-22"></a><span class="w">        </span><span class="s">&quot;example-skill&quot;</span><span class="p">,</span>
+</span><span id="__span-22-23"><a id="__codelineno-22-23" name="__codelineno-22-23"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;example_search&quot;</span><span class="p">},</span>
+</span><span id="__span-22-24"><a id="__codelineno-22-24" name="__codelineno-22-24"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">ToolActivationModeOnly</span><span class="p">),</span>
+</span><span id="__span-22-25"><a id="__codelineno-22-25" name="__codelineno-22-25"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-22-26"><a id="__codelineno-22-26" name="__codelineno-22-26"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>After <code>example-skill</code> is loaded, the user tools in later model requests come from the tools expanded from <code>example_file</code> and <code>example_search</code>; <code>search</code> and <code>calculator</code> are trimmed. Framework tools remain available.</p>
+<h4 id="include-and-only-match-simultaneously">Include and Only Match Simultaneously</h4>
+<p>When Include and Only activation results exist at the same time in one model request, the user tool set for that request is composed in Only mode. In other words, only user tools expanded from all Only rules are kept, while framework tools remain available.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-23-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-23-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-23-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-23-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-23-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-23-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-23-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-23-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-23-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-23-10">10</a></span>
+<span class="normal"><a href="#__codelineno-23-11">11</a></span>
+<span class="normal"><a href="#__codelineno-23-12">12</a></span>
+<span class="normal"><a href="#__codelineno-23-13">13</a></span>
+<span class="normal"><a href="#__codelineno-23-14">14</a></span>
+<span class="normal"><a href="#__codelineno-23-15">15</a></span>
+<span class="normal"><a href="#__codelineno-23-16">16</a></span>
+<span class="normal"><a href="#__codelineno-23-17">17</a></span>
+<span class="normal"><a href="#__codelineno-23-18">18</a></span>
+<span class="normal"><a href="#__codelineno-23-19">19</a></span>
+<span class="normal"><a href="#__codelineno-23-20">20</a></span>
+<span class="normal"><a href="#__codelineno-23-21">21</a></span>
+<span class="normal"><a href="#__codelineno-23-22">22</a></span>
+<span class="normal"><a href="#__codelineno-23-23">23</a></span>
+<span class="normal"><a href="#__codelineno-23-24">24</a></span>
+<span class="normal"><a href="#__codelineno-23-25">25</a></span>
+<span class="normal"><a href="#__codelineno-23-26">26</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1"></a><span class="nx">searchTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span><span class="nx">search</span><span class="p">,</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;search&quot;</span><span class="p">))</span>
+</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2"></a><span class="nx">calculatorTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span><span class="nx">calculator</span><span class="p">,</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;calculator&quot;</span><span class="p">))</span>
+</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3"></a><span class="nx">exampleSearch</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">file</span><span class="p">.</span><span class="nx">NewToolSet</span><span class="p">(</span>
+</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4"></a><span class="w">    </span><span class="nx">file</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;example_search&quot;</span><span class="p">),</span>
+</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5"></a><span class="w">    </span><span class="nx">file</span><span class="p">.</span><span class="nx">WithBaseDir</span><span class="p">(</span><span class="s">&quot;./search&quot;</span><span class="p">),</span>
+</span><span id="__span-23-6"><a id="__codelineno-23-6" name="__codelineno-23-6"></a><span class="p">)</span>
+</span><span id="__span-23-7"><a id="__codelineno-23-7" name="__codelineno-23-7"></a>
+</span><span id="__span-23-8"><a id="__codelineno-23-8" name="__codelineno-23-8"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-23-9"><a id="__codelineno-23-9" name="__codelineno-23-9"></a><span class="w">    </span><span class="s">&quot;skills-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-23-10"><a id="__codelineno-23-10" name="__codelineno-23-10"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkills</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-23-11"><a id="__codelineno-23-11" name="__codelineno-23-11"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">searchTool</span><span class="p">,</span><span class="w"> </span><span class="nx">calculatorTool</span><span class="p">}),</span>
+</span><span id="__span-23-12"><a id="__codelineno-23-12" name="__codelineno-23-12"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithActivatableToolSets</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">ToolSet</span><span class="p">{</span>
+</span><span id="__span-23-13"><a id="__codelineno-23-13" name="__codelineno-23-13"></a><span class="w">        </span><span class="nx">exampleFiles</span><span class="p">,</span>
+</span><span id="__span-23-14"><a id="__codelineno-23-14" name="__codelineno-23-14"></a><span class="w">        </span><span class="nx">exampleSearch</span><span class="p">,</span>
+</span><span id="__span-23-15"><a id="__codelineno-23-15" name="__codelineno-23-15"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-23-16"><a id="__codelineno-23-16" name="__codelineno-23-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationOnSkillLoad</span><span class="p">(</span>
+</span><span id="__span-23-17"><a id="__codelineno-23-17" name="__codelineno-23-17"></a><span class="w">        </span><span class="s">&quot;example-skill&quot;</span><span class="p">,</span>
+</span><span id="__span-23-18"><a id="__codelineno-23-18" name="__codelineno-23-18"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;example_file&quot;</span><span class="p">},</span>
+</span><span id="__span-23-19"><a id="__codelineno-23-19" name="__codelineno-23-19"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">ToolActivationModeInclude</span><span class="p">),</span>
+</span><span id="__span-23-20"><a id="__codelineno-23-20" name="__codelineno-23-20"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-23-21"><a id="__codelineno-23-21" name="__codelineno-23-21"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationOnSkillLoad</span><span class="p">(</span>
+</span><span id="__span-23-22"><a id="__codelineno-23-22" name="__codelineno-23-22"></a><span class="w">        </span><span class="s">&quot;example-skill&quot;</span><span class="p">,</span>
+</span><span id="__span-23-23"><a id="__codelineno-23-23" name="__codelineno-23-23"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;example_search&quot;</span><span class="p">},</span>
+</span><span id="__span-23-24"><a id="__codelineno-23-24" name="__codelineno-23-24"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithToolActivationMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">ToolActivationModeOnly</span><span class="p">),</span>
+</span><span id="__span-23-25"><a id="__codelineno-23-25" name="__codelineno-23-25"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-23-26"><a id="__codelineno-23-26" name="__codelineno-23-26"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>After <code>example-skill</code> is loaded, the user tools in later model requests come from the tools expanded from <code>example_search</code>. <code>search</code>, <code>calculator</code>, and <code>example_file</code> from the Include rule do not enter the user tool set for that request.</p>
+<h4 id="same-name-tool-handling">Same-name Tool Handling</h4>
+<p>When an activated tool has the same name as an existing user tool, the activated tool is used in the final result. In Include mode, the same-name user tool is replaced. In Only mode, the final user tool set comes from the activated tools expanded by Only rules. When an activated tool has the same name as a framework tool, the framework tool remains visible and a warning
+is recorded.</p>
+<h3 id="activation-lifetime">Activation Lifetime</h3>
+<p><code>WithToolActivationLifetime(...)</code> sets the effective lifetime of activation results.</p>
+<ul>
+<li><code>ToolActivationLifetimeInvocation</code> is the default lifetime. The activation result is effective only within the current agent invocation. If this invocation continues to produce later model requests, those requests keep carrying the activated tools. The next invocation of the same agent needs to trigger activation again through <code>skill_load</code>.</li>
+<li><code>ToolActivationLifetimeSession</code> keeps the activation result effective within the same session. Later invocations of the same agent in that session keep carrying those activated tools.</li>
+</ul>
 <h2 id="troubleshooting">Troubleshooting</h2>
 <ul>
 <li>Unknown skill: verify name and repository path; ensure the overview
@@ -4363,7 +4748,7 @@ example with <code>llmagent.WithWorkspaceExecSurfaceEnabled(false)</code>.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="May 27, 2026 10:15:05 UTC">2026-05-27 10:15:05</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 4, 2026 07:44:07 UTC">2026-06-04 07:44:07</span>
   </span>
 
     
