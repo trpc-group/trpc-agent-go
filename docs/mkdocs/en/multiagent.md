@@ -881,6 +881,92 @@ Important behavior:
 For custom Agents that do not use `LLMAgent`, see the `runner` guide for the
 low-level `agent.MarkAwaitingUserReply(...)` API.
 
+## Built-in Explorer (Read-only Exploration Agent)
+
+`agent/llmagent/builtin` provides a ready-to-use, read-only "explore / search /
+analyze / inspect" agent preset, so you do not have to hand-write the name,
+description, read-only prompt, and parent-capability inheritance every time.
+
+`builtin.NewExplorer()` returns a plain `agent.Agent`, so both mounting styles
+work:
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent/builtin"
+    agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
+)
+
+// Option 1: as a SubAgent, the model hands control over via transfer_to_agent.
+root := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(tools),
+    llmagent.WithSubAgents([]agent.Agent{builtin.NewExplorer()}),
+)
+
+// Option 2: wrapped by AgentTool, the model calls explorer synchronously and
+// continues after collecting the result.
+root := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(append(tools, agenttool.NewTool(builtin.NewExplorer()))),
+)
+```
+
+Capability inheritance is identical for both: transfer and AgentTool each run
+the sub-agent on a clone of the parent invocation, so the explorer derives its
+default surface from the direct parent invocation at `Run` time.
+
+### Default inheritance
+
+With no options, the explorer inherits from the **direct parent invocation**:
+
+- **User tools**: tools the parent registered via `WithTools` / `WithToolSets`.
+  Framework-injected tools (`transfer_to_agent`, `await_user_reply`, ...) are
+  not inherited.
+- **Knowledge**: the parent's retrieval capability (`knowledge_search`, ...) is
+  regenerated from the parent's knowledge configuration.
+- **Skills / code executor**: regenerated from the parent's configuration so
+  they bind to the child invocation instead of carrying the parent's runtime
+  state.
+- **Model**: inherits the parent invocation's currently resolved model.
+
+### Read-only is an advisory constraint
+
+The explorer's read-only behavior is an **advisory system prompt, not a
+permission boundary**. It is intended as a convenient built-in read-only role:
+the model is instructed to inspect, search, and summarize, but the framework
+does not automatically classify tools as read-only or mutating.
+
+### Customizing the surface
+
+```go
+builtin.NewExplorer(
+    builtin.WithName("explorer"),
+    builtin.WithDescription("Reads and investigates available context without modifying anything."),
+    builtin.WithInstruction(customReadOnlyPrompt),
+    builtin.WithSkills(readOnlySkillsRepo),            // explicit replacement
+    builtin.WithModel(modelInstance),                  // explicit; otherwise inherits parent model
+)
+```
+
+Available options: `WithName`, `WithDescription`, `WithInstruction`,
+`WithTools`, `WithSkills`, `WithModel`, `WithCodeExecutor`, plus the advanced
+escape hatch `WithLLMAgentOptions` (forwards raw `llmagent.Option` values to the
+inner agent; use sparingly).
+
+Behavior notes:
+
+- Without `WithTools`: inherits the parent's user tools at run time. With
+  `WithTools`: uses the explicit set and inherits neither parent user tools nor
+  knowledge.
+- Without `WithSkills` / `WithCodeExecutor`: regenerated from the parent's
+  capabilities at run time.
+- Without `WithModel`: inherits the parent invocation's model; if the parent
+  has no model either, `Run` returns a clear error.
+- No parent invocation (for example when run as a root): nothing is inherited;
+  only explicit configuration is used.
+
 ## Environment Variable Configuration
 
 All multi-agent examples require the following environment variables:
