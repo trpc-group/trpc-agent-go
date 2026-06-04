@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/toolsnapshot"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -355,7 +356,7 @@ func TestGetFilteredTools_NoFilterSkipsInvalidTools(t *testing.T) {
 	require.Len(t, filtered, 1)
 	require.Equal(t, "valid_tool", filtered[0].Declaration().Name)
 
-	snapshot, ok := agent.GetStateValue[[]tool.Tool](inv, stateKeyToolsSnapshot)
+	snapshot, ok := agent.GetStateValue[[]tool.Tool](inv, toolsnapshot.ToolsSnapshotKey)
 	require.True(t, ok)
 	require.Len(t, snapshot, 1)
 	require.Equal(t, "valid_tool", snapshot[0].Declaration().Name)
