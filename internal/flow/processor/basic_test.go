@@ -147,7 +147,11 @@ func TestBasicReqProc_ModelRequestHeaders(t *testing.T) {
 	headers := map[string]string{
 		"X-Session-ID": "session-1",
 	}
-	req := &model.Request{}
+	req := &model.Request{
+		Headers: map[string]string{
+			"X-Session-ID": "request-default",
+		},
+	}
 	inv := &agent.Invocation{
 		AgentName:    "test-agent",
 		InvocationID: "test-123",

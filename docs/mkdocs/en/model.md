@@ -1285,9 +1285,9 @@ llm := openai.New("deepseek-v4-flash",
 
 Use `agent.WithModelRequestHeaders` when a header should vary per
 `runner.Run(...)` call, for example `X-Session-ID` on providers that route
-a conversation to the same inference instance. OpenAI-compatible adapters
-merge these headers into the HTTP request after model-level headers, so
-request-level values take precedence on the same key.
+a conversation to the same inference instance. The OpenAI adapter merges
+these headers into the HTTP request after model-level headers, so request-level
+values take precedence on the same key.
 
 ```go
 events, err := r.Run(

@@ -1277,7 +1277,7 @@ llm := openai.New("deepseek-v4-flash",
 
 如果 Header 需要随每次 `runner.Run(...)` 动态变化，可以使用
 `agent.WithModelRequestHeaders`。典型例子是供应商要求通过 `X-Session-ID`
-把同一会话路由到同一推理实例。OpenAI 兼容 adapter 会在模型级 Header 之后
+把同一会话路由到同一推理实例。内置 OpenAI adapter 会在模型级 Header 之后
 合并这些请求级 Header，因此同名 Header 以请求级值为准。
 
 ```go
