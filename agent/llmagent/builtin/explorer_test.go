@@ -74,12 +74,14 @@ func (f *fakeParentAgent) InvocationToolSurface(
 }
 
 func (f *fakeParentAgent) InvocationSkillRepository(
+	context.Context,
 	*agent.Invocation,
 ) skill.Repository {
 	return f.skills
 }
 
 func (f *fakeParentAgent) InvocationCodeExecutor(
+	context.Context,
 	*agent.Invocation,
 ) codeexecutor.CodeExecutor {
 	return f.exec
@@ -329,26 +331,30 @@ func TestResolveSkills(t *testing.T) {
 	inherited := fakeSkillRepo{id: "parent"}
 	explicit := fakeSkillRepo{id: "explicit"}
 	parentInv := &agent.Invocation{Agent: &fakeParentAgent{skills: inherited}}
+	noProviderInv := &agent.Invocation{Agent: &stubAgent{name: "plain"}}
 
 	e := NewExplorer().(*explorer)
-	require.Equal(t, inherited, e.resolveSkills(parentInv))
-	require.Nil(t, e.resolveSkills(nil))
+	require.Equal(t, inherited, e.resolveSkills(context.Background(), parentInv))
+	require.Nil(t, e.resolveSkills(context.Background(), nil))
+	require.Nil(t, e.resolveSkills(context.Background(), noProviderInv))
 
 	e2 := NewExplorer(WithSkills(explicit)).(*explorer)
-	require.Equal(t, explicit, e2.resolveSkills(parentInv))
+	require.Equal(t, explicit, e2.resolveSkills(context.Background(), parentInv))
 }
 
 func TestResolveCodeExecutor(t *testing.T) {
 	inherited := fakeExecutor{id: "parent"}
 	explicit := fakeExecutor{id: "explicit"}
 	parentInv := &agent.Invocation{Agent: &fakeParentAgent{exec: inherited}}
+	noProviderInv := &agent.Invocation{Agent: &stubAgent{name: "plain"}}
 
 	e := NewExplorer().(*explorer)
-	require.Equal(t, inherited, e.resolveCodeExecutor(parentInv))
-	require.Nil(t, e.resolveCodeExecutor(nil))
+	require.Equal(t, inherited, e.resolveCodeExecutor(context.Background(), parentInv))
+	require.Nil(t, e.resolveCodeExecutor(context.Background(), nil))
+	require.Nil(t, e.resolveCodeExecutor(context.Background(), noProviderInv))
 
 	e2 := NewExplorer(WithCodeExecutor(explicit)).(*explorer)
-	require.Equal(t, explicit, e2.resolveCodeExecutor(parentInv))
+	require.Equal(t, explicit, e2.resolveCodeExecutor(context.Background(), parentInv))
 }
 
 func TestBuildInner_NoParentNoModel_Errors(t *testing.T) {
