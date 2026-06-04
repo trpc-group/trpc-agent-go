@@ -19,6 +19,8 @@ import (
 
 type storageUserIDContextKey struct{}
 
+type userStorageIDContextKey struct{}
+
 // WithStorageUserID records the storage user scope for the current request.
 func WithStorageUserID(ctx context.Context, userID string) context.Context {
 	userID = strings.TrimSpace(userID)
@@ -44,8 +46,40 @@ func StorageUserIDFromContext(ctx context.Context, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
-// ResolveStorageUserID extracts an explicit storage user override from request
-// extensions and falls back to the canonical request user when absent.
+// WithUserStorageID records the stable user-owned storage scope for
+// the current request.
+func WithUserStorageID(ctx context.Context, userID string) context.Context {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, userStorageIDContextKey{}, userID)
+}
+
+// UserStorageIDFromContext resolves the stable user-owned storage
+// scope for the current request.
+func UserStorageIDFromContext(
+	ctx context.Context,
+	fallback string,
+) string {
+	if ctx != nil {
+		if userID, ok := ctx.Value(
+			userStorageIDContextKey{},
+		).(string); ok {
+			userID = strings.TrimSpace(userID)
+			if userID != "" {
+				return userID
+			}
+		}
+	}
+	return strings.TrimSpace(fallback)
+}
+
+// ResolveStorageUserID extracts an explicit storage user override from
+// request extensions and falls back to the canonical request user when absent.
 func ResolveStorageUserID(
 	extensions map[string]json.RawMessage,
 	fallback string,
