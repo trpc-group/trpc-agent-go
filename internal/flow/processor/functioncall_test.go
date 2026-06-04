@@ -1598,9 +1598,40 @@ func TestAttachStateDeltaToToolResults_ReplaysPendingStateDeltas(
 		},
 	}
 
-	events := p.attachStateDeltaToToolResults(inv, results)
+	events := p.attachStateDeltaToToolResults(context.Background(), inv, results)
 	require.Len(t, events, 2)
 	require.Equal(t, []byte("v1"), events[1].StateDelta[writeKey])
+}
+
+func TestPostToolResultHookRunsAfterToolResult(t *testing.T) {
+	const hookKey = "hook"
+	ctx := context.Background()
+	inv := &agent.Invocation{AgentName: "tester"}
+	called := 0
+	p := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithPostToolResultHook(nil),
+		WithPostToolResultHook(func(
+			gotCtx context.Context,
+			gotInv *agent.Invocation,
+			ev *event.Event,
+		) {
+			require.Equal(t, ctx, gotCtx)
+			require.Equal(t, inv, gotInv)
+			called++
+			if ev.StateDelta == nil {
+				ev.StateDelta = map[string][]byte{}
+			}
+			ev.StateDelta[hookKey] = []byte("ran")
+		}),
+	)
+	events := p.attachStateDeltaToToolResults(ctx, inv, []toolResult{
+		{event: &event.Event{}},
+	})
+	require.Len(t, events, 1)
+	require.Equal(t, 1, called)
+	require.Equal(t, []byte("ran"), events[0].StateDelta[hookKey])
 }
 
 func marshalSkillLoadArgs(
