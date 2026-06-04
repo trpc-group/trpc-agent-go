@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/extractor/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/codex/">
       
       
-        <link rel="prev" href="../source/">
+        <link rel="prev" href="../claudecode/">
       
       
-        <link rel="next" href="../filter/">
+        <link rel="next" href="../runner/">
       
       
-      <link rel="icon" href="../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
     
     
       
-        <title>内容提取器 - tRPC-Agent-Go</title>
+        <title>Codex Agent - tRPC-Agent-Go</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.7e37652d.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
       
         
-        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -48,9 +48,9 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/extra.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
   
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#extractor" class="md-skip">
+        <a href="#codex-agent" class="md-skip">
           跳转至
         </a>
       
@@ -100,9 +100,9 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="页眉">
-    <a href="../../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href="../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../../assets/img/logo.png" alt="logo">
+  <img src="../../assets/img/logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              内容提取器
+              Codex Agent
             
           </span>
         </div>
@@ -166,7 +166,7 @@
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="../../../knowledge/extractor/" hreflang="en" class="md-select__link">
+            <a href="../../codex/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
@@ -263,7 +263,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../" class="md-tabs__link">
+      <a href="../" class="md-tabs__link">
         
   
   
@@ -295,7 +295,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../agent/" class="md-tabs__link">
+        <a href="../agent/" class="md-tabs__link">
           
   
   
@@ -318,7 +318,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../gateway/" class="md-tabs__link">
+        <a href="../gateway/" class="md-tabs__link">
           
   
   
@@ -338,7 +338,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../observability/" class="md-tabs__link">
+        <a href="../observability/" class="md-tabs__link">
           
   
   
@@ -356,7 +356,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../ecosystem/" class="md-tabs__link">
+      <a href="../ecosystem/" class="md-tabs__link">
         
   
   
@@ -391,9 +391,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href="../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../../assets/img/logo.png" alt="logo">
+  <img src="../../assets/img/logo.png" alt="logo">
 
     </a>
     tRPC-Agent-Go
@@ -420,7 +420,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -485,6 +485,8 @@
                 
   
   
+    
+  
   
   
     
@@ -495,11 +497,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" checked>
         
           
           <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
@@ -515,7 +517,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2_1">
             <span class="md-nav__icon md-icon"></span>
             Agent
@@ -529,7 +531,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agent/" class="md-nav__link">
+      <a href="../agent/" class="md-nav__link">
         
   
   
@@ -552,7 +554,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../multiagent/" class="md-nav__link">
+      <a href="../multiagent/" class="md-nav__link">
         
   
   
@@ -575,7 +577,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../taskrun/" class="md-nav__link">
+      <a href="../taskrun/" class="md-nav__link">
         
   
   
@@ -598,7 +600,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../team/" class="md-nav__link">
+      <a href="../team/" class="md-nav__link">
         
   
   
@@ -621,7 +623,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../graph/" class="md-nav__link">
+      <a href="../graph/" class="md-nav__link">
         
   
   
@@ -644,7 +646,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../custom-agent/" class="md-nav__link">
+      <a href="../custom-agent/" class="md-nav__link">
         
   
   
@@ -667,7 +669,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../dify/" class="md-nav__link">
+      <a href="../dify/" class="md-nav__link">
         
   
   
@@ -690,7 +692,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../claudecode/" class="md-nav__link">
+      <a href="../claudecode/" class="md-nav__link">
         
   
   
@@ -710,10 +712,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../codex/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Codex Agent
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -724,6 +748,122 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      概述
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      快速上手
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="快速上手">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      前置条件
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      基本用法
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      输出格式与解析
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      Skill 与外部仓库
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      事件映射
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      多轮会话
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      原始日志落盘
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      配置选项说明
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -744,7 +884,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runner/" class="md-nav__link">
+      <a href="../runner/" class="md-nav__link">
         
   
   
@@ -767,7 +907,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../codeexecutor/" class="md-nav__link">
+      <a href="../codeexecutor/" class="md-nav__link">
         
   
   
@@ -790,7 +930,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../error-handling/" class="md-nav__link">
+      <a href="../error-handling/" class="md-nav__link">
         
   
   
@@ -813,7 +953,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../model/" class="md-nav__link">
+      <a href="../model/" class="md-nav__link">
         
   
   
@@ -836,7 +976,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../prompt/" class="md-nav__link">
+      <a href="../prompt/" class="md-nav__link">
         
   
   
@@ -859,7 +999,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../callbacks/" class="md-nav__link">
+      <a href="../callbacks/" class="md-nav__link">
         
   
   
@@ -882,7 +1022,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../plugin/" class="md-nav__link">
+      <a href="../plugin/" class="md-nav__link">
         
   
   
@@ -905,7 +1045,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/" class="md-nav__link">
+      <a href="../memory/" class="md-nav__link">
         
   
   
@@ -928,7 +1068,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../artifact/" class="md-nav__link">
+      <a href="../artifact/" class="md-nav__link">
         
   
   
@@ -951,7 +1091,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../skill/" class="md-nav__link">
+      <a href="../skill/" class="md-nav__link">
         
   
   
@@ -974,7 +1114,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../tool/" class="md-nav__link">
+      <a href="../tool/" class="md-nav__link">
         
   
   
@@ -1038,7 +1178,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/" class="md-nav__link">
+      <a href="../session/" class="md-nav__link">
         
   
   
@@ -1061,7 +1201,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/summary/" class="md-nav__link">
+      <a href="../session/summary/" class="md-nav__link">
         
   
   
@@ -1084,7 +1224,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/inmemory/" class="md-nav__link">
+      <a href="../session/inmemory/" class="md-nav__link">
         
   
   
@@ -1107,7 +1247,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/sqlite/" class="md-nav__link">
+      <a href="../session/sqlite/" class="md-nav__link">
         
   
   
@@ -1130,7 +1270,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/redis/" class="md-nav__link">
+      <a href="../session/redis/" class="md-nav__link">
         
   
   
@@ -1153,7 +1293,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/mysql/" class="md-nav__link">
+      <a href="../session/mysql/" class="md-nav__link">
         
   
   
@@ -1176,7 +1316,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/tdsql/" class="md-nav__link">
+      <a href="../session/tdsql/" class="md-nav__link">
         
   
   
@@ -1199,7 +1339,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/postgres/" class="md-nav__link">
+      <a href="../session/postgres/" class="md-nav__link">
         
   
   
@@ -1222,7 +1362,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/pgvector/" class="md-nav__link">
+      <a href="../session/pgvector/" class="md-nav__link">
         
   
   
@@ -1245,7 +1385,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/clickhouse/" class="md-nav__link">
+      <a href="../session/clickhouse/" class="md-nav__link">
         
   
   
@@ -1273,8 +1413,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1285,11 +1423,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14" >
         
           
           <label class="md-nav__link" for="__nav_2_14" id="__nav_2_14_label" tabindex="0">
@@ -1305,7 +1443,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_14_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_14_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_14">
             <span class="md-nav__icon md-icon"></span>
             Knowledge
@@ -1319,7 +1457,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../knowledge/" class="md-nav__link">
         
   
   
@@ -1342,7 +1480,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../embedder/" class="md-nav__link">
+      <a href="../knowledge/embedder/" class="md-nav__link">
         
   
   
@@ -1365,7 +1503,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../reranker/" class="md-nav__link">
+      <a href="../knowledge/reranker/" class="md-nav__link">
         
   
   
@@ -1388,7 +1526,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../source/" class="md-nav__link">
+      <a href="../knowledge/source/" class="md-nav__link">
         
   
   
@@ -1408,32 +1546,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    内容提取器
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../knowledge/extractor/" class="md-nav__link">
         
   
   
@@ -1444,80 +1560,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="目录">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      目录
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#extractorreaderocr" class="md-nav__link">
-    <span class="md-ellipsis">
-      Extractor、Reader、OCR 的区别
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      当前接入方式
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#docling" class="md-nav__link">
-    <span class="md-ellipsis">
-      Docling 提取器
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_2" class="md-nav__link">
-    <span class="md-ellipsis">
-      使用示例
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#extractor_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      什么时候用 Extractor
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_3" class="md-nav__link">
-    <span class="md-ellipsis">
-      相关文档
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1530,7 +1572,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../filter/" class="md-nav__link">
+      <a href="../knowledge/filter/" class="md-nav__link">
         
   
   
@@ -1553,7 +1595,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../management/" class="md-nav__link">
+      <a href="../knowledge/management/" class="md-nav__link">
         
   
   
@@ -1576,7 +1618,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../ocr/" class="md-nav__link">
+      <a href="../knowledge/ocr/" class="md-nav__link">
         
   
   
@@ -1640,7 +1682,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/" class="md-nav__link">
         
   
   
@@ -1663,7 +1705,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/inmemory/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/inmemory/" class="md-nav__link">
         
   
   
@@ -1686,7 +1728,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/pgvector/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/pgvector/" class="md-nav__link">
         
   
   
@@ -1709,7 +1751,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/tcvector/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/tcvector/" class="md-nav__link">
         
   
   
@@ -1732,7 +1774,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/elasticsearch/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
         
   
   
@@ -1755,7 +1797,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/qdrant/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/qdrant/" class="md-nav__link">
         
   
   
@@ -1778,7 +1820,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/milvus/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/milvus/" class="md-nav__link">
         
   
   
@@ -1809,7 +1851,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting/" class="md-nav__link">
+      <a href="../knowledge/troubleshooting/" class="md-nav__link">
         
   
   
@@ -1840,7 +1882,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../planner/" class="md-nav__link">
+      <a href="../planner/" class="md-nav__link">
         
   
   
@@ -1863,7 +1905,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../event/" class="md-nav__link">
+      <a href="../event/" class="md-nav__link">
         
   
   
@@ -1886,7 +1928,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/" class="md-nav__link">
+      <a href="../evaluation/" class="md-nav__link">
         
   
   
@@ -1909,7 +1951,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../promptiter/" class="md-nav__link">
+      <a href="../promptiter/" class="md-nav__link">
         
   
   
@@ -1980,7 +2022,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../gateway/" class="md-nav__link">
+      <a href="../gateway/" class="md-nav__link">
         
   
   
@@ -2044,7 +2086,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/" class="md-nav__link">
+      <a href="../agui/" class="md-nav__link">
         
   
   
@@ -2067,7 +2109,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/chat/" class="md-nav__link">
+      <a href="../agui/chat/" class="md-nav__link">
         
   
   
@@ -2090,7 +2132,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/history/" class="md-nav__link">
+      <a href="../agui/history/" class="md-nav__link">
         
   
   
@@ -2113,7 +2155,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/cancel/" class="md-nav__link">
+      <a href="../agui/cancel/" class="md-nav__link">
         
   
   
@@ -2144,7 +2186,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../a2a/" class="md-nav__link">
+      <a href="../a2a/" class="md-nav__link">
         
   
   
@@ -2167,7 +2209,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../a2ui/" class="md-nav__link">
+      <a href="../a2ui/" class="md-nav__link">
         
   
   
@@ -2190,7 +2232,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../openclaw-runtime/" class="md-nav__link">
+      <a href="../openclaw-runtime/" class="md-nav__link">
         
   
   
@@ -2261,7 +2303,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../observability/" class="md-nav__link">
+      <a href="../observability/" class="md-nav__link">
         
   
   
@@ -2284,7 +2326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../telemetry-multimodal/" class="md-nav__link">
+      <a href="../telemetry-multimodal/" class="md-nav__link">
         
   
   
@@ -2314,7 +2356,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../ecosystem/" class="md-nav__link">
+      <a href="../ecosystem/" class="md-nav__link">
         
   
   
@@ -2356,27 +2398,9 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#extractorreaderocr" class="md-nav__link">
-    <span class="md-ellipsis">
-      Extractor、Reader、OCR 的区别
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#_1" class="md-nav__link">
     <span class="md-ellipsis">
-      当前接入方式
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#docling" class="md-nav__link">
-    <span class="md-ellipsis">
-      Docling 提取器
+      概述
     </span>
   </a>
   
@@ -2385,25 +2409,85 @@
         <li class="md-nav__item">
   <a href="#_2" class="md-nav__link">
     <span class="md-ellipsis">
-      使用示例
+      快速上手
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#extractor_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      什么时候用 Extractor
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
+    <nav class="md-nav" aria-label="快速上手">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#_3" class="md-nav__link">
     <span class="md-ellipsis">
-      相关文档
+      前置条件
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      基本用法
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      输出格式与解析
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#skill" class="md-nav__link">
+    <span class="md-ellipsis">
+      Skill 与外部仓库
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      事件映射
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      多轮会话
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      原始日志落盘
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      配置选项说明
     </span>
   </a>
   
@@ -2425,7 +2509,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/knowledge/extractor.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/codex.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2434,170 +2518,196 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/knowledge/extractor.md" title="查看本页的源代码" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/codex.md" title="查看本页的源代码" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="extractor">Extractor 内容提取</h1>
-<blockquote>
-<p><strong>完整示例</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/extractor">examples/knowledge/features/extractor</a></p>
-</blockquote>
-<p>Extractor 用于在进入 Reader 和 Chunking 之前，先把复杂原始内容转换成更适合后续处理的中间格式。</p>
-<p>典型处理链路如下：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>原始文件 / URL 响应体 -&gt; Extractor -&gt; markdown / text -&gt; Reader -&gt; Chunking -&gt; Document
+<h1 id="codex-agent">Codex Agent 使用指南</h1>
+<h2 id="_1">概述</h2>
+<p>tRPC-Agent-Go 提供了 <code>Codex</code> 的 <code>Agent</code> 实现，通过执行本地 Codex CLI 的 <code>codex exec --json</code> 获取 JSONL 事件流，并映射为框架事件。</p>
+<p>该实现的主要用途包括：</p>
+<ul>
+<li>在 <code>runner</code> 中运行 Codex</li>
+<li>落盘 CLI 原始 stdout 与 stderr</li>
+<li>在评估中对齐 Codex 命令与 MCP 工具轨迹</li>
+</ul>
+<h2 id="_2">快速上手</h2>
+<h3 id="_3">前置条件</h3>
+<ol>
+<li>本地已安装并完成 Codex CLI 认证</li>
+<li>CLI 可执行文件可从 <code>PATH</code> 访问，或通过 <code>WithBin</code> 指定绝对路径</li>
+</ol>
+<h3 id="_4">基本用法</h3>
+<p>完整示例参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/codex">examples/codex</a>。该示例包含临时的项目内 MCP server 和项目内 skill。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-0-10">10</a></span>
+<span class="normal"><a href="#__codelineno-0-11">11</a></span>
+<span class="normal"><a href="#__codelineno-0-12">12</a></span>
+<span class="normal"><a href="#__codelineno-0-13">13</a></span>
+<span class="normal"><a href="#__codelineno-0-14">14</a></span>
+<span class="normal"><a href="#__codelineno-0-15">15</a></span>
+<span class="normal"><a href="#__codelineno-0-16">16</a></span>
+<span class="normal"><a href="#__codelineno-0-17">17</a></span>
+<span class="normal"><a href="#__codelineno-0-18">18</a></span>
+<span class="normal"><a href="#__codelineno-0-19">19</a></span>
+<span class="normal"><a href="#__codelineno-0-20">20</a></span>
+<span class="normal"><a href="#__codelineno-0-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/codex&quot;</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="p">)</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codex</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithBin</span><span class="p">(</span><span class="s">&quot;codex&quot;</span><span class="p">),</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithGlobalArgs</span><span class="p">(</span><span class="s">&quot;--sandbox&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;workspace-write&quot;</span><span class="p">),</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="p">)</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">  </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatal</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="p">}</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;codex-cli-example&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">ag</span><span class="p">)</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="s">&quot;user-1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session-1&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Run pwd and summarize the workspace.&quot;</span><span class="p">))</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="w">  </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatal</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>这类能力适合 PDF、HTML、Office 文档、图片等不适合直接按文本切块的输入。</p>
-<h2 id="extractorreaderocr">Extractor、Reader、OCR 的区别</h2>
-<ul>
-<li><strong>Extractor</strong>：把复杂格式转换为 <code>markdown</code> 或 <code>text</code>，本质上更偏“文档转换”；某些实现内部也可能带 OCR 能力</li>
-<li><strong>Reader</strong>：读取 <code>markdown</code> / <code>text</code> / <code>json</code> / <code>csv</code> 等内容，并执行 chunking</li>
-<li><strong>OCR</strong>：从图片或扫描页中识别文字，通常作为 PDF Reader 的内部增强能力</li>
-</ul>
-<p>可以简单理解为：</p>
-<ul>
-<li><code>Extractor</code> 解决“先把内容变成可读文本”</li>
-<li><code>Reader</code> 解决“如何把文本组织成文档与分块”</li>
-<li><code>OCR</code> 解决“图像里有没有文字可识别”</li>
-</ul>
-<p>如果你的输入已经是 <code>.md</code>、<code>.txt</code>、<code>.json</code> 这类格式，通常不需要额外引入 Extractor，直接交给 Reader 即可。</p>
-<p>如果输入属于复杂的静态网页、复杂格式的 PDF、论文、海报等版面结构较强的内容，则更推荐优先使用 <code>Extractor</code>，尤其是像 <code>Docling</code> 这类能够更好保留结构信息的实现。</p>
-<h2 id="_1">当前接入方式</h2>
-<p>目前以下 Source 支持通过 <code>WithExtractor(...)</code> 接入内容提取器：</p>
-<ul>
-<li><code>filesource.WithExtractor(...)</code></li>
-<li><code>dirsource.WithExtractor(...)</code></li>
-<li><code>urlsource.WithExtractor(...)</code></li>
-<li><code>autosource.WithExtractor(...)</code></li>
-</ul>
-<p>其中 <code>URL Source</code> 的典型链路是：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a>URL -&gt; 下载响应体 -&gt; Extractor -&gt; markdown -&gt; Markdown Reader -&gt; MarkdownChunking
+<h2 id="_5">输出格式与解析</h2>
+<p>该 Agent 会强制为 <code>codex exec</code> 添加 <code>--json</code>，并按 JSONL 解析 stdout。除非需要控制参数顺序，否则不要手动追加 <code>--json</code>。</p>
+<p>Prompt 文本会通过 stdin 写入 Codex CLI，因此 <code>--help</code> 这类用户输入不会被解析成 Codex CLI flag。</p>
+<p><code>WithExtraArgs</code> 会把参数追加到 <code>exec</code> 或 <code>exec resume</code> 之后，只适合传入同时被 <code>codex exec</code> 与 <code>codex exec resume</code> 接受的参数，例如 <code>--model</code>。</p>
+<p><code>WithGlobalArgs</code> 会把参数追加到 <code>exec</code> 子命令之前，适合传入 <code>--ask-for-approval</code>、<code>--sandbox</code>、<code>--cd</code> 等 Codex 根级参数。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span>
+<span class="normal"><a href="#__codelineno-1-3">3</a></span>
+<span class="normal"><a href="#__codelineno-1-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codex</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithGlobalArgs</span><span class="p">(</span><span class="s">&quot;--ask-for-approval&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;never&quot;</span><span class="p">),</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithGlobalArgs</span><span class="p">(</span><span class="s">&quot;--sandbox&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;read-only&quot;</span><span class="p">),</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>这意味着当链接返回的是 <code>application/pdf</code>、<code>text/html</code> 等复杂内容时，可以先交给 Extractor，再交给对应 Reader 继续处理。</p>
-<p>对于支持直接远程取源的 Extractor（例如 Docling），<code>URL Source</code> 还可以直接走服务端的 URL 转换接口，而不是先由本地下载响应体后再上传。</p>
-<h2 id="docling">Docling 提取器</h2>
-<p>当前仓库内置的内容提取器实现是 <code>Docling</code>：</p>
+<h2 id="skill">Skill 与外部仓库</h2>
+<p>该 Agent 不安装、不合并、不改写 Codex skill 仓库。它只是在指定环境、profile 与工作目录下执行本地 Codex CLI；同一个 <code>codex exec</code> 命令能从本地 Codex 配置加载到的 skills、plugins 或 plugin marketplaces，在该 Agent 中同样可用。</p>
+<p>可以通过 Codex CLI 既有配置机制选择 skill 来源：</p>
 <ul>
-<li>包路径：<code>trpc.group/trpc-go/trpc-agent-go/knowledge/extractor/docling</code></li>
-<li>默认支持：<code>.pdf</code>、<code>.html</code>、<code>.docx</code>、<code>.pptx</code>、图片、<code>.csv</code> 等格式</li>
-<li>默认输出：<code>markdown</code></li>
+<li><code>WithEnv("CODEX_HOME=/path/to/codex-home")</code> 选择隔离的 Codex home。</li>
+<li><code>WithGlobalArgs("-p", "profile-name")</code> 选择 Codex profile。</li>
+<li><code>WithGlobalArgs("-c", "key=value")</code> 传入 Codex config override。</li>
+<li><code>WithGlobalArgs("--cd", "/path/to/workspace")</code> 或 <code>WithWorkDir("/path/to/workspace")</code> 选择 workspace context。</li>
 </ul>
-<p>如果你想在本地快速体验，可以直接用 Docker 启动 <code>Docling Serve</code>：</p>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-p<span class="w"> </span><span class="m">5001</span>:5001<span class="w"> </span>ghcr.io/docling-project/docling-serve
+<p>如果该 Codex CLI 环境配置了多个外部 skill 仓库，该 Agent 不会过滤它们；但它也不会根据配置合成 skill 事件。当前 Codex CLI 更偏向通过 shell 命令处理 skill，而不是专门的 skill 工具，因此映射到框架事件时通常是 <code>command_execution</code>，而不是 <code>skill_run</code>。</p>
+<h2 id="_6">事件映射</h2>
+<p>该 Agent 只发出工具事件与最终响应事件，不发出中间 reasoning 事件。</p>
+<table>
+<thead>
+<tr>
+<th>Codex JSONL 输出</th>
+<th>框架事件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>type == "thread.started"</code></td>
+<td>持久化到 session state key <code>codex.StateKeyThreadID</code></td>
+</tr>
+<tr>
+<td><code>item.type == "command_execution"</code></td>
+<td>tool-call 与 tool-result response 事件</td>
+</tr>
+<tr>
+<td><code>item.type == "mcp_tool_call"</code></td>
+<td>tool-call 与 tool-result response 事件</td>
+</tr>
+<tr>
+<td><code>web_search</code>、<code>file_change</code>、<code>image_view</code>、<code>image_generation</code> 等内置工具 item</td>
+<td>tool-call 与 tool-result response 事件</td>
+</tr>
+<tr>
+<td><code>item.type == "agent_message"</code></td>
+<td>final response 内容</td>
+</tr>
+<tr>
+<td><code>type == "turn.completed"</code></td>
+<td>final response usage</td>
+</tr>
+</tbody>
+</table>
+<p>MCP 工具调用会尽量归一化为与 Claude Code 兼容的工具名：<code>mcp__&lt;server&gt;__&lt;tool&gt;</code>。
+内置工具调用会保留 Codex 工具名。
+当前 Codex CLI 的真实 skill 使用常作为 prompt context 注入，或通过 shell <code>command_execution</code> item 体现。该 Agent 会保留这些真实 item 类型，不会合成 <code>skill_run</code> 事件。</p>
+<h2 id="_7">多轮会话</h2>
+<p>Codex 会自行创建 thread id。该 Agent 会把这个 id 存入 session state 的 <code>codex.StateKeyThreadID</code>，并在后续轮次使用：</p>
+<ol>
+<li>首轮：把 prompt 写入 <code>codex exec --json</code> 的 stdin</li>
+<li>后续轮次：把 prompt 写入 <code>codex exec resume --json &lt;thread-id&gt;</code> 的 stdin</li>
+</ol>
+<p>如果 resume 失败，该 Agent 会重新发起一次新的 <code>codex exec</code>；如果新执行返回了 thread id，则更新已保存的 thread id。如果 resume 与新建执行都失败，本次调用会返回 run error。</p>
+<p>如需保持上下文，请在 <code>runner</code> 中持续使用相同的 app name、user ID、session ID。</p>
+<h2 id="_8">原始日志落盘</h2>
+<p>使用 <code>WithRawOutputHook</code> 获取每次执行的 stdout/stderr，建议写入评估/观测产物目录中：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
+<span class="normal"><a href="#__codelineno-2-2">2</a></span>
+<span class="normal"><a href="#__codelineno-2-3">3</a></span>
+<span class="normal"><a href="#__codelineno-2-4">4</a></span>
+<span class="normal"><a href="#__codelineno-2-5">5</a></span>
+<span class="normal"><a href="#__codelineno-2-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">ag</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codex</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">  </span><span class="nx">codex</span><span class="p">.</span><span class="nx">WithRawOutputHook</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="o">*</span><span class="nx">codex</span><span class="p">.</span><span class="nx">RawOutputHookArgs</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="c1">// Write args.Stdout / args.Stderr to your log storage.</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">  </span><span class="p">}),</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p><code>Docling</code> 的部署门槛相对较低，适合本地开发机直接跑起来做文档转换实验，不需要额外搭建复杂服务。</p>
-<p>Docling 适合：</p>
-<ul>
-<li>PDF -&gt; Markdown</li>
-<li>HTML 网页 -&gt; Markdown</li>
-<li>Office 文档 -&gt; Markdown / 文本</li>
-</ul>
-<p>对于扫描 PDF、图片型 PDF、结构复杂的 HTML / Office 文档，<strong>推荐优先使用 Docling 作为主处理路径</strong>。</p>
-<p>同时需要注意：<code>Docling</code> 本身已经内置 OCR 能力，因此在这类链路里通常<strong>不需要再额外配置独立的 OCR 能力</strong>。</p>
-<h2 id="_2">使用示例</h2>
-<p>下面的示例展示了如何将 Docling 注入到 URL Source 中，对链接内容先提取再切分：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-3-10">10</a></span>
-<span class="normal"><a href="#__codelineno-3-11">11</a></span>
-<span class="normal"><a href="#__codelineno-3-12">12</a></span>
-<span class="normal"><a href="#__codelineno-3-13">13</a></span>
-<span class="normal"><a href="#__codelineno-3-14">14</a></span>
-<span class="normal"><a href="#__codelineno-3-15">15</a></span>
-<span class="normal"><a href="#__codelineno-3-16">16</a></span>
-<span class="normal"><a href="#__codelineno-3-17">17</a></span>
-<span class="normal"><a href="#__codelineno-3-18">18</a></span>
-<span class="normal"><a href="#__codelineno-3-19">19</a></span>
-<span class="normal"><a href="#__codelineno-3-20">20</a></span>
-<span class="normal"><a href="#__codelineno-3-21">21</a></span>
-<span class="normal"><a href="#__codelineno-3-22">22</a></span>
-<span class="normal"><a href="#__codelineno-3-23">23</a></span>
-<span class="normal"><a href="#__codelineno-3-24">24</a></span>
-<span class="normal"><a href="#__codelineno-3-25">25</a></span>
-<span class="normal"><a href="#__codelineno-3-26">26</a></span>
-<span class="normal"><a href="#__codelineno-3-27">27</a></span>
-<span class="normal"><a href="#__codelineno-3-28">28</a></span>
-<span class="normal"><a href="#__codelineno-3-29">29</a></span>
-<span class="normal"><a href="#__codelineno-3-30">30</a></span>
-<span class="normal"><a href="#__codelineno-3-31">31</a></span>
-<span class="normal"><a href="#__codelineno-3-32">32</a></span>
-<span class="normal"><a href="#__codelineno-3-33">33</a></span>
-<span class="normal"><a href="#__codelineno-3-34">34</a></span>
-<span class="normal"><a href="#__codelineno-3-35">35</a></span>
-<span class="normal"><a href="#__codelineno-3-36">36</a></span>
-<span class="normal"><a href="#__codelineno-3-37">37</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/extractor/docling&quot;</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">urlsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/url&quot;</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="c1">// 注册 markdown reader，用于处理 extractor 输出的 markdown 内容。</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown&quot;</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="p">)</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a>
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="w">    </span><span class="nx">ext</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">docling</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a><span class="w">        </span><span class="nx">docling</span><span class="p">.</span><span class="nx">WithEndpoint</span><span class="p">(</span><span class="s">&quot;http://localhost:5001&quot;</span><span class="p">),</span>
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="w">    </span><span class="k">defer</span><span class="w"> </span><span class="nx">ext</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
-</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a>
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a><span class="w">    </span><span class="nx">src</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span>
-</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23"></a><span class="w">            </span><span class="s">&quot;https://arxiv.org/pdf/1706.03762&quot;</span><span class="p">,</span>
-</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24"></a><span class="w">            </span><span class="s">&quot;https://www.rfc-editor.org/rfc/rfc9110.html&quot;</span><span class="p">,</span>
-</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithExtractor</span><span class="p">(</span><span class="nx">ext</span><span class="p">),</span>
-</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithChunkSize</span><span class="p">(</span><span class="mi">500</span><span class="p">),</span>
-</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithChunkOverlap</span><span class="p">(</span><span class="mi">50</span><span class="p">),</span>
-</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30"></a>
-</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31"></a><span class="w">    </span><span class="nx">docs</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">src</span><span class="p">.</span><span class="nx">ReadDocuments</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
-</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-3-35"><a id="__codelineno-3-35" name="__codelineno-3-35"></a>
-</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">docs</span>
-</span><span id="__span-3-37"><a id="__codelineno-3-37" name="__codelineno-3-37"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p>更完整的示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/extractor">examples/knowledge/features/extractor</a>。</p>
-<h2 id="extractor_1">什么时候用 Extractor</h2>
-<p>推荐使用 <code>Extractor</code> 的情况：</p>
-<ul>
-<li>希望 PDF / HTML 保留更好的结构信息</li>
-<li>原始格式不适合直接用现有 Reader 读取</li>
-<li>需要统一将多种复杂格式转成 Markdown 后再进入同一套切分流程</li>
-</ul>
-<p>不一定需要 <code>Extractor</code> 的情况：</p>
-<ul>
-<li>输入本身已经是 <code>.md</code>、<code>.txt</code>、<code>.json</code> 等可直接读取格式</li>
-<li>只需要 PDF 的纯文本抽取，不在意 Markdown 结构</li>
-<li>只需要 OCR 图像识别，而不是完整文档格式转换</li>
-</ul>
-<p>推荐优先使用 <code>OCR</code> 而不是 <code>Extractor</code> 的情况：</p>
-<ul>
-<li>输入本身是单张图片或纯图片流</li>
-<li>你只关心识别出的纯文本，不关心 Markdown 结构和版面保留</li>
-<li>你希望将 OCR 能力作为某个 Reader 的内部增强，而不是引入完整文档转换服务</li>
-</ul>
-<h2 id="_3">相关文档</h2>
-<ul>
-<li><a href="../source/">文档源</a> - Source 类型与配置方式</li>
-<li><a href="../ocr/">OCR 图片文字识别</a> - 扫描件和图片文字识别</li>
-<li><a href="../">Knowledge 概述</a> - Knowledge 模块整体结构与能力</li>
-</ul>
+<p><code>RawOutputHookArgs</code> 包含框架侧 <code>SessionID</code> 与 Codex 侧 <code>ThreadID</code>，可用于按 session 聚合日志。</p>
+<h2 id="_9">配置选项说明</h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithName(name)</code></td>
+<td>设置 Agent 名称。该值会用作事件 author。</td>
+</tr>
+<tr>
+<td><code>WithBin(bin)</code></td>
+<td>设置 CLI 可执行文件路径。默认值为 <code>codex</code>。</td>
+</tr>
+<tr>
+<td><code>WithGlobalArgs(args...)</code></td>
+<td>在 <code>exec</code> 子命令前追加 Codex 根级 flags。</td>
+</tr>
+<tr>
+<td><code>WithExtraArgs(args...)</code></td>
+<td>在可选 resume session id 前追加 <code>codex exec</code> flags。</td>
+</tr>
+<tr>
+<td><code>WithEnv(env...)</code></td>
+<td>追加 CLI 环境变量。格式为 <code>KEY=VALUE</code>。</td>
+</tr>
+<tr>
+<td><code>WithWorkDir(dir)</code></td>
+<td>设置 CLI 进程工作目录。</td>
+</tr>
+<tr>
+<td><code>WithRawOutputHook(hook)</code></td>
+<td>观测 raw stdout/stderr。回调会在 CLI 结束后、解析前调用。</td>
+</tr>
+</tbody>
+</table>
 
 
 
@@ -2620,7 +2730,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月10日 07:58:56 UTC">2026-04-10 07:58:56</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月4日 08:04:50 UTC">2026-06-04 08:04:50</span>
   </span>
 
     
@@ -2630,7 +2740,7 @@
     <span class="md-icon" title="创建日期">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月10日 07:58:56 UTC">2026-04-10 07:58:56</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月4日 08:04:50 UTC">2026-06-04 08:04:50</span>
   </span>
 
     
@@ -2711,7 +2821,7 @@
       <nav class="md-footer__inner md-grid" aria-label="页脚" >
         
           
-          <a href="../source/" class="md-footer__link md-footer__link--prev" aria-label="上一页: 数据源">
+          <a href="../claudecode/" class="md-footer__link md-footer__link--prev" aria-label="上一页: Claude Code Agent">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -2721,20 +2831,20 @@
                 上一页
               </span>
               <div class="md-ellipsis">
-                数据源
+                Claude Code Agent
               </div>
             </div>
           </a>
         
         
           
-          <a href="../filter/" class="md-footer__link md-footer__link--next" aria-label="下一页: 过滤器">
+          <a href="../runner/" class="md-footer__link md-footer__link--next" aria-label="下一页: Runner">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 下一页
               </span>
               <div class="md-ellipsis">
-                过滤器
+                Runner
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -2770,12 +2880,12 @@
     
     
       
-      <script id="__config" type="application/json">{"base": "../../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
       
-        <script src="../../../assets/javascripts/mathjax.js"></script>
+        <script src="../../assets/javascripts/mathjax.js"></script>
       
         <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
       

@@ -64,6 +64,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/codeexecutor/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/codex/</loc>
+        <lastmod>2026-06-04</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/codex/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/codex/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/custom-agent/</loc>
         <lastmod>2026-06-04</lastmod>
         <changefreq>daily</changefreq>
@@ -510,6 +517,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/codeexecutor/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/codeexecutor/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/codex/</loc>
+        <lastmod>2026-06-04</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/codex/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/codex/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/custom-agent/</loc>
