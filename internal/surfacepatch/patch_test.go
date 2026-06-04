@@ -148,6 +148,28 @@ func TestPatch_TracksExplicitZeroValues(t *testing.T) {
 	require.Nil(t, repo)
 }
 
+func TestPatch_SuppressSubAgentTransferMergesAndClones(t *testing.T) {
+	var base Patch
+	require.True(t, base.IsEmpty())
+	require.False(t, base.SuppressSubAgentTransfer())
+
+	var suppress Patch
+	suppress.SetSuppressSubAgentTransfer()
+	require.False(t, suppress.IsEmpty())
+	require.True(t, suppress.SuppressSubAgentTransfer())
+
+	merged := base.Merge(suppress)
+	require.True(t, merged.SuppressSubAgentTransfer())
+
+	cloned := merged.Clone()
+	require.True(t, cloned.SuppressSubAgentTransfer())
+
+	cfgs := WithPatch(nil, "root", suppress)
+	stored, ok := PatchForNode(cfgs, "root")
+	require.True(t, ok)
+	require.True(t, stored.SuppressSubAgentTransfer())
+}
+
 func TestPatch_IgnoresNilModelOverride(t *testing.T) {
 	var patch Patch
 	patch.SetModel(nil)
