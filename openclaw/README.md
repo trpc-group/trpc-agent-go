@@ -1454,6 +1454,9 @@ OpenClaw supports these extension points:
   `registry.RegisterMemoryBackend(type, factory)`.
   Select via `memory.backend` (`-memory-backend`) and optional
   `memory.config`.
+- **Gateway run options**: pass `app.WithGatewayRunOptions(...)` or
+  `app.WithGatewayRunOptionResolver(...)` from a custom binary to inject
+  request-scoped `agent.RunOption` values.
 - **Skills**: no Go code needed; point `skills.extra_dirs` at a folder.
 
 For a step-by-step plugin authoring guide (with copy-paste templates),

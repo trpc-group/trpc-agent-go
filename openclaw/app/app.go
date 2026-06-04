@@ -1185,6 +1185,7 @@ func NewRuntimeWithOptions(
 			),
 		),
 	)
+	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return nil, &exitError{
@@ -1699,6 +1700,7 @@ func run(
 			),
 		),
 	)
+	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
 		return &exitError{

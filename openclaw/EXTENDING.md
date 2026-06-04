@@ -624,6 +624,76 @@ If the application already owns the HTTP server, use
 `app.NewRuntimeWithOptions` and mount `rt.Gateway.Handler` instead of
 `app.MainWithOptions`.
 
+## Gateway run options (request-scoped controls)
+
+Use `app.WithGatewayRunOptions` for static `agent.RunOption` values that
+should apply to every HTTP gateway run from a custom binary.
+
+Use `app.WithGatewayRunOptionResolver` when the options depend on the inbound
+request. The resolver receives normalized gateway metadata, the user message,
+and request extensions. It can return a new context plus additional
+`agent.RunOption` values before OpenClaw calls `runner.Run`.
+
+This is useful for request-scoped controls such as:
+
+- request-scoped server tools via `agent.WithAdditionalTools`
+- temporary runtime state via `agent.MergeRuntimeState`
+- per-request instruction or model controls
+
+For request-scoped tools, keep the OpenClaw server as the execution boundary.
+Convert channel-specific extension data into server-side `tool.Tool` values and
+pass them as additional tools:
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/app"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+func main() {
+	os.Exit(app.MainWithOptions(
+		os.Args[1:],
+		app.WithGatewayRunOptionResolver(func(
+			ctx context.Context,
+			input app.GatewayRunOptionInput,
+		) (context.Context, []agent.RunOption, error) {
+			requestTools, err := requestToolsFromExtensions(
+				input.Extensions,
+			)
+			if err != nil {
+				return ctx, nil, err
+			}
+			if len(requestTools) == 0 {
+				return ctx, nil, nil
+			}
+			return ctx, []agent.RunOption{
+				agent.WithAdditionalTools(requestTools),
+			}, nil
+		}),
+	))
+}
+
+func requestToolsFromExtensions(
+	extensions map[string]json.RawMessage,
+) ([]tool.Tool, error) {
+	// Parse your channel or frontend-specific extension schema here.
+	return nil, nil
+}
+```
+
+Do not use `agent.WithExternalTools` as a frontend tool-calling protocol with
+the stock OpenClaw gateway. External tools require the caller to receive full
+assistant tool-call data, execute it, and continue with a tool-result message;
+the gateway protocol currently exposes user-facing replies and progress events
+instead of that continuation surface.
+
 ## Memory backend plugin (centralized user memory storage)
 
 Memory backends implement `memory.Service` (from `trpc-agent-go`).
