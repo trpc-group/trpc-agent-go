@@ -15,6 +15,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -65,15 +66,21 @@ func (s *Source) ReadGraph(ctx context.Context, opts ...source.ReadGraphOption) 
 	data := &graph.Data{}
 
 	for _, lang := range supportedCodeLanguages {
-		parser, ok := codeast.GetDirectoryParser(lang.fileType)
-		if !ok {
-			continue
-		}
 		allowed, err := s.allowedCodePaths(repoRoot, rootToScan, lang)
 		if err != nil {
 			return nil, err
 		}
 		if len(allowed) == 0 {
+			continue
+		}
+		parser, ok := codeast.GetDirectoryParser(lang.fileType)
+		if !ok {
+			slog.Warn("graph source: skipping language with unread files; "+
+				"no DirectoryParser registered (missing blank import?)",
+				"language", lang.fileType,
+				"file_count", len(allowed),
+				"hint", fmt.Sprintf(`import _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/%s"`, lang.fileType),
+			)
 			continue
 		}
 		var parseOpts []codeast.ParseOption
@@ -446,9 +453,19 @@ func buildShortNameIndex(keptSymbols map[string]struct{}) map[string][]string {
 
 // resolveSymbolID attempts to find the canonical symbol ID for a given raw ID.
 // It first tries exact match, then falls back to prefix-based and short-name matching.
+// Fuzzy matching is only attempted when rawID contains path context (at least one dot);
+// bare short names (e.g. "BaseModel" with no package prefix) are not resolved to avoid
+// false-positive edge connections.
 func resolveSymbolID(rawID string, keptSymbols map[string]struct{}, shortNameIndex map[string][]string) string {
 	if _, ok := keptSymbols[rawID]; ok {
 		return rawID
+	}
+
+	// Require path context for fuzzy matching. A bare short name like "BaseModel"
+	// (no dot) has no package information to anchor the match and could incorrectly
+	// resolve to an unrelated symbol that happens to share the same name.
+	if !strings.Contains(rawID, ".") {
+		return ""
 	}
 
 	short := symbolShortName(rawID)

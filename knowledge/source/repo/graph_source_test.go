@@ -842,7 +842,15 @@ func TestResolveSymbolIDExactMatch(t *testing.T) {
 func TestResolveSymbolIDShortNameUnique(t *testing.T) {
 	kept := map[string]struct{}{"pkg.internal.UniqueClass": {}}
 	idx := buildShortNameIndex(kept)
-	require.Equal(t, "pkg.internal.UniqueClass", resolveSymbolID("UniqueClass", kept, idx))
+	// With path context ("some.UniqueClass"), short-name resolves uniquely.
+	require.Equal(t, "pkg.internal.UniqueClass", resolveSymbolID("some.UniqueClass", kept, idx))
+}
+
+func TestResolveSymbolIDBareShortNameRejected(t *testing.T) {
+	kept := map[string]struct{}{"pkg.internal.UniqueClass": {}}
+	idx := buildShortNameIndex(kept)
+	// Bare short name (no dot) must not resolve — no path context to anchor the match.
+	require.Equal(t, "", resolveSymbolID("UniqueClass", kept, idx))
 }
 
 func TestResolveSymbolIDPrefixMatch(t *testing.T) {
@@ -861,8 +869,8 @@ func TestResolveSymbolIDAmbiguous(t *testing.T) {
 		"pkg.b.run": {},
 	}
 	idx := buildShortNameIndex(kept)
-	// "run" has multiple candidates, no prefix to disambiguate
-	require.Equal(t, "", resolveSymbolID("run", kept, idx))
+	// "other.run" has path context but prefix "other" matches neither "pkg.a" nor "pkg.b".
+	require.Equal(t, "", resolveSymbolID("other.run", kept, idx))
 }
 
 func TestReadDocumentNodesEmptyDocExtensions(t *testing.T) {

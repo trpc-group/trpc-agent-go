@@ -14,6 +14,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,13 +164,11 @@ func mergeResults(results []parseFileResult, absDir string) (*codeast.Result, er
 	var allNodes []*codeast.Node
 	var allEdges []*codeast.Edge
 	importsSet := make(map[string]struct{})
-	var firstErr error
+	var errs []error
 
 	for _, r := range results {
 		if r.err != nil {
-			if firstErr == nil {
-				firstErr = r.err
-			}
+			errs = append(errs, r.err)
 			continue
 		}
 		if r.result == nil {
@@ -184,8 +183,18 @@ func mergeResults(results []parseFileResult, absDir string) (*codeast.Result, er
 		}
 	}
 
-	if len(allNodes) == 0 && firstErr != nil {
-		return nil, fmt.Errorf("parse directory %s: %w", absDir, firstErr)
+	if len(allNodes) == 0 && len(errs) > 0 {
+		return nil, fmt.Errorf("parse directory %s: all %d file(s) failed, first: %w",
+			absDir, len(errs), errs[0])
+	}
+
+	if len(errs) > 0 {
+		slog.Warn("python parser: some files failed to parse; graph may be incomplete",
+			"directory", absDir,
+			"failed_count", len(errs),
+			"total_count", len(results),
+			"first_error", errs[0],
+		)
 	}
 
 	imports := make([]string, 0, len(importsSet))

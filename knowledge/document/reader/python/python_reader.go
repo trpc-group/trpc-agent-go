@@ -13,6 +13,7 @@ package python
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -152,6 +153,8 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 	}
 
 	var allDocs []*document.Document
+	var skippedFiles int
+	var firstSkipErr error
 	err = filepath.Walk(absDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -171,6 +174,10 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 
 		result, parseErr := r.parser.ParseFileAt(path, modulePath)
 		if parseErr != nil {
+			skippedFiles++
+			if firstSkipErr == nil {
+				firstSkipErr = parseErr
+			}
 			return nil
 		}
 		if result == nil || len(result.Nodes) == 0 {
@@ -183,6 +190,14 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	if skippedFiles > 0 {
+		slog.Warn("python reader: some files failed to parse; results may be incomplete",
+			"directory", dirPath,
+			"skipped_count", skippedFiles,
+			"first_error", firstSkipErr,
+		)
 	}
 
 	return r.applyTransformers(allDocs)
