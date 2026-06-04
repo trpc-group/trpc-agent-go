@@ -4751,7 +4751,7 @@ summarizer.</p>
 </ul>
 <p><strong>Pass 2 — Oversized tool result truncation</strong> (<code>ContextCompactionOversizedToolResultMaxTokens</code>, <strong>default 0 / disabled</strong>):</p>
 <ul>
-<li>Applies to <strong>all</strong> tool results including the current request</li>
+<li>Applies to <strong>nearly all</strong> tool results including the current request. Tool results returned by <code>session_load</code> itself are skipped so recovered slices are not compacted again</li>
 <li>Tool results exceeding this threshold are truncated using head+tail preservation: the beginning and end of the content are kept, with a <code>[...N characters truncated...]</code> marker in the middle</li>
 <li>This is the safety net for single tool results large enough to overflow the context window on their own (e.g. <code>web_fetch</code> returning 800K+ chars of HTML)</li>
 </ul>
@@ -4764,10 +4764,11 @@ summarizer.</p>
 <li><code>SkipRecentFunc</code>: customizes how many tail events are considered recent. It affects Pass 0 force-clean and Pass 1 historical classification; Pass 2 can still truncate oversized recent/current tool results.</li>
 </ul>
 <p>If the same tool name appears in both <code>ForceCleanToolNames</code> and <code>KeepToolNames</code>, <code>KeepToolNames</code> wins.</p>
+<p>When the compacted event has an <code>event_id</code>, placeholders and truncation markers include recovery hints such as <code>event_id</code>, <code>tool_call_id</code>, and <code>tool_name</code>. With <code>WithEnableOnDemandSession(true)</code> and a session backend that implements <code>session.WindowService</code>, the model can call <code>session_load</code> with <code>content_offset</code> / <code>content_limit</code> to reload a precise slice of the original tool result. <code>session_load</code> output size is controlled by its own window parameters and <code>content_limit</code>; reload very large results in slices instead of requesting the full payload at once.</p>
 <p>Additionally:</p>
 <ul>
 <li>If <code>WithAddSessionSummary(true)</code> is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous <code>CreateSessionSummary(...)</code> retry before calling the model</li>
-<li>Model-layer token tailoring remains the final fallback</li>
+<li>Model-layer token tailoring remains the final fallback. It trims whole message rounds, so keep recovered slices small enough that they still fit in the final provider request</li>
 <li>Context compaction uses <code>SimpleTokenCounter</code> by default. If your application
   uses a custom counter for CJK-heavy prompts or provider-specific tokenization,
   pass the same counter with <code>WithContextCompactionTokenCounter(...)</code> so Pass 1
@@ -5310,7 +5311,7 @@ cascade:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 2, 2026 03:07:01 UTC">2026-06-02 03:07:01</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 4, 2026 08:28:02 UTC">2026-06-04 08:28:02</span>
   </span>
 
     
