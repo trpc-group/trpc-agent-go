@@ -45,6 +45,16 @@ type Tool struct {
 	description            string
 	inputSchema            *tool.Schema
 	outputSchema           *tool.Schema
+
+	// dynamic enables the dynamic AgentTool mode created by NewDynamicTool.
+	// In this mode the tool runs a short-lived sub-agent whose
+	// capability surface (tools / skills / instruction) is selected per call
+	// within a code-defined safety boundary, rather than wrapping one
+	// pre-defined agent.
+	dynamic bool
+	// dynamicCfg holds the dynamic-mode configuration. It is only consulted
+	// when dynamic is true.
+	dynamicCfg *dynamicOptions
 }
 
 // Option is a function that configures an AgentTool.
@@ -59,6 +69,42 @@ type agentToolOptions struct {
 	historyScope           HistoryScope
 	responseMode           ResponseMode
 	description            *string
+	name                   *string
+
+	// Dynamic AgentTool options. They are only meaningful for NewDynamicTool;
+	// NewTool ignores them.
+	dynamic *dynamicOptions
+}
+
+// dynamicOptions holds the configuration knobs for the dynamic AgentTool mode.
+type dynamicOptions struct {
+	templateAgent          agent.Agent
+	capabilityProvider     CapabilitySurfaceProvider
+	capabilityTools        []tool.Tool
+	capabilitySkills       skillRepository
+	capabilityToolsSet     bool
+	exposeToolSelection    bool
+	exposeSkillSelection   bool
+	exposeInstruction      bool
+	requestDescription     *string
+	instructionDescription *string
+	toolsDescription       *string
+	skillsDescription      *string
+}
+
+func defaultDynamicOptions() *dynamicOptions {
+	return &dynamicOptions{
+		exposeToolSelection:  true,
+		exposeSkillSelection: false,
+		exposeInstruction:    true,
+	}
+}
+
+func (opts *agentToolOptions) ensureDynamicOptions() *dynamicOptions {
+	if opts.dynamic == nil {
+		opts.dynamic = defaultDynamicOptions()
+	}
+	return opts.dynamic
 }
 
 // InnerTextMode controls whether forwarded inner assistant text is visible
@@ -141,6 +187,25 @@ func WithDescription(description string) Option {
 	}
 }
 
+// WithName overrides the model-facing tool name for NewDynamicTool.
+//
+// It applies ONLY to NewDynamicTool, whose name defaults to
+// DefaultDynamicToolName ("dynamic_agent"); use it to expose a different,
+// code-defined entrypoint name (for example "explore" or "implement").
+//
+// It is intentionally ignored by NewTool: a wrapped agent's tool name is its
+// identity (agent.Info().Name) and is also used for the child event-filter key,
+// team node id, and recursion guards, so renaming only the model-facing name
+// would split that identity. Rename the wrapped agent instead.
+//
+// The name must comply with LLM API requirements (^[a-zA-Z0-9_-]+$).
+func WithName(name string) Option {
+	return func(opts *agentToolOptions) {
+		copiedName := name
+		opts.name = &copiedName
+	}
+}
+
 // HistoryScope controls whether and how AgentTool inherits parent history.
 //   - HistoryScopeIsolated: keep child events isolated; do not inherit parent history.
 //   - HistoryScopeParentBranch: inherit parent branch history by using a hierarchical
@@ -185,6 +250,13 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		opt(options)
 	}
 	info := agent.Info()
+	if options.name != nil {
+		log.Warnf(
+			"AgentTool: WithName(%q) is ignored by NewTool; "+
+				"rename the wrapped agent or use NewDynamicTool",
+			*options.name,
+		)
+	}
 
 	// Use the agent's input schema if available, otherwise fall back to default.
 	var inputSchema *tool.Schema
@@ -218,6 +290,10 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 	if options.description != nil {
 		description = *options.description
 	}
+	// NewTool's name is the wrapped agent's identity; WithName is intentionally
+	// dynamic-only (see WithName) so the model-facing name never diverges from
+	// the child filter key, team node id, and recursion guards.
+	name := info.Name
 	return &Tool{
 		agent:                  agent,
 		skipSummarization:      options.skipSummarization,
@@ -226,7 +302,7 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		structuredStreamErrors: options.structuredStreamErrors,
 		historyScope:           options.historyScope,
 		responseMode:           normalizeResponseMode(options.responseMode),
-		name:                   info.Name,
+		name:                   name,
 		description:            description,
 		inputSchema:            inputSchema,
 		outputSchema:           outputSchema,
@@ -235,6 +311,12 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 
 // Call executes the agent tool with the provided JSON arguments.
 func (at *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	// Dynamic AgentTool mode runs a short-lived sub-agent whose capability
+	// surface is selected per call from the parent invocation.
+	if at.dynamic {
+		return at.callDynamic(ctx, jsonArgs)
+	}
+
 	message := model.NewUserMessage(string(jsonArgs))
 
 	// Prefer to reuse parent invocation + session so the child can see parent
@@ -896,6 +978,10 @@ type streamCompletionState struct {
 	lastAssistantContent       string
 	finalOnlyResult            string
 	overrideResult             string
+	// resultPrefix is prepended to the model-visible result. It carries
+	// dynamic sub-agent warnings so the parent model sees them in stream mode,
+	// matching the Call path. Empty for non-dynamic AgentTool streaming.
+	resultPrefix string
 }
 
 func (at *Tool) streamableCallContext(ctx context.Context) context.Context {
@@ -920,6 +1006,10 @@ func (at *Tool) runStreamableCall(
 	writer *tool.StreamWriter,
 ) {
 	defer writer.Close()
+	if at.dynamic {
+		at.streamDynamic(ctx, jsonArgs, writer)
+		return
+	}
 	parentInv, ok := agent.InvocationFromContext(ctx)
 	message := model.NewUserMessage(string(jsonArgs))
 	if ok && parentInv != nil && parentInv.Session != nil {
@@ -957,6 +1047,7 @@ func (at *Tool) streamFromParentInvocation(
 		subInv,
 		at.wrapWithStreamSemantics(subCtx, subInv, evCh),
 		writer,
+		"",
 	)
 }
 
@@ -965,58 +1056,25 @@ func (at *Tool) forwardSubInvocationStream(
 	subInv *agent.Invocation,
 	wrapped <-chan *event.Event,
 	writer *tool.StreamWriter,
+	resultPrefix string,
 ) {
 	managePendingVisibleCompletion := shouldDeferStreamCompletion(ctx, subInv)
 	emitFinalResultChunk := tool.FinalResultChunksFromContext(ctx)
-	state := streamCompletionState{}
+	state := streamCompletionState{resultPrefix: resultPrefix}
+	// When the model-visible result is built from merged inner content (no
+	// final-result chunk is emitted), inject the prefix as a leading content
+	// chunk so it is merged into the tool response. For final-result modes the
+	// prefix is folded into the emitted result instead (see the emit helpers).
+	if resultPrefix != "" && !emitFinalResultChunk {
+		if writer.Send(tool.StreamChunk{Content: resultPrefix}, nil) {
+			return
+		}
+	}
 	for ev := range wrapped {
-		if ev != nil {
-			ensureInvocationEventFields(subInv, ev)
-		}
-		if shouldSuppressGraphExecutorBarrierEvent(subInv, ev) {
-			at.completeSuppressedBarrierStreamEvent(ctx, subInv, ev, &state)
-			continue
-		}
-		at.updateFinalOnlyStreamResult(ev, &state)
-		if agent.IsGraphCompletionEventDisabled(subInv) &&
-			isGraphCompletionSnapshotEvent(ev) {
-			if emitFinalResultChunk {
-				at.capturePendingCompletionChunk(ev, &state)
-				if managePendingVisibleCompletion {
-					at.capturePendingVisibleCompletion(ctx, subInv, ev, &state)
-				}
-				continue
-			}
-			visibleEvent, ok := visibleCompletionStreamEvent(ev, subInv.AgentName)
-			if !ok {
-				continue
-			}
-			if managePendingVisibleCompletion {
-				at.capturePendingVisibleCompletion(ctx, subInv, visibleEvent, &state)
-			}
-			state.pendingStreamVisibleEvent = visibleEvent
-			state.sawGraphCompletionSnapshot = true
-			continue
-		}
-		if managePendingVisibleCompletion {
-			state.pendingVisibleCompletion = at.updatePendingVisibleCompletionForSession(
-				ctx,
-				subInv,
-				state.pendingVisibleCompletion,
-				ev,
-			)
-			if ev != nil &&
-				ev.RequiresCompletion &&
-				state.pendingVisibleCompletion != nil {
-				at.flushPendingVisibleCompletionForSession(
-					ctx,
-					subInv,
-					&state,
-				)
-			}
-		}
-		at.updateStreamCompletionState(ev, &state)
-		if writer.Send(tool.StreamChunk{Content: ev}, nil) {
+		if at.handleForwardedStreamEvent(
+			ctx, subInv, ev, writer, &state,
+			managePendingVisibleCompletion, emitFinalResultChunk,
+		) {
 			return
 		}
 	}
@@ -1032,6 +1090,81 @@ func (at *Tool) forwardSubInvocationStream(
 		return
 	}
 	at.emitPendingVisibleCompletionEvent(&state, writer)
+}
+
+// handleForwardedStreamEvent processes a single forwarded sub-invocation event
+// and reports whether forwarding should stop (the writer signalled completion,
+// so the caller must return). Graph-completion snapshots are captured for
+// deferred emission and never forwarded inline.
+func (at *Tool) handleForwardedStreamEvent(
+	ctx context.Context,
+	subInv *agent.Invocation,
+	ev *event.Event,
+	writer *tool.StreamWriter,
+	state *streamCompletionState,
+	managePendingVisibleCompletion bool,
+	emitFinalResultChunk bool,
+) (stop bool) {
+	if ev != nil {
+		ensureInvocationEventFields(subInv, ev)
+	}
+	if shouldSuppressGraphExecutorBarrierEvent(subInv, ev) {
+		at.completeSuppressedBarrierStreamEvent(ctx, subInv, ev, state)
+		return false
+	}
+	at.updateFinalOnlyStreamResult(ev, state)
+	if agent.IsGraphCompletionEventDisabled(subInv) &&
+		isGraphCompletionSnapshotEvent(ev) {
+		at.handleGraphCompletionSnapshot(
+			ctx, subInv, ev, state,
+			managePendingVisibleCompletion, emitFinalResultChunk,
+		)
+		return false
+	}
+	if managePendingVisibleCompletion {
+		state.pendingVisibleCompletion = at.updatePendingVisibleCompletionForSession(
+			ctx,
+			subInv,
+			state.pendingVisibleCompletion,
+			ev,
+		)
+		if ev != nil &&
+			ev.RequiresCompletion &&
+			state.pendingVisibleCompletion != nil {
+			at.flushPendingVisibleCompletionForSession(ctx, subInv, state)
+		}
+	}
+	at.updateStreamCompletionState(ev, state)
+	return writer.Send(tool.StreamChunk{Content: ev}, nil)
+}
+
+// handleGraphCompletionSnapshot captures a graph-completion snapshot for
+// deferred emission: final-result modes stash the completion chunk, otherwise a
+// model-visible completion event is captured/queued for end-of-stream flush.
+func (at *Tool) handleGraphCompletionSnapshot(
+	ctx context.Context,
+	subInv *agent.Invocation,
+	ev *event.Event,
+	state *streamCompletionState,
+	managePendingVisibleCompletion bool,
+	emitFinalResultChunk bool,
+) {
+	if emitFinalResultChunk {
+		at.capturePendingCompletionChunk(ev, state)
+		if managePendingVisibleCompletion {
+			at.capturePendingVisibleCompletion(ctx, subInv, ev, state)
+		}
+		return
+	}
+	visibleEvent, ok := visibleCompletionStreamEvent(ev, subInv.AgentName)
+	if !ok {
+		return
+	}
+	if managePendingVisibleCompletion {
+		at.capturePendingVisibleCompletion(ctx, subInv, visibleEvent, state)
+	}
+	state.pendingStreamVisibleEvent = visibleEvent
+	state.sawGraphCompletionSnapshot = true
 }
 
 func (at *Tool) updateFinalOnlyStreamResult(
@@ -1228,12 +1361,13 @@ func (at *Tool) emitPendingCompletionChunk(
 	if state.overrideResult != "" {
 		state.pendingCompletionChunk.Result = state.overrideResult
 	}
+	result := prefixStreamResult(state.resultPrefix, state.pendingCompletionChunk.Result)
 	var content any = tool.FinalResultChunk{
-		Result: state.pendingCompletionChunk.Result,
+		Result: result,
 	}
 	if len(state.pendingCompletionChunk.StateDelta) > 0 {
 		content = tool.FinalResultStateChunk{
-			Result:     state.pendingCompletionChunk.Result,
+			Result:     result,
 			StateDelta: cloneStateDelta(state.pendingCompletionChunk.StateDelta),
 		}
 	}
@@ -1248,20 +1382,44 @@ func (at *Tool) emitFinalOnlyResultChunk(
 ) {
 	result := ""
 	var stateDelta map[string][]byte
+	prefix := ""
 	if state != nil {
 		result = state.finalOnlyResult
+		prefix = state.resultPrefix
 		if state.pendingCompletionChunk != nil {
 			stateDelta = state.pendingCompletionChunk.StateDelta
 		}
 	}
-	var content any = tool.FinalResultChunk{Result: result}
+	finalResult := prefixStreamResult(prefix, result)
+	var content any = tool.FinalResultChunk{Result: finalResult}
 	if len(stateDelta) > 0 {
 		content = tool.FinalResultStateChunk{
-			Result:     result,
+			Result:     finalResult,
 			StateDelta: cloneStateDelta(stateDelta),
 		}
 	}
 	_ = writer.Send(tool.StreamChunk{Content: content}, nil)
+}
+
+// prefixStreamResult prepends prefix (e.g. dynamic sub-agent warnings) to a
+// streamed final result. It only prefixes string/nil results so non-text tool
+// results are never corrupted; non-dynamic streaming passes an empty prefix and
+// is therefore unaffected.
+func prefixStreamResult(prefix string, result any) any {
+	if prefix == "" {
+		return result
+	}
+	switch v := result.(type) {
+	case nil:
+		return prefix
+	case string:
+		if v == "" {
+			return prefix
+		}
+		return prefix + "\n" + v
+	default:
+		return result
+	}
 }
 
 func (at *Tool) streamFromFallbackRunner(
