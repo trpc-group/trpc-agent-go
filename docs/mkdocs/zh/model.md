@@ -653,6 +653,24 @@ func runOnce(ctx context.Context, r runner.Runner, cacheKey string) error {
 }
 ```
 
+如果供应商同时要求同一会话携带请求体缓存键和路由 Header，可以组合使用
+请求级 extra fields 与请求级 headers：
+
+```go
+events, err := r.Run(
+    ctx,
+    "user-001",
+    "session-001",
+    model.NewUserMessage("Hello"),
+    agent.WithModelRequestExtraFields(map[string]any{
+        "prompt_cache_key": cacheKey,
+    }),
+    agent.WithModelRequestHeaders(map[string]string{
+        "X-Session-ID": "session-001",
+    }),
+)
+```
+
 该选项会作用于本次运行中创建的每一次模型调用，包括普通 LLM Agent、
 Graph LLM 节点，以及经由 failover 或 hedge model 路由的请求。内置 OpenAI
 和 HuggingFace/OpenAI 兼容 adapter 会把这些字段合并到顶层 JSON 请求体中。
@@ -1230,16 +1248,17 @@ llm := openai.New("gpt-4o-mini",
 
 在网关、专有平台或代理环境中，请求模型 API 往往需要额外的
 HTTP Header（例如组织/租户标识、灰度路由、自定义鉴权等）。Model 模块
-提供两种可靠方式为“所有模型请求”添加 Header，适用于普通请求、流式、
-文件上传、批处理等全链路。
+提供多种可靠方式添加 Header。
 
 推荐顺序：
 
 - 通过 `openai.WithHeaders` 快速追加静态 Header（简便）
+- 通过 `agent.WithModelRequestHeaders` 设置请求级 Header（适合
+  `runner.Run(...)` 调用中按用户、会话或租户变化的 Header）
 - 通过 OpenAI RequestOption 设置全局 Header（灵活、可组合中间件）
 - 通过自定义 `http.RoundTripper` 注入（进阶、横切能力更强）
 
-上述三种方式同样影响流式请求，因为底层使用的是同一个客户端。
+上述方式同样影响流式请求，因为底层使用的是同一个客户端。
 
 ##### 1. 使用 openai.WithHeaders 追加 Header
 
@@ -1254,7 +1273,26 @@ llm := openai.New("deepseek-v4-flash",
 )
 ```
 
-##### 2. 使用 OpenAI RequestOption 设置全局 Header
+##### 2. 从 Runner 传递请求级 Header
+
+如果 Header 需要随每次 `runner.Run(...)` 动态变化，可以使用
+`agent.WithModelRequestHeaders`。典型例子是供应商要求通过 `X-Session-ID`
+把同一会话路由到同一推理实例。OpenAI 兼容 adapter 会在模型级 Header 之后
+合并这些请求级 Header，因此同名 Header 以请求级值为准。
+
+```go
+events, err := r.Run(
+    ctx,
+    "user-001",
+    "session-001",
+    model.NewUserMessage("Hello"),
+    agent.WithModelRequestHeaders(map[string]string{
+        "X-Session-ID": "session-001",
+    }),
+)
+```
+
+##### 3. 使用 OpenAI RequestOption 设置全局 Header
 
 通过 `WithOpenAIOptions` 配合 `openaiopt.WithHeader` 或
 `openaiopt.WithMiddleware`，可为底层 OpenAI 客户端发起的“每个请求”
@@ -1386,7 +1424,7 @@ llm := openai.New("deepseek-v4-flash",
 ```
 
 
-##### 3. 使用自定义 http.RoundTripper（进阶）
+##### 4. 使用自定义 http.RoundTripper（进阶）
 
 在 HTTP 传输层统一注入 Header，适合同时需要代理、TLS、自定义监控等
 能力的场景。
