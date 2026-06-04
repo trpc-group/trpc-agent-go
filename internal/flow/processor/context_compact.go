@@ -11,6 +11,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -39,8 +40,127 @@ const (
 	DefaultContextCompactionOversizedToolResultMaxTokens = 8192
 
 	historicalToolResultPlaceholder = "Historical tool result omitted to save context."
+	sessionLoadToolName             = "session_load"
 	policyToolResultPlaceholder     = "Tool result omitted by context compaction policy."
 )
+
+type toolResultRecoveryRef struct {
+	EventID    string
+	ToolCallID string
+	ToolName   string
+	Reason     string
+}
+
+func toolResultRecoveryRefForMessage(
+	evt event.Event,
+	msg model.Message,
+	reason string,
+) toolResultRecoveryRef {
+	return toolResultRecoveryRef{
+		EventID:    strings.TrimSpace(evt.ID),
+		ToolCallID: strings.TrimSpace(msg.ToolID),
+		ToolName:   strings.TrimSpace(msg.ToolName),
+		Reason:     reason,
+	}
+}
+
+func recoverableToolResultPlaceholder(ref toolResultRecoveryRef) string {
+	if ref.EventID == "" && ref.ToolCallID == "" {
+		if ref.Reason == "current_invocation_summary" {
+			return compactedToolResultPlaceholder
+		}
+		return historicalToolResultPlaceholder
+	}
+	var b strings.Builder
+	switch ref.Reason {
+	case "current_invocation_summary":
+		b.WriteString(compactedToolResultPlaceholder)
+	default:
+		b.WriteString(historicalToolResultPlaceholder)
+	}
+	writeRecoveryRefLines(&b, ref)
+	b.WriteString("\nUse session_load with event_id and content_offset/content_limit if the full result is needed.")
+	return b.String()
+}
+
+func recoverableTruncationMarker(
+	ref toolResultRecoveryRef,
+	omittedChars int,
+) string {
+	if ref.EventID == "" && ref.ToolCallID == "" {
+		return fmt.Sprintf("\n\n[... %d characters truncated ...]\n\n", omittedChars)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n\n[... %d characters truncated from tool result", omittedChars)
+	if ref.EventID != "" {
+		fmt.Fprintf(&b, "; event_id=%s", ref.EventID)
+	}
+	if ref.ToolCallID != "" {
+		fmt.Fprintf(&b, "; tool_call_id=%s", ref.ToolCallID)
+	}
+	if ref.ToolName != "" {
+		fmt.Fprintf(&b, "; tool_name=%s", ref.ToolName)
+	}
+	b.WriteString("; use session_load ...]\n\n")
+	return b.String()
+}
+
+func compactRecoverableTruncationMarker(
+	ref toolResultRecoveryRef,
+	omittedChars int,
+) string {
+	if ref.EventID == "" && ref.ToolCallID == "" {
+		return fmt.Sprintf("\n\n[... %d characters truncated ...]\n\n", omittedChars)
+	}
+	var b strings.Builder
+	b.WriteString("\n\n[... ")
+	wroteField := false
+	if ref.EventID != "" {
+		fmt.Fprintf(&b, "event_id=%s", ref.EventID)
+		wroteField = true
+	}
+	if ref.ToolCallID != "" {
+		if wroteField {
+			b.WriteString("; ")
+		}
+		fmt.Fprintf(&b, "tool_call_id=%s", ref.ToolCallID)
+		wroteField = true
+	}
+	if wroteField {
+		b.WriteString("; ")
+	}
+	b.WriteString("session_load]\n\n")
+	return b.String()
+}
+
+func writeRecoveryRefLines(b *strings.Builder, ref toolResultRecoveryRef) {
+	if ref.EventID != "" {
+		fmt.Fprintf(b, "\nevent_id: %s", ref.EventID)
+	} else if ref.ToolCallID == "" {
+		b.WriteString("\nrecoverable: false")
+	}
+	if ref.ToolCallID != "" {
+		fmt.Fprintf(b, "\ntool_call_id: %s", ref.ToolCallID)
+	}
+	if ref.ToolName != "" {
+		fmt.Fprintf(b, "\ntool_name: %s", ref.ToolName)
+	}
+	if ref.Reason != "" {
+		fmt.Fprintf(b, "\nreason: %s", ref.Reason)
+	}
+}
+
+func isRecoverablePlaceholderContent(content string) bool {
+	content = strings.TrimSpace(content)
+	if content == historicalToolResultPlaceholder {
+		return true
+	}
+	if content == compactedToolResultPlaceholder {
+		return true
+	}
+	return strings.HasPrefix(content, historicalToolResultPlaceholder+"\n") ||
+		strings.HasPrefix(content, compactedToolResultPlaceholder+"\n")
+}
 
 // ContextCompactionConfig controls request-side history compaction applied
 // while projecting session events into a model request.
@@ -231,12 +351,13 @@ func applyForceCleanToolResultPass(
 			ctx,
 			events[i],
 			0,
-			func(ctx context.Context, msg model.Message, _ int) (model.Message, bool, int) {
+			func(ctx context.Context, msg model.Message, _ int, _ toolResultRecoveryRef) (model.Message, bool, int) {
 				if !cfg.forceCleanToolResult(msg) {
 					return msg, false, 0
 				}
 				return cleanToolResultMessageWithCounter(ctx, msg, cfg.TokenCounter)
 			},
+			"policy_force_clean",
 		)
 		if !changed {
 			continue
@@ -303,14 +424,15 @@ func compactHistoricalToolResultEvent(
 		ctx,
 		evt,
 		maxTokens,
-		func(ctx context.Context, msg model.Message, maxTokens int) (model.Message, bool, int) {
+		func(ctx context.Context, msg model.Message, maxTokens int, ref toolResultRecoveryRef) (model.Message, bool, int) {
 			if cfg.keepToolResult(msg) {
 				return msg, false, 0
 			}
-			return compactHistoricalToolResultMessageWithCounter(
-				ctx, msg, maxTokens, cfg.TokenCounter,
+			return compactHistoricalToolResultMessageWithCounterAndRef(
+				ctx, msg, maxTokens, cfg.TokenCounter, ref,
 			)
 		},
+		"historical_compaction",
 	)
 }
 
@@ -326,14 +448,15 @@ func applyOversizedToolResultPass(
 			ctx,
 			events[i],
 			maxTokens,
-			func(ctx context.Context, msg model.Message, maxTokens int) (model.Message, bool, int) {
+			func(ctx context.Context, msg model.Message, maxTokens int, ref toolResultRecoveryRef) (model.Message, bool, int) {
 				if cfg.keepToolResult(msg) {
 					return msg, false, 0
 				}
-				return truncateOversizedToolResultMessageWithCounter(
-					ctx, msg, maxTokens, cfg.TokenCounter,
+				return truncateOversizedToolResultMessageWithCounterAndRef(
+					ctx, msg, maxTokens, cfg.TokenCounter, ref,
 				)
 			},
+			"oversized_truncation",
 		)
 		if !changed {
 			continue
@@ -349,7 +472,8 @@ func rewriteToolResultEventMessages(
 	ctx context.Context,
 	evt event.Event,
 	maxTokens int,
-	rewrite func(context.Context, model.Message, int) (model.Message, bool, int),
+	rewrite func(context.Context, model.Message, int, toolResultRecoveryRef) (model.Message, bool, int),
+	reason string,
 ) (event.Event, bool, int, int) {
 	if evt.Response == nil || len(evt.Response.Choices) == 0 {
 		return evt, false, 0, 0
@@ -366,6 +490,11 @@ func rewriteToolResultEventMessages(
 			ctx,
 			evt.Response.Choices[j].Message,
 			maxTokens,
+			toolResultRecoveryRefForMessage(
+				evt,
+				evt.Response.Choices[j].Message,
+				reason,
+			),
 		)
 		if !changed {
 			continue
@@ -502,13 +631,37 @@ func truncateOversizedToolResultMessageWithCounter(
 	maxTokens int,
 	counter model.TokenCounter,
 ) (model.Message, bool, int) {
+	ref := toolResultRecoveryRef{
+		ToolCallID: msg.ToolID,
+		ToolName:   msg.ToolName,
+		Reason:     "oversized_truncation",
+	}
+	return truncateOversizedToolResultMessageWithCounterAndRef(
+		ctx,
+		msg,
+		maxTokens,
+		counter,
+		ref,
+	)
+}
+
+func truncateOversizedToolResultMessageWithCounterAndRef(
+	ctx context.Context,
+	msg model.Message,
+	maxTokens int,
+	counter model.TokenCounter,
+	ref toolResultRecoveryRef,
+) (model.Message, bool, int) {
 	if msg.Role != model.RoleTool || msg.ToolID == "" || maxTokens <= 0 {
 		return msg, false, 0
 	}
 	if msg.Content == "" && len(msg.ContentParts) == 0 {
 		return msg, false, 0
 	}
-	if msg.Content == historicalToolResultPlaceholder ||
+	if msg.ToolName == sessionLoadToolName {
+		return msg, false, 0
+	}
+	if isRecoverablePlaceholderContent(msg.Content) ||
 		msg.Content == policyToolResultPlaceholder {
 		return msg, false, 0
 	}
@@ -521,7 +674,7 @@ func truncateOversizedToolResultMessageWithCounter(
 		return msg, false, 0
 	}
 
-	truncated, ok := truncateMiddleToTokenBudget(ctx, msg, maxTokens, counter)
+	truncated, ok := truncateMiddleToTokenBudget(ctx, msg, maxTokens, counter, ref)
 	if !ok {
 		return msg, false, 0
 	}
@@ -547,6 +700,7 @@ func truncateMiddleToTokenBudget(
 	msg model.Message,
 	maxTokens int,
 	counter model.TokenCounter,
+	ref toolResultRecoveryRef,
 ) (string, bool) {
 	if msg.Content == "" || counter == nil || maxTokens <= 0 {
 		return "", false
@@ -558,7 +712,7 @@ func truncateMiddleToTokenBudget(
 	found := false
 	for low <= high {
 		mid := low + (high-low)/2
-		candidate := truncateMiddle(msg.Content, mid)
+		candidate := truncateMiddleWithRef(msg.Content, mid, ref)
 		candidateMsg := msg
 		candidateMsg.Content = candidate
 		tokens, err := counter.CountTokens(ctx, candidateMsg)
@@ -582,6 +736,14 @@ func truncateMiddleToTokenBudget(
 // contains key structure/headers) and end (usually contains conclusions)
 // of the tool output.
 func truncateMiddle(s string, maxChars int) string {
+	return truncateMiddleWithRef(s, maxChars, toolResultRecoveryRef{})
+}
+
+func truncateMiddleWithRef(
+	s string,
+	maxChars int,
+	ref toolResultRecoveryRef,
+) string {
 	runeCount := utf8.RuneCountInString(s)
 	if runeCount <= maxChars {
 		return s
@@ -589,11 +751,22 @@ func truncateMiddle(s string, maxChars int) string {
 
 	removed := runeCount - maxChars
 	marker := fmt.Sprintf("\n\n[... %d characters truncated ...]\n\n", removed)
+	if ref.EventID != "" || ref.ToolCallID != "" {
+		marker = recoverableTruncationMarker(ref, removed)
+	}
 	markerLen := utf8.RuneCountInString(marker)
 
 	available := maxChars - markerLen
+	if available < 2 && (ref.EventID != "" || ref.ToolCallID != "") {
+		marker = compactRecoverableTruncationMarker(ref, removed)
+		markerLen = utf8.RuneCountInString(marker)
+		available = maxChars - markerLen
+	}
 	if available < 2 {
 		runes := []rune(s)
+		if ref.EventID != "" || ref.ToolCallID != "" {
+			return marker
+		}
 		return string(runes[:maxChars])
 	}
 	halfBudget := available / 2
@@ -615,7 +788,7 @@ func cleanToolResultMessageWithCounter(
 	if msg.Content == "" && len(msg.ContentParts) == 0 {
 		return msg, false, 0
 	}
-	if (msg.Content == historicalToolResultPlaceholder ||
+	if (isRecoverablePlaceholderContent(msg.Content) ||
 		msg.Content == policyToolResultPlaceholder) &&
 		len(msg.ContentParts) == 0 {
 		return msg, false, 0
@@ -667,11 +840,31 @@ func compactHistoricalToolResultMessageWithCounter(
 	maxTokens int,
 	counter model.TokenCounter,
 ) (model.Message, bool, int) {
+	ref := toolResultRecoveryRef{
+		ToolCallID: msg.ToolID,
+		ToolName:   msg.ToolName,
+		Reason:     "historical_compaction",
+	}
+	return compactHistoricalToolResultMessageWithCounterAndRef(
+		ctx,
+		msg,
+		maxTokens,
+		counter,
+		ref,
+	)
+}
+
+func compactHistoricalToolResultMessageWithCounterAndRef(
+	ctx context.Context,
+	msg model.Message,
+	maxTokens int,
+	counter model.TokenCounter,
+	ref toolResultRecoveryRef,
+) (model.Message, bool, int) {
 	if msg.Role != model.RoleTool || msg.ToolID == "" || maxTokens <= 0 {
 		return msg, false, 0
 	}
-	if msg.Content == historicalToolResultPlaceholder &&
-		len(msg.ContentParts) == 0 {
+	if isRecoverablePlaceholderContent(msg.Content) && len(msg.ContentParts) == 0 {
 		return msg, false, 0
 	}
 
@@ -685,7 +878,7 @@ func compactHistoricalToolResultMessageWithCounter(
 
 	compacted := model.Message{
 		Role:     msg.Role,
-		Content:  historicalToolResultPlaceholder,
+		Content:  recoverableToolResultPlaceholder(ref),
 		ToolID:   msg.ToolID,
 		ToolName: msg.ToolName,
 	}
