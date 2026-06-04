@@ -1,6 +1,7 @@
 name: Pull Request Check
 on:
   pull_request:
+  merge_group:
   push:
   workflow_dispatch:
 permissions:
