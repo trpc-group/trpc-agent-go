@@ -238,7 +238,7 @@ func (e *explorer) Run(
 	if err != nil {
 		return nil, err
 	}
-	sanitizeChildInvocation(inv)
+	sanitizeChildInvocation(inv, inv.GetParentInvocation() != nil)
 	// Hand identity to the inner agent (mirrors agent.NewLazyAgent). The inner
 	// LLMAgent re-sets these in setupInvocation, but doing it here keeps the
 	// invocation consistent for any observer between now and that point.
@@ -255,9 +255,14 @@ func (e *explorer) Run(
 //     parent's tool names and was already applied during inheritance; leaving
 //     it would double-filter the explorer's (different) surface.
 //
-// AdditionalTools are intentionally preserved: they are run-scoped user tools
-// and, under the default soft read-only semantics, the explorer inherits them.
-func sanitizeChildInvocation(inv *agent.Invocation) {
+// Root explorer invocations are not inherited surfaces, so their caller-owned
+// run options remain intact. AdditionalTools are intentionally preserved even
+// for inherited invocations: they are run-scoped user tools and, under the
+// default soft read-only semantics, the explorer inherits them.
+func sanitizeChildInvocation(inv *agent.Invocation, inherited bool) {
+	if !inherited {
+		return
+	}
 	inv.RunOptions.ExternalTools = nil
 	inv.RunOptions.ExternalToolNames = nil
 	inv.RunOptions.ToolFilter = nil

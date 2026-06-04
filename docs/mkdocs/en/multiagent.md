@@ -934,18 +934,9 @@ With no options, the explorer inherits from the **direct parent invocation**:
 ### Read-only is an advisory constraint
 
 The explorer's read-only behavior is an **advisory system prompt, not a
-permission boundary**. If the parent agent exposes mutating tools, the explorer
-inherits them by default and is merely instructed not to use them. **When you
-need a hard boundary, narrow the surface explicitly** (recommended for
-production):
-
-```go
-builtin.NewExplorer(
-    builtin.WithToolFilter(tool.NewIncludeToolNamesFilter(
-        "read_file", "search", "knowledge_search",
-    )),
-)
-```
+permission boundary**. It is intended as a convenient built-in read-only role:
+the model is instructed to inspect, search, and summarize, but the framework
+does not automatically classify tools as read-only or mutating.
 
 ### Customizing the surface
 
@@ -954,16 +945,15 @@ builtin.NewExplorer(
     builtin.WithName("explorer"),
     builtin.WithDescription("Reads and investigates available context without modifying anything."),
     builtin.WithInstruction(customReadOnlyPrompt),
-    builtin.WithTools([]tool.Tool{readFile, search}), // explicit; does not inherit parent user tools
     builtin.WithSkills(readOnlySkillsRepo),            // explicit replacement
     builtin.WithModel(modelInstance),                  // explicit; otherwise inherits parent model
 )
 ```
 
 Available options: `WithName`, `WithDescription`, `WithInstruction`,
-`WithTools`, `WithToolFilter`, `WithSkills`, `WithModel`, `WithCodeExecutor`,
-plus the advanced escape hatch `WithLLMAgentOptions` (forwards raw
-`llmagent.Option` values to the inner agent; use sparingly).
+`WithTools`, `WithSkills`, `WithModel`, `WithCodeExecutor`, plus the advanced
+escape hatch `WithLLMAgentOptions` (forwards raw `llmagent.Option` values to the
+inner agent; use sparingly).
 
 Behavior notes:
 

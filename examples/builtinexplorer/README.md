@@ -1,51 +1,37 @@
 # Built-in Explorer Example
 
-This example shows how to use `builtin.NewExplorer()` as a focused,
-read-only exploration agent.
+This example shows the minimal way to expose `builtin.NewExplorer()` as an
+AgentTool so the model can call a ready-to-use, read-only exploration agent.
 
-The root agent has three tools:
+The root agent has two document tools and one explorer tool:
 
 - `search_docs`
 - `read_doc`
-- `save_note`
+- `explorer`
 
-The Explorer is mounted with:
+The Explorer is mounted as an AgentTool, and the root agent is instructed to
+use this tool for document lookup instead of calling `search_docs` / `read_doc`
+directly:
 
 ```go
-builtin.NewExplorer(
-    builtin.WithToolFilter(tool.NewIncludeToolNamesFilter(
-        "search_docs",
-        "read_doc",
-    )),
-)
+explorer := builtin.NewExplorer()
+llmagent.WithTools(append(
+    []tool.Tool{searchDocsTool(), readDocTool()},
+    agenttool.NewTool(explorer),
+))
 ```
 
-That filter demonstrates the recommended production pattern: Explorer's
-read-only behavior is a prompt constraint, not a permission boundary. If the
-root agent has mutating tools such as `save_note`, narrow the Explorer surface
-with `WithToolFilter` or `WithTools`.
+The Explorer inherits the parent agent's available capabilities at run time and
+adds a built-in read-only system prompt. The read-only behavior is an advisory
+prompt constraint, not a permission boundary.
 
-## Mounting Modes
-
-Run as an AgentTool:
+## Run
 
 ```bash
 cd examples/builtinexplorer
 export OPENAI_API_KEY="your-api-key"
-go run . -mode=agenttool
+go run .
 ```
-
-In this mode the model sees an `explorer` tool. The root agent calls Explorer
-synchronously, receives the findings, and then continues the turn.
-
-Run as a SubAgent:
-
-```bash
-go run . -mode=transfer
-```
-
-In this mode the model sees `transfer_to_agent` with `explorer` as a target.
-The root agent hands off the investigation to Explorer.
 
 ## Suggested Prompts
 
@@ -54,9 +40,5 @@ Investigate the release rollback policy and summarize when rollback is required.
 ```
 
 ```text
-Search the incident docs and save a note with the customer update guidance.
+Search the incident docs and explain what should be in the first customer update.
 ```
-
-The second prompt lets you compare responsibilities: Explorer should gather
-the read-only facts, while the root agent owns the state-changing `save_note`
-tool.

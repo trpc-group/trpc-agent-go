@@ -264,18 +264,35 @@ func TestInheritParentUserTools_NilOrNonProviderParent(t *testing.T) {
 	require.Nil(t, inheritParentUserTools(context.Background(), parentInv, nil))
 }
 
-func TestSanitizeChildInvocation(t *testing.T) {
+func TestSanitizeChildInvocation_InheritedInvocation(t *testing.T) {
 	inv := &agent.Invocation{}
 	inv.RunOptions.ExternalTools = []tool.Tool{&mockTool{name: "ext"}}
 	inv.RunOptions.ExternalToolNames = map[string]bool{"ext": true}
 	inv.RunOptions.ToolFilter = tool.NewIncludeToolNamesFilter("ext")
 	inv.RunOptions.AdditionalTools = []tool.Tool{&mockTool{name: "add"}}
 
-	sanitizeChildInvocation(inv)
+	sanitizeChildInvocation(inv, true)
 
 	require.Nil(t, inv.RunOptions.ExternalTools)
 	require.Nil(t, inv.RunOptions.ExternalToolNames)
 	require.Nil(t, inv.RunOptions.ToolFilter)
+	require.Len(t, inv.RunOptions.AdditionalTools, 1)
+}
+
+func TestSanitizeChildInvocation_RootInvocationPreservesRunOptions(
+	t *testing.T,
+) {
+	inv := &agent.Invocation{}
+	inv.RunOptions.ExternalTools = []tool.Tool{&mockTool{name: "ext"}}
+	inv.RunOptions.ExternalToolNames = map[string]bool{"ext": true}
+	inv.RunOptions.ToolFilter = tool.NewIncludeToolNamesFilter("ext")
+	inv.RunOptions.AdditionalTools = []tool.Tool{&mockTool{name: "add"}}
+
+	sanitizeChildInvocation(inv, false)
+
+	require.Len(t, inv.RunOptions.ExternalTools, 1)
+	require.Equal(t, map[string]bool{"ext": true}, inv.RunOptions.ExternalToolNames)
+	require.NotNil(t, inv.RunOptions.ToolFilter)
 	require.Len(t, inv.RunOptions.AdditionalTools, 1)
 }
 

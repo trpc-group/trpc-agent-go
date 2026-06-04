@@ -17,11 +17,9 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent/builtin"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -33,25 +31,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-const (
-	modeAgentTool = "agenttool"
-	modeTransfer  = "transfer"
-)
-
 var (
 	modelName = flag.String("model", "deepseek-v4-flash", "model name to use")
-	mode      = flag.String("mode", modeAgentTool, "mount mode: agenttool or transfer")
-	showTool  = flag.Bool("show-tool", false, "print tool response events")
 )
 
 type demo struct {
-	mode      string
 	modelName string
-	showTool  bool
 	runner    runner.Runner
 	userID    string
 	sessionID string
-	notes     []savedNote
 }
 
 type document struct {
@@ -83,16 +71,6 @@ type readDocResult struct {
 	Content string `json:"content"`
 }
 
-type saveNoteArgs struct {
-	Title string `json:"title" jsonschema:"description=Note title"`
-	Body  string `json:"body" jsonschema:"description=Note body"`
-}
-
-type savedNote struct {
-	Title string `json:"title"`
-	Body  string `json:"body"`
-}
-
 var knowledgeBase = []document{
 	{
 		ID:    "incident-runbook",
@@ -120,21 +98,14 @@ var knowledgeBase = []document{
 
 func main() {
 	flag.Parse()
-	if *mode != modeAgentTool && *mode != modeTransfer {
-		log.Fatalf("invalid -mode %q: use %s or %s", *mode, modeAgentTool, modeTransfer)
-	}
 
 	fmt.Println("Built-in Explorer Example")
 	fmt.Printf("Model: %s\n", *modelName)
-	fmt.Printf("Mode: %s\n", *mode)
-	fmt.Println("Root tools: search_docs, read_doc, save_note")
-	fmt.Println("Explorer surface: search_docs, read_doc")
+	fmt.Println("Explorer is mounted with builtin.NewExplorer()")
 	fmt.Println(strings.Repeat("=", 64))
 
 	d := &demo{
-		mode:      *mode,
 		modelName: *modelName,
-		showTool:  *showTool,
 		userID:    "user",
 		sessionID: fmt.Sprintf("builtin-explorer-%d", time.Now().Unix()),
 	}
@@ -154,60 +125,26 @@ func (d *demo) run() error {
 
 func (d *demo) setup() error {
 	m := openai.New(d.modelName)
-	readTools := []tool.Tool{d.searchDocsTool(), d.readDocTool()}
-	allTools := append([]tool.Tool{}, readTools...)
-	allTools = append(allTools, d.saveNoteTool())
-
-	explorer := builtin.NewExplorer(
-		builtin.WithToolFilter(tool.NewIncludeToolNamesFilter(
-			"search_docs",
-			"read_doc",
-		)),
-	)
-
-	var tools []tool.Tool
-	var subAgents []agent.Agent
-	var instruction string
-
-	switch d.mode {
-	case modeAgentTool:
-		tools = append(allTools, agenttool.NewTool(
-			explorer,
-			agenttool.WithSkipSummarization(true),
-			agenttool.WithStreamInner(true),
-			agenttool.WithInnerTextMode(agenttool.InnerTextModeInclude),
-			agenttool.WithResponseMode(agenttool.ResponseModeFinalOnly),
-		))
-		instruction = "" +
-			"You are a documentation assistant. For read-only investigation " +
-			"across the document corpus, call the explorer tool. The explorer " +
-			"keeps the investigation focused and only receives search_docs and " +
-			"read_doc. Use save_note only when the user explicitly asks you to " +
-			"save a note."
-	case modeTransfer:
-		tools = allTools
-		subAgents = []agent.Agent{explorer}
-		instruction = "" +
-			"You are a documentation assistant. For read-only investigation " +
-			"across the document corpus, transfer to the explorer agent. The " +
-			"explorer keeps the investigation focused and only receives " +
-			"search_docs and read_doc. Use save_note only when the user " +
-			"explicitly asks you to save a note."
-	}
+	explorer := builtin.NewExplorer()
+	explorerTool := agenttool.NewTool(explorer)
 
 	agentOpts := []llmagent.Option{
 		llmagent.WithModel(m),
-		llmagent.WithDescription("A documentation assistant with a built-in explorer"),
-		llmagent.WithInstruction(instruction),
+		llmagent.WithDescription("A documentation assistant with a built-in explorer tool"),
+		llmagent.WithInstruction(
+			"You are a documentation assistant. When you need to look up " +
+				"details from the document corpus, always call the explorer tool " +
+				"instead of calling search_docs or read_doc directly.",
+		),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
-			MaxTokens:   intPtr(2000),
-			Temperature: floatPtr(0.3),
-			Stream:      true,
+			MaxTokens: intPtr(2000),
+			Stream:    true,
 		}),
-		llmagent.WithTools(tools),
-	}
-	if len(subAgents) > 0 {
-		agentOpts = append(agentOpts, llmagent.WithSubAgents(subAgents))
+		llmagent.WithTools([]tool.Tool{
+			d.searchDocsTool(),
+			d.readDocTool(),
+			explorerTool,
+		}),
 	}
 
 	root := llmagent.New("doc-assistant", agentOpts...)
@@ -218,7 +155,7 @@ func (d *demo) setup() error {
 func (d *demo) chat(ctx context.Context) error {
 	fmt.Println("Try:")
 	fmt.Println("  Investigate the release rollback policy and summarize when rollback is required.")
-	fmt.Println("  Search the incident docs and save a note with the customer update guidance.")
+	fmt.Println("  Search the incident docs and explain what should be in the first customer update.")
 	fmt.Println("Commands: /exit")
 	fmt.Println()
 
@@ -261,6 +198,9 @@ func (d *demo) printEvents(events <-chan *event.Event) error {
 		if evt == nil || evt.Response == nil {
 			continue
 		}
+		if evt.Response.Error != nil {
+			fmt.Printf("\nError [%s]: %s\n", evt.Author, evt.Response.Error.Message)
+		}
 		for _, choice := range evt.Response.Choices {
 			if len(choice.Message.ToolCalls) > 0 {
 				for _, tc := range choice.Message.ToolCalls {
@@ -268,12 +208,11 @@ func (d *demo) printEvents(events <-chan *event.Event) error {
 				}
 			}
 			if choice.Message.Role == model.RoleTool {
-				if d.showTool {
-					fmt.Printf("\nTool result [%s]: %s\n", evt.Author, choice.Message.Content)
-				}
 				continue
 			}
-			if choice.Message.Content != "" {
+			if choice.Delta.Content != "" {
+				fmt.Print(choice.Delta.Content)
+			} else if choice.Message.Content != "" {
 				fmt.Print(choice.Message.Content)
 			}
 		}
@@ -300,14 +239,6 @@ func (d *demo) readDocTool() tool.Tool {
 	)
 }
 
-func (d *demo) saveNoteTool() tool.Tool {
-	return function.NewFunctionTool(
-		d.saveNote,
-		function.WithName("save_note"),
-		function.WithDescription("Save a persistent note. This changes state."),
-	)
-}
-
 func (d *demo) searchDocs(_ context.Context, args searchDocsArgs) (searchDocsResult, error) {
 	query := strings.ToLower(args.Query)
 	var hits []docHit
@@ -317,7 +248,6 @@ func (d *demo) searchDocs(_ context.Context, args searchDocsArgs) (searchDocsRes
 			hits = append(hits, docHit{ID: doc.ID, Title: doc.Title})
 		}
 	}
-	sort.Slice(hits, func(i, j int) bool { return hits[i].ID < hits[j].ID })
 	return searchDocsResult{Matches: hits}, nil
 }
 
@@ -334,12 +264,6 @@ func (d *demo) readDoc(_ context.Context, args readDocArgs) (readDocResult, erro
 	return readDocResult{}, fmt.Errorf("document %q not found", args.ID)
 }
 
-func (d *demo) saveNote(_ context.Context, args saveNoteArgs) (savedNote, error) {
-	note := savedNote{Title: args.Title, Body: args.Body}
-	d.notes = append(d.notes, note)
-	return note, nil
-}
-
 func containsAny(text string, words []string) bool {
 	for _, word := range words {
 		if word != "" && strings.Contains(text, strings.ToLower(word)) {
@@ -350,5 +274,3 @@ func containsAny(text string, words []string) bool {
 }
 
 func intPtr(v int) *int { return &v }
-
-func floatPtr(v float64) *float64 { return &v }
