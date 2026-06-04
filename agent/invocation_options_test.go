@@ -48,6 +48,9 @@ func TestWithModelRequestExtraFields(t *testing.T) {
 
 func TestWithModelRequestHeaders(t *testing.T) {
 	opts := &RunOptions{}
+	WithModelRequestHeaders(nil)(opts)
+	assert.Nil(t, opts.ModelRequestHeaders)
+
 	headers := map[string]string{
 		"X-Session-ID": "session-1",
 	}

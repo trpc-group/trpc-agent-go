@@ -174,6 +174,22 @@ func TestBasicReqProc_ModelRequestHeaders(t *testing.T) {
 			req.Headers["X-Session-ID"],
 		)
 	}
+
+	req = &model.Request{}
+	NewBasicRequestProcessor().ProcessRequest(
+		context.Background(),
+		inv,
+		req,
+		make(chan *event.Event, 1),
+	)
+	headers["X-Session-ID"] = "changed-again"
+
+	if req.Headers["X-Session-ID"] != "changed" {
+		t.Fatalf(
+			"ProcessRequest() got header %v, want changed",
+			req.Headers["X-Session-ID"],
+		)
+	}
 }
 
 // Helper functions for test data
