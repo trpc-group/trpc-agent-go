@@ -1540,6 +1540,14 @@ func setVisibleExternalToolNames(
 	invocation.RunOptions.ExternalToolNames = visible
 }
 
+func copyToolNames(src map[string]bool) map[string]bool {
+	dst := make(map[string]bool, len(src))
+	for name, ok := range src {
+		dst[name] = ok
+	}
+	return dst
+}
+
 func toolName(tl tool.Tool) string {
 	if tl == nil {
 		return ""
