@@ -27,13 +27,13 @@ description: "Probe weather prerequisites"
 metadata:
   openclaw:
     skillKey: "weather-api"
-    primaryEnv: "OPENAI_API_KEY"
+    primaryEnv: "OPENCLAW_STATUS_TEST_MISSING_ENV"
     emoji: "⛅"
     homepage: "https://example.com/weather"
     requires:
       bins: ["definitely-missing-bin"]
       anyBins: ["definitely-missing-a", "definitely-missing-b"]
-      env: ["OPENAI_API_KEY"]
+      env: ["OPENCLAW_STATUS_TEST_MISSING_ENV"]
       config: ["channels.telegram.token"]
 ---
 
@@ -55,9 +55,9 @@ metadata:
 		[]string{"definitely-missing-a", "definitely-missing-b"},
 		entry.Missing.AnyBins,
 	)
-	require.Equal(t, []string{"OPENAI_API_KEY"}, entry.Missing.Env)
+	require.Equal(t, []string{"OPENCLAW_STATUS_TEST_MISSING_ENV"}, entry.Missing.Env)
 	require.Equal(t, []string{"channels.telegram.token"}, entry.Missing.Config)
-	require.Equal(t, "OPENAI_API_KEY", entry.PrimaryEnv)
+	require.Equal(t, "OPENCLAW_STATUS_TEST_MISSING_ENV", entry.PrimaryEnv)
 	require.Equal(t, "https://example.com/weather", entry.Homepage)
 	require.Len(t, entry.Install, 2)
 	require.Equal(t, statusInstallIDRestartPath, entry.Install[0].ID)

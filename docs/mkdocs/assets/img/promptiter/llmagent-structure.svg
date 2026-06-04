@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="220" viewBox="0 0 560 220" role="img" aria-label="candidate candidate#instruction">
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .node { fill: #eef6ff; stroke: #3f7fbf; stroke-width: 1.6; }
+      .surface { fill: #fff7df; stroke: #d59b23; stroke-width: 1.2; }
+      .name { fill: #173b63; font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .id { fill: #6f4a00; font: 600 16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .prompt { fill: #475569; font: 600 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    </style>
+  </defs>
+  <rect class="bg" width="560" height="220" rx="18" />
+  <rect class="node" x="110" y="42" width="340" height="136" rx="14" />
+  <text class="name" x="280" y="96" text-anchor="middle">candidate</text>
+  <rect class="surface" x="148" y="116" width="264" height="48" rx="8" />
+  <text class="id" x="280" y="136" text-anchor="middle">candidate#instruction</text>
+  <text class="prompt" x="280" y="154" text-anchor="middle">生成一篇中文体育战报</text>
+</svg>

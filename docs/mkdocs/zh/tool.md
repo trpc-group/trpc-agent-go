@@ -1556,6 +1556,116 @@ child := agenttool.NewTool(
 - `HistoryScopeParentBranch` 是共享上下文链路，不是快照隔离。如果不希望子 Agent 的详细事件在父 Agent 后续上下文中出现，保持默认 `HistoryScopeIsolated`，并把必要上下文放进工具参数。
 - `WithSkipSummarization(true)` 只会跳过额外的外层总结型 LLM 调用，不会把 `tool.response` 变成 assistant final response；如果你需要真正的终止信号，仍应持续消费到 `runner.completion`
 
+### 动态 AgentTool
+
+`agenttool.NewTool(agent)` 适合工具背后已经有一个明确的专家 Agent：开发者先把
+Agent、模型、工具、skills、权限等配置好，再把它包装成父 Agent 的一个工具。
+
+当你的应用无法提前穷举所有专家角色，而是希望父 Agent 在每次调用时按任务临时选择
+工具子集或指定本次执行指令，可以使用 `agenttool.NewDynamicTool()`。它会向模型暴露
+一个默认名为 `dynamic_agent` 的工具；模型调用它时，不是在创建任意 Go 对象，也不是
+选择某个已注册 Agent，而是在代码定义的边界内运行一次短生命周期的子 Agent invocation。
+
+典型接入方式如下：
+
+```go
+dynamicAgent := agenttool.NewDynamicTool()
+
+parent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{
+        readFileTool,
+        searchCodeTool,
+        dynamicAgent,
+    }),
+)
+```
+
+默认情况下，`dynamic_agent` 的能力边界来自父 Agent 当前可用的业务工具。模型可以通过
+`tools` 字段把子 Agent 本次可用工具收窄到其中一部分；如果不传 `tools`，则允许使用
+边界内的全部工具。`dynamic_agent` 自身、`transfer_to_agent` 以及调用方执行的外部工具
+不会进入这个子 Agent 的可选工具面。
+
+模型侧默认可见的参数包括：
+
+```json
+{
+  "request": "分析这段代码是否存在权限绕过风险，必要上下文如下：...",
+  "instruction": "你是安全审计专家，只输出风险点和修复建议",
+  "tools": ["read_file", "search_code"]
+}
+```
+
+- `request`：必填，描述子 Agent 本次要完成的任务。默认历史作用域是
+  `HistoryScopeIsolated`，因此建议把完成任务需要的上下文写进 `request`。
+- `instruction`：可选，作为本次子 Agent invocation 的角色、约束或执行指令。
+- `tools`：可选，精确指定本次允许子 Agent 使用哪些工具名。传空数组表示本次不授予
+  任何业务工具。
+
+如果默认从父 Agent 派生能力面不符合业务边界，可以在代码侧显式设置模板 Agent 或最大
+能力面：
+
+```go
+workerTemplate := llmagent.New(
+    "worker-template",
+    llmagent.WithModel(workerModel),
+    llmagent.WithInstruction("你是一个只处理单个任务的执行型 Agent。"),
+)
+
+dynamicAgent := agenttool.NewDynamicTool(
+    // 可选：定义子 Agent 的模型、executor、callbacks、权限策略等执行边界。
+    agenttool.WithTemplateAgent(workerTemplate),
+    // 可选：限制模型最多只能从这些工具里选择。
+    agenttool.WithCapabilityTools([]tool.Tool{readFileTool, searchCodeTool}),
+)
+```
+
+`WithTemplateAgent` 是代码侧边界，不是模型参数。模型不能通过 `dynamic_agent` 选择任意
+Agent、模型或 executor；它只能在开发者配置好的边界内，为这一次调用填写 `request`、
+`instruction`，并按需选择 tools/skills 子集。
+
+常用选项：
+
+- `WithName(name)`：修改模型可见工具名。仅对 `NewDynamicTool` 生效；普通
+  `NewTool(agent)` 的工具名始终来自被包装 Agent 的 `Info().Name`。
+- `WithTemplateAgent(agent)`：设置动态子 Agent 的模板，常用于固定模型、executor、
+  callbacks、权限策略等执行边界。
+- `WithCapabilityTools(tools)`：设置模型可选择的最大工具集合。未设置时默认从父 Agent
+  本轮有效业务工具派生。显式设置后，这些工具名会被枚举进 `tools` 字段的 schema，模型从
+  已知集合中选择而非猜测字符串（父派生工具面与 `WithCapabilityProvider` 在每次调用时
+  解析，不会在此枚举）。
+- `WithCapabilitySkills(repo)`：设置模型可选择的最大 skill 仓库。未设置时默认从父
+  Agent 本轮有效 skill 仓库派生。
+- `WithExposeToolSelection(false)`：不向模型暴露 `tools` 字段。子 Agent 仍使用代码边界内
+  的工具面，但模型不能进一步收窄。
+- `WithExposeSkillSelection(true)`：向模型暴露 `skills` 字段。默认关闭，因为 skill 是否
+  可执行通常依赖部署环境和 code executor。
+- `WithExposeInstruction(false)`：不向模型暴露 `instruction` 字段。
+- `WithRequestDescription` / `WithInstructionDescription` /
+  `WithToolsDescription` / `WithSkillsDescription`：按业务语义调整字段描述，帮助模型更
+  稳定地填写参数。
+
+使用 `skills` 时需要额外注意 executor 环境。Dynamic AgentTool 会校验模型选择的 skill
+是否在边界仓库中；如果子 Agent 没有可用 code executor，而选中的 skill 可能需要执行代码，
+工具结果会带上提示。生产环境中更推荐在代码侧通过 `WithCapabilitySkills` 和模板 Agent
+先定义清楚可执行范围，再决定是否把 `skills` 字段暴露给模型。
+
+Dynamic AgentTool 与另外两种多 Agent 机制的边界不同：
+
+| 机制 | 模型选择什么 | 生命周期 | 控制权 |
+| --- | --- | --- | --- |
+| `agenttool.NewTool(agent)` | 一个固定的工具入口 | 每次工具调用 | 返回工具结果给父 Agent |
+| `transfer_to_agent` | 一个已注册 sub-agent | 当前轮继续由目标 Agent 处理 | 控制权移交 |
+| `agenttool.NewDynamicTool()` | 本次调用的 `request`、`instruction` 和 tools/skills 子集 | 每次工具调用 | 返回工具结果给父 Agent |
+
+如果同一个专家 Agent 同时通过 `WithSubAgents` 和 `agenttool.NewTool(agent)` 暴露给父
+Agent，模型会看到两条不同路径：`transfer_to_agent` 和普通 AgentTool。框架可以运行，
+但开发者应在 instruction 或工具 description 中明确何时使用哪一种，或者只保留一种入口。
+`dynamic_agent` 子调用内部不会获得 `transfer_to_agent`，但普通 AgentTool 会被视作业务工具；
+如果不希望动态子 Agent 再调用其他 AgentTool，可以用 `WithCapabilityTools` 或运行时
+`ToolFilter` 收窄边界。
+
 ## 工具集成与使用
 
 ### 创建 Agent 与工具集成

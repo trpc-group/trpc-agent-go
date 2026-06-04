@@ -32,6 +32,16 @@ func (m *mockTool) Call(context.Context, []byte) (any, error) {
 	return nil, nil
 }
 
+type nilDeclarationTool struct{}
+
+func (nilDeclarationTool) Declaration() *tool.Declaration {
+	return nil
+}
+
+func (nilDeclarationTool) Call(context.Context, []byte) (any, error) {
+	return nil, nil
+}
+
 func hasToolName(tools []tool.Tool, name string) bool {
 	for _, tl := range tools {
 		if tl.Declaration().Name == name {
@@ -324,6 +334,31 @@ func TestGetFilteredTools_NoFilter(t *testing.T) {
 	if !hasUserTools {
 		t.Fatal("expected cached state to report user tools when the snapshot still includes them")
 	}
+}
+
+func TestGetFilteredTools_NoFilterSkipsInvalidTools(t *testing.T) {
+	f := New(nil, nil, Options{})
+
+	validTool := &mockTool{name: "valid_tool"}
+	mockAgent := &mockAgentWithUserTools{
+		name:      "test-agent",
+		allTools:  []tool.Tool{nil, nilDeclarationTool{}, validTool},
+		userTools: []tool.Tool{nil, nilDeclarationTool{}, validTool},
+	}
+
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.AgentName = "test-agent"
+
+	filtered := f.getFilteredTools(context.Background(), inv)
+
+	require.Len(t, filtered, 1)
+	require.Equal(t, "valid_tool", filtered[0].Declaration().Name)
+
+	snapshot, ok := agent.GetStateValue[[]tool.Tool](inv, stateKeyToolsSnapshot)
+	require.True(t, ok)
+	require.Len(t, snapshot, 1)
+	require.Equal(t, "valid_tool", snapshot[0].Declaration().Name)
 }
 
 func TestGetFilteredTools_CachesFilteredUserToolPresence(t *testing.T) {
@@ -686,6 +721,54 @@ func TestGetFilteredTools_RunOptionToolsDoNotMutateToolSlice(
 	expandedBacking := backing[:cap(backing)]
 	require.Nil(t, expandedBacking[1])
 	require.Nil(t, expandedBacking[2])
+}
+
+func TestGetFilteredTools_ToolActivationApplierReceivesCopies(
+	t *testing.T,
+) {
+	const (
+		registeredToolName = "registered_tool"
+		externalToolName   = "external_tool"
+		activatedToolName  = "activated_tool"
+	)
+	registeredTool := &mockTool{name: registeredToolName}
+	externalTool := &mockTool{name: externalToolName}
+	activatedTool := &mockTool{name: activatedToolName}
+	backing := make([]tool.Tool, 1, 2)
+	backing[0] = registeredTool
+	userToolNames := map[string]bool{registeredToolName: true}
+	f := New(nil, nil, Options{
+		ToolActivationApplier: func(
+			_ context.Context,
+			_ *agent.Invocation,
+			tools []tool.Tool,
+			userNames map[string]bool,
+			externalNames map[string]bool,
+		) ([]tool.Tool, map[string]bool, map[string]bool) {
+			tools = append(tools, activatedTool)
+			userNames[activatedToolName] = true
+			externalNames["unused_external"] = true
+			return tools, userNames, externalNames
+		},
+	})
+	mockAgent := &mockAgentWithInvocationToolSurface{
+		name:          "test-agent",
+		allTools:      backing[:1],
+		userToolNames: userToolNames,
+	}
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.AgentName = "test-agent"
+	inv.RunOptions = agent.NewRunOptions(
+		agent.WithExternalTools([]tool.Tool{externalTool}),
+	)
+	filtered := f.getFilteredTools(context.Background(), inv)
+	require.True(t, hasToolName(filtered, registeredToolName))
+	require.True(t, hasToolName(filtered, externalToolName))
+	require.True(t, hasToolName(filtered, activatedToolName))
+	require.Equal(t, map[string]bool{registeredToolName: true}, userToolNames)
+	require.Nil(t, backing[:cap(backing)][1])
+	require.Equal(t, map[string]bool{externalToolName: true}, inv.RunOptions.ExternalToolNames)
 }
 
 // TestGetFilteredTools_WithExcludeFilter tests tool filtering using exclude filter.
