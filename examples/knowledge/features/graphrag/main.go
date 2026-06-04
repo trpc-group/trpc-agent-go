@@ -80,7 +80,7 @@ var (
 	defaultRepoURL  = "https://github.com/trpc-group/trpc-agent-python"
 	defaultRepoName = "trpc-agent-python"
 	defaultRepoDesc = "The tRPC Agent Python repository used to demonstrate graph RAG over repo source."
-	defaultQuery    = "Find code related to client RPC invocation in trpc-go, traverse its callees, and explain the nearby call graph."
+	defaultQuery    = "Find code related to agent execution in trpc-agent-python, traverse its callees, and explain the nearby call graph."
 	query           = flag.String("query", "", "Optional initial query to ask before entering chat")
 	modelName       = flag.String("model", util.GetEnvOrDefault("MODEL_NAME", "deepseek-chat"), "Model to use")
 	embeddingModel  = flag.String("embedding-model", util.GetEnvOrDefault("EMBEDDING_MODEL", "server:277357"), "Embedding model to use")

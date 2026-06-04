@@ -10,8 +10,10 @@
 package python
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
@@ -261,6 +263,25 @@ func TestParseDirectory_EmptyDir(t *testing.T) {
 	}
 	if len(result.Nodes) != 0 {
 		t.Errorf("expected 0 nodes from empty dir, got %d", len(result.Nodes))
+	}
+}
+
+func TestParseDirectory_ReturnsErrorWhenAnyFileFails(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "good.py"), []byte("class Good:\n    pass\n"), 0644); err != nil {
+		t.Fatalf("write good.py: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bad.py"), []byte("def broken(:\n"), 0644); err != nil {
+		t.Fatalf("write bad.py: %v", err)
+	}
+
+	parser := NewParser()
+	_, err := parser.ParseDirectory(dir)
+	if err == nil {
+		t.Fatal("ParseDirectory() error = nil, want parse error")
+	}
+	if !strings.Contains(err.Error(), "file(s) failed") {
+		t.Fatalf("ParseDirectory() error = %v, want failed file count", err)
 	}
 }
 
