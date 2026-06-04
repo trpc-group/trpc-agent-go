@@ -182,7 +182,8 @@ knowledge/
 │   └── reader/          # Document readers (supports txt/md/csv/json/docx/pdf, etc.)
 ├── query/                # Query enhancers
 │   ├── query.go         # QueryEnhancer interface definition
-│   └── passthrough.go   # Default passthrough enhancer
+│   ├── passthrough.go   # Default passthrough enhancer
+│   └── llm.go           # LLM query rewriting enhancer
 └── ocr/                  # OCR text recognition
     ├── ocr.go           # Extractor interface definition
     └── tesseract/       # Tesseract OCR implementation (separate go.mod)
@@ -400,6 +401,7 @@ To ensure fair comparison, all four systems use identical configurations:
 - [Vector Store](vectorstore/index.md) - Configure various vector database backends
 - [Embedder](embedder.md) - Text vectorization model configuration
 - [Reranker](reranker.md) - Retrieval result reranking
+- [Query Enhancer](query-enhancer.md) - Multi-turn query rewriting and enhancement
 - [Document Sources](source.md) - File, directory, URL, and other knowledge source configuration
 - [OCR Text Recognition](ocr.md) - Configure OCR-based text extraction for images and scanned content
 - [Filters](filter.md) - Basic filters and intelligent filters
