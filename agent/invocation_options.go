@@ -55,7 +55,11 @@ func WithInvocationEndInvocation(endInvocation bool) InvocationOptions {
 // WithInvocationSession set session for the Invocation.
 func WithInvocationSession(session *session.Session) InvocationOptions {
 	return func(inv *Invocation) {
+		oldSession := inv.Session
 		inv.Session = session
+		if oldSession != session {
+			inv.DeleteState(liveSessionStateKey)
+		}
 	}
 }
 
