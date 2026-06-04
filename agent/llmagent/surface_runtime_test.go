@@ -604,8 +604,8 @@ func TestLLMAgent_InvocationCapabilityAccessors(t *testing.T) {
 		)),
 	)
 
-	require.Same(t, repo, agt.InvocationSkillRepository(inv))
-	require.Same(t, runExec, agt.InvocationCodeExecutor(inv))
+	require.Same(t, repo, agt.InvocationSkillRepository(context.Background(), inv))
+	require.Same(t, runExec, agt.InvocationCodeExecutor(context.Background(), inv))
 
 	var opts Options
 	for _, opt := range agt.InvocationKnowledgeOptions(inv) {
@@ -620,13 +620,13 @@ func TestLLMAgent_InvocationCapabilityAccessors(t *testing.T) {
 
 func TestLLMAgent_InvocationCapabilityAccessors_NilAndEmpty(t *testing.T) {
 	var nilAgent *LLMAgent
-	require.Nil(t, nilAgent.InvocationSkillRepository(nil))
-	require.Nil(t, nilAgent.InvocationCodeExecutor(nil))
+	require.Nil(t, nilAgent.InvocationSkillRepository(context.Background(), nil))
+	require.Nil(t, nilAgent.InvocationCodeExecutor(context.Background(), nil))
 	require.Nil(t, nilAgent.InvocationKnowledgeOptions(nil))
 
 	agt := New("test-agent", WithModel(newDummyModel()))
-	require.Nil(t, agt.InvocationSkillRepository(nil))
-	require.Nil(t, agt.InvocationCodeExecutor(nil))
+	require.Nil(t, agt.InvocationSkillRepository(context.Background(), nil))
+	require.Nil(t, agt.InvocationCodeExecutor(context.Background(), nil))
 	require.Nil(t, agt.InvocationKnowledgeOptions(nil))
 }
 
