@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
-	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolsurface"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -1426,30 +1426,6 @@ func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
 	return threshold
 }
 
-// UserToolsProvider is an optional interface that agents can implement to expose
-// which tools were explicitly registered by the user (WithTools, WithToolSets)
-// vs framework-added tools (Knowledge, SubAgents).
-//
-// User tools are subject to filtering via WithToolFilter.
-// Framework tools are never filtered and always available to the agent.
-type UserToolsProvider interface {
-	UserTools() []tool.Tool
-}
-
-// ToolFilterProvider is an optional interface that agents can implement to provide
-type ToolFilterProvider interface {
-	FilterTools(ctx context.Context) []tool.Tool
-}
-
-// InvocationToolSurfaceProvider is an optional interface that exposes
-// invocation-scoped tools and user-tool classification.
-type InvocationToolSurfaceProvider interface {
-	InvocationToolSurface(
-		ctx context.Context,
-		invocation *agent.Invocation,
-	) ([]tool.Tool, map[string]bool)
-}
-
 // getFilteredTools returns the list of tools for this invocation after applying the filter.
 //
 // User tools (can be filtered):
@@ -1470,36 +1446,12 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 		return cached
 	}
 
-	var allTools []tool.Tool
-	var userToolNames map[string]bool
-	hasUserToolTracking := false
-	if provider, ok := invocation.Agent.(InvocationToolSurfaceProvider); ok {
-		allTools, userToolNames = provider.InvocationToolSurface(
-			ctx,
-			invocation,
-		)
-		hasUserToolTracking = userToolNames != nil
-	} else if provider, ok := invocation.Agent.(ToolFilterProvider); ok {
-		allTools = provider.FilterTools(ctx)
-	} else {
-		allTools = invocation.Agent.Tools()
-	}
-
-	// Get user tools (if the agent supports it).
-	// User tools are those explicitly registered via WithTools and
-	// WithToolSets. Framework tools (Knowledge, SubAgents) are never filtered.
-	if invocation.RunOptions.ToolFilter != nil && !hasUserToolTracking {
-		if provider, ok := invocation.Agent.(UserToolsProvider); ok {
-			userTools := provider.UserTools()
-			hasUserToolTracking = true
-			userToolNames = make(map[string]bool, len(userTools))
-			for _, t := range userTools {
-				userToolNames[t.Declaration().Name] = true
-			}
-		}
-	}
+	allTools, userToolNames, hasUserToolTracking := toolsurface.ResolveBase(
+		ctx,
+		invocation,
+	)
 	allTools, userToolNames, hasUserToolTracking, externalToolNames :=
-		appendRunOptionTools(
+		toolsurface.AppendRunOptionTools(
 			allTools,
 			userToolNames,
 			hasUserToolTracking,
@@ -1526,6 +1478,7 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 
 	// If no filter is specified, return all tools for this invocation.
 	if invocation.RunOptions.ToolFilter == nil {
+		allTools = sanitizeTools(allTools)
 		setVisibleExternalToolNames(invocation, allTools, externalToolNames)
 		toolsnapshot.Set(
 			invocation,
@@ -1535,33 +1488,16 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 		return allTools
 	}
 
-	// Apply the filter function to each tool.
-	// Framework tools are never filtered.
-	filtered := make([]tool.Tool, 0, len(allTools))
-	for _, t := range allTools {
-		toolName := t.Declaration().Name
-
-		// Determine if this is a user tool or framework tool.
-		isUserTool := !hasUserToolTracking || userToolNames[toolName]
-
-		// Framework tools are always included (never filtered).
-		if !isUserTool {
-			filtered = append(filtered, t)
-			continue
-		}
-
-		// User tool: apply the filter function.
-		if invocation.RunOptions.ToolFilter(ctx, t) {
-			filtered = append(filtered, t)
-		}
-	}
-
-	// Sort tools by name to ensure stable order for better prompt cache hit rate.
-	// Map iteration order is random in Go, so sorting ensures consistent tool ordering
-	// across requests, which improves cache efficiency.
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].Declaration().Name < filtered[j].Declaration().Name
-	})
+	// Framework tools are never filtered; user tools must pass the run-scoped
+	// filter. Shared via toolsurface so getFilteredTools and the dynamic tool's
+	// surface derivation stay in lockstep.
+	filtered := toolsurface.ApplyToolFilter(
+		ctx,
+		allTools,
+		userToolNames,
+		hasUserToolTracking,
+		invocation.RunOptions,
+	)
 
 	setVisibleExternalToolNames(invocation, filtered, externalToolNames)
 	toolsnapshot.Set(
@@ -1573,90 +1509,17 @@ func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocatio
 	return filtered
 }
 
-func appendRunOptionTools(
-	allTools []tool.Tool,
-	userToolNames map[string]bool,
-	hasUserToolTracking bool,
-	opts agent.RunOptions,
-) ([]tool.Tool, map[string]bool, bool, map[string]bool) {
-	if len(opts.AdditionalTools) == 0 && len(opts.ExternalTools) == 0 {
-		return allTools, userToolNames, hasUserToolTracking, nil
+func sanitizeTools(tools []tool.Tool) []tool.Tool {
+	if len(tools) == 0 {
+		return nil
 	}
-	allTools = append([]tool.Tool(nil), allTools...)
-	if hasUserToolTracking {
-		userToolNames = copyToolNames(userToolNames)
-	}
-	serverNames := collectToolNames(allTools)
-	seen := copyToolNames(serverNames)
-	allTools, userToolNames = appendRunOptionToolList(
-		allTools,
-		userToolNames,
-		hasUserToolTracking,
-		seen,
-		opts.AdditionalTools,
-	)
-	externalNames := make(map[string]bool, len(opts.ExternalTools))
-	for _, tl := range opts.ExternalTools {
-		name := toolName(tl)
-		if name == "" || serverNames[name] {
-			continue
-		}
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		allTools = append(allTools, tl)
-		externalNames[name] = true
-		if hasUserToolTracking {
-			if userToolNames == nil {
-				userToolNames = make(map[string]bool)
-			}
-			userToolNames[name] = true
-		}
-	}
-	return allTools, userToolNames, hasUserToolTracking, externalNames
-}
-
-func appendRunOptionToolList(
-	allTools []tool.Tool,
-	userToolNames map[string]bool,
-	hasUserToolTracking bool,
-	seen map[string]bool,
-	tools []tool.Tool,
-) ([]tool.Tool, map[string]bool) {
+	out := make([]tool.Tool, 0, len(tools))
 	for _, tl := range tools {
-		name := toolName(tl)
-		if name == "" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		allTools = append(allTools, tl)
-		if hasUserToolTracking {
-			if userToolNames == nil {
-				userToolNames = make(map[string]bool)
-			}
-			userToolNames[name] = true
+		if toolName(tl) != "" {
+			out = append(out, tl)
 		}
 	}
-	return allTools, userToolNames
-}
-
-func collectToolNames(tools []tool.Tool) map[string]bool {
-	names := make(map[string]bool, len(tools))
-	for _, tl := range tools {
-		if name := toolName(tl); name != "" {
-			names[name] = true
-		}
-	}
-	return names
-}
-
-func copyToolNames(src map[string]bool) map[string]bool {
-	dst := make(map[string]bool, len(src))
-	for name, ok := range src {
-		dst[name] = ok
-	}
-	return dst
+	return out
 }
 
 func setVisibleExternalToolNames(
