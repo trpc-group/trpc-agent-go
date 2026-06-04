@@ -17,6 +17,7 @@ nav:
           - Custom Agent: custom-agent.md
           - Dify Agent: dify.md
           - Claude Code Agent: claudecode.md
+          - Codex Agent: codex.md
       - Runner: runner.md
       - Code Executor: codeexecutor.md
       - Error Handling: error-handling.md
@@ -101,6 +102,7 @@ plugins:
                     - 自定义 Agent: custom-agent.md
                     - Dify Agent: dify.md
                     - Claude Code Agent: claudecode.md
+                    - Codex Agent: codex.md
                 - Runner: runner.md
                 - Code Executor: codeexecutor.md
                 - 错误处理: error-handling.md
