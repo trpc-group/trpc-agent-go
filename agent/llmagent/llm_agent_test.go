@@ -1019,6 +1019,28 @@ func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 		)
 	})
 
+	t.Run("with activatable toolsets", func(t *testing.T) {
+		toolset := dummyToolSet{name: "activatable"}
+		require.NotPanics(t, func() {
+			_ = New("test",
+				WithOutputSchema(schema),
+				WithActivatableToolSets([]tool.ToolSet{toolset}),
+			)
+		})
+	})
+
+	t.Run("with tool activation rules", func(t *testing.T) {
+		require.PanicsWithValue(t,
+			"Invalid LLMAgent configuration: if output_schema is set, tool activation rules must be empty",
+			func() {
+				_ = New("test",
+					WithOutputSchema(schema),
+					WithToolActivationOnSkillLoad("research", []string{"activatable"}),
+				)
+			},
+		)
+	})
+
 	// A hook-only extension (Register that never calls r.Tools)
 	// leaves extensionContributedTools empty and must remain
 	// compatible with WithOutputSchema — the guard reaches the
