@@ -316,6 +316,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/ocr/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/knowledge/query-enhancer/</loc>
+        <lastmod>2026-06-04</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/knowledge/query-enhancer/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/query-enhancer/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/knowledge/reranker/</loc>
         <lastmod>2026-06-04</lastmod>
         <changefreq>daily</changefreq>
@@ -769,6 +776,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/ocr/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/knowledge/ocr/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/knowledge/query-enhancer/</loc>
+        <lastmod>2026-06-04</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/query-enhancer/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/knowledge/query-enhancer/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/knowledge/reranker/</loc>

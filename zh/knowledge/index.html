@@ -1679,6 +1679,29 @@
   
   
     <li class="md-nav__item">
+      <a href="query-enhancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query Enhancer
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="source/" class="md-nav__link">
         
   
@@ -1805,10 +1828,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14_9" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14_10" >
         
           
-          <label class="md-nav__link" for="__nav_2_14_9" id="__nav_2_14_9_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_14_10" id="__nav_2_14_10_label" tabindex="0">
             
   
   
@@ -1821,8 +1844,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_14_9_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_14_9">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_14_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_14_10">
             <span class="md-nav__icon md-icon"></span>
             向量存储
           </label>
@@ -3079,7 +3102,8 @@
 <span class="normal"><a href="#__codelineno-2-40">40</a></span>
 <span class="normal"><a href="#__codelineno-2-41">41</a></span>
 <span class="normal"><a href="#__codelineno-2-42">42</a></span>
-<span class="normal"><a href="#__codelineno-2-43">43</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>knowledge/
+<span class="normal"><a href="#__codelineno-2-43">43</a></span>
+<span class="normal"><a href="#__codelineno-2-44">44</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>knowledge/
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a>├── knowledge.go          # 核心接口定义和主要实现
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a>├── source/               # 文档源管理
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a>│   ├── source.go        # Source 接口定义
@@ -3118,10 +3142,11 @@
 </span><span id="__span-2-37"><a id="__codelineno-2-37" name="__codelineno-2-37"></a>│   └── reader/          # 文档读取器（支持 txt/md/csv/json/docx/pdf 等格式）
 </span><span id="__span-2-38"><a id="__codelineno-2-38" name="__codelineno-2-38"></a>├── query/                # 查询增强器
 </span><span id="__span-2-39"><a id="__codelineno-2-39" name="__codelineno-2-39"></a>│   ├── query.go         # QueryEnhancer 接口定义
-</span><span id="__span-2-40"><a id="__codelineno-2-40" name="__codelineno-2-40"></a>│   └── passthrough.go   # 默认透传增强器
-</span><span id="__span-2-41"><a id="__codelineno-2-41" name="__codelineno-2-41"></a>└── ocr/                  # OCR 文字识别
-</span><span id="__span-2-42"><a id="__codelineno-2-42" name="__codelineno-2-42"></a>    ├── ocr.go           # Extractor 接口定义
-</span><span id="__span-2-43"><a id="__codelineno-2-43" name="__codelineno-2-43"></a>    └── tesseract/       # Tesseract OCR 实现（独立 go.mod）
+</span><span id="__span-2-40"><a id="__codelineno-2-40" name="__codelineno-2-40"></a>│   ├── passthrough.go   # 默认透传增强器
+</span><span id="__span-2-41"><a id="__codelineno-2-41" name="__codelineno-2-41"></a>│   └── llm.go           # LLM 查询改写增强器
+</span><span id="__span-2-42"><a id="__codelineno-2-42" name="__codelineno-2-42"></a>└── ocr/                  # OCR 文字识别
+</span><span id="__span-2-43"><a id="__codelineno-2-43" name="__codelineno-2-43"></a>    ├── ocr.go           # Extractor 接口定义
+</span><span id="__span-2-44"><a id="__codelineno-2-44" name="__codelineno-2-44"></a>    └── tesseract/       # Tesseract OCR 实现（独立 go.mod）
 </span></code></pre></div></td></tr></table></div>
 <h2 id="agent_1">与 Agent 集成</h2>
 <p>Knowledge 系统提供了搜索工具，可以将知识库能力集成到 Agent 中。</p>
@@ -3524,6 +3549,7 @@
 <li><a href="vectorstore/">向量存储</a> - 配置各种向量数据库后端</li>
 <li><a href="embedder/">Embedder</a> - 文本向量化模型配置</li>
 <li><a href="reranker/">Reranker</a> - 检索结果精排</li>
+<li><a href="query-enhancer/">Query Enhancer</a> - 多轮对话查询改写与增强</li>
 <li><a href="source/">文档源</a> - 文件、目录、URL 等知识来源配置</li>
 <li><a href="extractor/">Extractor 内容提取</a> - 复杂文档和网页转 Markdown / 文本</li>
 <li><a href="ocr/">OCR 图片文字识别</a> - 配置 Tesseract OCR 提取文本</li>
@@ -3553,7 +3579,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年4月10日 07:58:56 UTC">2026-04-10 07:58:56</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月4日 08:07:26 UTC">2026-06-04 08:07:26</span>
   </span>
 
     

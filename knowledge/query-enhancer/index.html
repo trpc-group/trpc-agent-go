@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/knowledge/vectorstore/milvus/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/knowledge/query-enhancer/">
       
       
-        <link rel="prev" href="../qdrant/">
+        <link rel="prev" href="../reranker/">
       
       
-        <link rel="next" href="../../troubleshooting/">
+        <link rel="next" href="../source/">
       
       
-      <link rel="icon" href="../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
     
     
       
-        <title>Milvus - tRPC-Agent-Go</title>
+        <title>Query Enhancer - tRPC-Agent-Go</title>
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/main.7e37652d.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
       
         
-        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -48,9 +48,9 @@
       
     
     
-      <link rel="stylesheet" href="../../../assets/stylesheets/extra.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
     
-    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
   
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#milvus" class="md-skip">
+        <a href="#query-enhancer" class="md-skip">
           Skip to content
         </a>
       
@@ -100,9 +100,9 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../.." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href="../.." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../../assets/img/logo.png" alt="logo">
+  <img src="../../assets/img/logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Milvus
+              Query Enhancer
             
           </span>
         </div>
@@ -172,7 +172,7 @@
           </li>
         
           <li class="md-select__item">
-            <a href="../../../zh/knowledge/vectorstore/milvus/" hreflang="zh" class="md-select__link">
+            <a href="../../zh/knowledge/query-enhancer/" hreflang="zh" class="md-select__link">
               中文
             </a>
           </li>
@@ -263,7 +263,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../.." class="md-tabs__link">
+      <a href="../.." class="md-tabs__link">
         
   
   
@@ -295,7 +295,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../../agent/" class="md-tabs__link">
+        <a href="../../agent/" class="md-tabs__link">
           
   
   
@@ -318,7 +318,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../gateway/" class="md-tabs__link">
+        <a href="../../gateway/" class="md-tabs__link">
           
   
   
@@ -338,7 +338,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../observability/" class="md-tabs__link">
+        <a href="../../observability/" class="md-tabs__link">
           
   
   
@@ -356,7 +356,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../../ecosystem/" class="md-tabs__link">
+      <a href="../../ecosystem/" class="md-tabs__link">
         
   
   
@@ -391,9 +391,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../.." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href="../.." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../../assets/img/logo.png" alt="logo">
+  <img src="../../assets/img/logo.png" alt="logo">
 
     </a>
     tRPC-Agent-Go
@@ -420,7 +420,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../.." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -529,7 +529,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agent/" class="md-nav__link">
+      <a href="../../agent/" class="md-nav__link">
         
   
   
@@ -552,7 +552,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../multiagent/" class="md-nav__link">
+      <a href="../../multiagent/" class="md-nav__link">
         
   
   
@@ -575,7 +575,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../taskrun/" class="md-nav__link">
+      <a href="../../taskrun/" class="md-nav__link">
         
   
   
@@ -598,7 +598,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../team/" class="md-nav__link">
+      <a href="../../team/" class="md-nav__link">
         
   
   
@@ -621,7 +621,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../graph/" class="md-nav__link">
+      <a href="../../graph/" class="md-nav__link">
         
   
   
@@ -644,7 +644,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../custom-agent/" class="md-nav__link">
+      <a href="../../custom-agent/" class="md-nav__link">
         
   
   
@@ -667,7 +667,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../dify/" class="md-nav__link">
+      <a href="../../dify/" class="md-nav__link">
         
   
   
@@ -690,7 +690,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../claudecode/" class="md-nav__link">
+      <a href="../../claudecode/" class="md-nav__link">
         
   
   
@@ -713,7 +713,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../codex/" class="md-nav__link">
+      <a href="../../codex/" class="md-nav__link">
         
   
   
@@ -744,7 +744,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../runner/" class="md-nav__link">
+      <a href="../../runner/" class="md-nav__link">
         
   
   
@@ -767,7 +767,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../codeexecutor/" class="md-nav__link">
+      <a href="../../codeexecutor/" class="md-nav__link">
         
   
   
@@ -790,7 +790,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../error-handling/" class="md-nav__link">
+      <a href="../../error-handling/" class="md-nav__link">
         
   
   
@@ -813,7 +813,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../model/" class="md-nav__link">
+      <a href="../../model/" class="md-nav__link">
         
   
   
@@ -836,7 +836,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../prompt/" class="md-nav__link">
+      <a href="../../prompt/" class="md-nav__link">
         
   
   
@@ -859,7 +859,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../callbacks/" class="md-nav__link">
+      <a href="../../callbacks/" class="md-nav__link">
         
   
   
@@ -882,7 +882,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../plugin/" class="md-nav__link">
+      <a href="../../plugin/" class="md-nav__link">
         
   
   
@@ -905,7 +905,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../memory/" class="md-nav__link">
+      <a href="../../memory/" class="md-nav__link">
         
   
   
@@ -928,7 +928,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../artifact/" class="md-nav__link">
+      <a href="../../artifact/" class="md-nav__link">
         
   
   
@@ -951,7 +951,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../skill/" class="md-nav__link">
+      <a href="../../skill/" class="md-nav__link">
         
   
   
@@ -974,7 +974,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../tool/" class="md-nav__link">
+      <a href="../../tool/" class="md-nav__link">
         
   
   
@@ -1038,7 +1038,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/" class="md-nav__link">
+      <a href="../../session/" class="md-nav__link">
         
   
   
@@ -1061,7 +1061,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/summary/" class="md-nav__link">
+      <a href="../../session/summary/" class="md-nav__link">
         
   
   
@@ -1084,7 +1084,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/inmemory/" class="md-nav__link">
+      <a href="../../session/inmemory/" class="md-nav__link">
         
   
   
@@ -1107,7 +1107,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/sqlite/" class="md-nav__link">
+      <a href="../../session/sqlite/" class="md-nav__link">
         
   
   
@@ -1130,7 +1130,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/redis/" class="md-nav__link">
+      <a href="../../session/redis/" class="md-nav__link">
         
   
   
@@ -1153,7 +1153,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/mysql/" class="md-nav__link">
+      <a href="../../session/mysql/" class="md-nav__link">
         
   
   
@@ -1176,7 +1176,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/tdsql/" class="md-nav__link">
+      <a href="../../session/tdsql/" class="md-nav__link">
         
   
   
@@ -1199,7 +1199,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/postgres/" class="md-nav__link">
+      <a href="../../session/postgres/" class="md-nav__link">
         
   
   
@@ -1222,7 +1222,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/pgvector/" class="md-nav__link">
+      <a href="../../session/pgvector/" class="md-nav__link">
         
   
   
@@ -1245,7 +1245,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/clickhouse/" class="md-nav__link">
+      <a href="../../session/clickhouse/" class="md-nav__link">
         
   
   
@@ -1319,256 +1319,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../../" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Overview
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../embedder/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Embedder
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reranker/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Reranker
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../query-enhancer/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Query Enhancer
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../source/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Source
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../filter/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Filter
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../extractor/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Extractor
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../management/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Management
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../ocr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    OCR
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-    
-  
-  
-  
-    
-    
-    
-    
-      
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14_10" checked>
-        
-          
-          <label class="md-nav__link" for="__nav_2_14_10" id="__nav_2_14_10_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    VectorStore
-    
-  </span>
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_14_10_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_2_14_10">
-            <span class="md-nav__icon md-icon"></span>
-            VectorStore
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../" class="md-nav__link">
         
   
@@ -1592,12 +1342,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../inmemory/" class="md-nav__link">
+      <a href="../embedder/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Memory
+    Embedder
     
   </span>
   
@@ -1615,81 +1365,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../pgvector/" class="md-nav__link">
+      <a href="../reranker/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    PGVector
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../tcvector/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    TcVector
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../elasticsearch/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Elasticsearch
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../qdrant/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Qdrant
+    Reranker
     
   </span>
   
@@ -1721,7 +1402,7 @@
   
   
   <span class="md-ellipsis">
-    Milvus
+    Query Enhancer
     
   </span>
   
@@ -1734,7 +1415,7 @@
   
   
   <span class="md-ellipsis">
-    Milvus
+    Query Enhancer
     
   </span>
   
@@ -1757,64 +1438,70 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#basic-configuration" class="md-nav__link">
+  <a href="#why-query-enhancer" class="md-nav__link">
     <span class="md-ellipsis">
-      Basic Configuration
+      Why Query Enhancer
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-options" class="md-nav__link">
+  <a href="#when-do-you-need-a-query-enhancer" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Options
+      When Do You Need a Query Enhancer
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration Options">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inject-into-knowledge" class="md-nav__link">
+    <span class="md-ellipsis">
+      Inject into Knowledge
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#supported-enhancers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Supported Enhancers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Supported Enhancers">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#connection-configuration" class="md-nav__link">
+  <a href="#llmenhancer-llm-rewriting" class="md-nav__link">
     <span class="md-ellipsis">
-      Connection Configuration
+      LLMEnhancer (LLM rewriting)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="LLMEnhancer (LLM rewriting)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#custom-system-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom System Prompt
     </span>
   </a>
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#collection-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Collection Configuration
-    </span>
-  </a>
+      </ul>
+    </nav>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#index-configuration" class="md-nav__link">
+  <a href="#passthroughenhancer-no-op" class="md-nav__link">
     <span class="md-ellipsis">
-      Index Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#search-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Search Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#field-mapping-advanced" class="md-nav__link">
-    <span class="md-ellipsis">
-      Field Mapping (Advanced)
+      PassthroughEnhancer (no-op)
     </span>
   </a>
   
@@ -1826,18 +1513,51 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#similarity-metric-types" class="md-nav__link">
+  <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
-      Similarity Metric Types
+      How it Works
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it Works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automatic-session-history-extraction" class="md-nav__link">
+    <span class="md-ellipsis">
+      Automatic Session History Extraction
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#filter-only-optimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Filter-only Optimization
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-enhancer" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom Enhancer
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#usage-example" class="md-nav__link">
+  <a href="#notes" class="md-nav__link">
     <span class="md-ellipsis">
-      Usage Example
+      Notes
     </span>
   </a>
   
@@ -1847,6 +1567,323 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Source
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Filter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../extractor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Extractor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Management
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ocr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OCR
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_14_10" id="__nav_2_14_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    VectorStore
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_14_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_14_10">
+            <span class="md-nav__icon md-icon"></span>
+            VectorStore
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/tcvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TcVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/elasticsearch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Elasticsearch
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/qdrant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Qdrant
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/milvus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Milvus
+    
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -1867,7 +1904,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../troubleshooting/" class="md-nav__link">
+      <a href="../troubleshooting/" class="md-nav__link">
         
   
   
@@ -1898,7 +1935,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../planner/" class="md-nav__link">
+      <a href="../../planner/" class="md-nav__link">
         
   
   
@@ -1921,7 +1958,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../event/" class="md-nav__link">
+      <a href="../../event/" class="md-nav__link">
         
   
   
@@ -1944,7 +1981,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../evaluation/" class="md-nav__link">
+      <a href="../../evaluation/" class="md-nav__link">
         
   
   
@@ -1967,7 +2004,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../promptiter/" class="md-nav__link">
+      <a href="../../promptiter/" class="md-nav__link">
         
   
   
@@ -2038,7 +2075,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../gateway/" class="md-nav__link">
+      <a href="../../gateway/" class="md-nav__link">
         
   
   
@@ -2102,7 +2139,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agui/" class="md-nav__link">
+      <a href="../../agui/" class="md-nav__link">
         
   
   
@@ -2125,7 +2162,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agui/chat/" class="md-nav__link">
+      <a href="../../agui/chat/" class="md-nav__link">
         
   
   
@@ -2148,7 +2185,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agui/history/" class="md-nav__link">
+      <a href="../../agui/history/" class="md-nav__link">
         
   
   
@@ -2171,7 +2208,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agui/cancel/" class="md-nav__link">
+      <a href="../../agui/cancel/" class="md-nav__link">
         
   
   
@@ -2202,7 +2239,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../a2a/" class="md-nav__link">
+      <a href="../../a2a/" class="md-nav__link">
         
   
   
@@ -2225,7 +2262,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../a2ui/" class="md-nav__link">
+      <a href="../../a2ui/" class="md-nav__link">
         
   
   
@@ -2248,7 +2285,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../openclaw-runtime/" class="md-nav__link">
+      <a href="../../openclaw-runtime/" class="md-nav__link">
         
   
   
@@ -2319,7 +2356,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../observability/" class="md-nav__link">
+      <a href="../../observability/" class="md-nav__link">
         
   
   
@@ -2342,7 +2379,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../telemetry-multimodal/" class="md-nav__link">
+      <a href="../../telemetry-multimodal/" class="md-nav__link">
         
   
   
@@ -2372,7 +2409,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../ecosystem/" class="md-nav__link">
+      <a href="../../ecosystem/" class="md-nav__link">
         
   
   
@@ -2414,64 +2451,70 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#basic-configuration" class="md-nav__link">
+  <a href="#why-query-enhancer" class="md-nav__link">
     <span class="md-ellipsis">
-      Basic Configuration
+      Why Query Enhancer
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-options" class="md-nav__link">
+  <a href="#when-do-you-need-a-query-enhancer" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Options
+      When Do You Need a Query Enhancer
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration Options">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inject-into-knowledge" class="md-nav__link">
+    <span class="md-ellipsis">
+      Inject into Knowledge
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#supported-enhancers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Supported Enhancers
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Supported Enhancers">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#connection-configuration" class="md-nav__link">
+  <a href="#llmenhancer-llm-rewriting" class="md-nav__link">
     <span class="md-ellipsis">
-      Connection Configuration
+      LLMEnhancer (LLM rewriting)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="LLMEnhancer (LLM rewriting)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#custom-system-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom System Prompt
     </span>
   </a>
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#collection-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Collection Configuration
-    </span>
-  </a>
+      </ul>
+    </nav>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#index-configuration" class="md-nav__link">
+  <a href="#passthroughenhancer-no-op" class="md-nav__link">
     <span class="md-ellipsis">
-      Index Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#search-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Search Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#field-mapping-advanced" class="md-nav__link">
-    <span class="md-ellipsis">
-      Field Mapping (Advanced)
+      PassthroughEnhancer (no-op)
     </span>
   </a>
   
@@ -2483,18 +2526,51 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#similarity-metric-types" class="md-nav__link">
+  <a href="#how-it-works" class="md-nav__link">
     <span class="md-ellipsis">
-      Similarity Metric Types
+      How it Works
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="How it Works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automatic-session-history-extraction" class="md-nav__link">
+    <span class="md-ellipsis">
+      Automatic Session History Extraction
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#filter-only-optimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Filter-only Optimization
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#custom-enhancer" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom Enhancer
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#usage-example" class="md-nav__link">
+  <a href="#notes" class="md-nav__link">
     <span class="md-ellipsis">
-      Usage Example
+      Notes
     </span>
   </a>
   
@@ -2516,7 +2592,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/knowledge/vectorstore/milvus.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/knowledge/query-enhancer.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2525,269 +2601,258 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/knowledge/vectorstore/milvus.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/knowledge/query-enhancer.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="milvus">Milvus</h1>
+<h1 id="query-enhancer">Query Enhancer</h1>
 <blockquote>
-<p><strong>Example Code</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/milvus">examples/knowledge/vectorstores/milvus</a></p>
+<p><strong>Example Code</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/query-enhancer">examples/knowledge/query-enhancer</a></p>
 </blockquote>
-<p><a href="https://milvus.io/">Milvus</a> is a high-performance vector database designed for billion-scale vector search scenarios.</p>
-<h2 id="basic-configuration">Basic Configuration</h2>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-0-10">10</a></span>
-<span class="normal"><a href="#__codelineno-0-11">11</a></span>
-<span class="normal"><a href="#__codelineno-0-12">12</a></span>
-<span class="normal"><a href="#__codelineno-0-13">13</a></span>
-<span class="normal"><a href="#__codelineno-0-14">14</a></span>
-<span class="normal"><a href="#__codelineno-0-15">15</a></span>
-<span class="normal"><a href="#__codelineno-0-16">16</a></span>
-<span class="normal"><a href="#__codelineno-0-17">17</a></span>
-<span class="normal"><a href="#__codelineno-0-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus&quot;</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="p">)</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="nx">milvusVS</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithAddress</span><span class="p">(</span><span class="s">&quot;localhost:19530&quot;</span><span class="p">),</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithCollectionName</span><span class="p">(</span><span class="s">&quot;my_documents&quot;</span><span class="p">),</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="p">)</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="c1">// Handle error</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="p">}</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">milvusVS</span><span class="p">),</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="p">)</span>
+<p>Query Enhancer rewrites and optimizes user queries before retrieval, improving search quality in multi-turn conversations. It is injected via <code>knowledge.WithQueryEnhancer</code>.</p>
+<h2 id="why-query-enhancer">Why Query Enhancer</h2>
+<p>In multi-turn conversations, follow-up questions often contain pronouns or omissions that perform poorly in vector search:</p>
+<table>
+<thead>
+<tr>
+<th>Turn</th>
+<th>User Query</th>
+<th>What the retriever sees</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>"What are Large Language Models?"</td>
+<td><code>What are Large Language Models?</code> — fine</td>
+</tr>
+<tr>
+<td>2</td>
+<td>"How does <strong>it</strong> handle context length?"</td>
+<td><code>How does it handle context length?</code> — "it" is meaningless</td>
+</tr>
+<tr>
+<td>3</td>
+<td>"Compare <strong>the above</strong> with traditional search"</td>
+<td><code>Compare the above with traditional search</code> — "the above" is lost</td>
+</tr>
+</tbody>
+</table>
+<p>Query Enhancer uses an LLM and conversation history to rewrite these ambiguous queries into standalone, retrieval-optimized queries.</p>
+<h2 id="when-do-you-need-a-query-enhancer">When Do You Need a Query Enhancer</h2>
+<p>In the default <strong>Agentic RAG</strong> scenario (Knowledge used as an Agent tool), the Agent's LLM already constructs tool call arguments based on conversation context, implicitly performing a degree of query rewriting. In this case, a Query Enhancer is <strong>usually not necessary</strong>.</p>
+<p>Query Enhancer is most useful in the following scenarios:</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Standalone retrieval (non-agentic)</strong></td>
+<td>Calling <code>kb.Search()</code> directly without an Agent LLM to rewrite queries</td>
+</tr>
+<tr>
+<td><strong>Embedding model struggles with conversational queries</strong></td>
+<td>The embedding model is optimized for keywords/short text and needs natural language converted to concise queries</td>
+</tr>
+<tr>
+<td><strong>Specialized strategies like HyDE</strong></td>
+<td>Need the LLM to generate a hypothetical answer first, then use its embedding for retrieval</td>
+</tr>
+<tr>
+<td><strong>Weak Agent LLM query construction</strong></td>
+<td>Some smaller LLMs may lose context when constructing tool call arguments</td>
+</tr>
+</tbody>
+</table>
+<p>In short: <strong>if retrieval quality already meets your needs in an Agentic RAG setup, you do not need to configure a Query Enhancer.</strong></p>
+<h2 id="inject-into-knowledge">Inject into Knowledge</h2>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span>
+<span class="normal"><a href="#__codelineno-0-5">5</a></span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithQueryEnhancer</span><span class="p">(</span><span class="nx">enhancer</span><span class="p">),</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="c1">// ... other configurations (VectorStore, Embedder, Sources, etc.)</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="configuration-options">Configuration Options</h2>
-<h3 id="connection-configuration">Connection Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Description</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithAddress(address)</code></td>
-<td>Milvus server address</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithUsername(username)</code></td>
-<td>Username</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithPassword(password)</code></td>
-<td>Password</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithDBName(dbName)</code></td>
-<td>Database name</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithAPIKey(apiKey)</code></td>
-<td>API Key authentication</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithDialOptions(opts...)</code></td>
-<td>gRPC connection options</td>
-<td><code>Timeout=5s</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="collection-configuration">Collection Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Description</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithCollectionName(name)</code></td>
-<td>Collection name</td>
-<td><code>"trpc_agent_documents"</code></td>
-</tr>
-<tr>
-<td><code>WithDimension(dim)</code></td>
-<td>Vector dimension</td>
-<td><code>1536</code></td>
-</tr>
-<tr>
-<td><code>WithMetricType(type)</code></td>
-<td>Similarity metric type (IP/L2/COSINE)</td>
-<td><code>entity.IP</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="index-configuration">Index Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Description</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithHNSWParams(m, efConstruction)</code></td>
-<td>HNSW index parameters</td>
-<td><code>M=16, EfConstruction=128</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="search-configuration">Search Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Description</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithMaxResults(max)</code></td>
-<td>Default number of search results</td>
-<td><code>10</code></td>
-</tr>
-<tr>
-<td><code>WithReranker(reranker)</code></td>
-<td>Set reranker</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithDocBuilder(builder)</code></td>
-<td>Custom document builder method</td>
-<td>Default builder</td>
-</tr>
-</tbody>
-</table>
-<h3 id="field-mapping-advanced">Field Mapping (Advanced)</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Description</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithIDField(field)</code></td>
-<td>ID field name</td>
-<td><code>"id"</code></td>
-</tr>
-<tr>
-<td><code>WithNameField(field)</code></td>
-<td>Name field name</td>
-<td><code>"name"</code></td>
-</tr>
-<tr>
-<td><code>WithContentField(field)</code></td>
-<td>Content field name</td>
-<td><code>"content"</code></td>
-</tr>
-<tr>
-<td><code>WithVectorField(field)</code></td>
-<td>Vector field name</td>
-<td><code>"vector"</code></td>
-</tr>
-<tr>
-<td><code>WithMetadataField(field)</code></td>
-<td>Metadata field name</td>
-<td><code>"metadata"</code></td>
-</tr>
-<tr>
-<td><code>WithCreatedAtField(field)</code></td>
-<td>Created time field name</td>
-<td><code>"created_at"</code></td>
-</tr>
-<tr>
-<td><code>WithUpdatedAtField(field)</code></td>
-<td>Updated time field name</td>
-<td><code>"updated_at"</code></td>
-</tr>
-</tbody>
-</table>
-<h2 id="similarity-metric-types">Similarity Metric Types</h2>
-<p>Milvus supports multiple similarity metric types:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-1-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-1-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-1-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-1-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-1-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;github.com/milvus-io/milvus/client/v2/entity&quot;</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="c1">// Inner Product - default, higher scores mean more similar</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMetricType</span><span class="p">(</span><span class="nx">entity</span><span class="p">.</span><span class="nx">IP</span><span class="p">)</span>
+<h2 id="supported-enhancers">Supported Enhancers</h2>
+<h3 id="llmenhancer-llm-rewriting">LLMEnhancer (LLM rewriting)</h3>
+<p>Uses a language model to rewrite queries based on conversation history, resolving references and removing conversational noise.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span>
+<span class="normal"><a href="#__codelineno-1-3">3</a></span>
+<span class="normal"><a href="#__codelineno-1-4">4</a></span>
+<span class="normal"><a href="#__codelineno-1-5">5</a></span>
+<span class="normal"><a href="#__codelineno-1-6">6</a></span>
+<span class="normal"><a href="#__codelineno-1-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/query&quot;</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nx">openaimodel</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="p">)</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="c1">// Euclidean Distance (L2) - lower scores mean more similar</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMetricType</span><span class="p">(</span><span class="nx">entity</span><span class="p">.</span><span class="nx">L2</span><span class="p">)</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="c1">// Cosine Similarity</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMetricType</span><span class="p">(</span><span class="nx">entity</span><span class="p">.</span><span class="nx">COSINE</span><span class="p">)</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openaimodel</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">)</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="nx">enhancer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">query</span><span class="p">.</span><span class="nx">NewLLMEnhancer</span><span class="p">(</span><span class="nx">llm</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="usage-example">Usage Example</h2>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-2-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-2-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-2-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-2-10">10</a></span>
-<span class="normal"><a href="#__codelineno-2-11">11</a></span>
-<span class="normal"><a href="#__codelineno-2-12">12</a></span>
-<span class="normal"><a href="#__codelineno-2-13">13</a></span>
-<span class="normal"><a href="#__codelineno-2-14">14</a></span>
-<span class="normal"><a href="#__codelineno-2-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus&quot;</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="s">&quot;github.com/milvus-io/milvus/client/v2/entity&quot;</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="p">)</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="nx">milvusVS</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithAddress</span><span class="p">(</span><span class="s">&quot;localhost:19530&quot;</span><span class="p">),</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithUsername</span><span class="p">(</span><span class="s">&quot;root&quot;</span><span class="p">),</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;Milvus&quot;</span><span class="p">),</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithCollectionName</span><span class="p">(</span><span class="s">&quot;knowledge_base&quot;</span><span class="p">),</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMetricType</span><span class="p">(</span><span class="nx">entity</span><span class="p">.</span><span class="nx">COSINE</span><span class="p">),</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithHNSWParams</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span><span class="w"> </span><span class="mi">256</span><span class="p">),</span><span class="w">  </span><span class="c1">// Higher recall</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMaxResults</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="p">)</span>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+<th>Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>model.Model</code> (constructor parameter)</td>
+<td>LLM instance for query rewriting</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>WithSystemPrompt(string)</code></td>
+<td>Custom rewriting prompt</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<h4 id="custom-system-prompt">Custom System Prompt</h4>
+<p>The default prompt works for general scenarios. Override it for domain-specific use cases:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
+<span class="normal"><a href="#__codelineno-2-2">2</a></span>
+<span class="normal"><a href="#__codelineno-2-3">3</a></span>
+<span class="normal"><a href="#__codelineno-2-4">4</a></span>
+<span class="normal"><a href="#__codelineno-2-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">enhancer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">query</span><span class="p">.</span><span class="nx">NewLLMEnhancer</span><span class="p">(</span><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">query</span><span class="p">.</span><span class="nx">WithSystemPrompt</span><span class="p">(</span><span class="s">`</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="s">Rewrite the query for a code search engine.</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="s">Focus on function names, types, and package names.</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="s">Output ONLY the rewritten query.</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="s">`</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="passthroughenhancer-no-op">PassthroughEnhancer (no-op)</h3>
+<p>Returns the original query unchanged. This is the default behavior when no enhancer is configured.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span>
+<span class="normal"><a href="#__codelineno-3-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/query&quot;</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="nx">enhancer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">query</span><span class="p">.</span><span class="nx">NewPassthroughEnhancer</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+<h2 id="how-it-works">How it Works</h2>
+<p>Position of the Query Enhancer in the RAG pipeline:</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-4-10">10</a></span>
+<span class="normal"><a href="#__codelineno-4-11">11</a></span>
+<span class="normal"><a href="#__codelineno-4-12">12</a></span>
+<span class="normal"><a href="#__codelineno-4-13">13</a></span>
+<span class="normal"><a href="#__codelineno-4-14">14</a></span>
+<span class="normal"><a href="#__codelineno-4-15">15</a></span>
+<span class="normal"><a href="#__codelineno-4-16">16</a></span>
+<span class="normal"><a href="#__codelineno-4-17">17</a></span>
+<span class="normal"><a href="#__codelineno-4-18">18</a></span>
+<span class="normal"><a href="#__codelineno-4-19">19</a></span>
+<span class="normal"><a href="#__codelineno-4-20">20</a></span>
+<span class="normal"><a href="#__codelineno-4-21">21</a></span>
+<span class="normal"><a href="#__codelineno-4-22">22</a></span>
+<span class="normal"><a href="#__codelineno-4-23">23</a></span>
+<span class="normal"><a href="#__codelineno-4-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a>User Query + Session History
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a>        │
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a>        ▼
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a>┌──────────────────┐
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>│  Query Enhancer   │  Rewrite query (resolve refs, denoise, optimize)
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a>└────────┬─────────┘
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a>         │
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a>         ▼
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a>┌──────────────────┐
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a>│    Embedder       │  Generate vector for the enhanced query
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a>└────────┬─────────┘
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a>         │
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a>         ▼
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a>┌──────────────────┐
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a>│  Vector Store     │  Search with the enhanced query
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a>└────────┬─────────┘
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a>         │
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a>         ▼
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a>┌──────────────────┐
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a>│  Reranker (opt.)  │  Rerank results using the original query
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a>└────────┬─────────┘
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22"></a>         │
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23"></a>         ▼
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24"></a>      Results
+</span></code></pre></div></td></tr></table></div>
+<h3 id="automatic-session-history-extraction">Automatic Session History Extraction</h3>
+<p>When Knowledge is used as an Agent tool, the framework automatically extracts recent conversation history (up to 10 messages) from the Session and passes it to the Query Enhancer. No manual history management is needed.</p>
+<p>The following messages are filtered out:</p>
+<ul>
+<li>Partial (streaming intermediate) messages</li>
+<li>Tool Call / Tool Result messages</li>
+<li>Empty content messages</li>
+<li>Non user/assistant role messages</li>
+</ul>
+<h3 id="filter-only-optimization">Filter-only Optimization</h3>
+<p>When the query text is empty and search mode is filter-only (<code>SearchModeFilter</code>), the framework automatically skips query enhancement to avoid unnecessary LLM calls.</p>
+<h2 id="custom-enhancer">Custom Enhancer</h2>
+<p>Implement the <code>query.Enhancer</code> interface to create a custom enhancer:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span>
+<span class="normal"><a href="#__codelineno-5-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Enhancer</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="nx">EnhanceQuery</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">Enhanced</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>For example, a debug decorator that prints the before/after query:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-6-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-6-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-6-10">10</a></span>
+<span class="normal"><a href="#__codelineno-6-11">11</a></span>
+<span class="normal"><a href="#__codelineno-6-12">12</a></span>
+<span class="normal"><a href="#__codelineno-6-13">13</a></span>
+<span class="normal"><a href="#__codelineno-6-14">14</a></span>
+<span class="normal"><a href="#__codelineno-6-15">15</a></span>
+<span class="normal"><a href="#__codelineno-6-16">16</a></span>
+<span class="normal"><a href="#__codelineno-6-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">debugEnhancer</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="w">    </span><span class="nx">inner</span><span class="w"> </span><span class="nx">query</span><span class="p">.</span><span class="nx">Enhancer</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="p">}</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">debugEnhancer</span><span class="p">)</span><span class="w"> </span><span class="nx">EnhanceQuery</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">query</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">query</span><span class="p">.</span><span class="nx">Enhanced</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">    </span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">d</span><span class="p">.</span><span class="nx">inner</span><span class="p">.</span><span class="nx">EnhanceQuery</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">)</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">Enhanced</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Query</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Query enhanced: %q -&gt; %q\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Query</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">Enhanced</span><span class="p">)</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a><span class="p">}</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15"></a>
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16"></a><span class="c1">// Usage:</span>
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17"></a><span class="nx">enhancer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">debugEnhancer</span><span class="p">{</span><span class="nx">inner</span><span class="p">:</span><span class="w"> </span><span class="nx">query</span><span class="p">.</span><span class="nx">NewLLMEnhancer</span><span class="p">(</span><span class="nx">llm</span><span class="p">)}</span>
+</span></code></pre></div></td></tr></table></div>
+<h2 id="notes">Notes</h2>
+<ul>
+<li>LLMEnhancer calls the LLM once per query, adding latency and cost.</li>
+<li>Query Enhancer is opt-in. When not configured, the behavior is equivalent to Passthrough.</li>
+<li>The Reranker receives the <strong>original query</strong>, not the enhanced one, to preserve the user's original intent for relevance judgment.</li>
+</ul>
 
 
 
@@ -2810,7 +2875,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 4, 2026 08:07:26 UTC">2026-06-04 08:07:26</span>
   </span>
 
     
@@ -2820,7 +2885,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 4, 2026 08:07:26 UTC">2026-06-04 08:07:26</span>
   </span>
 
     
@@ -2901,7 +2966,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../qdrant/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Qdrant">
+          <a href="../reranker/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Reranker">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -2911,20 +2976,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Qdrant
+                Reranker
               </div>
             </div>
           </a>
         
         
           
-          <a href="../../troubleshooting/" class="md-footer__link md-footer__link--next" aria-label="Next: Troubleshooting">
+          <a href="../source/" class="md-footer__link md-footer__link--next" aria-label="Next: Source">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Troubleshooting
+                Source
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -2960,12 +3025,12 @@
     
     
       
-      <script id="__config" type="application/json">{"base": "../../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
       
-        <script src="../../../assets/javascripts/mathjax.js"></script>
+        <script src="../../assets/javascripts/mathjax.js"></script>
       
         <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
       

@@ -1,6 +1,6 @@
 
 <!doctype html>
-<html lang="en" class="no-js">
+<html lang="zh" class="no-js">
   <head>
     
       <meta charset="utf-8">
@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/knowledge/vectorstore/milvus/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/query-enhancer/">
       
       
-        <link rel="prev" href="../qdrant/">
+        <link rel="prev" href="../reranker/">
       
       
-        <link rel="next" href="../../troubleshooting/">
+        <link rel="next" href="../source/">
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
@@ -22,7 +22,7 @@
     
     
       
-        <title>Milvus - tRPC-Agent-Go</title>
+        <title>Query Enhancer - tRPC-Agent-Go</title>
       
     
     
@@ -86,8 +86,8 @@
     <div data-md-component="skip">
       
         
-        <a href="#milvus" class="md-skip">
-          Skip to content
+        <a href="#query-enhancer" class="md-skip">
+          跳转至
         </a>
       
     </div>
@@ -99,8 +99,8 @@
       
 
 <header class="md-header" data-md-component="header">
-  <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../.." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
   <img src="../../../assets/img/logo.png" alt="logo">
 
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Milvus
+              Query Enhancer
             
           </span>
         </div>
@@ -159,20 +159,20 @@
       <div class="md-header__option">
   <div class="md-select">
     
-    <button class="md-header__button md-icon" aria-label="Select language">
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
     </button>
     <div class="md-select__inner">
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="./" hreflang="en" class="md-select__link">
+            <a href="../../../knowledge/query-enhancer/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
         
           <li class="md-select__item">
-            <a href="../../../zh/knowledge/vectorstore/milvus/" hreflang="zh" class="md-select__link">
+            <a href="./" hreflang="zh" class="md-select__link">
               中文
             </a>
           </li>
@@ -193,21 +193,21 @@
   <label class="md-search__overlay" for="__search"></label>
   <div class="md-search__inner" role="search">
     <form class="md-search__form" name="search">
-      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
       <label class="md-search__icon md-icon" for="__search">
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
       </label>
-      <nav class="md-search__options" aria-label="Search">
+      <nav class="md-search__options" aria-label="查找">
         
-          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
             
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
           </a>
         
-        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
@@ -220,7 +220,7 @@
       <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
         <div class="md-search-result" data-md-component="search-result">
           <div class="md-search-result__meta">
-            Initializing search
+            正在初始化搜索引擎
           </div>
           <ol class="md-search-result__list" role="presentation"></ol>
         </div>
@@ -232,7 +232,7 @@
     
     
       <div class="md-header__source">
-        <a href="https://github.com/trpc-group/trpc-agent-go" title="Go to repository" class="md-source" data-md-component="source">
+        <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -253,7 +253,7 @@
         
           
             
-<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
   <div class="md-grid">
     <ul class="md-tabs__list">
       
@@ -263,13 +263,13 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../.." class="md-tabs__link">
+      <a href="../../" class="md-tabs__link">
         
   
   
     
   
-  Overview
+  概览
 
       </a>
     </li>
@@ -295,11 +295,11 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../../agent/" class="md-tabs__link">
+        <a href="../../agent/" class="md-tabs__link">
           
   
   
-  Components
+  组件
 
         </a>
       </li>
@@ -318,11 +318,11 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../gateway/" class="md-tabs__link">
+        <a href="../../gateway/" class="md-tabs__link">
           
   
   
-  Server
+  服务
 
         </a>
       </li>
@@ -338,11 +338,11 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../observability/" class="md-tabs__link">
+        <a href="../../observability/" class="md-tabs__link">
           
   
   
-  Observability
+  可观测
 
         </a>
       </li>
@@ -356,13 +356,13 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../../ecosystem/" class="md-tabs__link">
+      <a href="../../ecosystem/" class="md-tabs__link">
         
   
   
     
   
-  Ecosystem
+  生态
 
       </a>
     </li>
@@ -389,9 +389,9 @@
   
 
 
-<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../.." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href="../../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
   <img src="../../../assets/img/logo.png" alt="logo">
 
@@ -400,7 +400,7 @@
   </label>
   
     <div class="md-nav__source">
-      <a href="https://github.com/trpc-group/trpc-agent-go" title="Go to repository" class="md-source" data-md-component="source">
+      <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -420,12 +420,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../.." class="md-nav__link">
+      <a href="../../" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Overview
+    概览
     
   </span>
   
@@ -466,7 +466,7 @@
   
   
   <span class="md-ellipsis">
-    Components
+    组件
     
   </span>
   
@@ -477,7 +477,7 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
-            Components
+            组件
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -529,7 +529,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agent/" class="md-nav__link">
+      <a href="../../agent/" class="md-nav__link">
         
   
   
@@ -552,7 +552,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../multiagent/" class="md-nav__link">
+      <a href="../../multiagent/" class="md-nav__link">
         
   
   
@@ -575,12 +575,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../taskrun/" class="md-nav__link">
+      <a href="../../taskrun/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Task Run Runtime
+    Task Run 运行时
     
   </span>
   
@@ -598,7 +598,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../team/" class="md-nav__link">
+      <a href="../../team/" class="md-nav__link">
         
   
   
@@ -621,7 +621,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../graph/" class="md-nav__link">
+      <a href="../../graph/" class="md-nav__link">
         
   
   
@@ -644,12 +644,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../custom-agent/" class="md-nav__link">
+      <a href="../../custom-agent/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Custom Agent
+    自定义 Agent
     
   </span>
   
@@ -667,7 +667,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../dify/" class="md-nav__link">
+      <a href="../../dify/" class="md-nav__link">
         
   
   
@@ -690,7 +690,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../claudecode/" class="md-nav__link">
+      <a href="../../claudecode/" class="md-nav__link">
         
   
   
@@ -713,7 +713,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../codex/" class="md-nav__link">
+      <a href="../../codex/" class="md-nav__link">
         
   
   
@@ -744,7 +744,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../runner/" class="md-nav__link">
+      <a href="../../runner/" class="md-nav__link">
         
   
   
@@ -767,7 +767,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../codeexecutor/" class="md-nav__link">
+      <a href="../../codeexecutor/" class="md-nav__link">
         
   
   
@@ -790,12 +790,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../error-handling/" class="md-nav__link">
+      <a href="../../error-handling/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Error Handling
+    错误处理
     
   </span>
   
@@ -813,7 +813,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../model/" class="md-nav__link">
+      <a href="../../model/" class="md-nav__link">
         
   
   
@@ -836,7 +836,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../prompt/" class="md-nav__link">
+      <a href="../../prompt/" class="md-nav__link">
         
   
   
@@ -859,7 +859,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../callbacks/" class="md-nav__link">
+      <a href="../../callbacks/" class="md-nav__link">
         
   
   
@@ -882,7 +882,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../plugin/" class="md-nav__link">
+      <a href="../../plugin/" class="md-nav__link">
         
   
   
@@ -905,7 +905,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../memory/" class="md-nav__link">
+      <a href="../../memory/" class="md-nav__link">
         
   
   
@@ -928,7 +928,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../artifact/" class="md-nav__link">
+      <a href="../../artifact/" class="md-nav__link">
         
   
   
@@ -951,7 +951,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../skill/" class="md-nav__link">
+      <a href="../../skill/" class="md-nav__link">
         
   
   
@@ -974,7 +974,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../tool/" class="md-nav__link">
+      <a href="../../tool/" class="md-nav__link">
         
   
   
@@ -1038,7 +1038,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/" class="md-nav__link">
+      <a href="../../session/" class="md-nav__link">
         
   
   
@@ -1061,7 +1061,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/summary/" class="md-nav__link">
+      <a href="../../session/summary/" class="md-nav__link">
         
   
   
@@ -1084,7 +1084,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/inmemory/" class="md-nav__link">
+      <a href="../../session/inmemory/" class="md-nav__link">
         
   
   
@@ -1107,7 +1107,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/sqlite/" class="md-nav__link">
+      <a href="../../session/sqlite/" class="md-nav__link">
         
   
   
@@ -1130,7 +1130,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/redis/" class="md-nav__link">
+      <a href="../../session/redis/" class="md-nav__link">
         
   
   
@@ -1153,7 +1153,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/mysql/" class="md-nav__link">
+      <a href="../../session/mysql/" class="md-nav__link">
         
   
   
@@ -1176,7 +1176,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/tdsql/" class="md-nav__link">
+      <a href="../../session/tdsql/" class="md-nav__link">
         
   
   
@@ -1199,7 +1199,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/postgres/" class="md-nav__link">
+      <a href="../../session/postgres/" class="md-nav__link">
         
   
   
@@ -1222,7 +1222,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/pgvector/" class="md-nav__link">
+      <a href="../../session/pgvector/" class="md-nav__link">
         
   
   
@@ -1245,7 +1245,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/clickhouse/" class="md-nav__link">
+      <a href="../../session/clickhouse/" class="md-nav__link">
         
   
   
@@ -1319,12 +1319,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Overview
+    概述
     
   </span>
   
@@ -1342,7 +1342,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../embedder/" class="md-nav__link">
+      <a href="../embedder/" class="md-nav__link">
         
   
   
@@ -1365,331 +1365,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reranker/" class="md-nav__link">
+      <a href="../reranker/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     Reranker
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../query-enhancer/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Query Enhancer
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../source/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Source
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../filter/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Filter
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../extractor/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Extractor
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../management/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Management
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../ocr/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    OCR
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-    
-  
-  
-  
-    
-    
-    
-    
-      
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14_10" checked>
-        
-          
-          <label class="md-nav__link" for="__nav_2_14_10" id="__nav_2_14_10_label" tabindex="0">
-            
-  
-  
-  <span class="md-ellipsis">
-    VectorStore
-    
-  </span>
-  
-
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_14_10_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_2_14_10">
-            <span class="md-nav__icon md-icon"></span>
-            VectorStore
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Overview
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../inmemory/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Memory
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../pgvector/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    PGVector
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../tcvector/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    TcVector
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../elasticsearch/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Elasticsearch
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../qdrant/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Qdrant
     
   </span>
   
@@ -1721,7 +1402,7 @@
   
   
   <span class="md-ellipsis">
-    Milvus
+    Query Enhancer
     
   </span>
   
@@ -1734,7 +1415,7 @@
   
   
   <span class="md-ellipsis">
-    Milvus
+    Query Enhancer
     
   </span>
   
@@ -1743,7 +1424,7 @@
       
         
 
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+<nav class="md-nav md-nav--secondary" aria-label="目录">
   
   
   
@@ -1752,69 +1433,75 @@
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
-      Table of contents
+      目录
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#basic-configuration" class="md-nav__link">
+  <a href="#query-enhancer_1" class="md-nav__link">
     <span class="md-ellipsis">
-      Basic Configuration
+      为什么需要 Query Enhancer
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-options" class="md-nav__link">
+  <a href="#query-enhancer_2" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Options
+      什么时候需要 Query Enhancer
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration Options">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#knowledge" class="md-nav__link">
+    <span class="md-ellipsis">
+      注入 Knowledge
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enhancer" class="md-nav__link">
+    <span class="md-ellipsis">
+      支持的 Enhancer
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="支持的 Enhancer">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#connection-configuration" class="md-nav__link">
+  <a href="#llmenhancerllm" class="md-nav__link">
     <span class="md-ellipsis">
-      Connection Configuration
+      LLMEnhancer（LLM 改写）
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="LLMEnhancer（LLM 改写）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#system-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      自定义 System Prompt
     </span>
   </a>
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#collection-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Collection Configuration
-    </span>
-  </a>
+      </ul>
+    </nav>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#index-configuration" class="md-nav__link">
+  <a href="#passthroughenhancer" class="md-nav__link">
     <span class="md-ellipsis">
-      Index Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#search-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Search Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#field-mapping-advanced" class="md-nav__link">
-    <span class="md-ellipsis">
-      Field Mapping (Advanced)
+      PassthroughEnhancer（透传）
     </span>
   </a>
   
@@ -1826,18 +1513,51 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#similarity-metric-types" class="md-nav__link">
+  <a href="#_1" class="md-nav__link">
     <span class="md-ellipsis">
-      Similarity Metric Types
+      工作原理
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="工作原理">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      会话历史自动提取
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#filter-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      Filter-only 场景优化
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enhancer_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      自定义 Enhancer
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#usage-example" class="md-nav__link">
+  <a href="#_3" class="md-nav__link">
     <span class="md-ellipsis">
-      Usage Example
+      注意事项
     </span>
   </a>
   
@@ -1852,9 +1572,24 @@
 
               
             
-          </ul>
-        </nav>
-      
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    数据源
+    
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -1867,12 +1602,283 @@
   
   
     <li class="md-nav__item">
-      <a href="../../troubleshooting/" class="md-nav__link">
+      <a href="../extractor/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Troubleshooting
+    内容提取器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    过滤器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    知识库管理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ocr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OCR
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_14_10" id="__nav_2_14_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    向量存储
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_14_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_14_10">
+            <span class="md-nav__icon md-icon"></span>
+            向量存储
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/tcvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TcVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/elasticsearch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Elasticsearch
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/qdrant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Qdrant
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../vectorstore/milvus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Milvus
     
   </span>
   
@@ -1898,7 +1904,38 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../planner/" class="md-nav__link">
+      <a href="../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    故障排除
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../planner/" class="md-nav__link">
         
   
   
@@ -1921,7 +1958,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../event/" class="md-nav__link">
+      <a href="../../event/" class="md-nav__link">
         
   
   
@@ -1944,7 +1981,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../evaluation/" class="md-nav__link">
+      <a href="../../evaluation/" class="md-nav__link">
         
   
   
@@ -1967,7 +2004,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../promptiter/" class="md-nav__link">
+      <a href="../../promptiter/" class="md-nav__link">
         
   
   
@@ -2016,7 +2053,7 @@
   
   
   <span class="md-ellipsis">
-    Server
+    服务
     
   </span>
   
@@ -2027,7 +2064,7 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
-            Server
+            服务
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -2038,7 +2075,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../gateway/" class="md-nav__link">
+      <a href="../../gateway/" class="md-nav__link">
         
   
   
@@ -2102,12 +2139,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agui/" class="md-nav__link">
+      <a href="../../agui/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Overview
+    总览
     
   </span>
   
@@ -2125,12 +2162,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agui/chat/" class="md-nav__link">
+      <a href="../../agui/chat/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Real-Time Conversation Route
+    实时对话路由
     
   </span>
   
@@ -2148,12 +2185,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agui/history/" class="md-nav__link">
+      <a href="../../agui/history/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Messages Snapshot Route
+    消息快照路由
     
   </span>
   
@@ -2171,12 +2208,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agui/cancel/" class="md-nav__link">
+      <a href="../../agui/cancel/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Cancel Route
+    取消路由
     
   </span>
   
@@ -2202,7 +2239,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../a2a/" class="md-nav__link">
+      <a href="../../a2a/" class="md-nav__link">
         
   
   
@@ -2225,7 +2262,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../a2ui/" class="md-nav__link">
+      <a href="../../a2ui/" class="md-nav__link">
         
   
   
@@ -2248,7 +2285,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../openclaw-runtime/" class="md-nav__link">
+      <a href="../../openclaw-runtime/" class="md-nav__link">
         
   
   
@@ -2297,7 +2334,7 @@
   
   
   <span class="md-ellipsis">
-    Observability
+    可观测
     
   </span>
   
@@ -2308,7 +2345,7 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
-            Observability
+            可观测
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -2319,12 +2356,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../observability/" class="md-nav__link">
+      <a href="../../observability/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Overview
+    概览
     
   </span>
   
@@ -2342,12 +2379,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../telemetry-multimodal/" class="md-nav__link">
+      <a href="../../telemetry-multimodal/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Multimodal Telemetry
+    多模态遥测
     
   </span>
   
@@ -2372,12 +2409,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../ecosystem/" class="md-nav__link">
+      <a href="../../ecosystem/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Ecosystem
+    生态
     
   </span>
   
@@ -2400,7 +2437,7 @@
                   <div class="md-sidebar__inner">
                     
 
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+<nav class="md-nav md-nav--secondary" aria-label="目录">
   
   
   
@@ -2409,69 +2446,75 @@
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
-      Table of contents
+      目录
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#basic-configuration" class="md-nav__link">
+  <a href="#query-enhancer_1" class="md-nav__link">
     <span class="md-ellipsis">
-      Basic Configuration
+      为什么需要 Query Enhancer
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-options" class="md-nav__link">
+  <a href="#query-enhancer_2" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Options
+      什么时候需要 Query Enhancer
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration Options">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#knowledge" class="md-nav__link">
+    <span class="md-ellipsis">
+      注入 Knowledge
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enhancer" class="md-nav__link">
+    <span class="md-ellipsis">
+      支持的 Enhancer
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="支持的 Enhancer">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#connection-configuration" class="md-nav__link">
+  <a href="#llmenhancerllm" class="md-nav__link">
     <span class="md-ellipsis">
-      Connection Configuration
+      LLMEnhancer（LLM 改写）
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="LLMEnhancer（LLM 改写）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#system-prompt" class="md-nav__link">
+    <span class="md-ellipsis">
+      自定义 System Prompt
     </span>
   </a>
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#collection-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Collection Configuration
-    </span>
-  </a>
+      </ul>
+    </nav>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#index-configuration" class="md-nav__link">
+  <a href="#passthroughenhancer" class="md-nav__link">
     <span class="md-ellipsis">
-      Index Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#search-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Search Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#field-mapping-advanced" class="md-nav__link">
-    <span class="md-ellipsis">
-      Field Mapping (Advanced)
+      PassthroughEnhancer（透传）
     </span>
   </a>
   
@@ -2483,18 +2526,51 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#similarity-metric-types" class="md-nav__link">
+  <a href="#_1" class="md-nav__link">
     <span class="md-ellipsis">
-      Similarity Metric Types
+      工作原理
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="工作原理">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      会话历史自动提取
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#filter-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      Filter-only 场景优化
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#enhancer_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      自定义 Enhancer
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#usage-example" class="md-nav__link">
+  <a href="#_3" class="md-nav__link">
     <span class="md-ellipsis">
-      Usage Example
+      注意事项
     </span>
   </a>
   
@@ -2516,7 +2592,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/knowledge/vectorstore/milvus.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/knowledge/query-enhancer.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2525,269 +2601,258 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/knowledge/vectorstore/milvus.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/knowledge/query-enhancer.md" title="查看本页的源代码" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="milvus">Milvus</h1>
+<h1 id="query-enhancer">Query Enhancer 查询增强</h1>
 <blockquote>
-<p><strong>Example Code</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/milvus">examples/knowledge/vectorstores/milvus</a></p>
+<p><strong>示例代码</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/query-enhancer">examples/knowledge/query-enhancer</a></p>
 </blockquote>
-<p><a href="https://milvus.io/">Milvus</a> is a high-performance vector database designed for billion-scale vector search scenarios.</p>
-<h2 id="basic-configuration">Basic Configuration</h2>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-0-10">10</a></span>
-<span class="normal"><a href="#__codelineno-0-11">11</a></span>
-<span class="normal"><a href="#__codelineno-0-12">12</a></span>
-<span class="normal"><a href="#__codelineno-0-13">13</a></span>
-<span class="normal"><a href="#__codelineno-0-14">14</a></span>
-<span class="normal"><a href="#__codelineno-0-15">15</a></span>
-<span class="normal"><a href="#__codelineno-0-16">16</a></span>
-<span class="normal"><a href="#__codelineno-0-17">17</a></span>
-<span class="normal"><a href="#__codelineno-0-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus&quot;</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="p">)</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="nx">milvusVS</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithAddress</span><span class="p">(</span><span class="s">&quot;localhost:19530&quot;</span><span class="p">),</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithCollectionName</span><span class="p">(</span><span class="s">&quot;my_documents&quot;</span><span class="p">),</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="p">)</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="c1">// Handle error</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="p">}</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">milvusVS</span><span class="p">),</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="p">)</span>
+<p>Query Enhancer 用于在检索前对用户查询进行改写和优化，提升多轮对话场景下的检索质量。通过 <code>knowledge.WithQueryEnhancer</code> 注入。</p>
+<h2 id="query-enhancer_1">为什么需要 Query Enhancer</h2>
+<p>在多轮对话中，用户的后续提问经常包含指代词或省略，直接用于向量检索效果很差：</p>
+<table>
+<thead>
+<tr>
+<th>轮次</th>
+<th>用户问题</th>
+<th>检索器实际看到的</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>"什么是大语言模型？"</td>
+<td><code>什么是大语言模型？</code> — 正常</td>
+</tr>
+<tr>
+<td>2</td>
+<td>"<strong>它</strong>是如何处理上下文长度的？"</td>
+<td><code>它是如何处理上下文长度的？</code> — "它"无法被检索器理解</td>
+</tr>
+<tr>
+<td>3</td>
+<td>"把<strong>上面的</strong>和传统搜索引擎对比一下"</td>
+<td><code>把上面的和传统搜索引擎对比一下</code> — "上面的"丢失了语义</td>
+</tr>
+</tbody>
+</table>
+<p>Query Enhancer 利用 LLM 和会话历史将这些模糊查询改写为独立的、面向检索优化的查询。</p>
+<h2 id="query-enhancer_2">什么时候需要 Query Enhancer</h2>
+<p>在默认的 <strong>Agentic RAG</strong> 场景中（Knowledge 作为 Agent 的工具），Agent 的 LLM 本身会根据对话上下文构造 tool call 参数，已经隐式完成了一定程度的查询改写。此时 Query Enhancer <strong>通常不是必需的</strong>。</p>
+<p>Query Enhancer 主要适用于以下场景：</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>非 Agentic 的独立检索</strong></td>
+<td>直接调用 <code>kb.Search()</code> 进行检索，没有 Agent LLM 帮忙改写查询</td>
+</tr>
+<tr>
+<td><strong>Embedding 模型对口语化查询不友好</strong></td>
+<td>检索用的 embedding 模型偏向关键词/短文本，需要将自然语言转为精练查询</td>
+</tr>
+<tr>
+<td><strong>HyDE 等特殊策略</strong></td>
+<td>需要先让 LLM 生成假设性答案，再用答案的 embedding 做检索</td>
+</tr>
+<tr>
+<td><strong>Agent 构造的 query 质量不够好</strong></td>
+<td>某些较弱的 LLM 在构造 tool call 参数时可能丢失上下文</td>
+</tr>
+</tbody>
+</table>
+<p>简而言之：<strong>如果你在 Agentic RAG 场景下检索质量已经满足需求，不需要额外配置 Query Enhancer。</strong></p>
+<h2 id="knowledge">注入 Knowledge</h2>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span>
+<span class="normal"><a href="#__codelineno-0-5">5</a></span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithQueryEnhancer</span><span class="p">(</span><span class="nx">enhancer</span><span class="p">),</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="c1">// ... 其他配置（VectorStore、Embedder、Sources 等）</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="configuration-options">Configuration Options</h2>
-<h3 id="connection-configuration">Connection Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Description</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithAddress(address)</code></td>
-<td>Milvus server address</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithUsername(username)</code></td>
-<td>Username</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithPassword(password)</code></td>
-<td>Password</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithDBName(dbName)</code></td>
-<td>Database name</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithAPIKey(apiKey)</code></td>
-<td>API Key authentication</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithDialOptions(opts...)</code></td>
-<td>gRPC connection options</td>
-<td><code>Timeout=5s</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="collection-configuration">Collection Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Description</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithCollectionName(name)</code></td>
-<td>Collection name</td>
-<td><code>"trpc_agent_documents"</code></td>
-</tr>
-<tr>
-<td><code>WithDimension(dim)</code></td>
-<td>Vector dimension</td>
-<td><code>1536</code></td>
-</tr>
-<tr>
-<td><code>WithMetricType(type)</code></td>
-<td>Similarity metric type (IP/L2/COSINE)</td>
-<td><code>entity.IP</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="index-configuration">Index Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Description</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithHNSWParams(m, efConstruction)</code></td>
-<td>HNSW index parameters</td>
-<td><code>M=16, EfConstruction=128</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="search-configuration">Search Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Description</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithMaxResults(max)</code></td>
-<td>Default number of search results</td>
-<td><code>10</code></td>
-</tr>
-<tr>
-<td><code>WithReranker(reranker)</code></td>
-<td>Set reranker</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithDocBuilder(builder)</code></td>
-<td>Custom document builder method</td>
-<td>Default builder</td>
-</tr>
-</tbody>
-</table>
-<h3 id="field-mapping-advanced">Field Mapping (Advanced)</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Description</th>
-<th>Default</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithIDField(field)</code></td>
-<td>ID field name</td>
-<td><code>"id"</code></td>
-</tr>
-<tr>
-<td><code>WithNameField(field)</code></td>
-<td>Name field name</td>
-<td><code>"name"</code></td>
-</tr>
-<tr>
-<td><code>WithContentField(field)</code></td>
-<td>Content field name</td>
-<td><code>"content"</code></td>
-</tr>
-<tr>
-<td><code>WithVectorField(field)</code></td>
-<td>Vector field name</td>
-<td><code>"vector"</code></td>
-</tr>
-<tr>
-<td><code>WithMetadataField(field)</code></td>
-<td>Metadata field name</td>
-<td><code>"metadata"</code></td>
-</tr>
-<tr>
-<td><code>WithCreatedAtField(field)</code></td>
-<td>Created time field name</td>
-<td><code>"created_at"</code></td>
-</tr>
-<tr>
-<td><code>WithUpdatedAtField(field)</code></td>
-<td>Updated time field name</td>
-<td><code>"updated_at"</code></td>
-</tr>
-</tbody>
-</table>
-<h2 id="similarity-metric-types">Similarity Metric Types</h2>
-<p>Milvus supports multiple similarity metric types:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-1-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-1-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-1-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-1-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-1-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;github.com/milvus-io/milvus/client/v2/entity&quot;</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="c1">// Inner Product - default, higher scores mean more similar</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMetricType</span><span class="p">(</span><span class="nx">entity</span><span class="p">.</span><span class="nx">IP</span><span class="p">)</span>
+<h2 id="enhancer">支持的 Enhancer</h2>
+<h3 id="llmenhancerllm">LLMEnhancer（LLM 改写）</h3>
+<p>使用大语言模型根据会话历史改写查询，解决指代消解、去除对话噪声等问题。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span>
+<span class="normal"><a href="#__codelineno-1-3">3</a></span>
+<span class="normal"><a href="#__codelineno-1-4">4</a></span>
+<span class="normal"><a href="#__codelineno-1-5">5</a></span>
+<span class="normal"><a href="#__codelineno-1-6">6</a></span>
+<span class="normal"><a href="#__codelineno-1-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/query&quot;</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nx">openaimodel</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="p">)</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="c1">// Euclidean Distance (L2) - lower scores mean more similar</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMetricType</span><span class="p">(</span><span class="nx">entity</span><span class="p">.</span><span class="nx">L2</span><span class="p">)</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="c1">// Cosine Similarity</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMetricType</span><span class="p">(</span><span class="nx">entity</span><span class="p">.</span><span class="nx">COSINE</span><span class="p">)</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openaimodel</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">)</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="nx">enhancer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">query</span><span class="p">.</span><span class="nx">NewLLMEnhancer</span><span class="p">(</span><span class="nx">llm</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="usage-example">Usage Example</h2>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-2-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-2-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-2-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-2-10">10</a></span>
-<span class="normal"><a href="#__codelineno-2-11">11</a></span>
-<span class="normal"><a href="#__codelineno-2-12">12</a></span>
-<span class="normal"><a href="#__codelineno-2-13">13</a></span>
-<span class="normal"><a href="#__codelineno-2-14">14</a></span>
-<span class="normal"><a href="#__codelineno-2-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus&quot;</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="s">&quot;github.com/milvus-io/milvus/client/v2/entity&quot;</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="p">)</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="nx">milvusVS</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithAddress</span><span class="p">(</span><span class="s">&quot;localhost:19530&quot;</span><span class="p">),</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithUsername</span><span class="p">(</span><span class="s">&quot;root&quot;</span><span class="p">),</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;Milvus&quot;</span><span class="p">),</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithCollectionName</span><span class="p">(</span><span class="s">&quot;knowledge_base&quot;</span><span class="p">),</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMetricType</span><span class="p">(</span><span class="nx">entity</span><span class="p">.</span><span class="nx">COSINE</span><span class="p">),</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithHNSWParams</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span><span class="w"> </span><span class="mi">256</span><span class="p">),</span><span class="w">  </span><span class="c1">// Higher recall</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMaxResults</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="p">)</span>
+<table>
+<thead>
+<tr>
+<th>配置项</th>
+<th>说明</th>
+<th>必填</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>model.Model</code>（构造函数参数）</td>
+<td>用于查询改写的 LLM 实例</td>
+<td>是</td>
+</tr>
+<tr>
+<td><code>WithSystemPrompt(string)</code></td>
+<td>自定义改写 prompt</td>
+<td>否</td>
+</tr>
+</tbody>
+</table>
+<h4 id="system-prompt">自定义 System Prompt</h4>
+<p>默认 prompt 适用于通用场景。对于特定领域，可以覆盖：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
+<span class="normal"><a href="#__codelineno-2-2">2</a></span>
+<span class="normal"><a href="#__codelineno-2-3">3</a></span>
+<span class="normal"><a href="#__codelineno-2-4">4</a></span>
+<span class="normal"><a href="#__codelineno-2-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">enhancer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">query</span><span class="p">.</span><span class="nx">NewLLMEnhancer</span><span class="p">(</span><span class="nx">llm</span><span class="p">,</span><span class="w"> </span><span class="nx">query</span><span class="p">.</span><span class="nx">WithSystemPrompt</span><span class="p">(</span><span class="s">`</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="s">将用户查询改写为面向代码搜索引擎的检索语句。</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="s">聚焦于函数名、类型名和包名。</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="s">只输出改写后的查询，不要输出其他内容。</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="s">`</span><span class="p">))</span>
 </span></code></pre></div></td></tr></table></div>
+<h3 id="passthroughenhancer">PassthroughEnhancer（透传）</h3>
+<p>不做任何改写，直接返回原始查询。这是未配置 enhancer 时的默认行为。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span>
+<span class="normal"><a href="#__codelineno-3-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/query&quot;</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="nx">enhancer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">query</span><span class="p">.</span><span class="nx">NewPassthroughEnhancer</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+<h2 id="_1">工作原理</h2>
+<p>Query Enhancer 在 RAG 管道中的位置：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-4-10">10</a></span>
+<span class="normal"><a href="#__codelineno-4-11">11</a></span>
+<span class="normal"><a href="#__codelineno-4-12">12</a></span>
+<span class="normal"><a href="#__codelineno-4-13">13</a></span>
+<span class="normal"><a href="#__codelineno-4-14">14</a></span>
+<span class="normal"><a href="#__codelineno-4-15">15</a></span>
+<span class="normal"><a href="#__codelineno-4-16">16</a></span>
+<span class="normal"><a href="#__codelineno-4-17">17</a></span>
+<span class="normal"><a href="#__codelineno-4-18">18</a></span>
+<span class="normal"><a href="#__codelineno-4-19">19</a></span>
+<span class="normal"><a href="#__codelineno-4-20">20</a></span>
+<span class="normal"><a href="#__codelineno-4-21">21</a></span>
+<span class="normal"><a href="#__codelineno-4-22">22</a></span>
+<span class="normal"><a href="#__codelineno-4-23">23</a></span>
+<span class="normal"><a href="#__codelineno-4-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a>用户查询 + 会话历史
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a>        │
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a>        ▼
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a>┌──────────────────┐
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>│  Query Enhancer   │  改写查询（指代消解、去噪、检索优化）
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a>└────────┬─────────┘
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a>         │
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a>         ▼
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a>┌──────────────────┐
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a>│    Embedder       │  对改写后的查询生成向量
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a>└────────┬─────────┘
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a>         │
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a>         ▼
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a>┌──────────────────┐
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a>│  Vector Store     │  使用改写后的查询检索
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a>└────────┬─────────┘
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a>         │
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a>         ▼
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a>┌──────────────────┐
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a>│  Reranker（可选）  │  使用原始查询重排结果
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a>└────────┬─────────┘
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22"></a>         │
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23"></a>         ▼
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24"></a>      检索结果
+</span></code></pre></div></td></tr></table></div>
+<h3 id="_2">会话历史自动提取</h3>
+<p>当 Knowledge 作为 Agent 工具使用时，框架会自动从 Session 中提取最近的对话历史（最多 10 条），传递给 Query Enhancer。无需用户手动管理历史。</p>
+<p>提取时会过滤掉：</p>
+<ul>
+<li>Partial（流式中间态）消息</li>
+<li>Tool Call / Tool Result 消息</li>
+<li>空白内容消息</li>
+<li>非 user/assistant 角色的消息</li>
+</ul>
+<h3 id="filter-only">Filter-only 场景优化</h3>
+<p>当查询文本为空且搜索模式为纯 filter 时（<code>SearchModeFilter</code>），框架自动跳过 query enhancement，避免不必要的 LLM 调用。</p>
+<h2 id="enhancer_1">自定义 Enhancer</h2>
+<p>实现 <code>query.Enhancer</code> 接口即可创建自定义增强器：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span>
+<span class="normal"><a href="#__codelineno-5-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Enhancer</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="nx">EnhanceQuery</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">Enhanced</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>例如，创建一个打印调试信息的装饰器：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-6-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-6-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-6-10">10</a></span>
+<span class="normal"><a href="#__codelineno-6-11">11</a></span>
+<span class="normal"><a href="#__codelineno-6-12">12</a></span>
+<span class="normal"><a href="#__codelineno-6-13">13</a></span>
+<span class="normal"><a href="#__codelineno-6-14">14</a></span>
+<span class="normal"><a href="#__codelineno-6-15">15</a></span>
+<span class="normal"><a href="#__codelineno-6-16">16</a></span>
+<span class="normal"><a href="#__codelineno-6-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">debugEnhancer</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="w">    </span><span class="nx">inner</span><span class="w"> </span><span class="nx">query</span><span class="p">.</span><span class="nx">Enhancer</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="p">}</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">debugEnhancer</span><span class="p">)</span><span class="w"> </span><span class="nx">EnhanceQuery</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">query</span><span class="p">.</span><span class="nx">Request</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">query</span><span class="p">.</span><span class="nx">Enhanced</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">    </span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">d</span><span class="p">.</span><span class="nx">inner</span><span class="p">.</span><span class="nx">EnhanceQuery</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">)</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">Enhanced</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Query</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;查询已改写: %q -&gt; %q\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="p">.</span><span class="nx">Query</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">.</span><span class="nx">Enhanced</span><span class="p">)</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a><span class="p">}</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15"></a>
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16"></a><span class="c1">// 使用：</span>
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17"></a><span class="nx">enhancer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">debugEnhancer</span><span class="p">{</span><span class="nx">inner</span><span class="p">:</span><span class="w"> </span><span class="nx">query</span><span class="p">.</span><span class="nx">NewLLMEnhancer</span><span class="p">(</span><span class="nx">llm</span><span class="p">)}</span>
+</span></code></pre></div></td></tr></table></div>
+<h2 id="_3">注意事项</h2>
+<ul>
+<li>LLMEnhancer 每次查询都会调用一次 LLM，会增加延迟和成本。</li>
+<li>Query Enhancer 是可选的（opt-in），不配置时等同于 Passthrough 行为。</li>
+<li>Reranker 接收的是<strong>原始查询</strong>而非改写后的查询，以保留用户原始意图用于相关性判断。</li>
+</ul>
 
 
 
@@ -2807,20 +2872,20 @@
     
       
   <span class="md-source-file__fact">
-    <span class="md-icon" title="Last update">
+    <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月4日 08:07:26 UTC">2026-06-04 08:07:26</span>
   </span>
 
     
     
       
   <span class="md-source-file__fact">
-    <span class="md-icon" title="Created">
+    <span class="md-icon" title="创建日期">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月4日 08:07:26 UTC">2026-06-04 08:07:26</span>
   </span>
 
     
@@ -2898,33 +2963,33 @@
   
     
       
-      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
         
           
-          <a href="../qdrant/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Qdrant">
+          <a href="../reranker/" class="md-footer__link md-footer__link--prev" aria-label="上一页: Reranker">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
             </div>
             <div class="md-footer__title">
               <span class="md-footer__direction">
-                Previous
+                上一页
               </span>
               <div class="md-ellipsis">
-                Qdrant
+                Reranker
               </div>
             </div>
           </a>
         
         
           
-          <a href="../../troubleshooting/" class="md-footer__link md-footer__link--next" aria-label="Next: Troubleshooting">
+          <a href="../source/" class="md-footer__link md-footer__link--next" aria-label="下一页: 数据源">
             <div class="md-footer__title">
               <span class="md-footer__direction">
-                Next
+                下一页
               </span>
               <div class="md-ellipsis">
-                Troubleshooting
+                数据源
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -2960,7 +3025,7 @@
     
     
       
-      <script id="__config" type="application/json">{"base": "../../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "../../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
     
     
       <script src="../../../assets/javascripts/bundle.92b07e13.min.js"></script>
