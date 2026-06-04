@@ -532,6 +532,26 @@ func TestMemoryFileEnvFromContext_EmptyScopeReturnsNil(t *testing.T) {
 	require.Nil(t, memoryFileEnvFromContext(ctx, store))
 }
 
+func TestMemoryFileEnvFromContext_CanceledContextReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("app", "u1", "telegram:dm:u1:s1"),
+		),
+	)
+	baseCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx := agent.NewInvocationContext(baseCtx, inv)
+
+	require.Nil(t, memoryFileEnvFromContext(ctx, store))
+}
+
 func TestMemoryFileEnvFromContext_EnsureMemoryErrorReturnsNil(t *testing.T) {
 	t.Parallel()
 

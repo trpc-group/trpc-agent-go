@@ -776,8 +776,8 @@ func memoryFileEnvFromContext(
 		ctx,
 		personalUserID,
 	)
-	currentPath := ensureMemoryEnvPath(store, appName, storageUserID)
-	personalPath := ensureMemoryEnvPath(store, appName, personalUserID)
+	currentPath := ensureMemoryEnvPath(ctx, store, appName, storageUserID)
+	personalPath := ensureMemoryEnvPath(ctx, store, appName, personalUserID)
 	if currentPath == "" {
 		return nil
 	}
@@ -792,6 +792,7 @@ func memoryFileEnvFromContext(
 }
 
 func ensureMemoryEnvPath(
+	ctx context.Context,
 	store *memoryfile.Store,
 	appName string,
 	userID string,
@@ -800,8 +801,11 @@ func ensureMemoryEnvPath(
 	if userID == "" {
 		return ""
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	path, err := store.EnsureMemory(
-		context.Background(),
+		ctx,
 		appName,
 		userID,
 	)
