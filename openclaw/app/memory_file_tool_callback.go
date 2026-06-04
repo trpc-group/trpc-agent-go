@@ -26,11 +26,21 @@ import (
 )
 
 const (
-	memoryToolFileName = "MEMORY.md"
+	memoryToolFileName     = "MEMORY.md"
+	memoryToolUserFileName = "USER_MEMORY.md"
+	memoryToolChatFileName = "CHAT_MEMORY.md"
 
 	memoryToolReadFileFS       = "fs_read_file"
 	memoryToolSaveFileFS       = "fs_save_file"
 	memoryToolReplaceContentFS = "fs_replace_content"
+)
+
+type memoryToolScope int
+
+const (
+	memoryToolScopeCurrent memoryToolScope = iota
+	memoryToolScopeUser
+	memoryToolScopeChat
 )
 
 var errMemorySaveFileExists = errors.New(
@@ -105,7 +115,15 @@ func newMemoryFileToolCallback(
 		if store == nil || args == nil {
 			return nil, nil
 		}
-		target, ok, err := memoryToolTargetFromContext(ctx, store)
+		fileName, ok := memoryToolFileNameFromArgs(args.Arguments)
+		if !ok {
+			return nil, nil
+		}
+		target, ok, err := memoryToolTargetFromContext(
+			ctx,
+			store,
+			fileName,
+		)
 		if err != nil || !ok {
 			return nil, err
 		}
@@ -155,14 +173,19 @@ func normalizeMemoryToolName(name string) string {
 func memoryToolTargetFromContext(
 	ctx context.Context,
 	store *memoryfile.Store,
+	fileName string,
 ) (memoryToolTarget, bool, error) {
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil || inv.Session == nil || store == nil {
 		return memoryToolTarget{}, false, nil
 	}
+	scope, ok := memoryToolScopeForFileName(fileName)
+	if !ok {
+		return memoryToolTarget{}, false, nil
+	}
 	appName := strings.TrimSpace(inv.Session.AppName)
 	userID := strings.TrimSpace(inv.Session.UserID)
-	userID = conversationscope.StorageUserIDFromContext(ctx, userID)
+	userID = memoryToolScopeUserID(ctx, scope, userID)
 	if appName == "" || userID == "" {
 		return memoryToolTarget{}, false, nil
 	}
@@ -175,6 +198,41 @@ func memoryToolTargetFromContext(
 		UserID:  userID,
 		Path:    path,
 	}, true, nil
+}
+
+func memoryToolScopeUserID(
+	ctx context.Context,
+	scope memoryToolScope,
+	fallback string,
+) string {
+	switch scope {
+	case memoryToolScopeUser:
+		return conversationscope.UserStorageIDFromContext(
+			ctx,
+			fallback,
+		)
+	case memoryToolScopeCurrent, memoryToolScopeChat:
+		userFallback := conversationscope.UserStorageIDFromContext(
+			ctx,
+			fallback,
+		)
+		return conversationscope.StorageUserIDFromContext(ctx, userFallback)
+	default:
+		return strings.TrimSpace(fallback)
+	}
+}
+
+func memoryToolFileNameFromArgs(args []byte) (string, bool) {
+	var req struct {
+		FileName string `json:"file_name"`
+	}
+	if err := json.Unmarshal(args, &req); err != nil {
+		return "", false
+	}
+	if !isMemoryFileAlias(req.FileName) {
+		return "", false
+	}
+	return req.FileName, true
 }
 
 func handleMemoryReadFileTool(
@@ -353,11 +411,27 @@ func memoryToolResult(result any) *tool.BeforeToolResult {
 }
 
 func isMemoryFileAlias(fileName string) bool {
+	_, ok := memoryToolScopeForFileName(fileName)
+	return ok
+}
+
+func memoryToolScopeForFileName(
+	fileName string,
+) (memoryToolScope, bool) {
 	normalized := filepath.ToSlash(strings.TrimSpace(fileName))
 	for strings.HasPrefix(normalized, "./") {
 		normalized = strings.TrimPrefix(normalized, "./")
 	}
-	return strings.EqualFold(normalized, memoryToolFileName)
+	switch {
+	case strings.EqualFold(normalized, memoryToolFileName):
+		return memoryToolScopeCurrent, true
+	case strings.EqualFold(normalized, memoryToolUserFileName):
+		return memoryToolScopeUser, true
+	case strings.EqualFold(normalized, memoryToolChatFileName):
+		return memoryToolScopeChat, true
+	default:
+		return memoryToolScopeCurrent, false
+	}
 }
 
 func nextMemorySaveContents(
