@@ -10,16 +10,50 @@
 package app
 
 import (
+	"context"
+	"encoding/json"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 )
 
 // RuntimeOption customizes an embedded OpenClaw runtime.
 type RuntimeOption func(*runtimeOptions)
 
+// GatewayInboundMessage describes the inbound gateway message for one run.
+type GatewayInboundMessage struct {
+	Channel   string
+	From      string
+	To        string
+	Thread    string
+	MessageID string
+	Text      string
+}
+
+// GatewayRunOptionInput describes one OpenClaw gateway run before runner.Run.
+type GatewayRunOptionInput struct {
+	Inbound    GatewayInboundMessage
+	UserID     string
+	SessionID  string
+	RequestID  string
+	Message    model.Message
+	Extensions map[string]json.RawMessage
+}
+
+// GatewayRunOptionResolver decorates context and agent run options for one
+// OpenClaw gateway run.
+type GatewayRunOptionResolver func(
+	ctx context.Context,
+	input GatewayRunOptionInput,
+) (context.Context, []agent.RunOption, error)
+
 type runtimeOptions struct {
 	runtimeProfileResolver runtimeprofile.Resolver
 	runtimeProfileCatalog  runtimeprofile.Catalog
 	runtimeProfileRequired bool
+	gatewayResolvers       []GatewayRunOptionResolver
 }
 
 // WithRuntimeProfileResolver injects per-request runtime profile resolution.
@@ -67,6 +101,42 @@ func WithRuntimeProfileStore(
 	}
 }
 
+// WithGatewayRunOptions appends static agent run options to every OpenClaw
+// gateway run.
+func WithGatewayRunOptions(runOpts ...agent.RunOption) RuntimeOption {
+	return func(opts *runtimeOptions) {
+		if len(runOpts) == 0 {
+			return
+		}
+		staticRunOpts := make([]agent.RunOption, 0, len(runOpts))
+		for _, runOpt := range runOpts {
+			if runOpt != nil {
+				staticRunOpts = append(staticRunOpts, runOpt)
+			}
+		}
+		if len(staticRunOpts) == 0 {
+			return
+		}
+		opts.gatewayResolvers = append(
+			opts.gatewayResolvers,
+			staticGatewayRunOptionResolver(staticRunOpts),
+		)
+	}
+}
+
+// WithGatewayRunOptionResolver injects per-request agent run options for
+// OpenClaw gateway runs.
+func WithGatewayRunOptionResolver(
+	resolver GatewayRunOptionResolver,
+) RuntimeOption {
+	return func(opts *runtimeOptions) {
+		if resolver == nil {
+			return
+		}
+		opts.gatewayResolvers = append(opts.gatewayResolvers, resolver)
+	}
+}
+
 func buildRuntimeOptions(options []RuntimeOption) runtimeOptions {
 	var opts runtimeOptions
 	for _, option := range options {
@@ -76,4 +146,77 @@ func buildRuntimeOptions(options []RuntimeOption) runtimeOptions {
 		option(&opts)
 	}
 	return opts
+}
+
+func appendRuntimeGatewayRunOptions(
+	opts []gateway.Option,
+	runtimeOpts runtimeOptions,
+) []gateway.Option {
+	for _, resolver := range runtimeOpts.gatewayResolvers {
+		if resolver == nil {
+			continue
+		}
+		opts = append(
+			opts,
+			gateway.WithRunOptionResolver(
+				adaptGatewayRunOptionResolver(resolver),
+			),
+		)
+	}
+	return opts
+}
+
+func staticGatewayRunOptionResolver(
+	staticRunOpts []agent.RunOption,
+) GatewayRunOptionResolver {
+	return func(
+		ctx context.Context,
+		_ GatewayRunOptionInput,
+	) (context.Context, []agent.RunOption, error) {
+		return ctx, append([]agent.RunOption(nil), staticRunOpts...), nil
+	}
+}
+
+func adaptGatewayRunOptionResolver(
+	resolver GatewayRunOptionResolver,
+) gateway.RunOptionResolver {
+	return func(
+		ctx context.Context,
+		input gateway.RunOptionInput,
+	) (context.Context, []agent.RunOption, error) {
+		return resolver(ctx, gatewayRunOptionInput(input))
+	}
+}
+
+func gatewayRunOptionInput(
+	input gateway.RunOptionInput,
+) GatewayRunOptionInput {
+	return GatewayRunOptionInput{
+		Inbound: GatewayInboundMessage{
+			Channel:   input.Inbound.Channel,
+			From:      input.Inbound.From,
+			To:        input.Inbound.To,
+			Thread:    input.Inbound.Thread,
+			MessageID: input.Inbound.MessageID,
+			Text:      input.Inbound.Text,
+		},
+		UserID:     input.UserID,
+		SessionID:  input.SessionID,
+		RequestID:  input.RequestID,
+		Message:    input.Message,
+		Extensions: cloneGatewayRunOptionExtensions(input.Extensions),
+	}
+}
+
+func cloneGatewayRunOptionExtensions(
+	extensions map[string]json.RawMessage,
+) map[string]json.RawMessage {
+	if len(extensions) == 0 {
+		return nil
+	}
+	out := make(map[string]json.RawMessage, len(extensions))
+	for key, value := range extensions {
+		out[key] = append(json.RawMessage(nil), value...)
+	}
+	return out
 }
