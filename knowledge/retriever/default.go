@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/query"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/reranker"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // DefaultRetriever implements the complete RAG pipeline.
@@ -72,7 +73,7 @@ func New(opts ...Option) *DefaultRetriever {
 func (dr *DefaultRetriever) Retrieve(ctx context.Context, q *Query) (*Result, error) {
 	// Step 1: Enhance query (if enhancer is available).
 	finalQuery := q.Text
-	if dr.queryEnhancer != nil {
+	if dr.queryEnhancer != nil && shouldEnhanceQuery(q) {
 		// Create query request with full context.
 		// No conversion needed as both use the same type from query package
 		queryReq := &query.Request{
@@ -86,6 +87,9 @@ func (dr *DefaultRetriever) Retrieve(ctx context.Context, q *Query) (*Result, er
 			return nil, err
 		}
 		finalQuery = enhanced.Enhanced
+		if finalQuery != q.Text {
+			log.DebugfContext(ctx, "query enhanced: %q -> %q", q.Text, finalQuery)
+		}
 	}
 
 	// Step 2: Generate embedding.
@@ -152,6 +156,10 @@ func (dr *DefaultRetriever) Retrieve(ctx context.Context, q *Query) (*Result, er
 func (dr *DefaultRetriever) Close() error {
 	// Close components if they support closing.
 	return nil
+}
+
+func shouldEnhanceQuery(q *Query) bool {
+	return !(q.Text == "" && q.SearchMode == vectorstore.SearchModeFilter)
 }
 
 // convertQueryFilter converts retriever.QueryFilter to vectorstore.SearchFilter.

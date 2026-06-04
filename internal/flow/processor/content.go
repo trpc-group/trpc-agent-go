@@ -1244,6 +1244,7 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 	for _, choice := range evt.Choices {
 		msg, ok := compactedCurrentInvocationMessage(
 			choice.Message,
+			evt,
 			cfg,
 		)
 		if !ok {
@@ -1269,6 +1270,7 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 
 func compactedCurrentInvocationMessage(
 	msg model.Message,
+	evt event.Event,
 	cfg ContextCompactionConfig,
 ) (model.Message, bool) {
 	switch {
@@ -1288,8 +1290,14 @@ func compactedCurrentInvocationMessage(
 			return msg, true
 		}
 		return model.Message{
-			Role:     msg.Role,
-			Content:  compactedToolResultPlaceholder,
+			Role: msg.Role,
+			Content: recoverableToolResultPlaceholder(
+				toolResultRecoveryRefForMessage(
+					evt,
+					msg,
+					"current_invocation_summary",
+				),
+			),
 			ToolID:   msg.ToolID,
 			ToolName: msg.ToolName,
 		}, true
@@ -2084,11 +2092,14 @@ func eventHasCompactedCurrentInvocationToolResult(
 		if msg.Role != model.RoleTool || msg.ToolID == "" {
 			continue
 		}
-		compacted, ok := compactedCurrentInvocationMessage(msg, cfg)
+		compacted, ok := compactedCurrentInvocationMessage(msg, evt, cfg)
 		if !ok {
 			continue
 		}
-		if compacted.Content != compactedToolResultPlaceholder {
+		if !strings.HasPrefix(
+			strings.TrimSpace(compacted.Content),
+			compactedToolResultPlaceholder,
+		) {
 			continue
 		}
 		if msg.Content != compacted.Content || len(msg.ContentParts) > 0 {

@@ -626,6 +626,8 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
+	require.Contains(t, decl.Description, "OPENCLAW_USER_MEMORY_FILE")
+	require.Contains(t, decl.Description, "OPENCLAW_CHAT_MEMORY_FILE")
 	require.Contains(
 		t,
 		decl.Description,
@@ -1297,6 +1299,139 @@ func TestMainWithOptionsAppliesRuntimeOptions(t *testing.T) {
 	})
 	require.Equal(t, 0, code)
 	require.True(t, observed)
+}
+
+func TestRuntimeGatewayRunOptions(t *testing.T) {
+	t.Parallel()
+
+	type ctxKey string
+
+	const (
+		ctxValueKey        ctxKey = "runtime-run-option"
+		ctxValue                  = "observed"
+		channelName               = "telegram"
+		extensionKey              = "client_tools"
+		extensionValue            = `{"source":"frontend"}`
+		messageID                 = "msg-1"
+		messageText               = "hello"
+		requestID                 = "req-in"
+		replyText                 = "ok"
+		sessionID                 = "telegram:dm:u1"
+		toolName                  = "frontend_pick_date"
+		userID                    = "u1"
+		staticInstruction         = "static"
+		dynamicInstruction        = "dynamic"
+	)
+
+	runner := &capturingRuntimeRunOptionRunner{reply: replyText}
+	runtimeOpts := buildRuntimeOptions([]RuntimeOption{
+		WithGatewayRunOptions(agent.WithInstruction(staticInstruction)),
+		WithGatewayRunOptionResolver(func(
+			ctx context.Context,
+			input GatewayRunOptionInput,
+		) (context.Context, []agent.RunOption, error) {
+			require.Equal(t, channelName, input.Inbound.Channel)
+			require.Equal(t, userID, input.Inbound.From)
+			require.Equal(t, messageID, input.Inbound.MessageID)
+			require.Equal(t, userID, input.UserID)
+			require.Equal(t, sessionID, input.SessionID)
+			require.Equal(t, requestID, input.RequestID)
+			require.Equal(t, messageText, input.Message.Content)
+			require.Equal(
+				t,
+				json.RawMessage(extensionValue),
+				input.Extensions[extensionKey],
+			)
+			return context.WithValue(
+					ctx,
+					ctxValueKey,
+					ctxValue,
+				), []agent.RunOption{
+					agent.WithExternalTools(
+						[]tool.Tool{stubTool{name: toolName}},
+					),
+					agent.WithInstruction(dynamicInstruction),
+				}, nil
+		}),
+	})
+
+	srv, err := gateway.New(
+		runner,
+		appendRuntimeGatewayRunOptions(nil, runtimeOpts)...,
+	)
+	require.NoError(t, err)
+
+	rsp, status := srv.ProcessMessage(
+		context.Background(),
+		gwproto.MessageRequest{
+			Channel:   channelName,
+			From:      userID,
+			MessageID: messageID,
+			RequestID: requestID,
+			Text:      messageText,
+			Extensions: map[string]json.RawMessage{
+				extensionKey: json.RawMessage(extensionValue),
+			},
+		},
+	)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, replyText, rsp.Reply)
+	require.Equal(t, ctxValue, runner.ctx.Value(ctxValueKey))
+	require.Equal(t, dynamicInstruction, runner.opts.Instruction)
+	require.Len(t, runner.opts.ExternalTools, 1)
+	require.Equal(
+		t,
+		toolName,
+		runner.opts.ExternalTools[0].Declaration().Name,
+	)
+}
+
+func TestRuntimeGatewayRunOptionsEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	const instruction = "static"
+
+	runtimeOpts := buildRuntimeOptions([]RuntimeOption{
+		WithGatewayRunOptions(),
+		WithGatewayRunOptions(nil),
+		WithGatewayRunOptionResolver(nil),
+	})
+	require.Empty(t, runtimeOpts.gatewayResolvers)
+
+	runOpt := agent.WithInstruction(instruction)
+	runtimeOpts = buildRuntimeOptions([]RuntimeOption{
+		WithGatewayRunOptions(runOpt),
+	})
+	require.Len(t, runtimeOpts.gatewayResolvers, 1)
+
+	firstCtx, firstOpts, err := runtimeOpts.gatewayResolvers[0](
+		context.Background(),
+		GatewayRunOptionInput{},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, firstCtx)
+	require.Len(t, firstOpts, 1)
+	firstOpts[0] = nil
+
+	_, secondOpts, err := runtimeOpts.gatewayResolvers[0](
+		context.Background(),
+		GatewayRunOptionInput{},
+	)
+	require.NoError(t, err)
+	require.Len(t, secondOpts, 1)
+	agentOpts := agent.NewRunOptions(secondOpts...)
+	require.Equal(t, instruction, agentOpts.Instruction)
+
+	gwOpts := appendRuntimeGatewayRunOptions(
+		nil,
+		runtimeOptions{
+			gatewayResolvers: []GatewayRunOptionResolver{nil},
+		},
+	)
+	require.Empty(t, gwOpts)
+
+	input := gatewayRunOptionInput(gateway.RunOptionInput{})
+	require.Nil(t, input.Extensions)
 }
 
 func TestMain_HelpSkipsErrorLog(t *testing.T) {
@@ -5664,6 +5799,38 @@ func (s *stubRunner) Close() error {
 	}
 	return s.closeErr
 }
+
+type capturingRuntimeRunOptionRunner struct {
+	ctx   context.Context
+	opts  agent.RunOptions
+	reply string
+}
+
+func (r *capturingRuntimeRunOptionRunner) Run(
+	ctx context.Context,
+	_ string,
+	_ string,
+	_ model.Message,
+	runOpts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	r.ctx = ctx
+	r.opts = agent.NewRunOptions(runOpts...)
+
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		Response: &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage(r.reply)},
+			},
+			Done: true,
+		},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (r *capturingRuntimeRunOptionRunner) Close() error { return nil }
 
 type inProcGWTestRunner struct {
 	reply     string

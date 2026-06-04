@@ -1733,11 +1733,178 @@ In short, `MemoryService` means "the framework manages memories directly", while
 - Call `Close()` on the service so background workers shut down cleanly.
 - If you need full CRUD tools or framework-side preload, use one of the built-in memory backends instead.
 
+## TencentDB Agent Memory Integration (`memory/tencentdb`)
+
+`memory/tencentdb` integrates
+[TencentDB Agent Memory](https://github.com/Tencent/TencentDB-Agent-Memory)
+through its standalone gateway sidecar. It is suitable when you want the
+TencentDB Agent Memory SDK to own the L0-L3 memory pipeline while
+tRPC-Agent-Go keeps the Runner, session, plugin, and tool lifecycle in Go.
+
+The boundary is intentionally different from built-in backends:
+
+- The TencentDB Agent Memory gateway performs capture, extraction, storage,
+  recall, and search.
+- The Go adapter sends completed session turns through `session.Ingestor`.
+- A Runner plugin calls `/recall` before each model request and injects the
+  returned context (opt-in via `WithRecallEnabled(true)`).
+- Native tools expose read-oriented search through `tdai_conversation_search`
+  (session-scoped, on by default) and `tdai_memory_search` (opt-in via
+  `WithMemorySearchTool(true)`).
+
+> **Multi-tenant note:** automatic recall and `tdai_memory_search` read from the
+> gateway's shared long-term store, which does not currently enforce
+> user/session scoping. They are therefore disabled by default; enable them only
+> when the gateway guarantees per-tenant isolation. Only session-scoped capture
+> and `tdai_conversation_search` are on by default.
+
+Even when the SDK uses local SQLite storage, the gateway is still required
+because it hosts the memory engine. Direct VectorDB or SQLite access only talks
+to storage and does not run the SDK's extraction and recall pipeline.
+
+**Use case**: Sidecar memory engine, local or self-managed storage, automatic
+recall before model calls, and external SDK-owned memory extraction.
+
+### Start the TencentDB Agent Memory Gateway
+
+Clone the SDK repository and start the standalone gateway:
+
+```bash
+git clone https://github.com/Tencent/TencentDB-Agent-Memory.git
+cd TencentDB-Agent-Memory
+npm install
+
+export TDAI_LLM_API_KEY="your-openai-compatible-api-key"
+export TDAI_LLM_BASE_URL="https://api.openai.com/v1"
+export TDAI_LLM_MODEL="deepseek-v4-flash"
+
+node --import tsx src/gateway/server.ts
+```
+
+The gateway listens on `http://127.0.0.1:8420` by default. It reads
+`TDAI_LLM_API_KEY`, `TDAI_LLM_BASE_URL`, and `TDAI_LLM_MODEL` for extraction,
+scene/persona generation, and recall.
+
+### Configuration Example
+
+```go
+import (
+    "os"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    memorytencentdb "trpc.group/trpc-go/trpc-agent-go/memory/tencentdb"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+gatewayURL := os.Getenv("TENCENTDB_AGENT_MEMORY_GATEWAY")
+if gatewayURL == "" {
+    gatewayURL = "http://127.0.0.1:8420"
+}
+
+memSvc, err := memorytencentdb.NewService(
+    memorytencentdb.WithGatewayURL(gatewayURL),
+    // Opt-in cross-session/user reads; enable only for a trusted/isolated gateway.
+    memorytencentdb.WithRecallEnabled(true),
+    memorytencentdb.WithMemorySearchTool(true),
+    // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
+)
+if err != nil {
+    panic(err)
+}
+defer memSvc.Close()
+
+sessionSvc := sessioninmemory.NewSessionService()
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(openai.New("deepseek-v4-flash")),
+    llmagent.WithTools(memSvc.Tools()),
+)
+
+r := runner.NewRunner(
+    "my-app",
+    agent,
+    runner.WithSessionService(sessionSvc),
+    runner.WithSessionIngestor(memSvc),
+    runner.WithPlugins(memSvc.Plugin()),
+)
+defer r.Close()
+```
+
+**Integration points**:
+
+- Register TencentDB-native search tools with `llmagent.WithTools(memSvc.Tools())`
+- Use `runner.WithSessionIngestor(memSvc)` to send timestamped session
+  transcripts to `/capture`
+- Use `runner.WithPlugins(memSvc.Plugin())` to enable automatic `/recall`
+  before model calls
+- Do **not** use `runner.WithMemoryService(...)` with this integration
+
+### Interactive Example
+
+Run the example after the gateway is ready:
+
+```bash
+cd examples/memory/tencentdb
+export OPENAI_API_KEY="your-openai-compatible-api-key"
+export TENCENTDB_AGENT_MEMORY_GATEWAY="http://127.0.0.1:8420"
+go run .
+```
+
+Then send facts, flush into a new session, and ask related questions:
+
+```text
+You: Remember this profile: my project code name is Apollo Lake, my deployment window is Friday night, and I prefer concise answers.
+You: /new
+You: What is my project code name, deployment window, and answer preference?
+```
+
+The first messages are captured by the gateway. The example's `/new` command
+flushes the current gateway session before switching to a fresh session, so the
+same user can recall extracted memories through the plugin and native search
+tools even after conversation history is reset.
+
+### Configuration Options
+
+| Option | Purpose | Default |
+| ------ | ------- | ------- |
+| `WithGatewayURL(url)` | TencentDB Agent Memory gateway URL. | `http://127.0.0.1:8420` |
+| `WithTimeout(d)` | HTTP timeout used by the gateway client. | `5s` |
+| `WithIngestWorkers(n)` | Number of async capture workers. | `1` |
+| `WithIngestQueueSize(n)` | Queue size for async capture jobs. | `10` |
+| `WithIngestJobTimeout(d)` | Timeout for queued capture jobs. | `30s` |
+| `WithSessionKeyFunc(fn)` | Customize session to gateway `session_key` mapping. | `base64url(app):base64url(user):base64url(session)` |
+| `WithAPIKey(key)` | Send `Authorization: Bearer <key>` (gateway `TDAI_GATEWAY_API_KEY`). | none |
+| `WithRecallEnabled(bool)` | Enable automatic recall plugin behavior (opt-in; reads shared store). | `false` |
+| `WithMemorySearchTool(bool)` | Expose `tdai_memory_search` (opt-in; reads shared store). | `false` |
+| `WithConversationSearchTool(bool)` | Expose `tdai_conversation_search`. | `true` |
+| `WithStandardAliases(bool)` | Also expose standard `memory_search` alias (requires memory search enabled). | `false` |
+| `WithToolPrefix(prefix)` | Change native tool prefix. | `tdai` |
+
+### Notes
+
+- The adapter forwards app, user, and session identifiers to the gateway, but
+  hard multi-tenant isolation depends on the gateway and SDK honoring those
+  fields end-to-end. Because of this, automatic recall and `tdai_memory_search`
+  are opt-in and disabled by default.
+- When the gateway is started with `TDAI_GATEWAY_API_KEY`, set `WithAPIKey(...)`
+  so requests carry `Authorization: Bearer <key>`; otherwise every non-health
+  route returns 401 while the health check still passes.
+- `tdai_memory_search` searches extracted long-term memory; extraction is
+  asynchronous, so newly captured facts may take a short time to become
+  searchable.
+- `tdai_conversation_search` searches conversation history and defaults to the
+  current gateway `session_key`.
+- Call `Close()` on the service so background capture workers shut down cleanly.
+
 ## References
 
 - [Memory Module Source](https://github.com/trpc-group/trpc-agent-go/tree/main/memory)
 - [Agentic Mode Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory)
 - [Auto Mode Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto)
 - [mem0 Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/mem0)
+- [TencentDB Agent Memory Example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/tencentdb)
+- [TencentDB Agent Memory SDK](https://github.com/Tencent/TencentDB-Agent-Memory)
 - [Ecosystem Guide](https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/ecosystem.md)
 - [API Documentation](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory)

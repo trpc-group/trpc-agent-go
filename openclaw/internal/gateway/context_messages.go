@@ -110,9 +110,13 @@ func (s *Server) memoryFileContextMessages(
 		return nil
 	}
 
-	primaryUserID := conversationscope.StorageUserIDFromContext(
+	personalUserID := conversationscope.UserStorageIDFromContext(
 		ctx,
 		userID,
+	)
+	primaryUserID := conversationscope.StorageUserIDFromContext(
+		ctx,
+		personalUserID,
 	)
 	messages := make([]model.Message, 0, 2)
 	if msg := s.memoryFileContextMessage(
@@ -120,7 +124,7 @@ func (s *Server) memoryFileContextMessages(
 		appName,
 		primaryUserID,
 		func() string {
-			if primaryUserID != userID {
+			if primaryUserID != personalUserID {
 				return chatMemoryScopeLabel
 			}
 			return userMemoryScopeLabel
@@ -129,13 +133,13 @@ func (s *Server) memoryFileContextMessages(
 	); msg != nil {
 		messages = append(messages, *msg)
 	}
-	if primaryUserID == userID {
+	if primaryUserID == personalUserID {
 		return messages
 	}
 	if msg := s.memoryFileContextMessage(
 		ctx,
 		appName,
-		userID,
+		personalUserID,
 		userMemoryScopeLabel,
 		false,
 	); msg != nil {

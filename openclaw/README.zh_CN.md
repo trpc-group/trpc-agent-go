@@ -1208,6 +1208,10 @@ OpenClaw 支持以下扩展点：
   `registry.RegisterMemoryBackend(type, factory)` 注册。
   通过 `memory.backend`（`-memory-backend`）和可选的
   `memory.config` 选择。
+- **Gateway Run Options**：在自定义二进制文件中传入
+  `app.WithGatewayRunOptions(...)` 或
+  `app.WithGatewayRunOptionResolver(...)`，为每个请求注入
+  `agent.RunOption`。
 - **Skills**：无需 Go 代码；将 `skills.extra_dirs` 指向一个文件夹。
 
 有关插件编写的分步指南（含复制粘贴模板），参见 `openclaw/EXTENDING.md`。
