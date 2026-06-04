@@ -6,7 +6,7 @@ replace trpc.group/trpc-go/trpc-agent-go => ../../../..
 
 require (
 	golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v1.9.2-0.20260602121024-664ebd0ab56d
 )
 
 require (
