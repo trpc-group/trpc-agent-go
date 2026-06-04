@@ -410,14 +410,16 @@ func conversationMessageFromEvent(evt *event.Event) (knowledge.ConversationMessa
 		}
 		content := strings.TrimSpace(msg.Content)
 		if content == "" {
+			var textParts []string
 			for _, part := range msg.ContentParts {
 				if part.Type == model.ContentTypeText && part.Text != nil {
-					content = strings.TrimSpace(*part.Text)
-					if content != "" {
-						break
+					t := strings.TrimSpace(*part.Text)
+					if t != "" {
+						textParts = append(textParts, t)
 					}
 				}
 			}
+			content = strings.Join(textParts, "\n")
 			if content == "" {
 				continue
 			}

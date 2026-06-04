@@ -101,7 +101,7 @@ go run main.go -vectorstore pgvector
 
 ## Example Output
 
-```
+```text
 🔄 Query Enhancer Demo — Multi-turn Knowledge Chat
 ===================================================
 
@@ -131,7 +131,7 @@ go run main.go -vectorstore pgvector
 
 ## How it Works
 
-```
+```text
 User Query + Session History
         │
         ▼

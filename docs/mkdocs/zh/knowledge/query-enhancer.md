@@ -89,7 +89,7 @@ enhancer := query.NewPassthroughEnhancer()
 
 Query Enhancer 在 RAG 管道中的位置：
 
-```
+```text
 用户查询 + 会话历史
         │
         ▼

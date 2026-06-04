@@ -89,7 +89,7 @@ enhancer := query.NewPassthroughEnhancer()
 
 Position of the Query Enhancer in the RAG pipeline:
 
-```
+```text
 User Query + Session History
         │
         ▼

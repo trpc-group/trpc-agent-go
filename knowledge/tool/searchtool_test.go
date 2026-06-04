@@ -112,6 +112,16 @@ func TestConversationMessageFromEvent(t *testing.T) {
 		Role:         model.RoleUser,
 		ContentParts: []model.ContentPart{{Type: model.ContentTypeText, Text: &contentPartsText}},
 	}, false)
+	multiPartA := "first part"
+	multiPartB := "second part"
+	multiTextPartsEvent := historyEvent(model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeText, Text: &multiPartA},
+			{Type: model.ContentTypeImage, Image: &model.Image{URL: "http://img"}},
+			{Type: model.ContentTypeText, Text: &multiPartB},
+		},
+	}, false)
 	validEvent := historyEvent(model.NewUserMessage(" question "), false)
 	tests := []struct {
 		name   string
@@ -161,6 +171,16 @@ func TestConversationMessageFromEvent(t *testing.T) {
 				Role:      "user",
 				Content:   "from content parts",
 				Timestamp: contentPartsEvent.Timestamp.Unix(),
+			},
+			wantOK: true,
+		},
+		{
+			name: "empty content with multiple text content parts",
+			evt:  &multiTextPartsEvent,
+			want: knowledge.ConversationMessage{
+				Role:      "user",
+				Content:   "first part\nsecond part",
+				Timestamp: multiTextPartsEvent.Timestamp.Unix(),
 			},
 			wantOK: true,
 		},
