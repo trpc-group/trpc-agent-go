@@ -30,6 +30,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
+func summaryTestMessageEvent() event.Event {
+	return event.Event{
+		Timestamp: time.Now(),
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Content: "message"},
+		}}},
+	}
+}
+
 func TestParseSummaryPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -106,9 +115,7 @@ func TestNewSessionSummarizer_ManualMode(t *testing.T) {
 	// With event_threshold=1, 2 events should trigger.
 	sess := session.NewSession("app", "user", "sess")
 	for i := 0; i < 2; i++ {
-		sess.Events = append(sess.Events, event.Event{
-			Timestamp: time.Now(),
-		})
+		sess.Events = append(sess.Events, summaryTestMessageEvent())
 	}
 	require.True(t, summarizer.ShouldSummarize(sess))
 }

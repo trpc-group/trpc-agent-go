@@ -285,9 +285,7 @@ func checkTokenThreshold(
 	if len(thresholdEvents) == 0 {
 		return false
 	}
-	message := extractTokenThresholdMessage(
-		thresholdEvents, nil, nil,
-	)
+	message := extractTokenThresholdMessage(thresholdEvents)
 	return checkTokenThresholdFromMessage(
 		ctx,
 		tokenCount,

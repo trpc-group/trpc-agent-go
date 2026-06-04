@@ -259,10 +259,11 @@ func (s *sessionSummarizer) ShouldSummarizeWithContext(
 	if sess == nil || len(sess.Events) == 0 {
 		return false
 	}
-	if len(filterSummaryInputEventsForSession(
+	summaryInputEvents := filterSummaryInputEventsForSession(
 		s.filterEventsForSummary(sess.Events),
 		sess,
-	)) == 0 {
+	)
+	if !s.hasSummarizableContent(summaryInputEvents) {
 		return false
 	}
 
@@ -370,11 +371,11 @@ func (s *sessionSummarizer) buildCheckSession(
 	delta := filterDeltaEvents(checkSess)
 	filtered := s.filterEventsForSummary(delta)
 	thresholdEvents := filterThresholdEventsForSession(filtered, checkSess)
-	thresholdMessage := extractTokenThresholdMessage(
-		thresholdEvents,
-		s.toolCallFormatter,
-		s.toolResultFormatter,
-	)
+	var thresholdMessage model.Message
+	summaryInputEvents := filterSummaryInputEventsForSession(filtered, checkSess)
+	if s.hasSummarizableContent(summaryInputEvents) {
+		thresholdMessage = extractTokenThresholdMessage(thresholdEvents)
+	}
 	checkSess.SetState(
 		tokenThresholdConversationTextStateKey,
 		[]byte(thresholdMessage.Content),
@@ -621,17 +622,9 @@ func extractConversationText(
 	return strings.Join(parts, "\n")
 }
 
-func extractTokenThresholdMessage(
-	events []event.Event,
-	toolCallFmt ToolCallFormatter,
-	toolResultFmt ToolResultFormatter,
-) model.Message {
+func extractTokenThresholdMessage(events []event.Event) model.Message {
 	return model.Message{
-		Content: extractConversationText(
-			events,
-			toolCallFmt,
-			toolResultFmt,
-		),
+		Content:          extractConversationText(events, nil, nil),
 		ReasoningContent: extractReasoningContent(events),
 	}
 }

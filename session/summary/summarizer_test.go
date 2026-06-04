@@ -29,7 +29,12 @@ func TestSessionSummarizer_ShouldSummarize(t *testing.T) {
 		s := NewSummarizer(&fakeModel{}, WithChecksAny(checks...))
 		sess := &session.Session{Events: make([]event.Event, 4)}
 		for i := range sess.Events {
-			sess.Events[i] = event.Event{Timestamp: time.Now()}
+			sess.Events[i] = event.Event{
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "message"},
+				}}},
+			}
 		}
 		assert.True(t, s.ShouldSummarize(sess))
 	})
@@ -1681,10 +1686,11 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 		assert.Nil(t, s.buildCheckSession(nil))
 	})
 
-	t.Run("injects effective token text from formatter-aware delta", func(t *testing.T) {
+	t.Run("injects token text without summary input formatter", func(t *testing.T) {
 		s := &sessionSummarizer{
-			toolResultFormatter: func(model.Message) string { return "" },
+			toolResultFormatter: func(model.Message) string { return "[tool result]" },
 		}
+		content := strings.Repeat("x", 2000)
 		sess := &session.Session{
 			Events: []event.Event{
 				{
@@ -1694,7 +1700,7 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 						Message: model.Message{
 							ToolID:   "call-1",
 							ToolName: "read_file",
-							Content:  strings.Repeat("x", 2000),
+							Content:  content,
 						},
 					}}},
 				},
@@ -1706,7 +1712,7 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 
 		raw, ok := checkSess.GetState(tokenThresholdConversationTextStateKey)
 		require.True(t, ok)
-		assert.Empty(t, string(raw))
+		assert.Contains(t, string(raw), content)
 	})
 
 	t.Run("injects reasoning content only for token threshold checks", func(t *testing.T) {

@@ -1059,6 +1059,7 @@ func TestOneShot_ReinitializesPerCall(t *testing.T) {
 	broker := New(WithServers(map[string]legacymcp.ConnectionConfig{
 		"http_named": {
 			ServerURL: server.URL,
+			Timeout:   5 * time.Second,
 		},
 	}))
 
