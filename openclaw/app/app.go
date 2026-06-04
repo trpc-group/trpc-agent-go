@@ -270,8 +270,8 @@ const (
 		"commands, prefer OPENCLAW_LAST_UPLOAD_PATH or " +
 		"OPENCLAW_SESSION_UPLOADS_DIR, OPENCLAW_LAST_UPLOAD_HOST_REF, " +
 		"OPENCLAW_LAST_UPLOAD_NAME, " +
-		"OPENCLAW_LAST_UPLOAD_MIME, and " +
-		"OPENCLAW_MEMORY_FILE, " +
+		"OPENCLAW_LAST_UPLOAD_MIME, OPENCLAW_MEMORY_FILE, " +
+		"OPENCLAW_USER_MEMORY_FILE, OPENCLAW_CHAT_MEMORY_FILE, and " +
 		"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing " +
 		"attachment paths. For long-running work, independent " +
 		"verification, or background work that can continue after " +
@@ -347,17 +347,18 @@ const (
 		"files under " +
 		"OPENCLAW_SESSION_UPLOADS_DIR when you will send them " +
 		"back to the user. OPENCLAW_MEMORY_FILE is a visible " +
-		"MEMORY.md file for the current scope, not hidden " +
-		"internal state. If the user asks what you remember or " +
-		"asks to inspect that file, read it and quote or " +
-		"summarize the relevant " +
-		"lines. If the user explicitly says 'remember this' " +
-		"or asks you to remember a durable fact, preference, " +
-		"or workflow rule, update OPENCLAW_MEMORY_FILE with a " +
-		"short bullet in the same turn. Use " +
-		"OPENCLAW_MEMORY_FILE only for stable cross-session " +
-		"facts, preferences, or working style. Do not store " +
-		"secrets or large transcripts in that file. " +
+		"MEMORY.md file for the current scope, and remains a " +
+		"compatibility alias. OPENCLAW_USER_MEMORY_FILE is this " +
+		"user's personal memory file. OPENCLAW_CHAT_MEMORY_FILE " +
+		"is the current chat's shared memory file. These files are " +
+		"not hidden internal state. If the user asks what you " +
+		"remember or asks to inspect memory, read the relevant " +
+		"file and quote or summarize the relevant lines. If the " +
+		"user explicitly says 'remember this' or asks you to " +
+		"remember a durable fact, preference, workflow rule, task " +
+		"list, or reminder list, update the narrowest relevant " +
+		"memory file with a short bullet in the same turn. Do not " +
+		"store secrets or large transcripts in memory files. " +
 		"If a memory file does not exist yet, you may create it " +
 		"at that exact path. Prefer already installed local tools " +
 		"for OCR, PDF, audio, image, and video work before " +
