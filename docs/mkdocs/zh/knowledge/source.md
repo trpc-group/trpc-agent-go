@@ -116,7 +116,7 @@ autoSrc := autosource.New(
 - 加载本地 checkout 后的 **仓库目录**
 - 对单个仓库统一处理 Go / Python / Proto / Markdown 等内容
 
-> **当前开源状态说明**：目前 AST-aware 代码解析能力已开源支持 **Go**、**Python** 和 **Proto / PB**。`C++`、`JavaScript` 等语言能力正在逐步开源中。对于这些尚未开源的语言，仓库源仍可通过普通文档 reader 处理对应文本类文件，但不会产出同等级别的 AST 语义实体。 
+> **当前开源状态说明**：目前 AST-aware 代码解析能力已开源支持 **Go**、**Python** 和 **Proto / PB**。`C++`、`JavaScript` 等语言能力正在逐步开源中。对于这些尚未开源的语言，仓库源仍可通过普通文档 reader 处理对应文本类文件，但不会产出同等级别的 AST 语义实体。
 
 ### 典型场景
 
@@ -281,7 +281,7 @@ trpc_ast_language: go
 
 除了向量化检索（embedding + vector store），仓库源还支持以图谱的方式存储代码结构关系。AST reader 在解析时会提取实体之间的边关系，结合图数据库（Apache AGE）实现结构化的代码导航。
 
-![AGE Graph Viewer - 代码图谱可视化](../../assets/img/knowledge/viewer.png)
+![AGE Graph Viewer - 代码图谱可视化](../../assets/img/knowledge/viewer.jpg)
 
 #### 边类型
 

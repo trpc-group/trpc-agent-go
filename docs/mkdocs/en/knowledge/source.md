@@ -274,7 +274,7 @@ For Python files, chunking follows the same approach at Class / Function / Metho
 
 Beyond vector retrieval (embedding + vector store), the repo source also supports storing structural code relationships as a graph. AST readers extract edges between entities during parsing. Combined with a graph database (Apache AGE), this enables structural code navigation.
 
-![AGE Graph Viewer - Code Graph Visualization](../../assets/img/knowledge/viewer.png)
+![AGE Graph Viewer - Code Graph Visualization](../../assets/img/knowledge/viewer.jpg)
 
 #### Edge Types
 

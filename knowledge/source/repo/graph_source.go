@@ -15,7 +15,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -28,11 +27,11 @@ import (
 
 // codeLanguageSpec describes one programming language for graph source parsing.
 type codeLanguageSpec struct {
-	fileType    string
-	ext         string
-	skipSuffix  string
-	skipPrefix  string
-	skipNames   []string
+	fileType   string
+	ext        string
+	skipSuffix string
+	skipPrefix string
+	skipNames  []string
 }
 
 // supportedCodeLanguages lists all languages that ReadGraph can parse when a
@@ -75,13 +74,7 @@ func (s *Source) ReadGraph(ctx context.Context, opts ...source.ReadGraphOption) 
 		}
 		parser, ok := codeast.GetDirectoryParser(lang.fileType)
 		if !ok {
-			slog.Warn("graph source: skipping language with unread files; "+
-				"no DirectoryParser registered (missing blank import?)",
-				"language", lang.fileType,
-				"file_count", len(allowed),
-				"hint", fmt.Sprintf(`import _ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/%s"`, lang.fileType),
-			)
-			continue
+			return nil, missingReaderError(lang.fileType)
 		}
 		var parseOpts []codeast.ParseOption
 		if parseConcurrency > 0 {
@@ -452,10 +445,9 @@ func buildShortNameIndex(keptSymbols map[string]struct{}) map[string][]string {
 }
 
 // resolveSymbolID attempts to find the canonical symbol ID for a given raw ID.
-// It first tries exact match, then falls back to prefix-based and short-name matching.
-// Fuzzy matching is only attempted when rawID contains path context (at least one dot);
-// bare short names (e.g. "BaseModel" with no package prefix) are not resolved to avoid
-// false-positive edge connections.
+// It first tries exact match, then falls back to prefix-based short-name matching.
+// Fuzzy matching requires both a short-name hit AND a package-prefix relationship,
+// preventing false-positive edges from unrelated symbols that share a name.
 func resolveSymbolID(rawID string, keptSymbols map[string]struct{}, shortNameIndex map[string][]string) string {
 	if _, ok := keptSymbols[rawID]; ok {
 		return rawID
@@ -476,13 +468,11 @@ func resolveSymbolID(rawID string, keptSymbols map[string]struct{}, shortNameInd
 	if len(candidates) == 0 {
 		return ""
 	}
-	if len(candidates) == 1 {
-		return candidates[0]
-	}
 
-	// Multiple candidates: try prefix-based matching.
-	// e.g. rawID = "pkg.abc.AgentABC" should match "pkg.abc._agent.AgentABC"
-	// because "pkg.abc" is a prefix of "pkg.abc._agent".
+	// Require prefix relationship: the rawID's package prefix must be a prefix
+	// of the candidate's full path. This handles Python re-export paths where
+	// e.g. "pkg.abc.AgentABC" should match "pkg.abc._agent.AgentABC", but rejects
+	// "external.Client" -> "pkg.Client" where packages are unrelated.
 	prefix := symbolPrefix(rawID)
 	if prefix == "" {
 		return ""

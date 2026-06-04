@@ -842,8 +842,10 @@ func TestResolveSymbolIDExactMatch(t *testing.T) {
 func TestResolveSymbolIDShortNameUnique(t *testing.T) {
 	kept := map[string]struct{}{"pkg.internal.UniqueClass": {}}
 	idx := buildShortNameIndex(kept)
-	// With path context ("some.UniqueClass"), short-name resolves uniquely.
-	require.Equal(t, "pkg.internal.UniqueClass", resolveSymbolID("some.UniqueClass", kept, idx))
+	// "pkg.UniqueClass" has prefix "pkg" which IS a prefix of "pkg.internal" — valid re-export match.
+	require.Equal(t, "pkg.internal.UniqueClass", resolveSymbolID("pkg.UniqueClass", kept, idx))
+	// "some.UniqueClass" has prefix "some" which is NOT a prefix of "pkg.internal" — rejected.
+	require.Equal(t, "", resolveSymbolID("some.UniqueClass", kept, idx))
 }
 
 func TestResolveSymbolIDBareShortNameRejected(t *testing.T) {

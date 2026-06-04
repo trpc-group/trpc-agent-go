@@ -13,8 +13,8 @@ package python
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -188,22 +188,13 @@ func mergeResults(results []parseFileResult, absDir string) (*codeast.Result, er
 			absDir, len(errs), errs[0])
 	}
 
-	if len(errs) > 0 {
-		slog.Warn("python parser: some files failed to parse; graph may be incomplete",
-			"directory", absDir,
-			"failed_count", len(errs),
-			"total_count", len(results),
-			"first_error", errs[0],
-		)
-	}
-
 	imports := make([]string, 0, len(importsSet))
 	for imp := range importsSet {
 		imports = append(imports, imp)
 	}
 	sort.Strings(imports)
 
-	return &codeast.Result{
+	result := &codeast.Result{
 		File: &codeast.FileInfo{
 			Name:     absDir,
 			Language: codeast.LanguagePython,
@@ -211,7 +202,14 @@ func mergeResults(results []parseFileResult, absDir string) (*codeast.Result, er
 		},
 		Nodes: allNodes,
 		Edges: allEdges,
-	}, nil
+	}
+
+	if len(errs) > 0 {
+		return result, fmt.Errorf("parse directory %s: %d/%d file(s) failed: %w",
+			absDir, len(errs), len(results), errors.Join(errs...))
+	}
+
+	return result, nil
 }
 
 // ParseContent parses Python source content and returns AST nodes and edges.
