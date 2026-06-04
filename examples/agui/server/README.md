@@ -9,6 +9,7 @@ This directory shows AG-UI servers that can talk to the AG-UI client examples.
 - [`event_emitter/`](event_emitter/) – Demonstrates Node EventEmitter for emitting custom events, progress updates, and streaming text from NodeFunc.
 - [`finishresult/`](finishresult/) – Demonstrates populating `RUN_FINISHED.result` by wrapping the default translator.
 - [`externaltool/llmagent/`](externaltool/llmagent/) – Demonstrates `llmagent + agui + WithExternalTools` with two internal tools and two dynamically declared external tools in the same conversation.
+- [`externaltool/agentnode/`](externaltool/agentnode/) – Demonstrates `GraphAgent + AgentNode + WithAgentNodeRunOptions(agent.WithExternalTools(...))` with AG-UI interrupt and resume.
 - [`externaltool/graphagent/`](externaltool/graphagent/) – Demonstrates a `GraphAgent` interrupt workflow with two internal tools and two external tools in the same turn.
 - [`streamtool/`](streamtool/) – Demonstrates a minimal `StreamableTool` that uses `agui.WithStreamingToolResultActivityEnabled(true)` to stream tool progress as `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` while preserving a final `TOOL_CALL_RESULT`.
 - [`heartbeat/`](heartbeat/) – Demonstrates SSE heartbeat keepalive frames with `agui.WithHeartbeatInterval`.

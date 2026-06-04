@@ -188,6 +188,7 @@ type Node struct {
 	// Subgraph (agent node) options
 	agentInputMapper      SubgraphInputMapper
 	agentOutputMapper     SubgraphOutputMapper
+	agentRunOptions       []agent.RunOption
 	agentIsolatedMessages bool
 	agentEventScope       string
 	// agentInputFromLastResponse indicates whether the agent node should

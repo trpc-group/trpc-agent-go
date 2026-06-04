@@ -221,6 +221,33 @@ func TestAgentNode_Stage2_PluginsWithoutAgentCallbacks_CallsRunDirectly(t *testi
 	require.Equal(t, 1, sub.ranCount())
 }
 
+func TestAgentNode_RunOptions_ApplyExternalToolsToSubInvocation(t *testing.T) {
+	sub := &recordingAgent{name: "child"}
+	parentExternal := &simpleTool{name: "parent_external"}
+	nodeExternal := &simpleTool{name: "node_external"}
+	state, _ := buildAgentNodeState(sub)
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationID("parent-inv"),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ExternalTools: []tool.Tool{parentExternal},
+		}),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parentInv)
+	fn := NewAgentNodeFunc(
+		sub.Info().Name,
+		WithAgentNodeRunOptions(agent.WithExternalTools([]tool.Tool{nodeExternal})),
+	)
+	out, err := fn(ctx, state)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	childInv := sub.capturedInvocation()
+	require.NotNil(t, childInv)
+	require.Equal(t, []tool.Tool{parentExternal, nodeExternal}, childInv.RunOptions.ExternalTools)
+	require.NotNil(t, childInv.RunOptions.RuntimeState)
+	require.Equal(t, "hi", childInv.RunOptions.RuntimeState[StateKeyUserInput])
+	require.Equal(t, []tool.Tool{parentExternal}, parentInv.RunOptions.ExternalTools)
+}
+
 // -------- Group B: BeforeAgent ---------------------------------------------
 
 // B1: BeforeAgent fires for the sub-agent, and its args carry the child
@@ -594,6 +621,7 @@ func TestAgentNode_Stage2_SubInvocation_InheritsPluginsFromParent(t *testing.T) 
 
 	childInv := buildAgentInvocationWithStateScopeAndInputKey(
 		ctx, state, State{}, sub, "agentNode", "", "",
+		nil,
 		nil,
 	)
 	require.NotNil(t, childInv)

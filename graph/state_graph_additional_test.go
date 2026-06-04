@@ -3489,6 +3489,7 @@ func TestBuildAgentInvocationWithStateAndScope_PrefersTraceTaskPredecessors(t *t
 		"delegate",
 		"",
 		StateKeyUserInput,
+		nil,
 		newTraceTaskMetadata(nil, "task", "delegate", []string{"upstream-1", "upstream-2"}, nil),
 	)
 	require.Equal(t, []string{"upstream-1", "upstream-2"}, agent.NextExecutionTracePredecessors(inv))

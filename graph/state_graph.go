@@ -395,7 +395,11 @@ func WithAgentNodeEventCallback(callback AgentEventCallback) Option {
 // kept separate from FinalState/RawStateDelta so callers can distinguish a
 // normal terminal snapshot from fatal fallback state.
 type SubgraphResult struct {
-	LastResponse       string
+	LastResponse string
+	// LastMessage is the latest assistant message observed from the child agent.
+	LastMessage *model.Message
+	// ToolCalls contains the tool calls from LastMessage when present.
+	ToolCalls          []model.ToolCall
 	FinalState         State
 	RawStateDelta      map[string][]byte
 	FallbackState      State
@@ -442,6 +446,13 @@ func WithSubgraphInputMapper(f SubgraphInputMapper) Option {
 func WithSubgraphOutputMapper(f SubgraphOutputMapper) Option {
 	return func(node *Node) {
 		node.agentOutputMapper = f
+	}
+}
+
+// WithAgentNodeRunOptions applies run options only to this agent node's child invocation.
+func WithAgentNodeRunOptions(opts ...agent.RunOption) Option {
+	return func(node *Node) {
+		node.agentRunOptions = append([]agent.RunOption(nil), opts...)
 	}
 }
 
@@ -2635,6 +2646,7 @@ type agentNodeConfig struct {
 	callbacks           *NodeCallbacks
 	inputMapper         SubgraphInputMapper
 	outputMapper        SubgraphOutputMapper
+	runOptions          []agent.RunOption
 	isolated            bool
 	scope               string
 	inputFromLast       bool
@@ -2652,6 +2664,7 @@ func agentNodeConfigFromOptions(opts ...Option) agentNodeConfig {
 		callbacks:           dummyNode.callbacks,
 		inputMapper:         dummyNode.agentInputMapper,
 		outputMapper:        dummyNode.agentOutputMapper,
+		runOptions:          append([]agent.RunOption(nil), dummyNode.agentRunOptions...),
 		isolated:            dummyNode.agentIsolatedMessages,
 		scope:               dummyNode.agentEventScope,
 		inputFromLast:       dummyNode.agentInputFromLastResponse,
@@ -2882,6 +2895,8 @@ func finalizeAgentNodeOutput(
 	if outputMapper != nil {
 		mapped := outputMapper(state, SubgraphResult{
 			LastResponse:       streamRes.lastResponse,
+			LastMessage:        streamRes.lastMessage,
+			ToolCalls:          streamRes.toolCalls,
 			FinalState:         streamRes.finalState,
 			RawStateDelta:      streamRes.rawDelta,
 			FallbackState:      streamRes.fallbackState,
@@ -2968,6 +2983,7 @@ func (r *agentNodeRuntime) Run(
 		nodeID,
 		r.config.scope,
 		r.config.userInputKey,
+		r.config.runOptions,
 		traceTask,
 	)
 	// Emit agent execution start event.
@@ -3103,6 +3119,8 @@ type agentEventStreamResult struct {
 	fallbackState    State
 	fallbackRawDelta map[string][]byte
 	structuredOutput any
+	lastMessage      *model.Message
+	toolCalls        []model.ToolCall
 	interrupt        *InterruptError
 	interruptInfo    *extractedPregelInterrupt
 	terminalErr      error
@@ -3208,6 +3226,7 @@ func updateAgentStreamResultFromEvent(
 ) {
 	captureAgentFallbackState(res, ev)
 	updateAgentLastResponse(res, ev)
+	updateAgentLastMessage(res, ev)
 	updateAgentStructuredOutput(res, ev)
 	updateAgentInterrupt(res, ev)
 	updateAgentFinalState(ctx, res, ev)
@@ -3245,6 +3264,25 @@ func updateAgentLastResponseValue(lastResponse *string, lastResponseID *string, 
 	*lastResponse = msg.Content
 }
 
+func updateAgentLastMessage(res *agentEventStreamResult, ev *event.Event) {
+	if res == nil || ev == nil || ev.Response == nil || len(ev.Response.Choices) == 0 {
+		return
+	}
+	msg := ev.Response.Choices[0].Message
+	if msg.Role != model.RoleAssistant || !agentMessageHasPayload(msg) {
+		return
+	}
+	res.lastMessage = &msg
+	res.toolCalls = msg.ToolCalls
+}
+
+func agentMessageHasPayload(msg model.Message) bool {
+	return msg.Content != "" ||
+		len(msg.ContentParts) > 0 ||
+		msg.ReasoningContent != "" ||
+		len(msg.ToolCalls) > 0
+}
+
 func updateAgentStructuredOutput(res *agentEventStreamResult, ev *event.Event) {
 	if res == nil || ev == nil {
 		return
@@ -3276,6 +3314,8 @@ func clearAgentSuccessResultOnError(res *agentEventStreamResult, ev *event.Event
 		return
 	}
 	res.lastResponse = ""
+	res.lastMessage = nil
+	res.toolCalls = nil
 	res.finalState = nil
 	res.rawDelta = nil
 	res.structuredOutput = nil
@@ -3722,6 +3762,7 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 	nodeID string,
 	scope string,
 	userInputKey string,
+	nodeRunOptions []agent.RunOption,
 	traceTask *traceTaskMetadata,
 ) *agent.Invocation {
 	// Extract user input from parent state.
@@ -3746,6 +3787,7 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok &&
 		parentInvocation != nil {
 		runOptions := parentInvocation.RunOptions
+		applyAgentNodeRunOptions(&runOptions, nodeRunOptions)
 		// Preserve the parent's visibility preference.
 		// The agent node captures completion snapshots from either raw
 		// graph.execution events or visible rewritten completion snapshots.
@@ -3795,15 +3837,29 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 		return inv
 	}
 	// Create standalone invocation.
+	runOptions := agent.RunOptions{}
+	applyAgentNodeRunOptions(&runOptions, nodeRunOptions)
+	runOptions.RuntimeState = runtime
 	inv := agent.NewInvocation(
 		agent.WithInvocationAgent(targetAgent),
-		agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: runtime}),
+		agent.WithInvocationRunOptions(runOptions),
 		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
 		agent.WithInvocationSession(sessionData),
 		// Use stable FilterKey based on agent name only (no UUID).
 		agent.WithInvocationEventFilterKey(targetAgent.Info().Name),
 	)
 	return inv
+}
+
+func applyAgentNodeRunOptions(runOptions *agent.RunOptions, opts []agent.RunOption) {
+	if runOptions == nil || len(opts) == 0 {
+		return
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(runOptions)
+		}
+	}
 }
 
 func currentTraceTaskPredecessors(traceTask *traceTaskMetadata) []string {
@@ -3839,6 +3895,7 @@ func buildAgentInvocationWithStateAndScope(
 		nodeID,
 		scope,
 		StateKeyUserInput,
+		nil,
 		nil,
 	)
 }

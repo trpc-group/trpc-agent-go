@@ -748,6 +748,68 @@ func TestProcessAgentEventStream_CapturesAssistantLastResponseID(t *testing.T) {
 	require.Equal(t, "resp-child-final", res.lastResponseID)
 }
 
+func TestProcessAgentEventStream_OutputMapperReceivesAssistantToolCalls(t *testing.T) {
+	inv := agent.NewInvocation(agent.WithInvocationID("inv-tool-call"))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	agentEvents := make(chan *event.Event, 1)
+	parentEventChan := make(chan *event.Event, 1)
+	agentEvents <- event.NewResponseEvent(
+		inv.InvocationID,
+		"child",
+		&model.Response{
+			Done:      true,
+			IsPartial: false,
+			Choices: []model.Choice{{
+				Index: 0,
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID:   "call_1",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "node_external",
+							Arguments: []byte(`{"q":"hi"}`),
+						},
+					}},
+				},
+			}},
+		},
+	)
+	close(agentEvents)
+	res, err := processAgentEventStream(
+		ctx,
+		inv,
+		agentEvents,
+		nil,
+		"node",
+		State{},
+		parentEventChan,
+		"child",
+		"",
+	)
+	require.NoError(t, err)
+	require.Empty(t, res.lastResponse)
+	require.NotNil(t, res.lastMessage)
+	require.Len(t, res.toolCalls, 1)
+	var mappedResult SubgraphResult
+	out := finalizeAgentNodeOutput(
+		State{},
+		"child-node",
+		res,
+		func(_ State, r SubgraphResult) State {
+			mappedResult = r
+			return State{"has_external_call": len(r.ToolCalls) > 0}
+		},
+		"",
+	)
+	state, ok := out.(State)
+	require.True(t, ok)
+	require.Equal(t, true, state["has_external_call"])
+	require.NotNil(t, mappedResult.LastMessage)
+	require.Len(t, mappedResult.ToolCalls, 1)
+	require.Equal(t, "node_external", mappedResult.ToolCalls[0].Function.Name)
+}
+
 func TestUpdateAgentLastResponseValue_IgnoresResponseIDWithoutMessageContent(t *testing.T) {
 	lastResponse := "existing"
 	lastResponseID := "existing-id"
