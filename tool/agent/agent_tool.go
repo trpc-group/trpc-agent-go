@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/teamtrace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -345,6 +346,13 @@ func (at *Tool) callWithParentInvocation(
 	if err := flush.Invoke(ctx, parentInv); err != nil {
 		return "", fmt.Errorf("flush parent invocation session: %w", err)
 	}
+	// The function-call processor's parallel execution path clones the parent
+	// session for state-delta isolation (see cloneStateDeltaSession in
+	// internal/flow/processor/functioncall.go). The clone freezes the Events
+	// slice; without restoring the live pointer the sub-agent loses
+	// visibility of its own tool_call / tool_response events on subsequent
+	// iterations and loops forever calling the same tool.
+	parentInv = parentInvocationWithLiveSession(parentInv)
 	// Build child filter key based on history scope.
 	childKey := at.buildChildFilterKey(parentInv)
 	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey)...)
@@ -356,6 +364,28 @@ func (at *Tool) callWithParentInvocation(
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
 	return at.collectResponse(subInv, at.wrapWithCallSemantics(subCtx, subInv, evCh))
+}
+
+// parentInvocationWithLiveSession returns a view of parentInv whose Session
+// references the live session shared with the runner. When no live session
+// pointer was attached or the invocation already targets the live session,
+// the original parentInv is returned unchanged.
+func parentInvocationWithLiveSession(
+	parentInv *agent.Invocation,
+) *agent.Invocation {
+	if parentInv == nil || parentInv.Session == nil {
+		return parentInv
+	}
+	liveSess, ok := livesession.Get(parentInv)
+	if !ok || liveSess == nil || liveSess == parentInv.Session {
+		return parentInv
+	}
+	view := parentInv.View()
+	if view == nil {
+		return parentInv
+	}
+	view.Session = liveSess
+	return view
 }
 
 func (at *Tool) surfaceRootNodeIDForParentInvocation(
@@ -1034,6 +1064,12 @@ func (at *Tool) streamFromParentInvocation(
 		)
 		return
 	}
+	// See the comment in callWithParentInvocation: when AgentTool is invoked
+	// from the parallel function-call path, parentInv.Session is a frozen
+	// snapshot. Without restoring the live pointer the sub-agent loses
+	// visibility of its own tool_call / tool_response events and loops
+	// forever.
+	parentInv = parentInvocationWithLiveSession(parentInv)
 	childKey := at.buildChildFilterKey(parentInv)
 	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey)...)
 	subCtx := agent.NewInvocationContext(ctx, subInv)

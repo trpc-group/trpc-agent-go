@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -604,6 +605,10 @@ func (r *runner) Run(
 		}
 		return r.sessionService.AppendEvent(ctx, persistSession, e)
 	})
+	// Expose the live session pointer so that downstream components (such
+	// as AgentTool sub-agents) can restore it after the function-call
+	// processor clones the session for state-delta isolation.
+	livesession.Attach(invocation, sess)
 	barrier.Enable(invocation)
 
 	// Run the agent and get the event channel.
@@ -1030,6 +1035,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
 		appender.Clear(loop.invocation)
+		livesession.Clear(loop.invocation)
 		steer.Clear(loop.invocation)
 		r.unregisterRun(loop.invocation.RunOptions.RequestID)
 		close(loop.processedEventCh)
