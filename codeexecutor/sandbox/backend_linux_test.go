@@ -342,19 +342,67 @@ func TestLinuxNoAccessMaskArgsMaskFirstMissingPathComponent(t *testing.T) {
 	}
 }
 
+func TestCleanupSyntheticDenyReadMaskTargetsRemovesOnlyEmptyRegularFiles(t *testing.T) {
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "empty")
+	secondEmpty := filepath.Join(dir, "second-empty")
+	nonEmpty := filepath.Join(dir, "non-empty")
+	subdir := filepath.Join(dir, "subdir")
+	symlink := filepath.Join(dir, "symlink")
+	missing := filepath.Join(dir, "missing")
+
+	for _, path := range []string{empty, secondEmpty} {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(nonEmpty, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(nonEmpty, symlink); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupSyntheticDenyReadMaskTargets([]string{
+		empty,
+		nonEmpty,
+		subdir,
+		symlink,
+		missing,
+		secondEmpty,
+	})
+
+	for _, path := range []string{empty, secondEmpty} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("empty regular file %s still exists, err=%v", path, err)
+		}
+	}
+	for _, path := range []string{nonEmpty, subdir, symlink} {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("cleanup removed %s: %v", path, err)
+		}
+	}
+}
+
 func TestLinuxNoAccessMaskArgsRejectGlobUnderWritableMount(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	ws, err := rt.CreateWorkspace(context.Background(), "none-mask-glob-writable", codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(ws.Path, "work", "app.env"), []byte("TOKEN=secret"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	profile := WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")
+	profile := ReadOnlyProfile().
+		WithWritePaths("work").
+		WithNoAccessGlobs("work/*.env")
 	_, err = rt.denyReadMaskArgs(profile, ws)
 	if !isKind(err, ErrPolicyViolation) {
 		t.Fatalf("writable no-access glob error = %v, want ErrPolicyViolation", err)
+	}
+	if !strings.Contains(err.Error(), "no-access-glob work/*.env") ||
+		!strings.Contains(err.Error(), "glob denial overlaps writable mount work") {
+		t.Fatalf("writable no-access glob error = %v, want glob and writable mount context", err)
 	}
 }
 
@@ -530,6 +578,60 @@ exit 0
 	}
 	if path != bwrap || mountProc {
 		t.Fatalf("linuxPreflight path=%q mountProc=%v, want %q false", path, mountProc, bwrap)
+	}
+}
+
+func TestLinuxSandboxCommandBindsDenyReadDataFDAndCleansSyntheticTargets(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	rt.preflightOnce.Do(func() {
+		rt.bwrapPath = "/bin/true"
+	})
+	ws, err := rt.CreateWorkspace(context.Background(), "linux/sandbox-command-cleanup", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(ws.Path, "work", "missing.txt")
+	profile := WorkspaceWriteProfile().WithNoAccessPaths("work/missing.txt")
+
+	cmd, backend, cleanup, err := rt.osSandboxCommand(
+		context.Background(),
+		profile,
+		ws,
+		filepath.Join(ws.Path, "work"),
+		[]string{"SANDBOX_TEST=1"},
+		codeexecutor.RunProgramSpec{Cmd: "/bin/echo", Args: []string{"ok"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backend != string(BackendLinuxBubblewrap) {
+		t.Fatalf("backend = %q, want %q", backend, BackendLinuxBubblewrap)
+	}
+	if cmd.Path != "/bin/true" {
+		t.Fatalf("cmd path = %q, want fake bwrap", cmd.Path)
+	}
+	if len(cmd.ExtraFiles) != 1 {
+		t.Fatalf("extra files = %d, want deny-read data fd", len(cmd.ExtraFiles))
+	}
+	if cleanup == nil {
+		t.Fatalf("cleanup is nil, want deny-read data fd cleanup")
+	}
+	if !hasArgSequence(cmd.Args, "--perms", "000", "--ro-bind-data", denyReadBindDataFD, missing) {
+		t.Fatalf("cmd args = %#v, missing bind-data mask for synthetic target", cmd.Args)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("synthetic target should not exist before sandbox start, stat err=%v", err)
+	}
+
+	if err := os.WriteFile(missing, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("cleanup did not remove synthetic target, stat err=%v", err)
+	}
+	if _, err := cmd.ExtraFiles[0].Stat(); err == nil {
+		t.Fatalf("cleanup did not close deny-read data fd")
 	}
 }
 
