@@ -97,6 +97,16 @@ func TestNonAdminProfilesExcludeForget(t *testing.T) {
 	}
 }
 
+func TestInvalidProfileReturnsError(t *testing.T) {
+	_, err := NewToolSet(WithProfile("retrievall"))
+	if err == nil {
+		t.Error("expected error for invalid profile, got nil")
+	}
+	if err != nil && !strings.Contains(err.Error(), "unknown profile") {
+		t.Errorf("error message should mention unknown profile, got: %v", err)
+	}
+}
+
 func TestWithSpecificToolsOverride(t *testing.T) {
 	ts, _ := NewToolSet(WithSpecificTools(ToolRead))
 	got := toolNames(ts)

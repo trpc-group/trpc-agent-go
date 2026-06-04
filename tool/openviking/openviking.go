@@ -20,10 +20,12 @@ package openviking
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/openviking/internal/client"
 )
 
@@ -128,6 +130,14 @@ func NewToolSet(opts ...Option) (*ToolSet, error) {
 		opt(cfg)
 	}
 
+	// Validate profile to prevent typos from silently exposing write tools.
+	switch cfg.profile {
+	case ProfileRetrieval, ProfileAgent, ProfileAdmin:
+		// valid
+	default:
+		return nil, fmt.Errorf("openviking: unknown profile %q: must be retrieval, agent, or admin", cfg.profile)
+	}
+
 	// Default to no client-level timeout (cfg.timeout == 0); callers control
 	// cancellation via context, and WithTimeout can opt into a hard deadline.
 	c := client.New(client.Config{
@@ -146,8 +156,16 @@ func NewToolSet(opts ...Option) (*ToolSet, error) {
 	return &ToolSet{client: c, tools: tools}, nil
 }
 
-// Tools implements tool.ToolSet.
-func (s *ToolSet) Tools(_ context.Context) []tool.Tool { return s.tools }
+// Tools implements tool.ToolSet. Each tool is wrapped in an unprefixed NamedTool
+// so that llmagent recognizes them as user tools and applies filters correctly,
+// while preserving the native viking_* names.
+func (s *ToolSet) Tools(_ context.Context) []tool.Tool {
+	wrapped := make([]tool.Tool, len(s.tools))
+	for i, t := range s.tools {
+		wrapped[i] = itool.NewUnprefixedNamedTool(t)
+	}
+	return wrapped
+}
 
 // Name implements tool.ToolSet. It returns an empty string on purpose so the
 // tools keep their native viking_* names without a toolset prefix; the agent
@@ -181,9 +199,11 @@ func selectToolNames(cfg *config) []ToolName {
 		return retrieval
 	case ProfileAdmin:
 		return append(retrieval, ToolStore, ToolAddResource, ToolAddSkill, ToolForget)
-	default: // ProfileAgent
+	case ProfileAgent:
 		return append(retrieval, ToolStore, ToolAddResource, ToolAddSkill)
 	}
+	// Unreachable: NewToolSet validates profile. Return retrieval-only as a safe fallback.
+	return retrieval
 }
 
 // removeTool returns items without any element equal to target.
