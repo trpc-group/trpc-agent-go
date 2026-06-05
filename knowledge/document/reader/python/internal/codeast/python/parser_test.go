@@ -217,6 +217,44 @@ func TestParseContent_QualifiedProtocolAndOptionalEdges(t *testing.T) {
 	}
 }
 
+func TestParserOptionsAndParseFileInfo(t *testing.T) {
+	custom := NewParser(WithPythonPath("custom-python"), WithExtractImports(false))
+	if custom.pythonPath != "custom-python" {
+		t.Fatalf("pythonPath = %q, want custom-python", custom.pythonPath)
+	}
+	if custom.extractImports {
+		t.Fatal("extractImports = true, want false")
+	}
+
+	parser := NewParser(WithExtractImports(false))
+	result, err := parser.ParseContent("pkg/mod.py", "import os\nclass Service:\n    pass\n")
+	if err != nil {
+		t.Fatalf("ParseContent() error = %v", err)
+	}
+	if len(result.File.Imports) != 0 {
+		t.Fatalf("File.Imports = %v, want empty when imports are disabled", result.File.Imports)
+	}
+
+	info, err := NewParser().ParseFileInfo("pkg/mod.py", "import os\nclass Service:\n    pass\n")
+	if err != nil {
+		t.Fatalf("ParseFileInfo() error = %v", err)
+	}
+	if info.Package != "pkg.mod" {
+		t.Fatalf("FileInfo.Package = %q, want pkg.mod", info.Package)
+	}
+	if len(info.Imports) != 1 || info.Imports[0] != "os" {
+		t.Fatalf("FileInfo.Imports = %v, want [os]", info.Imports)
+	}
+}
+
+func TestParseContentRunError(t *testing.T) {
+	parser := NewParser(WithPythonPath("python-not-found-for-trpc-agent-go-test"))
+	_, err := parser.ParseContent("sample.py", "class Service:\n    pass\n")
+	if err == nil || !strings.Contains(err.Error(), "run python parser") {
+		t.Fatalf("ParseContent() error = %v, want run python parser error", err)
+	}
+}
+
 func TestParseDirectory(t *testing.T) {
 	parser := NewParser()
 	dir := testdataPath("pkg")
@@ -396,5 +434,93 @@ func TestBuildNodeEmbeddingText(t *testing.T) {
 	}
 	if len(text) < 10 {
 		t.Errorf("embedding text too short: %s", text)
+	}
+}
+
+func TestMapEntityType(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want codeast.EntityType
+	}{
+		{raw: "Function", want: codeast.EntityFunction},
+		{raw: "Method", want: codeast.EntityMethod},
+		{raw: "Class", want: codeast.EntityClass},
+		{raw: "Interface", want: codeast.EntityInterface},
+		{raw: "Variable", want: codeast.EntityVariable},
+		{raw: "Module", want: codeast.EntityModule},
+		{raw: "Custom", want: codeast.EntityType("Custom")},
+	}
+	for _, tt := range tests {
+		if got := mapEntityType(tt.raw); got != tt.want {
+			t.Errorf("mapEntityType(%q) = %q, want %q", tt.raw, got, tt.want)
+		}
+	}
+}
+
+func TestMapRelationType(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want codeast.RelationType
+	}{
+		{raw: "CALLS", want: codeast.RelationCalls},
+		{raw: "METHOD", want: codeast.RelationMethod},
+		{raw: "IMPLEMENTS", want: codeast.RelationImplements},
+		{raw: "IMPORTS", want: codeast.RelationImports},
+		{raw: "INHERITS", want: codeast.RelationInherits},
+		{raw: "FIELD", want: codeast.RelationField},
+		{raw: "PARAM", want: codeast.RelationParam},
+		{raw: "RETURNS", want: codeast.RelationReturns},
+		{raw: "CUSTOM", want: codeast.RelationType("CUSTOM")},
+	}
+	for _, tt := range tests {
+		if got := mapRelationType(tt.raw); got != tt.want {
+			t.Errorf("mapRelationType(%q) = %q, want %q", tt.raw, got, tt.want)
+		}
+	}
+}
+
+func TestExtractPythonError(t *testing.T) {
+	tests := []struct {
+		name   string
+		stderr string
+		want   string
+	}{
+		{
+			name:   "known error",
+			stderr: "Traceback\n  File x\nModuleNotFoundError: No module named 'missing'",
+			want:   "ModuleNotFoundError: No module named 'missing'",
+		},
+		{
+			name:   "last non-empty line",
+			stderr: "line 1\n\nlast line",
+			want:   "last line",
+		},
+		{
+			name:   "empty",
+			stderr: "",
+			want:   "",
+		},
+	}
+	for _, tt := range tests {
+		if got := extractPythonError(tt.stderr); got != tt.want {
+			t.Errorf("%s: extractPythonError() = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestToInt(t *testing.T) {
+	tests := []struct {
+		value any
+		want  int
+	}{
+		{value: 1, want: 1},
+		{value: int64(2), want: 2},
+		{value: 3.7, want: 3},
+		{value: "4", want: 0},
+	}
+	for _, tt := range tests {
+		if got := toInt(tt.value); got != tt.want {
+			t.Errorf("toInt(%v) = %d, want %d", tt.value, got, tt.want)
+		}
 	}
 }
