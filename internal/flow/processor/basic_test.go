@@ -143,6 +143,55 @@ func TestBasicReqProc_ModelRequestExtraFields(t *testing.T) {
 	}
 }
 
+func TestBasicReqProc_ModelRequestHeaders(t *testing.T) {
+	headers := map[string]string{
+		"X-Session-ID": "session-1",
+	}
+	req := &model.Request{
+		Headers: map[string]string{
+			"X-Session-ID": "request-default",
+		},
+	}
+	inv := &agent.Invocation{
+		AgentName:    "test-agent",
+		InvocationID: "test-123",
+		RunOptions: agent.RunOptions{
+			ModelRequestHeaders: headers,
+		},
+	}
+
+	NewBasicRequestProcessor().ProcessRequest(
+		context.Background(),
+		inv,
+		req,
+		make(chan *event.Event, 1),
+	)
+	headers["X-Session-ID"] = "changed"
+
+	if req.Headers["X-Session-ID"] != "session-1" {
+		t.Fatalf(
+			"ProcessRequest() got header %v, want session-1",
+			req.Headers["X-Session-ID"],
+		)
+	}
+
+	req = &model.Request{}
+	NewBasicRequestProcessor().ProcessRequest(
+		context.Background(),
+		inv,
+		req,
+		make(chan *event.Event, 1),
+	)
+	headers["X-Session-ID"] = "changed-again"
+
+	if req.Headers["X-Session-ID"] != "changed" {
+		t.Fatalf(
+			"ProcessRequest() got header %v, want changed",
+			req.Headers["X-Session-ID"],
+		)
+	}
+}
+
 // Helper functions for test data
 func intPtr(i int) *int {
 	return &i

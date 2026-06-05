@@ -659,6 +659,24 @@ func runOnce(ctx context.Context, r runner.Runner, cacheKey string) error {
 }
 ```
 
+When a provider requires both a request body cache key and a routing header
+for the same conversation, combine this with request-scoped headers:
+
+```go
+events, err := r.Run(
+    ctx,
+    "user-001",
+    "session-001",
+    model.NewUserMessage("Hello"),
+    agent.WithModelRequestExtraFields(map[string]any{
+        "prompt_cache_key": cacheKey,
+    }),
+    agent.WithModelRequestHeaders(map[string]string{
+        "X-Session-ID": "session-001",
+    }),
+)
+```
+
 This option applies to every model call created during that run, including
 normal LLM agents, graph LLM nodes, and requests routed through failover or
 hedge models. The built-in OpenAI and HuggingFace/OpenAI-compatible adapters
@@ -1237,12 +1255,13 @@ For a complete interactive example, see [examples/model/retry](https://github.co
 In some enterprise or proxy scenarios, the model provider requires
 additional HTTP headers (for example, organization ID, tenant routing,
 or custom authentication). The Model module supports setting headers in
-three reliable ways that apply to all model requests, including
-non-streaming, streaming, file upload, and batch APIs.
+several reliable ways.
 
 Recommended order:
 
 - Global header via `openai.WithHeaders` (simplest for static headers)
+- Request-scoped header via `agent.WithModelRequestHeaders` (for
+  `runner.Run(...)` calls whose headers vary by user, session, or tenant)
 - Global header via OpenAI RequestOption (flexible, middleware-friendly)
 - Custom `http.RoundTripper` (advanced, cross-cutting)
 
@@ -1262,7 +1281,27 @@ llm := openai.New("deepseek-v4-flash",
 )
 ```
 
-##### 2. Global headers using OpenAI RequestOption
+##### 2. Request-scoped headers from Runner
+
+Use `agent.WithModelRequestHeaders` when a header should vary per
+`runner.Run(...)` call, for example `X-Session-ID` on providers that route
+a conversation to the same inference instance. The OpenAI adapter merges
+these headers into the HTTP request after model-level headers, so request-level
+values take precedence on the same key.
+
+```go
+events, err := r.Run(
+    ctx,
+    "user-001",
+    "session-001",
+    model.NewUserMessage("Hello"),
+    agent.WithModelRequestHeaders(map[string]string{
+        "X-Session-ID": "session-001",
+    }),
+)
+```
+
+##### 3. Global headers using OpenAI RequestOption
 
 Use `WithOpenAIOptions` with `openaiopt.WithHeader` or
 `openaiopt.WithMiddleware` to inject headers for every request created
@@ -1398,7 +1437,7 @@ llm := openai.New("deepseek-v4-flash",
 )
 ```
 
-##### 3. Custom http.RoundTripper (advanced)
+##### 4. Custom http.RoundTripper (advanced)
 
 Inject headers across all requests at the HTTP layer by wrapping the
 transport. This is useful when you also need custom proxy, TLS, or

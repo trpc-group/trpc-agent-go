@@ -46,6 +46,30 @@ func TestWithModelRequestExtraFields(t *testing.T) {
 	assert.Equal(t, "tenant-a", opts.ModelRequestExtraFields["tenant"])
 }
 
+func TestWithModelRequestHeaders(t *testing.T) {
+	opts := &RunOptions{}
+	WithModelRequestHeaders(nil)(opts)
+	assert.Nil(t, opts.ModelRequestHeaders)
+
+	headers := map[string]string{
+		"X-Session-ID": "session-1",
+	}
+
+	WithModelRequestHeaders(headers)(opts)
+	headers["X-Session-ID"] = "changed"
+
+	require.NotNil(t, opts.ModelRequestHeaders)
+	assert.Equal(t, "session-1", opts.ModelRequestHeaders["X-Session-ID"])
+
+	WithModelRequestHeaders(map[string]string{
+		"X-Session-ID": "session-2",
+		"X-Tenant-ID":  "tenant-a",
+	})(opts)
+
+	assert.Equal(t, "session-2", opts.ModelRequestHeaders["X-Session-ID"])
+	assert.Equal(t, "tenant-a", opts.ModelRequestHeaders["X-Tenant-ID"])
+}
+
 func TestWithInvocationBranch(t *testing.T) {
 	inv := NewInvocation(
 		WithInvocationBranch("test-branch"),
