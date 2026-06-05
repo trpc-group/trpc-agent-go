@@ -30,24 +30,7 @@ type stubTool struct {
 
 func (s stubTool) Declaration() *tool.Declaration { return s.decl }
 
-type sanitizeWarnLogger struct {
-	messages []string
-}
-
-func (l *sanitizeWarnLogger) Debug(args ...any)                 {}
-func (l *sanitizeWarnLogger) Debugf(format string, args ...any) {}
-func (l *sanitizeWarnLogger) Info(args ...any)                  {}
-func (l *sanitizeWarnLogger) Infof(format string, args ...any)  {}
-func (l *sanitizeWarnLogger) Warn(args ...any) {
-	l.messages = append(l.messages, fmt.Sprint(args...))
-}
-func (l *sanitizeWarnLogger) Warnf(format string, args ...any) {
-	l.messages = append(l.messages, fmt.Sprintf(format, args...))
-}
-func (l *sanitizeWarnLogger) Error(args ...any)                 {}
-func (l *sanitizeWarnLogger) Errorf(format string, args ...any) {}
-func (l *sanitizeWarnLogger) Fatal(args ...any)                 {}
-func (l *sanitizeWarnLogger) Fatalf(format string, args ...any) {}
+type sanitizeLogContextKey struct{}
 
 func TestSanitizeMessagesWithTools_DowngradesInvalidToolCallAndResult(t *testing.T) {
 	in := []model.Message{
@@ -71,7 +54,7 @@ func TestSanitizeMessagesWithTools_DowngradesInvalidToolCallAndResult(t *testing
 			Content:  "tool error",
 		},
 	}
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	if assert.Len(t, out, 3) {
 		assert.Equal(t, model.RoleUser, out[0].Role)
 		assert.Equal(t, model.RoleUser, out[1].Role)
@@ -86,12 +69,19 @@ func TestSanitizeMessagesWithTools_DowngradesInvalidToolCallAndResult(t *testing
 }
 
 func TestSanitizeMessagesWithTools_WarnsOnDowngradeWithoutPayload(t *testing.T) {
-	original := agentlog.Default
-	logger := &sanitizeWarnLogger{}
-	agentlog.Default = logger
+	original := agentlog.WarnfContext
+	var messages []string
+	contextMatches := 0
+	agentlog.WarnfContext = func(ctx context.Context, format string, args ...any) {
+		if ctx.Value(sanitizeLogContextKey{}) == "request" {
+			contextMatches++
+		}
+		messages = append(messages, fmt.Sprintf(format, args...))
+	}
 	defer func() {
-		agentlog.Default = original
+		agentlog.WarnfContext = original
 	}()
+	ctx := context.WithValue(context.Background(), sanitizeLogContextKey{}, "request")
 	in := []model.Message{
 		{
 			Role: model.RoleAssistant,
@@ -130,10 +120,11 @@ func TestSanitizeMessagesWithTools_WarnsOnDowngradeWithoutPayload(t *testing.T) 
 			Content:  "SECRET_ORPHAN_RESULT",
 		},
 	}
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(ctx, in, nil)
 	assert.Len(t, out, 4)
-	assert.Len(t, logger.messages, 4)
-	allLogs := strings.Join(logger.messages, "\n")
+	assert.Len(t, messages, 4)
+	assert.Equal(t, 4, contextMatches)
+	allLogs := strings.Join(messages, "\n")
 	assert.Contains(t, allLogs, "downgraded invalid tool call")
 	assert.Contains(t, allLogs, "downgraded invalid tool result")
 	assert.Contains(t, allLogs, "downgraded orphan tool call")
@@ -150,13 +141,13 @@ func TestSanitizeMessagesWithTools_WarnsOnDowngradeWithoutPayload(t *testing.T) 
 
 func TestSanitizeMessagesWithTools_PreservesNilMessagesSlice(t *testing.T) {
 	var in []model.Message
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	assert.Nil(t, out)
 }
 
 func TestSanitizeMessagesWithTools_PreservesEmptyMessagesSlice(t *testing.T) {
 	in := make([]model.Message, 0)
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	assert.NotNil(t, out)
 	assert.Len(t, out, 0)
 }
@@ -182,7 +173,7 @@ func TestSanitizeMessagesWithTools_PreservesValidToolRound(t *testing.T) {
 			Content: `{"ok":true}`,
 		},
 	}
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	if assert.Len(t, out, 3) {
 		assert.Equal(t, model.RoleAssistant, out[1].Role)
 		if assert.Len(t, out[1].ToolCalls, 1) {
@@ -219,7 +210,7 @@ func TestSanitizeMessagesWithTools_DowngradesDuplicateToolResult(t *testing.T) {
 		},
 	}
 
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	if assert.Len(t, out, 3) {
 		assert.Equal(t, model.RoleAssistant, out[0].Role)
 		assert.Equal(t, model.RoleTool, out[1].Role)
@@ -249,7 +240,7 @@ func TestSanitizeMessagesWithTools_NormalizesEmptyArgumentsToEmptyObject(t *test
 			ToolID: "call_1",
 		},
 	}
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	if assert.Len(t, out, 2) && assert.Len(t, out[0].ToolCalls, 1) {
 		assert.Equal(t, []byte("{}"), out[0].ToolCalls[0].Function.Arguments)
 	}
@@ -286,7 +277,7 @@ func TestSanitizeMessagesWithTools_SplitsMixedValidityToolRound(t *testing.T) {
 			Content: "bad tool error",
 		},
 	}
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	if assert.Len(t, out, 4) {
 		assert.Equal(t, model.RoleAssistant, out[0].Role)
 		if assert.Len(t, out[0].ToolCalls, 1) {
@@ -309,7 +300,7 @@ func TestSanitizeMessagesWithTools_DowngradesOrphanToolResult(t *testing.T) {
 			Content: "orphan",
 		},
 	}
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	if assert.Len(t, out, 1) {
 		assert.Equal(t, model.RoleUser, out[0].Role)
 		assert.Contains(t, out[0].Content, orphanToolResultTag)
@@ -331,7 +322,7 @@ func TestSanitizeMessagesWithTools_DowngradesOrphanToolCall(t *testing.T) {
 			},
 		},
 	}
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	if assert.Len(t, out, 1) {
 		assert.Equal(t, model.RoleUser, out[0].Role)
 		assert.Contains(t, out[0].Content, orphanToolCallTag)
@@ -356,7 +347,7 @@ func TestSanitizeMessagesWithTools_DropsReasoningOnlyAssistantAfterOrphanToolCal
 		},
 	}
 
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	if assert.Len(t, out, 1) {
 		assert.Equal(t, model.RoleUser, out[0].Role)
 		assert.Contains(t, out[0].Content, orphanToolCallTag)
@@ -392,7 +383,7 @@ func TestSanitizeMessagesWithTools_SplitsMatchedAndOrphanToolCalls(t *testing.T)
 			Content:  "ok",
 		},
 	}
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	if assert.Len(t, out, 3) {
 		assert.Equal(t, model.RoleAssistant, out[0].Role)
 		if assert.Len(t, out[0].ToolCalls, 1) {
@@ -427,7 +418,7 @@ func TestSanitizeMessagesWithTools_PreservesNonObjectJSONArgumentsWhenToolsUnkno
 			Content:  "ok",
 		},
 	}
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	if assert.Len(t, out, 2) {
 		assert.Equal(t, model.RoleAssistant, out[0].Role)
 		if assert.Len(t, out[0].ToolCalls, 1) {
@@ -464,7 +455,7 @@ func TestSanitizeMessagesWithTools_DowngradesSchemaTypeMismatch(t *testing.T) {
 			},
 		},
 	}
-	out := SanitizeMessagesWithTools(in, tools)
+	out := SanitizeMessagesWithTools(context.Background(), in, tools)
 	if assert.Len(t, out, 1) {
 		assert.Equal(t, model.RoleUser, out[0].Role)
 		assert.Contains(t, out[0].Content, invalidToolCallTag)
@@ -499,7 +490,7 @@ func TestSanitizeMessagesWithTools_DowngradesNonObjectJSONArgumentsWhenSchemaExp
 			},
 		},
 	}
-	out := SanitizeMessagesWithTools(in, tools)
+	out := SanitizeMessagesWithTools(context.Background(), in, tools)
 	if assert.Len(t, out, 1) {
 		assert.Equal(t, model.RoleUser, out[0].Role)
 		assert.Contains(t, out[0].Content, invalidToolCallTag)
@@ -536,7 +527,7 @@ func TestSanitizeMessagesWithTools_PreservesStringArgumentsWhenSchemaAllows(t *t
 			Content:  "ok",
 		},
 	}
-	out := SanitizeMessagesWithTools(in, tools)
+	out := SanitizeMessagesWithTools(context.Background(), in, tools)
 	if assert.Len(t, out, 2) {
 		assert.Equal(t, model.RoleAssistant, out[0].Role)
 		if assert.Len(t, out[0].ToolCalls, 1) {
@@ -576,7 +567,7 @@ func TestSanitizeMessagesWithTools_PreservesArrayArgumentsWhenSchemaAllows(t *te
 			Content:  "ok",
 		},
 	}
-	out := SanitizeMessagesWithTools(in, tools)
+	out := SanitizeMessagesWithTools(context.Background(), in, tools)
 	if assert.Len(t, out, 2) {
 		assert.Equal(t, model.RoleAssistant, out[0].Role)
 		if assert.Len(t, out[0].ToolCalls, 1) {
@@ -608,7 +599,7 @@ func TestSanitizeMessagesWithTools_PreservesNullArgumentsWhenToolsUnknown(t *tes
 			Content:  "ok",
 		},
 	}
-	out := SanitizeMessagesWithTools(in, nil)
+	out := SanitizeMessagesWithTools(context.Background(), in, nil)
 	if assert.Len(t, out, 2) {
 		assert.Equal(t, model.RoleAssistant, out[0].Role)
 		if assert.Len(t, out[0].ToolCalls, 1) {
@@ -645,7 +636,7 @@ func TestSanitizeMessagesWithTools_DowngradesNullArgumentsWhenSchemaExpectsObjec
 			},
 		},
 	}
-	out := SanitizeMessagesWithTools(in, tools)
+	out := SanitizeMessagesWithTools(context.Background(), in, tools)
 	if assert.Len(t, out, 1) {
 		assert.Equal(t, model.RoleUser, out[0].Role)
 		assert.Contains(t, out[0].Content, invalidToolCallTag)
@@ -684,7 +675,7 @@ func TestSanitizeMessagesWithTools_PreservesNullArgumentsWhenSchemaAllowsNull(t 
 			Content:  "ok",
 		},
 	}
-	out := SanitizeMessagesWithTools(in, tools)
+	out := SanitizeMessagesWithTools(context.Background(), in, tools)
 	if assert.Len(t, out, 2) {
 		assert.Equal(t, model.RoleAssistant, out[0].Role)
 		if assert.Len(t, out[0].ToolCalls, 1) {

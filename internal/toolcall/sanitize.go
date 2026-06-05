@@ -12,6 +12,7 @@ package toolcall
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,7 +47,8 @@ var (
 // This function also downgrades orphan tool calls that are not associated with a kept
 // tool result message, and orphan tool result messages that are not associated with a
 // kept tool call message, to avoid invalid tool message sequences in strict chat APIs.
-func SanitizeMessagesWithTools(messages []model.Message, tools map[string]tool.Tool) []model.Message {
+// The context is used to attach request-scoped metadata to downgrade warnings.
+func SanitizeMessagesWithTools(ctx context.Context, messages []model.Message, tools map[string]tool.Tool) []model.Message {
 	if len(messages) == 0 {
 		return messages
 	}
@@ -58,12 +60,12 @@ func SanitizeMessagesWithTools(messages []model.Message, tools map[string]tool.T
 			for next < len(messages) && messages[next].Role == model.RoleTool {
 				next++
 			}
-			out = append(out, sanitizeToolRound(msg, messages[i+1:next], tools)...)
+			out = append(out, sanitizeToolRound(ctx, msg, messages[i+1:next], tools)...)
 			i = next
 			continue
 		}
 		if msg.Role == model.RoleTool {
-			out = append(out, downgradeOrphanToolResult(msg))
+			out = append(out, downgradeOrphanToolResult(ctx, msg))
 			i++
 			continue
 		}
@@ -97,7 +99,7 @@ type toolCallSplit struct {
 }
 
 // sanitizeToolRound sanitizes a single assistant tool-call round with its following tool results.
-func sanitizeToolRound(assistant model.Message, toolResults []model.Message, tools map[string]tool.Tool) []model.Message {
+func sanitizeToolRound(ctx context.Context, assistant model.Message, toolResults []model.Message, tools map[string]tool.Tool) []model.Message {
 	validation := validateToolCalls(assistant.ToolCalls, tools)
 	split := splitToolResults(toolResults, validation.validIDs, validation.invalidIDs)
 	toolCallSplit := splitToolCalls(validation.validToolCalls, split.kept)
@@ -116,16 +118,16 @@ func sanitizeToolRound(assistant model.Message, toolResults []model.Message, too
 		out = append(out, split.kept...)
 	}
 	for _, orphanCall := range toolCallSplit.orphan {
-		out = append(out, downgradeOrphanToolCall(orphanCall))
+		out = append(out, downgradeOrphanToolCall(ctx, orphanCall))
 	}
 	for _, invalid := range validation.invalidToolCalls {
-		out = append(out, downgradeInvalidToolCall(invalid.call, invalid.reason))
+		out = append(out, downgradeInvalidToolCall(ctx, invalid.call, invalid.reason))
 		for _, tr := range split.invalidByID[invalid.call.ID] {
-			out = append(out, downgradeInvalidToolResult(tr))
+			out = append(out, downgradeInvalidToolResult(ctx, tr))
 		}
 	}
 	for _, orphan := range split.orphan {
-		out = append(out, downgradeOrphanToolResult(orphan))
+		out = append(out, downgradeOrphanToolResult(ctx, orphan))
 	}
 	return out
 }
@@ -419,8 +421,8 @@ func splitToolResults(toolResults []model.Message, validIDs map[string]struct{},
 }
 
 // downgradeInvalidToolCall converts an invalid tool call into a user message that preserves its payload.
-func downgradeInvalidToolCall(call model.ToolCall, reason string) model.Message {
-	log.Warnf(
+func downgradeInvalidToolCall(ctx context.Context, call model.ToolCall, reason string) model.Message {
+	log.WarnfContext(ctx,
 		"toolcall: downgraded invalid tool call to user message: name=%q id=%q reason=%q",
 		call.Function.Name,
 		call.ID,
@@ -441,8 +443,8 @@ func downgradeInvalidToolCall(call model.ToolCall, reason string) model.Message 
 }
 
 // downgradeOrphanToolCall converts a tool call without a matching tool result into a user message.
-func downgradeOrphanToolCall(call model.ToolCall) model.Message {
-	log.Warnf(
+func downgradeOrphanToolCall(ctx context.Context, call model.ToolCall) model.Message {
+	log.WarnfContext(ctx,
 		"toolcall: downgraded orphan tool call to user message: name=%q id=%q",
 		call.Function.Name,
 		call.ID,
@@ -461,8 +463,8 @@ func downgradeOrphanToolCall(call model.ToolCall) model.Message {
 }
 
 // downgradeInvalidToolResult converts a tool result associated with an invalid tool call into a user message.
-func downgradeInvalidToolResult(msg model.Message) model.Message {
-	log.Warnf(
+func downgradeInvalidToolResult(ctx context.Context, msg model.Message) model.Message {
+	log.WarnfContext(ctx,
 		"toolcall: downgraded invalid tool result to user message: tool_name=%q tool_call_id=%q",
 		msg.ToolName,
 		msg.ToolID,
@@ -481,8 +483,8 @@ func downgradeInvalidToolResult(msg model.Message) model.Message {
 }
 
 // downgradeOrphanToolResult converts an orphaned tool result into a user message.
-func downgradeOrphanToolResult(msg model.Message) model.Message {
-	log.Warnf(
+func downgradeOrphanToolResult(ctx context.Context, msg model.Message) model.Message {
+	log.WarnfContext(ctx,
 		"toolcall: downgraded orphan tool result to user message: tool_name=%q tool_call_id=%q",
 		msg.ToolName,
 		msg.ToolID,
