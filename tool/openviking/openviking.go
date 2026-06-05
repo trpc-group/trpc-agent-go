@@ -24,8 +24,8 @@ import (
 	"net/http"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/openviking/internal/client"
 )
 
