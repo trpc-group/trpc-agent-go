@@ -6,7 +6,7 @@ Evolution is the self-learning system in the tRPC-Agent-Go framework. It enables
 
 ### Purpose
 
-Evolution accumulates and reuses the agent's "operational experience" at the application level. When an agent completes a task, the background learning loop checks the review policy (default: ≥4 tool calls, user correction, or recovered error) before invoking the Reviewer. If the delta is worth reviewing, the Reviewer analyzes the conversation transcript and extracts reusable workflows as structured SKILL.md files. On subsequent similar tasks, the agent loads the matching skill via `skill_load` and follows the proven steps directly, avoiding repeated trial-and-error.
+Evolution accumulates and reuses the agent's "operational experience". Skills are unscoped by default (`SkillScopeNone`); app-level or user-level isolation can be enabled explicitly. When an agent completes a task, the background learning loop checks the review policy (default: ≥4 tool calls, user correction, or recovered error) before invoking the Reviewer. If the delta is worth reviewing, the Reviewer analyzes the conversation transcript and extracts reusable workflows as structured SKILL.md files. On subsequent similar tasks, the agent loads the matching skill via `skill_load` and follows the proven steps directly, avoiding repeated trial-and-error.
 
 It excels at capturing: stable multi-step workflows, tool-calling best practices, common pitfalls and avoidance strategies, domain-specific operational procedures.
 

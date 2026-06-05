@@ -304,7 +304,7 @@ func newCityTool() tool.Tool {
 
 // alwaysReviewPolicy triggers a review after every task, regardless of
 // tool call count. In production, omit WithReviewPolicy to use the built-in default,
-// which requires ≥4 tool calls.
+// which triggers on enough tool calls, user corrections, or recovered tool errors.
 type alwaysReviewPolicy struct{}
 
 func (alwaysReviewPolicy) ShouldReview(
