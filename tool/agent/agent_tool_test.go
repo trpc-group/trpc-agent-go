@@ -1043,6 +1043,7 @@ func TestTool_Call_GraphToolsNodeAgentToolCustomWrappedGraphAgentInterruptResume
 	require.Equal(t, parentLineageID, subgraphInterrupt["child_lineage_id"])
 	require.Equal(t, childInterruptKey, subgraphInterrupt["child_task_id"])
 	require.Equal(t, "call-child", subgraphInterrupt["tool_call_id"])
+	require.Equal(t, "1:"+wrapperAgentName+":call-child", subgraphInterrupt["tool_call_key"])
 	resumeRuntime := map[string]any{
 		graph.CfgKeyLineageID:    parentLineageID,
 		graph.CfgKeyCheckpointNS: parentNamespace,

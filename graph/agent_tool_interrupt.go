@@ -9,12 +9,22 @@
 
 package graph
 
-func agentToolChildRuntimeState(parent State, nodeID string, childAgentName string, toolCallID string) State {
+import "fmt"
+
+func agentToolChildRuntimeState(
+	parent State,
+	nodeID string,
+	childAgentName string,
+	toolCallID string,
+	toolCallKey string,
+) (State, error) {
 	child := copyRuntimeStateFiltered(parent)
 	removeAgentToolParentTraceState(child)
 	applyDefaultAgentToolCheckpointNamespace(child, childAgentName)
-	applyAgentToolSubgraphResume(parent, child, nodeID, childAgentName, toolCallID)
-	return child
+	if err := applyAgentToolSubgraphResume(parent, child, nodeID, childAgentName, toolCallID, toolCallKey); err != nil {
+		return nil, err
+	}
+	return child, nil
 }
 
 func removeAgentToolParentTraceState(child State) {
@@ -41,19 +51,56 @@ func applyDefaultAgentToolCheckpointNamespace(child State, childAgentName string
 	delete(child, CfgKeyCheckpointID)
 }
 
-func applyAgentToolSubgraphResume(parent State, child State, nodeID string, childAgentName string, toolCallID string) {
+func applyAgentToolSubgraphResume(
+	parent State,
+	child State,
+	nodeID string,
+	childAgentName string,
+	toolCallID string,
+	toolCallKey string,
+) error {
 	info, ok := subgraphInterruptInfoFromState(parent)
 	if !ok || nodeID == "" || info.parentNodeID != nodeID {
-		return
+		return nil
 	}
-	if childAgentName != "" && info.childAgentName != "" && info.childAgentName != childAgentName {
-		return
+	if err := validateAgentToolSubgraphInterruptInfo(info); err != nil {
+		return err
 	}
-	if toolCallID != "" && info.toolCallID != "" && info.toolCallID != toolCallID {
-		return
+	if childAgentName != info.childAgentName {
+		return nil
+	}
+	if toolCallID != info.toolCallID {
+		return nil
+	}
+	if toolCallKey != info.toolCallKey {
+		return nil
 	}
 	applyCheckpointResumeFields(child, info)
 	applyResumeCommandForAgentTool(parent, child, info)
+	return nil
+}
+
+func validateAgentToolSubgraphInterruptInfo(info subgraphInterruptInfo) error {
+	switch {
+	case info.parentNodeID == "":
+		return fmt.Errorf("agent tool graph interrupt missing parent node id")
+	case info.childAgentName == "":
+		return fmt.Errorf("agent tool graph interrupt missing child agent name")
+	case info.childCheckpointID == "":
+		return fmt.Errorf("agent tool graph interrupt missing child checkpoint id")
+	case info.childCheckpointNS == "":
+		return fmt.Errorf("agent tool graph interrupt missing child checkpoint namespace")
+	case info.childLineageID == "":
+		return fmt.Errorf("agent tool graph interrupt missing child lineage id")
+	case info.childTaskID == "":
+		return fmt.Errorf("agent tool graph interrupt missing child task id")
+	case info.toolCallID == "":
+		return fmt.Errorf("agent tool graph interrupt missing tool call id")
+	case info.toolCallKey == "":
+		return fmt.Errorf("agent tool graph interrupt missing tool call key")
+	default:
+		return nil
+	}
 }
 
 func applyResumeCommandForAgentTool(parent State, child State, info subgraphInterruptInfo) {
@@ -77,9 +124,6 @@ func resumeCommandForAgentTool(state State, childTaskID string) *Command {
 			return &Command{ResumeMap: map[string]any{childTaskID: v}}
 		}
 	}
-	if v, ok := state[ResumeChannel]; ok {
-		return &Command{Resume: v}
-	}
 	return nil
 }
 
@@ -102,7 +146,6 @@ func consumeAgentToolResumeValue(state State, childTaskID string) {
 			delete(state, StateKeyResumeMap)
 		}
 	}
-	delete(state, ResumeChannel)
 }
 
 func applyAgentToolInterruptState(
@@ -114,6 +157,7 @@ func applyAgentToolInterruptState(
 	childLineageID string,
 	childTaskID string,
 	toolCallID string,
+	toolCallKey string,
 ) {
 	if state == nil {
 		return
@@ -126,5 +170,6 @@ func applyAgentToolInterruptState(
 		subgraphInterruptKeyChildLineageID:    childLineageID,
 		subgraphInterruptKeyChildTaskID:       childTaskID,
 		subgraphInterruptKeyToolCallID:        toolCallID,
+		subgraphInterruptKeyToolCallKey:       toolCallKey,
 	}
 }

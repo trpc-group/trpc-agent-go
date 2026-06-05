@@ -26,6 +26,7 @@ type parentInvocationGraphRuntime struct {
 	state        graph.State
 	parentNodeID string
 	toolCallID   string
+	toolCallKey  string
 }
 
 const graphRuntimeSuppressSessionEventsStateKey = "agenttool:graph_runtime_suppress_session_events"
@@ -60,36 +61,51 @@ func parentInvocationGraphRuntimeFromContext(
 	if runtime.ParentNodeID == "" {
 		return nil, fmt.Errorf("agent tool graph parent node id is empty")
 	}
+	if runtime.ToolCallKey == "" {
+		return nil, fmt.Errorf("agent tool graph tool call key is empty")
+	}
 	return &parentInvocationGraphRuntime{
 		state:        graph.State(runtime.State),
 		parentNodeID: runtime.ParentNodeID,
 		toolCallID:   runtime.ToolCallID,
+		toolCallKey:  runtime.ToolCallKey,
 	}, nil
 }
 
 type graphToolInterruptCapture struct {
-	parentNodeID   string
-	toolCallID     string
-	childAgentName string
-	interrupt      *graph.InterruptError
-	lineageID      string
-	checkpointID   string
-	checkpointNS   string
+	parentNodeID         string
+	toolCallID           string
+	toolCallKey          string
+	childAgentName       string
+	expectedLineageID    string
+	expectedCheckpointNS string
+	interrupt            *graph.InterruptError
+	lineageID            string
+	checkpointID         string
+	checkpointNS         string
+	conflictErr          error
 }
 
 func (at *Tool) newGraphToolInterruptCapture(
+	runtimeState graph.State,
 	parentNodeID string,
 	toolCallID string,
+	toolCallKey string,
 	enabled bool,
 ) *graphToolInterruptCapture {
 	if !enabled {
 		return nil
 	}
 	childAgentName := at.agent.Info().Name
+	expectedLineageID, _ := runtimeState[graph.CfgKeyLineageID].(string)
+	expectedCheckpointNS, _ := runtimeState[graph.CfgKeyCheckpointNS].(string)
 	return &graphToolInterruptCapture{
-		parentNodeID:   parentNodeID,
-		toolCallID:     toolCallID,
-		childAgentName: childAgentName,
+		parentNodeID:         parentNodeID,
+		toolCallID:           toolCallID,
+		toolCallKey:          toolCallKey,
+		childAgentName:       childAgentName,
+		expectedLineageID:    expectedLineageID,
+		expectedCheckpointNS: expectedCheckpointNS,
 	}
 }
 
@@ -140,6 +156,12 @@ func (c *graphToolInterruptCapture) observe(evt *event.Event) {
 	if meta.NodeID == "" || meta.InterruptValue == nil {
 		return
 	}
+	if c.expectedLineageID != "" && meta.LineageID != c.expectedLineageID {
+		return
+	}
+	if c.expectedCheckpointNS != "" && meta.CheckpointNS != c.expectedCheckpointNS {
+		return
+	}
 	interrupt := graph.NewInterruptError(meta.InterruptValue)
 	interrupt.NodeID = meta.NodeID
 	interruptKey := meta.InterruptKey
@@ -148,15 +170,33 @@ func (c *graphToolInterruptCapture) observe(evt *event.Event) {
 	}
 	interrupt.Key = interruptKey
 	interrupt.TaskID = interruptKey
+	if c.interrupt != nil && !c.sameInterrupt(interrupt, meta) {
+		c.conflictErr = fmt.Errorf("agent tool graph captured multiple interrupt checkpoints")
+		return
+	}
 	c.interrupt = interrupt
 	c.lineageID = meta.LineageID
 	c.checkpointID = meta.CheckpointID
 	c.checkpointNS = meta.CheckpointNS
 }
 
+func (c *graphToolInterruptCapture) sameInterrupt(
+	interrupt *graph.InterruptError,
+	meta graph.PregelStepMetadata,
+) bool {
+	return c.interrupt.NodeID == interrupt.NodeID &&
+		c.interrupt.TaskID == interrupt.TaskID &&
+		c.lineageID == meta.LineageID &&
+		c.checkpointID == meta.CheckpointID &&
+		c.checkpointNS == meta.CheckpointNS
+}
+
 func (c *graphToolInterruptCapture) finish() error {
 	if c == nil {
 		return nil
+	}
+	if c.conflictErr != nil {
+		return c.conflictErr
 	}
 	if c.interrupt == nil {
 		return nil
@@ -172,14 +212,20 @@ func (c *graphToolInterruptCapture) finish() error {
 	if c.interrupt.TaskID == "" {
 		return fmt.Errorf("agent tool graph interrupt missing task id")
 	}
-	return agenttoolgraph.NewInterruptError(
-		c.interrupt,
-		c.parentNodeID,
-		c.childAgentName,
-		c.checkpointID,
-		c.checkpointNS,
-		c.lineageID,
-		c.interrupt.TaskID,
-		c.toolCallID,
-	)
+	if c.toolCallID == "" {
+		return fmt.Errorf("agent tool graph interrupt missing tool call id")
+	}
+	if c.toolCallKey == "" {
+		return fmt.Errorf("agent tool graph interrupt missing tool call key")
+	}
+	return agenttoolgraph.NewInterruptError(c.interrupt, agenttoolgraph.InterruptMetadata{
+		ParentNodeID:      c.parentNodeID,
+		ChildAgentName:    c.childAgentName,
+		ChildCheckpointID: c.checkpointID,
+		ChildCheckpointNS: c.checkpointNS,
+		ChildLineageID:    c.lineageID,
+		ChildTaskID:       c.interrupt.TaskID,
+		ToolCallID:        c.toolCallID,
+		ToolCallKey:       c.toolCallKey,
+	})
 }

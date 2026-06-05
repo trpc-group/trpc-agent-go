@@ -344,11 +344,13 @@ func (at *Tool) callWithParentInvocation(
 	var runtimeState graph.State
 	var parentNodeID string
 	var toolCallID string
+	var toolCallKey string
 	hasGraphRuntime := runtime != nil
 	if hasGraphRuntime {
 		runtimeState = runtime.state
 		parentNodeID = runtime.parentNodeID
 		toolCallID = runtime.toolCallID
+		toolCallKey = runtime.toolCallKey
 	}
 	// If the parent invocation does not have a session, fall back to isolated mode.
 	if parentInv.Session == nil && !hasGraphRuntime {
@@ -377,7 +379,7 @@ func (at *Tool) callWithParentInvocation(
 	if err != nil {
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
-	capture := at.newGraphToolInterruptCapture(parentNodeID, toolCallID, hasGraphRuntime)
+	capture := at.newGraphToolInterruptCapture(runtimeState, parentNodeID, toolCallID, toolCallKey, hasGraphRuntime)
 	response, err := at.collectResponse(
 		subInv,
 		at.wrapGraphToolInterruptCapture(

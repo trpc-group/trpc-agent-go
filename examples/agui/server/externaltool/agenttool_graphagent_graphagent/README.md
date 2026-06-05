@@ -56,35 +56,25 @@ The two AG-UI requests are:
 - Call 2: send the same `state.lineage_id`, the parent `state.checkpoint_id`,
   and `state.resume_map.review_decision`.
 
-The second response includes a `TOOL_CALL_RESULT` for `review_graph_tool` with:
+The second response includes a `TOOL_CALL_RESULT` for `review_graph_tool`
+showing the child graph resumed with the supplied review decision. It also
+includes `TEXT_MESSAGE_CONTENT` from the parent `final_answer` node.
 
-- `child graph resumed with review decision: approved`.
-
-It also includes `TEXT_MESSAGE_CONTENT` from the parent `final_answer` node.
-
-Example event summary from a successful run:
+The output has this two-step shape:
 
 ```text
-RUN_STARTED: 2
-TOOL_CALL_START: 2
-TOOL_CALL_ARGS: 2
-TOOL_CALL_END: 2
-TOOL_CALL_RESULT: 2
-ACTIVITY_DELTA: 2
-TEXT_MESSAGE_START: 1
-TEXT_MESSAGE_CONTENT: 119
-TEXT_MESSAGE_END: 1
-RUN_FINISHED: 2
-```
+Call 1: waiting for AgentTool child graph interrupt.
+threadId: agenttool-demo-thread
+lineageId: agenttool-demo-lineage-...
+checkpointId: ...
+toolCallId: ...
 
-Example final text:
+Call 2: resuming child graph through parent checkpoint.
 
-```text
-Approved.
+Final answer:
+...
 
-Release review notes (quick checklist):
-- Interrupt/resume path is correctly wired: child graph resumes and returns control without deadlocking.
-- No blocking waits observed in the interrupt handler; resume decision propagates cleanly.
+Verified: child graph resumed with review decision approved.
 ```
 
 ## Notes

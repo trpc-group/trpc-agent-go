@@ -7,25 +7,94 @@ import urllib.request
 import uuid
 
 
-def post_sse(endpoint, payload):
-    data = json.dumps(payload).encode("utf-8")
+def main() -> int:
+    args = parse_args()
+    try:
+        run(args)
+    except Exception as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def run(args: argparse.Namespace) -> None:
+    suffix = uuid.uuid4().hex[:8]
+    thread_id = args.thread_id
+    lineage_id = args.lineage_id or f"agenttool-demo-lineage-{suffix}"
+    run_id_1 = args.run_id_1 or f"agenttool-demo-run-1-{suffix}"
+    run_id_2 = args.run_id_2 or f"agenttool-demo-run-2-{suffix}"
+    first_payload = {
+        "threadId": thread_id,
+        "runId": run_id_1,
+        "state": {"lineage_id": lineage_id},
+        "messages": [{"role": "user", "content": args.question}],
+    }
+    print("Call 1: waiting for AgentTool child graph interrupt.")
+    first_events = list(stream_events(args.endpoint, first_payload))
+    require_no_run_error(first_events)
+    require_run_finished(first_events)
+    checkpoint_id = extract_checkpoint_id(first_events)
+    review_graph_tool_call_id = tool_call_id(first_events, "review_graph_tool")
+    print(f"threadId: {thread_id}")
+    print(f"lineageId: {lineage_id}")
+    print(f"checkpointId: {checkpoint_id}")
+    print(f"toolCallId: {review_graph_tool_call_id}")
+    second_payload = {
+        "threadId": thread_id,
+        "runId": run_id_2,
+        "state": {
+            "lineage_id": lineage_id,
+            "checkpoint_id": checkpoint_id,
+            "resume_map": {"review_decision": args.decision},
+        },
+        "messages": [{"role": "user", "content": ""}],
+    }
+    print("\nCall 2: resuming child graph through parent checkpoint.")
+    second_events = list(stream_events(args.endpoint, second_payload))
+    require_no_run_error(second_events)
+    require_run_finished(second_events)
+    require_resume_ack(second_events)
+    require_tool_result(
+        second_events,
+        review_graph_tool_call_id,
+        f"review decision: {args.decision}",
+    )
+    final_text = require_final_text(second_events)
+    print("\nFinal answer:")
+    print(final_text)
+    print(f"\nVerified: child graph resumed with review decision {args.decision}.")
+
+
+def stream_events(endpoint, payload):
     request = urllib.request.Request(
         endpoint,
-        data=data,
+        data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    events = []
-    with urllib.request.urlopen(request) as response:
-        for raw_line in response:
-            line = raw_line.decode("utf-8").rstrip("\r\n")
-            if line:
-                print(line, flush=True)
-            if not line.startswith("data: "):
-                continue
-            event = json.loads(line.removeprefix("data: "))
-            events.append(event)
-    return events
+    try:
+        with urllib.request.urlopen(request) as response:
+            data_lines = []
+            for raw_line in response:
+                line = raw_line.decode("utf-8").rstrip("\r\n")
+                if line.startswith("data:"):
+                    data_lines.append(line[5:].lstrip())
+                    continue
+                if line == "" and data_lines:
+                    yield parse_event(data_lines)
+                    data_lines = []
+            if data_lines:
+                yield parse_event(data_lines)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
+
+
+def parse_event(data_lines):
+    data = "\n".join(data_lines)
+    if data == "[DONE]":
+        return {"type": "DONE"}
+    return json.loads(data)
 
 
 def require_no_run_error(events):
@@ -116,57 +185,5 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
-    args = parse_args()
-    suffix = uuid.uuid4().hex[:8]
-    thread_id = args.thread_id
-    lineage_id = args.lineage_id or f"agenttool-demo-lineage-{suffix}"
-    run_id_1 = args.run_id_1 or f"agenttool-demo-run-1-{suffix}"
-    run_id_2 = args.run_id_2 or f"agenttool-demo-run-2-{suffix}"
-    first_payload = {
-        "threadId": thread_id,
-        "runId": run_id_1,
-        "state": {"lineage_id": lineage_id},
-        "messages": [{"role": "user", "content": args.question}],
-    }
-    first_events = post_sse(args.endpoint, first_payload)
-    require_no_run_error(first_events)
-    require_run_finished(first_events)
-    checkpoint_id = extract_checkpoint_id(first_events)
-    review_graph_tool_call_id = tool_call_id(first_events, "review_graph_tool")
-    print(f"threadId={thread_id}", file=sys.stderr, flush=True)
-    print(f"lineageId={lineage_id}", file=sys.stderr, flush=True)
-    print(f"checkpointId={checkpoint_id}", file=sys.stderr, flush=True)
-    second_payload = {
-        "threadId": thread_id,
-        "runId": run_id_2,
-        "state": {
-            "lineage_id": lineage_id,
-            "checkpoint_id": checkpoint_id,
-            "resume_map": {"review_decision": args.decision},
-        },
-        "messages": [{"role": "user", "content": ""}],
-    }
-    second_events = post_sse(args.endpoint, second_payload)
-    require_no_run_error(second_events)
-    require_run_finished(second_events)
-    require_resume_ack(second_events)
-    require_tool_result(
-        second_events,
-        review_graph_tool_call_id,
-        f"review decision: {args.decision}",
-    )
-    final_text = require_final_text(second_events)
-    print(f"finalText={final_text}", file=sys.stderr, flush=True)
-    print("verified=true", file=sys.stderr, flush=True)
-
-
 if __name__ == "__main__":
-    try:
-        main()
-    except urllib.error.HTTPError as exc:
-        print(f"HTTP {exc.code}: {exc.read().decode('utf-8')}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
+    raise SystemExit(main())
