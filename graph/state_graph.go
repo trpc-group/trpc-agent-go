@@ -21,6 +21,7 @@ import (
 	"maps"
 	"reflect"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -468,7 +469,7 @@ func WithSubgraphOutputMapper(f SubgraphOutputMapper) Option {
 // WithAgentNodeRunOptions applies run options only to this agent node's child invocation.
 func WithAgentNodeRunOptions(opts ...agent.RunOption) Option {
 	return func(node *Node) {
-		node.agentRunOptions = append([]agent.RunOption(nil), opts...)
+		node.agentRunOptions = append(node.agentRunOptions, append([]agent.RunOption(nil), opts...)...)
 	}
 }
 
@@ -3889,15 +3890,17 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 		}
 	}
 
-	// Clone from parent invocation if available to preserve linkage and filtering.
+	// Start from parent invocation options when available to preserve linkage and filtering.
 	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok &&
 		parentInvocation != nil {
-		runOptions := parentInvocation.RunOptions
+		runOptions := detachAgentNodeMutableRunOptions(parentInvocation.RunOptions)
+		runOptions.RuntimeState = nil
 		applyAgentNodeRunOptions(&runOptions, nodeRunOptions)
+		nodeRuntimeState := runOptions.RuntimeState
 		// Preserve the parent's visibility preference.
 		// The agent node captures completion snapshots from either raw
 		// graph.execution events or visible rewritten completion snapshots.
-		runOptions.RuntimeState = runtime
+		runOptions.RuntimeState = mergeAgentNodeRuntimeState(runtime, nodeRuntimeState)
 		runOptions.CustomAgentConfigs = withScopedGraphCallOptions(
 			runOptions.CustomAgentConfigs,
 			nodeID,
@@ -3943,7 +3946,8 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 	// Create standalone invocation.
 	runOptions := agent.RunOptions{}
 	applyAgentNodeRunOptions(&runOptions, nodeRunOptions)
-	runOptions.RuntimeState = runtime
+	nodeRuntimeState := runOptions.RuntimeState
+	runOptions.RuntimeState = mergeAgentNodeRuntimeState(runtime, nodeRuntimeState)
 	inv := agent.NewInvocation(
 		agent.WithInvocationAgent(targetAgent),
 		agent.WithInvocationRunOptions(runOptions),
@@ -3964,6 +3968,34 @@ func applyAgentNodeRunOptions(runOptions *agent.RunOptions, opts []agent.RunOpti
 			opt(runOptions)
 		}
 	}
+}
+
+func detachAgentNodeMutableRunOptions(in agent.RunOptions) agent.RunOptions {
+	out := in
+	// Detach only parent-owned mutable containers.
+	// Standard run options can append to or merge into these containers.
+	out.InjectedContextMessages = slices.Clip(out.InjectedContextMessages)
+	out.TraceStartedCallbacks = slices.Clip(out.TraceStartedCallbacks)
+	out.A2ARequestOptions = slices.Clip(out.A2ARequestOptions)
+	out.CustomAgentConfigs = maps.Clone(in.CustomAgentConfigs)
+	out.ModelRequestExtraFields = maps.Clone(in.ModelRequestExtraFields)
+	out.AdditionalTools = slices.Clip(out.AdditionalTools)
+	out.ExternalTools = slices.Clip(out.ExternalTools)
+	return out
+}
+
+func mergeAgentNodeRuntimeState(runtime State, nodeRuntimeState map[string]any) map[string]any {
+	if runtime == nil && nodeRuntimeState == nil {
+		return nil
+	}
+	merged := make(map[string]any, len(runtime)+len(nodeRuntimeState))
+	for key, value := range nodeRuntimeState {
+		merged[key] = value
+	}
+	for key, value := range runtime {
+		merged[key] = value
+	}
+	return merged
 }
 
 func currentTraceTaskPredecessors(traceTask *traceTaskMetadata) []string {

@@ -69,7 +69,10 @@ func resolveRunOptions(_ context.Context, input *aguiadapter.RunAgentInput) ([]a
 	if strings.TrimSpace(last.ToolCallID) == "" {
 		return nil, fmt.Errorf("tool message missing toolCallId")
 	}
-	content, _ := last.ContentString()
+	content, ok := last.ContentString()
+	if !ok {
+		return nil, fmt.Errorf("tool message content must be text")
+	}
 	if strings.TrimSpace(content) == "" {
 		return nil, fmt.Errorf("tool message content cannot be empty")
 	}

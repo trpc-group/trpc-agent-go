@@ -39,11 +39,14 @@ func newAGUIServer(r runner.Runner, sessionService session.Service) (*agui.Serve
 }
 
 func resolveRunOptions(_ context.Context, input *aguiadapter.RunAgentInput) ([]agent.RunOption, error) {
+	if input == nil || len(input.Messages) == 0 {
+		return nil, fmt.Errorf("run input must include at least one message")
+	}
 	options := []agent.RunOption{agent.WithGraphEmitFinalModelResponses(true)}
-	if input.Messages[len(input.Messages)-1].Role != types.RoleTool {
+	last := input.Messages[len(input.Messages)-1]
+	if last.Role != types.RoleTool {
 		return options, nil
 	}
-	last := input.Messages[len(input.Messages)-1]
 	if len(input.Messages) > 1 && input.Messages[len(input.Messages)-2].Role == types.RoleTool {
 		return nil, fmt.Errorf("expected exactly one trailing tool message")
 	}
@@ -61,13 +64,22 @@ func resolveRunOptions(_ context.Context, input *aguiadapter.RunAgentInput) ([]a
 	if checkpointID == "" {
 		return nil, fmt.Errorf("missing forwardedProps.%s", graph.CfgKeyCheckpointID)
 	}
-	content, _ := last.ContentString()
+	if strings.TrimSpace(last.ToolCallID) == "" {
+		return nil, fmt.Errorf("tool message missing toolCallId")
+	}
+	content, ok := last.ContentString()
+	if !ok {
+		return nil, fmt.Errorf("tool message content must be text")
+	}
+	if strings.TrimSpace(content) == "" {
+		return nil, fmt.Errorf("tool message content cannot be empty")
+	}
 	runtimeState := map[string]any{
 		graph.CfgKeyLineageID:    lineageID,
 		graph.CfgKeyCheckpointID: checkpointID,
-		graph.StateKeyCommand: &graph.Command{ResumeMap: map[string]any{
+		graph.StateKeyCommand: graph.NewResumeCommand().WithResumeMap(map[string]any{
 			last.ToolCallID: content,
-		}},
+		}),
 	}
 	return append(options, agent.WithRuntimeState(runtimeState)), nil
 }
