@@ -260,6 +260,10 @@ type Options struct {
 	Tools []tool.Tool
 	// ToolSets is the list of tool sets available to the agent.
 	ToolSets []tool.ToolSet
+	// activatableToolSets is the list of tool sets available for runtime activation.
+	activatableToolSets []tool.ToolSet
+	// toolActivationRules stores runtime tool activation rules.
+	toolActivationRules []toolActivationRule
 	// Planner is the planner to use for planning instructions.
 	Planner planner.Planner
 	// SubAgents is the list of sub-agents available to the agent.
@@ -824,6 +828,14 @@ func WithToolSets(toolSets []tool.ToolSet) Option {
 	}
 }
 
+// WithActivatableToolSets sets tool sets that may be activated at runtime.
+// These tool sets are not visible until an activation rule matches.
+func WithActivatableToolSets(toolSets []tool.ToolSet) Option {
+	return func(opts *Options) {
+		opts.activatableToolSets = append([]tool.ToolSet(nil), toolSets...)
+	}
+}
+
 // WithRefreshToolSetsOnRun controls whether tools from ToolSets are
 // refreshed from the underlying ToolSet on each run.
 // When enabled, the agent will call ToolSet.Tools again when building
@@ -882,6 +894,32 @@ func WithSkillScopeMode(mode skill.SkillScopeMode) Option {
 func WithSkillFilter(filter skill.VisibilityFilter) Option {
 	return func(opts *Options) {
 		opts.skillFilter = filter
+	}
+}
+
+// WithToolActivationOnSkillLoad activates tool sets after a skill is loaded.
+// The default mode is include and the default lifetime is invocation.
+// It is incompatible with WithOutputSchema.
+func WithToolActivationOnSkillLoad(
+	skill string,
+	toolSetNames []string,
+	opts ...ToolActivationOption,
+) Option {
+	return func(options *Options) {
+		ruleOptions := newToolActivationRuleOptions(opts...)
+		trigger := toolActivationTrigger{
+			kind:  toolActivationTriggerSkillLoad,
+			skill: skill,
+		}
+		options.toolActivationRules = append(
+			options.toolActivationRules,
+			toolActivationRule{
+				trigger:      trigger,
+				toolSetNames: append([]string(nil), toolSetNames...),
+				mode:         ruleOptions.mode,
+				lifetime:     ruleOptions.lifetime,
+			},
+		)
 	}
 }
 

@@ -20,7 +20,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/csv"
-	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/json"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/proto"

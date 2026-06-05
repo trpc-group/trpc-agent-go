@@ -280,12 +280,24 @@ func (c *CodeExecutor) ensureWS() (*workspaceRuntime, error) {
 }
 
 // Engine exposes the container runtime as an Engine for skills.
+//
+// The returned Engine advertises Capabilities{SupportsCleanEnv: true}
+// because RunProgram honors spec.CleanEnv: in clean mode the command
+// is spawned via `env -i ...` under a non-login `bash --noprofile
+// --norc`, so it starts from a minimal environment (workspace base
+// vars plus a default PATH) instead of inheriting the container
+// process env or sourcing start-up files. Tool layers that gate
+// policy mode on SupportsCleanEnv (tool/workspaceexec) therefore no
+// longer fail closed on the container backend (issue #1845).
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt, err := c.ensureWS()
 	if err != nil {
 		return nil
 	}
-	return codeexecutor.NewEngine(rt, rt, rt)
+	return codeexecutor.NewEngineWithCapabilities(
+		rt, rt, rt,
+		codeexecutor.Capabilities{SupportsCleanEnv: true},
+	)
 }
 
 // CreateWorkspace creates a workspace using the container runtime.

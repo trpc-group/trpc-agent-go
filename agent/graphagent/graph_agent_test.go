@@ -1592,6 +1592,7 @@ func TestGraphAgent_CreateInitialStateWithContextCompaction(t *testing.T) {
 				},
 			},
 			{
+				ID:        "event-old",
 				RequestID: "req-old",
 				FilterKey: agentName,
 				Response: &model.Response{
@@ -1657,6 +1658,9 @@ func TestGraphAgent_CreateInitialStateWithContextCompaction(t *testing.T) {
 	require.Equal(t, model.RoleTool, messages[1].Role)
 	require.Contains(t, messages[1].Content, "Previous tool call succeeded")
 	require.Contains(t, messages[1].Content, "Do NOT re-invoke")
+	require.Contains(t, messages[1].Content, "event_id: event-old")
+	require.Contains(t, messages[1].Content, "tool_call_id: tool-call-old")
+	require.Contains(t, messages[1].Content, "tool_name: worker")
 	require.Equal(t, "tool-call-old", messages[1].ToolID)
 	require.Equal(t, "worker", messages[1].ToolName)
 	require.Equal(t, model.RoleAssistant, messages[2].Role)

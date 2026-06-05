@@ -58,6 +58,12 @@ const (
 	// appenderStateKey is the invocation state key used by internal appender
 	// attachment (see internal/state/appender).
 	appenderStateKey = "__append_event__"
+	// liveSessionStateKey is the invocation state key used by internal
+	// livesession attachment (see internal/state/livesession). Sub-agents
+	// (e.g., AgentTool) read this pointer to restore the runner's live
+	// session after the function-call processor clones the invocation
+	// session for state-delta isolation.
+	liveSessionStateKey = "__live_session__"
 
 	// streamHubStateKey is the invocation state key used by the graph to
 	// share ephemeral streams across node invocations within the same run.
@@ -280,6 +286,23 @@ func WithModelRequestExtraFields(fields map[string]any) RunOption {
 		}
 		for key, value := range fields {
 			opts.ModelRequestExtraFields[key] = value
+		}
+	}
+}
+
+// WithModelRequestHeaders merges provider-specific HTTP headers into each
+// model request created during this run. Request-level headers take precedence
+// over model-level headers in adapters that support merging.
+func WithModelRequestHeaders(headers map[string]string) RunOption {
+	return func(opts *RunOptions) {
+		if len(headers) == 0 {
+			return
+		}
+		if opts.ModelRequestHeaders == nil {
+			opts.ModelRequestHeaders = make(map[string]string, len(headers))
+		}
+		for key, value := range headers {
+			opts.ModelRequestHeaders[key] = value
 		}
 	}
 }
@@ -1180,6 +1203,13 @@ type RunOptions struct {
 	// fields, with these request-level values taking precedence.
 	ModelRequestExtraFields map[string]any
 
+	// ModelRequestHeaders contains provider-specific HTTP headers for model
+	// calls made during this run.
+	//
+	// Adapters that support request headers merge these with model-level
+	// headers, with these request-level values taking precedence.
+	ModelRequestHeaders map[string]string
+
 	// CodeExecutor is the code executor to use for this specific run.
 	// If set, it temporarily overrides the agent's default code executor for
 	// this request only.
@@ -1584,6 +1614,7 @@ func isCloneStateKey(key string) bool {
 	case flusherStateKey,
 		barrierStateKey,
 		appenderStateKey,
+		liveSessionStateKey,
 		streamHubStateKey,
 		surfaceRootNodeIDStateKey,
 		teamMemberTraceRootStateKey:

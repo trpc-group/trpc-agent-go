@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -677,6 +678,63 @@ func TestLLMAgent_InvocationToolSurface_HidesWorkspaceExecWhenDisabled(
 	require.Nil(t, findTool(tools, "workspace_exec"))
 	require.Nil(t, findTool(tools, "workspace_write_stdin"))
 	require.Nil(t, findTool(tools, "workspace_kill_session"))
+}
+
+func TestLLMAgent_InvocationCapabilityAccessors(t *testing.T) {
+	repo := &mockSkillRepository{
+		summaries: []skill.Summary{{Name: "skill-a", Description: "desc"}},
+	}
+	staticExec := &interactiveStubExec{}
+	runExec := &interactiveStubExec{}
+	kb := &minimalKnowledge{}
+	knowledgeFilter := map[string]any{"tenant": "acme"}
+	conditionedFilter := &searchfilter.UniversalFilterCondition{
+		Field:    "tenant",
+		Operator: searchfilter.OperatorEqual,
+		Value:    "acme",
+	}
+	agenticInfo := map[string][]any{"tenant": {"acme"}}
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithSkills(repo),
+		WithCodeExecutor(staticExec),
+		WithKnowledge(kb),
+		WithKnowledgeFilter(knowledgeFilter),
+		WithKnowledgeConditionedFilter(conditionedFilter),
+		WithEnableKnowledgeAgenticFilter(true),
+		WithKnowledgeAgenticFilterInfo(agenticInfo),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithCodeExecutor(runExec),
+		)),
+	)
+
+	require.Same(t, repo, agt.InvocationSkillRepository(context.Background(), inv))
+	require.Same(t, runExec, agt.InvocationCodeExecutor(context.Background(), inv))
+
+	var opts Options
+	for _, opt := range agt.InvocationKnowledgeOptions(inv) {
+		opt(&opts)
+	}
+	require.Same(t, kb, opts.Knowledge)
+	require.Equal(t, knowledgeFilter, opts.KnowledgeFilter)
+	require.Same(t, conditionedFilter, opts.KnowledgeConditionedFilter)
+	require.True(t, opts.EnableKnowledgeAgenticFilter)
+	require.Equal(t, agenticInfo, opts.AgenticFilterInfo)
+}
+
+func TestLLMAgent_InvocationCapabilityAccessors_NilAndEmpty(t *testing.T) {
+	var nilAgent *LLMAgent
+	require.Nil(t, nilAgent.InvocationSkillRepository(context.Background(), nil))
+	require.Nil(t, nilAgent.InvocationCodeExecutor(context.Background(), nil))
+	require.Nil(t, nilAgent.InvocationKnowledgeOptions(nil))
+
+	agt := New("test-agent", WithModel(newDummyModel()))
+	require.Nil(t, agt.InvocationSkillRepository(context.Background(), nil))
+	require.Nil(t, agt.InvocationCodeExecutor(context.Background(), nil))
+	require.Nil(t, agt.InvocationKnowledgeOptions(nil))
 }
 
 func TestLLMAgent_SurfaceRuntimeHelpers_NilAgentBranches(t *testing.T) {

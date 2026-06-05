@@ -142,12 +142,18 @@ func New(name string, opts ...Option) *LLMAgent {
 		if len(options.extensionContributedTools) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, extension-contributed tools (WithExtensions → Registry.Tools) must be empty")
 		}
+		if len(options.toolActivationRules) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, tool activation rules must be empty")
+		}
 		if options.Knowledge != nil {
 			panic("Invalid LLMAgent configuration: if output_schema is set, knowledge must be empty")
 		}
 		if len(options.SubAgents) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
 		}
+	}
+	if err := validateAndNormalizeToolActivationOptions(&options); err != nil {
+		panic(fmt.Sprintf("Invalid LLMAgent configuration: %v", err))
 	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
@@ -220,10 +226,21 @@ func New(name string, opts ...Option) *LLMAgent {
 		)
 	}
 
+	toolCallProcessorOptions := []processor.FunctionCallResponseProcessorOption{
+		processor.WithToolCallRetryPolicy(options.ToolCallRetryPolicy),
+	}
+	if len(options.toolActivationRules) > 0 {
+		toolCallProcessorOptions = append(
+			toolCallProcessorOptions,
+			processor.WithPostToolResultHook(
+				a.handleToolActivationPostToolResult,
+			),
+		)
+	}
 	toolcallProcessor := processor.NewFunctionCallResponseProcessor(
 		options.EnableParallelTools,
 		options.ToolCallbacks,
-		processor.WithToolCallRetryPolicy(options.ToolCallRetryPolicy),
+		toolCallProcessorOptions...,
 	)
 	// Configure default transfer message for direct sub-agent calls.
 	// Default behavior (when not configured): enabled with built-in default message.
@@ -249,6 +266,9 @@ func New(name string, opts ...Option) *LLMAgent {
 		SyncSummaryIntraRun:             options.SyncSummaryIntraRun,
 		EnableContextCompaction:         options.EnableContextCompaction,
 		ContextCompactionThresholdRatio: options.ContextCompactionThresholdRatio,
+	}
+	if len(options.toolActivationRules) > 0 {
+		flowOpts.ToolActivationApplier = a.applyToolActivation
 	}
 
 	a.flow = llmflow.New(
@@ -1082,14 +1102,23 @@ func appendOnDemandSessionTools(
 		options.OutputSchema != nil {
 		return allTools
 	}
-	if inv != nil && !toolsessionrecall.SupportsOnDemandSession(inv) {
+	if inv == nil {
+		return append(
+			allTools,
+			toolsessionrecall.NewSearchTool(),
+			toolsessionrecall.NewLoadTool(),
+		)
+	}
+	if toolsessionrecall.SupportsSearch(inv) {
+		allTools = append(allTools, toolsessionrecall.NewSearchTool())
+	}
+	if toolsessionrecall.SupportsLoad(inv) {
+		allTools = append(allTools, toolsessionrecall.NewLoadTool())
+	}
+	if !toolsessionrecall.SupportsOnDemandSession(inv) {
 		return allTools
 	}
-	return append(
-		allTools,
-		toolsessionrecall.NewSearchTool(),
-		toolsessionrecall.NewLoadTool(),
-	)
+	return allTools
 }
 
 func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {

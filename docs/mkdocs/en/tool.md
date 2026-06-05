@@ -62,6 +62,27 @@ type MetadataProvider interface {
 }
 ```
 
+Direct MCP ToolSet tools also publish metadata from explicit MCP annotations:
+
+| MCP annotation | ToolMetadata field |
+| -------------- | ------------------ |
+| `readOnlyHint` | `ReadOnly`         |
+| `destructiveHint` | `Destructive`  |
+| `openWorldHint` | `OpenWorld`      |
+
+Only explicit MCP hints are mapped. If an MCP server omits
+`destructiveHint` or `openWorldHint`, the framework keeps the Go zero value
+(`false`) in `ToolMetadata`. This differs from MCP's default hint semantics,
+where `destructiveHint` defaults to `true` for non-read-only tools and
+`openWorldHint` defaults to `true`. `ToolMetadata` uses plain `bool` fields,
+so it cannot distinguish "missing" from "explicit false". If your policy must
+follow MCP's default semantics, treat non-read-only MCP tools conservatively
+unless your application has another trust signal.
+
+MCP annotations do not have matching fields for `SearchOrRead` or
+`ConcurrencySafe`. The framework also does not treat `readOnlyHint` or
+`idempotentHint` as a concurrency-safety signal.
+
 Permission policy is checked after the model requests a tool, after JSON repair
 and before-tool callbacks have finalized arguments, and immediately before the
 framework executes it:
@@ -821,6 +842,19 @@ agent := llmagent.New("mcp-assistant",
     llmagent.WithToolSets([]tool.ToolSet{mcpToolSet}))
 ```
 
+### MCP Annotations and Permission Metadata
+
+When a remote MCP server returns tool annotations from `tools/list`, direct
+MCP ToolSet tools implement `tool.MetadataProvider`. Permission policies can
+read `req.Metadata.ReadOnly`, `req.Metadata.Destructive`, and
+`req.Metadata.OpenWorld` without inspecting MCP-specific data structures.
+
+The mapping uses the tool snapshot returned by `tools/list`. Refreshing a
+ToolSet rebuilds the framework tool list rather than mutating existing
+`mcpTool` instances. If future code adds in-place hot updates from MCP
+`ToolListChangedNotification`, metadata reads should be checked again for
+thread safety.
+
 ### ToolSet Lifecycle and Ownership
 
 The `ToolSet` interface explicitly includes `Close()`. That means the
@@ -1068,9 +1102,11 @@ The main difference is **when** remote MCP tools become visible:
 - `MCP ToolSet`
   - performs `initialize + tools/list`
   - expands remote MCP tools into model-visible Tools
+  - maps explicit remote MCP safety annotations into `PermissionRequest.Metadata`
 - `mcpbroker`
   - initially exposes only 4 broker tools
   - the model discovers servers, then tools, then inspects selected schemas, then calls a concrete tool
+  - exposes broker tools such as `mcp_call`; remote tool annotations are not automatically reflected in `PermissionRequest.Metadata`
 
 You can think of them as:
 
@@ -1587,6 +1623,135 @@ child := agenttool.NewTool(
   details should not appear in later parent context, keep the default
   `HistoryScopeIsolated` and pass the needed context through tool arguments.
 - `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
+
+### Dynamic AgentTool
+
+`agenttool.NewTool(agent)` is a good fit when the tool is backed by one clear
+specialist Agent. In that case, the application constructs the Agent first
+including its model, tools, skills, permissions, and runtime policy, then exposes
+that Agent as a tool to the parent.
+
+Use `agenttool.NewDynamicTool()` when the application cannot predefine every
+specialist role, and the parent Agent should choose a tool subset or per-call
+instruction for each task. It exposes a model-facing tool named `dynamic_agent`
+by default. Calling this tool does not create arbitrary Go objects and does not
+select one pre-registered Agent by name; it runs one short-lived child Agent
+invocation within a boundary defined by application code.
+
+Typical setup:
+
+```go
+dynamicAgent := agenttool.NewDynamicTool()
+
+parent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{
+        readFileTool,
+        searchCodeTool,
+        dynamicAgent,
+    }),
+)
+```
+
+By default, `dynamic_agent` derives its capability boundary from the parent
+Agent's currently available user tools. The model can pass `tools` to narrow the
+child Agent's tools for this call. If `tools` is omitted, the child may use all
+tools inside the boundary. `dynamic_agent` itself, `transfer_to_agent`, and
+caller-executed external tools are not selectable for the child.
+
+The default model-facing arguments are:
+
+```json
+{
+  "request": "Analyze this code for authorization bypass risks. Relevant context: ...",
+  "instruction": "Act as a security auditor. Return only risks and fixes.",
+  "tools": ["read_file", "search_code"]
+}
+```
+
+- `request`: Required task description. The default history scope is
+  `HistoryScopeIsolated`, so include the context the child needs in `request`.
+- `instruction`: Optional role, constraints, or execution guidance for this
+  child invocation.
+- `tools`: Optional exact tool names allowed for this invocation. An empty array
+  means the child receives no user tools.
+
+If the default parent-derived boundary is not the right business boundary, set a
+template Agent or explicit maximum capability surface in code:
+
+```go
+workerTemplate := llmagent.New(
+    "worker-template",
+    llmagent.WithModel(workerModel),
+    llmagent.WithInstruction("You are a focused worker Agent for one task."),
+)
+
+dynamicAgent := agenttool.NewDynamicTool(
+    // Optional: define the child Agent execution boundary: model, executor,
+    // callbacks, permission policy, and similar runtime settings.
+    agenttool.WithTemplateAgent(workerTemplate),
+    // Optional: restrict the maximum tool set the model can choose from.
+    agenttool.WithCapabilityTools([]tool.Tool{readFileTool, searchCodeTool}),
+)
+```
+
+`WithTemplateAgent` is a code-side boundary, not a model parameter. The model
+cannot use `dynamic_agent` to choose arbitrary Agents, models, or executors. It
+can only fill `request`, optionally set `instruction`, and optionally narrow the
+tools/skills subset inside the boundary configured by the developer.
+
+Common options:
+
+- `WithName(name)`: change the model-facing tool name. This only applies to
+  `NewDynamicTool`; regular `NewTool(agent)` always uses the wrapped Agent's
+  `Info().Name`.
+- `WithTemplateAgent(agent)`: set the dynamic child Agent template, commonly used
+  to fix the model, executor, callbacks, permission policy, and other runtime
+  boundaries.
+- `WithCapabilityTools(tools)`: set the maximum tool surface the model may choose
+  from. When omitted, it is derived from the parent Agent's effective user tools
+  for the current run. When set, the tool names are enumerated in the `tools`
+  schema so the model selects from a known set instead of guessing strings (the
+  parent-derived surface and `WithCapabilityProvider` are resolved per call and
+  are not enumerated).
+- `WithCapabilitySkills(repo)`: set the maximum skill repository the model may
+  choose from. When omitted, it is derived from the parent Agent's effective skill
+  repository for the current run.
+- `WithExposeToolSelection(false)`: hide the `tools` field from the model. The
+  child still receives the code-defined tool surface, but the model cannot narrow
+  it.
+- `WithExposeSkillSelection(true)`: expose the `skills` field to the model. This
+  is disabled by default because skill execution usually depends on deployment
+  environment and code executor availability.
+- `WithExposeInstruction(false)`: hide the `instruction` field from the model.
+- `WithRequestDescription` / `WithInstructionDescription` /
+  `WithToolsDescription` / `WithSkillsDescription`: customize field descriptions
+  using business-specific wording so the model fills arguments more reliably.
+
+Take extra care when exposing `skills`. Dynamic AgentTool checks whether selected
+skill names exist in the boundary repository. If the child has no available code
+executor and a selected skill may require running code, the tool result includes a
+warning. In production, prefer defining the executable range in code with
+`WithCapabilitySkills` and a template Agent before exposing the `skills` field to
+the model.
+
+Dynamic AgentTool has a different boundary from the other multi-Agent mechanisms:
+
+| Mechanism | What the model chooses | Lifetime | Control |
+| --- | --- | --- | --- |
+| `agenttool.NewTool(agent)` | one fixed tool entrypoint | per tool call | returns a tool result to the parent Agent |
+| `transfer_to_agent` | one registered sub-agent | target Agent continues the current turn | hands off control |
+| `agenttool.NewDynamicTool()` | `request`, `instruction`, and a tools/skills subset for this call | per tool call | returns a tool result to the parent Agent |
+
+If the same specialist Agent is exposed through both `WithSubAgents` and
+`agenttool.NewTool(agent)`, the parent model sees two different paths:
+`transfer_to_agent` and a regular AgentTool. The framework can run this, but the
+developer should explain when to use each path in the instruction or tool
+description, or expose only one path. A `dynamic_agent` child does not receive
+`transfer_to_agent`, but regular AgentTools are treated as user tools. If a
+dynamic child should not call other AgentTools, narrow the boundary with
+`WithCapabilityTools` or a runtime `ToolFilter`.
 
 ## Tool Integration and Usage
 
