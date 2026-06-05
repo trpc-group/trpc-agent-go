@@ -509,6 +509,11 @@ type Request struct {
 	// request-level values take precedence.
 	ExtraFields map[string]any `json:"-"`
 
+	// Headers stores provider-specific HTTP headers for this request.
+	// Model adapters merge these with model-level headers when supported;
+	// request-level values take precedence.
+	Headers map[string]string `json:"-"`
+
 	Tools map[string]tool.Tool `json:"-"` // Tools are not serialized, handled separately
 }
 

@@ -5103,6 +5103,52 @@ func TestModel_GenerateContent_RequestExtraFieldsOverrideModelExtraFields(t *tes
 	assert.Equal(t, "request-cache", captured["prompt_cache_key"])
 }
 
+func TestModel_GenerateContent_RequestHeadersOverrideModelHeaders(t *testing.T) {
+	var sessionHeader string
+	var tenantHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		sessionHeader = r.Header.Get("X-Session-ID")
+		tenantHeader = r.Header.Get("X-Tenant-ID")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"gpt-3.5-turbo",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+		}`))
+	}))
+	defer server.Close()
+
+	m := New(
+		"gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithHeaders(map[string]string{
+			"X-Session-ID": "model-session",
+			"X-Tenant-ID":  "tenant-a",
+		}),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		Headers: map[string]string{
+			"X-Session-ID": "request-session",
+		},
+	}
+
+	responseChan, err := m.GenerateContent(context.Background(), req)
+	require.NoError(t, err)
+	for range responseChan {
+	}
+
+	assert.Equal(t, "request-session", sessionHeader)
+	assert.Equal(t, "tenant-a", tenantHeader)
+}
+
 // TestNew_WithAllOptions tests creating a model with all available options.
 func TestNew_WithAllOptions(t *testing.T) {
 	m := New("gpt-4",
