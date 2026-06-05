@@ -558,6 +558,9 @@ func TestCallOptions_AppliedToNestedSubgraph(t *testing.T) {
 			}),
 		),
 	)(&runOpts)
+	agent.WithModelRequestHeaders(map[string]string{
+		"X-Session-ID": "session-1",
+	})(&runOpts)
 
 	initial := State{
 		StateKeyParentAgent: parent,
@@ -575,6 +578,7 @@ func TestCallOptions_AppliedToNestedSubgraph(t *testing.T) {
 	}
 
 	require.NotNil(t, childModel.lastReq)
+	require.Equal(t, "session-1", childModel.lastReq.Headers["X-Session-ID"])
 	gen := childModel.lastReq.GenerationConfig
 	require.NotNil(t, gen.MaxTokens)
 	require.Equal(t, callOptsTestMaxTokens, *gen.MaxTokens)

@@ -290,6 +290,23 @@ func WithModelRequestExtraFields(fields map[string]any) RunOption {
 	}
 }
 
+// WithModelRequestHeaders merges provider-specific HTTP headers into each
+// model request created during this run. Request-level headers take precedence
+// over model-level headers in adapters that support merging.
+func WithModelRequestHeaders(headers map[string]string) RunOption {
+	return func(opts *RunOptions) {
+		if len(headers) == 0 {
+			return
+		}
+		if opts.ModelRequestHeaders == nil {
+			opts.ModelRequestHeaders = make(map[string]string, len(headers))
+		}
+		for key, value := range headers {
+			opts.ModelRequestHeaders[key] = value
+		}
+	}
+}
+
 // MergeRuntimeState merges runtime state into existing RunOptions state.
 //
 // When a key already exists, the new value replaces the old one.
@@ -1185,6 +1202,13 @@ type RunOptions struct {
 	// Adapters that support extra fields merge these with model-level extra
 	// fields, with these request-level values taking precedence.
 	ModelRequestExtraFields map[string]any
+
+	// ModelRequestHeaders contains provider-specific HTTP headers for model
+	// calls made during this run.
+	//
+	// Adapters that support request headers merge these with model-level
+	// headers, with these request-level values taking precedence.
+	ModelRequestHeaders map[string]string
 
 	// CodeExecutor is the code executor to use for this specific run.
 	// If set, it temporarily overrides the agent's default code executor for
