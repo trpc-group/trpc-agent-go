@@ -149,7 +149,7 @@ func TestNewService_FactsKeyInResponseIsIgnored(t *testing.T) {
 }
 
 func TestDefaultPolicy(t *testing.T) {
-	p := DefaultPolicy{}
+	p := defaultPolicy{}
 
 	assert.False(t, p.ShouldReview(nil))
 	assert.False(t, p.ShouldReview(&ReviewContext{}))

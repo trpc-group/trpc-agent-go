@@ -539,7 +539,7 @@ func TestDefaultSpecGate_DeleteAction_AlwaysPasses(t *testing.T) {
 }
 
 func TestDefaultSpecGate_NameTooLong(t *testing.T) {
-	g := &DefaultSpecGate{MinSteps: 1, MaxNameLen: 10}
+	g := &defaultSpecGate{minSteps: 1, maxNameLen: 10}
 	rev := &Revision{Action: "create", Spec: &SkillSpec{
 		Name:        "This is a very long skill name exceeding 10 chars",
 		Description: "desc",

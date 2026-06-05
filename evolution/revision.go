@@ -190,32 +190,36 @@ type ActivePointer interface {
 // Filesystem backed implementation.
 // -----------------------------------------------------------------------------
 
-// FileCandidateStore stores revisions under <root>/<skill-id>/revisions/<revision-id>/
+// fileCandidateStore stores revisions under <root>/<skill-id>/revisions/<revision-id>/
 // and an append-only audit log under <root>/<skill-id>/audit.log. It
 // is deliberately boring: plain files, no database, no locking file
 // layout, so it works inside the existing filesystem-only
 // `managed_skills/` world.
-type FileCandidateStore struct {
+type fileCandidateStore struct {
 	root string
 	mu   sync.Mutex // serializes audit-log appends per process.
 }
 
-// NewFileCandidateStore creates a FileCandidateStore rooted at root.
+// NewFileCandidateStore creates a filesystem-backed CandidateStore rooted at root.
 // The directory is created lazily on first write.
-func NewFileCandidateStore(root string) *FileCandidateStore {
-	return &FileCandidateStore{root: root}
+func NewFileCandidateStore(root string) CandidateStore {
+	return newFileCandidateStore(root)
+}
+
+func newFileCandidateStore(root string) *fileCandidateStore {
+	return &fileCandidateStore{root: root}
 }
 
 // skillDir returns the directory that holds all revisions and the
 // audit log for a single SkillID. It sanitizes the SkillID the same
 // way on-disk skill directories are sanitized so callers can pass the
 // reviewer-returned name verbatim.
-func (s *FileCandidateStore) skillDir(skillID string) string {
+func (s *fileCandidateStore) skillDir(skillID string) string {
 	return filepath.Join(s.root, sanitizeSkillName(skillID))
 }
 
 // WriteRevision implements CandidateStore.
-func (s *FileCandidateStore) WriteRevision(_ context.Context, rev *Revision) error {
+func (s *fileCandidateStore) WriteRevision(_ context.Context, rev *Revision) error {
 	if rev == nil {
 		return errors.New("evolution: write revision: nil revision")
 	}
@@ -247,7 +251,7 @@ func (s *FileCandidateStore) WriteRevision(_ context.Context, rev *Revision) err
 	// read the revision content directly. Deletion revisions have no
 	// spec; their meta.json is sufficient.
 	if rev.Spec != nil {
-		body := RenderSkillMarkdown(rev.Spec)
+		body := renderSkillMarkdown(rev.Spec)
 		if err := writeFileAtomically(filepath.Join(dir, "SKILL.md"), []byte(body), 0o644); err != nil {
 			return err
 		}
@@ -256,7 +260,7 @@ func (s *FileCandidateStore) WriteRevision(_ context.Context, rev *Revision) err
 }
 
 // ReadRevision implements CandidateStore.
-func (s *FileCandidateStore) ReadRevision(_ context.Context, skillID, revisionID string) (*Revision, error) {
+func (s *fileCandidateStore) ReadRevision(_ context.Context, skillID, revisionID string) (*Revision, error) {
 	if err := validateRevisionID(revisionID); err != nil {
 		return nil, err
 	}
@@ -275,7 +279,7 @@ func (s *FileCandidateStore) ReadRevision(_ context.Context, skillID, revisionID
 // ListRevisions implements CandidateStore. The returned slice is
 // sorted oldest-first so callers can pick the previous active
 // revision for rollback by walking it in reverse.
-func (s *FileCandidateStore) ListRevisions(_ context.Context, skillID string) ([]string, error) {
+func (s *fileCandidateStore) ListRevisions(_ context.Context, skillID string) ([]string, error) {
 	revDir := filepath.Join(s.skillDir(skillID), "revisions")
 	entries, err := os.ReadDir(revDir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -316,7 +320,7 @@ func (s *FileCandidateStore) ListRevisions(_ context.Context, skillID string) ([
 
 // ListSkills implements CandidateStore. Returns all SkillIDs that have
 // at least one revision directory on disk.
-func (s *FileCandidateStore) ListSkills(_ context.Context) ([]string, error) {
+func (s *fileCandidateStore) ListSkills(_ context.Context) ([]string, error) {
 	entries, err := os.ReadDir(s.root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -342,7 +346,7 @@ func (s *FileCandidateStore) ListSkills(_ context.Context) ([]string, error) {
 // process-wide mutex so concurrent workers do not interleave partial
 // JSON lines; this is fine for the single-binary benchmark and for
 // adopters that run one worker per process.
-func (s *FileCandidateStore) AppendAudit(_ context.Context, ev AuditEvent) error {
+func (s *fileCandidateStore) AppendAudit(_ context.Context, ev AuditEvent) error {
 	if strings.TrimSpace(ev.SkillID) == "" {
 		return errors.New("evolution: append audit: empty skill id")
 	}
@@ -371,25 +375,29 @@ func (s *FileCandidateStore) AppendAudit(_ context.Context, ev AuditEvent) error
 	return nil
 }
 
-// FileActivePointer stores the active revision id for each SkillID in
+// fileActivePointer stores the active revision id for each SkillID in
 // a single-line file named `active.txt` under the skill's directory.
 // A missing file means "no active revision" (skill deleted or never
 // promoted).
-type FileActivePointer struct {
+type fileActivePointer struct {
 	root string
 	mu   sync.Mutex
 }
 
-// NewFileActivePointer creates a FileActivePointer rooted at root.
+// NewFileActivePointer creates a filesystem-backed ActivePointer rooted at root.
 // root SHOULD be the same directory used by the accompanying
-// FileCandidateStore so the layout stays coherent.
-func NewFileActivePointer(root string) *FileActivePointer {
-	return &FileActivePointer{root: root}
+// CandidateStore so the layout stays coherent.
+func NewFileActivePointer(root string) ActivePointer {
+	return newFileActivePointer(root)
+}
+
+func newFileActivePointer(root string) *fileActivePointer {
+	return &fileActivePointer{root: root}
 }
 
 // Get implements ActivePointer. Returns ("", nil) when the skill has
 // no active pointer (missing file). Other I/O errors bubble up.
-func (p *FileActivePointer) Get(_ context.Context, skillID string) (string, error) {
+func (p *fileActivePointer) Get(_ context.Context, skillID string) (string, error) {
 	path := filepath.Join(p.root, sanitizeSkillName(skillID), "active.txt")
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -402,7 +410,7 @@ func (p *FileActivePointer) Get(_ context.Context, skillID string) (string, erro
 }
 
 // Set implements ActivePointer.
-func (p *FileActivePointer) Set(_ context.Context, skillID, revisionID string) error {
+func (p *fileActivePointer) Set(_ context.Context, skillID, revisionID string) error {
 	if strings.TrimSpace(skillID) == "" {
 		return errors.New("evolution: active pointer: empty skill id")
 	}
@@ -420,7 +428,7 @@ func (p *FileActivePointer) Set(_ context.Context, skillID, revisionID string) e
 }
 
 // Clear implements ActivePointer.
-func (p *FileActivePointer) Clear(_ context.Context, skillID string) error {
+func (p *fileActivePointer) Clear(_ context.Context, skillID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	path := filepath.Join(p.root, sanitizeSkillName(skillID), "active.txt")

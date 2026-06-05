@@ -49,14 +49,14 @@ It excels at capturing: stable multi-step workflows, tool-calling best practices
 
 | Stage | Responsibility | Implementation |
 |-------|----------------|----------------|
-| **Policy** | Decide whether to review (default: ≥4 tool calls) | `DefaultPolicy` |
+| **Policy** | Decide whether to review (default: ≥4 tool calls) | Built-in default policy |
 | **Reviewer** | Extract skill spec from transcript (JSON) | `LLMReviewer` (gpt-4o-mini) |
 | **Reconciler** | Deterministic dedup/absorb/merge (4 rules) | Pure string rules |
 | **SpecGate** | Validate spec schema, naming, duplicates | Deterministic |
 | **SafetyGate** | Scan for secrets, dangerous commands, path traversal | Deterministic |
 | **EffectivenessGate** | Block revisions from failed sessions | Deterministic |
-| **HumanGate** | Optional human approval | `AlwaysHoldGate` / `CreateOnlyHoldGate` |
-| **Publisher** | Write SKILL.md to disk | `FilePublisher` |
+| **HumanGate** | Optional human approval | `NewAlwaysHoldGate` / `NewCreateOnlyHoldGate` |
+| **Publisher** | Write SKILL.md to disk | File-based publisher |
 
 ## Quick Start
 
@@ -140,7 +140,7 @@ evoSvc := evolution.NewService(reviewerModel,
 
 ## Trigger Policy
 
-Evolution decides whether to review after each task completion. The default `DefaultPolicy` triggers when any of these conditions hold:
+Evolution decides whether to review after each task completion. The built-in default policy triggers when any of these conditions hold:
 
 | Condition | Rationale |
 |-----------|-----------|
@@ -282,7 +282,7 @@ revisions/
 | `WithSkillRepository(repo)` | Skill repo for **reading** existing skills for dedup; should be the same instance shared with the agent | Required |
 | `WithSkillRepositoryProvider(p)` | Resolve the skill repository per `SkillScope` (multi-tenant isolation, see below) | nil |
 | `WithSkillScopeMode(mode)` | Isolation granularity: `SkillScopeApp` (share per app) / `SkillScopeUser` (isolate per app+user) | `SkillScopeNone` (no isolation) |
-| `WithPolicy(p)` | Trigger policy | `DefaultPolicy` (≥4 tool calls) |
+| `WithPolicy(p)` | Trigger policy | Built-in default policy (≥4 tool calls) |
 | `WithCandidateStore(store)` | Immutable revision store | nil (no tracking) |
 | `WithActivePointer(ptr)` | Active revision pointer | nil |
 | `WithSpecGate(gate)` | Schema/naming validation | nil |
@@ -295,7 +295,7 @@ revisions/
 | `WithExistingSkillBodyMaxChars(n)` | Body excerpt length for reviewer context | 600 |
 | `WithReviewerOptions(...)` | LLM reviewer options (temperature etc.) | - |
 | `WithReviewer(r)` | Custom Reviewer implementation | LLMReviewer |
-| `WithPublisher(p)` | Custom Publisher implementation | FilePublisher |
+| `WithPublisher(p)` | Custom Publisher implementation | File-based publisher |
 
 ## Write Isolation
 

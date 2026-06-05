@@ -299,12 +299,12 @@ func newCityTool() tool.Tool {
 }
 
 // ---------------------------------------------------------------------------
-// Custom policy: always review (for demo; production uses DefaultPolicy)
+// Custom policy: always review (for demo; production uses the built-in default)
 // ---------------------------------------------------------------------------
 
 // alwaysReviewPolicy triggers a review after every task, regardless of
-// tool call count. In production, use evolution.DefaultPolicy{} which
-// requires ≥4 tool calls.
+// tool call count. In production, omit WithPolicy to use the built-in default,
+// which requires ≥4 tool calls.
 type alwaysReviewPolicy struct{}
 
 func (alwaysReviewPolicy) ShouldReview(_ *evolution.ReviewContext) bool { return true }

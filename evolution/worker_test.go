@@ -149,7 +149,7 @@ func TestWorker_ProcessJob_PolicyRejects(t *testing.T) {
 	assert.Equal(t, 0, rev.calls, "reviewer should not be called when policy rejects")
 	rev.mu.Unlock()
 
-	raw, ok := sess.GetState(SessionStateKeyLastReviewAt)
+	raw, ok := sess.GetState(sessionStateKeyLastReviewAt)
 	assert.True(t, ok, "last_review_at should be written even when skipped")
 	assert.NotEmpty(t, raw)
 }

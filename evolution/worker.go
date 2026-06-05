@@ -170,7 +170,7 @@ func newWorker(cfg workerConfig) *worker {
 		cfg.JobTimeout = defaultJobTimeout
 	}
 	if cfg.Policy == nil {
-		cfg.Policy = DefaultPolicy{}
+		cfg.Policy = defaultPolicy{}
 	}
 	bodyMax := cfg.ExistingSkillBodyMaxChars
 	if bodyMax == 0 {
@@ -197,10 +197,10 @@ func newWorker(cfg workerConfig) *worker {
 		approvalGateShadow:        cfg.ApprovalGateShadow,
 		managedSkillsDir:          cfg.ManagedSkillsDir,
 	}
-	if store, ok := cfg.CandidateStore.(*FileCandidateStore); ok && store != nil {
+	if store, ok := cfg.CandidateStore.(*fileCandidateStore); ok && store != nil {
 		w.candidateStoreRoot = store.root
 	}
-	if ptr, ok := cfg.ActivePointer.(*FileActivePointer); ok && ptr != nil {
+	if ptr, ok := cfg.ActivePointer.(*fileActivePointer); ok && ptr != nil {
 		w.activePointerRoot = ptr.root
 	}
 	return w
@@ -513,7 +513,7 @@ func (w *worker) candidateStoreForScope(scope skill.SkillScope, scoped bool) (Ca
 	if s := w.scopedStores[key]; s != nil {
 		return s, nil
 	}
-	s := NewFileCandidateStore(root)
+	s := newFileCandidateStore(root)
 	w.scopedStores[key] = s
 	return s, nil
 }
@@ -538,7 +538,7 @@ func (w *worker) activePointerForScope(scope skill.SkillScope, scoped bool) (Act
 	if p := w.scopedPointers[key]; p != nil {
 		return p, nil
 	}
-	p := NewFileActivePointer(root)
+	p := newFileActivePointer(root)
 	w.scopedPointers[key] = p
 	return p, nil
 }
@@ -1282,7 +1282,7 @@ func looksLikeError(content string) bool {
 }
 
 func readLastReviewAt(sess *session.Session) time.Time {
-	raw, ok := sess.GetState(SessionStateKeyLastReviewAt)
+	raw, ok := sess.GetState(sessionStateKeyLastReviewAt)
 	if !ok || len(raw) == 0 {
 		return time.Time{}
 	}
@@ -1294,7 +1294,7 @@ func readLastReviewAt(sess *session.Session) time.Time {
 }
 
 func writeLastReviewAt(sess *session.Session, ts time.Time) {
-	sess.SetState(SessionStateKeyLastReviewAt,
+	sess.SetState(sessionStateKeyLastReviewAt,
 		[]byte(ts.UTC().Format(time.RFC3339Nano)))
 }
 

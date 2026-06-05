@@ -113,7 +113,7 @@ func TestRenderSkillMarkdown_EmptySteps(t *testing.T) {
 		WhenToUse:   "never",
 		Steps:       nil,
 	}
-	md := RenderSkillMarkdown(spec)
+	md := renderSkillMarkdown(spec)
 	assert.Contains(t, md, "## Steps")
 	// No numbered items should appear
 	assert.NotContains(t, md, "1.")
@@ -127,7 +127,7 @@ func TestRenderSkillMarkdown_EmptyPitfalls(t *testing.T) {
 		Steps:       []string{"step"},
 		Pitfalls:    []string{},
 	}
-	md := RenderSkillMarkdown(spec)
+	md := renderSkillMarkdown(spec)
 	assert.NotContains(t, md, "## Pitfalls")
 }
 
@@ -139,7 +139,7 @@ func TestRenderSkillMarkdown_MultiplePitfalls(t *testing.T) {
 		Steps:       []string{"s"},
 		Pitfalls:    []string{"p1", "p2", "p3"},
 	}
-	md := RenderSkillMarkdown(spec)
+	md := renderSkillMarkdown(spec)
 	assert.Contains(t, md, "- p1")
 	assert.Contains(t, md, "- p2")
 	assert.Contains(t, md, "- p3")
@@ -152,7 +152,7 @@ func TestRenderSkillMarkdown_SpecialCharsInName(t *testing.T) {
 		WhenToUse:   "when",
 		Steps:       []string{"go"},
 	}
-	md := RenderSkillMarkdown(spec)
+	md := renderSkillMarkdown(spec)
 	assert.Contains(t, md, "name: Deploy: Multi-Region")
 	assert.Contains(t, md, "# Deploy: Multi-Region")
 }
@@ -181,7 +181,7 @@ func TestRenderSkillMarkdown_NewlineInDescription(t *testing.T) {
 		WhenToUse:   "when",
 		Steps:       []string{"s"},
 	}
-	md := RenderSkillMarkdown(spec)
+	md := renderSkillMarkdown(spec)
 	// yamlScalar should collapse newlines
 	assert.Contains(t, md, "description: line one line two")
 }

@@ -86,7 +86,7 @@ func TestRenderSkillMarkdown(t *testing.T) {
 		WhenToUse:   "When testing",
 		Steps:       []string{"First", "Second"},
 	}
-	md := RenderSkillMarkdown(spec)
+	md := renderSkillMarkdown(spec)
 	assert.Contains(t, md, "name: Test Skill")
 	assert.Contains(t, md, "description: A test skill")
 	assert.Contains(t, md, "# Test Skill")
@@ -102,7 +102,7 @@ func TestRenderSkillMarkdown_WithPitfalls(t *testing.T) {
 		Steps:     []string{"Do it"},
 		Pitfalls:  []string{"Watch out"},
 	}
-	md := RenderSkillMarkdown(spec)
+	md := renderSkillMarkdown(spec)
 	assert.Contains(t, md, "## Pitfalls")
 	assert.Contains(t, md, "- Watch out")
 }

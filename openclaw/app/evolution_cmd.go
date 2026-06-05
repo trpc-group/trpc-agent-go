@@ -391,7 +391,7 @@ func readAuditLog(rootDir, skillID string) ([]evolution.AuditEvent, error) {
 	return events, nil
 }
 
-func findSkillForRevision(ctx context.Context, store *evolution.FileCandidateStore, revisionID string) (string, error) {
+func findSkillForRevision(ctx context.Context, store evolution.CandidateStore, revisionID string) (string, error) {
 	skills, err := store.ListSkills(ctx)
 	if err != nil {
 		return "", fmt.Errorf("list skills: %w", err)

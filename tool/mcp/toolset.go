@@ -119,9 +119,12 @@ func (ts *ToolSet) Close() error {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
-	// Close session manager (best-effort; close never returns errors).
+	// Close session manager
 	if ts.sessionManager != nil {
-		ts.sessionManager.close()
+		if err := ts.sessionManager.close(); err != nil {
+			log.Error("Failed to close session manager", err)
+			return fmt.Errorf("failed to close MCP session: %w", err)
+		}
 	}
 
 	log.Debug("MCP tool set closed successfully")
@@ -419,9 +422,6 @@ func (m *mcpSessionManager) callTool(ctx context.Context, name string, arguments
 }
 
 // close closes the MCP session and client connection.
-// Close errors are logged but not propagated: the goal of close is to
-// release resources, and common "errors" (process already exited, pipe
-// already closed) simply mean the resource is already released.
 func (m *mcpSessionManager) close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -438,7 +438,8 @@ func (m *mcpSessionManager) close() error {
 	m.client = nil
 
 	if err != nil {
-		log.Debug("MCP client close returned error (resource likely already released)", "error", err)
+		log.Error("Failed to close MCP client", "error", err)
+		return fmt.Errorf("failed to close MCP client: %w", err)
 	}
 
 	log.Debug("MCP session closed successfully")

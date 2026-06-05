@@ -16,12 +16,12 @@ type Policy interface {
 	ShouldReview(ctx *ReviewContext) bool
 }
 
-// DefaultPolicy triggers review when there are enough tool calls, a user
+// defaultPolicy triggers review when there are enough tool calls, a user
 // correction, or a recovered error.
-type DefaultPolicy struct{}
+type defaultPolicy struct{}
 
 // ShouldReview implements Policy.
-func (DefaultPolicy) ShouldReview(ctx *ReviewContext) bool {
+func (defaultPolicy) ShouldReview(ctx *ReviewContext) bool {
 	if ctx == nil || len(ctx.Messages) == 0 {
 		return false
 	}

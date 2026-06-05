@@ -104,7 +104,7 @@ type HumanGate interface {
 	ShouldHold(ctx context.Context, rev *Revision, outcome *Outcome) (bool, error)
 }
 
-// OutcomeBasedEffectivenessGate is the default EffectivenessGate. It
+// outcomeBasedEffectivenessGate is the default EffectivenessGate. It
 // gates revisions based on the Outcome of the session that produced
 // the transcript the reviewer just analyzed. The idea is simple: if
 // the session failed or scored poorly, the reviewer's extraction is
@@ -115,31 +115,31 @@ type HumanGate interface {
 // a cheap heuristic that prevents learning from catastrophic runs.
 // A more sophisticated gate (mini-benchmark, shadow traffic) can
 // replace it by implementing the same interface.
-type OutcomeBasedEffectivenessGate struct {
+type outcomeBasedEffectivenessGate struct {
 	// MinScore is the minimum normalized Outcome.Score (0..1 scale)
 	// required for auto-promotion. Revisions from sessions below this
 	// score are held in PendingEval. Zero means "no score threshold"
 	// (effectively disabled).
-	MinScore float64
+	minScore float64
 
 	// RejectOnFail, when true, rejects revisions from sessions where
 	// Outcome.Status is "fail" or "agent_error". Revisions from
 	// partial successes are still allowed through (they often contain
 	// useful pitfall learnings). Default: true.
-	RejectOnFail bool
+	rejectOnFail bool
 }
 
 // NewOutcomeBasedEffectivenessGate returns a gate with sensible
 // defaults: MinScore=0.8, RejectOnFail=true.
-func NewOutcomeBasedEffectivenessGate() *OutcomeBasedEffectivenessGate {
-	return &OutcomeBasedEffectivenessGate{
-		MinScore:     0.8,
-		RejectOnFail: true,
+func NewOutcomeBasedEffectivenessGate() EffectivenessGate {
+	return &outcomeBasedEffectivenessGate{
+		minScore:     0.8,
+		rejectOnFail: true,
 	}
 }
 
 // Evaluate implements EffectivenessGate.
-func (g *OutcomeBasedEffectivenessGate) Evaluate(
+func (g *outcomeBasedEffectivenessGate) Evaluate(
 	_ context.Context, rev *Revision, outcome *Outcome,
 ) (*EffectivenessReport, error) {
 	if rev == nil {
@@ -157,7 +157,7 @@ func (g *OutcomeBasedEffectivenessGate) Evaluate(
 	}
 	reasons := make([]string, 0, 2)
 
-	if g.RejectOnFail {
+	if g.rejectOnFail {
 		switch outcome.Status {
 		case OutcomeFail, OutcomeAgentError:
 			reasons = append(reasons,
@@ -165,33 +165,33 @@ func (g *OutcomeBasedEffectivenessGate) Evaluate(
 		}
 	}
 
-	if g.MinScore > 0 && outcome.Score != nil && *outcome.Score < g.MinScore {
+	if g.minScore > 0 && outcome.Score != nil && *outcome.Score < g.minScore {
 		reasons = append(reasons,
-			fmt.Sprintf("session score %.1f is below threshold %.1f", *outcome.Score, g.MinScore))
+			fmt.Sprintf("session score %.1f is below threshold %.1f", *outcome.Score, g.minScore))
 	}
 
 	return &EffectivenessReport{Passed: len(reasons) == 0, Reasons: reasons}, nil
 }
 
-// DefaultSpecGate is the built-in SpecGate implementation. It uses only
+// defaultSpecGate is the built-in SpecGate implementation. It uses only
 // string-shape rules and the existing reconciler duplicate heuristics
 // so adopters can enable it without reviewer-side changes.
-type DefaultSpecGate struct {
+type defaultSpecGate struct {
 	// MinSteps is the minimum number of Steps required for a create or
 	// update action. Defaults to 2 when zero.
-	MinSteps int
+	minSteps int
 	// MaxNameLen is the maximum allowed length for Spec.Name. Defaults
 	// to 120 when zero.
-	MaxNameLen int
+	maxNameLen int
 }
 
-// NewDefaultSpecGate constructs a DefaultSpecGate with sane defaults.
-func NewDefaultSpecGate() *DefaultSpecGate {
-	return &DefaultSpecGate{MinSteps: 2, MaxNameLen: 120}
+// NewDefaultSpecGate constructs the built-in SpecGate with sane defaults.
+func NewDefaultSpecGate() SpecGate {
+	return &defaultSpecGate{minSteps: 2, maxNameLen: 120}
 }
 
 // Validate implements SpecGate.
-func (g *DefaultSpecGate) Validate(_ context.Context, c *Revision, existing []ExistingSkill) (*SpecReport, error) {
+func (g *defaultSpecGate) Validate(_ context.Context, c *Revision, existing []ExistingSkill) (*SpecReport, error) {
 	if c == nil {
 		return &SpecReport{Passed: false, Reasons: []string{"nil candidate"}}, nil
 	}
@@ -205,11 +205,11 @@ func (g *DefaultSpecGate) Validate(_ context.Context, c *Revision, existing []Ex
 	if c.Spec == nil {
 		return &SpecReport{Passed: false, Reasons: []string{"missing spec body"}}, nil
 	}
-	minSteps := g.MinSteps
+	minSteps := g.minSteps
 	if minSteps <= 0 {
 		minSteps = 2
 	}
-	maxName := g.MaxNameLen
+	maxName := g.maxNameLen
 	if maxName <= 0 {
 		maxName = 120
 	}
@@ -259,17 +259,17 @@ func (g *DefaultSpecGate) Validate(_ context.Context, c *Revision, existing []Ex
 	return &SpecReport{Passed: len(reasons) == 0, Reasons: reasons}, nil
 }
 
-// DefaultSafetyGate is the built-in SafetyGate implementation. It
+// defaultSafetyGate is the built-in SafetyGate implementation. It
 // scans Spec text fields for high-confidence patterns only; false
 // positives translate directly into rejected skills, so the rule
 // list stays short and specific on purpose.
-type DefaultSafetyGate struct{}
+type defaultSafetyGate struct{}
 
-// NewDefaultSafetyGate constructs a DefaultSafetyGate.
-func NewDefaultSafetyGate() *DefaultSafetyGate { return &DefaultSafetyGate{} }
+// NewDefaultSafetyGate constructs the built-in SafetyGate.
+func NewDefaultSafetyGate() SafetyGate { return &defaultSafetyGate{} }
 
 // Scan implements SafetyGate.
-func (g *DefaultSafetyGate) Scan(_ context.Context, c *Revision) (*SafetyReport, error) {
+func (g *defaultSafetyGate) Scan(_ context.Context, c *Revision) (*SafetyReport, error) {
 	if c == nil || c.Spec == nil {
 		return &SafetyReport{Passed: true}, nil
 	}
@@ -424,25 +424,25 @@ func containsPathTraversal(body string) (string, bool) {
 // HumanGate default implementations
 // ---------------------------------------------------------------------------
 
-// AlwaysHoldGate holds every revision for human review (most conservative).
-type AlwaysHoldGate struct{}
+// alwaysHoldGate holds every revision for human review (most conservative).
+type alwaysHoldGate struct{}
 
 // NewAlwaysHoldGate returns a gate that holds all revisions.
-func NewAlwaysHoldGate() *AlwaysHoldGate { return &AlwaysHoldGate{} }
+func NewAlwaysHoldGate() HumanGate { return &alwaysHoldGate{} }
 
 // ShouldHold implements HumanGate.
-func (g *AlwaysHoldGate) ShouldHold(_ context.Context, _ *Revision, _ *Outcome) (bool, error) {
+func (g *alwaysHoldGate) ShouldHold(_ context.Context, _ *Revision, _ *Outcome) (bool, error) {
 	return true, nil
 }
 
-// CreateOnlyHoldGate holds new skill creations for human review
+// createOnlyHoldGate holds new skill creations for human review
 // but auto-passes updates to existing skills.
-type CreateOnlyHoldGate struct{}
+type createOnlyHoldGate struct{}
 
 // NewCreateOnlyHoldGate returns a gate that only holds creates.
-func NewCreateOnlyHoldGate() *CreateOnlyHoldGate { return &CreateOnlyHoldGate{} }
+func NewCreateOnlyHoldGate() HumanGate { return &createOnlyHoldGate{} }
 
 // ShouldHold implements HumanGate.
-func (g *CreateOnlyHoldGate) ShouldHold(_ context.Context, rev *Revision, _ *Outcome) (bool, error) {
+func (g *createOnlyHoldGate) ShouldHold(_ context.Context, rev *Revision, _ *Outcome) (bool, error) {
 	return rev.Action == "create", nil
 }

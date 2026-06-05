@@ -48,7 +48,7 @@ func (p *filePublisher) UpsertSkill(_ context.Context, spec *SkillSpec) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	content := RenderSkillMarkdown(spec)
+	content := renderSkillMarkdown(spec)
 	target := filepath.Join(dir, "SKILL.md")
 	return writeFileAtomically(target, []byte(content), 0o644)
 }

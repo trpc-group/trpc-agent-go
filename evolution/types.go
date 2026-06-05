@@ -21,9 +21,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
-// SessionStateKeyLastReviewAt stores the last reviewed timestamp in session
+// sessionStateKeyLastReviewAt stores the last reviewed timestamp in session
 // state for incremental delta scanning.
-const SessionStateKeyLastReviewAt = "evolution:last_review_at"
+const sessionStateKeyLastReviewAt = "evolution:last_review_at"
 
 // Service reviews completed sessions and persists reusable procedures.
 //

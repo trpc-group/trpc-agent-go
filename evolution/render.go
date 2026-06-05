@@ -17,8 +17,8 @@ import (
 	"strings"
 )
 
-// RenderSkillMarkdown produces the SKILL.md content for a SkillSpec.
-func RenderSkillMarkdown(spec *SkillSpec) string {
+// renderSkillMarkdown produces the SKILL.md content for a SkillSpec.
+func renderSkillMarkdown(spec *SkillSpec) string {
 	var b strings.Builder
 	b.WriteString("---\n")
 	b.WriteString("name: " + yamlScalar(spec.Name) + "\n")

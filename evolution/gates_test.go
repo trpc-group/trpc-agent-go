@@ -36,7 +36,7 @@ func TestDefaultSpecGate_UpdateActionNotCheckedForDuplicates(t *testing.T) {
 
 func TestDefaultSpecGate_MinStepsDefault(t *testing.T) {
 	// When MinSteps is 0, default is 2
-	g := &DefaultSpecGate{MinSteps: 0, MaxNameLen: 0}
+	g := &defaultSpecGate{minSteps: 0, maxNameLen: 0}
 	rev := &Revision{Action: "create", Spec: &SkillSpec{
 		Name:        "One Step",
 		Description: "desc",
@@ -53,7 +53,7 @@ func TestDefaultSpecGate_MinStepsDefault(t *testing.T) {
 
 func TestDefaultSpecGate_MaxNameLenDefault(t *testing.T) {
 	// When MaxNameLen is 0, default is 120
-	g := &DefaultSpecGate{}
+	g := &defaultSpecGate{}
 	longName := make([]byte, 121)
 	for i := range longName {
 		longName[i] = 'a'
@@ -146,7 +146,7 @@ func TestDefaultSafetyGate_InPitfalls(t *testing.T) {
 // --- OutcomeBasedEffectivenessGate extended tests ---
 
 func TestOutcomeBasedEffectivenessGate_NoScoreThreshold(t *testing.T) {
-	g := &OutcomeBasedEffectivenessGate{MinScore: 0, RejectOnFail: false}
+	g := &outcomeBasedEffectivenessGate{minScore: 0, rejectOnFail: false}
 	score := 10.0
 	report, err := g.Evaluate(context.Background(),
 		&Revision{Action: "create", Spec: &SkillSpec{Name: "x"}},
@@ -157,7 +157,7 @@ func TestOutcomeBasedEffectivenessGate_NoScoreThreshold(t *testing.T) {
 }
 
 func TestOutcomeBasedEffectivenessGate_RejectOnFailDisabled(t *testing.T) {
-	g := &OutcomeBasedEffectivenessGate{MinScore: 0, RejectOnFail: false}
+	g := &outcomeBasedEffectivenessGate{minScore: 0, rejectOnFail: false}
 	report, _ := g.Evaluate(context.Background(),
 		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomeFail},
@@ -266,8 +266,20 @@ func TestContainsPathTraversal_DoubleDotWrite(t *testing.T) {
 
 func TestNewDefaultSpecGate_Defaults(t *testing.T) {
 	g := NewDefaultSpecGate()
-	assert.Equal(t, 2, g.MinSteps)
-	assert.Equal(t, 120, g.MaxNameLen)
+	rev := &Revision{Action: "create", Spec: &SkillSpec{
+		Name:        "One Step",
+		Description: "desc",
+		WhenToUse:   "when",
+		Steps:       []string{"only-one"},
+	}}
+	report, err := g.Validate(context.Background(), rev, nil)
+	require.NoError(t, err)
+	assert.False(t, report.Passed)
+
+	rev.Spec.Steps = []string{"step1", "step2"}
+	report, err = g.Validate(context.Background(), rev, nil)
+	require.NoError(t, err)
+	assert.True(t, report.Passed)
 }
 
 func TestNewDefaultSafetyGate_NotNil(t *testing.T) {
@@ -277,8 +289,14 @@ func TestNewDefaultSafetyGate_NotNil(t *testing.T) {
 
 func TestNewOutcomeBasedEffectivenessGate_Defaults(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate()
-	assert.Equal(t, 0.8, g.MinScore)
-	assert.True(t, g.RejectOnFail)
+	score := 0.5
+	report, err := g.Evaluate(context.Background(),
+		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
+		&Outcome{Status: OutcomeFail, Score: &score},
+	)
+	require.NoError(t, err)
+	assert.False(t, report.Passed)
+	assert.Len(t, report.Reasons, 2)
 }
 
 // ---------------------------------------------------------------------------
