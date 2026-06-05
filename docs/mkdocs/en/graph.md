@@ -1308,17 +1308,38 @@ Important:
   or mutating the full state. Returning full state can accidentally overwrite
   internal keys (execution context, callbacks, session) and break the workflow.
 
-#### Agent nodes: state mappers (advanced)
+#### Agent nodes: run options and state mappers (advanced)
 
-Agent nodes support two mappers to control what data crosses the parent/child
-boundary:
+Agent nodes support node-scoped run options and state mappers to control child
+run options, inputs, and outputs:
 
+- `WithAgentNodeRunOptions`: applies `agent.RunOption` values only to the
+  current AgentNode child call. Use it to configure caller-executed external
+  tools, model overrides, filters, and other per-run options for one Agent
+  node. Multiple AgentNodes can have different run options.
 - `WithSubgraphInputMapper`: project parent state → child runtime state
   (`Invocation.RunOptions.RuntimeState`).
+- `WithAgentNodeInputMapper`: project parent state → the child Agent input
+  message. If the returned state contains `graph.StateKeyAgentInputMessage`
+  with a `model.Message` or `*model.Message` value, the Agent node uses that
+  message as the child Agent input. This is useful for passing `role=tool`
+  tool messages instead of plain user text.
 - `WithSubgraphOutputMapper`: project child results → parent state updates.
+  For `AddAgentNode`, this receives child results through `SubgraphResult`
+  whether the child Agent is a GraphAgent or an LLMAgent.
 
 Use cases:
 
+- **Expose caller-executed tools only to one AgentNode**: use
+  `graph.WithAgentNodeRunOptions(agent.WithExternalTools(...))`. These tools
+  are visible only to that child call and are not registered on sibling
+  AgentNodes.
+- **Resume an AgentNode after the caller executes a tool**: store the returned
+  tool result in a parent state key, then use `WithAgentNodeInputMapper` to
+  project it to `StateKeyAgentInputMessage`. The AgentNode receives that tool
+  message when it runs again. Clear your own source state key as needed;
+  `StateKeyAgentInputMessage` returned by the mapper is only the temporary
+  input for that child call.
 - **Let the child read structured data from state** (without stuffing it into
   prompts): pass only selected keys to the child via `WithSubgraphInputMapper`.
   Runnable example: `examples/graph/subagent_runtime_state`.
@@ -4229,6 +4250,41 @@ eventCh, err := r.Run(ctx, userID, sessionID,
 )
 ```
 
+#### AgentNode child LLMAgent external tools
+
+When a parent graph calls a child `LLMAgent` through an AgentNode and the caller
+executes the external tool, the child `LLMAgent` usually produces the tool call
+and a regular node in the parent graph calls `graph.Interrupt`. After resume,
+that regular node writes the tool result into parent state, and the AgentNode
+uses an input mapper to pass the tool result back to the child `LLMAgent`.
+
+Code snippet:
+
+```go
+sg.AddAgentNode(
+    nodeResearch,
+    graph.WithAgentNodeRunOptions(agent.WithExternalTools([]tool.Tool{
+        externalSearchTool(),
+    })),
+    graph.WithSubgraphOutputMapper(storeExternalToolRequest),
+    graph.WithAgentNodeInputMapper(mapExternalToolMessage),
+)
+sg.AddNode(nodeExternalGate, interruptForExternalTool)
+sg.AddEdge(nodeResearch, nodeExternalGate)
+sg.AddConditionalEdges(nodeExternalGate, routeAfterExternalGate, map[string]string{
+    nodeResearch: nodeResearch,
+    graph.End:    graph.End,
+})
+```
+
+`WithAgentNodeRunOptions` configures external tools only for the current
+AgentNode. `storeExternalToolRequest` stores the tool call produced by the child
+`LLMAgent`. `interruptForExternalTool` waits for the caller to send back the
+tool result. `mapExternalToolMessage` converts the resumed tool result into
+`graph.StateKeyAgentInputMessage`.
+
+Complete example: `examples/graph/agentnode_llmagent_externaltool`.
+
 ### Event Monitoring
 
 The event stream carries execution progress and incremental outputs. The example shows how to iterate events and distinguish graph events vs model deltas:
@@ -4847,5 +4903,5 @@ This guide introduced the core usage of the `graph` package and GraphAgent: decl
   - I/O conventions: `io_conventions`, `io_conventions_tools`
   - Parallel/fan‑out: `parallel`, `fanout`, `diamond`
   - Placeholders: `placeholder`
-  - Checkpoints/interrupts: `checkpoint`, `interrupt`, `nested_interrupt`, `static_interrupt`
+  - Checkpoints/interrupts: `checkpoint`, `interrupt`, `nested_interrupt`, `agentnode_llmagent_externaltool`, `static_interrupt`
 - Further reading: `graph/state_graph.go`, `graph/executor.go`, `agent/graphagent`
