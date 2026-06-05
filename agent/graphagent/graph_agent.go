@@ -473,6 +473,8 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 		if len(req.Messages) > 0 {
 			initialState[graph.StateKeyMessages] = req.Messages
 		}
+	} else {
+		appendNonUserInvocationMessage(initialState, invocation.Message)
 	}
 
 	// Add invocation message to state.
@@ -503,6 +505,17 @@ func (ga *GraphAgent) createInitialState(ctx context.Context, invocation *agent.
 	}
 
 	return initialState
+}
+
+func appendNonUserInvocationMessage(initialState graph.State, message model.Message) {
+	if message.Role == model.RoleUser || !model.HasPayload(message) {
+		return
+	}
+	messages, _ := graph.GetStateValue[[]model.Message](
+		initialState,
+		graph.StateKeyMessages,
+	)
+	initialState[graph.StateKeyMessages] = append(messages, message)
 }
 
 func shouldSuppressHiddenCompletion(
