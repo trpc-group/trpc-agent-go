@@ -512,6 +512,26 @@ func TestRuntimeFilesystemOperations(t *testing.T) {
 	}
 }
 
+func TestStageDirectoryWriteDenied(t *testing.T) {
+	ctx := context.Background()
+	host := t.TempDir()
+	if err := os.WriteFile(filepath.Join(host, "input.txt"), []byte("host"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(ReadOnlyProfile().WithReadPaths(host)),
+	)
+	ws, err := rt.CreateWorkspace(ctx, "fs/stage-write-denied", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = rt.StageDirectory(ctx, ws, host, "work/staged", codeexecutor.StageOptions{})
+	if !isKind(err, ErrPathDenied) {
+		t.Fatalf("StageDirectory write denial = %v, want ErrPathDenied", err)
+	}
+}
+
 func TestRuntimeStageInputsWorkspaceSkillAndErrors(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	ws, err := rt.CreateWorkspace(context.Background(), "stage/inputs", codeexecutor.WorkspacePolicy{})
@@ -566,6 +586,34 @@ func TestRuntimeStageInputsWorkspaceSkillAndErrors(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(hostWS.Path, "work", "inputs", filepath.Base(host), "host.txt")); err != nil {
 		t.Fatalf("host input was not staged at default destination: %v", err)
+	}
+}
+
+func TestStageInputsLockedAndHostInputErrorBranches(t *testing.T) {
+	ctx := context.Background()
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	fileWorkspace := filepath.Join(t.TempDir(), "workspace-file")
+	if err := os.WriteFile(fileWorkspace, []byte("not a workspace"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := rt.stageInputsLocked(ctx, codeexecutor.Workspace{ID: "bad", Path: fileWorkspace}, nil)
+	if err == nil {
+		t.Fatalf("stageInputsLocked unexpectedly succeeded for file workspace")
+	}
+
+	ws, err := rt.CreateWorkspace(ctx, "stage/host-error", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := t.TempDir()
+	if err := os.WriteFile(filepath.Join(host, "host.txt"), []byte("host"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = rt.stageHostInput(ctx, ws, codeexecutor.InputSpec{
+		From: "host://" + host,
+	}, "work/host")
+	if !isKind(err, ErrPathDenied) {
+		t.Fatalf("stageHostInput error = %v, want ErrPathDenied", err)
 	}
 }
 
@@ -838,6 +886,15 @@ func TestFilesystemHelperBranches(t *testing.T) {
 	if hostPathHasRule(WorkspaceWriteProfile().WithNoAccessPaths(root), child, accessRead) {
 		t.Fatalf("no-access rule should not satisfy read grant")
 	}
+	if hostPathHasRule(WorkspaceWriteProfile().WithReadPaths(root), child, accessWrite) {
+		t.Fatalf("read grant should not satisfy write access")
+	}
+	if hostPathHasRule(WorkspaceWriteProfile().WithReadPaths("relative"), child, accessRead) {
+		t.Fatalf("relative rule should not satisfy host path grant")
+	}
+	if hostPathHasRule(WorkspaceWriteProfile().WithReadPaths(root), "relative", accessRead) {
+		t.Fatalf("relative target should not satisfy host path grant")
+	}
 
 	copiedFile := filepath.Join(t.TempDir(), "nested", "copy.txt")
 	if err := copyPath(child, copiedFile); err != nil {
@@ -870,6 +927,9 @@ func TestFilesystemHelperBranches(t *testing.T) {
 	}
 	if got := inputName("artifact://uploads/report.txt@7"); got != "report.txt" {
 		t.Fatalf("artifact input name = %q, want report.txt", got)
+	}
+	if got := inputName("artifact://@bad"); got == "" || got == "input" {
+		t.Fatalf("invalid artifact input name = %q, want sanitized fallback", got)
 	}
 }
 
@@ -1083,6 +1143,48 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 	}); !isKind(err, ErrPathDenied) {
 		t.Fatalf("copyPathWithValidator validation error = %v, want ErrPathDenied", err)
 	}
+	sourceLink := filepath.Join(outside, "source-link.txt")
+	if err := os.Symlink(source, sourceLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyPathWithValidator(sourceLink, filepath.Join(t.TempDir(), "copy.txt"), func(string) error {
+		return nil
+	}); !isKind(err, ErrPathDenied) {
+		t.Fatalf("copyPathWithValidator source symlink error = %v, want ErrPathDenied", err)
+	}
+
+	if err := copyFile(filepath.Join(outside, "missing.txt"), filepath.Join(t.TempDir(), "copy.txt"), 0o600); err == nil {
+		t.Fatalf("copyFile unexpectedly succeeded for missing source")
+	}
+	if err := copyFile(source, filepath.Join(fileParent, "copy.txt"), 0o600); err == nil {
+		t.Fatalf("copyFile unexpectedly succeeded with file as destination parent")
+	}
+	if err := copyFile(source, srcDir, 0o600); err == nil {
+		t.Fatalf("copyFile unexpectedly opened directory destination")
+	}
+	if err := copyFile(srcDir, filepath.Join(t.TempDir(), "dir-as-file"), 0o600); err == nil {
+		t.Fatalf("copyFile unexpectedly copied directory source")
+	}
+	if err := copyFileWithValidator(filepath.Join(outside, "missing.txt"), filepath.Join(t.TempDir(), "copy.txt"), 0o600, func(string) error {
+		return nil
+	}); err == nil {
+		t.Fatalf("copyFileWithValidator unexpectedly succeeded for missing source")
+	}
+	if err := copyFileWithValidator(source, filepath.Join(fileParent, "copy.txt"), 0o600, func(string) error {
+		return nil
+	}); err == nil {
+		t.Fatalf("copyFileWithValidator unexpectedly succeeded with file as destination parent")
+	}
+	if err := copyFileWithValidator(source, srcDir, 0o600, func(string) error {
+		return nil
+	}); err == nil {
+		t.Fatalf("copyFileWithValidator unexpectedly opened directory destination")
+	}
+	if err := copyFileWithValidator(srcDir, filepath.Join(t.TempDir(), "dir-as-file"), 0o600, func(string) error {
+		return nil
+	}); err == nil {
+		t.Fatalf("copyFileWithValidator unexpectedly copied directory source")
+	}
 
 	if err := writeFileAtomically(filepath.Join(fileParent, "out.txt"), []byte("out"), 0o600); err == nil {
 		t.Fatalf("writeFileAtomically unexpectedly succeeded with file as parent")
@@ -1096,6 +1198,9 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 	}
 	if err := writeFileAtomically(existingDir, []byte("out"), 0o600); err == nil {
 		t.Fatalf("writeFileAtomically unexpectedly renamed file over directory")
+	}
+	if _, _, err := readFileLimited(filepath.Join(outside, "missing.txt"), 4); err == nil {
+		t.Fatalf("readFileLimited unexpectedly succeeded for missing file")
 	}
 }
 

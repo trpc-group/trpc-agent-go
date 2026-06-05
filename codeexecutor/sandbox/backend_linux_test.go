@@ -342,6 +342,42 @@ func TestLinuxNoAccessMaskArgsMaskFirstMissingPathComponent(t *testing.T) {
 	}
 }
 
+func TestLinuxMissingNoAccessPathMaskTargetBranches(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "none-mask-target-branches", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTarget := filepath.Join(ws.Path, "work")
+	externalWriteTarget := t.TempDir()
+
+	target, ok, err := rt.missingNoAccessPathMaskTarget(ws, []string{writeTarget}, "")
+	if err != nil || ok || target != "" {
+		t.Fatalf("empty path target=%q ok=%v err=%v, want empty false nil", target, ok, err)
+	}
+	target, ok, err = rt.missingNoAccessPathMaskTarget(ws, []string{writeTarget}, "work")
+	if err != nil || ok || target != "" {
+		t.Fatalf("existing path target=%q ok=%v err=%v, want empty false nil", target, ok, err)
+	}
+	target, ok, err = rt.missingNoAccessPathMaskTarget(ws, []string{externalWriteTarget}, "work/missing.txt")
+	if err != nil || ok || target != "" {
+		t.Fatalf("missing path outside write target=%q ok=%v err=%v, want empty false nil", target, ok, err)
+	}
+	_, _, err = rt.missingNoAccessPathMaskTarget(ws, []string{writeTarget}, "../escape")
+	if !isKind(err, ErrPathDenied) {
+		t.Fatalf("escaping no-access path error = %v, want ErrPathDenied", err)
+	}
+
+	target, ok, err = firstMissingPathComponent("/")
+	if err != nil || ok || target != "" {
+		t.Fatalf("root first missing target=%q ok=%v err=%v, want empty false nil", target, ok, err)
+	}
+	_, ok, err = firstMissingPathComponent("relative/missing")
+	if !isKind(err, ErrPathDenied) || ok {
+		t.Fatalf("relative first missing ok=%v err=%v, want ErrPathDenied", ok, err)
+	}
+}
+
 func TestCleanupSyntheticDenyReadMaskTargetsRemovesOnlyEmptyRegularFiles(t *testing.T) {
 	dir := t.TempDir()
 	empty := filepath.Join(dir, "empty")
@@ -387,6 +423,42 @@ func TestCleanupSyntheticDenyReadMaskTargetsRemovesOnlyEmptyRegularFiles(t *test
 	}
 }
 
+func TestLinuxValidateNoAccessMaskBranches(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "none-mask-validation-branches", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	noWrites := ReadOnlyProfile().WithNoAccessGlobs("/absolute/*.secret")
+	if err := rt.validateNoAccessMasksEnforceable(noWrites, ws); err != nil {
+		t.Fatalf("no write mounts should skip glob enforceability checks: %v", err)
+	}
+
+	invalidRule := ReadOnlyProfile()
+	invalidRule.fileSystem.Rules = append(invalidRule.fileSystem.Rules, fileSystemRule{
+		Kind: ruleGlob, Access: accessRead, Glob: "work/*.secret",
+	})
+	if err := rt.validateNoAccessMasksEnforceable(invalidRule, ws); !isKind(err, ErrPolicyViolation) {
+		t.Fatalf("invalid rule error = %v, want ErrPolicyViolation", err)
+	}
+
+	blankGlob := ReadOnlyProfile().WithWritePaths("work")
+	blankGlob.fileSystem.Rules = append(blankGlob.fileSystem.Rules, fileSystemRule{
+		Kind: ruleGlob, Access: accessNone, Glob: " ",
+	})
+	if err := rt.validateNoAccessMasksEnforceable(blankGlob, ws); err != nil {
+		t.Fatalf("blank no-access glob should be ignored: %v", err)
+	}
+
+	absoluteGlob := ReadOnlyProfile().WithWritePaths("work").WithNoAccessGlobs("/tmp/*.secret")
+	err = rt.validateNoAccessMasksEnforceable(absoluteGlob, ws)
+	if !isKind(err, ErrPolicyViolation) ||
+		!strings.Contains(err.Error(), "linux backend requires workspace-relative glob denials") {
+		t.Fatalf("absolute no-access glob error = %v, want ErrPolicyViolation", err)
+	}
+}
+
 func TestLinuxNoAccessMaskArgsRejectGlobUnderWritableMount(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	ws, err := rt.CreateWorkspace(context.Background(), "none-mask-glob-writable", codeexecutor.WorkspacePolicy{})
@@ -403,6 +475,19 @@ func TestLinuxNoAccessMaskArgsRejectGlobUnderWritableMount(t *testing.T) {
 	if !strings.Contains(err.Error(), "no-access-glob work/*.env") ||
 		!strings.Contains(err.Error(), "glob denial overlaps writable mount work") {
 		t.Fatalf("writable no-access glob error = %v, want glob and writable mount context", err)
+	}
+}
+
+func TestLinuxDenyReadMaskSetupPropagatesGlobError(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "none-mask-invalid-glob", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := ReadOnlyProfile().WithNoAccessGlobs("[")
+	_, err = rt.denyReadMaskSetup(profile, ws)
+	if err == nil {
+		t.Fatalf("denyReadMaskSetup unexpectedly accepted invalid glob")
 	}
 }
 
@@ -490,6 +575,25 @@ func TestLinuxPrepareProtectedMasksRejectsEscapes(t *testing.T) {
 	err = rt.prepareProtectedMasks(profile, ws)
 	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("prepareProtectedMasks error = %v, want ErrPathDenied", err)
+	}
+}
+
+func TestLinuxPrepareProtectedMasksSkipsBlankDotAndCreatesMissing(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "protected-mask-create", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile()
+	profile.fileSystem.ProtectedMetadata = []string{"", ".", "work/missing-meta"}
+	if err := rt.prepareProtectedMasks(profile, ws); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(ws.Path, "work", "missing-meta")); err != nil {
+		t.Fatalf("missing protected metadata was not created: %v", err)
+	}
+	if _, err := os.Stat(denyReadMaskSource(ws)); err != nil {
+		t.Fatalf("deny-read mask source was not created: %v", err)
 	}
 }
 
@@ -581,6 +685,24 @@ exit 0
 	}
 }
 
+func TestLinuxPreflightReturnsProbeFailure(t *testing.T) {
+	binDir := t.TempDir()
+	bwrap := filepath.Join(binDir, "bwrap")
+	if err := os.WriteFile(bwrap, []byte(`#!/bin/sh
+echo "bwrap: generic failure" >&2
+exit 1
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	_, _, err := rt.linuxPreflight()
+	if !isKind(err, ErrSetupFailed) || !strings.Contains(err.Error(), "generic failure") {
+		t.Fatalf("linuxPreflight error = %v, want probe setup failure", err)
+	}
+}
+
 func TestLinuxSandboxCommandBindsDenyReadDataFDAndCleansSyntheticTargets(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	rt.preflightOnce.Do(func() {
@@ -635,6 +757,29 @@ func TestLinuxSandboxCommandBindsDenyReadDataFDAndCleansSyntheticTargets(t *test
 	}
 }
 
+func TestLinuxSandboxCommandPropagatesSetupError(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	rt.preflightOnce.Do(func() {
+		rt.bwrapPath = "/bin/true"
+	})
+	ws, err := rt.CreateWorkspace(context.Background(), "linux/sandbox-command-setup-error", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile().WithReadPaths("work/\x00blocked")
+	_, backend, cleanup, err := rt.osSandboxCommand(
+		context.Background(),
+		profile,
+		ws,
+		filepath.Join(ws.Path, "work"),
+		nil,
+		codeexecutor.RunProgramSpec{Cmd: "true"},
+	)
+	if backend != string(BackendLinuxBubblewrap) || err == nil || cleanup != nil {
+		t.Fatalf("osSandboxCommand backend=%q cleanup=%v err=%v, want setup error", backend, cleanup, err)
+	}
+}
+
 func TestLinuxSandboxCommandPrepareAndArgsErrors(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	rt.preflightOnce.Do(func() {
@@ -675,6 +820,34 @@ func TestLinuxSandboxCommandPrepareAndArgsErrors(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatalf("linuxSandboxArgs unexpectedly succeeded for unreadable protected path")
+	}
+}
+
+func TestLinuxWorkspaceMountArgsErrorAndDedupBranches(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "linux/mount-args-branches", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = rt.workspaceWriteMountArgs(ReadOnlyProfile().WithWritePaths("work/missing"), ws)
+	if !isKind(err, ErrPathDenied) {
+		t.Fatalf("missing write mount target error = %v, want ErrPathDenied", err)
+	}
+
+	externalWrite := t.TempDir()
+	profile := ReadOnlyProfile().WithWritePaths(externalWrite, externalWrite, filepath.Join(ws.Path, "work"))
+	targets, err := rt.linuxWriteMountTargets(profile, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var externalCount int
+	for _, target := range targets {
+		if target == externalWrite {
+			externalCount++
+		}
+	}
+	if externalCount != 1 {
+		t.Fatalf("linuxWriteMountTargets targets=%#v, want one external write target", targets)
 	}
 }
 
