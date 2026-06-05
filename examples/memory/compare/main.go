@@ -25,7 +25,6 @@ import (
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memorysqlite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
-	memorysqlitevec "trpc.group/trpc-go/trpc-agent-go/memory/sqlitevec"
 )
 
 const (
@@ -224,25 +223,8 @@ func mustCreateSQLiteService(
 func mustCreateSQLiteVecService(
 	ctx context.Context,
 ) (memory.Service, func()) {
-	db, path, err := openTempSQLiteDB(sqliteVecTempDBPattern)
-	mustNoErr(err, "open sqlitevec db")
-
-	emb := newOpenAIEmbedderFromEnv()
-	svc, err := memorysqlitevec.NewService(
-		db,
-		memorysqlitevec.WithEmbedder(emb),
-	)
-	if err != nil {
-		_ = db.Close()
-		_ = os.Remove(path)
-		log.Fatalf("create sqlitevec service: %v", err)
-	}
-	_ = ctx
-
-	cleanup := func() {
-		_ = svc.Close()
-		_ = os.Remove(path)
-	}
+	svc, cleanup, err := createSQLiteVecService(ctx)
+	mustNoErr(err, "create sqlitevec service")
 	return svc, cleanup
 }
 
