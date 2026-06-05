@@ -46,11 +46,11 @@ const (
 // dedup-aware fact pipeline instead of two competing writers against
 // the same backend.
 type worker struct {
-	reviewer  Reviewer
-	publisher Publisher
-	policy    Policy
-	skillRepo skill.Repository
-	repoProv  skill.RepositoryProvider
+	reviewer     Reviewer
+	publisher    Publisher
+	reviewPolicy ReviewPolicy
+	skillRepo    skill.Repository
+	repoProv     skill.RepositoryProvider
 
 	workerNum                 int
 	queueSize                 int
@@ -123,7 +123,7 @@ type workerConfig struct {
 	Publisher Publisher
 	// PublisherBaseDir enables file-backed scope routing for Publisher.
 	PublisherBaseDir string
-	Policy           Policy
+	ReviewPolicy     ReviewPolicy
 	SkillRepo        skill.Repository
 	// SkillRepoProvider resolves the repository visible for each skill scope.
 	SkillRepoProvider skill.RepositoryProvider
@@ -169,8 +169,8 @@ func newWorker(cfg workerConfig) *worker {
 	if cfg.JobTimeout <= 0 {
 		cfg.JobTimeout = defaultJobTimeout
 	}
-	if cfg.Policy == nil {
-		cfg.Policy = defaultPolicy{}
+	if cfg.ReviewPolicy == nil {
+		cfg.ReviewPolicy = DefaultReviewPolicy{}
 	}
 	bodyMax := cfg.ExistingSkillBodyMaxChars
 	if bodyMax == 0 {
@@ -179,7 +179,7 @@ func newWorker(cfg workerConfig) *worker {
 	w := &worker{
 		reviewer:                  cfg.Reviewer,
 		publisher:                 cfg.Publisher,
-		policy:                    cfg.Policy,
+		reviewPolicy:              cfg.ReviewPolicy,
 		skillRepo:                 cfg.SkillRepo,
 		repoProv:                  cfg.SkillRepoProvider,
 		workerNum:                 cfg.WorkerNum,
@@ -328,8 +328,22 @@ func (w *worker) processJob(item *pendingJob) {
 		return
 	}
 
-	if !w.policy.ShouldReview(reviewCtx) {
-		log.DebugfContext(ctx, "evolution: policy declined review for session %s (tool_calls=%d)",
+	policyInput := &ReviewPolicyInput{
+		AppName:       sess.AppName,
+		UserID:        sess.UserID,
+		SessionID:     sess.ID,
+		Scope:         scope,
+		Scoped:        scoped,
+		Outcome:       item.job.Outcome,
+		ReviewContext: reviewCtx,
+	}
+	shouldReview, err := w.reviewPolicy.ShouldReview(ctx, policyInput)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: review policy failed for session %s: %v", sess.ID, err)
+		return
+	}
+	if !shouldReview {
+		log.DebugfContext(ctx, "evolution: review policy declined review for session %s (tool_calls=%d)",
 			sess.ID, reviewCtx.ToolCallCount)
 		writeLastReviewAt(sess, latestTs)
 		return

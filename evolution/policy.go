@@ -9,30 +9,61 @@
 
 package evolution
 
+import "context"
+
 const defaultMinToolCalls = 4
 
-// Policy decides whether a session delta is worth reviewing.
-type Policy interface {
-	ShouldReview(ctx *ReviewContext) bool
+// ReviewPolicy decides whether a session delta is worth reviewing.
+type ReviewPolicy interface {
+	ShouldReview(ctx context.Context, input *ReviewPolicyInput) (bool, error)
 }
 
-// defaultPolicy triggers review when there are enough tool calls, a user
-// correction, or a recovered error.
-type defaultPolicy struct{}
+// DefaultReviewPolicy is the built-in review trigger policy.
+//
+// The zero value is usable: it triggers review when the delta has at least
+// 4 tool calls, a user correction, or a recovered tool error.
+type DefaultReviewPolicy struct {
+	// MinToolCalls is the tool-call threshold that triggers review. Zero uses
+	// the built-in default. A negative value disables the tool-call trigger.
+	MinToolCalls int
 
-// ShouldReview implements Policy.
-func (defaultPolicy) ShouldReview(ctx *ReviewContext) bool {
-	if ctx == nil || len(ctx.Messages) == 0 {
-		return false
+	// DisableUserCorrectionTrigger disables review when the delta contains a
+	// user correction after an assistant turn.
+	DisableUserCorrectionTrigger bool
+
+	// DisableRecoveredErrorTrigger disables review when the delta shows the
+	// assistant recovering after a tool error.
+	DisableRecoveredErrorTrigger bool
+}
+
+// ShouldReview implements ReviewPolicy.
+func (p DefaultReviewPolicy) ShouldReview(ctx context.Context, input *ReviewPolicyInput) (bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	if ctx.ToolCallCount >= defaultMinToolCalls {
-		return true
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
-	if ctx.HasUserCorrection {
-		return true
+	if input == nil || input.ReviewContext == nil {
+		return false, nil
 	}
-	if ctx.HasRecoveredError {
-		return true
+	reviewCtx := input.ReviewContext
+	if len(reviewCtx.Messages) == 0 {
+		return false, nil
 	}
-	return false
+
+	minToolCalls := p.MinToolCalls
+	if minToolCalls == 0 {
+		minToolCalls = defaultMinToolCalls
+	}
+	if minToolCalls > 0 && reviewCtx.ToolCallCount >= minToolCalls {
+		return true, nil
+	}
+	if !p.DisableUserCorrectionTrigger && reviewCtx.HasUserCorrection {
+		return true, nil
+	}
+	if !p.DisableRecoveredErrorTrigger && reviewCtx.HasRecoveredError {
+		return true, nil
+	}
+	return false, nil
 }

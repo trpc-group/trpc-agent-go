@@ -21,7 +21,7 @@ type serviceOpts struct {
 	skillRepo                 skill.Repository
 	skillRepoProvider         skill.RepositoryProvider
 	skillScopeMode            skill.SkillScopeMode
-	policy                    Policy
+	reviewPolicy              ReviewPolicy
 	publisher                 Publisher
 	workerNum                 int
 	queueSize                 int
@@ -69,9 +69,9 @@ func WithSkillScopeMode(mode skill.SkillScopeMode) Option {
 	return func(o *serviceOpts) { o.skillScopeMode = mode }
 }
 
-// WithPolicy overrides the default trigger policy.
-func WithPolicy(p Policy) Option {
-	return func(o *serviceOpts) { o.policy = p }
+// WithReviewPolicy overrides the default review trigger policy.
+func WithReviewPolicy(p ReviewPolicy) Option {
+	return func(o *serviceOpts) { o.reviewPolicy = p }
 }
 
 // WithPublisher overrides the default file-based publisher.

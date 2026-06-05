@@ -32,11 +32,11 @@ func TestWithSkillRepository(t *testing.T) {
 	assert.Equal(t, repo, opts.skillRepo)
 }
 
-func TestWithPolicy(t *testing.T) {
-	p := alwaysPolicy{}
+func TestWithReviewPolicy(t *testing.T) {
+	p := alwaysReviewPolicy{}
 	var opts serviceOpts
-	WithPolicy(p)(&opts)
-	assert.Equal(t, p, opts.policy)
+	WithReviewPolicy(p)(&opts)
+	assert.Equal(t, p, opts.reviewPolicy)
 }
 
 func TestWithPublisher(t *testing.T) {

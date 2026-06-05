@@ -104,6 +104,29 @@ func (m *mockSkillRepo) Refresh() error {
 	return nil
 }
 
+type capturingReviewPolicy struct {
+	mu    sync.Mutex
+	input *ReviewPolicyInput
+	allow bool
+	err   error
+}
+
+func (p *capturingReviewPolicy) ShouldReview(
+	_ context.Context,
+	input *ReviewPolicyInput,
+) (bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.input = input
+	return p.allow, p.err
+}
+
+func (p *capturingReviewPolicy) snapshot() *ReviewPolicyInput {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.input
+}
+
 // --- helpers ---
 
 func newTestSession() *session.Session {
@@ -134,7 +157,7 @@ func TestWorker_ProcessJob_NoMessages(t *testing.T) {
 	rev.mu.Unlock()
 }
 
-func TestWorker_ProcessJob_PolicyRejects(t *testing.T) {
+func TestWorker_ProcessJob_ReviewPolicyRejects(t *testing.T) {
 	rev := &mockReviewer{decision: &ReviewDecision{}}
 	w := newWorker(workerConfig{Reviewer: rev})
 
@@ -146,12 +169,71 @@ func TestWorker_ProcessJob_PolicyRejects(t *testing.T) {
 	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
 
 	rev.mu.Lock()
-	assert.Equal(t, 0, rev.calls, "reviewer should not be called when policy rejects")
+	assert.Equal(t, 0, rev.calls, "reviewer should not be called when review policy rejects")
 	rev.mu.Unlock()
 
 	raw, ok := sess.GetState(sessionStateKeyLastReviewAt)
 	assert.True(t, ok, "last_review_at should be written even when skipped")
 	assert.NotEmpty(t, raw)
+}
+
+func TestWorker_ProcessJob_ReviewPolicyReceivesContext(t *testing.T) {
+	policy := &capturingReviewPolicy{}
+	w := newWorker(workerConfig{
+		Reviewer:       &mockReviewer{decision: &ReviewDecision{}},
+		ReviewPolicy:   policy,
+		SkillScopeMode: skill.SkillScopeUser,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "hi"},
+		model.Message{Role: model.RoleAssistant, Content: "checking", ToolCalls: []model.ToolCall{{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name: "lookup",
+			},
+		}}},
+		model.Message{Role: model.RoleTool, ToolID: "call-1", Content: "ok"},
+	)
+	outcome := &Outcome{Status: OutcomeSuccess}
+
+	w.processJob(&pendingJob{
+		ctx: context.Background(),
+		job: LearningJob{Session: sess, Outcome: outcome},
+	})
+
+	input := policy.snapshot()
+	require.NotNil(t, input)
+	require.NotNil(t, input.ReviewContext)
+	assert.Equal(t, sess.AppName, input.AppName)
+	assert.Equal(t, sess.UserID, input.UserID)
+	assert.Equal(t, sess.ID, input.SessionID)
+	assert.Equal(t, skill.SkillScope{AppName: sess.AppName, UserID: sess.UserID}, input.Scope)
+	assert.True(t, input.Scoped)
+	assert.Same(t, outcome, input.Outcome)
+	assert.Equal(t, 1, input.ReviewContext.ToolCallCount)
+	assert.Len(t, input.ReviewContext.Messages, 2)
+	assert.NotEmpty(t, input.ReviewContext.Transcript)
+}
+
+func TestWorker_ProcessJob_ReviewPolicyErrorDoesNotAdvanceCursor(t *testing.T) {
+	policy := &capturingReviewPolicy{err: assert.AnError}
+	w := newWorker(workerConfig{
+		Reviewer:     &mockReviewer{decision: &ReviewDecision{}},
+		ReviewPolicy: policy,
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "hi"},
+		model.Message{Role: model.RoleAssistant, Content: "hello"},
+	)
+
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	_, ok := sess.GetState(sessionStateKeyLastReviewAt)
+	assert.False(t, ok, "last_review_at should not be written when policy fails")
 }
 
 func TestWorker_ProcessJob_SkillWrittenAndRefreshed(t *testing.T) {
@@ -165,12 +247,12 @@ func TestWorker_ProcessJob_SkillWrittenAndRefreshed(t *testing.T) {
 		},
 	}
 
-	// Use an AlwaysPolicy to bypass the threshold.
+	// Use an alwaysReviewPolicy to bypass the threshold.
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: pub,
-		Policy:    alwaysPolicy{},
-		SkillRepo: repo,
+		Reviewer:     rev,
+		Publisher:    pub,
+		ReviewPolicy: alwaysReviewPolicy{},
+		SkillRepo:    repo,
 	})
 
 	sess := newTestSession()
@@ -212,7 +294,7 @@ func TestWorker_ProcessJob_AppScopedFileBackends(t *testing.T) {
 		Reviewer:          rev,
 		Publisher:         newFilePublisher(managedDir),
 		PublisherBaseDir:  managedDir,
-		Policy:            alwaysPolicy{},
+		ReviewPolicy:      alwaysReviewPolicy{},
 		SkillScopeMode:    skill.SkillScopeApp,
 		SkillRepoProvider: provider,
 		CandidateStore:    NewFileCandidateStore(revisionsDir),
@@ -397,9 +479,9 @@ func TestWorker_ProcessJob_SkipReason(t *testing.T) {
 		decision: &ReviewDecision{SkipReason: "nothing useful"},
 	}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: pub,
-		Policy:    alwaysPolicy{},
+		Reviewer:     rev,
+		Publisher:    pub,
+		ReviewPolicy: alwaysReviewPolicy{},
 	})
 
 	sess := newTestSession()
@@ -417,8 +499,8 @@ func TestWorker_ProcessJob_SkipReason(t *testing.T) {
 func TestWorker_ProcessJob_SkipsWhenSkillWritesDetected(t *testing.T) {
 	rev := &mockReviewer{decision: &ReviewDecision{}}
 	w := newWorker(workerConfig{
-		Reviewer: rev,
-		Policy:   alwaysPolicy{},
+		Reviewer:     rev,
+		ReviewPolicy: alwaysReviewPolicy{},
 	})
 
 	sess := newTestSession()
@@ -436,8 +518,8 @@ func TestWorker_ProcessJob_SkipsWhenSkillWritesDetected(t *testing.T) {
 func TestWorker_ProcessJob_SkipsWhenStructuredSkillWriteDetected(t *testing.T) {
 	rev := &mockReviewer{decision: &ReviewDecision{}}
 	w := newWorker(workerConfig{
-		Reviewer: rev,
-		Policy:   alwaysPolicy{},
+		Reviewer:     rev,
+		ReviewPolicy: alwaysReviewPolicy{},
 	})
 
 	sess := newTestSession()
@@ -469,9 +551,9 @@ func TestWorker_AsyncEnqueue(t *testing.T) {
 		},
 	}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: pub,
-		Policy:    alwaysPolicy{},
+		Reviewer:     rev,
+		Publisher:    pub,
+		ReviewPolicy: alwaysReviewPolicy{},
 	})
 	w.Start()
 	defer w.Stop()
@@ -501,8 +583,8 @@ func TestWorker_DeltaScan_Incremental(t *testing.T) {
 		decision: &ReviewDecision{},
 	}
 	w := newWorker(workerConfig{
-		Reviewer: rev,
-		Policy:   alwaysPolicy{},
+		Reviewer:     rev,
+		ReviewPolicy: alwaysReviewPolicy{},
 	})
 
 	sess := newTestSession()
@@ -665,10 +747,10 @@ func TestWorker_ApplyDecision_UpdateExistingSkill(t *testing.T) {
 		},
 	}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: pub,
-		Policy:    alwaysPolicy{},
-		SkillRepo: repo,
+		Reviewer:     rev,
+		Publisher:    pub,
+		ReviewPolicy: alwaysReviewPolicy{},
+		SkillRepo:    repo,
 	})
 
 	sess := newTestSession()
@@ -706,10 +788,10 @@ func TestWorker_ApplyDecision_UpdateUnknownSkillIsDropped(t *testing.T) {
 		},
 	}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: pub,
-		Policy:    alwaysPolicy{},
-		SkillRepo: repo,
+		Reviewer:     rev,
+		Publisher:    pub,
+		ReviewPolicy: alwaysReviewPolicy{},
+		SkillRepo:    repo,
 	})
 
 	sess := newTestSession()
@@ -737,10 +819,10 @@ func TestWorker_ApplyDecision_DeleteExistingSkill(t *testing.T) {
 		decision: &ReviewDecision{Deletions: []string{"Stale"}},
 	}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: pub,
-		Policy:    alwaysPolicy{},
-		SkillRepo: repo,
+		Reviewer:     rev,
+		Publisher:    pub,
+		ReviewPolicy: alwaysReviewPolicy{},
+		SkillRepo:    repo,
 	})
 
 	sess := newTestSession()
@@ -765,10 +847,10 @@ func TestWorker_ApplyDecision_DeleteUnknownIsIdempotent(t *testing.T) {
 		decision: &ReviewDecision{Deletions: []string{"Phantom"}},
 	}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: pub,
-		Policy:    alwaysPolicy{},
-		SkillRepo: repo,
+		Reviewer:     rev,
+		Publisher:    pub,
+		ReviewPolicy: alwaysReviewPolicy{},
+		SkillRepo:    repo,
 	})
 
 	sess := newTestSession()
@@ -789,8 +871,8 @@ func TestWorker_ApplyDecision_DeleteUnknownIsIdempotent(t *testing.T) {
 func TestWorker_ProcessJob_ForwardsOutcomeToReviewer(t *testing.T) {
 	rev := &capturingReviewer{}
 	w := newWorker(workerConfig{
-		Reviewer: rev,
-		Policy:   alwaysPolicy{},
+		Reviewer:     rev,
+		ReviewPolicy: alwaysReviewPolicy{},
 	})
 
 	sess := newTestSession()
@@ -820,8 +902,8 @@ func TestWorker_ProcessJob_ForwardsOutcomeToReviewer(t *testing.T) {
 func TestWorker_Enqueue_ForwardsOutcomeViaAsyncQueue(t *testing.T) {
 	rev := &capturingReviewer{}
 	w := newWorker(workerConfig{
-		Reviewer: rev,
-		Policy:   alwaysPolicy{},
+		Reviewer:     rev,
+		ReviewPolicy: alwaysReviewPolicy{},
 	})
 	w.Start()
 	defer w.Stop()
@@ -851,8 +933,8 @@ func TestWorker_Enqueue_ForwardsOutcomeViaAsyncQueue(t *testing.T) {
 func TestWorker_ProcessJob_RedactsSecretsBeforeReviewer(t *testing.T) {
 	rev := &capturingReviewer{}
 	w := newWorker(workerConfig{
-		Reviewer: rev,
-		Policy:   alwaysPolicy{},
+		Reviewer:     rev,
+		ReviewPolicy: alwaysReviewPolicy{},
 	})
 
 	sess := newTestSession()
@@ -905,9 +987,9 @@ func TestWorker_ProcessJob_ForwardsExistingSkillsWithBodyExcerpt(t *testing.T) {
 	}
 	rev := &capturingReviewer{}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Policy:    alwaysPolicy{},
-		SkillRepo: repo,
+		Reviewer:     rev,
+		ReviewPolicy: alwaysReviewPolicy{},
+		SkillRepo:    repo,
 	})
 
 	sess := newTestSession()
@@ -936,7 +1018,7 @@ func TestWorker_ProcessJob_TruncatesBodyExcerptToConfiguredBudget(t *testing.T) 
 	rev := &capturingReviewer{}
 	w := newWorker(workerConfig{
 		Reviewer:                  rev,
-		Policy:                    alwaysPolicy{},
+		ReviewPolicy:              alwaysReviewPolicy{},
 		SkillRepo:                 repo,
 		ExistingSkillBodyMaxChars: 30,
 	})
@@ -968,7 +1050,7 @@ func TestWorker_ProcessJob_OmitsBodyWhenBudgetIsNegative(t *testing.T) {
 	rev := &capturingReviewer{}
 	w := newWorker(workerConfig{
 		Reviewer:                  rev,
-		Policy:                    alwaysPolicy{},
+		ReviewPolicy:              alwaysReviewPolicy{},
 		SkillRepo:                 repo,
 		ExistingSkillBodyMaxChars: -1,
 	})
@@ -1008,10 +1090,10 @@ func TestWorker_ProcessJob_ReconcilerRewritesSupersetCandidate(t *testing.T) {
 	}}
 	pub := &mockPublisher{}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Policy:    alwaysPolicy{},
-		SkillRepo: repo,
-		Publisher: pub,
+		Reviewer:     rev,
+		ReviewPolicy: alwaysReviewPolicy{},
+		SkillRepo:    repo,
+		Publisher:    pub,
 	})
 
 	sess := newTestSession()
@@ -1055,10 +1137,12 @@ func (c *capturingReviewer) snapshot() *ReviewInput {
 	return c.input
 }
 
-// alwaysPolicy is a Policy that always triggers review.
-type alwaysPolicy struct{}
+// alwaysReviewPolicy is a ReviewPolicy that always triggers review.
+type alwaysReviewPolicy struct{}
 
-func (alwaysPolicy) ShouldReview(_ *ReviewContext) bool { return true }
+func (alwaysReviewPolicy) ShouldReview(context.Context, *ReviewPolicyInput) (bool, error) {
+	return true, nil
+}
 
 func TestWorker_ApprovalGate_PromotesCleanCandidate(t *testing.T) {
 	dir := t.TempDir()
@@ -1078,7 +1162,7 @@ func TestWorker_ApprovalGate_PromotesCleanCandidate(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
-		Policy:         alwaysPolicy{},
+		ReviewPolicy:   alwaysReviewPolicy{},
 		SkillRepo:      repo,
 		CandidateStore: store,
 		ActivePointer:  ptr,
@@ -1127,7 +1211,7 @@ func TestWorker_ApprovalGate_SpecGateRejects(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
-		Policy:         alwaysPolicy{},
+		ReviewPolicy:   alwaysReviewPolicy{},
 		SkillRepo:      repo,
 		CandidateStore: store,
 		ActivePointer:  ptr,
@@ -1174,7 +1258,7 @@ func TestWorker_ApprovalGate_ShadowModePublishesAnyway(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:           rev,
 		Publisher:          pub,
-		Policy:             alwaysPolicy{},
+		ReviewPolicy:       alwaysReviewPolicy{},
 		SkillRepo:          repo,
 		CandidateStore:     store,
 		ActivePointer:      ptr,
@@ -1218,7 +1302,7 @@ func TestWorker_ApplyDeletionsWithGate_DeletesExistingSkill(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
-		Policy:         alwaysPolicy{},
+		ReviewPolicy:   alwaysReviewPolicy{},
 		SkillRepo:      repo,
 		CandidateStore: store,
 		ActivePointer:  ptr,
@@ -1258,7 +1342,7 @@ func TestWorker_ApplyDeletionsWithGate_NilPublisherSkips(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      nil, // no publisher
-		Policy:         alwaysPolicy{},
+		ReviewPolicy:   alwaysReviewPolicy{},
 		SkillRepo:      repo,
 		CandidateStore: store,
 	})
@@ -1287,7 +1371,7 @@ func TestWorker_ApplyDeletionsWithGate_NonexistentSkillSkipped(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
-		Policy:         alwaysPolicy{},
+		ReviewPolicy:   alwaysReviewPolicy{},
 		SkillRepo:      repo,
 		CandidateStore: store,
 		ActivePointer:  ptr,
@@ -1336,7 +1420,7 @@ func TestWorker_ApplyUpdatesWithGate_PassesGates(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
-		Policy:         alwaysPolicy{},
+		ReviewPolicy:   alwaysReviewPolicy{},
 		SkillRepo:      repo,
 		CandidateStore: store,
 		ActivePointer:  ptr,
@@ -1386,7 +1470,7 @@ func TestWorker_ApplyUpdatesWithGate_SpecGateRejects(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
-		Policy:         alwaysPolicy{},
+		ReviewPolicy:   alwaysReviewPolicy{},
 		SkillRepo:      repo,
 		CandidateStore: store,
 		ActivePointer:  ptr,
@@ -1438,9 +1522,9 @@ func TestWorker_Enqueue_SynchronousFallbackWhenNotStarted(t *testing.T) {
 		},
 	}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: pub,
-		Policy:    alwaysPolicy{},
+		Reviewer:     rev,
+		Publisher:    pub,
+		ReviewPolicy: alwaysReviewPolicy{},
 	})
 	// Do NOT call w.Start() — the worker is not started.
 
@@ -1492,7 +1576,7 @@ func TestWorker_SafetyGate_PassesCleanRevision(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
-		Policy:         alwaysPolicy{},
+		ReviewPolicy:   alwaysReviewPolicy{},
 		SkillRepo:      repo,
 		CandidateStore: store,
 		ActivePointer:  ptr,
@@ -1533,7 +1617,7 @@ func TestWorker_SafetyGate_RejectsDangerousContent(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
-		Policy:         alwaysPolicy{},
+		ReviewPolicy:   alwaysReviewPolicy{},
 		SkillRepo:      repo,
 		CandidateStore: store,
 		ActivePointer:  ptr,
@@ -1570,10 +1654,10 @@ func TestWorker_ApplySkills_WithPublisher(t *testing.T) {
 		},
 	}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: pub,
-		Policy:    alwaysPolicy{},
-		SkillRepo: repo,
+		Reviewer:     rev,
+		Publisher:    pub,
+		ReviewPolicy: alwaysReviewPolicy{},
+		SkillRepo:    repo,
 	})
 
 	sess := newTestSession()
@@ -1602,10 +1686,10 @@ func TestWorker_ApplySkills_NilPublisher(t *testing.T) {
 		},
 	}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: nil, // no publisher
-		Policy:    alwaysPolicy{},
-		SkillRepo: repo,
+		Reviewer:     rev,
+		Publisher:    nil, // no publisher
+		ReviewPolicy: alwaysReviewPolicy{},
+		SkillRepo:    repo,
 	})
 
 	sess := newTestSession()
@@ -1629,10 +1713,10 @@ func TestWorker_ApplySkills_NilSpecInSlice(t *testing.T) {
 		},
 	}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: pub,
-		Policy:    alwaysPolicy{},
-		SkillRepo: repo,
+		Reviewer:     rev,
+		Publisher:    pub,
+		ReviewPolicy: alwaysReviewPolicy{},
+		SkillRepo:    repo,
 	})
 
 	sess := newTestSession()
@@ -1659,10 +1743,10 @@ func TestWorker_ApplySkills_PublisherError(t *testing.T) {
 		},
 	}
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: pub,
-		Policy:    alwaysPolicy{},
-		SkillRepo: repo,
+		Reviewer:     rev,
+		Publisher:    pub,
+		ReviewPolicy: alwaysReviewPolicy{},
+		SkillRepo:    repo,
 	})
 
 	sess := newTestSession()
@@ -1696,7 +1780,7 @@ func TestWorker_ApprovalGate_EffectivenessGateHoldsOnFail(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:          rev,
 		Publisher:         pub,
-		Policy:            alwaysPolicy{},
+		ReviewPolicy:      alwaysReviewPolicy{},
 		SkillRepo:         repo,
 		CandidateStore:    store,
 		ActivePointer:     ptr,
@@ -1760,7 +1844,7 @@ func TestWorker_HumanGate_HoldsRevision(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
-		Policy:         alwaysPolicy{},
+		ReviewPolicy:   alwaysReviewPolicy{},
 		SkillRepo:      repo,
 		CandidateStore: store,
 		ActivePointer:  ptr,
@@ -1823,7 +1907,7 @@ func TestWorker_HumanGate_PassesUpdate(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
-		Policy:         alwaysPolicy{},
+		ReviewPolicy:   alwaysReviewPolicy{},
 		SkillRepo:      repo,
 		CandidateStore: store,
 		ActivePointer:  ptr,
@@ -1876,7 +1960,7 @@ func TestWorker_HumanGate_ErrorFailsClosed(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:       rev,
 		Publisher:      pub,
-		Policy:         alwaysPolicy{},
+		ReviewPolicy:   alwaysReviewPolicy{},
 		SkillRepo:      repo,
 		CandidateStore: store,
 		ActivePointer:  ptr,
@@ -1937,7 +2021,7 @@ func TestWorker_ApplyUpdates_SkipsNonEvolutionSkill(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:         rev,
 		Publisher:        pub,
-		Policy:           alwaysPolicy{},
+		ReviewPolicy:     alwaysReviewPolicy{},
 		SkillRepo:        repo,
 		ManagedSkillsDir: managedDir,
 	})
@@ -1982,7 +2066,7 @@ func TestWorker_ApplyUpdates_AllowsEvolutionSkill(t *testing.T) {
 	w := newWorker(workerConfig{
 		Reviewer:         rev,
 		Publisher:        pub,
-		Policy:           alwaysPolicy{},
+		ReviewPolicy:     alwaysReviewPolicy{},
 		SkillRepo:        repo,
 		ManagedSkillsDir: managedDir,
 	})
@@ -2026,10 +2110,10 @@ func TestWorker_ApplyUpdates_NoIsolationWhenManagedDirEmpty(t *testing.T) {
 	}
 	// ManagedSkillsDir not set → no isolation.
 	w := newWorker(workerConfig{
-		Reviewer:  rev,
-		Publisher: pub,
-		Policy:    alwaysPolicy{},
-		SkillRepo: repo,
+		Reviewer:     rev,
+		Publisher:    pub,
+		ReviewPolicy: alwaysReviewPolicy{},
+		SkillRepo:    repo,
 	})
 
 	sess := newTestSession()

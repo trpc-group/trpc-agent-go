@@ -6,7 +6,7 @@ Evolution is the self-learning system in the tRPC-Agent-Go framework. It enables
 
 ### Purpose
 
-Evolution accumulates and reuses the agent's "operational experience" at the application level. When an agent completes a multi-step task (≥4 tool calls by default), a background Reviewer analyzes the conversation transcript and extracts reusable workflows as structured SKILL.md files. On subsequent similar tasks, the agent loads the matching skill via `skill_load` and follows the proven steps directly, avoiding repeated trial-and-error.
+Evolution accumulates and reuses the agent's "operational experience" at the application level. When an agent completes a task, the background learning loop checks the review policy (default: ≥4 tool calls, user correction, or recovered error) before invoking the Reviewer. If the delta is worth reviewing, the Reviewer analyzes the conversation transcript and extracts reusable workflows as structured SKILL.md files. On subsequent similar tasks, the agent loads the matching skill via `skill_load` and follows the proven steps directly, avoiding repeated trial-and-error.
 
 It excels at capturing: stable multi-step workflows, tool-calling best practices, common pitfalls and avoidance strategies, domain-specific operational procedures.
 
@@ -24,7 +24,7 @@ It excels at capturing: stable multi-step workflows, tool-calling best practices
 │                        Main Task Path                           │
 │  Request ──▶ [skill_load] ──▶ Agent ──▶ Tool Calls ──▶ Result   │
 └────────────────────────────────────┬────────────────────────────┘
-                                     │ enqueue (≥4 tool calls)
+                                     │ enqueue + review policy
                                      ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                  Background Learning Loop (async)               │
@@ -49,7 +49,7 @@ It excels at capturing: stable multi-step workflows, tool-calling best practices
 
 | Stage | Responsibility | Implementation |
 |-------|----------------|----------------|
-| **Policy** | Decide whether to review (default: ≥4 tool calls) | Built-in default policy |
+| **ReviewPolicy** | Decide whether to review (default: ≥4 tool calls) | `DefaultReviewPolicy` |
 | **Reviewer** | Extract skill spec from transcript (JSON) | `LLMReviewer` (gpt-4o-mini) |
 | **Reconciler** | Deterministic dedup/absorb/merge (4 rules) | Pure string rules |
 | **SpecGate** | Validate spec schema, naming, duplicates | Deterministic |
@@ -138,9 +138,9 @@ evoSvc := evolution.NewService(reviewerModel,
 )
 ```
 
-## Trigger Policy
+## Review Policy
 
-Evolution decides whether to review after each task completion. The built-in default policy triggers when any of these conditions hold:
+Evolution decides whether to review after each task completion. The built-in `DefaultReviewPolicy` triggers when any of these conditions hold:
 
 | Condition | Rationale |
 |-----------|-----------|
@@ -148,15 +148,38 @@ Evolution decides whether to review after each task completion. The built-in def
 | `HasUserCorrection` | User corrected the agent → worth recording pitfall |
 | `HasRecoveredError` | Agent recovered from error → worth recording experience |
 
-Custom policy:
+Tune the built-in policy:
 
 ```go
-type myPolicy struct{}
-func (myPolicy) ShouldReview(ctx *evolution.ReviewContext) bool {
-    return ctx.ToolCallCount >= 6 // more conservative
+evolution.WithReviewPolicy(evolution.DefaultReviewPolicy{
+    MinToolCalls: 6, // more conservative than the default 4
+})
+```
+
+Custom policy implementations can call centralized services or use tenant-specific rules. Policy errors do not advance the review cursor, so the same delta can be retried later.
+
+```go
+type centralPolicy struct {
+    client *ReviewDecisionClient
 }
 
-evolution.WithPolicy(myPolicy{})
+func (p *centralPolicy) ShouldReview(
+    ctx context.Context,
+    input *evolution.ReviewPolicyInput,
+) (bool, error) {
+    if input == nil || input.ReviewContext == nil {
+        return false, nil
+    }
+    return p.client.ShouldReview(ctx, ReviewRequest{
+        AppName:       input.AppName,
+        UserID:        input.UserID,
+        SessionID:     input.SessionID,
+        ToolCallCount: input.ReviewContext.ToolCallCount,
+        Outcome:       input.Outcome,
+    })
+}
+
+evolution.WithReviewPolicy(&centralPolicy{client: client})
 ```
 
 ## Quality Gates
@@ -282,7 +305,7 @@ revisions/
 | `WithSkillRepository(repo)` | Skill repo for **reading** existing skills for dedup; should be the same instance shared with the agent | Required |
 | `WithSkillRepositoryProvider(p)` | Resolve the skill repository per `SkillScope` (multi-tenant isolation, see below) | nil |
 | `WithSkillScopeMode(mode)` | Isolation granularity: `SkillScopeApp` (share per app) / `SkillScopeUser` (isolate per app+user) | `SkillScopeNone` (no isolation) |
-| `WithPolicy(p)` | Trigger policy | Built-in default policy (≥4 tool calls) |
+| `WithReviewPolicy(p)` | Review trigger policy | `DefaultReviewPolicy` (≥4 tool calls) |
 | `WithCandidateStore(store)` | Immutable revision store | nil (no tracking) |
 | `WithActivePointer(ptr)` | Active revision pointer | nil |
 | `WithSpecGate(gate)` | Schema/naming validation | nil |
@@ -291,7 +314,7 @@ revisions/
 | `WithHumanGate(gate)` | Human approval | nil (disabled) |
 | `WithApprovalGateShadow(bool)` | Shadow mode — evaluate but don't enforce | false |
 | `WithWorkerNum(n)` | Async worker count | 1 |
-| `WithQueueSize(n)` | Per-worker job queue buffer | 16 |
+| `WithQueueSize(n)` | Per-worker job queue buffer | 10 |
 | `WithExistingSkillBodyMaxChars(n)` | Body excerpt length for reviewer context | 600 |
 | `WithReviewerOptions(...)` | LLM reviewer options (temperature etc.) | - |
 | `WithReviewer(r)` | Custom Reviewer implementation | LLMReviewer |
@@ -389,4 +412,4 @@ for a complete runnable example demonstrating:
 - Automatic skill extraction across multiple task rounds
 - Cold-start to warm-start progression
 - Quality gate metrics
-- Custom policy configuration
+- Custom review policy configuration

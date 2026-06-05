@@ -95,6 +95,22 @@ svc.Decide(ctx, evolution.ApprovalDecision{
 })
 ```
 
+### Customize Review Trigger
+
+The default review policy runs the reviewer for richer session deltas:
+at least 4 tool calls, user correction, or recovered tool error. You can tune
+the built-in threshold:
+
+```go
+evolution.WithReviewPolicy(evolution.DefaultReviewPolicy{
+    MinToolCalls: 6,
+})
+```
+
+For centralized routing, implement `evolution.ReviewPolicy` and use the
+`context.Context` plus `evolution.ReviewPolicyInput` metadata to call your
+decision service.
+
 ### Shadow Mode (observe without enforcing)
 
 ```go

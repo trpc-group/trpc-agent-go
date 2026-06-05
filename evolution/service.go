@@ -49,7 +49,7 @@ func NewService(reviewModel model.Model, opts ...Option) Service {
 		Reviewer:                  reviewer,
 		Publisher:                 publisher,
 		PublisherBaseDir:          publisherBaseDir,
-		Policy:                    o.policy,
+		ReviewPolicy:              o.reviewPolicy,
 		SkillRepo:                 o.skillRepo,
 		SkillRepoProvider:         o.skillRepoProvider,
 		SkillScopeMode:            o.skillScopeMode,

@@ -64,6 +64,33 @@ type LearningJob struct {
 	Scope skill.SkillScope
 }
 
+// ReviewPolicyInput contains the information a ReviewPolicy can use to decide
+// whether a session delta should be sent to the reviewer.
+type ReviewPolicyInput struct {
+	// AppName is copied from the session for convenience.
+	AppName string
+
+	// UserID is copied from the session for convenience.
+	UserID string
+
+	// SessionID is copied from the session for traceability.
+	SessionID string
+
+	// Scope is the resolved skill-sharing scope for this job. It is zero when
+	// the service is configured without scoped skill routing.
+	Scope skill.SkillScope
+
+	// Scoped reports whether Scope is active for this job.
+	Scoped bool
+
+	// Outcome is the optional caller-observed verdict for this session.
+	Outcome *Outcome
+
+	// ReviewContext contains the heuristic signals extracted from the session
+	// delta, including messages, compact transcript, and tool-call counts.
+	ReviewContext *ReviewContext
+}
+
 // OutcomeStatus is a typed enum that classifies the evaluator verdict.
 // Empty string means "no signal" and is treated as "unknown".
 type OutcomeStatus string
@@ -203,7 +230,7 @@ type ReviewToolCall struct {
 }
 
 // ReviewContext captures heuristic signals from the session delta that the
-// Policy uses to decide whether a review is worthwhile.
+// ReviewPolicy uses to decide whether a review is worthwhile.
 type ReviewContext struct {
 	LatestTs          time.Time
 	Messages          []model.Message

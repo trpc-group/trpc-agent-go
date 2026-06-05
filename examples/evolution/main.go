@@ -121,7 +121,7 @@ func (d *evolutionDemo) setup() error {
 	d.evoSvc = evolution.NewService(d.mdl,
 		evolution.WithManagedSkillsDir(skillsDir),
 		evolution.WithSkillRepository(repo),
-		evolution.WithPolicy(alwaysReviewPolicy{}),
+		evolution.WithReviewPolicy(alwaysReviewPolicy{}),
 		evolution.WithCandidateStore(evolution.NewFileCandidateStore(revisionsDir)),
 		evolution.WithActivePointer(evolution.NewFileActivePointer(revisionsDir)),
 		evolution.WithSpecGate(evolution.NewDefaultSpecGate()),
@@ -303,8 +303,13 @@ func newCityTool() tool.Tool {
 // ---------------------------------------------------------------------------
 
 // alwaysReviewPolicy triggers a review after every task, regardless of
-// tool call count. In production, omit WithPolicy to use the built-in default,
+// tool call count. In production, omit WithReviewPolicy to use the built-in default,
 // which requires ≥4 tool calls.
 type alwaysReviewPolicy struct{}
 
-func (alwaysReviewPolicy) ShouldReview(_ *evolution.ReviewContext) bool { return true }
+func (alwaysReviewPolicy) ShouldReview(
+	context.Context,
+	*evolution.ReviewPolicyInput,
+) (bool, error) {
+	return true, nil
+}

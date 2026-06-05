@@ -41,7 +41,7 @@ func TestService_ApprovalGateMetrics(t *testing.T) {
 	mdl := &stubModel{response: `{"skip_reason":"nothing useful"}`}
 	svc := NewService(mdl,
 		WithManagedSkillsDir(t.TempDir()),
-		WithPolicy(alwaysPolicy{}),
+		WithReviewPolicy(alwaysReviewPolicy{}),
 	)
 	require.NotNil(t, svc)
 	t.Cleanup(func() { _ = svc.Close() })
@@ -63,7 +63,7 @@ func TestNewService_EnqueueAndClose(t *testing.T) {
 
 	svc := NewService(mdl,
 		WithManagedSkillsDir(dir),
-		WithPolicy(alwaysPolicy{}),
+		WithReviewPolicy(alwaysReviewPolicy{}),
 	)
 	require.NotNil(t, svc)
 
@@ -95,7 +95,7 @@ func TestNewService_WritesSkill(t *testing.T) {
 	svc := NewService(mdl,
 		WithManagedSkillsDir(dir),
 		WithPublisher(pub),
-		WithPolicy(alwaysPolicy{}),
+		WithReviewPolicy(alwaysReviewPolicy{}),
 	)
 
 	sess := newTestSession()
@@ -131,7 +131,7 @@ func TestNewService_FactsKeyInResponseIsIgnored(t *testing.T) {
 	svc := NewService(mdl,
 		WithManagedSkillsDir(t.TempDir()),
 		WithPublisher(pub),
-		WithPolicy(alwaysPolicy{}),
+		WithReviewPolicy(alwaysReviewPolicy{}),
 	)
 
 	sess := newTestSession()
@@ -148,25 +148,82 @@ func TestNewService_FactsKeyInResponseIsIgnored(t *testing.T) {
 	pub.mu.Unlock()
 }
 
-func TestDefaultPolicy(t *testing.T) {
-	p := defaultPolicy{}
+func TestDefaultReviewPolicy(t *testing.T) {
+	p := DefaultReviewPolicy{}
 
-	assert.False(t, p.ShouldReview(nil))
-	assert.False(t, p.ShouldReview(&ReviewContext{}))
-	assert.False(t, p.ShouldReview(&ReviewContext{
+	assertReviewPolicy(t, p, nil, false)
+	assertReviewPolicy(t, p, &ReviewContext{}, false)
+	assertReviewPolicy(t, p, &ReviewContext{
 		Messages:      []model.Message{{Role: model.RoleUser, Content: "hi"}},
 		ToolCallCount: 2,
-	}))
-	assert.True(t, p.ShouldReview(&ReviewContext{
+	}, false)
+	assertReviewPolicy(t, p, &ReviewContext{
 		Messages:      []model.Message{{Role: model.RoleUser, Content: "hi"}},
-		ToolCallCount: 4,
-	}))
-	assert.True(t, p.ShouldReview(&ReviewContext{
+		ToolCallCount: defaultMinToolCalls,
+	}, true)
+	assertReviewPolicy(t, p, &ReviewContext{
 		Messages:          []model.Message{{Role: model.RoleUser, Content: "hi"}},
 		HasUserCorrection: true,
-	}))
-	assert.True(t, p.ShouldReview(&ReviewContext{
+	}, true)
+	assertReviewPolicy(t, p, &ReviewContext{
 		Messages:          []model.Message{{Role: model.RoleUser, Content: "hi"}},
 		HasRecoveredError: true,
-	}))
+	}, true)
+}
+
+func TestDefaultReviewPolicy_CustomTriggers(t *testing.T) {
+	p := DefaultReviewPolicy{
+		MinToolCalls:                 10,
+		DisableUserCorrectionTrigger: true,
+		DisableRecoveredErrorTrigger: true,
+	}
+
+	assertReviewPolicy(t, p, &ReviewContext{
+		Messages:      []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		ToolCallCount: 9,
+	}, false)
+	assertReviewPolicy(t, p, &ReviewContext{
+		Messages:      []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		ToolCallCount: 10,
+	}, true)
+	assertReviewPolicy(t, p, &ReviewContext{
+		Messages:          []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		HasUserCorrection: true,
+	}, false)
+	assertReviewPolicy(t, p, &ReviewContext{
+		Messages:          []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		HasRecoveredError: true,
+	}, false)
+}
+
+func TestDefaultReviewPolicy_DisableToolCallTrigger(t *testing.T) {
+	p := DefaultReviewPolicy{MinToolCalls: -1}
+
+	assertReviewPolicy(t, p, &ReviewContext{
+		Messages:      []model.Message{{Role: model.RoleUser, Content: "hi"}},
+		ToolCallCount: 100,
+	}, false)
+}
+
+func TestDefaultReviewPolicy_ContextCancelled(t *testing.T) {
+	p := DefaultReviewPolicy{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got, err := p.ShouldReview(ctx, &ReviewPolicyInput{
+		ReviewContext: &ReviewContext{
+			Messages:      []model.Message{{Role: model.RoleUser, Content: "hi"}},
+			ToolCallCount: defaultMinToolCalls,
+		},
+	})
+	require.Error(t, err)
+	assert.False(t, got)
+}
+
+func assertReviewPolicy(t *testing.T, p DefaultReviewPolicy, reviewCtx *ReviewContext, want bool) {
+	t.Helper()
+
+	got, err := p.ShouldReview(context.Background(), &ReviewPolicyInput{ReviewContext: reviewCtx})
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
 }
