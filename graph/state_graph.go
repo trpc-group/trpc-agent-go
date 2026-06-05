@@ -138,6 +138,16 @@ func WithUserInputKey(key string) Option {
 	}
 }
 
+// WithAgentNodeInputMapper sets a mapper used to build the child invocation
+// message for an AgentNode. The mapper should return StateKeyAgentInputMessage
+// with a *model.Message value. When the mapper is nil or does not return that
+// key, the AgentNode falls back to WithUserInputKey or StateKeyUserInput.
+func WithAgentNodeInputMapper(f AgentNodeInputMapper) Option {
+	return func(node *Node) {
+		node.agentInputMessageMapper = f
+	}
+}
+
 // WithToolSets sets the ToolSets for the node. This is a declarative
 // per-node configuration used by AddLLMNode to build the LLM runner.
 func WithToolSets(toolSets []tool.ToolSet) Option {
@@ -428,6 +438,12 @@ func (r SubgraphResult) EffectiveStateDelta() map[string][]byte {
 // SubgraphInputMapper projects parent state into child runtime state.
 // The returned state replaces the runtime state passed to the child.
 type SubgraphInputMapper func(parent State) State
+
+// AgentNodeInputMapper projects parent state into the AgentNode input state.
+// The returned state is inspected for StateKeyAgentInputMessage. When that key
+// contains a non-nil *model.Message, the AgentNode uses it as the child invocation
+// message instead of building a user message from StateKeyUserInput.
+type AgentNodeInputMapper func(parent State) State
 
 // SubgraphOutputMapper converts subgraph results into parent state updates.
 // Returning nil or an empty State means "no updates" will be applied.
@@ -2479,6 +2495,9 @@ func copyRuntimeStateFiltered(parent State) State {
 		if isInternalStateKey(k) {
 			continue
 		}
+		if k == StateKeyAgentInputMessage {
+			continue
+		}
 		out[k] = v
 	}
 	return out
@@ -2645,6 +2664,7 @@ const includeContentsNone = "none"
 type agentNodeConfig struct {
 	callbacks           *NodeCallbacks
 	inputMapper         SubgraphInputMapper
+	inputMessageMapper  AgentNodeInputMapper
 	outputMapper        SubgraphOutputMapper
 	runOptions          []agent.RunOption
 	isolated            bool
@@ -2663,6 +2683,7 @@ func agentNodeConfigFromOptions(opts ...Option) agentNodeConfig {
 	return agentNodeConfig{
 		callbacks:           dummyNode.callbacks,
 		inputMapper:         dummyNode.agentInputMapper,
+		inputMessageMapper:  dummyNode.agentInputMessageMapper,
 		outputMapper:        dummyNode.agentOutputMapper,
 		runOptions:          append([]agent.RunOption(nil), dummyNode.agentRunOptions...),
 		isolated:            dummyNode.agentIsolatedMessages,
@@ -2814,6 +2835,80 @@ func mapParentInputFromLastResponse(
 	return cloned
 }
 
+func agentNodeInputMessage(
+	parent State,
+	inputMessageMapper AgentNodeInputMapper,
+	userInputKey string,
+) model.Message {
+	if msg, ok := agentNodeInputMessageFromMappedState(
+		parent,
+		inputMessageMapper,
+	); ok {
+		return msg
+	}
+	if msg, ok := agentNodeInputMessageFromState(parent); ok {
+		return msg
+	}
+	if userInputKey == "" {
+		userInputKey = StateKeyUserInput
+	}
+	userInput, _ := GetStateValue[string](parent, userInputKey)
+	return model.NewUserMessage(userInput)
+}
+
+func agentNodeInputMessageFromMappedState(
+	parent State,
+	inputMessageMapper AgentNodeInputMapper,
+) (model.Message, bool) {
+	if inputMessageMapper == nil {
+		return model.Message{}, false
+	}
+	mapped := inputMessageMapper(parent)
+	if len(mapped) == 0 {
+		return model.Message{}, false
+	}
+	return agentNodeInputMessageFromState(mapped)
+}
+
+func agentNodeInputMessageFromState(state State) (model.Message, bool) {
+	raw, ok := state[StateKeyAgentInputMessage]
+	if !ok || raw == nil {
+		return model.Message{}, false
+	}
+	switch msg := raw.(type) {
+	case *model.Message:
+		if msg == nil {
+			return model.Message{}, false
+		}
+		return validAgentNodeInputMessage(*msg)
+	case model.Message:
+		return validAgentNodeInputMessage(msg)
+	case map[string]any:
+		return decodeAgentNodeInputMessage(msg)
+	default:
+		return model.Message{}, false
+	}
+}
+
+func validAgentNodeInputMessage(msg model.Message) (model.Message, bool) {
+	if msg.Role == "" {
+		return model.Message{}, false
+	}
+	return msg, true
+}
+
+func decodeAgentNodeInputMessage(raw any) (model.Message, bool) {
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return model.Message{}, false
+	}
+	var msg model.Message
+	if err := json.Unmarshal(b, &msg); err != nil {
+		return model.Message{}, false
+	}
+	return validAgentNodeInputMessage(msg)
+}
+
 func setSubgraphInterruptState(
 	ctx context.Context,
 	state State,
@@ -2904,14 +2999,25 @@ func finalizeAgentNodeOutput(
 			StructuredOutput:   streamRes.structuredOutput,
 		})
 		if len(mapped) == 0 {
+			if _, hadInputMessage := agentNodeInputMessageFromState(state); hadInputMessage {
+				return State{StateKeyAgentInputMessage: nil}
+			}
 			return State{}
 		}
-		if _, ok := mapped[userInputKey]; !ok {
-			copied := mapped.Clone()
-			copied[userInputKey] = ""
-			return copied
+		_, hasUserInput := mapped[userInputKey]
+		_, hadInputMessage := agentNodeInputMessageFromState(state)
+		_, hasInputMessage := mapped[StateKeyAgentInputMessage]
+		if hasUserInput && (!hadInputMessage || hasInputMessage) {
+			return mapped
 		}
-		return mapped
+		copied := mapped.Clone()
+		if !hasUserInput {
+			copied[userInputKey] = ""
+		}
+		if hadInputMessage && !hasInputMessage {
+			copied[StateKeyAgentInputMessage] = nil
+		}
+		return copied
 	}
 	upd := State{}
 	upd[StateKeyLastResponse] = streamRes.lastResponse
@@ -2919,6 +3025,9 @@ func finalizeAgentNodeOutput(
 		nodeID: streamRes.lastResponse,
 	}
 	upd[userInputKey] = ""
+	if _, hasInputMessage := agentNodeInputMessageFromState(state); hasInputMessage {
+		upd[StateKeyAgentInputMessage] = nil
+	}
 	return upd
 }
 
@@ -2983,6 +3092,7 @@ func (r *agentNodeRuntime) Run(
 		nodeID,
 		r.config.scope,
 		r.config.userInputKey,
+		r.config.inputMessageMapper,
 		r.config.runOptions,
 		traceTask,
 	)
@@ -3762,19 +3872,15 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 	nodeID string,
 	scope string,
 	userInputKey string,
+	inputMessageMapper AgentNodeInputMapper,
 	nodeRunOptions []agent.RunOption,
 	traceTask *traceTaskMetadata,
 ) *agent.Invocation {
-	// Extract user input from parent state.
-	var userInput string
-	if userInputKey == "" {
-		userInputKey = StateKeyUserInput
-	}
-	if input, exists := parentState[userInputKey]; exists {
-		if inputStr, ok := input.(string); ok {
-			userInput = inputStr
-		}
-	}
+	inputMessage := agentNodeInputMessage(
+		parentState,
+		inputMessageMapper,
+		userInputKey,
+	)
 	// Extract session from parent state.
 	var sessionData *session.Session
 	if sess, exists := parentState[StateKeySession]; exists {
@@ -3807,9 +3913,7 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 		}
 		invocationOpts := []agent.InvocationOptions{
 			agent.WithInvocationAgent(targetAgent),
-			agent.WithInvocationMessage(
-				model.NewUserMessage(userInput),
-			),
+			agent.WithInvocationMessage(inputMessage),
 			agent.WithInvocationRunOptions(runOptions),
 			agent.WithInvocationEventFilterKey(filterKey),
 		}
@@ -3843,7 +3947,7 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 	inv := agent.NewInvocation(
 		agent.WithInvocationAgent(targetAgent),
 		agent.WithInvocationRunOptions(runOptions),
-		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
+		agent.WithInvocationMessage(inputMessage),
 		agent.WithInvocationSession(sessionData),
 		// Use stable FilterKey based on agent name only (no UUID).
 		agent.WithInvocationEventFilterKey(targetAgent.Info().Name),
@@ -3895,6 +3999,7 @@ func buildAgentInvocationWithStateAndScope(
 		nodeID,
 		scope,
 		StateKeyUserInput,
+		nil,
 		nil,
 		nil,
 	)
@@ -5617,6 +5722,10 @@ func MessagesStateSchema() *StateSchema {
 	})
 	schema.AddField(StateKeyUserInput, StateField{
 		Type:    reflect.TypeOf(""),
+		Reducer: DefaultReducer,
+	})
+	schema.AddField(StateKeyAgentInputMessage, StateField{
+		Type:    reflect.TypeOf((*model.Message)(nil)),
 		Reducer: DefaultReducer,
 	})
 	schema.AddField(StateKeyLastResponse, StateField{

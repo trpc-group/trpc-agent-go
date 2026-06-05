@@ -754,7 +754,7 @@ The general flow is:
 - The caller sends the tool result back with a subsequent request, represented as a `role=tool` message.
 - The AG-UI server sends `TOOL_CALL_RESULT`, writes it to session history, and passes the tool result to the agent to continue running.
 
-Two server-side forms are currently supported. When directly wrapping an `llmagent.Agent`, use LLMAgent External Tool mode. When external execution belongs to a GraphAgent node and must resume from a checkpoint, use GraphAgent Interrupt mode.
+Two server-side forms are currently supported. When directly wrapping an `llmagent.Agent`, use LLMAgent External Tool mode. When external execution belongs to a GraphAgent and must resume from a checkpoint, use GraphAgent Interrupt mode. GraphAgent Interrupt mode covers the graph topologies described below.
 
 ### LLMAgent External Tool Mode
 
@@ -847,6 +847,70 @@ The second request uses `role=tool`. The request's `toolCallId` corresponds to t
 
 The resume contract is defined by GraphAgent. The interrupted node consumes the returned result through the `ResumeMap` key. A single pending tool call corresponds to one tool result. If one interrupt contains multiple pending tool calls, their results are consumed by the graph-level `ResumeMap` contract. When a graph mixes server-executed tools and caller-executed tools, split them into separate stages so the interrupt node only handles caller-provided results while internal tool execution remains on the normal graph tools path.
 
+#### Request and Event Shape
+
+GraphAgent request examples:
+
+First request (`role=user`):
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-1",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search and answer my question."
+    }
+  ]
+}
+```
+
+Second request (`role=tool`):
+
+```json
+{
+  "threadId": "demo-thread",
+  "runId": "demo-run-2",
+  "forwardedProps": {
+    "lineage_id": "lineage-from-graph-node-interrupt",
+    "checkpoint_id": "checkpoint-from-graph-node-interrupt"
+  },
+  "messages": [
+    {
+      "id": "tool-result-<toolCallId>",
+      "role": "tool",
+      "toolCallId": "<toolCallId>",
+      "name": "<toolName>",
+      "content": "tool output as string"
+    }
+  ]
+}
+```
+
+GraphAgent event stream example:
+
+```text
+First request role=user
+  → RUN_STARTED
+  → TOOL_CALL_START
+  → TOOL_CALL_ARGS
+  → TOOL_CALL_END
+  → ACTIVITY_DELTA graph.node.interrupt
+  → RUN_FINISHED
+
+Second request role=tool
+  → RUN_STARTED
+  → TOOL_CALL_RESULT generated from the tail tool message
+  → ACTIVITY_DELTA graph.node.interrupt resume acknowledgement, when enabled
+  → TEXT_MESSAGE_* generated after resuming
+  → RUN_FINISHED
+```
+
+#### Regular Node Interrupts
+
+Use this form when the interrupt is emitted by a regular node in the current `GraphAgent`. This node usually sits after an LLM node, reads the tool call produced by the previous node, and calls `graph.Interrupt` to wait for the caller to send back the tool result. After resume, the node writes the tool result back into graph state and the graph continues.
+
 Code snippet:
 
 ```go
@@ -912,63 +976,103 @@ server, err := agui.New(
 
 For the complete GraphAgent example, see the server implementation in [examples/agui/server/externaltool/graphagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/graphagent), and the frontend implementation in [examples/agui/client/tdesign-chat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat).
 
-GraphAgent request examples:
+#### AgentNode Child LLMAgent External Tools
 
-First request (`role=user`):
+Use this form when the tool call comes from an AgentNode child `LLMAgent`, but the interrupt is still emitted by a regular node in the parent graph. The child `LLMAgent` gets the external tool declaration through `graph.WithAgentNodeRunOptions(agent.WithExternalTools(...))`; the parent graph stores the child Agent's tool call with `graph.WithSubgraphOutputMapper(...)`; then a following regular node calls `graph.Interrupt` to wait for the caller to send back the tool result. After resume, the parent graph passes the result back to the same AgentNode as `model.NewToolMessage(...)`.
 
-```json
-{
-  "threadId": "demo-thread",
-  "runId": "demo-run-1",
-  "messages": [
-    {
-      "role": "user",
-      "content": "Search and answer my question."
+Code snippet:
+
+```go
+sg.AddAgentNode(
+    researchAgentName,
+    graph.WithAgentNodeRunOptions(agent.WithExternalTools([]tool.Tool{
+        externalSearchTool(),
+    })),
+    graph.WithSubgraphOutputMapper(storeResearchResult),
+    graph.WithAgentNodeInputMapper(mapExternalToolMessage),
+)
+sg.AddNode(nodeExternalGate, interruptForExternalTool)
+sg.AddEdge(researchAgentName, nodeExternalGate)
+sg.AddConditionalEdges(nodeExternalGate, routeAfterGate, map[string]string{
+    researchAgentName: researchAgentName,
+    graph.End:         graph.End,
+})
+
+func storeResearchResult(_ graph.State, result graph.SubgraphResult) graph.State {
+    for _, call := range result.ToolCalls {
+        if call.ID == "" || call.Function.Name != externalToolName {
+            continue
+        }
+        return graph.State{keyToolRequest: toolRequest{
+            ToolCallID: call.ID,
+            Name:       call.Function.Name,
+            Args:       string(call.Function.Arguments),
+        }}
     }
-  ]
+    return graph.State{keyToolMessage: nil}
+}
+
+func mapExternalToolMessage(state graph.State) graph.State {
+    if state[keyToolMessage] == nil {
+        return nil
+    }
+    return graph.State{graph.StateKeyAgentInputMessage: state[keyToolMessage]}
 }
 ```
 
-Second request (`role=tool`):
+`storeResearchResult` writes the child Agent's tool call into parent graph state. `mapExternalToolMessage` projects the tool message generated after resume to `graph.StateKeyAgentInputMessage`.
 
-```json
-{
-  "threadId": "demo-thread",
-  "runId": "demo-run-2",
-  "forwardedProps": {
-    "lineage_id": "lineage-from-graph-node-interrupt",
-    "checkpoint_id": "checkpoint-from-graph-node-interrupt"
-  },
-  "messages": [
-    {
-      "id": "tool-result-<toolCallId>",
-      "role": "tool",
-      "toolCallId": "<toolCallId>",
-      "name": "<toolName>",
-      "content": "tool output as string"
-    }
-  ]
+Complete example: [examples/agui/server/externaltool/agentnode_llmagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/agentnode_llmagent).
+
+#### AgentNode Child GraphAgent Interrupts
+
+Use this form when a parent GraphAgent calls a child `GraphAgent` through an AgentNode and the interrupt is emitted by a node inside the child `GraphAgent`. The child graph interrupt bubbles up and the parent graph also enters the interrupt state. Resume still starts from the parent checkpoint, and the framework continues from the corresponding child graph checkpoint.
+
+Code snippet:
+
+```go
+func buildParentGraph() (*graph.Graph, error) {
+    sg := graph.NewStateGraph(graph.MessagesStateSchema())
+    sg.AddAgentNode(researchAgentName)
+    sg.AddAgentNode(reviewAgentName)
+    sg.SetEntryPoint(researchAgentName)
+    sg.AddEdge(researchAgentName, reviewAgentName)
+    sg.SetFinishPoint(reviewAgentName)
+    return sg.Compile()
 }
+
+func buildResearchGraph(m model.Model, cfg model.GenerationConfig) (*graph.Graph, error) {
+    sg := graph.NewStateGraph(graph.MessagesStateSchema())
+    sg.AddLLMNode(
+        nodeResearchLLM,
+        m,
+        childInstruction(),
+        map[string]tool.Tool{externalToolName: externalSearchTool()},
+        graph.WithGenerationConfig(cfg),
+    )
+    sg.AddNode(nodeExternalGate, interruptForExternalTool)
+    sg.SetEntryPoint(nodeResearchLLM)
+    sg.AddEdge(nodeResearchLLM, nodeExternalGate)
+    sg.AddConditionalEdges(nodeExternalGate, routeAfterExternalGate, map[string]string{
+        nodeResearchLLM: nodeResearchLLM,
+        graph.End:       graph.End,
+    })
+    sg.SetFinishPoint(nodeResearchLLM)
+    return sg.Compile()
+}
+
+server, err := agui.New(
+    runner,
+    agui.WithGraphNodeInterruptActivityEnabled(true),
+    agui.WithGraphNodeInterruptActivityTopLevelOnly(true),
+)
 ```
 
-GraphAgent event stream example:
+`buildParentGraph` defines two AgentNodes in the parent graph, and `buildResearchGraph` defines the LLM node and interrupt node inside the child `GraphAgent`. `agui.WithGraphNodeInterruptActivityTopLevelOnly(true)` exposes only the parent graph interrupt activity to the frontend. The caller resumes with the `lineageId` and `checkpointId` returned by the parent graph.
 
-```text
-First request role=user
-  → RUN_STARTED
-  → TOOL_CALL_START
-  → TOOL_CALL_ARGS
-  → TOOL_CALL_END
-  → ACTIVITY_DELTA graph.node.interrupt
-  → RUN_FINISHED
+Disable `TopLevelOnly` if the frontend needs to observe the child graph's own interrupt activity. If the child `GraphAgent` is exposed to the parent Agent as an AgentTool and the frontend needs to observe inner graph events, enable `agenttool.WithStreamInner(true)` when constructing the AgentTool.
 
-Second request role=tool
-  → RUN_STARTED
-  → TOOL_CALL_RESULT generated from the tail tool message
-  → ACTIVITY_DELTA graph.node.interrupt resume acknowledgement, when enabled
-  → TEXT_MESSAGE_* generated after resuming
-  → RUN_FINISHED
-```
+Complete example: [examples/agui/server/externaltool/agentnode_graphagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/agentnode_graphagent).
 
 ### AG-UI `role=tool` Input Handling
 

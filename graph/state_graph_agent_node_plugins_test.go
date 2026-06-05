@@ -248,6 +248,120 @@ func TestAgentNode_RunOptions_ApplyExternalToolsToSubInvocation(t *testing.T) {
 	require.Equal(t, []tool.Tool{parentExternal}, parentInv.RunOptions.ExternalTools)
 }
 
+func TestAgentNode_InputMapperSuppliesInvocationMessage(t *testing.T) {
+	sub := &recordingAgent{name: "child"}
+	toolMsg := model.NewToolMessage("call-1", "handoff_task", "done")
+	out, err, _ := invokeAgentNode(
+		t,
+		sub,
+		nil,
+		WithAgentNodeInputMapper(func(State) State {
+			return State{StateKeyAgentInputMessage: &toolMsg}
+		}),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	childInv := sub.capturedInvocation()
+	require.NotNil(t, childInv)
+	require.Equal(t, model.RoleTool, childInv.Message.Role)
+	require.Equal(t, "call-1", childInv.Message.ToolID)
+	require.Equal(t, "handoff_task", childInv.Message.ToolName)
+	require.Equal(t, "done", childInv.Message.Content)
+}
+
+func TestAgentNode_InputMessageStateTakesPrecedenceAndClears(t *testing.T) {
+	sub := &recordingAgent{name: "child"}
+	state, _ := buildAgentNodeState(sub)
+	toolMsg := model.NewToolMessage("call-1", "handoff_task", "done")
+	state[StateKeyAgentInputMessage] = &toolMsg
+	parentInv := agent.NewInvocation(agent.WithInvocationID("parent-inv"))
+	ctx := agent.NewInvocationContext(context.Background(), parentInv)
+
+	fn := NewAgentNodeFunc(sub.Info().Name)
+	out, err := fn(ctx, state)
+
+	require.NoError(t, err)
+	childInv := sub.capturedInvocation()
+	require.NotNil(t, childInv)
+	require.Equal(t, toolMsg, childInv.Message)
+	require.NotNil(t, childInv.RunOptions.RuntimeState)
+	require.NotContains(t, childInv.RunOptions.RuntimeState, StateKeyAgentInputMessage)
+	update, ok := out.(State)
+	require.True(t, ok)
+	require.Equal(t, "", update[StateKeyUserInput])
+	require.Contains(t, update, StateKeyAgentInputMessage)
+	require.Nil(t, update[StateKeyAgentInputMessage])
+}
+
+func TestAgentNode_InputMessageClearsWhenOutputMapperEmpty(t *testing.T) {
+	sub := &recordingAgent{name: "child"}
+	state, _ := buildAgentNodeState(sub)
+	toolMsg := model.NewToolMessage("call-1", "handoff_task", "done")
+	state[StateKeyAgentInputMessage] = &toolMsg
+	parentInv := agent.NewInvocation(agent.WithInvocationID("parent-inv"))
+	ctx := agent.NewInvocationContext(context.Background(), parentInv)
+
+	fn := NewAgentNodeFunc(
+		sub.Info().Name,
+		WithSubgraphOutputMapper(func(State, SubgraphResult) State {
+			return State{}
+		}),
+	)
+	out, err := fn(ctx, state)
+
+	require.NoError(t, err)
+	update, ok := out.(State)
+	require.True(t, ok)
+	require.Len(t, update, 1)
+	require.Contains(t, update, StateKeyAgentInputMessage)
+	require.Nil(t, update[StateKeyAgentInputMessage])
+}
+
+func TestAgentNode_InputMapperFallsBackToUserInput(t *testing.T) {
+	sub := &recordingAgent{name: "child"}
+	out, err, _ := invokeAgentNode(
+		t,
+		sub,
+		nil,
+		WithAgentNodeInputMapper(func(State) State {
+			return State{"metadata": "ignored"}
+		}),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	childInv := sub.capturedInvocation()
+	require.NotNil(t, childInv)
+	require.Equal(t, model.RoleUser, childInv.Message.Role)
+	require.Equal(t, "hi", childInv.Message.Content)
+}
+
+func TestAgentNode_MessagesSchemaNilInputMessageFallsBackToUserInput(t *testing.T) {
+	sub := &recordingAgent{name: "child"}
+	compiled, err := NewStateGraph(MessagesStateSchema()).
+		AddAgentNode(sub.Info().Name).
+		SetEntryPoint(sub.Info().Name).
+		SetFinishPoint(sub.Info().Name).
+		Compile()
+	require.NoError(t, err)
+	exec, err := NewExecutor(compiled)
+	require.NoError(t, err)
+	events, err := exec.Execute(
+		context.Background(),
+		State{
+			StateKeyParentAgent: &parentWithSubAgent{a: sub},
+			StateKeyUserInput:   "hi",
+		},
+		agent.NewInvocation(agent.WithInvocationID("parent-inv")),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+	childInv := sub.capturedInvocation()
+	require.NotNil(t, childInv)
+	require.Equal(t, model.RoleUser, childInv.Message.Role)
+	require.Equal(t, "hi", childInv.Message.Content)
+}
+
 // -------- Group B: BeforeAgent ---------------------------------------------
 
 // B1: BeforeAgent fires for the sub-agent, and its args carry the child
@@ -621,6 +735,7 @@ func TestAgentNode_Stage2_SubInvocation_InheritsPluginsFromParent(t *testing.T) 
 
 	childInv := buildAgentInvocationWithStateScopeAndInputKey(
 		ctx, state, State{}, sub, "agentNode", "", "",
+		nil,
 		nil,
 		nil,
 	)

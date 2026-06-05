@@ -13,10 +13,10 @@ EXTERNAL_TOOL_NAME = "external_search"
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run the AgentNode external-tool AG-UI example end to end.",
+        description="Run the AgentNode LLMAgent external-tool AG-UI example end to end.",
     )
     parser.add_argument("--endpoint", default="http://127.0.0.1:8080/agui")
-    parser.add_argument("--thread-id", default="agentnode-externaltool-demo")
+    parser.add_argument("--thread-id", default="agentnode-llmagent-externaltool-demo")
     parser.add_argument(
         "--question",
         default="Use external search to explain GraphAgent AgentNode external tool resume.",

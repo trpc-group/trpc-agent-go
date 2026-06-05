@@ -186,11 +186,12 @@ type Node struct {
 	interruptAfter bool
 
 	// Subgraph (agent node) options
-	agentInputMapper      SubgraphInputMapper
-	agentOutputMapper     SubgraphOutputMapper
-	agentRunOptions       []agent.RunOption
-	agentIsolatedMessages bool
-	agentEventScope       string
+	agentInputMapper        SubgraphInputMapper
+	agentInputMessageMapper AgentNodeInputMapper
+	agentOutputMapper       SubgraphOutputMapper
+	agentRunOptions         []agent.RunOption
+	agentIsolatedMessages   bool
+	agentEventScope         string
 	// agentInputFromLastResponse indicates whether the agent node should
 	// construct the child invocation's user input from the parent's
 	// StateKeyLastResponse. When true, the framework will map

@@ -7,7 +7,7 @@
 //
 //
 
-// Package main demonstrates AG-UI GraphAgent resume after an AgentNode external tool call.
+// Package main demonstrates AG-UI resume after an AgentNode child GraphAgent interrupt.
 package main
 
 import (
@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	appName   = "agui-agentnode-externaltool-demo"
-	agentName = "agui-agentnode-externaltool"
+	appName   = "agui-agentnode-graphagent-externaltool-demo"
+	agentName = "agui-agentnode-graphagent-externaltool"
 )
 
 var (
