@@ -12,6 +12,7 @@ package openviking
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,6 +22,12 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 // okEnvelope writes a successful OpenViking response envelope.
 func okEnvelope(w http.ResponseWriter, result any) {
@@ -365,6 +372,39 @@ func TestOptionsConfigureClientAndName(t *testing.T) {
 		if got := headers.Get(h); got != want {
 			t.Errorf("header %s = %q, want %q", h, got, want)
 		}
+	}
+}
+
+func TestWithHTTPClientUsesCustomClient(t *testing.T) {
+	var seenURL string
+	httpClient := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			seenURL = req.URL.String()
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"status":"ok","result":{"status":"healthy"}}`)),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	ts, err := NewToolSet(
+		WithBaseURL("http://openviking.test"),
+		WithHTTPClient(httpClient),
+		WithSpecificTools(ToolHealth),
+	)
+	if err != nil {
+		t.Fatalf("NewToolSet: %v", err)
+	}
+	defer ts.Close()
+
+	health := callTool(t, ts, ToolHealth, healthArgs{}).(string)
+	if !strings.Contains(health, "healthy") {
+		t.Errorf("health output = %q", health)
+	}
+	if seenURL != "http://openviking.test/api/v1/system/status" {
+		t.Errorf("request URL = %q", seenURL)
 	}
 }
 

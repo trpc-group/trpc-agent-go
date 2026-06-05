@@ -44,14 +44,15 @@ const (
 
 // config holds resolved ToolSet configuration.
 type config struct {
-	baseURL   string
-	apiKey    string
-	account   string
-	user      string
-	agent     string
-	timeout   time.Duration
-	profile   Profile
-	toolNames []ToolName
+	baseURL    string
+	apiKey     string
+	account    string
+	user       string
+	agent      string
+	timeout    time.Duration
+	httpClient *http.Client
+	profile    Profile
+	toolNames  []ToolName
 }
 
 // Option configures a ToolSet.
@@ -91,6 +92,12 @@ func WithTimeout(d time.Duration) Option {
 			c.timeout = d
 		}
 	}
+}
+
+// WithHTTPClient sets the HTTP client used to call the OpenViking server.
+// When unset, NewToolSet creates a default client from WithTimeout.
+func WithHTTPClient(client *http.Client) Option {
+	return func(c *config) { c.httpClient = client }
 }
 
 // WithProfile selects the tool profile (retrieval, agent, admin). It is the
@@ -138,15 +145,19 @@ func NewToolSet(opts ...Option) (*ToolSet, error) {
 		return nil, fmt.Errorf("openviking: unknown profile %q: must be retrieval, agent, or admin", cfg.profile)
 	}
 
-	// Default to no client-level timeout (cfg.timeout == 0); callers control
-	// cancellation via context, and WithTimeout can opt into a hard deadline.
+	httpClient := cfg.httpClient
+	if httpClient == nil {
+		// Default to no client-level timeout (cfg.timeout == 0); callers control
+		// cancellation via context, and WithTimeout can opt into a hard deadline.
+		httpClient = &http.Client{Timeout: cfg.timeout}
+	}
 	c := client.New(client.Config{
 		BaseURL:    cfg.baseURL,
 		APIKey:     cfg.apiKey,
 		Account:    cfg.account,
 		User:       cfg.user,
 		Agent:      cfg.agent,
-		HTTPClient: &http.Client{Timeout: cfg.timeout},
+		HTTPClient: httpClient,
 	})
 
 	tools, err := buildTools(c, selectToolNames(cfg))
