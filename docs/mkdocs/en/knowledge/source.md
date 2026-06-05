@@ -152,7 +152,7 @@ The Go AST reader and Python AST reader are optional modules that require blank 
 
 The Proto reader is registered by default and needs no extra import.
 
-> **Note**: The Python reader uses an embedded Python script for AST parsing. It requires Python 3.8+ installed on the system (only uses the standard library `ast` module, no third-party dependencies).
+> **Note**: The Python reader uses an embedded Python script for AST parsing. It requires Python 3.9+ installed on the system (only uses the standard library `ast` module, no third-party dependencies).
 
 ### Repository Struct
 
@@ -308,9 +308,24 @@ repoSrc := repo.New(
 )
 
 // 2. Create GraphKnowledge (graph + vector hybrid retrieval)
+ageStore, err := agegraphstore.New(
+    agegraphstore.WithClientDSN(ageDSN),
+    agegraphstore.WithGraphName("my_graph"),
+)
+if err != nil {
+    return err
+}
+vectorStore, err := pgvector.New(
+    pgvector.WithPGVectorClientDSN(pgvectorDSN),
+    pgvector.WithTable("graph_vectors"),
+    pgvector.WithIndexDimension(1536),
+)
+if err != nil {
+    return err
+}
 gk := knowledge.NewGraphKnowledge(
-    knowledge.WithGraphStore(agegraphstore.New(db, agegraphstore.WithGraphName("my_graph"))),
-    knowledge.WithGraphVectorStore(pgvector.New(db)),
+    knowledge.WithGraphStore(ageStore),
+    knowledge.WithGraphVectorStore(vectorStore),
     knowledge.WithGraphEmbedder(embedder),
 )
 

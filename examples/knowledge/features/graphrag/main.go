@@ -119,20 +119,20 @@ func setupServices(ctx context.Context) (runner.Runner, *jsonlTrace, func(), err
 	ageDSN, ageGraphName := ageConfig()
 	if *recreate {
 		if err := dropAGEGraph(ctx, ageDSN, ageGraphName); err != nil {
-			return nil, nil, nil, fmt.Errorf("drop AGE graph: %v", err)
+			return nil, nil, nil, fmt.Errorf("drop AGE graph: %w", err)
 		}
 		fmt.Printf("Dropped AGE graph: %s\n", ageGraphName)
 	}
 
 	graphStore, err := newAGEGraphStore()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create AGE graph store: %v", err)
+		return nil, nil, nil, fmt.Errorf("create AGE graph store: %w", err)
 	}
 
 	embedder, resolvedDimension, err := setupEmbedder(ctx)
 	if err != nil {
 		graphStore.Close()
-		return nil, nil, nil, fmt.Errorf("setup embedder: %v", err)
+		return nil, nil, nil, fmt.Errorf("setup embedder: %w", err)
 	}
 	fmt.Printf("Embedding: %s (%d dimensions)\n", *embeddingModel, resolvedDimension)
 
@@ -140,7 +140,7 @@ func setupServices(ctx context.Context) (runner.Runner, *jsonlTrace, func(), err
 	if *recreate {
 		if err := dropPGVectorTable(ctx, vectorDSN, vectorTable); err != nil {
 			graphStore.Close()
-			return nil, nil, nil, fmt.Errorf("drop pgvector table: %v", err)
+			return nil, nil, nil, fmt.Errorf("drop pgvector table: %w", err)
 		}
 		fmt.Printf("Dropped pgvector table: %s\n", vectorTable)
 	}
@@ -148,7 +148,7 @@ func setupServices(ctx context.Context) (runner.Runner, *jsonlTrace, func(), err
 	vectorStore, err := newVectorStore(vectorDSN, vectorTable, resolvedDimension)
 	if err != nil {
 		graphStore.Close()
-		return nil, nil, nil, fmt.Errorf("create vector store: %v", err)
+		return nil, nil, nil, fmt.Errorf("create vector store: %w", err)
 	}
 
 	// cleanup closes the stores that the knowledge base uses internally.
@@ -165,7 +165,7 @@ func setupServices(ctx context.Context) (runner.Runner, *jsonlTrace, func(), err
 	if *recreate {
 		if err := loadGraphSource(ctx, kb); err != nil {
 			cleanup()
-			return nil, nil, nil, fmt.Errorf("load graph from repo source: %v", err)
+			return nil, nil, nil, fmt.Errorf("load graph from repo source: %w", err)
 		}
 	} else {
 		fmt.Println("Skipped graph source loading; using existing AGE graph and pgvector data")
@@ -200,7 +200,7 @@ func setupServices(ctx context.Context) (runner.Runner, *jsonlTrace, func(), err
 		if err != nil {
 			r.Close()
 			cleanup()
-			return nil, nil, nil, fmt.Errorf("open debug file: %v", err)
+			return nil, nil, nil, fmt.Errorf("open debug file: %w", err)
 		}
 		fmt.Printf("Debug trace: %s\n", *debugFile)
 	}

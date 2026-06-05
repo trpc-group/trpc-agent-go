@@ -176,6 +176,47 @@ func TestParseContent_Edges(t *testing.T) {
 	}
 }
 
+func TestParseContent_QualifiedProtocolAndOptionalEdges(t *testing.T) {
+	parser := NewParser()
+	result, err := parser.ParseContent("sample.py", strings.Join([]string{
+		"import typing",
+		"",
+		"class Client:",
+		"    def run(self):",
+		"        pass",
+		"",
+		"class Service(typing.Protocol):",
+		"    def call(self):",
+		"        pass",
+		"",
+		"class User:",
+		"    def __init__(self, client: typing.Optional[Client]):",
+		"        self.client = client",
+		"    def handle(self):",
+		"        self.client.run()",
+	}, "\n"))
+	if err != nil {
+		t.Fatalf("ParseContent failed: %v", err)
+	}
+
+	foundImplements := false
+	foundOptionalCall := false
+	for _, e := range result.Edges {
+		if e.FromID == "sample.Service" && e.ToID == "typing.Protocol" && e.Type == codeast.RelationImplements {
+			foundImplements = true
+		}
+		if e.FromID == "sample.User.handle" && e.ToID == "Client.run" && e.Type == codeast.RelationCalls {
+			foundOptionalCall = true
+		}
+	}
+	if !foundImplements {
+		t.Fatal("missing IMPLEMENTS edge for typing.Protocol base")
+	}
+	if !foundOptionalCall {
+		t.Fatal("missing CALLS edge resolved through typing.Optional annotation")
+	}
+}
+
 func TestParseDirectory(t *testing.T) {
 	parser := NewParser()
 	dir := testdataPath("pkg")
@@ -228,6 +269,24 @@ func TestParseDirectory(t *testing.T) {
 	}
 }
 
+func TestFileToModuleInitFiles(t *testing.T) {
+	tests := []struct {
+		filePath   string
+		baseModule string
+		want       string
+	}{
+		{filePath: "__init__.py", want: ""},
+		{filePath: filepath.Join("pkg", "__init__.py"), want: "pkg"},
+		{filePath: filepath.Join("pkg", "mod.py"), want: "pkg.mod"},
+		{filePath: "__init__.py", baseModule: "pkg", want: "pkg"},
+	}
+	for _, tt := range tests {
+		if got := fileToModule(tt.filePath, tt.baseModule); got != tt.want {
+			t.Errorf("fileToModule(%q, %q) = %q, want %q", tt.filePath, tt.baseModule, got, tt.want)
+		}
+	}
+}
+
 func TestParseDirectory_WithIncludeFiles(t *testing.T) {
 	parser := NewParser()
 	dir := testdataPath("pkg")
@@ -266,7 +325,7 @@ func TestParseDirectory_EmptyDir(t *testing.T) {
 	}
 }
 
-func TestParseDirectory_ReturnsErrorWhenAnyFileFails(t *testing.T) {
+func TestParseDirectory_ContinuesWhenSomeFilesFail(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "good.py"), []byte("class Good:\n    pass\n"), 0644); err != nil {
 		t.Fatalf("write good.py: %v", err)
@@ -276,12 +335,37 @@ func TestParseDirectory_ReturnsErrorWhenAnyFileFails(t *testing.T) {
 	}
 
 	parser := NewParser()
+	result, err := parser.ParseDirectory(dir)
+	if err != nil {
+		t.Fatalf("ParseDirectory() error = %v, want nil for partial failure", err)
+	}
+	if result == nil {
+		t.Fatal("ParseDirectory() result = nil")
+	}
+	foundGood := false
+	for _, n := range result.Nodes {
+		if n.Name == "Good" {
+			foundGood = true
+		}
+	}
+	if !foundGood {
+		t.Fatal("ParseDirectory() missing node from successfully parsed file")
+	}
+}
+
+func TestParseDirectory_ReturnsErrorWhenAllFilesFail(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "bad.py"), []byte("def broken(:\n"), 0644); err != nil {
+		t.Fatalf("write bad.py: %v", err)
+	}
+
+	parser := NewParser()
 	_, err := parser.ParseDirectory(dir)
 	if err == nil {
 		t.Fatal("ParseDirectory() error = nil, want parse error")
 	}
-	if !strings.Contains(err.Error(), "file(s) failed") {
-		t.Fatalf("ParseDirectory() error = %v, want failed file count", err)
+	if !strings.Contains(err.Error(), "all 1 file(s) failed") {
+		t.Fatalf("ParseDirectory() error = %v, want all-files-failed context", err)
 	}
 }
 

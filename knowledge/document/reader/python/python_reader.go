@@ -14,11 +14,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -114,7 +116,8 @@ func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 		return nil, fmt.Errorf("invalid URL scheme: %s", urlStr)
 	}
 
-	resp, err := http.Get(parsedURL.String()) //nolint:gosec
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(parsedURL.String()) //nolint:gosec
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch URL: %w", err)
 	}
@@ -154,6 +157,7 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 
 	var allDocs []*document.Document
 	var parseErrors []error
+	parsedFiles := 0
 	err = filepath.Walk(absDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -176,6 +180,7 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 			parseErrors = append(parseErrors, fmt.Errorf("%s: %w", relPath, parseErr))
 			return nil
 		}
+		parsedFiles++
 		if result == nil || len(result.Nodes) == 0 {
 			return nil
 		}
@@ -189,8 +194,15 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 	}
 
 	if len(parseErrors) > 0 {
-		return nil, fmt.Errorf("python reader: %d file(s) failed to parse in %s: %w",
-			len(parseErrors), dirPath, errors.Join(parseErrors...))
+		if parsedFiles == 0 {
+			return nil, fmt.Errorf("python reader: all %d file(s) failed to parse in %s: %w",
+				len(parseErrors), dirPath, errors.Join(parseErrors...))
+		}
+		slog.Warn("python reader skipped files during directory read",
+			"dir", dirPath,
+			"failed_files", len(parseErrors),
+			"parsed_files", parsedFiles,
+			"error", errors.Join(parseErrors...))
 	}
 
 	return r.applyTransformers(allDocs)
@@ -352,7 +364,13 @@ func fileToModulePath(relPath, baseModule string) string {
 	relPath = strings.TrimSuffix(relPath, ".py")
 	modulePath := strings.ReplaceAll(relPath, string(filepath.Separator), ".")
 	modulePath = strings.TrimSuffix(modulePath, ".__init__")
+	if modulePath == "__init__" {
+		modulePath = ""
+	}
 	if baseModule != "" {
+		if modulePath == "" {
+			return baseModule
+		}
 		return baseModule + "." + modulePath
 	}
 	return modulePath

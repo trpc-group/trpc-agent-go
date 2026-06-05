@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -132,7 +133,12 @@ func collectPythonFiles(absDir string, includeSet map[string]struct{}) ([]string
 		}
 		if info.IsDir() {
 			base := filepath.Base(path)
-			if base == "__pycache__" || base == ".git" || base == "node_modules" || base == ".venv" || base == "venv" {
+			if path != absDir && strings.HasPrefix(base, ".") {
+				return filepath.SkipDir
+			}
+			if base == "__pycache__" || base == ".git" || base == "node_modules" ||
+				base == ".venv" || base == "venv" || strings.EqualFold(base, "env") ||
+				base == "dist" || base == "build" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -165,12 +171,14 @@ func mergeResults(results []parseFileResult, absDir string) (*codeast.Result, er
 	var allEdges []*codeast.Edge
 	importsSet := make(map[string]struct{})
 	var errs []error
+	successes := 0
 
 	for _, r := range results {
 		if r.err != nil {
 			errs = append(errs, r.err)
 			continue
 		}
+		successes++
 		if r.result == nil {
 			continue
 		}
@@ -183,7 +191,7 @@ func mergeResults(results []parseFileResult, absDir string) (*codeast.Result, er
 		}
 	}
 
-	if len(allNodes) == 0 && len(errs) > 0 {
+	if successes == 0 && len(errs) > 0 {
 		return nil, fmt.Errorf("parse directory %s: all %d file(s) failed, first: %w",
 			absDir, len(errs), errs[0])
 	}
@@ -205,8 +213,11 @@ func mergeResults(results []parseFileResult, absDir string) (*codeast.Result, er
 	}
 
 	if len(errs) > 0 {
-		return result, fmt.Errorf("parse directory %s: %d/%d file(s) failed: %w",
-			absDir, len(errs), len(results), errors.Join(errs...))
+		slog.Warn("python parser skipped files during directory parse",
+			"dir", absDir,
+			"failed_files", len(errs),
+			"total_files", len(results),
+			"error", errors.Join(errs...))
 	}
 
 	return result, nil
@@ -425,21 +436,19 @@ func mapRelationType(t string) codeast.RelationType {
 
 // fileToModule converts a file path to a Python module path.
 func fileToModule(filePath, baseModule string) string {
-	name := filepath.Base(filePath)
-	name = strings.TrimSuffix(name, ".py")
-	if name == "__init__" {
-		dir := filepath.Dir(filePath)
-		name = filepath.Base(dir)
+	modulePath := strings.TrimSuffix(filePath, ".py")
+	modulePath = strings.ReplaceAll(modulePath, string(filepath.Separator), ".")
+	modulePath = strings.TrimSuffix(modulePath, ".__init__")
+	if modulePath == "__init__" {
+		modulePath = ""
 	}
-
-	relPath := strings.TrimSuffix(filePath, ".py")
-	relPath = strings.ReplaceAll(relPath, string(filepath.Separator), ".")
-	relPath = strings.TrimSuffix(relPath, ".__init__")
-
 	if baseModule != "" {
-		return baseModule + "." + name
+		if modulePath == "" {
+			return baseModule
+		}
+		return baseModule + "." + modulePath
 	}
-	return relPath
+	return modulePath
 }
 
 func extractPythonError(stderr string) string {

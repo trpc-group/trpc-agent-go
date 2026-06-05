@@ -9,6 +9,9 @@ import json
 import sys
 from typing import List, Dict, Any, Optional, Tuple
 
+if not hasattr(ast, "unparse"):
+    raise RuntimeError("Python 3.9+ is required because the parser uses ast.unparse")
+
 
 class PythonASTParser(ast.NodeVisitor):
     """Python AST parser that extracts code entities and relationships."""
@@ -165,13 +168,9 @@ class PythonASTParser(ast.NodeVisitor):
 
     def visit_ClassDef(self, node: ast.ClassDef):
         """Extract class definition."""
-        is_interface = any(
-            (isinstance(b, ast.Name) and b.id in ("Protocol", "ABC")) or
-            (isinstance(b, ast.Attribute) and b.attr in ("Protocol", "ABC"))
-            for b in node.bases
-        )
-        entity_type = "Interface" if is_interface else "Class"
         bases = [ast.unparse(b) for b in node.bases]
+        is_interface = any(self._short_type_name(b) in ("Protocol", "ABC") for b in bases)
+        entity_type = "Interface" if is_interface else "Class"
         signature = "class {}".format(node.name)
         if bases:
             signature += "({})".format(", ".join(bases))
@@ -201,11 +200,9 @@ class PythonASTParser(ast.NodeVisitor):
         self.chunk_index += 1
 
         for base in node.bases:
-            base_name = ast.unparse(base)
-            if '[' in base_name:
-                base_name = base_name.split('[')[0]
+            base_name = self._strip_generic(ast.unparse(base))
             resolved = self._resolve_symbol(base_name)
-            rel_type = "IMPLEMENTS" if base_name in ("Protocol", "ABC") else "INHERITS"
+            rel_type = "IMPLEMENTS" if self._short_type_name(base_name) in ("Protocol", "ABC") else "INHERITS"
             self.edges.append({"from_id": node_id, "to_id": resolved, "type": rel_type})
 
         old_class = self.current_class
@@ -409,13 +406,27 @@ class PythonASTParser(ast.NodeVisitor):
     @staticmethod
     def _unwrap_optional(ann: str) -> str:
         """Unwrap Optional[X] or X | None to the inner type X."""
-        if ann.startswith("Optional[") and ann.endswith("]"):
-            return ann[len("Optional["):-1]
+        optional_marker = "Optional["
+        optional_pos = ann.rfind(optional_marker)
+        if optional_pos >= 0 and ann.endswith("]"):
+            prefix = ann[:optional_pos]
+            if prefix == "" or prefix.endswith("."):
+                return ann[optional_pos + len(optional_marker):-1]
         if " | None" in ann:
             return ann.replace(" | None", "").strip()
         if "None | " in ann:
             return ann.replace("None | ", "").strip()
         return ann
+
+    @staticmethod
+    def _strip_generic(name: str) -> str:
+        """Strip generic parameters from a type name."""
+        return name.split("[", 1)[0].strip()
+
+    @classmethod
+    def _short_type_name(cls, name: str) -> str:
+        """Return the unqualified type name without generic parameters."""
+        return cls._strip_generic(name).rsplit(".", 1)[-1]
 
     def _get_call_target(self, node: ast.Call) -> Optional[str]:
         """Get the call target name."""

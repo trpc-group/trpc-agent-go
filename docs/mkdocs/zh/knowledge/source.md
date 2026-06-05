@@ -152,7 +152,7 @@ Go AST reader 和 Python AST reader 是可选模块，需要手动 blank import 
 
 Proto reader 默认注册，无需额外导入。
 
-> **注意**：Python reader 通过内嵌的 Python 脚本进行 AST 解析，运行时需要系统安装 Python 3.8+（仅使用标准库 `ast` 模块，无第三方依赖）。
+> **注意**：Python reader 通过内嵌的 Python 脚本进行 AST 解析，运行时需要系统安装 Python 3.9+（仅使用标准库 `ast` 模块，无第三方依赖）。
 
 ### Repository 结构说明
 
@@ -315,9 +315,24 @@ repoSrc := repo.New(
 )
 
 // 2. 创建 GraphKnowledge（图 + 向量混合检索）
+ageStore, err := agegraphstore.New(
+    agegraphstore.WithClientDSN(ageDSN),
+    agegraphstore.WithGraphName("my_graph"),
+)
+if err != nil {
+    return err
+}
+vectorStore, err := pgvector.New(
+    pgvector.WithPGVectorClientDSN(pgvectorDSN),
+    pgvector.WithTable("graph_vectors"),
+    pgvector.WithIndexDimension(1536),
+)
+if err != nil {
+    return err
+}
 gk := knowledge.NewGraphKnowledge(
-    knowledge.WithGraphStore(agegraphstore.New(db, agegraphstore.WithGraphName("my_graph"))),
-    knowledge.WithGraphVectorStore(pgvector.New(db)),
+    knowledge.WithGraphStore(ageStore),
+    knowledge.WithGraphVectorStore(vectorStore),
     knowledge.WithGraphEmbedder(embedder),
 )
 
