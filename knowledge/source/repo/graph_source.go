@@ -15,6 +15,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -74,6 +75,10 @@ func (s *Source) ReadGraph(ctx context.Context, opts ...source.ReadGraphOption) 
 		}
 		parser, ok := codeast.GetDirectoryParser(lang.fileType)
 		if !ok {
+			if lang.fileType == codeast.FileTypePython {
+				slog.Warn("repo graph parser is not registered; skipping language", "file_type", lang.fileType, "files", len(allowed))
+				continue
+			}
 			return nil, missingReaderError(lang.fileType)
 		}
 		var parseOpts []codeast.ParseOption

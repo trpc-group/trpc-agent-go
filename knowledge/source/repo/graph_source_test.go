@@ -534,6 +534,21 @@ func TestReadGraphPassesAllowedGoFilesToParser(t *testing.T) {
 	require.Equal(t, []string{mainPath}, includeFiles)
 }
 
+func TestReadGraphSkipsUnregisteredPythonParser(t *testing.T) {
+	if _, ok := codeast.GetDirectoryParser(codeast.FileTypePython); ok {
+		t.Skip("python directory parser is registered in this test binary")
+	}
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "service.py"), "def run():\n    return 1\n")
+
+	src := New(WithRepository(Repository{Dir: dir}))
+	data, err := src.ReadGraph(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	require.Empty(t, data.Nodes)
+	require.Empty(t, data.Edges)
+}
+
 func TestReadGraphResolveRepositoryError(t *testing.T) {
 	src := New()
 	_, err := src.ReadGraph(context.Background())
