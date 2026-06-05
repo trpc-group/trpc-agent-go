@@ -4008,6 +4008,61 @@ func TestResumeCommandForSubgraph(t *testing.T) {
 	require.Nil(t, cmd)
 }
 
+func TestAgentToolChildRuntimeState_ResumeKeysAreTargetScoped(t *testing.T) {
+	const (
+		parentNodeID   = "tools"
+		childAgentName = "child-agent"
+		childTaskID    = "approval"
+		toolCallID     = "call-child"
+	)
+	parentResumeMap := map[string]any{
+		childTaskID: "map-resume",
+		"other":     "other-resume",
+	}
+	parent := State{
+		ResumeChannel:     "direct-resume",
+		StateKeyResumeMap: parentResumeMap,
+		StateKeyCommand: &Command{
+			Resume: "stale-command",
+		},
+		StateKeyUserInput: "parent-input",
+		StateKeyMessages:  []model.Message{model.NewUserMessage("parent")},
+		StateKeySubgraphInterrupt: map[string]any{
+			subgraphInterruptKeyParentNodeID:      parentNodeID,
+			subgraphInterruptKeyChildAgentName:    childAgentName,
+			subgraphInterruptKeyChildCheckpointID: "child-checkpoint",
+			subgraphInterruptKeyChildCheckpointNS: "child-ns",
+			subgraphInterruptKeyChildLineageID:    "child-lineage",
+			subgraphInterruptKeyChildTaskID:       childTaskID,
+			subgraphInterruptKeyToolCallID:        toolCallID,
+		},
+	}
+	target := agentToolChildRuntimeState(parent, parentNodeID, childAgentName, toolCallID)
+	cmd, ok := target[StateKeyCommand].(*Command)
+	require.True(t, ok)
+	require.Equal(t, map[string]any{childTaskID: "map-resume"}, cmd.ResumeMap)
+	require.Nil(t, cmd.Resume)
+	require.NotContains(t, target, ResumeChannel)
+	require.NotContains(t, target, StateKeyResumeMap)
+	require.NotContains(t, target, StateKeyUserInput)
+	require.NotContains(t, target, StateKeyMessages)
+	require.Equal(t, "child-checkpoint", target[CfgKeyCheckpointID])
+	require.Equal(t, "child-ns", target[CfgKeyCheckpointNS])
+	require.Equal(t, "child-lineage", target[CfgKeyLineageID])
+	require.Equal(t, parentResumeMap, parent[StateKeyResumeMap])
+	other := agentToolChildRuntimeState(parent, parentNodeID, "other-agent", toolCallID)
+	require.NotContains(t, other, StateKeyCommand)
+	require.NotContains(t, other, ResumeChannel)
+	require.NotContains(t, other, StateKeyResumeMap)
+	otherCall := agentToolChildRuntimeState(parent, parentNodeID, childAgentName, "other-call")
+	require.NotContains(t, other, StateKeyCommand)
+	require.NotContains(t, other, ResumeChannel)
+	require.NotContains(t, other, StateKeyResumeMap)
+	require.NotContains(t, otherCall, StateKeyCommand)
+	require.NotContains(t, otherCall, ResumeChannel)
+	require.NotContains(t, otherCall, StateKeyResumeMap)
+}
+
 func TestExtractPregelInterrupt(t *testing.T) {
 	const (
 		invocationID = "inv"

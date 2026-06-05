@@ -49,6 +49,9 @@ const (
 	subgraphInterruptKeyChildCheckpointNS = "child_checkpoint_ns"
 	subgraphInterruptKeyChildLineageID    = "child_lineage_id"
 	subgraphInterruptKeyChildTaskID       = "child_task_id"
+	subgraphInterruptKeyToolCallID        = "tool_call_id"
+
+	stateKeyCompletedToolMessages = "__completed_tool_messages__"
 )
 
 // Checkpoint Metadata.Source enumeration values
@@ -115,7 +118,8 @@ func isInternalStateKey(key string) bool {
 	// Graph metadata keys stored in state delta for instrumentation
 	case MetadataKeyNode, MetadataKeyPregel, MetadataKeyChannel,
 		MetadataKeyState, MetadataKeyCompletion, MetadataKeyNodeCustom,
-		MetadataKeyNodeEmitter:
+		MetadataKeyNodeEmitter,
+		stateKeyCompletedToolMessages:
 		return true
 	default:
 		return false
