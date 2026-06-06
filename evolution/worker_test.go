@@ -373,6 +373,15 @@ func TestWorker_ResolveJobScope(t *testing.T) {
 		require.True(t, scoped)
 		require.Equal(t, skill.SkillScope{AppName: "app", UserID: "u-9"}, scope)
 	})
+	t.Run("none mode auto-detects app scope from explicit job AppName", func(t *testing.T) {
+		w := newWorker(workerConfig{Reviewer: &mockReviewer{}})
+		scope, scoped, err := w.resolveJobScope(LearningJob{
+			Scope: skill.SkillScope{AppName: "app"},
+		})
+		require.NoError(t, err)
+		require.True(t, scoped)
+		require.Equal(t, skill.SkillScope{AppName: "app"}, scope)
+	})
 	t.Run("scoped service with nil session and zero scope", func(t *testing.T) {
 		w := newWorker(workerConfig{
 			Reviewer:       &mockReviewer{},
@@ -405,6 +414,18 @@ func TestWorker_ScopedRoot(t *testing.T) {
 	// Invalid scope (app mode without app name) → error.
 	_, err = w.scopedRoot("/base", skill.SkillScope{}, true)
 	require.Error(t, err)
+}
+
+func TestWorker_ScopedRoot_NoneModeUsesExplicitScope(t *testing.T) {
+	w := newWorker(workerConfig{Reviewer: &mockReviewer{}})
+
+	got, err := w.scopedRoot("/base", skill.SkillScope{AppName: "app"}, true)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join("/base", "apps", "app"), got)
+
+	got, err = w.scopedRoot("/base", skill.SkillScope{AppName: "app", UserID: "u"}, true)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join("/base", "users", "app", "u"), got)
 }
 
 func TestWorker_ScopedBackends_CacheAndFallback(t *testing.T) {

@@ -70,7 +70,7 @@ func TestRepositoryProviderFunc_Nil(t *testing.T) {
 }
 
 func TestNormalizeSkillScopeMode(t *testing.T) {
-	require.Equal(t, SkillScopeApp, NormalizeSkillScopeMode(SkillScopeNone))
+	require.Equal(t, SkillScopeNone, NormalizeSkillScopeMode(SkillScopeNone))
 	require.Equal(t, SkillScopeApp, NormalizeSkillScopeMode(SkillScopeApp))
 	require.Equal(t, SkillScopeUser, NormalizeSkillScopeMode(SkillScopeUser))
 	// Case-insensitive and trimmed.
@@ -97,6 +97,12 @@ func TestNewSkillScope_TrimsAndDropsUserInAppMode(t *testing.T) {
 	require.Equal(t, SkillScope{AppName: "app"}, scope)
 }
 
+func TestNewSkillScope_NoneModeIsUnscoped(t *testing.T) {
+	scope, err := NewSkillScope(SkillScopeNone, "app", "user")
+	require.NoError(t, err)
+	require.True(t, scope.IsZero())
+}
+
 func TestSkillScope_IsZero(t *testing.T) {
 	require.True(t, SkillScope{}.IsZero())
 	require.True(t, SkillScope{AppName: "  "}.IsZero())
@@ -114,8 +120,7 @@ func TestScopePathParts_Errors(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestScopePathParts_NoneModeFallsBackToApp(t *testing.T) {
-	parts, err := ScopePathParts(SkillScopeNone, SkillScope{AppName: "app"})
-	require.NoError(t, err)
-	require.Equal(t, []string{"apps", "app"}, parts)
+func TestScopePathParts_NoneModeIsUnsupported(t *testing.T) {
+	_, err := ScopePathParts(SkillScopeNone, SkillScope{AppName: "app"})
+	require.Error(t, err)
 }

@@ -329,9 +329,40 @@ func TestLLMAgent_SkillRepositoryForInvocation_AppModeFallsBackToStatic(t *testi
 	)
 }
 
+func TestLLMAgent_SkillRepositoryForInvocation_NoneModeIsUnscoped(t *testing.T) {
+	staticRepo := &mockSkillRepository{summaries: []skill.Summary{{Name: "static"}}}
+	provider := skill.RepositoryProviderFunc(
+		func(_ context.Context, _ skill.SkillScope) (skill.Repository, error) {
+			t.Fatal("provider must not be called when skill scope mode is none")
+			return nil, nil
+		},
+	)
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithSkills(staticRepo),
+		WithSkillRepositoryProvider(provider),
+		WithSkillScopeMode(skill.SkillScopeNone),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{AppName: "app", UserID: "u"}),
+	)
+
+	require.Same(t, staticRepo, agt.skillRepositoryForInvocation(context.Background(), inv))
+}
+
 func TestSkillScopeForInvocation(t *testing.T) {
 	// Nil session → zero scope, no error.
 	scope, err := skillScopeForInvocation(skill.SkillScopeApp, nil)
+	require.NoError(t, err)
+	require.True(t, scope.IsZero())
+
+	scope, err = skillScopeForInvocation(
+		skill.SkillScopeNone,
+		agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{AppName: "app", UserID: "u"}),
+		),
+	)
 	require.NoError(t, err)
 	require.True(t, scope.IsZero())
 

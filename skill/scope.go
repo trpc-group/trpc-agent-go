@@ -52,12 +52,16 @@ func (f RepositoryProviderFunc) Repository(ctx context.Context, scope SkillScope
 	return f(ctx, scope)
 }
 
-// NormalizeSkillScopeMode normalizes empty/unknown modes to SkillScopeApp.
+// NormalizeSkillScopeMode normalizes known string forms while preserving
+// SkillScopeNone as the unscoped mode. Unknown non-empty modes fall back to
+// app-level sharing to keep configuration typos conservative.
 func NormalizeSkillScopeMode(mode SkillScopeMode) SkillScopeMode {
 	switch SkillScopeMode(strings.ToLower(strings.TrimSpace(string(mode)))) {
 	case SkillScopeUser:
 		return SkillScopeUser
 	case SkillScopeNone:
+		return SkillScopeNone
+	case SkillScopeApp:
 		return SkillScopeApp
 	default:
 		return SkillScopeApp
@@ -72,6 +76,8 @@ func NewSkillScope(mode SkillScopeMode, appName, userID string) (SkillScope, err
 		UserID:  strings.TrimSpace(userID),
 	}
 	switch mode {
+	case SkillScopeNone:
+		return SkillScope{}, nil
 	case SkillScopeApp:
 		scope.UserID = ""
 		if scope.AppName == "" {

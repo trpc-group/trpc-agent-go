@@ -442,11 +442,15 @@ func (w *worker) resolveJobScope(job LearningJob) (skill.SkillScope, bool, error
 		return skill.SkillScope{}, false, nil
 	}
 	mode := skill.NormalizeSkillScopeMode(w.skillScopeMode)
-	if w.skillScopeMode == skill.SkillScopeNone && !job.Scope.IsZero() && strings.TrimSpace(job.Scope.UserID) != "" {
+	if w.skillScopeMode == skill.SkillScopeNone && !job.Scope.IsZero() {
 		// An explicit job scope should remain usable even when the service is
-		// otherwise unscoped; a non-empty UserID means the caller intended
-		// app+user isolation for this single job.
-		mode = skill.SkillScopeUser
+		// otherwise unscoped. UserID selects app+user isolation; otherwise
+		// the explicit AppName selects app-level isolation for this single job.
+		if strings.TrimSpace(job.Scope.UserID) != "" {
+			mode = skill.SkillScopeUser
+		} else {
+			mode = skill.SkillScopeApp
+		}
 	}
 	if job.Scope.IsZero() {
 		if job.Session == nil {
@@ -470,9 +474,13 @@ func (w *worker) scopedRoot(root string, scope skill.SkillScope, scoped bool) (s
 	if !scoped || root == "" {
 		return root, nil
 	}
-	mode := w.skillScopeMode
-	if mode == skill.SkillScopeNone && strings.TrimSpace(scope.UserID) != "" {
-		mode = skill.SkillScopeUser
+	mode := skill.NormalizeSkillScopeMode(w.skillScopeMode)
+	if w.skillScopeMode == skill.SkillScopeNone {
+		if strings.TrimSpace(scope.UserID) != "" {
+			mode = skill.SkillScopeUser
+		} else {
+			mode = skill.SkillScopeApp
+		}
 	}
 	parts, err := skill.ScopePathParts(mode, scope)
 	if err != nil {
