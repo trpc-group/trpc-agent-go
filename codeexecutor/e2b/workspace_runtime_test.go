@@ -433,6 +433,68 @@ func TestRunProgram_FramedOutput(t *testing.T) {
 	assert.False(t, res.TimedOut)
 }
 
+func TestRunProgram_CleanEnvUsesEnvI(t *testing.T) {
+	srv := newMockE2BServer(t, func(string) string {
+		stdout := strings.Join([]string{
+			sentinelStdoutBegin,
+			sentinelStdoutEnd,
+			sentinelExitPrefix + "0",
+		}, "\n") + "\n"
+		return ndjsonLines(stdoutMsg(stdout))
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+
+	ws := codeexecutor.Workspace{ID: "x", Path: "/tmp/ws"}
+	_, err := c.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:      "echo",
+		Args:     []string{"hi"},
+		Env:      map[string]string{"FOO": "bar"},
+		CleanEnv: true,
+	})
+	require.NoError(t, err)
+
+	srv.mu.Lock()
+	code := srv.lastCode
+	srv.mu.Unlock()
+
+	require.Contains(t, code, "exec /usr/bin/env -i ")
+	require.Contains(t, code, "PATH="+shellQuote(minimalCleanPATH))
+	require.Contains(t, code, "/bin/bash --noprofile --norc -c")
+	require.Contains(t, code, "FOO=")
+	require.Contains(t, code, "bar")
+	require.Contains(t, code, codeexecutor.WorkspaceEnvDirKey+"=")
+}
+
+func TestRunProgram_CleanEnvKeepsSpecPATH(t *testing.T) {
+	srv := newMockE2BServer(t, func(string) string {
+		stdout := strings.Join([]string{
+			sentinelStdoutBegin,
+			sentinelStdoutEnd,
+			sentinelExitPrefix + "0",
+		}, "\n") + "\n"
+		return ndjsonLines(stdoutMsg(stdout))
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+
+	ws := codeexecutor.Workspace{ID: "x", Path: "/tmp/ws"}
+	_, err := c.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:      "echo",
+		Env:      map[string]string{"PATH": "/opt/vetted/bin"},
+		CleanEnv: true,
+	})
+	require.NoError(t, err)
+
+	srv.mu.Lock()
+	code := srv.lastCode
+	srv.mu.Unlock()
+
+	require.Contains(t, code, "env -i ")
+	require.Contains(t, code, "PATH=")
+	require.Contains(t, code, "/opt/vetted/bin")
+}
+
 func TestRunProgram_BashErrorSurfaced(t *testing.T) {
 	srv := newMockE2BServer(t, func(code string) string {
 		// Emit an error event — runBashStreaming should translate this
@@ -703,6 +765,7 @@ func TestEngineExposure(t *testing.T) {
 	assert.NotNil(t, eng.Manager())
 	assert.NotNil(t, eng.FS())
 	assert.NotNil(t, eng.Runner())
+	assert.True(t, eng.Describe().SupportsCleanEnv)
 }
 
 func TestPickLanguageTrimsAndLowers(t *testing.T) {
