@@ -1420,8 +1420,8 @@ func TestHeaderRoundTripper_InjectsHeaders(t *testing.T) {
 			}, nil
 		}),
 		headers: map[string]string{
-			"X-TR-Asset-Id": "asset-1",
-			"X-Custom":      "value",
+			"X-Asset-Id": "asset-1",
+			"X-Custom":   "value",
 		},
 	}
 	req, err := http.NewRequest(http.MethodPost, "https://bedrock.example.com/model", http.NoBody)
@@ -1429,7 +1429,7 @@ func TestHeaderRoundTripper_InjectsHeaders(t *testing.T) {
 	req.Header.Set("X-Custom", "existing")
 	_, err = rt.RoundTrip(req)
 	require.NoError(t, err)
-	assert.Equal(t, "asset-1", got.Get("X-TR-Asset-Id"))
+	assert.Equal(t, "asset-1", got.Get("X-Asset-Id"))
 	assert.Equal(t, "existing", got.Get("X-Custom"), "must not overwrite headers already on the request")
 }
 
@@ -1438,10 +1438,10 @@ func TestWrapAWSHTTPClient(t *testing.T) {
 	client := wrapAWSHTTPClient(&captureHTTPClient{fn: func(req *http.Request) (*http.Response, error) {
 		got = req.Header.Clone()
 		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header), Request: req}, nil
-	}}, map[string]string{"X-TR-Asset-Id": "asset-1"})
+	}}, map[string]string{"X-Asset-Id": "asset-1"})
 	_, err := client.Do(mustNewRequest(t, "https://example.com"))
 	require.NoError(t, err)
-	assert.Equal(t, "asset-1", got.Get("X-TR-Asset-Id"))
+	assert.Equal(t, "asset-1", got.Get("X-Asset-Id"))
 }
 
 type captureHTTPClient struct {
