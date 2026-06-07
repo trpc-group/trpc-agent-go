@@ -29,6 +29,8 @@ type options struct {
 	client BedrockClient
 	// channelBufferSize is the buffer size of the response channel.
 	channelBufferSize int
+	// extraHeaders are static HTTP headers added to every Bedrock Runtime request.
+	extraHeaders map[string]string
 }
 
 var defaultOptions = options{
@@ -89,5 +91,21 @@ func WithChannelBufferSize(size int) Option {
 			size = defaultChannelBufferSize
 		}
 		o.channelBufferSize = size
+	}
+}
+
+// WithHeaders appends static HTTP headers to all Bedrock Runtime requests.
+// Headers are injected via the AWS SDK HTTP client; existing request headers are not overwritten.
+func WithHeaders(headers map[string]string) Option {
+	return func(o *options) {
+		if len(headers) == 0 {
+			return
+		}
+		if o.extraHeaders == nil {
+			o.extraHeaders = make(map[string]string, len(headers))
+		}
+		for k, v := range headers {
+			o.extraHeaders[k] = v
+		}
 	}
 }

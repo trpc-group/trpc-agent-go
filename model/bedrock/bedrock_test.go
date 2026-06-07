@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -1394,6 +1395,74 @@ func TestWithClient(t *testing.T) {
 	o := &options{}
 	WithClient(mock)(o)
 	assert.Equal(t, mock, o.client)
+}
+
+func TestWithHeaders_MergesAndCopies(t *testing.T) {
+	o := &options{}
+	WithHeaders(map[string]string{"X-Trace": "one"})(o)
+	WithHeaders(map[string]string{"User-Agent": "agent"})(o)
+	assert.Equal(t, "one", o.extraHeaders["X-Trace"])
+	assert.Equal(t, "agent", o.extraHeaders["User-Agent"])
+	WithHeaders(nil)(o)
+	assert.Len(t, o.extraHeaders, 2)
+}
+
+func TestHeaderRoundTripper_InjectsHeaders(t *testing.T) {
+	var got http.Header
+	rt := &headerRoundTripper{
+		base: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			got = req.Header.Clone()
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       http.NoBody,
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+		headers: map[string]string{
+			"X-TR-Asset-Id": "asset-1",
+			"X-Custom":      "value",
+		},
+	}
+	req, err := http.NewRequest(http.MethodPost, "https://bedrock.example.com/model", http.NoBody)
+	require.NoError(t, err)
+	req.Header.Set("X-Custom", "existing")
+	_, err = rt.RoundTrip(req)
+	require.NoError(t, err)
+	assert.Equal(t, "asset-1", got.Get("X-TR-Asset-Id"))
+	assert.Equal(t, "existing", got.Get("X-Custom"), "must not overwrite headers already on the request")
+}
+
+func TestWrapAWSHTTPClient(t *testing.T) {
+	var got http.Header
+	client := wrapAWSHTTPClient(&captureHTTPClient{fn: func(req *http.Request) (*http.Response, error) {
+		got = req.Header.Clone()
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header), Request: req}, nil
+	}}, map[string]string{"X-TR-Asset-Id": "asset-1"})
+	_, err := client.Do(mustNewRequest(t, "https://example.com"))
+	require.NoError(t, err)
+	assert.Equal(t, "asset-1", got.Get("X-TR-Asset-Id"))
+}
+
+type captureHTTPClient struct {
+	fn func(*http.Request) (*http.Response, error)
+}
+
+func (c *captureHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	return c.fn(req)
+}
+
+func mustNewRequest(t *testing.T, url string) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, http.NoBody)
+	require.NoError(t, err)
+	return req
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 // ============================================================================

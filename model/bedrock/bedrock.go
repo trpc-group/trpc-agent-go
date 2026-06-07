@@ -59,7 +59,11 @@ func New(modelID string, opts ...Option) *Model {
 	if o.client != nil {
 		client = o.client
 	} else {
-		client = bedrockruntime.NewFromConfig(o.awsConfig, o.bedrockOptions...)
+		awsCfg := o.awsConfig
+		if len(o.extraHeaders) > 0 {
+			awsCfg.HTTPClient = wrapAWSHTTPClient(awsCfg.HTTPClient, o.extraHeaders)
+		}
+		client = bedrockruntime.NewFromConfig(awsCfg, o.bedrockOptions...)
 	}
 
 	return &Model{
