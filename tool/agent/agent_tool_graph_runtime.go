@@ -27,6 +27,7 @@ type parentInvocationGraphRuntime struct {
 	parentNodeID string
 	toolCallID   string
 	toolCallKey  string
+	childKey     string
 }
 
 const graphRuntimeSuppressSessionEventsStateKey = "agenttool:graph_runtime_suppress_session_events"
@@ -69,6 +70,7 @@ func parentInvocationGraphRuntimeFromContext(
 		parentNodeID: runtime.ParentNodeID,
 		toolCallID:   runtime.ToolCallID,
 		toolCallKey:  runtime.ToolCallKey,
+		childKey:     runtime.ChildFilterKey,
 	}, nil
 }
 
@@ -76,6 +78,7 @@ type graphToolInterruptCapture struct {
 	parentNodeID         string
 	toolCallID           string
 	toolCallKey          string
+	childKey             string
 	childAgentName       string
 	expectedLineageID    string
 	expectedCheckpointNS string
@@ -91,6 +94,7 @@ func (at *Tool) newGraphToolInterruptCapture(
 	parentNodeID string,
 	toolCallID string,
 	toolCallKey string,
+	childKey string,
 	enabled bool,
 ) *graphToolInterruptCapture {
 	if !enabled {
@@ -103,6 +107,7 @@ func (at *Tool) newGraphToolInterruptCapture(
 		parentNodeID:         parentNodeID,
 		toolCallID:           toolCallID,
 		toolCallKey:          toolCallKey,
+		childKey:             childKey,
 		childAgentName:       childAgentName,
 		expectedLineageID:    expectedLineageID,
 		expectedCheckpointNS: expectedCheckpointNS,
@@ -218,6 +223,9 @@ func (c *graphToolInterruptCapture) finish() error {
 	if c.toolCallKey == "" {
 		return fmt.Errorf("agent tool graph interrupt missing tool call key")
 	}
+	if c.childKey == "" {
+		return fmt.Errorf("agent tool graph interrupt missing child filter key")
+	}
 	return agenttoolgraph.NewInterruptError(c.interrupt, agenttoolgraph.InterruptMetadata{
 		ParentNodeID:      c.parentNodeID,
 		ChildAgentName:    c.childAgentName,
@@ -227,5 +235,6 @@ func (c *graphToolInterruptCapture) finish() error {
 		ChildTaskID:       c.interrupt.TaskID,
 		ToolCallID:        c.toolCallID,
 		ToolCallKey:       c.toolCallKey,
+		ChildFilterKey:    c.childKey,
 	})
 }

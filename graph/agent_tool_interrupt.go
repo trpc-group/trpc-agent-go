@@ -80,6 +80,25 @@ func applyAgentToolSubgraphResume(
 	return nil
 }
 
+func agentToolChildFilterKey(
+	parent State,
+	nodeID string,
+	childAgentName string,
+	toolCallID string,
+	toolCallKey string,
+) string {
+	info, ok := subgraphInterruptInfoFromState(parent)
+	if !ok || nodeID == "" || info.parentNodeID != nodeID {
+		return ""
+	}
+	if childAgentName != info.childAgentName ||
+		toolCallID != info.toolCallID ||
+		toolCallKey != info.toolCallKey {
+		return ""
+	}
+	return info.childFilterKey
+}
+
 func validateAgentToolSubgraphInterruptInfo(info subgraphInterruptInfo) error {
 	switch {
 	case info.parentNodeID == "":
@@ -98,6 +117,8 @@ func validateAgentToolSubgraphInterruptInfo(info subgraphInterruptInfo) error {
 		return fmt.Errorf("agent tool graph interrupt missing tool call id")
 	case info.toolCallKey == "":
 		return fmt.Errorf("agent tool graph interrupt missing tool call key")
+	case info.childFilterKey == "":
+		return fmt.Errorf("agent tool graph interrupt missing child filter key")
 	default:
 		return nil
 	}
@@ -158,6 +179,7 @@ func applyAgentToolInterruptState(
 	childTaskID string,
 	toolCallID string,
 	toolCallKey string,
+	childFilterKey string,
 ) {
 	if state == nil {
 		return
@@ -171,5 +193,6 @@ func applyAgentToolInterruptState(
 		subgraphInterruptKeyChildTaskID:       childTaskID,
 		subgraphInterruptKeyToolCallID:        toolCallID,
 		subgraphInterruptKeyToolCallKey:       toolCallKey,
+		subgraphInterruptKeyChildFilterKey:    childFilterKey,
 	}
 }

@@ -516,6 +516,355 @@ func (w *graphWrapperAgent) FindSubAgent(name string) agent.Agent {
 	return w.inner.FindSubAgent(name)
 }
 
+type toolSurfaceRecordingModel struct {
+	name    string
+	message model.Message
+
+	mu       sync.Mutex
+	requests int
+	tools    []map[string]bool
+}
+
+func (m *toolSurfaceRecordingModel) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	_ = ctx
+	toolNames := make(map[string]bool, len(request.Tools))
+	for name := range request.Tools {
+		toolNames[name] = true
+	}
+	m.mu.Lock()
+	m.requests++
+	m.tools = append(m.tools, toolNames)
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	go func() {
+		defer close(ch)
+		ch <- &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: m.message,
+			}},
+		}
+	}()
+	return ch, nil
+}
+
+func (m *toolSurfaceRecordingModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *toolSurfaceRecordingModel) sawTool(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, tools := range m.tools {
+		if tools[name] {
+			return true
+		}
+	}
+	return false
+}
+
+type handoffArgs struct {
+	AgentID string `json:"agent_id"`
+	Task    string `json:"task"`
+}
+
+type handoffDispatchTool struct {
+	name    string
+	factory func() map[string]tool.CallableTool
+
+	mu       sync.Mutex
+	calls    int
+	selected []string
+}
+
+func (h *handoffDispatchTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        h.name,
+		Description: "Dispatches a task to a selected agent tool.",
+		InputSchema: &tool.Schema{
+			Type:     "object",
+			Required: []string{"agent_id", "task"},
+			Properties: map[string]*tool.Schema{
+				"agent_id": {Type: "string"},
+				"task":     {Type: "string"},
+			},
+		},
+	}
+}
+
+func (h *handoffDispatchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	var req handoffArgs
+	if err := json.Unmarshal(jsonArgs, &req); err != nil {
+		return nil, err
+	}
+	agents := h.factory()
+	selected, ok := agents[req.AgentID]
+	if !ok {
+		return nil, fmt.Errorf("handoff agent %q not found", req.AgentID)
+	}
+	h.mu.Lock()
+	h.calls++
+	h.selected = append(h.selected, req.AgentID)
+	h.mu.Unlock()
+	childArgs, err := json.Marshal(map[string]string{"request": req.Task})
+	if err != nil {
+		return nil, err
+	}
+	result, err := selected.Call(ctx, childArgs)
+	if err != nil {
+		return nil, err
+	}
+	text, ok := result.(string)
+	if !ok {
+		return nil, fmt.Errorf("handoff child result must be a string, got %T", result)
+	}
+	return text, nil
+}
+
+func (h *handoffDispatchTool) callCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.calls
+}
+
+func (h *handoffDispatchTool) selectedAgentIDs() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.selected...)
+}
+
+type handoffTestCustomAgent struct {
+	name  string
+	inner agent.Agent
+
+	mu            sync.Mutex
+	runs          int
+	externalTools []map[string]bool
+}
+
+func (a *handoffTestCustomAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	tools := make(map[string]bool)
+	if invocation != nil {
+		for _, tl := range invocation.RunOptions.ExternalTools {
+			if decl := tl.Declaration(); decl != nil && decl.Name != "" {
+				tools[decl.Name] = true
+			}
+		}
+	}
+	a.mu.Lock()
+	a.runs++
+	a.externalTools = append(a.externalTools, tools)
+	a.mu.Unlock()
+	return a.inner.Run(ctx, invocation)
+}
+
+func (a *handoffTestCustomAgent) Tools() []tool.Tool {
+	return a.inner.Tools()
+}
+
+func (a *handoffTestCustomAgent) Info() agent.Info {
+	info := a.inner.Info()
+	info.Name = a.name
+	return info
+}
+
+func (a *handoffTestCustomAgent) SubAgents() []agent.Agent {
+	return a.inner.SubAgents()
+}
+
+func (a *handoffTestCustomAgent) FindSubAgent(name string) agent.Agent {
+	return a.inner.FindSubAgent(name)
+}
+
+func (a *handoffTestCustomAgent) ranCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.runs
+}
+
+func (a *handoffTestCustomAgent) sawExternalTool(name string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, tools := range a.externalTools {
+		if tools[name] {
+			return true
+		}
+	}
+	return false
+}
+
+type handoffTestInnerGraphAgent struct {
+	agent.Agent
+	worker *handoffTestCustomAgent
+}
+
+type resumeAwareToolLoopModel struct {
+	name       string
+	toolName   string
+	toolCallID string
+	toolArgs   []byte
+	finalText  string
+
+	mu                 sync.Mutex
+	requests           int
+	sawCompleteHistory bool
+}
+
+func (m *resumeAwareToolLoopModel) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	_ = ctx
+	hasAssistantToolCall := false
+	hasToolResult := false
+	for _, msg := range request.Messages {
+		for _, call := range msg.ToolCalls {
+			if call.ID == m.toolCallID && call.Function.Name == m.toolName {
+				hasAssistantToolCall = true
+			}
+		}
+		if msg.Role == model.RoleTool &&
+			msg.ToolID == m.toolCallID &&
+			msg.ToolName == m.toolName {
+			hasToolResult = true
+		}
+	}
+	m.mu.Lock()
+	m.requests++
+	if hasAssistantToolCall && hasToolResult {
+		m.sawCompleteHistory = true
+	}
+	m.mu.Unlock()
+	if hasToolResult && !hasAssistantToolCall {
+		return nil, fmt.Errorf("tool result for %s is missing its assistant tool call history", m.toolName)
+	}
+	ch := make(chan *model.Response, 1)
+	go func() {
+		defer close(ch)
+		message := model.Message{
+			Role:    model.RoleAssistant,
+			Content: m.finalText,
+		}
+		if !hasToolResult {
+			message.Content = ""
+			message.ToolCalls = []model.ToolCall{{
+				Type: "function",
+				ID:   m.toolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      m.toolName,
+					Arguments: m.toolArgs,
+				},
+			}}
+		}
+		ch <- &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: message,
+			}},
+		}
+	}()
+	return ch, nil
+}
+
+func (m *resumeAwareToolLoopModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *resumeAwareToolLoopModel) requestCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.requests
+}
+
+func (m *resumeAwareToolLoopModel) sawToolResultWithAssistantHistory() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sawCompleteHistory
+}
+
+func (a *handoffTestInnerGraphAgent) ranCount() int {
+	return a.worker.ranCount()
+}
+
+func (a *handoffTestInnerGraphAgent) sawExternalTool(name string) bool {
+	return a.worker.sawExternalTool(name)
+}
+
+func newHandoffTestInnerGraphAgent(
+	t *testing.T,
+	graphName string,
+	workerName string,
+	externalToolName string,
+	m model.Model,
+) *handoffTestInnerGraphAgent {
+	t.Helper()
+	innerLLM := llmagent.New(
+		workerName+"-base",
+		llmagent.WithModel(m),
+	)
+	worker := &handoffTestCustomAgent{
+		name:  workerName,
+		inner: innerLLM,
+	}
+	externalTool := function.NewFunctionTool(
+		func(context.Context, map[string]string) (string, error) {
+			return "", errors.New("inner external tool is caller-executed")
+		},
+		function.WithName(externalToolName),
+		function.WithDescription("Represents a caller-executed inner tool."),
+	)
+	schema := graph.MessagesStateSchema().
+		AddField("inner_tool_name", graph.StateField{Type: reflect.TypeOf("")}).
+		AddField("inner_tool_args", graph.StateField{Type: reflect.TypeOf("")})
+	sg := graph.NewStateGraph(schema)
+	sg.AddAgentNode(
+		workerName,
+		graph.WithAgentNodeRunOptions(agent.WithExternalTools([]tool.Tool{externalTool})),
+		graph.WithSubgraphOutputMapper(func(_ graph.State, result graph.SubgraphResult) graph.State {
+			if len(result.ToolCalls) != 1 {
+				return nil
+			}
+			call := result.ToolCalls[0]
+			return graph.State{
+				"inner_tool_name": call.Function.Name,
+				"inner_tool_args": string(call.Function.Arguments),
+			}
+		}),
+	)
+	sg.AddNode("inner_finish", func(ctx context.Context, state graph.State) (any, error) {
+		_ = ctx
+		toolName, _ := state["inner_tool_name"].(string)
+		toolArgs, _ := state["inner_tool_args"].(string)
+		if toolName == "" {
+			return nil, errors.New("inner tool call is missing")
+		}
+		return graph.State{
+			graph.StateKeyLastResponse: graphName + " selected " + toolName + " with " + toolArgs,
+		}, nil
+	})
+	compiled := sg.AddEdge(workerName, "inner_finish").
+		SetEntryPoint(workerName).
+		SetFinishPoint("inner_finish").
+		MustCompile()
+	ga, err := graphagent.New(
+		graphName,
+		compiled,
+		graphagent.WithSubAgents([]agent.Agent{worker}),
+	)
+	require.NoError(t, err)
+	return &handoffTestInnerGraphAgent{Agent: ga, worker: worker}
+}
+
 func TestNewTool(t *testing.T) {
 	mockAgent := &mockAgent{
 		name:        "test-agent",
@@ -1094,6 +1443,420 @@ func TestTool_Call_GraphToolsNodeAgentToolCustomWrappedGraphAgentInterruptResume
 	require.False(t, hasSubgraphInterrupt)
 	_, hasResumeMap := latestParent.Checkpoint.ChannelValues[graph.StateKeyResumeMap]
 	require.False(t, hasResumeMap)
+}
+
+func TestTool_Call_HandoffNodeSelectsGraphAgentToolWithNestedExternalAgentNode(t *testing.T) {
+	const (
+		outerAgentName       = "outer_handoff_graph"
+		outerPlannerName     = "handoff_planner"
+		handoffNodeID        = "execute_handoff"
+		handoffToolName      = "handoff_task"
+		handoffAgentID       = "research"
+		innerGraphName       = "dynamic_research_graph"
+		innerWorkerName      = "wrapped_inner_worker"
+		innerExternalTool    = "inner_external"
+		handoffTask          = "summarize the incident"
+		innerToolCallID      = "call-inner-external"
+		expectedInnerToolArg = `{"query":"incident"}`
+	)
+	outerModel := &toolSurfaceRecordingModel{
+		name: "outer-model",
+		message: model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call-handoff",
+				Function: model.FunctionDefinitionParam{
+					Name: handoffToolName,
+					Arguments: []byte(
+						`{"agent_id":"` + handoffAgentID + `","task":"` + handoffTask + `"}`,
+					),
+				},
+			}},
+		},
+	}
+	innerModel := &toolSurfaceRecordingModel{
+		name: "inner-model",
+		message: model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   innerToolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      innerExternalTool,
+					Arguments: []byte(expectedInnerToolArg),
+				},
+			}},
+		},
+	}
+	innerGraphAgent := newHandoffTestInnerGraphAgent(
+		t,
+		innerGraphName,
+		innerWorkerName,
+		innerExternalTool,
+		innerModel,
+	)
+	handoffTool := &handoffDispatchTool{
+		name: handoffToolName,
+		factory: func() map[string]tool.CallableTool {
+			return map[string]tool.CallableTool{
+				handoffAgentID: NewTool(innerGraphAgent),
+			}
+		},
+	}
+	outerPlanner := llmagent.New(
+		outerPlannerName,
+		llmagent.WithModel(outerModel),
+	)
+	outerSchema := graph.MessagesStateSchema().
+		AddField("handoff_request", graph.StateField{Type: reflect.TypeOf(handoffArgs{})}).
+		AddField("handoff_result", graph.StateField{Type: reflect.TypeOf("")})
+	outerGraph := graph.NewStateGraph(outerSchema)
+	outerGraph.AddAgentNode(
+		outerPlannerName,
+		graph.WithAgentNodeRunOptions(agent.WithExternalTools([]tool.Tool{handoffTool})),
+		graph.WithSubgraphOutputMapper(func(_ graph.State, result graph.SubgraphResult) graph.State {
+			if len(result.ToolCalls) != 1 {
+				return nil
+			}
+			call := result.ToolCalls[0]
+			if call.Function.Name != handoffToolName {
+				return nil
+			}
+			var req handoffArgs
+			if err := json.Unmarshal(call.Function.Arguments, &req); err != nil {
+				return nil
+			}
+			return graph.State{"handoff_request": req}
+		}),
+	)
+	outerGraph.AddNode(handoffNodeID, func(ctx context.Context, state graph.State) (any, error) {
+		req, ok := state["handoff_request"].(handoffArgs)
+		if !ok {
+			return nil, errors.New("handoff request is missing")
+		}
+		args, err := json.Marshal(req)
+		if err != nil {
+			return nil, err
+		}
+		result, err := handoffTool.Call(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		text, ok := result.(string)
+		if !ok {
+			return nil, fmt.Errorf("handoff result must be a string, got %T", result)
+		}
+		return graph.State{
+			"handoff_result":           text,
+			graph.StateKeyLastResponse: text,
+		}, nil
+	})
+	compiledOuter := outerGraph.AddEdge(outerPlannerName, handoffNodeID).
+		SetEntryPoint(outerPlannerName).
+		SetFinishPoint(handoffNodeID).
+		MustCompile()
+	outerAgent, err := graphagent.New(
+		outerAgentName,
+		compiledOuter,
+		graphagent.WithSubAgents([]agent.Agent{outerPlanner}),
+	)
+	require.NoError(t, err)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("outer-handoff-invocation"),
+		agent.WithInvocationMessage(model.NewUserMessage("start handoff")),
+		agent.WithInvocationSession(session.NewSession("app", "user", "handoff-session")),
+	)
+	events, err := outerAgent.Run(
+		agent.NewInvocationContext(context.Background(), invocation),
+		invocation,
+	)
+	require.NoError(t, err)
+	var done *event.Event
+	for ev := range events {
+		if ev != nil && ev.Done && ev.Object == graph.ObjectTypeGraphExecution {
+			done = ev
+		}
+	}
+	require.NotNil(t, done)
+	var handoffResult string
+	require.NoError(t, json.Unmarshal(done.StateDelta["handoff_result"], &handoffResult))
+	require.Equal(
+		t,
+		"dynamic_research_graph selected inner_external with "+expectedInnerToolArg,
+		handoffResult,
+	)
+	require.Equal(t, 1, handoffTool.callCount())
+	require.Equal(t, []string{handoffAgentID}, handoffTool.selectedAgentIDs())
+	require.True(t, outerModel.sawTool(handoffToolName))
+	require.True(t, innerModel.sawTool(innerExternalTool))
+	require.Equal(t, 1, innerGraphAgent.ranCount())
+	require.True(t, innerGraphAgent.sawExternalTool(innerExternalTool))
+}
+
+func TestTool_Call_GraphToolsNodeAgentToolGraphAgentAgentNodeResumeKeepsChildHistory(t *testing.T) {
+	const (
+		parentLineageID  = "agent-tool-agentnode-parent-lineage"
+		parentNamespace  = "agent-tool-agentnode-parent"
+		toolsNodeID      = "tools"
+		childGraphName   = "agentnode-child-graph-tool"
+		innerWorkerName  = "agentnode-inner-worker"
+		innerGateNodeID  = "inner_external_gate"
+		innerToolName    = "inner_external_search"
+		innerToolCallID  = "call-inner-search"
+		innerToolArgs    = `{"query":"incident"}`
+		innerResumeValue = "search result"
+		innerFinalText   = "inner final after search result"
+	)
+	type innerToolRequest struct {
+		ToolCallID string `json:"tool_call_id"`
+		Name       string `json:"name"`
+		Args       string `json:"args"`
+	}
+	const (
+		stateKeyInnerToolRequest = "inner_tool_request"
+		stateKeyInnerToolMessage = "inner_tool_message"
+		stateKeyAfterOut         = "after_out"
+	)
+	saver := checkpointinmemory.NewSaver()
+	innerModel := &resumeAwareToolLoopModel{
+		name:       "resume-aware-inner-model",
+		toolName:   innerToolName,
+		toolCallID: innerToolCallID,
+		toolArgs:   []byte(innerToolArgs),
+		finalText:  innerFinalText,
+	}
+	innerLLM := llmagent.New(innerWorkerName+"-llm", llmagent.WithModel(innerModel))
+	worker := &handoffTestCustomAgent{name: innerWorkerName, inner: innerLLM}
+	innerExternalTool := function.NewFunctionTool(
+		func(context.Context, map[string]string) (string, error) {
+			return "", errors.New("inner external tool is caller-executed")
+		},
+		function.WithName(innerToolName),
+		function.WithDescription("Represents a caller-executed inner tool."),
+	)
+	childSchema := graph.MessagesStateSchema().
+		AddField(stateKeyInnerToolRequest, graph.StateField{Type: reflect.TypeOf(innerToolRequest{})}).
+		AddField(stateKeyInnerToolMessage, graph.StateField{Type: reflect.TypeOf(model.Message{})}).
+		AddField(stateKeyAfterOut, graph.StateField{Type: reflect.TypeOf("")})
+	childGraph := graph.NewStateGraph(childSchema)
+	childGraph.AddAgentNode(
+		innerWorkerName,
+		graph.WithAgentNodeRunOptions(agent.WithExternalTools([]tool.Tool{innerExternalTool})),
+		graph.WithAgentNodeInputMapper(func(state graph.State) graph.State {
+			raw, ok := state[stateKeyInnerToolMessage]
+			if !ok || raw == nil {
+				return nil
+			}
+			msg, ok := raw.(model.Message)
+			if !ok || msg.Role != model.RoleTool {
+				return nil
+			}
+			return graph.State{graph.StateKeyAgentInputMessage: &msg}
+		}),
+		graph.WithSubgraphOutputMapper(func(_ graph.State, result graph.SubgraphResult) graph.State {
+			for _, call := range result.ToolCalls {
+				if call.ID == "" || call.Function.Name != innerToolName {
+					continue
+				}
+				return graph.State{
+					stateKeyInnerToolRequest: innerToolRequest{
+						ToolCallID: call.ID,
+						Name:       call.Function.Name,
+						Args:       string(call.Function.Arguments),
+					},
+					stateKeyInnerToolMessage: nil,
+				}
+			}
+			if strings.TrimSpace(result.LastResponse) != "" {
+				return graph.State{
+					stateKeyInnerToolRequest:   nil,
+					stateKeyInnerToolMessage:   nil,
+					graph.StateKeyLastResponse: result.LastResponse,
+				}
+			}
+			return graph.State{stateKeyInnerToolRequest: nil}
+		}),
+	)
+	childGraph.AddNode(innerGateNodeID, func(ctx context.Context, state graph.State) (any, error) {
+		req, ok := state[stateKeyInnerToolRequest].(innerToolRequest)
+		if !ok || req.ToolCallID == "" {
+			return nil, nil
+		}
+		value, err := graph.Interrupt(ctx, state, req.ToolCallID, req)
+		if err != nil {
+			return nil, err
+		}
+		text, ok := value.(string)
+		if !ok || strings.TrimSpace(text) == "" {
+			return nil, fmt.Errorf("resume value for %s must be a non-empty string", req.ToolCallID)
+		}
+		return graph.State{
+			stateKeyInnerToolRequest: nil,
+			stateKeyInnerToolMessage: model.NewToolMessage(req.ToolCallID, req.Name, text),
+		}, nil
+	})
+	childCompiled := childGraph.AddEdge(innerWorkerName, innerGateNodeID).
+		AddConditionalEdges(innerGateNodeID, func(_ context.Context, state graph.State) (string, error) {
+			if state[stateKeyInnerToolMessage] != nil {
+				return innerWorkerName, nil
+			}
+			return graph.End, nil
+		}, map[string]string{
+			innerWorkerName: innerWorkerName,
+			graph.End:       graph.End,
+		}).
+		SetEntryPoint(innerWorkerName).
+		SetFinishPoint(innerWorkerName).
+		MustCompile()
+	childAgent, err := graphagent.New(
+		childGraphName,
+		childCompiled,
+		graphagent.WithCheckpointSaver(saver),
+		graphagent.WithSubAgents([]agent.Agent{worker}),
+	)
+	require.NoError(t, err)
+	parentSchema := graph.MessagesStateSchema().
+		AddField(stateKeyAfterOut, graph.StateField{Type: reflect.TypeOf("")})
+	parentGraph := graph.NewStateGraph(parentSchema)
+	childToolCall := model.ToolCall{
+		Type: "function",
+		ID:   "call-child-graph",
+		Function: model.FunctionDefinitionParam{
+			Name:      childGraphName,
+			Arguments: []byte(`{"request":"start"}`),
+		},
+	}
+	parentGraph.AddNode("before", func(ctx context.Context, state graph.State) (any, error) {
+		_ = ctx
+		_ = state
+		return graph.State{
+			graph.StateKeyMessages: graph.AppendMessages{Items: []model.Message{{
+				Role:      model.RoleAssistant,
+				ToolCalls: []model.ToolCall{childToolCall},
+			}}},
+		}, nil
+	})
+	parentGraph.AddToolsNode(
+		toolsNodeID,
+		map[string]tool.Tool{
+			childGraphName: NewTool(childAgent),
+		},
+	)
+	parentGraph.AddNode("after", func(ctx context.Context, state graph.State) (any, error) {
+		_ = ctx
+		lastToolResponse, _ := state[graph.StateKeyLastToolResponse].(string)
+		var text string
+		if err := json.Unmarshal([]byte(lastToolResponse), &text); err != nil {
+			return nil, err
+		}
+		return graph.State{stateKeyAfterOut: text}, nil
+	})
+	parentCompiled := parentGraph.AddEdge("before", toolsNodeID).
+		AddEdge(toolsNodeID, "after").
+		SetEntryPoint("before").
+		SetFinishPoint("after").
+		MustCompile()
+	parentAgent, err := graphagent.New(
+		"parent-agenttool-agentnode-history",
+		parentCompiled,
+		graphagent.WithCheckpointSaver(saver),
+	)
+	require.NoError(t, err)
+	parentSession := session.NewSession("app", "user", "agenttool-agentnode-history")
+	initialInvocation := agent.NewInvocation(
+		agent.WithInvocationID("parent-agentnode-initial"),
+		agent.WithInvocationMessage(model.NewUserMessage("start")),
+		agent.WithInvocationSession(parentSession),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRuntimeState(map[string]any{
+				graph.CfgKeyLineageID:    parentLineageID,
+				graph.CfgKeyCheckpointNS: parentNamespace,
+			}),
+		)),
+	)
+	initialEvents, err := parentAgent.Run(
+		agent.NewInvocationContext(context.Background(), initialInvocation),
+		initialInvocation,
+	)
+	require.NoError(t, err)
+	for ev := range initialEvents {
+		_ = ev
+	}
+	manager := parentAgent.Executor().CheckpointManager()
+	require.NotNil(t, manager)
+	parentTuples, err := manager.ListCheckpoints(
+		context.Background(),
+		graph.CreateCheckpointConfig(parentLineageID, "", parentNamespace),
+		nil,
+	)
+	require.NoError(t, err)
+	childTuples, err := manager.ListCheckpoints(
+		context.Background(),
+		graph.CreateCheckpointConfig(parentLineageID, "", childGraphName),
+		nil,
+	)
+	require.NoError(t, err)
+	var parentInterrupt *graph.CheckpointTuple
+	var childInterrupt *graph.CheckpointTuple
+	for _, tuple := range parentTuples {
+		if tuple != nil && tuple.Checkpoint != nil && tuple.Checkpoint.InterruptState != nil &&
+			tuple.Checkpoint.InterruptState.NodeID == toolsNodeID {
+			parentInterrupt = tuple
+		}
+	}
+	for _, tuple := range childTuples {
+		if tuple != nil && tuple.Checkpoint != nil && tuple.Checkpoint.InterruptState != nil &&
+			tuple.Checkpoint.InterruptState.NodeID == innerGateNodeID {
+			childInterrupt = tuple
+		}
+	}
+	require.NotNil(t, parentInterrupt)
+	require.NotNil(t, childInterrupt)
+	subgraphInterrupt, ok := parentInterrupt.Checkpoint.ChannelValues[graph.StateKeySubgraphInterrupt].(map[string]any)
+	require.True(t, ok)
+	childFilterKey, ok := subgraphInterrupt["child_filter_key"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, childFilterKey)
+	resumeInvocation := agent.NewInvocation(
+		agent.WithInvocationID("parent-agentnode-resume"),
+		agent.WithInvocationMessage(model.NewUserMessage("resume")),
+		agent.WithInvocationSession(parentSession),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRuntimeState(map[string]any{
+				graph.CfgKeyLineageID:    parentLineageID,
+				graph.CfgKeyCheckpointNS: parentNamespace,
+				graph.CfgKeyCheckpointID: parentInterrupt.Checkpoint.ID,
+				graph.StateKeyCommand: &graph.Command{
+					ResumeMap: map[string]any{
+						innerToolCallID: innerResumeValue,
+					},
+				},
+			}),
+		)),
+	)
+	resumeEvents, err := parentAgent.Run(
+		agent.NewInvocationContext(context.Background(), resumeInvocation),
+		resumeInvocation,
+	)
+	require.NoError(t, err)
+	var done *event.Event
+	var resumeErrs []string
+	for ev := range resumeEvents {
+		if ev != nil && ev.Error != nil {
+			resumeErrs = append(resumeErrs, ev.Error.Error())
+		}
+		if ev != nil && ev.Done && ev.Object == graph.ObjectTypeGraphExecution {
+			done = ev
+		}
+	}
+	require.NotNil(t, done, strings.Join(resumeErrs, "; "))
+	var afterOut string
+	require.NoError(t, json.Unmarshal(done.StateDelta[stateKeyAfterOut], &afterOut))
+	require.Equal(t, innerFinalText, afterOut)
+	require.Equal(t, 2, innerModel.requestCount())
+	require.True(t, innerModel.sawToolResultWithAssistantHistory())
+	require.Equal(t, 2, worker.ranCount())
 }
 
 func TestTool_Call_GraphEmitFinalModelResponses_DedupsGraphCompletionSnapshot(t *testing.T) {

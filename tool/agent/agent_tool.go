@@ -365,6 +365,9 @@ func (at *Tool) callWithParentInvocation(
 	}
 	// Build child filter key based on history scope.
 	childKey := at.buildChildFilterKey(parentInv)
+	if hasGraphRuntime && runtime.childKey != "" {
+		childKey = runtime.childKey
+	}
 	if runtimeState != nil {
 		if _, ok := runtimeState[graph.CfgKeyCheckpointID]; ok {
 			// A checkpoint resume is driven by the command in runtime state.
@@ -379,7 +382,7 @@ func (at *Tool) callWithParentInvocation(
 	if err != nil {
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
-	capture := at.newGraphToolInterruptCapture(runtimeState, parentNodeID, toolCallID, toolCallKey, hasGraphRuntime)
+	capture := at.newGraphToolInterruptCapture(runtimeState, parentNodeID, toolCallID, toolCallKey, childKey, hasGraphRuntime)
 	response, err := at.collectResponse(
 		subInv,
 		at.wrapGraphToolInterruptCapture(

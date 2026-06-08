@@ -26,6 +26,7 @@ type RuntimeContext struct {
 	ParentNodeID     string
 	ToolCallID       string
 	ToolCallKey      string
+	ChildFilterKey   string
 }
 
 // RuntimeCallable is implemented by internal tools that consume AgentTool graph runtime.
@@ -47,6 +48,7 @@ type InterruptMetadata struct {
 	ChildTaskID       string
 	ToolCallID        string
 	ToolCallKey       string
+	ChildFilterKey    string
 }
 
 type interruptError struct {
@@ -98,6 +100,8 @@ func validateInterruptMetadata(metadata InterruptMetadata) error {
 		return fmt.Errorf("agent tool graph interrupt missing tool call id")
 	case metadata.ToolCallKey == "":
 		return fmt.Errorf("agent tool graph interrupt missing tool call key")
+	case metadata.ChildFilterKey == "":
+		return fmt.Errorf("agent tool graph interrupt missing child filter key")
 	default:
 		return nil
 	}

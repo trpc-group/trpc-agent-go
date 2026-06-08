@@ -1,0 +1,18 @@
+Call 1: waiting for inner_external_search interrupt.
+handoff_task toolCallId: call_938fa48395484ce991880e10
+handoff_task args: {"agent_id": "research", "task": "Find the old version and the new version for the release upgrade verification. Search the old version first, then search the new version."}
+lineageId: handoff-agenttool-lineage-ac49c544
+inner_external_search toolCallId: call_d06e47497bb0430d97350aac
+inner_external_search args: {"query": "old version release upgrade verification"}
+checkpointId: 5216d3f7-0195-416a-807a-eda2304b456c
+inner_external_search result> 
+Call 2: resuming AgentTool child graph.
+inner_external_search toolCallId: chatcmpl-tool-429cd09019314a0fa7bba7600d37b80c
+inner_external_search args: {"query": "new version release upgrade verification"}
+checkpointId: c76d0794-ddda-4616-96a8-4b807668a721
+inner_external_search result> 
+Call 3: resuming AgentTool child graph.
+Verified: child graph completed.
+
+Final answer:
+The old version is v1.2.3 and the new version is v2.4.5.

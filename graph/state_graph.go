@@ -2531,6 +2531,7 @@ type subgraphInterruptInfo struct {
 	childTaskID       string
 	toolCallID        string
 	toolCallKey       string
+	childFilterKey    string
 }
 
 type extractedPregelInterrupt struct {
@@ -2578,6 +2579,9 @@ func subgraphInterruptInfoFromState(
 	}
 	if v, ok := typed[subgraphInterruptKeyToolCallKey].(string); ok {
 		info.toolCallKey = v
+	}
+	if v, ok := typed[subgraphInterruptKeyChildFilterKey].(string); ok {
+		info.childFilterKey = v
 	}
 	return info, true
 }
@@ -3923,6 +3927,7 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 		// The agent node captures completion snapshots from either raw
 		// graph.execution events or visible rewritten completion snapshots.
 		runOptions.RuntimeState = mergeAgentNodeRuntimeState(runtime, nodeRuntimeState)
+		injectAgentNodeToolContinuationMessages(&runOptions, runtime, inputMessage)
 		runOptions.CustomAgentConfigs = withScopedGraphCallOptions(
 			runOptions.CustomAgentConfigs,
 			nodeID,
@@ -3970,6 +3975,7 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 	applyAgentNodeRunOptions(&runOptions, nodeRunOptions)
 	nodeRuntimeState := runOptions.RuntimeState
 	runOptions.RuntimeState = mergeAgentNodeRuntimeState(runtime, nodeRuntimeState)
+	injectAgentNodeToolContinuationMessages(&runOptions, runtime, inputMessage)
 	inv := agent.NewInvocation(
 		agent.WithInvocationAgent(targetAgent),
 		agent.WithInvocationRunOptions(runOptions),
@@ -4018,6 +4024,31 @@ func mergeAgentNodeRuntimeState(runtime State, nodeRuntimeState map[string]any) 
 		merged[key] = value
 	}
 	return merged
+}
+
+func injectAgentNodeToolContinuationMessages(
+	runOptions *agent.RunOptions,
+	runtime State,
+	inputMessage model.Message,
+) {
+	if runOptions == nil || runtime == nil || inputMessage.Role != model.RoleTool {
+		return
+	}
+	messages, ok := runtime[StateKeyMessages].([]model.Message)
+	if !ok || len(messages) == 0 {
+		return
+	}
+	history := make([]model.Message, 0, len(messages))
+	for _, msg := range messages {
+		if model.MessagesEqual(msg, inputMessage) {
+			continue
+		}
+		history = append(history, msg)
+	}
+	if len(history) == 0 {
+		return
+	}
+	runOptions.InjectedContextMessages = append(runOptions.InjectedContextMessages, history...)
 }
 
 func currentTraceTaskPredecessors(traceTask *traceTaskMetadata) []string {
@@ -4475,6 +4506,7 @@ func agentToolGraphRuntimeContext(
 		ParentNodeID:     currentNodeID,
 		ToolCallID:       toolCall.ID,
 		ToolCallKey:      toolCallKey,
+		ChildFilterKey:   agentToolChildFilterKey(state, currentNodeID, toolCall.Function.Name, toolCall.ID, toolCallKey),
 	}, nil
 }
 
@@ -5897,6 +5929,7 @@ func setAgentToolInterruptStateFromError(state State, err error) {
 		meta.ChildTaskID,
 		meta.ToolCallID,
 		meta.ToolCallKey,
+		meta.ChildFilterKey,
 	)
 }
 

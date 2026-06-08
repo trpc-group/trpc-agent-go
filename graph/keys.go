@@ -51,6 +51,7 @@ const (
 	subgraphInterruptKeyChildTaskID       = "child_task_id"
 	subgraphInterruptKeyToolCallID        = "tool_call_id"
 	subgraphInterruptKeyToolCallKey       = "tool_call_key"
+	subgraphInterruptKeyChildFilterKey    = "child_filter_key"
 
 	stateKeyCompletedToolMessages = "__completed_tool_messages__"
 )

@@ -232,6 +232,7 @@ func testAgentToolInterruptMetadata() agenttoolgraph.InterruptMetadata {
 		ChildTaskID:       "approval",
 		ToolCallID:        "call_interrupt",
 		ToolCallKey:       "1:interrupt:call_interrupt",
+		ChildFilterKey:    "parent/child",
 	}
 }
 
@@ -258,6 +259,7 @@ func testAgentToolSubgraphInterruptState(
 		subgraphInterruptKeyChildLineageID:    "child-lineage",
 		subgraphInterruptKeyChildTaskID:       childTaskID,
 		subgraphInterruptKeyToolCallID:        toolCallID,
+		subgraphInterruptKeyChildFilterKey:    "parent/child",
 	}
 	if toolCallKey != "" {
 		state[subgraphInterruptKeyToolCallKey] = toolCallKey
@@ -4292,6 +4294,21 @@ func TestAgentToolChildRuntimeState_RejectsIncompleteInterruptMetadata(t *testin
 	}
 	_, err = agentToolChildRuntimeState(missingToolCallKey, parentNodeID, childAgentName, toolCallID, toolCallKey)
 	require.ErrorContains(t, err, "missing tool call key")
+	missingChildFilterKey := State{
+		StateKeySubgraphInterrupt: func() map[string]any {
+			state := testAgentToolSubgraphInterruptState(
+				parentNodeID,
+				childAgentName,
+				childTaskID,
+				toolCallID,
+				toolCallKey,
+			)
+			delete(state, subgraphInterruptKeyChildFilterKey)
+			return state
+		}(),
+	}
+	_, err = agentToolChildRuntimeState(missingChildFilterKey, parentNodeID, childAgentName, toolCallID, toolCallKey)
+	require.ErrorContains(t, err, "missing child filter key")
 }
 
 func TestExtractPregelInterrupt(t *testing.T) {
