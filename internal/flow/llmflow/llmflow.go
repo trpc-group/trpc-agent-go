@@ -1041,7 +1041,7 @@ func (f *Flow) preprocess(
 		}
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
-	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(llmRequest.Messages, llmRequest.Tools)
+	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(ctx, llmRequest.Messages, llmRequest.Tools)
 	return rebuildPlan
 }
 
@@ -1158,6 +1158,7 @@ func (f *Flow) rebuildRequestForContextCompaction(
 		}
 	}
 	rebuilt.Messages = toolcall.SanitizeMessagesWithTools(
+		ctx,
 		rebuilt.Messages,
 		rebuilt.Tools,
 	)
