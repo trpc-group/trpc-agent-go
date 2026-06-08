@@ -4311,6 +4311,144 @@ func TestAgentToolChildRuntimeState_RejectsIncompleteInterruptMetadata(t *testin
 	require.ErrorContains(t, err, "missing child filter key")
 }
 
+func TestValidateAgentToolSubgraphInterruptInfo_RejectsMissingRequiredFields(t *testing.T) {
+	valid := subgraphInterruptInfo{
+		parentNodeID:      "tools",
+		childAgentName:    "child-agent",
+		childCheckpointID: "child-checkpoint",
+		childCheckpointNS: "child-ns",
+		childLineageID:    "child-lineage",
+		childTaskID:       "approval",
+		toolCallID:        "call-child",
+		toolCallKey:       "1:child-agent:call-child",
+		childFilterKey:    "parent/child",
+	}
+	require.NoError(t, validateAgentToolSubgraphInterruptInfo(valid))
+
+	tests := []struct {
+		name      string
+		mutate    func(*subgraphInterruptInfo)
+		wantError string
+	}{
+		{
+			name: "parent node id",
+			mutate: func(info *subgraphInterruptInfo) {
+				info.parentNodeID = ""
+			},
+			wantError: "missing parent node id",
+		},
+		{
+			name: "child agent name",
+			mutate: func(info *subgraphInterruptInfo) {
+				info.childAgentName = ""
+			},
+			wantError: "missing child agent name",
+		},
+		{
+			name: "child checkpoint id",
+			mutate: func(info *subgraphInterruptInfo) {
+				info.childCheckpointID = ""
+			},
+			wantError: "missing child checkpoint id",
+		},
+		{
+			name: "child checkpoint namespace",
+			mutate: func(info *subgraphInterruptInfo) {
+				info.childCheckpointNS = ""
+			},
+			wantError: "missing child checkpoint namespace",
+		},
+		{
+			name: "child lineage id",
+			mutate: func(info *subgraphInterruptInfo) {
+				info.childLineageID = ""
+			},
+			wantError: "missing child lineage id",
+		},
+		{
+			name: "child task id",
+			mutate: func(info *subgraphInterruptInfo) {
+				info.childTaskID = ""
+			},
+			wantError: "missing child task id",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := valid
+			tt.mutate(&info)
+			require.ErrorContains(t, validateAgentToolSubgraphInterruptInfo(info), tt.wantError)
+		})
+	}
+}
+
+func TestAgentToolChildFilterKey_TargetScoped(t *testing.T) {
+	const (
+		parentNodeID   = "tools"
+		childAgentName = "child-agent"
+		childTaskID    = "approval"
+		toolCallID     = "call-child"
+		toolCallKey    = "1:child-agent:call-child"
+		childFilterKey = "parent/child"
+	)
+	state := State{
+		StateKeySubgraphInterrupt: func() map[string]any {
+			raw := testAgentToolSubgraphInterruptState(
+				parentNodeID,
+				childAgentName,
+				childTaskID,
+				toolCallID,
+				toolCallKey,
+			)
+			raw[subgraphInterruptKeyChildFilterKey] = childFilterKey
+			return raw
+		}(),
+	}
+
+	require.Equal(
+		t,
+		childFilterKey,
+		agentToolChildFilterKey(state, parentNodeID, childAgentName, toolCallID, toolCallKey),
+	)
+	require.Empty(t, agentToolChildFilterKey(state, "", childAgentName, toolCallID, toolCallKey))
+	require.Empty(t, agentToolChildFilterKey(state, "other", childAgentName, toolCallID, toolCallKey))
+	require.Empty(t, agentToolChildFilterKey(state, parentNodeID, "other", toolCallID, toolCallKey))
+	require.Empty(t, agentToolChildFilterKey(state, parentNodeID, childAgentName, "other", toolCallKey))
+	require.Empty(t, agentToolChildFilterKey(state, parentNodeID, childAgentName, toolCallID, "other"))
+	require.Empty(t, agentToolChildFilterKey(State{}, parentNodeID, childAgentName, toolCallID, toolCallKey))
+}
+
+func TestClearAgentToolSubgraphInterruptState_ConsumesTargetResumeValue(t *testing.T) {
+	const (
+		nodeID      = "tools"
+		childTaskID = "approval"
+	)
+	state := State{
+		StateKeySubgraphInterrupt: testAgentToolSubgraphInterruptState(
+			nodeID,
+			"child-agent",
+			childTaskID,
+			"call-child",
+			"1:child-agent:call-child",
+		),
+		StateKeyResumeMap: map[string]any{
+			childTaskID: "approved",
+			"other":     "keep",
+		},
+	}
+
+	clearAgentToolSubgraphInterruptState(state, nodeID)
+
+	require.NotContains(t, state, StateKeySubgraphInterrupt)
+	require.Equal(t, map[string]any{"other": "keep"}, state[StateKeyResumeMap])
+
+	consumeAgentToolResumeValue(state, "other")
+	require.NotContains(t, state, StateKeyResumeMap)
+	require.NotPanics(t, func() {
+		clearAgentToolSubgraphInterruptState(nil, nodeID)
+	})
+}
+
 func TestExtractPregelInterrupt(t *testing.T) {
 	const (
 		invocationID = "inv"

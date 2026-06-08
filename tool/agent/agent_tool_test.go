@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	checkpointinmemory "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
@@ -1009,6 +1010,218 @@ func TestTool_Call_DisableGraphCompletionEvent_KeepsFinalText(t *testing.T) {
 	resultText, ok := result.(string)
 	require.True(t, ok)
 	require.Equal(t, "child-final", resultText)
+}
+
+func TestParentInvocationGraphRuntimeFromContext_ValidatesRequiredFields(t *testing.T) {
+	valid := agenttoolgraph.RuntimeContext{
+		ParentInvocation: agent.NewInvocation(),
+		State:            map[string]any{"k": "v"},
+		ParentNodeID:     "tools",
+		ToolCallID:       "call-child",
+		ToolCallKey:      "0:child:call-child",
+		ChildFilterKey:   "parent/child",
+	}
+	runtime, err := parentInvocationGraphRuntimeFromContext(valid)
+	require.NoError(t, err)
+	require.Equal(t, graph.State(valid.State), runtime.state)
+	require.Equal(t, valid.ParentNodeID, runtime.parentNodeID)
+	require.Equal(t, valid.ToolCallID, runtime.toolCallID)
+	require.Equal(t, valid.ToolCallKey, runtime.toolCallKey)
+	require.Equal(t, valid.ChildFilterKey, runtime.childKey)
+
+	tests := []struct {
+		name      string
+		mutate    func(*agenttoolgraph.RuntimeContext)
+		wantError string
+	}{
+		{
+			name: "parent invocation",
+			mutate: func(runtime *agenttoolgraph.RuntimeContext) {
+				runtime.ParentInvocation = nil
+			},
+			wantError: "parent invocation is nil",
+		},
+		{
+			name: "runtime state",
+			mutate: func(runtime *agenttoolgraph.RuntimeContext) {
+				runtime.State = nil
+			},
+			wantError: "runtime state is nil",
+		},
+		{
+			name: "parent node id",
+			mutate: func(runtime *agenttoolgraph.RuntimeContext) {
+				runtime.ParentNodeID = ""
+			},
+			wantError: "parent node id is empty",
+		},
+		{
+			name: "tool call key",
+			mutate: func(runtime *agenttoolgraph.RuntimeContext) {
+				runtime.ToolCallKey = ""
+			},
+			wantError: "tool call key is empty",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := valid
+			tt.mutate(&runtime)
+			_, err := parentInvocationGraphRuntimeFromContext(runtime)
+			require.ErrorContains(t, err, tt.wantError)
+		})
+	}
+}
+
+func TestShouldSuppressGraphRuntimeSessionEvent(t *testing.T) {
+	inv := agent.NewInvocation()
+	graphEvent := event.New("inv", "author", event.WithObject(graph.ObjectTypeGraphPregelStep))
+	require.False(t, shouldSuppressGraphRuntimeSessionEvent(nil, graphEvent))
+	require.False(t, shouldSuppressGraphRuntimeSessionEvent(inv, nil))
+	require.False(t, shouldSuppressGraphRuntimeSessionEvent(inv, graphEvent))
+
+	inv.SetState(graphRuntimeSuppressSessionEventsStateKey, true)
+	require.True(t, shouldSuppressGraphRuntimeSessionEvent(inv, graphEvent))
+	require.False(t, shouldSuppressGraphRuntimeSessionEvent(
+		inv,
+		event.New("inv", "author", event.WithObject("model.response")),
+	))
+}
+
+func TestGraphToolInterruptCapture_ObserveAndFinish(t *testing.T) {
+	capture := &graphToolInterruptCapture{
+		parentNodeID:         "tools",
+		toolCallID:           "call-child",
+		toolCallKey:          "0:child:call-child",
+		childKey:             "parent/child",
+		childAgentName:       "child",
+		expectedLineageID:    "lineage",
+		expectedCheckpointNS: "child",
+	}
+	capture.observe(nil)
+	capture.observe(event.New("inv", "author", event.WithObject("other")))
+	capture.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "other-lineage",
+		CheckpointID:   "checkpoint",
+		CheckpointNS:   "child",
+	}))
+	capture.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointID:   "checkpoint",
+		CheckpointNS:   "other-child",
+	}))
+	capture.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointID:   "checkpoint",
+		CheckpointNS:   "child",
+	}))
+	capture.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointID:   "checkpoint",
+		CheckpointNS:   "child",
+	}))
+
+	err := capture.finish()
+	require.Error(t, err)
+	metadata, ok := agenttoolgraph.InterruptMetadataFromError(err)
+	require.True(t, ok)
+	require.Equal(t, "tools", metadata.ParentNodeID)
+	require.Equal(t, "child", metadata.ChildAgentName)
+	require.Equal(t, "checkpoint", metadata.ChildCheckpointID)
+	require.Equal(t, "child", metadata.ChildCheckpointNS)
+	require.Equal(t, "lineage", metadata.ChildLineageID)
+	require.Equal(t, "approval", metadata.ChildTaskID)
+	require.Equal(t, "call-child", metadata.ToolCallID)
+	require.Equal(t, "0:child:call-child", metadata.ToolCallKey)
+	require.Equal(t, "parent/child", metadata.ChildFilterKey)
+}
+
+func TestGraphToolInterruptCapture_FinishRejectsInvalidCapturedState(t *testing.T) {
+	require.NoError(t, (*graphToolInterruptCapture)(nil).finish())
+	require.NoError(t, (&graphToolInterruptCapture{}).finish())
+
+	conflict := &graphToolInterruptCapture{
+		parentNodeID:   "tools",
+		toolCallID:     "call-child",
+		toolCallKey:    "0:child:call-child",
+		childKey:       "parent/child",
+		childAgentName: "child",
+	}
+	conflict.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointID:   "checkpoint-1",
+		CheckpointNS:   "child",
+	}))
+	conflict.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointID:   "checkpoint-2",
+		CheckpointNS:   "child",
+	}))
+	require.ErrorContains(t, conflict.finish(), "multiple interrupt checkpoints")
+
+	missingCheckpoint := &graphToolInterruptCapture{
+		parentNodeID:   "tools",
+		toolCallID:     "call-child",
+		toolCallKey:    "0:child:call-child",
+		childKey:       "parent/child",
+		childAgentName: "child",
+	}
+	missingCheckpoint.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointNS:   "child",
+	}))
+	require.ErrorContains(t, missingCheckpoint.finish(), "missing checkpoint metadata")
+
+	missingChildKey := &graphToolInterruptCapture{
+		parentNodeID:   "tools",
+		toolCallID:     "call-child",
+		toolCallKey:    "0:child:call-child",
+		childAgentName: "child",
+	}
+	missingChildKey.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointID:   "checkpoint",
+		CheckpointNS:   "child",
+	}))
+	require.ErrorContains(t, missingChildKey.finish(), "missing child filter key")
+}
+
+func testPregelStepEvent(t *testing.T, metadata graph.PregelStepMetadata) *event.Event {
+	t.Helper()
+	raw, err := json.Marshal(metadata)
+	require.NoError(t, err)
+	return event.New(
+		"inv",
+		"author",
+		event.WithObject(graph.ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{
+			graph.MetadataKeyPregel: raw,
+		}),
+	)
 }
 
 func TestTool_Call_GraphToolsNodeAgentToolGraphAgentInterruptResume(t *testing.T) {
