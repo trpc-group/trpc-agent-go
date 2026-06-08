@@ -68,6 +68,18 @@ type captureRequestModel struct {
 	got *model.Request
 }
 
+type testSkillRepository struct{}
+
+func (testSkillRepository) Summaries() []skill.Summary { return nil }
+
+func (testSkillRepository) Get(string) (*skill.Skill, error) {
+	return nil, errors.New("not found")
+}
+
+func (testSkillRepository) Path(string) (string, error) {
+	return "", os.ErrNotExist
+}
+
 type stubRuntimeAgent struct{}
 
 type stubAdminPromptsProvider struct{}
@@ -1638,6 +1650,40 @@ func TestNewAgent_EmptyInstructionUsesDefault(t *testing.T) {
 	}, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, agt)
+}
+
+func TestNewAgent_UsesConfiguredSkillRepositoryProvider(t *testing.T) {
+	t.Parallel()
+
+	scopedRepo := &testSkillRepository{}
+	calls := 0
+	provider := skill.RepositoryProviderFunc(
+		func(_ context.Context, scope skill.SkillScope) (skill.Repository, error) {
+			calls++
+			require.Equal(t, skill.SkillScope{AppName: "demo"}, scope)
+			return scopedRepo, nil
+		},
+	)
+	agt, _, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:                 "demo",
+		SkillsRoot:              t.TempDir(),
+		StateDir:                t.TempDir(),
+		EvolutionSkillScopeMode: skill.SkillScopeApp,
+		SkillRepositoryProvider: provider,
+	}, nil, nil)
+	require.NoError(t, err)
+	surface, ok := agt.(interface {
+		InvocationSkillRepository(context.Context, *agent.Invocation) skill.Repository
+	})
+	require.True(t, ok)
+	got := surface.InvocationSkillRepository(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{AppName: "demo"}),
+		),
+	)
+	require.NotNil(t, got)
+	require.Equal(t, 1, calls)
 }
 
 func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {

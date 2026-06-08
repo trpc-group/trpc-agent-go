@@ -1086,6 +1086,9 @@ func NewRuntimeWithOptions(
 
 			RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
 		}
+		cwd, _ := os.Getwd()
+		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
+		agentCfg.SkillRepositoryProvider = skillsProv
 		ag, skillsRepo, err = newAgent(
 			mdl,
 			agentCfg,
@@ -1093,8 +1096,6 @@ func NewRuntimeWithOptions(
 			toolSets,
 		)
 		if err == nil {
-			cwd, _ := os.Getwd()
-			skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
 			skillsWatch = newSkillsWatchService(
 				cwd,
 				agentCfg,
@@ -1621,6 +1622,9 @@ func run(
 
 			RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
 		}
+		cwd, _ := os.Getwd()
+		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
+		agentCfg.SkillRepositoryProvider = skillsProv
 		ag, skillsRepo, err = newAgent(
 			mdl,
 			agentCfg,
@@ -1628,8 +1632,6 @@ func run(
 			toolSets,
 		)
 		if err == nil {
-			cwd, _ := os.Getwd()
-			skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
 			skillsWatch = newSkillsWatchService(
 				cwd,
 				agentCfg,
@@ -2496,6 +2498,10 @@ func newAgent(
 			instruction + "\n\n" + browserToolingGuidance,
 		)
 	}
+	repoProvider := cfg.SkillRepositoryProvider
+	if repoProvider == nil {
+		repoProvider = newScopedSkillRepositoryProvider(cwd, cfg)
+	}
 
 	genConfig := model.GenerationConfig{Stream: true}
 	if cfg.GenerationConfig != nil {
@@ -2526,9 +2532,7 @@ func newAgent(
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(
 		opts,
-		llmagent.WithSkillRepositoryProvider(
-			newScopedSkillRepositoryProvider(cwd, cfg),
-		),
+		llmagent.WithSkillRepositoryProvider(repoProvider),
 		llmagent.WithSkillScopeMode(cfg.EvolutionSkillScopeMode),
 	)
 	opts = append(
@@ -2793,6 +2797,7 @@ type agentConfig struct {
 	SkillsToolingGuide      *string
 	KnowledgesConfig        []knowledgeEntry
 	EvolutionSkillScopeMode skill.SkillScopeMode
+	SkillRepositoryProvider skill.RepositoryProvider
 
 	StateDir string
 

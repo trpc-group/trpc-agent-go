@@ -151,6 +151,32 @@ func scopedEvolutionCLIPath(root, appName, userID string) (string, error) {
 	return filepath.Join(append([]string{root}, parts...)...), nil
 }
 
+func managedSkillsDirForRevisionsDir(revisionsDir string) string {
+	clean := filepath.Clean(revisionsDir)
+	volume := filepath.VolumeName(clean)
+	rest := strings.TrimPrefix(clean, volume)
+	absolute := strings.HasPrefix(rest, string(filepath.Separator))
+	rest = strings.Trim(rest, string(filepath.Separator))
+	parts := []string{}
+	if rest != "" && rest != "." {
+		parts = strings.Split(rest, string(filepath.Separator))
+	}
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] != "evolution" || parts[i+1] != "revisions" {
+			continue
+		}
+		out := append([]string{}, parts[:i]...)
+		out = append(out, defaultSkillsDir, "evolution")
+		out = append(out, parts[i+2:]...)
+		joined := filepath.Join(out...)
+		if absolute {
+			joined = string(filepath.Separator) + joined
+		}
+		return volume + joined
+	}
+	return filepath.Join(filepath.Dir(clean), defaultSkillsDir, "evolution")
+}
+
 // ---------------------------------------------------------------------------
 // Subcommands
 // ---------------------------------------------------------------------------
@@ -225,6 +251,10 @@ func (e *evoEnv) decide(args []string, approve bool) int {
 
 	store := evolution.NewFileCandidateStore(dir)
 	pointer := evolution.NewFileActivePointer(dir)
+	var publisher evolution.Publisher
+	if approve {
+		publisher = evolution.NewFilePublisher(managedSkillsDirForRevisionsDir(dir))
+	}
 	ctx := context.Background()
 
 	skillID, err := findSkillForRevision(ctx, store, revisionID)
@@ -233,7 +263,7 @@ func (e *evoEnv) decide(args []string, approve bool) int {
 		return 1
 	}
 
-	svc := evolution.NewApprovalService(store, pointer, nil)
+	svc := evolution.NewApprovalService(store, pointer, publisher)
 	err = svc.Decide(ctx, evolution.ApprovalDecision{
 		RevisionID: revisionID,
 		SkillID:    skillID,

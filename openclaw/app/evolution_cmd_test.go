@@ -25,10 +25,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 )
 
-// setupEvolutionTestDir creates a temp dir with revision data for testing.
-func setupEvolutionTestDir(t *testing.T) string {
+func writeEvolutionTestRevisions(t *testing.T, dir string) {
 	t.Helper()
-	dir := t.TempDir()
 	store := evolution.NewFileCandidateStore(dir)
 	ctx := context.Background()
 
@@ -70,8 +68,22 @@ func setupEvolutionTestDir(t *testing.T) string {
 	auditLog := `{"at":"2026-05-01T09:00:00Z","action":"promote","skill_id":"recipe-cookbook","revision_id":"rev-active-002","status":"active","reason":"update"}
 `
 	require.NoError(t, os.WriteFile(filepath.Join(auditDir, "audit.log"), []byte(auditLog), 0o644))
+}
 
+// setupEvolutionTestDir creates a temp dir with revision data for testing.
+func setupEvolutionTestDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	writeEvolutionTestRevisions(t, dir)
 	return dir
+}
+
+func setupEvolutionRuntimeDirs(t *testing.T) (string, string) {
+	t.Helper()
+	stateDir := t.TempDir()
+	revisionsDir := filepath.Join(stateDir, "evolution", "revisions")
+	writeEvolutionTestRevisions(t, revisionsDir)
+	return revisionsDir, filepath.Join(stateDir, defaultSkillsDir, "evolution")
 }
 
 func runEvo(t *testing.T, args []string) (stdout, stderr string, code int) {
@@ -155,7 +167,7 @@ func TestEvolution_Diff_NotFound(t *testing.T) {
 }
 
 func TestEvolution_Approve(t *testing.T) {
-	dir := setupEvolutionTestDir(t)
+	dir, managedDir := setupEvolutionRuntimeDirs(t)
 	stdout, _, code := runEvo(t, []string{evoCmdApprove, "--dir", dir, "rev-pending-001", "--comment", "lgtm"})
 	assert.Equal(t, 0, code)
 	assert.Contains(t, stdout, "promoted to active")
@@ -164,6 +176,11 @@ func TestEvolution_Approve(t *testing.T) {
 	rev, err := store.ReadRevision(context.Background(), "weather-monitor", "rev-pending-001")
 	require.NoError(t, err)
 	assert.Equal(t, evolution.RevisionActive, rev.Status)
+	skillPath := filepath.Join(managedDir, "weather-monitor", "SKILL.md")
+	require.FileExists(t, skillPath)
+	raw, err := os.ReadFile(skillPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "Weather Monitor")
 }
 
 func TestEvolution_Reject(t *testing.T) {
@@ -227,6 +244,22 @@ func TestFindSkillForRevision(t *testing.T) {
 	_, err = findSkillForRevision(context.Background(), store, "nonexistent")
 	assert.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "not found"))
+}
+
+func TestManagedSkillsDirForRevisionsDir(t *testing.T) {
+	stateDir := t.TempDir()
+	revisionsDir := filepath.Join(stateDir, "evolution", "revisions")
+	require.Equal(
+		t,
+		filepath.Join(stateDir, defaultSkillsDir, "evolution"),
+		managedSkillsDirForRevisionsDir(revisionsDir),
+	)
+	scopedRevisionsDir := filepath.Join(revisionsDir, "apps", "weather")
+	require.Equal(
+		t,
+		filepath.Join(stateDir, defaultSkillsDir, "evolution", "apps", "weather"),
+		managedSkillsDirForRevisionsDir(scopedRevisionsDir),
+	)
 }
 
 func TestReadAuditLog(t *testing.T) {

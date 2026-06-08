@@ -1215,6 +1215,65 @@ func TestWorker_ApprovalGate_PromotesCleanCandidate(t *testing.T) {
 	assert.NotEmpty(t, got, "active pointer should be set")
 }
 
+func TestWorker_ApprovalGate_PromoteArchivesPreviousActive(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+	ctx := context.Background()
+
+	oldRev := &Revision{
+		SkillID:    skillIDFromName("Clean Skill"),
+		RevisionID: "rev-old",
+		Source:     "reviewer",
+		Action:     "create",
+		Status:     RevisionActive,
+		Spec:       &SkillSpec{Name: "Clean Skill", Description: "old", WhenToUse: "use", Steps: []string{"a", "b"}},
+		CreatedAt:  time.Now().UTC(),
+	}
+	require.NoError(t, store.WriteRevision(ctx, oldRev))
+	require.NoError(t, ptr.Set(ctx, oldRev.SkillID, oldRev.RevisionID))
+
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Skills: []*SkillSpec{{
+			Name:        "Clean Skill",
+			Description: "desc",
+			WhenToUse:   "use",
+			Steps:       []string{"a", "b"},
+		}},
+	}}
+	w := newWorker(workerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		ReviewPolicy:   alwaysReviewPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		SpecGate:       NewDefaultSpecGate(),
+		SafetyGate:     NewDefaultSafetyGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "work"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: ctx, job: LearningJob{Session: sess}})
+
+	activeRev, err := ptr.Get(ctx, oldRev.SkillID)
+	require.NoError(t, err)
+	require.NotEmpty(t, activeRev)
+	require.NotEqual(t, oldRev.RevisionID, activeRev)
+	storedOld, err := store.ReadRevision(ctx, oldRev.SkillID, oldRev.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionArchived, storedOld.Status)
+	raw, err := os.ReadFile(filepath.Join(dir, oldRev.SkillID, "audit.log"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"action":"archive"`)
+	assert.Contains(t, string(raw), `"revision_id":"rev-old"`)
+}
+
 func TestWorker_ApprovalGate_SpecGateRejects(t *testing.T) {
 	dir := t.TempDir()
 	pub := &mockPublisher{}
@@ -1512,6 +1571,58 @@ func TestWorker_ApplyUpdatesWithGate_SpecGateRejects(t *testing.T) {
 
 	metrics := w.approvalGateMetrics()
 	assert.Equal(t, 1, metrics.SpecGateRejected)
+	assert.Equal(t, 0, metrics.UpdatesApplied)
+}
+
+func TestWorker_ApplyUpdatesWithGate_SkipsNonEvolutionSkill(t *testing.T) {
+	dir := t.TempDir()
+	managedDir := "/state/skills/evolution"
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{
+		summaries: []skill.Summary{{Name: "Bundled Weather", Description: "bundled"}},
+		bodies:    map[string]string{"Bundled Weather": "body"},
+		paths: map[string]string{
+			"Bundled Weather": "/state/skills/bundled/weather-monitor",
+		},
+	}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Updates: []*SkillUpdate{{
+			Name: "Bundled Weather",
+			NewSpec: &SkillSpec{
+				Name:        "Bundled Weather",
+				Description: "updated desc",
+				WhenToUse:   "always",
+				Steps:       []string{"step one", "step two"},
+			},
+		}},
+	}}
+	w := newWorker(workerConfig{
+		Reviewer:         rev,
+		Publisher:        pub,
+		ReviewPolicy:     alwaysReviewPolicy{},
+		SkillRepo:        repo,
+		ManagedSkillsDir: managedDir,
+		CandidateStore:   store,
+		ActivePointer:    ptr,
+		SpecGate:         NewDefaultSpecGate(),
+		SafetyGate:       NewDefaultSafetyGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "improve"},
+		model.Message{Role: model.RoleAssistant, Content: "ok"},
+	)
+	w.processJob(&pendingJob{ctx: context.Background(), job: LearningJob{Session: sess}})
+
+	pub.mu.Lock()
+	assert.Empty(t, pub.skills, "gated update to bundled skill should be skipped")
+	pub.mu.Unlock()
+	metrics := w.approvalGateMetrics()
+	assert.Equal(t, 0, metrics.CandidatesSeen)
 	assert.Equal(t, 0, metrics.UpdatesApplied)
 }
 

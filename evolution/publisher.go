@@ -38,6 +38,11 @@ func newFilePublisher(root string) *filePublisher {
 	return &filePublisher{root: root}
 }
 
+// NewFilePublisher creates a filesystem-backed Publisher rooted at root.
+func NewFilePublisher(root string) Publisher {
+	return newFilePublisher(root)
+}
+
 // UpsertSkill implements Publisher. It creates (or overwrites) a SKILL.md file
 // under root/<sanitized-name>/SKILL.md.
 func (p *filePublisher) UpsertSkill(_ context.Context, spec *SkillSpec) error {

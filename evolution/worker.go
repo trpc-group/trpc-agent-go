@@ -651,6 +651,10 @@ func (w *worker) applyUpdatesWithGate(ctx context.Context, updates []*SkillUpdat
 			log.WarnfContext(ctx, "evolution: update skill %q skipped: not found in repo", upd.Name)
 			continue
 		}
+		if !w.isEvolutionManagedSkill(upd.Name, repo, scope, scoped) {
+			log.WarnfContext(ctx, "evolution: update skill %q skipped: not evolution-managed (protected)", upd.Name)
+			continue
+		}
 		spec := *upd.NewSpec
 		spec.Name = upd.Name // force stable on-disk name
 		rev := w.buildRevision(&spec, "update", upd.Name)
@@ -934,6 +938,10 @@ func (w *worker) publishRevision(ctx context.Context, rev *Revision, actionLabel
 		_ = store.WriteRevision(ctx, rev)
 	}
 	if pointer != nil {
+		if err := archiveCurrentActiveRevision(ctx, store, pointer, rev.SkillID, rev.RevisionID); err != nil {
+			log.WarnfContext(ctx, "evolution: archive active revision %q failed: %v", rev.SkillID, err)
+			return false
+		}
 		if err := pointer.Set(ctx, rev.SkillID, rev.RevisionID); err != nil {
 			log.WarnfContext(ctx, "evolution: active pointer set %s failed: %v", rev.SkillID, err)
 		}

@@ -12,6 +12,8 @@ package evolution
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -110,6 +112,57 @@ func TestApprovalService_Decide_Approve(t *testing.T) {
 	activeRev, err := ptr.Get(ctx, "my-skill")
 	require.NoError(t, err)
 	assert.Equal(t, "rev-approve", activeRev)
+}
+
+func TestApprovalService_Decide_ApproveArchivesPreviousActive(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+	pub := &mockPublisher{}
+	ctx := context.Background()
+
+	oldRev := &Revision{
+		SkillID:    "my-skill",
+		RevisionID: "rev-old",
+		Source:     "reviewer",
+		Action:     "create",
+		Status:     RevisionActive,
+		Spec:       &SkillSpec{Name: "My Skill", Description: "old", WhenToUse: "w", Steps: []string{"s1", "s2"}},
+		CreatedAt:  time.Now().UTC(),
+	}
+	pendingRev := &Revision{
+		SkillID:    "my-skill",
+		RevisionID: "rev-new",
+		Source:     "reviewer",
+		Action:     "update",
+		Status:     RevisionPendingApproval,
+		Spec:       &SkillSpec{Name: "My Skill", Description: "new", WhenToUse: "w", Steps: []string{"s1", "s2"}},
+		CreatedAt:  time.Now().UTC(),
+	}
+	require.NoError(t, store.WriteRevision(ctx, oldRev))
+	require.NoError(t, store.WriteRevision(ctx, pendingRev))
+	require.NoError(t, ptr.Set(ctx, "my-skill", "rev-old"))
+
+	svc := NewApprovalService(store, ptr, pub)
+	err := svc.Decide(ctx, ApprovalDecision{
+		RevisionID: "rev-new",
+		SkillID:    "my-skill",
+		Approved:   true,
+		Reviewer:   "alice@example.com",
+		Comment:    "replace old revision",
+	})
+	require.NoError(t, err)
+
+	storedOld, err := store.ReadRevision(ctx, "my-skill", "rev-old")
+	require.NoError(t, err)
+	assert.Equal(t, RevisionArchived, storedOld.Status)
+	activeRev, err := ptr.Get(ctx, "my-skill")
+	require.NoError(t, err)
+	assert.Equal(t, "rev-new", activeRev)
+	raw, err := os.ReadFile(filepath.Join(dir, "my-skill", "audit.log"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"action":"archive"`)
+	assert.Contains(t, string(raw), `"revision_id":"rev-old"`)
 }
 
 func TestApprovalService_Decide_Reject(t *testing.T) {

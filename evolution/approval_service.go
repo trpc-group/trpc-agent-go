@@ -102,6 +102,7 @@ func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision)
 		return ErrAlreadyDecided
 	}
 
+	persisted := false
 	if decision.Approved {
 		// Promote: publish skill + set active pointer
 		if s.publisher != nil && rev.Spec != nil {
@@ -112,7 +113,14 @@ func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision)
 		rev.Status = RevisionActive
 		now := time.Now().UTC()
 		rev.PromotedAt = &now
+		if err := s.store.WriteRevision(ctx, rev); err != nil {
+			return fmt.Errorf("write revision: %w", err)
+		}
+		persisted = true
 		if s.pointer != nil {
+			if err := archiveCurrentActiveRevision(ctx, s.store, s.pointer, rev.SkillID, rev.RevisionID); err != nil {
+				return err
+			}
 			if err := s.pointer.Set(ctx, rev.SkillID, rev.RevisionID); err != nil {
 				return fmt.Errorf("set active pointer: %w", err)
 			}
@@ -122,7 +130,10 @@ func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision)
 	}
 
 	// Persist updated status
-	if err := s.store.WriteRevision(ctx, rev); err != nil {
+	if !persisted {
+		err = s.store.WriteRevision(ctx, rev)
+	}
+	if err != nil {
 		return fmt.Errorf("write revision: %w", err)
 	}
 
