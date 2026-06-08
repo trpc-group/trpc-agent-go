@@ -15,10 +15,24 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
+
+func TestCancelQueuedUserMessages_LeavesEnqueueOnlyRunnerCompatible(t *testing.T) {
+	r := &enqueueOnlyRunner{}
+
+	err := EnqueueUserMessage(
+		r,
+		"req-enqueue-only",
+		model.NewUserMessage("hello"),
+	)
+	require.NoError(t, err)
+	require.False(t, CancelQueuedUserMessages(r, "req-enqueue-only"))
+	require.Len(t, r.messages, 1)
+}
 
 func TestRunner_CancelQueuedUserMessages_DiscardsPendingAndKeepsQueueOpen(t *testing.T) {
 	const (
@@ -148,4 +162,30 @@ func TestRunner_CancelQueuedUserMessages_DiscardsPendingAndKeepsQueueOpen(t *tes
 	)
 	require.Equal(t, -1, discardedIdx)
 	require.NotEqual(t, -1, keptIdx)
+}
+
+type enqueueOnlyRunner struct {
+	messages []model.Message
+}
+
+func (r *enqueueOnlyRunner) Run(
+	context.Context,
+	string,
+	string,
+	model.Message,
+	...agent.RunOption,
+) (<-chan *event.Event, error) {
+	return nil, nil
+}
+
+func (r *enqueueOnlyRunner) Close() error {
+	return nil
+}
+
+func (r *enqueueOnlyRunner) EnqueueUserMessage(
+	_ string,
+	message model.Message,
+) error {
+	r.messages = append(r.messages, message)
+	return nil
 }

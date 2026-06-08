@@ -211,7 +211,10 @@ type SteerableRunner interface {
 
 	// EnqueueUserMessage queues a user message for the active request.
 	EnqueueUserMessage(requestID string, message model.Message) error
+}
 
+// QueuedUserMessagesCanceler supports discarding queued user messages.
+type QueuedUserMessagesCanceler interface {
 	// CancelQueuedUserMessages discards user messages that are queued but not
 	// yet consumed for the active request.
 	CancelQueuedUserMessages(requestID string) bool
@@ -219,10 +222,6 @@ type SteerableRunner interface {
 
 type queuedUserMessageEnqueuer interface {
 	EnqueueUserMessage(requestID string, message model.Message) error
-}
-
-type queuedUserMessagesCanceler interface {
-	CancelQueuedUserMessages(requestID string) bool
 }
 
 // EnqueueUserMessage queues a user message on runners that support steering.
@@ -241,11 +240,11 @@ func EnqueueUserMessage(
 // CancelQueuedUserMessages discards queued user messages on runners that
 // support steering.
 func CancelQueuedUserMessages(r Runner, requestID string) bool {
-	steerable, ok := r.(queuedUserMessagesCanceler)
+	cancelable, ok := r.(QueuedUserMessagesCanceler)
 	if !ok {
 		return false
 	}
-	return steerable.CancelQueuedUserMessages(requestID)
+	return cancelable.CancelQueuedUserMessages(requestID)
 }
 
 // RunStatus is a snapshot of a running invocation.
