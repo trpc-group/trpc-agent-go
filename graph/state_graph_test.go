@@ -206,6 +206,30 @@ func (t *resultWithErrorTool) Call(_ context.Context, _ []byte) (any, error) {
 	return t.result, t.err
 }
 
+type runtimeAwareTool struct {
+	name          string
+	callResult    any
+	runtimeResult any
+	calledCall    bool
+	runtime       agenttoolgraph.RuntimeContext
+}
+
+func (t *runtimeAwareTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: t.name} }
+
+func (t *runtimeAwareTool) Call(_ context.Context, _ []byte) (any, error) {
+	t.calledCall = true
+	return t.callResult, nil
+}
+
+func (t *runtimeAwareTool) CallWithAgentToolGraphRuntime(
+	_ context.Context,
+	_ []byte,
+	runtime agenttoolgraph.RuntimeContext,
+) (any, error) {
+	t.runtime = runtime
+	return t.runtimeResult, nil
+}
+
 // helper to build tool calls with fixed IDs and names.
 func makeToolCalls(names ...string) []model.ToolCall {
 	calls := make([]model.ToolCall, 0, len(names))
@@ -1389,6 +1413,99 @@ func TestSelectToolCallError_RejectsMultipleAgentToolGraphInterrupts(t *testing.
 		testAgentToolInterruptError(t, secondMetadata),
 	})
 	require.ErrorContains(t, err, "multiple agent tool graph interrupts")
+}
+
+func TestCompletedToolMessagesForNode_DecodesAndClears(t *testing.T) {
+	const nodeID = "tools"
+	calls := makeToolCalls("alpha", "beta", "gamma")
+	alphaMsg := model.NewToolMessage(calls[0].ID, calls[0].Function.Name, `{"alpha":true}`)
+	betaMsg := model.NewToolMessage(calls[1].ID, calls[1].Function.Name, `{"beta":true}`)
+	gammaMsg := model.NewToolMessage(calls[2].ID, calls[2].Function.Name, `{"gamma":true}`)
+
+	require.Nil(t, completedToolMessagesForNode(nil, nodeID))
+	require.Nil(t, completedToolMessagesForNode(State{}, nodeID))
+	require.Nil(t, completedToolMessagesForNode(State{stateKeyCompletedToolMessages: "bad"}, nodeID))
+	require.Nil(t, completedToolMessagesForNode(State{
+		stateKeyCompletedToolMessages: map[string]any{nodeID: "bad"},
+	}, nodeID))
+
+	state := State{}
+	recordCompletedToolMessage(state, "", "skip", alphaMsg)
+	recordCompletedToolMessage(state, nodeID, "", alphaMsg)
+	recordCompletedToolMessage(state, nodeID, completedToolMessageKey(0, calls[0]), alphaMsg)
+
+	nodes := state[stateKeyCompletedToolMessages].(map[string]any)
+	rawMessages := nodes[nodeID].(map[string]any)
+	rawMessages[completedToolMessageKey(1, calls[1])] = &betaMsg
+	rawMessages[completedToolMessageKey(2, calls[2])] = map[string]any{
+		"role":      gammaMsg.Role,
+		"content":   gammaMsg.Content,
+		"tool_id":   gammaMsg.ToolID,
+		"tool_name": gammaMsg.ToolName,
+	}
+	rawMessages["bad"] = make(chan struct{})
+
+	messages := completedToolMessagesForNode(state, nodeID)
+	require.Equal(t, alphaMsg, messages[completedToolMessageKey(0, calls[0])])
+	require.Equal(t, betaMsg, messages[completedToolMessageKey(1, calls[1])])
+	require.Equal(t, gammaMsg, messages[completedToolMessageKey(2, calls[2])])
+	require.NotContains(t, messages, "bad")
+
+	clearCompletedToolMessages(state, "other")
+	require.Contains(t, state, stateKeyCompletedToolMessages)
+	clearCompletedToolMessages(state, nodeID)
+	require.NotContains(t, state, stateKeyCompletedToolMessages)
+	require.NotPanics(t, func() {
+		clearCompletedToolMessages(nil, nodeID)
+	})
+}
+
+func TestCallToolWithRetry_UsesAgentToolGraphRuntimeWhenAvailable(t *testing.T) {
+	toolCall := makeToolCalls("child")[0]
+	runtimeTool := &runtimeAwareTool{
+		name:          "child",
+		callResult:    "call",
+		runtimeResult: "runtime",
+	}
+	state := State{
+		StateKeyCurrentNodeID: "tools",
+	}
+	invocation := agent.NewInvocation(agent.WithInvocationID("parent"))
+
+	result, err := callToolWithRetry(
+		context.Background(),
+		toolCall,
+		runtimeTool,
+		nil,
+		invocation,
+		state,
+		0,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "runtime", result)
+	require.False(t, runtimeTool.calledCall)
+	require.Equal(t, invocation, runtimeTool.runtime.ParentInvocation)
+	require.Equal(t, "tools", runtimeTool.runtime.ParentNodeID)
+	require.Equal(t, toolCall.ID, runtimeTool.runtime.ToolCallID)
+	require.Equal(t, completedToolMessageKey(0, toolCall), runtimeTool.runtime.ToolCallKey)
+
+	fallbackTool := &runtimeAwareTool{
+		name:          "child",
+		callResult:    "call",
+		runtimeResult: "runtime",
+	}
+	result, err = callToolWithRetry(
+		context.Background(),
+		toolCall,
+		fallbackTool,
+		nil,
+		nil,
+		state,
+		0,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "call", result)
+	require.True(t, fallbackTool.calledCall)
 }
 
 type assertAnError struct{}
@@ -4447,6 +4564,40 @@ func TestClearAgentToolSubgraphInterruptState_ConsumesTargetResumeValue(t *testi
 	require.NotPanics(t, func() {
 		clearAgentToolSubgraphInterruptState(nil, nodeID)
 	})
+}
+
+func TestInjectAgentNodeToolContinuationMessages(t *testing.T) {
+	input := model.NewToolMessage("call-1", "tool", "result")
+	historyUser := model.NewUserMessage("before")
+	historyAssistant := model.NewAssistantMessage("after")
+
+	var nilOptions *agent.RunOptions
+	require.NotPanics(t, func() {
+		injectAgentNodeToolContinuationMessages(nilOptions, State{}, input)
+	})
+
+	opts := &agent.RunOptions{}
+	injectAgentNodeToolContinuationMessages(opts, nil, input)
+	require.Empty(t, opts.InjectedContextMessages)
+
+	injectAgentNodeToolContinuationMessages(opts, State{StateKeyMessages: []model.Message{historyUser}}, model.NewUserMessage("not tool"))
+	require.Empty(t, opts.InjectedContextMessages)
+
+	injectAgentNodeToolContinuationMessages(opts, State{StateKeyMessages: []model.Message{input}}, input)
+	require.Empty(t, opts.InjectedContextMessages)
+
+	opts.InjectedContextMessages = []model.Message{model.NewSystemMessage("existing")}
+	injectAgentNodeToolContinuationMessages(opts, State{
+		StateKeyMessages: []model.Message{historyUser, input, historyAssistant},
+	}, input)
+	require.Equal(t, []model.Message{
+		model.NewSystemMessage("existing"),
+		historyUser,
+		historyAssistant,
+	}, opts.InjectedContextMessages)
+
+	injectAgentNodeToolContinuationMessages(opts, State{StateKeyMessages: "bad"}, input)
+	require.Len(t, opts.InjectedContextMessages, 3)
 }
 
 func TestExtractPregelInterrupt(t *testing.T) {
