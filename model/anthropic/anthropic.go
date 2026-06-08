@@ -28,6 +28,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modeltailoring"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -266,7 +267,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in anthropic.Model",
 				err,
 			)
-			request.Messages = tailored
+			modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
 			return
 		}
 		log.WarnContext(
@@ -277,7 +278,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	request.Messages = tailored
+	modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
 }
 
 // buildChatRequest builds the chat request for the Anthropic API.

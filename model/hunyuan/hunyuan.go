@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/modeltailoring"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -310,14 +311,14 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	if err != nil {
 		if len(tailored) > 0 {
 			log.WarnContext(ctx, "token tailoring returned best-effort messages in hunyuan.Model", err)
-			request.Messages = tailored
+			modeltailoring.ApplyResult(ctx, "hunyuan.Model", request, tailored)
 			return
 		}
 		log.WarnContext(ctx, "token tailoring failed in hunyuan.Model", "error", err)
 		return
 	}
 
-	request.Messages = tailored
+	modeltailoring.ApplyResult(ctx, "hunyuan.Model", request, tailored)
 }
 
 // buildChatRequest builds the chat request for the Hunyuan API.

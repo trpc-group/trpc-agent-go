@@ -2280,6 +2280,16 @@ func (s overflowTailoringStrategy) TailorMessages(
 	return s.tailored, errors.New("minimal protected context exceeds token budget")
 }
 
+type emptyTailoringStrategy struct{}
+
+func (emptyTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return nil, nil
+}
+
 type captureMaxTokensStrategy struct {
 	maxTokens int
 	called    bool
@@ -2347,6 +2357,23 @@ func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
 	m.applyTokenTailoring(context.Background(), req)
 
 	require.Equal(t, tailored, req.Messages)
+}
+
+func TestWithTokenTailoring_PreservesOriginalOnEmptyResult(t *testing.T) {
+	original := []model.Message{
+		model.NewSystemMessage("sys"),
+		model.NewUserMessage("q"),
+	}
+	m := New("test-model",
+		WithEnableTokenTailoring(true),
+		WithMaxInputTokens(1),
+		WithTailoringStrategy(emptyTailoringStrategy{}),
+	)
+	req := &model.Request{Messages: append([]model.Message(nil), original...)}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	require.Equal(t, original, req.Messages)
 }
 
 func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
