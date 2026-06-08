@@ -38,6 +38,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -1076,8 +1077,9 @@ func (f *Flow) maybeCompactContextBeforeLLM(
 
 	filterKey := invocation.GetEventFilterKey()
 	before := snapshotSummary(invocation.Session, filterKey)
+	summaryCtx := sessionsummary.ContextWithCacheSafeForkRequest(ctx, req)
 	err := invocation.SessionService.CreateSessionSummary(
-		ctx,
+		summaryCtx,
 		invocation.Session,
 		filterKey,
 		false,
