@@ -68,15 +68,33 @@ type captureRequestModel struct {
 	got *model.Request
 }
 
-type testSkillRepository struct{}
+type testSkillRepository struct {
+	summary skill.Summary
+	body    string
+	path    string
+}
 
-func (testSkillRepository) Summaries() []skill.Summary { return nil }
+func (r *testSkillRepository) Summaries() []skill.Summary {
+	if r == nil || r.summary.Name == "" {
+		return nil
+	}
+	return []skill.Summary{r.summary}
+}
 
-func (testSkillRepository) Get(string) (*skill.Skill, error) {
+func (r *testSkillRepository) Get(name string) (*skill.Skill, error) {
+	if r != nil && name == r.summary.Name {
+		return &skill.Skill{
+			Summary: r.summary,
+			Body:    r.body,
+		}, nil
+	}
 	return nil, errors.New("not found")
 }
 
-func (testSkillRepository) Path(string) (string, error) {
+func (r *testSkillRepository) Path(name string) (string, error) {
+	if r != nil && name == r.summary.Name {
+		return r.path, nil
+	}
 	return "", os.ErrNotExist
 }
 
@@ -1655,7 +1673,14 @@ func TestNewAgent_EmptyInstructionUsesDefault(t *testing.T) {
 func TestNewAgent_UsesConfiguredSkillRepositoryProvider(t *testing.T) {
 	t.Parallel()
 
-	scopedRepo := &testSkillRepository{}
+	scopedRepo := &testSkillRepository{
+		summary: skill.Summary{
+			Name:        "scoped-provider-only",
+			Description: "visible only from the injected provider",
+		},
+		body: "provider body",
+		path: filepath.Join(t.TempDir(), "scoped-provider-only"),
+	}
 	calls := 0
 	provider := skill.RepositoryProviderFunc(
 		func(_ context.Context, scope skill.SkillScope) (skill.Repository, error) {
@@ -1683,6 +1708,13 @@ func TestNewAgent_UsesConfiguredSkillRepositoryProvider(t *testing.T) {
 		),
 	)
 	require.NotNil(t, got)
+	require.Equal(t, scopedRepo.Summaries(), got.Summaries())
+	loaded, err := got.Get("scoped-provider-only")
+	require.NoError(t, err)
+	require.Equal(t, "provider body", loaded.Body)
+	path, err := got.Path("scoped-provider-only")
+	require.NoError(t, err)
+	require.Equal(t, scopedRepo.path, path)
 	require.Equal(t, 1, calls)
 }
 
