@@ -10,7 +10,18 @@
 // Package model provides interfaces for working with LLMs.
 package model
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
+
+const (
+	// defaultHTTPClientTimeout is the default timeout for HTTP clients
+	// created by DefaultNewHTTPClient. This prevents goroutine leaks when
+	// a server becomes unresponsive and no caller-specified context deadline
+	// is set. Users can override this via WithHTTPClientTimeout.
+	defaultHTTPClientTimeout = 5 * time.Minute
+)
 
 // HTTPClient is the interface for the HTTP client.
 type HTTPClient interface {
@@ -26,7 +37,12 @@ var DefaultNewHTTPClient HTTPClientNewFunc = func(opts ...HTTPClientOption) HTTP
 	for _, opt := range opts {
 		opt(options)
 	}
+	timeout := options.Timeout
+	if timeout <= 0 {
+		timeout = defaultHTTPClientTimeout
+	}
 	return &http.Client{
+		Timeout:   timeout,
 		Transport: options.Transport,
 	}
 }
@@ -48,8 +64,17 @@ func WithHTTPClientTransport(transport http.RoundTripper) HTTPClientOption {
 	}
 }
 
+// WithHTTPClientTimeout sets the timeout for the HTTP client.
+// A zero or negative value disables the timeout (not recommended).
+func WithHTTPClientTimeout(timeout time.Duration) HTTPClientOption {
+	return func(options *HTTPClientOptions) {
+		options.Timeout = timeout
+	}
+}
+
 // HTTPClientOptions is the options for the HTTP client.
 type HTTPClientOptions struct {
 	Name      string
 	Transport http.RoundTripper
+	Timeout   time.Duration
 }
