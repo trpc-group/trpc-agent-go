@@ -71,6 +71,13 @@ type NamedTool struct {
 	name     string
 }
 
+// NewUnprefixedNamedTool wraps a tool as a NamedTool without adding any name
+// prefix. This is useful for ToolSets whose tools should be recognized as user
+// tools (e.g. for filtering) while keeping their original names.
+func NewUnprefixedNamedTool(t tool.Tool) *NamedTool {
+	return &NamedTool{original: t}
+}
+
 // Declaration returns the tool declaration with a prefixed name.
 func (t *NamedTool) Declaration() *tool.Declaration {
 	decl := t.original.Declaration()
