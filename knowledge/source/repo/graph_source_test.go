@@ -848,6 +848,49 @@ func TestGraphDataFromCodeASTFuzzySymbolResolution(t *testing.T) {
 	require.Equal(t, string(codeast.RelationInherits), data.Edges[0].Type)
 }
 
+func TestGraphDataFromCodeASTResolvesPythonSameModuleBareTarget(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "sample.py"), "class BaseHandler: pass\nclass HTTPHandler(BaseHandler): pass\n")
+
+	src := New(WithRepository(Repository{Dir: dir}))
+	result := &codeast.Result{
+		Nodes: []*codeast.Node{
+			{
+				ID: "sample.BaseHandler", Type: codeast.EntityClass,
+				Name: "BaseHandler", FullName: "sample.BaseHandler",
+				Language: codeast.LanguagePython, Scope: codeast.ScopeCode,
+				Code: "class BaseHandler: pass", FilePath: filepath.Join(dir, "sample.py"),
+				LineStart: 1, LineEnd: 1,
+			},
+			{
+				ID: "sample.HTTPHandler", Type: codeast.EntityClass,
+				Name: "HTTPHandler", FullName: "sample.HTTPHandler",
+				Language: codeast.LanguagePython, Scope: codeast.ScopeCode,
+				Code: "class HTTPHandler(BaseHandler): pass", FilePath: filepath.Join(dir, "sample.py"),
+				LineStart: 2, LineEnd: 2,
+			},
+		},
+		Edges: []*codeast.Edge{
+			{FromID: "sample.HTTPHandler", ToID: "BaseHandler", Type: codeast.RelationInherits},
+		},
+	}
+	allowed := map[string]struct{}{"sample.py": {}}
+	data := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo"}, allowed)
+	require.Len(t, data.Nodes, 2)
+	require.Len(t, data.Edges, 1, "same-module bare Python target should resolve relative to the source symbol")
+	require.Equal(t, string(codeast.RelationInherits), data.Edges[0].Type)
+}
+
+func TestResolveTargetSymbolIDBareNameAmbiguous(t *testing.T) {
+	kept := map[string]struct{}{
+		"pkg.a.Source":         {},
+		"pkg.a.internal.Model": {},
+		"pkg.a.other.Model":    {},
+	}
+	idx := buildShortNameIndex(kept)
+	require.Equal(t, "", resolveTargetSymbolID("Model", "pkg.a.Source", kept, idx))
+}
+
 func TestResolveSymbolIDExactMatch(t *testing.T) {
 	kept := map[string]struct{}{"pkg.foo.Bar": {}}
 	idx := buildShortNameIndex(kept)

@@ -199,7 +199,7 @@ func (s *Source) graphDataFromCodeAST(
 		if resolvedFrom == "" {
 			continue
 		}
-		resolvedTo := resolveSymbolID(astEdge.ToID, keptSymbols, shortNameIndex)
+		resolvedTo := resolveTargetSymbolID(astEdge.ToID, resolvedFrom, keptSymbols, shortNameIndex)
 		if resolvedTo == "" {
 			continue
 		}
@@ -492,6 +492,22 @@ func resolveSymbolID(rawID string, keptSymbols map[string]struct{}, shortNameInd
 		}
 	}
 	return matched
+}
+
+func resolveTargetSymbolID(rawID string, sourceID string, keptSymbols map[string]struct{}, shortNameIndex map[string][]string) string {
+	if resolved := resolveSymbolID(rawID, keptSymbols, shortNameIndex); resolved != "" {
+		return resolved
+	}
+	if rawID == "" || sourceID == "" || strings.Contains(rawID, ".") {
+		return ""
+	}
+	for prefix := symbolPrefix(sourceID); prefix != ""; prefix = symbolPrefix(prefix) {
+		candidate := prefix + "." + rawID
+		if resolved := resolveSymbolID(candidate, keptSymbols, shortNameIndex); resolved != "" {
+			return resolved
+		}
+	}
+	return ""
 }
 
 func symbolShortName(id string) string {
