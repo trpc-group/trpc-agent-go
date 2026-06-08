@@ -13,6 +13,7 @@ package model
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,4 +128,45 @@ func TestMultipleOptionApplications(t *testing.T) {
 	WithHTTPClientName("third")(options)
 
 	assert.Equal(t, "third", options.Name)
+}
+
+func TestDefaultNewHTTPClient_DefaultTimeout(t *testing.T) {
+	client := DefaultNewHTTPClient()
+	require.NotNil(t, client)
+
+	httpClient, ok := client.(*http.Client)
+	require.True(t, ok)
+	assert.Equal(t, defaultHTTPClientTimeout, httpClient.Timeout)
+}
+
+func TestDefaultNewHTTPClient_CustomTimeout(t *testing.T) {
+	custom := 30 * time.Second
+	client := DefaultNewHTTPClient(WithHTTPClientTimeout(custom))
+	require.NotNil(t, client)
+
+	httpClient, ok := client.(*http.Client)
+	require.True(t, ok)
+	assert.Equal(t, custom, httpClient.Timeout)
+}
+
+func TestDefaultNewHTTPClient_DisableTimeout(t *testing.T) {
+	client := DefaultNewHTTPClient(WithHTTPClientTimeout(0))
+	require.NotNil(t, client)
+
+	httpClient, ok := client.(*http.Client)
+	require.True(t, ok)
+	assert.Equal(t, time.Duration(0), httpClient.Timeout)
+}
+
+func TestWithHTTPClientTimeout(t *testing.T) {
+	options := &HTTPClientOptions{}
+
+	WithHTTPClientTimeout(10 * time.Second)(options)
+	assert.Equal(t, 10*time.Second, options.Timeout)
+	assert.False(t, options.DisableTimeout)
+
+	options = &HTTPClientOptions{}
+	WithHTTPClientTimeout(0)(options)
+	assert.Equal(t, time.Duration(0), options.Timeout)
+	assert.True(t, options.DisableTimeout)
 }

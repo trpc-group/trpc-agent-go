@@ -38,7 +38,7 @@ var DefaultNewHTTPClient HTTPClientNewFunc = func(opts ...HTTPClientOption) HTTP
 		opt(options)
 	}
 	timeout := options.Timeout
-	if timeout <= 0 {
+	if timeout == 0 && !options.DisableTimeout {
 		timeout = defaultHTTPClientTimeout
 	}
 	return &http.Client{
@@ -65,16 +65,19 @@ func WithHTTPClientTransport(transport http.RoundTripper) HTTPClientOption {
 }
 
 // WithHTTPClientTimeout sets the timeout for the HTTP client.
-// A zero or negative value disables the timeout (not recommended).
+// Use 0 to explicitly disable the timeout (not recommended for production).
+// If not called, DefaultNewHTTPClient applies a 5-minute default timeout.
 func WithHTTPClientTimeout(timeout time.Duration) HTTPClientOption {
 	return func(options *HTTPClientOptions) {
 		options.Timeout = timeout
+		options.DisableTimeout = timeout == 0
 	}
 }
 
 // HTTPClientOptions is the options for the HTTP client.
 type HTTPClientOptions struct {
-	Name      string
-	Transport http.RoundTripper
-	Timeout   time.Duration
+	Name           string
+	Transport      http.RoundTripper
+	Timeout        time.Duration
+	DisableTimeout bool
 }
