@@ -750,6 +750,12 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 	if request.FrequencyPenalty != nil {
 		chatRequest.FrequencyPenalty = openai.Float(*request.FrequencyPenalty)
 	}
+	if request.Logprobs != nil {
+		chatRequest.Logprobs = openai.Bool(*request.Logprobs)
+	}
+	if request.TopLogprobs != nil {
+		chatRequest.TopLogprobs = openai.Int(int64(*request.TopLogprobs))
+	}
 	if request.ReasoningEffort != nil {
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
@@ -2408,7 +2414,8 @@ func (m *Model) createFinalResponse(
 		}
 
 		finalResponse.Choices[i] = model.Choice{
-			Index: int(choice.Index),
+			Index:    int(choice.Index),
+			Logprobs: convertChatCompletionChoiceLogprobs(choice.Logprobs),
 			Message: model.Message{
 				Role:             model.RoleAssistant,
 				Content:          choice.Message.Content,
@@ -2491,7 +2498,8 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 			reasoningContent := extractReasoningContent(choice.Message.JSON.ExtraFields)
 
 			response.Choices[i] = model.Choice{
-				Index: int(choice.Index),
+				Index:    int(choice.Index),
+				Logprobs: convertChatCompletionChoiceLogprobs(choice.Logprobs),
 				Message: model.Message{
 					Role:             model.RoleAssistant,
 					Content:          choice.Message.Content,
@@ -2537,6 +2545,44 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 	}
 
 	return response
+}
+
+func convertChatCompletionChoiceLogprobs(
+	logprobs openai.ChatCompletionChoiceLogprobs,
+) *model.Logprobs {
+	if len(logprobs.Content) == 0 {
+		return nil
+	}
+	converted := &model.Logprobs{
+		Content: make([]model.TokenLogprob, len(logprobs.Content)),
+	}
+	for i, token := range logprobs.Content {
+		converted.Content[i] = model.TokenLogprob{
+			Token:       token.Token,
+			Logprob:     token.Logprob,
+			Bytes:       int64SliceToIntSlice(token.Bytes),
+			TopLogprobs: make([]model.TopLogprob, len(token.TopLogprobs)),
+		}
+		for j, top := range token.TopLogprobs {
+			converted.Content[i].TopLogprobs[j] = model.TopLogprob{
+				Token:   top.Token,
+				Logprob: top.Logprob,
+				Bytes:   int64SliceToIntSlice(top.Bytes),
+			}
+		}
+	}
+	return converted
+}
+
+func int64SliceToIntSlice(values []int64) []int {
+	if values == nil {
+		return nil
+	}
+	converted := make([]int, len(values))
+	for i, value := range values {
+		converted[i] = int(value)
+	}
+	return converted
 }
 
 // FileOptions is the options for file operations.
