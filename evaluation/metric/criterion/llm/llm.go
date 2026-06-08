@@ -21,9 +21,10 @@ import (
 // LLMCriterion configures an LLM judge for evaluation.
 type LLMCriterion struct {
 	Rubrics            []*Rubric             `json:"rubrics,omitempty"`
-	JudgeModel         *JudgeModelOptions    `json:"judgeModel,omitempty"` // JudgeModel holds configuration for the judge model.
-	JudgeRunnerOptions *JudgeRunnerOptions   `json:"-"`                    // JudgeRunnerOptions holds runtime judge runner configuration.
-	Template           *JudgeTemplateOptions `json:"template,omitempty"`   // Template holds template evaluator configuration.
+	JudgeModel         *JudgeModelOptions    `json:"judgeModel,omitempty"`        // JudgeModel holds configuration for the judge model.
+	JudgeRunnerOptions *JudgeRunnerOptions   `json:"-"`                           // JudgeRunnerOptions holds runtime judge runner configuration.
+	SampleParallelism  int                   `json:"sampleParallelism,omitempty"` // SampleParallelism caps concurrent sample requests.
+	Template           *JudgeTemplateOptions `json:"template,omitempty"`          // Template holds template evaluator configuration.
 }
 
 // Rubric defines a single judging rubric item for LLM-based evaluation.
@@ -135,7 +136,8 @@ func New(providerName, modelName string, opt ...Option) *LLMCriterion {
 	opts := newOptions(opt...)
 	numSamples := opts.numSamples
 	return &LLMCriterion{
-		Rubrics: opts.rubrics,
+		Rubrics:           opts.rubrics,
+		SampleParallelism: opts.sampleParallelism,
 		JudgeModel: &JudgeModelOptions{
 			ProviderName: providerName,
 			ModelName:    modelName,

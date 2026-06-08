@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 
+	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/internal/judger"
@@ -40,6 +41,16 @@ type LLMEvaluator interface {
 // LLMBaseEvaluator hosts shared orchestration logic for LLM evaluators.
 type LLMBaseEvaluator struct {
 	LLMEvaluator LLMEvaluator // LLMEvaluator is the concrete LLM evaluator implementation.
+}
+
+type sampleCollectionRequest struct {
+	actual            *evalset.Invocation
+	expected          *evalset.Invocation
+	messages          []model.Message
+	evalMetric        *metric.EvalMetric
+	structuredOutput  *model.StructuredOutput
+	numSamples        int
+	sampleParallelism int
 }
 
 // New constructs an LLMBaseEvaluator wrapper around the concrete evaluator.
@@ -87,6 +98,9 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 	if numSamples <= 0 {
 		return nil, fmt.Errorf("num samples must be greater than 0")
 	}
+	if judgeCriterion.SampleParallelism < 0 {
+		return nil, fmt.Errorf("sample parallelism must be non-negative")
+	}
 	if len(actuals) != len(expecteds) {
 		return nil, fmt.Errorf("actual invocations (%d) and expected invocations (%d) count mismatch",
 			len(actuals), len(expecteds))
@@ -105,31 +119,17 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 		if err != nil {
 			return nil, fmt.Errorf("resolve structured output: %w", err)
 		}
-		samples := make([]*evaluator.PerInvocationResult, 0, numSamples)
-		for range numSamples {
-			response, err := judger.Judge(ctx, messages, evalMetric, judger.WithStructuredOutput(structuredOutput))
-			if err != nil {
-				return nil, fmt.Errorf("judge response: %w", err)
-			}
-			score, err := r.ScoreBasedOnResponse(ctx, response, evalMetric)
-			if err != nil {
-				return nil, fmt.Errorf("score based on response: %w", err)
-			}
-			evalStatus := status.EvalStatusPassed
-			if score.Score < evalMetric.Threshold {
-				evalStatus = status.EvalStatusFailed
-			}
-			samples = append(samples, &evaluator.PerInvocationResult{
-				ActualInvocation:   actual,
-				ExpectedInvocation: expected,
-				Score:              score.Score,
-				Status:             evalStatus,
-				Details: &evaluator.PerInvocationDetails{
-					Reason:       score.Reason,
-					Score:        score.Score,
-					RubricScores: score.RubricScores,
-				},
-			})
+		samples, err := r.collectSamples(ctx, &sampleCollectionRequest{
+			actual:            actual,
+			expected:          expected,
+			messages:          messages,
+			evalMetric:        evalMetric,
+			structuredOutput:  structuredOutput,
+			numSamples:        numSamples,
+			sampleParallelism: judgeCriterion.SampleParallelism,
+		})
+		if err != nil {
+			return nil, err
 		}
 		perInvocationResult, err := r.AggregateSamples(ctx, samples, evalMetric)
 		if err != nil {
@@ -138,6 +138,80 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 		results = append(results, perInvocationResult)
 	}
 	return r.AggregateInvocations(ctx, results, evalMetric)
+}
+
+func (r *LLMBaseEvaluator) collectSamples(ctx context.Context,
+	req *sampleCollectionRequest) ([]*evaluator.PerInvocationResult, error) {
+	if req.sampleParallelism <= 1 {
+		return r.collectSamplesSerially(ctx, req)
+	}
+	return r.collectSamplesInParallel(ctx, req)
+}
+
+func (r *LLMBaseEvaluator) collectSamplesSerially(ctx context.Context,
+	req *sampleCollectionRequest) ([]*evaluator.PerInvocationResult, error) {
+	samples := make([]*evaluator.PerInvocationResult, 0, req.numSamples)
+	for range req.numSamples {
+		sample, err := r.collectOneSample(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		samples = append(samples, sample)
+	}
+	return samples, nil
+}
+
+func (r *LLMBaseEvaluator) collectSamplesInParallel(ctx context.Context,
+	req *sampleCollectionRequest) ([]*evaluator.PerInvocationResult, error) {
+	parallelism := req.sampleParallelism
+	if parallelism > req.numSamples {
+		parallelism = req.numSamples
+	}
+	samples := make([]*evaluator.PerInvocationResult, req.numSamples)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(parallelism)
+	for i := range req.numSamples {
+		sampleIndex := i
+		group.Go(func() error {
+			sample, err := r.collectOneSample(groupCtx, req)
+			if err != nil {
+				return err
+			}
+			samples[sampleIndex] = sample
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
+	}
+	return samples, nil
+}
+
+func (r *LLMBaseEvaluator) collectOneSample(ctx context.Context,
+	req *sampleCollectionRequest) (*evaluator.PerInvocationResult, error) {
+	response, err := judger.Judge(ctx, req.messages, req.evalMetric, judger.WithStructuredOutput(req.structuredOutput))
+	if err != nil {
+		return nil, fmt.Errorf("judge response: %w", err)
+	}
+	score, err := r.ScoreBasedOnResponse(ctx, response, req.evalMetric)
+	if err != nil {
+		return nil, fmt.Errorf("score based on response: %w", err)
+	}
+	evalStatus := status.EvalStatusPassed
+	if score.Score < req.evalMetric.Threshold {
+		evalStatus = status.EvalStatusFailed
+	}
+	return &evaluator.PerInvocationResult{
+		ActualInvocation:   req.actual,
+		ExpectedInvocation: req.expected,
+		Score:              score.Score,
+		Status:             evalStatus,
+		Details: &evaluator.PerInvocationDetails{
+			Reason:       score.Reason,
+			Score:        score.Score,
+			RubricScores: score.RubricScores,
+		},
+	}, nil
 }
 
 // AggregateInvocations delegates invocation aggregation to the concrete evaluator.

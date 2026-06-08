@@ -1529,9 +1529,10 @@ import "trpc.group/trpc-go/trpc-agent-go/model"
 
 // LLMCriterion 表示 LLM Judge 准则
 type LLMCriterion struct {
-	Rubrics    []*Rubric             // Rubrics 是评估细则列表
-	JudgeModel *JudgeModelOptions    // JudgeModel 是裁判模型配置
-	Template   *JudgeTemplateOptions // Template 是模板评估器配置
+	Rubrics           []*Rubric             // Rubrics 是评估细则列表
+	JudgeModel        *JudgeModelOptions    // JudgeModel 是裁判模型配置
+	SampleParallelism int                   // SampleParallelism 是样本请求并发上限
+	Template          *JudgeTemplateOptions // Template 是模板评估器配置
 }
 
 // JudgeModelOptions 表示裁判模型配置
@@ -1603,6 +1604,8 @@ type RubricContent struct {
 `Generation` 默认使用 `MaxTokens=2000`、`Temperature=0.8`、`Stream=false`。
 
 `numSamples` 用于控制每轮的采样次数，默认为 1，采样次数越大越能抵御裁判波动，但开销也会相应增加。
+
+`sampleParallelism` 用于控制同一轮内裁判样本请求的并发上限。默认值为 0，保持原有串行行为；配置为大于 1 的值时，才会启用有上限的并行采样。如果该值大于 `numSamples`，评估器会按 `numSamples` 截断并发数。
 
 `providerName` 表示裁判模型的供应商，对应框架的 Model Provider。框架会按 `providerName` 与 `modelName` 创建裁判模型实例，常见取值有 `openai`、`anthropic` 和 `gemini`。Provider 的详细介绍可参考 [Provider](./model.md#provider)。
 

@@ -30,13 +30,14 @@ var (
 
 // options captures judge model configuration overrides.
 type options struct {
-	rubrics     []*Rubric               // rubrics is the list of rubrics to use.
-	variant     string                  // variant selects OpenAI-compatible model behavior.
-	baseURL     string                  // baseURL is a custom base URL for the judge model.
-	apiKey      string                  // apiKey is the credential for the judge model provider.
-	extraFields map[string]any          // extraFields holds provider-specific extras.
-	numSamples  int                     // numSamples is the number of samples to request.
-	generation  *model.GenerationConfig // generation configures the judge model generation behavior.
+	rubrics           []*Rubric               // rubrics is the list of rubrics to use.
+	variant           string                  // variant selects OpenAI-compatible model behavior.
+	baseURL           string                  // baseURL is a custom base URL for the judge model.
+	apiKey            string                  // apiKey is the credential for the judge model provider.
+	extraFields       map[string]any          // extraFields holds provider-specific extras.
+	numSamples        int                     // numSamples is the number of samples to request.
+	sampleParallelism int                     // sampleParallelism caps concurrent sample requests.
+	generation        *model.GenerationConfig // generation configures the judge model generation behavior.
 }
 
 // newOptions applies Option overrides on top of sensible defaults.
@@ -93,6 +94,13 @@ func WithExtraFields(extraFields map[string]any) Option {
 func WithNumSamples(numSamples int) Option {
 	return func(o *options) {
 		o.numSamples = numSamples
+	}
+}
+
+// WithSampleParallelism caps concurrent judge sample requests.
+func WithSampleParallelism(sampleParallelism int) Option {
+	return func(o *options) {
+		o.sampleParallelism = sampleParallelism
 	}
 }
 
