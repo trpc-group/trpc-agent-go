@@ -1043,7 +1043,7 @@ Content request processor 组装最终请求消息大致遵循下面顺序：
 2. Few-shot 示例（如果配置，会插入到前导 system block 之后）
 3. Injected context messages（`WithInjectedContextMessages`）—— **在历史之前**
 4. Session history（会话的 canonical transcript）
-5. Late context messages（`WithLateContextMessages`）—— **插入到最后一个 user message 之前**
+5. Late context messages（`WithLateContextMessages`）—— **插入到最后一个 user message 之前**（如果当前请求里没有 user message，则会插入到前导 system block 之后）
 6.（如果当前回合已有）属于当前回合的 tool/assistant tail
 
 这种 “late” 放置方式适合动态、每轮变化的规则：它能让规则贴近本轮用户请求，同时尽量保持前缀稳定（更利于 prompt cache）。

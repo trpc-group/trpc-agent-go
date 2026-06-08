@@ -31,18 +31,18 @@ import (
 )
 
 var (
-	mode     = flag.String("mode", "debug", "Model mode: debug (default) or openai")
-	modelName = flag.String("model", "gpt-4o-mini", "Model name (openai mode)")
-	stream   = flag.Bool("stream", false, "Enable streaming responses (openai mode)")
-	maxTokens = flag.Int("max-tokens", -1, "Max completion tokens (openai mode). <0 means use model default")
+	mode        = flag.String("mode", "debug", "Model mode: debug (default) or openai")
+	modelName   = flag.String("model", "gpt-4o-mini", "Model name (openai mode)")
+	stream      = flag.Bool("stream", false, "Enable streaming responses (openai mode)")
+	maxTokens   = flag.Int("max-tokens", -1, "Max completion tokens (openai mode). <0 means use model default")
 	temperature = flag.Float64("temperature", -1, "Sampling temperature (openai mode). <0 means use model default")
-	baseURL  = flag.String("base-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI-compatible base URL (optional)")
-	apiKey   = flag.String("api-key", os.Getenv("OPENAI_API_KEY"), "API key (optional; falls back to env)")
-	variant  = flag.String("variant", "openai", "Model variant for OpenAI adapter (openai/deepseek/hunyuan/qwen)")
-	targetPath = flag.String("target-path", "main.go", "Target path (used by the example's minimal rules selector)")
-	rulesText = flag.String("rules", "", "Optional rules text override (if empty, auto-select based on -target-path)")
-	turn1    = flag.String("turn1", "Summarize the change in one sentence.", "First user message (with late context)")
-	turn2    = flag.String("turn2", "Now answer again, same question.", "Second user message (no late context)")
+	baseURL     = flag.String("base-url", os.Getenv("OPENAI_BASE_URL"), "OpenAI-compatible base URL (optional)")
+	apiKey      = flag.String("api-key", os.Getenv("OPENAI_API_KEY"), "API key (optional; falls back to env)")
+	variant     = flag.String("variant", "openai", "Model variant for OpenAI adapter (openai/deepseek/hunyuan/qwen)")
+	targetPath  = flag.String("target-path", "main.go", "Target path (used by the example's minimal rules selector)")
+	rulesText   = flag.String("rules", "", "Optional rules text override (if empty, auto-select based on -target-path)")
+	turn1       = flag.String("turn1", "Summarize the change in one sentence.", "First user message (with late context)")
+	turn2       = flag.String("turn2", "Now answer again, same question.", "Second user message (no late context)")
 )
 
 // scenarioKey is used to pass a human-readable label through context.
@@ -166,7 +166,7 @@ func (d *rulesDemo) setup() error {
 	})
 
 	genConfig := model.GenerationConfig{
-		Stream:      d.streaming,
+		Stream: d.streaming,
 	}
 	if maxTokens != nil && *maxTokens >= 0 {
 		genConfig.MaxTokens = intPtr(*maxTokens)
@@ -395,4 +395,3 @@ func main() {
 		log.Fatalf("example failed: %v", err)
 	}
 }
-

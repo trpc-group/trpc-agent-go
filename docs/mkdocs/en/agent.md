@@ -1073,7 +1073,7 @@ The content request processor assembles the final model request roughly like thi
 2. Few-shot examples (if configured, inserted after the leading system block)
 3. Injected context messages (`WithInjectedContextMessages`) — **before history**
 4. Session history (canonical transcript)
-5. Late context messages (`WithLateContextMessages`) — **inserted before the latest user message**
+5. Late context messages (`WithLateContextMessages`) — **inserted before the latest user message** (if there is no user message, they are inserted immediately after the leading system block)
 6. (If already present) tool / assistant tail belonging to the current turn
 
 This “late” placement is useful when your injected content is dynamic and you want it close to the current user request, while keeping the prefix stable for prompt caching.

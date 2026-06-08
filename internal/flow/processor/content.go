@@ -744,7 +744,7 @@ func (p *ContentRequestProcessor) injectLateContextMessages(invocation *agent.In
 
 func lateContextInsertIndex(messages []model.Message) int {
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == model.RoleUser {
+		if messages[i].Role == model.RoleUser || messages[i].Role == "" {
 			return i
 		}
 	}
