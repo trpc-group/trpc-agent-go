@@ -23,11 +23,12 @@ import (
 	"github.com/google/uuid"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/steerext"
 	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
@@ -267,14 +268,14 @@ func (t *translator) finalizeEvents(
 func (t *translator) queuedUserMessageEvents(
 	evt *agentevent.Event,
 ) ([]aguievents.Event, bool, error) {
-	meta, ok, err := agentevent.GetExtension[steer.QueuedUserMessageMetadata](
+	meta, ok, err := agentevent.GetExtension[steerext.QueuedUserMessageMetadata](
 		evt,
-		steer.ExtensionKeyQueuedUserMessage,
+		steerext.QueuedUserMessageExtensionKey,
 	)
 	if err != nil {
 		return nil, true, fmt.Errorf("decode queued user message metadata: %w", err)
 	}
-	if !ok || meta.Status != steer.QueuedUserMessageStatusConsumed {
+	if !ok || meta.Status != steerext.QueuedUserMessageStatusConsumed {
 		return nil, false, nil
 	}
 	if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
@@ -301,7 +302,19 @@ func (t *translator) queuedUserMessageEvents(
 		events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
 		t.receivingMessage = false
 	}
-	if message.Content != "" {
+	if len(message.ContentParts) > 0 {
+		userMessage, err := queuedUserMessageFromContentParts(messageID, message)
+		if err != nil {
+			return nil, true, err
+		}
+		events = append(
+			events,
+			aguievents.NewCustomEvent(
+				multimodal.CustomEventNameUserMessage,
+				aguievents.WithValue(userMessage),
+			),
+		)
+	} else if message.Content != "" {
 		events = append(
 			events,
 			aguievents.NewTextMessageStartEvent(

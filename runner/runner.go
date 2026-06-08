@@ -3192,7 +3192,44 @@ func normalizeQueuedUserMessage(
 	if message.Role != model.RoleUser || !model.HasPayload(message) {
 		return model.Message{}, ErrInvalidQueuedUserMessage
 	}
+	if !queuedUserMessageContentPartsSupported(message.ContentParts) {
+		return model.Message{}, ErrInvalidQueuedUserMessage
+	}
 	return message, nil
+}
+
+func queuedUserMessageContentPartsSupported(parts []model.ContentPart) bool {
+	for _, part := range parts {
+		switch part.Type {
+		case model.ContentTypeText:
+			if part.Text == nil {
+				return false
+			}
+		case model.ContentTypeImage:
+			if part.Image == nil {
+				return false
+			}
+			if strings.TrimSpace(part.Image.URL) == "" && len(part.Image.Data) == 0 {
+				return false
+			}
+		case model.ContentTypeAudio:
+			if part.Audio == nil || len(part.Audio.Data) == 0 {
+				return false
+			}
+		case model.ContentTypeFile:
+			if part.File == nil {
+				return false
+			}
+			if strings.TrimSpace(part.File.FileID) == "" &&
+				strings.TrimSpace(part.File.URL) == "" &&
+				len(part.File.Data) == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ensureErrorEventContent ensures that error events have valid content.

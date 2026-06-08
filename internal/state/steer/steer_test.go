@@ -10,6 +10,7 @@
 package steer
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -17,6 +18,21 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+func TestQueuedUserMessageWireValues(t *testing.T) {
+	require.Equal(
+		t,
+		"trpc_agent.steer.queued_user_message",
+		ExtensionKeyQueuedUserMessage,
+	)
+	require.Equal(t, "consumed", QueuedUserMessageStatusConsumed)
+
+	payload, err := json.Marshal(QueuedUserMessageMetadata{
+		Status: QueuedUserMessageStatusConsumed,
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"status":"consumed"}`, string(payload))
+}
 
 func TestQueue_FIFOAndClose(t *testing.T) {
 	queue := NewQueue()

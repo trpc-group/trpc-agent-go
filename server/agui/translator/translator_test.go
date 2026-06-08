@@ -11,6 +11,7 @@ package translator
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"sync"
 	"testing"
@@ -23,10 +24,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/steerext"
 	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -147,9 +149,9 @@ func TestTranslateQueuedUserMessageConsumed(t *testing.T) {
 	evt.RequestID = "request-1"
 	require.NoError(t, agentevent.SetExtension(
 		evt,
-		steer.ExtensionKeyQueuedUserMessage,
-		steer.QueuedUserMessageMetadata{
-			Status: steer.QueuedUserMessageStatusConsumed,
+		steerext.QueuedUserMessageExtensionKey,
+		steerext.QueuedUserMessageMetadata{
+			Status: steerext.QueuedUserMessageStatusConsumed,
 		},
 	))
 
@@ -180,7 +182,7 @@ func TestTranslateQueuedUserMessageConsumed(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "request-1", activityContent["requestId"])
 	assert.Equal(t, "queued-message-1", activityContent["messageId"])
-	assert.Equal(t, steer.QueuedUserMessageStatusConsumed, activityContent["status"])
+	assert.Equal(t, steerext.QueuedUserMessageStatusConsumed, activityContent["status"])
 }
 
 func TestTranslateQueuedUserMessageConsumedClosesOpenMessage(t *testing.T) {
@@ -212,9 +214,9 @@ func TestTranslateQueuedUserMessageConsumedClosesOpenMessage(t *testing.T) {
 	})
 	require.NoError(t, agentevent.SetExtension(
 		evt,
-		steer.ExtensionKeyQueuedUserMessage,
-		steer.QueuedUserMessageMetadata{
-			Status: steer.QueuedUserMessageStatusConsumed,
+		steerext.QueuedUserMessageExtensionKey,
+		steerext.QueuedUserMessageMetadata{
+			Status: steerext.QueuedUserMessageStatusConsumed,
 		},
 	))
 
@@ -242,9 +244,9 @@ func TestTranslateQueuedUserMessageConsumedWithEventIDFallback(t *testing.T) {
 	evt.ID = "queued-event-id"
 	require.NoError(t, agentevent.SetExtension(
 		evt,
-		steer.ExtensionKeyQueuedUserMessage,
-		steer.QueuedUserMessageMetadata{
-			Status: steer.QueuedUserMessageStatusConsumed,
+		steerext.QueuedUserMessageExtensionKey,
+		steerext.QueuedUserMessageMetadata{
+			Status: steerext.QueuedUserMessageStatusConsumed,
 		},
 	))
 
@@ -260,6 +262,208 @@ func TestTranslateQueuedUserMessageConsumedWithEventIDFallback(t *testing.T) {
 	assert.Equal(t, steerConsumedActivityMessageID("queued-event-id"), activity.MessageID)
 }
 
+func TestTranslateQueuedUserMessageConsumedWithContentParts(t *testing.T) {
+	translator := newTranslatorForTest(t)
+	if translator == nil {
+		return
+	}
+
+	text := "describe this image"
+	message := model.Message{
+		Role:    model.RoleUser,
+		Content: "context",
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeText,
+				Text: &text,
+			},
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					URL:    " https://example.com/image.png ",
+					Format: "image/png",
+				},
+			},
+			{
+				Type: model.ContentTypeAudio,
+				Audio: &model.Audio{
+					Data:   []byte("audio"),
+					Format: "wav",
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "report.pdf",
+					Data:     []byte("file"),
+					MimeType: "application/pdf",
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:   "uploaded.pdf",
+					FileID: "file-123",
+				},
+			},
+		},
+	}
+	evt := queuedUserMessageEventForTest(t, &model.Response{
+		ID: "queued-multimodal",
+		Choices: []model.Choice{{
+			Message: message,
+		}},
+	})
+
+	events, err := translator.Translate(context.Background(), evt)
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+
+	custom, ok := events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Equal(t, multimodal.CustomEventNameUserMessage, custom.Name)
+	userMessage, ok := custom.Value.(aguitypes.Message)
+	require.True(t, ok)
+	assert.Equal(t, "queued-multimodal", userMessage.ID)
+	assert.Equal(t, aguitypes.RoleUser, userMessage.Role)
+	contents, ok := userMessage.ContentInputContents()
+	require.True(t, ok)
+	require.Len(t, contents, 6)
+	assert.Equal(t, aguitypes.InputContentTypeText, contents[0].Type)
+	assert.Equal(t, "context", contents[0].Text)
+	assert.Equal(t, aguitypes.InputContentTypeText, contents[1].Type)
+	assert.Equal(t, text, contents[1].Text)
+	assert.Equal(t, aguitypes.InputContentTypeBinary, contents[2].Type)
+	assert.Equal(t, "image/png", contents[2].MimeType)
+	assert.Equal(t, "https://example.com/image.png", contents[2].URL)
+	assert.Equal(t, aguitypes.InputContentTypeBinary, contents[3].Type)
+	assert.Equal(t, "audio/wav", contents[3].MimeType)
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("audio")), contents[3].Data)
+	assert.Equal(t, aguitypes.InputContentTypeBinary, contents[4].Type)
+	assert.Equal(t, "application/pdf", contents[4].MimeType)
+	assert.Equal(t, "report.pdf", contents[4].Filename)
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("file")), contents[4].Data)
+	assert.Equal(t, aguitypes.InputContentTypeBinary, contents[5].Type)
+	assert.Equal(t, "application/octet-stream", contents[5].MimeType)
+	assert.Equal(t, "uploaded.pdf", contents[5].Filename)
+	assert.Equal(t, "file-123", contents[5].ID)
+
+	activity, ok := events[1].(*aguievents.ActivitySnapshotEvent)
+	require.True(t, ok)
+	assert.Equal(t, steerConsumedActivityMessageID("queued-multimodal"), activity.MessageID)
+}
+
+func TestQueuedUserMessageContentPartsConversionErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		message model.Message
+		want    string
+	}{
+		{
+			name:    "empty",
+			message: model.Message{Role: model.RoleUser},
+			want:    "queued user message content parts are empty",
+		},
+		{
+			name: "nil text",
+			message: model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeText,
+			}}},
+			want: "queued user message text content part is nil",
+		},
+		{
+			name: "nil image",
+			message: model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeImage,
+			}}},
+			want: "queued user message image content part is nil",
+		},
+		{
+			name: "empty image",
+			message: model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeImage,
+				Image: &model.Image{},
+			}}},
+			want: "queued user message image content part is empty",
+		},
+		{
+			name: "nil audio",
+			message: model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeAudio,
+			}}},
+			want: "queued user message audio content part is nil",
+		},
+		{
+			name: "empty audio",
+			message: model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeAudio,
+				Audio: &model.Audio{},
+			}}},
+			want: "queued user message audio content part is empty",
+		},
+		{
+			name: "nil file",
+			message: model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeFile,
+			}}},
+			want: "queued user message file content part is nil",
+		},
+		{
+			name: "empty file",
+			message: model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeFile,
+				File: &model.File{},
+			}}},
+			want: "queued user message file content part is empty",
+		},
+		{
+			name: "unsupported",
+			message: model.Message{Role: model.RoleUser, ContentParts: []model.ContentPart{{
+				Type: "video",
+			}}},
+			want: "queued user message content part type unsupported",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := queuedUserMessageFromContentParts("message-id", tt.message)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestQueuedUserMessageContentPartsConversionDefaults(t *testing.T) {
+	message := model.Message{
+		Role: model.RoleUser,
+		ContentParts: []model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Data: []byte("image"),
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					URL: " https://example.com/report.pdf ",
+				},
+			},
+		},
+	}
+
+	userMessage, err := queuedUserMessageFromContentParts("message-id", message)
+	require.NoError(t, err)
+	contents, ok := userMessage.ContentInputContents()
+	require.True(t, ok)
+	require.Len(t, contents, 2)
+	assert.Equal(t, "image/*", contents[0].MimeType)
+	assert.Equal(t, base64.StdEncoding.EncodeToString([]byte("image")), contents[0].Data)
+	assert.Equal(t, "application/octet-stream", contents[1].MimeType)
+	assert.Equal(t, "https://example.com/report.pdf", contents[1].URL)
+}
+
 func TestTranslateQueuedUserMessageConsumedWithEmptyContentUsesGeneratedID(t *testing.T) {
 	translator := newTranslatorForTest(t)
 	if translator == nil {
@@ -273,9 +477,9 @@ func TestTranslateQueuedUserMessageConsumedWithEmptyContentUsesGeneratedID(t *te
 	})
 	require.NoError(t, agentevent.SetExtension(
 		evt,
-		steer.ExtensionKeyQueuedUserMessage,
-		steer.QueuedUserMessageMetadata{
-			Status: steer.QueuedUserMessageStatusConsumed,
+		steerext.QueuedUserMessageExtensionKey,
+		steerext.QueuedUserMessageMetadata{
+			Status: steerext.QueuedUserMessageStatusConsumed,
 		},
 	))
 
@@ -303,7 +507,7 @@ func TestTranslateQueuedUserMessageConsumedInvalidEvents(t *testing.T) {
 			name: "invalid metadata",
 			event: &agentevent.Event{
 				Extensions: map[string]json.RawMessage{
-					steer.ExtensionKeyQueuedUserMessage: json.RawMessage(`{bad`),
+					steerext.QueuedUserMessageExtensionKey: json.RawMessage(`{bad`),
 				},
 			},
 			wantErr: "decode queued user message metadata",
@@ -356,8 +560,8 @@ func TestTranslateQueuedUserMessageNonConsumedMetadataFallsThrough(t *testing.T)
 	})
 	require.NoError(t, agentevent.SetExtension(
 		evt,
-		steer.ExtensionKeyQueuedUserMessage,
-		steer.QueuedUserMessageMetadata{Status: "pending"},
+		steerext.QueuedUserMessageExtensionKey,
+		steerext.QueuedUserMessageMetadata{Status: "pending"},
 	))
 
 	events, err := translator.Translate(context.Background(), evt)
@@ -374,9 +578,9 @@ func queuedUserMessageEventForTest(
 	evt := agentevent.NewResponseEvent("inv-1", "user", response)
 	require.NoError(t, agentevent.SetExtension(
 		evt,
-		steer.ExtensionKeyQueuedUserMessage,
-		steer.QueuedUserMessageMetadata{
-			Status: steer.QueuedUserMessageStatusConsumed,
+		steerext.QueuedUserMessageExtensionKey,
+		steerext.QueuedUserMessageMetadata{
+			Status: steerext.QueuedUserMessageStatusConsumed,
 		},
 	))
 	return evt

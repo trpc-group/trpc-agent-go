@@ -451,6 +451,33 @@ func TestEnqueueUserMessage_Errors(t *testing.T) {
 	err = EnqueueUserMessage(
 		r,
 		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeImage,
+				Image: &model.Image{URL: " "},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
+
+	textPart := "hello from part"
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeText,
+				Text: &textPart,
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
 		model.NewUserMessage("hello"),
 	)
 	require.ErrorIs(t, err, ErrRunNotFound)
