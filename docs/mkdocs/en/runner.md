@@ -827,7 +827,7 @@ writing it into the session transcript, use one of these RunOptions:
 Both options affect only the current model request and are not persisted into
 the session events.
 
-Runnable example: `examples/prompt/rules`.
+Runnable example: `examples/prompt/late_context_messages`.
 
 ### Override Runtime Surfaces for a Specific Node by `nodeID`
 

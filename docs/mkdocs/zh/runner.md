@@ -784,7 +784,7 @@ eventChan, err := r.Run(
 
 两者都只影响本次模型请求，不会持久化到 Session 事件中。
 
-可运行示例：`examples/prompt/rules`。
+可运行示例：`examples/prompt/late_context_messages`。
 
 #### 按 `nodeID` 覆盖指定节点的运行时 surface
 
