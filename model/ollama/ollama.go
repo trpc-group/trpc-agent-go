@@ -26,11 +26,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/ollama/ollama/api"
-	"trpc.group/trpc-go/trpc-agent-go/internal/modeltailoring"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/internal/modeltailoring"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 

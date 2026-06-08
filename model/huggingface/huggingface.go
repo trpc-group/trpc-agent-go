@@ -22,10 +22,10 @@ import (
 	"os"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/modeltailoring"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/internal/modeltailoring"
 )
 
 // Model implements the model.Model interface for HuggingFace API.
