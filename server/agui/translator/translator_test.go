@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
@@ -128,6 +129,77 @@ func TestTranslateNilEvent(t *testing.T) {
 
 	_, err = translator.Translate(context.Background(), &agentevent.Event{})
 	assert.Error(t, err)
+}
+
+func TestTranslateQueuedUserMessageConsumed(t *testing.T) {
+	translator := newTranslatorForTest(t)
+	if translator == nil {
+		return
+	}
+
+	evt := agentevent.NewResponseEvent("inv-1", "user", &model.Response{
+		ID: "queued-message-1",
+		Choices: []model.Choice{{
+			Message: model.NewUserMessage("Please narrow the scope"),
+		}},
+	})
+	evt.ID = "event-1"
+	evt.RequestID = "request-1"
+	require.NoError(t, agentevent.SetExtension(
+		evt,
+		steer.ExtensionKeyQueuedUserMessage,
+		steer.QueuedUserMessageMetadata{
+			Status: steer.QueuedUserMessageStatusConsumed,
+		},
+	))
+
+	events, err := translator.Translate(context.Background(), evt)
+	require.NoError(t, err)
+	require.Len(t, events, 4)
+
+	start, ok := events[0].(*aguievents.TextMessageStartEvent)
+	require.True(t, ok)
+	assert.Equal(t, "queued-message-1", start.MessageID)
+	require.NotNil(t, start.Role)
+	assert.Equal(t, string(aguitypes.RoleUser), *start.Role)
+
+	content, ok := events[1].(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	assert.Equal(t, "queued-message-1", content.MessageID)
+	assert.Equal(t, "Please narrow the scope", content.Delta)
+
+	end, ok := events[2].(*aguievents.TextMessageEndEvent)
+	require.True(t, ok)
+	assert.Equal(t, "queued-message-1", end.MessageID)
+
+	activity, ok := events[3].(*aguievents.ActivitySnapshotEvent)
+	require.True(t, ok)
+	assert.Equal(t, steerConsumedActivityMessageID("queued-message-1"), activity.MessageID)
+	assert.Equal(t, steerConsumedActivityType, activity.ActivityType)
+	activityContent, ok := activity.Content.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "request-1", activityContent["requestId"])
+	assert.Equal(t, "queued-message-1", activityContent["messageId"])
+	assert.Equal(t, steer.QueuedUserMessageStatusConsumed, activityContent["status"])
+}
+
+func TestTranslateUserLikeEventWithoutQueuedMetadataDoesNotEmitSteerConsumed(t *testing.T) {
+	translator := newTranslatorForTest(t)
+	if translator == nil {
+		return
+	}
+
+	events, err := translator.Translate(context.Background(), agentevent.NewResponseEvent(
+		"inv-1",
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("ordinary user event"),
+			}},
+		},
+	))
+	require.NoError(t, err)
+	assert.Empty(t, events)
 }
 
 func TestTranslateErrorResponse(t *testing.T) {

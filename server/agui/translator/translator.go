@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	agentevent "trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
@@ -104,7 +105,10 @@ type translator struct {
 	streamingToolResultContent             map[string]string
 }
 
-const skillRunArtifactsStateKey = skill.StateKeyArtifacts
+const (
+	skillRunArtifactsStateKey = skill.StateKeyArtifacts
+	steerConsumedActivityType = "steer.consumed"
+)
 
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
 func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]aguievents.Event, error) {
@@ -132,6 +136,14 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 	// Handle node custom events (progress, text, custom).
 	events = append(events, t.graphNodeCustomEvents(event)...)
 	events = append(events, t.toolArtifactsEvents(event)...)
+	queuedUserEvents, handled, err := t.queuedUserMessageEvents(event)
+	if err != nil {
+		return nil, err
+	}
+	if handled {
+		events = append(events, queuedUserEvents...)
+		return t.finalizeEvents(event, events), nil
+	}
 
 	rsp := event.Response
 	if rsp == nil {
@@ -250,6 +262,71 @@ func (t *translator) finalizeEvents(
 		base.RawEvent = metadata
 	}
 	return events
+}
+
+func (t *translator) queuedUserMessageEvents(
+	evt *agentevent.Event,
+) ([]aguievents.Event, bool, error) {
+	meta, ok, err := agentevent.GetExtension[steer.QueuedUserMessageMetadata](
+		evt,
+		steer.ExtensionKeyQueuedUserMessage,
+	)
+	if err != nil {
+		return nil, true, fmt.Errorf("decode queued user message metadata: %w", err)
+	}
+	if !ok || meta.Status != steer.QueuedUserMessageStatusConsumed {
+		return nil, false, nil
+	}
+	if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
+		return nil, true, errors.New("queued user message event missing message")
+	}
+	message := evt.Response.Choices[0].Message
+	if message.Role != model.RoleUser {
+		return nil, true, fmt.Errorf(
+			"queued user message event role must be user: %s",
+			message.Role,
+		)
+	}
+
+	messageID := evt.Response.ID
+	if messageID == "" {
+		messageID = evt.ID
+	}
+	if messageID == "" {
+		messageID = uuid.NewString()
+	}
+
+	events := make([]aguievents.Event, 0, 4)
+	if t.receivingMessage {
+		events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
+		t.receivingMessage = false
+	}
+	if message.Content != "" {
+		events = append(
+			events,
+			aguievents.NewTextMessageStartEvent(
+				messageID,
+				aguievents.WithRole(string(aguitypes.RoleUser)),
+			),
+			aguievents.NewTextMessageContentEvent(messageID, message.Content),
+			aguievents.NewTextMessageEndEvent(messageID),
+		)
+		t.lastMessageID = messageID
+	}
+	events = append(events, aguievents.NewActivitySnapshotEvent(
+		steerConsumedActivityMessageID(messageID),
+		steerConsumedActivityType,
+		map[string]any{
+			"requestId": evt.RequestID,
+			"messageId": messageID,
+			"status":    meta.Status,
+		},
+	))
+	return events, true, nil
+}
+
+func steerConsumedActivityMessageID(messageID string) string {
+	return "activity-steer-consumed-" + messageID
 }
 
 type artifactRef struct {

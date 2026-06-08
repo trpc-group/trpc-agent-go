@@ -211,6 +211,18 @@ type SteerableRunner interface {
 
 	// EnqueueUserMessage queues a user message for the active request.
 	EnqueueUserMessage(requestID string, message model.Message) error
+
+	// CancelQueuedUserMessages discards user messages that are queued but not
+	// yet consumed for the active request.
+	CancelQueuedUserMessages(requestID string) bool
+}
+
+type queuedUserMessageEnqueuer interface {
+	EnqueueUserMessage(requestID string, message model.Message) error
+}
+
+type queuedUserMessagesCanceler interface {
+	CancelQueuedUserMessages(requestID string) bool
 }
 
 // EnqueueUserMessage queues a user message on runners that support steering.
@@ -219,11 +231,21 @@ func EnqueueUserMessage(
 	requestID string,
 	message model.Message,
 ) error {
-	steerable, ok := r.(SteerableRunner)
+	steerable, ok := r.(queuedUserMessageEnqueuer)
 	if !ok {
 		return ErrQueuedUserMessageUnsupported
 	}
 	return steerable.EnqueueUserMessage(requestID, message)
+}
+
+// CancelQueuedUserMessages discards queued user messages on runners that
+// support steering.
+func CancelQueuedUserMessages(r Runner, requestID string) bool {
+	steerable, ok := r.(queuedUserMessagesCanceler)
+	if !ok {
+		return false
+	}
+	return steerable.CancelQueuedUserMessages(requestID)
 }
 
 // RunStatus is a snapshot of a running invocation.
@@ -783,6 +805,15 @@ func (r *runner) EnqueueUserMessage(
 		return ErrRunNotFound
 	}
 	return nil
+}
+
+func (r *runner) CancelQueuedUserMessages(requestID string) bool {
+	handle := r.lookupRun(requestID)
+	if handle == nil || handle.queue == nil {
+		return false
+	}
+	handle.queue.Discard()
+	return true
 }
 
 func (r *runner) newExecutionContext(
