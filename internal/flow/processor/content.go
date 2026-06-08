@@ -565,6 +565,8 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		)
 	}
 
+	p.injectLateContextMessages(invocation, req)
+
 	// Send a preprocessing event.
 	agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
@@ -719,6 +721,38 @@ func (p *ContentRequestProcessor) injectInjectedContextMessages(invocation *agen
 		return
 	}
 	req.Messages = append(req.Messages, messages...)
+}
+
+// injectLateContextMessages inserts per-run context messages close to the
+// latest user turn. It keeps assistant/tool tails intact by inserting before
+// the latest user message rather than appending after tool results.
+func (p *ContentRequestProcessor) injectLateContextMessages(invocation *agent.Invocation, req *model.Request) {
+	if invocation == nil || req == nil {
+		return
+	}
+	messages := invocation.RunOptions.LateContextMessages
+	if len(messages) == 0 {
+		return
+	}
+	insertAt := lateContextInsertIndex(req.Messages)
+	out := make([]model.Message, 0, len(req.Messages)+len(messages))
+	out = append(out, req.Messages[:insertAt]...)
+	out = append(out, messages...)
+	out = append(out, req.Messages[insertAt:]...)
+	req.Messages = out
+}
+
+func lateContextInsertIndex(messages []model.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == model.RoleUser {
+			return i
+		}
+	}
+	insertAt := 0
+	for insertAt < len(messages) && messages[insertAt].Role == model.RoleSystem {
+		insertAt++
+	}
+	return insertAt
 }
 
 type summaryHistoryCutoff struct {
