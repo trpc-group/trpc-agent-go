@@ -177,6 +177,7 @@ _ = result.OverallStatus
     - [Evaluation \& Benchmarks](#evaluation--benchmarks)
   - [Table of Contents](#table-of-contents)
   - [Documentation](#documentation)
+    - [Blog](#blog)
   - [Quick Start](#quick-start)
     - [Prerequisites](#prerequisites)
     - [Run the Example](#run-the-example)
@@ -214,6 +215,18 @@ _ = result.OverallStatus
 ## Documentation
 
 Ready to dive into tRPC-Agent-Go? Our [documentation](https://trpc-group.github.io/trpc-agent-go/) covers everything from basic concepts to advanced techniques, helping you build powerful AI applications with confidence. Whether you're new to AI agents or an experienced developer, you'll find detailed guides, practical examples, and best practices to accelerate your development journey.
+
+### Blog
+
+These blog posts cover the framework overview, core capabilities, and engineering practices—read as needed:
+
+- [A Go Agent Framework for Building Intelligent AI Applications](docs/mkdocs/en/blog/trpcagentgo.md)
+- [GraphAgent Seamlessly Combines AI Workflows and Agents](docs/mkdocs/en/blog/graphagent.md)
+- [Quickly Build AG-UI-Based Agent Services](docs/mkdocs/en/blog/agui.md)
+- [A Go-Native Implementation of the Anthropic Agent Skills Specification](docs/mkdocs/en/blog/skill.md)
+- [Building an Enterprise-Grade, Secure, and Controllable OpenClaw Runtime](docs/mkdocs/en/blog/openclaw.md)
+- [A Complete Guide to AI Agent Automated Evaluation Paradigms and Engineering Practice](docs/mkdocs/en/blog/evaluation.md)
+- [A Complete Guide to Automated Prompt Iteration and Engineering Practice for AI Agents](docs/mkdocs/en/blog/promptiter.md)
 
 ## Quick Start
 
