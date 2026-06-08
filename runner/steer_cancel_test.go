@@ -175,7 +175,9 @@ func (r *enqueueOnlyRunner) Run(
 	model.Message,
 	...agent.RunOption,
 ) (<-chan *event.Event, error) {
-	return nil, nil
+	events := make(chan *event.Event)
+	close(events)
+	return events, nil
 }
 
 func (r *enqueueOnlyRunner) Close() error {

@@ -213,7 +213,10 @@ type SteerableRunner interface {
 	EnqueueUserMessage(requestID string, message model.Message) error
 }
 
-// QueuedUserMessagesCanceler supports discarding queued user messages.
+// QueuedUserMessagesCanceler is an optional capability detected by the
+// package-level CancelQueuedUserMessages helper. It is intentionally independent
+// from SteerableRunner so existing steerable runner implementations remain
+// compatible.
 type QueuedUserMessagesCanceler interface {
 	// CancelQueuedUserMessages discards user messages that are queued but not
 	// yet consumed for the active request.
@@ -225,6 +228,8 @@ type queuedUserMessageEnqueuer interface {
 }
 
 // EnqueueUserMessage queues a user message on runners that support steering.
+// The helper detects the EnqueueUserMessage method directly, so custom runners
+// do not need to satisfy SteerableRunner by name.
 func EnqueueUserMessage(
 	r Runner,
 	requestID string,
