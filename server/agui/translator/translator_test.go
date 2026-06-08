@@ -183,6 +183,205 @@ func TestTranslateQueuedUserMessageConsumed(t *testing.T) {
 	assert.Equal(t, steer.QueuedUserMessageStatusConsumed, activityContent["status"])
 }
 
+func TestTranslateQueuedUserMessageConsumedClosesOpenMessage(t *testing.T) {
+	translator := newTranslatorImplForTest(t)
+	if translator == nil {
+		return
+	}
+
+	_, err := translator.Translate(context.Background(), &agentevent.Event{
+		Response: &model.Response{
+			ID:     "assistant-open",
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "working",
+				},
+			}},
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, translator.receivingMessage)
+
+	evt := agentevent.NewResponseEvent("inv-1", "user", &model.Response{
+		ID: "queued-message-2",
+		Choices: []model.Choice{{
+			Message: model.NewUserMessage("Use a shorter answer"),
+		}},
+	})
+	require.NoError(t, agentevent.SetExtension(
+		evt,
+		steer.ExtensionKeyQueuedUserMessage,
+		steer.QueuedUserMessageMetadata{
+			Status: steer.QueuedUserMessageStatusConsumed,
+		},
+	))
+
+	events, err := translator.Translate(context.Background(), evt)
+	require.NoError(t, err)
+	require.Len(t, events, 5)
+
+	endOpen, ok := events[0].(*aguievents.TextMessageEndEvent)
+	require.True(t, ok)
+	assert.Equal(t, "assistant-open", endOpen.MessageID)
+	assert.False(t, translator.receivingMessage)
+}
+
+func TestTranslateQueuedUserMessageConsumedWithEventIDFallback(t *testing.T) {
+	translator := newTranslatorForTest(t)
+	if translator == nil {
+		return
+	}
+
+	evt := agentevent.NewResponseEvent("inv-1", "user", &model.Response{
+		Choices: []model.Choice{{
+			Message: model.NewUserMessage("Use event ID"),
+		}},
+	})
+	evt.ID = "queued-event-id"
+	require.NoError(t, agentevent.SetExtension(
+		evt,
+		steer.ExtensionKeyQueuedUserMessage,
+		steer.QueuedUserMessageMetadata{
+			Status: steer.QueuedUserMessageStatusConsumed,
+		},
+	))
+
+	events, err := translator.Translate(context.Background(), evt)
+	require.NoError(t, err)
+	require.Len(t, events, 4)
+
+	start, ok := events[0].(*aguievents.TextMessageStartEvent)
+	require.True(t, ok)
+	assert.Equal(t, "queued-event-id", start.MessageID)
+	activity, ok := events[3].(*aguievents.ActivitySnapshotEvent)
+	require.True(t, ok)
+	assert.Equal(t, steerConsumedActivityMessageID("queued-event-id"), activity.MessageID)
+}
+
+func TestTranslateQueuedUserMessageConsumedWithEmptyContentUsesGeneratedID(t *testing.T) {
+	translator := newTranslatorForTest(t)
+	if translator == nil {
+		return
+	}
+
+	evt := agentevent.NewResponseEvent("inv-1", "user", &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleUser},
+		}},
+	})
+	require.NoError(t, agentevent.SetExtension(
+		evt,
+		steer.ExtensionKeyQueuedUserMessage,
+		steer.QueuedUserMessageMetadata{
+			Status: steer.QueuedUserMessageStatusConsumed,
+		},
+	))
+
+	events, err := translator.Translate(context.Background(), evt)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+
+	activity, ok := events[0].(*aguievents.ActivitySnapshotEvent)
+	require.True(t, ok)
+	activityContent, ok := activity.Content.(map[string]any)
+	require.True(t, ok)
+	messageID, ok := activityContent["messageId"].(string)
+	require.True(t, ok)
+	assert.NotEmpty(t, messageID)
+	assert.Equal(t, steerConsumedActivityMessageID(messageID), activity.MessageID)
+}
+
+func TestTranslateQueuedUserMessageConsumedInvalidEvents(t *testing.T) {
+	tests := []struct {
+		name    string
+		event   *agentevent.Event
+		wantErr string
+	}{
+		{
+			name: "invalid metadata",
+			event: &agentevent.Event{
+				Extensions: map[string]json.RawMessage{
+					steer.ExtensionKeyQueuedUserMessage: json.RawMessage(`{bad`),
+				},
+			},
+			wantErr: "decode queued user message metadata",
+		},
+		{
+			name:    "missing response",
+			event:   queuedUserMessageEventForTest(t, nil),
+			wantErr: "queued user message event missing message",
+		},
+		{
+			name:    "missing choice",
+			event:   queuedUserMessageEventForTest(t, &model.Response{}),
+			wantErr: "queued user message event missing message",
+		},
+		{
+			name: "non user role",
+			event: queuedUserMessageEventForTest(t, &model.Response{
+				Choices: []model.Choice{{
+					Message: model.NewAssistantMessage("not user"),
+				}},
+			}),
+			wantErr: "queued user message event role must be user",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			translator := newTranslatorForTest(t)
+			if translator == nil {
+				return
+			}
+			events, err := translator.Translate(context.Background(), tt.event)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Empty(t, events)
+		})
+	}
+}
+
+func TestTranslateQueuedUserMessageNonConsumedMetadataFallsThrough(t *testing.T) {
+	translator := newTranslatorForTest(t)
+	if translator == nil {
+		return
+	}
+
+	evt := agentevent.NewResponseEvent("inv-1", "user", &model.Response{
+		Choices: []model.Choice{{
+			Message: model.NewUserMessage("pending message"),
+		}},
+	})
+	require.NoError(t, agentevent.SetExtension(
+		evt,
+		steer.ExtensionKeyQueuedUserMessage,
+		steer.QueuedUserMessageMetadata{Status: "pending"},
+	))
+
+	events, err := translator.Translate(context.Background(), evt)
+	require.NoError(t, err)
+	assert.Empty(t, events)
+}
+
+func queuedUserMessageEventForTest(
+	t *testing.T,
+	response *model.Response,
+) *agentevent.Event {
+	t.Helper()
+
+	evt := agentevent.NewResponseEvent("inv-1", "user", response)
+	require.NoError(t, agentevent.SetExtension(
+		evt,
+		steer.ExtensionKeyQueuedUserMessage,
+		steer.QueuedUserMessageMetadata{
+			Status: steer.QueuedUserMessageStatusConsumed,
+		},
+	))
+	return evt
+}
+
 func TestTranslateUserLikeEventWithoutQueuedMetadataDoesNotEmitSteerConsumed(t *testing.T) {
 	translator := newTranslatorForTest(t)
 	if translator == nil {
