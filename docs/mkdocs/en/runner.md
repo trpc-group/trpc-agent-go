@@ -814,6 +814,21 @@ eventChan, err := r.Run(
 
 A complete example is available at [examples/usermessagerewriter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/usermessagerewriter).
 
+#### Inject Per-run Context Messages (non-persistent)
+
+If you need to provide extra context for **this turn only** (for example:
+“rules”, dynamic constraints, retrieved passages, background knowledge) without
+writing it into the session transcript, use one of these RunOptions:
+
+- `agent.WithInjectedContextMessages(...)`: inject messages **before session history**
+- `agent.WithLateContextMessages(...)`: inject messages **near the latest user turn**
+  (after history, inserted before the latest user message)
+
+Both options affect only the current model request and are not persisted into
+the session events.
+
+Runnable example: `examples/prompt/late_context_messages`.
+
 ### Override Runtime Surfaces for a Specific Node by `nodeID`
 
 If you need to change one specific node in a `runner.Run(...)` call instead of

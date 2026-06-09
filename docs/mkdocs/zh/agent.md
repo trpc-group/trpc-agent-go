@@ -1017,6 +1017,45 @@ Memory Service 用于记录用户的偏好信息，支持个性化体验。
 2. [Session](session/index.md) - 了解会话管理
 3. [Multi-Agent](multiagent.md) - 学习多 Agent 系统
 
+## 提示词脚手架（“Rules”/ 上下文注入模式）
+
+很多 Agent 产品会把“rules”做成一个显式功能（项目记忆、按回合约束、按路径匹配的规则等）。但在工程上，“rules”并不是一个稳定、统一的框架层概念：不同产品对它的语义选择差异很大（system vs user role、放在历史前还是贴近最新 user、是否持久化、如何做文件范围选择、对 prompt cache 的影响等）。
+
+tRPC‑Agent‑Go 选择不在 core 引入一等 `Rules` 抽象，而是提供更通用的 **提示词/上下文注入原语**，让你用组合方式实现自己产品想要的 “rules” 语义。
+
+### 如何选择合适的原语
+
+- 稳定的全局约束（常见的“全局规则”，推荐）：
+  - Agent 级配置：`llmagent.WithGlobalInstruction(...)` / `llmagent.WithInstruction(...)`
+  - 单次请求覆盖（不修改 agent 实例）：`agent.WithGlobalInstruction(...)` / `agent.WithInstruction(...)`
+- 单次请求、非持久化上下文，注入在 **session history 之前**（更适合作为背景 seed/context）：
+  - `agent.WithInjectedContextMessages([]model.Message{...})`
+- 单次请求、非持久化上下文，注入在 **贴近最新用户回合**（适合作为本轮“rules/动态约束”）：
+  - `agent.WithLateContextMessages([]model.Message{...})`
+- 需要完全控制最终消息序列：
+  - 用结构化 `BeforeModel` 回调重写 `request.Messages`（见 `docs/mkdocs/zh/callbacks.md`）。
+
+### 消息位置（高层语义）
+
+Content request processor 组装最终请求消息大致遵循下面顺序：
+
+1. System prompt / instructions（稳定前缀）
+2. Few-shot 示例（如果配置，会插入到前导 system block 之后）
+3. Injected context messages（`WithInjectedContextMessages`）—— **在历史之前**
+4. Session history（会话的 canonical transcript）
+5. Late context messages（`WithLateContextMessages`）—— **插入到最后一个 user message 之前**（如果当前请求里没有 user message，则会插入到前导 system block 之后）
+6.（如果当前回合已有）属于当前回合的 tool/assistant tail
+
+这种 “late” 放置方式适合动态、每轮变化的规则：它能让规则贴近本轮用户请求，同时尽量保持前缀稳定（更利于 prompt cache）。
+
+### 注意事项与最佳实践
+
+- 建议 late context 使用 `role=user`。在消息序列中间插入 `role=system` 并非所有 provider 都支持，也可能与消息校验/修复逻辑产生不兼容。
+- `WithInjectedContextMessages` 与 `WithLateContextMessages` 都 **不会持久化** 到 session transcript（只影响本次模型请求）。
+- 在 multi-agent 场景中，这些选项属于 `RunOptions`，会随 invocation clone 传播到子调用；如果需要“只对某个 agent 生效”，推荐用回调按 `invocation.AgentName` 过滤实现。
+
+可运行示例：`examples/prompt/late_context_messages`。
+
 ## 运行时动态更新 Instruction
 
 你可以在 Agent 已经创建并被 Runner 使用的情况下，动态更新其行为文案：

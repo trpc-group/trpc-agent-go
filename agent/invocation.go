@@ -404,6 +404,15 @@ func WithInjectedContextMessages(messages []model.Message) RunOption {
 	}
 }
 
+// WithLateContextMessages appends per-run messages that are injected into the
+// model request near the latest user turn but are not persisted into the session
+// transcript.
+func WithLateContextMessages(messages []model.Message) RunOption {
+	return func(opts *RunOptions) {
+		opts.LateContextMessages = append(opts.LateContextMessages, messages...)
+	}
+}
+
 // UserMessageRewriteArgs contains stable metadata for one user message rewrite.
 type UserMessageRewriteArgs struct {
 	AppName         string
@@ -1067,6 +1076,11 @@ type RunOptions struct {
 	// into the model request for this run. These messages are not persisted into
 	// session events and therefore must be provided on every run if needed.
 	InjectedContextMessages []model.Message
+
+	// LateContextMessages allows callers to inject additional context messages
+	// near the latest user turn for this run. These messages are not persisted
+	// into session events and therefore must be provided on every run if needed.
+	LateContextMessages []model.Message
 
 	// UserMessageRewriter rewrites the current-turn input into an ordered
 	// message sequence before runner persists it into the session transcript.
