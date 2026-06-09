@@ -404,6 +404,15 @@ func WithInjectedContextMessages(messages []model.Message) RunOption {
 	}
 }
 
+// WithLateContextMessages appends per-run messages that are injected into the
+// model request near the latest user turn but are not persisted into the session
+// transcript.
+func WithLateContextMessages(messages []model.Message) RunOption {
+	return func(opts *RunOptions) {
+		opts.LateContextMessages = append(opts.LateContextMessages, messages...)
+	}
+}
+
 // UserMessageRewriteArgs contains stable metadata for one user message rewrite.
 type UserMessageRewriteArgs struct {
 	AppName         string
@@ -561,6 +570,21 @@ func WithDisableResponseUsageTracking(disable bool) RunOption {
 func WithDisableModelExecutionEvents(disable bool) RunOption {
 	return func(opts *RunOptions) {
 		opts.DisableModelExecutionEvents = disable
+	}
+}
+
+// WithLatencyDiagnostics enables pre-LLM diagnostic spans and status events.
+func WithLatencyDiagnostics(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.LatencyDiagnosticsEnabled = enabled
+		opts.LatencyDiagnosticsEmitEvents = enabled
+	}
+}
+
+// WithLatencyDiagnosticsEvents controls whether diagnostics emit events.
+func WithLatencyDiagnosticsEvents(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.LatencyDiagnosticsEmitEvents = enabled
 	}
 }
 
@@ -1068,6 +1092,11 @@ type RunOptions struct {
 	// session events and therefore must be provided on every run if needed.
 	InjectedContextMessages []model.Message
 
+	// LateContextMessages allows callers to inject additional context messages
+	// near the latest user turn for this run. These messages are not persisted
+	// into session events and therefore must be provided on every run if needed.
+	LateContextMessages []model.Message
+
 	// UserMessageRewriter rewrites the current-turn input into an ordered
 	// message sequence before runner persists it into the session transcript.
 	UserMessageRewriter UserMessageRewriter
@@ -1131,6 +1160,12 @@ type RunOptions struct {
 
 	// DisableModelExecutionEvents disables emitting model execution start/complete events.
 	DisableModelExecutionEvents bool
+
+	// LatencyDiagnosticsEnabled enables detailed pre-LLM diagnostic spans.
+	LatencyDiagnosticsEnabled bool
+
+	// LatencyDiagnosticsEmitEvents emits caller-visible diagnostic status events.
+	LatencyDiagnosticsEmitEvents bool
 
 	// DisablePartialEventIDs disables generating IDs for partial response events.
 	DisablePartialEventIDs bool

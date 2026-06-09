@@ -449,6 +449,88 @@ func TestRunProgram_BashErrorSurfaced(t *testing.T) {
 	assert.Contains(t, err.Error(), "bash error")
 }
 
+// runProgramCaptureScript runs spec through a mock e2b sandbox and
+// returns the bash script handed to the sandbox `/execute` endpoint,
+// so CleanEnv tests can assert how RunProgram shapes the program
+// invocation without a real sandbox.
+func runProgramCaptureScript(
+	t *testing.T, spec codeexecutor.RunProgramSpec,
+) string {
+	t.Helper()
+	var gotScript string
+	srv := newMockE2BServer(t, func(code string) string {
+		gotScript = code
+		stdout := strings.Join([]string{
+			sentinelStdoutBegin, "", sentinelStdoutEnd,
+			sentinelExitPrefix + "0",
+		}, "\n") + "\n"
+		stderr := strings.Join([]string{
+			sentinelStderrBegin, sentinelStderrEnd,
+		}, "\n") + "\n"
+		return ndjsonLines(stdoutMsg(stdout), stderrMsg(stderr))
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+	ws := codeexecutor.Workspace{ID: "wCE", Path: "/tmp/ws"}
+	_, err := c.RunProgram(context.Background(), ws, spec)
+	require.NoError(t, err)
+	require.NotEmpty(t, gotScript)
+	return gotScript
+}
+
+// TestRunProgram_CleanEnvUsesEnvI guards the e2b half of issue
+// #1845: when spec.CleanEnv is set the spawned program must be
+// launched through `env -i` with a minimal PATH, so it starts from
+// an empty environment plus the workspace base vars instead of
+// inheriting the sandbox process environment.
+func TestRunProgram_CleanEnvUsesEnvI(t *testing.T) {
+	script := runProgramCaptureScript(t, codeexecutor.RunProgramSpec{
+		Cmd:      "echo",
+		Args:     []string{"hi"},
+		CleanEnv: true,
+		Timeout:  3 * time.Second,
+	})
+	require.Contains(t, script, "env -i ",
+		"clean mode must start the program from an empty env")
+	require.Contains(t, script, minimalCleanPATH,
+		"clean mode must inject a minimal PATH for env -i")
+	require.Contains(t, script, codeexecutor.WorkspaceEnvDirKey+"=",
+		"workspace base vars must still be injected in clean mode")
+}
+
+// TestRunProgram_CleanEnvKeepsSpecPATH verifies a caller-supplied
+// PATH is honored in clean mode and suppresses the minimalCleanPATH
+// fallback (so the tool/skill layer, which has already vetted that
+// PATH, stays authoritative).
+func TestRunProgram_CleanEnvKeepsSpecPATH(t *testing.T) {
+	script := runProgramCaptureScript(t, codeexecutor.RunProgramSpec{
+		Cmd:      "echo",
+		CleanEnv: true,
+		Env:      map[string]string{"PATH": "/opt/vetted/bin"},
+		Timeout:  3 * time.Second,
+	})
+	require.Contains(t, script, "env -i ")
+	require.Contains(t, script, "/opt/vetted/bin")
+	require.NotContains(t, script, minimalCleanPATH,
+		"caller PATH must suppress the minimal PATH fallback")
+}
+
+// TestRunProgram_NoCleanEnvUsesPlainEnv pins the non-policy
+// contract: without CleanEnv the runtime keeps a plain `env ...`
+// token and inherits the sandbox environment, so existing callers
+// are unaffected.
+func TestRunProgram_NoCleanEnvUsesPlainEnv(t *testing.T) {
+	script := runProgramCaptureScript(t, codeexecutor.RunProgramSpec{
+		Cmd:     "echo",
+		Env:     map[string]string{"FOO": "bar"},
+		Timeout: 3 * time.Second,
+	})
+	require.Contains(t, script, "env ")
+	require.NotContains(t, script, "env -i",
+		"non-clean mode must not isolate the environment")
+	require.NotContains(t, script, minimalCleanPATH)
+}
+
 func TestCollect_ReadsFiles(t *testing.T) {
 	calls := 0
 	srv := newMockE2BServer(t, func(code string) string {
@@ -703,6 +785,8 @@ func TestEngineExposure(t *testing.T) {
 	assert.NotNil(t, eng.Manager())
 	assert.NotNil(t, eng.FS())
 	assert.NotNil(t, eng.Runner())
+	assert.True(t, eng.Describe().SupportsCleanEnv,
+		"e2b engine must advertise CleanEnv support (issue #1845)")
 }
 
 func TestPickLanguageTrimsAndLowers(t *testing.T) {

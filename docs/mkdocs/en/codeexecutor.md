@@ -928,16 +928,11 @@ caller-supplied env (including `PATH`) are preserved as before.
     `codeexecutor.Capabilities.SupportsCleanEnv` is `false`, and
     returns an error pointing the operator at a supported runtime.
 
-    Today only `codeexecutor/local` advertises
-    `SupportsCleanEnv: true`. `codeexecutor/container` and
-    `codeexecutor/e2b` keep the zero-valued capabilities, so policy
-    mode on those backends is currently refused at the gate.
-    Implementing `CleanEnv` for them (so the policy gate opens
-    automatically once they declare the capability) is tracked in
-    [#1845](https://github.com/trpc-group/trpc-agent-go/issues/1845).
-    Until then, run policy mode on the local backend, or drop the
-    policy lists and rely on the sandbox layer for env / network
-    isolation.
+    Today `codeexecutor/local`, `codeexecutor/container`, and
+    `codeexecutor/e2b` advertise `SupportsCleanEnv: true`, so policy
+    mode is supported on those backends. Other backends keep the
+    zero-valued capabilities and are refused at the gate until they
+    are audited and opt in via `NewEngineWithCapabilities`.
 
 ### Scope
 
