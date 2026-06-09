@@ -93,6 +93,17 @@ func (p *BasicRequestProcessor) ProcessRequest(
 			req.ExtraFields[key] = value
 		}
 	}
+	if len(invocation.RunOptions.ModelRequestHeaders) > 0 {
+		if req.Headers == nil {
+			req.Headers = make(
+				map[string]string,
+				len(invocation.RunOptions.ModelRequestHeaders),
+			)
+		}
+		for key, value := range invocation.RunOptions.ModelRequestHeaders {
+			req.Headers[key] = value
+		}
+	}
 
 	// Propagate structured output from invocation to request if present.
 	if invocation.StructuredOutput != nil {

@@ -17,6 +17,7 @@ nav:
           - Custom Agent: custom-agent.md
           - Dify Agent: dify.md
           - Claude Code Agent: claudecode.md
+          - Codex Agent: codex.md
       - Runner: runner.md
       - Code Executor: codeexecutor.md
       - Error Handling: error-handling.md
@@ -43,6 +44,7 @@ nav:
           - Overview: knowledge/index.md
           - Embedder: knowledge/embedder.md
           - Reranker: knowledge/reranker.md
+          - Query Enhancer: knowledge/query-enhancer.md
           - Source: knowledge/source.md
           - Filter: knowledge/filter.md
           - Extractor: knowledge/extractor.md
@@ -75,6 +77,14 @@ nav:
       - Overview: observability.md
       - Multimodal Telemetry: telemetry-multimodal.md
   - Ecosystem: ecosystem.md
+  - Blog:
+      - "A Go Agent Framework for Building Intelligent AI Applications": blog/trpcagentgo.md
+      - "GraphAgent Seamlessly Combines AI Workflows and Agents": blog/graphagent.md
+      - "Quickly Build AG-UI-Based Agent Services": blog/agui.md
+      - "A Go-Native Implementation of the Anthropic Agent Skills Specification": blog/skill.md
+      - "A Complete Guide to AI Agent Automated Evaluation Paradigms and Engineering Practice": blog/evaluation.md
+      - "Building an Enterprise-Grade, Secure, and Controllable OpenClaw Runtime": blog/openclaw.md
+      - "A Complete Guide to Automated Prompt Iteration and Engineering Practice for AI Agents": blog/promptiter.md
 
 plugins:
   - search
@@ -101,6 +111,7 @@ plugins:
                     - 自定义 Agent: custom-agent.md
                     - Dify Agent: dify.md
                     - Claude Code Agent: claudecode.md
+                    - Codex Agent: codex.md
                 - Runner: runner.md
                 - Code Executor: codeexecutor.md
                 - 错误处理: error-handling.md
@@ -127,6 +138,7 @@ plugins:
                     - 概述: knowledge/index.md
                     - Embedder: knowledge/embedder.md
                     - Reranker: knowledge/reranker.md
+                    - Query Enhancer: knowledge/query-enhancer.md
                     - 数据源: knowledge/source.md
                     - 内容提取器: knowledge/extractor.md
                     - 过滤器: knowledge/filter.md
@@ -159,6 +171,14 @@ plugins:
                 - 概览: observability.md
                 - 多模态遥测: telemetry-multimodal.md
             - 生态: ecosystem.md
+            - 博客:
+                - "构建智能 AI 应用的 Go 语言 Agent 框架": blog/trpcagentgo.md
+                - "GraphAgent 让 AI 工作流与 Agent 无缝融合": blog/graphagent.md
+                - "快速构建基于 AG-UI 的 Agent 服务": blog/agui.md
+                - "Anthropic Agent Skills 规范的 Go 原生实现": blog/skill.md
+                - "AI Agent 自动化评估范式与工程实践全解析": blog/evaluation.md
+                - "打造企业级安全可控的 OpenClaw Runtime": blog/openclaw.md
+                - "AI Agent 提示词自动迭代与工程实践全解析": blog/promptiter.md
   - git-revision-date-localized:
       enable_creation_date: true
       type: iso_datetime

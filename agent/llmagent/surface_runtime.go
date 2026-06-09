@@ -96,6 +96,32 @@ func (a *LLMAgent) codeExecutorForInvocation(
 	return a.option.codeExecutor
 }
 
+// InvocationSkillRepository returns the effective skill repository for the
+// invocation, honoring an invocation-scoped surface patch when present. It
+// implements agent.InvocationSkillRepositoryProvider so helpers such as the
+// dynamic AgentTool can derive a child skill surface from a parent invocation
+// without importing the llmagent package.
+func (a *LLMAgent) InvocationSkillRepository(
+	_ context.Context,
+	inv *agent.Invocation,
+) skill.Repository {
+	if a == nil {
+		return nil
+	}
+	return a.skillRepositoryForInvocation(inv)
+}
+
+// InvocationCodeExecutor returns the effective code executor for the
+// invocation, honoring a per-run override when present. It implements
+// agent.InvocationCodeExecutorProvider so callers can check executor
+// availability for a parent invocation without importing the llmagent package.
+func (a *LLMAgent) InvocationCodeExecutor(
+	_ context.Context,
+	inv *agent.Invocation,
+) codeexecutor.CodeExecutor {
+	return a.codeExecutorForInvocation(inv)
+}
+
 func (a *LLMAgent) supportsWorkspaceExecForInvocation(
 	inv *agent.Invocation,
 ) bool {
@@ -241,7 +267,10 @@ func (a *LLMAgent) InvocationToolSurface(
 	if options.EnableAwaitUserReplyTool {
 		allTools = append(allTools, toolawaitreply.New())
 	}
-	if len(subAgents) == 0 {
+	// A surface patch may suppress framework-managed sub-agent transfer for this
+	// node (the dynamic AgentTool does so for short-lived sub-agents that must
+	// not hand control to another agent). Treat it like having no sub-agents.
+	if len(subAgents) == 0 || patch.SuppressSubAgentTransfer() {
 		allTools = appendExtensionTools(allTools, &options)
 		return allTools, userToolNames
 	}
@@ -261,6 +290,47 @@ func (a *LLMAgent) InvocationToolSurface(
 	// from extension name collisions.
 	allTools = appendExtensionTools(allTools, &options)
 	return allTools, userToolNames
+}
+
+// InvocationKnowledgeOptions returns the options required to reproduce this
+// agent's knowledge-search surface on a derived agent.
+//
+// Built-in presets use it to inherit a parent agent's retrieval capability
+// without copying the parent's materialized (and possibly custom-named)
+// knowledge tools. The invocation argument is accepted for parity with the
+// other invocation-scoped accessors and reserved for future per-invocation
+// knowledge resolution; it is currently unused.
+func (a *LLMAgent) InvocationKnowledgeOptions(
+	_ *agent.Invocation,
+) []Option {
+	if a == nil {
+		return nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.option.Knowledge == nil {
+		return nil
+	}
+	opts := []Option{WithKnowledge(a.option.Knowledge)}
+	if a.option.KnowledgeFilter != nil {
+		opts = append(opts, WithKnowledgeFilter(a.option.KnowledgeFilter))
+	}
+	if a.option.KnowledgeConditionedFilter != nil {
+		opts = append(
+			opts,
+			WithKnowledgeConditionedFilter(a.option.KnowledgeConditionedFilter),
+		)
+	}
+	if a.option.EnableKnowledgeAgenticFilter {
+		opts = append(opts, WithEnableKnowledgeAgenticFilter(true))
+		if a.option.AgenticFilterInfo != nil {
+			opts = append(
+				opts,
+				WithKnowledgeAgenticFilterInfo(a.option.AgenticFilterInfo),
+			)
+		}
+	}
+	return opts
 }
 
 func (a *LLMAgent) userToolsForInvocation(

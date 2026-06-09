@@ -375,14 +375,15 @@ func TestGetEmbedding_EmptyResponse(t *testing.T) {
 		emb := New(
 			WithBaseURL(srv.URL),
 			WithAPIKey("dummy"),
+			WithMaxRetries(0),
 		)
 
-		vec, err := emb.GetEmbedding(context.Background(), "test")
-		if err != nil {
-			t.Fatalf("GetEmbedding should not return error for empty data: %v", err)
+		_, err := emb.GetEmbedding(context.Background(), "test")
+		if err == nil {
+			t.Fatal("GetEmbedding should return error for empty data")
 		}
-		if len(vec) != 0 {
-			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		if !strings.Contains(err.Error(), "received empty embedding response") {
+			t.Fatalf("GetEmbedding error = %v, want empty response", err)
 		}
 	})
 
@@ -403,14 +404,15 @@ func TestGetEmbedding_EmptyResponse(t *testing.T) {
 		emb := New(
 			WithBaseURL(srv.URL),
 			WithAPIKey("dummy"),
+			WithMaxRetries(0),
 		)
 
-		vec, err := emb.GetEmbedding(context.Background(), "test")
-		if err != nil {
-			t.Fatalf("GetEmbedding should not return error for empty vector: %v", err)
+		_, err := emb.GetEmbedding(context.Background(), "test")
+		if err == nil {
+			t.Fatal("GetEmbedding should return error for empty vector")
 		}
-		if len(vec) != 0 {
-			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		if !strings.Contains(err.Error(), "received empty embedding vector") {
+			t.Fatalf("GetEmbedding error = %v, want empty vector", err)
 		}
 	})
 }
@@ -433,17 +435,16 @@ func TestGetEmbeddingWithUsage_EmptyResponse(t *testing.T) {
 		emb := New(
 			WithBaseURL(srv.URL),
 			WithAPIKey("dummy"),
+			WithMaxRetries(0),
 		)
 
-		vec, usage, err := emb.GetEmbeddingWithUsage(context.Background(), "test")
-		if err != nil {
-			t.Fatalf("GetEmbeddingWithUsage should not return error: %v", err)
+		_, _, err := emb.GetEmbeddingWithUsage(context.Background(), "test")
+		if err == nil {
+			t.Fatal("GetEmbeddingWithUsage should return error")
 		}
-		if len(vec) != 0 {
-			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		if !strings.Contains(err.Error(), "received empty embedding response") {
+			t.Fatalf("GetEmbeddingWithUsage error = %v, want empty response", err)
 		}
-		// Usage may be nil when data is empty, which is acceptable
-		_ = usage
 	})
 
 	t.Run("empty embedding vector with usage", func(t *testing.T) {
@@ -464,14 +465,15 @@ func TestGetEmbeddingWithUsage_EmptyResponse(t *testing.T) {
 		emb := New(
 			WithBaseURL(srv.URL),
 			WithAPIKey("dummy"),
+			WithMaxRetries(0),
 		)
 
-		vec, _, err := emb.GetEmbeddingWithUsage(context.Background(), "test")
-		if err != nil {
-			t.Fatalf("GetEmbeddingWithUsage should not return error: %v", err)
+		_, _, err := emb.GetEmbeddingWithUsage(context.Background(), "test")
+		if err == nil {
+			t.Fatal("GetEmbeddingWithUsage should return error")
 		}
-		if len(vec) != 0 {
-			t.Errorf("Expected empty embedding, got length %d", len(vec))
+		if !strings.Contains(err.Error(), "received empty embedding vector") {
+			t.Fatalf("GetEmbeddingWithUsage error = %v, want empty vector", err)
 		}
 	})
 }
@@ -492,14 +494,15 @@ func TestGetEmbedding_EmptyDataArray(t *testing.T) {
 	emb := New(
 		WithBaseURL(srv.URL),
 		WithAPIKey("dummy"),
+		WithMaxRetries(0),
 	)
 
-	vec, err := emb.GetEmbedding(context.Background(), "test")
-	if err != nil {
-		t.Fatalf("GetEmbedding should not return error: %v", err)
+	_, err := emb.GetEmbedding(context.Background(), "test")
+	if err == nil {
+		t.Fatal("GetEmbedding should return error")
 	}
-	if len(vec) != 0 {
-		t.Errorf("Expected empty embedding, got length %d", len(vec))
+	if !strings.Contains(err.Error(), "received empty embedding response") {
+		t.Fatalf("GetEmbedding error = %v, want empty response", err)
 	}
 }
 
@@ -590,6 +593,49 @@ func TestRetryLogic(t *testing.T) {
 		// Initial attempt + 2 retries = 3 total attempts
 		if attemptCount != 3 {
 			t.Errorf("Expected 3 attempts (1 initial + 2 retries), got %d", attemptCount)
+		}
+	})
+
+	t.Run("retry on empty embedding response", func(t *testing.T) {
+		attemptCount := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attemptCount++
+			w.Header().Set("Content-Type", "application/json")
+			if attemptCount == 1 {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"object": "list",
+					"data":   []map[string]any{},
+					"model":  "text-embedding-3-small",
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"object": "list",
+				"data": []map[string]any{
+					{"object": "embedding", "index": 0, "embedding": []float64{0.1, 0.2, 0.3}},
+				},
+				"model": "text-embedding-3-small",
+			})
+		}))
+		defer srv.Close()
+
+		emb := New(
+			WithBaseURL(srv.URL),
+			WithAPIKey("dummy"),
+			WithMaxRetries(1),
+			WithRetryBackoff([]time.Duration{time.Millisecond}),
+			WithRequestOptions(option.WithMaxRetries(0)),
+		)
+
+		vec, err := emb.GetEmbedding(context.Background(), "test")
+		if err != nil {
+			t.Fatalf("GetEmbedding should succeed after empty response retry: %v", err)
+		}
+		if len(vec) != 3 {
+			t.Errorf("Expected 3 dimensions, got %d", len(vec))
+		}
+		if attemptCount != 2 {
+			t.Errorf("Expected 2 attempts, got %d", attemptCount)
 		}
 	})
 

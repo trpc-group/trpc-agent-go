@@ -311,6 +311,28 @@ func TestWithStorageUserIDAndContextFallbacks(t *testing.T) {
 	require.Equal(t, "fallback", StorageUserIDFromContext(base, " fallback "))
 }
 
+func TestWithUserStorageIDAndContextFallbacks(t *testing.T) {
+	t.Parallel()
+
+	ctx := WithUserStorageID(
+		context.Background(),
+		" user-scope ",
+	)
+	require.Equal(
+		t,
+		"user-scope",
+		UserStorageIDFromContext(ctx, ""),
+	)
+
+	base := context.Background()
+	require.True(t, WithUserStorageID(base, "   ") == base)
+	require.Equal(
+		t,
+		"fallback",
+		UserStorageIDFromContext(base, " fallback "),
+	)
+}
+
 func TestWrapSessionService_UsesContextStorageScopeForStorage(t *testing.T) {
 	t.Parallel()
 

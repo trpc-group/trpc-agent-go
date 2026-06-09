@@ -33,6 +33,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -639,6 +640,10 @@ func (r *runner) Run(
 	flushChan := make(chan *flush.FlushRequest)
 	flush.Attach(execCtx, invocation, flushChan)
 	r.attachSessionAppender(invocation, sess)
+	// Expose the live session pointer so that downstream components (such
+	// as AgentTool sub-agents) can restore it after the function-call
+	// processor clones the session for state-delta isolation.
+	livesession.Attach(invocation, sess)
 	barrier.Enable(invocation)
 
 	// Run the agent and get the event channel.
@@ -1218,6 +1223,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
 		appender.Clear(loop.invocation)
+		livesession.Clear(loop.invocation)
 		steer.Clear(loop.invocation)
 		r.unregisterRun(loop.invocation.RunOptions.RequestID)
 		close(loop.processedEventCh)
@@ -1308,6 +1314,7 @@ func (r *runner) processSingleAgentEvent(
 	if agentEvent == nil {
 		return nil
 	}
+	agentEvent = errorEventWithContent(agentEvent)
 	excludeRootCompletion := routedEvent && !sameSession(persistSession, loop.sess)
 	if excludeRootCompletion {
 		r.captureRoutedCompletionError(loop, agentEvent)
@@ -2312,7 +2319,7 @@ func (r *runner) handleEventPersistence(
 	agentEvent *event.Event,
 ) bool {
 	// Ensure error events have content so they are valid for persistence.
-	ensureErrorEventContent(agentEvent)
+	agentEvent = errorEventWithContent(agentEvent)
 
 	// Append event to session if it's complete (not partial).
 	if !r.shouldPersistEvent(agentEvent) {
@@ -3518,6 +3525,22 @@ func ensureErrorEventContent(e *event.Event) {
 		reason := "error"
 		e.Response.Choices[0].FinishReason = &reason
 	}
+}
+
+func errorEventWithContent(e *event.Event) *event.Event {
+	if e == nil || e.Response == nil || e.Response.Error == nil {
+		return e
+	}
+	if e.IsValidContent() {
+		return e
+	}
+
+	// Preserve event identity but repair content on an owned response copy.
+	eventCopy := *e
+	eventCopy.Response = e.Response.Clone()
+	ensureErrorEventContent(&eventCopy)
+
+	return &eventCopy
 }
 
 // RunWithMessages is a convenience helper that lets callers pass a full

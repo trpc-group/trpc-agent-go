@@ -404,8 +404,10 @@ When the model calls tools, the tool outputs are added to the conversation as
 on the tool result…”, or reveal internal process details.
 
 To make the assistant respond more naturally after tool calls, LLMAgent
-injects a short “post-tool” dynamic prompt into the system message **only when
-tool results are present**.
+injects a short “post-tool” guidance block into the system message when the
+feature is enabled. The guidance is present from the first model request so
+later tool-call turns keep the same prompt prefix and can reuse provider-side
+prompt caches more effectively.
 
 - Default: enabled, using the built-in prompt.
 - Customize the injected text: `llmagent.WithPostToolPrompt("...")`.

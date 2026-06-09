@@ -160,12 +160,13 @@ llmAgent := llmagent.New(
 
 Requirements and behavior:
 
-- `WithEnableOnDemandSession(true)` enables the progressive-disclosure path and
-  only exposes `session_search` and
-  `session_load` when the session backend implements both
-  `session.SearchableService` and `session.WindowService`.
-- `session/pgvector` supports this path today. Pure in-memory summary demos do
-  not expose these tools.
+- `WithEnableOnDemandSession(true)` enables on-demand session tools according to
+  backend capability. `session_search` is exposed when the backend implements
+  `session.SearchableService`; `session_load` is exposed when the backend
+  implements `session.WindowService`. Backends may support either one or both.
+- `session/pgvector` supports both discovery and exact loading. Normal session
+  backends that implement `WindowService` expose exact `session_load` recovery
+  even when semantic `session_search` is unavailable.
 - `current_hidden` searches current-session history strictly before the summary
   boundary recorded in `summary:last_included_ts`.
 - `current_session` searches the current session regardless of summary cutoff.
@@ -188,11 +189,17 @@ What is intentionally excluded:
 Recommended usage pattern:
 
 1. Let the model answer from the visible prompt, summary, and recent history.
-2. If a missing detail is needed, call `session_search` first.
-3. Use `session_load` only when the small context window returned by
-   `session_search` is still not enough.
+2. If `session_search` is available and a missing detail is needed, call it
+   first.
+3. Use `session_load` when you have an `event_id` and need the surrounding raw
+   history or exact tool result, including on backends without semantic search.
 4. Treat loaded history as untrusted historical context, not active
    instructions.
+
+Migration note: earlier builds only treated on-demand session support as
+available when both `session_search` and `session_load` were present. The tool
+surface is now capability-based, so search-only integrations can expose
+`session_search` and load-only integrations can expose `session_load`.
 
 ## SessionSummarizer Interface
 
@@ -930,7 +937,7 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 
 **Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, **default 0 / disabled**):
 
-- Applies to **all** tool results including the current request
+- Applies to **nearly all** tool results including the current request. Tool results returned by `session_load` itself are skipped so recovered slices are not compacted again
 - Tool results exceeding this threshold are truncated using head+tail preservation: the beginning and end of the content are kept, with a `[...N characters truncated...]` marker in the middle
 - This is the safety net for single tool results large enough to overflow the context window on their own (e.g. `web_fetch` returning 800K+ chars of HTML)
 
@@ -946,10 +953,12 @@ Use `WithToolResultCompactionConfig(...)` when you need tool-name or recency pol
 
 If the same tool name appears in both `ForceCleanToolNames` and `KeepToolNames`, `KeepToolNames` wins.
 
+When the compacted event has an `event_id`, placeholders and truncation markers include recovery hints such as `event_id`, `tool_call_id`, and `tool_name`. With `WithEnableOnDemandSession(true)` and a session backend that implements `session.WindowService`, the model can call `session_load` with `content_offset` / `content_limit` to reload a precise slice of the original tool result. `session_load` output size is controlled by its own window parameters and `content_limit`; reload very large results in slices instead of requesting the full payload at once.
+
 Additionally:
 
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model
-- Model-layer token tailoring remains the final fallback
+- Model-layer token tailoring remains the final fallback. It trims whole message rounds, so keep recovered slices small enough that they still fit in the final provider request
 - Context compaction uses `SimpleTokenCounter` by default. If your application
   uses a custom counter for CJK-heavy prompts or provider-specific tokenization,
   pass the same counter with `WithContextCompactionTokenCounter(...)` so Pass 1

@@ -13,18 +13,34 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	goparser "go/parser"
+	"go/token"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	docreader "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
+
+func init() {
+	docreader.RegisterReader([]string{".go"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testGoReader{}
+	})
+	docreader.RegisterReader([]string{".proto"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testProtoReader{}
+	})
+	codeast.RegisterDirectoryParser(codeast.FileTypeGo, &stubDirectoryParser{})
+}
 
 func TestReadDocumentsFromRemoteBranch(t *testing.T) {
 	remoteURL, _ := createRemoteRepo(t, []repoCommit{{
@@ -356,15 +372,13 @@ func (s *Service) Do() error { return nil }
 	assertEqual(t, methodCount, 1)
 }
 
-func TestReadDocumentsRejectsMultipleRepositoriesPerSource(t *testing.T) {
+func TestWithRepositoryLastOptionWins(t *testing.T) {
+	secondRepo := t.TempDir()
 	src := New(WithRepository(Repository{Dir: t.TempDir()}),
-		WithRepository(Repository{URL: "https://example.com/demo.git"}),
+		WithRepository(Repository{Dir: secondRepo}),
 	)
 
-	_, err := src.ReadDocuments(context.Background())
-	if err == nil {
-		t.Fatal("expected error for multiple repositories per source")
-	}
+	assertEqual(t, src.repository.Dir, secondRepo)
 }
 
 func TestFirstNonEmpty(t *testing.T) {
@@ -376,20 +390,13 @@ func TestFirstNonEmpty(t *testing.T) {
 
 func TestResolvedRepositoryUsesStructuredRepository(t *testing.T) {
 	src := New(WithRepository(Repository{URL: "https://example.com/demo.git", Branch: "main"}))
-	repository, ok := src.resolvedRepository()
-	if !ok {
-		t.Fatal("expected repository to be configured")
-	}
-	assertEqual(t, repository.URL, "https://example.com/demo.git")
-	assertEqual(t, repository.Branch, "main")
+	assertEqual(t, src.repository.URL, "https://example.com/demo.git")
+	assertEqual(t, src.repository.Branch, "main")
 }
 
 func TestResolvedRepositoryAndDescriptorEdgeCases(t *testing.T) {
 	t.Run("missing repository returns false", func(t *testing.T) {
 		src := New()
-		if _, ok := src.resolvedRepository(); ok {
-			t.Fatal("expected unresolved repository")
-		}
 		if _, _, ok := src.RepositoryDescriptor(); ok {
 			t.Fatal("expected no repository descriptor")
 		}
@@ -905,6 +912,344 @@ func TestResolveRepositoryRejectsInvalidStructuredInputs(t *testing.T) {
 	}
 }
 
+type testGoReader struct{}
+
+func (r *testGoReader) ReadFromReader(name string, rd io.Reader) ([]*document.Document, error) {
+	content, err := io.ReadAll(rd)
+	if err != nil {
+		return nil, err
+	}
+	result, err := r.parseFiles(filepath.Dir(name), []testGoFile{{path: name, content: string(content)}})
+	if err != nil {
+		return nil, err
+	}
+	return testCodeASTDocs(result), nil
+}
+
+func (r *testGoReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	result, err := r.parseFiles(filepath.Dir(filePath), []testGoFile{{path: filePath, content: string(content)}})
+	if err != nil {
+		return nil, err
+	}
+	return testCodeASTDocs(result), nil
+}
+
+func (r *testGoReader) ReadFromURL(_ string) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (r *testGoReader) ReadFromDirectory(dirPath string) ([]*document.Document, error) {
+	result, err := r.ReadCodeASTFromDirectory(dirPath)
+	if err != nil {
+		return nil, err
+	}
+	return testCodeASTDocs(result), nil
+}
+
+func (r *testGoReader) ReadCodeASTFromDirectory(dirPath string) (*codeast.Result, error) {
+	var filePaths []string
+	if err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) == ".go" && !strings.HasSuffix(path, "_test.go") {
+			filePaths = append(filePaths, path)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	sort.Strings(filePaths)
+
+	files := make([]testGoFile, 0, len(filePaths))
+	for _, filePath := range filePaths {
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, testGoFile{path: filePath, content: string(content)})
+	}
+	return r.parseFiles(dirPath, files)
+}
+
+func (r *testGoReader) Name() string {
+	return "test-go"
+}
+
+func (r *testGoReader) SupportedExtensions() []string {
+	return []string{".go"}
+}
+
+func (r *testGoReader) parseFiles(baseDir string, files []testGoFile) (*codeast.Result, error) {
+	moduleRoot, modulePath := testGoModule(baseDir)
+	fset := token.NewFileSet()
+	var nodes []*codeast.Node
+	var calls []testGoCall
+	var edges []*codeast.Edge
+
+	for _, goFile := range files {
+		fileNode, err := goparser.ParseFile(fset, goFile.path, goFile.content, goparser.ParseComments)
+		if err != nil {
+			return nil, err
+		}
+		pkgPath := testGoPackagePath(moduleRoot, modulePath, filepath.Dir(goFile.path), fileNode.Name.Name)
+		for _, decl := range fileNode.Decls {
+			switch d := decl.(type) {
+			case *ast.GenDecl:
+				for _, spec := range d.Specs {
+					typeSpec, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					if _, ok := typeSpec.Type.(*ast.StructType); !ok {
+						continue
+					}
+					id := pkgPath + "." + typeSpec.Name.Name
+					nodes = append(nodes, testGoNode(fset, goFile, d, id, typeSpec.Name.Name, pkgPath, codeast.EntityStruct, d.Doc))
+				}
+			case *ast.FuncDecl:
+				receiver := testGoReceiverName(d)
+				name := d.Name.Name
+				id := pkgPath + "." + name
+				entityType := codeast.EntityFunction
+				if receiver != "" {
+					receiverType := strings.TrimPrefix(receiver, "*")
+					receiverID := pkgPath + "." + receiverType
+					id = receiverID + "." + name
+					entityType = codeast.EntityMethod
+					edges = append(edges, &codeast.Edge{FromID: receiverID, ToID: id, Type: codeast.RelationMethod})
+				}
+				node := testGoNode(fset, goFile, d, id, name, pkgPath, entityType, d.Doc)
+				if receiver != "" {
+					node.Metadata = map[string]any{codeast.MetadataKeyReceiverType: receiver}
+				}
+				nodes = append(nodes, node)
+				calls = append(calls, testGoCalls(d, id, pkgPath)...)
+			}
+		}
+	}
+
+	nodeSet := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		nodeSet[node.ID] = struct{}{}
+	}
+	for _, call := range calls {
+		targetID := call.packagePath + "." + call.name
+		if _, ok := nodeSet[targetID]; ok {
+			edges = append(edges, &codeast.Edge{FromID: call.fromID, ToID: targetID, Type: codeast.RelationCalls})
+		}
+	}
+	return &codeast.Result{Nodes: nodes, Edges: edges}, nil
+}
+
+type testGoFile struct {
+	path    string
+	content string
+}
+
+type testGoCall struct {
+	fromID      string
+	packagePath string
+	name        string
+}
+
+func testGoModule(baseDir string) (string, string) {
+	absDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		absDir = baseDir
+	}
+	for dir := absDir; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		content, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) == 2 && fields[0] == "module" {
+				return dir, fields[1]
+			}
+		}
+	}
+	return absDir, ""
+}
+
+func testGoPackagePath(moduleRoot, modulePath, dir, packageName string) string {
+	if modulePath == "" {
+		return packageName
+	}
+	rel, err := filepath.Rel(moduleRoot, dir)
+	if err != nil || rel == "." {
+		return modulePath
+	}
+	return filepath.ToSlash(filepath.Join(modulePath, rel))
+}
+
+func testGoNode(
+	fset *token.FileSet,
+	goFile testGoFile,
+	node ast.Node,
+	id string,
+	name string,
+	pkgPath string,
+	entityType codeast.EntityType,
+	doc *ast.CommentGroup,
+) *codeast.Node {
+	start := fset.Position(node.Pos()).Line
+	end := fset.Position(node.End()).Line
+	comment := ""
+	if doc != nil {
+		comment = strings.TrimSpace(doc.Text())
+	}
+	return &codeast.Node{
+		ID:         id,
+		Type:       entityType,
+		Name:       name,
+		FullName:   id,
+		Scope:      codeast.ScopeCode,
+		Language:   codeast.LanguageGo,
+		Comment:    comment,
+		Code:       testGoSnippet(goFile.content, start, end),
+		FilePath:   goFile.path,
+		LineStart:  start,
+		LineEnd:    end,
+		ChunkIndex: len(id),
+		Package:    pkgPath,
+	}
+}
+
+func testGoReceiverName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return ""
+	}
+	switch expr := fn.Recv.List[0].Type.(type) {
+	case *ast.Ident:
+		return expr.Name
+	case *ast.StarExpr:
+		if ident, ok := expr.X.(*ast.Ident); ok {
+			return "*" + ident.Name
+		}
+	}
+	return ""
+}
+
+func testGoCalls(fn *ast.FuncDecl, fromID string, packagePath string) []testGoCall {
+	if fn.Body == nil {
+		return nil
+	}
+	var calls []testGoCall
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if ident, ok := call.Fun.(*ast.Ident); ok {
+			calls = append(calls, testGoCall{fromID: fromID, packagePath: packagePath, name: ident.Name})
+		}
+		return true
+	})
+	return calls
+}
+
+func testGoSnippet(content string, start, end int) string {
+	if start <= 0 || end < start {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if start > len(lines) {
+		return ""
+	}
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return strings.Join(lines[start-1:end], "\n")
+}
+
+func testCodeASTDocs(result *codeast.Result) []*document.Document {
+	if result == nil {
+		return nil
+	}
+	docs := make([]*document.Document, 0, len(result.Nodes))
+	for _, node := range result.Nodes {
+		metadata := map[string]any{
+			"trpc_ast_type":       string(node.Type),
+			"trpc_ast_name":       node.Name,
+			"trpc_ast_full_name":  node.FullName,
+			"trpc_ast_language":   string(node.Language),
+			"trpc_ast_scope":      string(node.Scope),
+			"trpc_ast_package":    node.Package,
+			"trpc_ast_file_path":  node.FilePath,
+			source.MetaFilePath:   node.FilePath,
+			source.MetaChunkIndex: node.ChunkIndex,
+		}
+		for k, v := range node.Metadata {
+			metadata["trpc_ast_"+k] = v
+		}
+		embeddingText, _ := json.Marshal(map[string]any{
+			"id":        node.ID,
+			"name":      node.Name,
+			"type":      string(node.Type),
+			"file_path": node.FilePath,
+		})
+		docs = append(docs, &document.Document{
+			Name:          node.Name,
+			Content:       node.Code,
+			EmbeddingText: string(embeddingText),
+			Metadata:      metadata,
+		})
+	}
+	return docs
+}
+
+type testProtoReader struct{}
+
+func (r *testProtoReader) ReadFromReader(name string, rd io.Reader) ([]*document.Document, error) {
+	content, err := io.ReadAll(rd)
+	if err != nil {
+		return nil, err
+	}
+	return []*document.Document{r.document(name, string(content))}, nil
+}
+
+func (r *testProtoReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return []*document.Document{r.document(filePath, string(content))}, nil
+}
+
+func (r *testProtoReader) ReadFromURL(_ string) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (r *testProtoReader) Name() string {
+	return "test-proto"
+}
+
+func (r *testProtoReader) SupportedExtensions() []string {
+	return []string{".proto"}
+}
+
+func (r *testProtoReader) document(name string, content string) *document.Document {
+	metadata := map[string]any{
+		"trpc_ast_type":      "file",
+		"trpc_ast_name":      name,
+		"trpc_ast_full_name": name,
+		"trpc_ast_language":  string(codeast.LanguageProto),
+		"trpc_ast_scope":     string(codeast.ScopeCode),
+		"trpc_ast_file_path": name,
+		source.MetaFilePath:  name,
+	}
+	return &document.Document{Name: filepath.Base(name), Content: content, Metadata: metadata}
+}
+
 type stubReader struct {
 	fileDocs []*document.Document
 	fileErr  error
@@ -987,6 +1332,44 @@ func findDocByFullName(docs []*document.Document, fullName string) *document.Doc
 		}
 	}
 	return nil
+}
+
+func hasGraphNode(data *graph.Data, id string) bool {
+	for _, node := range data.Nodes {
+		if node.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGraphNodeMetadataKey(data *graph.Data, id, key string) bool {
+	for _, node := range data.Nodes {
+		if node.ID != id {
+			continue
+		}
+		_, ok := node.Metadata[key]
+		return ok
+	}
+	return false
+}
+
+func hasGraphNodeMetadataValue(data *graph.Data, id, key string, value any) bool {
+	for _, node := range data.Nodes {
+		if node.ID == id && node.Metadata[key] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGraphEdge(data *graph.Data, fromID, toID, edgeType string) bool {
+	for _, edge := range data.Edges {
+		if edge.FromID == fromID && edge.ToID == toID && edge.Type == edgeType {
+			return true
+		}
+	}
+	return false
 }
 
 type repoCommit struct {
@@ -1074,4 +1457,801 @@ func writeRepoFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write %s: %v", path, err)
 	}
+}
+
+func isGraphDocumentNode(node *graph.Node) bool {
+	if node == nil || node.Metadata == nil {
+		return false
+	}
+	filePath, _ := node.Metadata[source.MetaFilePath].(string)
+	if filePath == "" {
+		return false
+	}
+	_, hasASTScope := node.Metadata["trpc_ast_scope"]
+	return !hasASTScope
+}
+
+func countGraphDocumentNodes(data *graph.Data) int {
+	n := 0
+	for _, node := range data.Nodes {
+		if isGraphDocumentNode(node) {
+			n++
+		}
+	}
+	return n
+}
+
+func findGraphDocumentNodeByContent(data *graph.Data, substr string) *graph.Node {
+	for _, node := range data.Nodes {
+		if isGraphDocumentNode(node) && strings.Contains(node.Content, substr) {
+			return node
+		}
+	}
+	return nil
+}
+
+func TestReadGraphIncludesDocumentNodes(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "service.go"), "package demo\n\nfunc Run() {}\n")
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "# Demo\n\nThis is the readme.\n")
+	writeRepoFile(t, filepath.Join(dir, "CHANGELOG.md"), "# Changelog\n\nv1.0.0 initial release\n")
+	writeRepoFile(t, filepath.Join(dir, "internal", "notes.txt"), "internal notes")
+
+	docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testMarkdownReader{}
+	})
+
+	src := New(
+		WithRepository(Repository{Dir: dir}),
+		WithDocExtensions([]string{".md"}),
+	)
+
+	data, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ReadGraph() error = %v", err)
+	}
+
+	docCount := countGraphDocumentNodes(data)
+	if docCount != 2 {
+		t.Fatalf("expected 2 document nodes (README + CHANGELOG), got %d", docCount)
+	}
+
+	readmeNode := findGraphDocumentNodeByContent(data, "readme")
+	if readmeNode == nil {
+		t.Fatal("expected README document node")
+	}
+	if readmeNode.Metadata[source.MetaFilePath] == "" {
+		t.Error("expected document node to have MetaFilePath")
+	}
+	if _, ok := readmeNode.Metadata["kind"]; ok {
+		t.Error("document node should not have legacy kind metadata")
+	}
+	if _, ok := readmeNode.Metadata["trpc_ast_scope"]; ok {
+		t.Error("document node should not use trpc_ast_scope")
+	}
+	if readmeNode.ID == "" {
+		t.Error("expected document node to have non-empty ID")
+	}
+
+	txtNode := findGraphDocumentNodeByContent(data, "internal notes")
+	if txtNode != nil {
+		t.Fatal("txt file should not be included when only .md is configured")
+	}
+}
+
+func TestReadGraphDocumentNodesWithoutCodeNodes(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "# Hello\n\nworld\n")
+
+	docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testMarkdownReader{}
+	})
+
+	src := New(
+		WithRepository(Repository{Dir: dir}),
+		WithDocExtensions([]string{".md"}),
+	)
+
+	data, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ReadGraph() error = %v", err)
+	}
+	if len(data.Nodes) == 0 {
+		t.Fatal("expected at least one document node")
+	}
+	if countGraphDocumentNodes(data) == 0 {
+		t.Fatal("expected document node")
+	}
+}
+
+func TestReadGraphDocumentIDsAreDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "service.go"), "package demo\n\nfunc Run() {}\n")
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "# Hello\n")
+
+	docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testMarkdownReader{}
+	})
+
+	src := New(
+		WithRepository(Repository{Dir: dir}),
+		WithDocExtensions([]string{".md"}),
+	)
+
+	data1, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("first ReadGraph() error = %v", err)
+	}
+	data2, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("second ReadGraph() error = %v", err)
+	}
+
+	ids1 := make(map[string]struct{})
+	for _, node := range data1.Nodes {
+		if isGraphDocumentNode(node) {
+			ids1[node.ID] = struct{}{}
+		}
+	}
+	for _, node := range data2.Nodes {
+		if isGraphDocumentNode(node) {
+			if _, ok := ids1[node.ID]; !ok {
+				t.Fatalf("document node ID %q not stable across runs", node.ID)
+			}
+		}
+	}
+}
+
+func TestReadGraphDocumentNodesNotIncludedByDefault(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "service.go"), "package demo\n\nfunc Run() {}\n")
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "# Hello\n")
+
+	src := New(WithRepository(Repository{Dir: dir}))
+
+	data, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ReadGraph() error = %v", err)
+	}
+	if countGraphDocumentNodes(data) != 0 {
+		t.Fatal("document nodes should not appear without WithDocExtensions")
+	}
+}
+
+type testMarkdownReader struct{}
+
+func (r *testMarkdownReader) ReadFromReader(name string, rd io.Reader) ([]*document.Document, error) {
+	content, err := io.ReadAll(rd)
+	if err != nil {
+		return nil, err
+	}
+	return []*document.Document{{
+		Name:     filepath.Base(name),
+		Content:  strings.ToLower(string(content)),
+		Metadata: map[string]any{source.MetaChunkIndex: 0},
+	}}, nil
+}
+
+func (r *testMarkdownReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	return []*document.Document{{
+		Name:     filepath.Base(filePath),
+		Content:  strings.ToLower(string(content)),
+		Metadata: map[string]any{source.MetaChunkIndex: 0},
+	}}, nil
+}
+
+func (r *testMarkdownReader) ReadFromURL(_ string) ([]*document.Document, error) { return nil, nil }
+func (r *testMarkdownReader) Name() string                                       { return "test-md" }
+func (r *testMarkdownReader) SupportedExtensions() []string                      { return []string{".md"} }
+
+// stubDirectoryParser is a minimal codeast.DirectoryParser used in tests to
+// avoid importing the real golang reader package (which requires CGO / full
+// type checking). It returns an empty result so that code-path logic in
+// ReadGraph can be exercised without real Go AST parsing.
+type stubDirectoryParser struct{}
+
+func (stubDirectoryParser) ParseDirectory(_ string, _ ...codeast.ParseOption) (*codeast.Result, error) {
+	return &codeast.Result{}, nil
+}
+
+// errorOnBadMarkdownReader returns an error for files named "bad.md",
+// used to test that readDocumentNodes continues past reader errors.
+type errorOnBadMarkdownReader struct{}
+
+func (r *errorOnBadMarkdownReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	if strings.Contains(filepath.Base(filePath), "bad") {
+		return nil, fmt.Errorf("simulated read error")
+	}
+	return []*document.Document{{
+		Name:     filepath.Base(filePath),
+		Content:  "good content",
+		Metadata: map[string]any{source.MetaChunkIndex: 0},
+	}}, nil
+}
+
+func (r *errorOnBadMarkdownReader) ReadFromReader(_ string, _ io.Reader) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (r *errorOnBadMarkdownReader) ReadFromURL(_ string) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (r *errorOnBadMarkdownReader) Name() string                  { return "error-on-bad-md" }
+func (r *errorOnBadMarkdownReader) SupportedExtensions() []string { return []string{".md"} }
+
+// multiChunkMarkdownReader returns multiple chunks including nil to test
+// chunk index extraction and nil doc skipping in readDocumentNodes.
+type multiChunkMarkdownReader struct{}
+
+func (r *multiChunkMarkdownReader) ReadFromFile(filePath string) ([]*document.Document, error) {
+	return []*document.Document{
+		nil,
+		{Name: "part1", Content: "part 1 content", Metadata: map[string]any{source.MetaChunkIndex: 5}},
+		{Name: "part2", Content: "part 2 content"},
+	}, nil
+}
+
+func (r *multiChunkMarkdownReader) ReadFromReader(_ string, _ io.Reader) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (r *multiChunkMarkdownReader) ReadFromURL(_ string) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (r *multiChunkMarkdownReader) Name() string                  { return "multi-chunk-md" }
+func (r *multiChunkMarkdownReader) SupportedExtensions() []string { return []string{".md"} }
+
+// configurableDirectoryParser allows tests to inject specific parse results.
+type configurableDirectoryParser struct {
+	result *codeast.Result
+	err    error
+	opts   []codeast.ParseOption
+}
+
+func (p *configurableDirectoryParser) ParseDirectory(_ string, opts ...codeast.ParseOption) (*codeast.Result, error) {
+	p.opts = opts
+	if p.err != nil {
+		return nil, p.err
+	}
+	return p.result, nil
+}
+
+func TestReadGraphNoAllowedGoPathsReturnsEmptyData(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "# Hello\n")
+
+	src := New(WithRepository(Repository{Dir: dir}))
+	data, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ReadGraph() error = %v", err)
+	}
+	if data == nil {
+		t.Fatal("expected non-nil data")
+	}
+	if len(data.Nodes) != 0 {
+		t.Fatalf("expected 0 nodes, got %d", len(data.Nodes))
+	}
+	if len(data.Edges) != 0 {
+		t.Fatalf("expected 0 edges, got %d", len(data.Edges))
+	}
+}
+
+func TestReadGraphParseConcurrencyOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "main.go"), "package demo\n\nfunc Main() {}\n")
+
+	parser := &configurableDirectoryParser{
+		result: &codeast.Result{},
+	}
+	codeast.RegisterDirectoryParser(codeast.FileTypeGo, parser)
+	defer codeast.RegisterDirectoryParser(codeast.FileTypeGo, stubDirectoryParser{})
+
+	t.Run("option overrides source field", func(t *testing.T) {
+		src := New(
+			WithRepository(Repository{Dir: dir}),
+			WithParseConcurrency(3),
+		)
+		_, err := src.ReadGraph(context.Background(), source.WithReadGraphParseConcurrency(7))
+		if err != nil {
+			t.Fatalf("ReadGraph() error = %v", err)
+		}
+		resolved := codeast.ParseConcurrency(parser.opts)
+		if resolved != 7 {
+			t.Fatalf("expected parseConcurrency=7 from option, got %d", resolved)
+		}
+	})
+
+	t.Run("falls back to source field", func(t *testing.T) {
+		src := New(
+			WithRepository(Repository{Dir: dir}),
+			WithParseConcurrency(5),
+		)
+		_, err := src.ReadGraph(context.Background())
+		if err != nil {
+			t.Fatalf("ReadGraph() error = %v", err)
+		}
+		resolved := codeast.ParseConcurrency(parser.opts)
+		if resolved != 5 {
+			t.Fatalf("expected parseConcurrency=5 from source, got %d", resolved)
+		}
+	})
+
+	t.Run("zero option uses source field", func(t *testing.T) {
+		src := New(
+			WithRepository(Repository{Dir: dir}),
+			WithParseConcurrency(4),
+		)
+		_, err := src.ReadGraph(context.Background(), source.WithReadGraphParseConcurrency(0))
+		if err != nil {
+			t.Fatalf("ReadGraph() error = %v", err)
+		}
+		resolved := codeast.ParseConcurrency(parser.opts)
+		if resolved != 4 {
+			t.Fatalf("expected parseConcurrency=4 from source fallback, got %d", resolved)
+		}
+	})
+}
+
+func TestGraphDataFromCodeAST(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "service.go"), "package demo\n")
+
+	src := New(WithRepository(Repository{Dir: dir, RepoName: "demo", RepoURL: "https://example.com/demo.git", Branch: "main"}))
+
+	t.Run("nil result returns empty data", func(t *testing.T) {
+		data := src.graphDataFromCodeAST(nil, dir, &repoInfo{name: "demo"}, nil)
+		if data == nil {
+			t.Fatal("expected non-nil data")
+		}
+		if len(data.Nodes) != 0 || len(data.Edges) != 0 {
+			t.Fatal("expected empty data for nil result")
+		}
+	})
+
+	t.Run("nodes filtered by allowedGoPaths", func(t *testing.T) {
+		result := &codeast.Result{
+			Nodes: []*codeast.Node{
+				{
+					ID: "example.com/demo.Allowed", Type: codeast.EntityStruct,
+					Name: "Allowed", FullName: "example.com/demo.Allowed",
+					Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+					Code: "type Allowed struct{}", FilePath: filepath.Join(dir, "service.go"),
+					LineStart: 1, LineEnd: 1, Package: "example.com/demo",
+				},
+				{
+					ID: "example.com/demo.Excluded", Type: codeast.EntityStruct,
+					Name: "Excluded", FullName: "example.com/demo.Excluded",
+					Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+					Code: "type Excluded struct{}", FilePath: filepath.Join(dir, "other.go"),
+					LineStart: 1, LineEnd: 1, Package: "example.com/demo",
+				},
+			},
+		}
+		allowed := map[string]struct{}{"service.go": {}}
+		data := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo", url: "https://example.com/demo.git", branch: "main"}, allowed)
+		if len(data.Nodes) != 1 {
+			t.Fatalf("expected 1 node (Allowed), got %d", len(data.Nodes))
+		}
+		if data.Nodes[0].Name != "Allowed" {
+			t.Fatalf("expected Allowed node, got %s", data.Nodes[0].Name)
+		}
+	})
+
+	t.Run("nil and empty-ID nodes are skipped", func(t *testing.T) {
+		result := &codeast.Result{
+			Nodes: []*codeast.Node{
+				nil,
+				{ID: "", Name: "Empty"},
+				{
+					ID: "example.com/demo.Valid", Type: codeast.EntityFunction,
+					Name: "Valid", FullName: "example.com/demo.Valid",
+					Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+					Code: "func Valid() {}", FilePath: filepath.Join(dir, "service.go"),
+					LineStart: 1, LineEnd: 1, Package: "example.com/demo",
+				},
+			},
+		}
+		allowed := map[string]struct{}{"service.go": {}}
+		data := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo"}, allowed)
+		if len(data.Nodes) != 1 {
+			t.Fatalf("expected 1 node, got %d", len(data.Nodes))
+		}
+	})
+
+	t.Run("edges generated correctly", func(t *testing.T) {
+		result := &codeast.Result{
+			Nodes: []*codeast.Node{
+				{
+					ID: "example.com/demo.Service", Type: codeast.EntityStruct,
+					Name: "Service", FullName: "example.com/demo.Service",
+					Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+					Code: "type Service struct{}", FilePath: filepath.Join(dir, "service.go"),
+					LineStart: 1, LineEnd: 1, Package: "example.com/demo",
+				},
+				{
+					ID: "example.com/demo.Service.Do", Type: codeast.EntityMethod,
+					Name: "Do", FullName: "example.com/demo.Service.Do",
+					Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+					Code: "func (s *Service) Do() {}", FilePath: filepath.Join(dir, "service.go"),
+					LineStart: 2, LineEnd: 2, Package: "example.com/demo",
+					Metadata: map[string]any{"receiver_type": "*Service"},
+				},
+			},
+			Edges: []*codeast.Edge{
+				{FromID: "example.com/demo.Service", ToID: "example.com/demo.Service.Do", Type: codeast.RelationMethod},
+				nil,
+				{FromID: "", ToID: "example.com/demo.Service.Do", Type: codeast.RelationCalls},
+				{FromID: "example.com/demo.Service", ToID: "", Type: codeast.RelationCalls},
+				{FromID: "example.com/demo.Service", ToID: "example.com/demo.Service.Do", Type: ""},
+				{FromID: "example.com/demo.Service", ToID: "example.com/demo.Missing", Type: codeast.RelationCalls},
+				{FromID: "example.com/demo.Missing", ToID: "example.com/demo.Service", Type: codeast.RelationCalls},
+			},
+		}
+		allowed := map[string]struct{}{"service.go": {}}
+		data := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo", url: "https://example.com/demo.git", branch: "main"}, allowed)
+		if len(data.Nodes) != 2 {
+			t.Fatalf("expected 2 nodes, got %d", len(data.Nodes))
+		}
+		if len(data.Edges) != 1 {
+			t.Fatalf("expected 1 valid edge, got %d", len(data.Edges))
+		}
+		edge := data.Edges[0]
+		if edge.Type != string(codeast.RelationMethod) {
+			t.Fatalf("expected edge type METHOD, got %s", edge.Type)
+		}
+		if edge.Metadata == nil || edge.Metadata["builder"] != "repo_graph_source" {
+			t.Fatal("expected builder metadata on edge")
+		}
+	})
+
+	t.Run("edge with existing metadata preserves it", func(t *testing.T) {
+		result := &codeast.Result{
+			Nodes: []*codeast.Node{
+				{
+					ID: "example.com/demo.A", Type: codeast.EntityFunction,
+					Name: "A", FullName: "example.com/demo.A",
+					Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+					Code: "func A() {}", FilePath: filepath.Join(dir, "service.go"),
+					LineStart: 1, LineEnd: 1,
+				},
+				{
+					ID: "example.com/demo.B", Type: codeast.EntityFunction,
+					Name: "B", FullName: "example.com/demo.B",
+					Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+					Code: "func B() {}", FilePath: filepath.Join(dir, "service.go"),
+					LineStart: 2, LineEnd: 2,
+				},
+			},
+			Edges: []*codeast.Edge{
+				{
+					FromID: "example.com/demo.A", ToID: "example.com/demo.B",
+					Type:     codeast.RelationCalls,
+					Metadata: map[string]any{"weight": 1},
+				},
+			},
+		}
+		allowed := map[string]struct{}{"service.go": {}}
+		data := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo"}, allowed)
+		if len(data.Edges) != 1 {
+			t.Fatalf("expected 1 edge, got %d", len(data.Edges))
+		}
+		if data.Edges[0].Metadata["weight"] != 1 {
+			t.Fatal("expected edge metadata to be preserved")
+		}
+		if data.Edges[0].Metadata["builder"] != "repo_graph_source" {
+			t.Fatal("expected builder metadata on edge")
+		}
+	})
+
+	t.Run("node IDs are deterministic SHA1", func(t *testing.T) {
+		result := &codeast.Result{
+			Nodes: []*codeast.Node{
+				{
+					ID: "example.com/demo.Func", Type: codeast.EntityFunction,
+					Name: "Func", FullName: "example.com/demo.Func",
+					Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+					Code: "func Func() {}", FilePath: filepath.Join(dir, "service.go"),
+					LineStart: 1, LineEnd: 1,
+				},
+			},
+		}
+		allowed := map[string]struct{}{"service.go": {}}
+		data1 := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo", branch: "main"}, allowed)
+		data2 := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo", branch: "main"}, allowed)
+		if data1.Nodes[0].ID != data2.Nodes[0].ID {
+			t.Fatalf("node IDs not deterministic: %s vs %s", data1.Nodes[0].ID, data2.Nodes[0].ID)
+		}
+		if !strings.HasPrefix(data1.Nodes[0].ID, "node:") {
+			t.Fatalf("expected node ID prefix 'node:', got %s", data1.Nodes[0].ID)
+		}
+	})
+}
+
+func TestReadDocumentNodesInternal(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "# Hello\n\nworld\n")
+	writeRepoFile(t, filepath.Join(dir, "CHANGELOG.md"), "# Changelog\n")
+	writeRepoFile(t, filepath.Join(dir, "notes.txt"), "notes content")
+	writeRepoFile(t, filepath.Join(dir, "main.go"), "package main\n")
+
+	docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testMarkdownReader{}
+	})
+
+	t.Run("reads only matching extensions", func(t *testing.T) {
+		src := New(
+			WithRepository(Repository{Dir: dir}),
+			WithDocExtensions([]string{".md"}),
+		)
+		nodes, err := src.readDocumentNodes(context.Background(), dir, dir, &repoInfo{name: "demo", branch: "main"})
+		if err != nil {
+			t.Fatalf("readDocumentNodes() error = %v", err)
+		}
+		if len(nodes) != 2 {
+			t.Fatalf("expected 2 document nodes (.md files), got %d", len(nodes))
+		}
+		for _, node := range nodes {
+			if node.ID == "" {
+				t.Fatal("expected non-empty node ID")
+			}
+			if node.Metadata[source.MetaFilePath] == "" {
+				t.Fatal("expected non-empty file path in metadata")
+			}
+		}
+	})
+
+	t.Run("no reader available skips file gracefully", func(t *testing.T) {
+		noReaderDir := t.TempDir()
+		writeRepoFile(t, filepath.Join(noReaderDir, "data.xyz"), "xyz content")
+		src := New(
+			WithRepository(Repository{Dir: noReaderDir}),
+			WithDocExtensions([]string{".xyz"}),
+		)
+		nodes, err := src.readDocumentNodes(context.Background(), noReaderDir, noReaderDir, &repoInfo{name: "demo"})
+		if err != nil {
+			t.Fatalf("readDocumentNodes() error = %v", err)
+		}
+		if len(nodes) != 0 {
+			t.Fatalf("expected 0 nodes for unsupported extension, got %d", len(nodes))
+		}
+	})
+
+	t.Run("nil info produces valid namespace", func(t *testing.T) {
+		src := New(
+			WithRepository(Repository{Dir: dir}),
+			WithDocExtensions([]string{".md"}),
+		)
+		nodes, err := src.readDocumentNodes(context.Background(), dir, dir, nil)
+		if err != nil {
+			t.Fatalf("readDocumentNodes() error = %v", err)
+		}
+		if len(nodes) == 0 {
+			t.Fatal("expected at least one node")
+		}
+		for _, node := range nodes {
+			if node.ID == "" {
+				t.Fatal("expected non-empty node ID with nil info")
+			}
+		}
+	})
+
+	t.Run("chunk index extraction and nil doc handling", func(t *testing.T) {
+		chunkDir := t.TempDir()
+		writeRepoFile(t, filepath.Join(chunkDir, "doc.md"), "# Part 1\n\n---\n\n# Part 2\n")
+
+		docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+			return &multiChunkMarkdownReader{}
+		})
+		defer docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+			return &testMarkdownReader{}
+		})
+
+		src := New(
+			WithRepository(Repository{Dir: chunkDir}),
+			WithDocExtensions([]string{".md"}),
+		)
+		src.readers["markdown"] = &multiChunkMarkdownReader{}
+		nodes, err := src.readDocumentNodes(context.Background(), chunkDir, chunkDir, &repoInfo{name: "demo"})
+		if err != nil {
+			t.Fatalf("readDocumentNodes() error = %v", err)
+		}
+		if len(nodes) != 2 {
+			t.Fatalf("expected 2 nodes (nil doc skipped), got %d", len(nodes))
+		}
+		found5 := false
+		for _, node := range nodes {
+			if node.Metadata[source.MetaChunkIndex] == 5 {
+				found5 = true
+			}
+		}
+		if !found5 {
+			t.Fatal("expected chunk index 5 from metadata")
+		}
+	})
+}
+
+func TestReadDocumentNodesReaderErrorContinues(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "good.md"), "# Good\n")
+	writeRepoFile(t, filepath.Join(dir, "bad.md"), "# Bad\n")
+
+	docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+		return &errorOnBadMarkdownReader{}
+	})
+	defer docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testMarkdownReader{}
+	})
+
+	src := New(
+		WithRepository(Repository{Dir: dir}),
+		WithDocExtensions([]string{".md"}),
+	)
+	src.readers["markdown"] = &errorOnBadMarkdownReader{}
+	nodes, err := src.readDocumentNodes(context.Background(), dir, dir, &repoInfo{name: "demo"})
+	if err == nil {
+		t.Fatal("readDocumentNodes() expected error for failed file read, got nil")
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("expected 1 node (successful file still collected), got %d", len(nodes))
+	}
+}
+
+func TestReadGraphWithDocExtensionsOnly(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "README.md"), "# Test\n\ncontent\n")
+
+	docreader.RegisterReader([]string{".md"}, func(opts ...docreader.Option) docreader.Reader {
+		return &testMarkdownReader{}
+	})
+
+	src := New(
+		WithRepository(Repository{Dir: dir}),
+		WithDocExtensions([]string{".md"}),
+	)
+	data, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ReadGraph() error = %v", err)
+	}
+	if len(data.Nodes) == 0 {
+		t.Fatal("expected document nodes")
+	}
+	for _, node := range data.Nodes {
+		if node.Metadata[source.MetaFilePath] == "" {
+			t.Fatal("expected file_path metadata on document node")
+		}
+	}
+}
+
+func TestWithDocExtensionsOption(t *testing.T) {
+	extensions := []string{".md", ".txt"}
+	src := New(WithDocExtensions(extensions))
+
+	extensions[0] = ".rst"
+
+	if src.docExtensions[0] != ".md" {
+		t.Fatal("WithDocExtensions should copy the slice")
+	}
+	if len(src.docExtensions) != 2 {
+		t.Fatalf("expected 2 doc extensions, got %d", len(src.docExtensions))
+	}
+}
+
+func TestWithParseConcurrencyOption(t *testing.T) {
+	src := New(WithParseConcurrency(8))
+	assertEqual(t, src.parseConcurrency, 8)
+
+	src2 := New(WithParseConcurrency(0))
+	assertEqual(t, src2.parseConcurrency, 0)
+
+	src3 := New(WithParseConcurrency(-1))
+	assertEqual(t, src3.parseConcurrency, -1)
+}
+
+func TestWithMetadataValueNilMetadata(t *testing.T) {
+	src := &Source{}
+	opt := WithMetadataValue("key", "val")
+	opt(src)
+	if src.metadata == nil {
+		t.Fatal("expected metadata to be initialized")
+	}
+	assertEqual(t, src.metadata["key"], "val")
+}
+
+func TestReadGraphParseDirectoryError(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "main.go"), "package main\n\nfunc Main() {}\n")
+
+	parser := &configurableDirectoryParser{err: fmt.Errorf("parse failure")}
+	codeast.RegisterDirectoryParser(codeast.FileTypeGo, parser)
+	defer codeast.RegisterDirectoryParser(codeast.FileTypeGo, stubDirectoryParser{})
+
+	src := New(WithRepository(Repository{Dir: dir}))
+	_, err := src.ReadGraph(context.Background())
+	if err == nil {
+		t.Fatal("expected parse error to propagate")
+	}
+	if !strings.Contains(err.Error(), "parse failure") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestReadGraphWithCustomParserResult(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "service.go"), "package demo\n\ntype Service struct{}\n\nfunc (s *Service) Do() error { return nil }\n")
+
+	parser := &configurableDirectoryParser{
+		result: &codeast.Result{
+			Nodes: []*codeast.Node{
+				{
+					ID: "example.com/demo.Service", Type: codeast.EntityStruct,
+					Name: "Service", FullName: "example.com/demo.Service",
+					Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+					Code: "type Service struct{}", FilePath: filepath.Join(dir, "service.go"),
+					LineStart: 3, LineEnd: 3, Package: "example.com/demo",
+				},
+				{
+					ID: "example.com/demo.Service.Do", Type: codeast.EntityMethod,
+					Name: "Do", FullName: "example.com/demo.Service.Do",
+					Language: codeast.LanguageGo, Scope: codeast.ScopeCode,
+					Code: "func (s *Service) Do() error { return nil }", FilePath: filepath.Join(dir, "service.go"),
+					LineStart: 5, LineEnd: 5, Package: "example.com/demo",
+					Metadata: map[string]any{"receiver_type": "*Service"},
+				},
+			},
+			Edges: []*codeast.Edge{
+				{FromID: "example.com/demo.Service", ToID: "example.com/demo.Service.Do", Type: codeast.RelationMethod},
+			},
+		},
+	}
+	codeast.RegisterDirectoryParser(codeast.FileTypeGo, parser)
+	defer codeast.RegisterDirectoryParser(codeast.FileTypeGo, stubDirectoryParser{})
+
+	src := New(WithRepository(Repository{
+		Dir:      dir,
+		RepoName: "demo",
+		RepoURL:  "https://example.com/demo.git",
+		Branch:   "main",
+	}))
+	data, err := src.ReadGraph(context.Background())
+	if err != nil {
+		t.Fatalf("ReadGraph() error = %v", err)
+	}
+	if len(data.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(data.Nodes))
+	}
+	if len(data.Edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(data.Edges))
+	}
+
+	var serviceNode, methodNode *graph.Node
+	for _, n := range data.Nodes {
+		if n.Name == "Service" {
+			serviceNode = n
+		}
+		if n.Name == "Do" {
+			methodNode = n
+		}
+	}
+	if serviceNode == nil || methodNode == nil {
+		t.Fatal("expected both Service and Do nodes")
+	}
+
+	edge := data.Edges[0]
+	if edge.FromID != serviceNode.ID || edge.ToID != methodNode.ID {
+		t.Fatalf("edge does not connect expected nodes: from=%s to=%s", edge.FromID, edge.ToID)
+	}
+	assertEqual(t, edge.Type, string(codeast.RelationMethod))
 }

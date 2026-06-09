@@ -17,11 +17,13 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -29,6 +31,7 @@ import (
 const (
 	defaultMaxResults        = 10
 	defaultMinScore          = 0.0
+	defaultSearchHistorySize = 10
 	agenticFilterPromptIntro = "You are a helpful assistant that can search for relevant information in the knowledge base."
 
 	// metadataFilterHint is appended to the tool description when no explicit
@@ -96,6 +99,7 @@ type KnowledgeSearchResponse struct {
 
 // DocumentResult represents a single document result with metadata and score.
 type DocumentResult struct {
+	ID       string         `json:"id,omitempty"`
 	Text     string         `json:"text"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 	Score    float64        `json:"score"`
@@ -119,6 +123,7 @@ type options struct {
 	minScore            float64
 	excludeMetadataKeys map[string]struct{}
 	postProcessor       ResultPostProcessor
+	includeContent      bool
 }
 
 // WithToolName sets the name of the knowledge search tool.
@@ -211,13 +216,20 @@ func WithResultPostProcessor(p ResultPostProcessor) Option {
 	}
 }
 
+func withIncludeContentDefault(include bool) Option {
+	return func(opts *options) {
+		opts.includeContent = include
+	}
+}
+
 // NewKnowledgeSearchTool creates a function tool for knowledge search using
 // the Knowledge interface.
 // This tool allows agents to search for relevant information in the knowledge base.
 func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 	opt := &options{
-		maxResults: defaultMaxResults,
-		minScore:   defaultMinScore,
+		maxResults:     defaultMaxResults,
+		minScore:       defaultMinScore,
+		includeContent: true,
 	}
 	for _, o := range opts {
 		o(opt)
@@ -229,7 +241,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 		invocation, ok := agent.InvocationFromContext(ctx)
 		var runnerFilter map[string]any
 		var runnerConditionedFilter *searchfilter.UniversalFilterCondition
-		if !ok {
+		if !ok || invocation == nil {
 			log.DebugfContext(ctx, "knowledge search tool: no invocation found in context")
 		} else {
 			runnerFilter = invocation.RunOptions.KnowledgeFilter
@@ -239,17 +251,18 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 		agentFilterCondition := convertMetadataToFilterCondition(opt.staticFilter)
 		runnerFilterCondition := convertMetadataToFilterCondition(runnerFilter)
 		finalFilter := mergeFilterConditions(agentFilterCondition, opt.conditionedFilter, runnerFilterCondition, runnerConditionedFilter)
+		history, userID, sessionID := searchContextFromInvocation(invocation)
 
-		// Create search request - for tools, we don't have conversation history yet.
-		// This could be enhanced in the future to extract context from the agent's session.
 		searchReq := &knowledge.SearchRequest{
-			Query: req.Query,
+			Query:     req.Query,
+			History:   history,
+			UserID:    userID,
+			SessionID: sessionID,
 			SearchFilter: &knowledge.SearchFilter{
 				FilterCondition: finalFilter,
 			},
 			MaxResults: opt.maxResults,
 			MinScore:   opt.minScore,
-			// History, UserID, SessionID could be filled from agent context in the future.
 		}
 
 		result, err := kb.Search(ctx, searchReq)
@@ -257,7 +270,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 			return nil, fmt.Errorf("search failed: %w", err)
 		}
 
-		resp, err := convertSearchResults(result, opt.excludeMetadataKeys)
+		resp, err := convertSearchResults(result, opt.excludeMetadataKeys, opt.includeContent)
 		if err != nil {
 			return nil, err
 		}
@@ -282,8 +295,9 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 
 // KnowledgeSearchRequestWithFilter represents the input with filter for the knowledge search tool.
 type KnowledgeSearchRequestWithFilter struct {
-	Query  string                                 `json:"query,omitempty" jsonschema:"description=The search query to find relevant information in the knowledge base. Can be empty when using only filters."`
-	Filter *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions to apply to the search query. Use lowercase operators eq ne gt gte lt lte in not in like not like between and or."`
+	Query          string                                 `json:"query,omitempty" jsonschema:"description=The search query to find relevant information in the knowledge base. Can be empty when using only filters."`
+	Filter         *searchfilter.UniversalFilterCondition `json:"filter,omitempty" jsonschema:"description=Filter conditions to apply to the search query. Use lowercase operators eq ne gt gte lt lte in not in like not like between and or."`
+	IncludeContent *bool                                  `json:"include_content,omitempty" jsonschema:"description=Whether to include full document content in the response. Default depends on the tool; graph tools default to false to keep responses compact."`
 }
 
 // NewAgenticFilterSearchTool creates a knowledge search tool with dynamic agent-controlled filtering.
@@ -299,8 +313,9 @@ func NewAgenticFilterSearchTool(
 	opts ...Option,
 ) tool.Tool {
 	opt := &options{
-		maxResults: defaultMaxResults,
-		minScore:   defaultMinScore,
+		maxResults:     defaultMaxResults,
+		minScore:       defaultMinScore,
+		includeContent: true,
 	}
 	for _, o := range opts {
 		o(opt)
@@ -314,7 +329,7 @@ func NewAgenticFilterSearchTool(
 		invocation, ok := agent.InvocationFromContext(ctx)
 		var runnerFilter map[string]any
 		var runnerConditionedFilter *searchfilter.UniversalFilterCondition
-		if !ok {
+		if !ok || invocation == nil {
 			log.DebugfContext(ctx, "knowledge search tool: no invocation found in context")
 		} else {
 			runnerFilter = invocation.RunOptions.KnowledgeFilter
@@ -324,9 +339,13 @@ func NewAgenticFilterSearchTool(
 		agentMetadataCondition := convertMetadataToFilterCondition(opt.staticFilter)
 		runnerFilterCondition := convertMetadataToFilterCondition(runnerFilter)
 		finalFilter := mergeFilterConditions(agentMetadataCondition, opt.conditionedFilter, runnerFilterCondition, runnerConditionedFilter, req.Filter)
+		history, userID, sessionID := searchContextFromInvocation(invocation)
 
 		searchReq := &knowledge.SearchRequest{
-			Query: req.Query,
+			Query:     req.Query,
+			History:   history,
+			UserID:    userID,
+			SessionID: sessionID,
 			SearchFilter: &knowledge.SearchFilter{
 				FilterCondition: finalFilter,
 			},
@@ -345,7 +364,11 @@ func NewAgenticFilterSearchTool(
 			return nil, fmt.Errorf("search failed: %w", err)
 		}
 
-		resp, err := convertSearchResults(result, opt.excludeMetadataKeys)
+		includeContent := opt.includeContent
+		if req.IncludeContent != nil {
+			includeContent = *req.IncludeContent
+		}
+		resp, err := convertSearchResults(result, opt.excludeMetadataKeys, includeContent)
 		if err != nil {
 			return nil, err
 		}
@@ -363,6 +386,66 @@ func NewAgenticFilterSearchTool(
 		function.WithName(toolName),
 		function.WithDescription(description),
 	)
+}
+
+func searchContextFromInvocation(invocation *agent.Invocation) ([]knowledge.ConversationMessage, string, string) {
+	if invocation == nil || invocation.Session == nil {
+		return nil, "", ""
+	}
+	sess := invocation.Session
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	history := make([]knowledge.ConversationMessage, 0, defaultSearchHistorySize)
+	for i := len(sess.Events) - 1; i >= 0 && len(history) < defaultSearchHistorySize; i-- {
+		msg, ok := conversationMessageFromEvent(&sess.Events[i])
+		if !ok {
+			continue
+		}
+		history = append(history, msg)
+	}
+	for i, j := 0, len(history)-1; i < j; i, j = i+1, j-1 {
+		history[i], history[j] = history[j], history[i]
+	}
+	return history, sess.UserID, sess.ID
+}
+
+func conversationMessageFromEvent(evt *event.Event) (knowledge.ConversationMessage, bool) {
+	if evt == nil {
+		return knowledge.ConversationMessage{}, false
+	}
+	resp := evt.Response
+	if resp == nil || resp.IsPartial || resp.IsToolCallResponse() || resp.IsToolResultResponse() {
+		return knowledge.ConversationMessage{}, false
+	}
+	for _, choice := range resp.Choices {
+		msg := choice.Message
+		if msg.Role != model.RoleUser && msg.Role != model.RoleAssistant {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content == "" {
+			var textParts []string
+			for _, part := range msg.ContentParts {
+				if part.Type == model.ContentTypeText && part.Text != nil {
+					t := strings.TrimSpace(*part.Text)
+					if t != "" {
+						textParts = append(textParts, t)
+					}
+				}
+			}
+			content = strings.Join(textParts, "\n")
+			if content == "" {
+				continue
+			}
+		}
+		return knowledge.ConversationMessage{
+			Role:      string(msg.Role),
+			Content:   content,
+			Timestamp: evt.Timestamp.Unix(),
+		}, true
+	}
+	return knowledge.ConversationMessage{}, false
 }
 
 func composeAgenticToolDescription(toolDescription, filterInfo string) string {
@@ -397,6 +480,7 @@ func applyPostProcessor(ctx context.Context, resp *KnowledgeSearchResponse, p Re
 func convertSearchResults(
 	result *knowledge.SearchResult,
 	excludeKeys map[string]struct{},
+	includeContent bool,
 ) (*KnowledgeSearchResponse, error) {
 	if result == nil || len(result.Documents) == 0 {
 		return nil, errors.New("no relevant information found")
@@ -404,8 +488,13 @@ func convertSearchResults(
 
 	documents := make([]*DocumentResult, 0, len(result.Documents))
 	for _, doc := range result.Documents {
+		text := ""
+		if includeContent {
+			text = doc.Document.Content
+		}
 		documents = append(documents, &DocumentResult{
-			Text:     doc.Document.Content,
+			ID:       doc.Document.ID,
+			Text:     text,
 			Metadata: filterMetadata(doc.Document.Metadata, excludeKeys),
 			Score:    doc.Score,
 		})

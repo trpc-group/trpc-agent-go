@@ -41,6 +41,18 @@ func (m *mockSource) GetMetadata() map[string]any {
 	return m.metadata
 }
 
+func TestFileReaderTypeGo(t *testing.T) {
+	if FileReaderTypeGo != "go" {
+		t.Fatalf("expected FileReaderTypeGo='go', got %s", FileReaderTypeGo)
+	}
+}
+
+func TestFileReaderTypeProto(t *testing.T) {
+	if FileReaderTypeProto != "proto" {
+		t.Fatalf("expected FileReaderTypeProto='proto', got %s", FileReaderTypeProto)
+	}
+}
+
 func TestGetAllMetadata(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -335,4 +347,36 @@ func TestConstants(t *testing.T) {
 	require.Contains(t, MetaURLScheme, expectedPrefix)
 	require.Contains(t, MetaInputCount, expectedPrefix)
 	require.Contains(t, MetaInputs, expectedPrefix)
+}
+
+func TestReadGraphParseConcurrency(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []ReadGraphOption
+		want int
+	}{
+		{
+			name: "no opts returns zero",
+			opts: nil,
+			want: 0,
+		},
+		{
+			name: "single opt returns value",
+			opts: []ReadGraphOption{WithReadGraphParseConcurrency(8)},
+			want: 8,
+		},
+		{
+			name: "last opt wins",
+			opts: []ReadGraphOption{
+				WithReadGraphParseConcurrency(4),
+				WithReadGraphParseConcurrency(16),
+			},
+			want: 16,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, ReadGraphParseConcurrency(tt.opts))
+		})
+	}
 }

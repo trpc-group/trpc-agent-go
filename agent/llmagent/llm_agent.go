@@ -142,12 +142,18 @@ func New(name string, opts ...Option) *LLMAgent {
 		if len(options.extensionContributedTools) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, extension-contributed tools (WithExtensions → Registry.Tools) must be empty")
 		}
+		if len(options.toolActivationRules) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, tool activation rules must be empty")
+		}
 		if options.Knowledge != nil {
 			panic("Invalid LLMAgent configuration: if output_schema is set, knowledge must be empty")
 		}
 		if len(options.SubAgents) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
 		}
+	}
+	if err := validateAndNormalizeToolActivationOptions(&options); err != nil {
+		panic(fmt.Sprintf("Invalid LLMAgent configuration: %v", err))
 	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
@@ -220,10 +226,21 @@ func New(name string, opts ...Option) *LLMAgent {
 		)
 	}
 
+	toolCallProcessorOptions := []processor.FunctionCallResponseProcessorOption{
+		processor.WithToolCallRetryPolicy(options.ToolCallRetryPolicy),
+	}
+	if len(options.toolActivationRules) > 0 {
+		toolCallProcessorOptions = append(
+			toolCallProcessorOptions,
+			processor.WithPostToolResultHook(
+				a.handleToolActivationPostToolResult,
+			),
+		)
+	}
 	toolcallProcessor := processor.NewFunctionCallResponseProcessor(
 		options.EnableParallelTools,
 		options.ToolCallbacks,
-		processor.WithToolCallRetryPolicy(options.ToolCallRetryPolicy),
+		toolCallProcessorOptions...,
 	)
 	// Configure default transfer message for direct sub-agent calls.
 	// Default behavior (when not configured): enabled with built-in default message.
@@ -249,6 +266,9 @@ func New(name string, opts ...Option) *LLMAgent {
 		SyncSummaryIntraRun:             options.SyncSummaryIntraRun,
 		EnableContextCompaction:         options.EnableContextCompaction,
 		ContextCompactionThresholdRatio: options.ContextCompactionThresholdRatio,
+	}
+	if len(options.toolActivationRules) > 0 {
+		flowOpts.ToolActivationApplier = a.applyToolActivation
 	}
 
 	a.flow = llmflow.New(
@@ -462,8 +482,8 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	// session_search / session_load when enabled.
 	requestProcessors = appendOnDemandSessionProcessor(options, requestProcessors)
 
-	// 9. Post-tool processor - injects dynamic prompt after tool results.
-	requestProcessors = appendPostToolProcessor(options, requestProcessors)
+	// 9. Post-tool processor - injects stable tool-result guidance.
+	requestProcessors = appendPostToolProcessor(a, options, requestProcessors)
 
 	// 10. Skills tool result processor - materializes loaded skill content
 	// into tool result messages.
@@ -489,13 +509,23 @@ func hasInvocationStructuredOutput(ctx context.Context, invocation *agent.Invoca
 	return invocation.StructuredOutput != nil || invocation.StructuredOutputType != nil
 }
 
-func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+func appendPostToolProcessor(
+	a *LLMAgent,
+	options *Options,
+	requestProcessors []flow.RequestProcessor,
+) []flow.RequestProcessor {
 	if options.postToolPromptEnabled != nil &&
 		!*options.postToolPromptEnabled {
 		return requestProcessors
 	}
 
 	var postToolOpts []processor.PostToolOption
+	hasToolSurface := hasPotentialToolSurface(a, options)
+	postToolOpts = append(
+		postToolOpts,
+		processor.WithPostToolPromptBeforeResult(hasToolSurface),
+		processor.WithPostToolPromptCreateSystemMessage(hasToolSurface),
+	)
 	if options.PostToolPrompt != "" {
 		postToolOpts = append(
 			postToolOpts,
@@ -504,6 +534,24 @@ func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestP
 	}
 	postToolProcessor := processor.NewPostToolRequestProcessor(postToolOpts...)
 	return append(requestProcessors, postToolProcessor)
+}
+
+func hasPotentialToolSurface(a *LLMAgent, options *Options) bool {
+	if a != nil && len(a.tools) > 0 {
+		return true
+	}
+	if options == nil {
+		return false
+	}
+	return len(options.Tools) > 0 ||
+		len(options.ToolSets) > 0 ||
+		len(options.activatableToolSets) > 0 ||
+		len(options.toolActivationRules) > 0 ||
+		len(options.SubAgents) > 0 ||
+		len(options.extensionContributedTools) > 0 ||
+		options.EnableAwaitUserReplyTool ||
+		options.Knowledge != nil ||
+		options.skillsRepository != nil
 }
 
 func appendOnDemandSessionProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
@@ -1060,14 +1108,23 @@ func appendOnDemandSessionTools(
 		options.OutputSchema != nil {
 		return allTools
 	}
-	if inv != nil && !toolsessionrecall.SupportsOnDemandSession(inv) {
+	if inv == nil {
+		return append(
+			allTools,
+			toolsessionrecall.NewSearchTool(),
+			toolsessionrecall.NewLoadTool(),
+		)
+	}
+	if toolsessionrecall.SupportsSearch(inv) {
+		allTools = append(allTools, toolsessionrecall.NewSearchTool())
+	}
+	if toolsessionrecall.SupportsLoad(inv) {
+		allTools = append(allTools, toolsessionrecall.NewLoadTool())
+	}
+	if !toolsessionrecall.SupportsOnDemandSession(inv) {
 		return allTools
 	}
-	return append(
-		allTools,
-		toolsessionrecall.NewSearchTool(),
-		toolsessionrecall.NewLoadTool(),
-	)
+	return allTools
 }
 
 func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {

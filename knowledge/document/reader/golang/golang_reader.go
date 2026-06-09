@@ -23,8 +23,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	idocument "trpc.group/trpc-go/trpc-agent-go/knowledge/document/internal/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
+	codegolang "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang/internal/codeast/golang"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
-	codegolang "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast/golang"
 	itransform "trpc.group/trpc-go/trpc-agent-go/knowledge/internal/transform"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
@@ -139,19 +139,7 @@ func (r *Reader) ReadFromURL(urlStr string) ([]*document.Document, error) {
 // ReadFromDirectory reads a Go module or directory and returns AST entity documents.
 // It performs package-aware parsing across the directory instead of processing files independently.
 func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error) {
-	absDir, err := filepath.Abs(dirPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path: %w", err)
-	}
-	stat, err := os.Stat(absDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat directory: %w", err)
-	}
-	if !stat.IsDir() {
-		return nil, fmt.Errorf("not a directory: %s", dirPath)
-	}
-
-	result, err := r.parser.ParseDirectory(absDir)
+	result, err := parseGoDirectory(dirPath, r.parser)
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +152,21 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 		source.MetaSourceName: r.Name(),
 	}
 	return r.applyTransformers(r.nodesToDocuments(result, baseMetadata))
+}
+
+func parseGoDirectory(dirPath string, parser *codegolang.Parser) (*codeast.Result, error) {
+	absDir, err := filepath.Abs(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+	}
+	stat, err := os.Stat(absDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat directory: %w", err)
+	}
+	if !stat.IsDir() {
+		return nil, fmt.Errorf("not a directory: %s", dirPath)
+	}
+	return parser.ParseDirectory(absDir)
 }
 
 func (r *Reader) processContent(content, name string, baseMetadata map[string]any) ([]*document.Document, error) {
