@@ -622,6 +622,23 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 使用 `ResponseModeFinalOnly`。如果还希望在流式 UI 中隐藏子 Agent 的正文，
 再单独组合 `InnerTextModeExclude`。
 
+#### 模型钉住 (Pin Model)
+
+默认情况下，子 Agent 会继承调用方的 `RunOptions.ModelName`、
+`RunOptions.Model` 和 `RunOptions.ModelSelector`。这仅在调用方通过
+`agent.WithModelName(...)`、`agent.WithModel(...)` 或
+`agent.WithModelSelector(...)` 在 `runner.Run` 时指定了模型才会生效（例如 AGUI
+服务端转发终端用户的模型选择）。如果 RunOptions 中未设置模型，子 Agent 自然使用
+自己通过 `llmagent.WithModel` 配置的模型。
+
+当子 Agent 需要始终使用自己的模型，不受 RunOptions 传入的运行时模型选择的影响：
+
+```go
+agenttool.NewTool(subAgent,
+    agenttool.WithPinModel(true),
+)
+```
+
 ### Agent 委托 (Agent Transfer)
 
 Agent 委托通过 `transfer_to_agent` 工具实现 Agent 间的任务委托，允许主 Agent 根据任务类型自动选择合适的 SubAgent。

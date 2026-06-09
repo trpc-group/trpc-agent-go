@@ -43,6 +43,7 @@ type Tool struct {
 	historyScope           HistoryScope
 	persistentHistory      *persistentHistoryOptions
 	responseMode           ResponseMode
+	pinModel               bool
 	name                   string
 	description            string
 	inputSchema            *tool.Schema
@@ -73,6 +74,7 @@ type agentToolOptions struct {
 	responseMode           ResponseMode
 	description            *string
 	name                   *string
+	pinModel               bool
 
 	// Dynamic AgentTool options. They are only meaningful for NewDynamicTool;
 	// NewTool ignores them.
@@ -308,6 +310,28 @@ func WithPersistentHistoryKeyFunc(fn PersistentHistoryKeyFunc) Option {
 	}
 }
 
+// WithPinModel pins the sub-agent's model so that it always uses its own
+// configured model (set via llmagent.WithModel) regardless of the caller's
+// runtime model selection propagated through RunOptions.
+//
+// Background: when the caller passes agent.WithModelName(...),
+// agent.WithModel(...) or agent.WithModelSelector(...) at runner.Run time
+// (e.g., AGUI server forwarding the user's model choice), RunOptions
+// propagate to child invocations via Clone(). This causes the sub-agent's
+// own model to be overridden.
+//
+// WithPinModel(true) clears RunOptions.ModelName, RunOptions.Model and
+// RunOptions.ModelSelector for the child invocation so the sub-agent's
+// own model takes effect.
+//
+// If no Model/ModelName/ModelSelector is set in RunOptions, the sub-agent
+// naturally uses its own model regardless of this option.
+func WithPinModel(enabled bool) Option {
+	return func(opts *agentToolOptions) {
+		opts.pinModel = enabled
+	}
+}
+
 // NewTool creates a new Tool that wraps the given agent.
 //
 // Note: The tool name is derived from the agent's info (agent.Info().Name).
@@ -393,6 +417,7 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		historyScope:           options.historyScope,
 		persistentHistory:      persistent,
 		responseMode:           normalizeResponseMode(options.responseMode),
+		pinModel:               options.pinModel,
 		name:                   name,
 		description:            description,
 		inputSchema:            inputSchema,
@@ -503,6 +528,18 @@ func (at *Tool) childInvocationOptions(
 	}
 	if parentInv == nil {
 		return invocationOpts
+	}
+	// When pinModel is set, clear the inherited model selection so the
+	// sub-agent's own model (configured via llmagent.WithModel) takes effect
+	// instead of the parent's runtime model selection.
+	if at.pinModel && (parentInv.RunOptions.ModelName != "" ||
+		parentInv.RunOptions.Model != nil ||
+		parentInv.RunOptions.ModelSelector != nil) {
+		clearedOpts := parentInv.RunOptions
+		clearedOpts.ModelName = ""
+		clearedOpts.Model = nil
+		clearedOpts.ModelSelector = nil
+		invocationOpts = append(invocationOpts, agent.WithInvocationRunOptions(clearedOpts))
 	}
 	if surfaceRootNodeID := at.surfaceRootNodeIDForParentInvocation(parentInv); surfaceRootNodeID != "" {
 		invocationOpts = append(
