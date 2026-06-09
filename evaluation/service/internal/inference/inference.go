@@ -220,6 +220,9 @@ func inferenceInvocation(
 			eventErr = errors.Join(eventErr, fmt.Errorf("event: %w", event.Error))
 			continue
 		}
+		if event.Response != nil && event.Response.IsPartial {
+			continue
+		}
 		if event.IsFinalResponse() {
 			continue
 		}

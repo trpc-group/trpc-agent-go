@@ -598,6 +598,85 @@ func TestInferenceInvocationRejectsUnexpectedToolResultResponse(t *testing.T) {
 	}
 }
 
+func TestInferenceInvocationSkipsPartialToolResultResponse(t *testing.T) {
+	ctx := context.Background()
+	session := &evalset.SessionInput{UserID: "user"}
+	toolCallEvent := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						ToolCalls: []model.ToolCall{
+							{
+								ID: "call-1",
+								Function: model.FunctionDefinitionParam{
+									Name:      "tool",
+									Arguments: []byte(`{"query":"hello"}`),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	partialToolResultEvent := &event.Event{
+		Response: &model.Response{
+			IsPartial: true,
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:   model.RoleTool,
+						ToolID: "missing-inner-call",
+					},
+					Delta: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  "missing-inner-call",
+						Content: "partial",
+					},
+				},
+			},
+		},
+	}
+	finalToolResultEvent := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  "call-1",
+						Content: `{"result":42}`,
+					},
+				},
+			},
+		},
+	}
+	r := &fakeRunner{
+		events: []*event.Event{
+			toolCallEvent,
+			partialToolResultEvent,
+			finalToolResultEvent,
+			makeFinalEvent("ok"),
+		},
+	}
+
+	result, executionTrace, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
+		InvocationID: "inv",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
+	}, nil)
+
+	require.NoError(t, err)
+	assert.Nil(t, executionTrace)
+	require.NotNil(t, result)
+	require.Len(t, result.Tools, 1)
+	assert.Equal(t, "call-1", result.Tools[0].ID)
+	assert.Equal(t, "tool", result.Tools[0].Name)
+	assert.Equal(t, map[string]any{"query": "hello"}, result.Tools[0].Arguments)
+	assert.Equal(t, map[string]any{"result": float64(42)}, result.Tools[0].Result)
+	require.NotNil(t, result.FinalResponse)
+	assert.Equal(t, "ok", result.FinalResponse.Content)
+}
+
 func TestInferenceInvocation_PreservesTraceOnToolResultMergeError(t *testing.T) {
 	ctx := context.Background()
 	session := &evalset.SessionInput{UserID: "user"}
