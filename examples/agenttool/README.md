@@ -41,6 +41,8 @@ Agent tools provide a way to wrap any agent as a tool that can be called by othe
 | `-show-inner`    | Show inner agent deltas streamed by AgentTool         | `true`          |
 | `-inner-text`    | Inner text mode: `include` or `exclude`               | `include`       |
 | `-response-mode` | Tool result mode: `default` or `final-only`           | `default`       |
+| `-persistent-child-history` | Enable stable child history (AgentTool persistent FilterKey) | `false` |
+| `-persistent-child-key` | Custom stable child FilterKey (advanced)        | ``              |
 | `-show-tool`     | Show tool.response deltas/finals in transcript        | `false`         |
 | `-debug`         | Prefix streamed lines with author for debugging       | `false`         |
 
@@ -81,7 +83,25 @@ agentTool := agenttool.NewTool(
     agenttool.WithStreamInner(showInner),
     agenttool.WithInnerTextMode(innerTextMode),
     agenttool.WithResponseMode(responseMode),
+    // Optional: keep child Agent history across multiple tool calls.
+    // agenttool.WithPersistentHistory(),
 )
+```
+
+### Persistent Child History (Optional)
+
+Enable a stable child event-filter key so the wrapped child Agent can continue
+from its own previous execution history across multiple AgentTool calls:
+
+```bash
+go run . -persistent-child-history=true
+```
+
+Advanced: provide a custom stable key (use this to shard different tasks and
+avoid interleaving history when multiple tasks share one tool):
+
+```bash
+go run . -persistent-child-key="agenttool:math-specialist:task-1"
 ```
 
 ### Full Inner Transcript
