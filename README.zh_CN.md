@@ -172,6 +172,7 @@ _ = result.OverallStatus
     - [**评测与基准**](#评测与基准)
   - [目录](#目录)
   - [文档](#文档)
+    - [博客](#博客)
   - [快速开始](#快速开始)
     - [前置条件](#前置条件)
     - [运行示例](#运行示例)
@@ -209,6 +210,18 @@ _ = result.OverallStatus
 ## 文档
 
 准备好深入了解 tRPC-Agent-Go 了吗？我们的[文档](https://trpc-group.github.io/trpc-agent-go/)涵盖从基础概念到高级技巧的一切，帮助你自信地构建强大的 AI 应用。无论你是 AI agent 新手还是有经验的开发者，都能在其中找到详细指南、实用示例和最佳实践，加速你的开发旅程。
+
+### 博客
+
+这些博客围绕框架全景、核心能力与工程实践展开，可按需阅读：
+
+- [构建智能 AI 应用的 Go 语言 Agent 框架](docs/mkdocs/zh/blog/trpcagentgo.md)
+- [GraphAgent 让 AI 工作流与 Agent 无缝融合](docs/mkdocs/zh/blog/graphagent.md)
+- [快速构建基于 AG-UI 的 Agent 服务](docs/mkdocs/zh/blog/agui.md)
+- [Anthropic Agent Skills 规范的 Go 原生实现](docs/mkdocs/zh/blog/skill.md)
+- [打造企业级安全可控的 OpenClaw Runtime](docs/mkdocs/zh/blog/openclaw.md)
+- [AI Agent 自动化评估范式与工程实践全解析](docs/mkdocs/zh/blog/evaluation.md)
+- [AI Agent 提示词自动迭代与工程实践全解析](docs/mkdocs/zh/blog/promptiter.md)
 
 ## 快速开始
 
