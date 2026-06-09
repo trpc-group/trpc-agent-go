@@ -76,8 +76,17 @@ func WithHTTPClientTimeout(timeout time.Duration) HTTPClientOption {
 
 // HTTPClientOptions is the options for the HTTP client.
 type HTTPClientOptions struct {
-	Name           string
-	Transport      http.RoundTripper
-	Timeout        time.Duration
+	// Name is the name of the HTTP client, used for identification and logging.
+	Name string
+
+	// Transport is the custom HTTP transport to use. If nil, the default transport is used.
+	Transport http.RoundTripper
+
+	// Timeout is the timeout for the HTTP client. A zero value with DisableTimeout
+	// set to false causes DefaultNewHTTPClient to apply the default 5-minute timeout.
+	Timeout time.Duration
+
+	// DisableTimeout indicates whether to explicitly disable the HTTP client timeout.
+	// When true, the client will have no timeout regardless of the Timeout field value.
 	DisableTimeout bool
 }
