@@ -562,20 +562,20 @@ type Options struct {
 	// a small overview prompt.
 	EnableOnDemandSession bool
 
-	// postToolPromptEnabled controls whether the post-tool dynamic prompt
-	// injection is enabled. When nil (default), injection is enabled to
-	// preserve existing behavior.
+	// postToolPromptEnabled controls whether stable post-tool guidance is
+	// injected. When nil (default), injection is enabled to preserve existing
+	// behavior.
 	postToolPromptEnabled *bool
 
-	// PostToolPrompt overrides the default dynamic prompt injected when
-	// tool results are detected.
+	// PostToolPrompt overrides the default stable guidance injected into the
+	// system prompt for tool-result handling.
 	//
 	// When empty (default), the built-in default prompt is used.
 	// To disable prompt injection entirely, use
 	// WithEnablePostToolPrompt(false).
 	//
-	// Set to a non-empty string to customize the guidance given to the
-	// model after tool calls.
+	// Set to a non-empty string to customize the guidance given to the model
+	// for tool calls.
 	PostToolPrompt string
 
 	// extensions holds the agent-scoped extensions registered via
@@ -1860,24 +1860,26 @@ func WithEnableOnDemandSession(enable bool) Option {
 	}
 }
 
-// WithPostToolPrompt overrides the default dynamic prompt injected when tool
-// results are detected in the conversation. The default prompt guides the
-// model to synthesize results naturally without meta-commentary.
+// WithPostToolPrompt overrides the default stable prompt injected into the
+// system prompt for tool-result handling. The default prompt guides the model
+// to synthesize results naturally without meta-commentary.
 // To disable post-tool prompt injection entirely, use
 // WithEnablePostToolPrompt(false).
 //
 // Example usage:
 //
-//	llmagent.WithPostToolPrompt("[Dynamic Prompt] Summarize the tool output concisely.")
+//	llmagent.WithPostToolPrompt(
+//		"[Dynamic Prompt] Summarize the tool output concisely.",
+//	)
 func WithPostToolPrompt(prompt string) Option {
 	return func(opts *Options) {
 		opts.PostToolPrompt = prompt
 	}
 }
 
-// WithEnablePostToolPrompt enables or disables post-tool prompt injection.
-// When disabled, no prompt is injected after tool results, even if a custom
-// PostToolPrompt is configured.
+// WithEnablePostToolPrompt enables or disables stable post-tool prompt
+// injection. When disabled, no post-tool guidance is injected even if a
+// custom PostToolPrompt is configured.
 func WithEnablePostToolPrompt(enable bool) Option {
 	return func(opts *Options) {
 		opts.postToolPromptEnabled = &enable
