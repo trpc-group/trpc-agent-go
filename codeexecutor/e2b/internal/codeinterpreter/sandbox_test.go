@@ -443,8 +443,13 @@ func TestConnect_ThroughMockAPI(t *testing.T) {
 		}
 		// Validate that the timeout field is present in the request body.
 		var body map[string]any
-		data, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(data, &body)
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		if err := json.Unmarshal(data, &body); err != nil {
+			t.Fatalf("failed to unmarshal request body: %v", err)
+		}
 		if _, ok := body["timeout"]; !ok {
 			t.Error("connect request body missing 'timeout' field")
 		}
