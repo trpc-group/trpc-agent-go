@@ -774,6 +774,18 @@ eventChan, err := r.Run(
 
 完整示例可参考 [examples/usermessagerewriter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/usermessagerewriter)。
 
+#### 注入单次请求上下文（非持久化）
+
+如果你需要为**本轮**提供额外上下文（例如“rules”、动态约束、检索结果、背景知识），但又不希望把它写入 session transcript，可以使用这些 RunOption：
+
+- `agent.WithInjectedContextMessages(...)`：把消息注入到 **session history 之前**
+- `agent.WithLateContextMessages(...)`：把消息注入到 **贴近最新用户回合**
+  （历史之后，插入到最后一个 user message 之前）
+
+两者都只影响本次模型请求，不会持久化到 Session 事件中。
+
+可运行示例：`examples/prompt/late_context_messages`。
+
 #### 按 `nodeID` 覆盖指定节点的运行时 surface
 
 如果你需要在一次 `runner.Run(...)` 中只修改某个节点，而不是修改整个 Agent，可以传入
