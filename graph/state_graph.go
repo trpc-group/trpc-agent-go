@@ -1600,7 +1600,7 @@ func (r *llmRunner) executeModel(
 		GenerationConfig: r.generationConfig,
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
-	request.Messages = toolcall.SanitizeMessagesWithTools(request.Messages, request.Tools)
+	request.Messages = toolcall.SanitizeMessagesWithTools(ctx, request.Messages, request.Tools)
 	applyInvocationRequestOverrides(request, callInvocation, nodeID)
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)

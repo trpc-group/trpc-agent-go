@@ -5489,3 +5489,128 @@ func TestTool_StreamableCall_NilEvent(t *testing.T) {
 		t.Fatalf("expected non-nil content")
 	}
 }
+
+func TestTool_WithPinModel_Default(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent)
+	if agentTool.pinModel {
+		t.Error("Expected pinModel to be false by default")
+	}
+}
+
+func TestTool_WithPinModel_Enabled(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinModel(true))
+	if !agentTool.pinModel {
+		t.Error("Expected pinModel to be true")
+	}
+}
+
+func TestTool_WithPinModel_ClearsModelName(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinModel(true))
+
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ModelName: "parent-model",
+		}),
+	)
+
+	opts := agentTool.childInvocationOptions(parentInv, model.NewUserMessage("test"), "child-key", nil)
+
+	// Apply options to a new invocation to verify ModelName is cleared
+	childInv := parentInv.Clone(opts...)
+	if childInv.RunOptions.ModelName != "" {
+		t.Errorf("Expected ModelName to be cleared, got %q", childInv.RunOptions.ModelName)
+	}
+	if childInv.RunOptions.Model != nil {
+		t.Error("Expected Model to be nil")
+	}
+}
+
+func TestTool_WithPinModel_ClearsModel(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinModel(true))
+
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			Model: &fixedResponseModel{},
+		}),
+	)
+
+	opts := agentTool.childInvocationOptions(parentInv, model.NewUserMessage("test"), "child-key", nil)
+
+	childInv := parentInv.Clone(opts...)
+	if childInv.RunOptions.Model != nil {
+		t.Error("Expected Model to be nil when WithPinModel is enabled")
+	}
+}
+
+func TestTool_WithPinModel_ClearsModelSelector(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinModel(true))
+
+	selector := func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+		return &fixedResponseModel{}, nil
+	}
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ModelSelector: selector,
+		}),
+	)
+
+	opts := agentTool.childInvocationOptions(parentInv, model.NewUserMessage("test"), "child-key", nil)
+
+	childInv := parentInv.Clone(opts...)
+	if childInv.RunOptions.ModelSelector != nil {
+		t.Error("Expected ModelSelector to be nil when WithPinModel is enabled")
+	}
+}
+
+func TestTool_WithPinModel_Disabled_PreservesModelName(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinModel(false))
+
+	parentModel := &fixedResponseModel{}
+	parentSelector := func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+		return &fixedResponseModel{}, nil
+	}
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ModelName:     "parent-model",
+			Model:         parentModel,
+			ModelSelector: parentSelector,
+		}),
+	)
+
+	opts := agentTool.childInvocationOptions(parentInv, model.NewUserMessage("test"), "child-key", nil)
+
+	childInv := parentInv.Clone(opts...)
+	if childInv.RunOptions.ModelName != "parent-model" {
+		t.Errorf("Expected ModelName to be preserved, got %q", childInv.RunOptions.ModelName)
+	}
+	if childInv.RunOptions.Model != parentModel {
+		t.Error("Expected Model to be preserved when WithPinModel is disabled")
+	}
+	if childInv.RunOptions.ModelSelector == nil {
+		t.Error("Expected ModelSelector to be preserved when WithPinModel is disabled")
+	}
+}

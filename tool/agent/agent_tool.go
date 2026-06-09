@@ -41,7 +41,9 @@ type Tool struct {
 	innerTextMode          InnerTextMode
 	structuredStreamErrors bool
 	historyScope           HistoryScope
+	persistentHistory      *persistentHistoryOptions
 	responseMode           ResponseMode
+	pinModel               bool
 	name                   string
 	description            string
 	inputSchema            *tool.Schema
@@ -68,9 +70,11 @@ type agentToolOptions struct {
 	innerTextMode          InnerTextMode
 	structuredStreamErrors bool
 	historyScope           HistoryScope
+	persistentHistory      *persistentHistoryOptions
 	responseMode           ResponseMode
 	description            *string
 	name                   *string
+	pinModel               bool
 
 	// Dynamic AgentTool options. They are only meaningful for NewDynamicTool;
 	// NewTool ignores them.
@@ -106,6 +110,36 @@ func (opts *agentToolOptions) ensureDynamicOptions() *dynamicOptions {
 		opts.dynamic = defaultDynamicOptions()
 	}
 	return opts.dynamic
+}
+
+// PersistentHistoryKeyFunc resolves the stable child event-filter key for one
+// AgentTool invocation.
+//
+// Returning an empty string falls back to the default stable key.
+//
+// Note: This is currently supported only for NewTool (wrapped fixed agent), not
+// NewDynamicTool.
+type PersistentHistoryKeyFunc func(
+	ctx context.Context,
+	parentInv *agent.Invocation,
+	jsonArgs []byte,
+) string
+
+// persistentHistoryOptions holds configuration for stable child history.
+//
+// It is a pointer field on Tool/agentToolOptions so those structs remain
+// comparable (see dynamic_tool_test.go).
+type persistentHistoryOptions struct {
+	enabled bool
+	key     string
+	keyFunc PersistentHistoryKeyFunc
+}
+
+func (opts *agentToolOptions) ensurePersistentHistoryOptions() *persistentHistoryOptions {
+	if opts.persistentHistory == nil {
+		opts.persistentHistory = &persistentHistoryOptions{}
+	}
+	return opts.persistentHistory
 }
 
 // InnerTextMode controls whether forwarded inner assistant text is visible
@@ -230,6 +264,74 @@ func WithHistoryScope(scope HistoryScope) Option {
 	}
 }
 
+// WithPersistentHistory enables stable child history for a wrapped agent tool.
+//
+// When enabled, the child invocation uses a stable event-filter key so that it
+// can see its own past events across multiple AgentTool calls (within the same
+// session). This does not change control-flow semantics (still call-return) and
+// does not make runtime/executor state persistent.
+//
+// This option is currently supported only for NewTool (wrapped fixed agent) and
+// is incompatible with HistoryScopeParentBranch. When HistoryScopeParentBranch
+// is enabled, persistent history is ignored and the legacy UUID-suffixed child
+// filter keys are used.
+func WithPersistentHistory() Option {
+	return func(opts *agentToolOptions) {
+		cfg := opts.ensurePersistentHistoryOptions()
+		cfg.enabled = true
+		cfg.key = ""
+		cfg.keyFunc = nil
+	}
+}
+
+// WithPersistentHistoryKey enables stable child history using a caller-provided
+// stable event-filter key.
+//
+// See WithPersistentHistory for semantics and limitations.
+func WithPersistentHistoryKey(key string) Option {
+	return func(opts *agentToolOptions) {
+		cfg := opts.ensurePersistentHistoryOptions()
+		cfg.enabled = true
+		cfg.keyFunc = nil
+		cfg.key = strings.TrimSpace(key)
+	}
+}
+
+// WithPersistentHistoryKeyFunc enables stable child history using a caller
+// function to compute the stable event-filter key per call.
+//
+// See WithPersistentHistory for semantics and limitations.
+func WithPersistentHistoryKeyFunc(fn PersistentHistoryKeyFunc) Option {
+	return func(opts *agentToolOptions) {
+		cfg := opts.ensurePersistentHistoryOptions()
+		cfg.enabled = true
+		cfg.key = ""
+		cfg.keyFunc = fn
+	}
+}
+
+// WithPinModel pins the sub-agent's model so that it always uses its own
+// configured model (set via llmagent.WithModel) regardless of the caller's
+// runtime model selection propagated through RunOptions.
+//
+// Background: when the caller passes agent.WithModelName(...),
+// agent.WithModel(...) or agent.WithModelSelector(...) at runner.Run time
+// (e.g., AGUI server forwarding the user's model choice), RunOptions
+// propagate to child invocations via Clone(). This causes the sub-agent's
+// own model to be overridden.
+//
+// WithPinModel(true) clears RunOptions.ModelName, RunOptions.Model and
+// RunOptions.ModelSelector for the child invocation so the sub-agent's
+// own model takes effect.
+//
+// If no Model/ModelName/ModelSelector is set in RunOptions, the sub-agent
+// naturally uses its own model regardless of this option.
+func WithPinModel(enabled bool) Option {
+	return func(opts *agentToolOptions) {
+		opts.pinModel = enabled
+	}
+}
+
 // NewTool creates a new Tool that wraps the given agent.
 //
 // Note: The tool name is derived from the agent's info (agent.Info().Name).
@@ -295,6 +397,17 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 	// dynamic-only (see WithName) so the model-facing name never diverges from
 	// the child filter key, team node id, and recursion guards.
 	name := info.Name
+
+	persistent := options.persistentHistory
+	if persistent != nil &&
+		persistent.enabled &&
+		options.historyScope == HistoryScopeParentBranch {
+		log.Warnf(
+			"AgentTool[%s]: persistent history is ignored when HistoryScopeParentBranch is enabled",
+			name,
+		)
+		persistent = nil
+	}
 	return &Tool{
 		agent:                  agent,
 		skipSummarization:      options.skipSummarization,
@@ -302,7 +415,9 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		innerTextMode:          tool.NormalizeInnerTextMode(options.innerTextMode),
 		structuredStreamErrors: options.structuredStreamErrors,
 		historyScope:           options.historyScope,
+		persistentHistory:      persistent,
 		responseMode:           normalizeResponseMode(options.responseMode),
+		pinModel:               options.pinModel,
 		name:                   name,
 		description:            description,
 		inputSchema:            inputSchema,
@@ -364,7 +479,7 @@ func (at *Tool) callWithParentInvocation(
 		parentInv = parentInvocationWithLiveSession(parentInv)
 	}
 	// Build child filter key based on history scope.
-	childKey := at.buildChildFilterKey(parentInv)
+	childKey := at.buildChildFilterKey(ctx, parentInv, []byte(message.Content))
 	if hasGraphRuntime && runtime.childKey != "" {
 		childKey = runtime.childKey
 	}
@@ -458,6 +573,18 @@ func (at *Tool) childInvocationOptions(
 	}
 	if parentInv == nil {
 		return invocationOpts
+	}
+	// When pinModel is set, clear the inherited model selection so the
+	// sub-agent's own model (configured via llmagent.WithModel) takes effect
+	// instead of the parent's runtime model selection.
+	if at.pinModel && (parentInv.RunOptions.ModelName != "" ||
+		parentInv.RunOptions.Model != nil ||
+		parentInv.RunOptions.ModelSelector != nil) {
+		clearedOpts := parentInv.RunOptions
+		clearedOpts.ModelName = ""
+		clearedOpts.Model = nil
+		clearedOpts.ModelSelector = nil
+		invocationOpts = append(invocationOpts, agent.WithInvocationRunOptions(clearedOpts))
 	}
 	if surfaceRootNodeID := at.surfaceRootNodeIDForParentInvocation(parentInv); surfaceRootNodeID != "" {
 		invocationOpts = append(
@@ -904,7 +1031,27 @@ func (at *Tool) callWithIsolatedRunner(
 // buildChildFilterKey constructs a child filter key based on the history scope
 // configuration. For HistoryScopeParentBranch, it creates a hierarchical key
 // that allows the child to inherit parent history.
-func (at *Tool) buildChildFilterKey(parentInv *agent.Invocation) string {
+func (at *Tool) buildChildFilterKey(
+	ctx context.Context,
+	parentInv *agent.Invocation,
+	jsonArgs []byte,
+) string {
+	// Persistent history is supported only for isolated history scope. When
+	// HistoryScopeParentBranch is enabled, NewTool clears persistentHistory at
+	// construction time to preserve legacy semantics.
+	if at.persistentHistory != nil &&
+		at.persistentHistory.enabled &&
+		at.historyScope == HistoryScopeIsolated {
+		childKey := strings.TrimSpace(at.persistentHistory.key)
+		if at.persistentHistory.keyFunc != nil {
+			childKey = strings.TrimSpace(at.persistentHistory.keyFunc(ctx, parentInv, jsonArgs))
+		}
+		if childKey == "" {
+			childKey = defaultPersistentHistoryKey(at.name)
+		}
+		return childKey
+	}
+
 	childKey := at.agent.Info().Name + "-" + uuid.NewString()
 	if at.historyScope == HistoryScopeParentBranch {
 		if pk := parentInv.GetEventFilterKey(); pk != "" {
@@ -912,6 +1059,16 @@ func (at *Tool) buildChildFilterKey(parentInv *agent.Invocation) string {
 		}
 	}
 	return childKey
+}
+
+func defaultPersistentHistoryKey(agentName string) string {
+	if agentName == "" {
+		agentName = "child"
+	}
+	// Avoid "/" so the key does not accidentally fall under the parent's
+	// prefix/subtree filters unless the caller explicitly opts into that
+	// relationship via WithPersistentHistoryKey.
+	return "agenttool:" + agentName + ":default"
 }
 
 // collectResponse collects and concatenates assistant messages from the event
@@ -1116,7 +1273,7 @@ func (at *Tool) streamFromParentInvocation(
 	// visibility of its own tool_call / tool_response events and loops
 	// forever.
 	parentInv = parentInvocationWithLiveSession(parentInv)
-	childKey := at.buildChildFilterKey(parentInv)
+	childKey := at.buildChildFilterKey(ctx, parentInv, []byte(message.Content))
 	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey, nil)...)
 	subCtx := agent.NewInvocationContext(ctx, subInv)
 	evCh, err := agent.RunWithPlugins(subCtx, subInv, at.agent)
