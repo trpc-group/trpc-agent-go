@@ -1,0 +1,3815 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/blog/skill/">
+      
+      
+        <link rel="prev" href="../agui/">
+      
+      
+        <link rel="next" href="../evaluation/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
+    
+    
+      
+        <title>A Go-Native Implementation of the Anthropic Agent Skills Specification - tRPC-Agent-Go</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+  
+
+
+  
+  
+
+<script id="__analytics">function __md_analytics(){function e(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],e("js",new Date),e("config",""),document.addEventListener("DOMContentLoaded",(function(){document.forms.search&&document.forms.search.query.addEventListener("blur",(function(){this.value&&e("event","search",{search_term:this.value})}));document$.subscribe((function(){var t=document.forms.feedback;if(void 0!==t)for(var a of t.querySelectorAll("[type=submit]"))a.addEventListener("click",(function(a){a.preventDefault();var n=document.location.pathname,d=this.getAttribute("data-md-value");e("event","feedback",{page:n,data:d}),t.firstElementChild.disabled=!0;var r=t.querySelector(".md-feedback__note [data-md-value='"+d+"']");r&&(r.hidden=!1)})),t.hidden=!1})),location$.subscribe((function(t){e("config","",{page_path:t.pathname})}))}));var t=document.createElement("script");t.async=!0,t.src="https://www.googletagmanager.com/gtag/js?id=",document.getElementById("__analytics").insertAdjacentElement("afterEnd",t)}</script>
+  
+    <script>"undefined"!=typeof __md_analytics&&__md_analytics()</script>
+  
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#trpc-agent-go-skills-a-go-native-implementation-of-the-anthropic-agent-skills-specification" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../assets/img/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            tRPC-Agent-Go
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              A Go-Native Implementation of the Anthropic Agent Skills Specification
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="../../zh/blog/skill/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/trpc-group/trpc-agent-go" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Overview
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agent/" class="md-tabs__link">
+          
+  
+  
+  Components
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../gateway/" class="md-tabs__link">
+          
+  
+  
+  Server
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../observability/" class="md-tabs__link">
+          
+  
+  
+  Observability
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../ecosystem/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Ecosystem
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../trpcagentgo/" class="md-tabs__link">
+          
+  
+  
+  Blog
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../assets/img/logo.png" alt="logo">
+
+    </a>
+    tRPC-Agent-Go
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/trpc-group/trpc-agent-go" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Components
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Components
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_1">
+            <span class="md-nav__icon md-icon"></span>
+            Agent
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../multiagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multi Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../taskrun/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Task Run Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Team
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Custom Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dify/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Dify Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../claudecode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Claude Code Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codex/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Codex Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Runner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeexecutor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Code Executor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Error Handling
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Model
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../prompt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Prompt Template
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../callbacks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Callbacks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plugin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Plugins
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../artifact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Artifact
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Skill
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tool
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_13" id="__nav_2_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Session
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_13">
+            <span class="md-nav__icon md-icon"></span>
+            Session
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Session Summary
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/sqlite/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLite Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/redis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Redis Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mysql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/tdsql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TDSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/postgres/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ClickHouse Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_14" id="__nav_2_14_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Knowledge
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_14">
+            <span class="md-nav__icon md-icon"></span>
+            Knowledge
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/embedder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embedder
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/reranker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reranker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/query-enhancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query Enhancer
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Source
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Filter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/extractor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Extractor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Management
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/ocr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OCR
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_14_10" id="__nav_2_14_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    VectorStore
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_14_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_14_10">
+            <span class="md-nav__icon md-icon"></span>
+            VectorStore
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/tcvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TcVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Elasticsearch
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/qdrant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Qdrant
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/milvus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Milvus
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../planner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Planner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../event/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Event
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PromptIter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Server
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Server
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Gateway
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    AG-UI
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            AG-UI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/chat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Real-Time Conversation Route
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Messages Snapshot Route
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/cancel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Cancel Route
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2a/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2UI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../openclaw-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Observability
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Observability
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telemetry-multimodal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multimodal Telemetry
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ecosystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Ecosystem
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Blog
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Blog
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trpcagentgo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A Go Agent Framework for Building Intelligent AI Applications
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graphagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    GraphAgent Seamlessly Combines AI Workflows and Agents
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Quickly Build AG-UI-Based Agent Services
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    A Go-Native Implementation of the Anthropic Agent Skills Specification
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    A Go-Native Implementation of the Anthropic Agent Skills Specification
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#background" class="md-nav__link">
+    <span class="md-ellipsis">
+      Background
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Background">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#traditional-pain-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      Traditional Pain Points
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-three-layer-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      The Three-Layer Model
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick Start
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Quick Start">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#environment-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environment Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#getting-started-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Getting Started Example
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Architecture Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#skill-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      Skill Directory
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Skill Directory">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#directory-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      Directory Structure
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#loading-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Loading Flow
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#context-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Context Injection
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Context Injection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#request-preprocessing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Request Preprocessing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#skill-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      Skill State
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tool Overview
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tool Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tool-registration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tool Registration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tool-responsibilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tool Responsibilities
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Execution Environment
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Execution Environment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#execution-interfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      Execution Interfaces
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#local-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local Execution
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#container-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      Container Execution
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Execution Flow
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Execution Flow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#entry-parsing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Entry Parsing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#skill-mounting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Skill Mounting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#result-collection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Result Collection
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interaction-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Interaction Example
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extending-runtime-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extending Runtime Support
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#capability-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      Capability Comparison
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A Complete Guide to AI Agent Automated Evaluation Paradigms and Engineering Practice
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openclaw/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Building an Enterprise-Grade, Secure, and Controllable OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A Complete Guide to Automated Prompt Iteration and Engineering Practice for AI Agents
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#background" class="md-nav__link">
+    <span class="md-ellipsis">
+      Background
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Background">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#traditional-pain-points" class="md-nav__link">
+    <span class="md-ellipsis">
+      Traditional Pain Points
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-three-layer-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      The Three-Layer Model
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick Start
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Quick Start">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#environment-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Environment Setup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#getting-started-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Getting Started Example
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Architecture Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#skill-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      Skill Directory
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Skill Directory">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#directory-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      Directory Structure
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#loading-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Loading Flow
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#context-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Context Injection
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Context Injection">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#request-preprocessing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Request Preprocessing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#skill-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      Skill State
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tool-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tool Overview
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Tool Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tool-registration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tool Registration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tool-responsibilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tool Responsibilities
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Execution Environment
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Execution Environment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#execution-interfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      Execution Interfaces
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#local-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local Execution
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#container-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      Container Execution
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Execution Flow
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Execution Flow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#entry-parsing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Entry Parsing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#skill-mounting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Skill Mounting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#result-collection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Result Collection
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#interaction-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Interaction Example
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extending-runtime-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extending Runtime Support
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#capability-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      Capability Comparison
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/blog/skill.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/blog/skill.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="trpc-agent-go-skills-a-go-native-implementation-of-the-anthropic-agent-skills-specification">tRPC-Agent-Go Skills: A Go-Native Implementation of the Anthropic Agent Skills Specification</h1>
+<blockquote>
+<p>tRPC-Agent-Go added first-class support for Anthropic-style Agent Skills at the framework level. This article walks from practical usage to design and implementation so that you can enable and extend this capability confidently in real business scenarios.</p>
+<p><a href="https://github.com/trpc-group/trpc-agent-go/">tRPC-Agent-Go</a> is an autonomous multi-agent framework for Go. It provides tool calling, session and memory management, artifact management, multi-agent collaboration, graph orchestration, knowledge bases, observability, and more. tRPC-Agent-Go grows with community support. Stars are welcome.</p>
+</blockquote>
+<p>In many agent projects based on large language models, the real challenge is not only making the model smarter. It is also how to turn task knowledge into reusable skills, feed that knowledge to the model on demand, and execute it safely in a controlled environment. Anthropic's Agent Skills proposal provides a clear path: package reusable tasks as skill directories, describe goals and procedures in <code>SKILL.md</code>, add supporting documents and scripts, let the system load that information only when needed during the conversation, and complete the actual work in a workspace.</p>
+<p>tRPC-Agent-Go aligns with this design at the framework layer. On one side, it provides context capabilities such as skill repository access, summaries, and body injection. On the other side, it combines Skills with the Workspace abstraction so that scripts owned by a skill can run safely in an isolated workspace. In this way, "task knowledge + documents + optional scripts" becomes one unified and controllable agent capability layer.</p>
+<p>This article explains:</p>
+<ul>
+<li>The overall idea and common use cases of Agent Skills.</li>
+<li>How tRPC-Agent-Go loads Skill context on demand.</li>
+<li>The capability boundaries when Skills are combined with an execution environment.</li>
+<li>How application developers can quickly enable and extend this capability.</li>
+</ul>
+<p>The following sections first cover background and concepts, then give a minimal usage example, and finally discuss the framework's internal design and implementation so that you can understand Skills clearly and use them reliably.</p>
+<h2 id="background">Background</h2>
+<h3 id="traditional-pain-points">Traditional Pain Points</h3>
+<p>Before Agent Skills, we usually gave an LLM extra capabilities in this way: put a pile of operation manuals and command examples into the prompt, ask the model to generate code or steps according to those instructions, and then let a human or an external system execute them.</p>
+<p>This approach has two obvious problems:</p>
+<ol>
+<li>Context explosion: all steps and scripts are written into the prompt, quickly filling the context window and making the solution costly and hard to maintain.</li>
+<li>Split execution environment: the model only talks about scripts instead of running them. Execution results have to be moved manually, making it difficult to form a closed loop or support auditing and replay.</li>
+</ol>
+<p>Anthropic proposed a unified solution in <a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">Equipping agents for the real world with Agent Skills</a>: package reusable tasks as Skill directories, use <code>SKILL.md</code> to describe the goal and workflow, use documents and scripts to add details, and let the system manage skill discovery, loading, and execution. The open-source repository <a href="https://github.com/anthropics/skills"><code>anthropics/skills</code></a> provides many example Skills, such as PDF processing and presentation generation.</p>
+<p>When designing its Skill capability, tRPC-Agent-Go fully aligned with this semantic model. The format and meaning of <code>SKILL.md</code> are consistent with Anthropic's official design, and the skill directory structure is compatible with the example repository above. You can point tRPC-Agent-Go directly at a Claude Skills repository without rewriting <code>SKILL.md</code>.</p>
+<h3 id="the-three-layer-model">The Three-Layer Model</h3>
+<p>The following minimal skill directory gives an intuitive picture of what a Skill looks like.</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span>
+<span class="normal"><a href="#__codelineno-0-5">5</a></span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>skills/
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>  report-summary/
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>    SKILL.md
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a>    USAGE.md
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a>    scripts/
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a>      summarize.py
+</span></code></pre></div></td></tr></table></div>
+<p>The content of <code>SKILL.md</code> can be very simple, for example:</p>
+<div class="language-markdown highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-1-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-1-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-1-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-1-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-1-10">10</a></span>
+<span class="normal"><a href="#__codelineno-1-11">11</a></span>
+<span class="normal"><a href="#__codelineno-1-12">12</a></span>
+<span class="normal"><a href="#__codelineno-1-13">13</a></span>
+<span class="normal"><a href="#__codelineno-1-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a>---
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a>name: report-summary
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="gu">description: Summarize long reports into short bullet points.</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="gu">---</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a>Usage
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="k">-</span><span class="w"> </span>When the user asks to summarize a long report into a concise outline.
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a>Steps
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a>1) Read the input file from $WORK_DIR/inputs/report.txt
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a>2) Run: python3 scripts/summarize.py &gt; $OUTPUT_DIR/summary.txt
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a>3) Return a short natural language summary and mention summary.txt
+</span></code></pre></div></td></tr></table></div>
+<p>In this example, the YAML header fields <code>name</code> and <code>description</code> provide the summary. The body describes when to use the skill and the concrete steps. <code>USAGE.md</code> provides supporting instructions, and <code>scripts/summarize.py</code> is the script that actually runs. What makes the directory behave like a skill is loading and executing these pieces only when they are needed.</p>
+<p>In Anthropic's Agent Skills specification, a Skill directory essentially contains three layers of information:</p>
+<pre class="mermaid"><code>flowchart LR
+    A[Overview layer name + description]:::overview --&gt; B[Body layer SKILL.md body]:::body
+    B --&gt; C[Docs and scripts layer docs + scripts]:::docs
+
+    classDef overview fill:#e1f5e1,stroke:#4caf50,stroke-width:2px
+    classDef body fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+    classDef docs fill:#fff3e0,stroke:#ff9800,stroke-width:2px</code></pre>
+<ol>
+<li>Overview layer: contains only <code>name</code> and <code>description</code> from the YAML header of <code>SKILL.md</code>. It is very cheap and can be injected at the start of every turn to tell the model which skills are available and what each skill does.</li>
+<li>Body layer: the Markdown body of <code>SKILL.md</code>, describing when to use the skill, concrete steps, and command examples. It is loaded on demand through a tool call only when the model decides to use that Skill.</li>
+<li>Docs and scripts layer: additional Markdown documents and script files. Documents are selected and injected on demand, while scripts run only inside the workspace and are not copied verbatim into the prompt.</li>
+</ol>
+<p>This three-layer model is the key to understanding Agent Skills. The agent pulls heavier information into the context or execution environment only when it needs it, balancing capability with cost.</p>
+<h2 id="quick-start">Quick Start</h2>
+<p>This section starts from practical usage and provides a minimal runnable example so that you can quickly experience Agent Skills in tRPC-Agent-Go.</p>
+<h3 id="environment-setup">Environment Setup</h3>
+<ul>
+<li>Go 1.21+</li>
+<li>A key for an OpenAI-compatible model service</li>
+<li>A Skills directory. You can use the example directory <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/skillrun/skills"><code>examples/skillrun/skills</code></a> directly.</li>
+</ul>
+<p>Common environment variables:</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
+<span class="normal"><a href="#__codelineno-2-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-api-key&quot;</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">SKILLS_ROOT</span><span class="o">=</span>/path/to/your/skills<span class="w">   </span><span class="c1"># Optional. Defaults to ./skills.</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="getting-started-example">Getting Started Example</h3>
+<p>The following code is a simplified skill conversation example based on <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/skillrun/main.go"><code>examples/skillrun/main.go</code></a>.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-3-10">10</a></span>
+<span class="normal"><a href="#__codelineno-3-11">11</a></span>
+<span class="normal"><a href="#__codelineno-3-12">12</a></span>
+<span class="normal"><a href="#__codelineno-3-13">13</a></span>
+<span class="normal"><a href="#__codelineno-3-14">14</a></span>
+<span class="normal"><a href="#__codelineno-3-15">15</a></span>
+<span class="normal"><a href="#__codelineno-3-16">16</a></span>
+<span class="normal"><a href="#__codelineno-3-17">17</a></span>
+<span class="normal"><a href="#__codelineno-3-18">18</a></span>
+<span class="normal"><a href="#__codelineno-3-19">19</a></span>
+<span class="normal"><a href="#__codelineno-3-20">20</a></span>
+<span class="normal"><a href="#__codelineno-3-21">21</a></span>
+<span class="normal"><a href="#__codelineno-3-22">22</a></span>
+<span class="normal"><a href="#__codelineno-3-23">23</a></span>
+<span class="normal"><a href="#__codelineno-3-24">24</a></span>
+<span class="normal"><a href="#__codelineno-3-25">25</a></span>
+<span class="normal"><a href="#__codelineno-3-26">26</a></span>
+<span class="normal"><a href="#__codelineno-3-27">27</a></span>
+<span class="normal"><a href="#__codelineno-3-28">28</a></span>
+<span class="normal"><a href="#__codelineno-3-29">29</a></span>
+<span class="normal"><a href="#__codelineno-3-30">30</a></span>
+<span class="normal"><a href="#__codelineno-3-31">31</a></span>
+<span class="normal"><a href="#__codelineno-3-32">32</a></span>
+<span class="normal"><a href="#__codelineno-3-33">33</a></span>
+<span class="normal"><a href="#__codelineno-3-34">34</a></span>
+<span class="normal"><a href="#__codelineno-3-35">35</a></span>
+<span class="normal"><a href="#__codelineno-3-36">36</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/codeexecutor/local&quot;</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/skill&quot;</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="p">)</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="w">    </span><span class="nx">mdl</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">)</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="w">    </span><span class="nx">repo</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">skill</span><span class="p">.</span><span class="nx">NewFSRepository</span><span class="p">(</span><span class="s">&quot;./skills&quot;</span><span class="p">)</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="w">    </span><span class="nx">exec</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">local</span><span class="p">.</span><span class="nx">New</span><span class="p">()</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="w">    </span><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="w">        </span><span class="s">&quot;skills-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">mdl</span><span class="p">),</span>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkills</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">exec</span><span class="p">),</span>
+</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24"></a>
+</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;demo-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26"></a><span class="w">    </span><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27"></a><span class="w">        </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span>
+</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28"></a><span class="w">        </span><span class="s">&quot;user1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session1&quot;</span><span class="p">,</span>
+</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Please use an appropriate Skill to summarize a text file.&quot;</span><span class="p">),</span>
+</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31"></a>
+</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">ev</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">ch</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33"></a><span class="w">        </span><span class="c1">// Handle streaming responses and tool calls. Details are omitted here.</span>
+</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34"></a><span class="w">        </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">ev</span>
+</span><span id="__span-3-35"><a id="__codelineno-3-35" name="__codelineno-3-35"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>This code enables Agent Skills with <code>WithSkills(repo)</code>, connects an execution environment with <code>WithCodeExecutor(exec)</code>, and starts a conversation through <code>Runner</code>. The model can then automatically choose and call skill-related tools when needed.</p>
+<p>In an actual conversation, a typical flow is: the model first learns which skills are available from the overview. When you say "use a certain Skill to do X" or describe a task that matches a skill, it calls skill tools to load the body and documents, executes commands in the skill workspace, and returns results or output files.</p>
+<p>The following sections explain how these behaviors are wired together inside the framework.</p>
+<h2 id="architecture-overview">Architecture Overview</h2>
+<p>The following overview diagram maps the key modules:</p>
+<pre class="mermaid"><code>flowchart TB
+    subgraph "Conversation Entry"
+        U[User message]:::user
+        R[Runner]:::runner
+    end
+
+    subgraph "LLMAgent Layer"
+        LA[LLMAgent WithSkills + WithCodeExecutor]:::agent
+        PR[SkillsRequestProcessor request preprocessing]:::proc
+        TLoad[skill_load and related tools]:::tool
+        TRun[skill_run tool]:::tool
+    end
+
+    subgraph "Skills Repository"
+        REPO[skill.Repository FSRepository]:::repo
+        FS[Skill directory + SKILL.md]:::fs
+    end
+
+    subgraph "Execution Layer codeexecutor"
+        ENG[Engine]:::exec
+        LRT[local.Runtime]:::rt
+        CRT[container.workspaceRuntime]:::rt
+    end
+
+    U --&gt; R --&gt; LA
+    LA --&gt; PR
+    PR --&gt; LA
+    LA --&gt;|tool call| TLoad
+    LA --&gt;|tool call| TRun
+    TLoad --&gt; REPO
+    TRun --&gt; REPO
+    TRun --&gt; ENG
+    ENG --&gt; LRT
+    ENG --&gt; CRT
+    REPO --&gt; FS
+
+    classDef user fill:#fff3e0,stroke:#fb8c00,stroke-width:2px
+    classDef runner fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+    classDef agent fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px
+    classDef proc fill:#fce4ec,stroke:#d81b60,stroke-width:2px
+    classDef tool fill:#ede7f6,stroke:#5e35b1,stroke-width:2px
+    classDef repo fill:#f1f8e9,stroke:#7cb342,stroke-width:2px
+    classDef fs fill:#efebe9,stroke:#6d4c41,stroke-width:2px
+    classDef exec fill:#e0f2f1,stroke:#00897b,stroke-width:2px
+    classDef rt fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px</code></pre>
+<p>It can be understood as three layers:</p>
+<ul>
+<li>Conversation layer: <code>Runner</code> and <code>LLMAgent</code> receive user messages, call the model, and drive tool streams.</li>
+<li>Skill management layer: <code>skill.Repository</code> discovers and parses <code>SKILL.md</code>, while <code>SkillsRequestProcessor</code> injects summaries, bodies, and documents on demand.</li>
+<li>Execution layer: the unified <code>Engine</code> abstraction hides differences between local execution and container execution. <code>skill_run</code> only talks to a common interface and does not care whether the underlying runtime is the host machine or a container.</li>
+</ul>
+<p>The next sections describe these modules in order.</p>
+<h2 id="skill-directory">Skill Directory</h2>
+<h3 id="directory-structure">Directory Structure</h3>
+<p>In tRPC-Agent-Go, a Skill directory usually looks like this:</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span>
+<span class="normal"><a href="#__codelineno-4-3">3</a></span>
+<span class="normal"><a href="#__codelineno-4-4">4</a></span>
+<span class="normal"><a href="#__codelineno-4-5">5</a></span>
+<span class="normal"><a href="#__codelineno-4-6">6</a></span>
+<span class="normal"><a href="#__codelineno-4-7">7</a></span>
+<span class="normal"><a href="#__codelineno-4-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a>my-skill/
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a>  SKILL.md
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a>  USAGE.md
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a>  scripts/
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>    run.sh
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a>    helper.py
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a>  assets/
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a>    logo.png
+</span></code></pre></div></td></tr></table></div>
+<p>The specification stays consistent with Anthropic's Agent Skills specification. Key points include: the directory name should match the <code>name</code> field in the YAML header of <code>SKILL.md</code>; <code>description</code> should describe what the skill does and when to use it in natural language; the body is free-form Markdown for usage conditions, steps, and command examples.</p>
+<p>In code, <code>skill/repository.go</code> turns these rules into concrete implementation. The constant <code>skillFile = "SKILL.md"</code> defines the skill entry file name. The <code>EnvSkillsRoot</code> environment variable specifies the skill repository root. <code>FSRepository</code> recursively scans the skill root and finds subdirectories that contain <code>SKILL.md</code>.</p>
+<p>The related code is available in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/skill/repository.go"><code>skill/repository.go</code></a>.</p>
+<h3 id="loading-flow">Loading Flow</h3>
+<p><code>FSRepository</code> implements the <code>skill.Repository</code> interface and loads skills from the file system:</p>
+<ul>
+<li><code>Summaries</code>: returns the <code>Summary</code> for all skills, containing only <code>Name</code> and <code>Description</code>. This corresponds to the overview layer.</li>
+<li><code>Get</code>: reads the complete <code>SKILL.md</code> body and collects all <code>.md</code> or <code>.txt</code> documents in the same directory into <code>Docs</code>. This corresponds to the body and documents layer.</li>
+<li><code>Path</code>: returns the skill directory path so the full directory can be mounted into the workspace during execution.</li>
+</ul>
+<p>This layer can be understood through the following diagram:</p>
+<pre class="mermaid"><code>flowchart LR
+    FSRoot[Skills root SKILLS_ROOT]:::fs --&gt; Scan[FSRepository.scan]:::repo
+    Scan --&gt; Index[In-memory index name -&gt; dir]:::repo
+    Index --&gt; Sum[Summaries overview list]:::repo
+    Index --&gt; Get[Get name Summary + Body + Docs]:::repo
+    Index --&gt; Path[Path name skill directory path]:::repo
+
+    classDef fs fill:#efebe9,stroke:#6d4c41,stroke-width:2px
+    classDef repo fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px</code></pre>
+<p>With this design, the framework does not need to understand YAML details when reading or executing a Skill. It only needs to obtain four categories of information through the interface: overview, body, documents, and directory path.</p>
+<h2 id="context-injection">Context Injection</h2>
+<h3 id="request-preprocessing">Request Preprocessing</h3>
+<p>When you create an <code>LLMAgent</code> with:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span>
+<span class="normal"><a href="#__codelineno-5-3">3</a></span>
+<span class="normal"><a href="#__codelineno-5-4">4</a></span>
+<span class="normal"><a href="#__codelineno-5-5">5</a></span>
+<span class="normal"><a href="#__codelineno-5-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="s">&quot;skills-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">mdl</span><span class="p">),</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkills</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">exec</span><span class="p">),</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The framework automatically attaches the <code>SkillsRequestProcessor</code> request preprocessing chain from <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/internal/flow/processor/skills.go"><code>internal/flow/processor/skills.go</code></a>.</p>
+<p>Before every request is sent to the model, it does two things:</p>
+<ol>
+<li>Always inject the skill overview. The processor reads <code>repo.Summaries</code>, generates text such as <code>Available skills: - name: description</code>, merges it into the system message, and appends guidance on how to use the workspace and tools safely, including conventions for directories such as <code>inputs</code> and <code>out</code>.</li>
+<li>Inject loaded skill bodies and documents on demand. The processor reads temporary keys in session state, such as <code>temp:skill:loaded:&lt;name&gt;</code> and <code>temp:skill:docs:&lt;name&gt;</code>. For every skill marked as loaded, it concatenates the full <code>SKILL.md</code> body into the system message. It then selects specific <code>.md</code> or <code>.txt</code> documents according to <code>docs</code> and prefixes them with <code>[Doc] filename</code>.</li>
+</ol>
+<p>The approximate sequence is as follows:</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant U as User
+    participant R as Runner
+    participant A as LLMAgent
+    participant P as SkillsRequestProcessor
+    participant M as Model LLM
+
+    U-&gt;&gt;R: Send message
+    R-&gt;&gt;A: Build Request
+    A-&gt;&gt;P: ProcessRequest
+    P-&gt;&gt;P: Inject skill overview and loaded bodies/docs
+    P--&gt;&gt;A: Modified Request
+    A-&gt;&gt;M: Call model API
+    M--&gt;&gt;A: Return response</code></pre>
+<p>There are two key points:</p>
+<ul>
+<li>The overview is always present, so the model always knows which skills are available, but the cost is low.</li>
+<li>Bodies and documents are loaded on demand. They are injected only when a tool call clearly indicates that a skill should be used, avoiding wasted context.</li>
+</ul>
+<h3 id="skill-state">Skill State</h3>
+<p><code>SkillsRequestProcessor</code> itself does not decide which skill to load. It only reads session state. The following three tools actually write that state:</p>
+<ul>
+<li><code>skill_load</code>: declares that the body of a skill should be loaded and which documents should be used.</li>
+<li><code>skill_select_docs</code>: adjusts document selection separately by adding, replacing, or clearing documents.</li>
+<li><code>skill_list_docs</code>: lists all selectable document file names under a skill.</li>
+</ul>
+<p>These tools are implemented in:</p>
+<ul>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go"><code>tool/skill/load.go</code></a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/select_docs.go"><code>tool/skill/select_docs.go</code></a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/list_docs.go"><code>tool/skill/list_docs.go</code></a></li>
+</ul>
+<p>They share one important property: they do not manipulate the prompt directly. They only read and write temporary keys in <code>Session.State</code>. This keeps the decision of which Skill and documents to use separate from how those contents are injected into the system message. The former is handled by tools, and the latter is handled uniformly by the request processor.</p>
+<h2 id="tool-overview">Tool Overview</h2>
+<h3 id="tool-registration">Tool Registration</h3>
+<p>When you create an <code>LLMAgent</code> with <code>llmagent.WithSkills(repo)</code>, <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/agent/llmagent/llm_agent.go"><code>agent/llmagent/llm_agent.go</code></a> automatically registers four skill-related tools:</p>
+<ul>
+<li><code>skill_load</code></li>
+<li><code>skill_select_docs</code></li>
+<li><code>skill_list_docs</code></li>
+<li><code>skill_run</code></li>
+</ul>
+<p>Part of the logic can be summarized by the following diagram:</p>
+<pre class="mermaid"><code>flowchart LR
+    O[LLMAgent option WithSkills]:::agent
+    O --&gt; T1[NewLoadTool]:::tool
+    O --&gt; T2[NewSelectDocsTool]:::tool
+    O --&gt; T3[NewListDocsTool]:::tool
+    O --&gt; T4[NewRunTool + CodeExecutor]:::tool
+
+    classDef agent fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px
+    classDef tool fill:#ede7f6,stroke:#5e35b1,stroke-width:2px</code></pre>
+<p>If <code>WithCodeExecutor(exec)</code> is also configured, the framework passes that executor to the <code>skill_run</code> tool. If no executor is configured explicitly, <code>skill_run</code> falls back to the default local executor.</p>
+<h3 id="tool-responsibilities">Tool Responsibilities</h3>
+<p>Based on <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/skill.md"><code>docs/mkdocs/en/skill.md</code></a> and the <code>tool/skill/*.go</code> source code, each tool has the following responsibility:</p>
+<ul>
+<li><code>skill_load</code>: inputs are required <code>skill</code>, optional <code>docs</code>, and <code>include_all_docs</code>. It writes <code>temp:skill:loaded:&lt;name&gt;</code> and <code>temp:skill:docs:&lt;name&gt;</code> to mark that this conversation needs the body of the skill and selected documents.</li>
+<li><code>skill_select_docs</code>: inputs are <code>skill</code>, <code>docs</code>, <code>include_all_docs</code>, and <code>mode</code>. It updates <code>temp:skill:docs:&lt;name&gt;</code> and supports append, replace, or clear operations.</li>
+<li><code>skill_list_docs</code>: input is <code>skill</code>; output is the list of available document file names under that skill so the model can choose.</li>
+<li><code>skill_run</code>: inputs include <code>skill</code>, <code>command</code>, <code>cwd</code>, <code>env</code>, <code>output_files</code>, <code>inputs</code>, <code>outputs</code>, and <code>timeout</code>. It executes the command inside an isolated Workspace, collects output files, and saves them as Artifacts when needed.</li>
+</ul>
+<p>The first three tools solve the problem of letting the model know which Skill and documents to use. The last tool, <code>skill_run</code>, actually runs scripts and is the key link between Skills and the execution environment.</p>
+<h2 id="execution-environment">Execution Environment</h2>
+<p>To provide a Claude-like Skills experience, there is one key principle: a Skill should depend only on a clean execution interface and should not care whether the backend is the host machine or a container. tRPC-Agent-Go centralizes this abstraction in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/workspace.go"><code>codeexecutor/workspace.go</code></a> and <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/metadata.go"><code>codeexecutor/metadata.go</code></a>.</p>
+<p>A simplified structure diagram helps illustrate the execution abstraction:</p>
+<pre class="mermaid"><code>flowchart TB
+    subgraph Engine
+        WM[WorkspaceManager]:::exec
+        WFS[WorkspaceFS]:::exec
+        PR[ProgramRunner]:::exec
+    end
+
+    classDef exec fill:#e0f2f1,stroke:#00897b,stroke-width:2px</code></pre>
+<h3 id="execution-interfaces">Execution Interfaces</h3>
+<p>In the <code>codeexecutor</code> package, the execution interface consists of components with clear responsibilities:</p>
+<ul>
+<li><code>Workspace</code> represents an isolated execution space, including an ID and a physical path.</li>
+<li><code>WorkspaceManager</code> creates and cleans up Workspaces.</li>
+<li><code>WorkspaceFS</code> stages files, mounts directories, and collects outputs inside a Workspace.</li>
+<li><code>ProgramRunner</code> runs concrete commands inside a Workspace.</li>
+<li><code>Engine</code> packages the three interfaces above and exposes a unified execution capability.</li>
+</ul>
+<p>There is also a helper interface, <code>EngineProvider</code>, which allows an existing <code>CodeExecutor</code> to expose its internal <code>Engine</code> for reuse by <code>skill_run</code>.</p>
+<p>The standard Workspace layout, ensured by <code>EnsureLayout</code>, includes: <code>skills</code> for read-only skill trees, <code>work</code> for writable intermediate files, <code>runs</code> for per-run temporary directories, <code>out</code> for collected output files, and <code>metadata.json</code> for mounted skills and input/output records.</p>
+<p>At runtime, the framework injects environment variables such as <code>WORKSPACE_DIR</code>, <code>SKILLS_DIR</code>, <code>WORK_DIR</code>, <code>OUTPUT_DIR</code>, <code>RUN_DIR</code>, and the current skill name <code>SKILL_NAME</code>. Skill documents can use these variables directly to describe file paths, such as "read input from <code>$WORK_DIR/inputs</code> and write results to <code>$OUTPUT_DIR</code>."</p>
+<h3 id="local-execution">Local Execution</h3>
+<p>The local executor's Workspace implementation is in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/local/workspace_runtime.go"><code>codeexecutor/local/workspace_runtime.go</code></a>. It creates a working directory for each execution ID, initializes standard subdirectories and metadata, copies or links the requested skill directory or input directory into the Workspace, runs commands inside the Workspace through <code>exec.CommandContext</code>, injects the environment variables described above, and collects output files according to glob patterns. If size or count limits are exceeded, it sets the <code>LimitsHit</code> flag.</p>
+<p>The local Runtime enables <code>AutoInputs</code> by default, allowing specified host directories to be mapped under <code>work/inputs</code> so that Skills can access external files conveniently.</p>
+<h3 id="container-execution">Container Execution</h3>
+<p>The container executor's Workspace implementation is in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/container/workspace_runtime.go"><code>codeexecutor/container/workspace_runtime.go</code></a>. Compared with local execution, it additionally creates an isolated directory inside the container for each Workspace, uses existing bind mounts when possible, such as mounting the entire Skills repository to <code>/opt/trpc-agent/skills</code>, to mount skills quickly through in-container copies, runs commands through Docker Exec with timeouts and resource limits, and pulls output files back to the host through glob expansion and tar streams.</p>
+<p>For <code>skill_run</code>, these differences are transparent. As long as it receives an object implementing the <code>Engine</code> interface, it can schedule both local and container execution environments uniformly.</p>
+<h2 id="execution-flow">Execution Flow</h2>
+<h3 id="entry-parsing">Entry Parsing</h3>
+<p>The core implementation of <code>skill_run</code> is in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go"><code>tool/skill/run.go</code></a>. The tool first parses JSON arguments, validates that <code>skill</code> and <code>command</code> are not empty, and then resolves the skill root directory through the skill repository.</p>
+<p>When selecting an Engine, <code>skill_run</code> first tries to get one from the externally injected <code>CodeExecutor</code>, if that executor implements <code>EngineProvider</code>. Otherwise, it falls back to a default Engine based on the local Runtime. This keeps the default easy to use while allowing applications to replace the execution backend when needed.</p>
+<h3 id="skill-mounting">Skill Mounting</h3>
+<p><code>RunTool</code> maintains a <code>WorkspaceRegistry</code>, implemented in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/registry.go"><code>codeexecutor/registry.go</code></a>, to reuse Workspaces by session ID. This means multiple <code>skill_run</code> calls in the same conversation can share one Workspace, preserving intermediate outputs under <code>work</code> and <code>out</code> so that skills can be chained.</p>
+<p>The rough flow for mounting a Skill directory is: use <code>repo.Path</code> to find the skill root, call <code>codeexecutor.DirDigest</code> to compute the directory digest, read the Workspace's <code>metadata.json</code> to check whether a skill with the same digest has already been mounted, skip copying if it has, otherwise mount the skill directory to <code>skills/&lt;name&gt;</code> in the Workspace, create symlinks from the skill root to <code>out</code>, <code>work</code>, and <code>work/inputs</code>, and finally make the skill directory tree read-only except for symlinks.</p>
+<p>From a command-line perspective, the skill script sees its root directory as <code>skills/&lt;name&gt;</code>, while writes to <code>out</code>, <code>work</code>, and <code>inputs</code> all land in shared Workspace directories. This is both safe and convenient for collaboration among multiple skills.</p>
+<h3 id="result-collection">Result Collection</h3>
+<p><code>skill_run</code> supports two output collection methods:</p>
+<ol>
+<li>Traditional <code>output_files</code>: pass glob patterns such as <code>["out/*.txt"]</code> or <code>$OUTPUT_DIR/*.csv</code>. The underlying <code>WorkspaceFS.Collect</code> collects matched files and returns file name, content, and MIME type.</li>
+<li>Declarative <code>outputs</code>: use <code>OutputSpec</code> to specify glob patterns, whether to inline content, whether to save as an Artifact, and maximum file count and size. The underlying <code>CollectOutputs</code> returns an <code>OutputManifest</code> and saves files through the Artifact service when needed.</li>
+</ol>
+<p>Inputs are declared through the <code>inputs</code> array. Each <code>InputSpec</code> can come from sources such as <code>artifact://</code>, <code>host://</code>, <code>workspace://</code>, or <code>skill://</code>. The concrete implementation is distributed across the <code>codeexecutor</code> package and the local and container runtimes.</p>
+<p>Finally, <code>skill_run</code> returns a structured <code>runOutput</code>, including <code>stdout</code>, <code>stderr</code>, <code>exit_code</code>, <code>timed_out</code>, <code>duration_ms</code>, <code>output_files</code>, and optional <code>artifact_files</code>.</p>
+<p>The full execution chain can be summarized by the following sequence diagram:</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant M as Model LLM
+    participant T as skill_run tool
+    participant E as Engine
+    participant WM as WorkspaceManager
+    participant FS as WorkspaceFS
+    participant PR as ProgramRunner
+
+    M-&gt;&gt;T: Tool call {skill, command, ...}
+    T-&gt;&gt;T: parseRunArgs validates arguments
+    T-&gt;&gt;E: ensureEngine
+    T-&gt;&gt;WM: Acquire Workspace
+    WM--&gt;&gt;T: Workspace
+    T-&gt;&gt;FS: StageDirectory mounts skill directory
+    T-&gt;&gt;FS: StageInputs maps external inputs
+    T-&gt;&gt;PR: RunProgram
+    PR--&gt;&gt;T: RunResult
+    T-&gt;&gt;FS: Collect or CollectOutputs
+    FS--&gt;&gt;T: Files and Manifest
+    T--&gt;&gt;M: runOutput JSON</code></pre>
+<h2 id="interaction-example">Interaction Example</h2>
+<p>The repository provides a complete interactive skill conversation example at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/skillrun"><code>examples/skillrun</code></a>. It shows how to chat with a Skills-enabled Agent from the command line.</p>
+<p>It uses the OpenAI-compatible model client <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/openai.go"><code>model/openai/openai.go</code></a>, loads the skill repository through <code>skill.NewFSRepository</code> with the default <code>./skills</code> or the <code>SKILLS_ROOT</code> environment variable, selects a local or container executor through command-line arguments, creates an <code>LLMAgent</code> with Skills and an instructional system prompt, consumes model output through <code>Runner</code> streaming, and prints tool calls and tool responses, including <code>artifact_files</code> returned by <code>skill_run</code>.</p>
+<p>If you want to try Anthropic's official example Skills, clone <a href="https://github.com/anthropics/skills"><code>anthropics/skills</code></a> locally, point <code>SKILLS_ROOT</code> to that directory, and run the example under <code>examples/skillrun</code>. You can then use those Skills directly in tRPC-Agent-Go.</p>
+<p>Note that the semantics of a Skill come entirely from <code>SKILL.md</code> and the documents themselves. The framework only provides the foundation for on-demand injection and safe execution. When authoring a Skill, you only need to describe the task and steps clearly in natural language, and organize <code>scripts</code> and <code>out</code> directories so commands can be reproduced.</p>
+<h2 id="extending-runtime-support">Extending Runtime Support</h2>
+<p>If you want to add another runtime beyond the existing local and container implementations, such as Kubernetes Pods or remote sandboxes, you can follow this path:</p>
+<ol>
+<li>Implement the Workspace interface trio: a custom <code>WorkspaceManager</code>, <code>WorkspaceFS</code>, and <code>ProgramRunner</code>, responsible for creating and cleaning Workspaces, managing files and directories, and running commands inside the Workspace.</li>
+<li>Package them as an Engine: use <code>codeexecutor.NewEngine</code> to wrap these three components into a new <code>Engine</code>.</li>
+<li>Inject through <code>LLMAgent</code>: pass the new <code>CodeExecutor</code> or Engine to <code>LLMAgent.WithCodeExecutor</code>, or pass the <code>Engine</code> directly to <code>skill_run</code> in a custom Agent.</li>
+</ol>
+<p>Because <code>skill_run</code> works entirely through the <code>Engine</code> abstraction, once a new execution backend implements the Workspace interfaces, all existing Skills can migrate to it without modifying <code>SKILL.md</code>.</p>
+<h2 id="capability-comparison">Capability Comparison</h2>
+<p>In addition to Skills, tRPC-Agent-Go also includes an automatic code block execution path. It processes code blocks in model responses and runs them automatically. The corresponding logic is in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/internal/flow/processor/codeexecution.go"><code>internal/flow/processor/codeexecution.go</code></a>.</p>
+<p>The difference and positioning are roughly as follows:</p>
+<ul>
+<li>Automatic code execution fits lightweight scenarios where the model temporarily writes a bit of code to try something. The model outputs triple-backtick code blocks, such as ```python, and the framework extracts and runs them automatically, then returns the result.</li>
+<li>Skill execution fits reusable task templates. Scripts always live in the skill directory. The model writes only commands, not script bodies, executes them through <code>skill_run</code> in the Workspace, and can collect output files and Artifacts.</li>
+</ul>
+<p>Implementation-wise, both reuse the Workspace abstraction from <code>codeexecutor</code>. The entry points differ: automatic code execution enters from the model response processor, while <code>skill_run</code> enters from a tool call.</p>
+<h2 id="summary">Summary</h2>
+<p>The Agent Skills capability in tRPC-Agent-Go can be summarized along several main lines:</p>
+<ul>
+<li>Information organization: <code>SKILL.md</code>, documents, and scripts form a three-layer information model. The overview is always present, bodies and documents are injected on demand, and scripts run only in the workspace.</li>
+<li>Request injection: <code>SkillsRequestProcessor</code> automatically merges the overview, loaded skill bodies, and selected documents into the system message based on session state.</li>
+<li>Tool collaboration: <code>skill_load</code>, <code>skill_select_docs</code>, and <code>skill_list_docs</code> decide which Skill and documents are used, while <code>skill_run</code> actually executes commands in the Workspace and collects results.</li>
+<li>Execution abstraction: <code>codeexecutor</code> hides local and container differences through Workspace and Engine abstractions, letting Skills depend only on one unified execution interface.</li>
+<li>Extensibility: once the Workspace trio is implemented and wrapped as a new Engine, all existing Skills can move to the new execution backend without rewriting <code>SKILL.md</code>.</li>
+</ul>
+<p>For users, the workflow is simple: prepare a compliant Skills directory, configure <code>WithSkills</code> and an appropriate <code>CodeExecutor</code> on <code>LLMAgent</code>, then interact with the Agent as in a normal chat. Express your needs naturally or mention the skill you want to use, and the model will choose and call the relevant tools at the right time.</p>
+<p>All remaining work, including discovery, injection, execution, collection, and persistence, is handled uniformly by tRPC-Agent-Go at the framework layer.</p>
+<p>We welcome everyone to try Agent Skills in real business scenarios, turn high-frequency tasks into reusable skill packages, and gradually build your own skill library. For more examples and best practices, refer to the following documents and repositories.</p>
+<p><strong>Code Repository</strong>:</p>
+<ul>
+<li><a href="https://github.com/trpc-group/trpc-agent-go">tRPC-Agent-Go repository</a></li>
+</ul>
+<p><strong>Skills Documentation</strong>:</p>
+<ul>
+<li>Skills feature description and usage examples: <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/skill.md"><code>docs/mkdocs/en/skill.md</code></a></li>
+<li>Interactive example project: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/skillrun"><code>examples/skillrun</code></a></li>
+</ul>
+<p>Feel free to use GitHub Issues to discuss framework usage, share practical cases, and propose improvements.</p>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Last update">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 9, 2026 08:42:05 UTC">2026-06-09 08:42:05</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Created">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 9, 2026 08:42:05 UTC">2026-06-09 08:42:05</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+  
+
+
+
+  <form class="md-feedback" name="feedback" hidden>
+    <fieldset>
+      <legend class="md-feedback__title">
+        Was this page helpful?
+      </legend>
+      <div class="md-feedback__inner">
+        <div class="md-feedback__list">
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page was helpful" data-md-value="1">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m7 0c0 .8-.7 1.5-1.5 1.5S14 10.3 14 9.5 14.7 8 15.5 8s1.5.7 1.5 1.5m-5 7.73c-1.75 0-3.29-.73-4.19-1.81L9.23 14c.45.72 1.52 1.23 2.77 1.23s2.32-.51 2.77-1.23l1.42 1.42c-.9 1.08-2.44 1.81-4.19 1.81"/></svg>
+            </button>
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page could be improved" data-md-value="0">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10m-6.5-4c.8 0 1.5.7 1.5 1.5s-.7 1.5-1.5 1.5-1.5-.7-1.5-1.5.7-1.5 1.5-1.5M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m2 4.5c1.75 0 3.29.72 4.19 1.81l-1.42 1.42C14.32 16.5 13.25 16 12 16s-2.32.5-2.77 1.23l-1.42-1.42C8.71 14.72 10.25 14 12 14"/></svg>
+            </button>
+          
+        </div>
+        <div class="md-feedback__note">
+          
+            <div data-md-value="1" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!
+            </div>
+          
+            <div data-md-value="0" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!<br>Please help us improve by opening an <a href="https://github.com/trpc-group/trpc-agent-go/issues/new" target="_blank" rel="noopener">issue</a>.
+            </div>
+          
+        </div>
+      </div>
+    </fieldset>
+  </form>
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../agui/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Quickly Build AG-UI-Based Agent Services">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Quickly Build AG-UI-Based Agent Services
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../evaluation/" class="md-footer__link md-footer__link--next" aria-label="Next: A Complete Guide to AI Agent Automated Evaluation Paradigms and Engineering Practice">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                A Complete Guide to AI Agent Automated Evaluation Paradigms and Engineering Practice
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+        <script src="../../assets/javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

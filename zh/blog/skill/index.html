@@ -1,0 +1,3809 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/blog/skill/">
+      
+      
+        <link rel="prev" href="../agui/">
+      
+      
+        <link rel="next" href="../evaluation/">
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
+    
+    
+      
+        <title>Anthropic Agent Skills 规范的 Go 原生实现 - tRPC-Agent-Go</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.7e37652d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+  
+
+
+  
+  
+
+<script id="__analytics">function __md_analytics(){function e(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],e("js",new Date),e("config",""),document.addEventListener("DOMContentLoaded",(function(){document.forms.search&&document.forms.search.query.addEventListener("blur",(function(){this.value&&e("event","search",{search_term:this.value})}));document$.subscribe((function(){var t=document.forms.feedback;if(void 0!==t)for(var a of t.querySelectorAll("[type=submit]"))a.addEventListener("click",(function(a){a.preventDefault();var n=document.location.pathname,d=this.getAttribute("data-md-value");e("event","feedback",{page:n,data:d}),t.firstElementChild.disabled=!0;var r=t.querySelector(".md-feedback__note [data-md-value='"+d+"']");r&&(r.hidden=!1)})),t.hidden=!1})),location$.subscribe((function(t){e("config","",{page_path:t.pathname})}))}));var t=document.createElement("script");t.async=!0,t.src="https://www.googletagmanager.com/gtag/js?id=",document.getElementById("__analytics").insertAdjacentElement("afterEnd",t)}</script>
+  
+    <script>"undefined"!=typeof __md_analytics&&__md_analytics()</script>
+  
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#trpc-agent-go-skillsanthropic-agent-skills-go" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../../assets/img/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            tRPC-Agent-Go
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Anthropic Agent Skills 规范的 Go 原生实现
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../blog/skill/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  概览
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agent/" class="md-tabs__link">
+          
+  
+  
+  组件
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../gateway/" class="md-tabs__link">
+          
+  
+  
+  服务
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../observability/" class="md-tabs__link">
+          
+  
+  
+  可观测
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../ecosystem/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  生态
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../trpcagentgo/" class="md-tabs__link">
+          
+  
+  
+  博客
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../../assets/img/logo.png" alt="logo">
+
+    </a>
+    tRPC-Agent-Go
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    组件
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            组件
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_1">
+            <span class="md-nav__icon md-icon"></span>
+            Agent
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../multiagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multi Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../taskrun/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Task Run 运行时
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Team
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    自定义 Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dify/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Dify Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../claudecode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Claude Code Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codex/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Codex Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Runner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeexecutor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Code Executor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    错误处理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Model
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../prompt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Prompt Template
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../callbacks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Callbacks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plugin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Plugins
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../artifact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Artifact
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Skill
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tool
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_13" id="__nav_2_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Session
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_13">
+            <span class="md-nav__icon md-icon"></span>
+            Session
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Session Summary
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/sqlite/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLite Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/redis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Redis Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mysql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/tdsql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TDSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/postgres/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ClickHouse Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_14" id="__nav_2_14_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Knowledge
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_14">
+            <span class="md-nav__icon md-icon"></span>
+            Knowledge
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/embedder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embedder
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/reranker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reranker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/query-enhancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query Enhancer
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    数据源
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/extractor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    内容提取器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    过滤器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    知识库管理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/ocr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OCR
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_14_10" id="__nav_2_14_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    向量存储
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_14_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_14_10">
+            <span class="md-nav__icon md-icon"></span>
+            向量存储
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/tcvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TcVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Elasticsearch
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/qdrant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Qdrant
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/milvus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Milvus
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    故障排除
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../planner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Planner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../event/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Event
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PromptIter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    服务
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            服务
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Gateway
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    AG-UI
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            AG-UI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    总览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/chat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    实时对话路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    消息快照路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/cancel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    取消路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2a/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2UI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../openclaw-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    可观测
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            可观测
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telemetry-multimodal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    多模态遥测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ecosystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    生态
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    博客
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            博客
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trpcagentgo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    构建智能 AI 应用的 Go 语言 Agent 框架
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graphagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    GraphAgent 让 AI 工作流与 Agent 无缝融合
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    快速构建基于 AG-UI 的 Agent 服务
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Anthropic Agent Skills 规范的 Go 原生实现
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Anthropic Agent Skills 规范的 Go 原生实现
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      背景
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="背景">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      传统痛点
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      三层模型
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      快速开始
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="快速开始">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      环境准备
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      入门示例
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      架构总览
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      技能目录
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="技能目录">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      目录结构
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      加载流程
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      上下文注入
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="上下文注入">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      请求预处理
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      技能状态
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      工具总览
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="工具总览">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      工具注册
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      工具职责
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_17" class="md-nav__link">
+    <span class="md-ellipsis">
+      执行环境
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="执行环境">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      执行接口
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      本地执行
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      容器执行
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_21" class="md-nav__link">
+    <span class="md-ellipsis">
+      执行流程
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="执行流程">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_22" class="md-nav__link">
+    <span class="md-ellipsis">
+      入口解析
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_23" class="md-nav__link">
+    <span class="md-ellipsis">
+      技能挂载
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_24" class="md-nav__link">
+    <span class="md-ellipsis">
+      结果收集
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_25" class="md-nav__link">
+    <span class="md-ellipsis">
+      交互示例
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_26" class="md-nav__link">
+    <span class="md-ellipsis">
+      扩展运行
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_27" class="md-nav__link">
+    <span class="md-ellipsis">
+      能力对比
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_28" class="md-nav__link">
+    <span class="md-ellipsis">
+      总结
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 自动化评估范式与工程实践全解析
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openclaw/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    打造企业级安全可控的 OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 提示词自动迭代与工程实践全解析
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      背景
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="背景">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      传统痛点
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      三层模型
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      快速开始
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="快速开始">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      环境准备
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      入门示例
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      架构总览
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      技能目录
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="技能目录">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      目录结构
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      加载流程
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      上下文注入
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="上下文注入">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      请求预处理
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_13" class="md-nav__link">
+    <span class="md-ellipsis">
+      技能状态
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_14" class="md-nav__link">
+    <span class="md-ellipsis">
+      工具总览
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="工具总览">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_15" class="md-nav__link">
+    <span class="md-ellipsis">
+      工具注册
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_16" class="md-nav__link">
+    <span class="md-ellipsis">
+      工具职责
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_17" class="md-nav__link">
+    <span class="md-ellipsis">
+      执行环境
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="执行环境">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
+      执行接口
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      本地执行
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_20" class="md-nav__link">
+    <span class="md-ellipsis">
+      容器执行
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_21" class="md-nav__link">
+    <span class="md-ellipsis">
+      执行流程
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="执行流程">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_22" class="md-nav__link">
+    <span class="md-ellipsis">
+      入口解析
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_23" class="md-nav__link">
+    <span class="md-ellipsis">
+      技能挂载
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_24" class="md-nav__link">
+    <span class="md-ellipsis">
+      结果收集
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_25" class="md-nav__link">
+    <span class="md-ellipsis">
+      交互示例
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_26" class="md-nav__link">
+    <span class="md-ellipsis">
+      扩展运行
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_27" class="md-nav__link">
+    <span class="md-ellipsis">
+      能力对比
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_28" class="md-nav__link">
+    <span class="md-ellipsis">
+      总结
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/blog/skill.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/blog/skill.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="trpc-agent-go-skillsanthropic-agent-skills-go">tRPC-Agent-Go Skills：Anthropic Agent Skills 规范的 Go 原生实现</h1>
+<blockquote>
+<p>tRPC-Agent-Go 框架第一时间支持了 Anthropic 风格的 Agent Skills。本文将从“如何使用”到“设计实现”依次展开，帮助你在实际业务中自如地启用和扩展这一能力。</p>
+<p><a href="https://github.com/trpc-group/trpc-agent-go/">tRPC-Agent-Go</a> 是面向 Go 语言的自主式多 Agent 框架，具有工具调用、会话与记忆管理、制品管理、多 Agent 协同、图编排、知识库与可观测等能力。tRPC-Agent-Go 的成长离不开大家的支持，欢迎 Star 项目。</p>
+</blockquote>
+<p>在很多基于大语言模型（Large Language Model，LLM）的 Agent 项目里，真正的挑战并不只是“让模型变聪明”，而是如何把一整套任务知识沉淀成可复用的技能，用按需加载的方式喂给模型，并在受控环境中安全落地执行。Anthropic 提出的 Agent Skills 提供了一条很清晰的路径：把可复用的任务封装为技能目录，用 <code>SKILL.md</code> 描述目标与流程，用文档和脚本补充细节，由系统在对话过程中按需加载这些信息，并在工作区中完成实际操作。</p>
+<p>tRPC-Agent-Go 在框架层对齐了这套设计：一方面提供 Skill 仓库存取、概览与正文注入等上下文能力，另一方面结合 Workspace 抽象，把技能涉及的脚本放进隔离工作区中安全运行，让“任务知识 + 文档 + 可选脚本”成为一个统一、可控的 Agent 能力层。</p>
+<p>本文会从零开始，带你理解：
+- Agent Skills 的整体思路和典型使用场景
+- tRPC-Agent-Go 中如何按需加载 Skill 的上下文
+- Skills 与执行环境结合后的能力边界
+- 作为业务方，如何快速启用并扩展这一能力</p>
+<p>后文会先梳理背景与概念，再给出一个最小使用示例，最后展开框架内部的设计与实现，帮助你把 Skill 看清楚、用得稳。</p>
+<h2 id="_1">背景</h2>
+<h3 id="_2">传统痛点</h3>
+<p>在没有 Agent Skills 之前，我们通常这样给 LLM“加能力”：把一堆“操作手册”“命令示例”写在提示词里，再让模型按这些说明生成代码或操作步骤，由人类或外部系统去执行。</p>
+<p>这种方式有两个明显问题：</p>
+<ol>
+<li>上下文爆炸：所有步骤、脚本都写在提示词里，上下文窗口（Context Window）被快速占满，成本高、可维护性差。  </li>
+<li>执行环境割裂：模型只“说”脚本，不真正“跑”脚本，执行结果需要人工搬运，难以形成闭环，也不利于审计和回溯。</li>
+</ol>
+<p>Anthropic 在文章 <a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills">Equipping agents for the real world with Agent Skills</a> 中提出了一套统一的解决方案：把可复用的任务封装为 Skill 目录，用 <code>SKILL.md</code> 描述目标与流程，用文档和脚本补充细节，由系统管理技能的发现、加载和执行。开源仓库 <a href="https://github.com/anthropics/skills"><code>anthropics/skills</code></a> 中提供了大量示例 Skill，如 PDF 处理、PPT 生成等。</p>
+<p>tRPC-Agent-Go 在设计 Skill 能力时，完全对齐了这套语义：<code>SKILL.md</code> 的格式和含义与 Anthropic 官方一致，技能目录结构也与上述示例仓库兼容，你可以直接把 Claude Skills 仓库指给 tRPC-Agent-Go 使用，而不需要改写 <code>SKILL.md</code>。</p>
+<h3 id="_3">三层模型</h3>
+<p>先看一个极简的技能目录示例，帮助你对 Skill 的“长什么样”有一个直观印象。</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span>
+<span class="normal"><a href="#__codelineno-0-5">5</a></span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>skills/
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>  report-summary/
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>    SKILL.md
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a>    USAGE.md
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a>    scripts/
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a>      summarize.py
+</span></code></pre></div></td></tr></table></div>
+<p>其中 <code>SKILL.md</code> 的内容可以非常简单，例如：</p>
+<div class="language-markdown highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-1-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-1-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-1-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-1-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-1-10">10</a></span>
+<span class="normal"><a href="#__codelineno-1-11">11</a></span>
+<span class="normal"><a href="#__codelineno-1-12">12</a></span>
+<span class="normal"><a href="#__codelineno-1-13">13</a></span>
+<span class="normal"><a href="#__codelineno-1-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a>---
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a>name: report-summary
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="gu">description: Summarize long reports into short bullet points.</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="gu">---</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a>Usage
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="k">-</span><span class="w"> </span>When the user asks to summarize a long report into a concise outline.
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a>Steps
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a>1) Read the input file from $WORK_DIR/inputs/report.txt
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a>2) Run: python3 scripts/summarize.py &gt; $OUTPUT_DIR/summary.txt
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a>3) Return a short natural language summary and mention summary.txt
+</span></code></pre></div></td></tr></table></div>
+<p>这个例子里：YAML 头部的 <code>name</code> 和 <code>description</code> 提供“概览”，正文部分给出了使用时机和具体步骤，<code>USAGE.md</code> 作为补充说明，<code>scripts/summarize.py</code> 则是实际执行的脚本。真正做到“用起来像一个技能”，靠的就是对这些内容按需加载和执行。</p>
+<p>在 Anthropic 的 Agent Skills 规范中，一个 Skill 目录本质上包含三层信息：</p>
+<pre class="mermaid"><code>flowchart LR
+    A[概览层 name + description]:::overview --&gt; B[正文层 SKILL.md body]:::body
+    B --&gt; C[文档与脚本层 docs + scripts]:::docs
+
+    classDef overview fill:#e1f5e1,stroke:#4caf50,stroke-width:2px
+    classDef body fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+    classDef docs fill:#fff3e0,stroke:#ff9800,stroke-width:2px</code></pre>
+<ol>
+<li>概览层：只包含 <code>SKILL.md</code> YAML 头部中的 <code>name</code> 和 <code>description</code>，成本极低，可以在每轮对话一开始就注入，用来告诉模型“有哪些技能、各自做什么”。  </li>
+<li>正文层：<code>SKILL.md</code> 的 Markdown 正文，描述“何时使用”“具体步骤”“命令示例”，只在模型决策“要用这个 Skill”时，通过工具调用按需加载。  </li>
+<li>文档与脚本层：附加的 Markdown 文档和脚本文件，文档按需选取一部分注入，脚本只在工作区执行，不会被原样放进提示词。</li>
+</ol>
+<p>这个“三层模型”是理解 Agent Skills 的核心：Agent 只在需要时才把更“重”的信息拉进上下文或执行环境，从而在“能力强”和“成本低”之间取得平衡。</p>
+<h2 id="_4">快速开始</h2>
+<p>本节从“怎么用”出发，给出一个最小可运行示例，帮助你快速感受 tRPC-Agent-Go 的 Agent Skills 能力。</p>
+<h3 id="_5">环境准备</h3>
+<ul>
+<li>Go 1.21+  </li>
+<li>一个 OpenAI 兼容模型服务的 Key  </li>
+<li>一个 Skills 目录（可以直接使用示例目录 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/skillrun/skills"><code>examples/skillrun/skills</code></a>）</li>
+</ul>
+<p>常用环境变量：</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
+<span class="normal"><a href="#__codelineno-2-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-api-key&quot;</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">SKILLS_ROOT</span><span class="o">=</span>/path/to/your/skills<span class="w">   </span><span class="c1"># 可选，默认使用 ./skills</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="_6">入门示例</h3>
+<p>下面这段代码是简化版的技能对话示例，基于 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/skillrun/main.go"><code>examples/skillrun/main.go</code></a>。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-3-10">10</a></span>
+<span class="normal"><a href="#__codelineno-3-11">11</a></span>
+<span class="normal"><a href="#__codelineno-3-12">12</a></span>
+<span class="normal"><a href="#__codelineno-3-13">13</a></span>
+<span class="normal"><a href="#__codelineno-3-14">14</a></span>
+<span class="normal"><a href="#__codelineno-3-15">15</a></span>
+<span class="normal"><a href="#__codelineno-3-16">16</a></span>
+<span class="normal"><a href="#__codelineno-3-17">17</a></span>
+<span class="normal"><a href="#__codelineno-3-18">18</a></span>
+<span class="normal"><a href="#__codelineno-3-19">19</a></span>
+<span class="normal"><a href="#__codelineno-3-20">20</a></span>
+<span class="normal"><a href="#__codelineno-3-21">21</a></span>
+<span class="normal"><a href="#__codelineno-3-22">22</a></span>
+<span class="normal"><a href="#__codelineno-3-23">23</a></span>
+<span class="normal"><a href="#__codelineno-3-24">24</a></span>
+<span class="normal"><a href="#__codelineno-3-25">25</a></span>
+<span class="normal"><a href="#__codelineno-3-26">26</a></span>
+<span class="normal"><a href="#__codelineno-3-27">27</a></span>
+<span class="normal"><a href="#__codelineno-3-28">28</a></span>
+<span class="normal"><a href="#__codelineno-3-29">29</a></span>
+<span class="normal"><a href="#__codelineno-3-30">30</a></span>
+<span class="normal"><a href="#__codelineno-3-31">31</a></span>
+<span class="normal"><a href="#__codelineno-3-32">32</a></span>
+<span class="normal"><a href="#__codelineno-3-33">33</a></span>
+<span class="normal"><a href="#__codelineno-3-34">34</a></span>
+<span class="normal"><a href="#__codelineno-3-35">35</a></span>
+<span class="normal"><a href="#__codelineno-3-36">36</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/codeexecutor/local&quot;</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/skill&quot;</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="p">)</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="w">    </span><span class="nx">mdl</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;gpt-4o-mini&quot;</span><span class="p">)</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="w">    </span><span class="nx">repo</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">skill</span><span class="p">.</span><span class="nx">NewFSRepository</span><span class="p">(</span><span class="s">&quot;./skills&quot;</span><span class="p">)</span>
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="w">    </span><span class="nx">exec</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">local</span><span class="p">.</span><span class="nx">New</span><span class="p">()</span>
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a>
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="w">    </span><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="w">        </span><span class="s">&quot;skills-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">mdl</span><span class="p">),</span>
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkills</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">exec</span><span class="p">),</span>
+</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24"></a>
+</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25"></a><span class="w">    </span><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;demo-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26"></a><span class="w">    </span><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27"></a><span class="w">        </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span>
+</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28"></a><span class="w">        </span><span class="s">&quot;user1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;session1&quot;</span><span class="p">,</span>
+</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29"></a><span class="w">        </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;请用合适的 Skill 总结一个文本文件&quot;</span><span class="p">),</span>
+</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31"></a>
+</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">ev</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">ch</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33"></a><span class="w">        </span><span class="c1">// 处理流式响应与工具调用，这里略去细节。</span>
+</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34"></a><span class="w">        </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">ev</span>
+</span><span id="__span-3-35"><a id="__codelineno-3-35" name="__codelineno-3-35"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>这段代码做了几件事：用 <code>WithSkills(repo)</code> 打开 Agent Skills 能力，用 <code>WithCodeExecutor(exec)</code> 接入执行环境，并通过 <code>Runner</code> 发起一次对话，让模型可以在需要时自动选择并调用技能相关工具。</p>
+<p>在实际对话中，一个典型流程大致是：模型先通过概览了解有哪些技能，当你说“用某个 Skill 做 X”或描述一个技能适用的任务时，它调用技能工具加载正文与文档，然后在技能工作区中执行命令并返回结果或输出文件。</p>
+<p>后续章节会从实现角度解释：这些行为在框架内部是如何串起来的。</p>
+<h2 id="_7">架构总览</h2>
+<p>先看一张总览图，帮助你把几个关键模块对上号：</p>
+<pre class="mermaid"><code>flowchart TB
+    subgraph "对话入口"
+        U[用户消息]:::user
+        R[Runner]:::runner
+    end
+
+    subgraph "LLMAgent 层"
+        LA[LLMAgent WithSkills + WithCodeExecutor]:::agent
+        PR[SkillsRequestProcessor 请求预处理]:::proc
+        TLoad[skill_load 等工具]:::tool
+        TRun[skill_run 工具]:::tool
+    end
+
+    subgraph "Skills 仓库"
+        REPO[skill.Repository FSRepository]:::repo
+        FS[技能目录 + SKILL.md]:::fs
+    end
+
+    subgraph "执行层（codeexecutor）"
+        ENG[Engine]:::exec
+        LRT[local.Runtime]:::rt
+        CRT[container.workspaceRuntime]:::rt
+    end
+
+    U --&gt; R --&gt; LA
+    LA --&gt; PR
+    PR --&gt; LA
+    LA --&gt;|工具调用| TLoad
+    LA --&gt;|工具调用| TRun
+    TLoad --&gt; REPO
+    TRun --&gt; REPO
+    TRun --&gt; ENG
+    ENG --&gt; LRT
+    ENG --&gt; CRT
+    REPO --&gt; FS
+
+    classDef user fill:#fff3e0,stroke:#fb8c00,stroke-width:2px
+    classDef runner fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+    classDef agent fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px
+    classDef proc fill:#fce4ec,stroke:#d81b60,stroke-width:2px
+    classDef tool fill:#ede7f6,stroke:#5e35b1,stroke-width:2px
+    classDef repo fill:#f1f8e9,stroke:#7cb342,stroke-width:2px
+    classDef fs fill:#efebe9,stroke:#6d4c41,stroke-width:2px
+    classDef exec fill:#e0f2f1,stroke:#00897b,stroke-width:2px
+    classDef rt fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px</code></pre>
+<p>可以大致理解为三层：</p>
+<ul>
+<li>对话层：<code>Runner</code> + <code>LLMAgent</code>，负责接收用户消息、调用模型和驱动工具流。  </li>
+<li>Skill 管理层：<code>skill.Repository</code> 负责发现并解析 <code>SKILL.md</code>，<code>SkillsRequestProcessor</code> 负责把概览、正文和文档按需注入。  </li>
+<li>执行层：用统一的 <code>Engine</code> 抽象屏蔽“本地执行”和“容器执行”的差异，<code>skill_run</code> 只面对统一接口，不关心底层是本机还是容器。</li>
+</ul>
+<p>接下来我们依次展开这些模块。</p>
+<h2 id="_8">技能目录</h2>
+<h3 id="_9">目录结构</h3>
+<p>在 tRPC-Agent-Go 中，一个 Skill 目录通常类似下面这样：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span>
+<span class="normal"><a href="#__codelineno-4-3">3</a></span>
+<span class="normal"><a href="#__codelineno-4-4">4</a></span>
+<span class="normal"><a href="#__codelineno-4-5">5</a></span>
+<span class="normal"><a href="#__codelineno-4-6">6</a></span>
+<span class="normal"><a href="#__codelineno-4-7">7</a></span>
+<span class="normal"><a href="#__codelineno-4-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a>my-skill/
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a>  SKILL.md
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a>  USAGE.md
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a>  scripts/
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>    run.sh
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a>    helper.py
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a>  assets/
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a>    logo.png
+</span></code></pre></div></td></tr></table></div>
+<p>规范与 Anthropic 的 Agent Skills 规范保持一致，核心要点包括：目录名与 <code>SKILL.md</code> 中 YAML 头部的 <code>name</code> 一致；<code>description</code> 用自然语言描述“技能做什么、何时用”；正文部分是完全自由的 Markdown，用来写使用时机、步骤和命令示例。</p>
+<p>在代码中，<code>skill/repository.go</code> 把这些规范落实到了具体实现：常量 <code>skillFile = "SKILL.md"</code> 定义了 Skill 入口文件名，<code>EnvSkillsRoot</code> 环境变量指定技能仓库根目录，<code>FSRepository</code> 会递归遍历技能根目录，寻找包含 <code>SKILL.md</code> 的子目录。</p>
+<p>相关代码可以在 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/skill/repository.go"><code>skill/repository.go</code></a> 中查看。</p>
+<h3 id="_10">加载流程</h3>
+<p><code>FSRepository</code> 实现了 <code>skill.Repository</code> 接口，用于从文件系统加载技能：</p>
+<ul>
+<li><code>Summaries</code>：返回所有技能的 <code>Summary</code>，只包含 <code>Name</code> 和 <code>Description</code>，对应“概览层”。  </li>
+<li><code>Get</code>：读取完整的 <code>SKILL.md</code> 正文，并收集同目录下所有 <code>.md</code> 或 <code>.txt</code> 文档到 <code>Docs</code> 列表，对应“正文 + 文档层”。  </li>
+<li><code>Path</code>：返回技能目录路径，供后续执行时把整个目录挂载到工作区。</li>
+</ul>
+<p>这一层做的事情可以用下面的图来理解：</p>
+<pre class="mermaid"><code>flowchart LR
+    FSRoot[技能根目录 SKILLS_ROOT]:::fs --&gt; Scan[FSRepository.scan]:::repo
+    Scan --&gt; Index[内存索引 name -&gt; dir]:::repo
+    Index --&gt; Sum[Summaries 概览列表]:::repo
+    Index --&gt; Get[Get name Summary + Body + Docs]:::repo
+    Index --&gt; Path[Path name 技能目录路径]:::repo
+
+    classDef fs fill:#efebe9,stroke:#6d4c41,stroke-width:2px
+    classDef repo fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px</code></pre>
+<p>这样，框架在读取和执行 Skill 时，都不需要理解 YAML 的细节，只要通过接口拿到“概览、正文、文档、目录路径”四类信息即可。</p>
+<h2 id="_11">上下文注入</h2>
+<h3 id="_12">请求预处理</h3>
+<p>当你在创建 <code>LLMAgent</code> 时调用：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span>
+<span class="normal"><a href="#__codelineno-5-3">3</a></span>
+<span class="normal"><a href="#__codelineno-5-4">4</a></span>
+<span class="normal"><a href="#__codelineno-5-5">5</a></span>
+<span class="normal"><a href="#__codelineno-5-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="s">&quot;skills-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">mdl</span><span class="p">),</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkills</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">exec</span><span class="p">),</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>框架内部会自动挂上一条请求预处理链 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/internal/flow/processor/skills.go"><code>internal/flow/processor/skills.go</code></a> 中的 <code>SkillsRequestProcessor</code>。</p>
+<p>它在每次发送给模型的请求前做两件事：</p>
+<ol>
+<li>总是注入“技能概览”。处理器读取 <code>repo.Summaries</code>，生成诸如 <code>Available skills: - name: description</code> 的文本，并将其合并到系统消息（system message）中，同时追加一段“如何安全使用工作区和工具”的指导文案，明确 <code>inputs</code>、<code>out</code> 等目录的约定。  </li>
+<li>按需注入已加载技能的正文和文档。处理器读取会话状态中的临时键 <code>temp:skill:loaded:&lt;name&gt;</code> 和 <code>temp:skill:docs:&lt;name&gt;</code>，对每个被标记为已加载的技能，把 <code>SKILL.md</code> 正文整体拼接到系统消息中，并根据 <code>docs</code> 选择具体 <code>.md</code> 或 <code>.txt</code> 文档，并加上 <code>[Doc] 文件名</code> 的前缀。</li>
+</ol>
+<p>整个过程的时序大致如下：</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant U as 用户
+    participant R as Runner
+    participant A as LLMAgent
+    participant P as SkillsRequestProcessor
+    participant M as 模型(LLM)
+
+    U-&gt;&gt;R: 发送消息
+    R-&gt;&gt;A: 构造请求 Request
+    A-&gt;&gt;P: ProcessRequest
+    P-&gt;&gt;P: 注入技能概览与已加载正文文档
+    P--&gt;&gt;A: 修改后的 Request
+    A-&gt;&gt;M: 调用模型 API
+    M--&gt;&gt;A: 返回响应</code></pre>
+<p>这里有两个关键点：</p>
+<ul>
+<li>概览始终存在，让模型始终知道“有哪些技能可用”，但成本很低。  </li>
+<li>正文与文档按需加载，只有当工具调用明确表明“要用这个技能”时才会注入，从而避免上下文浪费。</li>
+</ul>
+<h3 id="_13">技能状态</h3>
+<p><code>SkillsRequestProcessor</code> 本身并不决定“加载哪个技能”，它只读取会话状态。真正写入状态的是三个工具：</p>
+<ul>
+<li><code>skill_load</code>：声明“加载某个技能的正文，以及要用哪些文档”。  </li>
+<li><code>skill_select_docs</code>：单独调整文档选择（增加、替换或清空）。  </li>
+<li><code>skill_list_docs</code>：列出某技能下所有可选文档文件名。</li>
+</ul>
+<p>这三个工具的实现位于以下文件：</p>
+<ul>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/load.go"><code>tool/skill/load.go</code></a>  </li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/select_docs.go"><code>tool/skill/select_docs.go</code></a>  </li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/list_docs.go"><code>tool/skill/list_docs.go</code></a></li>
+</ul>
+<p>它们的共同点是：不直接操作 Prompt，只读写 <code>Session.State</code> 中的临时键。这样可以保证“选择使用哪个 Skill 和哪些文档”与“如何把这些内容注入系统消息”是解耦的两个步骤：前者由工具负责，后者由请求处理器统一完成。</p>
+<h2 id="_14">工具总览</h2>
+<h3 id="_15">工具注册</h3>
+<p>当你在创建 <code>LLMAgent</code> 时调用 <code>llmagent.WithSkills(repo)</code>，<a href="https://github.com/trpc-group/trpc-agent-go/blob/main/agent/llmagent/llm_agent.go"><code>agent/llmagent/llm_agent.go</code></a> 会自动注册四个技能相关工具：</p>
+<ul>
+<li><code>skill_load</code>  </li>
+<li><code>skill_select_docs</code>  </li>
+<li><code>skill_list_docs</code>  </li>
+<li><code>skill_run</code></li>
+</ul>
+<p>部分逻辑可以用下面的图来概括：</p>
+<pre class="mermaid"><code>flowchart LR
+    O[LLMAgent 选项 WithSkills]:::agent
+    O --&gt; T1[NewLoadTool]:::tool
+    O --&gt; T2[NewSelectDocsTool]:::tool
+    O --&gt; T3[NewListDocsTool]:::tool
+    O --&gt; T4[NewRunTool + CodeExecutor]:::tool
+
+    classDef agent fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px
+    classDef tool fill:#ede7f6,stroke:#5e35b1,stroke-width:2px</code></pre>
+<p>如果你还配置了 <code>WithCodeExecutor(exec)</code>，框架会把这个执行器传给 <code>skill_run</code> 工具；如果没有显式配置，<code>skill_run</code> 会自动退回到默认的本地执行器。</p>
+<h3 id="_16">工具职责</h3>
+<p>结合 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/zh/skill.md"><code>docs/mkdocs/zh/skill.md</code></a> 和 <code>tool/skill/*.go</code> 源码，每个工具的职责大致如下：</p>
+<ul>
+<li><code>skill_load</code>：输入为 <code>skill</code>（必填）、可选的 <code>docs</code> 和 <code>include_all_docs</code>，行为是写入 <code>temp:skill:loaded:&lt;name&gt;</code> 与 <code>temp:skill:docs:&lt;name&gt;</code>，标记“本轮对话需要该技能正文和哪些文档”。  </li>
+<li><code>skill_select_docs</code>：输入为 <code>skill</code>、<code>docs</code>、<code>include_all_docs</code> 和 <code>mode</code>，行为是更新 <code>temp:skill:docs:&lt;name&gt;</code>，支持追加、替换或清空。  </li>
+<li><code>skill_list_docs</code>：输入为 <code>skill</code>，输出为该技能下可用文档文件名列表，方便模型做选择。  </li>
+<li><code>skill_run</code>：输入为 <code>skill</code>、<code>command</code>、<code>cwd</code>、<code>env</code>、<code>output_files</code>、<code>inputs</code>、<code>outputs</code>、<code>timeout</code> 等，行为是在隔离的 Workspace 中执行命令，收集输出文件，并在需要时保存为 Artifact（工件）。</li>
+</ul>
+<p>前三个工具解决“模型知道用哪个 Skill、读哪些文档”的问题，最后一个 <code>skill_run</code> 则负责“真正把脚本跑起来”，是连接技能和执行环境的关键一环。</p>
+<h2 id="_17">执行环境</h2>
+<p>要实现类似 Claude 的 Skills 体验，有一个关键原则：Skill 本身只依赖一个干净的执行接口，而不关心后台到底是本机还是容器。tRPC-Agent-Go 把这一层抽象集中在 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/workspace.go"><code>codeexecutor/workspace.go</code></a> 和 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/metadata.go"><code>codeexecutor/metadata.go</code></a> 中。</p>
+<p>一个简化的结构图可以帮助理解执行抽象内部的组成：</p>
+<pre class="mermaid"><code>flowchart TB
+    subgraph Engine
+        WM[WorkspaceManager]:::exec
+        WFS[WorkspaceFS]:::exec
+        PR[ProgramRunner]:::exec
+    end
+
+    classDef exec fill:#e0f2f1,stroke:#00897b,stroke-width:2px</code></pre>
+<h3 id="_18">执行接口</h3>
+<p>在 <code>codeexecutor</code> 包中，执行接口由一组职责清晰的组件组成：</p>
+<ul>
+<li><code>Workspace</code> 表示一个隔离的执行空间，包含 ID 和物理路径。  </li>
+<li><code>WorkspaceManager</code> 负责创建与清理 Workspace。  </li>
+<li><code>WorkspaceFS</code> 负责在 Workspace 中放置文件、挂载目录、收集输出。  </li>
+<li><code>ProgramRunner</code> 在 Workspace 中运行具体命令。  </li>
+<li><code>Engine</code> 把上述三个接口打包在一起，对外提供统一的执行能力。</li>
+</ul>
+<p>另外还有一个辅助接口 <code>EngineProvider</code>，允许已有的 <code>CodeExecutor</code> 暴露内部的 <code>Engine</code>，供 <code>skill_run</code> 复用。</p>
+<p>Workspace 的标准目录结构（由 <code>EnsureLayout</code> 保证）包括：<code>skills</code> 目录存放只读技能树、<code>work</code> 目录存放可写中间文件、<code>runs</code> 目录存放每次执行的临时目录、<code>out</code> 目录存放收集后的输出文件、<code>metadata.json</code> 记录已挂载技能与输入输出记录。</p>
+<p>运行时会注入一组环境变量，例如 <code>WORKSPACE_DIR</code>、<code>SKILLS_DIR</code>、<code>WORK_DIR</code>、<code>OUTPUT_DIR</code>、<code>RUN_DIR</code> 和当前技能名 <code>SKILL_NAME</code>。Skill 文档可以直接使用这些变量来描述文件路径，例如“从 <code>$WORK_DIR/inputs</code> 读取输入，把结果写入 <code>$OUTPUT_DIR</code>”。</p>
+<h3 id="_19">本地执行</h3>
+<p>本地执行器的 Workspace 实现在 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/local/workspace_runtime.go"><code>codeexecutor/local/workspace_runtime.go</code></a>。它的职责包括：为每个执行 ID 创建工作目录并初始化标准子目录与元数据，将指定的技能目录或输入目录复制或链接到 Workspace，通过 <code>exec.CommandContext</code> 在 Workspace 中运行命令，注入前面提到的环境变量，并根据通配符收集输出文件，在大小或数量超过限制时设置 <code>LimitsHit</code> 标志。</p>
+<p>本地 Runtime 默认启用 <code>AutoInputs</code>，可以把指定的宿主机目录映射到 <code>work/inputs</code> 下，方便 Skill 直接访问外部文件。</p>
+<h3 id="_20">容器执行</h3>
+<p>容器执行器的 Workspace 实现在 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/container/workspace_runtime.go"><code>codeexecutor/container/workspace_runtime.go</code></a>。相比本地执行，它额外做了几件事：为每个 Workspace 在容器内创建一个独立目录，尽可能利用已有的 bind mount（例如把整个 Skills 仓库挂到 <code>/opt/trpc-agent/skills</code>）以“容器内复制”的方式快速挂载技能，通过 Docker 的 Exec 接口运行命令，带有超时与资源限制，并使用 glob 展开和 tar 流将输出文件拉回宿主机。</p>
+<p>对 <code>skill_run</code> 而言，这些差异都是透明的，只要拿到一个实现了 <code>Engine</code> 接口的对象，就能统一调度本地和容器执行环境。</p>
+<h2 id="_21">执行流程</h2>
+<h3 id="_22">入口解析</h3>
+<p><code>skill_run</code> 的核心实现位于 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/tool/skill/run.go"><code>tool/skill/run.go</code></a>。工具首先解析 JSON 参数，校验 <code>skill</code> 和 <code>command</code> 是否为空，然后通过技能仓库解析技能根目录。</p>
+<p>在选择 Engine 时，<code>skill_run</code> 会优先尝试从外部注入的 <code>CodeExecutor</code> 中获取 Engine（当执行器实现了 <code>EngineProvider</code> 接口时），否则退回到一个基于本地 Runtime 的默认 Engine。这样既兼顾了易用性，又允许业务侧按需替换执行后端。</p>
+<h3 id="_23">技能挂载</h3>
+<p><code>RunTool</code> 内部维护了一个 <code>WorkspaceRegistry</code>，对应代码在 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/codeexecutor/registry.go"><code>codeexecutor/registry.go</code></a>，用于按会话 ID 复用 Workspace。这样同一对话中的多次 <code>skill_run</code> 调用可以共享一个 Workspace，中间产出保留在 <code>work</code> 和 <code>out</code> 下，便于技能之间串联。</p>
+<p>挂载 Skill 目录的大致流程是：通过 <code>repo.Path</code> 找到技能根目录，调用 <code>codeexecutor.DirDigest</code> 计算目录摘要，读取 Workspace 的 <code>metadata.json</code> 判断是否已经挂载过相同摘要的技能，如果是则跳过复制，否则将技能目录挂载到 Workspace 的 <code>skills/&lt;name&gt;</code>，在技能根目录下创建指向 <code>out</code>、<code>work</code>、<code>work/inputs</code> 的符号链接，最后把技能目录树（除符号链接外）设为只读。</p>
+<p>从命令行视角看，技能脚本认为自己的根目录就是 <code>skills/&lt;name&gt;</code>，但写入 <code>out</code>、<code>work</code>、<code>inputs</code> 实际上都落在 Workspace 共享目录中，既安全又方便多个技能协同。</p>
+<h3 id="_24">结果收集</h3>
+<p><code>skill_run</code> 支持两种输出收集方式：</p>
+<ol>
+<li>传统的 <code>output_files</code>：传入通配符列表（例如 <code>["out/*.txt"]</code> 或 <code>$OUTPUT_DIR/*.csv</code>），底层通过 <code>WorkspaceFS.Collect</code> 收集匹配文件，并返回文件名、内容和 MIME 类型。  </li>
+<li>声明式的 <code>outputs</code>：通过 <code>OutputSpec</code> 指定通配符、是否内联内容、是否保存为 Artifact，以及最大文件数和大小，底层通过 <code>CollectOutputs</code> 返回 <code>OutputManifest</code>，并在需要时调用 Artifact 服务保存文件。</li>
+</ol>
+<p>输入通过 <code>inputs</code> 数组声明，每个 <code>InputSpec</code> 可以来自 <code>artifact://</code>、<code>host://</code>、<code>workspace://</code> 或 <code>skill://</code> 等不同来源。具体实现分布在 <code>codeexecutor</code> 包和本地、容器 runtime 中。</p>
+<p>最终，<code>skill_run</code> 返回一个结构化结果 <code>runOutput</code>，包括 <code>stdout</code>、<code>stderr</code>、<code>exit_code</code>、<code>timed_out</code>、<code>duration_ms</code>、<code>output_files</code> 以及可选的 <code>artifact_files</code>。</p>
+<p>整个执行链可以用以下时序图概括：</p>
+<pre class="mermaid"><code>sequenceDiagram
+    participant M as 模型(LLM)
+    participant T as skill_run 工具
+    participant E as Engine
+    participant WM as WorkspaceManager
+    participant FS as WorkspaceFS
+    participant PR as ProgramRunner
+
+    M-&gt;&gt;T: 工具调用 {skill, command, ...}
+    T-&gt;&gt;T: parseRunArgs 校验参数
+    T-&gt;&gt;E: ensureEngine
+    T-&gt;&gt;WM: Acquire Workspace
+    WM--&gt;&gt;T: Workspace
+    T-&gt;&gt;FS: StageDirectory 挂载技能目录
+    T-&gt;&gt;FS: StageInputs 映射外部输入
+    T-&gt;&gt;PR: RunProgram
+    PR--&gt;&gt;T: RunResult
+    T-&gt;&gt;FS: Collect 或 CollectOutputs
+    FS--&gt;&gt;T: 文件和 Manifest
+    T--&gt;&gt;M: runOutput JSON</code></pre>
+<h2 id="_25">交互示例</h2>
+<p>仓库中提供了一个完整的交互式技能对话示例工程 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/skillrun"><code>examples/skillrun</code></a>。这个示例展示了如何在命令行下与具备 Skills 能力的 Agent 进行对话。</p>
+<p>它做了几件事：使用 OpenAI 兼容的模型客户端 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/model/openai/openai.go"><code>model/openai/openai.go</code></a>，通过 <code>skill.NewFSRepository</code> 加载技能仓库（默认 <code>./skills</code>，也可通过 <code>SKILLS_ROOT</code> 指定），根据命令行参数选择本地或容器执行器，创建带 Skills 的 <code>LLMAgent</code> 并注入指导性系统提示词，使用 <code>Runner</code> 流式消费模型输出，同时打印工具调用和工具响应，包括 <code>skill_run</code> 返回的 <code>artifact_files</code>。</p>
+<p>如果你希望体验 Anthropic 官方示例 Skill，可以将仓库 <a href="https://github.com/anthropics/skills"><code>anthropics/skills</code></a> 克隆到本地，把环境变量 <code>SKILLS_ROOT</code> 指向该目录，然后在 <code>examples/skillrun</code> 下运行示例，就可以在 tRPC-Agent-Go 中直接使用这些 Skills。</p>
+<p>需要注意的是，Skill 的语义完全来自 <code>SKILL.md</code> 和文档本身，框架只是提供“按需注入 + 安全执行”的基础能力。编写 Skill 时，你只需要关注如何用自然语言清楚描述任务及步骤，以及如何组织 <code>scripts</code> 和 <code>out</code> 目录保证命令可重现。</p>
+<h2 id="_26">扩展运行</h2>
+<p>如果你希望在现有的本地和容器实现之外，再接入新的运行时（例如 Kubernetes Pod、远程沙箱等），可以沿着下面的思路来做。</p>
+<ol>
+<li>实现 Workspace 接口三件套：实现自定义的 <code>WorkspaceManager</code>、<code>WorkspaceFS</code> 和 <code>ProgramRunner</code>，负责创建与清理 Workspace、管理文件和目录、在 Workspace 内运行命令。  </li>
+<li>封装为 Engine：使用 <code>codeexecutor.NewEngine</code> 把上述三个组件打包成一个新的 <code>Engine</code>。  </li>
+<li>通过 <code>LLMAgent</code> 注入：将新的 <code>CodeExecutor</code> 或 Engine 注入 <code>LLMAgent.WithCodeExecutor</code>，或者直接在自定义 Agent 中以 <code>Engine</code> 形式传给 <code>skill_run</code>。</li>
+</ol>
+<p>由于 <code>skill_run</code> 完全基于 <code>Engine</code> 抽象工作，一旦新的执行后端实现了 Workspace 接口，所有现有 Skill 都可以无缝迁移，无需改动 <code>SKILL.md</code>。</p>
+<h2 id="_27">能力对比</h2>
+<p>除了 Skills，tRPC-Agent-Go 还内置了一条“自动执行代码块”的路径，处理模型回答中的代码块并自动执行，对应的逻辑在 <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/internal/flow/processor/codeexecution.go"><code>internal/flow/processor/codeexecution.go</code></a> 中。</p>
+<p>两者的区别和定位大致如下：</p>
+<ul>
+<li>自动代码执行适合“临时写点代码试试”的轻量场景：模型在回答中输出三引号代码块（例如 ```python），框架自动提取并运行，返回结果。  </li>
+<li>Skill 执行适合“可复用的任务模板”：脚本始终存放在技能目录中，模型只写命令，不写脚本正文，通过 <code>skill_run</code> 在 Workspace 中执行，并可收集输出文件和 Artifact。</li>
+</ul>
+<p>从实现上看，两者都复用 <code>codeexecutor</code> 的 Workspace 抽象，只是入口不同：自动代码执行从模型响应处理器进入，<code>skill_run</code> 从工具调用进入。</p>
+<h2 id="_28">总结</h2>
+<p>回顾全文，tRPC-Agent-Go 的 Agent Skills 能力可以总结为几条主线：</p>
+<ul>
+<li>信息组织：用 <code>SKILL.md</code> 配合文档和脚本构成三层信息模型，概览始终存在，正文与文档按需注入，脚本只在工作区执行。  </li>
+<li>请求注入：<code>SkillsRequestProcessor</code> 基于会话状态自动把概览、已加载技能正文和选定文档合并进系统消息。  </li>
+<li>工具协作：<code>skill_load</code>、<code>skill_select_docs</code>、<code>skill_list_docs</code> 负责“选用哪一个 Skill 和哪些文档”，<code>skill_run</code> 负责“在 Workspace 中真正执行命令并收集结果”。  </li>
+<li>执行抽象：<code>codeexecutor</code> 用 Workspace 与 Engine 抽象屏蔽本地与容器差异，让 Skill 只依赖统一执行接口。  </li>
+<li>扩展能力：只要实现 Workspace 三件套并封装为新 Engine，所有现有 Skill 都可以迁移到新的执行后端，无需改写 <code>SKILL.md</code>。</li>
+</ul>
+<p>对使用者而言，你只需要：准备好符合规范的 Skills 目录，在 <code>LLMAgent</code> 上配置 <code>WithSkills</code> 与合适的 <code>CodeExecutor</code>，像普通聊天一样与 Agent 交互，自然表达你的需求或希望使用的技能，模型会在合适的时机自行选择并调用相关工具。</p>
+<p>其余的发现、注入、执行、收集与持久化工作，都由 tRPC-Agent-Go 在框架层统一完成。</p>
+<p>欢迎大家在实际业务中试用 Agent Skills 能力，把高频任务沉淀为可复用的技能包，逐步构建自己的技能库。如需更多使用示例和最佳实践，可参考以下文档与仓库。</p>
+<p><strong>代码仓库</strong>：
+- <a href="https://github.com/trpc-group/trpc-agent-go">tRPC-Agent-Go 仓库</a></p>
+<p><strong>Skills 相关文档</strong>：
+- Skills 功能说明与用法示例：<a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/zh/skill.md"><code>docs/mkdocs/zh/skill.md</code></a>
+- 交互式示例工程：<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/skillrun"><code>examples/skillrun</code></a></p>
+<p>欢迎通过 GitHub Issues 交流框架使用经验、分享实践案例、讨论改进建议。</p>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="最后更新">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月9日 08:42:05 UTC">2026-06-09 08:42:05</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="创建日期">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月9日 08:42:05 UTC">2026-06-09 08:42:05</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+  
+
+
+
+  <form class="md-feedback" name="feedback" hidden>
+    <fieldset>
+      <legend class="md-feedback__title">
+        Was this page helpful?
+      </legend>
+      <div class="md-feedback__inner">
+        <div class="md-feedback__list">
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page was helpful" data-md-value="1">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m7 0c0 .8-.7 1.5-1.5 1.5S14 10.3 14 9.5 14.7 8 15.5 8s1.5.7 1.5 1.5m-5 7.73c-1.75 0-3.29-.73-4.19-1.81L9.23 14c.45.72 1.52 1.23 2.77 1.23s2.32-.51 2.77-1.23l1.42 1.42c-.9 1.08-2.44 1.81-4.19 1.81"/></svg>
+            </button>
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page could be improved" data-md-value="0">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10m-6.5-4c.8 0 1.5.7 1.5 1.5s-.7 1.5-1.5 1.5-1.5-.7-1.5-1.5.7-1.5 1.5-1.5M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m2 4.5c1.75 0 3.29.72 4.19 1.81l-1.42 1.42C14.32 16.5 13.25 16 12 16s-2.32.5-2.77 1.23l-1.42-1.42C8.71 14.72 10.25 14 12 14"/></svg>
+            </button>
+          
+        </div>
+        <div class="md-feedback__note">
+          
+            <div data-md-value="1" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!
+            </div>
+          
+            <div data-md-value="0" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!<br>Please help us improve by opening an <a href="https://github.com/trpc-group/trpc-agent-go/issues/new" target="_blank" rel="noopener">issue</a>.
+            </div>
+          
+        </div>
+      </div>
+    </fieldset>
+  </form>
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+        
+          
+          <a href="../agui/" class="md-footer__link md-footer__link--prev" aria-label="上一页: 快速构建基于 AG-UI 的 Agent 服务">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                上一页
+              </span>
+              <div class="md-ellipsis">
+                快速构建基于 AG-UI 的 Agent 服务
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../evaluation/" class="md-footer__link md-footer__link--next" aria-label="下一页: AI Agent 自动化评估范式与工程实践全解析">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                下一页
+              </span>
+              <div class="md-ellipsis">
+                AI Agent 自动化评估范式与工程实践全解析
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+        <script src="../../../assets/javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,4026 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/blog/agui/">
+      
+      
+        <link rel="prev" href="../graphagent/">
+      
+      
+        <link rel="next" href="../skill/">
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
+    
+    
+      
+        <title>Quickly Build AG-UI-Based Agent Services - tRPC-Agent-Go</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+  
+
+
+  
+  
+
+<script id="__analytics">function __md_analytics(){function e(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],e("js",new Date),e("config",""),document.addEventListener("DOMContentLoaded",(function(){document.forms.search&&document.forms.search.query.addEventListener("blur",(function(){this.value&&e("event","search",{search_term:this.value})}));document$.subscribe((function(){var t=document.forms.feedback;if(void 0!==t)for(var a of t.querySelectorAll("[type=submit]"))a.addEventListener("click",(function(a){a.preventDefault();var n=document.location.pathname,d=this.getAttribute("data-md-value");e("event","feedback",{page:n,data:d}),t.firstElementChild.disabled=!0;var r=t.querySelector(".md-feedback__note [data-md-value='"+d+"']");r&&(r.hidden=!1)})),t.hidden=!1})),location$.subscribe((function(t){e("config","",{page_path:t.pathname})}))}));var t=document.createElement("script");t.async=!0,t.src="https://www.googletagmanager.com/gtag/js?id=",document.getElementById("__analytics").insertAdjacentElement("afterEnd",t)}</script>
+  
+    <script>"undefined"!=typeof __md_analytics&&__md_analytics()</script>
+  
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#trpc-agent-go-quickly-build-ag-ui-based-agent-services" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../assets/img/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            tRPC-Agent-Go
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Quickly Build AG-UI-Based Agent Services
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="Select language">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="../../zh/blog/agui/" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/trpc-group/trpc-agent-go" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Overview
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agent/" class="md-tabs__link">
+          
+  
+  
+  Components
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../gateway/" class="md-tabs__link">
+          
+  
+  
+  Server
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../observability/" class="md-tabs__link">
+          
+  
+  
+  Observability
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../ecosystem/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Ecosystem
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../trpcagentgo/" class="md-tabs__link">
+          
+  
+  
+  Blog
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../assets/img/logo.png" alt="logo">
+
+    </a>
+    tRPC-Agent-Go
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/trpc-group/trpc-agent-go" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Components
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            Components
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_1">
+            <span class="md-nav__icon md-icon"></span>
+            Agent
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../multiagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multi Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../taskrun/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Task Run Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Team
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Custom Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dify/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Dify Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../claudecode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Claude Code Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codex/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Codex Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Runner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeexecutor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Code Executor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Error Handling
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Model
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../prompt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Prompt Template
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../callbacks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Callbacks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plugin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Plugins
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../artifact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Artifact
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Skill
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tool
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_13" id="__nav_2_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Session
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_13">
+            <span class="md-nav__icon md-icon"></span>
+            Session
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Session Summary
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/sqlite/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLite Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/redis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Redis Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mysql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/tdsql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TDSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/postgres/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ClickHouse Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_14" id="__nav_2_14_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Knowledge
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_14">
+            <span class="md-nav__icon md-icon"></span>
+            Knowledge
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/embedder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embedder
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/reranker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reranker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/query-enhancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query Enhancer
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Source
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Filter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/extractor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Extractor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Management
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/ocr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OCR
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_14_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_14_10" id="__nav_2_14_10_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    VectorStore
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_14_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_14_10">
+            <span class="md-nav__icon md-icon"></span>
+            VectorStore
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/tcvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TcVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Elasticsearch
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/qdrant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Qdrant
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/milvus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Milvus
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Troubleshooting
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../planner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Planner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../event/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Event
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PromptIter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Server
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Server
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Gateway
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    AG-UI
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            AG-UI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/chat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Real-Time Conversation Route
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Messages Snapshot Route
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/cancel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Cancel Route
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2a/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2UI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../openclaw-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Observability
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Observability
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telemetry-multimodal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multimodal Telemetry
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ecosystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Ecosystem
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    Blog
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            Blog
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trpcagentgo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A Go Agent Framework for Building Intelligent AI Applications
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graphagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    GraphAgent Seamlessly Combines AI Workflows and Agents
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Quickly Build AG-UI-Based Agent Services
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Quickly Build AG-UI-Based Agent Services
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#introduction" class="md-nav__link">
+    <span class="md-ellipsis">
+      Introduction
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ag-ui-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      AG-UI Overview
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="AG-UI Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#protocol-positioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Protocol Positioning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#event-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event Model
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#open-source-ecosystem" class="md-nav__link">
+    <span class="md-ellipsis">
+      Open Source Ecosystem
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick Integration
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Quick Integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#agent-development" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent Development
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#start-an-ag-ui-service-over-http" class="md-nav__link">
+    <span class="md-ellipsis">
+      Start an AG-UI Service over HTTP
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#copilotkit-joint-debugging" class="md-nav__link">
+    <span class="md-ellipsis">
+      CopilotKit Joint Debugging
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#core-concepts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Core Concepts
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Core Concepts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overall-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overall Design
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#adapter" class="md-nav__link">
+    <span class="md-ellipsis">
+      Adapter
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#translator" class="md-nav__link">
+    <span class="md-ellipsis">
+      Translator
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runner" class="md-nav__link">
+    <span class="md-ellipsis">
+      Runner
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#service" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#custom-communication-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom Communication Protocol
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-translator" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom Translator
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-useridresolver" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom UserIDResolver
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#event-translation-callbacks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event Translation Callbacks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runagentinput-hook" class="md-nav__link">
+    <span class="md-ellipsis">
+      RunAgentInput Hook
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      References
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-and-communication" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage and Communication
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A Go-Native Implementation of the Anthropic Agent Skills Specification
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A Complete Guide to AI Agent Automated Evaluation Paradigms and Engineering Practice
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openclaw/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Building an Enterprise-Grade, Secure, and Controllable OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A Complete Guide to Automated Prompt Iteration and Engineering Practice for AI Agents
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#introduction" class="md-nav__link">
+    <span class="md-ellipsis">
+      Introduction
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ag-ui-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      AG-UI Overview
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="AG-UI Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#protocol-positioning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Protocol Positioning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#event-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event Model
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#open-source-ecosystem" class="md-nav__link">
+    <span class="md-ellipsis">
+      Open Source Ecosystem
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick Integration
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Quick Integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#agent-development" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent Development
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#start-an-ag-ui-service-over-http" class="md-nav__link">
+    <span class="md-ellipsis">
+      Start an AG-UI Service over HTTP
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#copilotkit-joint-debugging" class="md-nav__link">
+    <span class="md-ellipsis">
+      CopilotKit Joint Debugging
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#core-concepts" class="md-nav__link">
+    <span class="md-ellipsis">
+      Core Concepts
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Core Concepts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#overall-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overall Design
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#adapter" class="md-nav__link">
+    <span class="md-ellipsis">
+      Adapter
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#translator" class="md-nav__link">
+    <span class="md-ellipsis">
+      Translator
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runner" class="md-nav__link">
+    <span class="md-ellipsis">
+      Runner
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#service" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#custom-communication-protocol" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom Communication Protocol
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-translator" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom Translator
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#custom-useridresolver" class="md-nav__link">
+    <span class="md-ellipsis">
+      Custom UserIDResolver
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#event-translation-callbacks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event Translation Callbacks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#runagentinput-hook" class="md-nav__link">
+    <span class="md-ellipsis">
+      RunAgentInput Hook
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      References
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-and-communication" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage and Communication
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/blog/agui.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/blog/agui.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="trpc-agent-go-quickly-build-ag-ui-based-agent-services">tRPC-Agent-Go: Quickly Build AG-UI-Based Agent Services</h1>
+<blockquote>
+<p>When bringing AI Agents into production, a key end-to-end challenge is how to connect the reasoning process with the user interface while keeping the protocol layer extensible. The AG-UI protocol provides a lightweight and open solution, and tRPC-Agent-Go delivers a complete engineering practice for it. This article starts with an overview of the AG-UI protocol, moves on to a minimal integration practice, then breaks down the core modules and explains highly customizable usage patterns to help you quickly connect Agents to the AG-UI protocol and bridge the last mile between Agents and users.</p>
+</blockquote>
+<h2 id="introduction">Introduction</h2>
+<p><a href="https://github.com/trpc-group/trpc-agent-go/">tRPC-Agent-Go</a> is an autonomous multi-Agent framework for Go, with capabilities including tool calling, session/memory/artifact management, multi-Agent collaboration, graph orchestration, knowledge bases, and observability. The growth of <a href="https://github.com/trpc-group/trpc-agent-go/">tRPC-Agent-Go</a> depends on everyone's support. You are welcome to Star the project and join the community in building it together.</p>
+<p>Next, this article starts with an overview of the AG-UI protocol, moves on to a minimal integration practice, then breaks down the core modules and explains highly customizable usage patterns to help you quickly connect Agents to the AG-UI protocol and bridge the last mile between Agents and users.</p>
+<h2 id="ag-ui-overview">AG-UI Overview</h2>
+<h3 id="protocol-positioning">Protocol Positioning</h3>
+<p>AG-UI is an open, lightweight, event-based protocol that standardizes how Agents connect with user interface applications. It emphasizes simplicity and flexibility, supports any event transport layer such as SSE, WebSocket, and WebHooks, and uses a relaxed event format matching model to enable seamless integration among Agents, real-time user context, and user interfaces.</p>
+<p>Together with MCP and A2A, the AG-UI protocol forms the Agent communication protocol stack. It bridges the last mile between Agents and users. The following figure shows the position and responsibilities of the three protocols in the protocol stack.</p>
+<p><img alt="agui" src="https://raw.githubusercontent.com/ag-ui-protocol/ag-ui/775740d67c5bb632bde49da3fc0536d4884f08ac/docs/images/ai-protocol-stack.png" /></p>
+<ul>
+<li>MCP protocol: A communication protocol that standardizes how Agents call tools</li>
+<li>A2A protocol: A communication protocol that standardizes collaboration between Agents</li>
+<li>AG‑UI protocol: A communication protocol that standardizes the interaction interface between Agents and users</li>
+</ul>
+<p>In plain terms, the AG‑UI protocol abstracts the interaction between an Agent and the user interface into an event stream. A single Agent invocation starts with <code>RunStarted</code> and ends with <code>RunFinished</code> or <code>RunError</code>; during the run, text deltas, tool calls, and state synchronization are continuously sent to the frontend as typed events.</p>
+<h3 id="event-model">Event Model</h3>
+<p>The AG‑UI protocol uses an event-driven model with clearly grouped event types, including lifecycle, text messages, tool calls, state management, and extension events. Multiple event types within each group work together to build a complete cycle.</p>
+<ul>
+<li>Lifecycle events: <code>RunStarted</code>, <code>RunFinished</code>, <code>RunError</code></li>
+<li>Text message events: <code>TextMessageStart</code>, <code>TextMessageContent</code>, <code>TextMessageEnd</code></li>
+<li>Tool call events: <code>ToolCallStart</code>, <code>ToolCallArgs</code>, <code>ToolCallEnd</code>, <code>ToolCallResult</code></li>
+<li>State synchronization events: <code>StateSnapshot</code>, <code>StateDelta</code>, <code>MessagesSnapshot</code></li>
+<li>Extension event: <code>Custom</code></li>
+</ul>
+<p>From the perspective of an event stream, a typical event sequence starts with <code>RunStarted</code>. While generating content, the Agent pushes deltas with <code>TextMessageContent</code>; when a tool is needed, it first announces the call with <code>ToolCallStart</code>, then pushes <code>ToolCallArgs</code>, and sends back <code>ToolCallResult</code> after the tool completes; finally, the sequence ends with <code>RunFinished</code>.</p>
+<p>For example, the SSE frames roughly look like this, where the <code>data:</code> content is a single event in JSON format.</p>
+<div class="language-http highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-0-10">10</a></span>
+<span class="normal"><a href="#__codelineno-0-11">11</a></span>
+<span class="normal"><a href="#__codelineno-0-12">12</a></span>
+<span class="normal"><a href="#__codelineno-0-13">13</a></span>
+<span class="normal"><a href="#__codelineno-0-14">14</a></span>
+<span class="normal"><a href="#__codelineno-0-15">15</a></span>
+<span class="normal"><a href="#__codelineno-0-16">16</a></span>
+<span class="normal"><a href="#__codelineno-0-17">17</a></span>
+<span class="normal"><a href="#__codelineno-0-18">18</a></span>
+<span class="normal"><a href="#__codelineno-0-19">19</a></span>
+<span class="normal"><a href="#__codelineno-0-20">20</a></span>
+<span class="normal"><a href="#__codelineno-0-21">21</a></span>
+<span class="normal"><a href="#__codelineno-0-22">22</a></span>
+<span class="normal"><a href="#__codelineno-0-23">23</a></span>
+<span class="normal"><a href="#__codelineno-0-24">24</a></span>
+<span class="normal"><a href="#__codelineno-0-25">25</a></span>
+<span class="normal"><a href="#__codelineno-0-26">26</a></span>
+<span class="normal"><a href="#__codelineno-0-27">27</a></span>
+<span class="normal"><a href="#__codelineno-0-28">28</a></span>
+<span class="normal"><a href="#__codelineno-0-29">29</a></span>
+<span class="normal"><a href="#__codelineno-0-30">30</a></span>
+<span class="normal"><a href="#__codelineno-0-31">31</a></span>
+<span class="normal"><a href="#__codelineno-0-32">32</a></span>
+<span class="normal"><a href="#__codelineno-0-33">33</a></span>
+<span class="normal"><a href="#__codelineno-0-34">34</a></span>
+<span class="normal"><a href="#__codelineno-0-35">35</a></span>
+<span class="normal"><a href="#__codelineno-0-36">36</a></span>
+<span class="normal"><a href="#__codelineno-0-37">37</a></span>
+<span class="normal"><a href="#__codelineno-0-38">38</a></span>
+<span class="normal"><a href="#__codelineno-0-39">39</a></span>
+<span class="normal"><a href="#__codelineno-0-40">40</a></span>
+<span class="normal"><a href="#__codelineno-0-41">41</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="err">id: RUN_STARTED_1761536557195</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="err">data: {&quot;type&quot;:&quot;RUN_STARTED&quot;,&quot;threadId&quot;:&quot;session-01&quot;,&quot;runId&quot;:&quot;invocation-01&quot;}</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="err">id: TEXT_MESSAGE_START_1761536558081</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="err">data: {&quot;type&quot;:&quot;TEXT_MESSAGE_START&quot;,&quot;messageId&quot;:&quot;message-01&quot;,&quot;role&quot;:&quot;assistant&quot;}</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="err">id: TEXT_MESSAGE_CONTENT_1761536558294</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="err">data: {&quot;type&quot;:&quot;TEXT_MESSAGE_CONTENT&quot;,&quot;messageId&quot;:&quot;message-01&quot;,&quot;delta&quot;:&quot;I&#39;ll calculate &quot;}</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="err">id: TEXT_MESSAGE_CONTENT_1761536558370</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="err">data: {&quot;type&quot;:&quot;TEXT_MESSAGE_CONTENT&quot;,&quot;messageId&quot;:&quot;message-01&quot;,&quot;delta&quot;:&quot;2 to the power of 3.&quot;}</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="err">id: TEXT_MESSAGE_END_1761536559693</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="err">data: {&quot;type&quot;:&quot;TEXT_MESSAGE_END&quot;,&quot;messageId&quot;:&quot;message-01&quot;}</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="err">id: TOOL_CALL_START_1761536559693</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="err">data: {&quot;type&quot;:&quot;TOOL_CALL_START&quot;,&quot;toolCallId&quot;:&quot;call-01&quot;,&quot;toolCallName&quot;:&quot;calculator&quot;,&quot;parentMessageId&quot;:&quot;message-01&quot;}</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="err">id: TOOL_CALL_ARGS_1761536559693</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="err">data: {&quot;type&quot;:&quot;TOOL_CALL_ARGS&quot;,&quot;toolCallId&quot;:&quot;call-01&quot;,&quot;delta&quot;:&quot;{\&quot;a\&quot;: 2, \&quot;b\&quot;: 3, \&quot;operation\&quot;: \&quot;power\&quot;}&quot;}</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="err">id: TOOL_CALL_END_1761536559693</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="err">data: {&quot;type&quot;:&quot;TOOL_CALL_END&quot;,&quot;toolCallId&quot;:&quot;call-01&quot;}</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a>
+</span><span id="__span-0-25"><a id="__codelineno-0-25" name="__codelineno-0-25"></a><span class="err">id: TOOL_CALL_RESULT_1761536559693</span>
+</span><span id="__span-0-26"><a id="__codelineno-0-26" name="__codelineno-0-26"></a><span class="err">data: {&quot;type&quot;:&quot;TOOL_CALL_RESULT&quot;,&quot;messageId&quot;:&quot;message-01&quot;,&quot;toolCallId&quot;:&quot;call-01&quot;,&quot;content&quot;:&quot;{\&quot;result\&quot;:8}&quot;,&quot;role&quot;:&quot;tool&quot;}</span>
+</span><span id="__span-0-27"><a id="__codelineno-0-27" name="__codelineno-0-27"></a>
+</span><span id="__span-0-28"><a id="__codelineno-0-28" name="__codelineno-0-28"></a><span class="err">id: TEXT_MESSAGE_START_1761536560773</span>
+</span><span id="__span-0-29"><a id="__codelineno-0-29" name="__codelineno-0-29"></a><span class="err">data: {&quot;type&quot;:&quot;TEXT_MESSAGE_START&quot;,&quot;messageId&quot;:&quot;message-02&quot;,&quot;role&quot;:&quot;assistant&quot;}</span>
+</span><span id="__span-0-30"><a id="__codelineno-0-30" name="__codelineno-0-30"></a>
+</span><span id="__span-0-31"><a id="__codelineno-0-31" name="__codelineno-0-31"></a><span class="err">id: TEXT_MESSAGE_CONTENT_1761536560977</span>
+</span><span id="__span-0-32"><a id="__codelineno-0-32" name="__codelineno-0-32"></a><span class="err">data: {&quot;type&quot;:&quot;TEXT_MESSAGE_CONTENT&quot;,&quot;messageId&quot;:&quot;message-02&quot;,&quot;delta&quot;:&quot;2 to the power of 3&quot;}</span>
+</span><span id="__span-0-33"><a id="__codelineno-0-33" name="__codelineno-0-33"></a>
+</span><span id="__span-0-34"><a id="__codelineno-0-34" name="__codelineno-0-34"></a><span class="err">id: TEXT_MESSAGE_CONTENT_1761536561050</span>
+</span><span id="__span-0-35"><a id="__codelineno-0-35" name="__codelineno-0-35"></a><span class="err">data: {&quot;type&quot;:&quot;TEXT_MESSAGE_CONTENT&quot;,&quot;messageId&quot;:&quot;message-02&quot;,&quot;delta&quot;:&quot; equals 8.&quot;}</span>
+</span><span id="__span-0-36"><a id="__codelineno-0-36" name="__codelineno-0-36"></a>
+</span><span id="__span-0-37"><a id="__codelineno-0-37" name="__codelineno-0-37"></a><span class="err">id: TEXT_MESSAGE_END_1761536561439</span>
+</span><span id="__span-0-38"><a id="__codelineno-0-38" name="__codelineno-0-38"></a><span class="err">data: {&quot;type&quot;:&quot;TEXT_MESSAGE_END&quot;,&quot;messageId&quot;:&quot;message-02&quot;}</span>
+</span><span id="__span-0-39"><a id="__codelineno-0-39" name="__codelineno-0-39"></a>
+</span><span id="__span-0-40"><a id="__codelineno-0-40" name="__codelineno-0-40"></a><span class="err">id: RUN_FINISHED_1761536561439</span>
+</span><span id="__span-0-41"><a id="__codelineno-0-41" name="__codelineno-0-41"></a><span class="err">data: {&quot;type&quot;:&quot;RUN_FINISHED&quot;,&quot;threadId&quot;:&quot;session-01&quot;,&quot;runId&quot;:&quot;invocation-01&quot;}</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="open-source-ecosystem">Open Source Ecosystem</h3>
+<p><a href="https://github.com/ag-ui-protocol/ag-ui">AG‑UI</a> provides SDKs for multiple languages, including TypeScript, Python, Golang, Kotlin, and Java.</p>
+<p>Agent frameworks such as LangGraph, CrewAI, Agno, and ADK have already integrated with AG‑UI through official or community-maintained adapters and can output AG-UI protocol event streams.</p>
+<p>On the frontend, clients that implement the AG‑UI protocol, such as <a href="https://www.npmjs.com/package/@ag-ui/client">@ag-ui/client</a> and <a href="https://github.com/CopilotKit/CopilotKit">CopilotKit</a>, can be used to consume events.</p>
+<p>In addition, we have also contributed improvements to the Go SDK in the official AG-UI repository.</p>
+<ul>
+<li><a href="https://github.com/ag-ui-protocol/ag-ui/pull/560">feat: add http.Flusher fallback for SSEWriter in Golang SDK</a></li>
+<li><a href="https://github.com/ag-ui-protocol/ag-ui/pull/339/commits/1d05c81e442acaf2abf31e70d10d90f1cf757a01">fix: event missing EventTypeToolCallResult</a></li>
+</ul>
+<p>For more supported cases, see the <a href="https://github.com/ag-ui-protocol/ag-ui?tab=readme-ov-file#-supported-frameworks">official documentation</a>.</p>
+<h2 id="quick-integration">Quick Integration</h2>
+<h3 id="agent-development">Agent Development</h3>
+<p>The following example builds an Agent with a calculator tool.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-1-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-1-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-1-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-1-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-1-10">10</a></span>
+<span class="normal"><a href="#__codelineno-1-11">11</a></span>
+<span class="normal"><a href="#__codelineno-1-12">12</a></span>
+<span class="normal"><a href="#__codelineno-1-13">13</a></span>
+<span class="normal"><a href="#__codelineno-1-14">14</a></span>
+<span class="normal"><a href="#__codelineno-1-15">15</a></span>
+<span class="normal"><a href="#__codelineno-1-16">16</a></span>
+<span class="normal"><a href="#__codelineno-1-17">17</a></span>
+<span class="normal"><a href="#__codelineno-1-18">18</a></span>
+<span class="normal"><a href="#__codelineno-1-19">19</a></span>
+<span class="normal"><a href="#__codelineno-1-20">20</a></span>
+<span class="normal"><a href="#__codelineno-1-21">21</a></span>
+<span class="normal"><a href="#__codelineno-1-22">22</a></span>
+<span class="normal"><a href="#__codelineno-1-23">23</a></span>
+<span class="normal"><a href="#__codelineno-1-24">24</a></span>
+<span class="normal"><a href="#__codelineno-1-25">25</a></span>
+<span class="normal"><a href="#__codelineno-1-26">26</a></span>
+<span class="normal"><a href="#__codelineno-1-27">27</a></span>
+<span class="normal"><a href="#__codelineno-1-28">28</a></span>
+<span class="normal"><a href="#__codelineno-1-29">29</a></span>
+<span class="normal"><a href="#__codelineno-1-30">30</a></span>
+<span class="normal"><a href="#__codelineno-1-31">31</a></span>
+<span class="normal"><a href="#__codelineno-1-32">32</a></span>
+<span class="normal"><a href="#__codelineno-1-33">33</a></span>
+<span class="normal"><a href="#__codelineno-1-34">34</a></span>
+<span class="normal"><a href="#__codelineno-1-35">35</a></span>
+<span class="normal"><a href="#__codelineno-1-36">36</a></span>
+<span class="normal"><a href="#__codelineno-1-37">37</a></span>
+<span class="normal"><a href="#__codelineno-1-38">38</a></span>
+<span class="normal"><a href="#__codelineno-1-39">39</a></span>
+<span class="normal"><a href="#__codelineno-1-40">40</a></span>
+<span class="normal"><a href="#__codelineno-1-41">41</a></span>
+<span class="normal"><a href="#__codelineno-1-42">42</a></span>
+<span class="normal"><a href="#__codelineno-1-43">43</a></span>
+<span class="normal"><a href="#__codelineno-1-44">44</a></span>
+<span class="normal"><a href="#__codelineno-1-45">45</a></span>
+<span class="normal"><a href="#__codelineno-1-46">46</a></span>
+<span class="normal"><a href="#__codelineno-1-47">47</a></span>
+<span class="normal"><a href="#__codelineno-1-48">48</a></span>
+<span class="normal"><a href="#__codelineno-1-49">49</a></span>
+<span class="normal"><a href="#__codelineno-1-50">50</a></span>
+<span class="normal"><a href="#__codelineno-1-51">51</a></span>
+<span class="normal"><a href="#__codelineno-1-52">52</a></span>
+<span class="normal"><a href="#__codelineno-1-53">53</a></span>
+<span class="normal"><a href="#__codelineno-1-54">54</a></span>
+<span class="normal"><a href="#__codelineno-1-55">55</a></span>
+<span class="normal"><a href="#__codelineno-1-56">56</a></span>
+<span class="normal"><a href="#__codelineno-1-57">57</a></span>
+<span class="normal"><a href="#__codelineno-1-58">58</a></span>
+<span class="normal"><a href="#__codelineno-1-59">59</a></span>
+<span class="normal"><a href="#__codelineno-1-60">60</a></span>
+<span class="normal"><a href="#__codelineno-1-61">61</a></span>
+<span class="normal"><a href="#__codelineno-1-62">62</a></span>
+<span class="normal"><a href="#__codelineno-1-63">63</a></span>
+<span class="normal"><a href="#__codelineno-1-64">64</a></span>
+<span class="normal"><a href="#__codelineno-1-65">65</a></span>
+<span class="normal"><a href="#__codelineno-1-66">66</a></span>
+<span class="normal"><a href="#__codelineno-1-67">67</a></span>
+<span class="normal"><a href="#__codelineno-1-68">68</a></span>
+<span class="normal"><a href="#__codelineno-1-69">69</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model&quot;</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/function&quot;</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="p">)</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">newAgent</span><span class="p">()</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">    </span><span class="nx">modelInstance</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-chat&quot;</span><span class="p">)</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="w">    </span><span class="nx">generationConfig</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">model</span><span class="p">.</span><span class="nx">GenerationConfig</span><span class="p">{</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a><span class="w">        </span><span class="nx">MaxTokens</span><span class="p">:</span><span class="w">   </span><span class="nx">intPtr</span><span class="p">(</span><span class="mi">512</span><span class="p">),</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a><span class="w">        </span><span class="nx">Temperature</span><span class="p">:</span><span class="w"> </span><span class="nx">floatPtr</span><span class="p">(</span><span class="mf">0.7</span><span class="p">),</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15"></a><span class="w">        </span><span class="nx">Stream</span><span class="p">:</span><span class="w">      </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17"></a><span class="w">    </span><span class="nx">calculatorTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18"></a><span class="w">        </span><span class="nx">calculator</span><span class="p">,</span>
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19"></a><span class="w">        </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;calculator&quot;</span><span class="p">),</span>
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20"></a><span class="w">        </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;A calculator tool, you can use it to calculate the result of the operation. &quot;</span><span class="o">+</span>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21"></a><span class="w">            </span><span class="s">&quot;a is the first number, b is the second number, &quot;</span><span class="o">+</span>
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22"></a><span class="w">            </span><span class="s">&quot;the operation can be add, subtract, multiply, divide, power.&quot;</span><span class="p">),</span>
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24"></a><span class="w">    </span><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25"></a><span class="w">        </span><span class="s">&quot;agui-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">calculatorTool</span><span class="p">}),</span>
+</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">generationConfig</span><span class="p">),</span>
+</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29"></a><span class="w">        </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;You are a helpful assistant.&quot;</span><span class="p">),</span>
+</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30"></a><span class="w">    </span><span class="p">)</span>
+</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">agent</span>
+</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32"></a><span class="p">}</span>
+</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33"></a>
+</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34"></a><span class="kd">func</span><span class="w"> </span><span class="nx">calculator</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="nx">calculatorArgs</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">calculatorResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35"></a><span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">result</span><span class="w"> </span><span class="kt">float64</span>
+</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36"></a><span class="w">    </span><span class="k">switch</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Operation</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37"></a><span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;add&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;+&quot;</span><span class="p">:</span>
+</span><span id="__span-1-38"><a id="__codelineno-1-38" name="__codelineno-1-38"></a><span class="w">        </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">A</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">B</span>
+</span><span id="__span-1-39"><a id="__codelineno-1-39" name="__codelineno-1-39"></a><span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;subtract&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;-&quot;</span><span class="p">:</span>
+</span><span id="__span-1-40"><a id="__codelineno-1-40" name="__codelineno-1-40"></a><span class="w">        </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">A</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">B</span>
+</span><span id="__span-1-41"><a id="__codelineno-1-41" name="__codelineno-1-41"></a><span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;multiply&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;*&quot;</span><span class="p">:</span>
+</span><span id="__span-1-42"><a id="__codelineno-1-42" name="__codelineno-1-42"></a><span class="w">        </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">A</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">B</span>
+</span><span id="__span-1-43"><a id="__codelineno-1-43" name="__codelineno-1-43"></a><span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;divide&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;/&quot;</span><span class="p">:</span>
+</span><span id="__span-1-44"><a id="__codelineno-1-44" name="__codelineno-1-44"></a><span class="w">        </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">A</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">B</span>
+</span><span id="__span-1-45"><a id="__codelineno-1-45" name="__codelineno-1-45"></a><span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="s">&quot;power&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;^&quot;</span><span class="p">:</span>
+</span><span id="__span-1-46"><a id="__codelineno-1-46" name="__codelineno-1-46"></a><span class="w">        </span><span class="nx">result</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">math</span><span class="p">.</span><span class="nx">Pow</span><span class="p">(</span><span class="nx">args</span><span class="p">.</span><span class="nx">A</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">B</span><span class="p">)</span>
+</span><span id="__span-1-47"><a id="__codelineno-1-47" name="__codelineno-1-47"></a><span class="w">    </span><span class="k">default</span><span class="p">:</span>
+</span><span id="__span-1-48"><a id="__codelineno-1-48" name="__codelineno-1-48"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">calculatorResult</span><span class="p">{</span><span class="nx">Result</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;invalid operation: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="p">.</span><span class="nx">Operation</span><span class="p">)</span>
+</span><span id="__span-1-49"><a id="__codelineno-1-49" name="__codelineno-1-49"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-1-50"><a id="__codelineno-1-50" name="__codelineno-1-50"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">calculatorResult</span><span class="p">{</span><span class="nx">Result</span><span class="p">:</span><span class="w"> </span><span class="nx">result</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-1-51"><a id="__codelineno-1-51" name="__codelineno-1-51"></a><span class="p">}</span>
+</span><span id="__span-1-52"><a id="__codelineno-1-52" name="__codelineno-1-52"></a>
+</span><span id="__span-1-53"><a id="__codelineno-1-53" name="__codelineno-1-53"></a><span class="kd">type</span><span class="w"> </span><span class="nx">calculatorArgs</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-54"><a id="__codelineno-1-54" name="__codelineno-1-54"></a><span class="w">    </span><span class="nx">Operation</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="s">`json:&quot;operation&quot; description:&quot;add, subtract, multiply, divide, power&quot;`</span>
+</span><span id="__span-1-55"><a id="__codelineno-1-55" name="__codelineno-1-55"></a><span class="w">    </span><span class="nx">A</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;a&quot; description:&quot;First number&quot;`</span>
+</span><span id="__span-1-56"><a id="__codelineno-1-56" name="__codelineno-1-56"></a><span class="w">    </span><span class="nx">B</span><span class="w">         </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;b&quot; description:&quot;Second number&quot;`</span>
+</span><span id="__span-1-57"><a id="__codelineno-1-57" name="__codelineno-1-57"></a><span class="p">}</span>
+</span><span id="__span-1-58"><a id="__codelineno-1-58" name="__codelineno-1-58"></a>
+</span><span id="__span-1-59"><a id="__codelineno-1-59" name="__codelineno-1-59"></a><span class="kd">type</span><span class="w"> </span><span class="nx">calculatorResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-60"><a id="__codelineno-1-60" name="__codelineno-1-60"></a><span class="w">    </span><span class="nx">Result</span><span class="w"> </span><span class="kt">float64</span><span class="w"> </span><span class="s">`json:&quot;result&quot;`</span>
+</span><span id="__span-1-61"><a id="__codelineno-1-61" name="__codelineno-1-61"></a><span class="p">}</span>
+</span><span id="__span-1-62"><a id="__codelineno-1-62" name="__codelineno-1-62"></a>
+</span><span id="__span-1-63"><a id="__codelineno-1-63" name="__codelineno-1-63"></a><span class="kd">func</span><span class="w"> </span><span class="nx">intPtr</span><span class="p">(</span><span class="nx">i</span><span class="w"> </span><span class="kt">int</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="kt">int</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-64"><a id="__codelineno-1-64" name="__codelineno-1-64"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">i</span>
+</span><span id="__span-1-65"><a id="__codelineno-1-65" name="__codelineno-1-65"></a><span class="p">}</span>
+</span><span id="__span-1-66"><a id="__codelineno-1-66" name="__codelineno-1-66"></a>
+</span><span id="__span-1-67"><a id="__codelineno-1-67" name="__codelineno-1-67"></a><span class="kd">func</span><span class="w"> </span><span class="nx">floatPtr</span><span class="p">(</span><span class="nx">f</span><span class="w"> </span><span class="kt">float64</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="kt">float64</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-1-68"><a id="__codelineno-1-68" name="__codelineno-1-68"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">f</span>
+</span><span id="__span-1-69"><a id="__codelineno-1-69" name="__codelineno-1-69"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="start-an-ag-ui-service-over-http">Start an AG-UI Service over HTTP</h3>
+<p>The AG-UI service exposes a standard HTTP Handler. The integration process mainly consists of three steps.</p>
+<ol>
+<li>Create a framework Runner.</li>
+<li>Create an AG-UI service with <code>agui.New</code>.</li>
+<li>Start the HTTP service with <code>http.ListenAndServe</code>.</li>
+</ol>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-2-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-2-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-2-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-2-10">10</a></span>
+<span class="normal"><a href="#__codelineno-2-11">11</a></span>
+<span class="normal"><a href="#__codelineno-2-12">12</a></span>
+<span class="normal"><a href="#__codelineno-2-13">13</a></span>
+<span class="normal"><a href="#__codelineno-2-14">14</a></span>
+<span class="normal"><a href="#__codelineno-2-15">15</a></span>
+<span class="normal"><a href="#__codelineno-2-16">16</a></span>
+<span class="normal"><a href="#__codelineno-2-17">17</a></span>
+<span class="normal"><a href="#__codelineno-2-18">18</a></span>
+<span class="normal"><a href="#__codelineno-2-19">19</a></span>
+<span class="normal"><a href="#__codelineno-2-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/log&quot;</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="p">)</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">newAgent</span><span class="p">()</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="c1">// Create the AG-UI service and set the HTTP route.</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">runner</span><span class="p">,</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithPath</span><span class="p">(</span><span class="s">&quot;/agui&quot;</span><span class="p">))</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;failed to create AG-UI server: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="p">}</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a>
+</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17"></a><span class="c1">// Start the HTTP service.</span>
+</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">&quot;127.0.0.1:8080&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">Handler</span><span class="p">());</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;server stopped with error: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>At this point, we have developed the Agent and started the AG-UI service. The complete code is available in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default">examples/agui/server/default</a>.</p>
+<h3 id="copilotkit-joint-debugging">CopilotKit Joint Debugging</h3>
+<p>When developing the frontend with CopilotKit, users can interact with the Agent in the frontend after setting the backend AG-UI service address. The complete code is available in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit">examples/agui/client/copilotkit</a>.</p>
+<p>!video<a href="152728">agui.mp4</a></p>
+<h2 id="core-concepts">Core Concepts</h2>
+<h3 id="overall-design">Overall Design</h3>
+<p>In tRPC-Agent-Go, AG‑UI mainly consists of the following modules.</p>
+<ol>
+<li>Adapter: Defines the structure of the frontend request body <code>RunAgentInput</code>.</li>
+<li>Translator: Translates internal events into AG‑UI events.</li>
+<li>Runner: Processes the request body, runs the Agent, invokes the Translator, and so on.</li>
+<li>Service: Provides an HTTP Handler, accepts requests, and sends AG-UI event responses. It provides an SSE transport implementation by default and can also be customized for other communication protocols.</li>
+</ol>
+<pre class="mermaid"><code>sequenceDiagram
+    participant UI as Frontend
+    participant SVC as AG‑UI Service
+    participant RN as Runner
+    participant TR as Translator
+    participant AG as Agent
+    UI-&gt;&gt;SVC: POST /agui
+    activate SVC
+    SVC-&gt;&gt;RN: RunAgentInput
+    RN-&gt;&gt;AG: UserID, SessionID, UserMessage
+    AG--&gt;&gt;RN: Internal event stream
+    RN-&gt;&gt;TR: Internal event
+    TR--&gt;&gt;RN: AG-UI event
+    RN--&gt;&gt;SVC: AG-UI event stream
+    SVC--&gt;&gt;UI: SSE frames
+    deactivate SVC</code></pre>
+<p>This sequence diagram shows the default SSE path of AG‑UI: the frontend sends a POST <code>/agui</code> request to the AG‑UI Service, and the <code>Service</code> passes <code>RunAgentInput</code> to the <code>Runner</code>; the <code>Runner</code> calls the underlying Agent with <code>UserID</code>, <code>SessionID</code>, and the user message, then passes each generated internal event to the <code>Translator</code>, which translates it into an AG‑UI event; these events are returned to the <code>Runner</code> and streamed by the <code>Service</code> to the frontend as <code>SSE</code> frames. Through this loop, the Agent's reasoning process can be presented in the UI in real time.</p>
+<h3 id="adapter">Adapter</h3>
+<p>The frontend request body is defined in <a href="https://github.com/trpc-group/trpc-agent-go/blob/main/server/agui/adapter/adapter.go">server/agui/adapter</a>. The core structure is as follows.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span>
+<span class="normal"><a href="#__codelineno-3-3">3</a></span>
+<span class="normal"><a href="#__codelineno-3-4">4</a></span>
+<span class="normal"><a href="#__codelineno-3-5">5</a></span>
+<span class="normal"><a href="#__codelineno-3-6">6</a></span>
+<span class="normal"><a href="#__codelineno-3-7">7</a></span>
+<span class="normal"><a href="#__codelineno-3-8">8</a></span>
+<span class="normal"><a href="#__codelineno-3-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types&quot;</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RunAgentInput</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="nx">ThreadID</span><span class="w">       </span><span class="kt">string</span><span class="w">          </span><span class="s">`json:&quot;threadId&quot;`</span><span class="w">       </span><span class="c1">// Session ID.</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="nx">RunID</span><span class="w">          </span><span class="kt">string</span><span class="w">          </span><span class="s">`json:&quot;runId&quot;`</span><span class="w">          </span><span class="c1">// Run ID.</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="nx">Messages</span><span class="w">       </span><span class="p">[]</span><span class="nx">types</span><span class="p">.</span><span class="nx">Message</span><span class="w"> </span><span class="s">`json:&quot;messages&quot;`</span><span class="w">       </span><span class="c1">// Conversation messages.</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">State</span><span class="w">          </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w">  </span><span class="s">`json:&quot;state&quot;`</span><span class="w">          </span><span class="c1">// Session state.</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="w">    </span><span class="nx">ForwardedProps</span><span class="w"> </span><span class="kt">any</span><span class="w">             </span><span class="s">`json:&quot;forwardedProps&quot;`</span><span class="w"> </span><span class="c1">// Extension fields.</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<ul>
+<li>ThreadID is the session identifier and corresponds to the framework-level SessionID.</li>
+<li>RunID is the identifier of this invocation and corresponds to the framework-level InvocationID.</li>
+<li>Messages stores the conversation between the user and the Agent.</li>
+<li>State is used to carry session state.</li>
+<li>ForwardedProps stores business-side extension fields, such as the user ID.</li>
+</ul>
+<h3 id="translator">Translator</h3>
+<p>The Translator interface provides the <code>Translate</code> method, which translates internal events into AG-UI events.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span>
+<span class="normal"><a href="#__codelineno-4-3">3</a></span>
+<span class="normal"><a href="#__codelineno-4-4">4</a></span>
+<span class="normal"><a href="#__codelineno-4-5">5</a></span>
+<span class="normal"><a href="#__codelineno-4-6">6</a></span>
+<span class="normal"><a href="#__codelineno-4-7">7</a></span>
+<span class="normal"><a href="#__codelineno-4-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">    </span><span class="nx">aguievents</span><span class="w"> </span><span class="s">&quot;github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events&quot;</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="nx">agentevent</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/event&quot;</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="p">)</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Translator</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="w">    </span><span class="nx">Translate</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">agentevent</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The specific event translation logic is as follows.</p>
+<ul>
+<li>Before the Agent starts running, a <code>RunStarted</code> AG-UI event is sent; after a normal run finishes, a <code>RunFinished</code> AG-UI event is sent; if an error occurs in the middle, a <code>RunError</code> AG-UI event is sent.</li>
+<li>Internal text events are translated into <code>TextMessageStart</code>, <code>TextMessageContent</code>, and <code>TextMessageEnd</code> AG-UI events.</li>
+<li>Internal tool call and execution result events are translated into <code>ToolCallStart</code>, <code>ToolCallArgs</code>, <code>ToolCallEnd</code>, and <code>ToolCallResult</code> AG-UI events.</li>
+</ul>
+<p>In addition, you can implement a custom Translator for custom events or reporting to an observability platform.</p>
+<h3 id="runner">Runner</h3>
+<p>The AG-UI Runner wraps the framework Runner. It receives the frontend request body <code>RunAgentInput</code>, invokes the Agent to run, passes the generated internal events to the Translator for translation into AG-UI events, and then returns them to the upper-level Service.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span>
+<span class="normal"><a href="#__codelineno-5-3">3</a></span>
+<span class="normal"><a href="#__codelineno-5-4">4</a></span>
+<span class="normal"><a href="#__codelineno-5-5">5</a></span>
+<span class="normal"><a href="#__codelineno-5-6">6</a></span>
+<span class="normal"><a href="#__codelineno-5-7">7</a></span>
+<span class="normal"><a href="#__codelineno-5-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="nx">aguievents</span><span class="w"> </span><span class="s">&quot;github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events&quot;</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/adapter&quot;</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="p">)</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Runner</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">    </span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">runAgentInput</span><span class="w"> </span><span class="o">*</span><span class="nx">adapter</span><span class="p">.</span><span class="nx">RunAgentInput</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">&lt;-</span><span class="kd">chan</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="service">Service</h3>
+<p>Service exposes an HTTP Handler, calls the AG-UI Runner, and sends AG-UI events to the frontend.</p>
+<p>The framework provides an SSE implementation by default and also allows custom Service implementations to extend it to other communication protocols such as WebSocket.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span>
+<span class="normal"><a href="#__codelineno-6-2">2</a></span>
+<span class="normal"><a href="#__codelineno-6-3">3</a></span>
+<span class="normal"><a href="#__codelineno-6-4">4</a></span>
+<span class="normal"><a href="#__codelineno-6-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;net/http&quot;</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Service</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">    </span><span class="nx">Handler</span><span class="p">()</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h2 id="usage">Usage</h2>
+<h3 id="custom-communication-protocol">Custom Communication Protocol</h3>
+<p>The AG-UI protocol does not mandate a communication protocol. The framework uses SSE as the default communication protocol for AG-UI. If you want to switch to another protocol such as WebSocket, you can implement the <code>service.Service</code> interface:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-7-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-7-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-7-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-7-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-7-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-7-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-7-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-7-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-7-10">10</a></span>
+<span class="normal"><a href="#__codelineno-7-11">11</a></span>
+<span class="normal"><a href="#__codelineno-7-12">12</a></span>
+<span class="normal"><a href="#__codelineno-7-13">13</a></span>
+<span class="normal"><a href="#__codelineno-7-14">14</a></span>
+<span class="normal"><a href="#__codelineno-7-15">15</a></span>
+<span class="normal"><a href="#__codelineno-7-16">16</a></span>
+<span class="normal"><a href="#__codelineno-7-17">17</a></span>
+<span class="normal"><a href="#__codelineno-7-18">18</a></span>
+<span class="normal"><a href="#__codelineno-7-19">19</a></span>
+<span class="normal"><a href="#__codelineno-7-20">20</a></span>
+<span class="normal"><a href="#__codelineno-7-21">21</a></span>
+<span class="normal"><a href="#__codelineno-7-22">22</a></span>
+<span class="normal"><a href="#__codelineno-7-23">23</a></span>
+<span class="normal"><a href="#__codelineno-7-24">24</a></span>
+<span class="normal"><a href="#__codelineno-7-25">25</a></span>
+<span class="normal"><a href="#__codelineno-7-26">26</a></span>
+<span class="normal"><a href="#__codelineno-7-27">27</a></span>
+<span class="normal"><a href="#__codelineno-7-28">28</a></span>
+<span class="normal"><a href="#__codelineno-7-29">29</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4"></a><span class="w">    </span><span class="nx">aguirunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/runner&quot;</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/service&quot;</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6"></a><span class="p">)</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7"></a>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8"></a><span class="kd">type</span><span class="w"> </span><span class="nx">wsService</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9"></a><span class="w">    </span><span class="nx">path</span><span class="w">    </span><span class="kt">string</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10"></a><span class="w">    </span><span class="nx">runner</span><span class="w">  </span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">Runner</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11"></a><span class="w">    </span><span class="nx">handler</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12"></a><span class="p">}</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13"></a>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14"></a><span class="kd">func</span><span class="w"> </span><span class="nx">NewWSService</span><span class="p">(</span><span class="nx">runner</span><span class="w"> </span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">Runner</span><span class="p">,</span><span class="w"> </span><span class="nx">opt</span><span class="w"> </span><span class="o">...</span><span class="nx">service</span><span class="p">.</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="nx">service</span><span class="p">.</span><span class="nx">Service</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15"></a><span class="w">    </span><span class="nx">opts</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">service</span><span class="p">.</span><span class="nx">NewOptions</span><span class="p">(</span><span class="nx">opt</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16"></a><span class="w">    </span><span class="nx">s</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">wsService</span><span class="p">{</span>
+</span><span id="__span-7-17"><a id="__codelineno-7-17" name="__codelineno-7-17"></a><span class="w">        </span><span class="nx">path</span><span class="p">:</span><span class="w">   </span><span class="nx">opts</span><span class="p">.</span><span class="nx">Path</span><span class="p">,</span>
+</span><span id="__span-7-18"><a id="__codelineno-7-18" name="__codelineno-7-18"></a><span class="w">        </span><span class="nx">runner</span><span class="p">:</span><span class="w"> </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-7-19"><a id="__codelineno-7-19" name="__codelineno-7-19"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-7-20"><a id="__codelineno-7-20" name="__codelineno-7-20"></a><span class="w">    </span><span class="nx">h</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">NewServeMux</span><span class="p">()</span>
+</span><span id="__span-7-21"><a id="__codelineno-7-21" name="__codelineno-7-21"></a><span class="w">    </span><span class="nx">h</span><span class="p">.</span><span class="nx">HandleFunc</span><span class="p">(</span><span class="nx">s</span><span class="p">.</span><span class="nx">path</span><span class="p">,</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">handle</span><span class="p">)</span>
+</span><span id="__span-7-22"><a id="__codelineno-7-22" name="__codelineno-7-22"></a><span class="w">    </span><span class="nx">s</span><span class="p">.</span><span class="nx">handler</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">h</span>
+</span><span id="__span-7-23"><a id="__codelineno-7-23" name="__codelineno-7-23"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">s</span>
+</span><span id="__span-7-24"><a id="__codelineno-7-24" name="__codelineno-7-24"></a><span class="p">}</span>
+</span><span id="__span-7-25"><a id="__codelineno-7-25" name="__codelineno-7-25"></a>
+</span><span id="__span-7-26"><a id="__codelineno-7-26" name="__codelineno-7-26"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">wsService</span><span class="p">)</span><span class="w"> </span><span class="nx">Handler</span><span class="p">()</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* HTTP Handler */</span><span class="w"> </span><span class="p">}</span>
+</span><span id="__span-7-27"><a id="__codelineno-7-27" name="__codelineno-7-27"></a>
+</span><span id="__span-7-28"><a id="__codelineno-7-28" name="__codelineno-7-28"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-7-29"><a id="__codelineno-7-29" name="__codelineno-7-29"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">runner</span><span class="p">,</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithServiceFactory</span><span class="p">(</span><span class="nx">NewWSService</span><span class="p">))</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="custom-translator">Custom Translator</h3>
+<p>The default <code>translator.New</code> translates internal events into the standard event set defined by the protocol. If you want to append custom information while preserving the default behavior, you can implement the <code>translator.Translator</code> interface and use AG-UI's <code>Custom</code> event type to carry extension data:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-8-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-8-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-8-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-8-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-8-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-8-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-8-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-8-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-8-10">10</a></span>
+<span class="normal"><a href="#__codelineno-8-11">11</a></span>
+<span class="normal"><a href="#__codelineno-8-12">12</a></span>
+<span class="normal"><a href="#__codelineno-8-13">13</a></span>
+<span class="normal"><a href="#__codelineno-8-14">14</a></span>
+<span class="normal"><a href="#__codelineno-8-15">15</a></span>
+<span class="normal"><a href="#__codelineno-8-16">16</a></span>
+<span class="normal"><a href="#__codelineno-8-17">17</a></span>
+<span class="normal"><a href="#__codelineno-8-18">18</a></span>
+<span class="normal"><a href="#__codelineno-8-19">19</a></span>
+<span class="normal"><a href="#__codelineno-8-20">20</a></span>
+<span class="normal"><a href="#__codelineno-8-21">21</a></span>
+<span class="normal"><a href="#__codelineno-8-22">22</a></span>
+<span class="normal"><a href="#__codelineno-8-23">23</a></span>
+<span class="normal"><a href="#__codelineno-8-24">24</a></span>
+<span class="normal"><a href="#__codelineno-8-25">25</a></span>
+<span class="normal"><a href="#__codelineno-8-26">26</a></span>
+<span class="normal"><a href="#__codelineno-8-27">27</a></span>
+<span class="normal"><a href="#__codelineno-8-28">28</a></span>
+<span class="normal"><a href="#__codelineno-8-29">29</a></span>
+<span class="normal"><a href="#__codelineno-8-30">30</a></span>
+<span class="normal"><a href="#__codelineno-8-31">31</a></span>
+<span class="normal"><a href="#__codelineno-8-32">32</a></span>
+<span class="normal"><a href="#__codelineno-8-33">33</a></span>
+<span class="normal"><a href="#__codelineno-8-34">34</a></span>
+<span class="normal"><a href="#__codelineno-8-35">35</a></span>
+<span class="normal"><a href="#__codelineno-8-36">36</a></span>
+<span class="normal"><a href="#__codelineno-8-37">37</a></span>
+<span class="normal"><a href="#__codelineno-8-38">38</a></span>
+<span class="normal"><a href="#__codelineno-8-39">39</a></span>
+<span class="normal"><a href="#__codelineno-8-40">40</a></span>
+<span class="normal"><a href="#__codelineno-8-41">41</a></span>
+<span class="normal"><a href="#__codelineno-8-42">42</a></span>
+<span class="normal"><a href="#__codelineno-8-43">43</a></span>
+<span class="normal"><a href="#__codelineno-8-44">44</a></span>
+<span class="normal"><a href="#__codelineno-8-45">45</a></span>
+<span class="normal"><a href="#__codelineno-8-46">46</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="w">    </span><span class="nx">aguievents</span><span class="w"> </span><span class="s">&quot;github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events&quot;</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/event&quot;</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/adapter&quot;</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="w">    </span><span class="nx">aguirunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/runner&quot;</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/translator&quot;</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="p">)</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10"></a>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11"></a><span class="kd">type</span><span class="w"> </span><span class="nx">customTranslator</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12"></a><span class="w">    </span><span class="nx">inner</span><span class="w"> </span><span class="nx">translator</span><span class="p">.</span><span class="nx">Translator</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13"></a><span class="p">}</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14"></a>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">customTranslator</span><span class="p">)</span><span class="w"> </span><span class="nx">Translate</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-16"><a id="__codelineno-8-16" name="__codelineno-8-16"></a><span class="w">    </span><span class="nx">out</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">t</span><span class="p">.</span><span class="nx">inner</span><span class="p">.</span><span class="nx">Translate</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="p">)</span>
+</span><span id="__span-8-17"><a id="__codelineno-8-17" name="__codelineno-8-17"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-18"><a id="__codelineno-8-18" name="__codelineno-8-18"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-8-19"><a id="__codelineno-8-19" name="__codelineno-8-19"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-20"><a id="__codelineno-8-20" name="__codelineno-8-20"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">payload</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">buildCustomPayload</span><span class="p">(</span><span class="nx">event</span><span class="p">);</span><span class="w"> </span><span class="nx">payload</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-21"><a id="__codelineno-8-21" name="__codelineno-8-21"></a><span class="w">        </span><span class="nx">out</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">out</span><span class="p">,</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">NewCustomEvent</span><span class="p">(</span><span class="s">&quot;trace.metadata&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">WithValue</span><span class="p">(</span><span class="nx">payload</span><span class="p">)))</span>
+</span><span id="__span-8-22"><a id="__codelineno-8-22" name="__codelineno-8-22"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-23"><a id="__codelineno-8-23" name="__codelineno-8-23"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">out</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-8-24"><a id="__codelineno-8-24" name="__codelineno-8-24"></a><span class="p">}</span>
+</span><span id="__span-8-25"><a id="__codelineno-8-25" name="__codelineno-8-25"></a>
+</span><span id="__span-8-26"><a id="__codelineno-8-26" name="__codelineno-8-26"></a><span class="kd">func</span><span class="w"> </span><span class="nx">buildCustomPayload</span><span class="p">(</span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-27"><a id="__codelineno-8-27" name="__codelineno-8-27"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-28"><a id="__codelineno-8-28" name="__codelineno-8-28"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-8-29"><a id="__codelineno-8-29" name="__codelineno-8-29"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-30"><a id="__codelineno-8-30" name="__codelineno-8-30"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
+</span><span id="__span-8-31"><a id="__codelineno-8-31" name="__codelineno-8-31"></a><span class="w">        </span><span class="s">&quot;object&quot;</span><span class="p">:</span><span class="w">    </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Object</span><span class="p">,</span>
+</span><span id="__span-8-32"><a id="__codelineno-8-32" name="__codelineno-8-32"></a><span class="w">        </span><span class="s">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">event</span><span class="p">.</span><span class="nx">Response</span><span class="p">.</span><span class="nx">Timestamp</span><span class="p">,</span>
+</span><span id="__span-8-33"><a id="__codelineno-8-33" name="__codelineno-8-33"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-34"><a id="__codelineno-8-34" name="__codelineno-8-34"></a><span class="p">}</span>
+</span><span id="__span-8-35"><a id="__codelineno-8-35" name="__codelineno-8-35"></a>
+</span><span id="__span-8-36"><a id="__codelineno-8-36" name="__codelineno-8-36"></a><span class="nx">factory</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">*</span><span class="nx">adapter</span><span class="p">.</span><span class="nx">RunAgentInput</span><span class="p">,</span>
+</span><span id="__span-8-37"><a id="__codelineno-8-37" name="__codelineno-8-37"></a><span class="w">    </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">translator</span><span class="p">.</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">translator</span><span class="p">.</span><span class="nx">Translator</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-38"><a id="__codelineno-8-38" name="__codelineno-8-38"></a><span class="w">    </span><span class="nx">inner</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">translator</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">ThreadID</span><span class="p">,</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">RunID</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-8-39"><a id="__codelineno-8-39" name="__codelineno-8-39"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-40"><a id="__codelineno-8-40" name="__codelineno-8-40"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;create inner translator: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-8-41"><a id="__codelineno-8-41" name="__codelineno-8-41"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-42"><a id="__codelineno-8-42" name="__codelineno-8-42"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">customTranslator</span><span class="p">{</span><span class="nx">inner</span><span class="p">:</span><span class="w"> </span><span class="nx">inner</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-8-43"><a id="__codelineno-8-43" name="__codelineno-8-43"></a><span class="p">}</span>
+</span><span id="__span-8-44"><a id="__codelineno-8-44" name="__codelineno-8-44"></a>
+</span><span id="__span-8-45"><a id="__codelineno-8-45" name="__codelineno-8-45"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-8-46"><a id="__codelineno-8-46" name="__codelineno-8-46"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">runner</span><span class="p">,</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithTranslatorFactory</span><span class="p">(</span><span class="nx">factory</span><span class="p">)))</span>
+</span></code></pre></div></td></tr></table></div>
+<p>For example, when using React Planner, if you want to apply different custom events to different tabs, you can implement a custom Translator to achieve this.</p>
+<p>!video<a href="153393">react2.mp4</a></p>
+<p>The complete code example is available in <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/react">examples/agui/server/react</a>.</p>
+<h3 id="custom-useridresolver">Custom <code>UserIDResolver</code></h3>
+<p>By default, all requests are assigned to the fixed <code>"user"</code> user ID. You can customize <code>UserIDResolver</code> to extract <code>UserID</code> from <code>RunAgentInput</code>:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-9-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-9-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-9-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-9-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-9-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-9-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-9-10">10</a></span>
+<span class="normal"><a href="#__codelineno-9-11">11</a></span>
+<span class="normal"><a href="#__codelineno-9-12">12</a></span>
+<span class="normal"><a href="#__codelineno-9-13">13</a></span>
+<span class="normal"><a href="#__codelineno-9-14">14</a></span>
+<span class="normal"><a href="#__codelineno-9-15">15</a></span>
+<span class="normal"><a href="#__codelineno-9-16">16</a></span>
+<span class="normal"><a href="#__codelineno-9-17">17</a></span>
+<span class="normal"><a href="#__codelineno-9-18">18</a></span>
+<span class="normal"><a href="#__codelineno-9-19">19</a></span>
+<span class="normal"><a href="#__codelineno-9-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/adapter&quot;</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="w">    </span><span class="nx">aguirunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/runner&quot;</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="p">)</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7"></a>
+</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8"></a><span class="nx">resolver</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">*</span><span class="nx">adapter</span><span class="p">.</span><span class="nx">RunAgentInput</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9"></a><span class="w">    </span><span class="nx">props</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">ForwardedProps</span><span class="p">.(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">)</span>
+</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;anonymous&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">user</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">props</span><span class="p">[</span><span class="s">&quot;userId&quot;</span><span class="p">].(</span><span class="kt">string</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">user</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">user</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="s">&quot;anonymous&quot;</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17"></a><span class="p">}</span>
+</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18"></a>
+</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">runner</span><span class="p">,</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithUserIDResolver</span><span class="p">(</span><span class="nx">resolver</span><span class="p">)))</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="event-translation-callbacks">Event Translation Callbacks</h3>
+<p>AG-UI provides an event translation callback mechanism, making it easy to insert custom logic before and after the event translation process.</p>
+<ul>
+<li><code>translator.BeforeTranslateCallback</code>: Triggered before an internal event is translated into an AG-UI event. Return value conventions:<ul>
+<li>Return <code>(customEvent, nil)</code>: Use <code>customEvent</code> as the input event for translation.</li>
+<li>Return <code>(nil, nil)</code>: Keep the current event and continue executing subsequent callbacks. If all callbacks return <code>nil</code>, the original event is ultimately used.</li>
+<li>Return an error: Terminate the current execution flow, and the client will receive <code>RunError</code>.</li>
+</ul>
+</li>
+<li><code>translator.AfterTranslateCallback</code>: Triggered after the AG-UI event translation is complete and before it is sent to the client. Return value conventions:<ul>
+<li>Return <code>(customEvent, nil)</code>: Use <code>customEvent</code> as the final event sent to the client.</li>
+<li>Return <code>(nil, nil)</code>: Keep the current event and continue executing subsequent callbacks. If all callbacks return <code>nil</code>, the original event is ultimately sent.</li>
+<li>Return an error: Terminate the current execution flow, and the client will receive <code>RunError</code>.</li>
+</ul>
+</li>
+</ul>
+<p>Usage example:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-10-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-10-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-10-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-10-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-10-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-10-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-10-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-10-10">10</a></span>
+<span class="normal"><a href="#__codelineno-10-11">11</a></span>
+<span class="normal"><a href="#__codelineno-10-12">12</a></span>
+<span class="normal"><a href="#__codelineno-10-13">13</a></span>
+<span class="normal"><a href="#__codelineno-10-14">14</a></span>
+<span class="normal"><a href="#__codelineno-10-15">15</a></span>
+<span class="normal"><a href="#__codelineno-10-16">16</a></span>
+<span class="normal"><a href="#__codelineno-10-17">17</a></span>
+<span class="normal"><a href="#__codelineno-10-18">18</a></span>
+<span class="normal"><a href="#__codelineno-10-19">19</a></span>
+<span class="normal"><a href="#__codelineno-10-20">20</a></span>
+<span class="normal"><a href="#__codelineno-10-21">21</a></span>
+<span class="normal"><a href="#__codelineno-10-22">22</a></span>
+<span class="normal"><a href="#__codelineno-10-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="w">    </span><span class="nx">aguievents</span><span class="w"> </span><span class="s">&quot;github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events&quot;</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/event&quot;</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">    </span><span class="nx">aguirunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/runner&quot;</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/translator&quot;</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="p">)</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="nx">callbacks</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">translator</span><span class="p">.</span><span class="nx">NewCallbacks</span><span class="p">().</span>
+</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a><span class="w">    </span><span class="nx">RegisterBeforeTranslate</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">event</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11"></a><span class="w">        </span><span class="c1">// Logic executed before event translation.</span>
+</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13"></a><span class="w">    </span><span class="p">}).</span>
+</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a><span class="w">    </span><span class="nx">RegisterAfterTranslate</span><span class="p">(</span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15"></a><span class="w">        </span><span class="c1">// Logic executed after event translation.</span>
+</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">msg</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">event</span><span class="p">.(</span><span class="o">*</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">TextMessageContentEvent</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a><span class="w">            </span><span class="c1">// Modify the message content in the event.</span>
+</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">NewTextMessageContentEvent</span><span class="p">(</span><span class="nx">msg</span><span class="p">.</span><span class="nx">MessageID</span><span class="p">,</span><span class="w"> </span><span class="nx">msg</span><span class="p">.</span><span class="nx">Delta</span><span class="o">+</span><span class="s">&quot; [via callback]&quot;</span><span class="p">),</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22"></a>
+</span><span id="__span-10-23"><a id="__codelineno-10-23" name="__codelineno-10-23"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">runner</span><span class="p">,</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithTranslateCallbacks</span><span class="p">(</span><span class="nx">callbacks</span><span class="p">)))</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Event translation callbacks can be used in many scenarios, such as:</p>
+<ul>
+<li>Custom event handling: Modify event data during event translation and add extra business logic.</li>
+<li>Monitoring reporting: Insert custom monitoring reporting logic before and after translation.</li>
+</ul>
+<h3 id="runagentinput-hook">RunAgentInput Hook</h3>
+<p>When the AG-UI frontend request body <code>RunAgentInput</code> cannot fully meet user requirements, you can place extra content into the extension field <code>ForwardedProps</code> and use <code>WithRunAgentInputHook</code> to rewrite the request body uniformly. The following example shows how to read a prompt from <code>ForwardedProps</code> and merge it into the last user message:</p>
+<p><div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-11-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-11-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-11-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-11-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-11-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-11-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-11-10">10</a></span>
+<span class="normal"><a href="#__codelineno-11-11">11</a></span>
+<span class="normal"><a href="#__codelineno-11-12">12</a></span>
+<span class="normal"><a href="#__codelineno-11-13">13</a></span>
+<span class="normal"><a href="#__codelineno-11-14">14</a></span>
+<span class="normal"><a href="#__codelineno-11-15">15</a></span>
+<span class="normal"><a href="#__codelineno-11-16">16</a></span>
+<span class="normal"><a href="#__codelineno-11-17">17</a></span>
+<span class="normal"><a href="#__codelineno-11-18">18</a></span>
+<span class="normal"><a href="#__codelineno-11-19">19</a></span>
+<span class="normal"><a href="#__codelineno-11-20">20</a></span>
+<span class="normal"><a href="#__codelineno-11-21">21</a></span>
+<span class="normal"><a href="#__codelineno-11-22">22</a></span>
+<span class="normal"><a href="#__codelineno-11-23">23</a></span>
+<span class="normal"><a href="#__codelineno-11-24">24</a></span>
+<span class="normal"><a href="#__codelineno-11-25">25</a></span>
+<span class="normal"><a href="#__codelineno-11-26">26</a></span>
+<span class="normal"><a href="#__codelineno-11-27">27</a></span>
+<span class="normal"><a href="#__codelineno-11-28">28</a></span>
+<span class="normal"><a href="#__codelineno-11-29">29</a></span>
+<span class="normal"><a href="#__codelineno-11-30">30</a></span>
+<span class="normal"><a href="#__codelineno-11-31">31</a></span>
+<span class="normal"><a href="#__codelineno-11-32">32</a></span>
+<span class="normal"><a href="#__codelineno-11-33">33</a></span>
+<span class="normal"><a href="#__codelineno-11-34">34</a></span>
+<span class="normal"><a href="#__codelineno-11-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/adapter&quot;</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="w">    </span><span class="nx">aguirunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/runner&quot;</span>
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="p">)</span>
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a>
+</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="nx">hook</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">*</span><span class="nx">adapter</span><span class="p">.</span><span class="nx">RunAgentInput</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">adapter</span><span class="p">.</span><span class="nx">RunAgentInput</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;empty input&quot;</span><span class="p">)</span>
+</span><span id="__span-11-11"><a id="__codelineno-11-11" name="__codelineno-11-11"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-11-12"><a id="__codelineno-11-12" name="__codelineno-11-12"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">input</span><span class="p">.</span><span class="nx">Messages</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-13"><a id="__codelineno-11-13" name="__codelineno-11-13"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;missing messages&quot;</span><span class="p">)</span>
+</span><span id="__span-11-14"><a id="__codelineno-11-14" name="__codelineno-11-14"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-11-15"><a id="__codelineno-11-15" name="__codelineno-11-15"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">ForwardedProps</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-16"><a id="__codelineno-11-16" name="__codelineno-11-16"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">input</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-11-17"><a id="__codelineno-11-17" name="__codelineno-11-17"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-11-18"><a id="__codelineno-11-18" name="__codelineno-11-18"></a><span class="w">    </span><span class="nx">props</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">ForwardedProps</span><span class="p">.(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">)</span>
+</span><span id="__span-11-19"><a id="__codelineno-11-19" name="__codelineno-11-19"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-20"><a id="__codelineno-11-20" name="__codelineno-11-20"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">input</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-11-21"><a id="__codelineno-11-21" name="__codelineno-11-21"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-11-22"><a id="__codelineno-11-22" name="__codelineno-11-22"></a><span class="w">    </span><span class="nx">otherContent</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">props</span><span class="p">[</span><span class="s">&quot;other_content&quot;</span><span class="p">].(</span><span class="kt">string</span><span class="p">)</span>
+</span><span id="__span-11-23"><a id="__codelineno-11-23" name="__codelineno-11-23"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-24"><a id="__codelineno-11-24" name="__codelineno-11-24"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">input</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-11-25"><a id="__codelineno-11-25" name="__codelineno-11-25"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-11-26"><a id="__codelineno-11-26" name="__codelineno-11-26"></a><span class="w">    </span><span class="nx">content</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">Messages</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="nx">input</span><span class="p">.</span><span class="nx">Messages</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">].</span><span class="nx">ContentString</span><span class="p">()</span>
+</span><span id="__span-11-27"><a id="__codelineno-11-27" name="__codelineno-11-27"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-11-28"><a id="__codelineno-11-28" name="__codelineno-11-28"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;last message content must be a string&quot;</span><span class="p">)</span>
+</span><span id="__span-11-29"><a id="__codelineno-11-29" name="__codelineno-11-29"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-11-30"><a id="__codelineno-11-30" name="__codelineno-11-30"></a><span class="w">    </span><span class="nx">input</span><span class="p">.</span><span class="nx">Messages</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="nx">input</span><span class="p">.</span><span class="nx">Messages</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">].</span><span class="nx">Content</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">content</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">otherContent</span>
+</span><span id="__span-11-31"><a id="__codelineno-11-31" name="__codelineno-11-31"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">input</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-11-32"><a id="__codelineno-11-32" name="__codelineno-11-32"></a><span class="p">}</span>
+</span><span id="__span-11-33"><a id="__codelineno-11-33" name="__codelineno-11-33"></a>
+</span><span id="__span-11-34"><a id="__codelineno-11-34" name="__codelineno-11-34"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-11-35"><a id="__codelineno-11-35" name="__codelineno-11-35"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">runner</span><span class="p">,</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithRunAgentInputHook</span><span class="p">(</span><span class="nx">hook</span><span class="p">)))</span>
+</span></code></pre></div></td></tr></table></div>
+Key points:</p>
+<ul>
+<li>Returning <code>nil</code> keeps the original input but preserves in-place modifications.</li>
+<li>Returning a custom <code>*adapter.RunAgentInput</code> overrides the original input; returning <code>nil</code> means the original input is used.</li>
+<li>Returning an error aborts the current request, and the client receives a <code>RunError</code> event.</li>
+</ul>
+<h2 id="summary">Summary</h2>
+<p>The AG-UI protocol abstracts the interaction between users and Agents into a unified event protocol, and tRPC-Agent-Go provides a complete engineering practice for it, with clear paths from minimal integration to customized extensions. Through this article's overview of the AG-UI protocol, integration examples, core module breakdown, and usage guide, you can quickly integrate the AG-UI protocol into existing projects and build a stable, observable Agent frontend-backend path with a streaming experience.</p>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://github.com/trpc-group/trpc-agent-go">tRPC-Agent-Go repository</a></li>
+<li><a href="https://github.com/ag-ui-protocol/ag-ui">AG-UI official repository</a></li>
+</ul>
+<h2 id="usage-and-communication">Usage and Communication</h2>
+<p>You are welcome to use the tRPC-Agent-Go framework. For detailed documentation and examples, please visit the <a href="https://github.com/trpc-group/trpc-agent-go">tRPC-Agent-Go repository</a>.</p>
+<p>The growth of <a href="https://github.com/trpc-group/trpc-agent-go/">tRPC-Agent-Go</a> depends on everyone's support. You are welcome to Star the project and join the community in building it together.</p>
+<p>You are welcome to discuss framework usage experience, share best practices, and suggest improvements through GitHub Issues. Let's work together to advance Go in the field of AI Agents.</p>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Last update">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 9, 2026 08:42:05 UTC">2026-06-09 08:42:05</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Created">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 9, 2026 08:42:05 UTC">2026-06-09 08:42:05</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+  
+
+
+
+  <form class="md-feedback" name="feedback" hidden>
+    <fieldset>
+      <legend class="md-feedback__title">
+        Was this page helpful?
+      </legend>
+      <div class="md-feedback__inner">
+        <div class="md-feedback__list">
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page was helpful" data-md-value="1">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m7 0c0 .8-.7 1.5-1.5 1.5S14 10.3 14 9.5 14.7 8 15.5 8s1.5.7 1.5 1.5m-5 7.73c-1.75 0-3.29-.73-4.19-1.81L9.23 14c.45.72 1.52 1.23 2.77 1.23s2.32-.51 2.77-1.23l1.42 1.42c-.9 1.08-2.44 1.81-4.19 1.81"/></svg>
+            </button>
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page could be improved" data-md-value="0">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10m-6.5-4c.8 0 1.5.7 1.5 1.5s-.7 1.5-1.5 1.5-1.5-.7-1.5-1.5.7-1.5 1.5-1.5M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m2 4.5c1.75 0 3.29.72 4.19 1.81l-1.42 1.42C14.32 16.5 13.25 16 12 16s-2.32.5-2.77 1.23l-1.42-1.42C8.71 14.72 10.25 14 12 14"/></svg>
+            </button>
+          
+        </div>
+        <div class="md-feedback__note">
+          
+            <div data-md-value="1" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!
+            </div>
+          
+            <div data-md-value="0" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!<br>Please help us improve by opening an <a href="https://github.com/trpc-group/trpc-agent-go/issues/new" target="_blank" rel="noopener">issue</a>.
+            </div>
+          
+        </div>
+      </div>
+    </fieldset>
+  </form>
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../graphagent/" class="md-footer__link md-footer__link--prev" aria-label="Previous: GraphAgent Seamlessly Combines AI Workflows and Agents">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                GraphAgent Seamlessly Combines AI Workflows and Agents
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../skill/" class="md-footer__link md-footer__link--next" aria-label="Next: A Go-Native Implementation of the Anthropic Agent Skills Specification">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                A Go-Native Implementation of the Anthropic Agent Skills Specification
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+        <script src="../../assets/javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
