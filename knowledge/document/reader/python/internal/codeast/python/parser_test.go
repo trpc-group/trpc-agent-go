@@ -10,6 +10,7 @@
 package python
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -404,6 +405,21 @@ func TestParseDirectory_ReturnsErrorWhenAllFilesFail(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "all 1 file(s) failed") {
 		t.Fatalf("ParseDirectory() error = %v, want all-files-failed context", err)
+	}
+}
+
+func TestParseDirectory_ParserUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "svc.py"), []byte("def run():\n    return 1\n"), 0644); err != nil {
+		t.Fatalf("write svc.py: %v", err)
+	}
+
+	// A missing interpreter must surface as ErrParserUnavailable (not a generic
+	// per-file failure) so repo graph source can skip Python and still parse Go.
+	parser := NewParser(WithPythonPath("python-not-found-for-trpc-agent-go-test"))
+	_, err := parser.ParseDirectory(dir)
+	if !errors.Is(err, codeast.ErrParserUnavailable) {
+		t.Fatalf("ParseDirectory() error = %v, want ErrParserUnavailable", err)
 	}
 }
 

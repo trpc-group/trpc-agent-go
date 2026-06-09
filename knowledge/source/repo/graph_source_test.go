@@ -11,6 +11,7 @@ package repo
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"path/filepath"
 	"testing"
@@ -540,6 +541,27 @@ func TestReadGraphSkipsUnregisteredPythonParser(t *testing.T) {
 	}
 	dir := t.TempDir()
 	writeRepoFile(t, filepath.Join(dir, "service.py"), "def run():\n    return 1\n")
+
+	src := New(WithRepository(Repository{Dir: dir}))
+	data, err := src.ReadGraph(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	require.Empty(t, data.Nodes)
+	require.Empty(t, data.Edges)
+}
+
+func TestReadGraphSkipsParserUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "main.go"), "package demo\n\nfunc Main() {}\n")
+
+	// Mirror how the python parser surfaces a missing/too-old interpreter:
+	// wrapped with %w so errors.Is still matches through the wrapping.
+	parser := &configurableDirectoryParser{
+		err: fmt.Errorf("parse directory: %w", codeast.ErrParserUnavailable),
+	}
+	codeast.RegisterDirectoryParser(codeast.FileTypeGo, parser)
+	defer codeast.RegisterDirectoryParser(codeast.FileTypeGo, stubDirectoryParser{})
 
 	src := New(WithRepository(Repository{Dir: dir}))
 	data, err := src.ReadGraph(context.Background())

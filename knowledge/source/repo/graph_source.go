@@ -14,6 +14,7 @@ import (
 	//nolint:gosec // Used only for stable graph IDs, not cryptographic security.
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -88,6 +89,14 @@ func (s *Source) ReadGraph(ctx context.Context, opts ...source.ReadGraphOption) 
 		parseOpts = append(parseOpts, codeast.WithParseIncludeFiles(absoluteAllowedPaths(repoRoot, allowed)))
 		result, err := parser.ParseDirectory(rootToScan, parseOpts...)
 		if err != nil {
+			// The parser is registered but its runtime dependency (e.g. an
+			// external interpreter) is unavailable. Skip this language rather
+			// than failing the whole graph read, which may be mostly Go.
+			if errors.Is(err, codeast.ErrParserUnavailable) {
+				slog.Warn("repo graph parser runtime unavailable; skipping language",
+					"file_type", lang.fileType, "files", len(allowed), "error", err)
+				continue
+			}
 			return nil, err
 		}
 		langData := s.graphDataFromCodeAST(result, repoRoot, repoInfo, allowed)

@@ -87,6 +87,14 @@ func (p *Parser) ParseDirectory(dirPath string, opts ...codeast.ParseOption) (*c
 		return &codeast.Result{}, nil
 	}
 
+	// Probe the interpreter once before spawning workers. A missing or too-old
+	// interpreter is reported as codeast.ErrParserUnavailable so aggregating
+	// callers (e.g. repo graph source) can skip Python instead of failing the
+	// whole read; it also avoids spawning one doomed subprocess per file.
+	if err := p.probeAvailable(); err != nil {
+		return nil, err
+	}
+
 	concurrency := codeast.ParseConcurrency(opts)
 	if concurrency <= 0 {
 		concurrency = defaultParseConcurrency
@@ -254,6 +262,18 @@ func (p *Parser) ParseFileInfo(name, content string) (*codeast.FileInfo, error) 
 		return nil, err
 	}
 	return result.File, nil
+}
+
+// probeAvailable verifies the configured interpreter exists and is new enough
+// (Python 3.9+, required by ast.unparse) with a single lightweight subprocess.
+// Both a missing interpreter and a too-old one are reported as
+// codeast.ErrParserUnavailable.
+func (p *Parser) probeAvailable() error {
+	cmd := exec.Command(p.pythonPath, "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)") //nolint:gosec
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%w: %s: %v", codeast.ErrParserUnavailable, p.pythonPath, err)
+	}
+	return nil
 }
 
 func (p *Parser) parseFile(filePath, modulePath, reportedPath string) (*codeast.Result, error) {

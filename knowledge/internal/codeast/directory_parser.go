@@ -10,9 +10,17 @@
 package codeast
 
 import (
+	"errors"
 	"path/filepath"
 	"sync"
 )
+
+// ErrParserUnavailable indicates a directory parser is registered but its
+// runtime dependency is missing or incompatible (e.g. the external interpreter
+// it shells out to is not installed or too old). Callers that aggregate
+// multiple languages may treat it as "skip this language" rather than failing
+// the whole operation.
+var ErrParserUnavailable = errors.New("codeast: directory parser runtime unavailable")
 
 // FileType constants for directory parser registration.
 // These mirror source.FileReaderType values and live here to avoid import cycles
