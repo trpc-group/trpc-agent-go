@@ -539,6 +539,111 @@ func TestBuildRequestProcessors_PostToolPromptInjection(t *testing.T) {
 	})
 }
 
+func TestHasPotentialToolSurface(t *testing.T) {
+	baseTool := &mockTool{name: testToolNameA}
+	baseToolSet := &mockToolSet{name: testDummyToolSetName}
+	subAgent := &mockAgent{name: testSimpleSubAgentName}
+
+	tests := []struct {
+		name    string
+		agent   *LLMAgent
+		options *Options
+		want    bool
+	}{
+		{
+			name:    "nil options",
+			options: nil,
+			want:    false,
+		},
+		{
+			name: "agent tools",
+			agent: &LLMAgent{
+				tools: []tool.Tool{baseTool},
+			},
+			options: nil,
+			want:    true,
+		},
+		{
+			name:    "no surface",
+			options: &Options{},
+			want:    false,
+		},
+		{
+			name: "direct tools",
+			options: &Options{
+				Tools: []tool.Tool{baseTool},
+			},
+			want: true,
+		},
+		{
+			name: "tool sets",
+			options: &Options{
+				ToolSets: []tool.ToolSet{baseToolSet},
+			},
+			want: true,
+		},
+		{
+			name: "activatable tool sets",
+			options: &Options{
+				activatableToolSets: []tool.ToolSet{baseToolSet},
+			},
+			want: true,
+		},
+		{
+			name: "tool activation rules",
+			options: &Options{
+				toolActivationRules: []toolActivationRule{{}},
+			},
+			want: true,
+		},
+		{
+			name: "sub agents",
+			options: &Options{
+				SubAgents: []agent.Agent{subAgent},
+			},
+			want: true,
+		},
+		{
+			name: "extension tools",
+			options: &Options{
+				extensionContributedTools: []tool.Tool{baseTool},
+			},
+			want: true,
+		},
+		{
+			name: "await user reply tool",
+			options: &Options{
+				EnableAwaitUserReplyTool: true,
+			},
+			want: true,
+		},
+		{
+			name: "knowledge",
+			options: &Options{
+				Knowledge: &minimalKnowledge{},
+			},
+			want: true,
+		},
+		{
+			name: "skills repository",
+			options: &Options{
+				skillsRepository: &mockSkillRepository{},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(
+				t,
+				tt.want,
+				hasPotentialToolSurface(tt.agent, tt.options),
+			)
+		})
+	}
+}
+
 // Test that WithPreserveSameBranch option sets the corresponding
 // field in Options correctly.
 func TestWithPreserveSameBranch_Option(t *testing.T) {
