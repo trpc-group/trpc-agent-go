@@ -384,6 +384,12 @@ func (f *Flow) maybeConsumeQueuedUserMessages(
 					Message: message,
 				}},
 			},
+			event.WithExtension(
+				steer.ExtensionKeyQueuedUserMessage,
+				steer.QueuedUserMessageMetadata{
+					Status: steer.QueuedUserMessageStatusConsumed,
+				},
+			),
 		)
 		evt.RequiresCompletion = true
 
