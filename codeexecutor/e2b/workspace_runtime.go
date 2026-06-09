@@ -623,16 +623,7 @@ func (r *workspaceRuntime) RunProgram(
 		codeexecutor.EnvOutputDir:       outDir,
 		codeexecutor.EnvRunDir:          runDir,
 	}
-	var envParts []string
-	for k, v := range baseEnv {
-		if _, ok := spec.Env[k]; ok {
-			continue
-		}
-		envParts = append(envParts, k+"="+shellQuote(v))
-	}
-	for k, v := range spec.Env {
-		envParts = append(envParts, k+"="+shellQuote(v))
-	}
+	envPrefix := envToken(baseEnv, spec.Env, spec.CleanEnv)
 
 	quotedCmd := shellQuote(spec.Cmd)
 	var quotedArgs strings.Builder
@@ -647,19 +638,17 @@ func (r *workspaceRuntime) RunProgram(
 		stdinRedir = " < <(printf %s " + shellQuote(b64) + " | base64 -d)"
 	}
 
-	envAssign := ""
-	if len(envParts) > 0 {
-		envAssign = "env " + strings.Join(envParts, " ") + " "
-	}
-
 	inner := fmt.Sprintf(
 		"mkdir -p %s %s && cd %s && %s%s%s%s",
 		shellQuote(runDir), shellQuote(outDir),
 		shellQuote(cwd),
-		envAssign, quotedCmd, quotedArgs.String(),
+		envPrefix, quotedCmd, quotedArgs.String(),
 		stdinRedir,
 	)
 	script := buildRunWrapper(inner)
+	if spec.CleanEnv {
+		script = "exec " + cleanWrapperCommand(script)
+	}
 
 	start := time.Now()
 	stdoutRaw, stderrRaw, _, err := r.runBashStreaming(ctx, script, timeout)

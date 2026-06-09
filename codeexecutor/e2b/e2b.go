@@ -518,9 +518,15 @@ func (c *CodeExecutor) ExecuteInline(
 }
 
 // Engine exposes the sandbox-backed runtime as an Engine for skill tools.
+// The returned Engine advertises Capabilities{SupportsCleanEnv: true}
+// because RunProgram honors spec.CleanEnv by re-executing the E2B
+// bash wrapper itself through `/usr/bin/env -i ... /bin/bash`.
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
-	return codeexecutor.NewEngine(rt, rt, rt)
+	return codeexecutor.NewEngineWithCapabilities(
+		rt, rt, rt,
+		codeexecutor.Capabilities{SupportsCleanEnv: true},
+	)
 }
 
 // Close terminates the owned sandbox (if any).

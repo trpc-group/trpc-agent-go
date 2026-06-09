@@ -165,9 +165,7 @@ type Capabilities struct {
 	//
 	// Defaults to false so any backend that has not been audited
 	// for CleanEnv support is treated as "does not support" until
-	// it opts in. local opts in via NewEngineWithCapabilities;
-	// container / e2b currently do not (tracked in
-	// https://github.com/trpc-group/trpc-agent-go/issues/1845).
+	// it opts in via NewEngineWithCapabilities.
 	SupportsCleanEnv bool
 }
 
@@ -214,10 +212,10 @@ func NewEngine(
 // NewEngineWithCapabilities is the explicit-capabilities form of
 // NewEngine. Backends that have audited their runtime behaviour
 // against the Capabilities surface (today: codeexecutor/local
-// declares SupportsCleanEnv = true) use this constructor; backends
-// that have not yet been audited continue to use NewEngine and
-// inherit the zero value, which fails closed in any tool that
-// gates on a capability.
+// declare SupportsCleanEnv = true) use this constructor; backends
+// that have not yet been audited continue to use NewEngine and inherit
+// the zero value, which fails closed in any tool that gates on a
+// capability.
 func NewEngineWithCapabilities(
 	m WorkspaceManager,
 	f WorkspaceFS,

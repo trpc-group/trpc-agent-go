@@ -856,13 +856,10 @@ deny 里。
     是 `false`，工具会在 spawn 之前直接拒掉这次调用，错误信息指引
     operator 切到支持的 runtime。
 
-    目前只有 `codeexecutor/local` 声明了 `SupportsCleanEnv: true`。
-    `codeexecutor/container` 和 `codeexecutor/e2b` 保持 zero-valued
-    capabilities，所以这两个后端上的策略模式当前会在闸门处被拒掉。
-    给它们实现 `CleanEnv`（让它们声明 capability 后闸门自动放开）
-    跟在 [#1845](https://github.com/trpc-group/trpc-agent-go/issues/1845)
-    里。在那之前，请在 local 后端上开策略模式，或者去掉 allow/deny
-    列表，把 env / 网络隔离交给沙箱层。
+    `codeexecutor/local`、`codeexecutor/container` 和
+    `codeexecutor/e2b` 都会显式声明 `SupportsCleanEnv: true`。
+    尚未完成审计的 backend 会保持 zero-valued capability，因此策略模式
+    仍会在这些 backend 上 fail-closed。
 
 ### 边界
 
