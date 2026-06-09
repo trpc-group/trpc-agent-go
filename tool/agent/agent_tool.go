@@ -275,7 +275,10 @@ func WithHistoryScope(scope HistoryScope) Option {
 // filter keys are used.
 func WithPersistentHistory() Option {
 	return func(opts *agentToolOptions) {
-		opts.ensurePersistentHistoryOptions().enabled = true
+		cfg := opts.ensurePersistentHistoryOptions()
+		cfg.enabled = true
+		cfg.key = ""
+		cfg.keyFunc = nil
 	}
 }
 
@@ -287,6 +290,7 @@ func WithPersistentHistoryKey(key string) Option {
 	return func(opts *agentToolOptions) {
 		cfg := opts.ensurePersistentHistoryOptions()
 		cfg.enabled = true
+		cfg.keyFunc = nil
 		cfg.key = strings.TrimSpace(key)
 	}
 }
@@ -299,6 +303,7 @@ func WithPersistentHistoryKeyFunc(fn PersistentHistoryKeyFunc) Option {
 	return func(opts *agentToolOptions) {
 		cfg := opts.ensurePersistentHistoryOptions()
 		cfg.enabled = true
+		cfg.key = ""
 		cfg.keyFunc = fn
 	}
 }

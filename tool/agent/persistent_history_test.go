@@ -20,6 +20,7 @@ import (
 	coreagent "trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -184,17 +185,23 @@ func TestTool_PersistentHistory_DefaultKey_ReusedAcrossCalls(t *testing.T) {
 	at := NewTool(child, WithPersistentHistory())
 
 	sess := session.NewSession("app", "user", "session")
-	parent := coreagent.NewInvocation(
+	parent1 := coreagent.NewInvocation(
 		coreagent.WithInvocationSession(sess),
 		coreagent.WithInvocationEventFilterKey("parent"),
 	)
-	ctx := coreagent.NewInvocationContext(context.Background(), parent)
+	ctx1 := coreagent.NewInvocationContext(context.Background(), parent1)
 
-	out1, err := at.Call(ctx, []byte(`{"request":"one"}`))
+	out1, err := at.Call(ctx1, []byte(`{"request":"one"}`))
 	require.NoError(t, err)
 	require.Equal(t, "run1", out1)
 
-	out2, err := at.Call(ctx, []byte(`{"request":"two"}`))
+	parent2 := coreagent.NewInvocation(
+		coreagent.WithInvocationSession(sess),
+		coreagent.WithInvocationEventFilterKey("parent"),
+	)
+	ctx2 := coreagent.NewInvocationContext(context.Background(), parent2)
+
+	out2, err := at.Call(ctx2, []byte(`{"request":"two"}`))
 	require.NoError(t, err)
 	require.Equal(t, "run1|run2", out2)
 
@@ -209,15 +216,22 @@ func TestTool_PersistentHistory_CustomKey_Used(t *testing.T) {
 	at := NewTool(child, WithPersistentHistoryKey("agenttool:child:task-1"))
 
 	sess := session.NewSession("app", "user", "session")
-	parent := coreagent.NewInvocation(
+	parent1 := coreagent.NewInvocation(
 		coreagent.WithInvocationSession(sess),
 		coreagent.WithInvocationEventFilterKey("parent"),
 	)
-	ctx := coreagent.NewInvocationContext(context.Background(), parent)
+	ctx1 := coreagent.NewInvocationContext(context.Background(), parent1)
 
-	_, err := at.Call(ctx, []byte(`{"request":"one"}`))
+	_, err := at.Call(ctx1, []byte(`{"request":"one"}`))
 	require.NoError(t, err)
-	_, err = at.Call(ctx, []byte(`{"request":"two"}`))
+
+	parent2 := coreagent.NewInvocation(
+		coreagent.WithInvocationSession(sess),
+		coreagent.WithInvocationEventFilterKey("parent"),
+	)
+	ctx2 := coreagent.NewInvocationContext(context.Background(), parent2)
+
+	_, err = at.Call(ctx2, []byte(`{"request":"two"}`))
 	require.NoError(t, err)
 
 	keys := child.keys()
@@ -242,21 +256,33 @@ func TestTool_PersistentHistory_KeyFunc_IsolatesHistoryByKey(t *testing.T) {
 	))
 
 	sess := session.NewSession("app", "user", "session")
-	parent := coreagent.NewInvocation(
+	parent1 := coreagent.NewInvocation(
 		coreagent.WithInvocationSession(sess),
 		coreagent.WithInvocationEventFilterKey("parent"),
 	)
-	ctx := coreagent.NewInvocationContext(context.Background(), parent)
+	ctx1 := coreagent.NewInvocationContext(context.Background(), parent1)
 
-	outA1, err := at.Call(ctx, []byte(`{"task":"A"}`))
+	outA1, err := at.Call(ctx1, []byte(`{"task":"A"}`))
 	require.NoError(t, err)
 	require.Equal(t, "prev=0", outA1)
 
-	outB1, err := at.Call(ctx, []byte(`{"task":"B"}`))
+	parent2 := coreagent.NewInvocation(
+		coreagent.WithInvocationSession(sess),
+		coreagent.WithInvocationEventFilterKey("parent"),
+	)
+	ctx2 := coreagent.NewInvocationContext(context.Background(), parent2)
+
+	outB1, err := at.Call(ctx2, []byte(`{"task":"B"}`))
 	require.NoError(t, err)
 	require.Equal(t, "prev=0", outB1)
 
-	outA2, err := at.Call(ctx, []byte(`{"task":"A"}`))
+	parent3 := coreagent.NewInvocation(
+		coreagent.WithInvocationSession(sess),
+		coreagent.WithInvocationEventFilterKey("parent"),
+	)
+	ctx3 := coreagent.NewInvocationContext(context.Background(), parent3)
+
+	outA2, err := at.Call(ctx3, []byte(`{"task":"A"}`))
 	require.NoError(t, err)
 	require.Equal(t, "prev=1", outA2)
 
@@ -264,6 +290,51 @@ func TestTool_PersistentHistory_KeyFunc_IsolatesHistoryByKey(t *testing.T) {
 		[]string{"agenttool:child:task-A", "agenttool:child:task-B", "agenttool:child:task-A"},
 		child.keys(),
 	)
+}
+
+func TestTool_PersistentHistory_LastOptionWins(t *testing.T) {
+	child := &prevCountAgent{name: "child"}
+	at := NewTool(
+		child,
+		WithPersistentHistoryKeyFunc(func(_ context.Context, _ *coreagent.Invocation, jsonArgs []byte) string {
+			if strings.Contains(string(jsonArgs), `"task":"A"`) {
+				return "agenttool:child:task-A"
+			}
+			return "agenttool:child:default"
+		}),
+		WithPersistentHistoryKey("agenttool:child:task-1"),
+	)
+
+	sess := session.NewSession("app", "user", "session")
+	parent := coreagent.NewInvocation(
+		coreagent.WithInvocationSession(sess),
+		coreagent.WithInvocationEventFilterKey("parent"),
+	)
+	ctx := coreagent.NewInvocationContext(context.Background(), parent)
+
+	_, err := at.Call(ctx, []byte(`{"task":"A"}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"agenttool:child:task-1"}, child.keys())
+}
+
+func TestTool_PersistentHistory_WithPersistentHistoryClearsOverrides(t *testing.T) {
+	child := &persistentHistoryTestAgent{name: "child"}
+	at := NewTool(
+		child,
+		WithPersistentHistoryKey("agenttool:child:task-1"),
+		WithPersistentHistory(),
+	)
+
+	sess := session.NewSession("app", "user", "session")
+	parent := coreagent.NewInvocation(
+		coreagent.WithInvocationSession(sess),
+		coreagent.WithInvocationEventFilterKey("parent"),
+	)
+	ctx := coreagent.NewInvocationContext(context.Background(), parent)
+
+	_, err := at.Call(ctx, []byte(`{"request":"one"}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"agenttool:child:default"}, child.keys())
 }
 
 func TestTool_PersistentHistory_ParentFilterExcludesChildEvents(t *testing.T) {
@@ -362,12 +433,21 @@ func TestTool_PersistentHistory_ParentFilterExcludesChildEvents(t *testing.T) {
 }
 
 func TestTool_PersistentHistory_IgnoresParentBranchHistoryScope(t *testing.T) {
+	original := agentlog.Default
+	logger := &dynTestWarnLogger{}
+	agentlog.Default = logger
+	t.Cleanup(func() {
+		agentlog.Default = original
+	})
+
 	child := &persistentHistoryTestAgent{name: "child"}
 	at := NewTool(
 		child,
 		WithPersistentHistoryKey("agenttool:child:task-1"),
 		WithHistoryScope(HistoryScopeParentBranch),
 	)
+	require.Equal(t, 1, logger.warnfCalls)
+	require.Nil(t, at.persistentHistory)
 
 	sess := session.NewSession("app", "user", "session")
 	parent := coreagent.NewInvocation(
