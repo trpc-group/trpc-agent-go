@@ -434,6 +434,13 @@ func TestMaybeConsumeQueuedUserMessages_DrainsInOrder(t *testing.T) {
 			require.NotNil(t, evt)
 			require.Equal(t, queuedUserAuthor, evt.Author)
 			require.True(t, evt.RequiresCompletion)
+			meta, ok, err := event.GetExtension[steer.QueuedUserMessageMetadata](
+				evt,
+				steer.ExtensionKeyQueuedUserMessage,
+			)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, steer.QueuedUserMessageStatusConsumed, meta.Status)
 			require.Equal(
 				t,
 				[]string{"first", "second"}[i],
