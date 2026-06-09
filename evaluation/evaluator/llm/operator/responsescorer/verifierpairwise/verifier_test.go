@@ -128,6 +128,18 @@ func TestScoreForTagFromLogprobsUsesScoreInsideTagClosingToken(t *testing.T) {
 	assert.InDelta(t, 0.4947, score, 1e-3)
 }
 
+func TestScoreForTagFromLogprobsRejectsInvalidPrefixedScoreToken(t *testing.T) {
+	_, err := scoreForTagFromLogprobs([]model.TokenLogprob{
+		{Token: "analysis\n<score_A"},
+		{
+			Token:       ">not-score",
+			TopLogprobs: []model.TopLogprob{{Token: ">also-not-score", Logprob: 0}},
+		},
+	}, scoreATag, defaultGranularity)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "score token logprobs")
+}
+
 func TestScoreForTagFromLogprobsRejectsMissingData(t *testing.T) {
 	_, err := scoreForTagFromLogprobs(nil, scoreATag, defaultGranularity)
 	require.Error(t, err)
@@ -183,6 +195,17 @@ func TestScoreTokenRejectsWrappedToken(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = scoreForIndex(0, 1)
 	assert.False(t, ok)
+	_, ok = scoreTokenIndex("U", defaultGranularity)
+	assert.False(t, ok)
+	dist := scoreTokenDistributionFromToken(model.TokenLogprob{
+		Token: "not-score",
+		TopLogprobs: []model.TopLogprob{
+			{Token: "also-not-score", Logprob: 0},
+			{Token: "T", Logprob: 0},
+		},
+	}, defaultGranularity)
+	require.NotNil(t, dist)
+	assert.Contains(t, dist.logprobs, defaultGranularity-1)
 	assert.Equal(t, 0.0, pairwisePreferenceScore(0, 2))
 	assert.Equal(t, 1.0, pairwisePreferenceScore(2, 0))
 }

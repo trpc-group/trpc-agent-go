@@ -4659,6 +4659,7 @@ func TestConvertChatCompletionChoiceLogprobs(t *testing.T) {
 	require.Len(t, got.Content[0].TopLogprobs, 1)
 	assert.Equal(t, "B", got.Content[0].TopLogprobs[0].Token)
 	assert.Equal(t, []int{66}, got.Content[0].TopLogprobs[0].Bytes)
+	assert.Nil(t, int64SliceToIntSlice(nil))
 }
 
 // TestConvertUserMessageContent_WithImage tests image content conversion.

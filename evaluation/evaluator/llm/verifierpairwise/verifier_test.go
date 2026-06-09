@@ -52,6 +52,15 @@ func TestVerifierEvaluatorStructuredOutput(t *testing.T) {
 	assert.Nil(t, out)
 }
 
+func TestVerifierEvaluatorMetadataAndEvaluateDelegates(t *testing.T) {
+	ev := New().(*verifierEvaluator)
+	assert.Equal(t, EvaluatorName, ev.Name())
+	assert.Contains(t, ev.Description(), "LLM-as-a-Verifier")
+
+	_, err := ev.Evaluate(context.Background(), nil, nil, verifierMetric())
+	require.Error(t, err)
+}
+
 func TestVerifierEvaluatorUsesCustomOperators(t *testing.T) {
 	ev := New(
 		WithMessagesConstructor(fakeStructuredMessagesConstructor{}),

@@ -68,6 +68,12 @@ func TestConstructMessagesRequiresRubrics(t *testing.T) {
 	assert.Contains(t, err.Error(), "llm judge rubrics are required")
 }
 
+func TestCriteriaTextHandlesMissingJudgeConfig(t *testing.T) {
+	assert.Empty(t, criteriaText(nil))
+	assert.Empty(t, criteriaText(&metric.EvalMetric{}))
+	assert.Empty(t, criteriaText(&metric.EvalMetric{Criterion: &criterion.Criterion{}}))
+}
+
 func TestConstructMessagesRejectsInvalidInputs(t *testing.T) {
 	constructor := New()
 	_, err := constructor.ConstructMessages(context.Background(), nil, nil, verifierMetric())
