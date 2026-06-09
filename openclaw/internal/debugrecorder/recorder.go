@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/buildinfo"
 )
 
 const (
@@ -199,16 +200,18 @@ func (r *Recorder) Start(start TraceStart) (*Trace, error) {
 	}
 
 	meta := struct {
-		StartedAt time.Time  `json:"started_at"`
-		Mode      Mode       `json:"mode"`
-		Start     TraceStart `json:"start"`
-		TraceID   string     `json:"trace_id,omitempty"`
-		Version   string     `json:"version"`
+		StartedAt time.Time      `json:"started_at"`
+		Mode      Mode           `json:"mode"`
+		Start     TraceStart     `json:"start"`
+		TraceID   string         `json:"trace_id,omitempty"`
+		Runtime   buildinfo.Info `json:"runtime"`
+		Version   string         `json:"version"`
 	}{
 		StartedAt: now,
 		Mode:      r.mode,
 		Start:     start,
 		TraceID:   strings.TrimSpace(start.TraceID),
+		Runtime:   buildinfo.Snapshot(),
 		Version:   "v1",
 	}
 	metaPath := filepath.Join(root, metaFileName)
