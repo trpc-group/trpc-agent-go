@@ -188,12 +188,13 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 	}
 
 	var out struct {
-		SandboxID       string `json:"sandboxID"`
-		ClientID        string `json:"clientID"`
-		TemplateID      string `json:"templateID"`
-		EnvdPort        int    `json:"envdPort"`
-		Domain          string `json:"domain,omitempty"`
-		EnvdAccessToken string `json:"envdAccessToken,omitempty"`
+		SandboxID          string `json:"sandboxID"`
+		ClientID           string `json:"clientID"`
+		TemplateID         string `json:"templateID"`
+		EnvdPort           int    `json:"envdPort"`
+		Domain             string `json:"domain,omitempty"`
+		EnvdAccessToken    string `json:"envdAccessToken,omitempty"`
+		TrafficAccessToken string `json:"trafficAccessToken,omitempty"`
 	}
 	if err := cfg.do(ctx, "POST", "/sandboxes", body, &out); err != nil {
 		return nil, err
@@ -201,6 +202,9 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 
 	if out.EnvdAccessToken != "" && cfg.AccessToken == "" {
 		cfg.AccessToken = out.EnvdAccessToken
+	}
+	if out.TrafficAccessToken != "" && cfg.TrafficAccessToken == "" {
+		cfg.TrafficAccessToken = out.TrafficAccessToken
 	}
 
 	return &Sandbox{

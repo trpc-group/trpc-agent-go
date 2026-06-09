@@ -528,6 +528,8 @@ func (c *CodeExecutor) Engine() codeexecutor.Engine {
 // Only the owner of a sandbox (i.e. the executor that created it) should
 // pause it; connected executors should leave lifecycle management to the
 // creator.
+// After a successful pause the executor relinquishes ownership so that a
+// subsequent Close() call does not kill the paused sandbox.
 func (c *CodeExecutor) Pause(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -537,7 +539,13 @@ func (c *CodeExecutor) Pause(ctx context.Context) error {
 	if !c.owned {
 		return fmt.Errorf("e2b: only owner may pause sandbox")
 	}
-	return c.sbx.Pause(ctx)
+	if err := c.sbx.Pause(ctx); err != nil {
+		return err
+	}
+	// Detach ownership so Close() does not destroy the paused sandbox.
+	// The caller can resume it later via New(WithSandboxID(...)).
+	c.owned = false
+	return nil
 }
 
 // Close terminates the owned sandbox (if any).

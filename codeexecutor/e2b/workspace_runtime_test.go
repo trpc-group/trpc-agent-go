@@ -1135,6 +1135,26 @@ func TestPauseExecutor_Success(t *testing.T) {
 
 	err := c.Pause(context.Background())
 	require.NoError(t, err)
+	// After a successful pause the executor must relinquish ownership so that
+	// Close() does not kill the paused sandbox.
+	assert.False(t, c.owned, "owned should be false after Pause()")
+}
+
+func TestCloseAfterPause_DoesNotKillSandbox(t *testing.T) {
+	srv := newMockE2BServer(t, nil)
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+
+	require.NoError(t, c.Pause(context.Background()))
+	killsBefore := srv.killCalls
+
+	// Close() should be a no-op because ownership was cleared by Pause().
+	require.NoError(t, c.Close())
+	srv.mu.Lock()
+	killsAfter := srv.killCalls
+	srv.mu.Unlock()
+
+	assert.Equal(t, killsBefore, killsAfter, "Close() after Pause() must not issue a DELETE (kill) request")
 }
 
 func TestPauseExecutor_NilSandbox(t *testing.T) {
