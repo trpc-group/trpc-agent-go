@@ -213,11 +213,12 @@ func NewEngine(
 
 // NewEngineWithCapabilities is the explicit-capabilities form of
 // NewEngine. Backends that have audited their runtime behaviour
-// against the Capabilities surface (today: codeexecutor/local
-// declares SupportsCleanEnv = true) use this constructor; backends
-// that have not yet been audited continue to use NewEngine and
-// inherit the zero value, which fails closed in any tool that
-// gates on a capability.
+// against the Capabilities surface (today: codeexecutor/local,
+// codeexecutor/container and codeexecutor/e2b declare
+// SupportsCleanEnv = true) use this constructor; backends that have
+// not yet been audited continue to use NewEngine and inherit the
+// zero value, which fails closed in any tool that gates on a
+// capability.
 func NewEngineWithCapabilities(
 	m WorkspaceManager,
 	f WorkspaceFS,
