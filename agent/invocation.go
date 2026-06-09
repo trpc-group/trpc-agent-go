@@ -573,6 +573,21 @@ func WithDisableModelExecutionEvents(disable bool) RunOption {
 	}
 }
 
+// WithLatencyDiagnostics enables pre-LLM diagnostic spans and status events.
+func WithLatencyDiagnostics(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.LatencyDiagnosticsEnabled = enabled
+		opts.LatencyDiagnosticsEmitEvents = enabled
+	}
+}
+
+// WithLatencyDiagnosticsEvents controls whether diagnostics emit events.
+func WithLatencyDiagnosticsEvents(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.LatencyDiagnosticsEmitEvents = enabled
+	}
+}
+
 // WithDisablePartialEventIDs disables generating IDs for partial response events.
 func WithDisablePartialEventIDs(disable bool) RunOption {
 	return func(opts *RunOptions) {
@@ -1145,6 +1160,12 @@ type RunOptions struct {
 
 	// DisableModelExecutionEvents disables emitting model execution start/complete events.
 	DisableModelExecutionEvents bool
+
+	// LatencyDiagnosticsEnabled enables detailed pre-LLM diagnostic spans.
+	LatencyDiagnosticsEnabled bool
+
+	// LatencyDiagnosticsEmitEvents emits caller-visible diagnostic status events.
+	LatencyDiagnosticsEmitEvents bool
 
 	// DisablePartialEventIDs disables generating IDs for partial response events.
 	DisablePartialEventIDs bool
