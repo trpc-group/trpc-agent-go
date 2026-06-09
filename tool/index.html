@@ -6443,10 +6443,18 @@ still fall back to <code>Event.Branch</code> for compatibility.</p>
 <p>AgentTool currently has two history scopes:</p>
 <ul>
 <li><code>HistoryScopeIsolated</code> (default): the child Agent uses an independent
-  <code>FilterKey</code>, such as <code>math-specialist-&lt;uuid&gt;</code>. With normal Runner-generated
-  events, the child sees only the current tool arguments and does not inherit
-  parent Agent history. Child events are still stored in the same session, but
-  under a separate view.</li>
+  <code>FilterKey</code>, such as <code>math-specialist-&lt;uuid&gt;</code> (a new child key is generated on
+  every call). With normal Runner-generated events, the child sees only the
+  current tool arguments and does not inherit parent Agent history. Child events
+  are still stored in the same session, but under a separate view.<ul>
+<li>If you want the same AgentTool to be called multiple times while the child
+  Agent continues from its own prior execution history, enable
+  <code>WithPersistentHistory*</code> under <code>HistoryScopeIsolated</code> (see Options below).
+  This switches the child key to a stable value (for example
+  <code>agenttool:math-specialist:default</code>) so the child context becomes
+  continuous.</li>
+</ul>
+</li>
 <li><code>HistoryScopeParentBranch</code>: the child Agent uses a sub-key under the parent
   key, such as <code>assistant/math-specialist-&lt;uuid&gt;</code>. The default prefix matching
   treats ancestors and descendants as the same lineage. This means the child
@@ -6516,6 +6524,39 @@ change when you switch history scope:</p>
   assistant messages into the tool result</li>
 <li><code>ResponseModeFinalOnly</code>: return only the last complete child assistant
   message as the tool result</li>
+</ul>
+</li>
+</ul>
+<ul>
+<li>
+<p>WithPersistentHistory() / WithPersistentHistoryKey(string) / WithPersistentHistoryKeyFunc(...):</p>
+<ul>
+<li>Purpose: use a <strong>stable child <code>FilterKey</code></strong> under <code>HistoryScopeIsolated</code> so
+  the child Agent can read its own history across multiple AgentTool calls
+  within the same session (instead of starting from a fresh UUID key every
+  time).</li>
+<li>Default key: <code>agenttool:&lt;toolName&gt;:default</code> (intentionally avoids <code>/</code> so it
+  does not accidentally fall under the parent's prefix/subtree filters).</li>
+<li>Advanced: use <code>WithPersistentHistoryKey(...)</code> or
+  <code>WithPersistentHistoryKeyFunc(...)</code> to shard different tasks onto different
+  keys and avoid interleaving history when multiple tasks share one tool.</li>
+<li>Notes:<ul>
+<li>This is not a permission boundary. If the parent uses <code>BranchFilterModeAll</code>
+  / an empty key, or you design keys that create a prefix relationship such
+  as <code>parent/...</code>, parent context may still include child events.</li>
+<li>Whether the child can see earlier history also depends on the child Agent
+  message filter/timeline settings (defaults include history; "current
+  request/invocation only" modes will limit cross-call visibility even with
+  a stable key).</li>
+<li>Currently supported only for <code>agenttool.NewTool(agent)</code>. It is ignored by
+  <code>agenttool.NewDynamicTool()</code> (dynamic tools are intentionally short-lived
+  and memoryless).</li>
+<li>Incompatible with <code>HistoryScopeParentBranch</code>: when both are set, the
+  framework ignores persistent history and uses the <code>parent/child-uuid</code>
+  semantics.</li>
+</ul>
+</li>
+<li>Complete example: see <code>examples/agenttool/</code> (use <code>-persistent-child-history</code> / <code>-persistent-child-key</code>).</li>
 </ul>
 </li>
 </ul>
@@ -7839,7 +7880,7 @@ explicitly at the right time.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 4, 2026 08:00:40 UTC">2026-06-04 08:00:40</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 9, 2026 08:52:25 UTC">2026-06-09 08:52:25</span>
   </span>
 
     
