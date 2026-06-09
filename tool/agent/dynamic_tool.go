@@ -233,6 +233,12 @@ func NewDynamicTool(opts ...Option) *Tool {
 	if options.name != nil && *options.name != "" {
 		name = *options.name
 	}
+	if options.persistentHistory != nil && options.persistentHistory.enabled {
+		log.Warnf(
+			"AgentTool[%s]: WithPersistentHistory* is ignored by NewDynamicTool (not supported yet)",
+			name,
+		)
+	}
 	dynamicCfg := options.ensureDynamicOptions()
 	description := buildDynamicDescription(dynamicCfg, options.historyScope)
 	if options.description != nil {

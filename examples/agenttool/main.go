@@ -70,6 +70,16 @@ var (
 		responseModeDefault,
 		"AgentTool response mode: default or final-only",
 	)
+	persistentChildHistory = flag.Bool(
+		"persistent-child-history",
+		false,
+		"Enable stable child event-filter key for the math-specialist AgentTool",
+	)
+	persistentChildKey = flag.String(
+		"persistent-child-key",
+		"",
+		"Stable child event-filter key (advanced)",
+	)
 )
 
 func main() {
@@ -91,6 +101,12 @@ func main() {
 	fmt.Printf("Inner text mode: %s\n", mode)
 	fmt.Printf("Response mode: %s\n", responseModeName(responseMode))
 	fmt.Printf("Show tool: %t\n", *showTool)
+	fmt.Printf("Persistent child history: %t\n",
+		*persistentChildHistory || strings.TrimSpace(*persistentChildKey) != "",
+	)
+	if strings.TrimSpace(*persistentChildKey) != "" {
+		fmt.Printf("Persistent child key: %s\n", strings.TrimSpace(*persistentChildKey))
+	}
 	fmt.Printf("Available tools: current_time, math-specialist(agent_tool)\n")
 	fmt.Println(strings.Repeat("=", 50))
 
@@ -102,6 +118,8 @@ func main() {
 		showInner:     *showInner,
 		innerTextMode: mode,
 		responseMode:  responseMode,
+		persistent:    *persistentChildHistory,
+		persistentKey: *persistentChildKey,
 	}
 
 	if err := chat.run(); err != nil {
@@ -122,6 +140,9 @@ type agentToolChat struct {
 	showInner     bool
 	innerTextMode agenttool.InnerTextMode
 	responseMode  agenttool.ResponseMode
+
+	persistent    bool
+	persistentKey string
 }
 
 // run starts the interactive chat session.
@@ -170,9 +191,7 @@ func (c *agentToolChat) setup(_ context.Context) error {
 				"calculation and result.",
 		),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
-			MaxTokens:   intPtr(1000),
-			Temperature: floatPtr(0.3),
-			Stream:      true,
+			Stream: true,
 		}),
 		llmagent.WithTools([]tool.Tool{calculatorTool}),
 		llmagent.WithInputSchema(map[string]any{
@@ -199,19 +218,25 @@ func (c *agentToolChat) setup(_ context.Context) error {
 	// Create agent tool that wraps the math specialist agent.
 	// SkipSummarization surfaces the child tool result directly.
 	// The run still finishes on runner.completion.
-	agentTool := agenttool.NewTool(
-		mathAgent,
+	agentToolOpts := []agenttool.Option{
 		agenttool.WithSkipSummarization(true),
 		agenttool.WithStreamInner(c.showInner),
 		agenttool.WithInnerTextMode(c.innerTextMode),
 		agenttool.WithResponseMode(c.responseMode),
-	)
+	}
+	if strings.TrimSpace(c.persistentKey) != "" {
+		agentToolOpts = append(
+			agentToolOpts,
+			agenttool.WithPersistentHistoryKey(c.persistentKey),
+		)
+	} else if c.persistent {
+		agentToolOpts = append(agentToolOpts, agenttool.WithPersistentHistory())
+	}
+	agentTool := agenttool.NewTool(mathAgent, agentToolOpts...)
 
 	// Create LLM agent with tools including the agent tool.
 	genConfig := model.GenerationConfig{
-		MaxTokens:   intPtr(2000),
-		Temperature: floatPtr(0.7),
-		Stream:      true, // Enable streaming
+		Stream: true, // Enable streaming
 	}
 
 	c.agentName = "chat-assistant"

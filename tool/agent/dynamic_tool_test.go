@@ -87,6 +87,18 @@ func TestNewDynamicTool_TypesRemainComparable(t *testing.T) {
 	_ = map[agentToolOptions]struct{}{}
 }
 
+func TestNewDynamicTool_WarnsWhenPersistentHistoryEnabled(t *testing.T) {
+	original := agentlog.Default
+	logger := &dynTestWarnLogger{}
+	agentlog.Default = logger
+	t.Cleanup(func() {
+		agentlog.Default = original
+	})
+
+	_ = NewDynamicTool(WithPersistentHistory())
+	require.Equal(t, 1, logger.warnfCalls)
+}
+
 func TestNewDynamicTool_WithNameAndDescription(t *testing.T) {
 	at := NewDynamicTool(
 		WithName("explore"),
