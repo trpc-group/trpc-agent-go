@@ -18,10 +18,12 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/deps"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 var (
@@ -1369,6 +1371,145 @@ description: "Probe weather prerequisites"
 	require.Equal(t, "weather-probe", summaries[0].Name)
 }
 
+func TestRepositorySummaries_RefreshesAfterDirtyCheckTTL(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: old
+---
+
+# weather-probe
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	summaries := repo.Summaries()
+	require.Len(t, summaries, 1)
+	require.Equal(t, "old", summaries[0].Description)
+
+	summaries[0].Description = "mutated"
+	require.Equal(t, "old", repo.Summaries()[0].Description)
+
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: new description
+---
+
+# weather-probe
+`)
+
+	// The hot path stays cached until the lightweight dirty-check TTL expires.
+	require.Equal(t, "old", repo.Summaries()[0].Description)
+	expireSummaryCache(t, repo)
+	require.Equal(t, "new description", repo.Summaries()[0].Description)
+}
+
+func TestRepositorySummaries_DiscoversNewSkillAfterDirtyCheckTTL(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+	require.Empty(t, repo.Summaries())
+
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+---
+
+# weather-probe
+`)
+
+	require.Empty(t, repo.Summaries())
+	expireSummaryCache(t, repo)
+
+	summaries := repo.Summaries()
+	require.Len(t, summaries, 1)
+	require.Equal(t, "weather-probe", summaries[0].Name)
+}
+
+func TestRepositorySummaryCacheHit(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+---
+
+# weather-probe
+`)
+
+	repo, err := NewRepository([]string{root})
+	require.NoError(t, err)
+
+	hit, known := repo.SummaryCacheHit(context.Background())
+	require.True(t, known)
+	require.True(t, hit)
+
+	expireSummaryCache(t, repo)
+	hit, known = repo.SummaryCacheHit(context.Background())
+	require.True(t, known)
+	require.False(t, hit)
+}
+
+func TestRepositorySummaryFingerprintHelpers(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+---
+
+# weather-probe
+`)
+	ignoredDir := filepath.Join(root, "node_modules", "ignored")
+	require.NoError(t, os.MkdirAll(ignoredDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(ignoredDir, skillFileName),
+		[]byte("ignored"),
+		0o644,
+	))
+
+	fingerprints := scanSummaryFingerprints([]string{"", root})
+	require.Len(t, fingerprints, 1)
+	require.True(t, summaryFingerprintsEqual(fingerprints, fingerprints))
+	require.False(t, summaryFingerprintsEqual(fingerprints, nil))
+
+	modified := make(map[string]summaryFileFingerprint, len(fingerprints))
+	for path, fingerprint := range fingerprints {
+		modified[path] = summaryFileFingerprint{
+			ModTime: fingerprint.ModTime,
+			Size:    fingerprint.Size + 1,
+		}
+	}
+	require.False(t, summaryFingerprintsEqual(fingerprints, modified))
+
+	summaries := []skill.Summary{{
+		Name:        "weather-probe",
+		Description: "Probe weather prerequisites",
+	}}
+	cloned := cloneSkillSummaries(summaries)
+	require.Equal(t, summaries, cloned)
+	cloned[0].Description = "mutated"
+	require.Equal(t, "Probe weather prerequisites", summaries[0].Description)
+	require.Nil(t, cloneSkillSummaries(nil))
+
+	require.Nil(t, (&Repository{}).summaryScanRootsLocked())
+	base, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+
+	rootedRepo := &Repository{base: base}
+	require.Equal(t, []string{root}, rootedRepo.summaryScanRootsLocked())
+
+	repo := &Repository{base: rootlessSkillRepository{}, roots: []string{root}}
+	require.Equal(t, []string{root}, repo.summaryScanRootsLocked())
+}
+
 func TestRepositorySetSkillEnabled_ReindexesEligibility(t *testing.T) {
 	t.Parallel()
 
@@ -1425,6 +1566,14 @@ func TestRepositoryRefreshAndSetSkillEnabled_ErrorGuards(t *testing.T) {
 		repo.SetSkillEnabled(" ", true),
 		"skill config key is required",
 	)
+}
+
+func expireSummaryCache(t *testing.T, repo *Repository) {
+	t.Helper()
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	repo.summaryCacheExpiresAt = time.Now().Add(-time.Second)
 }
 
 func TestRepositoryHelperNormalizersAndBundledDetection(t *testing.T) {
@@ -1500,4 +1649,18 @@ type marshalTextErr struct{}
 
 func (marshalTextErr) MarshalText() ([]byte, error) {
 	return nil, errors.New("boom")
+}
+
+type rootlessSkillRepository struct{}
+
+func (rootlessSkillRepository) Summaries() []skill.Summary {
+	return nil
+}
+
+func (rootlessSkillRepository) Get(string) (*skill.Skill, error) {
+	return nil, errors.New("not found")
+}
+
+func (rootlessSkillRepository) Path(string) (string, error) {
+	return "", errors.New("not found")
 }

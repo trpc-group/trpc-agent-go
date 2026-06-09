@@ -145,11 +145,175 @@ func (s *flowRecordingSpan) SetAttributes(kv ...attribute.KeyValue) {
 
 func flowHasAttr(attrs []attribute.KeyValue, key string, want any) bool {
 	for _, kv := range attrs {
-		if string(kv.Key) == key && kv.Value.AsInterface() == want {
+		if string(kv.Key) == key &&
+			fmt.Sprint(kv.Value.AsInterface()) == fmt.Sprint(want) {
 			return true
 		}
 	}
 	return false
+}
+
+func TestLatencyDiagnosticHelpers(t *testing.T) {
+	ctx := context.Background()
+	_, disabledSpan, disabledStarted := startLatencySpan(ctx, nil, "disabled")
+	require.False(t, disabledStarted)
+	require.Nil(t, disabledSpan)
+	finishLatencySpan(nil, false, errors.New("ignored"))
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{}),
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			LatencyDiagnosticsEnabled:    true,
+			LatencyDiagnosticsEmitEvents: true,
+			RequestID:                    "req-latency",
+		}),
+	)
+	req := &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+		Tools: map[string]tool.Tool{
+			"slow": &mockLongRunnerTool{name: "slow", long: true},
+		},
+	}
+
+	_, span, started := startLatencySpan(
+		ctx,
+		inv,
+		latencySpanFlowRun,
+		attribute.String("test.attr", "value"),
+	)
+	require.True(t, started)
+	finishLatencySpan(span, started, errors.New("boom"))
+
+	reqAttrs := latencyRequestAttrs(req)
+	require.True(t, flowHasAttr(reqAttrs, "llmflow.request.messages", 1))
+	require.True(t, flowHasAttr(reqAttrs, "llmflow.request.tools", 1))
+	require.True(t, flowHasAttr(reqAttrs, "llmflow.request.stream", true))
+	require.Nil(t, latencyRequestAttrs(nil))
+
+	resp := &model.Response{
+		Done:      true,
+		IsPartial: true,
+		Object:    model.ObjectTypePreprocessingStatus,
+		Error:     &model.ResponseError{Type: model.ErrorTypeRunError},
+		Choices:   []model.Choice{{Index: 1}},
+	}
+	respAttrs := latencyResponseAttrs(resp)
+	require.True(t, flowHasAttr(respAttrs, "llmflow.response.done", true))
+	require.True(t, flowHasAttr(respAttrs, "llmflow.response.partial", true))
+	require.True(t, flowHasAttr(respAttrs, "llmflow.response.choices", 1))
+	require.True(
+		t,
+		flowHasAttr(
+			respAttrs,
+			"llmflow.response.object",
+			model.ObjectTypePreprocessingStatus,
+		),
+	)
+	require.True(
+		t,
+		flowHasAttr(
+			respAttrs,
+			"llmflow.response.error_type",
+			string(model.ErrorTypeRunError),
+		),
+	)
+	require.Nil(t, latencyResponseAttrs(nil))
+	require.True(t, latencyTraceResponseDetails(nil))
+	require.True(t, latencyTraceResponseDetails(resp))
+	require.False(t, latencyTraceResponseDetails(&model.Response{}))
+
+	invAttrs := latencyInvocationAttrs(inv)
+	require.True(t, flowHasAttr(invAttrs, "llmflow.agent", "a"))
+	require.True(t, flowHasAttr(invAttrs, "llmflow.request_id", "req-latency"))
+	require.True(t, flowHasAttr(invAttrs, "llmflow.session.events", 0))
+	require.Nil(t, latencyInvocationAttrs(nil))
+
+	require.Empty(t, latencyProcessorName(nil))
+	require.Equal(
+		t,
+		"mockRequestProcessor",
+		latencyProcessorName(&mockRequestProcessor{}),
+	)
+	require.Equal(t, "stage", latencyProcessorStageSpanName("stage", nil))
+	require.Equal(
+		t,
+		"stage.mockRequestProcessor",
+		latencyProcessorStageSpanName("stage", &mockRequestProcessor{}),
+	)
+}
+
+func TestEmitLatencyDiagnosticEventAndContextAttrs(t *testing.T) {
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{}),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			LatencyDiagnosticsEnabled:    true,
+			LatencyDiagnosticsEmitEvents: true,
+		}),
+	)
+	ch := make(chan *event.Event, 1)
+	emitLatencyDiagnosticEvent(
+		context.Background(),
+		inv,
+		ch,
+		event.LatencyDiagnostic{
+			Stage:  latencyDiagnosticStageCompact,
+			Status: latencyDiagnosticStatusStart,
+		},
+	)
+	evt := <-ch
+	diagnostic, ok, err := event.GetExtension[event.LatencyDiagnostic](
+		evt,
+		event.LatencyDiagnosticExtensionKey,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, latencyDiagnosticStageCompact, diagnostic.Stage)
+	require.Equal(t, latencyDiagnosticStatusStart, diagnostic.Status)
+
+	disabled := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			LatencyDiagnosticsEnabled: true,
+		}),
+	)
+	emitLatencyDiagnosticEvent(
+		context.Background(),
+		disabled,
+		ch,
+		event.LatencyDiagnostic{Status: latencyDiagnosticStatusSkip},
+	)
+	require.Empty(t, ch)
+
+	req := &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	attrs := contextCompactionAttrs(
+		contextCompactionDecision{
+			shouldCompact: true,
+			tokenCount:    10,
+			threshold:     8,
+			contextWindow: 16,
+		},
+		req,
+	)
+	require.True(
+		t,
+		flowHasAttr(attrs, "llmflow.context_compaction.triggered", true),
+	)
+	require.True(
+		t,
+		flowHasAttr(attrs, "llmflow.context_compaction.token_count", 10),
+	)
+	require.True(
+		t,
+		flowHasAttr(attrs, "llmflow.context_compaction.threshold", 8),
+	)
+	require.True(
+		t,
+		flowHasAttr(attrs, "llmflow.context_compaction.context_window", 16),
+	)
 }
 
 func TestPreprocess_AddsAgentToolsWhenPresent(t *testing.T) {

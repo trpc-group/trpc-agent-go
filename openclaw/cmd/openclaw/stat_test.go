@@ -13,26 +13,28 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/buildinfo"
 )
 
 func TestCurrentVersionUsesReleaseValue(t *testing.T) {
-	old := releaseVersion
-	releaseVersion = " v0.0.3 "
+	old := buildinfo.ReleaseVersion
+	buildinfo.ReleaseVersion = " v0.0.3 "
 	t.Cleanup(func() {
-		releaseVersion = old
+		buildinfo.ReleaseVersion = old
 	})
 
 	require.Equal(t, "v0.0.3", currentVersion())
 }
 
 func TestCurrentVersionFallsBackToDefault(t *testing.T) {
-	old := releaseVersion
-	releaseVersion = "   "
+	old := buildinfo.ReleaseVersion
+	buildinfo.ReleaseVersion = "   "
 	t.Cleanup(func() {
-		releaseVersion = old
+		buildinfo.ReleaseVersion = old
 	})
 
-	require.Equal(t, defaultReleaseVersion, currentVersion())
+	require.Equal(t, buildinfo.DefaultReleaseVersion, currentVersion())
 }
 
 func TestNormalizeReleaseVersion(t *testing.T) {
