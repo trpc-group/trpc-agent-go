@@ -10,6 +10,7 @@
 package steer
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -17,6 +18,21 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+func TestQueuedUserMessageWireValues(t *testing.T) {
+	require.Equal(
+		t,
+		"trpc_agent.steer.queued_user_message",
+		ExtensionKeyQueuedUserMessage,
+	)
+	require.Equal(t, "consumed", QueuedUserMessageStatusConsumed)
+
+	payload, err := json.Marshal(QueuedUserMessageMetadata{
+		Status: QueuedUserMessageStatusConsumed,
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"status":"consumed"}`, string(payload))
+}
 
 func TestQueue_FIFOAndClose(t *testing.T) {
 	queue := NewQueue()
@@ -73,6 +89,25 @@ func TestClose_RejectsFutureEnqueueAndPreservesQueuedMessages(t *testing.T) {
 	require.Equal(t, "hello", drained[0].Content)
 }
 
+func TestQueue_DiscardClearsQueuedMessagesWithoutClosing(t *testing.T) {
+	queue := NewQueue()
+
+	require.Nil(t, queue.Discard())
+	require.True(t, queue.Enqueue(model.NewUserMessage("one")))
+	require.True(t, queue.Enqueue(model.NewUserMessage("two")))
+
+	discarded := queue.Discard()
+	require.Len(t, discarded, 2)
+	require.Equal(t, "one", discarded[0].Content)
+	require.Equal(t, "two", discarded[1].Content)
+	require.Nil(t, queue.Drain())
+
+	require.True(t, queue.Enqueue(model.NewUserMessage("three")))
+	drained := queue.Drain()
+	require.Len(t, drained, 1)
+	require.Equal(t, "three", drained[0].Content)
+}
+
 func TestNilSafety(t *testing.T) {
 	var (
 		invocation *agent.Invocation
@@ -83,6 +118,7 @@ func TestNilSafety(t *testing.T) {
 	require.False(t, IsAttached(invocation))
 	require.False(t, queue.Enqueue(model.NewUserMessage("x")))
 	require.Nil(t, queue.Drain())
+	require.Nil(t, queue.Discard())
 	queue.Close()
 	Clear(invocation)
 	require.Nil(t, Drain(invocation))

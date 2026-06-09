@@ -215,17 +215,43 @@ type SteerableRunner interface {
 	EnqueueUserMessage(requestID string, message model.Message) error
 }
 
+// QueuedUserMessagesCanceler is an optional capability detected by the
+// package-level CancelQueuedUserMessages helper. It is intentionally independent
+// from SteerableRunner so existing steerable runner implementations remain
+// compatible.
+type QueuedUserMessagesCanceler interface {
+	// CancelQueuedUserMessages discards user messages that are queued but not
+	// yet consumed for the active request.
+	CancelQueuedUserMessages(requestID string) bool
+}
+
+type queuedUserMessageEnqueuer interface {
+	EnqueueUserMessage(requestID string, message model.Message) error
+}
+
 // EnqueueUserMessage queues a user message on runners that support steering.
+// The helper detects the EnqueueUserMessage method directly, so custom runners
+// do not need to satisfy SteerableRunner by name.
 func EnqueueUserMessage(
 	r Runner,
 	requestID string,
 	message model.Message,
 ) error {
-	steerable, ok := r.(SteerableRunner)
+	steerable, ok := r.(queuedUserMessageEnqueuer)
 	if !ok {
 		return ErrQueuedUserMessageUnsupported
 	}
 	return steerable.EnqueueUserMessage(requestID, message)
+}
+
+// CancelQueuedUserMessages discards queued user messages on runners that
+// support steering.
+func CancelQueuedUserMessages(r Runner, requestID string) bool {
+	cancelable, ok := r.(QueuedUserMessagesCanceler)
+	if !ok {
+		return false
+	}
+	return cancelable.CancelQueuedUserMessages(requestID)
 }
 
 // RunStatus is a snapshot of a running invocation.
@@ -897,6 +923,15 @@ func (r *runner) EnqueueUserMessage(
 		return ErrRunNotFound
 	}
 	return nil
+}
+
+func (r *runner) CancelQueuedUserMessages(requestID string) bool {
+	handle := r.lookupRun(requestID)
+	if handle == nil || handle.queue == nil {
+		return false
+	}
+	handle.queue.Discard()
+	return true
 }
 
 func (r *runner) newExecutionContext(
@@ -3490,7 +3525,44 @@ func normalizeQueuedUserMessage(
 	if message.Role != model.RoleUser || !model.HasPayload(message) {
 		return model.Message{}, ErrInvalidQueuedUserMessage
 	}
+	if !queuedUserMessageContentPartsSupported(message.ContentParts) {
+		return model.Message{}, ErrInvalidQueuedUserMessage
+	}
 	return message, nil
+}
+
+func queuedUserMessageContentPartsSupported(parts []model.ContentPart) bool {
+	for _, part := range parts {
+		switch part.Type {
+		case model.ContentTypeText:
+			if part.Text == nil {
+				return false
+			}
+		case model.ContentTypeImage:
+			if part.Image == nil {
+				return false
+			}
+			if strings.TrimSpace(part.Image.URL) == "" && len(part.Image.Data) == 0 {
+				return false
+			}
+		case model.ContentTypeAudio:
+			if part.Audio == nil || len(part.Audio.Data) == 0 {
+				return false
+			}
+		case model.ContentTypeFile:
+			if part.File == nil {
+				return false
+			}
+			if strings.TrimSpace(part.File.FileID) == "" &&
+				strings.TrimSpace(part.File.URL) == "" &&
+				len(part.File.Data) == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ensureErrorEventContent ensures that error events have valid content.
