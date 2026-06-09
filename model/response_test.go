@@ -1166,6 +1166,11 @@ func TestObjectTypeConstants(t *testing.T) {
 			expected: "preprocessing.planning",
 		},
 		{
+			name:     "preprocessing status type",
+			constant: ObjectTypePreprocessingStatus,
+			expected: "preprocessing.status",
+		},
+		{
 			name:     "postprocessing planning type",
 			constant: ObjectTypePostprocessingPlanning,
 			expected: "postprocessing.planning",

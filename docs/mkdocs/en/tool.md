@@ -1529,10 +1529,16 @@ still fall back to `Event.Branch` for compatibility.
 AgentTool currently has two history scopes:
 
 - `HistoryScopeIsolated` (default): the child Agent uses an independent
-  `FilterKey`, such as `math-specialist-<uuid>`. With normal Runner-generated
-  events, the child sees only the current tool arguments and does not inherit
-  parent Agent history. Child events are still stored in the same session, but
-  under a separate view.
+  `FilterKey`, such as `math-specialist-<uuid>` (a new child key is generated on
+  every call). With normal Runner-generated events, the child sees only the
+  current tool arguments and does not inherit parent Agent history. Child events
+  are still stored in the same session, but under a separate view.
+  - If you want the same AgentTool to be called multiple times while the child
+    Agent continues from its own prior execution history, enable
+    `WithPersistentHistory*` under `HistoryScopeIsolated` (see Options below).
+    This switches the child key to a stable value (for example
+    `agenttool:math-specialist:default`) so the child context becomes
+    continuous.
 - `HistoryScopeParentBranch`: the child Agent uses a sub-key under the parent
   key, such as `assistant/math-specialist-<uuid>`. The default prefix matching
   treats ancestors and descendants as the same lineage. This means the child
@@ -1589,6 +1595,33 @@ change when you switch history scope:
     assistant messages into the tool result
   - `ResponseModeFinalOnly`: return only the last complete child assistant
     message as the tool result
+
+- WithPersistentHistory() / WithPersistentHistoryKey(string) / WithPersistentHistoryKeyFunc(...):
+
+  - Purpose: use a **stable child `FilterKey`** under `HistoryScopeIsolated` so
+    the child Agent can read its own history across multiple AgentTool calls
+    within the same session (instead of starting from a fresh UUID key every
+    time).
+  - Default key: `agenttool:<toolName>:default` (intentionally avoids `/` so it
+    does not accidentally fall under the parent's prefix/subtree filters).
+  - Advanced: use `WithPersistentHistoryKey(...)` or
+    `WithPersistentHistoryKeyFunc(...)` to shard different tasks onto different
+    keys and avoid interleaving history when multiple tasks share one tool.
+  - Notes:
+    - This is not a permission boundary. If the parent uses `BranchFilterModeAll`
+      / an empty key, or you design keys that create a prefix relationship such
+      as `parent/...`, parent context may still include child events.
+    - Whether the child can see earlier history also depends on the child Agent
+      message filter/timeline settings (defaults include history; "current
+      request/invocation only" modes will limit cross-call visibility even with
+      a stable key).
+    - Currently supported only for `agenttool.NewTool(agent)`. It is ignored by
+      `agenttool.NewDynamicTool()` (dynamic tools are intentionally short-lived
+      and memoryless).
+    - Incompatible with `HistoryScopeParentBranch`: when both are set, the
+      framework ignores persistent history and uses the `parent/child-uuid`
+      semantics.
+  - Complete example: see `examples/agenttool/` (use `-persistent-child-history` / `-persistent-child-key`).
 
 - WithHistoryScope(HistoryScope):
   - `HistoryScopeIsolated` (default): Use an independent child `FilterKey`; the child usually sees only the current tool arguments and does not inherit parent history.

@@ -12,12 +12,14 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -28,11 +30,13 @@ import (
 )
 
 type mockRepo struct {
-	sums  []skill.Summary
-	full  map[string]*skill.Skill
-	paths map[string]string
-	roots []string
-	errs  map[string]error
+	sums       []skill.Summary
+	full       map[string]*skill.Skill
+	paths      map[string]string
+	roots      []string
+	errs       map[string]error
+	cacheHit   bool
+	cacheKnown bool
 }
 
 func (m *mockRepo) Summaries() []skill.Summary { return m.sums }
@@ -54,6 +58,10 @@ func (m *mockRepo) Path(name string) (string, error) {
 
 func (m *mockRepo) Roots() []string {
 	return append([]string(nil), m.roots...)
+}
+
+func (m *mockRepo) SummaryCacheHit(context.Context) (bool, bool) {
+	return m.cacheHit, m.cacheKnown
 }
 
 func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
@@ -127,6 +135,116 @@ func TestSkillsRequestProcessor_ProcessRequest_OverviewAndDocs(
 	ev := <-ch
 	require.NotNil(t, ev)
 	require.Equal(t, model.ObjectTypePreprocessingInstruction, ev.Object)
+}
+
+func TestSkillsRequestProcessor_LatencyDiagnosticsSpans(
+	t *testing.T,
+) {
+	recorder := useSpanRecorder(t)
+	repo := &mockRepo{
+		sums: []skill.Summary{
+			{Name: "calc", Description: "math ops"},
+		},
+		full: map[string]*skill.Skill{
+			"calc": {
+				Summary: skill.Summary{Name: "calc"},
+				Body:    "Calc body",
+			},
+		},
+		cacheHit:   true,
+		cacheKnown: true,
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv1",
+		AgentName:    "tester",
+		RunOptions: agent.RunOptions{
+			LatencyDiagnosticsEnabled: true,
+		},
+		Session: &session.Session{
+			State: session.StateMap{
+				skill.LoadedKey("tester", "calc"): []byte("1"),
+			},
+		},
+	}
+	req := &model.Request{}
+
+	ch := make(chan *event.Event, 2)
+	p := NewSkillsRequestProcessor(repo)
+	p.ProcessRequest(context.Background(), inv, req, ch)
+
+	spans := recorder.Ended()
+	require.NotNil(
+		t,
+		findProcessorSpan(spans, processorLatencySpanPromptRender),
+	)
+	require.NotNil(
+		t,
+		findProcessorSpan(spans, processorLatencySpanRepositoryLoad),
+	)
+	summarySpan := findProcessorSpan(
+		spans,
+		processorLatencySpanSummaryCompute,
+	)
+	require.NotNil(t, summarySpan)
+	require.True(
+		t,
+		processorSpanHasAttr(
+			summarySpan,
+			processorAttrSkillSummaryCount,
+			1,
+		),
+	)
+	cacheSpan := findProcessorSpan(
+		spans,
+		processorLatencySpanSummaryCache,
+	)
+	require.NotNil(t, cacheSpan)
+	require.True(
+		t,
+		processorSpanHasAttr(
+			cacheSpan,
+			processorAttrSkillCacheKnown,
+			true,
+		),
+	)
+	require.True(
+		t,
+		processorSpanHasAttr(
+			cacheSpan,
+			processorAttrSkillCacheHit,
+			true,
+		),
+	)
+}
+
+func findProcessorSpan(
+	spans []sdktrace.ReadOnlySpan,
+	name string,
+) sdktrace.ReadOnlySpan {
+	for _, span := range spans {
+		if span.Name() == name {
+			return span
+		}
+	}
+	return nil
+}
+
+func processorSpanHasAttr(
+	span sdktrace.ReadOnlySpan,
+	key string,
+	want any,
+) bool {
+	if span == nil {
+		return false
+	}
+	for _, kv := range span.Attributes() {
+		if string(kv.Key) == key &&
+			fmt.Sprint(kv.Value.AsInterface()) == fmt.Sprint(want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSkillsRequestProcessor_ProcessRequest_ContextAwareRepoFiltersVisibleSkills(
