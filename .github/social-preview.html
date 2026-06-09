@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1280, initial-scale=1">
+  <title>tRPC-Agent-Go social preview</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 1280px;
+      height: 640px;
+      margin: 0;
+      overflow: hidden;
+      background: #f8fbff;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    }
+
+    .canvas {
+      position: relative;
+      width: 1280px;
+      height: 640px;
+      color: #0f2742;
+      background-image:
+        linear-gradient(90deg, rgba(248, 251, 255, 0.98) 0%, rgba(248, 251, 255, 0.92) 34%, rgba(248, 251, 255, 0.48) 55%, rgba(248, 251, 255, 0.06) 100%),
+        radial-gradient(circle at 18% 45%, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0.74) 44%, rgba(255, 255, 255, 0) 66%),
+        url("./social-preview-background.png");
+      background-size: 1280px 640px;
+      background-position: center;
+    }
+
+    .accent {
+      position: absolute;
+      left: 82px;
+      top: 90px;
+      width: 7px;
+      height: 442px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, #2563eb 0%, #06b6d4 52%, #22c55e 100%);
+      box-shadow: 0 18px 42px rgba(37, 99, 235, 0.24);
+    }
+
+    .copy {
+      position: absolute;
+      left: 122px;
+      top: 103px;
+      width: 590px;
+    }
+
+    .repo {
+      margin: 0 0 18px;
+      color: #2f6fa7;
+      font-size: 21px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin: 0;
+      color: #0d2540;
+      font-size: 72px;
+      line-height: 0.96;
+      font-weight: 900;
+      letter-spacing: 0;
+      white-space: nowrap;
+      text-shadow: 0 16px 30px rgba(37, 99, 235, 0.08);
+    }
+
+    .tagline {
+      margin: 24px 0 0;
+      color: #165b96;
+      font-size: 31px;
+      line-height: 1.16;
+      font-weight: 780;
+      letter-spacing: 0;
+    }
+
+    .support {
+      margin: 18px 0 0;
+      max-width: 530px;
+      color: #48657f;
+      font-size: 21px;
+      line-height: 1.42;
+      font-weight: 670;
+      letter-spacing: 0;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 13px 12px;
+      width: 536px;
+      margin-top: 34px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 44px;
+      padding: 0 21px;
+      border-radius: 12px;
+      color: #ffffff;
+      font-size: 20px;
+      font-weight: 850;
+      letter-spacing: 0;
+      white-space: nowrap;
+      border: 1px solid rgba(255, 255, 255, 0.72);
+      box-shadow: 0 16px 32px rgba(15, 76, 129, 0.18);
+    }
+
+    .blue {
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+    }
+
+    .teal {
+      background: linear-gradient(135deg, #06b6d4, #0284c7);
+    }
+
+    .violet {
+      background: linear-gradient(135deg, #8b5cf6, #6d28d9);
+    }
+
+    .amber {
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+    }
+
+    .indigo {
+      background: linear-gradient(135deg, #6366f1, #4338ca);
+    }
+
+    .orange {
+      background: linear-gradient(135deg, #fb923c, #ea580c);
+    }
+
+    .footer {
+      position: absolute;
+      left: 122px;
+      bottom: 50px;
+      width: 570px;
+      margin: 0;
+      color: #143550;
+      font-size: 24px;
+      line-height: 1.34;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+  </style>
+</head>
+<body>
+  <main class="canvas" aria-label="tRPC-Agent-Go social preview">
+    <div class="accent"></div>
+    <section class="copy" aria-label="Repository summary">
+      <p class="repo">github.com/trpc-group/trpc-agent-go</p>
+      <h1>tRPC-Agent-Go</h1>
+      <p class="tagline">Production-ready LLM agents in Go</p>
+      <p class="support">Graph workflows, tools, memory, evaluation, observability, and open protocols.</p>
+      <div class="chips" aria-label="Capabilities">
+        <span class="chip blue">Graph workflows</span>
+        <span class="chip teal">Tool calling</span>
+        <span class="chip violet">Memory</span>
+        <span class="chip amber">A2A</span>
+        <span class="chip teal">AG-UI</span>
+        <span class="chip indigo">MCP</span>
+        <span class="chip orange">Evaluation</span>
+      </div>
+    </section>
+    <p class="footer">Compose agents from real Go code, then ship them with production integrations.</p>
+  </main>
+</body>
+</html>
