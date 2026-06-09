@@ -21,6 +21,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+const currentTimeMessagePrefix = "The current time is: "
+
+var timeNow = time.Now
+
 // TimeRequestProcessor implements time processing logic.
 type TimeRequestProcessor struct {
 	// AddCurrentTime controls whether to add current time to the system prompt.
@@ -100,7 +104,7 @@ func (p *TimeRequestProcessor) ProcessRequest(
 
 	// Get current time with timezone support.
 	currentTime := p.getCurrentTime()
-	timeContent := fmt.Sprintf("The current time is: %s", currentTime)
+	timeContent := fmt.Sprintf("%s%s", currentTimeMessagePrefix, currentTime)
 
 	// Add time information to the system message.
 	p.addTimeToSystemMessage(req, timeContent)
@@ -139,7 +143,7 @@ func (p *TimeRequestProcessor) getCurrentTime() string {
 		loc = time.Local
 	}
 
-	now := time.Now().In(loc)
+	now := timeNow().In(loc)
 	format := p.TimeFormat
 	if format == "" {
 		format = "2006-01-02 15:04:05 MST"
@@ -148,32 +152,22 @@ func (p *TimeRequestProcessor) getCurrentTime() string {
 	return now.Format(format)
 }
 
-// addTimeToSystemMessage adds time information to the system message.
+// addTimeToSystemMessage adds time information as a dedicated system message.
 func (p *TimeRequestProcessor) addTimeToSystemMessage(req *model.Request, timeContent string) {
-	// Find existing system message or create new one.
-	systemMsgIndex := findLastSystemMessageIndex(req.Messages)
-
-	if systemMsgIndex >= 0 {
-		// There's already a system message, check if it contains time info.
-		if !containsTimeInfo(req.Messages[systemMsgIndex].Content, timeContent) {
-			// Append time info to existing system message.
-			if req.Messages[systemMsgIndex].Content == "" {
-				req.Messages[systemMsgIndex].Content = timeContent
-			} else {
-				req.Messages[systemMsgIndex].Content += "\n\n" +
-					timeContent
-			}
-		}
-	} else {
-		// No existing system message, create new one.
-		timeMsg := model.NewSystemMessage(timeContent)
-		req.Messages = append([]model.Message{timeMsg}, req.Messages...)
+	if idx := findCurrentTimeMessageIndex(req.Messages); idx >= 0 {
+		req.Messages[idx].Content = timeContent
+		return
 	}
+
+	insertAfterLastSystemMessage(req, model.NewSystemMessage(timeContent))
 }
 
-// containsTimeInfo checks if the given content already contains the time information.
-func containsTimeInfo(content, timeInfo string) bool {
-	// Extract just the time part for comparison.
-	timePart := strings.TrimPrefix(timeInfo, "The current time is: ")
-	return strings.Contains(content, timePart)
+func findCurrentTimeMessageIndex(messages []model.Message) int {
+	for i, msg := range messages {
+		if msg.Role == model.RoleSystem &&
+			strings.HasPrefix(msg.Content, currentTimeMessagePrefix) {
+			return i
+		}
+	}
+	return -1
 }

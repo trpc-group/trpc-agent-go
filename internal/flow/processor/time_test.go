@@ -11,6 +11,7 @@ package processor
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -94,15 +95,19 @@ func TestNewTimeRequestProcessor(t *testing.T) {
 func TestTimeRequestProcessor_ProcessRequest_Disabled(t *testing.T) {
 	processor := NewTimeRequestProcessor(WithAddCurrentTime(false))
 	req := &model.Request{
-		Messages: []model.Message{},
+		Messages: []model.Message{
+			model.NewSystemMessage("stable system"),
+			model.NewUserMessage("hello"),
+		},
 	}
+	before := append([]model.Message(nil), req.Messages...)
 	ch := make(chan *event.Event, 1)
 
 	processor.ProcessRequest(context.Background(), nil, req, ch)
 
-	// Should not add any messages when disabled.
-	if len(req.Messages) != 0 {
-		t.Errorf("Expected no messages, got %d", len(req.Messages))
+	// Should not change any messages when disabled.
+	if !reflect.DeepEqual(req.Messages, before) {
+		t.Errorf("Expected messages to remain unchanged, got %#v", req.Messages)
 	}
 
 	// Should not send any events.
@@ -117,15 +122,17 @@ func TestTimeRequestProcessor_ProcessRequest_Disabled(t *testing.T) {
 func TestTimeRequestProcessor_ProcessRequest_Enabled(t *testing.T) {
 	processor := NewTimeRequestProcessor(WithAddCurrentTime(true))
 	req := &model.Request{
-		Messages: []model.Message{},
+		Messages: []model.Message{
+			model.NewUserMessage("hello"),
+		},
 	}
 	ch := make(chan *event.Event, 1)
 
 	processor.ProcessRequest(context.Background(), nil, req, ch)
 
-	// Should add a system message with time.
-	if len(req.Messages) != 1 {
-		t.Errorf("Expected 1 message, got %d", len(req.Messages))
+	// Should add a system message with time before user content.
+	if len(req.Messages) != 2 {
+		t.Errorf("Expected 2 messages, got %d", len(req.Messages))
 	}
 
 	msg := req.Messages[0]
@@ -135,6 +142,10 @@ func TestTimeRequestProcessor_ProcessRequest_Enabled(t *testing.T) {
 
 	if !strings.Contains(msg.Content, "The current time is:") {
 		t.Errorf("Expected time content, got: %s", msg.Content)
+	}
+	if req.Messages[1].Role != model.RoleUser ||
+		req.Messages[1].Content != "hello" {
+		t.Errorf("Expected user message to remain after time, got: %#v", req.Messages[1])
 	}
 }
 
@@ -149,18 +160,22 @@ func TestTimeRequestProcessor_ProcessRequest_WithExistingSystemMessage(t *testin
 
 	processor.ProcessRequest(context.Background(), nil, req, ch)
 
-	// Should still have only 1 message.
-	if len(req.Messages) != 1 {
-		t.Errorf("Expected 1 message, got %d", len(req.Messages))
+	// Should preserve the stable system message and add time as a new block.
+	if len(req.Messages) != 2 {
+		t.Errorf("Expected 2 messages, got %d", len(req.Messages))
 	}
 
 	msg := req.Messages[0]
-	if !strings.Contains(msg.Content, "Existing system message") {
-		t.Errorf("Expected existing content to be preserved, got: %s", msg.Content)
+	if msg.Content != "Existing system message" {
+		t.Errorf("Expected existing content to be preserved exactly, got: %s", msg.Content)
 	}
 
-	if !strings.Contains(msg.Content, "The current time is:") {
-		t.Errorf("Expected time content to be added, got: %s", msg.Content)
+	timeMsg := req.Messages[1]
+	if timeMsg.Role != model.RoleSystem {
+		t.Errorf("Expected time system message, got %s", timeMsg.Role)
+	}
+	if !strings.Contains(timeMsg.Content, "The current time is:") {
+		t.Errorf("Expected time content to be added, got: %s", timeMsg.Content)
 	}
 }
 
@@ -182,15 +197,18 @@ func TestTimeRequestProcessor_RebuildRequestForContextCompaction(t *testing.T) {
 		req,
 	)
 
-	if len(req.Messages) != 1 {
-		t.Fatalf("Expected 1 message, got %d", len(req.Messages))
+	if len(req.Messages) != 2 {
+		t.Fatalf("Expected 2 messages, got %d", len(req.Messages))
 	}
-	if !strings.Contains(req.Messages[0].Content, "The current time is:") {
-		t.Fatalf("Expected time content to be added, got: %s", req.Messages[0].Content)
+	if req.Messages[0].Content != "Existing system message" {
+		t.Fatalf("Expected stable system content to remain unchanged, got: %s", req.Messages[0].Content)
+	}
+	if !strings.Contains(req.Messages[1].Content, "The current time is:") {
+		t.Fatalf("Expected time content to be added, got: %s", req.Messages[1].Content)
 	}
 }
 
-func TestTimeRequestProcessor_ProcessRequest_AppendsToLastSystem(
+func TestTimeRequestProcessor_ProcessRequest_InsertsAfterLastSystem(
 	t *testing.T,
 ) {
 	processor := NewTimeRequestProcessor(WithAddCurrentTime(true))
@@ -205,25 +223,27 @@ func TestTimeRequestProcessor_ProcessRequest_AppendsToLastSystem(
 
 	processor.ProcessRequest(context.Background(), nil, req, ch)
 
-	if len(req.Messages) != 3 {
-		t.Errorf("Expected 3 messages, got %d", len(req.Messages))
+	if len(req.Messages) != 4 {
+		t.Errorf("Expected 4 messages, got %d", len(req.Messages))
 	}
 
-	if strings.Contains(req.Messages[0].Content, "The current time is:") {
-		t.Errorf(
-			"Expected time appended to last system message, got: %s",
-			req.Messages[0].Content,
-		)
+	if req.Messages[0].Content != "system 1" {
+		t.Errorf("Expected first system unchanged, got: %s", req.Messages[0].Content)
 	}
-	if !strings.Contains(req.Messages[1].Content, "The current time is:") {
-		t.Errorf(
-			"Expected time appended to last system message, got: %s",
-			req.Messages[1].Content,
-		)
+	if req.Messages[1].Content != "system 2" {
+		t.Errorf("Expected second system unchanged, got: %s", req.Messages[1].Content)
+	}
+	if req.Messages[2].Role != model.RoleSystem ||
+		!strings.HasPrefix(req.Messages[2].Content, currentTimeMessagePrefix) {
+		t.Errorf("Expected standalone time system message, got: %#v", req.Messages[2])
+	}
+	if req.Messages[3].Role != model.RoleUser ||
+		req.Messages[3].Content != "hello" {
+		t.Errorf("Expected user message after system block, got: %#v", req.Messages[3])
 	}
 }
 
-func TestTimeRequestProcessor_ProcessRequest_SetsEmptyLastSystem(
+func TestTimeRequestProcessor_ProcessRequest_PreservesEmptySystem(
 	t *testing.T,
 ) {
 	processor := NewTimeRequestProcessor(WithAddCurrentTime(true))
@@ -238,24 +258,65 @@ func TestTimeRequestProcessor_ProcessRequest_SetsEmptyLastSystem(
 
 	processor.ProcessRequest(context.Background(), nil, req, ch)
 
-	if len(req.Messages) != 3 {
-		t.Errorf("Expected 3 messages, got %d", len(req.Messages))
+	if len(req.Messages) != 4 {
+		t.Errorf("Expected 4 messages, got %d", len(req.Messages))
 	}
 
-	if strings.Contains(req.Messages[0].Content, "The current time is:") {
-		t.Errorf(
-			"Expected time set on last system message, got: %s",
-			req.Messages[0].Content,
-		)
+	if req.Messages[0].Content != "system 1" {
+		t.Errorf("Expected first system unchanged, got: %s", req.Messages[0].Content)
 	}
-	if !strings.HasPrefix(
-		req.Messages[1].Content,
-		"The current time is:",
-	) {
-		t.Errorf(
-			"Expected time set on last system message, got: %s",
-			req.Messages[1].Content,
-		)
+	if req.Messages[1].Content != "" {
+		t.Errorf("Expected empty system unchanged, got: %s", req.Messages[1].Content)
+	}
+	if req.Messages[2].Role != model.RoleSystem ||
+		!strings.HasPrefix(req.Messages[2].Content, currentTimeMessagePrefix) {
+		t.Errorf("Expected standalone time system message, got: %#v", req.Messages[2])
+	}
+}
+
+func TestTimeRequestProcessor_ProcessRequest_UpdatesTimeBlockOnly(
+	t *testing.T,
+) {
+	setNow := stubTimeNow(t)
+	processor := NewTimeRequestProcessor(
+		WithAddCurrentTime(true),
+		WithTimezone("UTC"),
+		WithTimeFormat(time.RFC3339),
+	)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("stable system 1"),
+			model.NewSystemMessage("stable system 2"),
+			model.NewUserMessage("hello"),
+		},
+	}
+
+	setNow(time.Date(2026, 6, 9, 1, 2, 3, 0, time.UTC))
+	processor.ProcessRequest(context.Background(), nil, req, nil)
+	firstMessages := append([]model.Message(nil), req.Messages...)
+
+	setNow(time.Date(2026, 6, 9, 4, 5, 6, 0, time.UTC))
+	processor.ProcessRequest(context.Background(), nil, req, nil)
+
+	if len(req.Messages) != len(firstMessages) {
+		t.Fatalf("Expected message count to stay %d, got %d", len(firstMessages), len(req.Messages))
+	}
+	if req.Messages[0].Content != firstMessages[0].Content ||
+		req.Messages[1].Content != firstMessages[1].Content {
+		t.Fatalf("Expected stable system content to remain byte-identical, got %#v", req.Messages[:2])
+	}
+	if req.Messages[2].Role != model.RoleSystem ||
+		!strings.HasPrefix(req.Messages[2].Content, currentTimeMessagePrefix) {
+		t.Fatalf("Expected time system message at index 2, got %#v", req.Messages[2])
+	}
+	if req.Messages[2].Content == firstMessages[2].Content {
+		t.Fatalf("Expected time block to change, got %s", req.Messages[2].Content)
+	}
+	if !strings.Contains(req.Messages[2].Content, "2026-06-09T04:05:06Z") {
+		t.Fatalf("Expected updated time block, got %s", req.Messages[2].Content)
+	}
+	if !reflect.DeepEqual(req.Messages[3], firstMessages[3]) {
+		t.Fatalf("Expected non-system content to remain unchanged, got %#v", req.Messages[3])
 	}
 }
 
@@ -407,5 +468,18 @@ func TestTimeRequestProcessor_InvalidTimezone(t *testing.T) {
 	// Should fall back to UTC format.
 	if !strings.Contains(result, "UTC") {
 		t.Errorf("Expected UTC fallback, got: %s", result)
+	}
+}
+
+func stubTimeNow(t *testing.T) func(time.Time) {
+	t.Helper()
+	original := timeNow
+	t.Cleanup(func() {
+		timeNow = original
+	})
+	return func(now time.Time) {
+		timeNow = func() time.Time {
+			return now
+		}
 	}
 }
