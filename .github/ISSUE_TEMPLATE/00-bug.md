@@ -4,7 +4,6 @@ description: Create a report to help us improve
 title: ''
 labels: ["type/bug"]
 assignees: ''
-
 ---
 
 **Describe the bug**
@@ -27,7 +26,7 @@ If applicable, add screenshots to help explain your problem.
  - OS: [e.g. iOS]
  - Version [e.g. 22]
  - Go version:
- - tRPC-A2A-go version:
+ - tRPC-Agent-Go version:
 
 **Additional context**
-Add any other context about the problem here. 
+Add any other context about the problem here.

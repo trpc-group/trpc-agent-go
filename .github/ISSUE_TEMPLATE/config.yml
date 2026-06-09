@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://trpc-group.github.io/trpc-agent-go/
+    about: Read guides and API usage examples before opening a question.
+  - name: Discussions
+    url: https://github.com/trpc-group/trpc-agent-go/discussions
+    about: Ask usage questions and share ideas with the community.
