@@ -36,6 +36,8 @@ const (
 	ObjectTypePreprocessingInstruction = "preprocessing.instruction"
 	// ObjectTypePreprocessingPlanning is the object type for planning preprocessing events.
 	ObjectTypePreprocessingPlanning = "preprocessing.planning"
+	// ObjectTypePreprocessingStatus is the object type for diagnostic preprocessing status events.
+	ObjectTypePreprocessingStatus = "preprocessing.status"
 	// ObjectTypePostprocessingPlanning is the object type for planning postprocessing events.
 	ObjectTypePostprocessingPlanning = "postprocessing.planning"
 	// ObjectTypePostprocessingCodeExecution is the object type for code execution postprocessing events.
