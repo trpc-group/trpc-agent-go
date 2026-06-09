@@ -934,6 +934,48 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#prompt-scaffolding-rules-context-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prompt Scaffolding (“Rules” / Context Injection)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prompt Scaffolding (“Rules” / Context Injection)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#choose-the-right-primitive" class="md-nav__link">
+    <span class="md-ellipsis">
+      Choose the right primitive
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#message-placement-high-level" class="md-nav__link">
+    <span class="md-ellipsis">
+      Message placement (high level)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#notes-and-best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Notes and best practices
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#runtime-instruction-updates" class="md-nav__link">
     <span class="md-ellipsis">
       Runtime Instruction Updates
@@ -3322,6 +3364,48 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#prompt-scaffolding-rules-context-injection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prompt Scaffolding (“Rules” / Context Injection)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Prompt Scaffolding (“Rules” / Context Injection)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#choose-the-right-primitive" class="md-nav__link">
+    <span class="md-ellipsis">
+      Choose the right primitive
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#message-placement-high-level" class="md-nav__link">
+    <span class="md-ellipsis">
+      Message placement (high level)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#notes-and-best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      Notes and best practices
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#runtime-instruction-updates" class="md-nav__link">
     <span class="md-ellipsis">
       Runtime Instruction Updates
@@ -4919,6 +5003,47 @@ The structured callback API (recommended) requires <strong>trpc-agent-go &gt;= 0
 <li><a href="../session/">Session</a> - Understand session management</li>
 <li><a href="../multiagent/">Multi-Agent</a> - Learn multi-Agent systems</li>
 </ol>
+<h2 id="prompt-scaffolding-rules-context-injection">Prompt Scaffolding (“Rules” / Context Injection)</h2>
+<p>Many agent products expose a “rules” feature (project memory, per‑turn constraints, etc.). In practice, “rules” is not a single stable framework‑level concept: different products choose different semantics (system vs user role, placement relative to history, persistence, file‑scoped selection, cache behavior).</p>
+<p>tRPC‑Agent‑Go intentionally keeps this generic and provides <strong>prompt / context injection primitives</strong> that you can combine to implement your product’s “rules” semantics.</p>
+<h3 id="choose-the-right-primitive">Choose the right primitive</h3>
+<ul>
+<li>Always‑on stable guidance (recommended for “global rules”):<ul>
+<li>Agent‑level: <code>llmagent.WithGlobalInstruction(...)</code> / <code>llmagent.WithInstruction(...)</code></li>
+<li>Per‑run override (does not mutate the agent): <code>agent.WithGlobalInstruction(...)</code> / <code>agent.WithInstruction(...)</code></li>
+</ul>
+</li>
+<li>Per‑run, non‑persistent context injected <strong>before session history</strong> (good for background seed context):<ul>
+<li><code>agent.WithInjectedContextMessages([]model.Message{...})</code></li>
+</ul>
+</li>
+<li>Per‑run, non‑persistent context injected <strong>near the latest user turn</strong> (useful for per‑turn “rules” / dynamic constraints):<ul>
+<li><code>agent.WithLateContextMessages([]model.Message{...})</code></li>
+</ul>
+</li>
+<li>Full control over the final request messages:<ul>
+<li>Use a structured <code>BeforeModel</code> callback to rewrite <code>request.Messages</code> (see <code>docs/mkdocs/en/callbacks.md</code>).</li>
+</ul>
+</li>
+</ul>
+<h3 id="message-placement-high-level">Message placement (high level)</h3>
+<p>The content request processor assembles the final model request roughly like this:</p>
+<ol>
+<li>System prompt / instructions (stable prefix)</li>
+<li>Few-shot examples (if configured, inserted after the leading system block)</li>
+<li>Injected context messages (<code>WithInjectedContextMessages</code>) — <strong>before history</strong></li>
+<li>Session history (canonical transcript)</li>
+<li>Late context messages (<code>WithLateContextMessages</code>) — <strong>inserted before the latest user message</strong> (if there is no user message, they are inserted immediately after the leading system block)</li>
+<li>(If already present) tool / assistant tail belonging to the current turn</li>
+</ol>
+<p>This “late” placement is useful when your injected content is dynamic and you want it close to the current user request, while keeping the prefix stable for prompt caching.</p>
+<h3 id="notes-and-best-practices">Notes and best practices</h3>
+<ul>
+<li>Prefer <code>role=user</code> for late context messages. Injecting <code>role=system</code> in the middle of the message list is not universally supported across providers and may interact poorly with validators.</li>
+<li><code>WithInjectedContextMessages</code> and <code>WithLateContextMessages</code> are <strong>not persisted</strong> into the session transcript (they affect only the current model request).</li>
+<li>In multi‑agent runs, these options live on <code>RunOptions</code> and are propagated via invocation cloning. If you need per‑agent scoping, use callbacks and filter by <code>invocation.AgentName</code>.</li>
+</ul>
+<p>Runnable example: <code>examples/prompt/late_context_messages</code>.</p>
 <h2 id="runtime-instruction-updates">Runtime Instruction Updates</h2>
 <p>You can update an Agent’s behavior-defining text at runtime without rebuilding or restarting the Agent.</p>
 <p>What changes dynamically</p>
@@ -5481,7 +5606,7 @@ runtime surfaces for a specific node by stable <code>nodeID</code> within a sing
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 9, 2026 08:53:22 UTC">2026-06-09 08:53:22</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 9, 2026 09:57:12 UTC">2026-06-09 09:57:12</span>
   </span>
 
     
