@@ -634,6 +634,25 @@ and the parent Agent should only consume its final answer. Use
 `InnerTextModeExclude` separately when you also want to hide child assistant
 text from the streamed UI.
 
+#### Model Pinning
+
+By default, a sub-agent inherits the caller's `RunOptions.ModelName`,
+`RunOptions.Model` and `RunOptions.ModelSelector`. This only takes effect
+when the caller passes `agent.WithModelName(...)`, `agent.WithModel(...)`
+or `agent.WithModelSelector(...)` at `runner.Run` time (for example, an
+AGUI server forwarding the end-user's model choice). If no runtime model
+is set in RunOptions, the sub-agent naturally uses its own model
+configured via `llmagent.WithModel`.
+
+When the sub-agent should always use its own model regardless of the
+runtime model selection propagated through RunOptions:
+
+```go
+agenttool.NewTool(subAgent,
+    agenttool.WithPinModel(true),
+)
+```
+
 ### Agent Transfer
 
 Agent Transfer implements task delegation between Agents through the `transfer_to_agent` tool, allowing the main Agent to automatically select appropriate SubAgents based on task type.
