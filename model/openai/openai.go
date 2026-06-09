@@ -768,6 +768,10 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 	for key, value := range request.ExtraFields {
 		opts = append(opts, openaiopt.WithJSONSet(key, value))
 	}
+	// Add request-level headers after model-level client options so they take precedence.
+	for key, value := range request.Headers {
+		opts = append(opts, openaiopt.WithHeader(key, value))
+	}
 
 	// Add streaming options if needed.
 	if request.Stream {

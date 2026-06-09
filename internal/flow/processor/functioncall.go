@@ -115,10 +115,18 @@ type FunctionCallResponseProcessor struct {
 	enableParallelTools bool
 	toolCallbacks       *tool.Callbacks
 	toolRetryPolicy     *tool.RetryPolicy
+	postToolResultHooks []PostToolResultHook
 }
 
 // FunctionCallResponseProcessorOption configures a function-call response processor.
 type FunctionCallResponseProcessorOption func(*FunctionCallResponseProcessor)
+
+// PostToolResultHook observes and may mutate a completed tool result event.
+type PostToolResultHook func(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	ev *event.Event,
+)
 
 // WithToolCallRetryPolicy sets the retry policy used for single callable tool invocations.
 func WithToolCallRetryPolicy(policy *tool.RetryPolicy) FunctionCallResponseProcessorOption {
@@ -128,6 +136,18 @@ func WithToolCallRetryPolicy(policy *tool.RetryPolicy) FunctionCallResponseProce
 			return
 		}
 		p.toolRetryPolicy = policy
+	}
+}
+
+// WithPostToolResultHook appends an internal hook after tool state delta is attached.
+func WithPostToolResultHook(
+	hook PostToolResultHook,
+) FunctionCallResponseProcessorOption {
+	return func(p *FunctionCallResponseProcessor) {
+		if hook == nil {
+			return
+		}
+		p.postToolResultHooks = append(p.postToolResultHooks, hook)
 	}
 }
 
@@ -354,6 +374,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCalls(
 		toolResults = append(toolResults, result)
 	}
 	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
+		ctx,
 		invocation,
 		toolResults,
 	)
@@ -397,6 +418,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequential(
 		return nil, err
 	}
 	toolEvents := p.attachStateDeltaToToolResults(
+		ctx,
 		invocation,
 		[]toolResult{result},
 	)
@@ -541,6 +563,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		ctx, resultChan, len(toolCalls),
 	)
 	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
+		ctx,
 		invocation,
 		toolResults,
 	)
@@ -1107,6 +1130,7 @@ func shouldSkipToolSkipSummarization(ctx context.Context) bool {
 }
 
 func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
+	ctx context.Context,
 	invocation *agent.Invocation,
 	results []toolResult,
 ) []*event.Event {
@@ -1137,6 +1161,7 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 				result.event,
 			)
 		}
+		p.runPostToolResultHooks(ctx, invocation, result.event)
 		if len(result.event.StateDelta) > 0 {
 			priorStateDelta = append(
 				priorStateDelta,
@@ -1146,6 +1171,16 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 		events = append(events, result.event)
 	}
 	return events
+}
+
+func (p *FunctionCallResponseProcessor) runPostToolResultHooks(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	ev *event.Event,
+) {
+	for _, hook := range p.postToolResultHooks {
+		hook(ctx, invocation, ev)
+	}
 }
 
 func applyPriorStateDeltas(

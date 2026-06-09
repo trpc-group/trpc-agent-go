@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="626" height="208" viewBox="0 0 626 208" role="img" aria-label="llmagent execution trace">
+  <defs>
+    <style>
+      .bg { fill: #f8fafc; }
+      .step { fill: #eef6ff; stroke: #3f7fbf; stroke-width: 1.8; }
+      .surface { fill: #fff7df; stroke: #d59b23; stroke-width: 1.4; }
+      .name { fill: #173b63; font: 700 40px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .node-name { fill: #64748b; font: 600 34px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .id { fill: #6f4a00; font: 700 30px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    </style>
+  </defs>
+  <rect class="bg" width="626" height="208" rx="18" />
+  <rect class="step" x="24" y="31" width="578" height="146" rx="14" />
+  <text class="name" x="313" y="71" text-anchor="middle">s1</text>
+  <text class="node-name" x="313" y="107" text-anchor="middle">candidate</text>
+  <rect class="surface" x="46" y="121" width="534" height="42" rx="8" />
+  <text class="id" x="313" y="152" text-anchor="middle">candidate#instruction</text>
+</svg>

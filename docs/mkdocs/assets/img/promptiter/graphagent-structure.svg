@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1540" height="620" viewBox="0 0 1540 620" role="img" aria-label="graph">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#718096" />
+    </marker>
+    <marker id="dash-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b6f47" />
+    </marker>
+    <style>
+      .bg { fill: #f8fafc; }
+      .fn { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 1.3; }
+      .agent { fill: #eef6ff; stroke: #3f7fbf; stroke-width: 1.5; }
+      .surface { fill: #fff7df; stroke: #d59b23; stroke-width: 1.1; }
+      .name { fill: #173b63; font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .fn-name { fill: #334155; font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .id { fill: #6f4a00; font: 600 11.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .prompt { fill: #475569; font: 600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .branch { fill: #8b6f47; font: 600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      .branch-bg { fill: #f8fafc; }
+      .edge { stroke: #718096; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .cond { stroke: #8b6f47; stroke-width: 1.7; stroke-dasharray: 6 5; fill: none; marker-end: url(#dash-arrow); }
+    </style>
+  </defs>
+  <rect class="bg" width="1540" height="620" rx="18" />
+
+  <rect class="agent" x="30" y="282" width="118" height="58" rx="10" />
+  <text class="name" x="89" y="317" text-anchor="middle">candidate</text>
+
+  <rect class="fn" x="170" y="282" width="140" height="58" rx="10" />
+  <text class="fn-name" x="240" y="317" text-anchor="middle">candidate/prepare</text>
+
+  <rect class="agent" x="390" y="68" width="270" height="124" rx="10" />
+  <text class="name" x="525" y="100" text-anchor="middle">candidate/title</text>
+  <rect class="surface" x="400" y="120" width="250" height="52" rx="7" />
+  <text class="id" x="525" y="141" text-anchor="middle">candidate/title#instruction</text>
+  <text class="prompt" x="525" y="162" text-anchor="middle">生成中文战报标题</text>
+
+  <rect class="agent" x="390" y="249" width="270" height="124" rx="10" />
+  <text class="name" x="525" y="281" text-anchor="middle">candidate/introduction</text>
+  <rect class="surface" x="400" y="301" width="250" height="52" rx="7" />
+  <text class="id" x="525" y="322" text-anchor="middle">candidate/introduction#instruction</text>
+  <text class="prompt" x="525" y="343" text-anchor="middle">写出比赛背景和开场导语</text>
+
+  <rect class="agent" x="390" y="430" width="270" height="124" rx="10" />
+  <text class="name" x="525" y="462" text-anchor="middle">candidate/highlight</text>
+  <rect class="surface" x="400" y="482" width="250" height="52" rx="7" />
+  <text class="id" x="525" y="503" text-anchor="middle">candidate/highlight#instruction</text>
+  <text class="prompt" x="525" y="524" text-anchor="middle">提取关键回合和转折点</text>
+
+  <rect class="fn" x="720" y="282" width="145" height="58" rx="10" />
+  <text class="fn-name" x="793" y="317" text-anchor="middle">candidate/merge</text>
+
+  <rect class="agent" x="875" y="249" width="220" height="124" rx="10" />
+  <text class="name" x="985" y="281" text-anchor="middle">candidate/polish</text>
+  <rect class="surface" x="885" y="301" width="200" height="52" rx="7" />
+  <text class="id" x="985" y="322" text-anchor="middle">candidate/polish#instruction</text>
+  <text class="prompt" x="985" y="343" text-anchor="middle">润色战报结构和表达</text>
+
+  <rect class="agent" x="1145" y="249" width="220" height="124" rx="10" />
+  <text class="name" x="1255" y="281" text-anchor="middle">candidate/review</text>
+  <rect class="surface" x="1155" y="301" width="200" height="52" rx="7" />
+  <text class="id" x="1255" y="322" text-anchor="middle">candidate/review#instruction</text>
+  <text class="prompt" x="1255" y="343" text-anchor="middle">审核事实一致性和发布标准</text>
+
+  <rect class="fn" x="1400" y="282" width="125" height="58" rx="10" />
+  <text class="fn-name" x="1463" y="317" text-anchor="middle">candidate/publish</text>
+
+  <path class="edge" d="M 148 311 L 170 311" />
+  <path class="edge" d="M 310 311 C 360 311, 340 130, 390 130" />
+  <path class="edge" d="M 310 311 L 390 311" />
+  <path class="edge" d="M 310 311 C 360 311, 340 492, 390 492" />
+
+  <path class="edge" d="M 660 130 C 700 130, 680 296, 720 296" />
+  <path class="edge" d="M 660 311 L 720 311" />
+  <path class="edge" d="M 660 492 C 700 492, 680 326, 720 326" />
+  <path class="edge" d="M 865 311 L 875 311" />
+  <path class="edge" d="M 1095 311 L 1145 311" />
+
+  <path class="cond" d="M 1365 311 L 1400 311" />
+  <rect class="branch-bg" x="1368" y="262" width="42" height="22" rx="5" />
+  <text class="branch" x="1389" y="277" text-anchor="middle">pass</text>
+  <path class="cond" d="M 1255 373 C 1255 520, 985 520, 985 373" />
+  <text class="branch" x="1120" y="522" text-anchor="middle">revise</text>
+</svg>
