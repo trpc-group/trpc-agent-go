@@ -4261,8 +4261,8 @@ $$
 
 ```go
 qualityMetric := &metric.EvalMetric{
-	EvaluatorName: "llm_verifier_pairwise",
-	Threshold:     0.5,
+	MetricName: "llm_verifier_pairwise",
+	Threshold:  0.5,
 	Criterion: &criterion.Criterion{
 		LLMJudge: &criterionllm.LLMCriterion{
 			Rubrics: []*criterionllm.Rubric{

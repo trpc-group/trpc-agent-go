@@ -442,6 +442,9 @@ func (m *Model) prepareChatRequest(
 	if request == nil {
 		return nil, nil, errors.New("request cannot be nil")
 	}
+	if err := validateLogprobsConfig(request); err != nil {
+		return nil, nil, err
+	}
 	// Optimize message structure for cache if enabled.
 	if m.optimizeForCache {
 		request.Messages = m.optimizeMessagesForCache(request.Messages)
@@ -450,6 +453,16 @@ func (m *Model) prepareChatRequest(
 	m.applyTokenTailoring(ctx, request)
 	chatRequest, opts := m.buildChatRequest(request)
 	return chatRequest, opts, nil
+}
+
+func validateLogprobsConfig(request *model.Request) error {
+	if request.TopLogprobs == nil {
+		return nil
+	}
+	if request.Logprobs == nil || !*request.Logprobs {
+		return errors.New("openai: top_logprobs requires logprobs to be true")
+	}
+	return nil
 }
 
 // GenerateContent implements the model.Model interface.

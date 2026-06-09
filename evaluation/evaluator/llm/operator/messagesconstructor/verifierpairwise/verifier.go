@@ -109,6 +109,9 @@ func (c *verifierMessagesConstructor) ConstructMessages(ctx context.Context, act
 	if expected.FinalResponse == nil {
 		return nil, fmt.Errorf("expected final response is required for llm_verifier_pairwise")
 	}
+	if actual.FinalResponse == nil {
+		return nil, fmt.Errorf("actual final response is required for llm_verifier_pairwise")
+	}
 	criteria := criteriaText(evalMetric)
 	if criteria == "" {
 		return nil, fmt.Errorf("llm judge rubrics are required")

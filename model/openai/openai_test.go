@@ -4601,6 +4601,43 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 	})
 }
 
+func TestPrepareChatRequest_ValidatesLogprobsConfig(t *testing.T) {
+	m := New("gpt-3.5-turbo", WithAPIKey("test-key"))
+	logprobsFalse := false
+	logprobsTrue := true
+	topLogprobs := 5
+	providerSpecificTopLogprobs := 21
+
+	_, _, err := m.prepareChatRequest(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		GenerationConfig: model.GenerationConfig{
+			TopLogprobs: &topLogprobs,
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires logprobs to be true")
+
+	_, _, err = m.prepareChatRequest(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		GenerationConfig: model.GenerationConfig{
+			Logprobs:    &logprobsFalse,
+			TopLogprobs: &topLogprobs,
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires logprobs to be true")
+
+	chatReq, _, err := m.prepareChatRequest(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		GenerationConfig: model.GenerationConfig{
+			Logprobs:    &logprobsTrue,
+			TopLogprobs: &providerSpecificTopLogprobs,
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(21), chatReq.TopLogprobs.Value)
+}
+
 func TestConvertChatCompletionChoiceLogprobs(t *testing.T) {
 	got := convertChatCompletionChoiceLogprobs(openaigo.ChatCompletionChoiceLogprobs{
 		Content: []openaigo.ChatCompletionTokenLogprob{

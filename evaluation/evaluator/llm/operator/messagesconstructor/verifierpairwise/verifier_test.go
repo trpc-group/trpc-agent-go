@@ -91,6 +91,14 @@ func TestConstructMessagesRejectsInvalidInputs(t *testing.T) {
 	_, err = constructor.ConstructMessages(context.Background(), []*evalset.Invocation{{}}, []*evalset.Invocation{{}}, verifierMetric())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expected final response is required")
+	_, err = constructor.ConstructMessages(
+		context.Background(),
+		[]*evalset.Invocation{{FinalResponse: nil}},
+		[]*evalset.Invocation{{FinalResponse: messagePtr(model.NewAssistantMessage("B"))}},
+		verifierMetric(),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "actual final response is required")
 }
 
 func verifierMetric() *metric.EvalMetric {
