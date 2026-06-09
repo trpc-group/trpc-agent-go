@@ -64,6 +64,32 @@ func TestScoreBasedOnResponseRequiresLogprobs(t *testing.T) {
 	assert.Contains(t, err.Error(), "logprobs are missing")
 }
 
+func TestScoreFromLogprobsReportsTagSpecificErrors(t *testing.T) {
+	_, _, err := scoreFromLogprobs(&model.Response{
+		Choices: []model.Choice{
+			{
+				Logprobs: &model.Logprobs{
+					Content: []model.TokenLogprob{{Token: "<score_B>"}, {Token: "A", Logprob: 0}},
+				},
+			},
+		},
+	}, defaultGranularity)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "score_A")
+
+	_, _, err = scoreFromLogprobs(&model.Response{
+		Choices: []model.Choice{
+			{
+				Logprobs: &model.Logprobs{
+					Content: []model.TokenLogprob{{Token: "<score_A>"}, {Token: "A", Logprob: 0}},
+				},
+			},
+		},
+	}, defaultGranularity)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "score_B")
+}
+
 func TestScoreForTagFromLogprobsUsesTokenAfterTag(t *testing.T) {
 	score, err := scoreForTagFromLogprobs([]model.TokenLogprob{
 		{
@@ -102,6 +128,24 @@ func TestScoreForTagFromLogprobsUsesScoreInsideTagClosingToken(t *testing.T) {
 	assert.InDelta(t, 0.4947, score, 1e-3)
 }
 
+func TestScoreForTagFromLogprobsRejectsMissingData(t *testing.T) {
+	_, err := scoreForTagFromLogprobs(nil, scoreATag, defaultGranularity)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty")
+	_, err = scoreForTagFromLogprobs([]model.TokenLogprob{{Token: "analysis"}}, scoreATag, defaultGranularity)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "score tag is missing")
+	_, err = scoreForTagFromLogprobs([]model.TokenLogprob{{Token: scoreATag}}, scoreATag, defaultGranularity)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "score token is missing")
+	_, err = scoreForTagFromLogprobs([]model.TokenLogprob{
+		{Token: scoreATag},
+		{Token: "not-score"},
+	}, scoreATag, defaultGranularity)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "score token logprobs")
+}
+
 func TestScoreForTagFromLogprobsRejectsInvalidLogprobs(t *testing.T) {
 	_, err := scoreForTagFromLogprobs([]model.TokenLogprob{
 		{Token: "<score_A>"},
@@ -115,6 +159,16 @@ func TestScoreForTagFromLogprobsRejectsInvalidLogprobs(t *testing.T) {
 	}, scoreATag, defaultGranularity)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "negative infinity")
+
+	_, err = scoreForTagFromLogprobs([]model.TokenLogprob{
+		{Token: "<score_A>"},
+		{
+			Token:   "A",
+			Logprob: math.NaN(),
+		},
+	}, scoreATag, defaultGranularity)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NaN")
 }
 
 func TestScoreTokenRejectsWrappedToken(t *testing.T) {
@@ -122,4 +176,13 @@ func TestScoreTokenRejectsWrappedToken(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = scoreTokenIndex("A,", defaultGranularity)
 	assert.False(t, ok)
+	_, ok = scoreTokenIndexAfterPrefix("B", "A", defaultGranularity)
+	assert.False(t, ok)
+	assert.Nil(t, scoreTokenDistributionFromTokenPrefix(model.TokenLogprob{Token: "A"}, 2, defaultGranularity))
+	_, ok = scoreForIndex(-1, defaultGranularity)
+	assert.False(t, ok)
+	_, ok = scoreForIndex(0, 1)
+	assert.False(t, ok)
+	assert.Equal(t, 0.0, pairwisePreferenceScore(0, 2))
+	assert.Equal(t, 1.0, pairwisePreferenceScore(2, 0))
 }

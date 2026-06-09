@@ -10,6 +10,7 @@ package bestofn
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 
@@ -24,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -167,6 +169,81 @@ func TestEvaluationSelector_PairwiseRejectsOnlyFailedCandidate(t *testing.T) {
 	assert.Contains(t, err.Error(), "no passing candidate")
 }
 
+func TestEvaluationSelector_SelectValidatesRequest(t *testing.T) {
+	selector := newEvaluationSelector(&options{
+		metrics: []*metric.EvalMetric{contentScoreMetric(0.5)},
+	})
+	_, err := selector.Select(context.Background(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "select request is nil")
+
+	_, err = selector.Select(context.Background(), selectRequest())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "candidate attempts are empty")
+}
+
+func TestEvaluationSelector_SelectRejectsUnsupportedMode(t *testing.T) {
+	selector := newEvaluationSelector(&options{
+		metrics:       []*metric.EvalMetric{contentScoreMetric(0.5)},
+		selectionMode: SelectionMode("unsupported"),
+	})
+	_, err := selector.Select(context.Background(), selectRequest(candidateAttempt(0, "ok")))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported selection mode")
+}
+
+func TestEvaluationSelector_PointwiseReturnsEvaluateError(t *testing.T) {
+	ctx := context.Background()
+	manager := evalsetinmemory.New()
+	_, err := manager.Create(ctx, "app", "eval")
+	require.NoError(t, err)
+	selector := &evaluationSelector{
+		metrics: []*metric.EvalMetric{{EvaluatorName: "content_score"}},
+	}
+	_, err = selector.selectByPointwise(
+		ctx,
+		manager,
+		errorEvaluationService{},
+		"eval",
+		selectRequest(candidateAttempt(0, "ok")),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "evaluate candidates")
+}
+
+func TestEvaluationSelector_PairwiseUsesStatusComparisons(t *testing.T) {
+	selector := newEvaluationSelector(&options{
+		selectionMode: SelectionModePairwise,
+	})
+	winner, err := selector.Select(context.Background(), selectRequest(
+		errorCandidateAttempt(0, "failed"),
+		candidateAttempt(1, "ok"),
+		errorCandidateAttempt(2, "failed"),
+	))
+	require.NoError(t, err)
+	assert.Equal(t, 1, winner)
+}
+
+func TestEvaluationSelector_PairwiseRecordsTies(t *testing.T) {
+	registry := evaluatorregistry.New()
+	require.NoError(t, registry.Register("pairwise_preference", &pairwisePreferenceEvaluator{
+		scores: map[string]float64{"A>B": 0.5},
+	}))
+	selector := newEvaluationSelector(&options{
+		metrics: []*metric.EvalMetric{
+			pairwisePreferenceMetric(),
+		},
+		selectionMode: SelectionModePairwise,
+		registry:      registry,
+	})
+	winner, err := selector.Select(context.Background(), selectRequest(
+		candidateAttempt(0, "A"),
+		candidateAttempt(1, "B"),
+	))
+	require.NoError(t, err)
+	assert.Equal(t, 0, winner)
+}
+
 func TestEvaluationSelector_UsesConfiguredEvalSetManager(t *testing.T) {
 	manager := evalsetinmemory.New()
 	registry := evaluatorregistry.New()
@@ -204,6 +281,26 @@ func TestEvaluationSelector_EvalCaseStoresCandidateTraceInConversation(t *testin
 	assert.Equal(t, "candidate", evalCase.Conversation[0].InvocationID)
 	require.NotNil(t, evalCase.Conversation[0].FinalResponse)
 	assert.Equal(t, "answer", evalCase.Conversation[0].FinalResponse.Content)
+}
+
+func TestEvaluationSelector_PairwiseEvalCaseStoresExpectedAndActual(t *testing.T) {
+	contextMessages := []*model.Message{messagePtr(model.NewSystemMessage("context"))}
+	selector := &evaluationSelector{contextMessages: contextMessages}
+	actual := &evalset.Invocation{
+		InvocationID:  "actual",
+		FinalResponse: messagePtr(model.NewAssistantMessage("candidate A")),
+	}
+	expected := &evalset.Invocation{
+		InvocationID:  "expected",
+		FinalResponse: messagePtr(model.NewAssistantMessage("candidate B")),
+	}
+	evalCase := selector.pairwiseEvalCase("pair", selectRequest(), actual, expected)
+	assert.Equal(t, evalset.EvalModeTrace, evalCase.EvalMode)
+	assert.Equal(t, contextMessages, evalCase.ContextMessages)
+	require.Len(t, evalCase.Conversation, 1)
+	require.Len(t, evalCase.ActualConversation, 1)
+	assert.Equal(t, "expected", evalCase.Conversation[0].InvocationID)
+	assert.Equal(t, "actual", evalCase.ActualConversation[0].InvocationID)
 }
 
 func TestEvaluationSelector_ReturnsErrorWhenAllCandidatesFailInference(t *testing.T) {
@@ -330,6 +427,32 @@ func TestNewRunnerOption_ValidatesConfiguration(t *testing.T) {
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "require passing candidate")
+	_, err = NewRunnerOption(
+		WithEvalMetrics(&metric.EvalMetric{}),
+		WithRegistry(nil),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "registry is nil")
+	_, err = NewRunnerOption(
+		WithEvalMetrics(&metric.EvalMetric{}),
+		WithMetricRegistry(nil),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metric registry is nil")
+	_, err = NewRunnerOption(
+		WithEvalMetrics(&metric.EvalMetric{}),
+		WithJudgeRunner(noOpRunner{}),
+		WithJudgeRunnerNumSamples(0),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "judge runner num samples")
+	_, err = NewRunnerOption(
+		WithEvalMetrics(&metric.EvalMetric{}),
+		WithAttemptParallelEnabled(true),
+		WithAttemptParallelism(3),
+		WithContextMessages(messagePtr(model.NewSystemMessage("context"))),
+	)
+	require.NoError(t, err)
 }
 
 func TestEvaluationSelector_MetricsWithJudgeRunnerInjectsRunner(t *testing.T) {
@@ -348,6 +471,30 @@ func TestEvaluationSelector_MetricsWithJudgeRunnerInjectsRunner(t *testing.T) {
 	require.NotNil(t, got[0].Criterion.LLMJudge)
 	require.NotNil(t, got[0].Criterion.LLMJudge.JudgeRunnerOptions)
 	assert.NotNil(t, got[0].Criterion.LLMJudge.JudgeRunnerOptions.Runner)
+}
+
+func TestEvaluationSelector_MetricWithJudgeRunnerHandlesNilAndCopiesSamples(t *testing.T) {
+	numSamples := 3
+	evalMetric := &metric.EvalMetric{
+		Criterion: &criterion.Criterion{
+			LLMJudge: &criterionllm.LLMCriterion{},
+		},
+	}
+	selector := newEvaluationSelector(&options{
+		metrics:               []*metric.EvalMetric{nil, &metric.EvalMetric{}, evalMetric},
+		judgeRunner:           noOpRunner{},
+		judgeRunnerNumSamples: &numSamples,
+	}).(*evaluationSelector)
+
+	got := selector.metricsWithJudgeRunner()
+	require.Len(t, got, 3)
+	assert.Nil(t, got[0])
+	assert.NotNil(t, got[1])
+	assert.Nil(t, got[1].Criterion)
+	require.NotNil(t, got[2].Criterion.LLMJudge.JudgeRunnerOptions)
+	require.NotNil(t, got[2].Criterion.LLMJudge.JudgeRunnerOptions.NumSamples)
+	assert.Equal(t, 3, *got[2].Criterion.LLMJudge.JudgeRunnerOptions.NumSamples)
+	assert.Nil(t, evalMetric.Criterion.LLMJudge.JudgeRunnerOptions)
 }
 
 func TestInvocationFromAttempt_PrefersAttemptInvocationFinalResponse(t *testing.T) {
@@ -452,6 +599,40 @@ func TestInvocationFromAttempt_ReturnsToolResultMismatchError(t *testing.T) {
 	_, err := invocationFromAttempt(model.NewUserMessage("question"), attempt)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tool ID missing")
+}
+
+func TestEvaluationSelector_BuildHelpersHandleUnusableAttempts(t *testing.T) {
+	selector := &evaluationSelector{}
+	manager := evalsetinmemory.New()
+	_, err := manager.Create(context.Background(), "app", "eval")
+	require.NoError(t, err)
+
+	_, _, err = selector.buildInferenceResults(context.Background(), manager, "eval", selectRequest(nil))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no usable candidate attempts")
+	_, err = selector.buildCandidates(selectRequest(nil))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no usable candidate attempts")
+	_, err = invocationFromAttempt(model.NewUserMessage("question"), nil)
+	require.Error(t, err)
+}
+
+func TestEvaluationSelector_CollectPairwiseResultsSkipsInvalidInputs(t *testing.T) {
+	selector := &evaluationSelector{}
+	scores := []*pairwiseCandidateScore{
+		{attemptIndex: 0},
+		{attemptIndex: 1},
+	}
+	selector.collectPairwiseResults(scores, []*pairwiseComparison{
+		nil,
+		{left: 0, right: 1},
+		{left: 0, right: 1},
+	}, []*evalresult.EvalCaseResult{
+		{OverallEvalMetricResults: []*evalresult.EvalMetricResult{{Score: 0.8, EvalStatus: status.EvalStatusPassed}}},
+		{OverallEvalMetricResults: []*evalresult.EvalMetricResult{{Score: math.NaN(), EvalStatus: status.EvalStatusPassed}}},
+	})
+	assert.Zero(t, scores[0].comparisons)
+	assert.Zero(t, scores[1].comparisons)
 }
 
 func TestEvaluationSelector_SelectWinnerTreatsNaNAsNotEvaluated(t *testing.T) {
@@ -608,6 +789,28 @@ func (e *pairwisePreferenceEvaluator) score(actual *evalset.Invocation, expected
 	return score
 }
 
+type errorEvaluationService struct{}
+
+func (s errorEvaluationService) Inference(
+	ctx context.Context,
+	request *service.InferenceRequest,
+	opt ...service.Option,
+) ([]*service.InferenceResult, error) {
+	return nil, nil
+}
+
+func (s errorEvaluationService) Evaluate(
+	ctx context.Context,
+	request *service.EvaluateRequest,
+	opt ...service.Option,
+) (*service.EvalSetRunResult, error) {
+	return nil, errors.New("evaluation failed")
+}
+
+func (s errorEvaluationService) Close() error {
+	return nil
+}
+
 func selectRequest(attempts ...*runner.CandidateAttempt) *runner.CandidateSelectRequest {
 	return &runner.CandidateSelectRequest{
 		AppName:   "app",
@@ -721,6 +924,10 @@ func responseEventWithInvocation(invocationID string, content string) *event.Eve
 		},
 	}
 	return event.NewResponseEvent(invocationID, "candidate", response)
+}
+
+func messagePtr(message model.Message) *model.Message {
+	return &message
 }
 
 var _ evaluator.Evaluator = (*contentScoreEvaluator)(nil)

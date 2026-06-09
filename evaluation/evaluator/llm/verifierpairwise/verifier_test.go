@@ -52,6 +52,35 @@ func TestVerifierEvaluatorStructuredOutput(t *testing.T) {
 	assert.Nil(t, out)
 }
 
+func TestVerifierEvaluatorUsesCustomOperators(t *testing.T) {
+	ev := New(
+		WithMessagesConstructor(fakeStructuredMessagesConstructor{}),
+		WithResponsescorer(fakeResponseScorer{}),
+		WithSamplesAggregator(fakeSamplesAggregator{}),
+		WithInvocationsAggregator(fakeInvocationsAggregator{}),
+	).(*verifierEvaluator)
+	messages, err := ev.ConstructMessages(context.Background(), nil, nil, verifierMetric())
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "custom prompt", messages[0].Content)
+
+	out, err := ev.StructuredOutput(context.Background(), nil, nil, verifierMetric())
+	require.NoError(t, err)
+	assert.NotNil(t, out)
+
+	score, err := ev.ScoreBasedOnResponse(context.Background(), &model.Response{}, verifierMetric())
+	require.NoError(t, err)
+	assert.Equal(t, 0.42, score.Score)
+
+	sample, err := ev.AggregateSamples(context.Background(), nil, verifierMetric())
+	require.NoError(t, err)
+	assert.Equal(t, 0.43, sample.Score)
+
+	result, err := ev.AggregateInvocations(context.Background(), nil, verifierMetric())
+	require.NoError(t, err)
+	assert.Equal(t, 0.44, result.OverallScore)
+}
+
 func TestVerifierEvaluatorScoreBasedOnResponseUsesLogprobs(t *testing.T) {
 	ev := New().(*verifierEvaluator)
 	result, err := ev.ScoreBasedOnResponse(context.Background(), &model.Response{
@@ -125,4 +154,54 @@ func verifierMetric() *metric.EvalMetric {
 
 func messagePtr(message model.Message) *model.Message {
 	return &message
+}
+
+type fakeStructuredMessagesConstructor struct{}
+
+func (c fakeStructuredMessagesConstructor) ConstructMessages(
+	ctx context.Context,
+	actuals []*evalset.Invocation,
+	expecteds []*evalset.Invocation,
+	evalMetric *metric.EvalMetric,
+) ([]model.Message, error) {
+	return []model.Message{model.NewUserMessage("custom prompt")}, nil
+}
+
+func (c fakeStructuredMessagesConstructor) StructuredOutput(
+	ctx context.Context,
+	actuals []*evalset.Invocation,
+	expecteds []*evalset.Invocation,
+	evalMetric *metric.EvalMetric,
+) (*model.StructuredOutput, error) {
+	return &model.StructuredOutput{}, nil
+}
+
+type fakeResponseScorer struct{}
+
+func (s fakeResponseScorer) ScoreBasedOnResponse(
+	ctx context.Context,
+	response *model.Response,
+	evalMetric *metric.EvalMetric,
+) (*evaluator.ScoreResult, error) {
+	return &evaluator.ScoreResult{Score: 0.42}, nil
+}
+
+type fakeSamplesAggregator struct{}
+
+func (a fakeSamplesAggregator) AggregateSamples(
+	ctx context.Context,
+	samples []*evaluator.PerInvocationResult,
+	evalMetric *metric.EvalMetric,
+) (*evaluator.PerInvocationResult, error) {
+	return &evaluator.PerInvocationResult{Score: 0.43}, nil
+}
+
+type fakeInvocationsAggregator struct{}
+
+func (a fakeInvocationsAggregator) AggregateInvocations(
+	ctx context.Context,
+	results []*evaluator.PerInvocationResult,
+	evalMetric *metric.EvalMetric,
+) (*evaluator.EvaluateResult, error) {
+	return &evaluator.EvaluateResult{OverallScore: 0.44}, nil
 }
