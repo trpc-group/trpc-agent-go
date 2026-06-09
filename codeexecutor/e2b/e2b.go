@@ -518,9 +518,31 @@ func (c *CodeExecutor) ExecuteInline(
 }
 
 // Engine exposes the sandbox-backed runtime as an Engine for skill tools.
+//
+// The engine advertises SupportsCleanEnv: RunProgram honors
+// RunProgramSpec.CleanEnv by launching the spawned program through
+// `env -i` with only the workspace base variables, the (already
+// scrubbed) spec.Env and a minimal PATH, so the program does not
+// inherit the sandbox process environment (issue #1845). This lets
+// tool/workspaceexec policy mode run on the e2b backend instead of
+// failing closed.
+//
+// Scope note: the e2b Jupyter `/execute` API exposes no hook to
+// launch the *framing* shell (the kernel-side bash that runs our
+// script and the output sentinels) in an empty environment, so that
+// shell still inherits the sandbox environment. This is not a
+// model-injection vector: the sandbox environment is fixed by the
+// template / WithEnvVars at sandbox creation (operator-controlled),
+// and model-supplied env (spec.Env) is confined to the `env -i`
+// invocation rather than the framing shell. The SupportsCleanEnv
+// contract is about the spawned program's environment, which `env -i`
+// satisfies.
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
-	return codeexecutor.NewEngine(rt, rt, rt)
+	return codeexecutor.NewEngineWithCapabilities(
+		rt, rt, rt,
+		codeexecutor.Capabilities{SupportsCleanEnv: true},
+	)
 }
 
 // Close terminates the owned sandbox (if any).
