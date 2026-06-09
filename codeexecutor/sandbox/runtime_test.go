@@ -231,6 +231,56 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 	}
 }
 
+func TestRuntimeRunProgramSerialTimeoutStartsAfterLock(t *testing.T) {
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(DangerFullAccessProfile()),
+		WithSessionPolicy(SessionPolicy{RunConcurrency: SessionRunConcurrencySerial}),
+	)
+	ws, err := rt.CreateWorkspace(context.Background(), "run/serial-timeout", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstReady := filepath.Join(ws.Path, "work", "first-ready")
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+			Cmd:     "bash",
+			Args:    []string{"-c", "printf ready > first-ready; sleep 0.75"},
+			Timeout: 2 * time.Second,
+		})
+		firstDone <- err
+	}()
+	waitUntil := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(firstReady); err == nil {
+			break
+		}
+		select {
+		case err := <-firstDone:
+			t.Fatalf("first run finished before readiness marker: %v", err)
+		default:
+		}
+		if time.Now().After(waitUntil) {
+			t.Fatalf("first run did not write readiness marker")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "true",
+		Timeout: 250 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("queued run error = %v", err)
+	}
+	if res.TimedOut {
+		t.Fatalf("queued run unexpectedly timed out: %#v", res)
+	}
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first run error = %v", err)
+	}
+}
+
 func TestRuntimeWorkspaceLifecycleAndManifest(t *testing.T) {
 	root := t.TempDir()
 	stale := filepath.Join(root, "sandbox", "unsafe", "id", "work", "stale.txt")
@@ -1058,6 +1108,23 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 	ws, err := rt.CreateWorkspace(ctx, "fs/symlink-helpers", codeexecutor.WorkspacePolicy{})
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	realRoot := t.TempDir()
+	linkedRoot := filepath.Join(t.TempDir(), "workspace-root")
+	if err := os.Symlink(realRoot, linkedRoot); err != nil {
+		t.Skipf("symlink root setup failed: %v", err)
+	}
+	linkedRuntime := NewRuntime(WithWorkspaceRoot(linkedRoot))
+	linkedWS, err := linkedRuntime.CreateWorkspace(ctx, "fs/canonical-root", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := linkedRuntime.PutFiles(ctx, linkedWS, []codeexecutor.PutFile{{
+		Path:    "work/canonical.txt",
+		Content: []byte("ok"),
+	}}); err != nil {
+		t.Fatalf("put through symlink workspace root error = %v", err)
 	}
 
 	outside := t.TempDir()

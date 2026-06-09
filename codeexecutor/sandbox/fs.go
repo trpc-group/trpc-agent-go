@@ -686,14 +686,46 @@ func (r *Runtime) checkWorkspaceWriteTarget(
 	if !changed {
 		return nil
 	}
-	if !sameOrChild(wsAbs, resolved) {
+	wsReal, err := canonicalizeExistingPath(wsAbs)
+	if err != nil {
+		return err
+	}
+	resolvedReal, err := canonicalizeExistingPath(resolved)
+	if err != nil {
+		return err
+	}
+	if !sameOrChild(wsReal, resolvedReal) {
 		return deniedf(ErrPathDenied, "write", target, "symlink target escapes workspace")
 	}
-	resolvedRel, err := filepath.Rel(wsAbs, resolved)
+	resolvedRel, err := filepath.Rel(wsReal, resolvedReal)
 	if err != nil {
 		return err
 	}
 	return r.checkWrite(profile, ws, filepath.ToSlash(resolvedRel))
+}
+
+func canonicalizeExistingPath(path string) (string, error) {
+	path = filepath.Clean(path)
+	var suffix []string
+	cur := path
+	for {
+		resolved, err := filepath.EvalSymlinks(cur)
+		if err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return filepath.Abs(resolved)
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return filepath.Abs(path)
+		}
+		suffix = append(suffix, filepath.Base(cur))
+		cur = parent
+	}
 }
 
 func resolvePotentialSymlinkTarget(path string) (string, bool, error) {

@@ -32,13 +32,13 @@ func (r *Runtime) RunProgram(
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
-	runCtx, cancel := context.WithTimeout(ctx, prep.timeout)
-	defer cancel()
 	if r.sessionPolicy.RunConcurrency == SessionRunConcurrencySerial {
 		lock := r.runLock(ws)
 		lock.Lock()
 		defer lock.Unlock()
 	}
+	runCtx, cancel := context.WithTimeout(ctx, prep.timeout)
+	defer cancel()
 	start := time.Now()
 	env := r.buildEnvironment(ws, spec)
 	cmd, backendName, cleanup, err := r.commandForProfile(runCtx, prep.profile, ws, prep.cwd, env, spec)
