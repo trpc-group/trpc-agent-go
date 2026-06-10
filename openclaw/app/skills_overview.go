@@ -126,8 +126,12 @@ func selectCompactSkillSummaries(
 		}
 		byName[name] = summary
 	}
+	total := len(byName)
+	if total == 0 {
+		return nil, 0
+	}
 
-	selected := make([]skill.Summary, 0, minInt(limit, len(summaries)))
+	selected := make([]skill.Summary, 0, minInt(limit, total))
 	seen := map[string]struct{}{}
 	appendByName := func(name string) bool {
 		summary, ok := byName[name]
@@ -144,15 +148,15 @@ func selectCompactSkillSummaries(
 
 	for _, name := range pinned {
 		if appendByName(name) {
-			return selected, len(summaries) - len(selected)
+			return selected, total - len(selected)
 		}
 	}
 	for _, summary := range summaries {
 		if appendByName(strings.TrimSpace(summary.Name)) {
-			return selected, len(summaries) - len(selected)
+			return selected, total - len(selected)
 		}
 	}
-	return selected, len(summaries) - len(selected)
+	return selected, total - len(selected)
 }
 
 func normalizePinnedSkillNames(pinned []string) []string {

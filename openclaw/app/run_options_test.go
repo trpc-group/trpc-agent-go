@@ -1159,6 +1159,23 @@ skills:
 	require.Equal(t, "beta,gamma", opts.SkillsOverviewPinned)
 }
 
+func TestParseRunOptions_SkillsCamelCaseConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  summaryCacheTtlMs: 1500
+  overviewLimit: 3
+  overviewPinned: ["alpha","beta"]
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, 1500*time.Millisecond, opts.SkillsSummaryCacheTTL)
+	require.Equal(t, 3, opts.SkillsOverviewLimit)
+	require.Equal(t, "alpha,beta", opts.SkillsOverviewPinned)
+}
+
 func TestParseRunOptions_KnowledgesProvidersConfig(t *testing.T) {
 	t.Parallel()
 

@@ -46,6 +46,25 @@ func TestRenderCompactSkillsOverviewPinnedAndOmitted(t *testing.T) {
 	require.NotContains(t, got, "- beta: Beta skill")
 }
 
+func TestRenderCompactSkillsOverviewOmittedUsesUniqueSkills(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	summaries := []skill.Summary{
+		{Name: "alpha", Description: "Alpha skill"},
+		{Name: " ", Description: "Blank skill"},
+		{Name: "beta", Description: "Beta skill"},
+		{Name: "alpha", Description: "Alpha updated"},
+		{Name: "gamma", Description: "Gamma skill"},
+	}
+
+	got := renderCompactSkillsOverview(summaries, 2, nil)
+
+	require.Contains(t, got, "1 more skills are available")
+	require.NotContains(t, got, "3 more skills are available")
+}
+
 func TestNewSkillsOverviewRendererDisabled(t *testing.T) {
 	t.Parallel()
 
