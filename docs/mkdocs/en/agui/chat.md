@@ -1070,9 +1070,61 @@ server, err := agui.New(
 
 `buildParentGraph` defines two AgentNodes in the parent graph, and `buildResearchGraph` defines the LLM node and interrupt node inside the child `GraphAgent`. `agui.WithGraphNodeInterruptActivityTopLevelOnly(true)` exposes only the parent graph interrupt activity to the frontend. The caller resumes with the `lineageId` and `checkpointId` returned by the parent graph.
 
-Disable `TopLevelOnly` if the frontend needs to observe the child graph's own interrupt activity. If the child `GraphAgent` is exposed to the parent Agent as an AgentTool and the frontend needs to observe inner graph events, enable `agenttool.WithStreamInner(true)` when constructing the AgentTool.
+Disable `TopLevelOnly` if the frontend needs to observe the child graph's own interrupt activity.
 
 Complete example: [examples/agui/server/externaltool/agentnode_graphagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/agentnode_graphagent).
+
+#### AgentTool Child GraphAgent Interrupts
+
+Use this form when a parent `GraphAgent` runs `agenttool.NewTool(childGraphAgent)` in a `ToolsNode`, and the interrupt is emitted by a node inside the child `GraphAgent`. Unlike AgentNode execution, the child graph enters the parent graph as a normal tool call. From the parent graph's point of view, the interrupt point is the `ToolsNode` currently running AgentTool, but the actual `graph.Interrupt(...)` call happens inside the child `GraphAgent` node. When it interrupts, the parent `ToolsNode` checkpoint records the AgentTool child graph checkpoint metadata. After the caller receives the external result, it resumes with a subsequent AG-UI request instead of continuing within the same SSE run. On resume, the caller still passes only the parent graph `lineage_id` and parent graph `checkpoint_id`, then writes the tool result into `state.resume_map` with the key used by the child graph's `graph.Interrupt`. The framework routes that value to the corresponding child graph checkpoint.
+
+Code snippet:
+
+```go
+tools := map[string]tool.Tool{
+    childAgentName: agenttool.NewTool(childGraphAgent),
+}
+
+sg.AddLLMNode(
+    nodeCallReviewGraph,
+    modelInstance,
+    instruction,
+    tools,
+    graph.WithGenerationConfig(generationConfig),
+)
+sg.AddToolsNode(nodeExecuteTools, tools)
+sg.AddConditionalEdges(nodeCallReviewGraph, routeAfterReviewGraph, map[string]string{
+    nodeExecuteTools: nodeExecuteTools,
+    graph.End:        graph.End,
+})
+sg.AddEdge(nodeExecuteTools, nodeCallReviewGraph)
+
+func childReviewNode(ctx context.Context, state graph.State) (any, error) {
+    value, err := graph.Interrupt(ctx, state, childInterruptKey, "Review decision is required.")
+    if err != nil {
+        return nil, err
+    }
+    decision, ok := value.(string)
+    if !ok {
+        return nil, fmt.Errorf("review decision must be a string")
+    }
+    return graph.State{graph.StateKeyLastResponse: "review decision: " + decision}, nil
+}
+
+server, err := agui.New(
+    runner,
+    agui.WithGraphNodeInterruptActivityEnabled(true),
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithStateResolver(resolveRuntimeState),
+    ),
+)
+```
+
+After `nodeExecuteTools` completes, the graph returns to `nodeCallReviewGraph`, so the same LLM node consumes the tool message returned by AgentTool and generates the final response. A separate final-answer node is not required. `resolveRuntimeState` converts `state.lineage_id`, `state.checkpoint_id`, and `state.resume_map` from the AG-UI request into GraphAgent runtime state. `state.checkpoint_id` should be the parent graph `ToolsNode` interrupt checkpoint. The child graph checkpoint is resumed internally by AgentTool, so AG-UI callers should not pass the child checkpoint. The `state.resume_map` key should be the key passed to the child graph's `graph.Interrupt`, such as `childInterruptKey` in the snippet above.
+
+If the frontend also needs to observe inner graph events, enable `agenttool.WithStreamInner(true)` when constructing the AgentTool. If it only consumes the parent graph's `graph.node.interrupt` activity, the default configuration is enough.
+
+Complete example: [examples/agui/server/externaltool/agenttool_graphagent_graphagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/agenttool_graphagent_graphagent). If the outer flow first uses an AgentNode to produce a handoff tool call, and then the parent graph selects an AgentTool to execute it, see [examples/agui/server/externaltool/agentnode_handoff_agenttool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/agentnode_handoff_agenttool).
 
 ### AG-UI `role=tool` Input Handling
 
