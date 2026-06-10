@@ -107,6 +107,7 @@ func TestExtensionToType(t *testing.T) {
 		{".csv", "csv"},
 		{".pdf", "pdf"},
 		{".docx", "docx"},
+		{".py", "python"},
 		{".xlsx", "xlsx"}, // unknown -> passthrough without dot
 	}
 	for _, c := range cases {
@@ -256,9 +257,12 @@ func TestGetAllReaders(t *testing.T) {
 				RegisterReader([]string{".json"}, func(opts ...Option) Reader {
 					return &dummyReader{name: "json-reader", exts: []string{".json"}}
 				})
+				RegisterReader([]string{".py"}, func(opts ...Option) Reader {
+					return &dummyReader{name: "python-reader", exts: []string{".py"}}
+				})
 			},
-			expectedTypes: []string{"text", "markdown", "json"},
-			expectedCount: 3,
+			expectedTypes: []string{"text", "markdown", "json", "python"},
+			expectedCount: 4,
 		},
 		{
 			name: "multiple extensions same type",

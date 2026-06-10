@@ -11,6 +11,7 @@ package repo
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"path/filepath"
 	"testing"
@@ -534,6 +535,42 @@ func TestReadGraphPassesAllowedGoFilesToParser(t *testing.T) {
 	require.Equal(t, []string{mainPath}, includeFiles)
 }
 
+func TestReadGraphSkipsUnregisteredPythonParser(t *testing.T) {
+	if _, ok := codeast.GetDirectoryParser(codeast.FileTypePython); ok {
+		t.Skip("python directory parser is registered in this test binary")
+	}
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "service.py"), "def run():\n    return 1\n")
+
+	src := New(WithRepository(Repository{Dir: dir}))
+	data, err := src.ReadGraph(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	require.Empty(t, data.Nodes)
+	require.Empty(t, data.Edges)
+}
+
+func TestReadGraphSkipsParserUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(dir, "main.go"), "package demo\n\nfunc Main() {}\n")
+
+	// Mirror how the python parser surfaces a missing/too-old interpreter:
+	// wrapped with %w so errors.Is still matches through the wrapping.
+	parser := &configurableDirectoryParser{
+		err: fmt.Errorf("parse directory: %w", codeast.ErrParserUnavailable),
+	}
+	codeast.RegisterDirectoryParser(codeast.FileTypeGo, parser)
+	defer codeast.RegisterDirectoryParser(codeast.FileTypeGo, stubDirectoryParser{})
+
+	src := New(WithRepository(Repository{Dir: dir}))
+	data, err := src.ReadGraph(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, data)
+	require.Empty(t, data.Nodes)
+	require.Empty(t, data.Edges)
+}
+
 func TestReadGraphResolveRepositoryError(t *testing.T) {
 	src := New()
 	_, err := src.ReadGraph(context.Background())
@@ -796,6 +833,126 @@ func TestGraphDataFromCodeASTEmptyAllowedPaths(t *testing.T) {
 	data := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo"}, map[string]struct{}{})
 	require.Empty(t, data.Nodes)
 	require.Empty(t, data.Edges)
+}
+
+func TestGraphDataFromCodeASTFuzzySymbolResolution(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "agent.py"), "class BaseAgent: pass\n")
+	writeRepoFile(t, filepath.Join(dir, "abc.py"), "class AgentABC: pass\n")
+
+	src := New(WithRepository(Repository{Dir: dir}))
+	result := &codeast.Result{
+		Nodes: []*codeast.Node{
+			{
+				ID: "pkg.agents._base_agent.BaseAgent", Type: codeast.EntityClass,
+				Name: "BaseAgent", FullName: "pkg.agents._base_agent.BaseAgent",
+				Language: codeast.LanguagePython, Scope: codeast.ScopeCode,
+				Code: "class BaseAgent(AgentABC): ...", FilePath: filepath.Join(dir, "agent.py"),
+				LineStart: 1, LineEnd: 1,
+			},
+			{
+				ID: "pkg.abc._agent.AgentABC", Type: codeast.EntityClass,
+				Name: "AgentABC", FullName: "pkg.abc._agent.AgentABC",
+				Language: codeast.LanguagePython, Scope: codeast.ScopeCode,
+				Code: "class AgentABC: ...", FilePath: filepath.Join(dir, "abc.py"),
+				LineStart: 1, LineEnd: 1,
+			},
+		},
+		Edges: []*codeast.Edge{
+			// Edge uses the re-export path (missing internal module segment)
+			{FromID: "pkg.agents._base_agent.BaseAgent", ToID: "pkg.abc.AgentABC", Type: codeast.RelationInherits},
+		},
+	}
+	allowed := map[string]struct{}{"agent.py": {}, "abc.py": {}}
+	data := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo"}, allowed)
+	require.Len(t, data.Nodes, 2)
+	require.Len(t, data.Edges, 1, "INHERITS edge should be resolved via prefix matching")
+	require.Equal(t, string(codeast.RelationInherits), data.Edges[0].Type)
+}
+
+func TestGraphDataFromCodeASTResolvesPythonSameModuleBareTarget(t *testing.T) {
+	dir := t.TempDir()
+	writeRepoFile(t, filepath.Join(dir, "sample.py"), "class BaseHandler: pass\nclass HTTPHandler(BaseHandler): pass\n")
+
+	src := New(WithRepository(Repository{Dir: dir}))
+	result := &codeast.Result{
+		Nodes: []*codeast.Node{
+			{
+				ID: "sample.BaseHandler", Type: codeast.EntityClass,
+				Name: "BaseHandler", FullName: "sample.BaseHandler",
+				Language: codeast.LanguagePython, Scope: codeast.ScopeCode,
+				Code: "class BaseHandler: pass", FilePath: filepath.Join(dir, "sample.py"),
+				LineStart: 1, LineEnd: 1,
+			},
+			{
+				ID: "sample.HTTPHandler", Type: codeast.EntityClass,
+				Name: "HTTPHandler", FullName: "sample.HTTPHandler",
+				Language: codeast.LanguagePython, Scope: codeast.ScopeCode,
+				Code: "class HTTPHandler(BaseHandler): pass", FilePath: filepath.Join(dir, "sample.py"),
+				LineStart: 2, LineEnd: 2,
+			},
+		},
+		Edges: []*codeast.Edge{
+			{FromID: "sample.HTTPHandler", ToID: "BaseHandler", Type: codeast.RelationInherits},
+		},
+	}
+	allowed := map[string]struct{}{"sample.py": {}}
+	data := src.graphDataFromCodeAST(result, dir, &repoInfo{name: "demo"}, allowed)
+	require.Len(t, data.Nodes, 2)
+	require.Len(t, data.Edges, 1, "same-module bare Python target should resolve relative to the source symbol")
+	require.Equal(t, string(codeast.RelationInherits), data.Edges[0].Type)
+}
+
+func TestResolveTargetSymbolIDBareNameAmbiguous(t *testing.T) {
+	kept := map[string]struct{}{
+		"pkg.a.Source":         {},
+		"pkg.a.internal.Model": {},
+		"pkg.a.other.Model":    {},
+	}
+	idx := buildShortNameIndex(kept)
+	require.Equal(t, "", resolveTargetSymbolID("Model", "pkg.a.Source", kept, idx))
+}
+
+func TestResolveSymbolIDExactMatch(t *testing.T) {
+	kept := map[string]struct{}{"pkg.foo.Bar": {}}
+	idx := buildShortNameIndex(kept)
+	require.Equal(t, "pkg.foo.Bar", resolveSymbolID("pkg.foo.Bar", kept, idx))
+}
+
+func TestResolveSymbolIDShortNameUnique(t *testing.T) {
+	kept := map[string]struct{}{"pkg.internal.UniqueClass": {}}
+	idx := buildShortNameIndex(kept)
+	// "pkg.UniqueClass" has prefix "pkg" which IS a prefix of "pkg.internal" — valid re-export match.
+	require.Equal(t, "pkg.internal.UniqueClass", resolveSymbolID("pkg.UniqueClass", kept, idx))
+	// "some.UniqueClass" has prefix "some" which is NOT a prefix of "pkg.internal" — rejected.
+	require.Equal(t, "", resolveSymbolID("some.UniqueClass", kept, idx))
+}
+
+func TestResolveSymbolIDBareShortNameRejected(t *testing.T) {
+	kept := map[string]struct{}{"pkg.internal.UniqueClass": {}}
+	idx := buildShortNameIndex(kept)
+	// Bare short name (no dot) must not resolve — no path context to anchor the match.
+	require.Equal(t, "", resolveSymbolID("UniqueClass", kept, idx))
+}
+
+func TestResolveSymbolIDPrefixMatch(t *testing.T) {
+	kept := map[string]struct{}{
+		"pkg.abc._agent.AgentABC":     {},
+		"pkg.models._types.AgentType": {},
+	}
+	idx := buildShortNameIndex(kept)
+	// "pkg.abc.AgentABC" should match "pkg.abc._agent.AgentABC" via prefix
+	require.Equal(t, "pkg.abc._agent.AgentABC", resolveSymbolID("pkg.abc.AgentABC", kept, idx))
+}
+
+func TestResolveSymbolIDAmbiguous(t *testing.T) {
+	kept := map[string]struct{}{
+		"pkg.a.run": {},
+		"pkg.b.run": {},
+	}
+	idx := buildShortNameIndex(kept)
+	// "other.run" has path context but prefix "other" matches neither "pkg.a" nor "pkg.b".
+	require.Equal(t, "", resolveSymbolID("other.run", kept, idx))
 }
 
 func TestReadDocumentNodesEmptyDocExtensions(t *testing.T) {

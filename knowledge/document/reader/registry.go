@@ -103,6 +103,8 @@ func extensionToType(ext string) string {
 		return "pdf"
 	case "docx", "doc":
 		return "docx"
+	case "py":
+		return "python"
 	default:
 		return ext
 	}

@@ -681,6 +681,16 @@ func TestRunGitErrorPath(t *testing.T) {
 	}
 }
 
+func TestMissingReaderErrorIncludesPythonHint(t *testing.T) {
+	err := missingReaderError(codeast.FileTypePython)
+	if err == nil {
+		t.Fatal("missingReaderError(python) = nil")
+	}
+	if !strings.Contains(err.Error(), "knowledge/document/reader/python") {
+		t.Fatalf("missingReaderError(python) = %v, want python reader import hint", err)
+	}
+}
+
 func TestProcessFileMetadataAndErrors(t *testing.T) {
 	t.Run("success metadata and file node rename", func(t *testing.T) {
 		repoRoot := t.TempDir()
