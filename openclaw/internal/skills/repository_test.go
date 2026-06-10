@@ -1456,6 +1456,33 @@ description: "Probe weather prerequisites"
 	require.False(t, hit)
 }
 
+func TestRepositorySummaryCacheDirtyCheckTTL(t *testing.T) {
+	t.Parallel()
+
+	const customSummaryCacheTTL = time.Hour
+
+	root := t.TempDir()
+	writeSkill(t, root, "weather-probe", `---
+name: weather-probe
+description: "Probe weather prerequisites"
+---
+
+# weather-probe
+`)
+
+	repo, err := NewRepository(
+		[]string{root},
+		WithSummaryCacheDirtyCheckTTL(customSummaryCacheTTL),
+	)
+	require.NoError(t, err)
+
+	repo.mu.RLock()
+	expiresAt := repo.summaryCacheExpiresAt
+	repo.mu.RUnlock()
+
+	require.Greater(t, time.Until(expiresAt), customSummaryCacheTTL/2)
+}
+
 func TestRepositorySummaryFingerprintHelpers(t *testing.T) {
 	t.Parallel()
 

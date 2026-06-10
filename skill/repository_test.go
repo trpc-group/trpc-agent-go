@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -27,6 +28,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -41,6 +43,12 @@ func writeSkill(t *testing.T, dir, name string) string {
 		[]byte(data), 0o644)
 	require.NoError(t, err)
 	return sdir
+}
+
+func advanceFileModTime(t *testing.T, path string) {
+	t.Helper()
+	when := time.Now().Add(time.Second)
+	require.NoError(t, os.Chtimes(path, when, when))
 }
 
 func TestStateKeys_ScopedAndLegacy(t *testing.T) {
@@ -248,6 +256,53 @@ func TestFSRepository_Summaries_SortedByName(t *testing.T) {
 	require.Len(t, sums, 2)
 	require.Equal(t, "a", sums[0].Name)
 	require.Equal(t, "b", sums[1].Name)
+}
+
+func TestFSRepository_Summaries_ReflectsModifiedSkillFile(t *testing.T) {
+	const (
+		skillName       = "alpha"
+		updatedSummary  = "updated"
+		skillBody       = "body"
+		summaryTemplate = "---\nname: %s\n" +
+			"description: %s\n---\n%s\n"
+	)
+
+	root := t.TempDir()
+	sdir := writeSkill(t, root, skillName)
+
+	repo, err := NewFSRepository(root)
+	require.NoError(t, err)
+	require.Equal(t, "d", repo.Summaries()[0].Description)
+
+	skillPath := filepath.Join(sdir, skillFile)
+	data := fmt.Sprintf(
+		summaryTemplate,
+		skillName,
+		updatedSummary,
+		skillBody,
+	)
+	require.NoError(t, os.WriteFile(skillPath, []byte(data), 0o644))
+	advanceFileModTime(t, skillPath)
+
+	sums := repo.Summaries()
+	require.Len(t, sums, 1)
+	require.Equal(t, skillName, sums[0].Name)
+	require.Equal(t, updatedSummary, sums[0].Description)
+}
+
+func TestFSRepository_Summaries_SkipsMissingSkillFile(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	sdir := writeSkill(t, root, "alpha")
+
+	repo, err := NewFSRepository(root)
+	require.NoError(t, err)
+	require.Len(t, repo.Summaries(), 1)
+
+	require.NoError(t, os.Remove(filepath.Join(sdir, skillFile)))
+
+	require.Empty(t, repo.Summaries())
 }
 
 func TestFSRepository_Get_IncludesNestedDocs(t *testing.T) {
