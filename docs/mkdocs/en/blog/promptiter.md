@@ -6,7 +6,7 @@
 
 tRPC-Agent-Go provides PromptIter on top of the Evaluation capability to move Agent prompt optimization from manual rewriting to an evaluation-constrained automated iteration workflow. PromptIter centers on training sets, validation sets, and evaluation metrics. It backpropagates failure signals exposed by the training set along execution traces for attribution, converts them into candidate prompts through text-gradient aggregation and optimization patch generation, and then lets validation-set evaluation and the acceptance policy decide whether the candidate prompt enters later rounds. Each run records candidate prompts, validation results, acceptance decisions, and stop reasons, so different prompt versions can be compared, reviewed, and traced under fixed evaluation criteria. It supports synchronous runs, asynchronous runs, and HTTP iteration services.
 
-![image.png](../../assets/img/blog/promptiter/overview.png)
+![image.png](../../assets/img/blog/promptiter/overview_en.png)
 
 ## Background
 
