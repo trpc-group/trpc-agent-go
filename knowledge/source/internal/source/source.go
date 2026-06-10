@@ -11,8 +11,10 @@
 package source
 
 import (
+	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
@@ -24,6 +26,11 @@ import (
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/proto"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/text"
+)
+
+var (
+	goReaderFallbackWarnOnce     sync.Once
+	pythonReaderFallbackWarnOnce sync.Once
 )
 
 // ReaderConfig holds configuration for creating readers.
@@ -132,7 +139,9 @@ func GetFileType(filePath string) string {
 	case ".proto":
 		return "proto"
 	case ".go":
-		return "go"
+		return getGoFileType()
+	case ".py":
+		return getPythonFileType()
 	default:
 		return "text"
 	}
@@ -157,7 +166,7 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 		case strings.Contains(mainType, "application/pdf"):
 			return "pdf"
 		case strings.Contains(mainType, "text/x-go"), strings.Contains(mainType, "application/x-go"):
-			return "go"
+			return getGoFileType()
 		case strings.Contains(mainType, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"):
 			return "docx"
 		}
@@ -181,11 +190,39 @@ func GetFileTypeFromContentType(contentType, fileName string) string {
 	case ".proto":
 		return "proto"
 	case ".go":
-		return "go"
+		return getGoFileType()
+	case ".py":
+		return getPythonFileType()
 	default:
 		// Unknown extension, fallback to text reader
 		return "text"
 	}
+}
+
+func getGoFileType() string {
+	for _, ext := range reader.GetRegisteredExtensions() {
+		if ext == ".go" {
+			return "go"
+		}
+	}
+	goReaderFallbackWarnOnce.Do(func() {
+		slog.Warn("go AST reader is not registered; falling back to text reader",
+			"import", "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang")
+	})
+	return "text"
+}
+
+func getPythonFileType() string {
+	for _, ext := range reader.GetRegisteredExtensions() {
+		if ext == ".py" {
+			return "python"
+		}
+	}
+	pythonReaderFallbackWarnOnce.Do(func() {
+		slog.Warn("python AST reader is not registered; falling back to text reader",
+			"import", "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python")
+	})
+	return "text"
 }
 
 // GetReadersWithChunkConfig is deprecated. Use GetReaders with functional options instead.
