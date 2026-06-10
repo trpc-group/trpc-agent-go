@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubricreferencecritic"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/rubricresponse"
 	llmtemplate "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/template"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/verifierpairwise"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/tooltrajectory"
 )
 
@@ -68,6 +69,8 @@ func New() Registry {
 	r.Register(hallucinationEvaluator.Name(), hallucinationEvaluator)
 	templateEvaluator := llmtemplate.New()
 	r.Register(templateEvaluator.Name(), templateEvaluator)
+	verifierPairwiseEvaluator := verifierpairwise.New()
+	r.Register(verifierPairwiseEvaluator.Name(), verifierPairwiseEvaluator)
 	return r
 }
 

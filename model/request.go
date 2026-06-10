@@ -387,6 +387,10 @@ type GenerationConfig struct {
 
 	// FrequencyPenalty penalizes new tokens based on their frequency in the text so far.
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+	// Logprobs controls whether providers should return token log probabilities.
+	Logprobs *bool `json:"logprobs,omitempty"`
+	// TopLogprobs controls how many alternative token log probabilities are returned.
+	TopLogprobs *int `json:"top_logprobs,omitempty"`
 
 	// ReasoningEffort limits the reasoning effort for reasoning models.
 	// The accepted values depend on the provider:
@@ -442,6 +446,8 @@ type GenerationConfigPatch struct {
 	Stop             []string `json:"stop,omitempty"`
 	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+	Logprobs         *bool    `json:"logprobs,omitempty"`
+	TopLogprobs      *int     `json:"top_logprobs,omitempty"`
 	ReasoningEffort  *string  `json:"reasoning_effort,omitempty"`
 	ThinkingEnabled  *bool    `json:"thinking_enabled,omitempty"`
 	ThinkingTokens   *int     `json:"thinking_tokens,omitempty"`
@@ -474,6 +480,12 @@ func ApplyGenerationConfigPatch(
 	}
 	if patch.FrequencyPenalty != nil {
 		base.FrequencyPenalty = patch.FrequencyPenalty
+	}
+	if patch.Logprobs != nil {
+		base.Logprobs = patch.Logprobs
+	}
+	if patch.TopLogprobs != nil {
+		base.TopLogprobs = patch.TopLogprobs
 	}
 	if patch.ReasoningEffort != nil {
 		base.ReasoningEffort = patch.ReasoningEffort
