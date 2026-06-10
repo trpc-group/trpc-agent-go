@@ -108,6 +108,9 @@ const (
 	flagDebugRecorderDir  = "debug-recorder-dir"
 	flagDebugRecorderMode = "debug-recorder-mode"
 
+	flagLatencyDiagnostics       = "latency-diagnostics"
+	flagLatencyDiagnosticsEvents = "latency-diagnostics-events"
+
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
 	flagAdminAutoPort = "admin-auto-port"
@@ -136,6 +139,8 @@ type runOptions struct {
 	LangfuseUIBaseURL                    string
 	LangfuseTraceURLTemplate             string
 	LangfuseObservationLeafValueMaxBytes *int
+	LatencyDiagnosticsEnabled            bool
+	LatencyDiagnosticsEvents             bool
 
 	A2AEnabled        bool
 	A2AHost           string
@@ -682,6 +687,18 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"",
 		"Debug recorder mode: full|safe (default: full)",
 	)
+	fs.BoolVar(
+		&opts.LatencyDiagnosticsEnabled,
+		flagLatencyDiagnostics,
+		false,
+		"Enable per-request latency diagnostic spans",
+	)
+	fs.BoolVar(
+		&opts.LatencyDiagnosticsEvents,
+		flagLatencyDiagnosticsEvents,
+		false,
+		"Emit latency diagnostic runner events",
+	)
 	fs.StringVar(
 		&opts.SessionBackend,
 		"session-backend",
@@ -979,7 +996,8 @@ type adminConfig struct {
 }
 
 type observabilityConfig struct {
-	Langfuse *langfuseConfig `yaml:"langfuse,omitempty"`
+	Langfuse    *langfuseConfig           `yaml:"langfuse,omitempty"`
+	LatencyDiag *latencyDiagnosticsConfig `yaml:"latency_diagnostics,omitempty"`
 }
 
 type langfuseConfig struct {
@@ -988,6 +1006,11 @@ type langfuseConfig struct {
 	UIBaseURL                    *string `yaml:"ui_base_url,omitempty"`
 	TraceURLTemplate             *string `yaml:"trace_url_template,omitempty"`
 	ObservationLeafValueMaxBytes *int    `yaml:"observation_leaf_value_max_bytes,omitempty"`
+}
+
+type latencyDiagnosticsConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty"`
+	Events  *bool `yaml:"events,omitempty"`
 }
 
 type a2aConfig struct {
@@ -1347,12 +1370,20 @@ func (cfg *fileConfig) apply(
 			opts.AdminAutoPort = *cfg.Admin.AutoPort
 		}
 	}
-	if cfg.Observability != nil &&
-		cfg.Observability.Langfuse != nil {
-		applyLangfuseConfig(
-			cfg.Observability.Langfuse,
-			opts,
-		)
+	if cfg.Observability != nil {
+		if cfg.Observability.Langfuse != nil {
+			applyLangfuseConfig(
+				cfg.Observability.Langfuse,
+				opts,
+			)
+		}
+		if cfg.Observability.LatencyDiag != nil {
+			applyLatencyDiagnosticsConfig(
+				cfg.Observability.LatencyDiag,
+				opts,
+				set,
+			)
+		}
 	}
 	if cfg.A2A != nil {
 		if cfg.A2A.Enabled != nil &&
@@ -1829,6 +1860,22 @@ func applyLangfuseConfig(
 	if cfg.ObservationLeafValueMaxBytes != nil {
 		value := *cfg.ObservationLeafValueMaxBytes
 		opts.LangfuseObservationLeafValueMaxBytes = &value
+	}
+}
+
+func applyLatencyDiagnosticsConfig(
+	cfg *latencyDiagnosticsConfig,
+	opts *runOptions,
+	set map[string]struct{},
+) {
+	if cfg == nil || opts == nil {
+		return
+	}
+	if cfg.Enabled != nil && !flagWasSet(set, flagLatencyDiagnostics) {
+		opts.LatencyDiagnosticsEnabled = *cfg.Enabled
+	}
+	if cfg.Events != nil && !flagWasSet(set, flagLatencyDiagnosticsEvents) {
+		opts.LatencyDiagnosticsEvents = *cfg.Events
 	}
 }
 

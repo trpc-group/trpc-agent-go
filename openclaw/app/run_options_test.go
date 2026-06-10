@@ -341,6 +341,9 @@ observability:
     ui_base_url: " http://127.0.0.1:3000/ "
     trace_url_template: " http://127.0.0.1:3000/project/local-dev/traces/{{trace_id}} "
     observation_leaf_value_max_bytes: 4096
+  latency_diagnostics:
+    enabled: true
+    events: true
 `)
 
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
@@ -359,6 +362,30 @@ observability:
 		4096,
 		*opts.LangfuseObservationLeafValueMaxBytes,
 	)
+	require.True(t, opts.LatencyDiagnosticsEnabled)
+	require.True(t, opts.LatencyDiagnosticsEvents)
+}
+
+func TestParseRunOptions_LatencyDiagnosticsFlagsOverrideConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+observability:
+  latency_diagnostics:
+    enabled: true
+    events: true
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-latency-diagnostics=false",
+		"-latency-diagnostics-events=false",
+	})
+	require.NoError(t, err)
+	require.False(t, opts.LatencyDiagnosticsEnabled)
+	require.False(t, opts.LatencyDiagnosticsEvents)
 }
 
 func TestParseRunOptions_UsesDefaultConfigPath(t *testing.T) {
@@ -1322,6 +1349,8 @@ func TestParseRunOptions_SkillsDefaults(t *testing.T) {
 	require.True(t, opts.SkillsSkipFallback)
 	require.Zero(t, opts.SkillsMaxLoaded)
 	require.Nil(t, opts.SkillsToolingGuide)
+	require.False(t, opts.LatencyDiagnosticsEnabled)
+	require.False(t, opts.LatencyDiagnosticsEvents)
 }
 
 func TestParseRunOptions_SkillsLoadMode_InvalidFails(t *testing.T) {

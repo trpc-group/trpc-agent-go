@@ -1179,6 +1179,12 @@ func NewRuntimeWithOptions(
 			),
 		)
 	}
+	gwOpts = appendLatencyDiagnosticsGatewayOption(
+		gwOpts,
+		opts.StateDir,
+		opts.LatencyDiagnosticsEnabled,
+		opts.LatencyDiagnosticsEvents,
+	)
 	gwOpts = appendSkillsOverviewGatewayOption(
 		gwOpts,
 		opts.SkillsOverviewLimit,
@@ -1702,6 +1708,12 @@ func run(
 			),
 		)
 	}
+	gwOpts = appendLatencyDiagnosticsGatewayOption(
+		gwOpts,
+		opts.StateDir,
+		opts.LatencyDiagnosticsEnabled,
+		opts.LatencyDiagnosticsEvents,
+	)
 	gwOpts = appendSkillsOverviewGatewayOption(
 		gwOpts,
 		opts.SkillsOverviewLimit,
