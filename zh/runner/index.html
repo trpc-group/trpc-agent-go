@@ -1459,6 +1459,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#best-of-n" class="md-nav__link">
+    <span class="md-ellipsis">
+      在线 Best-of-N 候选选择
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#_32" class="md-nav__link">
     <span class="md-ellipsis">
       📝 总结
@@ -3851,6 +3860,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#best-of-n" class="md-nav__link">
+    <span class="md-ellipsis">
+      在线 Best-of-N 候选选择
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#_32" class="md-nav__link">
     <span class="md-ellipsis">
       📝 总结
@@ -6166,6 +6184,185 @@ runner 的消费循环也会正常结束，避免写端阻塞。</p>
 </span><span id="__span-55-27"><a id="__codelineno-55-27" name="__codelineno-55-27"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
 </span><span id="__span-55-28"><a id="__codelineno-55-28" name="__codelineno-55-28"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
+<h2 id="best-of-n">在线 Best-of-N 候选选择</h2>
+<p>Best-of-N 用于在一次 <code>Runner.Run</code> 内完成多次生成、评估排序和最佳结果输出。Runner 收到同一条用户消息后，会让同一个 Agent 基于当前会话上下文生成 N 份候选结果，再通过 <a href="../evaluation/#评估指标-evalmetric">评估指标 Metric</a> 判断候选质量，最终只将质量最高的候选作为本轮输出。</p>
+<p><code>runner/bestofn</code> 以 <code>runner.Option</code> 的方式接入现有 Runner。业务 Agent 负责生成候选结果，<a href="../evaluation/">Evaluation</a> 负责评估候选结果，Runner 负责管理会话、事件流和最终结果提交。候选选择依据来自 <code>WithEvalMetrics(...)</code> 注入的 <a href="../evaluation/#评估指标-evalmetric">评估指标 Metric</a>，既可以是静态规则评估器，也可以是 LLM Judge 类评估器。</p>
+<p>下面示例使用 <a href="../evaluation/#llm-细则响应评估器">llm_rubric_response</a> 作为候选选择指标，该指标会逐个评估候选最终回答是否满足评估细则。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-56-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-56-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-56-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-56-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-56-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-56-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-56-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-56-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-56-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-56-10">10</a></span>
+<span class="normal"><a href="#__codelineno-56-11">11</a></span>
+<span class="normal"><a href="#__codelineno-56-12">12</a></span>
+<span class="normal"><a href="#__codelineno-56-13">13</a></span>
+<span class="normal"><a href="#__codelineno-56-14">14</a></span>
+<span class="normal"><a href="#__codelineno-56-15">15</a></span>
+<span class="normal"><a href="#__codelineno-56-16">16</a></span>
+<span class="normal"><a href="#__codelineno-56-17">17</a></span>
+<span class="normal"><a href="#__codelineno-56-18">18</a></span>
+<span class="normal"><a href="#__codelineno-56-19">19</a></span>
+<span class="normal"><a href="#__codelineno-56-20">20</a></span>
+<span class="normal"><a href="#__codelineno-56-21">21</a></span>
+<span class="normal"><a href="#__codelineno-56-22">22</a></span>
+<span class="normal"><a href="#__codelineno-56-23">23</a></span>
+<span class="normal"><a href="#__codelineno-56-24">24</a></span>
+<span class="normal"><a href="#__codelineno-56-25">25</a></span>
+<span class="normal"><a href="#__codelineno-56-26">26</a></span>
+<span class="normal"><a href="#__codelineno-56-27">27</a></span>
+<span class="normal"><a href="#__codelineno-56-28">28</a></span>
+<span class="normal"><a href="#__codelineno-56-29">29</a></span>
+<span class="normal"><a href="#__codelineno-56-30">30</a></span>
+<span class="normal"><a href="#__codelineno-56-31">31</a></span>
+<span class="normal"><a href="#__codelineno-56-32">32</a></span>
+<span class="normal"><a href="#__codelineno-56-33">33</a></span>
+<span class="normal"><a href="#__codelineno-56-34">34</a></span>
+<span class="normal"><a href="#__codelineno-56-35">35</a></span>
+<span class="normal"><a href="#__codelineno-56-36">36</a></span>
+<span class="normal"><a href="#__codelineno-56-37">37</a></span>
+<span class="normal"><a href="#__codelineno-56-38">38</a></span>
+<span class="normal"><a href="#__codelineno-56-39">39</a></span>
+<span class="normal"><a href="#__codelineno-56-40">40</a></span>
+<span class="normal"><a href="#__codelineno-56-41">41</a></span>
+<span class="normal"><a href="#__codelineno-56-42">42</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-56-1"><a id="__codelineno-56-1" name="__codelineno-56-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-56-2"><a id="__codelineno-56-2" name="__codelineno-56-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric&quot;</span>
+</span><span id="__span-56-3"><a id="__codelineno-56-3" name="__codelineno-56-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion&quot;</span>
+</span><span id="__span-56-4"><a id="__codelineno-56-4" name="__codelineno-56-4"></a><span class="w">    </span><span class="nx">criterionllm</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm&quot;</span>
+</span><span id="__span-56-5"><a id="__codelineno-56-5" name="__codelineno-56-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-56-6"><a id="__codelineno-56-6" name="__codelineno-56-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner/bestofn&quot;</span>
+</span><span id="__span-56-7"><a id="__codelineno-56-7" name="__codelineno-56-7"></a><span class="p">)</span>
+</span><span id="__span-56-8"><a id="__codelineno-56-8" name="__codelineno-56-8"></a>
+</span><span id="__span-56-9"><a id="__codelineno-56-9" name="__codelineno-56-9"></a><span class="nx">qualityMetric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">{</span>
+</span><span id="__span-56-10"><a id="__codelineno-56-10" name="__codelineno-56-10"></a><span class="w">    </span><span class="nx">MetricName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;llm_rubric_response&quot;</span><span class="p">,</span>
+</span><span id="__span-56-11"><a id="__codelineno-56-11" name="__codelineno-56-11"></a><span class="w">    </span><span class="nx">Threshold</span><span class="p">:</span><span class="w">  </span><span class="mf">1.0</span><span class="p">,</span>
+</span><span id="__span-56-12"><a id="__codelineno-56-12" name="__codelineno-56-12"></a><span class="w">    </span><span class="nx">Criterion</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">criterion</span><span class="p">.</span><span class="nx">Criterion</span><span class="p">{</span>
+</span><span id="__span-56-13"><a id="__codelineno-56-13" name="__codelineno-56-13"></a><span class="w">        </span><span class="nx">LLMJudge</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">criterionllm</span><span class="p">.</span><span class="nx">LLMCriterion</span><span class="p">{</span>
+</span><span id="__span-56-14"><a id="__codelineno-56-14" name="__codelineno-56-14"></a><span class="w">            </span><span class="nx">Rubrics</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">criterionllm</span><span class="p">.</span><span class="nx">Rubric</span><span class="p">{</span>
+</span><span id="__span-56-15"><a id="__codelineno-56-15" name="__codelineno-56-15"></a><span class="w">                </span><span class="p">{</span>
+</span><span id="__span-56-16"><a id="__codelineno-56-16" name="__codelineno-56-16"></a><span class="w">                    </span><span class="nx">ID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;quality&quot;</span><span class="p">,</span>
+</span><span id="__span-56-17"><a id="__codelineno-56-17" name="__codelineno-56-17"></a><span class="w">                    </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">criterionllm</span><span class="p">.</span><span class="nx">RubricContent</span><span class="p">{</span>
+</span><span id="__span-56-18"><a id="__codelineno-56-18" name="__codelineno-56-18"></a><span class="w">                        </span><span class="nx">Text</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The final answer directly satisfies the user&#39;s request and does not introduce unsupported claims.&quot;</span><span class="p">,</span>
+</span><span id="__span-56-19"><a id="__codelineno-56-19" name="__codelineno-56-19"></a><span class="w">                    </span><span class="p">},</span>
+</span><span id="__span-56-20"><a id="__codelineno-56-20" name="__codelineno-56-20"></a><span class="w">                </span><span class="p">},</span>
+</span><span id="__span-56-21"><a id="__codelineno-56-21" name="__codelineno-56-21"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-56-22"><a id="__codelineno-56-22" name="__codelineno-56-22"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-56-23"><a id="__codelineno-56-23" name="__codelineno-56-23"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-56-24"><a id="__codelineno-56-24" name="__codelineno-56-24"></a><span class="p">}</span>
+</span><span id="__span-56-25"><a id="__codelineno-56-25" name="__codelineno-56-25"></a>
+</span><span id="__span-56-26"><a id="__codelineno-56-26" name="__codelineno-56-26"></a><span class="nx">judgeRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app-judge&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">judgeAgent</span><span class="p">)</span>
+</span><span id="__span-56-27"><a id="__codelineno-56-27" name="__codelineno-56-27"></a><span class="k">defer</span><span class="w"> </span><span class="nx">judgeRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-56-28"><a id="__codelineno-56-28" name="__codelineno-56-28"></a>
+</span><span id="__span-56-29"><a id="__codelineno-56-29" name="__codelineno-56-29"></a><span class="nx">bestOfNOpt</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">NewRunnerOption</span><span class="p">(</span>
+</span><span id="__span-56-30"><a id="__codelineno-56-30" name="__codelineno-56-30"></a><span class="w">    </span><span class="c1">// WithAttempts 设置每次 Runner.Run 生成的候选数量。</span>
+</span><span id="__span-56-31"><a id="__codelineno-56-31" name="__codelineno-56-31"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithAttempts</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-56-32"><a id="__codelineno-56-32" name="__codelineno-56-32"></a><span class="w">    </span><span class="c1">// WithEvalMetrics 设置用于选择候选结果的评估指标。</span>
+</span><span id="__span-56-33"><a id="__codelineno-56-33" name="__codelineno-56-33"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithEvalMetrics</span><span class="p">(</span><span class="nx">qualityMetric</span><span class="p">),</span>
+</span><span id="__span-56-34"><a id="__codelineno-56-34" name="__codelineno-56-34"></a><span class="w">    </span><span class="c1">// WithJudgeRunner 设置 LLM Judge 类指标使用的裁判 Runner。</span>
+</span><span id="__span-56-35"><a id="__codelineno-56-35" name="__codelineno-56-35"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
+</span><span id="__span-56-36"><a id="__codelineno-56-36" name="__codelineno-56-36"></a><span class="p">)</span>
+</span><span id="__span-56-37"><a id="__codelineno-56-37" name="__codelineno-56-37"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-56-38"><a id="__codelineno-56-38" name="__codelineno-56-38"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-56-39"><a id="__codelineno-56-39" name="__codelineno-56-39"></a><span class="p">}</span>
+</span><span id="__span-56-40"><a id="__codelineno-56-40" name="__codelineno-56-40"></a>
+</span><span id="__span-56-41"><a id="__codelineno-56-41" name="__codelineno-56-41"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;my-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">candidateAgent</span><span class="p">,</span><span class="w"> </span><span class="nx">bestOfNOpt</span><span class="p">)</span>
+</span><span id="__span-56-42"><a id="__codelineno-56-42" name="__codelineno-56-42"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>WithAttempts(attempts)</code> 设置每次 <code>Runner.Run</code> 生成的候选数量。默认值为 2；取值必须大于或等于 1。设置为 1 时只生成一次候选，底层 Runner 会按普通单次运行流程执行，不触发候选选择；</p>
+<p><code>WithEvalMetrics(metrics...)</code> 设置候选选择使用的 <a href="../evaluation/#评估指标-evalmetric">评估指标 Metric</a>。至少需要提供一个评估指标。每个评估指标会产出分数和评估状态，Runner 会根据 <code>WithSelectionMode</code> 指定的候选选择模式汇总这些结果；默认模式会逐个评估候选，也可以切换为成对比较。</p>
+<p><code>WithContextMessages(messages...)</code> 给每个候选 <a href="../evaluation/#评估集-evalset">评估用例 EvalCase</a> 附加 <a href="../evaluation/#上下文注入">ContextMessages</a>。这些消息会进入评估用例，供评估器读取额外背景。</p>
+<p><code>WithJudgeRunner(r)</code> 设置 LLM Judge 类评估指标使用的裁判 Runner。配置后，LLM Judge 类评估指标的裁判模型调用会走该 Runner。</p>
+<p><code>WithJudgeRunnerNumSamples(n)</code> 设置 LLM Judge 类评估指标对同一份评估输入调用裁判 Runner 的采样次数。取值必须大于 0，同时需要配置 <code>WithJudgeRunner</code>，并且评估指标中需要包含 LLM Judge criterion。</p>
+<p><code>WithSelectionMode(mode)</code> 设置候选结果如何交给 <a href="../evaluation/#评估指标-evalmetric">评估指标 Metric</a>，以及评估指标结果如何汇总成最终选中候选。默认值为 <code>SelectionModePointwise</code>。</p>
+<ul>
+<li><code>SelectionModePointwise</code> 会逐个评估候选。每份候选独立生成一个 <a href="../evaluation/#评估集-evalset">评估用例 EvalCase</a>，评估指标给这份候选打分，最终选择平均分最高的候选。分数相同时，评估状态为 passed 的候选优先；状态也相同时，候选序号较小的结果优先。这个模式适合使用能直接评价单份回复质量的 <a href="../evaluation/#评估指标-evalmetric">评估指标 Metric</a>。</li>
+<li><code>SelectionModePairwise</code> 会对候选做成对比较。每两个候选形成一组比较，前一个候选作为 actual，后一个候选作为 expected 交给 <a href="../evaluation/">Evaluation</a>，由对应的 <a href="../evaluation/#评估器-evaluator">评估器 Evaluator</a> 根据 <a href="../evaluation/#评估指标-evalmetric">评估指标 Metric</a> 配置执行比较并输出比较分数；分数大于 0.5 表示前一个候选质量更高，小于 0.5 表示后一个候选质量更高，等于 0.5 表示质量相当。所有候选比较完成后，胜场更多的候选优先；胜场相同时，比较分数偏离 0.5 幅度更大的候选优先；仍然相同时，候选序号较小的结果优先。这个模式只要求评估器能输出比较分数，并不绑定具体评估器。</li>
+</ul>
+<p><code>WithRequirePassingCandidate(enabled)</code> 要求 <code>SelectionModePointwise</code> 的选中候选必须通过评估指标阈值。开启后，未达到 passed 状态的候选不会被选中；所有候选都未通过时，事件流会发出选择错误。该选项只支持 <code>SelectionModePointwise</code>，与 <code>SelectionModePairwise</code> 同用时 <code>NewRunnerOption</code> 会返回配置错误。</p>
+<p>候选生成默认串行执行，可以通过 <code>WithAttemptParallelEnabled(enabled)</code> 开启候选运行并发，默认值为 <code>false</code>。<code>WithAttemptParallelism(parallelism)</code> 设置候选运行最大并发数；开启并发且 <code>parallelism &lt;= 0</code> 时，使用 <code>runtime.GOMAXPROCS(0)</code>。</p>
+<p>开启并发的配置示例如下。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-57-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-57-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-57-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-57-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-57-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-57-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-57-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-57-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-57-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-57-10">10</a></span>
+<span class="normal"><a href="#__codelineno-57-11">11</a></span>
+<span class="normal"><a href="#__codelineno-57-12">12</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-57-1"><a id="__codelineno-57-1" name="__codelineno-57-1"></a><span class="nx">bestOfNOpt</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">NewRunnerOption</span><span class="p">(</span>
+</span><span id="__span-57-2"><a id="__codelineno-57-2" name="__codelineno-57-2"></a><span class="w">    </span><span class="c1">// WithAttempts 设置候选生成次数。</span>
+</span><span id="__span-57-3"><a id="__codelineno-57-3" name="__codelineno-57-3"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithAttempts</span><span class="p">(</span><span class="mi">6</span><span class="p">),</span>
+</span><span id="__span-57-4"><a id="__codelineno-57-4" name="__codelineno-57-4"></a><span class="w">    </span><span class="c1">// WithAttemptParallelEnabled 开启候选生成并发。</span>
+</span><span id="__span-57-5"><a id="__codelineno-57-5" name="__codelineno-57-5"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithAttemptParallelEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-57-6"><a id="__codelineno-57-6" name="__codelineno-57-6"></a><span class="w">    </span><span class="c1">// WithAttemptParallelism 设置候选生成最大并发数。</span>
+</span><span id="__span-57-7"><a id="__codelineno-57-7" name="__codelineno-57-7"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithAttemptParallelism</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-57-8"><a id="__codelineno-57-8" name="__codelineno-57-8"></a><span class="w">    </span><span class="c1">// WithEvalMetrics 设置用于选择候选结果的评估指标。</span>
+</span><span id="__span-57-9"><a id="__codelineno-57-9" name="__codelineno-57-9"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithEvalMetrics</span><span class="p">(</span><span class="nx">qualityMetric</span><span class="p">),</span>
+</span><span id="__span-57-10"><a id="__codelineno-57-10" name="__codelineno-57-10"></a><span class="w">    </span><span class="c1">// WithJudgeRunner 设置 LLM Judge 类指标使用的裁判 Runner。</span>
+</span><span id="__span-57-11"><a id="__codelineno-57-11" name="__codelineno-57-11"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
+</span><span id="__span-57-12"><a id="__codelineno-57-12" name="__codelineno-57-12"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>WithEvalSetManager(manager)</code> 设置候选评测过程中使用的 <a href="../evaluation/#evalset-manager">EvalSet Manager</a>，用于管理 <a href="../evaluation/#评估集-evalset">评估集 EvalSet</a> 和 <a href="../evaluation/#评估集-evalset">评估用例 EvalCase</a>，默认使用内存 manager 实现。</p>
+<p><code>WithRegistry(registry)</code> 设置 <a href="../evaluation/#评估服务-service">评估服务 Service</a> 解析 <a href="../evaluation/#评估器-evaluator">评估器 Evaluator</a> 名称时使用的 <a href="../evaluation/#评估器注册中心">评估器注册中心 Registry</a>，通常只在接入自定义评估器时配置。</p>
+<p><code>WithMetricRegistry(registry)</code> 设置 <a href="../evaluation/#评估服务-service">评估服务 Service</a> 解析 <a href="../evaluation/#评估指标-evalmetric">评估指标 Metric</a> 扩展时使用的 <a href="../evaluation/#metricregistry-扩展">MetricRegistry</a>，通常只在接入自定义评估指标扩展时配置。</p>
+<p>如果需要用 <a href="../evaluation/#llm-成对比较评估器">llm_verifier_pairwise</a> 对候选最终响应做成对比较，可以将选择模式改为 <code>SelectionModePairwise</code>。该模式会把候选两两组成比较用例，并根据比较分数汇总选择结果。裁判 Agent 需要开启 <code>logprobs</code> 与 <code>top_logprobs</code>，完整配置方式可参考 <a href="../evaluation/#llm-verifier">LLM Verifier</a> 说明。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-58-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-58-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-58-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-58-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-58-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-58-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-58-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-58-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-58-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-58-10">10</a></span>
+<span class="normal"><a href="#__codelineno-58-11">11</a></span>
+<span class="normal"><a href="#__codelineno-58-12">12</a></span>
+<span class="normal"><a href="#__codelineno-58-13">13</a></span>
+<span class="normal"><a href="#__codelineno-58-14">14</a></span>
+<span class="normal"><a href="#__codelineno-58-15">15</a></span>
+<span class="normal"><a href="#__codelineno-58-16">16</a></span>
+<span class="normal"><a href="#__codelineno-58-17">17</a></span>
+<span class="normal"><a href="#__codelineno-58-18">18</a></span>
+<span class="normal"><a href="#__codelineno-58-19">19</a></span>
+<span class="normal"><a href="#__codelineno-58-20">20</a></span>
+<span class="normal"><a href="#__codelineno-58-21">21</a></span>
+<span class="normal"><a href="#__codelineno-58-22">22</a></span>
+<span class="normal"><a href="#__codelineno-58-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-58-1"><a id="__codelineno-58-1" name="__codelineno-58-1"></a><span class="nx">verifierMetric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">metric</span><span class="p">.</span><span class="nx">EvalMetric</span><span class="p">{</span>
+</span><span id="__span-58-2"><a id="__codelineno-58-2" name="__codelineno-58-2"></a><span class="w">    </span><span class="nx">MetricName</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;llm_verifier_pairwise&quot;</span><span class="p">,</span>
+</span><span id="__span-58-3"><a id="__codelineno-58-3" name="__codelineno-58-3"></a><span class="w">    </span><span class="nx">Threshold</span><span class="p">:</span><span class="w">  </span><span class="mf">0.5</span><span class="p">,</span>
+</span><span id="__span-58-4"><a id="__codelineno-58-4" name="__codelineno-58-4"></a><span class="w">    </span><span class="nx">Criterion</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">criterion</span><span class="p">.</span><span class="nx">Criterion</span><span class="p">{</span>
+</span><span id="__span-58-5"><a id="__codelineno-58-5" name="__codelineno-58-5"></a><span class="w">        </span><span class="nx">LLMJudge</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">criterionllm</span><span class="p">.</span><span class="nx">LLMCriterion</span><span class="p">{</span>
+</span><span id="__span-58-6"><a id="__codelineno-58-6" name="__codelineno-58-6"></a><span class="w">            </span><span class="nx">Rubrics</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">criterionllm</span><span class="p">.</span><span class="nx">Rubric</span><span class="p">{</span>
+</span><span id="__span-58-7"><a id="__codelineno-58-7" name="__codelineno-58-7"></a><span class="w">                </span><span class="p">{</span>
+</span><span id="__span-58-8"><a id="__codelineno-58-8" name="__codelineno-58-8"></a><span class="w">                    </span><span class="nx">ID</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;quality&quot;</span><span class="p">,</span>
+</span><span id="__span-58-9"><a id="__codelineno-58-9" name="__codelineno-58-9"></a><span class="w">                    </span><span class="nx">Content</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">criterionllm</span><span class="p">.</span><span class="nx">RubricContent</span><span class="p">{</span>
+</span><span id="__span-58-10"><a id="__codelineno-58-10" name="__codelineno-58-10"></a><span class="w">                        </span><span class="nx">Text</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;The final answer directly satisfies the user&#39;s request and does not introduce unsupported claims.&quot;</span><span class="p">,</span>
+</span><span id="__span-58-11"><a id="__codelineno-58-11" name="__codelineno-58-11"></a><span class="w">                    </span><span class="p">},</span>
+</span><span id="__span-58-12"><a id="__codelineno-58-12" name="__codelineno-58-12"></a><span class="w">                </span><span class="p">},</span>
+</span><span id="__span-58-13"><a id="__codelineno-58-13" name="__codelineno-58-13"></a><span class="w">            </span><span class="p">},</span>
+</span><span id="__span-58-14"><a id="__codelineno-58-14" name="__codelineno-58-14"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-58-15"><a id="__codelineno-58-15" name="__codelineno-58-15"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-58-16"><a id="__codelineno-58-16" name="__codelineno-58-16"></a><span class="p">}</span>
+</span><span id="__span-58-17"><a id="__codelineno-58-17" name="__codelineno-58-17"></a>
+</span><span id="__span-58-18"><a id="__codelineno-58-18" name="__codelineno-58-18"></a><span class="nx">bestOfNOpt</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">NewRunnerOption</span><span class="p">(</span>
+</span><span id="__span-58-19"><a id="__codelineno-58-19" name="__codelineno-58-19"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithAttempts</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-58-20"><a id="__codelineno-58-20" name="__codelineno-58-20"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithSelectionMode</span><span class="p">(</span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">SelectionModePairwise</span><span class="p">),</span>
+</span><span id="__span-58-21"><a id="__codelineno-58-21" name="__codelineno-58-21"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithEvalMetrics</span><span class="p">(</span><span class="nx">verifierMetric</span><span class="p">),</span>
+</span><span id="__span-58-22"><a id="__codelineno-58-22" name="__codelineno-58-22"></a><span class="w">    </span><span class="nx">bestofn</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
+</span><span id="__span-58-23"><a id="__codelineno-58-23" name="__codelineno-58-23"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>使用 <a href="../evaluation/#llm-成对比较评估器">llm_verifier_pairwise</a> 作为候选选择指标的完整示例参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llmverifier">examples/evaluation/llmverifier</a>。</p>
+<p>运行时，Runner 会基于当前用户消息和 Session 创建多次候选运行。每个候选运行调用同一个 Agent，候选轨迹随后转换成 <a href="../evaluation/#评估集-evalset">评估用例 EvalCase</a> 参与评估。选择完成后，外层 Session 只提交选中候选的运行事件，调用方收到的是选中候选事件和正常的完成事件。Agent 开启流式输出时，候选事件会先进入内部缓冲，调用方在选择完成后收到选中候选的流式片段。</p>
+<p>工具、插件、Skill、MCP ToolSet 和回调会在候选运行中执行。框架会隔离 Session 提交，并通过只读服务拦截框架管理的 Memory 和 Artifact 写入。业务代码主动发起的外部请求由业务侧控制。</p>
+<p>开启执行链路追踪或 Graph checkpoint 恢复时，本轮会绕过 Best-of-N 候选选择，按原有 Runner 流程执行。</p>
 <h2 id="_32">📝 总结</h2>
 <p>Runner 组件是 tRPC-Agent-Go 框架的核心，提供了完整的对话管理和 Agent 编排能力。通过合理使用会话管理、工具集成和事件处理，可以构建强大的智能对话应用。</p>
 
@@ -6190,7 +6387,7 @@ runner 的消费循环也会正常结束，避免写端阻塞。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月9日 09:57:12 UTC">2026-06-09 09:57:12</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月10日 09:17:18 UTC">2026-06-10 09:17:18</span>
   </span>
 
     
