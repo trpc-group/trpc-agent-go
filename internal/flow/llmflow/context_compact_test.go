@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -60,6 +61,49 @@ func (s *summaryInjectingService) Calls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.calls
+}
+
+type contextCapturingSummaryService struct {
+	session.Service
+	mu            sync.Mutex
+	calls         int
+	parentRequest *model.Request
+}
+
+func (s *contextCapturingSummaryService) CreateSessionSummary(
+	ctx context.Context,
+	sess *session.Session,
+	filterKey string,
+	_ bool,
+) error {
+	parent, _ := sessionsummary.CacheSafeForkRequestFromContext(ctx)
+	s.mu.Lock()
+	s.calls++
+	s.parentRequest = parent
+	s.mu.Unlock()
+
+	sess.SummariesMu.Lock()
+	defer sess.SummariesMu.Unlock()
+	if sess.Summaries == nil {
+		sess.Summaries = make(map[string]*session.Summary)
+	}
+	sess.Summaries[filterKey] = &session.Summary{
+		Summary:   "compressed with captured parent",
+		UpdatedAt: time.Now().Add(time.Minute),
+	}
+	return nil
+}
+
+func (s *contextCapturingSummaryService) Calls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+func (s *contextCapturingSummaryService) ParentRequest() *model.Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.parentRequest
 }
 
 type summaryFailingService struct {
@@ -405,6 +449,69 @@ func TestMaybeCompactContextBeforeLLM_RebuildsRequestWithSummary(t *testing.T) {
 	require.Equal(t, "completed", doneDiagnostic.Status)
 	require.NotNil(t, doneDiagnostic.Updated)
 	require.True(t, *doneDiagnostic.Updated)
+}
+
+func TestMaybeCompactContextBeforeLLM_PassesParentRequestForCacheSafeFork(t *testing.T) {
+	modelName := "compact-retry-cache-safe-fork"
+	model.RegisterModelContextWindow(modelName, 10000)
+
+	baseSvc := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, baseSvc.Close())
+	})
+
+	service := &contextCapturingSummaryService{Service: baseSvc}
+	longContent := strings.Repeat("history ", 2000)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				RequestID: "req-old",
+				Timestamp: time.Now().Add(-time.Hour),
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewUserMessage(longContent),
+					}},
+				},
+			},
+		},
+	}
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(service),
+		agent.WithInvocationMessage(model.NewUserMessage("current")),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-current"}),
+		agent.WithInvocationModel(&compactingModel{name: modelName}),
+		agent.WithInvocationEventFilterKey("branch/test"),
+	)
+
+	f := New(
+		[]flow.RequestProcessor{
+			processor.NewContentRequestProcessor(
+				processor.WithAddSessionSummary(true),
+			),
+		},
+		nil,
+		Options{
+			EnableContextCompaction:         true,
+			ContextCompactionThresholdRatio: 0.2,
+		},
+	)
+
+	req := &model.Request{}
+	rebuildPlan := f.preprocess(context.Background(), inv, req, nil)
+	rebuilt := f.maybeCompactContextBeforeLLM(
+		context.Background(),
+		inv,
+		nil,
+		req,
+		rebuildPlan,
+	)
+
+	require.Equal(t, 1, service.Calls())
+	require.Same(t, req, service.ParentRequest())
+	require.NotSame(t, req, rebuilt)
 }
 
 func TestMaybeCompactContextBeforeLLM_SkipsWithoutSummaryAwareProcessor(t *testing.T) {
