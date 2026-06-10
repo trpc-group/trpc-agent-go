@@ -1451,6 +1451,26 @@ func TestHeadOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 	assert.Equal(t, "Query", tailored[len(tailored)-1].Content)
 }
 
+func TestMiddleOutStrategy_MaxTokensZeroPreservesProtectedContext(t *testing.T) {
+	msgs := []Message{
+		NewSystemMessage("System"),
+		NewUserMessage("Old question"),
+		NewAssistantMessage("Old answer"),
+		NewUserMessage("Latest question"),
+	}
+
+	counter := NewSimpleTokenCounter()
+	strategy := NewMiddleOutStrategy(counter)
+
+	tailored, err := strategy.TailorMessages(context.Background(), msgs, 0)
+	require.Error(t, err)
+	requireTokenTailoringOverflow(t, err)
+	require.Len(t, tailored, 2)
+	assert.Equal(t, RoleSystem, tailored[0].Role)
+	assert.Equal(t, RoleUser, tailored[1].Role)
+	assert.Equal(t, "Latest question", tailored[1].Content)
+}
+
 // TestTailOutStrategy_PreservedSegmentsExceedBudget tests when preserved segments exceed budget.
 func TestTailOutStrategy_PreservedSegmentsExceedBudget(t *testing.T) {
 	msgs := []Message{
@@ -1772,7 +1792,7 @@ func TestShouldReturnOriginal_MaxTokensZero(t *testing.T) {
 	}
 
 	done, out := shouldReturnOriginal(context.Background(), counter, messages, 0)
-	require.True(t, done)
+	require.False(t, done)
 	require.Nil(t, out)
 }
 
