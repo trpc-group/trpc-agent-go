@@ -10,6 +10,7 @@
 package graph
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -94,13 +95,14 @@ func NewInterruptError(value any) *InterruptError {
 
 // IsInterruptError checks if an error is a InterruptError.
 func IsInterruptError(err error) bool {
-	_, ok := err.(*InterruptError)
-	return ok
+	var interrupt *InterruptError
+	return errors.As(err, &interrupt)
 }
 
 // GetInterruptError extracts InterruptError from an error.
 func GetInterruptError(err error) (*InterruptError, bool) {
-	if interrupt, ok := err.(*InterruptError); ok {
+	var interrupt *InterruptError
+	if errors.As(err, &interrupt) {
 		return interrupt, true
 	}
 	return nil, false
