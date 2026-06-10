@@ -79,6 +79,13 @@ func (m *mockE2BServer) handle(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 		return
+	case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/connect"):
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sandboxID":"sbx-mock","clientID":"c-mock","templateID":"code-interpreter-v1","state":"running"}`))
+		return
+	case r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/pause"):
+		w.WriteHeader(http.StatusNoContent)
+		return
 	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/sandboxes/"):
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"sandboxID":"sbx-mock","clientID":"c-mock","templateID":"code-interpreter-v1","state":"running"}`))
@@ -1203,6 +1210,63 @@ func TestExecuteCode_SandboxExecutionError(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "execute block 0")
+}
+
+func TestPauseExecutor_Success(t *testing.T) {
+	srv := newMockE2BServer(t, nil)
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+
+	err := c.Pause(context.Background())
+	require.NoError(t, err)
+	// After a successful pause the executor must relinquish ownership so that
+	// Close() does not kill the paused sandbox.
+	assert.False(t, c.owned, "owned should be false after Pause()")
+}
+
+func TestCloseAfterPause_DoesNotKillSandbox(t *testing.T) {
+	srv := newMockE2BServer(t, nil)
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+
+	require.NoError(t, c.Pause(context.Background()))
+	killsBefore := srv.killCalls
+
+	// Close() should be a no-op because ownership was cleared by Pause().
+	require.NoError(t, c.Close())
+	srv.mu.Lock()
+	killsAfter := srv.killCalls
+	srv.mu.Unlock()
+
+	assert.Equal(t, killsBefore, killsAfter, "Close() after Pause() must not issue a DELETE (kill) request")
+}
+
+func TestPauseExecutor_NilSandbox(t *testing.T) {
+	c := &CodeExecutor{}
+	err := c.Pause(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sandbox not initialized")
+}
+
+func TestPauseExecutor_NotOwner(t *testing.T) {
+	srv := newMockE2BServer(t, nil)
+	defer srv.close()
+
+	t.Setenv("E2B_API_KEY", "test-key")
+	c, err := NewWithContext(context.Background(),
+		WithAPIKey("test-key"),
+		WithDomain("e2b.test"),
+		WithDebug(true),
+		WithHTTPClient(srv.client()),
+		WithSandboxID("existing-id"),
+	)
+	require.NoError(t, err)
+	defer c.Close()
+
+	require.False(t, c.owned, "pre-condition: connected executor must not own the sandbox")
+	err = c.Pause(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only owner may pause sandbox")
 }
 
 func writeTempFile(path, content string) error {
