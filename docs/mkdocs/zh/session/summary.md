@@ -130,6 +130,45 @@ eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
 
 完成以上配置后，摘要功能即可自动运行。
 
+## Cache-Safe 摘要 Forking
+
+默认情况下，摘要器会发送独立的摘要请求：可选的摘要 system prompt 加上一个
+包含已提取对话文本的 user prompt。这条路径简单直接，并且仍然是默认行为。
+
+如果长会话场景对 prompt cache 命中率比较敏感，可以显式开启 cache-safe forking：
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithContextThreshold(),
+    summary.WithMaxSummaryWords(200),
+    summary.WithCacheSafeForking(true),
+)
+```
+
+开启后，如果框架当前能拿到父会话的模型请求，摘要器会克隆这个父请求，并只在
+末尾追加一条用于压缩的 user message。这样可以保留父请求的 prefix，包括
+system context、历史消息和工具定义，让支持 prompt cache 的模型服务复用更多
+已缓存输入。如果当前没有父请求，例如异步摘要或手动调用摘要接口，摘要器会自动
+回退到默认的独立摘要请求。
+
+追加的压缩提示词和 `WithPrompt(...)` 是分开的，因为它不再嵌入
+`{conversation_text}`；父请求本身已经包含对话前缀。只有需要自定义这条追加的
+user message 时，才需要使用 `WithCacheSafeForkPrompt(...)`。
+
+Cache-safe forking 控制的是“生成摘要那次请求”的构造方式。摘要已经生成以后，
+下一次普通对话请求如果也希望更利于 prompt cache，建议把摘要注入为 user
+message，而不是合并进 system prompt：
+
+```go
+llmAgent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(summaryModel),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithSessionSummaryInjectionMode(llmagent.SessionSummaryInjectionUser),
+)
+```
+
 ## 摘要 + 渐进式披露
 
 当摘要注入和 prompt 侧的上下文压缩一起工作时，旧细节可能不再直接出现在
@@ -405,6 +444,8 @@ summary.WithChecksAny(
 | `WithMaxSummaryWords(maxWords int)` | 限制摘要的最大字数，包含在提示词中指导模型生成 |
 | `WithPrompt(prompt string)` | 自定义摘要提示词，必须包含 `{conversation_text}` 占位符 |
 | `WithSystemPrompt(prompt string)` | 为摘要额外添加独立的 system message 指令；不能包含 `{conversation_text}` |
+| `WithCacheSafeForking(enable bool)` | 在有父请求可用时，启用 cache-safe 摘要请求 forking。默认关闭 |
+| `WithCacheSafeForkPrompt(prompt string)` | 自定义 cache-safe fork 模式下追加的压缩 user message。可包含 `{max_summary_words}`，但不能包含 `{conversation_text}` |
 | `WithSkipRecent(skipFunc SkipRecentFunc)` | 自定义函数跳过最近事件 |
 
 ### Hook 选项

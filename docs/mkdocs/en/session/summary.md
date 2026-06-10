@@ -125,6 +125,50 @@ eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
 
 After completing the above configuration, the summary feature runs automatically.
 
+## Cache-Safe Summary Forking
+
+By default, the summarizer sends a standalone summary request: an optional
+summary system prompt plus a user prompt containing the extracted conversation
+text. This is simple and remains the default behavior.
+
+For long sessions where prompt-cache reuse matters, you can opt in to
+cache-safe forking:
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithContextThreshold(),
+    summary.WithMaxSummaryWords(200),
+    summary.WithCacheSafeForking(true),
+)
+```
+
+When enabled and the framework has the parent model request available, the
+summarizer clones that parent request and appends one compacting user message
+at the end. This preserves the parent request prefix, including system context,
+history, and tools, so providers with prompt caching can reuse more cached
+input. If no parent request is available, for example in asynchronous or manual
+summary calls, the summarizer falls back to the default standalone request.
+
+The appended compacting prompt is separate from `WithPrompt(...)` because it
+does not embed `{conversation_text}`; the parent request already contains the
+conversation. Use `WithCacheSafeForkPrompt(...)` only when you need to customize
+that appended user message.
+
+Cache-safe forking controls the request used to generate the summary. To make
+the next normal conversation request more cache friendly after a summary exists,
+prefer injecting the summary as a user message instead of merging it into the
+system prompt:
+
+```go
+llmAgent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(summaryModel),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithSessionSummaryInjectionMode(llmagent.SessionSummaryInjectionUser),
+)
+```
+
 ## Summary + Progressive Disclosure
 
 When summary injection and prompt-side context compaction keep the request
@@ -413,6 +457,8 @@ summary.WithChecksAny(
 | `WithMaxSummaryWords(maxWords int)` | Limit summary word count; included in prompt to guide model |
 | `WithPrompt(prompt string)` | Custom summary prompt; must contain `{conversation_text}` placeholder |
 | `WithSystemPrompt(prompt string)` | Add a separate system message for summarization instructions; must not contain `{conversation_text}` |
+| `WithCacheSafeForking(enable bool)` | Opt in to cache-safe summary request forking when a parent request is available. Disabled by default |
+| `WithCacheSafeForkPrompt(prompt string)` | Customize the compacting user message appended in cache-safe fork mode. May include `{max_summary_words}`, but not `{conversation_text}` |
 | `WithSkipRecent(skipFunc SkipRecentFunc)` | Custom function to skip recent events |
 
 ### Hook Options

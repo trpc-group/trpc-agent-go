@@ -40,6 +40,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -1515,6 +1516,7 @@ func (f *Flow) runContextCompaction(
 		latencySpanContextSummary,
 		contextCompactionAttrs(decision, req)...,
 	)
+	summaryCtx = sessionsummary.ContextWithCacheSafeForkRequest(summaryCtx, req)
 	err := invocation.SessionService.CreateSessionSummary(
 		summaryCtx,
 		invocation.Session,
