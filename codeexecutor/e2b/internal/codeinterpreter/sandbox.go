@@ -67,6 +67,11 @@ type SandboxInfo struct {
 	// same way: when present and the caller did not provide an AccessToken,
 	// the SDK uses this value as the X-Access-Token header.
 	EnvdAccessToken string `json:"envdAccessToken,omitempty"`
+	// TrafficAccessToken is an optional access token returned by the
+	// POST /sandboxes/{id}/connect endpoint. When present it is forwarded as
+	// the E2B-Traffic-Access-Token header on direct sandbox data-plane
+	// requests.
+	TrafficAccessToken string `json:"trafficAccessToken,omitempty"`
 }
 
 // Sandbox is a running E2B sandbox with code-interpreter capabilities.
@@ -183,12 +188,13 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 	}
 
 	var out struct {
-		SandboxID       string `json:"sandboxID"`
-		ClientID        string `json:"clientID"`
-		TemplateID      string `json:"templateID"`
-		EnvdPort        int    `json:"envdPort"`
-		Domain          string `json:"domain,omitempty"`
-		EnvdAccessToken string `json:"envdAccessToken,omitempty"`
+		SandboxID          string `json:"sandboxID"`
+		ClientID           string `json:"clientID"`
+		TemplateID         string `json:"templateID"`
+		EnvdPort           int    `json:"envdPort"`
+		Domain             string `json:"domain,omitempty"`
+		EnvdAccessToken    string `json:"envdAccessToken,omitempty"`
+		TrafficAccessToken string `json:"trafficAccessToken,omitempty"`
 	}
 	if err := cfg.do(ctx, "POST", "/sandboxes", body, &out); err != nil {
 		return nil, err
@@ -196,6 +202,9 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 
 	if out.EnvdAccessToken != "" && cfg.AccessToken == "" {
 		cfg.AccessToken = out.EnvdAccessToken
+	}
+	if out.TrafficAccessToken != "" && cfg.TrafficAccessToken == "" {
+		cfg.TrafficAccessToken = out.TrafficAccessToken
 	}
 
 	return &Sandbox{
@@ -208,8 +217,11 @@ func Create(ctx context.Context, opts *SandboxOpts) (*Sandbox, error) {
 	}, nil
 }
 
-// Connect attaches to an already running sandbox by its ID. The caller must
-// supply at least the API key (via opts or the env var).
+// Connect attaches to a sandbox by its ID. The sandbox may be running or
+// paused — the POST /sandboxes/{id}/connect endpoint handles both cases
+// (returning 200 for already-running sandboxes and 201 when a paused sandbox
+// is resumed). The caller must supply at least the API key (via opts or the
+// E2B_API_KEY env var).
 func Connect(ctx context.Context, sandboxID string, opts *SandboxOpts) (*Sandbox, error) {
 	if opts == nil {
 		opts = &SandboxOpts{}
@@ -226,13 +238,27 @@ func Connect(ctx context.Context, sandboxID string, opts *SandboxOpts) (*Sandbox
 	}
 	cfg.init()
 
+	if cfg.APIKey == "" {
+		return nil, &AuthenticationError{Message: "API key is required; set E2B_API_KEY or SandboxOpts.APIKey"}
+	}
+
+	timeoutSec := int(opts.Timeout / time.Second)
+	if timeoutSec == 0 {
+		timeoutSec = DefaultSandboxTimeout
+	}
+
+	body := map[string]any{"timeout": timeoutSec}
+
 	var info SandboxInfo
-	if err := cfg.do(ctx, "GET", "/sandboxes/"+sandboxID, nil, &info); err != nil {
+	if err := cfg.do(ctx, "POST", "/sandboxes/"+sandboxID+"/connect", body, &info); err != nil {
 		return nil, err
 	}
 
 	if info.EnvdAccessToken != "" && cfg.AccessToken == "" {
 		cfg.AccessToken = info.EnvdAccessToken
+	}
+	if info.TrafficAccessToken != "" && cfg.TrafficAccessToken == "" {
+		cfg.TrafficAccessToken = info.TrafficAccessToken
 	}
 
 	return &Sandbox{
@@ -256,6 +282,14 @@ func (s *Sandbox) SetTimeout(ctx context.Context, timeout time.Duration) error {
 		"timeout": int(timeout / time.Second),
 	}
 	return s.connection.do(ctx, "POST", "/sandboxes/"+s.id+"/timeout", body, nil)
+}
+
+// Pause suspends the sandbox, preserving its filesystem and memory state.
+// The sandbox can be resumed later by calling Connect with the same sandbox ID.
+// Pause is not destructive — the sandbox is not billed while paused and can
+// be woken up at any time.
+func (s *Sandbox) Pause(ctx context.Context) error {
+	return s.connection.do(ctx, "POST", "/sandboxes/"+s.id+"/pause", nil, nil)
 }
 
 // IsRunning checks whether the sandbox is still reachable.
