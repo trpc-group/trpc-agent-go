@@ -2303,6 +2303,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#agenttool-graphagent" class="md-nav__link">
+    <span class="md-ellipsis">
+      AgentTool 子 GraphAgent 中断
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3115,6 +3124,15 @@
   <a href="#agentnode-graphagent" class="md-nav__link">
     <span class="md-ellipsis">
       AgentNode 子 GraphAgent 中断
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agenttool-graphagent" class="md-nav__link">
+    <span class="md-ellipsis">
+      AgentTool 子 GraphAgent 中断
     </span>
   </a>
   
@@ -4728,80 +4746,129 @@ resolver 只需要返回业务额外需要的 run options。</p>
 </span><span id="__span-38-35"><a id="__codelineno-38-35" name="__codelineno-38-35"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>其中 <code>buildParentGraph</code> 定义父图的两个 AgentNode，<code>buildResearchGraph</code> 定义子 <code>GraphAgent</code> 内部的 LLM 节点与中断节点；<code>agui.WithGraphNodeInterruptActivityTopLevelOnly(true)</code> 只向前端暴露父图中断 activity，调用方使用父图返回的 <code>lineageId</code> 与 <code>checkpointId</code> 发起恢复。</p>
-<p>如果需要在前端观察子图自己的中断 activity，可以关闭 <code>TopLevelOnly</code>。如果子 <code>GraphAgent</code> 是通过 AgentTool 暴露给父 Agent，并且前端需要看到内层 graph 事件，需要在构造 AgentTool 时开启 <code>agenttool.WithStreamInner(true)</code>。</p>
+<p>如果需要在前端观察子图自己的中断 activity，可以关闭 <code>TopLevelOnly</code>。</p>
 <p>完整示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/agentnode_graphagent">examples/agui/server/externaltool/agentnode_graphagent</a>。</p>
+<h4 id="agenttool-graphagent">AgentTool 子 GraphAgent 中断</h4>
+<p>本节适用于父 <code>GraphAgent</code> 的 <code>ToolsNode</code> 执行 <code>agenttool.NewTool(childGraphAgent)</code>，并且中断由子 <code>GraphAgent</code> 内部节点发出的场景。与 AgentNode 不同，子图以普通工具调用的形式进入父图；从父图视角看，中断点落在正在执行 AgentTool 的 <code>ToolsNode</code>，但真正调用 <code>graph.Interrupt(...)</code> 的位置在子 <code>GraphAgent</code> 内部节点。中断发生后，父图的 <code>ToolsNode</code> checkpoint 会记录 AgentTool 子图 checkpoint 元数据。调用方拿到外部结果后通过下一次 AG-UI 请求恢复运行，而不是在同一次 SSE run 中继续；恢复时仍然只需要传父图的 <code>lineage_id</code> 和父图的 <code>checkpoint_id</code>，并在 <code>state.resume_map</code> 中使用子图 <code>graph.Interrupt</code> 的 key 写入工具结果，框架会把该值路由到对应的子图 checkpoint。</p>
+<p>代码示例片段如下：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-39-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-39-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-39-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-39-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-39-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-39-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-39-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-39-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-39-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-39-10">10</a></span>
+<span class="normal"><a href="#__codelineno-39-11">11</a></span>
+<span class="normal"><a href="#__codelineno-39-12">12</a></span>
+<span class="normal"><a href="#__codelineno-39-13">13</a></span>
+<span class="normal"><a href="#__codelineno-39-14">14</a></span>
+<span class="normal"><a href="#__codelineno-39-15">15</a></span>
+<span class="normal"><a href="#__codelineno-39-16">16</a></span>
+<span class="normal"><a href="#__codelineno-39-17">17</a></span>
+<span class="normal"><a href="#__codelineno-39-18">18</a></span>
+<span class="normal"><a href="#__codelineno-39-19">19</a></span>
+<span class="normal"><a href="#__codelineno-39-20">20</a></span>
+<span class="normal"><a href="#__codelineno-39-21">21</a></span>
+<span class="normal"><a href="#__codelineno-39-22">22</a></span>
+<span class="normal"><a href="#__codelineno-39-23">23</a></span>
+<span class="normal"><a href="#__codelineno-39-24">24</a></span>
+<span class="normal"><a href="#__codelineno-39-25">25</a></span>
+<span class="normal"><a href="#__codelineno-39-26">26</a></span>
+<span class="normal"><a href="#__codelineno-39-27">27</a></span>
+<span class="normal"><a href="#__codelineno-39-28">28</a></span>
+<span class="normal"><a href="#__codelineno-39-29">29</a></span>
+<span class="normal"><a href="#__codelineno-39-30">30</a></span>
+<span class="normal"><a href="#__codelineno-39-31">31</a></span>
+<span class="normal"><a href="#__codelineno-39-32">32</a></span>
+<span class="normal"><a href="#__codelineno-39-33">33</a></span>
+<span class="normal"><a href="#__codelineno-39-34">34</a></span>
+<span class="normal"><a href="#__codelineno-39-35">35</a></span>
+<span class="normal"><a href="#__codelineno-39-36">36</a></span>
+<span class="normal"><a href="#__codelineno-39-37">37</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="nx">tools</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span>
+</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2"></a><span class="w">    </span><span class="nx">childAgentName</span><span class="p">:</span><span class="w"> </span><span class="nx">agenttool</span><span class="p">.</span><span class="nx">NewTool</span><span class="p">(</span><span class="nx">childGraphAgent</span><span class="p">),</span>
+</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3"></a><span class="p">}</span>
+</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4"></a>
+</span><span id="__span-39-5"><a id="__codelineno-39-5" name="__codelineno-39-5"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddLLMNode</span><span class="p">(</span>
+</span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6"></a><span class="w">    </span><span class="nx">nodeCallReviewGraph</span><span class="p">,</span>
+</span><span id="__span-39-7"><a id="__codelineno-39-7" name="__codelineno-39-7"></a><span class="w">    </span><span class="nx">modelInstance</span><span class="p">,</span>
+</span><span id="__span-39-8"><a id="__codelineno-39-8" name="__codelineno-39-8"></a><span class="w">    </span><span class="nx">instruction</span><span class="p">,</span>
+</span><span id="__span-39-9"><a id="__codelineno-39-9" name="__codelineno-39-9"></a><span class="w">    </span><span class="nx">tools</span><span class="p">,</span>
+</span><span id="__span-39-10"><a id="__codelineno-39-10" name="__codelineno-39-10"></a><span class="w">    </span><span class="nx">graph</span><span class="p">.</span><span class="nx">WithGenerationConfig</span><span class="p">(</span><span class="nx">generationConfig</span><span class="p">),</span>
+</span><span id="__span-39-11"><a id="__codelineno-39-11" name="__codelineno-39-11"></a><span class="p">)</span>
+</span><span id="__span-39-12"><a id="__codelineno-39-12" name="__codelineno-39-12"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddToolsNode</span><span class="p">(</span><span class="nx">nodeExecuteTools</span><span class="p">,</span><span class="w"> </span><span class="nx">tools</span><span class="p">)</span>
+</span><span id="__span-39-13"><a id="__codelineno-39-13" name="__codelineno-39-13"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddConditionalEdges</span><span class="p">(</span><span class="nx">nodeCallReviewGraph</span><span class="p">,</span><span class="w"> </span><span class="nx">routeAfterReviewGraph</span><span class="p">,</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">string</span><span class="p">{</span>
+</span><span id="__span-39-14"><a id="__codelineno-39-14" name="__codelineno-39-14"></a><span class="w">    </span><span class="nx">nodeExecuteTools</span><span class="p">:</span><span class="w"> </span><span class="nx">nodeExecuteTools</span><span class="p">,</span>
+</span><span id="__span-39-15"><a id="__codelineno-39-15" name="__codelineno-39-15"></a><span class="w">    </span><span class="nx">graph</span><span class="p">.</span><span class="nx">End</span><span class="p">:</span><span class="w">        </span><span class="nx">graph</span><span class="p">.</span><span class="nx">End</span><span class="p">,</span>
+</span><span id="__span-39-16"><a id="__codelineno-39-16" name="__codelineno-39-16"></a><span class="p">})</span>
+</span><span id="__span-39-17"><a id="__codelineno-39-17" name="__codelineno-39-17"></a><span class="nx">sg</span><span class="p">.</span><span class="nx">AddEdge</span><span class="p">(</span><span class="nx">nodeExecuteTools</span><span class="p">,</span><span class="w"> </span><span class="nx">nodeCallReviewGraph</span><span class="p">)</span>
+</span><span id="__span-39-18"><a id="__codelineno-39-18" name="__codelineno-39-18"></a>
+</span><span id="__span-39-19"><a id="__codelineno-39-19" name="__codelineno-39-19"></a><span class="kd">func</span><span class="w"> </span><span class="nx">childReviewNode</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">state</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">any</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-20"><a id="__codelineno-39-20" name="__codelineno-39-20"></a><span class="w">    </span><span class="nx">value</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">Interrupt</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">state</span><span class="p">,</span><span class="w"> </span><span class="nx">childInterruptKey</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Review decision is required.&quot;</span><span class="p">)</span>
+</span><span id="__span-39-21"><a id="__codelineno-39-21" name="__codelineno-39-21"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-22"><a id="__codelineno-39-22" name="__codelineno-39-22"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-39-23"><a id="__codelineno-39-23" name="__codelineno-39-23"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-39-24"><a id="__codelineno-39-24" name="__codelineno-39-24"></a><span class="w">    </span><span class="nx">decision</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">value</span><span class="p">.(</span><span class="kt">string</span><span class="p">)</span>
+</span><span id="__span-39-25"><a id="__codelineno-39-25" name="__codelineno-39-25"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-39-26"><a id="__codelineno-39-26" name="__codelineno-39-26"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;review decision must be a string&quot;</span><span class="p">)</span>
+</span><span id="__span-39-27"><a id="__codelineno-39-27" name="__codelineno-39-27"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-39-28"><a id="__codelineno-39-28" name="__codelineno-39-28"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">graph</span><span class="p">.</span><span class="nx">State</span><span class="p">{</span><span class="nx">graph</span><span class="p">.</span><span class="nx">StateKeyLastResponse</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;review decision: &quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">decision</span><span class="p">},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-39-29"><a id="__codelineno-39-29" name="__codelineno-39-29"></a><span class="p">}</span>
+</span><span id="__span-39-30"><a id="__codelineno-39-30" name="__codelineno-39-30"></a>
+</span><span id="__span-39-31"><a id="__codelineno-39-31" name="__codelineno-39-31"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-39-32"><a id="__codelineno-39-32" name="__codelineno-39-32"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-39-33"><a id="__codelineno-39-33" name="__codelineno-39-33"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithGraphNodeInterruptActivityEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-39-34"><a id="__codelineno-39-34" name="__codelineno-39-34"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span>
+</span><span id="__span-39-35"><a id="__codelineno-39-35" name="__codelineno-39-35"></a><span class="w">        </span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithStateResolver</span><span class="p">(</span><span class="nx">resolveRuntimeState</span><span class="p">),</span>
+</span><span id="__span-39-36"><a id="__codelineno-39-36" name="__codelineno-39-36"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-39-37"><a id="__codelineno-39-37" name="__codelineno-39-37"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>其中 <code>nodeExecuteTools</code> 完成后回到 <code>nodeCallReviewGraph</code>，由同一个 LLM 节点消费 AgentTool 返回的 tool message 并生成最终回复；单独的最终回答节点不是必需的。<code>resolveRuntimeState</code> 负责把 AG-UI 请求中的 <code>state.lineage_id</code>、<code>state.checkpoint_id</code> 和 <code>state.resume_map</code> 转换为 GraphAgent runtime state。<code>state.checkpoint_id</code> 应使用父图 <code>ToolsNode</code> 的中断 checkpoint；子图 checkpoint 由 AgentTool 内部恢复，AG-UI 调用方不需要传子图 checkpoint。<code>state.resume_map</code> 的 key 应使用子图 <code>graph.Interrupt</code> 传入的 key，例如上例中的 <code>childInterruptKey</code>。</p>
+<p>如果前端还需要观察内层 graph 事件，可以在构造 AgentTool 时开启 <code>agenttool.WithStreamInner(true)</code>；如果只消费父图的 <code>graph.node.interrupt</code> activity，默认配置即可。</p>
+<p>完整示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/agenttool_graphagent_graphagent">examples/agui/server/externaltool/agenttool_graphagent_graphagent</a>。如果外层先通过 AgentNode 产生 handoff 工具调用，再由父图选择 AgentTool 执行，可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/agentnode_handoff_agenttool">examples/agui/server/externaltool/agentnode_handoff_agenttool</a>。</p>
 <h3 id="ag-ui-roletool">AG-UI <code>role=tool</code> 输入处理</h3>
 <p><code>role=tool</code> 输入的请求结构可参考 <a href="#外部工具结果输入">外部工具结果输入</a>。AG-UI 服务端会读取 <code>messages</code> 尾部连续的 <code>role=tool</code> message，作为当前工具结果输入批次。</p>
 <p>如果一次事件流返回了多个需要调用方执行的工具调用，后续请求可以在 <code>messages</code> 尾部按顺序放置多条 <code>role=tool</code> message，每条对应一个 <code>toolCallId</code>。</p>
 <p><code>RunOptionResolver</code> 同时返回 <code>agent.WithUserMessageRewriter</code> 时，用户 rewriter 会先执行。rewriter 返回的非工具消息会保留在最终工具结果块之前；rewriter 返回的工具消息如果与某个 AG-UI <code>toolCallId</code> 对应，会替换该工具调用的请求结果。AG-UI 会按请求尾部工具消息的顺序放置最终工具结果块。</p>
 <p>如果希望 <code>role=tool</code> 输入回显经过 Translator，可以开启 <code>agui.WithToolResultInputTranslationEnabled(true)</code>。开启后，AG-UI 服务端会先把每条工具结果输入规范化为内部事件，再交给 Translator 处理，示例如下。</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-39-1">1</a></span>
-<span class="normal"><a href="#__codelineno-39-2">2</a></span>
-<span class="normal"><a href="#__codelineno-39-3">3</a></span>
-<span class="normal"><a href="#__codelineno-39-4">4</a></span>
-<span class="normal"><a href="#__codelineno-39-5">5</a></span>
-<span class="normal"><a href="#__codelineno-39-6">6</a></span>
-<span class="normal"><a href="#__codelineno-39-7">7</a></span>
-<span class="normal"><a href="#__codelineno-39-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-39-2"><a id="__codelineno-39-2" name="__codelineno-39-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
-</span><span id="__span-39-3"><a id="__codelineno-39-3" name="__codelineno-39-3"></a><span class="p">)</span>
-</span><span id="__span-39-4"><a id="__codelineno-39-4" name="__codelineno-39-4"></a>
-</span><span id="__span-39-5"><a id="__codelineno-39-5" name="__codelineno-39-5"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-39-6"><a id="__codelineno-39-6" name="__codelineno-39-6"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
-</span><span id="__span-39-7"><a id="__codelineno-39-7" name="__codelineno-39-7"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithToolResultInputTranslationEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-39-8"><a id="__codelineno-39-8" name="__codelineno-39-8"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-40-1">1</a></span>
+<span class="normal"><a href="#__codelineno-40-2">2</a></span>
+<span class="normal"><a href="#__codelineno-40-3">3</a></span>
+<span class="normal"><a href="#__codelineno-40-4">4</a></span>
+<span class="normal"><a href="#__codelineno-40-5">5</a></span>
+<span class="normal"><a href="#__codelineno-40-6">6</a></span>
+<span class="normal"><a href="#__codelineno-40-7">7</a></span>
+<span class="normal"><a href="#__codelineno-40-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3"></a><span class="p">)</span>
+</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4"></a>
+</span><span id="__span-40-5"><a id="__codelineno-40-5" name="__codelineno-40-5"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-40-6"><a id="__codelineno-40-6" name="__codelineno-40-6"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-40-7"><a id="__codelineno-40-7" name="__codelineno-40-7"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithToolResultInputTranslationEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-40-8"><a id="__codelineno-40-8" name="__codelineno-40-8"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="graphagent">GraphAgent 节点活动事件</h2>
 <p>在 <code>GraphAgent</code> 场景下，单次运行通常会按图执行多个节点。框架可以额外发送 Activity 事件，用于让前端展示节点执行进度，以及渲染 Human-in-the-Loop 中断状态。该能力默认关闭，可在创建 AG-UI Server 时按需开启。</p>
 <p><code>ACTIVITY_DELTA</code> 事件格式可参考 <a href="https://docs.ag-ui.com/concepts/events#activitydelta">AG-UI 官方文档</a></p>
 <h3 id="graphnodelifecycle">节点生命周期（<code>graph.node.lifecycle</code>）</h3>
 <p>节点生命周期事件用于表示 graph 节点的执行阶段。创建 AG-UI Server 时通过 <code>agui.WithGraphNodeLifecycleActivityEnabled(true)</code> 开启：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-40-1">1</a></span>
-<span class="normal"><a href="#__codelineno-40-2">2</a></span>
-<span class="normal"><a href="#__codelineno-40-3">3</a></span>
-<span class="normal"><a href="#__codelineno-40-4">4</a></span>
-<span class="normal"><a href="#__codelineno-40-5">5</a></span>
-<span class="normal"><a href="#__codelineno-40-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-40-1"><a id="__codelineno-40-1" name="__codelineno-40-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
-</span><span id="__span-40-2"><a id="__codelineno-40-2" name="__codelineno-40-2"></a>
-</span><span id="__span-40-3"><a id="__codelineno-40-3" name="__codelineno-40-3"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-40-4"><a id="__codelineno-40-4" name="__codelineno-40-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
-</span><span id="__span-40-5"><a id="__codelineno-40-5" name="__codelineno-40-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithGraphNodeLifecycleActivityEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-40-6"><a id="__codelineno-40-6" name="__codelineno-40-6"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-41-1">1</a></span>
+<span class="normal"><a href="#__codelineno-41-2">2</a></span>
+<span class="normal"><a href="#__codelineno-41-3">3</a></span>
+<span class="normal"><a href="#__codelineno-41-4">4</a></span>
+<span class="normal"><a href="#__codelineno-41-5">5</a></span>
+<span class="normal"><a href="#__codelineno-41-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2"></a>
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithGraphNodeLifecycleActivityEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>开启后，节点在 <code>start</code>、<code>complete</code> 和 <code>error</code> 阶段都会发送 <code>ACTIVITY_DELTA</code>。<code>activityType</code> 固定为 <code>graph.node.lifecycle</code>，<code>patch</code> 会通过 <code>add /node</code> 写入当前节点状态，其中 <code>phase</code> 表示具体阶段，<code>error</code> 只在失败时出现。</p>
 <p>示例：</p>
 <p>节点开始阶段（<code>phase=start</code>）：</p>
-<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-41-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-41-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-41-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-41-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-41-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-41-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-41-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-41-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-41-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-41-10">10</a></span>
-<span class="normal"><a href="#__codelineno-41-11">11</a></span>
-<span class="normal"><a href="#__codelineno-41-12">12</a></span>
-<span class="normal"><a href="#__codelineno-41-13">13</a></span>
-<span class="normal"><a href="#__codelineno-41-14">14</a></span>
-<span class="normal"><a href="#__codelineno-41-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a><span class="p">{</span>
-</span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ACTIVITY_DELTA&quot;</span><span class="p">,</span>
-</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a><span class="w">  </span><span class="nt">&quot;messageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;activity-node-1&quot;</span><span class="p">,</span>
-</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="w">  </span><span class="nt">&quot;activityType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;graph.node.lifecycle&quot;</span><span class="p">,</span>
-</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a><span class="w">  </span><span class="nt">&quot;patch&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7"></a><span class="w">      </span><span class="nt">&quot;op&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
-</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8"></a><span class="w">      </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/node&quot;</span><span class="p">,</span>
-</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10"></a><span class="w">        </span><span class="nt">&quot;nodeId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;plan_llm_node&quot;</span><span class="p">,</span>
-</span><span id="__span-41-11"><a id="__codelineno-41-11" name="__codelineno-41-11"></a><span class="w">        </span><span class="nt">&quot;phase&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;start&quot;</span>
-</span><span id="__span-41-12"><a id="__codelineno-41-12" name="__codelineno-41-12"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-41-13"><a id="__codelineno-41-13" name="__codelineno-41-13"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-41-14"><a id="__codelineno-41-14" name="__codelineno-41-14"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-41-15"><a id="__codelineno-41-15" name="__codelineno-41-15"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p>节点成功结束阶段（<code>phase=complete</code>）：</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-42-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-42-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-42-3"> 3</a></span>
@@ -4818,7 +4885,7 @@ resolver 只需要返回业务额外需要的 run options。</p>
 <span class="normal"><a href="#__codelineno-42-14">14</a></span>
 <span class="normal"><a href="#__codelineno-42-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-42-1"><a id="__codelineno-42-1" name="__codelineno-42-1"></a><span class="p">{</span>
 </span><span id="__span-42-2"><a id="__codelineno-42-2" name="__codelineno-42-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ACTIVITY_DELTA&quot;</span><span class="p">,</span>
-</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3"></a><span class="w">  </span><span class="nt">&quot;messageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;activity-node-2&quot;</span><span class="p">,</span>
+</span><span id="__span-42-3"><a id="__codelineno-42-3" name="__codelineno-42-3"></a><span class="w">  </span><span class="nt">&quot;messageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;activity-node-1&quot;</span><span class="p">,</span>
 </span><span id="__span-42-4"><a id="__codelineno-42-4" name="__codelineno-42-4"></a><span class="w">  </span><span class="nt">&quot;activityType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;graph.node.lifecycle&quot;</span><span class="p">,</span>
 </span><span id="__span-42-5"><a id="__codelineno-42-5" name="__codelineno-42-5"></a><span class="w">  </span><span class="nt">&quot;patch&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 </span><span id="__span-42-6"><a id="__codelineno-42-6" name="__codelineno-42-6"></a><span class="w">    </span><span class="p">{</span>
@@ -4826,13 +4893,13 @@ resolver 只需要返回业务额外需要的 run options。</p>
 </span><span id="__span-42-8"><a id="__codelineno-42-8" name="__codelineno-42-8"></a><span class="w">      </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/node&quot;</span><span class="p">,</span>
 </span><span id="__span-42-9"><a id="__codelineno-42-9" name="__codelineno-42-9"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-42-10"><a id="__codelineno-42-10" name="__codelineno-42-10"></a><span class="w">        </span><span class="nt">&quot;nodeId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;plan_llm_node&quot;</span><span class="p">,</span>
-</span><span id="__span-42-11"><a id="__codelineno-42-11" name="__codelineno-42-11"></a><span class="w">        </span><span class="nt">&quot;phase&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;complete&quot;</span>
+</span><span id="__span-42-11"><a id="__codelineno-42-11" name="__codelineno-42-11"></a><span class="w">        </span><span class="nt">&quot;phase&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;start&quot;</span>
 </span><span id="__span-42-12"><a id="__codelineno-42-12" name="__codelineno-42-12"></a><span class="w">      </span><span class="p">}</span>
 </span><span id="__span-42-13"><a id="__codelineno-42-13" name="__codelineno-42-13"></a><span class="w">    </span><span class="p">}</span>
 </span><span id="__span-42-14"><a id="__codelineno-42-14" name="__codelineno-42-14"></a><span class="w">  </span><span class="p">]</span>
 </span><span id="__span-42-15"><a id="__codelineno-42-15" name="__codelineno-42-15"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>节点失败结束阶段（<code>phase=error</code>）：</p>
+<p>节点成功结束阶段（<code>phase=complete</code>）：</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-43-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-43-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-43-3"> 3</a></span>
@@ -4847,10 +4914,9 @@ resolver 只需要返回业务额外需要的 run options。</p>
 <span class="normal"><a href="#__codelineno-43-12">12</a></span>
 <span class="normal"><a href="#__codelineno-43-13">13</a></span>
 <span class="normal"><a href="#__codelineno-43-14">14</a></span>
-<span class="normal"><a href="#__codelineno-43-15">15</a></span>
-<span class="normal"><a href="#__codelineno-43-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1"></a><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-43-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-43-1"><a id="__codelineno-43-1" name="__codelineno-43-1"></a><span class="p">{</span>
 </span><span id="__span-43-2"><a id="__codelineno-43-2" name="__codelineno-43-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ACTIVITY_DELTA&quot;</span><span class="p">,</span>
-</span><span id="__span-43-3"><a id="__codelineno-43-3" name="__codelineno-43-3"></a><span class="w">  </span><span class="nt">&quot;messageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;activity-node-3&quot;</span><span class="p">,</span>
+</span><span id="__span-43-3"><a id="__codelineno-43-3" name="__codelineno-43-3"></a><span class="w">  </span><span class="nt">&quot;messageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;activity-node-2&quot;</span><span class="p">,</span>
 </span><span id="__span-43-4"><a id="__codelineno-43-4" name="__codelineno-43-4"></a><span class="w">  </span><span class="nt">&quot;activityType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;graph.node.lifecycle&quot;</span><span class="p">,</span>
 </span><span id="__span-43-5"><a id="__codelineno-43-5" name="__codelineno-43-5"></a><span class="w">  </span><span class="nt">&quot;patch&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 </span><span id="__span-43-6"><a id="__codelineno-43-6" name="__codelineno-43-6"></a><span class="w">    </span><span class="p">{</span>
@@ -4858,67 +4924,61 @@ resolver 只需要返回业务额外需要的 run options。</p>
 </span><span id="__span-43-8"><a id="__codelineno-43-8" name="__codelineno-43-8"></a><span class="w">      </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/node&quot;</span><span class="p">,</span>
 </span><span id="__span-43-9"><a id="__codelineno-43-9" name="__codelineno-43-9"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-43-10"><a id="__codelineno-43-10" name="__codelineno-43-10"></a><span class="w">        </span><span class="nt">&quot;nodeId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;plan_llm_node&quot;</span><span class="p">,</span>
-</span><span id="__span-43-11"><a id="__codelineno-43-11" name="__codelineno-43-11"></a><span class="w">        </span><span class="nt">&quot;phase&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;error&quot;</span><span class="p">,</span>
-</span><span id="__span-43-12"><a id="__codelineno-43-12" name="__codelineno-43-12"></a><span class="w">        </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;node execution failed&quot;</span>
-</span><span id="__span-43-13"><a id="__codelineno-43-13" name="__codelineno-43-13"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-43-14"><a id="__codelineno-43-14" name="__codelineno-43-14"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-43-15"><a id="__codelineno-43-15" name="__codelineno-43-15"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-43-16"><a id="__codelineno-43-16" name="__codelineno-43-16"></a><span class="p">}</span>
+</span><span id="__span-43-11"><a id="__codelineno-43-11" name="__codelineno-43-11"></a><span class="w">        </span><span class="nt">&quot;phase&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;complete&quot;</span>
+</span><span id="__span-43-12"><a id="__codelineno-43-12" name="__codelineno-43-12"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-43-13"><a id="__codelineno-43-13" name="__codelineno-43-13"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-43-14"><a id="__codelineno-43-14" name="__codelineno-43-14"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-43-15"><a id="__codelineno-43-15" name="__codelineno-43-15"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>节点失败结束阶段（<code>phase=error</code>）：</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-44-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-44-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-44-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-44-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-44-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-44-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-44-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-44-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-44-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-44-10">10</a></span>
+<span class="normal"><a href="#__codelineno-44-11">11</a></span>
+<span class="normal"><a href="#__codelineno-44-12">12</a></span>
+<span class="normal"><a href="#__codelineno-44-13">13</a></span>
+<span class="normal"><a href="#__codelineno-44-14">14</a></span>
+<span class="normal"><a href="#__codelineno-44-15">15</a></span>
+<span class="normal"><a href="#__codelineno-44-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1"></a><span class="p">{</span>
+</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ACTIVITY_DELTA&quot;</span><span class="p">,</span>
+</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3"></a><span class="w">  </span><span class="nt">&quot;messageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;activity-node-3&quot;</span><span class="p">,</span>
+</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4"></a><span class="w">  </span><span class="nt">&quot;activityType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;graph.node.lifecycle&quot;</span><span class="p">,</span>
+</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5"></a><span class="w">  </span><span class="nt">&quot;patch&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-44-7"><a id="__codelineno-44-7" name="__codelineno-44-7"></a><span class="w">      </span><span class="nt">&quot;op&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
+</span><span id="__span-44-8"><a id="__codelineno-44-8" name="__codelineno-44-8"></a><span class="w">      </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/node&quot;</span><span class="p">,</span>
+</span><span id="__span-44-9"><a id="__codelineno-44-9" name="__codelineno-44-9"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-44-10"><a id="__codelineno-44-10" name="__codelineno-44-10"></a><span class="w">        </span><span class="nt">&quot;nodeId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;plan_llm_node&quot;</span><span class="p">,</span>
+</span><span id="__span-44-11"><a id="__codelineno-44-11" name="__codelineno-44-11"></a><span class="w">        </span><span class="nt">&quot;phase&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;error&quot;</span><span class="p">,</span>
+</span><span id="__span-44-12"><a id="__codelineno-44-12" name="__codelineno-44-12"></a><span class="w">        </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;node execution failed&quot;</span>
+</span><span id="__span-44-13"><a id="__codelineno-44-13" name="__codelineno-44-13"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-44-14"><a id="__codelineno-44-14" name="__codelineno-44-14"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-44-15"><a id="__codelineno-44-15" name="__codelineno-44-15"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-44-16"><a id="__codelineno-44-16" name="__codelineno-44-16"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>前端可以根据 <code>/node.nodeId</code> 定位节点，根据 <code>/node.phase</code> 更新展示状态。例如 <code>phase=start</code> 时高亮节点，<code>phase=complete</code> 时标记完成，<code>phase=error</code> 时展示 <code>/node.error</code>。</p>
 <h3 id="graphnodeinterrupt">中断状态（<code>graph.node.interrupt</code>）</h3>
 <p>中断状态事件用于表示 graph 执行暂停和恢复，通过 <code>agui.WithGraphNodeInterruptActivityEnabled(true)</code> 开启：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-44-1">1</a></span>
-<span class="normal"><a href="#__codelineno-44-2">2</a></span>
-<span class="normal"><a href="#__codelineno-44-3">3</a></span>
-<span class="normal"><a href="#__codelineno-44-4">4</a></span>
-<span class="normal"><a href="#__codelineno-44-5">5</a></span>
-<span class="normal"><a href="#__codelineno-44-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-44-1"><a id="__codelineno-44-1" name="__codelineno-44-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
-</span><span id="__span-44-2"><a id="__codelineno-44-2" name="__codelineno-44-2"></a>
-</span><span id="__span-44-3"><a id="__codelineno-44-3" name="__codelineno-44-3"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-44-4"><a id="__codelineno-44-4" name="__codelineno-44-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
-</span><span id="__span-44-5"><a id="__codelineno-44-5" name="__codelineno-44-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithGraphNodeInterruptActivityEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-44-6"><a id="__codelineno-44-6" name="__codelineno-44-6"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-45-1">1</a></span>
+<span class="normal"><a href="#__codelineno-45-2">2</a></span>
+<span class="normal"><a href="#__codelineno-45-3">3</a></span>
+<span class="normal"><a href="#__codelineno-45-4">4</a></span>
+<span class="normal"><a href="#__codelineno-45-5">5</a></span>
+<span class="normal"><a href="#__codelineno-45-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2"></a>
+</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-45-4"><a id="__codelineno-45-4" name="__codelineno-45-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-45-5"><a id="__codelineno-45-5" name="__codelineno-45-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithGraphNodeInterruptActivityEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-45-6"><a id="__codelineno-45-6" name="__codelineno-45-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>当节点调用 <code>graph.Interrupt(ctx, state, key, prompt)</code> 且当前没有可用的 resume 输入时，框架会发送 <code>ACTIVITY_DELTA</code>。<code>activityType</code> 固定为 <code>graph.node.interrupt</code>，<code>patch</code> 会通过 <code>add /interrupt</code> 写入中断信息，包含 <code>nodeId</code>、<code>key</code>、<code>prompt</code>、<code>checkpointId</code> 与 <code>lineageId</code>：</p>
-<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-45-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-45-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-45-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-45-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-45-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-45-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-45-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-45-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-45-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-45-10">10</a></span>
-<span class="normal"><a href="#__codelineno-45-11">11</a></span>
-<span class="normal"><a href="#__codelineno-45-12">12</a></span>
-<span class="normal"><a href="#__codelineno-45-13">13</a></span>
-<span class="normal"><a href="#__codelineno-45-14">14</a></span>
-<span class="normal"><a href="#__codelineno-45-15">15</a></span>
-<span class="normal"><a href="#__codelineno-45-16">16</a></span>
-<span class="normal"><a href="#__codelineno-45-17">17</a></span>
-<span class="normal"><a href="#__codelineno-45-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-45-1"><a id="__codelineno-45-1" name="__codelineno-45-1"></a><span class="p">{</span>
-</span><span id="__span-45-2"><a id="__codelineno-45-2" name="__codelineno-45-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ACTIVITY_DELTA&quot;</span><span class="p">,</span>
-</span><span id="__span-45-3"><a id="__codelineno-45-3" name="__codelineno-45-3"></a><span class="w">  </span><span class="nt">&quot;messageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;activity-interrupt-1&quot;</span><span class="p">,</span>
-</span><span id="__span-45-4"><a id="__codelineno-45-4" name="__codelineno-45-4"></a><span class="w">  </span><span class="nt">&quot;activityType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;graph.node.interrupt&quot;</span><span class="p">,</span>
-</span><span id="__span-45-5"><a id="__codelineno-45-5" name="__codelineno-45-5"></a><span class="w">  </span><span class="nt">&quot;patch&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-</span><span id="__span-45-6"><a id="__codelineno-45-6" name="__codelineno-45-6"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-45-7"><a id="__codelineno-45-7" name="__codelineno-45-7"></a><span class="w">      </span><span class="nt">&quot;op&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
-</span><span id="__span-45-8"><a id="__codelineno-45-8" name="__codelineno-45-8"></a><span class="w">      </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/interrupt&quot;</span><span class="p">,</span>
-</span><span id="__span-45-9"><a id="__codelineno-45-9" name="__codelineno-45-9"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-45-10"><a id="__codelineno-45-10" name="__codelineno-45-10"></a><span class="w">        </span><span class="nt">&quot;nodeId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;confirm&quot;</span><span class="p">,</span>
-</span><span id="__span-45-11"><a id="__codelineno-45-11" name="__codelineno-45-11"></a><span class="w">        </span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;confirm&quot;</span><span class="p">,</span>
-</span><span id="__span-45-12"><a id="__codelineno-45-12" name="__codelineno-45-12"></a><span class="w">        </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Confirm continuing after the recipe amounts are calculated.&quot;</span><span class="p">,</span>
-</span><span id="__span-45-13"><a id="__codelineno-45-13" name="__codelineno-45-13"></a><span class="w">        </span><span class="nt">&quot;checkpointId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;checkpoint-xxx&quot;</span><span class="p">,</span>
-</span><span id="__span-45-14"><a id="__codelineno-45-14" name="__codelineno-45-14"></a><span class="w">        </span><span class="nt">&quot;lineageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;lineage-xxx&quot;</span>
-</span><span id="__span-45-15"><a id="__codelineno-45-15" name="__codelineno-45-15"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-45-16"><a id="__codelineno-45-16" name="__codelineno-45-16"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-45-17"><a id="__codelineno-45-17" name="__codelineno-45-17"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-45-18"><a id="__codelineno-45-18" name="__codelineno-45-18"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p>该事件表示执行在当前节点暂停。前端可使用 <code>/interrupt.prompt</code> 渲染中断提示，并用 <code>/interrupt.key</code> 选择需要提供的恢复值。<code>checkpointId</code> 与 <code>lineageId</code> 可用于定位需要恢复的 checkpoint 并关联多次运行。</p>
-<p>当新的运行携带 resume 输入发起恢复时，AG-UI Server 会在该运行的事件流开始处发送一条恢复回执，并且先于任何 <code>graph.node.lifecycle</code> 事件发送。恢复回执同样使用 <code>activityType: graph.node.interrupt</code>，先将 <code>/interrupt</code> 置为 <code>null</code>，再通过 <code>add /resume</code> 写入本次恢复输入：</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-46-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-46-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-46-3"> 3</a></span>
@@ -4936,115 +4996,153 @@ resolver 只需要返回业务额外需要的 run options。</p>
 <span class="normal"><a href="#__codelineno-46-15">15</a></span>
 <span class="normal"><a href="#__codelineno-46-16">16</a></span>
 <span class="normal"><a href="#__codelineno-46-17">17</a></span>
-<span class="normal"><a href="#__codelineno-46-18">18</a></span>
-<span class="normal"><a href="#__codelineno-46-19">19</a></span>
-<span class="normal"><a href="#__codelineno-46-20">20</a></span>
-<span class="normal"><a href="#__codelineno-46-21">21</a></span>
-<span class="normal"><a href="#__codelineno-46-22">22</a></span>
-<span class="normal"><a href="#__codelineno-46-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1"></a><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-46-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-46-1"><a id="__codelineno-46-1" name="__codelineno-46-1"></a><span class="p">{</span>
 </span><span id="__span-46-2"><a id="__codelineno-46-2" name="__codelineno-46-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ACTIVITY_DELTA&quot;</span><span class="p">,</span>
-</span><span id="__span-46-3"><a id="__codelineno-46-3" name="__codelineno-46-3"></a><span class="w">  </span><span class="nt">&quot;messageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;activity-resume-1&quot;</span><span class="p">,</span>
+</span><span id="__span-46-3"><a id="__codelineno-46-3" name="__codelineno-46-3"></a><span class="w">  </span><span class="nt">&quot;messageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;activity-interrupt-1&quot;</span><span class="p">,</span>
 </span><span id="__span-46-4"><a id="__codelineno-46-4" name="__codelineno-46-4"></a><span class="w">  </span><span class="nt">&quot;activityType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;graph.node.interrupt&quot;</span><span class="p">,</span>
 </span><span id="__span-46-5"><a id="__codelineno-46-5" name="__codelineno-46-5"></a><span class="w">  </span><span class="nt">&quot;patch&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
 </span><span id="__span-46-6"><a id="__codelineno-46-6" name="__codelineno-46-6"></a><span class="w">    </span><span class="p">{</span>
 </span><span id="__span-46-7"><a id="__codelineno-46-7" name="__codelineno-46-7"></a><span class="w">      </span><span class="nt">&quot;op&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
 </span><span id="__span-46-8"><a id="__codelineno-46-8" name="__codelineno-46-8"></a><span class="w">      </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/interrupt&quot;</span><span class="p">,</span>
-</span><span id="__span-46-9"><a id="__codelineno-46-9" name="__codelineno-46-9"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
-</span><span id="__span-46-10"><a id="__codelineno-46-10" name="__codelineno-46-10"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-46-11"><a id="__codelineno-46-11" name="__codelineno-46-11"></a><span class="w">    </span><span class="p">{</span>
-</span><span id="__span-46-12"><a id="__codelineno-46-12" name="__codelineno-46-12"></a><span class="w">      </span><span class="nt">&quot;op&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
-</span><span id="__span-46-13"><a id="__codelineno-46-13" name="__codelineno-46-13"></a><span class="w">      </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/resume&quot;</span><span class="p">,</span>
-</span><span id="__span-46-14"><a id="__codelineno-46-14" name="__codelineno-46-14"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-46-15"><a id="__codelineno-46-15" name="__codelineno-46-15"></a><span class="w">        </span><span class="nt">&quot;checkpointId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;checkpoint-xxx&quot;</span><span class="p">,</span>
-</span><span id="__span-46-16"><a id="__codelineno-46-16" name="__codelineno-46-16"></a><span class="w">        </span><span class="nt">&quot;lineageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;lineage-xxx&quot;</span><span class="p">,</span>
-</span><span id="__span-46-17"><a id="__codelineno-46-17" name="__codelineno-46-17"></a><span class="w">        </span><span class="nt">&quot;resumeMap&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-46-18"><a id="__codelineno-46-18" name="__codelineno-46-18"></a><span class="w">          </span><span class="nt">&quot;confirm&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
-</span><span id="__span-46-19"><a id="__codelineno-46-19" name="__codelineno-46-19"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-46-20"><a id="__codelineno-46-20" name="__codelineno-46-20"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-46-21"><a id="__codelineno-46-21" name="__codelineno-46-21"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-46-22"><a id="__codelineno-46-22" name="__codelineno-46-22"></a><span class="w">  </span><span class="p">]</span>
-</span><span id="__span-46-23"><a id="__codelineno-46-23" name="__codelineno-46-23"></a><span class="p">}</span>
+</span><span id="__span-46-9"><a id="__codelineno-46-9" name="__codelineno-46-9"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-46-10"><a id="__codelineno-46-10" name="__codelineno-46-10"></a><span class="w">        </span><span class="nt">&quot;nodeId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;confirm&quot;</span><span class="p">,</span>
+</span><span id="__span-46-11"><a id="__codelineno-46-11" name="__codelineno-46-11"></a><span class="w">        </span><span class="nt">&quot;key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;confirm&quot;</span><span class="p">,</span>
+</span><span id="__span-46-12"><a id="__codelineno-46-12" name="__codelineno-46-12"></a><span class="w">        </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Confirm continuing after the recipe amounts are calculated.&quot;</span><span class="p">,</span>
+</span><span id="__span-46-13"><a id="__codelineno-46-13" name="__codelineno-46-13"></a><span class="w">        </span><span class="nt">&quot;checkpointId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;checkpoint-xxx&quot;</span><span class="p">,</span>
+</span><span id="__span-46-14"><a id="__codelineno-46-14" name="__codelineno-46-14"></a><span class="w">        </span><span class="nt">&quot;lineageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;lineage-xxx&quot;</span>
+</span><span id="__span-46-15"><a id="__codelineno-46-15" name="__codelineno-46-15"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-46-16"><a id="__codelineno-46-16" name="__codelineno-46-16"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-46-17"><a id="__codelineno-46-17" name="__codelineno-46-17"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-46-18"><a id="__codelineno-46-18" name="__codelineno-46-18"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>该事件表示执行在当前节点暂停。前端可使用 <code>/interrupt.prompt</code> 渲染中断提示，并用 <code>/interrupt.key</code> 选择需要提供的恢复值。<code>checkpointId</code> 与 <code>lineageId</code> 可用于定位需要恢复的 checkpoint 并关联多次运行。</p>
+<p>当新的运行携带 resume 输入发起恢复时，AG-UI Server 会在该运行的事件流开始处发送一条恢复回执，并且先于任何 <code>graph.node.lifecycle</code> 事件发送。恢复回执同样使用 <code>activityType: graph.node.interrupt</code>，先将 <code>/interrupt</code> 置为 <code>null</code>，再通过 <code>add /resume</code> 写入本次恢复输入：</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-47-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-47-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-47-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-47-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-47-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-47-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-47-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-47-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-47-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-47-10">10</a></span>
+<span class="normal"><a href="#__codelineno-47-11">11</a></span>
+<span class="normal"><a href="#__codelineno-47-12">12</a></span>
+<span class="normal"><a href="#__codelineno-47-13">13</a></span>
+<span class="normal"><a href="#__codelineno-47-14">14</a></span>
+<span class="normal"><a href="#__codelineno-47-15">15</a></span>
+<span class="normal"><a href="#__codelineno-47-16">16</a></span>
+<span class="normal"><a href="#__codelineno-47-17">17</a></span>
+<span class="normal"><a href="#__codelineno-47-18">18</a></span>
+<span class="normal"><a href="#__codelineno-47-19">19</a></span>
+<span class="normal"><a href="#__codelineno-47-20">20</a></span>
+<span class="normal"><a href="#__codelineno-47-21">21</a></span>
+<span class="normal"><a href="#__codelineno-47-22">22</a></span>
+<span class="normal"><a href="#__codelineno-47-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1"></a><span class="p">{</span>
+</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;ACTIVITY_DELTA&quot;</span><span class="p">,</span>
+</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3"></a><span class="w">  </span><span class="nt">&quot;messageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;activity-resume-1&quot;</span><span class="p">,</span>
+</span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4"></a><span class="w">  </span><span class="nt">&quot;activityType&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;graph.node.interrupt&quot;</span><span class="p">,</span>
+</span><span id="__span-47-5"><a id="__codelineno-47-5" name="__codelineno-47-5"></a><span class="w">  </span><span class="nt">&quot;patch&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+</span><span id="__span-47-6"><a id="__codelineno-47-6" name="__codelineno-47-6"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-47-7"><a id="__codelineno-47-7" name="__codelineno-47-7"></a><span class="w">      </span><span class="nt">&quot;op&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
+</span><span id="__span-47-8"><a id="__codelineno-47-8" name="__codelineno-47-8"></a><span class="w">      </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/interrupt&quot;</span><span class="p">,</span>
+</span><span id="__span-47-9"><a id="__codelineno-47-9" name="__codelineno-47-9"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span>
+</span><span id="__span-47-10"><a id="__codelineno-47-10" name="__codelineno-47-10"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-47-11"><a id="__codelineno-47-11" name="__codelineno-47-11"></a><span class="w">    </span><span class="p">{</span>
+</span><span id="__span-47-12"><a id="__codelineno-47-12" name="__codelineno-47-12"></a><span class="w">      </span><span class="nt">&quot;op&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;add&quot;</span><span class="p">,</span>
+</span><span id="__span-47-13"><a id="__codelineno-47-13" name="__codelineno-47-13"></a><span class="w">      </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/resume&quot;</span><span class="p">,</span>
+</span><span id="__span-47-14"><a id="__codelineno-47-14" name="__codelineno-47-14"></a><span class="w">      </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-47-15"><a id="__codelineno-47-15" name="__codelineno-47-15"></a><span class="w">        </span><span class="nt">&quot;checkpointId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;checkpoint-xxx&quot;</span><span class="p">,</span>
+</span><span id="__span-47-16"><a id="__codelineno-47-16" name="__codelineno-47-16"></a><span class="w">        </span><span class="nt">&quot;lineageId&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;lineage-xxx&quot;</span><span class="p">,</span>
+</span><span id="__span-47-17"><a id="__codelineno-47-17" name="__codelineno-47-17"></a><span class="w">        </span><span class="nt">&quot;resumeMap&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-47-18"><a id="__codelineno-47-18" name="__codelineno-47-18"></a><span class="w">          </span><span class="nt">&quot;confirm&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+</span><span id="__span-47-19"><a id="__codelineno-47-19" name="__codelineno-47-19"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-47-20"><a id="__codelineno-47-20" name="__codelineno-47-20"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-47-21"><a id="__codelineno-47-21" name="__codelineno-47-21"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-47-22"><a id="__codelineno-47-22" name="__codelineno-47-22"></a><span class="w">  </span><span class="p">]</span>
+</span><span id="__span-47-23"><a id="__codelineno-47-23" name="__codelineno-47-23"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>如果使用多级 GraphAgent，子图中断会向上冒泡，事件流中默认可能出现多条 <code>graph.node.interrupt</code>。如果前端只希望保留用于恢复的最外层中断，可额外开启 <code>agui.WithGraphNodeInterruptActivityTopLevelOnly(true)</code>：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-47-1">1</a></span>
-<span class="normal"><a href="#__codelineno-47-2">2</a></span>
-<span class="normal"><a href="#__codelineno-47-3">3</a></span>
-<span class="normal"><a href="#__codelineno-47-4">4</a></span>
-<span class="normal"><a href="#__codelineno-47-5">5</a></span>
-<span class="normal"><a href="#__codelineno-47-6">6</a></span>
-<span class="normal"><a href="#__codelineno-47-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-47-1"><a id="__codelineno-47-1" name="__codelineno-47-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
-</span><span id="__span-47-2"><a id="__codelineno-47-2" name="__codelineno-47-2"></a>
-</span><span id="__span-47-3"><a id="__codelineno-47-3" name="__codelineno-47-3"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-47-4"><a id="__codelineno-47-4" name="__codelineno-47-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
-</span><span id="__span-47-5"><a id="__codelineno-47-5" name="__codelineno-47-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithGraphNodeInterruptActivityEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-47-6"><a id="__codelineno-47-6" name="__codelineno-47-6"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithGraphNodeInterruptActivityTopLevelOnly</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-47-7"><a id="__codelineno-47-7" name="__codelineno-47-7"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1">1</a></span>
+<span class="normal"><a href="#__codelineno-48-2">2</a></span>
+<span class="normal"><a href="#__codelineno-48-3">3</a></span>
+<span class="normal"><a href="#__codelineno-48-4">4</a></span>
+<span class="normal"><a href="#__codelineno-48-5">5</a></span>
+<span class="normal"><a href="#__codelineno-48-6">6</a></span>
+<span class="normal"><a href="#__codelineno-48-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a>
+</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithGraphNodeInterruptActivityEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithGraphNodeInterruptActivityTopLevelOnly</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>完整示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph">examples/agui/server/graph</a>，前端渲染与审批交互可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat">examples/agui/client/tdesign-chat</a>。</p>
 <h2 id="_16">可观测平台上报</h2>
 <p>可观测平台通常需要记录本次对话的输入、业务标签和最终输出。AG-UI 可以通过 <code>RunOptionResolver</code> 为本次 Agent 运行补充 span 属性，也可以配合事件翻译回调在流式输出结束后写入最终结果。</p>
 <p>输入侧可以在 <code>RunOptionResolver</code> 中返回 <code>agent.WithSpanAttributes(...)</code>，框架会把这些属性写入 Agent 入口 span：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-48-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-48-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-48-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-48-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-48-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-48-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-48-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-48-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-48-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-48-10">10</a></span>
-<span class="normal"><a href="#__codelineno-48-11">11</a></span>
-<span class="normal"><a href="#__codelineno-48-12">12</a></span>
-<span class="normal"><a href="#__codelineno-48-13">13</a></span>
-<span class="normal"><a href="#__codelineno-48-14">14</a></span>
-<span class="normal"><a href="#__codelineno-48-15">15</a></span>
-<span class="normal"><a href="#__codelineno-48-16">16</a></span>
-<span class="normal"><a href="#__codelineno-48-17">17</a></span>
-<span class="normal"><a href="#__codelineno-48-18">18</a></span>
-<span class="normal"><a href="#__codelineno-48-19">19</a></span>
-<span class="normal"><a href="#__codelineno-48-20">20</a></span>
-<span class="normal"><a href="#__codelineno-48-21">21</a></span>
-<span class="normal"><a href="#__codelineno-48-22">22</a></span>
-<span class="normal"><a href="#__codelineno-48-23">23</a></span>
-<span class="normal"><a href="#__codelineno-48-24">24</a></span>
-<span class="normal"><a href="#__codelineno-48-25">25</a></span>
-<span class="normal"><a href="#__codelineno-48-26">26</a></span>
-<span class="normal"><a href="#__codelineno-48-27">27</a></span>
-<span class="normal"><a href="#__codelineno-48-28">28</a></span>
-<span class="normal"><a href="#__codelineno-48-29">29</a></span>
-<span class="normal"><a href="#__codelineno-48-30">30</a></span>
-<span class="normal"><a href="#__codelineno-48-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-48-1"><a id="__codelineno-48-1" name="__codelineno-48-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-48-2"><a id="__codelineno-48-2" name="__codelineno-48-2"></a><span class="w">    </span><span class="s">&quot;go.opentelemetry.io/otel/attribute&quot;</span>
-</span><span id="__span-48-3"><a id="__codelineno-48-3" name="__codelineno-48-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
-</span><span id="__span-48-4"><a id="__codelineno-48-4" name="__codelineno-48-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/adapter&quot;</span>
-</span><span id="__span-48-5"><a id="__codelineno-48-5" name="__codelineno-48-5"></a><span class="w">    </span><span class="nx">aguirunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/runner&quot;</span>
-</span><span id="__span-48-6"><a id="__codelineno-48-6" name="__codelineno-48-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
-</span><span id="__span-48-7"><a id="__codelineno-48-7" name="__codelineno-48-7"></a><span class="p">)</span>
-</span><span id="__span-48-8"><a id="__codelineno-48-8" name="__codelineno-48-8"></a>
-</span><span id="__span-48-9"><a id="__codelineno-48-9" name="__codelineno-48-9"></a><span class="nx">runOptionResolver</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">*</span><span class="nx">adapter</span><span class="p">.</span><span class="nx">RunAgentInput</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">RunOption</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-48-10"><a id="__codelineno-48-10" name="__codelineno-48-10"></a><span class="w">    </span><span class="nx">content</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">Messages</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="nx">input</span><span class="p">.</span><span class="nx">Messages</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">].</span><span class="nx">ContentString</span><span class="p">()</span>
-</span><span id="__span-48-11"><a id="__codelineno-48-11" name="__codelineno-48-11"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-48-12"><a id="__codelineno-48-12" name="__codelineno-48-12"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;last message content is not a string&quot;</span><span class="p">)</span>
-</span><span id="__span-48-13"><a id="__codelineno-48-13" name="__codelineno-48-13"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-48-14"><a id="__codelineno-48-14" name="__codelineno-48-14"></a><span class="w">    </span><span class="nx">attrs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">attribute</span><span class="p">.</span><span class="nx">KeyValue</span><span class="p">{</span>
-</span><span id="__span-48-15"><a id="__codelineno-48-15" name="__codelineno-48-15"></a><span class="w">        </span><span class="nx">attribute</span><span class="p">.</span><span class="nx">String</span><span class="p">(</span><span class="s">&quot;trace.input&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">content</span><span class="p">),</span>
-</span><span id="__span-48-16"><a id="__codelineno-48-16" name="__codelineno-48-16"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-48-17"><a id="__codelineno-48-17" name="__codelineno-48-17"></a><span class="w">    </span><span class="nx">forwardedProps</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">ForwardedProps</span><span class="p">.(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">)</span>
-</span><span id="__span-48-18"><a id="__codelineno-48-18" name="__codelineno-48-18"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-48-19"><a id="__codelineno-48-19" name="__codelineno-48-19"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">scenario</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">forwardedProps</span><span class="p">[</span><span class="s">&quot;scenario&quot;</span><span class="p">].(</span><span class="kt">string</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-48-20"><a id="__codelineno-48-20" name="__codelineno-48-20"></a><span class="w">            </span><span class="nx">attrs</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">attrs</span><span class="p">,</span><span class="w"> </span><span class="nx">attribute</span><span class="p">.</span><span class="nx">String</span><span class="p">(</span><span class="s">&quot;conversation.scenario&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">scenario</span><span class="p">))</span>
-</span><span id="__span-48-21"><a id="__codelineno-48-21" name="__codelineno-48-21"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-48-22"><a id="__codelineno-48-22" name="__codelineno-48-22"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-48-23"><a id="__codelineno-48-23" name="__codelineno-48-23"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">[]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">RunOption</span><span class="p">{</span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithSpanAttributes</span><span class="p">(</span><span class="nx">attrs</span><span class="o">...</span><span class="p">)},</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-48-24"><a id="__codelineno-48-24" name="__codelineno-48-24"></a><span class="p">}</span>
-</span><span id="__span-48-25"><a id="__codelineno-48-25" name="__codelineno-48-25"></a>
-</span><span id="__span-48-26"><a id="__codelineno-48-26" name="__codelineno-48-26"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-48-27"><a id="__codelineno-48-27" name="__codelineno-48-27"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
-</span><span id="__span-48-28"><a id="__codelineno-48-28" name="__codelineno-48-28"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span>
-</span><span id="__span-48-29"><a id="__codelineno-48-29" name="__codelineno-48-29"></a><span class="w">        </span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithRunOptionResolver</span><span class="p">(</span><span class="nx">runOptionResolver</span><span class="p">),</span>
-</span><span id="__span-48-30"><a id="__codelineno-48-30" name="__codelineno-48-30"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-48-31"><a id="__codelineno-48-31" name="__codelineno-48-31"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-49-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-49-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-49-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-49-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-49-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-49-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-49-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-49-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-49-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-49-10">10</a></span>
+<span class="normal"><a href="#__codelineno-49-11">11</a></span>
+<span class="normal"><a href="#__codelineno-49-12">12</a></span>
+<span class="normal"><a href="#__codelineno-49-13">13</a></span>
+<span class="normal"><a href="#__codelineno-49-14">14</a></span>
+<span class="normal"><a href="#__codelineno-49-15">15</a></span>
+<span class="normal"><a href="#__codelineno-49-16">16</a></span>
+<span class="normal"><a href="#__codelineno-49-17">17</a></span>
+<span class="normal"><a href="#__codelineno-49-18">18</a></span>
+<span class="normal"><a href="#__codelineno-49-19">19</a></span>
+<span class="normal"><a href="#__codelineno-49-20">20</a></span>
+<span class="normal"><a href="#__codelineno-49-21">21</a></span>
+<span class="normal"><a href="#__codelineno-49-22">22</a></span>
+<span class="normal"><a href="#__codelineno-49-23">23</a></span>
+<span class="normal"><a href="#__codelineno-49-24">24</a></span>
+<span class="normal"><a href="#__codelineno-49-25">25</a></span>
+<span class="normal"><a href="#__codelineno-49-26">26</a></span>
+<span class="normal"><a href="#__codelineno-49-27">27</a></span>
+<span class="normal"><a href="#__codelineno-49-28">28</a></span>
+<span class="normal"><a href="#__codelineno-49-29">29</a></span>
+<span class="normal"><a href="#__codelineno-49-30">30</a></span>
+<span class="normal"><a href="#__codelineno-49-31">31</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2"></a><span class="w">    </span><span class="s">&quot;go.opentelemetry.io/otel/attribute&quot;</span>
+</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/adapter&quot;</span>
+</span><span id="__span-49-5"><a id="__codelineno-49-5" name="__codelineno-49-5"></a><span class="w">    </span><span class="nx">aguirunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/runner&quot;</span>
+</span><span id="__span-49-6"><a id="__codelineno-49-6" name="__codelineno-49-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
+</span><span id="__span-49-7"><a id="__codelineno-49-7" name="__codelineno-49-7"></a><span class="p">)</span>
+</span><span id="__span-49-8"><a id="__codelineno-49-8" name="__codelineno-49-8"></a>
+</span><span id="__span-49-9"><a id="__codelineno-49-9" name="__codelineno-49-9"></a><span class="nx">runOptionResolver</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">*</span><span class="nx">adapter</span><span class="p">.</span><span class="nx">RunAgentInput</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">RunOption</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-49-10"><a id="__codelineno-49-10" name="__codelineno-49-10"></a><span class="w">    </span><span class="nx">content</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">Messages</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="nx">input</span><span class="p">.</span><span class="nx">Messages</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">].</span><span class="nx">ContentString</span><span class="p">()</span>
+</span><span id="__span-49-11"><a id="__codelineno-49-11" name="__codelineno-49-11"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-49-12"><a id="__codelineno-49-12" name="__codelineno-49-12"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;last message content is not a string&quot;</span><span class="p">)</span>
+</span><span id="__span-49-13"><a id="__codelineno-49-13" name="__codelineno-49-13"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-49-14"><a id="__codelineno-49-14" name="__codelineno-49-14"></a><span class="w">    </span><span class="nx">attrs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="p">[]</span><span class="nx">attribute</span><span class="p">.</span><span class="nx">KeyValue</span><span class="p">{</span>
+</span><span id="__span-49-15"><a id="__codelineno-49-15" name="__codelineno-49-15"></a><span class="w">        </span><span class="nx">attribute</span><span class="p">.</span><span class="nx">String</span><span class="p">(</span><span class="s">&quot;trace.input&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">content</span><span class="p">),</span>
+</span><span id="__span-49-16"><a id="__codelineno-49-16" name="__codelineno-49-16"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-49-17"><a id="__codelineno-49-17" name="__codelineno-49-17"></a><span class="w">    </span><span class="nx">forwardedProps</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">ForwardedProps</span><span class="p">.(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">)</span>
+</span><span id="__span-49-18"><a id="__codelineno-49-18" name="__codelineno-49-18"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-49-19"><a id="__codelineno-49-19" name="__codelineno-49-19"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">scenario</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">forwardedProps</span><span class="p">[</span><span class="s">&quot;scenario&quot;</span><span class="p">].(</span><span class="kt">string</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-49-20"><a id="__codelineno-49-20" name="__codelineno-49-20"></a><span class="w">            </span><span class="nx">attrs</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">attrs</span><span class="p">,</span><span class="w"> </span><span class="nx">attribute</span><span class="p">.</span><span class="nx">String</span><span class="p">(</span><span class="s">&quot;conversation.scenario&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">scenario</span><span class="p">))</span>
+</span><span id="__span-49-21"><a id="__codelineno-49-21" name="__codelineno-49-21"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-49-22"><a id="__codelineno-49-22" name="__codelineno-49-22"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-49-23"><a id="__codelineno-49-23" name="__codelineno-49-23"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">[]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">RunOption</span><span class="p">{</span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithSpanAttributes</span><span class="p">(</span><span class="nx">attrs</span><span class="o">...</span><span class="p">)},</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-49-24"><a id="__codelineno-49-24" name="__codelineno-49-24"></a><span class="p">}</span>
+</span><span id="__span-49-25"><a id="__codelineno-49-25" name="__codelineno-49-25"></a>
+</span><span id="__span-49-26"><a id="__codelineno-49-26" name="__codelineno-49-26"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-49-27"><a id="__codelineno-49-27" name="__codelineno-49-27"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-49-28"><a id="__codelineno-49-28" name="__codelineno-49-28"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithAGUIRunnerOptions</span><span class="p">(</span>
+</span><span id="__span-49-29"><a id="__codelineno-49-29" name="__codelineno-49-29"></a><span class="w">        </span><span class="nx">aguirunner</span><span class="p">.</span><span class="nx">WithRunOptionResolver</span><span class="p">(</span><span class="nx">runOptionResolver</span><span class="p">),</span>
+</span><span id="__span-49-30"><a id="__codelineno-49-30" name="__codelineno-49-30"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-49-31"><a id="__codelineno-49-31" name="__codelineno-49-31"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>输出侧可以在事件翻译回调 <code>AfterTranslate</code> 中累积文本事件，并在输出结束后写入 <code>trace.output</code>。这样前端流式事件与后端 trace 可以按同一次运行对齐，便于在可观测平台中同时查看输入和最终输出。</p>
 <p>与 Langfuse 可观测平台的结合示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse">examples/agui/server/langfuse</a>。</p>
@@ -5063,37 +5161,37 @@ resolver 只需要返回业务额外需要的 run options。</p>
 <li>最后调用“关闭文档面板”工具</li>
 </ol>
 <p>转换为 AG-UI 事件流，大致形态如下：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-49-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-49-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-49-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-49-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-49-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-49-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-49-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-49-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-49-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-49-10">10</a></span>
-<span class="normal"><a href="#__codelineno-49-11">11</a></span>
-<span class="normal"><a href="#__codelineno-49-12">12</a></span>
-<span class="normal"><a href="#__codelineno-49-13">13</a></span>
-<span class="normal"><a href="#__codelineno-49-14">14</a></span>
-<span class="normal"><a href="#__codelineno-49-15">15</a></span>
-<span class="normal"><a href="#__codelineno-49-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-49-1"><a id="__codelineno-49-1" name="__codelineno-49-1"></a>打开文档面板工具
-</span><span id="__span-49-2"><a id="__codelineno-49-2" name="__codelineno-49-2"></a>  → ToolCallStart
-</span><span id="__span-49-3"><a id="__codelineno-49-3" name="__codelineno-49-3"></a>  → ToolCallArgs
-</span><span id="__span-49-4"><a id="__codelineno-49-4" name="__codelineno-49-4"></a>  → ToolCallEnd
-</span><span id="__span-49-5"><a id="__codelineno-49-5" name="__codelineno-49-5"></a>  → ToolCallResult
-</span><span id="__span-49-6"><a id="__codelineno-49-6" name="__codelineno-49-6"></a>
-</span><span id="__span-49-7"><a id="__codelineno-49-7" name="__codelineno-49-7"></a>文档内容
-</span><span id="__span-49-8"><a id="__codelineno-49-8" name="__codelineno-49-8"></a>  → TextMessageStart
-</span><span id="__span-49-9"><a id="__codelineno-49-9" name="__codelineno-49-9"></a>  → TextMessageContent
-</span><span id="__span-49-10"><a id="__codelineno-49-10" name="__codelineno-49-10"></a>  → TextMessageEnd
-</span><span id="__span-49-11"><a id="__codelineno-49-11" name="__codelineno-49-11"></a>
-</span><span id="__span-49-12"><a id="__codelineno-49-12" name="__codelineno-49-12"></a>关闭文档面板工具
-</span><span id="__span-49-13"><a id="__codelineno-49-13" name="__codelineno-49-13"></a>  → ToolCallStart
-</span><span id="__span-49-14"><a id="__codelineno-49-14" name="__codelineno-49-14"></a>  → ToolCallArgs
-</span><span id="__span-49-15"><a id="__codelineno-49-15" name="__codelineno-49-15"></a>  → ToolCallEnd
-</span><span id="__span-49-16"><a id="__codelineno-49-16" name="__codelineno-49-16"></a>  → ToolCallResult
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-50-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-50-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-50-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-50-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-50-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-50-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-50-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-50-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-50-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-50-10">10</a></span>
+<span class="normal"><a href="#__codelineno-50-11">11</a></span>
+<span class="normal"><a href="#__codelineno-50-12">12</a></span>
+<span class="normal"><a href="#__codelineno-50-13">13</a></span>
+<span class="normal"><a href="#__codelineno-50-14">14</a></span>
+<span class="normal"><a href="#__codelineno-50-15">15</a></span>
+<span class="normal"><a href="#__codelineno-50-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1"></a>打开文档面板工具
+</span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2"></a>  → ToolCallStart
+</span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3"></a>  → ToolCallArgs
+</span><span id="__span-50-4"><a id="__codelineno-50-4" name="__codelineno-50-4"></a>  → ToolCallEnd
+</span><span id="__span-50-5"><a id="__codelineno-50-5" name="__codelineno-50-5"></a>  → ToolCallResult
+</span><span id="__span-50-6"><a id="__codelineno-50-6" name="__codelineno-50-6"></a>
+</span><span id="__span-50-7"><a id="__codelineno-50-7" name="__codelineno-50-7"></a>文档内容
+</span><span id="__span-50-8"><a id="__codelineno-50-8" name="__codelineno-50-8"></a>  → TextMessageStart
+</span><span id="__span-50-9"><a id="__codelineno-50-9" name="__codelineno-50-9"></a>  → TextMessageContent
+</span><span id="__span-50-10"><a id="__codelineno-50-10" name="__codelineno-50-10"></a>  → TextMessageEnd
+</span><span id="__span-50-11"><a id="__codelineno-50-11" name="__codelineno-50-11"></a>
+</span><span id="__span-50-12"><a id="__codelineno-50-12" name="__codelineno-50-12"></a>关闭文档面板工具
+</span><span id="__span-50-13"><a id="__codelineno-50-13" name="__codelineno-50-13"></a>  → ToolCallStart
+</span><span id="__span-50-14"><a id="__codelineno-50-14" name="__codelineno-50-14"></a>  → ToolCallArgs
+</span><span id="__span-50-15"><a id="__codelineno-50-15" name="__codelineno-50-15"></a>  → ToolCallEnd
+</span><span id="__span-50-16"><a id="__codelineno-50-16" name="__codelineno-50-16"></a>  → ToolCallResult
 </span></code></pre></div></td></tr></table></div>
 </li>
 <li>
@@ -5129,7 +5227,7 @@ resolver 只需要返回业务额外需要的 run options。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月5日 12:24:10 UTC">2026-06-05 12:24:10</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月10日 09:21:51 UTC">2026-06-10 09:21:51</span>
   </span>
 
     
