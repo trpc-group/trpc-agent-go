@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
@@ -2401,6 +2402,7 @@ func newToolsNodeRuntime(
 			toolCallbacks, _ = extractToolCallbacks(state)
 		}
 
+		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 		// Process all tool calls and collect results.
 		newMessages, err := processToolCalls(ctx, toolCallsConfig{
 			ToolCalls:      toolCalls,
@@ -2409,6 +2411,7 @@ func newToolsNodeRuntime(
 			EventChan:      eventChan,
 			Span:           span,
 			State:          state,
+			NodeID:         nodeID,
 			EnableParallel: parallel,
 			ToolCallbacks:  toolCallbacks,
 			RetryPolicy:    configuredRetryPolicy,
@@ -2420,13 +2423,13 @@ func newToolsNodeRuntime(
 			return nil, err
 		}
 		upd := State{StateKeyMessages: newMessages}
+		clearAgentToolSubgraphInterruptState(state, nodeID)
 
 		if len(newMessages) > 0 {
 			upd[StateKeyLastToolResponse] =
 				newMessages[len(newMessages)-1].Content
 		}
 
-		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 		if nodeID != "" {
 			type toolNodeResponse struct {
 				ToolID   string          `json:"tool_id"`
@@ -2526,6 +2529,9 @@ type subgraphInterruptInfo struct {
 	childCheckpointNS string
 	childLineageID    string
 	childTaskID       string
+	toolCallID        string
+	toolCallKey       string
+	childFilterKey    string
 }
 
 type extractedPregelInterrupt struct {
@@ -2567,6 +2573,15 @@ func subgraphInterruptInfoFromState(
 	}
 	if v, ok := typed[subgraphInterruptKeyChildTaskID].(string); ok {
 		info.childTaskID = v
+	}
+	if v, ok := typed[subgraphInterruptKeyToolCallID].(string); ok {
+		info.toolCallID = v
+	}
+	if v, ok := typed[subgraphInterruptKeyToolCallKey].(string); ok {
+		info.toolCallKey = v
+	}
+	if v, ok := typed[subgraphInterruptKeyChildFilterKey].(string); ok {
+		info.childFilterKey = v
 	}
 	return info, true
 }
@@ -3912,6 +3927,7 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 		// The agent node captures completion snapshots from either raw
 		// graph.execution events or visible rewritten completion snapshots.
 		runOptions.RuntimeState = mergeAgentNodeRuntimeState(runtime, nodeRuntimeState)
+		injectAgentNodeToolContinuationMessages(&runOptions, runtime, inputMessage)
 		runOptions.CustomAgentConfigs = withScopedGraphCallOptions(
 			runOptions.CustomAgentConfigs,
 			nodeID,
@@ -3959,6 +3975,7 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 	applyAgentNodeRunOptions(&runOptions, nodeRunOptions)
 	nodeRuntimeState := runOptions.RuntimeState
 	runOptions.RuntimeState = mergeAgentNodeRuntimeState(runtime, nodeRuntimeState)
+	injectAgentNodeToolContinuationMessages(&runOptions, runtime, inputMessage)
 	inv := agent.NewInvocation(
 		agent.WithInvocationAgent(targetAgent),
 		agent.WithInvocationRunOptions(runOptions),
@@ -4007,6 +4024,31 @@ func mergeAgentNodeRuntimeState(runtime State, nodeRuntimeState map[string]any) 
 		merged[key] = value
 	}
 	return merged
+}
+
+func injectAgentNodeToolContinuationMessages(
+	runOptions *agent.RunOptions,
+	runtime State,
+	inputMessage model.Message,
+) {
+	if runOptions == nil || runtime == nil || inputMessage.Role != model.RoleTool {
+		return
+	}
+	messages, ok := runtime[StateKeyMessages].([]model.Message)
+	if !ok || len(messages) == 0 {
+		return
+	}
+	history := make([]model.Message, 0, len(messages))
+	for _, msg := range messages {
+		if model.MessagesEqual(msg, inputMessage) {
+			continue
+		}
+		history = append(history, msg)
+	}
+	if len(history) == 0 {
+		return
+	}
+	runOptions.InjectedContextMessages = append(runOptions.InjectedContextMessages, history...)
 }
 
 func currentTraceTaskPredecessors(traceTask *traceTaskMetadata) []string {
@@ -4302,6 +4344,7 @@ func runTool(
 		t,
 		state,
 		nil,
+		0,
 	)
 	return finalCtx, result, modifiedArgs, err
 }
@@ -4313,6 +4356,7 @@ func runToolWithEventContexts(
 	t tool.Tool,
 	state State,
 	retryPolicy *tool.RetryPolicy,
+	toolCallIndex int,
 ) (context.Context, *agent.Invocation, context.Context, *agent.Invocation, any, []byte, error) {
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	if invocation, ok := agent.InvocationFromContext(ctx); ok && jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
@@ -4368,7 +4412,15 @@ func runToolWithEventContexts(
 	if err != nil {
 		return startCtx, startInvocation, ctx, startInvocation, nil, toolCall.Function.Arguments, err
 	}
-	result, toolErr := callToolWithRetry(ctx, toolCall, callableTool, retryPolicy)
+	result, toolErr := callToolWithRetry(
+		ctx,
+		toolCall,
+		callableTool,
+		retryPolicy,
+		startInvocation,
+		state,
+		toolCallIndex,
+	)
 	completeInvocation := startInvocation
 
 	ctx, customResult, err = runAfterToolPluginCallbacks(
@@ -4427,21 +4479,78 @@ func runToolWithEventContexts(
 	return startCtx, startInvocation, ctx, completeInvocation, result, toolCall.Function.Arguments, nil
 }
 
+func agentToolGraphRuntimeContext(
+	invocation *agent.Invocation,
+	state State,
+	toolCall model.ToolCall,
+	toolCallIndex int,
+) (agenttoolgraph.RuntimeContext, error) {
+	if invocation == nil {
+		return agenttoolgraph.RuntimeContext{}, nil
+	}
+	toolCallKey := agentToolCallKey(toolCallIndex, toolCall)
+	currentNodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
+	runtimeState, err := agentToolChildRuntimeState(
+		state,
+		currentNodeID,
+		toolCall.Function.Name,
+		toolCall.ID,
+		toolCallKey,
+	)
+	if err != nil {
+		return agenttoolgraph.RuntimeContext{}, err
+	}
+	return agenttoolgraph.RuntimeContext{
+		ParentInvocation: invocation,
+		State:            runtimeState,
+		ParentNodeID:     currentNodeID,
+		ToolCallID:       toolCall.ID,
+		ToolCallKey:      toolCallKey,
+		ChildFilterKey:   agentToolChildFilterKey(state, currentNodeID, toolCall.Function.Name, toolCall.ID, toolCallKey),
+	}, nil
+}
+
 func callToolWithRetry(
 	ctx context.Context,
 	toolCall model.ToolCall,
 	callableTool tool.CallableTool,
 	retryPolicy *tool.RetryPolicy,
+	invocation *agent.Invocation,
+	state State,
+	toolCallIndex int,
 ) (any, error) {
+	runtimeTool, ok := callableTool.(agenttoolgraph.RuntimeCallable)
+	var graphRuntime agenttoolgraph.RuntimeContext
+	if ok {
+		var err error
+		graphRuntime, err = agentToolGraphRuntimeContext(
+			invocation,
+			state,
+			toolCall,
+			toolCallIndex,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	call := func(ctx context.Context, arguments []byte) (any, error) {
+		if ok && graphRuntime.ParentInvocation != nil &&
+			graphRuntime.State != nil &&
+			graphRuntime.ParentNodeID != "" &&
+			graphRuntime.ToolCallKey != "" {
+			return runtimeTool.CallWithAgentToolGraphRuntime(ctx, arguments, graphRuntime)
+		}
+		return callableTool.Call(ctx, arguments)
+	}
 	if retryPolicy == nil {
-		return callableTool.Call(ctx, toolCall.Function.Arguments)
+		return call(ctx, toolCall.Function.Arguments)
 	}
 	runResult := toolretry.Execute(ctx, toolretry.ExecuteInput{
 		ToolName:   toolCall.Function.Name,
 		ToolCallID: toolCall.ID,
 		Arguments:  toolCall.Function.Arguments,
 		Policy:     retryPolicy,
-		Call:       callableTool.Call,
+		Call:       call,
 		ResultError: func(result any) bool {
 			return extractResultError(result)
 		},
@@ -5395,6 +5504,7 @@ type toolCallsConfig struct {
 	EventChan    chan<- *event.Event
 	Span         oteltrace.Span
 	State        State
+	NodeID       string
 	// EnableParallel controls whether multiple tool calls are executed concurrently.
 	// When false or when there is only one tool call, execution is serial.
 	EnableParallel bool
@@ -5412,12 +5522,20 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	if toolCallbacks == nil {
 		toolCallbacks, _ = extractToolCallbacks(config.State)
 	}
+	completedMessages := completedToolMessagesForNode(config.State, config.NodeID)
 	// Serial path or single tool call.
 	if !config.EnableParallel || len(config.ToolCalls) <= 1 {
 		newMessages := make([]model.Message, 0, len(config.ToolCalls))
-		for _, toolCall := range config.ToolCalls {
+		completedThisRun := make(map[string]model.Message)
+		for i, toolCall := range config.ToolCalls {
+			completedKey := completedToolMessageKey(i, toolCall)
+			if msg, ok := completedMessages[completedKey]; ok {
+				newMessages = append(newMessages, msg)
+				continue
+			}
 			toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
 				ToolCall:      toolCall,
+				ToolCallIndex: i,
 				Tools:         config.Tools,
 				InvocationID:  config.InvocationID,
 				EventChan:     config.EventChan,
@@ -5427,15 +5545,27 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				RetryPolicy:   config.RetryPolicy,
 			})
 			if err != nil {
+				if IsInterruptError(err) {
+					recordCompletedToolMessages(config.State, config.NodeID, completedThisRun)
+					setAgentToolInterruptStateFromError(config.State, err)
+				} else {
+					clearCompletedToolMessages(config.State, config.NodeID)
+				}
 				return nil, err
 			}
 			newMessages = append(newMessages, toolMessage)
+			completedThisRun[completedKey] = toolMessage
 		}
+		clearCompletedToolMessages(config.State, config.NodeID)
 		return newMessages, nil
 	}
 
 	// Parallel path: execute each tool call in its own goroutine while
 	// preserving the original order in the resulting messages slice.
+	type pendingCall struct {
+		idx int
+		tc  model.ToolCall
+	}
 	type result struct {
 		idx int
 		msg model.Message
@@ -5445,17 +5575,32 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	results := make(chan result, len(config.ToolCalls))
-	var wg sync.WaitGroup
-	wg.Add(len(config.ToolCalls))
-
+	out := make([]model.Message, len(config.ToolCalls))
+	pendingCalls := make([]pendingCall, 0, len(config.ToolCalls))
 	for i, tc := range config.ToolCalls {
-		i, tc := i, tc
+		completedKey := completedToolMessageKey(i, tc)
+		if msg, ok := completedMessages[completedKey]; ok {
+			out[i] = msg
+			continue
+		}
+		pendingCalls = append(pendingCalls, pendingCall{idx: i, tc: tc})
+	}
+	if len(pendingCalls) == 0 {
+		clearCompletedToolMessages(config.State, config.NodeID)
+		return out, nil
+	}
+	results := make(chan result, len(pendingCalls))
+	var wg sync.WaitGroup
+	wg.Add(len(pendingCalls))
+
+	for _, pending := range pendingCalls {
+		i, tc := pending.idx, pending.tc
 		runCtx := agent.CloneContext(ctx)
 		go func(ctx context.Context) {
 			defer wg.Done()
 			msg, err := executeSingleToolCall(ctx, singleToolCallConfig{
 				ToolCall:      tc,
+				ToolCallIndex: i,
 				Tools:         config.Tools,
 				InvocationID:  config.InvocationID,
 				EventChan:     config.EventChan,
@@ -5480,31 +5625,156 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	}()
 
 	// Aggregate while preserving order.
-	out := make([]model.Message, len(config.ToolCalls))
-	var firstErr error
-	received := 0
+	errsByIndex := make([]error, len(config.ToolCalls))
+	completedThisRun := make(map[string]model.Message)
 	for r := range results {
-		received++
-		if r.err != nil && firstErr == nil {
-			firstErr = r.err
+		if r.err != nil {
+			errsByIndex[r.idx] = r.err
 		}
 		// Only set when message exists; zero value is fine otherwise.
 		if r.err == nil {
 			out[r.idx] = r.msg
-		}
-		if received == len(config.ToolCalls) {
-			break
+			completedKey := completedToolMessageKey(r.idx, config.ToolCalls[r.idx])
+			completedThisRun[completedKey] = r.msg
 		}
 	}
-	if firstErr != nil {
-		return nil, firstErr
+	if err := selectToolCallError(errsByIndex); err != nil {
+		if IsInterruptError(err) {
+			recordCompletedToolMessages(config.State, config.NodeID, completedThisRun)
+			setAgentToolInterruptStateFromError(config.State, err)
+		} else {
+			clearCompletedToolMessages(config.State, config.NodeID)
+		}
+		return nil, err
 	}
+	clearCompletedToolMessages(config.State, config.NodeID)
 	return out, nil
+}
+
+func selectToolCallError(errs []error) error {
+	var agentToolInterrupt error
+	var interrupt error
+	var first error
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if first == nil {
+			first = err
+		}
+		if _, ok := agenttoolgraph.InterruptMetadataFromError(err); ok {
+			if agentToolInterrupt != nil {
+				return fmt.Errorf("multiple agent tool graph interrupts in parallel tools node")
+			}
+			agentToolInterrupt = err
+			continue
+		}
+		if IsInterruptError(err) && interrupt == nil {
+			interrupt = err
+		}
+	}
+	if agentToolInterrupt != nil {
+		return agentToolInterrupt
+	}
+	if interrupt != nil {
+		return interrupt
+	}
+	return first
+}
+
+func completedToolMessagesForNode(state State, nodeID string) map[string]model.Message {
+	if state == nil || nodeID == "" {
+		return nil
+	}
+	nodes, ok := state[stateKeyCompletedToolMessages].(map[string]any)
+	if !ok {
+		return nil
+	}
+	rawMessages, ok := nodes[nodeID].(map[string]any)
+	if !ok {
+		return nil
+	}
+	messages := make(map[string]model.Message, len(rawMessages))
+	for key, raw := range rawMessages {
+		msg, ok := modelMessageFromAny(raw)
+		if ok {
+			messages[key] = msg
+		}
+	}
+	return messages
+}
+
+func modelMessageFromAny(raw any) (model.Message, bool) {
+	switch msg := raw.(type) {
+	case model.Message:
+		return msg, true
+	case *model.Message:
+		if msg == nil {
+			return model.Message{}, false
+		}
+		return *msg, true
+	default:
+		data, err := json.Marshal(raw)
+		if err != nil {
+			return model.Message{}, false
+		}
+		var decoded model.Message
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return model.Message{}, false
+		}
+		return decoded, true
+	}
+}
+
+func recordCompletedToolMessage(state State, nodeID string, key string, msg model.Message) {
+	if state == nil || nodeID == "" || key == "" {
+		return
+	}
+	nodes, ok := state[stateKeyCompletedToolMessages].(map[string]any)
+	if !ok {
+		nodes = make(map[string]any)
+		state[stateKeyCompletedToolMessages] = nodes
+	}
+	rawMessages, ok := nodes[nodeID].(map[string]any)
+	if !ok {
+		rawMessages = make(map[string]any)
+		nodes[nodeID] = rawMessages
+	}
+	rawMessages[key] = msg
+}
+
+func recordCompletedToolMessages(state State, nodeID string, messages map[string]model.Message) {
+	for key, msg := range messages {
+		recordCompletedToolMessage(state, nodeID, key, msg)
+	}
+}
+
+func clearCompletedToolMessages(state State, nodeID string) {
+	if state == nil || nodeID == "" {
+		return
+	}
+	nodes, ok := state[stateKeyCompletedToolMessages].(map[string]any)
+	if !ok {
+		return
+	}
+	delete(nodes, nodeID)
+	if len(nodes) == 0 {
+		delete(state, stateKeyCompletedToolMessages)
+	}
+}
+
+func completedToolMessageKey(index int, toolCall model.ToolCall) string {
+	return fmt.Sprintf("%d:%s:%s", index, toolCall.Function.Name, toolCall.ID)
+}
+
+func agentToolCallKey(index int, toolCall model.ToolCall) string {
+	return fmt.Sprintf("%d:%s:%s", index, toolCall.Function.Name, toolCall.ID)
 }
 
 // singleToolCallConfig contains configuration for executing a single tool call.
 type singleToolCallConfig struct {
 	ToolCall      model.ToolCall
+	ToolCallIndex int
 	Tools         map[string]tool.Tool
 	InvocationID  string
 	EventChan     chan<- *event.Event
@@ -5557,6 +5827,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		t,
 		config.State,
 		config.RetryPolicy,
+		config.ToolCallIndex,
 	)
 	eventInvocation := invocationFromContextOrFallback(
 		finalCtx,
@@ -5625,7 +5896,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	if err != nil {
 		if interruptErr != nil {
-			return model.Message{}, interruptErr
+			return model.Message{}, err
 		}
 		config.Span.RecordError(err)
 		config.Span.SetStatus(codes.Error, err.Error())
@@ -5641,6 +5912,25 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	}
 
 	return model.NewToolMessage(id, name, string(content)), nil
+}
+
+func setAgentToolInterruptStateFromError(state State, err error) {
+	meta, ok := agenttoolgraph.InterruptMetadataFromError(err)
+	if !ok {
+		return
+	}
+	applyAgentToolInterruptState(
+		state,
+		meta.ParentNodeID,
+		meta.ChildAgentName,
+		meta.ChildCheckpointID,
+		meta.ChildCheckpointNS,
+		meta.ChildLineageID,
+		meta.ChildTaskID,
+		meta.ToolCallID,
+		meta.ToolCallKey,
+		meta.ChildFilterKey,
+	)
 }
 
 func invocationFromContextOrFallback(ctx context.Context, fallback *agent.Invocation) *agent.Invocation {

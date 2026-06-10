@@ -437,8 +437,10 @@ func (at *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 
 	// Prefer to reuse parent invocation + session so the child can see parent
 	// history according to the configured history scope.
-	if parentInv, ok := agent.InvocationFromContext(ctx); ok && parentInv != nil && parentInv.Session != nil {
-		return at.callWithParentInvocation(ctx, parentInv, message)
+	if parentInv, ok := agent.InvocationFromContext(ctx); ok && parentInv != nil {
+		if parentInv.Session != nil {
+			return at.callWithParentInvocation(ctx, parentInv, message, nil)
+		}
 	}
 
 	// Fallback: isolated in-memory run when parent invocation is not available.
@@ -452,25 +454,42 @@ func (at *Tool) callWithParentInvocation(
 	ctx context.Context,
 	parentInv *agent.Invocation,
 	message model.Message,
+	runtime *parentInvocationGraphRuntime,
 ) (string, error) {
+	var runtimeState graph.State
+	var parentNodeID string
+	var toolCallID string
+	var toolCallKey string
+	hasGraphRuntime := runtime != nil
+	if hasGraphRuntime {
+		runtimeState = runtime.state
+		parentNodeID = runtime.parentNodeID
+		toolCallID = runtime.toolCallID
+		toolCallKey = runtime.toolCallKey
+	}
 	// If the parent invocation does not have a session, fall back to isolated mode.
-	if parentInv.Session == nil {
+	if parentInv.Session == nil && !hasGraphRuntime {
 		return at.callWithIsolatedRunner(ctx, message)
 	}
 	// Flush all events emitted before this tool call so that the snapshot sees all events.
-	if err := flush.Invoke(ctx, parentInv); err != nil {
-		return "", fmt.Errorf("flush parent invocation session: %w", err)
+	if parentInv.Session != nil {
+		if err := flush.Invoke(ctx, parentInv); err != nil {
+			return "", fmt.Errorf("flush parent invocation session: %w", err)
+		}
+		parentInv = parentInvocationWithLiveSession(parentInv)
 	}
-	// The function-call processor's parallel execution path clones the parent
-	// session for state-delta isolation (see cloneStateDeltaSession in
-	// internal/flow/processor/functioncall.go). The clone freezes the Events
-	// slice; without restoring the live pointer the sub-agent loses
-	// visibility of its own tool_call / tool_response events on subsequent
-	// iterations and loops forever calling the same tool.
-	parentInv = parentInvocationWithLiveSession(parentInv)
 	// Build child filter key based on history scope.
 	childKey := at.buildChildFilterKey(ctx, parentInv, []byte(message.Content))
-	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey)...)
+	if hasGraphRuntime && runtime.childKey != "" {
+		childKey = runtime.childKey
+	}
+	if runtimeState != nil {
+		if _, ok := runtimeState[graph.CfgKeyCheckpointID]; ok {
+			// A checkpoint resume is driven by the command in runtime state.
+			message = model.Message{}
+		}
+	}
+	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey, runtimeState)...)
 
 	// Run the agent and collect response.
 	subCtx := agent.NewInvocationContext(ctx, subInv)
@@ -478,7 +497,21 @@ func (at *Tool) callWithParentInvocation(
 	if err != nil {
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
-	return at.collectResponse(subInv, at.wrapWithCallSemantics(subCtx, subInv, evCh))
+	capture := at.newGraphToolInterruptCapture(runtimeState, parentNodeID, toolCallID, toolCallKey, childKey, hasGraphRuntime)
+	response, err := at.collectResponse(
+		subInv,
+		at.wrapGraphToolInterruptCapture(
+			at.wrapWithCallSemantics(subCtx, subInv, evCh),
+			capture,
+		),
+	)
+	if err != nil {
+		return "", err
+	}
+	if interruptErr := capture.finish(); interruptErr != nil {
+		return "", interruptErr
+	}
+	return response, nil
 }
 
 // parentInvocationWithLiveSession returns a view of parentInv whose Session
@@ -520,11 +553,23 @@ func (at *Tool) childInvocationOptions(
 	parentInv *agent.Invocation,
 	message model.Message,
 	childKey string,
+	runtimeState map[string]any,
 ) []agent.InvocationOptions {
 	invocationOpts := []agent.InvocationOptions{
 		agent.WithInvocationAgent(at.agent),
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationEventFilterKey(childKey),
+	}
+	if runtimeState != nil {
+		invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
+			runOptions := inv.RunOptions
+			agent.WithDisableGraphExecutorEvents(false)(&runOptions)
+			runOptions.RuntimeState = runtimeState
+			inv.RunOptions = runOptions
+			if parentInv != nil && agent.IsGraphExecutorEventsDisabled(parentInv) {
+				inv.SetState(graphRuntimeSuppressSessionEventsStateKey, true)
+			}
+		})
 	}
 	if parentInv == nil {
 		return invocationOpts
@@ -615,7 +660,8 @@ func (at *Tool) wrapWithCallSemantics(
 					)
 					continue
 				}
-				if shouldMirrorEventToSession(evt) {
+				if !shouldSuppressGraphRuntimeSessionEvent(inv, evt) &&
+					shouldMirrorEventToSession(evt) {
 					persistedEvent := persistableSessionEvent(evt)
 					if shouldDelayVisibleCompletionSessionMirror(persistedEvent) {
 						pendingVisibleCompletion = at.replacePendingVisibleCompletionForSession(
@@ -1228,7 +1274,7 @@ func (at *Tool) streamFromParentInvocation(
 	// forever.
 	parentInv = parentInvocationWithLiveSession(parentInv)
 	childKey := at.buildChildFilterKey(ctx, parentInv, []byte(message.Content))
-	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey)...)
+	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey, nil)...)
 	subCtx := agent.NewInvocationContext(ctx, subInv)
 	evCh, err := agent.RunWithPlugins(subCtx, subInv, at.agent)
 	if err != nil {
