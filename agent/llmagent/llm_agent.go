@@ -45,6 +45,7 @@ import (
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolawaitreply "trpc.group/trpc-go/trpc-agent-go/tool/awaitreply"
+	toolcurrenttime "trpc.group/trpc-go/trpc-agent-go/tool/currenttime"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
@@ -598,6 +599,10 @@ func appendTimeProcessor(options *Options, requestProcessors []flow.RequestProce
 		processor.WithAddCurrentTime(true),
 		processor.WithTimezone(options.Timezone),
 		processor.WithTimeFormat(options.TimeFormat),
+		processor.WithCurrentTimeTool(
+			toolcurrenttime.ToolName,
+			options.OutputSchema == nil,
+		),
 	)
 	return append(requestProcessors, timeProcessor)
 }
@@ -750,6 +755,7 @@ func registerTools(
 	allTools := append([]tool.Tool(nil), options.Tools...)
 	allTools, userToolNames = appendStaticToolSetTools(allTools, userToolNames, options)
 	allTools = appendKnowledgeTools(allTools, options)
+	allTools = appendCurrentTimeTool(allTools, options)
 
 	// Step 2: determine workspace registry and skill_run tool based on
 	// which capabilities the caller configured.
@@ -787,6 +793,31 @@ func registerTools(
 	// skill repository is configured.
 	allTools = appendSkillTools(allTools, options, runTool)
 	return allTools, userToolNames, workspaceRegistry
+}
+
+func appendCurrentTimeTool(
+	allTools []tool.Tool,
+	options *Options,
+) []tool.Tool {
+	if options == nil || !options.AddCurrentTime || options.OutputSchema != nil {
+		return allTools
+	}
+	if hasToolNamed(allTools, toolcurrenttime.ToolName) {
+		return allTools
+	}
+	return append(allTools, toolcurrenttime.New())
+}
+
+func hasToolNamed(tools []tool.Tool, name string) bool {
+	for _, tl := range tools {
+		if tl == nil || tl.Declaration() == nil {
+			continue
+		}
+		if tl.Declaration().Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func collectUserToolNames(tools []tool.Tool) map[string]bool {

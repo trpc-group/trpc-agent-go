@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -27,6 +28,7 @@ const (
 	testUserToolNameTwo       = "user_tool_2"
 	testTransferToolName      = "transfer_to_agent"
 	testKnowledgeToolName     = "knowledge_search"
+	testCurrentTimeToolName   = "current_time"
 	testDynamicToolSetName    = "dynamic"
 	testFirstToolSetName      = "set_one"
 	testSecondToolSetName     = "set_two"
@@ -127,6 +129,70 @@ func TestLLMAgent_Tools_IncludesAwaitUserReplyWhenEnabled(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected await_user_reply tool when enabled")
+	}
+}
+
+func TestLLMAgent_Tools_IncludesCurrentTimeWhenAddCurrentTime(t *testing.T) {
+	agt := New("main", WithAddCurrentTime(true))
+
+	ts := agt.Tools()
+	found := false
+	for _, tl := range ts {
+		if tl.Declaration().Name == testCurrentTimeToolName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected current_time tool when AddCurrentTime is enabled")
+	}
+
+	for _, tl := range agt.UserTools() {
+		if tl.Declaration().Name == testCurrentTimeToolName {
+			t.Fatalf("current_time should be a framework tool, not a user tool")
+		}
+	}
+}
+
+func TestLLMAgent_InvocationToolSurface_IncludesCurrentTimeWhenAddCurrentTime(t *testing.T) {
+	agt := New("main", WithAddCurrentTime(true))
+
+	tools, userToolNames := agt.InvocationToolSurface(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		),
+	)
+	found := false
+	for _, tl := range tools {
+		if tl.Declaration().Name == testCurrentTimeToolName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected current_time tool in invocation tool surface")
+	}
+	if userToolNames[testCurrentTimeToolName] {
+		t.Fatalf("current_time should not be tracked as a user tool")
+	}
+}
+
+func TestLLMAgent_Tools_SkipsCurrentTimeWithOutputSchema(t *testing.T) {
+	agt := New("main",
+		WithAddCurrentTime(true),
+		WithOutputSchema(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"answer": map[string]any{"type": "string"},
+			},
+		}),
+	)
+
+	for _, tl := range agt.Tools() {
+		if tl.Declaration().Name == testCurrentTimeToolName {
+			t.Fatalf("current_time should be disabled when output schema forbids tools")
+		}
 	}
 }
 
@@ -422,7 +488,7 @@ func TestLLMAgent_FilterTools_PassesContextToToolSets(t *testing.T) {
 		t.Fatalf("expected %q in Tools output", expectedNoCtx)
 	}
 
-	filteredNil := agt.FilterTools(nil)
+	filteredNil := agt.FilterTools(context.TODO())
 	foundNoCtx = false
 	for _, tl := range filteredNil {
 		if tl.Declaration().Name == expectedNoCtx {

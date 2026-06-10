@@ -33,7 +33,7 @@ func TestNewTimeRequestProcessor(t *testing.T) {
 			opts:           []TimeOption{},
 			expectedAdd:    false,
 			expectedTz:     "",
-			expectedFormat: "2006-01-02 15:04:05 MST",
+			expectedFormat: "2006-01-02",
 		},
 		{
 			name: "with add current time",
@@ -42,7 +42,7 @@ func TestNewTimeRequestProcessor(t *testing.T) {
 			},
 			expectedAdd:    true,
 			expectedTz:     "",
-			expectedFormat: "2006-01-02 15:04:05 MST",
+			expectedFormat: "2006-01-02",
 		},
 		{
 			name: "with timezone",
@@ -51,7 +51,7 @@ func TestNewTimeRequestProcessor(t *testing.T) {
 			},
 			expectedAdd:    false,
 			expectedTz:     "UTC",
-			expectedFormat: "2006-01-02 15:04:05 MST",
+			expectedFormat: "2006-01-02",
 		},
 		{
 			name: "with custom format",
@@ -133,7 +133,7 @@ func TestTimeRequestProcessor_ProcessRequest_Enabled(t *testing.T) {
 		t.Errorf("Expected system message, got %s", msg.Role)
 	}
 
-	if !strings.Contains(msg.Content, "The current time is:") {
+	if !strings.Contains(msg.Content, "The current date is:") {
 		t.Errorf("Expected time content, got: %s", msg.Content)
 	}
 }
@@ -159,7 +159,7 @@ func TestTimeRequestProcessor_ProcessRequest_WithExistingSystemMessage(t *testin
 		t.Errorf("Expected existing content to be preserved, got: %s", msg.Content)
 	}
 
-	if !strings.Contains(msg.Content, "The current time is:") {
+	if !strings.Contains(msg.Content, "The current date is:") {
 		t.Errorf("Expected time content to be added, got: %s", msg.Content)
 	}
 }
@@ -185,7 +185,7 @@ func TestTimeRequestProcessor_RebuildRequestForContextCompaction(t *testing.T) {
 	if len(req.Messages) != 1 {
 		t.Fatalf("Expected 1 message, got %d", len(req.Messages))
 	}
-	if !strings.Contains(req.Messages[0].Content, "The current time is:") {
+	if !strings.Contains(req.Messages[0].Content, "The current date is:") {
 		t.Fatalf("Expected time content to be added, got: %s", req.Messages[0].Content)
 	}
 }
@@ -209,13 +209,13 @@ func TestTimeRequestProcessor_ProcessRequest_AppendsToLastSystem(
 		t.Errorf("Expected 3 messages, got %d", len(req.Messages))
 	}
 
-	if strings.Contains(req.Messages[0].Content, "The current time is:") {
+	if strings.Contains(req.Messages[0].Content, "The current date is:") {
 		t.Errorf(
 			"Expected time appended to last system message, got: %s",
 			req.Messages[0].Content,
 		)
 	}
-	if !strings.Contains(req.Messages[1].Content, "The current time is:") {
+	if !strings.Contains(req.Messages[1].Content, "The current date is:") {
 		t.Errorf(
 			"Expected time appended to last system message, got: %s",
 			req.Messages[1].Content,
@@ -242,7 +242,7 @@ func TestTimeRequestProcessor_ProcessRequest_SetsEmptyLastSystem(
 		t.Errorf("Expected 3 messages, got %d", len(req.Messages))
 	}
 
-	if strings.Contains(req.Messages[0].Content, "The current time is:") {
+	if strings.Contains(req.Messages[0].Content, "The current date is:") {
 		t.Errorf(
 			"Expected time set on last system message, got: %s",
 			req.Messages[0].Content,
@@ -250,7 +250,7 @@ func TestTimeRequestProcessor_ProcessRequest_SetsEmptyLastSystem(
 	}
 	if !strings.HasPrefix(
 		req.Messages[1].Content,
-		"The current time is:",
+		"The current date is:",
 	) {
 		t.Errorf(
 			"Expected time set on last system message, got: %s",
@@ -272,7 +272,7 @@ func TestTimeRequestProcessor_ProcessRequest_WithTimezone(t *testing.T) {
 	processor.ProcessRequest(context.Background(), nil, req, ch)
 
 	msg := req.Messages[0]
-	if !strings.Contains(msg.Content, "UTC") {
+	if !strings.Contains(msg.Content, "timezone: UTC") {
 		t.Errorf("Expected UTC timezone, got: %s", msg.Content)
 	}
 }
@@ -293,6 +293,31 @@ func TestTimeRequestProcessor_ProcessRequest_WithCustomFormat(t *testing.T) {
 	// Should contain date in YYYY-MM-DD format.
 	if !strings.Contains(msg.Content, time.Now().Format("2006-01-02")) {
 		t.Errorf("Expected custom date format, got: %s", msg.Content)
+	}
+}
+
+func TestTimeRequestProcessor_ProcessRequest_WithCurrentTimeToolGuidance(t *testing.T) {
+	processor := NewTimeRequestProcessor(
+		WithAddCurrentTime(true),
+		WithCurrentTimeTool("current_time", true),
+	)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("Existing system message"),
+		},
+	}
+
+	processor.ProcessRequest(context.Background(), nil, req, nil)
+
+	if len(req.Messages) != 1 {
+		t.Fatalf("Expected 1 message, got %d", len(req.Messages))
+	}
+	content := req.Messages[0].Content
+	if !strings.Contains(content, "call the current_time tool") {
+		t.Fatalf("Expected current_time tool guidance, got: %s", content)
+	}
+	if !strings.Contains(content, "valid only for the current request") {
+		t.Fatalf("Expected ephemeral time guidance, got: %s", content)
 	}
 }
 
@@ -353,12 +378,12 @@ func TestTimeRequestProcessor_GetCurrentTime(t *testing.T) {
 		{
 			name:     "local timezone",
 			timezone: "",
-			format:   "2006-01-02 15:04:05 MST",
+			format:   "2006-01-02",
 		},
 		{
 			name:     "UTC timezone",
 			timezone: "UTC",
-			format:   "2006-01-02 15:04:05 MST",
+			format:   "2006-01-02",
 		},
 		{
 			name:     "custom format",

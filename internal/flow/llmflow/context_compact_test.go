@@ -653,7 +653,7 @@ func TestMaybeCompactContextBeforeLLM_RebuildsWithoutReplayingEarlierProcessors(
 	require.NotSame(t, req, rebuilt)
 	require.Contains(t, rebuilt.Messages[0].Content, "prefix guidance")
 	require.Contains(t, rebuilt.Messages[0].Content, "compressed history")
-	require.Contains(t, rebuilt.Messages[0].Content, "The current time is:")
+	require.Contains(t, rebuilt.Messages[0].Content, "The current date is:")
 	require.Equal(t, "current", rebuilt.Messages[len(rebuilt.Messages)-1].Content)
 }
 
