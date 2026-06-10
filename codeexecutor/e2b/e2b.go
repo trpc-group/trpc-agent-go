@@ -545,6 +545,31 @@ func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	)
 }
 
+// Pause suspends the sandbox without destroying it. The sandbox filesystem
+// and memory state are preserved. Call New with WithSandboxID to resume.
+// Only the owner of a sandbox (i.e. the executor that created it) should
+// pause it; connected executors should leave lifecycle management to the
+// creator.
+// After a successful pause the executor relinquishes ownership so that a
+// subsequent Close() call does not kill the paused sandbox.
+func (c *CodeExecutor) Pause(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sbx == nil {
+		return fmt.Errorf("e2b: sandbox not initialized")
+	}
+	if !c.owned {
+		return fmt.Errorf("e2b: only owner may pause sandbox")
+	}
+	if err := c.sbx.Pause(ctx); err != nil {
+		return err
+	}
+	// Detach ownership so Close() does not destroy the paused sandbox.
+	// The caller can resume it later via New(WithSandboxID(...)).
+	c.owned = false
+	return nil
+}
+
 // Close terminates the owned sandbox (if any).
 func (c *CodeExecutor) Close() error {
 	c.mu.Lock()
