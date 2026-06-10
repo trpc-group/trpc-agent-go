@@ -414,9 +414,6 @@ func shouldReturnOriginal(
 	if len(messages) == 0 {
 		return true, messages
 	}
-	if maxTokens <= 0 {
-		return true, nil
-	}
 	if tokenCounter == nil {
 		tokenCounter = NewSimpleTokenCounter()
 	}
