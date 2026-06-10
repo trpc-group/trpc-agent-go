@@ -91,15 +91,18 @@ const (
 
 	flagEnableParallelTools = "enable-parallel-tools"
 
-	flagSkillsAllowBundled  = "skills-allow-bundled"
-	flagSkillsWatch         = "skills-watch"
-	flagSkillsWatchBundled  = "skills-watch-bundled"
-	flagSkillsWatchDebounce = "skills-watch-debounce"
-	flagSkillsToolProfile   = "skills-tool-profile"
-	flagSkillsLoadMode      = "skills-load-mode"
-	flagSkillsMaxLoaded     = "skills-max-loaded"
-	flagSkillsToolResults   = "skills-loaded-content-in-tool-results"
-	flagSkillsSkipFallback  = "skills-skip-fallback-on-session-summary"
+	flagSkillsAllowBundled    = "skills-allow-bundled"
+	flagSkillsWatch           = "skills-watch"
+	flagSkillsWatchBundled    = "skills-watch-bundled"
+	flagSkillsWatchDebounce   = "skills-watch-debounce"
+	flagSkillsSummaryCacheTTL = "skills-summary-cache-ttl"
+	flagSkillsOverviewLimit   = "skills-overview-limit"
+	flagSkillsOverviewPinned  = "skills-overview-pinned"
+	flagSkillsToolProfile     = "skills-tool-profile"
+	flagSkillsLoadMode        = "skills-load-mode"
+	flagSkillsMaxLoaded       = "skills-max-loaded"
+	flagSkillsToolResults     = "skills-loaded-content-in-tool-results"
+	flagSkillsSkipFallback    = "skills-skip-fallback-on-session-summary"
 
 	flagDebugRecorder     = "debug-recorder"
 	flagDebugRecorderDir  = "debug-recorder-dir"
@@ -173,28 +176,31 @@ type runOptions struct {
 	ClaudeEnv          string
 	ClaudeWorkDir      string
 
-	ModelMode           string
-	OpenAIModel         string
-	OpenAIVariant       string
-	OpenAIBaseURL       string
-	GenerationConfig    *model.GenerationConfig
-	ModelConfig         *yaml.Node
-	KnowledgesConfig    []knowledgeEntry
-	SkillsRoot          string
-	SkillsExtraDir      string
-	SkillsDebug         bool
-	SkillsAllowBundled  string
-	SkillConfigs        map[string]ocskills.SkillConfig
-	SkillsWatch         bool
-	SkillsWatchBundled  bool
-	SkillsWatchDebounce time.Duration
-	SkillsToolProfile   string
-	SkillsLoadMode      string
-	SkillsMaxLoaded     int
-	SkillsToolResults   bool
-	SkillsSkipFallback  bool
-	SkillsToolingGuide  *string
-	StateDir            string
+	ModelMode             string
+	OpenAIModel           string
+	OpenAIVariant         string
+	OpenAIBaseURL         string
+	GenerationConfig      *model.GenerationConfig
+	ModelConfig           *yaml.Node
+	KnowledgesConfig      []knowledgeEntry
+	SkillsRoot            string
+	SkillsExtraDir        string
+	SkillsDebug           bool
+	SkillsAllowBundled    string
+	SkillConfigs          map[string]ocskills.SkillConfig
+	SkillsWatch           bool
+	SkillsWatchBundled    bool
+	SkillsWatchDebounce   time.Duration
+	SkillsSummaryCacheTTL time.Duration
+	SkillsOverviewLimit   int
+	SkillsOverviewPinned  string
+	SkillsToolProfile     string
+	SkillsLoadMode        string
+	SkillsMaxLoaded       int
+	SkillsToolResults     bool
+	SkillsSkipFallback    bool
+	SkillsToolingGuide    *string
+	StateDir              string
 
 	DebugRecorderEnabled bool
 	DebugRecorderDir     string
@@ -599,6 +605,27 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagSkillsWatchBundled,
 		false,
 		"Also watch bundled skills roots for local changes",
+	)
+	fs.DurationVar(
+		&opts.SkillsSummaryCacheTTL,
+		flagSkillsSummaryCacheTTL,
+		0,
+		"How long to reuse the skills summary cache before "+
+			"checking for changes (0 uses the default)",
+	)
+	fs.IntVar(
+		&opts.SkillsOverviewLimit,
+		flagSkillsOverviewLimit,
+		0,
+		"Show at most N skills in the skills overview "+
+			"(0 shows all)",
+	)
+	fs.StringVar(
+		&opts.SkillsOverviewPinned,
+		flagSkillsOverviewPinned,
+		"",
+		"Comma-separated skill names to show first when "+
+			"skills-overview-limit is set",
 	)
 	fs.StringVar(
 		&opts.SkillsToolProfile,
@@ -1055,19 +1082,25 @@ type skillsConfig struct {
 	ExtraDirs []string `yaml:"extra_dirs,omitempty"`
 	Debug     *bool    `yaml:"debug,omitempty"`
 
-	AllowBundled       []string `yaml:"allow_bundled,omitempty"`
-	AllowBundledCamel  []string `yaml:"allowBundled,omitempty"`
-	Watch              *bool    `yaml:"watch,omitempty"`
-	WatchBundled       *bool    `yaml:"watch_bundled,omitempty"`
-	WatchBundledCamel  *bool    `yaml:"watchBundled,omitempty"`
-	WatchDebounceMS    *int     `yaml:"watch_debounce_ms,omitempty"`
-	WatchDebounceCamel *int     `yaml:"watchDebounceMs,omitempty"`
-	ToolProfile        *string  `yaml:"tool_profile,omitempty"`
-	ToolProfileCamel   *string  `yaml:"toolProfile,omitempty"`
-	LoadMode           *string  `yaml:"load_mode,omitempty"`
-	LoadModeCamel      *string  `yaml:"loadMode,omitempty"`
-	MaxLoadedSkills    *int     `yaml:"max_loaded_skills,omitempty"`
-	MaxLoadedCamel     *int     `yaml:"maxLoadedSkills,omitempty"`
+	AllowBundled        []string `yaml:"allow_bundled,omitempty"`
+	AllowBundledCamel   []string `yaml:"allowBundled,omitempty"`
+	Watch               *bool    `yaml:"watch,omitempty"`
+	WatchBundled        *bool    `yaml:"watch_bundled,omitempty"`
+	WatchBundledCamel   *bool    `yaml:"watchBundled,omitempty"`
+	WatchDebounceMS     *int     `yaml:"watch_debounce_ms,omitempty"`
+	WatchDebounceCamel  *int     `yaml:"watchDebounceMs,omitempty"`
+	SummaryCacheTTLMS   *int     `yaml:"summary_cache_ttl_ms,omitempty"`
+	SummaryCacheCamel   *int     `yaml:"summaryCacheTtlMs,omitempty"`
+	OverviewLimit       *int     `yaml:"overview_limit,omitempty"`
+	OverviewLimitCamel  *int     `yaml:"overviewLimit,omitempty"`
+	OverviewPinned      []string `yaml:"overview_pinned,omitempty"`
+	OverviewPinnedCamel []string `yaml:"overviewPinned,omitempty"`
+	ToolProfile         *string  `yaml:"tool_profile,omitempty"`
+	ToolProfileCamel    *string  `yaml:"toolProfile,omitempty"`
+	LoadMode            *string  `yaml:"load_mode,omitempty"`
+	LoadModeCamel       *string  `yaml:"loadMode,omitempty"`
+	MaxLoadedSkills     *int     `yaml:"max_loaded_skills,omitempty"`
+	MaxLoadedCamel      *int     `yaml:"maxLoadedSkills,omitempty"`
 
 	ToolResults          *bool   `yaml:"loaded_content_in_tool_results,omitempty"`
 	ToolResultsCamel     *bool   `yaml:"loadedContentInToolResults,omitempty"`
@@ -1576,6 +1609,35 @@ func (cfg *fileConfig) apply(
 				*watchDebounceMS,
 			) * time.Millisecond
 		}
+		summaryCacheTTLMS := firstIntPtr(
+			cfg.Skills.SummaryCacheTTLMS,
+			cfg.Skills.SummaryCacheCamel,
+		)
+		if summaryCacheTTLMS != nil &&
+			!flagWasSet(set, flagSkillsSummaryCacheTTL) {
+			opts.SkillsSummaryCacheTTL = time.Duration(
+				*summaryCacheTTLMS,
+			) * time.Millisecond
+		}
+		overviewLimit := firstIntPtr(
+			cfg.Skills.OverviewLimit,
+			cfg.Skills.OverviewLimitCamel,
+		)
+		if overviewLimit != nil &&
+			!flagWasSet(set, flagSkillsOverviewLimit) {
+			opts.SkillsOverviewLimit = *overviewLimit
+		}
+		overviewPinned := cfg.Skills.OverviewPinned
+		if len(overviewPinned) == 0 {
+			overviewPinned = cfg.Skills.OverviewPinnedCamel
+		}
+		if len(overviewPinned) > 0 &&
+			!flagWasSet(set, flagSkillsOverviewPinned) {
+			opts.SkillsOverviewPinned = strings.Join(
+				overviewPinned,
+				csvDelimiter,
+			)
+		}
 		if len(cfg.Skills.Entries) > 0 {
 			opts.SkillConfigs = convertSkillConfigs(
 				cfg.Skills.Entries,
@@ -2057,6 +2119,18 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid skills watch debounce: %v",
 			opts.SkillsWatchDebounce,
+		)
+	}
+	if opts.SkillsSummaryCacheTTL < 0 {
+		return fmt.Errorf(
+			"invalid skills summary cache ttl: %v",
+			opts.SkillsSummaryCacheTTL,
+		)
+	}
+	if opts.SkillsOverviewLimit < 0 {
+		return fmt.Errorf(
+			"invalid skills overview limit: %d",
+			opts.SkillsOverviewLimit,
 		)
 	}
 	opts.MemoryBackend = resolveMemoryBackendType(opts.MemoryBackend)

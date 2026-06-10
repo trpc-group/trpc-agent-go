@@ -779,6 +779,9 @@ skills:
   watch: false
   watch_bundled: true
   watch_debounce_ms: 125
+  summary_cache_ttl_ms: 60000
+  overview_limit: 12
+  overview_pinned: ["coding-agent","skill-creator"]
   tool_profile: "knowledge_only"
   load_mode: "session"
   max_loaded_skills: 3
@@ -923,6 +926,13 @@ memory:
 	require.False(t, opts.SkillsWatch)
 	require.True(t, opts.SkillsWatchBundled)
 	require.Equal(t, 125*time.Millisecond, opts.SkillsWatchDebounce)
+	require.Equal(t, time.Minute, opts.SkillsSummaryCacheTTL)
+	require.Equal(t, 12, opts.SkillsOverviewLimit)
+	require.Equal(
+		t,
+		"coding-agent,skill-creator",
+		opts.SkillsOverviewPinned,
+	)
 	require.Equal(
 		t,
 		skillprofile.KnowledgeOnly,
@@ -1081,6 +1091,45 @@ skills:
 	})
 	require.NoError(t, err)
 	require.Equal(t, "b,c", opts.SkillsAllowBundled)
+}
+
+func TestParseRunOptions_SkillsSummaryCacheTTLFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  summary_cache_ttl_ms: 1000
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-skills-summary-cache-ttl", "2m",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2*time.Minute, opts.SkillsSummaryCacheTTL)
+}
+
+func TestParseRunOptions_SkillsOverviewFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  overview_limit: 4
+  overview_pinned: ["alpha"]
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-skills-overview-limit", "2",
+		"-skills-overview-pinned", "beta,gamma",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, opts.SkillsOverviewLimit)
+	require.Equal(t, "beta,gamma", opts.SkillsOverviewPinned)
 }
 
 func TestParseRunOptions_KnowledgesProvidersConfig(t *testing.T) {
@@ -1260,6 +1309,9 @@ func TestParseRunOptions_SkillsDefaults(t *testing.T) {
 		defaultSkillsWatchDebounce,
 		opts.SkillsWatchDebounce,
 	)
+	require.Zero(t, opts.SkillsSummaryCacheTTL)
+	require.Zero(t, opts.SkillsOverviewLimit)
+	require.Empty(t, opts.SkillsOverviewPinned)
 	require.Equal(
 		t,
 		defaultSkillsToolProfile,
@@ -1466,5 +1518,35 @@ func TestFinalizeRunOptions_SkillsWatchDebounce(t *testing.T) {
 		t,
 		err,
 		"invalid skills watch debounce: -1ms",
+	)
+}
+
+func TestFinalizeRunOptions_SkillsSummaryCacheTTL(t *testing.T) {
+	t.Parallel()
+
+	opts := &runOptions{
+		SkillsSummaryCacheTTL: -time.Millisecond,
+	}
+
+	err := finalizeRunOptions(opts)
+	require.EqualError(
+		t,
+		err,
+		"invalid skills summary cache ttl: -1ms",
+	)
+}
+
+func TestFinalizeRunOptions_SkillsOverviewLimit(t *testing.T) {
+	t.Parallel()
+
+	opts := &runOptions{
+		SkillsOverviewLimit: -1,
+	}
+
+	err := finalizeRunOptions(opts)
+	require.EqualError(
+		t,
+		err,
+		"invalid skills overview limit: -1",
 	)
 }

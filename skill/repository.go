@@ -28,6 +28,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -91,8 +92,20 @@ type RefreshableRepository interface {
 type FSRepository struct {
 	roots []string
 	mu    sync.RWMutex
-	// name -> directory path that contains SKILL.md
-	index map[string]string
+	// name -> cached skill entry.
+	index map[string]fsSkillEntry
+}
+
+type fsSkillEntry struct {
+	dir       string
+	file      string
+	summary   Summary
+	signature fsFileSignature
+}
+
+type fsFileSignature struct {
+	size    int64
+	modTime time.Time
 }
 
 // NewFSRepository creates a FSRepository scanning the given roots.
@@ -133,12 +146,12 @@ func (r *FSRepository) Refresh() error {
 // It allows staging the whole skill folder for execution.
 func (r *FSRepository) Path(name string) (string, error) {
 	r.mu.RLock()
-	dir, ok := r.index[name]
+	entry, ok := r.index[name]
 	r.mu.RUnlock()
 	if !ok {
 		return "", fmt.Errorf("skill %q not found", name)
 	}
-	return dir, nil
+	return entry.dir, nil
 }
 
 // Roots returns the configured filesystem roots.
@@ -148,8 +161,8 @@ func (r *FSRepository) Roots() []string {
 	return append([]string(nil), r.roots...)
 }
 
-func scanRoots(roots []string) (map[string]string, error) {
-	index := map[string]string{}
+func scanRoots(roots []string) (map[string]fsSkillEntry, error) {
+	index := map[string]fsSkillEntry{}
 	seen := map[string]struct{}{}
 	for _, root := range roots {
 		if root == "" {
@@ -173,8 +186,8 @@ func scanRoots(roots []string) (map[string]string, error) {
 				return nil
 			}
 			sf := filepath.Join(p, skillFile)
-			st, err2 := os.Stat(sf)
-			if err2 != nil || st.IsDir() {
+			info, err2 := os.Stat(sf)
+			if err2 != nil || info.IsDir() {
 				return nil
 			}
 			sum, err3 := parseSummary(sf)
@@ -188,9 +201,17 @@ func scanRoots(roots []string) (map[string]string, error) {
 			if strings.TrimSpace(name) == "" {
 				return nil
 			}
+			if strings.TrimSpace(sum.Name) == "" {
+				sum.Name = name
+			}
 			// Record first occurrence; later ones ignored.
 			if _, ok := index[name]; !ok {
-				index[name] = p
+				index[name] = fsSkillEntry{
+					dir:       p,
+					file:      sf,
+					summary:   sum,
+					signature: newFSFileSignature(info),
+				}
 			}
 			return nil
 		})
@@ -200,22 +221,13 @@ func scanRoots(roots []string) (map[string]string, error) {
 
 // Summaries implements Repository.
 func (r *FSRepository) Summaries() []Summary {
-	r.mu.RLock()
-	index := make(map[string]string, len(r.index))
-	for name, dir := range r.index {
-		index[name] = dir
-	}
-	r.mu.RUnlock()
+	index := r.snapshotIndex()
 
 	out := make([]Summary, 0, len(index))
-	for name, dir := range index {
-		sf := filepath.Join(dir, skillFile)
-		s, err := parseSummary(sf)
-		if err != nil {
+	for name, entry := range index {
+		s, ok := r.summaryForEntry(name, entry)
+		if !ok {
 			continue
-		}
-		if s.Name == "" {
-			s.Name = name
 		}
 		out = append(out, s)
 	}
@@ -228,11 +240,12 @@ func (r *FSRepository) Summaries() []Summary {
 // Get implements Repository.
 func (r *FSRepository) Get(name string) (*Skill, error) {
 	r.mu.RLock()
-	dir, ok := r.index[name]
+	entry, ok := r.index[name]
 	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("skill %q not found", name)
 	}
+	dir := entry.dir
 	sf := filepath.Join(dir, skillFile)
 	sum, body, err := parseFull(sf)
 	if err != nil {
@@ -243,6 +256,71 @@ func (r *FSRepository) Get(name string) (*Skill, error) {
 	}
 	docs := r.readDocs(dir)
 	return &Skill{Summary: sum, Body: body, Docs: docs}, nil
+}
+
+func (r *FSRepository) snapshotIndex() map[string]fsSkillEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	index := make(map[string]fsSkillEntry, len(r.index))
+	for name, entry := range r.index {
+		index[name] = entry
+	}
+	return index
+}
+
+func (r *FSRepository) summaryForEntry(
+	name string,
+	entry fsSkillEntry,
+) (Summary, bool) {
+	info, err := os.Stat(entry.file)
+	if err != nil || info.IsDir() {
+		return Summary{}, false
+	}
+	signature := newFSFileSignature(info)
+	if signature == entry.signature {
+		return summaryWithFallbackName(entry.summary, name), true
+	}
+
+	summary, err := parseSummary(entry.file)
+	if err != nil {
+		return Summary{}, false
+	}
+	summary = summaryWithFallbackName(summary, name)
+	r.updateCachedSummary(name, entry, summary, signature)
+	return summary, true
+}
+
+func (r *FSRepository) updateCachedSummary(
+	name string,
+	oldEntry fsSkillEntry,
+	summary Summary,
+	signature fsFileSignature,
+) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	entry, ok := r.index[name]
+	if !ok || entry.dir != oldEntry.dir || entry.file != oldEntry.file {
+		return
+	}
+	entry.summary = summary
+	entry.signature = signature
+	r.index[name] = entry
+}
+
+func summaryWithFallbackName(summary Summary, name string) Summary {
+	if strings.TrimSpace(summary.Name) == "" {
+		summary.Name = name
+	}
+	return summary
+}
+
+func newFSFileSignature(info os.FileInfo) fsFileSignature {
+	return fsFileSignature{
+		size:    info.Size(),
+		modTime: info.ModTime(),
+	}
 }
 
 func (r *FSRepository) readDocs(dir string) []Doc {
