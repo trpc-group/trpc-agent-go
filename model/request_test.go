@@ -286,6 +286,8 @@ func TestApplyGenerationConfigPatch(t *testing.T) {
 		Stop:             []string{"STOP"},
 		PresencePenalty:  Float64Ptr(0.1),
 		FrequencyPenalty: Float64Ptr(0.2),
+		Logprobs:         BoolPtr(false),
+		TopLogprobs:      IntPtr(5),
 		ReasoningEffort:  StringPtr("low"),
 		ThinkingEnabled:  BoolPtr(true),
 		ThinkingTokens:   IntPtr(100),
@@ -299,6 +301,8 @@ func TestApplyGenerationConfigPatch(t *testing.T) {
 		Stop:             []string{"X"},
 		PresencePenalty:  Float64Ptr(1.1),
 		FrequencyPenalty: Float64Ptr(1.2),
+		Logprobs:         BoolPtr(true),
+		TopLogprobs:      IntPtr(20),
 		ReasoningEffort:  StringPtr("high"),
 		ThinkingEnabled:  BoolPtr(false),
 		ThinkingTokens:   IntPtr(200),
@@ -317,6 +321,10 @@ func TestApplyGenerationConfigPatch(t *testing.T) {
 	require.Equal(t, 1.1, *got.PresencePenalty)
 	require.NotNil(t, got.FrequencyPenalty)
 	require.Equal(t, 1.2, *got.FrequencyPenalty)
+	require.NotNil(t, got.Logprobs)
+	require.True(t, *got.Logprobs)
+	require.NotNil(t, got.TopLogprobs)
+	require.Equal(t, 20, *got.TopLogprobs)
 	require.NotNil(t, got.ReasoningEffort)
 	require.Equal(t, "high", *got.ReasoningEffort)
 	require.NotNil(t, got.ThinkingEnabled)

@@ -169,6 +169,25 @@ func WithPersistInterruptedAssistant(enabled bool) Option {
 	}
 }
 
+// WithCandidateSelector enables candidate selection for runner-managed agent runs.
+//
+// Candidate selection is automatically bypassed for execution-trace and graph
+// checkpoint resume runs because candidate selection cannot safely replay those
+// execution modes.
+func WithCandidateSelector(
+	selector CandidateSelector,
+	opts ...candidateSelectOption,
+) Option {
+	return func(options *Options) {
+		options.candidateSelector = selector
+		for _, opt := range opts {
+			if opt != nil {
+				opt(&options.candidateSelectOptions)
+			}
+		}
+	}
+}
+
 // Runner is the interface for running agents.
 type Runner interface {
 	Run(
@@ -277,6 +296,8 @@ type runner struct {
 	artifactService                    artifact.Service
 	pluginManager                      agent.PluginManager
 	ralphLoop                          *RalphLoopConfig
+	candidateSelector                  CandidateSelector
+	candidateSelectOptions             candidateSelectOptions
 	awaitUserReplyRouting              bool
 	persistInterruptedAssistantDefault bool
 
@@ -306,6 +327,8 @@ type Options struct {
 	agentFactories                     map[string]AgentFactory
 	plugins                            []plugin.Plugin
 	ralphLoop                          *RalphLoopConfig
+	candidateSelector                  CandidateSelector
+	candidateSelectOptions             candidateSelectOptions
 	awaitUserReplyRouting              bool
 	persistInterruptedAssistantDefault bool
 }
@@ -315,6 +338,9 @@ func newOptions(opt ...Option) Options {
 	opts := Options{
 		agents:         make(map[string]agent.Agent),
 		agentFactories: make(map[string]AgentFactory),
+		candidateSelectOptions: candidateSelectOptions{
+			attempts: defaultCandidateAttempts,
+		},
 	}
 	for _, o := range opt {
 		o(&opts)
@@ -357,6 +383,8 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		artifactService:                    options.artifactService,
 		pluginManager:                      pm,
 		ralphLoop:                          options.ralphLoop,
+		candidateSelector:                  options.candidateSelector,
+		candidateSelectOptions:             options.candidateSelectOptions,
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
 		ownedSessionService:                ownedSessionService,
@@ -410,6 +438,8 @@ func NewRunnerWithAgentFactory(
 		artifactService:                    options.artifactService,
 		pluginManager:                      pm,
 		ralphLoop:                          options.ralphLoop,
+		candidateSelector:                  options.candidateSelector,
+		candidateSelectOptions:             options.candidateSelectOptions,
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
 		ownedSessionService:                ownedSessionService,
@@ -1071,10 +1101,18 @@ func (r *runner) wrapSelectedAgent(ag agent.Agent) agent.Agent {
 	if ag == nil {
 		return nil
 	}
-	if r.ralphLoop == nil {
-		return ag
+	selected := ag
+	if r.ralphLoop != nil {
+		selected = wrapAgentWithRalphLoop(selected, *r.ralphLoop)
 	}
-	return wrapAgentWithRalphLoop(ag, *r.ralphLoop)
+	if r.candidateSelector != nil {
+		selected = wrapAgentWithCandidateSelector(
+			selected,
+			r.candidateSelector,
+			r.candidateSelectOptions,
+		)
+	}
+	return selected
 }
 
 // getOrCreateSession returns an existing session or creates a new one.
