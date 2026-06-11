@@ -4,7 +4,7 @@ go 1.24.6
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../../
 
-require trpc.group/trpc-go/trpc-agent-go v0.8.1
+require trpc.group/trpc-go/trpc-agent-go v1.10.0
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
