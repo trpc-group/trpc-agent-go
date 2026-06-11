@@ -30,7 +30,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
-	"trpc.group/trpc-go/trpc-agent-go/internal/sessionrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
@@ -49,6 +48,9 @@ import (
 // Author types for events.
 const (
 	authorUser = "user"
+
+	// String key avoids a new cross-module internal package dependency.
+	summaryAwareSessionRestoreContextKey = "trpc.group/trpc-go/trpc-agent-go/summary-aware-session-restore-filter-key"
 
 	errMsgEmptyRequestID               = "runner: empty request id"
 	errMsgNilCancelFunc                = "runner: nil cancel function"
@@ -563,8 +565,9 @@ func (r *runner) Run(
 		runnerSessionAttrs(sessionKey, nil)...,
 	)
 	if r.summaryAwareSessionRestore {
-		sessionCtx = sessionrestore.WithSummaryCutoff(
+		sessionCtx = context.WithValue(
 			sessionCtx,
+			summaryAwareSessionRestoreContextKey,
 			sessionRestoreFilterKey(effectiveAppName, ro),
 		)
 	}

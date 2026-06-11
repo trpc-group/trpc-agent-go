@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	"trpc.group/trpc-go/trpc-agent-go/internal/sessionrestore"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -277,7 +276,11 @@ func TestGetSession_SummaryAwareRestoreUsesSummaryBoundary(t *testing.T) {
 		UserID:    "user-123",
 		SessionID: "session-456",
 	}
-	ctx := sessionrestore.WithSummaryCutoff(context.Background(), key.AppName)
+	ctx := context.WithValue(
+		context.Background(),
+		summaryAwareSessionRestoreContextKey,
+		key.AppName,
+	)
 
 	baseTime := time.Now().Add(-2 * time.Hour).UTC()
 	cutoff := baseTime.Add(time.Hour)
@@ -316,16 +319,20 @@ func TestGetSession_SummaryAwareRestoreUsesSummaryBoundary(t *testing.T) {
 	evt := event.NewResponseEvent("inv-after-summary", "author", &model.Response{
 		Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "after"}}},
 	})
+	evt.Timestamp = cutoff.Add(time.Minute)
 	eventBytes, err := json.Marshal(evt)
 	require.NoError(t, err)
-	eventCreatedAt := cutoff.Add(time.Minute)
-	restoreAfterTime := cutoff.Add(-summaryRestoreGuard)
-	expectLimitedEventRefs(
+	eventCreatedAt := baseTime.Add(5 * time.Minute)
+	expectLimitedEventRefsWithTimestamp(
 		mock,
 		key,
-		restoreAfterTime,
+		sessState.CreatedAt,
 		defaultSessionEventLimit,
-		eventRef{id: 1, createdAt: eventCreatedAt},
+		eventRef{
+			id:             1,
+			createdAt:      eventCreatedAt,
+			eventTimestamp: evt.Timestamp,
+		},
 	)
 	expectEventsByRefs(
 		mock,
@@ -353,11 +360,14 @@ func TestGetSession_SummaryAwareRestoreBoundsAnchorSearch(t *testing.T) {
 		UserID:    "user-123",
 		SessionID: "session-456",
 	}
-	ctx := sessionrestore.WithSummaryCutoff(context.Background(), key.AppName)
+	ctx := context.WithValue(
+		context.Background(),
+		summaryAwareSessionRestoreContextKey,
+		key.AppName,
+	)
 
 	baseTime := time.Now().Add(-2 * time.Hour).UTC()
 	cutoff := baseTime.Add(time.Hour)
-	restoreAfterTime := cutoff.Add(-summaryRestoreGuard)
 	sessState := SessionState{
 		ID:        key.SessionID,
 		State:     session.StateMap{},
@@ -393,25 +403,30 @@ func TestGetSession_SummaryAwareRestoreBoundsAnchorSearch(t *testing.T) {
 	assistant := event.NewResponseEvent("inv-after-summary", "author", &model.Response{
 		Choices: []model.Choice{{Message: model.Message{Role: model.RoleAssistant, Content: "after"}}},
 	})
+	assistant.Timestamp = cutoff.Add(time.Minute)
 	assistantBytes, err := json.Marshal(assistant)
 	require.NoError(t, err)
 	assistantCreatedAt := cutoff.Add(time.Minute)
-	expectLimitedEventRefs(
+	expectLimitedEventRefsWithTimestamp(
 		mock,
 		key,
-		restoreAfterTime,
+		sessState.CreatedAt,
 		defaultSessionEventLimit,
-		eventRef{id: 2, createdAt: assistantCreatedAt},
+		eventRef{
+			id:             2,
+			createdAt:      assistantCreatedAt,
+			eventTimestamp: assistant.Timestamp,
+		},
 	)
 	expectEventsByRefs(
 		mock,
 		key,
 		limitedEventRow{id: 2, event: assistantBytes, createdAt: assistantCreatedAt},
 	)
-	expectNoUserAnchor(
+	expectNoUserAnchorWithTimestamp(
 		mock,
 		key,
-		restoreAfterTime,
+		sessState.CreatedAt,
 		assistantCreatedAt,
 		assistantCreatedAt,
 		int64(2),
@@ -435,7 +450,11 @@ func TestGetSession_SummaryAwareRestoreIgnoredForEventPage(t *testing.T) {
 		UserID:    "user-123",
 		SessionID: "session-456",
 	}
-	ctx := sessionrestore.WithSummaryCutoff(context.Background(), key.AppName)
+	ctx := context.WithValue(
+		context.Background(),
+		summaryAwareSessionRestoreContextKey,
+		key.AppName,
+	)
 
 	sessState := SessionState{
 		ID:        key.SessionID,

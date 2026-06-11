@@ -835,7 +835,7 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 			WithArgs(key.AppName, key.UserID, key.SessionID, createdAt, 1).
 			WillReturnError(fmt.Errorf("database error"))
 
-		refs, err := s.getRecentEventRefs(context.Background(), key, createdAt, 1)
+		refs, err := s.getRecentEventRefs(context.Background(), key, createdAt, time.Time{}, 1)
 		assert.Error(t, err)
 		assert.Nil(t, refs)
 		require.NoError(t, mock.ExpectationsWereMet())
@@ -851,7 +851,7 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 			WithArgs(key.AppName, key.UserID, key.SessionID, createdAt, 1).
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
 
-		refs, err := s.getRecentEventRefs(context.Background(), key, createdAt, 1)
+		refs, err := s.getRecentEventRefs(context.Background(), key, createdAt, time.Time{}, 1)
 		assert.Error(t, err)
 		assert.Nil(t, refs)
 		require.NoError(t, mock.ExpectationsWereMet())
@@ -894,7 +894,13 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 			WithArgs(key.AppName, key.UserID, key.SessionID, createdAt, userAnchorSearchBatchSize).
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
 
-		anchor, ok, err := s.getLastUserEventBeforeRefs(context.Background(), key, createdAt, nil)
+		anchor, ok, err := s.getLastUserEventBeforeRefs(
+			context.Background(),
+			key,
+			createdAt,
+			time.Time{},
+			nil,
+		)
 		assert.Error(t, err)
 		assert.False(t, ok)
 		assert.Empty(t, anchor.InvocationID)
@@ -950,7 +956,13 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 			limitedEventRow{id: 1, event: userBytes, createdAt: userCreatedAt},
 		)
 
-		anchor, ok, err := s.getLastUserEventBeforeRefs(context.Background(), key, createdAt, nil)
+		anchor, ok, err := s.getLastUserEventBeforeRefs(
+			context.Background(),
+			key,
+			createdAt,
+			time.Time{},
+			nil,
+		)
 		require.NoError(t, err)
 		require.True(t, ok)
 		assert.Equal(t, "inv-user", anchor.InvocationID)
