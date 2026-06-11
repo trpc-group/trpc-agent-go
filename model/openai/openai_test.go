@@ -2280,6 +2280,26 @@ func (s overflowTailoringStrategy) TailorMessages(
 	return s.tailored, errors.New("minimal protected context exceeds token budget")
 }
 
+type emptyTailoringStrategy struct{}
+
+func (emptyTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return nil, nil
+}
+
+type emptySliceTailoringStrategy struct{}
+
+func (emptySliceTailoringStrategy) TailorMessages(
+	ctx context.Context,
+	messages []model.Message,
+	maxTokens int,
+) ([]model.Message, error) {
+	return []model.Message{}, nil
+}
+
 type captureMaxTokensStrategy struct {
 	maxTokens int
 	called    bool
@@ -2347,6 +2367,35 @@ func TestWithTokenTailoring_UsesProtectedContextOnOverflow(t *testing.T) {
 	m.applyTokenTailoring(context.Background(), req)
 
 	require.Equal(t, tailored, req.Messages)
+}
+
+func TestWithTokenTailoring_PreservesOriginalOnEmptyResult(t *testing.T) {
+	tests := []struct {
+		name     string
+		strategy model.TailoringStrategy
+	}{
+		{name: "nil result", strategy: emptyTailoringStrategy{}},
+		{name: "empty slice result", strategy: emptySliceTailoringStrategy{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := []model.Message{
+				model.NewSystemMessage("sys"),
+				model.NewUserMessage("q"),
+			}
+			m := New("test-model",
+				WithEnableTokenTailoring(true),
+				WithMaxInputTokens(1),
+				WithTailoringStrategy(tt.strategy),
+			)
+			req := &model.Request{Messages: append([]model.Message(nil), original...)}
+
+			m.applyTokenTailoring(context.Background(), req)
+
+			require.Equal(t, original, req.Messages)
+		})
+	}
 }
 
 func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
@@ -4480,6 +4529,8 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 		topP := 0.9
 		frequencyPenalty := 0.5
 		presencePenalty := 0.3
+		logprobs := true
+		topLogprobs := 20
 
 		req := &model.Request{
 			Messages: []model.Message{
@@ -4491,12 +4542,16 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 				TopP:             &topP,
 				FrequencyPenalty: &frequencyPenalty,
 				PresencePenalty:  &presencePenalty,
+				Logprobs:         &logprobs,
+				TopLogprobs:      &topLogprobs,
 				Stream:           true,
 			},
 		}
 
 		chatReq, _ := m.buildChatRequest(req)
 		assert.Equal(t, "gpt-3.5-turbo", chatReq.Model, "expected model to be gpt-3.5-turbo")
+		assert.True(t, chatReq.Logprobs.Value)
+		assert.Equal(t, int64(20), chatReq.TopLogprobs.Value)
 		// Verify at least one parameter is set
 		assert.NotEmpty(t, chatReq.Messages, "expected messages to be set")
 	})
@@ -4593,6 +4648,67 @@ func TestBuildChatRequest_EdgeCases(t *testing.T) {
 		require.NotNil(t, typePtr)
 		assert.Equal(t, "json_object", *typePtr)
 	})
+}
+
+func TestPrepareChatRequest_ValidatesLogprobsConfig(t *testing.T) {
+	m := New("gpt-3.5-turbo", WithAPIKey("test-key"))
+	logprobsFalse := false
+	logprobsTrue := true
+	topLogprobs := 5
+	providerSpecificTopLogprobs := 21
+
+	_, _, err := m.prepareChatRequest(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		GenerationConfig: model.GenerationConfig{
+			TopLogprobs: &topLogprobs,
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires logprobs to be true")
+
+	_, _, err = m.prepareChatRequest(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		GenerationConfig: model.GenerationConfig{
+			Logprobs:    &logprobsFalse,
+			TopLogprobs: &topLogprobs,
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires logprobs to be true")
+
+	chatReq, _, err := m.prepareChatRequest(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		GenerationConfig: model.GenerationConfig{
+			Logprobs:    &logprobsTrue,
+			TopLogprobs: &providerSpecificTopLogprobs,
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(21), chatReq.TopLogprobs.Value)
+}
+
+func TestConvertChatCompletionChoiceLogprobs(t *testing.T) {
+	got := convertChatCompletionChoiceLogprobs(openaigo.ChatCompletionChoiceLogprobs{
+		Content: []openaigo.ChatCompletionTokenLogprob{
+			{
+				Token:   "A",
+				Logprob: -0.1,
+				Bytes:   []int64{65},
+				TopLogprobs: []openaigo.ChatCompletionTokenLogprobTopLogprob{
+					{Token: "B", Logprob: -0.2, Bytes: []int64{66}},
+				},
+			},
+		},
+	})
+	require.NotNil(t, got)
+	require.Len(t, got.Content, 1)
+	assert.Equal(t, "A", got.Content[0].Token)
+	assert.Equal(t, -0.1, got.Content[0].Logprob)
+	assert.Equal(t, []int{65}, got.Content[0].Bytes)
+	require.Len(t, got.Content[0].TopLogprobs, 1)
+	assert.Equal(t, "B", got.Content[0].TopLogprobs[0].Token)
+	assert.Equal(t, []int{66}, got.Content[0].TopLogprobs[0].Bytes)
+	assert.Nil(t, int64SliceToIntSlice(nil))
 }
 
 // TestConvertUserMessageContent_WithImage tests image content conversion.

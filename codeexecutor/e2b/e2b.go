@@ -518,9 +518,56 @@ func (c *CodeExecutor) ExecuteInline(
 }
 
 // Engine exposes the sandbox-backed runtime as an Engine for skill tools.
+//
+// The engine advertises SupportsCleanEnv: RunProgram honors
+// RunProgramSpec.CleanEnv by launching the spawned program through
+// `env -i` with only the workspace base variables, the (already
+// scrubbed) spec.Env and a minimal PATH, so the program does not
+// inherit the sandbox process environment (issue #1845). This lets
+// tool/workspaceexec policy mode run on the e2b backend instead of
+// failing closed.
+//
+// Scope note: the e2b Jupyter `/execute` API exposes no hook to
+// launch the *framing* shell (the kernel-side bash that runs our
+// script and the output sentinels) in an empty environment, so that
+// shell still inherits the sandbox environment. This is not a
+// model-injection vector: the sandbox environment is fixed by the
+// template / WithEnvVars at sandbox creation (operator-controlled),
+// and model-supplied env (spec.Env) is confined to the `env -i`
+// invocation rather than the framing shell. The SupportsCleanEnv
+// contract is about the spawned program's environment, which `env -i`
+// satisfies.
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
-	return codeexecutor.NewEngine(rt, rt, rt)
+	return codeexecutor.NewEngineWithCapabilities(
+		rt, rt, rt,
+		codeexecutor.Capabilities{SupportsCleanEnv: true},
+	)
+}
+
+// Pause suspends the sandbox without destroying it. The sandbox filesystem
+// and memory state are preserved. Call New with WithSandboxID to resume.
+// Only the owner of a sandbox (i.e. the executor that created it) should
+// pause it; connected executors should leave lifecycle management to the
+// creator.
+// After a successful pause the executor relinquishes ownership so that a
+// subsequent Close() call does not kill the paused sandbox.
+func (c *CodeExecutor) Pause(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sbx == nil {
+		return fmt.Errorf("e2b: sandbox not initialized")
+	}
+	if !c.owned {
+		return fmt.Errorf("e2b: only owner may pause sandbox")
+	}
+	if err := c.sbx.Pause(ctx); err != nil {
+		return err
+	}
+	// Detach ownership so Close() does not destroy the paused sandbox.
+	// The caller can resume it later via New(WithSandboxID(...)).
+	c.owned = false
+	return nil
 }
 
 // Close terminates the owned sandbox (if any).

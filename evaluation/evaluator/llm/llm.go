@@ -13,6 +13,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"runtime"
 
 	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -44,13 +45,14 @@ type LLMBaseEvaluator struct {
 }
 
 type sampleCollectionRequest struct {
-	actual            *evalset.Invocation
-	expected          *evalset.Invocation
-	messages          []model.Message
-	evalMetric        *metric.EvalMetric
-	structuredOutput  *model.StructuredOutput
-	numSamples        int
-	sampleParallelism int
+	actual                   *evalset.Invocation
+	expected                 *evalset.Invocation
+	messages                 []model.Message
+	evalMetric               *metric.EvalMetric
+	structuredOutput         *model.StructuredOutput
+	numSamples               int
+	sampleParallelismEnabled bool
+	sampleParallelism        int
 }
 
 // New constructs an LLMBaseEvaluator wrapper around the concrete evaluator.
@@ -120,13 +122,14 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 			return nil, fmt.Errorf("resolve structured output: %w", err)
 		}
 		samples, err := r.collectSamples(ctx, &sampleCollectionRequest{
-			actual:            actual,
-			expected:          expected,
-			messages:          messages,
-			evalMetric:        evalMetric,
-			structuredOutput:  structuredOutput,
-			numSamples:        numSamples,
-			sampleParallelism: judgeCriterion.SampleParallelism,
+			actual:                   actual,
+			expected:                 expected,
+			messages:                 messages,
+			evalMetric:               evalMetric,
+			structuredOutput:         structuredOutput,
+			numSamples:               numSamples,
+			sampleParallelismEnabled: judgeCriterion.SampleParallelismEnabled,
+			sampleParallelism:        judgeCriterion.SampleParallelism,
 		})
 		if err != nil {
 			return nil, err
@@ -142,10 +145,11 @@ func (r *LLMBaseEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*e
 
 func (r *LLMBaseEvaluator) collectSamples(ctx context.Context,
 	req *sampleCollectionRequest) ([]*evaluator.PerInvocationResult, error) {
-	if req.sampleParallelism <= 1 {
+	parallelism := resolveSampleParallelism(req.numSamples, req.sampleParallelismEnabled, req.sampleParallelism)
+	if parallelism <= 1 {
 		return r.collectSamplesSerially(ctx, req)
 	}
-	return r.collectSamplesInParallel(ctx, req)
+	return r.collectSamplesInParallel(ctx, req, parallelism)
 }
 
 func (r *LLMBaseEvaluator) collectSamplesSerially(ctx context.Context,
@@ -162,11 +166,7 @@ func (r *LLMBaseEvaluator) collectSamplesSerially(ctx context.Context,
 }
 
 func (r *LLMBaseEvaluator) collectSamplesInParallel(ctx context.Context,
-	req *sampleCollectionRequest) ([]*evaluator.PerInvocationResult, error) {
-	parallelism := req.sampleParallelism
-	if parallelism > req.numSamples {
-		parallelism = req.numSamples
-	}
+	req *sampleCollectionRequest, parallelism int) ([]*evaluator.PerInvocationResult, error) {
 	samples := make([]*evaluator.PerInvocationResult, req.numSamples)
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.SetLimit(parallelism)
@@ -185,6 +185,19 @@ func (r *LLMBaseEvaluator) collectSamplesInParallel(ctx context.Context,
 		return nil, err
 	}
 	return samples, nil
+}
+
+func resolveSampleParallelism(numSamples int, enabled bool, parallelism int) int {
+	if !enabled || numSamples <= 1 {
+		return 1
+	}
+	if parallelism <= 0 {
+		parallelism = runtime.GOMAXPROCS(0)
+	}
+	if parallelism > numSamples {
+		return numSamples
+	}
+	return parallelism
 }
 
 func (r *LLMBaseEvaluator) collectOneSample(ctx context.Context,

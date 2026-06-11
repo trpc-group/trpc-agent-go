@@ -430,7 +430,7 @@ func pathQueryCypher(fromID, toID, pattern string, limit int) string {
 
 func traverseNodeQueryCypher(startID, pattern string, limit int) string {
 	return fmt.Sprintf(
-		`MATCH p=(start:%s {id: %s})%s(n:%s) UNWIND nodes(p) AS node WITH node, min(length(p)) AS distance ORDER BY distance ASC, node.id ASC LIMIT %d RETURN node.id, node.name, node.content, node.metadata`,
+		`MATCH p=(start:%s {id: %s})%s(n:%s) WITH DISTINCT n, min(length(p)) AS dist RETURN n.id, n.name, n.content, n.metadata ORDER BY dist ASC, n.id ASC LIMIT %d`,
 		nodeLabel,
 		cypherString(startID),
 		pattern,

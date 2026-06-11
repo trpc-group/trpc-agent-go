@@ -12,6 +12,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -570,6 +571,46 @@ func TestLLMBaseEvaluator_DefaultSampleCollectionStaysSerial(t *testing.T) {
 	require.Len(t, stub.receivedSamples, 2)
 }
 
+func TestLLMBaseEvaluator_SampleParallelismRequiresEnabledSwitch(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseAll)
+	r := &parallelJudgeRunner{
+		started: started,
+		release: release,
+	}
+	stub := &scoreByResponseEvaluator{}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	evalMetric := buildEvalMetric("unknown-provider", 1)
+	numSamples := 2
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{
+		Runner:     r,
+		NumSamples: &numSamples,
+	}
+	evalMetric.Criterion.LLMJudge.SampleParallelism = 2
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := base.Evaluate(
+			context.Background(),
+			[]*evalset.Invocation{{InvocationID: "a"}},
+			[]*evalset.Invocation{{InvocationID: "b"}},
+			evalMetric,
+		)
+		done <- err
+	}()
+
+	waitForSampleStart(t, started)
+	assertNoSampleStart(t, started)
+	releaseAll()
+	require.NoError(t, <-done)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&r.runCalls))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&r.maxConcurrent))
+	require.Len(t, stub.receivedSamples, 2)
+}
+
 func TestLLMBaseEvaluator_SampleParallelismRunsWithLimit(t *testing.T) {
 	started := make(chan struct{}, 3)
 	release := make(chan struct{})
@@ -588,7 +629,52 @@ func TestLLMBaseEvaluator_SampleParallelismRunsWithLimit(t *testing.T) {
 		Runner:     r,
 		NumSamples: &numSamples,
 	}
+	evalMetric.Criterion.LLMJudge.SampleParallelismEnabled = true
 	evalMetric.Criterion.LLMJudge.SampleParallelism = 2
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := base.Evaluate(
+			context.Background(),
+			[]*evalset.Invocation{{InvocationID: "a"}},
+			[]*evalset.Invocation{{InvocationID: "b"}},
+			evalMetric,
+		)
+		done <- err
+	}()
+
+	waitForSampleStart(t, started)
+	waitForSampleStart(t, started)
+	assertNoSampleStart(t, started)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&r.maxConcurrent))
+	releaseAll()
+	require.NoError(t, <-done)
+	assert.Equal(t, int32(3), atomic.LoadInt32(&r.runCalls))
+	assert.LessOrEqual(t, atomic.LoadInt32(&r.maxConcurrent), int32(2))
+	require.Len(t, stub.receivedSamples, 3)
+}
+
+func TestLLMBaseEvaluator_SampleParallelismDefaultsToGOMAXPROCSWhenEnabled(t *testing.T) {
+	previousGOMAXPROCS := runtime.GOMAXPROCS(2)
+	t.Cleanup(func() { runtime.GOMAXPROCS(previousGOMAXPROCS) })
+	started := make(chan struct{}, 3)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseAll)
+	r := &parallelJudgeRunner{
+		started: started,
+		release: release,
+	}
+	stub := &scoreByResponseEvaluator{}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	evalMetric := buildEvalMetric("unknown-provider", 1)
+	numSamples := 3
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{
+		Runner:     r,
+		NumSamples: &numSamples,
+	}
+	evalMetric.Criterion.LLMJudge.SampleParallelismEnabled = true
 
 	done := make(chan error, 1)
 	go func() {
@@ -630,6 +716,7 @@ func TestLLMBaseEvaluator_SampleParallelismCapsAtNumSamples(t *testing.T) {
 		Runner:     r,
 		NumSamples: &numSamples,
 	}
+	evalMetric.Criterion.LLMJudge.SampleParallelismEnabled = true
 	evalMetric.Criterion.LLMJudge.SampleParallelism = 10
 
 	done := make(chan error, 1)
@@ -684,6 +771,7 @@ func TestLLMBaseEvaluator_SampleParallelismReturnsScoreError(t *testing.T) {
 		Runner:     &parallelJudgeRunner{},
 		NumSamples: &numSamples,
 	}
+	evalMetric.Criterion.LLMJudge.SampleParallelismEnabled = true
 	evalMetric.Criterion.LLMJudge.SampleParallelism = 2
 
 	_, err := base.Evaluate(

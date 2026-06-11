@@ -195,10 +195,9 @@ func TestTraverseNodeQueryCypherOrdersByNearestDistance(t *testing.T) {
 	cypher := traverseNodeQueryCypher("node-a", "-[:CALLS*1..2]->", 10)
 	for _, want := range []string{
 		`MATCH p=(start:Node {id: "node-a"})-[:CALLS*1..2]->(n:Node)`,
-		"UNWIND nodes(p) AS node",
-		"WITH node, min(length(p)) AS distance",
-		"ORDER BY distance ASC, node.id ASC LIMIT 10 RETURN",
-		"node.id, node.name, node.content, node.metadata",
+		"WITH DISTINCT n, min(length(p)) AS dist",
+		"RETURN n.id, n.name, n.content, n.metadata",
+		"ORDER BY dist ASC, n.id ASC LIMIT 10",
 	} {
 		if !strings.Contains(cypher, want) {
 			t.Fatalf("traverseNodeQueryCypher() missing %q in %s", want, cypher)

@@ -1067,9 +1067,61 @@ server, err := agui.New(
 
 其中 `buildParentGraph` 定义父图的两个 AgentNode，`buildResearchGraph` 定义子 `GraphAgent` 内部的 LLM 节点与中断节点；`agui.WithGraphNodeInterruptActivityTopLevelOnly(true)` 只向前端暴露父图中断 activity，调用方使用父图返回的 `lineageId` 与 `checkpointId` 发起恢复。
 
-如果需要在前端观察子图自己的中断 activity，可以关闭 `TopLevelOnly`。如果子 `GraphAgent` 是通过 AgentTool 暴露给父 Agent，并且前端需要看到内层 graph 事件，需要在构造 AgentTool 时开启 `agenttool.WithStreamInner(true)`。
+如果需要在前端观察子图自己的中断 activity，可以关闭 `TopLevelOnly`。
 
 完整示例可参考 [examples/agui/server/externaltool/agentnode_graphagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/agentnode_graphagent)。
+
+#### AgentTool 子 GraphAgent 中断
+
+本节适用于父 `GraphAgent` 的 `ToolsNode` 执行 `agenttool.NewTool(childGraphAgent)`，并且中断由子 `GraphAgent` 内部节点发出的场景。与 AgentNode 不同，子图以普通工具调用的形式进入父图；从父图视角看，中断点落在正在执行 AgentTool 的 `ToolsNode`，但真正调用 `graph.Interrupt(...)` 的位置在子 `GraphAgent` 内部节点。中断发生后，父图的 `ToolsNode` checkpoint 会记录 AgentTool 子图 checkpoint 元数据。调用方拿到外部结果后通过下一次 AG-UI 请求恢复运行，而不是在同一次 SSE run 中继续；恢复时仍然只需要传父图的 `lineage_id` 和父图的 `checkpoint_id`，并在 `state.resume_map` 中使用子图 `graph.Interrupt` 的 key 写入工具结果，框架会把该值路由到对应的子图 checkpoint。
+
+代码示例片段如下：
+
+```go
+tools := map[string]tool.Tool{
+    childAgentName: agenttool.NewTool(childGraphAgent),
+}
+
+sg.AddLLMNode(
+    nodeCallReviewGraph,
+    modelInstance,
+    instruction,
+    tools,
+    graph.WithGenerationConfig(generationConfig),
+)
+sg.AddToolsNode(nodeExecuteTools, tools)
+sg.AddConditionalEdges(nodeCallReviewGraph, routeAfterReviewGraph, map[string]string{
+    nodeExecuteTools: nodeExecuteTools,
+    graph.End:        graph.End,
+})
+sg.AddEdge(nodeExecuteTools, nodeCallReviewGraph)
+
+func childReviewNode(ctx context.Context, state graph.State) (any, error) {
+    value, err := graph.Interrupt(ctx, state, childInterruptKey, "Review decision is required.")
+    if err != nil {
+        return nil, err
+    }
+    decision, ok := value.(string)
+    if !ok {
+        return nil, fmt.Errorf("review decision must be a string")
+    }
+    return graph.State{graph.StateKeyLastResponse: "review decision: " + decision}, nil
+}
+
+server, err := agui.New(
+    runner,
+    agui.WithGraphNodeInterruptActivityEnabled(true),
+    agui.WithAGUIRunnerOptions(
+        aguirunner.WithStateResolver(resolveRuntimeState),
+    ),
+)
+```
+
+其中 `nodeExecuteTools` 完成后回到 `nodeCallReviewGraph`，由同一个 LLM 节点消费 AgentTool 返回的 tool message 并生成最终回复；单独的最终回答节点不是必需的。`resolveRuntimeState` 负责把 AG-UI 请求中的 `state.lineage_id`、`state.checkpoint_id` 和 `state.resume_map` 转换为 GraphAgent runtime state。`state.checkpoint_id` 应使用父图 `ToolsNode` 的中断 checkpoint；子图 checkpoint 由 AgentTool 内部恢复，AG-UI 调用方不需要传子图 checkpoint。`state.resume_map` 的 key 应使用子图 `graph.Interrupt` 传入的 key，例如上例中的 `childInterruptKey`。
+
+如果前端还需要观察内层 graph 事件，可以在构造 AgentTool 时开启 `agenttool.WithStreamInner(true)`；如果只消费父图的 `graph.node.interrupt` activity，默认配置即可。
+
+完整示例可参考 [examples/agui/server/externaltool/agenttool_graphagent_graphagent](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/agenttool_graphagent_graphagent)。如果外层先通过 AgentNode 产生 handoff 工具调用，再由父图选择 AgentTool 执行，可参考 [examples/agui/server/externaltool/agentnode_handoff_agenttool](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/externaltool/agentnode_handoff_agenttool)。
 
 ### AG-UI `role=tool` 输入处理
 

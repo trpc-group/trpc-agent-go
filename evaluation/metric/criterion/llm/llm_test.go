@@ -18,11 +18,13 @@ import (
 )
 
 func TestNewLlmCriterion(t *testing.T) {
-	crit := New("provider", "model", WithNumSamples(2), WithSampleParallelism(3), WithBaseURL("base"))
+	crit := New("provider", "model", WithNumSamples(2), WithSampleParallelismEnabled(true),
+		WithSampleParallelism(3), WithBaseURL("base"))
 	require.NotNil(t, crit.JudgeModel)
 	assert.Equal(t, "provider", crit.JudgeModel.ProviderName)
 	assert.Equal(t, "model", crit.JudgeModel.ModelName)
 	assert.Equal(t, 2, *crit.JudgeModel.NumSamples)
+	assert.True(t, crit.SampleParallelismEnabled)
 	assert.Equal(t, 3, crit.SampleParallelism)
 	assert.Equal(t, "base", crit.JudgeModel.BaseURL)
 }
@@ -84,15 +86,19 @@ func TestLLMCriterionSampleParallelismJSON(t *testing.T) {
 	crit := New("provider", "model")
 	data, err := json.Marshal(crit)
 	require.NoError(t, err)
+	assert.NotContains(t, string(data), "sampleParallelismEnabled")
 	assert.NotContains(t, string(data), "sampleParallelism")
 
+	crit.SampleParallelismEnabled = true
 	crit.SampleParallelism = 3
 	data, err = json.Marshal(crit)
 	require.NoError(t, err)
+	assert.Contains(t, string(data), `"sampleParallelismEnabled":true`)
 	assert.Contains(t, string(data), `"sampleParallelism":3`)
 
 	var decoded LLMCriterion
 	err = json.Unmarshal(data, &decoded)
 	require.NoError(t, err)
+	assert.True(t, decoded.SampleParallelismEnabled)
 	assert.Equal(t, 3, decoded.SampleParallelism)
 }

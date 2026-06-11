@@ -623,16 +623,13 @@ func (r *workspaceRuntime) RunProgram(
 		codeexecutor.EnvOutputDir:       outDir,
 		codeexecutor.EnvRunDir:          runDir,
 	}
-	var envParts []string
-	for k, v := range baseEnv {
-		if _, ok := spec.Env[k]; ok {
-			continue
-		}
-		envParts = append(envParts, k+"="+shellQuote(v))
-	}
-	for k, v := range spec.Env {
-		envParts = append(envParts, k+"="+shellQuote(v))
-	}
+	// envAssign is the leading `env ...` / `env -i ...` token spliced
+	// in front of the command. When spec.CleanEnv is set
+	// (workspace_exec / skill_run policy mode) it becomes `env -i ...`
+	// so the spawned program starts from an empty environment plus the
+	// workspace base vars and a minimal PATH, honoring
+	// RunProgramSpec.CleanEnv on the e2b backend (issue #1845).
+	envAssign := envToken(baseEnv, spec.Env, spec.CleanEnv)
 
 	quotedCmd := shellQuote(spec.Cmd)
 	var quotedArgs strings.Builder
@@ -645,11 +642,6 @@ func (r *workspaceRuntime) RunProgram(
 	if spec.Stdin != "" {
 		b64 := base64.StdEncoding.EncodeToString([]byte(spec.Stdin))
 		stdinRedir = " < <(printf %s " + shellQuote(b64) + " | base64 -d)"
-	}
-
-	envAssign := ""
-	if len(envParts) > 0 {
-		envAssign = "env " + strings.Join(envParts, " ") + " "
 	}
 
 	inner := fmt.Sprintf(
