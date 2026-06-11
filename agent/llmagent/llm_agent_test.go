@@ -299,6 +299,23 @@ func TestBuildRequestProcessors_SessionSummaryInjectionModeWiring(t *testing.T) 
 	require.Equal(t, processor.SessionSummaryInjectionSystem, crp.SessionSummaryInjectionMode)
 }
 
+func TestBuildRequestProcessors_AddCurrentTimeToolGuidanceWiring(t *testing.T) {
+	opts := &Options{}
+	WithAddCurrentTime(true)(opts)
+
+	procs := buildRequestProcessors("test-agent", opts)
+	var timeProc *processor.TimeRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.TimeRequestProcessor); ok {
+			timeProc = v
+		}
+	}
+	require.NotNil(t, timeProc)
+	require.True(t, timeProc.AddCurrentTime)
+	require.Equal(t, "environment_context_current_time", timeProc.CurrentTimeToolName)
+	require.True(t, timeProc.CurrentTimeToolAvailable)
+}
+
 // Test that buildRequestProcessors wires MaxHistoryRuns into
 // ContentRequestProcessor correctly.
 func TestBuildRequestProcessors_MaxHistoryRunsWiring(t *testing.T) {
