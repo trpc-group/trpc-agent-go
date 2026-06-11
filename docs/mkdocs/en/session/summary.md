@@ -909,8 +909,8 @@ agent := llmagent.New(
 
 | Mode | Injection Position | Token Tailoring Behavior | Use Case |
 | --- | --- | --- | --- |
-| `SessionSummaryInjectionSystem` (default) | Merged into system message | Summary in preserved head, never trimmed | Summary must always be present |
-| `SessionSummaryInjectionUser` | Merged into the first user history/current message when possible; otherwise inserted near history | Summary participates in round trimming, can be evicted | Sliding window for very long conversations |
+| `SessionSummaryInjectionSystem` (default) | Merged into system message; enabled memory preload / session recall preload also use system context | Session-derived context is in the preserved head and never trimmed | Summary must always be present |
+| `SessionSummaryInjectionUser` | Merged into the first user history/current message when possible; otherwise inserted near history; enabled memory preload / session recall preload use the same user/history path | Summary, memory preload, and session recall preload participate in round trimming and can be evicted; stable system prefixes are easier to cache | Sliding window for very long conversations and prompt-cache-sensitive workloads |
 
 **User mode message structure**:
 

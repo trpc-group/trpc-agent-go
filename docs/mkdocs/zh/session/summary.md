@@ -894,8 +894,8 @@ agent := llmagent.New(
 
 | 模式 | 注入位置 | Token Tailoring 行为 | 适用场景 |
 | --- | --- | --- | --- |
-| `SessionSummaryInjectionSystem`（默认） | 合并到 system message | 摘要在 preserved head 中，不会被裁剪 | 需要摘要始终存在的场景 |
-| `SessionSummaryInjectionUser` | 优先合并到第一条 user history/current message；否则在靠近 history 的位置注入 | 摘要参与普通轮次裁剪，可被滑动窗口淘汰 | 超长对话的滑动窗口场景 |
+| `SessionSummaryInjectionSystem`（默认） | 合并到 system message；开启 memory preload / session recall preload 时也使用 system context | 摘要及启用的 preload context 在 preserved head 中，不会被裁剪 | 需要摘要始终存在的场景 |
+| `SessionSummaryInjectionUser` | 优先合并到第一条 user history/current message；否则在靠近 history 的位置注入；开启 memory preload / session recall preload 时使用同一 user/history 路径 | 摘要、memory preload、session recall preload 参与普通轮次裁剪，可被滑动窗口淘汰；也更利于保持稳定 system 前缀 | 超长对话、prompt cache 敏感场景 |
 
 **User 模式的消息结构**：
 

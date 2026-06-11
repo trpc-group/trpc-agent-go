@@ -35,23 +35,25 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-// SessionSummaryInjectionMode controls how the session summary is injected
-// into the model request.
+// SessionSummaryInjectionMode controls where session summaries are injected.
+// In user mode, enabled preloaded memory and session recall use the same
+// user/history placement as the summary.
 type SessionSummaryInjectionMode string
 
 const (
-	// SessionSummaryInjectionSystem injects the summary as a system message
-	// (default). The summary is merged into the existing system message or
-	// prepended as a new one. This makes the summary part of the preserved
+	// SessionSummaryInjectionSystem injects the session summary as system
+	// context (default). Enabled preloaded memory and session recall also use
+	// system context in this mode. This makes the context part of the preserved
 	// head in token tailoring and is not subject to sliding-window trimming.
 	SessionSummaryInjectionSystem SessionSummaryInjectionMode = "system"
 
-	// SessionSummaryInjectionUser injects the summary as a user message
-	// placed near session history. The processor prefers merging it into the
-	// first user history/current message when possible; if none exists and
-	// the existing prompt prefix already ends with a user message, it falls
-	// back to merging there to avoid introducing an extra adjacent user
-	// block. This mode allows the summary to participate in token-budget
+	// SessionSummaryInjectionUser injects the session summary near user/history
+	// messages. Enabled preloaded memory and session recall use the same
+	// user/history placement in this mode. The processor prefers merging this
+	// context into the first user history/current message when possible; if none
+	// exists and the existing prompt prefix already ends with a user message, it
+	// falls back to merging there to avoid introducing an extra adjacent user
+	// block. This mode allows the context to participate in token-budget
 	// trimming like any other user-anchored round, enabling a true
 	// sliding-window experience.
 	SessionSummaryInjectionUser SessionSummaryInjectionMode = "user"
@@ -117,8 +119,10 @@ type ContentRequestProcessor struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// to the request if available.
 	AddSessionSummary bool
-	// SessionSummaryInjectionMode controls how the session summary is injected
-	// into the model request. Default is SessionSummaryInjectionSystem.
+	// SessionSummaryInjectionMode controls where session summaries are injected.
+	// In user mode, enabled preloaded memory and session recall use the same
+	// user/history placement as the summary. Default is
+	// SessionSummaryInjectionSystem.
 	SessionSummaryInjectionMode SessionSummaryInjectionMode
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
@@ -151,7 +155,7 @@ type ContentRequestProcessor struct {
 	// When < 0, all memories are loaded.
 	PreloadMemory int
 	// PreloadSessionRecall sets the number of recalled
-	// session events to inject into the system prompt.
+	// session events to inject as preload context.
 	// When > 0, query-time search runs across other
 	// sessions for the current user.
 	// When 0 (default), it is disabled.
@@ -227,13 +231,17 @@ func WithAddSessionSummary(add bool) ContentOption {
 	}
 }
 
-// WithSessionSummaryInjectionMode sets the injection mode for session summaries.
+// WithSessionSummaryInjectionMode sets where session summaries are injected.
+// In user mode, enabled preloaded memory and session recall use the same
+// user/history placement as the summary.
 //
 // Available modes:
-//   - SessionSummaryInjectionSystem (default): injects as system message,
-//     merged into existing system message or prepended.
-//   - SessionSummaryInjectionUser: injects as a user message near history.
-//     The processor first tries to merge it into the first user
+//   - SessionSummaryInjectionSystem (default): injects session summary as
+//     system context. Enabled preloaded memory and session recall also use
+//     system context.
+//   - SessionSummaryInjectionUser: injects session summary near user/history.
+//     Enabled preloaded memory and session recall use the same placement. The
+//     processor first tries to merge this context into the first user
 //     history/current message; if none exists and the existing prompt prefix
 //     already ends with user, it falls back to merging there.
 func WithSessionSummaryInjectionMode(mode SessionSummaryInjectionMode) ContentOption {
@@ -307,7 +315,7 @@ func WithPreloadMemory(limit int) ContentOption {
 }
 
 // WithPreloadSessionRecall sets the number of recalled
-// session events to preload into the system prompt.
+// session events to preload as context.
 func WithPreloadSessionRecall(limit int) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.PreloadSessionRecall = limit
@@ -621,6 +629,7 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 	var messages []model.Message
 	var summaryCutoff summaryHistoryCutoff
 	var summaryText string
+	var userContextBlocks []string
 	// Skip session summary when include_contents=none, but still get current
 	// invocation's events (tool calls/results) to maintain ReAct loop context.
 	if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
@@ -633,15 +642,23 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 	// PreloadMemory: 0 = disabled, -1 = all, N > 0 = adaptive preload budget.
 	if p.PreloadMemory != 0 && invocation.MemoryService != nil {
 		if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
-			p.injectSystemContextMessage(req, *memMsg)
+			if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
+				userContextBlocks = appendUserContextBlock(userContextBlocks, memMsg.Content)
+			} else {
+				p.injectSystemContextMessage(req, *memMsg)
+			}
 		}
 	}
 	if summaryText != "" {
 		invocation.SetState(contentHasSessionSummaryStateKey, true)
 		if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
 			// User-mode injection is deferred until after history messages are
-			// collected, so the summary can be merged with the first user
-			// message in history when applicable.
+			// collected, so the summary and enabled preload context can be merged with the
+			// first user message in history when applicable.
+			userContextBlocks = appendUserContextBlock(
+				userContextBlocks,
+				p.formatSummaryForUser(summaryText),
+			)
 		} else {
 			// Default system-mode: inject as system context message.
 			summaryMsg := model.Message{
@@ -655,7 +672,11 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 		p.PreloadSessionRecall > 0 &&
 		invocation.SessionService != nil {
 		if recallMsg := p.getPreloadSessionRecallMessage(ctx, invocation); recallMsg != nil {
-			p.injectSystemContextMessage(req, *recallMsg)
+			if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
+				userContextBlocks = appendUserContextBlock(userContextBlocks, recallMsg.Content)
+			} else {
+				p.injectSystemContextMessage(req, *recallMsg)
+			}
 		}
 	}
 
@@ -674,14 +695,18 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 		}
 	}
 
-	// When user-mode summary injection is active, prepend the summary as a
-	// user message near history. Prefer merging into the first user
-	// history/current message so the summary stays attached to the live user
-	// turn. If no such message exists, fall back to a trailing user message in
-	// req.Messages (for example, injected context) to avoid creating an extra
-	// adjacent user block.
-	if summaryText != "" && p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
-		messages = p.prependSummaryUserMessage(summaryText, messages, req.Messages)
+	// When user-mode injection is active, prepend the summary and enabled
+	// preload context as user content near history. Prefer merging into the
+	// first user history/current message so the context stays attached to the
+	// live user turn. If no such message exists, fall back to a trailing user
+	// message in req.Messages (for example, injected context) to avoid creating
+	// an extra adjacent user block.
+	if len(userContextBlocks) > 0 {
+		messages = prependUserContextMessage(
+			strings.Join(userContextBlocks, mergedUserSeparator),
+			messages,
+			req.Messages,
+		)
 	}
 
 	req.Messages = append(req.Messages, messages...)
@@ -708,6 +733,13 @@ func (p *ContentRequestProcessor) injectSystemContextMessage(
 		return
 	}
 	req.Messages = append([]model.Message{msg}, req.Messages...)
+}
+
+func appendUserContextBlock(blocks []string, content string) []string {
+	if content == "" {
+		return blocks
+	}
+	return append(blocks, content)
 }
 
 // injectInjectedContextMessages inserts per-run context messages into the request
@@ -889,7 +921,17 @@ func (p *ContentRequestProcessor) prependSummaryUserMessage(
 	if formatted == "" {
 		return messages
 	}
+	return prependUserContextMessage(formatted, messages, reqPrefix)
+}
 
+func prependUserContextMessage(
+	formatted string,
+	messages []model.Message,
+	reqPrefix []model.Message,
+) []model.Message {
+	if formatted == "" {
+		return messages
+	}
 	// Case 1: merge into the first available user history/current message.
 	for i := range messages {
 		if messages[i].Role != model.RoleUser {
@@ -2646,8 +2688,8 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 	return newPreloadMemoryMessage(memories)
 }
 
-// loadPreloadMemoryMessage loads memories directly and formats them as a
-// system message.
+// loadPreloadMemoryMessage loads memories directly and formats them as preload
+// context.
 func (p *ContentRequestProcessor) loadPreloadMemoryMessage(
 	ctx context.Context,
 	inv *agent.Invocation,
@@ -2692,7 +2734,7 @@ func buildPreloadSearchQuery(msg model.Message) string {
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
-// formatMemoryContent formats memories for system prompt injection.
+// formatMemoryContent formats memories for preload context injection.
 func formatMemoryContent(memories []*memory.Entry) string {
 	var sb strings.Builder
 	sb.WriteString("## User Memories\n\n")
