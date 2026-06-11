@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -1064,6 +1065,67 @@ func TestToolListScopesToCurrentUser(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, jobs, 1)
 	require.Equal(t, "mine", jobs[0].Name)
+}
+
+func TestToolUsesConversationStorageScope(t *testing.T) {
+	t.Parallel()
+
+	svc, err := NewService(
+		t.TempDir(),
+		&stubRunner{reply: "ok"},
+		outbound.NewRouter(),
+	)
+	require.NoError(t, err)
+
+	_, err = svc.Add(&Job{
+		Name:    "personal",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:  ScheduleKindEvery,
+			Every: "1m",
+		},
+		Message: "personal",
+		UserID:  "wecom:dm:user-1",
+	})
+	require.NoError(t, err)
+
+	tool := NewTool(svc)
+	var ctx context.Context = agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{
+			Session: &session.Session{
+				ID:     "wecom:chat:room-1",
+				UserID: "wecom:dm:user-1",
+			},
+		},
+	)
+	ctx = conversationscope.WithStorageUserID(ctx, "wecom:chat:room-1")
+
+	addArgs, err := json.Marshal(map[string]any{
+		"action":   "add",
+		"message":  "group reminder",
+		"interval": "1m",
+	})
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, addArgs)
+	require.NoError(t, err)
+
+	job, ok := result.(*Job)
+	require.True(t, ok)
+	require.Equal(t, "wecom:chat:room-1", job.UserID)
+	require.Equal(t, "wecom", job.Delivery.Channel)
+	require.Equal(t, "group:room-1", job.Delivery.Target)
+
+	result, err = tool.Call(ctx, []byte(`{"action":"list"}`))
+	require.NoError(t, err)
+
+	payload, ok := result.(map[string]any)
+	require.True(t, ok)
+	jobs, ok := payload["jobs"].([]*Job)
+	require.True(t, ok)
+	require.Len(t, jobs, 1)
+	require.Equal(t, "group reminder", jobs[0].Message)
 }
 
 func TestToolRemoveRejectsOtherUsersJob(t *testing.T) {
