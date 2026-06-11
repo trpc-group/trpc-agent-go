@@ -11,7 +11,12 @@ package llm
 
 import (
 	"context"
+	"fmt"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -131,6 +136,117 @@ func (f *fakeJudgeRunner) Run(_ context.Context, _ string, _ string, _ model.Mes
 func (f *fakeJudgeRunner) Close() error { return nil }
 
 var _ runner.Runner = (*fakeJudgeRunner)(nil)
+
+type parallelJudgeRunner struct {
+	started       chan<- struct{}
+	release       <-chan struct{}
+	runCalls      int32
+	running       int32
+	maxConcurrent int32
+}
+
+func (p *parallelJudgeRunner) Run(ctx context.Context, _ string, _ string, _ model.Message,
+	_ ...agent.RunOption) (<-chan *event.Event, error) {
+	call := atomic.AddInt32(&p.runCalls, 1)
+	running := atomic.AddInt32(&p.running, 1)
+	p.updateMaxConcurrent(running)
+	if p.started != nil {
+		p.started <- struct{}{}
+	}
+	if p.release != nil {
+		select {
+		case <-p.release:
+		case <-ctx.Done():
+			atomic.AddInt32(&p.running, -1)
+			return nil, ctx.Err()
+		}
+	}
+	atomic.AddInt32(&p.running, -1)
+	ch := make(chan *event.Event, 1)
+	ch <- event.NewResponseEvent("inv", "judge", &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Content: fmt.Sprintf("score-%d", call)}}},
+		Done:    true,
+	})
+	close(ch)
+	return ch, nil
+}
+
+func (p *parallelJudgeRunner) Close() error { return nil }
+
+func (p *parallelJudgeRunner) updateMaxConcurrent(running int32) {
+	for {
+		current := atomic.LoadInt32(&p.maxConcurrent)
+		if running <= current {
+			return
+		}
+		if atomic.CompareAndSwapInt32(&p.maxConcurrent, current, running) {
+			return
+		}
+	}
+}
+
+var _ runner.Runner = (*parallelJudgeRunner)(nil)
+
+type scoreByResponseEvaluator struct {
+	mu              sync.Mutex
+	scoreErr        error
+	receivedSamples []*evaluator.PerInvocationResult
+}
+
+func (s *scoreByResponseEvaluator) Name() string { return "score_by_response" }
+
+func (s *scoreByResponseEvaluator) Description() string { return "score by response" }
+
+func (s *scoreByResponseEvaluator) Evaluate(context.Context, []*evalset.Invocation, []*evalset.Invocation,
+	*metric.EvalMetric) (*evaluator.EvaluateResult, error) {
+	return nil, nil
+}
+
+func (s *scoreByResponseEvaluator) ConstructMessages(context.Context, []*evalset.Invocation, []*evalset.Invocation,
+	*metric.EvalMetric) ([]model.Message, error) {
+	return []model.Message{{Role: "user", Content: "prompt"}}, nil
+}
+
+func (s *scoreByResponseEvaluator) ScoreBasedOnResponse(_ context.Context, resp *model.Response,
+	_ *metric.EvalMetric) (*evaluator.ScoreResult, error) {
+	if s.scoreErr != nil {
+		return nil, s.scoreErr
+	}
+	score := 0
+	if _, err := fmt.Sscanf(respContent(resp), "score-%d", &score); err != nil {
+		return nil, err
+	}
+	return &evaluator.ScoreResult{Score: float64(score)}, nil
+}
+
+func respContent(resp *model.Response) string {
+	if resp == nil || len(resp.Choices) == 0 {
+		return ""
+	}
+	return resp.Choices[0].Message.Content
+}
+
+func (s *scoreByResponseEvaluator) AggregateSamples(_ context.Context, samples []*evaluator.PerInvocationResult,
+	_ *metric.EvalMetric) (*evaluator.PerInvocationResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.receivedSamples = append([]*evaluator.PerInvocationResult(nil), samples...)
+	return &evaluator.PerInvocationResult{
+		ActualInvocation:   samples[0].ActualInvocation,
+		ExpectedInvocation: samples[0].ExpectedInvocation,
+		Score:              samples[0].Score,
+		Status:             samples[0].Status,
+	}, nil
+}
+
+func (s *scoreByResponseEvaluator) AggregateInvocations(_ context.Context,
+	results []*evaluator.PerInvocationResult, _ *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
+	return &evaluator.EvaluateResult{
+		OverallScore:         results[0].Score,
+		OverallStatus:        results[0].Status,
+		PerInvocationResults: results,
+	}, nil
+}
 
 func buildEvalMetric(providerName string, numSamples int) *metric.EvalMetric {
 	return &metric.EvalMetric{
@@ -414,6 +530,276 @@ func TestLLMBaseEvaluator_UsesJudgeRunnerNumSamples(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 3, r.runCalls)
 	require.Len(t, stub.receivedSamples, 3)
+}
+
+func TestLLMBaseEvaluator_DefaultSampleCollectionStaysSerial(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseAll)
+	r := &parallelJudgeRunner{
+		started: started,
+		release: release,
+	}
+	stub := &scoreByResponseEvaluator{}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	evalMetric := buildEvalMetric("unknown-provider", 1)
+	numSamples := 2
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{
+		Runner:     r,
+		NumSamples: &numSamples,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := base.Evaluate(
+			context.Background(),
+			[]*evalset.Invocation{{InvocationID: "a"}},
+			[]*evalset.Invocation{{InvocationID: "b"}},
+			evalMetric,
+		)
+		done <- err
+	}()
+
+	waitForSampleStart(t, started)
+	assertNoSampleStart(t, started)
+	releaseAll()
+	require.NoError(t, <-done)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&r.runCalls))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&r.maxConcurrent))
+	require.Len(t, stub.receivedSamples, 2)
+}
+
+func TestLLMBaseEvaluator_SampleParallelismRequiresEnabledSwitch(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseAll)
+	r := &parallelJudgeRunner{
+		started: started,
+		release: release,
+	}
+	stub := &scoreByResponseEvaluator{}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	evalMetric := buildEvalMetric("unknown-provider", 1)
+	numSamples := 2
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{
+		Runner:     r,
+		NumSamples: &numSamples,
+	}
+	evalMetric.Criterion.LLMJudge.SampleParallelism = 2
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := base.Evaluate(
+			context.Background(),
+			[]*evalset.Invocation{{InvocationID: "a"}},
+			[]*evalset.Invocation{{InvocationID: "b"}},
+			evalMetric,
+		)
+		done <- err
+	}()
+
+	waitForSampleStart(t, started)
+	assertNoSampleStart(t, started)
+	releaseAll()
+	require.NoError(t, <-done)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&r.runCalls))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&r.maxConcurrent))
+	require.Len(t, stub.receivedSamples, 2)
+}
+
+func TestLLMBaseEvaluator_SampleParallelismRunsWithLimit(t *testing.T) {
+	started := make(chan struct{}, 3)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseAll)
+	r := &parallelJudgeRunner{
+		started: started,
+		release: release,
+	}
+	stub := &scoreByResponseEvaluator{}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	evalMetric := buildEvalMetric("unknown-provider", 1)
+	numSamples := 3
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{
+		Runner:     r,
+		NumSamples: &numSamples,
+	}
+	evalMetric.Criterion.LLMJudge.SampleParallelismEnabled = true
+	evalMetric.Criterion.LLMJudge.SampleParallelism = 2
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := base.Evaluate(
+			context.Background(),
+			[]*evalset.Invocation{{InvocationID: "a"}},
+			[]*evalset.Invocation{{InvocationID: "b"}},
+			evalMetric,
+		)
+		done <- err
+	}()
+
+	waitForSampleStart(t, started)
+	waitForSampleStart(t, started)
+	assertNoSampleStart(t, started)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&r.maxConcurrent))
+	releaseAll()
+	require.NoError(t, <-done)
+	assert.Equal(t, int32(3), atomic.LoadInt32(&r.runCalls))
+	assert.LessOrEqual(t, atomic.LoadInt32(&r.maxConcurrent), int32(2))
+	require.Len(t, stub.receivedSamples, 3)
+}
+
+func TestLLMBaseEvaluator_SampleParallelismDefaultsToGOMAXPROCSWhenEnabled(t *testing.T) {
+	previousGOMAXPROCS := runtime.GOMAXPROCS(2)
+	t.Cleanup(func() { runtime.GOMAXPROCS(previousGOMAXPROCS) })
+	started := make(chan struct{}, 3)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseAll)
+	r := &parallelJudgeRunner{
+		started: started,
+		release: release,
+	}
+	stub := &scoreByResponseEvaluator{}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	evalMetric := buildEvalMetric("unknown-provider", 1)
+	numSamples := 3
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{
+		Runner:     r,
+		NumSamples: &numSamples,
+	}
+	evalMetric.Criterion.LLMJudge.SampleParallelismEnabled = true
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := base.Evaluate(
+			context.Background(),
+			[]*evalset.Invocation{{InvocationID: "a"}},
+			[]*evalset.Invocation{{InvocationID: "b"}},
+			evalMetric,
+		)
+		done <- err
+	}()
+
+	waitForSampleStart(t, started)
+	waitForSampleStart(t, started)
+	assertNoSampleStart(t, started)
+	assert.Equal(t, int32(2), atomic.LoadInt32(&r.maxConcurrent))
+	releaseAll()
+	require.NoError(t, <-done)
+	assert.Equal(t, int32(3), atomic.LoadInt32(&r.runCalls))
+	assert.LessOrEqual(t, atomic.LoadInt32(&r.maxConcurrent), int32(2))
+	require.Len(t, stub.receivedSamples, 3)
+}
+
+func TestLLMBaseEvaluator_SampleParallelismCapsAtNumSamples(t *testing.T) {
+	started := make(chan struct{}, 3)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseAll)
+	r := &parallelJudgeRunner{
+		started: started,
+		release: release,
+	}
+	stub := &scoreByResponseEvaluator{}
+	base := &LLMBaseEvaluator{LLMEvaluator: stub}
+	evalMetric := buildEvalMetric("unknown-provider", 1)
+	numSamples := 3
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{
+		Runner:     r,
+		NumSamples: &numSamples,
+	}
+	evalMetric.Criterion.LLMJudge.SampleParallelismEnabled = true
+	evalMetric.Criterion.LLMJudge.SampleParallelism = 10
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := base.Evaluate(
+			context.Background(),
+			[]*evalset.Invocation{{InvocationID: "a"}},
+			[]*evalset.Invocation{{InvocationID: "b"}},
+			evalMetric,
+		)
+		done <- err
+	}()
+
+	waitForSampleStart(t, started)
+	waitForSampleStart(t, started)
+	waitForSampleStart(t, started)
+	assertNoSampleStart(t, started)
+	assert.Equal(t, int32(3), atomic.LoadInt32(&r.maxConcurrent))
+	releaseAll()
+	require.NoError(t, <-done)
+	assert.Equal(t, int32(3), atomic.LoadInt32(&r.runCalls))
+	require.Len(t, stub.receivedSamples, 3)
+}
+
+func TestLLMBaseEvaluator_RejectsNegativeSampleParallelism(t *testing.T) {
+	base := &LLMBaseEvaluator{LLMEvaluator: &fakeLLMEvaluator{}}
+	evalMetric := buildEvalMetric("unknown-provider", 1)
+	numSamples := 2
+	r := &parallelJudgeRunner{}
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{
+		Runner:     r,
+		NumSamples: &numSamples,
+	}
+	evalMetric.Criterion.LLMJudge.SampleParallelism = -1
+
+	_, err := base.Evaluate(
+		context.Background(),
+		[]*evalset.Invocation{{InvocationID: "a"}},
+		[]*evalset.Invocation{{InvocationID: "b"}},
+		evalMetric,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sample parallelism must be non-negative")
+	assert.Equal(t, int32(0), atomic.LoadInt32(&r.runCalls))
+}
+
+func TestLLMBaseEvaluator_SampleParallelismReturnsScoreError(t *testing.T) {
+	base := &LLMBaseEvaluator{LLMEvaluator: &scoreByResponseEvaluator{scoreErr: assert.AnError}}
+	evalMetric := buildEvalMetric("unknown-provider", 1)
+	numSamples := 2
+	evalMetric.Criterion.LLMJudge.JudgeRunnerOptions = &llm.JudgeRunnerOptions{
+		Runner:     &parallelJudgeRunner{},
+		NumSamples: &numSamples,
+	}
+	evalMetric.Criterion.LLMJudge.SampleParallelismEnabled = true
+	evalMetric.Criterion.LLMJudge.SampleParallelism = 2
+
+	_, err := base.Evaluate(
+		context.Background(),
+		[]*evalset.Invocation{{InvocationID: "a"}},
+		[]*evalset.Invocation{{InvocationID: "b"}},
+		evalMetric,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "score based on response")
+}
+
+func waitForSampleStart(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "sample did not start")
+	}
+}
+
+func assertNoSampleStart(t *testing.T, started <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-started:
+		require.FailNow(t, "unexpected sample started")
+	case <-time.After(50 * time.Millisecond):
+	}
 }
 
 func TestLLMBaseEvaluator_RejectsInvalidJudgeRunnerNumSamples(t *testing.T) {
