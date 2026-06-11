@@ -404,8 +404,10 @@ When the model calls tools, the tool outputs are added to the conversation as
 on the tool result…”, or reveal internal process details.
 
 To make the assistant respond more naturally after tool calls, LLMAgent
-injects a short “post-tool” dynamic prompt into the system message **only when
-tool results are present**.
+injects a short “post-tool” guidance block into the system message when the
+feature is enabled. The guidance is present from the first model request so
+later tool-call turns keep the same prompt prefix and can reuse provider-side
+prompt caches more effectively.
 
 - Default: enabled, using the built-in prompt.
 - Customize the injected text: `llmagent.WithPostToolPrompt("...")`.
@@ -1046,6 +1048,45 @@ Memory Service is used to record user preference information, supporting persona
 1. [Runner](runner.md) - Learn the recommended usage
 2. [Session](session/index.md) - Understand session management
 3. [Multi-Agent](multiagent.md) - Learn multi-Agent systems
+
+## Prompt Scaffolding (“Rules” / Context Injection)
+
+Many agent products expose a “rules” feature (project memory, per‑turn constraints, etc.). In practice, “rules” is not a single stable framework‑level concept: different products choose different semantics (system vs user role, placement relative to history, persistence, file‑scoped selection, cache behavior).
+
+tRPC‑Agent‑Go intentionally keeps this generic and provides **prompt / context injection primitives** that you can combine to implement your product’s “rules” semantics.
+
+### Choose the right primitive
+
+- Always‑on stable guidance (recommended for “global rules”):
+  - Agent‑level: `llmagent.WithGlobalInstruction(...)` / `llmagent.WithInstruction(...)`
+  - Per‑run override (does not mutate the agent): `agent.WithGlobalInstruction(...)` / `agent.WithInstruction(...)`
+- Per‑run, non‑persistent context injected **before session history** (good for background seed context):
+  - `agent.WithInjectedContextMessages([]model.Message{...})`
+- Per‑run, non‑persistent context injected **near the latest user turn** (useful for per‑turn “rules” / dynamic constraints):
+  - `agent.WithLateContextMessages([]model.Message{...})`
+- Full control over the final request messages:
+  - Use a structured `BeforeModel` callback to rewrite `request.Messages` (see `docs/mkdocs/en/callbacks.md`).
+
+### Message placement (high level)
+
+The content request processor assembles the final model request roughly like this:
+
+1. System prompt / instructions (stable prefix)
+2. Few-shot examples (if configured, inserted after the leading system block)
+3. Injected context messages (`WithInjectedContextMessages`) — **before history**
+4. Session history (canonical transcript)
+5. Late context messages (`WithLateContextMessages`) — **inserted before the latest user message** (if there is no user message, they are inserted immediately after the leading system block)
+6. (If already present) tool / assistant tail belonging to the current turn
+
+This “late” placement is useful when your injected content is dynamic and you want it close to the current user request, while keeping the prefix stable for prompt caching.
+
+### Notes and best practices
+
+- Prefer `role=user` for late context messages. Injecting `role=system` in the middle of the message list is not universally supported across providers and may interact poorly with validators.
+- `WithInjectedContextMessages` and `WithLateContextMessages` are **not persisted** into the session transcript (they affect only the current model request).
+- In multi‑agent runs, these options live on `RunOptions` and are propagated via invocation cloning. If you need per‑agent scoping, use callbacks and filter by `invocation.AgentName`.
+
+Runnable example: `examples/prompt/late_context_messages`.
 
 ## Runtime Instruction Updates
 

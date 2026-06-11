@@ -14,7 +14,9 @@ import (
 	//nolint:gosec // Used only for stable graph IDs, not cryptographic security.
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -24,6 +26,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/codeast"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
+
+// codeLanguageSpec describes one programming language for graph source parsing.
+type codeLanguageSpec struct {
+	fileType   string
+	ext        string
+	skipSuffix string
+	skipPrefix string
+	skipNames  []string
+}
+
+// supportedCodeLanguages lists all languages that ReadGraph can parse when a
+// DirectoryParser is registered and matching files exist in the repository.
+var supportedCodeLanguages = []codeLanguageSpec{
+	{fileType: codeast.FileTypeGo, ext: ".go", skipSuffix: "_test.go"},
+	{fileType: codeast.FileTypePython, ext: ".py", skipPrefix: "test_", skipNames: []string{"conftest.py", "setup.py"}},
+}
 
 // ReadGraph reads repository code as graph-native data.
 func (s *Source) ReadGraph(ctx context.Context, opts ...source.ReadGraphOption) (*graph.Data, error) {
@@ -45,29 +63,45 @@ func (s *Source) ReadGraph(ctx context.Context, opts ...source.ReadGraphOption) 
 	if err != nil {
 		return nil, err
 	}
-	allowedGoPaths, err := s.allowedGoPaths(repoRoot, rootToScan)
-	if err != nil {
-		return nil, err
-	}
 
-	var data *graph.Data
-	if len(allowedGoPaths) > 0 {
-		parser, ok := codeast.GetDirectoryParser(codeast.FileTypeGo)
+	data := &graph.Data{}
+
+	for _, lang := range supportedCodeLanguages {
+		allowed, err := s.allowedCodePaths(repoRoot, rootToScan, lang)
+		if err != nil {
+			return nil, err
+		}
+		if len(allowed) == 0 {
+			continue
+		}
+		parser, ok := codeast.GetDirectoryParser(lang.fileType)
 		if !ok {
-			return nil, missingReaderError(codeast.FileTypeGo)
+			if lang.fileType == codeast.FileTypePython {
+				slog.Warn("repo graph parser is not registered; skipping language", "file_type", lang.fileType, "files", len(allowed))
+				continue
+			}
+			return nil, missingReaderError(lang.fileType)
 		}
 		var parseOpts []codeast.ParseOption
 		if parseConcurrency > 0 {
 			parseOpts = append(parseOpts, codeast.WithParseConcurrency(parseConcurrency))
 		}
-		parseOpts = append(parseOpts, codeast.WithParseIncludeFiles(absoluteAllowedGoPaths(repoRoot, allowedGoPaths)))
+		parseOpts = append(parseOpts, codeast.WithParseIncludeFiles(absoluteAllowedPaths(repoRoot, allowed)))
 		result, err := parser.ParseDirectory(rootToScan, parseOpts...)
 		if err != nil {
+			// The parser is registered but its runtime dependency (e.g. an
+			// external interpreter) is unavailable. Skip this language rather
+			// than failing the whole graph read, which may be mostly Go.
+			if errors.Is(err, codeast.ErrParserUnavailable) {
+				slog.Warn("repo graph parser runtime unavailable; skipping language",
+					"file_type", lang.fileType, "files", len(allowed), "error", err)
+				continue
+			}
 			return nil, err
 		}
-		data = s.graphDataFromCodeAST(result, repoRoot, repoInfo, allowedGoPaths)
-	} else {
-		data = &graph.Data{}
+		langData := s.graphDataFromCodeAST(result, repoRoot, repoInfo, allowed)
+		data.Nodes = append(data.Nodes, langData.Nodes...)
+		data.Edges = append(data.Edges, langData.Edges...)
 	}
 
 	if len(s.docExtensions) > 0 {
@@ -81,14 +115,29 @@ func (s *Source) ReadGraph(ctx context.Context, opts ...source.ReadGraphOption) 
 	return data, nil
 }
 
+// allowedGoPaths returns the Go-specific allowed paths for backward compatibility.
 func (s *Source) allowedGoPaths(repoRoot, rootToScan string) (map[string]struct{}, error) {
+	return s.allowedCodePaths(repoRoot, rootToScan, supportedCodeLanguages[0])
+}
+
+func (s *Source) allowedCodePaths(repoRoot, rootToScan string, lang codeLanguageSpec) (map[string]struct{}, error) {
 	filePaths, err := s.getFilePaths(rootToScan)
 	if err != nil {
 		return nil, err
 	}
 	allowed := make(map[string]struct{})
 	for _, filePath := range filePaths {
-		if filepath.Ext(filePath) != ".go" || strings.HasSuffix(filePath, "_test.go") {
+		if filepath.Ext(filePath) != lang.ext {
+			continue
+		}
+		name := filepath.Base(filePath)
+		if lang.skipSuffix != "" && strings.HasSuffix(name, lang.skipSuffix) {
+			continue
+		}
+		if lang.skipPrefix != "" && strings.HasPrefix(name, lang.skipPrefix) {
+			continue
+		}
+		if slices.Contains(lang.skipNames, name) {
 			continue
 		}
 		relPath, err := filepath.Rel(repoRoot, filePath)
@@ -100,7 +149,7 @@ func (s *Source) allowedGoPaths(repoRoot, rootToScan string) (map[string]struct{
 	return allowed, nil
 }
 
-func absoluteAllowedGoPaths(repoRoot string, allowed map[string]struct{}) []string {
+func absoluteAllowedPaths(repoRoot string, allowed map[string]struct{}) []string {
 	if len(allowed) == 0 {
 		return nil
 	}
@@ -148,19 +197,24 @@ func (s *Source) graphDataFromCodeAST(
 		nodeMap[nodeID] = graphNodeFromCodeAST(astNode, nodeID, relPath, baseMetadata)
 	}
 
+	// Build indexes for fuzzy symbol resolution (handles Python re-export paths).
+	shortNameIndex := buildShortNameIndex(keptSymbols)
+
 	for _, astEdge := range result.Edges {
 		if astEdge == nil || astEdge.FromID == "" || astEdge.ToID == "" || astEdge.Type == "" {
 			continue
 		}
-		if _, ok := keptSymbols[astEdge.FromID]; !ok {
+		resolvedFrom := resolveSymbolID(astEdge.FromID, keptSymbols, shortNameIndex)
+		if resolvedFrom == "" {
 			continue
 		}
-		if _, ok := keptSymbols[astEdge.ToID]; !ok {
+		resolvedTo := resolveTargetSymbolID(astEdge.ToID, resolvedFrom, keptSymbols, shortNameIndex)
+		if resolvedTo == "" {
 			continue
 		}
-		fromID := symbolIDs[astEdge.FromID]
-		toID := symbolIDs[astEdge.ToID]
-		edgeKey := repoGraphEdgeKey(symbolNodeKeys[astEdge.FromID], string(astEdge.Type), symbolNodeKeys[astEdge.ToID])
+		fromID := symbolIDs[resolvedFrom]
+		toID := symbolIDs[resolvedTo]
+		edgeKey := repoGraphEdgeKey(symbolNodeKeys[resolvedFrom], string(astEdge.Type), symbolNodeKeys[resolvedTo])
 		edgeID := generatedGraphID("edge", edgeKey)
 		edgeMap[edgeID] = &graph.Edge{
 			ID:       edgeID,
@@ -389,4 +443,92 @@ func graphNodeFromDocumentChunk(
 		Content:  doc.Content,
 		Metadata: metadata,
 	}
+}
+
+// buildShortNameIndex creates a mapping from the last segment of a symbol ID
+// (e.g. "AgentABC" from "pkg.mod.AgentABC") to all matching full IDs.
+func buildShortNameIndex(keptSymbols map[string]struct{}) map[string][]string {
+	index := make(map[string][]string, len(keptSymbols))
+	for id := range keptSymbols {
+		short := symbolShortName(id)
+		if short != "" {
+			index[short] = append(index[short], id)
+		}
+	}
+	return index
+}
+
+// resolveSymbolID attempts to find the canonical symbol ID for a given raw ID.
+// It first tries exact match, then falls back to prefix-based short-name matching.
+// Fuzzy matching requires both a short-name hit AND a package-prefix relationship,
+// preventing false-positive edges from unrelated symbols that share a name.
+func resolveSymbolID(rawID string, keptSymbols map[string]struct{}, shortNameIndex map[string][]string) string {
+	if _, ok := keptSymbols[rawID]; ok {
+		return rawID
+	}
+
+	// Require path context for fuzzy matching. A bare short name like "BaseModel"
+	// (no dot) has no package information to anchor the match and could incorrectly
+	// resolve to an unrelated symbol that happens to share the same name.
+	if !strings.Contains(rawID, ".") {
+		return ""
+	}
+
+	short := symbolShortName(rawID)
+	if short == "" {
+		return ""
+	}
+	candidates := shortNameIndex[short]
+	if len(candidates) == 0 {
+		return ""
+	}
+
+	// Require prefix relationship: the rawID's package prefix must be a prefix
+	// of the candidate's full path. This handles Python re-export paths where
+	// e.g. "pkg.abc.AgentABC" should match "pkg.abc._agent.AgentABC", but rejects
+	// "external.Client" -> "pkg.Client" where packages are unrelated.
+	prefix := symbolPrefix(rawID)
+	if prefix == "" {
+		return ""
+	}
+	var matched string
+	for _, c := range candidates {
+		if strings.HasPrefix(c, prefix+".") {
+			if matched != "" {
+				return "" // ambiguous
+			}
+			matched = c
+		}
+	}
+	return matched
+}
+
+func resolveTargetSymbolID(rawID string, sourceID string, keptSymbols map[string]struct{}, shortNameIndex map[string][]string) string {
+	if resolved := resolveSymbolID(rawID, keptSymbols, shortNameIndex); resolved != "" {
+		return resolved
+	}
+	if rawID == "" || sourceID == "" || strings.Contains(rawID, ".") {
+		return ""
+	}
+	for prefix := symbolPrefix(sourceID); prefix != ""; prefix = symbolPrefix(prefix) {
+		candidate := prefix + "." + rawID
+		if resolved := resolveSymbolID(candidate, keptSymbols, shortNameIndex); resolved != "" {
+			return resolved
+		}
+	}
+	return ""
+}
+
+func symbolShortName(id string) string {
+	if idx := strings.LastIndex(id, "."); idx >= 0 && idx < len(id)-1 {
+		return id[idx+1:]
+	}
+	return id
+}
+
+func symbolPrefix(id string) string {
+	if idx := strings.LastIndex(id, "."); idx > 0 {
+		return id[:idx]
+	}
+	return ""
 }

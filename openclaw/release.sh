@@ -145,7 +145,7 @@ build_release() {
   local target="$2"
   local dist_root="$3"
   local go_bin="$4"
-  local host goos goarch stage_dir archive output_dir go_version
+  local host goos goarch stage_dir archive output_dir go_version commit
 
   [ -n "$version" ] || die "--version is required"
 
@@ -160,6 +160,7 @@ build_release() {
   goos="${target%/*}"
   goarch="${target#*/}"
   go_version="$("$go_bin" version | awk '{ print $3 }')"
+  commit="$(git -C "$(repo_root)" rev-parse HEAD)"
   output_dir="$(dist_dir "$dist_root" "$version")"
   stage_dir="${output_dir}/_stage/${PACKAGE_ROOT_NAME}"
   archive="$(archive_name "$version" "$goos" "$goarch")"
@@ -175,7 +176,9 @@ build_release() {
     cd "$(module_dir)"
     CGO_ENABLED=1 GOOS="$goos" GOARCH="$goarch" \
       "$go_bin" build -trimpath \
-      -ldflags "-X main.releaseVersion=${version}" \
+      -ldflags "\
+-X trpc.group/trpc-go/trpc-agent-go/openclaw/internal/buildinfo.ReleaseVersion=${version} \
+-X trpc.group/trpc-go/trpc-agent-go/openclaw/internal/buildinfo.SourceCommit=${commit}" \
       -o "${stage_dir}/bin/${BINARY_NAME}" \
       ./cmd/openclaw
   )

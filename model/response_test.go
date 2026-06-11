@@ -1021,6 +1021,38 @@ func TestResponse_Clone(t *testing.T) {
 	}
 }
 
+func TestResponseCloneDeepCopiesLogprobs(t *testing.T) {
+	response := &Response{
+		Choices: []Choice{
+			{
+				Logprobs: &Logprobs{
+					Content: []TokenLogprob{
+						{
+							Token:   "A",
+							Logprob: -0.1,
+							Bytes:   []int{65},
+							TopLogprobs: []TopLogprob{
+								{Token: "A", Logprob: -0.1, Bytes: []int{65}},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	clone := response.Clone()
+	require.NotNil(t, clone)
+	require.NotNil(t, clone.Choices[0].Logprobs)
+	require.NotSame(t, response.Choices[0].Logprobs, clone.Choices[0].Logprobs)
+	require.NotSame(t, &response.Choices[0].Logprobs.Content[0], &clone.Choices[0].Logprobs.Content[0])
+	response.Choices[0].Logprobs.Content[0].Token = "T"
+	response.Choices[0].Logprobs.Content[0].TopLogprobs[0].Token = "T"
+	response.Choices[0].Logprobs.Content[0].Bytes[0] = 84
+	assert.Equal(t, "A", clone.Choices[0].Logprobs.Content[0].Token)
+	assert.Equal(t, "A", clone.Choices[0].Logprobs.Content[0].TopLogprobs[0].Token)
+	assert.Equal(t, []int{65}, clone.Choices[0].Logprobs.Content[0].Bytes)
+}
+
 // TestResponse_IsToolCallResponse tests the IsToolCallResponse method with additional scenarios.
 func TestResponse_IsToolCallResponse(t *testing.T) {
 	tests := []struct {
@@ -1164,6 +1196,11 @@ func TestObjectTypeConstants(t *testing.T) {
 			name:     "preprocessing planning type",
 			constant: ObjectTypePreprocessingPlanning,
 			expected: "preprocessing.planning",
+		},
+		{
+			name:     "preprocessing status type",
+			constant: ObjectTypePreprocessingStatus,
+			expected: "preprocessing.status",
 		},
 		{
 			name:     "postprocessing planning type",

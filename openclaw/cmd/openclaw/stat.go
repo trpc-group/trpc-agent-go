@@ -9,21 +9,18 @@
 
 package main
 
-import "strings"
+import (
+	"strings"
 
-const (
-	defaultReleaseVersion = "dev"
-	releaseTagPrefix      = "openclaw-"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/buildinfo"
 )
 
-var releaseVersion = defaultReleaseVersion
+const (
+	releaseTagPrefix = "openclaw-"
+)
 
 func currentVersion() string {
-	version := strings.TrimSpace(releaseVersion)
-	if version == "" {
-		return defaultReleaseVersion
-	}
-	return version
+	return buildinfo.CurrentVersion()
 }
 
 func normalizeReleaseVersion(raw string) string {

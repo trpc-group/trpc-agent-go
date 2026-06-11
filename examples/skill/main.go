@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -97,7 +98,21 @@ const (
 	maxDocChars = 100000
 )
 
-const truncatedSuffix = "\n\n... (Content truncated due to size limit)"
+const (
+	truncatedSuffix = "\n\n... (Content truncated due to size limit)"
+
+	errFilePathEmpty = "file_path is empty"
+	errAbsolutePath  = "absolute paths are not allowed"
+	errPathTraversal = "path traversal is not allowed"
+	parentDirSegment = ".."
+	pathSeparator    = "/"
+
+	parentDirPathPrefix  = parentDirSegment + pathSeparator
+	windowsAbsPathMinLen = 3
+	windowsDriveSep      = ':'
+	windowsPathSep       = '\\'
+	windowsUNCPrefix     = `\\`
+)
 
 // Save the original working directory.
 var originalDir string
@@ -520,7 +535,7 @@ func readFileContent(
 ) (ReadFileResponse, error) {
 	rawPath := strings.TrimSpace(req.FilePath)
 	if rawPath == "" {
-		return ReadFileResponse{Error: "file_path is empty"}, nil
+		return ReadFileResponse{Error: errFilePathEmpty}, nil
 	}
 
 	content, _, handled, err := tryReadFileRef(ctx, rawPath)
@@ -537,7 +552,10 @@ func readFileContent(
 	cacheKey := rawPath
 	filePath := stripInputsPrefix(rawPath)
 	if strings.TrimSpace(filePath) == "" {
-		return ReadFileResponse{Error: "file_path is empty"}, nil
+		return ReadFileResponse{Error: errFilePathEmpty}, nil
+	}
+	if errMsg := validateLocalReadPath(filePath); errMsg != "" {
+		return ReadFileResponse{Error: errMsg}, nil
 	}
 	if !filepath.IsAbs(filePath) &&
 		!looksLikeSkillWorkspacePath(filePath) {
@@ -621,6 +639,50 @@ func stripInputsPrefix(p string) string {
 		return strings.TrimPrefix(s, "work/inputs/")
 	}
 	return strings.TrimSpace(p)
+}
+
+func validateLocalReadPath(p string) string {
+	trimmed := strings.TrimSpace(p)
+	if trimmed == "" {
+		return errFilePathEmpty
+	}
+	if isLocalReadAbsPath(trimmed) {
+		return errAbsolutePath
+	}
+
+	normalized := filepath.ToSlash(trimmed)
+	clean := path.Clean(normalized)
+	if clean == parentDirSegment ||
+		strings.HasPrefix(clean, parentDirPathPrefix) {
+		return errPathTraversal
+	}
+	for _, part := range strings.Split(normalized, pathSeparator) {
+		if part == parentDirSegment {
+			return errPathTraversal
+		}
+	}
+	return ""
+}
+
+func isLocalReadAbsPath(p string) bool {
+	return filepath.IsAbs(p) || isWindowsAbsPath(p)
+}
+
+func isWindowsAbsPath(p string) bool {
+	if strings.HasPrefix(p, windowsUNCPrefix) {
+		return true
+	}
+	if len(p) < windowsAbsPathMinLen || !isASCIIAlpha(p[0]) {
+		return false
+	}
+	if p[1] != windowsDriveSep {
+		return false
+	}
+	return p[2] == pathSeparator[0] || p[2] == windowsPathSep
+}
+
+func isASCIIAlpha(b byte) bool {
+	return ('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z')
 }
 
 // readPDFFile reads a PDF file and extracts plain text.

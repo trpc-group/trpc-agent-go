@@ -37,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/internal/modeltailoring"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -442,6 +443,9 @@ func (m *Model) prepareChatRequest(
 	if request == nil {
 		return nil, nil, errors.New("request cannot be nil")
 	}
+	if err := validateLogprobsConfig(request); err != nil {
+		return nil, nil, err
+	}
 	// Optimize message structure for cache if enabled.
 	if m.optimizeForCache {
 		request.Messages = m.optimizeMessagesForCache(request.Messages)
@@ -450,6 +454,16 @@ func (m *Model) prepareChatRequest(
 	m.applyTokenTailoring(ctx, request)
 	chatRequest, opts := m.buildChatRequest(request)
 	return chatRequest, opts, nil
+}
+
+func validateLogprobsConfig(request *model.Request) error {
+	if request.TopLogprobs == nil {
+		return nil
+	}
+	if request.Logprobs == nil || !*request.Logprobs {
+		return errors.New("openai: top_logprobs requires logprobs to be true")
+	}
+	return nil
 }
 
 // GenerateContent implements the model.Model interface.
@@ -619,7 +633,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in openai.Model",
 				err,
 			)
-			request.Messages = tailored
+			modeltailoring.ApplyResult(ctx, "openai.Model", request, tailored)
 			return
 		}
 		log.WarnContext(
@@ -630,7 +644,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	request.Messages = tailored
+	modeltailoring.ApplyResult(ctx, "openai.Model", request, tailored)
 }
 
 func (m *Model) effectiveOutputReserveTokens(request *model.Request) int {
@@ -749,6 +763,12 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 	}
 	if request.FrequencyPenalty != nil {
 		chatRequest.FrequencyPenalty = openai.Float(*request.FrequencyPenalty)
+	}
+	if request.Logprobs != nil {
+		chatRequest.Logprobs = openai.Bool(*request.Logprobs)
+	}
+	if request.TopLogprobs != nil {
+		chatRequest.TopLogprobs = openai.Int(int64(*request.TopLogprobs))
 	}
 	if request.ReasoningEffort != nil {
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
@@ -2412,7 +2432,8 @@ func (m *Model) createFinalResponse(
 		}
 
 		finalResponse.Choices[i] = model.Choice{
-			Index: int(choice.Index),
+			Index:    int(choice.Index),
+			Logprobs: convertChatCompletionChoiceLogprobs(choice.Logprobs),
 			Message: model.Message{
 				Role:             model.RoleAssistant,
 				Content:          choice.Message.Content,
@@ -2495,7 +2516,8 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 			reasoningContent := extractReasoningContent(choice.Message.JSON.ExtraFields)
 
 			response.Choices[i] = model.Choice{
-				Index: int(choice.Index),
+				Index:    int(choice.Index),
+				Logprobs: convertChatCompletionChoiceLogprobs(choice.Logprobs),
 				Message: model.Message{
 					Role:             model.RoleAssistant,
 					Content:          choice.Message.Content,
@@ -2541,6 +2563,44 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 	}
 
 	return response
+}
+
+func convertChatCompletionChoiceLogprobs(
+	logprobs openai.ChatCompletionChoiceLogprobs,
+) *model.Logprobs {
+	if len(logprobs.Content) == 0 {
+		return nil
+	}
+	converted := &model.Logprobs{
+		Content: make([]model.TokenLogprob, len(logprobs.Content)),
+	}
+	for i, token := range logprobs.Content {
+		converted.Content[i] = model.TokenLogprob{
+			Token:       token.Token,
+			Logprob:     token.Logprob,
+			Bytes:       int64SliceToIntSlice(token.Bytes),
+			TopLogprobs: make([]model.TopLogprob, len(token.TopLogprobs)),
+		}
+		for j, top := range token.TopLogprobs {
+			converted.Content[i].TopLogprobs[j] = model.TopLogprob{
+				Token:   top.Token,
+				Logprob: top.Logprob,
+				Bytes:   int64SliceToIntSlice(top.Bytes),
+			}
+		}
+	}
+	return converted
+}
+
+func int64SliceToIntSlice(values []int64) []int {
+	if values == nil {
+		return nil
+	}
+	converted := make([]int, len(values))
+	for i, value := range values {
+		converted[i] = int(value)
+	}
+	return converted
 }
 
 // FileOptions is the options for file operations.

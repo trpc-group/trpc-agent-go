@@ -285,6 +285,176 @@ func TestProcessRequest_InsertsInjectedContextMessages_BeforeSessionHistory(t *t
 	require.True(t, model.MessagesEqual(model.NewUserMessage("current"), req.Messages[5]))
 }
 
+func TestProcessRequest_InsertsLateContextMessages_BeforeLatestUserMessage(t *testing.T) {
+	lateContext := []model.Message{
+		model.NewUserMessage("late rules"),
+		model.NewUserMessage("late background"),
+	}
+
+	sess := &session.Session{}
+	sess.Events = append(sess.Events,
+		newSessionEvent("user", model.NewUserMessage("hello")),
+		newSessionEvent("test-agent", model.NewAssistantMessage("hi")),
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-late-context",
+		AgentName:    "test-agent",
+		Session:      sess,
+		Message:      model.NewUserMessage("current"),
+		RunOptions: agent.RunOptions{
+			LateContextMessages: lateContext,
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage("agent system prompt")},
+	}
+	p := NewContentRequestProcessor()
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 1+2+len(lateContext)+1)
+	require.True(t, model.MessagesEqual(model.NewSystemMessage("agent system prompt"), req.Messages[0]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("hello"), req.Messages[1]))
+	require.True(t, model.MessagesEqual(model.NewAssistantMessage("hi"), req.Messages[2]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("late rules"), req.Messages[3]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("late background"), req.Messages[4]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("current"), req.Messages[5]))
+}
+
+func TestProcessRequest_InsertsLateContextMessages_AfterLeadingSystemWhenNoUser(t *testing.T) {
+	lateContext := []model.Message{
+		model.NewUserMessage("late rules"),
+	}
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-late-no-user",
+		AgentName:    "test-agent",
+		RunOptions: agent.RunOptions{
+			LateContextMessages: lateContext,
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("agent system prompt"),
+			model.NewAssistantMessage("assistant tail"),
+		},
+	}
+	p := NewContentRequestProcessor()
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 3)
+	require.True(t, model.MessagesEqual(model.NewSystemMessage("agent system prompt"), req.Messages[0]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("late rules"), req.Messages[1]))
+	require.True(t, model.MessagesEqual(model.NewAssistantMessage("assistant tail"), req.Messages[2]))
+}
+
+func TestProcessRequest_InsertsLateContextMessages_KeepsToolTailAfterUserTurn(t *testing.T) {
+	lateContext := []model.Message{
+		model.NewUserMessage("late rules"),
+		model.NewUserMessage("late background"),
+	}
+
+	toolCallMsg := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{
+				Type: "function",
+				ID:   "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "get_user_phone",
+					Arguments: []byte(`{"purpose":"test"}`),
+				},
+			},
+		},
+	}
+	toolResultMsg := model.NewToolMessage("call_1", "get_user_phone", `{"status":"ok"}`)
+
+	sess := &session.Session{}
+	sess.Events = append(sess.Events,
+		newSessionEvent("user", model.NewUserMessage("hello")),
+		newSessionEvent("test-agent", model.NewAssistantMessage("hi")),
+		newSessionEvent("user", model.NewUserMessage("current")),
+		newSessionEvent("test-agent", toolCallMsg),
+		newSessionEvent("test-agent", toolResultMsg),
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-late-tool-tail",
+		AgentName:    "test-agent",
+		Session:      sess,
+		Message:      model.NewUserMessage("current"),
+		RunOptions: agent.RunOptions{
+			LateContextMessages: lateContext,
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage("agent system prompt")},
+	}
+	p := NewContentRequestProcessor()
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 8)
+	require.True(t, model.MessagesEqual(model.NewSystemMessage("agent system prompt"), req.Messages[0]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("hello"), req.Messages[1]))
+	require.True(t, model.MessagesEqual(model.NewAssistantMessage("hi"), req.Messages[2]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("late rules"), req.Messages[3]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("late background"), req.Messages[4]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("current"), req.Messages[5]))
+	require.True(t, model.MessagesEqual(toolCallMsg, req.Messages[6]))
+	require.True(t, model.MessagesEqual(toolResultMsg, req.Messages[7]))
+}
+
+func TestProcessRequest_InsertsInjectedAndLateContextMessages_InOrder(t *testing.T) {
+	injectedContext := []model.Message{
+		model.NewSystemMessage("ctx system"),
+		model.NewUserMessage("ctx user"),
+	}
+	lateContext := []model.Message{
+		model.NewUserMessage("late rules"),
+	}
+
+	sess := &session.Session{}
+	sess.Events = append(sess.Events,
+		newSessionEvent("user", model.NewUserMessage("hello")),
+		newSessionEvent("test-agent", model.NewAssistantMessage("hi")),
+	)
+
+	inv := &agent.Invocation{
+		InvocationID: "inv-injected-and-late",
+		AgentName:    "test-agent",
+		Session:      sess,
+		Message:      model.NewUserMessage("current"),
+		RunOptions: agent.RunOptions{
+			InjectedContextMessages: injectedContext,
+			LateContextMessages:     lateContext,
+		},
+	}
+
+	req := &model.Request{
+		Messages: []model.Message{model.NewSystemMessage("agent system prompt")},
+	}
+	p := NewContentRequestProcessor()
+	p.ProcessRequest(context.Background(), inv, req, nil)
+
+	require.Len(t, req.Messages, 1+len(injectedContext)+2+len(lateContext)+1)
+	require.True(t, model.MessagesEqual(model.NewSystemMessage("agent system prompt"), req.Messages[0]))
+
+	// Injected context is inserted early, before session history.
+	require.True(t, model.MessagesEqual(model.NewSystemMessage("ctx system"), req.Messages[1]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("ctx user"), req.Messages[2]))
+
+	// Session history stays canonical.
+	require.True(t, model.MessagesEqual(model.NewUserMessage("hello"), req.Messages[3]))
+	require.True(t, model.MessagesEqual(model.NewAssistantMessage("hi"), req.Messages[4]))
+
+	// Late context is inserted right before the latest user message.
+	require.True(t, model.MessagesEqual(model.NewUserMessage("late rules"), req.Messages[5]))
+	require.True(t, model.MessagesEqual(model.NewUserMessage("current"), req.Messages[6]))
+}
+
 func TestProcessRequest_NoDuplicateInvocationToolMessage(t *testing.T) {
 	const (
 		requestID   = "req-tool-message"

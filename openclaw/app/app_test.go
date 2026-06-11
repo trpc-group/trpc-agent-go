@@ -2061,7 +2061,7 @@ func TestNewAgent_OpenClawPostToolPrompt_AppliedAfterToolResult(
 	require.NotContains(t, system, "Final Answer Requirement:")
 }
 
-func TestNewAgent_OpenClawPostToolPrompt_NotAppliedWithoutToolResult(
+func TestNewAgent_OpenClawPostToolPrompt_AppliedWithoutToolResult(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -2082,7 +2082,12 @@ func TestNewAgent_OpenClawPostToolPrompt_NotAppliedWithoutToolResult(
 		session.NewSession("demo", "user", "sess"),
 	)
 	system := joinSystemMessages(req)
-	require.NotContains(t, system, openClawPostToolPrompt)
+	require.Contains(t, system, openClawPostToolPrompt)
+	require.Contains(
+		t,
+		system,
+		"Do not answer only with what you will do next.",
+	)
 }
 
 func TestNewAgent_LocalExecKeepsExecCommandButOmitsWorkspaceExec(

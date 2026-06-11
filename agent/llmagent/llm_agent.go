@@ -490,8 +490,8 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	// session_search / session_load when enabled.
 	requestProcessors = appendOnDemandSessionProcessor(options, requestProcessors)
 
-	// 9. Post-tool processor - injects dynamic prompt after tool results.
-	requestProcessors = appendPostToolProcessor(options, requestProcessors)
+	// 9. Post-tool processor - injects stable tool-result guidance.
+	requestProcessors = appendPostToolProcessor(a, options, requestProcessors)
 
 	// 10. Skills tool result processor - materializes loaded skill content
 	// into tool result messages.
@@ -517,13 +517,23 @@ func hasInvocationStructuredOutput(ctx context.Context, invocation *agent.Invoca
 	return invocation.StructuredOutput != nil || invocation.StructuredOutputType != nil
 }
 
-func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+func appendPostToolProcessor(
+	a *LLMAgent,
+	options *Options,
+	requestProcessors []flow.RequestProcessor,
+) []flow.RequestProcessor {
 	if options.postToolPromptEnabled != nil &&
 		!*options.postToolPromptEnabled {
 		return requestProcessors
 	}
 
 	var postToolOpts []processor.PostToolOption
+	hasToolSurface := hasPotentialToolSurface(a, options)
+	postToolOpts = append(
+		postToolOpts,
+		processor.WithPostToolPromptBeforeResult(hasToolSurface),
+		processor.WithPostToolPromptCreateSystemMessage(hasToolSurface),
+	)
 	if options.PostToolPrompt != "" {
 		postToolOpts = append(
 			postToolOpts,
@@ -532,6 +542,24 @@ func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestP
 	}
 	postToolProcessor := processor.NewPostToolRequestProcessor(postToolOpts...)
 	return append(requestProcessors, postToolProcessor)
+}
+
+func hasPotentialToolSurface(a *LLMAgent, options *Options) bool {
+	if a != nil && len(a.tools) > 0 {
+		return true
+	}
+	if options == nil {
+		return false
+	}
+	return len(options.Tools) > 0 ||
+		len(options.ToolSets) > 0 ||
+		len(options.activatableToolSets) > 0 ||
+		len(options.toolActivationRules) > 0 ||
+		len(options.SubAgents) > 0 ||
+		len(options.extensionContributedTools) > 0 ||
+		options.EnableAwaitUserReplyTool ||
+		options.Knowledge != nil ||
+		options.skillsRepository != nil
 }
 
 func appendOnDemandSessionProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {

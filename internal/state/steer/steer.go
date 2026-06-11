@@ -22,6 +22,21 @@ import (
 // StateKeyQueuedUserMessages is the invocation state key used by Attach.
 const StateKeyQueuedUserMessages = "__queued_user_messages__"
 
+const (
+	// ExtensionKeyQueuedUserMessage marks events emitted when queued user
+	// messages are consumed at a safe boundary.
+	ExtensionKeyQueuedUserMessage = "trpc_agent.steer.queued_user_message"
+
+	// QueuedUserMessageStatusConsumed is the status for consumed queued
+	// user-message events.
+	QueuedUserMessageStatusConsumed = "consumed"
+)
+
+// QueuedUserMessageMetadata describes the queued user-message event state.
+type QueuedUserMessageMetadata struct {
+	Status string `json:"status"`
+}
+
 // Queue stores queued user messages in FIFO order.
 type Queue struct {
 	mu       sync.Mutex
@@ -63,6 +78,22 @@ func (q *Queue) Drain() []model.Message {
 	drained := append([]model.Message(nil), q.messages...)
 	q.messages = nil
 	return drained
+}
+
+// Discard removes all queued messages without closing the queue.
+func (q *Queue) Discard() []model.Message {
+	if q == nil {
+		return nil
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.messages) == 0 {
+		return nil
+	}
+	discarded := append([]model.Message(nil), q.messages...)
+	q.messages = nil
+	return discarded
 }
 
 // Close rejects future enqueues.

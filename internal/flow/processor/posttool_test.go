@@ -1,5 +1,6 @@
 //
-// Tencent is pleased to support the open source community by making trpc-agent-go available.
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -11,6 +12,7 @@ package processor
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,61 +22,81 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-func TestPostToolRequestProcessor_NoToolResults(t *testing.T) {
+const (
+	testSystemContent = "You are helpful."
+	testToolCallID    = "call_1"
+	testToolName      = "search"
+	testPromptMarker  = "[Tool Prompt]"
+)
+
+func TestPostToolRequestProcessor_WithoutToolResults(t *testing.T) {
 	p := NewPostToolRequestProcessor()
 	req := &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage("You are helpful."),
+			model.NewSystemMessage(testSystemContent),
 			model.NewUserMessage("Hello"),
 		},
 	}
-	originalLen := len(req.Messages)
+
 	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
 
-	assert.Len(t, req.Messages, originalLen)
-	assert.Equal(t, "You are helpful.", req.Messages[0].Content)
-}
-
-func TestPostToolRequestProcessor_WithToolResults_DefaultPrompt(t *testing.T) {
-	p := NewPostToolRequestProcessor()
-	req := &model.Request{
-		Messages: []model.Message{
-			model.NewSystemMessage("You are helpful."),
-			model.NewUserMessage("Search for Go tutorials"),
-			model.NewAssistantMessage(""),
-			model.NewToolMessage("call_1", "search", `{"results": ["tutorial1"]}`),
-		},
-	}
-	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
-
-	// Messages count should remain the same; prompt is appended to system message.
-	require.Len(t, req.Messages, 4)
+	require.Len(t, req.Messages, 2)
 	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
-	assert.Contains(t, req.Messages[0].Content, "You are helpful.")
-	assert.Contains(t, req.Messages[0].Content, "[Tool Prompt]")
+	assert.Contains(t, req.Messages[0].Content, testSystemContent)
+	assert.Contains(t, req.Messages[0].Content, testPromptMarker)
 	assert.Contains(t, req.Messages[0].Content, "Analyze the tool result")
 	assert.Contains(t, req.Messages[0].Content, "Do NOT call the same data-fetch tool")
 	assert.Contains(t, req.Messages[0].Content, "required artifact is still missing")
 }
 
-func TestPostToolRequestProcessor_IgnoresHistoricalToolResults(t *testing.T) {
+func TestPostToolRequestProcessor_WithToolResults_DefaultPrompt(
+	t *testing.T,
+) {
 	p := NewPostToolRequestProcessor()
 	req := &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage("You are helpful."),
+			model.NewSystemMessage(testSystemContent),
+			model.NewUserMessage("Search for Go tutorials"),
+			model.NewAssistantMessage(""),
+			model.NewToolMessage(
+				testToolCallID,
+				testToolName,
+				`{"results": ["tutorial1"]}`,
+			),
+		},
+	}
+
+	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
+
+	require.Len(t, req.Messages, 4)
+	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	assert.Contains(t, req.Messages[0].Content, testSystemContent)
+	assert.Contains(t, req.Messages[0].Content, testPromptMarker)
+	assert.Contains(t, req.Messages[0].Content, "Analyze the tool result")
+}
+
+func TestPostToolRequestProcessor_WithHistoricalToolResults(t *testing.T) {
+	p := NewPostToolRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage(testSystemContent),
 			model.NewUserMessage("Search for Go tutorials"),
 			{
 				Role: model.RoleAssistant,
 				ToolCalls: []model.ToolCall{{
 					Type: "function",
-					ID:   "call_1",
+					ID:   testToolCallID,
 					Function: model.FunctionDefinitionParam{
-						Name:      "search",
+						Name:      testToolName,
 						Arguments: []byte(`{"q":"go tutorials"}`),
 					},
 				}},
 			},
-			model.NewToolMessage("call_1", "search", `{"results":["tutorial1"]}`),
+			model.NewToolMessage(
+				testToolCallID,
+				testToolName,
+				`{"results":["tutorial1"]}`,
+			),
 			model.NewAssistantMessage("Here is one tutorial."),
 			model.NewUserMessage("What about Rust?"),
 		},
@@ -83,53 +105,85 @@ func TestPostToolRequestProcessor_IgnoresHistoricalToolResults(t *testing.T) {
 	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
 
 	require.Len(t, req.Messages, 6)
-	assert.Equal(t, "You are helpful.", req.Messages[0].Content)
-	assert.NotContains(t, req.Messages[0].Content, "[Tool Prompt]")
+	assert.Contains(t, req.Messages[0].Content, testSystemContent)
+	assert.Contains(t, req.Messages[0].Content, testPromptMarker)
 }
 
-func TestPostToolRequestProcessor_WithCompactedToolResultsState(t *testing.T) {
+func TestPostToolRequestProcessor_StablePrefixAcrossToolLoop(
+	t *testing.T,
+) {
 	p := NewPostToolRequestProcessor()
-	inv := &agent.Invocation{}
-	inv.SetState(contentHasCompactedToolResultsStateKey, true)
-
-	req := &model.Request{
+	firstReq := &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage("You are helpful."),
-			model.NewUserMessage("Continue"),
+			model.NewSystemMessage(testSystemContent),
+			model.NewUserMessage("Search for Go tutorials"),
+		},
+	}
+	nextReq := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage(testSystemContent),
+			model.NewUserMessage("Search for Go tutorials"),
+			model.NewAssistantMessage(""),
+			model.NewToolMessage(testToolCallID, testToolName, "result"),
 		},
 	}
 
-	p.ProcessRequest(context.Background(), inv, req, nil)
+	p.ProcessRequest(context.Background(), &agent.Invocation{}, firstReq, nil)
+	p.ProcessRequest(context.Background(), &agent.Invocation{}, nextReq, nil)
 
-	require.Len(t, req.Messages, 2)
-	assert.Contains(t, req.Messages[0].Content, "[Tool Prompt]")
-	assert.Contains(t, req.Messages[0].Content, "Analyze the tool result")
-	assert.Contains(t, req.Messages[0].Content, "Reuse successful tool results you already have")
+	require.Equal(
+		t,
+		firstReq.Messages[0].Content,
+		nextReq.Messages[0].Content,
+	)
+	assert.Contains(t, firstReq.Messages[0].Content, testPromptMarker)
+	assert.Contains(t, firstReq.Messages[0].Content, "Analyze the tool result")
+	assert.Contains(t, firstReq.Messages[0].Content, "Reuse successful tool results you already have")
 }
 
-func TestPostToolRequestProcessor_WithToolResults_CustomPrompt(t *testing.T) {
-	customPrompt := "[Tool Prompt] Be concise and direct."
+func TestPostToolRequestProcessor_DoesNotDuplicatePrompt(t *testing.T) {
+	p := NewPostToolRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage(testSystemContent),
+			model.NewUserMessage("Search something"),
+		},
+	}
+
+	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
+	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
+
+	require.Len(t, req.Messages, 2)
+	assert.Equal(t, 1, strings.Count(req.Messages[0].Content, testPromptMarker))
+}
+
+func TestPostToolRequestProcessor_CustomPrompt(t *testing.T) {
+	const customPrompt = "[Tool Prompt] Be concise and direct."
+
 	p := NewPostToolRequestProcessor(WithPostToolPrompt(customPrompt))
 	req := &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage("You are helpful."),
-			model.NewToolMessage("call_1", "search", "result"),
+			model.NewSystemMessage(testSystemContent),
+			model.NewUserMessage("Search something"),
 		},
 	}
+
 	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
 
 	require.Len(t, req.Messages, 2)
 	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	assert.Contains(t, req.Messages[0].Content, customPrompt)
+	assert.NotContains(t, req.Messages[0].Content, DefaultPostToolPrompt)
 }
 
 func TestPostToolRequestProcessor_EmptyPrompt(t *testing.T) {
 	p := NewPostToolRequestProcessor(WithPostToolPrompt(""))
 	req := &model.Request{
 		Messages: []model.Message{
-			model.NewToolMessage("call_1", "fn", "data"),
+			model.NewToolMessage(testToolCallID, "fn", "data"),
 		},
 	}
+
 	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
 
 	assert.Len(t, req.Messages, 1)
@@ -143,27 +197,31 @@ func TestPostToolRequestProcessor_NilRequest(t *testing.T) {
 func TestPostToolRequestProcessor_EmptyMessages(t *testing.T) {
 	p := NewPostToolRequestProcessor()
 	req := &model.Request{}
+
 	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
-	assert.Empty(t, req.Messages)
+
+	require.Len(t, req.Messages, 1)
+	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	assert.Contains(t, req.Messages[0].Content, testPromptMarker)
 }
 
 func TestPostToolRequestProcessor_MultipleToolResults(t *testing.T) {
 	p := NewPostToolRequestProcessor()
 	req := &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage("You are helpful."),
+			model.NewSystemMessage(testSystemContent),
 			model.NewUserMessage("Find weather and news"),
 			model.NewAssistantMessage(""),
-			model.NewToolMessage("call_1", "weather", "sunny"),
+			model.NewToolMessage(testToolCallID, "weather", "sunny"),
 			model.NewToolMessage("call_2", "news", "headlines"),
 		},
 	}
+
 	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
 
-	// Messages count unchanged; prompt appended to system message.
 	require.Len(t, req.Messages, 5)
 	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
-	assert.Contains(t, req.Messages[0].Content, "[Tool Prompt]")
+	assert.Contains(t, req.Messages[0].Content, testPromptMarker)
 }
 
 func TestPostToolRequestProcessor_NoSystemMessage(t *testing.T) {
@@ -172,16 +230,15 @@ func TestPostToolRequestProcessor_NoSystemMessage(t *testing.T) {
 		Messages: []model.Message{
 			model.NewUserMessage("Search something"),
 			model.NewAssistantMessage(""),
-			model.NewToolMessage("call_1", "search", "result"),
+			model.NewToolMessage(testToolCallID, testToolName, "result"),
 		},
 	}
+
 	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
 
-	// A new system message should be prepended.
 	require.Len(t, req.Messages, 4)
 	assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
-	assert.Contains(t, req.Messages[0].Content, "[Tool Prompt]")
-	// Original messages shifted.
+	assert.Contains(t, req.Messages[0].Content, testPromptMarker)
 	assert.Equal(t, model.RoleUser, req.Messages[1].Role)
 }
 
@@ -191,8 +248,8 @@ func TestPostToolRequestProcessor_RebuildRequestForContextCompaction(
 	p := NewPostToolRequestProcessor()
 	req := &model.Request{
 		Messages: []model.Message{
-			model.NewSystemMessage("You are helpful."),
-			model.NewToolMessage("call_1", "search", "result"),
+			model.NewSystemMessage(testSystemContent),
+			model.NewToolMessage(testToolCallID, testToolName, "result"),
 		},
 	}
 
@@ -205,82 +262,90 @@ func TestPostToolRequestProcessor_RebuildRequestForContextCompaction(
 	)
 
 	require.Len(t, req.Messages, 2)
-	assert.Contains(t, req.Messages[0].Content, "[Tool Prompt]")
+	assert.Contains(t, req.Messages[0].Content, testPromptMarker)
 }
 
-func TestHasPendingToolResultMessages(t *testing.T) {
-	tests := []struct {
-		name     string
-		messages []model.Message
-		want     bool
-	}{
-		{
-			name:     "empty",
-			messages: nil,
-			want:     false,
-		},
-		{
-			name: "no tool messages",
-			messages: []model.Message{
-				model.NewUserMessage("hi"),
-				model.NewAssistantMessage("hello"),
+func TestPostToolRequestProcessor_OptionsGateStableInjection(
+	t *testing.T,
+) {
+	t.Run("before result disabled", func(t *testing.T) {
+		p := NewPostToolRequestProcessor(
+			WithPostToolPromptBeforeResult(false),
+		)
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewSystemMessage(testSystemContent),
+				model.NewUserMessage("hello"),
 			},
-			want: false,
-		},
-		{
-			name: "trailing tool message",
-			messages: []model.Message{
-				model.NewUserMessage("hi"),
-				model.NewToolMessage("id", "fn", "result"),
+		}
+
+		p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
+
+		require.Len(t, req.Messages, 2)
+		assert.Equal(t, testSystemContent, req.Messages[0].Content)
+	})
+
+	t.Run("system creation disabled before result", func(t *testing.T) {
+		p := NewPostToolRequestProcessor(
+			WithPostToolPromptCreateSystemMessage(false),
+		)
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewUserMessage("hello"),
 			},
-			want: true,
-		},
-		{
-			name: "tool message in middle",
-			messages: []model.Message{
-				model.NewUserMessage("hi"),
-				model.NewToolMessage("id", "fn", "result"),
-				model.NewAssistantMessage("done"),
+		}
+
+		p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
+
+		require.Len(t, req.Messages, 1)
+		assert.Equal(t, model.RoleUser, req.Messages[0].Role)
+	})
+
+	t.Run("tool result still injects", func(t *testing.T) {
+		p := NewPostToolRequestProcessor(
+			WithPostToolPromptBeforeResult(false),
+		)
+		req := &model.Request{
+			Messages: []model.Message{
+				model.NewSystemMessage(testSystemContent),
+				model.NewToolMessage(testToolCallID, testToolName, "result"),
 			},
-			want: false,
-		},
-		{
-			name: "ignore trailing system messages",
-			messages: []model.Message{
-				model.NewUserMessage("hi"),
-				model.NewToolMessage("id", "fn", "result"),
-				model.NewSystemMessage("system"),
-			},
-			want: true,
+		}
+
+		p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
+
+		require.Len(t, req.Messages, 2)
+		assert.Contains(t, req.Messages[0].Content, testPromptMarker)
+	})
+}
+
+func TestPostToolRequestProcessor_EmptySystemMessage(t *testing.T) {
+	p := NewPostToolRequestProcessor()
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage(""),
+			model.NewUserMessage("hello"),
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := hasPendingToolResultMessages(tt.messages)
-			assert.Equal(t, tt.want, got)
-		})
-	}
+	p.ProcessRequest(context.Background(), &agent.Invocation{}, req, nil)
+
+	require.Len(t, req.Messages, 2)
+	assert.Equal(t, DefaultPostToolPrompt, req.Messages[0].Content)
 }
 
-func TestHasCompactedToolResultMessages(t *testing.T) {
-	t.Run("nil invocation", func(t *testing.T) {
-		assert.False(t, hasCompactedToolResultMessages(nil))
-	})
+func TestPostToolRequestProcessor_HelperEdgeCases(t *testing.T) {
+	require.False(t, hasPendingToolResultMessages([]model.Message{
+		model.NewSystemMessage(testSystemContent),
+	}))
 
-	t.Run("missing state", func(t *testing.T) {
-		assert.False(t, hasCompactedToolResultMessages(&agent.Invocation{}))
-	})
+	require.False(t, hasCompactedToolResultMessages(nil))
+	require.False(t, hasCompactedToolResultMessages(&agent.Invocation{}))
 
-	t.Run("non-bool state", func(t *testing.T) {
-		inv := &agent.Invocation{}
-		inv.SetState(contentHasCompactedToolResultsStateKey, "true")
-		assert.False(t, hasCompactedToolResultMessages(inv))
-	})
+	invocation := &agent.Invocation{}
+	invocation.SetState(contentHasCompactedToolResultsStateKey, "true")
+	require.False(t, hasCompactedToolResultMessages(invocation))
 
-	t.Run("bool state", func(t *testing.T) {
-		inv := &agent.Invocation{}
-		inv.SetState(contentHasCompactedToolResultsStateKey, true)
-		assert.True(t, hasCompactedToolResultMessages(inv))
-	})
+	invocation.SetState(contentHasCompactedToolResultsStateKey, true)
+	require.True(t, hasCompactedToolResultMessages(invocation))
 }

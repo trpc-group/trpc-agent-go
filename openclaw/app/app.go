@@ -229,6 +229,12 @@ const (
 		"input after reasonable local exploration, state " +
 		"the issue briefly and continue with the best " +
 		"fallback."
+	openClawSkillsPathGuidance = "Each entry includes a path to that " +
+		"skill's SKILL.md on disk."
+	openClawCompactSkillsGuidance = "The overview may show a compact " +
+		"subset. When no shown skill clearly matches, call " +
+		"`skill_list` to inspect the full catalog before " +
+		"choosing a skill."
 	openClawSkillLoadToolDescription = "Load a skill body and optional " +
 		"docs. This is a blocking requirement when the user " +
 		"names a listed skill, names a slash command, or the " +
@@ -1065,6 +1071,9 @@ func NewRuntimeWithOptions(
 			SkillsWatch:             opts.SkillsWatch,
 			SkillsWatchBundled:      opts.SkillsWatchBundled,
 			SkillsWatchDebounce:     opts.SkillsWatchDebounce,
+			SkillsSummaryCacheTTL:   opts.SkillsSummaryCacheTTL,
+			SkillsOverviewLimit:     opts.SkillsOverviewLimit,
+			SkillsOverviewPinned:    splitCSV(opts.SkillsOverviewPinned),
 			SkillsToolProfile:       opts.SkillsToolProfile,
 			SkillsLoadMode:          opts.SkillsLoadMode,
 			SkillsMaxLoaded:         opts.SkillsMaxLoaded,
@@ -1190,6 +1199,17 @@ func NewRuntimeWithOptions(
 			),
 		)
 	}
+	gwOpts = appendLatencyDiagnosticsGatewayOption(
+		gwOpts,
+		opts.StateDir,
+		opts.LatencyDiagnosticsEnabled,
+		opts.LatencyDiagnosticsEvents,
+	)
+	gwOpts = appendSkillsOverviewGatewayOption(
+		gwOpts,
+		opts.SkillsOverviewLimit,
+		splitCSV(opts.SkillsOverviewPinned),
+	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -1602,6 +1622,9 @@ func run(
 			SkillsWatch:             opts.SkillsWatch,
 			SkillsWatchBundled:      opts.SkillsWatchBundled,
 			SkillsWatchDebounce:     opts.SkillsWatchDebounce,
+			SkillsSummaryCacheTTL:   opts.SkillsSummaryCacheTTL,
+			SkillsOverviewLimit:     opts.SkillsOverviewLimit,
+			SkillsOverviewPinned:    splitCSV(opts.SkillsOverviewPinned),
 			SkillsToolProfile:       opts.SkillsToolProfile,
 			SkillsLoadMode:          opts.SkillsLoadMode,
 			SkillsMaxLoaded:         opts.SkillsMaxLoaded,
@@ -1717,6 +1740,17 @@ func run(
 			),
 		)
 	}
+	gwOpts = appendLatencyDiagnosticsGatewayOption(
+		gwOpts,
+		opts.StateDir,
+		opts.LatencyDiagnosticsEnabled,
+		opts.LatencyDiagnosticsEvents,
+	)
+	gwOpts = appendSkillsOverviewGatewayOption(
+		gwOpts,
+		opts.SkillsOverviewLimit,
+		splitCSV(opts.SkillsOverviewPinned),
+	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -2464,14 +2498,22 @@ func newAgent(
 	cwd, _ := os.Getwd()
 	roots := resolveSkillRoots(cwd, cfg)
 	bundledRoot := resolveBundledSkillsRoot(cwd, cfg.StateDir)
-	repo, err := ocskills.NewRepository(
-		roots,
+	repoOptions := []ocskills.Option{
 		ocskills.WithDebug(cfg.SkillsDebug),
 		ocskills.WithConfigKeys(cfg.SkillConfigKeys),
 		ocskills.WithBundledSkillsRoot(bundledRoot),
 		ocskills.WithAllowBundled(cfg.SkillsAllowBundled),
 		ocskills.WithSkillConfigs(cfg.SkillConfigs),
-	)
+	}
+	if cfg.SkillsSummaryCacheTTL > 0 {
+		repoOptions = append(
+			repoOptions,
+			ocskills.WithSummaryCacheDirtyCheckTTL(
+				cfg.SkillsSummaryCacheTTL,
+			),
+		)
+	}
+	repo, err := ocskills.NewRepository(roots, repoOptions...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2600,7 +2642,16 @@ func buildOpenClawSkillsGuidance(cfg agentConfig) string {
 	if cfg.SkillsToolingGuide != nil {
 		return strings.TrimSpace(*cfg.SkillsToolingGuide)
 	}
-	return strings.TrimSpace(openClawSkillsGuidance)
+	guidance := strings.TrimSpace(openClawSkillsGuidance)
+	if cfg.SkillsOverviewLimit > 0 {
+		guidance = strings.Replace(
+			guidance,
+			openClawSkillsPathGuidance,
+			openClawCompactSkillsGuidance,
+			1,
+		)
+	}
+	return guidance
 }
 
 func hasToolNamed(tools []tool.Tool, name string) bool {
@@ -2789,6 +2840,9 @@ type agentConfig struct {
 	SkillsWatch             bool
 	SkillsWatchBundled      bool
 	SkillsWatchDebounce     time.Duration
+	SkillsSummaryCacheTTL   time.Duration
+	SkillsOverviewLimit     int
+	SkillsOverviewPinned    []string
 	SkillsToolProfile       string
 	SkillsLoadMode          string
 	SkillsMaxLoaded         int

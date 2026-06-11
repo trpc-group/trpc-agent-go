@@ -19,6 +19,8 @@ import (
 	"strings"
 	"unicode"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
@@ -363,16 +365,45 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 
 	p.maybeClearSkillStateForTurn(ctx, inv, ch)
 
+	promptCtx, promptSpan, promptStarted := startProcessorLatencySpan(
+		ctx,
+		inv,
+		processorLatencySpanPromptRender,
+		processorSkillRepositoryAttrs(repo)...,
+	)
+
 	// 1) Always inject overview (names + descriptions) into system
 	//    message. Merge into existing system message if present.
-	p.injectOverview(ctx, inv, req, repo)
+	p.injectOverview(promptCtx, inv, req, repo)
 
+	_, stateSpan, stateStarted := startProcessorLatencySpan(
+		promptCtx,
+		inv,
+		processorLatencySpanStateScan,
+	)
 	loaded := p.getLoadedSkills(inv)
+	if stateStarted {
+		stateSpan.SetAttributes(
+			attribute.Int(processorAttrSkillSelectedCount, len(loaded)),
+		)
+	}
+	finishProcessorLatencySpan(stateSpan, stateStarted, nil)
+
 	loaded = p.maybeCapLoadedSkills(ctx, inv, loaded, ch)
+	if promptStarted {
+		promptSpan.SetAttributes(
+			attribute.Int(processorAttrSkillSelectedCount, len(loaded)),
+			attribute.Bool(
+				processorAttrSkillToolResultMode,
+				p.toolResultMode,
+			),
+		)
+	}
 
 	if p.toolResultMode {
 		// Loaded skill bodies/docs are materialized into tool results by a
 		// post-content request processor.
+		finishProcessorLatencySpan(promptSpan, promptStarted, nil)
 		agent.EmitEvent(ctx, inv, ch, event.New(
 			inv.InvocationID, inv.AgentName,
 			event.WithObject(model.ObjectTypePreprocessingInstruction),
@@ -383,12 +414,18 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 	// 2) Loaded skills full content (merge into existing system message).
 	sort.Strings(loaded) // stable prompt order
 
+	loadCtx, loadSpan, loadStarted := startProcessorLatencySpan(
+		promptCtx,
+		inv,
+		processorLatencySpanRepositoryLoad,
+		attribute.Int(processorAttrSkillSelectedCount, len(loaded)),
+	)
 	var lb strings.Builder
 	for _, name := range loaded {
-		sk, err := skill.GetForContext(ctx, repo, name)
+		sk, err := skill.GetForContext(loadCtx, repo, name)
 		if err != nil || sk == nil {
 			log.WarnfContext(
-				ctx,
+				loadCtx,
 				"skills: get %s failed: %v",
 				name,
 				err,
@@ -399,13 +436,13 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 			lb.WriteString("\n[Loaded] ")
 			lb.WriteString(name)
 			lb.WriteString("\n")
-			p.appendSkillPathHints(&lb, ctx, repo, name)
+			p.appendSkillPathHints(&lb, loadCtx, repo, name)
 			lb.WriteString("\n")
 			lb.WriteString(sk.Body)
 			lb.WriteString("\n")
 		}
 		// Docs
-		sel := p.getDocsSelection(ctx, inv, name)
+		sel := p.getDocsSelection(loadCtx, inv, name)
 		// Summary line to make selected docs explicit.
 		lb.WriteString("Docs loaded: ")
 		if len(sel) == 0 {
@@ -420,11 +457,24 @@ func (p *SkillsRequestProcessor) ProcessRequest(
 			}
 		}
 	}
+	if loadStarted {
+		loadSpan.SetAttributes(
+			attribute.Int(processorAttrSkillRenderedBytes, lb.Len()),
+			attribute.Int(processorAttrSkillLoadedCount, len(loaded)),
+		)
+	}
+	finishProcessorLatencySpan(loadSpan, loadStarted, nil)
 	if s := lb.String(); s != "" {
 		p.mergeIntoSystem(req, s)
 	}
 
 	p.maybeOffloadLoadedSkills(ctx, inv, loaded, ch)
+	if promptStarted {
+		promptSpan.SetAttributes(
+			attribute.Int(processorAttrSkillRenderedBytes, lb.Len()),
+		)
+	}
+	finishProcessorLatencySpan(promptSpan, promptStarted, nil)
 
 	// Send a preprocessing trace event even when only overview is
 	// injected, for consistent trace semantics.
@@ -774,7 +824,26 @@ func (p *SkillsRequestProcessor) injectOverview(
 	req *model.Request,
 	repo skill.Repository,
 ) {
-	sums := skill.SummariesForContext(ctx, repo)
+	cacheCtx, cacheSpan, cacheStarted := startProcessorLatencySpan(
+		ctx,
+		inv,
+		processorLatencySpanSummaryCache,
+		processorSkillSummaryCacheAttrs(ctx, repo)...,
+	)
+	finishProcessorLatencySpan(cacheSpan, cacheStarted, nil)
+
+	summaryCtx, summarySpan, summaryStarted := startProcessorLatencySpan(
+		cacheCtx,
+		inv,
+		processorLatencySpanSummaryCompute,
+	)
+	sums := skill.SummariesForContext(summaryCtx, repo)
+	if summaryStarted {
+		summarySpan.SetAttributes(
+			attribute.Int(processorAttrSkillSummaryCount, len(sums)),
+		)
+	}
+	finishProcessorLatencySpan(summarySpan, summaryStarted, nil)
 	if len(sums) == 0 {
 		return
 	}
@@ -783,7 +852,7 @@ func (p *SkillsRequestProcessor) injectOverview(
 	rendered, truncated := p.applyOverviewCap(sums)
 	flags := p.toolFlagsForInvocation(inv)
 	protocol := p.protocolGuidanceText(flags)
-	availableSkills := p.availableSkillsText(ctx, inv, repo, sums, rendered, truncated, flags, topRecommendation)
+	availableSkills := p.availableSkillsText(summaryCtx, inv, repo, sums, rendered, truncated, flags, topRecommendation)
 	overview, prepend := p.defaultOverviewText(flags, availableSkills, protocol)
 	p.mergeOverview(req, overview, prepend)
 }
