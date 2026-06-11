@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 func TestGetSession_Success(t *testing.T) {
@@ -276,9 +277,8 @@ func TestGetSession_SummaryAwareRestoreUsesSummaryBoundary(t *testing.T) {
 		UserID:    "user-123",
 		SessionID: "session-456",
 	}
-	ctx := context.WithValue(
+	ctx := sessionsummary.ContextWithSummaryAwareRestoreFilterKey(
 		context.Background(),
-		summaryAwareSessionRestoreContextKey,
 		key.AppName,
 	)
 
@@ -360,9 +360,8 @@ func TestGetSession_SummaryAwareRestoreBoundsAnchorSearch(t *testing.T) {
 		UserID:    "user-123",
 		SessionID: "session-456",
 	}
-	ctx := context.WithValue(
+	ctx := sessionsummary.ContextWithSummaryAwareRestoreFilterKey(
 		context.Background(),
-		summaryAwareSessionRestoreContextKey,
 		key.AppName,
 	)
 
@@ -450,9 +449,8 @@ func TestGetSession_SummaryAwareRestoreIgnoredForEventPage(t *testing.T) {
 		UserID:    "user-123",
 		SessionID: "session-456",
 	}
-	ctx := context.WithValue(
+	ctx := sessionsummary.ContextWithSummaryAwareRestoreFilterKey(
 		context.Background(),
-		summaryAwareSessionRestoreContextKey,
 		key.AppName,
 	)
 

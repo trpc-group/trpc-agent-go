@@ -21,14 +21,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 const (
 	userAnchorSearchBatchSize = 64
 	summaryRestoreGuard       = time.Minute
-
-	// String key avoids a new cross-module internal package dependency.
-	summaryAwareSessionRestoreContextKey = "trpc.group/trpc-go/trpc-agent-go/summary-aware-session-restore-filter-key"
 )
 
 // getSession retrieves a single session with its events and summaries.
@@ -789,8 +787,7 @@ func shouldUseSummaryAwareRestore(
 }
 
 func summaryRestoreFilterKeyFromContext(ctx context.Context) (string, bool) {
-	filterKey, ok := ctx.Value(summaryAwareSessionRestoreContextKey).(string)
-	return filterKey, ok && filterKey != ""
+	return sessionsummary.SummaryAwareRestoreFilterKeyFromContext(ctx)
 }
 
 func summaryRestoreAfterTime(
