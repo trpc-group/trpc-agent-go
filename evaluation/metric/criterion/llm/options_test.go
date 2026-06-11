@@ -21,6 +21,8 @@ import (
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := newOptions()
 	assert.Equal(t, DefaultNumSamples, opts.numSamples)
+	assert.False(t, opts.sampleParallelismEnabled)
+	assert.Equal(t, 0, opts.sampleParallelism)
 	require.NotNil(t, opts.generation)
 	assert.Equal(t, defaultStream, opts.generation.Stream)
 	require.NotNil(t, opts.generation.MaxTokens)
@@ -37,6 +39,8 @@ func TestOptionOverrides(t *testing.T) {
 		WithAPIKey("key"),
 		WithExtraFields(map[string]any{"x": "y"}),
 		WithNumSamples(3),
+		WithSampleParallelismEnabled(true),
+		WithSampleParallelism(2),
 		WithGeneration(gen),
 	)
 	assert.Equal(t, "deepseek", opts.variant)
@@ -45,5 +49,7 @@ func TestOptionOverrides(t *testing.T) {
 	require.Contains(t, opts.extraFields, "x")
 	assert.Equal(t, "y", opts.extraFields["x"])
 	assert.Equal(t, 3, opts.numSamples)
+	assert.True(t, opts.sampleParallelismEnabled)
+	assert.Equal(t, 2, opts.sampleParallelism)
 	assert.Equal(t, gen, opts.generation)
 }

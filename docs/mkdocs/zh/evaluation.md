@@ -1530,9 +1530,11 @@ import "trpc.group/trpc-go/trpc-agent-go/model"
 
 // LLMCriterion 表示 LLM Judge 准则
 type LLMCriterion struct {
-	Rubrics    []*Rubric             // Rubrics 是评估细则列表
-	JudgeModel *JudgeModelOptions    // JudgeModel 是裁判模型配置
-	Template   *JudgeTemplateOptions // Template 是模板评估器配置
+	Rubrics                  []*Rubric             // Rubrics 是评估细则列表
+	JudgeModel               *JudgeModelOptions    // JudgeModel 是裁判模型配置
+	SampleParallelismEnabled bool                  // SampleParallelismEnabled 是否启用样本并发请求
+	SampleParallelism        int                   // SampleParallelism 是样本请求并发上限
+	Template                 *JudgeTemplateOptions // Template 是模板评估器配置
 }
 
 // JudgeModelOptions 表示裁判模型配置
@@ -1604,6 +1606,50 @@ type RubricContent struct {
 `Generation` 默认使用 `MaxTokens=2000`、`Temperature=0.8`、`Stream=false`。
 
 `numSamples` 用于控制每轮的采样次数，默认为 1，采样次数越大越能抵御裁判波动，但开销也会相应增加。
+
+`sampleParallelismEnabled` 用于控制同一轮内裁判样本请求是否可以并发执行。默认值为 `false`，保持原有串行行为。`sampleParallelism` 只在启用样本并发后作为并发上限生效。当 `sampleParallelismEnabled=true` 且 `sampleParallelism=0` 时，评估器使用 `runtime.GOMAXPROCS(0)`，并按 `numSamples` 截断并发数。当 `sampleParallelism>0` 时，评估器使用 `min(sampleParallelism, numSamples)`。如果模型服务有 QPS 或并发限制，建议显式配置较保守的 `sampleParallelism`。
+
+配置示例：
+
+不配置`sampleParallelismEnabled`时，默认保持串行：
+```json
+{
+  "llmJudge": {
+    "judgeModel": {
+      "providerName": "openai",
+      "modelName": "gpt-4o-mini",
+      "numSamples": 3
+    }
+  }
+}
+```
+配置`sampleParallelismEnabled=true`，但是不配置`sampleParallelism`时，开启并发，并发度默认使用`runtime.GOMAXPROCS(0)`，再按 `numSamples`截断：
+```json
+{
+  "llmJudge": {
+    "sampleParallelismEnabled": true,
+    "judgeModel": {
+      "providerName": "openai",
+      "modelName": "gpt-4o-mini",
+      "numSamples": 3
+    }
+  }
+}
+```
+配置`sampleParallelismEnabled=true`且配置`sampleParallelism=2`时，并发度为2:
+```json
+{
+  "llmJudge": {
+    "sampleParallelismEnabled": true,
+    "sampleParallelism": 2,
+    "judgeModel": {
+      "providerName": "openai",
+      "modelName": "gpt-4o-mini",
+      "numSamples": 3
+    }
+  }
+}
+```
 
 `providerName` 表示裁判模型的供应商，对应框架的 Model Provider。框架会按 `providerName` 与 `modelName` 创建裁判模型实例，常见取值有 `openai`、`anthropic` 和 `gemini`。Provider 的详细介绍可参考 [Provider](./model.md#provider)。
 
