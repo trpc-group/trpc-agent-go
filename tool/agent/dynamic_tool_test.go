@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -653,6 +654,30 @@ func TestNewDynamicTool_Integration_ExcludesSiblingAgentTools(t *testing.T) {
 	require.Len(t, seen, 1)
 	require.Equal(t, []string{"tool_a"}, seen[0],
 		"dynamic child surface must exclude all AgentTool entrypoints")
+}
+
+func TestNewDynamicTool_RestoresLiveSessionFromParallelClone(t *testing.T) {
+	const liveOnlyContent = "dynamic-live-only-history"
+	liveSess, frozenSess := liveAndFrozenSessionsForTest(t, liveOnlyContent)
+
+	child := &liveSessionHistoryAgent{
+		name:            "dynamic-live-session-child",
+		liveOnlyContent: liveOnlyContent,
+	}
+	at := NewDynamicTool()
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(child),
+		agent.WithInvocationSession(frozenSess),
+		agent.WithInvocationEventFilterKey("parent"),
+	)
+	livesession.Attach(parent, liveSess)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	res, err := at.Call(ctx, []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	require.Equal(t, "saw-live-session", res)
+	require.Same(t, liveSess, child.seenSession)
+	require.True(t, child.sawLiveOnly)
 }
 
 // --- Fix 5: WithName is dynamic-only ---------------------------------------
