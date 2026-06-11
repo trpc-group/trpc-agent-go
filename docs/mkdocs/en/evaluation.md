@@ -1608,6 +1608,8 @@ type RubricContent struct {
 
 Example configurations:
 
+When `sampleParallelismEnabled` is not configured, the evaluator keeps the default serial behavior:
+
 ```json
 {
   "llmJudge": {
@@ -1619,6 +1621,8 @@ Example configurations:
   }
 }
 ```
+
+When `sampleParallelismEnabled=true` and `sampleParallelism` is not configured, sample parallelism is enabled, and the parallelism defaults to `runtime.GOMAXPROCS(0)` before being capped by `numSamples`:
 
 ```json
 {
@@ -1632,6 +1636,8 @@ Example configurations:
   }
 }
 ```
+
+When `sampleParallelismEnabled=true` and `sampleParallelism=2`, the parallelism is 2:
 
 ```json
 {

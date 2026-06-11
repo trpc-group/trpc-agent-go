@@ -1611,6 +1611,7 @@ type RubricContent struct {
 
 配置示例：
 
+不配置`sampleParallelismEnabled`时，默认保持串行：
 ```json
 {
   "llmJudge": {
@@ -1622,7 +1623,7 @@ type RubricContent struct {
   }
 }
 ```
-
+配置`sampleParallelismEnabled=true`，但是不配置`sampleParallelism`时，开启并发，并发度默认使用`runtime.GOMAXPROCS(0)`，再按 `numSamples`截断：
 ```json
 {
   "llmJudge": {
@@ -1635,7 +1636,7 @@ type RubricContent struct {
   }
 }
 ```
-
+配置`sampleParallelismEnabled=true`且配置`sampleParallelism=2`时，并发度为2:
 ```json
 {
   "llmJudge": {
