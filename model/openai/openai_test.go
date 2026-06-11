@@ -5439,6 +5439,32 @@ func TestConvertUserMessageContent_DeepSeekVariant(t *testing.T) {
 	})
 }
 
+func TestTextOnlyUserContentString_EdgeCases(t *testing.T) {
+	content, ok := textOnlyUserContentString(
+		[]openai.ChatCompletionContentPartUnionParam{
+			userTextPart("Use this text."),
+		},
+		map[string]any{"file_ids": []string{"file-123"}},
+	)
+	require.False(t, ok)
+	assert.Empty(t, content)
+
+	content, ok = textOnlyUserContentString(nil, nil)
+	require.False(t, ok)
+	assert.Empty(t, content)
+
+	content, ok = textOnlyUserContentString(
+		[]openai.ChatCompletionContentPartUnionParam{{}},
+		nil,
+	)
+	require.False(t, ok)
+	assert.Empty(t, content)
+
+	content, ok = joinedTextContent(nil)
+	require.False(t, ok)
+	assert.Empty(t, content)
+}
+
 // TestConvertAssistantMessageContent_WithContentAndParts tests assistant message with both content and parts.
 func TestConvertAssistantMessageContent_WithContentAndParts(t *testing.T) {
 	m := &Model{}
@@ -8918,6 +8944,23 @@ func TestOmittedContentHint_FileURLFallbackNotCounted(t *testing.T) {
 		},
 	})
 	require.Empty(t, got)
+}
+
+func TestOmittedContentHintCountingFileURLs_FileURLCounted(t *testing.T) {
+	m := &Model{variantConfig: variantConfig{textOnlyMessageContent: true}}
+	got := m.omittedContentHintCountingFileURLs([]model.ContentPart{
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "report.pdf",
+				URL:      "https://example.com/report.pdf",
+				MimeType: "application/pdf",
+			},
+		},
+	})
+	require.Equal(t,
+		"Omitted non-text attachments for this provider: 1 file.",
+		got)
 }
 
 // TestChatRequestCallbackSynchronous verifies that

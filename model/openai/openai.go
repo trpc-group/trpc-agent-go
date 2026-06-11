@@ -1118,12 +1118,16 @@ func (m *Model) omittedContentHint(parts []model.ContentPart) string {
 	return m.omittedContentHintForParts(parts, true)
 }
 
+// omittedContentHintCountingFileURLs includes URL-only files in the omitted
+// file count for roles that cannot preserve file URL fallback text.
 func (m *Model) omittedContentHintCountingFileURLs(
 	parts []model.ContentPart,
 ) string {
 	return m.omittedContentHintForParts(parts, false)
 }
 
+// omittedContentHintForParts summarizes non-text parts omitted by text-only
+// model variants.
 func (m *Model) omittedContentHintForParts(
 	parts []model.ContentPart,
 	skipFileURLFallback bool,
@@ -1234,6 +1238,8 @@ func singleUserContentString(
 	return "", false
 }
 
+// textOnlyUserContentString flattens user content parts when every outgoing
+// part is plain text and no variant-specific extra fields are required.
 func textOnlyUserContentString(
 	contentParts []openai.ChatCompletionContentPartUnionParam,
 	extraFields map[string]any,
@@ -1251,6 +1257,7 @@ func textOnlyUserContentString(
 	return joinedTextContent(texts)
 }
 
+// joinedTextContent joins non-empty text segments with a stable separator.
 func joinedTextContent(texts []string) (string, bool) {
 	if len(texts) == 0 {
 		return "", false
@@ -1316,11 +1323,6 @@ func (m *Model) convertAssistantMessageContent(
 	if m.variantConfig.textOnlyMessageContent {
 		texts := make([]string, 0, len(contentParts))
 		for _, part := range contentParts {
-			if part.OfText == nil {
-				return openai.ChatCompletionAssistantMessageParamContentUnion{
-					OfArrayOfContentParts: contentParts,
-				}
-			}
 			texts = append(texts, part.OfText.Text)
 		}
 		if omittedHint := m.omittedContentHintCountingFileURLs(
