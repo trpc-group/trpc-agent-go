@@ -699,6 +699,30 @@ func TestMessagesSnapshotUserIDResolverError(t *testing.T) {
 	assert.Contains(t, err.Error(), "resolve user ID")
 }
 
+func TestMessagesSnapshotRecoversUserIDResolverPanic(t *testing.T) {
+	svc := &testSessionService{trackEvents: []session.TrackEvent{newUserMessageTrackEvent(t, "user-1", "hi")}}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner: noopBaseRunner{},
+		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
+			panic("bad forwarded props")
+		},
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		appName:           "demo",
+		tracker:           tracker,
+	}
+
+	stream, err := r.MessagesSnapshot(
+		context.Background(),
+		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
+	)
+	require.Error(t, err)
+	assert.Nil(t, stream)
+	assert.Contains(t, err.Error(), "messages snapshot panic")
+	assert.Contains(t, err.Error(), "bad forwarded props")
+}
+
 func TestMessagesSnapshotAppNameResolverError(t *testing.T) {
 	svc := &testSessionService{}
 	tracker, err := track.New(svc)

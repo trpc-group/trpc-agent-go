@@ -34,7 +34,13 @@ type MessagesSnapshotter interface {
 
 // MessagesSnapshot sends a MessagesSnapshot event stream by replaying persisted AG-UI track events.
 func (r *runner) MessagesSnapshot(ctx context.Context,
-	runAgentInput *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+	runAgentInput *adapter.RunAgentInput) (eventCh <-chan aguievents.Event, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			eventCh = nil
+			err = fmt.Errorf("messages snapshot panic: %v", rec)
+		}
+	}()
 	if r.runner == nil {
 		return nil, errors.New("runner is nil")
 	}
@@ -44,7 +50,7 @@ func (r *runner) MessagesSnapshot(ctx context.Context,
 	if r.tracker == nil {
 		return nil, errors.New("tracker is nil")
 	}
-	runAgentInput, err := r.applyRunAgentInputHook(ctx, runAgentInput)
+	runAgentInput, err = r.applyRunAgentInputHook(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("run input hook: %w", err)
 	}
@@ -132,6 +138,10 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 		return nil, nil, fmt.Errorf("get track events: %w", err)
 	}
 	eventsForReduce, safeForFollow := trimTrackEventsToHistoryStart(trackEvents.Events)
+	if !safeForFollow && len(trackEvents.Events) > 0 {
+		log.WarnfContext(ctx, "agui messages snapshot: no safe user message boundary, app=%s, user=%s, session=%s, trackEvents=%d",
+			sessionKey.AppName, sessionKey.UserID, sessionKey.SessionID, len(trackEvents.Events))
+	}
 	messages, err := reduce.Reduce(
 		sessionKey.AppName,
 		sessionKey.UserID,
