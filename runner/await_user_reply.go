@@ -25,35 +25,36 @@ func (r *runner) applyAwaitUserReplyRoute(
 	sess *session.Session,
 	message model.Message,
 	ro agent.RunOptions,
-) (agent.RunOptions, string, error) {
+) (agent.RunOptions, string, string, error) {
 	if r == nil || !r.awaitUserReplyRouting {
-		return ro, "", nil
+		return ro, "", "", nil
 	}
 	if message.Role != model.RoleUser {
-		return ro, "", nil
+		return ro, "", "", nil
 	}
 	if ro.Agent != nil || ro.AgentByName != "" {
-		return r.clearOverriddenAwaitUserReplyRoute(
+		ro, rootName, err := r.clearOverriddenAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
 			ro,
 		)
+		return ro, rootName, "", err
 	}
 
 	route, ok, err := agent.PendingAwaitUserReplyRoute(sess)
 	if err != nil {
 		if clearErr := r.clearAwaitUserReplyRoute(ctx, key, sess); clearErr != nil {
-			return ro, "", fmt.Errorf(
+			return ro, "", "", fmt.Errorf(
 				"runner: clear invalid await_user_reply route: %w",
 				clearErr,
 			)
 		}
 		log.Warnf("runner: ignore invalid await_user_reply route: %v", err)
-		return ro, "", nil
+		return ro, "", "", nil
 	}
 	if !ok {
-		return ro, "", nil
+		return ro, "", "", nil
 	}
 	selected, rootName, ok, err := r.resolveAwaitUserReplyRoute(
 		ctx,
@@ -61,11 +62,11 @@ func (r *runner) applyAwaitUserReplyRoute(
 		ro,
 	)
 	if err != nil {
-		return ro, "", err
+		return ro, "", "", err
 	}
 	if !ok {
 		if clearErr := r.clearAwaitUserReplyRoute(ctx, key, sess); clearErr != nil {
-			return ro, "", fmt.Errorf(
+			return ro, "", "", fmt.Errorf(
 				"runner: clear stale await_user_reply route: %w",
 				clearErr,
 			)
@@ -74,16 +75,16 @@ func (r *runner) applyAwaitUserReplyRoute(
 			"runner: ignore stale await_user_reply route for path %q",
 			route.LookupPath,
 		)
-		return ro, "", nil
+		return ro, "", "", nil
 	}
 	if err := r.clearAwaitUserReplyRoute(ctx, key, sess); err != nil {
-		return ro, "", fmt.Errorf(
+		return ro, "", "", fmt.Errorf(
 			"runner: consume await_user_reply route: %w",
 			err,
 		)
 	}
 	ro.Agent = selected
-	return ro, rootName, nil
+	return ro, rootName, route.LookupPath, nil
 }
 
 func (r *runner) clearOverriddenAwaitUserReplyRoute(
