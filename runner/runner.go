@@ -562,7 +562,7 @@ func (r *runner) Run(
 		ro,
 		runnerLatencySpanAwaitRoute,
 	)
-	ro, awaitUserReplyRootName, err := r.applyAwaitUserReplyRoute(
+	ro, awaitUserReplyRootName, awaitUserReplyLookupPath, err := r.applyAwaitUserReplyRoute(
 		awaitCtx,
 		sessionKey,
 		sess,
@@ -623,6 +623,7 @@ func (r *runner) Run(
 		ro,
 		effectiveAppName,
 		awaitUserReplyRootName,
+		awaitUserReplyLookupPath,
 	)
 	currentTurnSession, err := sessionroute.ResolveCurrentTurnSession(
 		execCtx,
@@ -738,12 +739,13 @@ func (r *runner) newRunInvocation(
 	ro agent.RunOptions,
 	effectiveAppName string,
 	awaitUserReplyRootName string,
+	awaitUserReplyLookupPath string,
 ) *agent.Invocation {
 	eventFilterKey := effectiveAppName
 	if ro.EventFilterKey != "" {
 		eventFilterKey = ro.EventFilterKey
 	}
-	invocation := agent.NewInvocation(
+	invocationOpts := []agent.InvocationOptions{
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationSessionService(r.sessionService),
 		agent.WithInvocationMessage(message),
@@ -755,7 +757,14 @@ func (r *runner) newRunInvocation(
 		agent.WithInvocationArtifactService(r.artifactService),
 		agent.WithInvocationEventFilterKey(eventFilterKey),
 		agent.WithInvocationPlugins(r.pluginManager),
-	)
+	}
+	if awaitUserReplyLookupPath != "" {
+		invocationOpts = append(
+			invocationOpts,
+			agent.WithInvocationBranch(awaitUserReplyLookupPath),
+		)
+	}
+	invocation := agent.NewInvocation(invocationOpts...)
 	if rootLookupName := r.selectedRootLookupName(
 		ro,
 		awaitUserReplyRootName,
