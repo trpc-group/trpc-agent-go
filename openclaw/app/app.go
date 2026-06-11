@@ -37,7 +37,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	sandboxexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/sandbox"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -1079,6 +1082,7 @@ func NewRuntimeWithOptions(
 			MemoryFileStore:       fileMemoryStore,
 
 			EnableLocalExec:      opts.EnableLocalExec,
+			CodeExecutor:         opts.CodeExecutor,
 			EnableOpenClawTools:  opts.EnableOpenClawTools,
 			OpenClawToolingGuide: opts.OpenClawToolingGuide,
 			EnableParallelTools:  opts.EnableParallelTools,
@@ -1359,6 +1363,20 @@ func NewRuntimeWithOptions(
 	return rt, nil
 }
 
+// Run sends one message through the OpenClaw runtime runner.
+func (r *Runtime) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	message model.Message,
+	runOpts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	if r == nil || r.runner == nil {
+		return nil, errors.New("openclaw runtime runner is not configured")
+	}
+	return r.runner.Run(ctx, userID, sessionID, message, runOpts...)
+}
+
 // Close releases owned resources (session/memory services, toolsets, runner).
 func (r *Runtime) Close() error {
 	if r == nil {
@@ -1615,6 +1633,7 @@ func run(
 			MemoryFileStore:       fileMemoryStore,
 
 			EnableLocalExec:     opts.EnableLocalExec,
+			CodeExecutor:        opts.CodeExecutor,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
 			EnableParallelTools: opts.EnableParallelTools,
 
@@ -2280,6 +2299,12 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support enable-local-exec",
 		)
 	}
+	if opts.CodeExecutor.Type != "" &&
+		opts.CodeExecutor.Type != codeExecutorTypeNone {
+		return errors.New(
+			"claude-code agent does not support tools.code_executor",
+		)
+	}
 	if opts.EnableOpenClawTools {
 		return errors.New(
 			"claude-code agent does not support enable-openclaw-tools",
@@ -2573,9 +2598,24 @@ func newAgent(
 	if cfg.RefreshToolSetsOnRun {
 		opts = append(opts, llmagent.WithRefreshToolSetsOnRun(true))
 	}
-	if cfg.EnableLocalExec {
-		exec := localexec.New()
+	exec, err := codeExecutorFromConfig(
+		cfg.StateDir,
+		cfg.EnableLocalExec,
+		cfg.CodeExecutor,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	if exec != nil {
 		opts = append(opts, llmagent.WithCodeExecutor(exec))
+	}
+	if cfg.CodeExecutor.AutoExecuteCodeBlocks != nil {
+		opts = append(
+			opts,
+			llmagent.WithEnableCodeExecutionResponseProcessor(
+				*cfg.CodeExecutor.AutoExecuteCodeBlocks,
+			),
+		)
 	}
 
 	callbacks := tool.NewCallbacks()
@@ -2588,6 +2628,121 @@ func newAgent(
 	opts = append(opts, llmagent.WithToolCallbacks(callbacks))
 
 	return llmagent.New(defaultAgentName, opts...), repo, nil
+}
+
+func codeExecutorFromConfig(
+	stateDir string,
+	enableLocal bool,
+	cfg codeExecutorOptions,
+) (codeexecutor.CodeExecutor, error) {
+	typeName := strings.ToLower(strings.TrimSpace(cfg.Type))
+	if typeName == "" {
+		if enableLocal {
+			return localexec.New(), nil
+		}
+		return nil, nil
+	}
+	switch typeName {
+	case codeExecutorTypeNone:
+		return nil, nil
+	case codeExecutorTypeLocal:
+		return localexec.New(), nil
+	case codeExecutorTypeSandbox:
+		return sandboxCodeExecutorFromConfig(stateDir, cfg.Sandbox), nil
+	default:
+		return nil, fmt.Errorf("unsupported code executor type: %s", typeName)
+	}
+}
+
+func sandboxCodeExecutorFromConfig(
+	stateDir string,
+	cfg sandboxCodeExecutorOptions,
+) codeexecutor.CodeExecutor {
+	root := strings.TrimSpace(cfg.WorkspaceRoot)
+	if root == "" {
+		root = filepath.Join(stateDir, "sandbox")
+	}
+	profile := sandboxPermissionProfileFromConfig(cfg)
+	return sandboxexec.New(
+		sandboxexec.WithWorkspaceRoot(root),
+		sandboxexec.WithBackend(sandboxBackendFromConfig(cfg.Backend)),
+		sandboxexec.WithPermissionProfile(profile),
+		sandboxexec.WithShellEnvironmentPolicy(
+			sandboxShellEnvPolicyFromConfig(cfg.ShellEnv),
+		),
+		sandboxexec.WithDefaultTimeout(cfg.DefaultTimeout),
+		sandboxexec.WithOutputMaxBytes(cfg.OutputMaxBytes),
+	)
+}
+
+func sandboxBackendFromConfig(raw string) sandboxexec.BackendType {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case sandboxBackendLinuxBubblewrap:
+		return sandboxexec.BackendLinuxBubblewrap
+	default:
+		return sandboxexec.BackendAuto
+	}
+}
+
+func sandboxPermissionProfileFromConfig(
+	cfg sandboxCodeExecutorOptions,
+) sandboxexec.PermissionProfile {
+	var profile sandboxexec.PermissionProfile
+	switch strings.ToLower(strings.TrimSpace(cfg.Profile)) {
+	case sandboxProfileReadOnly:
+		profile = sandboxexec.ReadOnlyProfile()
+	case sandboxProfileDisabled:
+		return sandboxexec.DangerFullAccessProfile()
+	default:
+		profile = sandboxexec.WorkspaceWriteProfile()
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Network)) {
+	case sandboxNetworkEnabled:
+		profile = profile.WithNetworkPolicy(sandboxexec.NetworkPolicy{
+			Mode: sandboxexec.NetworkEnabled,
+		})
+	default:
+		profile = profile.WithNetworkPolicy(sandboxexec.NetworkPolicy{
+			Mode: sandboxexec.NetworkRestricted,
+		})
+	}
+	return profile
+}
+
+func sandboxShellEnvPolicyFromConfig(
+	cfg sandboxShellEnvOptions,
+) sandboxexec.ShellEnvironmentPolicy {
+	return sandboxexec.ShellEnvironmentPolicy{
+		Inherit:              sandboxShellEnvInheritFromConfig(cfg.Inherit),
+		ApplyDefaultExcludes: cfg.ApplyDefaultExcludes,
+		Exclude:              append([]string(nil), cfg.Exclude...),
+		Set:                  copyStringMap(cfg.Set),
+		IncludeOnly:          append([]string(nil), cfg.IncludeOnly...),
+	}
+}
+
+func sandboxShellEnvInheritFromConfig(
+	raw string,
+) sandboxexec.ShellEnvironmentPolicyInherit {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case sandboxShellEnvInheritAll:
+		return sandboxexec.ShellEnvironmentPolicyInheritAll
+	case sandboxShellEnvInheritNone:
+		return sandboxexec.ShellEnvironmentPolicyInheritNone
+	default:
+		return sandboxexec.ShellEnvironmentPolicyInheritCore
+	}
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func buildOpenClawToolingGuidance(cfg agentConfig) string {
@@ -2815,6 +2970,7 @@ type agentConfig struct {
 	MemoryFileStore *memoryfile.Store
 
 	EnableLocalExec bool
+	CodeExecutor    codeExecutorOptions
 
 	EnableOpenClawTools  bool
 	OpenClawToolingGuide *string
