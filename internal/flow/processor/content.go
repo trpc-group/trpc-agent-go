@@ -906,7 +906,7 @@ func (p *ContentRequestProcessor) injectLateContextMessages(invocation *agent.In
 
 func lateContextInsertIndex(messages []model.Message) int {
 	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == model.RoleUser || messages[i].Role == "" {
+		if userLikeRole(messages[i].Role) {
 			return i
 		}
 	}
@@ -1064,7 +1064,7 @@ func prependUserContextMessage(
 	}
 	// Case 1: merge into the first available user history/current message.
 	for i := range messages {
-		if messages[i].Role != model.RoleUser {
+		if !userLikeRole(messages[i].Role) {
 			continue
 		}
 		merged := make([]model.Message, len(messages))
@@ -1080,7 +1080,7 @@ func prependUserContextMessage(
 	// Case 2: reqPrefix (existing req.Messages) ends with a user message.
 	// Merge summary into that message only as a fallback when there is no
 	// user history/current message to attach the summary to.
-	if len(reqPrefix) > 0 && reqPrefix[len(reqPrefix)-1].Role == model.RoleUser {
+	if len(reqPrefix) > 0 && userLikeRole(reqPrefix[len(reqPrefix)-1].Role) {
 		last := &reqPrefix[len(reqPrefix)-1]
 		if last.Content == "" {
 			last.Content = formatted
@@ -1098,6 +1098,10 @@ func prependUserContextMessage(
 	})
 	out = append(out, messages...)
 	return out
+}
+
+func userLikeRole(role model.Role) bool {
+	return role == model.RoleUser || role == ""
 }
 
 // formatSummaryForUser returns a user-role-friendly summary text.
@@ -1545,7 +1549,7 @@ func annotateUserMessagesWithAttachedFiles(
 func annotateUserMessageWithAttachedFiles(
 	msg model.Message,
 ) model.Message {
-	if msg.Role != model.RoleUser && msg.Role != "" {
+	if !userLikeRole(msg.Role) {
 		return msg
 	}
 	if len(msg.ContentParts) == 0 {
