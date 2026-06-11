@@ -283,6 +283,20 @@ tools:
   # Optional: override the built-in OpenClaw tooling guidance prompt.
   # Leave unset to use the built-in default, or set to "" to disable it.
   openclaw_tooling_guidance: ""
+  # Optional: configure fenced-code execution without exposing workspace_exec.
+  code_executor:
+    type: "sandbox" # none|local|sandbox
+    auto_execute_code_blocks: true
+    sandbox:
+      workspace_root: "" # default: state_dir/sandbox
+      backend: "auto" # auto|linux-bubblewrap
+      profile: "workspace_write" # workspace_write|read_only|disabled
+      network: "restricted" # restricted|enabled
+      default_timeout: "30s"
+      output_max_bytes: 1048576
+      shell_env:
+        inherit: "core" # all|core|none
+        apply_default_excludes: true
   providers:
     - type: "browser"
       name: "browser-runtime"
@@ -327,6 +341,9 @@ Notes:
 - Duration fields use Go-style strings like `60s`, `10m`, `1h`.
 - For secrets (model keys, Telegram tokens), keep them out of version control.
   Prefer environment variables when available.
+- `tools.code_executor.type: sandbox` wires `codeexecutor/sandbox` into
+  fenced-code execution while keeping the generic `workspace_exec` tool surface
+  disabled. Use OpenClaw `exec_command` for host-side tool work.
 - `knowledges` currently configures only embedder / vector store wiring.
   Loading documents into a knowledge base is a separate runtime action.
 - Example `pgvector` knowledge config:

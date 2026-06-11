@@ -72,12 +72,23 @@ func (r *Resolver) CreateWorkspace(
 	}
 	sid := name
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-		if inv.Session != nil && inv.Session.ID != "" {
-			sid = inv.Session.ID
+		if key := KeyFromInvocation(inv); key != "" {
+			sid = key
 		}
 		ctx = withWorkspaceArtifactContext(ctx, inv)
 	}
 	return reg.Acquire(ctx, eng.Manager(), sid)
+}
+
+// KeyFromInvocation derives the shared workspace key for an invocation.
+func KeyFromInvocation(inv *agent.Invocation) string {
+	if inv == nil || inv.Session == nil {
+		return ""
+	}
+	if inv.Session.AppName != "" && inv.Session.UserID != "" && inv.Session.ID != "" {
+		return inv.Session.AppName + "/" + inv.Session.UserID + "/" + inv.Session.ID
+	}
+	return inv.Session.ID
 }
 
 // withWorkspaceArtifactContext mirrors internal/workspaceinput.withArtifactContext:

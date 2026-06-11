@@ -55,6 +55,27 @@ const (
 	memoryBackendPostgres  = "postgres"
 	memoryBackendPGVector  = "pgvector"
 
+	codeExecutorTypeNone    = "none"
+	codeExecutorTypeLocal   = "local"
+	codeExecutorTypeSandbox = "sandbox"
+
+	sandboxBackendAuto            = "auto"
+	sandboxBackendLinuxBubblewrap = "linux-bubblewrap"
+
+	sandboxProfileWorkspaceWrite = "workspace_write"
+	sandboxProfileReadOnly       = "read_only"
+	sandboxProfileDisabled       = "disabled"
+
+	sandboxNetworkRestricted = "restricted"
+	sandboxNetworkEnabled    = "enabled"
+
+	sandboxShellEnvInheritAll  = "all"
+	sandboxShellEnvInheritCore = "core"
+	sandboxShellEnvInheritNone = "none"
+
+	defaultSandboxCodeExecutorTimeout        = 30 * time.Second
+	defaultSandboxCodeExecutorOutputMaxBytes = 1 << 20
+
 	summaryPolicyAny = "any"
 	summaryPolicyAll = "all"
 
@@ -246,6 +267,7 @@ type runOptions struct {
 	SessionSummaryApproxRunesPerToken float64
 
 	EnableLocalExec      bool
+	CodeExecutor         codeExecutorOptions
 	EnableOpenClawTools  bool
 	OpenClawToolingGuide *string
 	EnableParallelTools  bool
@@ -1143,15 +1165,64 @@ type skillEntryConfig struct {
 }
 
 type toolsConfig struct {
-	EnableLocalExec           *bool   `yaml:"enable_local_exec,omitempty"`
-	EnableOpenClawTools       *bool   `yaml:"enable_openclaw_tools,omitempty"`
-	OpenClawToolingGuide      *string `yaml:"openclaw_tooling_guidance,omitempty"`
-	OpenClawToolingGuideCamel *string `yaml:"openClawToolingGuidance,omitempty"`
-	EnableParallelTools       *bool   `yaml:"enable_parallel_tools,omitempty"`
-	RefreshToolSetsOnRun      *bool   `yaml:"refresh_toolsets_on_run,omitempty"`
+	EnableLocalExec           *bool               `yaml:"enable_local_exec,omitempty"`
+	CodeExecutor              *codeExecutorConfig `yaml:"code_executor,omitempty"`
+	EnableOpenClawTools       *bool               `yaml:"enable_openclaw_tools,omitempty"`
+	OpenClawToolingGuide      *string             `yaml:"openclaw_tooling_guidance,omitempty"`
+	OpenClawToolingGuideCamel *string             `yaml:"openClawToolingGuidance,omitempty"`
+	EnableParallelTools       *bool               `yaml:"enable_parallel_tools,omitempty"`
+	RefreshToolSetsOnRun      *bool               `yaml:"refresh_toolsets_on_run,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
+}
+
+type codeExecutorConfig struct {
+	Type                  string                     `yaml:"type,omitempty"`
+	AutoExecuteCodeBlocks *bool                      `yaml:"auto_execute_code_blocks,omitempty"`
+	Sandbox               *sandboxCodeExecutorConfig `yaml:"sandbox,omitempty"`
+}
+
+type sandboxCodeExecutorConfig struct {
+	WorkspaceRoot  string                 `yaml:"workspace_root,omitempty"`
+	Backend        string                 `yaml:"backend,omitempty"`
+	Profile        string                 `yaml:"profile,omitempty"`
+	Network        string                 `yaml:"network,omitempty"`
+	DefaultTimeout string                 `yaml:"default_timeout,omitempty"`
+	OutputMaxBytes *int                   `yaml:"output_max_bytes,omitempty"`
+	ShellEnv       *sandboxShellEnvConfig `yaml:"shell_env,omitempty"`
+}
+
+type sandboxShellEnvConfig struct {
+	Inherit              string            `yaml:"inherit,omitempty"`
+	ApplyDefaultExcludes *bool             `yaml:"apply_default_excludes,omitempty"`
+	Exclude              []string          `yaml:"exclude,omitempty"`
+	IncludeOnly          []string          `yaml:"include_only,omitempty"`
+	Set                  map[string]string `yaml:"set,omitempty"`
+}
+
+type codeExecutorOptions struct {
+	Type                  string
+	AutoExecuteCodeBlocks *bool
+	Sandbox               sandboxCodeExecutorOptions
+}
+
+type sandboxCodeExecutorOptions struct {
+	WorkspaceRoot  string
+	Backend        string
+	Profile        string
+	Network        string
+	DefaultTimeout time.Duration
+	OutputMaxBytes int
+	ShellEnv       sandboxShellEnvOptions
+}
+
+type sandboxShellEnvOptions struct {
+	Inherit              string
+	ApplyDefaultExcludes bool
+	Exclude              []string
+	IncludeOnly          []string
+	Set                  map[string]string
 }
 
 type sessionConfig struct {
@@ -1722,6 +1793,15 @@ func (cfg *fileConfig) apply(
 			!flagWasSet(set, "enable-local-exec") {
 			opts.EnableLocalExec = *cfg.Tools.EnableLocalExec
 		}
+		if cfg.Tools.CodeExecutor != nil {
+			codeExecutor, err := convertCodeExecutorConfig(
+				cfg.Tools.CodeExecutor,
+			)
+			if err != nil {
+				return fmt.Errorf("tools.code_executor: %w", err)
+			}
+			opts.CodeExecutor = codeExecutor
+		}
 		if cfg.Tools.EnableOpenClawTools != nil {
 			opts.enableOpenClawToolsExplicit = true
 			if !flagWasSet(set, "enable-openclaw-tools") {
@@ -2052,6 +2132,195 @@ func convertKnowledgeConfigs(
 		return nil, nil
 	}
 	return out, nil
+}
+
+func convertCodeExecutorConfig(
+	cfg *codeExecutorConfig,
+) (codeExecutorOptions, error) {
+	if cfg == nil {
+		return codeExecutorOptions{}, nil
+	}
+	typeName := strings.ToLower(strings.TrimSpace(cfg.Type))
+	if typeName == "" {
+		typeName = codeExecutorTypeNone
+	}
+	out := codeExecutorOptions{
+		Type:                  typeName,
+		AutoExecuteCodeBlocks: cfg.AutoExecuteCodeBlocks,
+	}
+	switch typeName {
+	case codeExecutorTypeNone, codeExecutorTypeLocal:
+		if cfg.Sandbox != nil {
+			return codeExecutorOptions{}, fmt.Errorf(
+				"sandbox config requires type %q",
+				codeExecutorTypeSandbox,
+			)
+		}
+		return out, nil
+	case codeExecutorTypeSandbox:
+		sandboxCfg, err := convertSandboxCodeExecutorConfig(cfg.Sandbox)
+		if err != nil {
+			return codeExecutorOptions{}, err
+		}
+		out.Sandbox = sandboxCfg
+		return out, nil
+	default:
+		return codeExecutorOptions{}, fmt.Errorf(
+			"invalid type %q: want none|local|sandbox",
+			cfg.Type,
+		)
+	}
+}
+
+func convertSandboxCodeExecutorConfig(
+	cfg *sandboxCodeExecutorConfig,
+) (sandboxCodeExecutorOptions, error) {
+	out := sandboxCodeExecutorOptions{
+		Backend:        sandboxBackendAuto,
+		Profile:        sandboxProfileWorkspaceWrite,
+		Network:        sandboxNetworkRestricted,
+		DefaultTimeout: defaultSandboxCodeExecutorTimeout,
+		OutputMaxBytes: defaultSandboxCodeExecutorOutputMaxBytes,
+		ShellEnv: sandboxShellEnvOptions{
+			Inherit:              sandboxShellEnvInheritCore,
+			ApplyDefaultExcludes: true,
+		},
+	}
+	if cfg == nil {
+		return out, nil
+	}
+	out.WorkspaceRoot = strings.TrimSpace(cfg.WorkspaceRoot)
+	backend := strings.ToLower(strings.TrimSpace(cfg.Backend))
+	if backend != "" {
+		switch backend {
+		case sandboxBackendAuto, sandboxBackendLinuxBubblewrap:
+			out.Backend = backend
+		default:
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.backend %q: want auto|linux-bubblewrap",
+				cfg.Backend,
+			)
+		}
+	}
+	profile := strings.ToLower(strings.TrimSpace(cfg.Profile))
+	if profile != "" {
+		switch profile {
+		case sandboxProfileWorkspaceWrite,
+			sandboxProfileReadOnly,
+			sandboxProfileDisabled:
+			out.Profile = profile
+		default:
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.profile %q: want workspace_write|read_only|disabled",
+				cfg.Profile,
+			)
+		}
+	}
+	network := strings.ToLower(strings.TrimSpace(cfg.Network))
+	if network != "" {
+		switch network {
+		case sandboxNetworkRestricted, sandboxNetworkEnabled:
+			out.Network = network
+		default:
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.network %q: want restricted|enabled",
+				cfg.Network,
+			)
+		}
+	}
+	timeout := strings.TrimSpace(cfg.DefaultTimeout)
+	if timeout != "" {
+		dur, err := parseDuration(timeout)
+		if err != nil {
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.default_timeout: %w",
+				err,
+			)
+		}
+		if dur <= 0 {
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.default_timeout must be positive",
+			)
+		}
+		out.DefaultTimeout = dur
+	}
+	if cfg.OutputMaxBytes != nil {
+		if *cfg.OutputMaxBytes <= 0 {
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.output_max_bytes must be positive",
+			)
+		}
+		out.OutputMaxBytes = *cfg.OutputMaxBytes
+	}
+	if cfg.ShellEnv != nil {
+		shellEnv, err := convertSandboxShellEnvConfig(cfg.ShellEnv)
+		if err != nil {
+			return sandboxCodeExecutorOptions{}, err
+		}
+		out.ShellEnv = shellEnv
+	}
+	return out, nil
+}
+
+func convertSandboxShellEnvConfig(
+	cfg *sandboxShellEnvConfig,
+) (sandboxShellEnvOptions, error) {
+	out := sandboxShellEnvOptions{
+		Inherit:              sandboxShellEnvInheritCore,
+		ApplyDefaultExcludes: true,
+	}
+	if cfg == nil {
+		return out, nil
+	}
+	inherit := strings.ToLower(strings.TrimSpace(cfg.Inherit))
+	if inherit != "" {
+		switch inherit {
+		case sandboxShellEnvInheritAll,
+			sandboxShellEnvInheritCore,
+			sandboxShellEnvInheritNone:
+			out.Inherit = inherit
+		default:
+			return sandboxShellEnvOptions{}, fmt.Errorf(
+				"sandbox.shell_env.inherit %q: want all|core|none",
+				cfg.Inherit,
+			)
+		}
+	}
+	if cfg.ApplyDefaultExcludes != nil {
+		out.ApplyDefaultExcludes = *cfg.ApplyDefaultExcludes
+	}
+	out.Exclude = trimStringSlice(cfg.Exclude)
+	out.IncludeOnly = trimStringSlice(cfg.IncludeOnly)
+	if len(cfg.Set) > 0 {
+		out.Set = make(map[string]string, len(cfg.Set))
+		for key, value := range cfg.Set {
+			name := strings.TrimSpace(key)
+			if name == "" {
+				return sandboxShellEnvOptions{}, fmt.Errorf(
+					"sandbox.shell_env.set contains empty key",
+				)
+			}
+			out.Set[name] = value
+		}
+	}
+	return out, nil
+}
+
+func trimStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func applySessionSummary(

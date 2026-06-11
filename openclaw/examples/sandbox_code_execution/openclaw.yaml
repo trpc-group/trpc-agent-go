@@ -1,0 +1,21 @@
+app_name: "openclaw-sandbox-code-execution"
+state_dir: "/tmp/openclaw-sandbox-code-execution"
+
+model:
+  mode: "openai"
+  name: "glm-4.7-flash"
+
+tools:
+  code_executor:
+    type: "sandbox"
+    auto_execute_code_blocks: true
+    sandbox:
+      workspace_root: ""
+      backend: "auto"
+      profile: "workspace_write"
+      network: "restricted"
+      default_timeout: "30s"
+      output_max_bytes: 1048576
+      shell_env:
+        inherit: "core"
+        apply_default_excludes: true
