@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/sessionrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
@@ -78,6 +79,16 @@ type Option func(*Options)
 func WithSessionService(service session.Service) Option {
 	return func(opts *Options) {
 		opts.sessionService = service
+	}
+}
+
+// WithSummaryAwareSessionRestore allows storage-backed session services to use
+// existing summary boundaries to avoid restoring already summarized history.
+//
+// Default: false.
+func WithSummaryAwareSessionRestore(enabled bool) Option {
+	return func(opts *Options) {
+		opts.summaryAwareSessionRestore = enabled
 	}
 }
 
@@ -300,6 +311,7 @@ type runner struct {
 	candidateSelectOptions             candidateSelectOptions
 	awaitUserReplyRouting              bool
 	persistInterruptedAssistantDefault bool
+	summaryAwareSessionRestore         bool
 
 	// Resource management fields.
 	ownedSessionService bool      // Indicates if sessionService was created by this runner.
@@ -331,6 +343,7 @@ type Options struct {
 	candidateSelectOptions             candidateSelectOptions
 	awaitUserReplyRouting              bool
 	persistInterruptedAssistantDefault bool
+	summaryAwareSessionRestore         bool
 }
 
 // newOptions creates a new Options.
@@ -387,6 +400,7 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		candidateSelectOptions:             options.candidateSelectOptions,
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
+		summaryAwareSessionRestore:         options.summaryAwareSessionRestore,
 		ownedSessionService:                ownedSessionService,
 	}
 }
@@ -442,6 +456,7 @@ func NewRunnerWithAgentFactory(
 		candidateSelectOptions:             options.candidateSelectOptions,
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
+		summaryAwareSessionRestore:         options.summaryAwareSessionRestore,
 		ownedSessionService:                ownedSessionService,
 	}
 }
@@ -547,6 +562,12 @@ func (r *runner) Run(
 		runnerLatencySpanGetSession,
 		runnerSessionAttrs(sessionKey, nil)...,
 	)
+	if r.summaryAwareSessionRestore {
+		sessionCtx = sessionrestore.WithSummaryCutoff(
+			sessionCtx,
+			sessionRestoreFilterKey(effectiveAppName, ro),
+		)
+	}
 	sess, err := r.getOrCreateSession(sessionCtx, ro, sessionKey)
 	if sessionStarted && sess != nil {
 		sessionSpan.SetAttributes(runnerSessionAttrs(sessionKey, sess)...)
@@ -741,10 +762,7 @@ func (r *runner) newRunInvocation(
 	awaitUserReplyRootName string,
 	awaitUserReplyLookupPath string,
 ) *agent.Invocation {
-	eventFilterKey := effectiveAppName
-	if ro.EventFilterKey != "" {
-		eventFilterKey = ro.EventFilterKey
-	}
+	eventFilterKey := sessionRestoreFilterKey(effectiveAppName, ro)
 	invocationOpts := []agent.InvocationOptions{
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationSessionService(r.sessionService),
@@ -772,6 +790,13 @@ func (r *runner) newRunInvocation(
 		agent.SetAwaitUserReplyRootLookupName(invocation, rootLookupName)
 	}
 	return invocation
+}
+
+func sessionRestoreFilterKey(effectiveAppName string, ro agent.RunOptions) string {
+	if ro.EventFilterKey != "" {
+		return ro.EventFilterKey
+	}
+	return effectiveAppName
 }
 
 func (r *runner) attachSessionAppender(

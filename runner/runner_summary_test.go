@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/sessionrestore"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -184,6 +185,55 @@ func TestRunner_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
 	assert.Equal(t, "trace-12345", contextCapturingService.capturedTraceID, "Context value should be preserved and passed to EnqueueSummaryJob")
 }
 
+func TestRunner_SummaryAwareSessionRestoreHint(t *testing.T) {
+	t.Run("enabled passes event filter key", func(t *testing.T) {
+		svc := &mockSessionService{}
+		r := NewRunner(
+			"test-app",
+			&mockAgent{name: "test-agent"},
+			WithSessionService(svc),
+			WithSummaryAwareSessionRestore(true),
+		)
+
+		_, err := RunWithMessages(
+			context.Background(),
+			r,
+			"user1",
+			"sess1",
+			[]model.Message{{Role: model.RoleUser, Content: "hello"}},
+			agent.WithEventFilterKey("root/branch"),
+		)
+		require.NoError(t, err)
+		require.NotEmpty(t, svc.getSessionCalls)
+		assert.True(t, svc.getSessionCalls[0].restoreHintOK)
+		assert.Equal(
+			t,
+			"root/branch",
+			svc.getSessionCalls[0].restoreHint.SummaryFilterKey,
+		)
+	})
+
+	t.Run("disabled leaves context unchanged", func(t *testing.T) {
+		svc := &mockSessionService{}
+		r := NewRunner(
+			"test-app",
+			&mockAgent{name: "test-agent"},
+			WithSessionService(svc),
+		)
+
+		_, err := RunWithMessages(
+			context.Background(),
+			r,
+			"user1",
+			"sess1",
+			[]model.Message{{Role: model.RoleUser, Content: "hello"}},
+		)
+		require.NoError(t, err)
+		require.NotEmpty(t, svc.getSessionCalls)
+		assert.False(t, svc.getSessionCalls[0].restoreHintOK)
+	})
+}
+
 // contextCapturingSessionService captures the context passed to EnqueueSummaryJob.
 type contextCapturingSessionService struct {
 	*mockSessionService
@@ -330,8 +380,10 @@ type createSessionCall struct {
 }
 
 type getSessionCall struct {
-	key     session.Key
-	options []session.Option
+	key           session.Key
+	options       []session.Option
+	restoreHint   sessionrestore.Hint
+	restoreHintOK bool
 }
 
 func (m *mockSessionService) CreateSession(ctx context.Context, key session.Key, state session.StateMap, options ...session.Option) (*session.Session, error) {
@@ -346,7 +398,13 @@ func (m *mockSessionService) CreateSession(ctx context.Context, key session.Key,
 }
 
 func (m *mockSessionService) GetSession(ctx context.Context, key session.Key, options ...session.Option) (*session.Session, error) {
-	m.getSessionCalls = append(m.getSessionCalls, getSessionCall{key, options})
+	hint, ok := sessionrestore.FromContext(ctx)
+	m.getSessionCalls = append(m.getSessionCalls, getSessionCall{
+		key:           key,
+		options:       options,
+		restoreHint:   hint,
+		restoreHintOK: ok,
+	})
 	return &session.Session{
 		ID:        key.SessionID,
 		AppName:   key.AppName,

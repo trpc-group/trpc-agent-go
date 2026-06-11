@@ -19,11 +19,15 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/sessionrestore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-const userAnchorSearchBatchSize = 64
+const (
+	userAnchorSearchBatchSize = 64
+	summaryRestoreGuard       = time.Minute
+)
 
 // getSession retrieves a single session with its events and summaries.
 func (s *Service) getSession(
@@ -87,16 +91,40 @@ func (s *Service) getSession(
 		return nil, err
 	}
 
+	var summaries map[string]*session.Summary
+	var summariesLoaded bool
+	var restoreAfterTime time.Time
+	if hint, ok := sessionrestore.FromContext(ctx); ok &&
+		shouldUseSummaryAwareRestore(limit, s.opts.sessionEventLimit, afterTime, page) {
+		summariesList, err := s.getSummariesList(ctx, []session.Key{key}, []time.Time{sessState.CreatedAt})
+		if err != nil {
+			return nil, fmt.Errorf("get summaries failed: %w", err)
+		}
+		summaries = summariesList[0]
+		summariesLoaded = true
+		restoreAfterTime = summaryRestoreAfterTime(summaries, hint.SummaryFilterKey)
+	}
+
 	// Batch load events for all sessions
-	eventsList, err := s.getSessionEvents(ctx, key, sessState.CreatedAt, limit, afterTime, page)
+	eventsList, err := s.getSessionEvents(
+		ctx,
+		key,
+		sessState.CreatedAt,
+		limit,
+		afterTime,
+		page,
+		restoreAfterTime,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("get events failed: %w", err)
 	}
 	events := eventsList[0]
 
 	// Query summaries
-	summaries := make(map[string]*session.Summary)
-	if len(events) > 0 {
+	if summaries == nil {
+		summaries = make(map[string]*session.Summary)
+	}
+	if !summariesLoaded && len(events) > 0 {
 		// Batch load summaries for all sessions
 		summariesList, err := s.getSummariesList(ctx, []session.Key{key}, []time.Time{sessState.CreatedAt})
 		if err != nil {
@@ -114,7 +142,13 @@ func (s *Service) getSession(
 		session.WithSessionUpdatedAt(sessState.UpdatedAt),
 	)
 
-	trackEventsList, err := s.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, limit, afterTime)
+	trackEventsList, err := s.getTrackEvents(
+		ctx,
+		[]session.Key{key},
+		[]*SessionState{sessState},
+		limit,
+		afterTime,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("get track events failed: %w", err)
 	}
@@ -141,6 +175,7 @@ func (s *Service) getSessionEvents(
 	limit int,
 	afterTime time.Time,
 	page *session.EventPage,
+	restoreAfterTime time.Time,
 ) ([][]event.Event, error) {
 	if page != nil {
 		return s.getEventsList(ctx, []session.Key{key}, []time.Time{sessionCreatedAt}, limit, afterTime, page)
@@ -156,7 +191,7 @@ func (s *Service) getSessionEvents(
 	if effectiveLimit <= 0 {
 		return s.getEventsList(ctx, []session.Key{key}, []time.Time{sessionCreatedAt}, limit, afterTime, nil)
 	}
-	return s.getLimitedSessionEvents(ctx, key, sessionCreatedAt, effectiveLimit, afterTime)
+	return s.getLimitedSessionEvents(ctx, key, sessionCreatedAt, effectiveLimit, afterTime, restoreAfterTime)
 }
 
 // listSessions lists all sessions for a user.
@@ -690,15 +725,13 @@ func (s *Service) getLimitedSessionEvents(
 	sessionCreatedAt time.Time,
 	limit int,
 	afterTime time.Time,
+	restoreAfterTime time.Time,
 ) ([][]event.Event, error) {
 	filterAfterTime := afterTime
 	if filterAfterTime.IsZero() && s.opts.sessionTTL > 0 {
 		filterAfterTime = time.Now().Add(-s.opts.sessionTTL)
 	}
-	queryAfterTime := filterAfterTime
-	if sessionCreatedAt.After(queryAfterTime) {
-		queryAfterTime = sessionCreatedAt
-	}
+	queryAfterTime := maxTime(filterAfterTime, restoreAfterTime, sessionCreatedAt)
 
 	refs, err := s.getRecentEventRefs(ctx, key, queryAfterTime, limit)
 	if err != nil {
@@ -719,7 +752,8 @@ func (s *Service) getLimitedSessionEvents(
 		return [][]event.Event{append([]event.Event{anchor}, filteredEvents...)}, nil
 	}
 
-	anchor, ok, err := s.getLastUserEventBeforeRefs(ctx, key, sessionCreatedAt, refs)
+	anchorSearchAfterTime := maxTime(sessionCreatedAt, restoreAfterTime)
+	anchor, ok, err := s.getLastUserEventBeforeRefs(ctx, key, anchorSearchAfterTime, refs)
 	if err != nil {
 		return nil, err
 	}
@@ -727,6 +761,47 @@ func (s *Service) getLimitedSessionEvents(
 		return [][]event.Event{[]event.Event{}}, nil
 	}
 	return [][]event.Event{append([]event.Event{anchor}, filteredEvents...)}, nil
+}
+
+func shouldUseSummaryAwareRestore(
+	limit int,
+	defaultLimit int,
+	afterTime time.Time,
+	page *session.EventPage,
+) bool {
+	if page != nil || !afterTime.IsZero() {
+		return false
+	}
+	effectiveLimit := limit
+	if effectiveLimit <= 0 {
+		effectiveLimit = defaultLimit
+	}
+	return effectiveLimit > 0
+}
+
+func summaryRestoreAfterTime(
+	summaries map[string]*session.Summary,
+	filterKey string,
+) time.Time {
+	boundary, ok := session.SummaryPrefixBoundary(summaries, filterKey)
+	if !ok || boundary == nil {
+		return time.Time{}
+	}
+	cutoff := boundary.CutoffTime()
+	if cutoff.IsZero() {
+		return time.Time{}
+	}
+	return cutoff.Add(-summaryRestoreGuard)
+}
+
+func maxTime(times ...time.Time) time.Time {
+	var max time.Time
+	for _, t := range times {
+		if t.After(max) {
+			max = t
+		}
+	}
+	return max
 }
 
 // getRecentEventRefs fetches lightweight event ordering metadata before

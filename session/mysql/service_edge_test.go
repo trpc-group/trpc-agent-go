@@ -784,6 +784,7 @@ func TestGetSessionEvents_DelegatesToPagedEvents(t *testing.T) {
 		0,
 		time.Time{},
 		&session.EventPage{Offset: 0, Limit: 2},
+		time.Time{},
 	)
 	require.NoError(t, err)
 	require.Len(t, result, 1)
@@ -812,7 +813,7 @@ func TestGetSessionEvents_DisabledLimitUsesLegacyList(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
 			AddRow(int64(1), key.AppName, key.UserID, key.SessionID, evtBytes, createdAt.Add(time.Minute)))
 
-	result, err := s.getSessionEvents(context.Background(), key, createdAt, 0, time.Time{}, nil)
+	result, err := s.getSessionEvents(context.Background(), key, createdAt, 0, time.Time{}, nil, time.Time{})
 	require.NoError(t, err)
 	require.Len(t, result, 1)
 	require.Len(t, result[0], 1)
