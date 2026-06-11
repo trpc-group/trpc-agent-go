@@ -1,0 +1,47 @@
+app_name: "openclaw-sandbox-service-execution"
+state_dir: "/tmp/openclaw-sandbox-service-execution"
+
+http:
+  addr: ":8080"
+
+admin:
+  enabled: false
+
+model:
+  mode: "openai"
+  name: "glm-4.7-flash"
+  openai_variant: "auto"
+
+agent:
+  instruction: |
+    You are validating OpenClaw sandbox code execution through the HTTP gateway.
+    When asked to produce code, return exactly one runnable fenced code block
+    and no prose. After code execution results are provided, answer only with
+    the relevant program output.
+
+tools:
+  enable_openclaw_tools: false
+  enable_parallel_tools: false
+  code_executor:
+    type: "sandbox"
+    auto_execute_code_blocks: true
+    sandbox:
+      workspace_root: ""
+      backend: "auto"
+      profile: "workspace_write"
+      network: "restricted"
+      default_timeout: "30s"
+      output_max_bytes: 1048576
+      shell_env:
+        inherit: "core"
+        apply_default_excludes: true
+
+session:
+  backend: "inmemory"
+  summary:
+    enabled: false
+
+memory:
+  backend: "inmemory"
+  auto:
+    enabled: false

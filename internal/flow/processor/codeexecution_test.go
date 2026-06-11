@@ -178,14 +178,69 @@ func TestCodeExecutionResponseProcessor_UsesRunCodeExecutorOverride(
 	require.Contains(t, result.Response.Choices[0].Message.Content, "override")
 }
 
+func TestCodeExecutionResponseProcessor_UsesSharedWorkspaceSessionKey(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	proc := iprocessor.NewCodeExecutionResponseProcessor()
+
+	cases := []struct {
+		name string
+		sess *session.Session
+		want string
+	}{
+		{
+			name: "session id only",
+			sess: &session.Session{ID: "test-session"},
+			want: "test-session",
+		},
+		{
+			name: "full session key",
+			sess: &session.Session{
+				AppName: "test-app",
+				UserID:  "test-user",
+				ID:      "test-session",
+			},
+			want: "test-app/test-user/test-session",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := &stubExec{}
+			inv := &agent.Invocation{
+				Agent:     &testAgent{exec: exec},
+				Session:   tc.sess,
+				AgentName: "test-agent",
+			}
+			rsp := &model.Response{
+				Done: true,
+				Choices: []model.Choice{
+					{Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "```bash\necho hello\n```",
+					}},
+				},
+			}
+
+			ch := make(chan *event.Event, 4)
+			proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
+
+			require.Equal(t, tc.want, exec.lastInput.ExecutionID)
+		})
+	}
+}
+
 // stubExec is a simple CodeExecutor stub returning a fixed output
 type stubExec struct {
-	output string
+	output    string
+	lastInput codeexecutor.CodeExecutionInput
 }
 
 func (s *stubExec) ExecuteCode(
 	ctx context.Context, input codeexecutor.CodeExecutionInput,
 ) (codeexecutor.CodeExecutionResult, error) {
+	s.lastInput = input
 	output := s.output
 	if output == "" {
 		output = "OK"
