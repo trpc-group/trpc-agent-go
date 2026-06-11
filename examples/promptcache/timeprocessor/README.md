@@ -51,6 +51,13 @@ The following sample was collected with Hunyuan `hy3-preview` through the
 OpenAI-compatible API on 2026-06-10. Each case has four turns. Prompt cache is
 provider-side and best-effort, so exact numbers may vary between runs.
 
+This table is an illustrative demo run, not an isolated benchmark. In a
+sequential `-case all` run, `baseline` may warm provider-side cache for later
+cases because they share most of the same long stable prompt prefix. Therefore,
+do not interpret `date-only` being higher than `baseline` as a design advantage;
+`baseline` is only a sanity reference that stable prompts can be cached. The key
+comparison for this demo is `date-only` versus `full-datetime`.
+
 | Case | Time Handling | Exact Time Tool | Prompt Tokens | Cached Tokens | Requests With Cache | Tool Calls | Overall Cache Rate |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | `baseline` | No time processor. Stable system prompt only. | Not available | 15,878 | 11,200 | 3/4 | 0 | 70.5% |
@@ -58,11 +65,12 @@ provider-side and best-effort, so exact numbers may vary between runs.
 | `full-datetime` | `WithAddCurrentTime(true)` with `WithTimeFormat("2006-01-02 15:04:05 MST")`; timestamp changes every turn. | Available but not called in this case | 17,112 | 10,752 | 3/4 | 0 | 62.8% |
 | `precise-tool` | Date-only system context; exact time fetched only on demand. | `environment_context_current_time` called on time questions | 17,693 | 13,120 | 3/4 | 2 | 74.2% |
 
-The important comparison is `date-only` versus `full-datetime`: keeping the
-system prompt stable at date granularity preserves more of the prompt-cache
-prefix, while full datetime invalidates more of the prefix as the timestamp
-changes. `precise-tool` keeps the stable date context and still supports exact
-clock time via `environment_context_current_time`.
+The important comparison is `date-only` versus `full-datetime`, not
+`date-only` versus `baseline`: keeping the system prompt stable at date
+granularity preserves more of the prompt-cache prefix, while full datetime
+invalidates more of the prefix as the timestamp changes. `precise-tool` keeps
+the stable date context and still supports exact clock time via
+`environment_context_current_time`.
 
 For the sample above, `date-only` improves the cache rate by 29.9 percentage
 points over `full-datetime` and reuses 5,120 more cached tokens. The
