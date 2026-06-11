@@ -531,6 +531,7 @@ func (at *Tool) buildDynamicSubInvocation(
 	if err := flush.Invoke(ctx, parentInv); err != nil {
 		return nil, nil, nil, fmt.Errorf("flush parent invocation session: %w", err)
 	}
+	parentInv = parentInvocationWithLiveSession(parentInv)
 
 	patch, warnings := at.buildDynamicPatch(ctx, parentInv, spec)
 
