@@ -72,6 +72,7 @@ type Repository struct {
 	summaries             []skill.Summary
 	summaryFingerprints   map[string]summaryFileFingerprint
 	summaryCacheExpiresAt time.Time
+	summaryCacheTTL       time.Duration
 
 	baseDirs map[string]string
 
@@ -129,6 +130,16 @@ func WithSkillConfigs(cfg map[string]SkillConfig) Option {
 	}
 }
 
+// WithSummaryCacheDirtyCheckTTL sets how long Summaries can reuse cached
+// results before checking skill files for changes.
+func WithSummaryCacheDirtyCheckTTL(ttl time.Duration) Option {
+	return func(r *Repository) {
+		if ttl > 0 {
+			r.summaryCacheTTL = ttl
+		}
+	}
+}
+
 func NewRepository(roots []string, opts ...Option) (*Repository, error) {
 	base, err := skill.NewFSRepository(roots...)
 	if err != nil {
@@ -143,6 +154,8 @@ func NewRepository(roots []string, opts ...Option) (*Repository, error) {
 		baseDirs: map[string]string{},
 		metas:    map[string]*openClawMetadata{},
 		skillKey: map[string]string{},
+
+		summaryCacheTTL: summaryCacheDirtyCheckTTL,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -401,12 +414,13 @@ func (r *Repository) SetSkillEnabled(
 }
 
 func (r *Repository) indexLocked() {
+	now := time.Now()
 	if r.base == nil {
 		r.eligible = map[string]struct{}{}
 		r.reasons = map[string]string{}
 		r.summaries = nil
 		r.summaryFingerprints = map[string]summaryFileFingerprint{}
-		r.summaryCacheExpiresAt = time.Now().Add(summaryCacheDirtyCheckTTL)
+		r.summaryCacheExpiresAt = r.summaryCacheExpiry(now)
 		r.baseDirs = map[string]string{}
 		r.metas = map[string]*openClawMetadata{}
 		r.skillKey = map[string]string{}
@@ -502,7 +516,7 @@ func (r *Repository) indexLocked() {
 	r.summaryFingerprints = scanSummaryFingerprints(
 		r.summaryScanRootsLocked(),
 	)
-	r.summaryCacheExpiresAt = time.Now().Add(summaryCacheDirtyCheckTTL)
+	r.summaryCacheExpiresAt = r.summaryCacheExpiry(now)
 	r.baseDirs = baseDirs
 	r.metas = metas
 	r.skillKey = skillKeys
@@ -513,19 +527,27 @@ func (r *Repository) summaryCacheExpiredLocked(now time.Time) bool {
 		!now.Before(r.summaryCacheExpiresAt)
 }
 
+func (r *Repository) summaryCacheExpiry(now time.Time) time.Time {
+	ttl := r.summaryCacheTTL
+	if ttl <= 0 {
+		ttl = summaryCacheDirtyCheckTTL
+	}
+	return now.Add(ttl)
+}
+
 func (r *Repository) refreshSummaryCacheIfDirtyLocked(now time.Time) {
 	if !r.summaryCacheExpiredLocked(now) {
 		return
 	}
 	current := scanSummaryFingerprints(r.summaryScanRootsLocked())
 	if summaryFingerprintsEqual(current, r.summaryFingerprints) {
-		r.summaryCacheExpiresAt = now.Add(summaryCacheDirtyCheckTTL)
+		r.summaryCacheExpiresAt = r.summaryCacheExpiry(now)
 		return
 	}
 	if refreshable, ok := r.base.(skill.RefreshableRepository); ok {
 		if err := refreshable.Refresh(); err != nil {
 			log.Warnf("skills summary refresh failed: %v", err)
-			r.summaryCacheExpiresAt = now.Add(summaryCacheDirtyCheckTTL)
+			r.summaryCacheExpiresAt = r.summaryCacheExpiry(now)
 			return
 		}
 	}

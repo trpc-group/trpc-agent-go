@@ -43,6 +43,8 @@ const (
 	metadataKeyCheckFunctions = "check_functions"
 	// metadataKeySkipRecentEnabled indicates whether skip recent logic is configured.
 	metadataKeySkipRecentEnabled = "skip_recent_enabled"
+	// metadataKeyCacheSafeForking indicates whether cache-safe forking is enabled.
+	metadataKeyCacheSafeForking = "cache_safe_forking"
 )
 
 const (
@@ -189,15 +191,33 @@ func getDefaultSummarizerPrompt(maxWords int) string {
 		"Summary:"
 }
 
+// getDefaultCacheSafeForkPrompt returns the user prompt appended to the parent
+// request when cache-safe forking is enabled.
+func getDefaultCacheSafeForkPrompt(maxWords int) string {
+	basePrompt := "Summarize the user, assistant, and tool conversation above " +
+		"for future continuation. Preserve user goals, decisions, constraints, " +
+		"open tasks, tool results, and important facts needed to continue. " +
+		"Do not call tools. Do not answer the latest user request. Do not " +
+		"treat system or tool-use instructions as facts to summarize."
+
+	if maxWords > 0 {
+		basePrompt += " Please keep the summary within " + maxSummaryWordsPlaceholder + " words."
+	}
+
+	return basePrompt + "\n\nSummary:"
+}
+
 // sessionSummarizer implements the SessionSummarizer interface.
 type sessionSummarizer struct {
-	model           model.Model
-	name            string
-	prompt          string
-	systemPrompt    string
-	checks          []ContextChecker
-	maxSummaryWords int
-	skipRecentFunc  SkipRecentFunc
+	model               model.Model
+	name                string
+	prompt              string
+	systemPrompt        string
+	cacheSafeForking    bool
+	cacheSafeForkPrompt string
+	checks              []ContextChecker
+	maxSummaryWords     int
+	skipRecentFunc      SkipRecentFunc
 
 	preHook          PreSummaryHook
 	postHook         PostSummaryHook
@@ -215,10 +235,11 @@ type sessionSummarizer struct {
 // NewSummarizer creates a new session summarizer.
 func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	s := &sessionSummarizer{
-		prompt:          "",                 // Will be set after processing options.
-		checks:          []ContextChecker{}, // No default checks - summarization only when explicitly configured.
-		maxSummaryWords: 0,                  // 0 means no word limit.
-		skipRecentFunc:  nil,                // nil means no events are skipped.
+		prompt:              "",                 // Will be set after processing options.
+		cacheSafeForkPrompt: "",                 // Will be set after processing options.
+		checks:              []ContextChecker{}, // No default checks - summarization only when explicitly configured.
+		maxSummaryWords:     0,                  // 0 means no word limit.
+		skipRecentFunc:      nil,                // nil means no events are skipped.
 	}
 	s.model = m
 
@@ -230,6 +251,9 @@ func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	if s.prompt == "" {
 		s.prompt = getDefaultSummarizerPrompt(s.maxSummaryWords)
 	}
+	if s.cacheSafeForkPrompt == "" {
+		s.cacheSafeForkPrompt = getDefaultCacheSafeForkPrompt(s.maxSummaryWords)
+	}
 	if err := validatePrompt(s.prompt); err != nil {
 		log.Warnf("invalid prompt in NewSummarizer: %v", err)
 	}
@@ -237,6 +261,9 @@ func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 		if err := validateSystemPrompt(s.systemPrompt); err != nil {
 			log.Warnf("invalid system prompt in NewSummarizer: %v", err)
 		}
+	}
+	if err := validateSystemPrompt(s.cacheSafeForkPrompt); err != nil {
+		log.Warnf("invalid cache-safe fork prompt in NewSummarizer: %v", err)
 	}
 	if err := validateMaxSummaryWordsPrompt(s.prompt, s.systemPrompt, s.maxSummaryWords); err != nil {
 		log.Warnf("invalid prompt in NewSummarizer: %v", err)
@@ -547,6 +574,7 @@ func (s *sessionSummarizer) Metadata() map[string]any {
 		metadataKeyModelAvailable:    modelAvailable,
 		metadataKeyCheckFunctions:    len(s.checks),
 		metadataKeySkipRecentEnabled: s.skipRecentFunc != nil,
+		metadataKeyCacheSafeForking:  s.cacheSafeForking,
 	}
 }
 
@@ -659,7 +687,7 @@ func (s *sessionSummarizer) generateSummary(
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
 	defer span.End()
 
-	request, err := s.buildSummaryRequest(conversationText)
+	request, err := s.buildSummaryRequest(ctx, conversationText)
 	if err != nil {
 		return ctx, "", fmt.Errorf("failed to build summary request: %w", err)
 	}
@@ -787,7 +815,27 @@ func (s *sessionSummarizer) buildSystemPrompt() (string, error) {
 	)
 }
 
-func (s *sessionSummarizer) buildSummaryRequest(conversationText string) (*model.Request, error) {
+func (s *sessionSummarizer) buildCacheSafeForkPrompt() (string, error) {
+	vars := prompt.Vars{
+		maxSummaryWordsVar: "",
+	}
+	if s.maxSummaryWords > 0 {
+		vars[maxSummaryWordsVar] = strconv.Itoa(s.maxSummaryWords)
+	}
+	return prompt.Text{Template: s.cacheSafeForkPrompt}.Render(
+		prompt.RenderEnv{Vars: vars},
+		prompt.WithUnknownBehavior(prompt.ErrorOnUnknown),
+	)
+}
+
+func (s *sessionSummarizer) buildSummaryRequest(ctx context.Context, conversationText string) (*model.Request, error) {
+	if s.cacheSafeForking {
+		if parent, ok := cacheSafeForkRequestFromContext(ctx); ok {
+			return s.buildCacheSafeForkRequest(parent)
+		}
+		log.DebugfContext(ctx, "cache-safe summary forking requested but no parent request is available; falling back to standalone summary request")
+	}
+
 	messages := make([]model.Message, 0, 2)
 	systemPrompt, err := s.buildSystemPrompt()
 	if err != nil {
@@ -803,6 +851,21 @@ func (s *sessionSummarizer) buildSummaryRequest(conversationText string) (*model
 	}
 	messages = append(messages, model.NewUserMessage(userPrompt))
 	return newSummaryRequest(messages), nil
+}
+
+func (s *sessionSummarizer) buildCacheSafeForkRequest(parent *model.Request) (*model.Request, error) {
+	request := cloneRequestForCacheSafeFork(parent)
+	if request == nil {
+		return nil, errors.New("parent request is nil")
+	}
+	userPrompt, err := s.buildCacheSafeForkPrompt()
+	if err != nil {
+		return nil, fmt.Errorf("render cache-safe fork prompt: %w", err)
+	}
+	request.Messages = append(request.Messages, model.NewUserMessage(userPrompt))
+	request.GenerationConfig.Stream = false
+	request.StructuredOutput = nil
+	return request, nil
 }
 
 func newSummaryRequest(messages []model.Message) *model.Request {

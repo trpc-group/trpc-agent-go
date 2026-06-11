@@ -60,6 +60,7 @@ import (
 	util "trpc.group/trpc-go/trpc-agent-go/examples/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang"
+	_ "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/graph"
 	agegraphstore "trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age"
@@ -76,15 +77,17 @@ import (
 )
 
 var (
-	defaultRepoURL = "https://github.com/trpc-group/trpc-go"
-	defaultQuery   = "Find code related to client RPC invocation in trpc-go, traverse its callees, and explain the nearby call graph."
-	query          = flag.String("query", "", "Optional initial query to ask before entering chat")
-	modelName      = flag.String("model", util.GetEnvOrDefault("MODEL_NAME", "deepseek-chat"), "Model to use")
-	embeddingModel = flag.String("embedding-model", util.GetEnvOrDefault("EMBEDDING_MODEL", "server:277357"), "Embedding model to use")
-	embeddingDim   = flag.Int("embedding-dimension", defaultEmbeddingDimension(), "Embedding dimension; <=0 probes once")
-	recreate       = flag.Bool("recreate", false, "Drop pgvector table and reload graph source; false reuses existing graph/vector data")
-	progressStep   = flag.Int("progress-step", 1000, "Graph seed indexing progress step")
-	debugFile      = flag.String("debug-file", "", "Write JSONL tool trace to this file when set")
+	defaultRepoURL  = "https://github.com/trpc-group/trpc-agent-python"
+	defaultRepoName = "trpc-agent-python"
+	defaultRepoDesc = "The tRPC Agent Python repository used to demonstrate graph RAG over repo source."
+	defaultQuery    = "Find code related to agent execution in trpc-agent-python, traverse its callees, and explain the nearby call graph."
+	query           = flag.String("query", "", "Optional initial query to ask before entering chat")
+	modelName       = flag.String("model", util.GetEnvOrDefault("MODEL_NAME", "deepseek-chat"), "Model to use")
+	embeddingModel  = flag.String("embedding-model", util.GetEnvOrDefault("EMBEDDING_MODEL", "server:277357"), "Embedding model to use")
+	embeddingDim    = flag.Int("embedding-dimension", defaultEmbeddingDimension(), "Embedding dimension; <=0 probes once")
+	recreate        = flag.Bool("recreate", false, "Drop pgvector table and reload graph source; false reuses existing graph/vector data")
+	progressStep    = flag.Int("progress-step", 1000, "Graph seed indexing progress step")
+	debugFile       = flag.String("debug-file", "", "Write JSONL tool trace to this file when set")
 )
 
 func main() {
@@ -95,39 +98,64 @@ func main() {
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Println(strings.Repeat("=", 50))
 
+	r, trace, cleanup, err := setupServices(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer cleanup()
+	defer r.Close()
+	defer trace.Close()
+
+	sessionID := fmt.Sprintf("graph-demo-session-%d", time.Now().Unix())
+	fmt.Printf("\nChat ready. Session: %s\n", sessionID)
+	fmt.Printf("Type '/exit' to end the conversation.\n")
+	fmt.Printf("Try: %s\n", defaultQuery)
+	fmt.Println(strings.Repeat("=", 50))
+
+	chatLoop(ctx, r, sessionID, trace)
+}
+
+func setupServices(ctx context.Context) (runner.Runner, *jsonlTrace, func(), error) {
 	ageDSN, ageGraphName := ageConfig()
 	if *recreate {
 		if err := dropAGEGraph(ctx, ageDSN, ageGraphName); err != nil {
-			log.Fatalf("drop AGE graph: %v", err)
+			return nil, nil, nil, fmt.Errorf("drop AGE graph: %w", err)
 		}
 		fmt.Printf("Dropped AGE graph: %s\n", ageGraphName)
 	}
 
 	graphStore, err := newAGEGraphStore()
 	if err != nil {
-		log.Fatalf("create AGE graph store: %v", err)
+		return nil, nil, nil, fmt.Errorf("create AGE graph store: %w", err)
 	}
-	defer graphStore.Close()
 
 	embedder, resolvedDimension, err := setupEmbedder(ctx)
 	if err != nil {
-		log.Fatalf("setup embedder: %v", err)
+		graphStore.Close()
+		return nil, nil, nil, fmt.Errorf("setup embedder: %w", err)
 	}
 	fmt.Printf("Embedding: %s (%d dimensions)\n", *embeddingModel, resolvedDimension)
 
 	vectorDSN, vectorTable := pgVectorConfig()
 	if *recreate {
 		if err := dropPGVectorTable(ctx, vectorDSN, vectorTable); err != nil {
-			log.Fatalf("drop pgvector table: %v", err)
+			graphStore.Close()
+			return nil, nil, nil, fmt.Errorf("drop pgvector table: %w", err)
 		}
 		fmt.Printf("Dropped pgvector table: %s\n", vectorTable)
 	}
 
 	vectorStore, err := newVectorStore(vectorDSN, vectorTable, resolvedDimension)
 	if err != nil {
-		log.Fatalf("create vector store: %v", err)
+		graphStore.Close()
+		return nil, nil, nil, fmt.Errorf("create vector store: %w", err)
 	}
-	defer vectorStore.Close()
+
+	// cleanup closes the stores that the knowledge base uses internally.
+	cleanup := func() {
+		graphStore.Close()
+		vectorStore.Close()
+	}
 
 	kb := knowledge.NewGraphKnowledge(
 		knowledge.WithGraphStore(graphStore),
@@ -136,7 +164,8 @@ func main() {
 	)
 	if *recreate {
 		if err := loadGraphSource(ctx, kb); err != nil {
-			log.Fatalf("load graph from repo source: %v", err)
+			cleanup()
+			return nil, nil, nil, fmt.Errorf("load graph from repo source: %w", err)
 		}
 	} else {
 		fmt.Println("Skipped graph source loading; using existing AGE graph and pgvector data")
@@ -145,8 +174,8 @@ func main() {
 	graphToolSet := knowledgetool.NewCodeGraphSearchTool(
 		kb,
 		knowledgetool.WithCodeSearchRepoInfos([]knowledgetool.CodeRepoInfo{{
-			Name:        "trpc-go",
-			Description: "The tRPC-Go framework repository used to demonstrate graph RAG over repo source.",
+			Name:        defaultRepoName,
+			Description: defaultRepoDesc,
 		}}),
 		knowledgetool.WithCodeSearchMaxResults(3),
 	)
@@ -164,24 +193,22 @@ func main() {
 		llmAgent,
 		runner.WithSessionService(sessioninmemory.NewSessionService()),
 	)
-	defer r.Close()
 
 	var trace *jsonlTrace
 	if *debugFile != "" {
 		trace, err = newJSONLTrace(*debugFile)
 		if err != nil {
-			log.Fatalf("open debug file: %v", err)
+			r.Close()
+			cleanup()
+			return nil, nil, nil, fmt.Errorf("open debug file: %w", err)
 		}
-		defer trace.Close()
 		fmt.Printf("Debug trace: %s\n", *debugFile)
 	}
 
-	sessionID := fmt.Sprintf("graph-demo-session-%d", time.Now().Unix())
-	fmt.Printf("\nChat ready. Session: %s\n", sessionID)
-	fmt.Printf("Type '/exit' to end the conversation.\n")
-	fmt.Printf("Try: %s\n", defaultQuery)
-	fmt.Println(strings.Repeat("=", 50))
+	return r, trace, cleanup, nil
+}
 
+func chatLoop(ctx context.Context, r runner.Runner, sessionID string, trace *jsonlTrace) {
 	if strings.TrimSpace(*query) != "" {
 		fmt.Printf("\nInitial query: %s\n", *query)
 		if err := runTurn(ctx, r, "graph-demo-user", sessionID, *query, trace); err != nil {
@@ -327,16 +354,16 @@ func loadGraphSource(ctx context.Context, kb *knowledge.BuiltinGraphKnowledge) e
 	repoSrc := repo.New(
 		repo.WithRepository(repo.Repository{
 			URL:         defaultRepoURL,
-			RepoName:    "trpc-go",
+			RepoName:    defaultRepoName,
 			RepoURL:     defaultRepoURL,
-			Description: "The tRPC-Go framework repository used to demonstrate graph RAG over repo source.",
+			Description: defaultRepoDesc,
 		}),
-		repo.WithName("trpc-go Repository"),
-		repo.WithFileExtensions([]string{".go"}),
+		repo.WithName(defaultRepoName+" Repository"),
+		repo.WithFileExtensions([]string{".go", ".py"}),
 	)
 	err := kb.LoadGraphSource(
 		ctx,
-		timedGraphSource{name: "trpc-go Repository", src: repoSrc},
+		timedGraphSource{name: defaultRepoName + " Repository", src: repoSrc},
 		knowledge.WithGraphLoadProgress(true),
 		knowledge.WithGraphLoadProgressStepSize(*progressStep),
 		knowledge.WithGraphLoadConcurrency(knowledge.GraphLoadConcurrency{

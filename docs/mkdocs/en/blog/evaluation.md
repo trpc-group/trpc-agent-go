@@ -6,7 +6,7 @@
 
 tRPC-Agent-Go builds a complete automated evaluation system around evaluation sets and metrics. It unifies multi-turn conversations, tool calls, and final outputs into a repeatable evaluation process, and produces structured evaluation results to support regression validation. The framework integrates multiple metric types, including deterministic static evaluation, LLM Judge semantic evaluation, and rubric-based evaluation. Together with concurrent inference, Trace mode, callbacks, and context injection, it aims to provide end-to-end support from Agent development to regression testing, helping developers predict and catch potential behavior drift during version iteration.
 
-![overview.png](../../assets/img/blog/evaluation/overview.png)
+![overview.png](../../assets/img/blog/evaluation/overview_en.png)
 
 ## Background
 

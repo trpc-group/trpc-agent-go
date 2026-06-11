@@ -227,6 +227,12 @@ const (
 		"input after reasonable local exploration, state " +
 		"the issue briefly and continue with the best " +
 		"fallback."
+	openClawSkillsPathGuidance = "Each entry includes a path to that " +
+		"skill's SKILL.md on disk."
+	openClawCompactSkillsGuidance = "The overview may show a compact " +
+		"subset. When no shown skill clearly matches, call " +
+		"`skill_list` to inspect the full catalog before " +
+		"choosing a skill."
 	openClawSkillLoadToolDescription = "Load a skill body and optional " +
 		"docs. This is a blocking requirement when the user " +
 		"names a listed skill, names a slash command, or the " +
@@ -1054,20 +1060,23 @@ func NewRuntimeWithOptions(
 			SkillsAllowBundled: splitCSV(
 				opts.SkillsAllowBundled,
 			),
-			SkillConfigs:        opts.SkillConfigs,
-			SkillConfigKeys:     resolveSkillConfigKeys(opts),
-			SkillsWatch:         opts.SkillsWatch,
-			SkillsWatchBundled:  opts.SkillsWatchBundled,
-			SkillsWatchDebounce: opts.SkillsWatchDebounce,
-			SkillsToolProfile:   opts.SkillsToolProfile,
-			SkillsLoadMode:      opts.SkillsLoadMode,
-			SkillsMaxLoaded:     opts.SkillsMaxLoaded,
-			SkillsToolResults:   opts.SkillsToolResults,
-			SkillsSkipFallback:  opts.SkillsSkipFallback,
-			SkillsToolingGuide:  opts.SkillsToolingGuide,
-			KnowledgesConfig:    opts.KnowledgesConfig,
-			StateDir:            resolvedStateDir,
-			MemoryFileStore:     fileMemoryStore,
+			SkillConfigs:          opts.SkillConfigs,
+			SkillConfigKeys:       resolveSkillConfigKeys(opts),
+			SkillsWatch:           opts.SkillsWatch,
+			SkillsWatchBundled:    opts.SkillsWatchBundled,
+			SkillsWatchDebounce:   opts.SkillsWatchDebounce,
+			SkillsSummaryCacheTTL: opts.SkillsSummaryCacheTTL,
+			SkillsOverviewLimit:   opts.SkillsOverviewLimit,
+			SkillsOverviewPinned:  splitCSV(opts.SkillsOverviewPinned),
+			SkillsToolProfile:     opts.SkillsToolProfile,
+			SkillsLoadMode:        opts.SkillsLoadMode,
+			SkillsMaxLoaded:       opts.SkillsMaxLoaded,
+			SkillsToolResults:     opts.SkillsToolResults,
+			SkillsSkipFallback:    opts.SkillsSkipFallback,
+			SkillsToolingGuide:    opts.SkillsToolingGuide,
+			KnowledgesConfig:      opts.KnowledgesConfig,
+			StateDir:              resolvedStateDir,
+			MemoryFileStore:       fileMemoryStore,
 
 			EnableLocalExec:      opts.EnableLocalExec,
 			EnableOpenClawTools:  opts.EnableOpenClawTools,
@@ -1170,6 +1179,17 @@ func NewRuntimeWithOptions(
 			),
 		)
 	}
+	gwOpts = appendLatencyDiagnosticsGatewayOption(
+		gwOpts,
+		opts.StateDir,
+		opts.LatencyDiagnosticsEnabled,
+		opts.LatencyDiagnosticsEvents,
+	)
+	gwOpts = appendSkillsOverviewGatewayOption(
+		gwOpts,
+		opts.SkillsOverviewLimit,
+		splitCSV(opts.SkillsOverviewPinned),
+	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -1576,20 +1596,23 @@ func run(
 			SkillsAllowBundled: splitCSV(
 				opts.SkillsAllowBundled,
 			),
-			SkillConfigs:        opts.SkillConfigs,
-			SkillConfigKeys:     resolveSkillConfigKeys(opts),
-			SkillsWatch:         opts.SkillsWatch,
-			SkillsWatchBundled:  opts.SkillsWatchBundled,
-			SkillsWatchDebounce: opts.SkillsWatchDebounce,
-			SkillsToolProfile:   opts.SkillsToolProfile,
-			SkillsLoadMode:      opts.SkillsLoadMode,
-			SkillsMaxLoaded:     opts.SkillsMaxLoaded,
-			SkillsToolResults:   opts.SkillsToolResults,
-			SkillsSkipFallback:  opts.SkillsSkipFallback,
-			SkillsToolingGuide:  opts.SkillsToolingGuide,
-			KnowledgesConfig:    opts.KnowledgesConfig,
-			StateDir:            resolvedStateDir,
-			MemoryFileStore:     fileMemoryStore,
+			SkillConfigs:          opts.SkillConfigs,
+			SkillConfigKeys:       resolveSkillConfigKeys(opts),
+			SkillsWatch:           opts.SkillsWatch,
+			SkillsWatchBundled:    opts.SkillsWatchBundled,
+			SkillsWatchDebounce:   opts.SkillsWatchDebounce,
+			SkillsSummaryCacheTTL: opts.SkillsSummaryCacheTTL,
+			SkillsOverviewLimit:   opts.SkillsOverviewLimit,
+			SkillsOverviewPinned:  splitCSV(opts.SkillsOverviewPinned),
+			SkillsToolProfile:     opts.SkillsToolProfile,
+			SkillsLoadMode:        opts.SkillsLoadMode,
+			SkillsMaxLoaded:       opts.SkillsMaxLoaded,
+			SkillsToolResults:     opts.SkillsToolResults,
+			SkillsSkipFallback:    opts.SkillsSkipFallback,
+			SkillsToolingGuide:    opts.SkillsToolingGuide,
+			KnowledgesConfig:      opts.KnowledgesConfig,
+			StateDir:              resolvedStateDir,
+			MemoryFileStore:       fileMemoryStore,
 
 			EnableLocalExec:     opts.EnableLocalExec,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
@@ -1685,6 +1708,17 @@ func run(
 			),
 		)
 	}
+	gwOpts = appendLatencyDiagnosticsGatewayOption(
+		gwOpts,
+		opts.StateDir,
+		opts.LatencyDiagnosticsEnabled,
+		opts.LatencyDiagnosticsEvents,
+	)
+	gwOpts = appendSkillsOverviewGatewayOption(
+		gwOpts,
+		opts.SkillsOverviewLimit,
+		splitCSV(opts.SkillsOverviewPinned),
+	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -2432,14 +2466,22 @@ func newAgent(
 	cwd, _ := os.Getwd()
 	roots := resolveSkillRoots(cwd, cfg)
 	bundledRoot := resolveBundledSkillsRoot(cwd, cfg.StateDir)
-	repo, err := ocskills.NewRepository(
-		roots,
+	repoOptions := []ocskills.Option{
 		ocskills.WithDebug(cfg.SkillsDebug),
 		ocskills.WithConfigKeys(cfg.SkillConfigKeys),
 		ocskills.WithBundledSkillsRoot(bundledRoot),
 		ocskills.WithAllowBundled(cfg.SkillsAllowBundled),
 		ocskills.WithSkillConfigs(cfg.SkillConfigs),
-	)
+	}
+	if cfg.SkillsSummaryCacheTTL > 0 {
+		repoOptions = append(
+			repoOptions,
+			ocskills.WithSummaryCacheDirtyCheckTTL(
+				cfg.SkillsSummaryCacheTTL,
+			),
+		)
+	}
+	repo, err := ocskills.NewRepository(roots, repoOptions...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2559,7 +2601,16 @@ func buildOpenClawSkillsGuidance(cfg agentConfig) string {
 	if cfg.SkillsToolingGuide != nil {
 		return strings.TrimSpace(*cfg.SkillsToolingGuide)
 	}
-	return strings.TrimSpace(openClawSkillsGuidance)
+	guidance := strings.TrimSpace(openClawSkillsGuidance)
+	if cfg.SkillsOverviewLimit > 0 {
+		guidance = strings.Replace(
+			guidance,
+			openClawSkillsPathGuidance,
+			openClawCompactSkillsGuidance,
+			1,
+		)
+	}
+	return guidance
 }
 
 func hasToolNamed(tools []tool.Tool, name string) bool {
@@ -2739,22 +2790,25 @@ type agentConfig struct {
 	Instruction                                   string
 	SystemPrompt                                  string
 
-	SkillsRoot          string
-	SkillsExtraDirs     []string
-	SkillsDebug         bool
-	SkillsAllowBundled  []string
-	SkillConfigs        map[string]ocskills.SkillConfig
-	SkillConfigKeys     []string
-	SkillsWatch         bool
-	SkillsWatchBundled  bool
-	SkillsWatchDebounce time.Duration
-	SkillsToolProfile   string
-	SkillsLoadMode      string
-	SkillsMaxLoaded     int
-	SkillsToolResults   bool
-	SkillsSkipFallback  bool
-	SkillsToolingGuide  *string
-	KnowledgesConfig    []knowledgeEntry
+	SkillsRoot            string
+	SkillsExtraDirs       []string
+	SkillsDebug           bool
+	SkillsAllowBundled    []string
+	SkillConfigs          map[string]ocskills.SkillConfig
+	SkillConfigKeys       []string
+	SkillsWatch           bool
+	SkillsWatchBundled    bool
+	SkillsWatchDebounce   time.Duration
+	SkillsSummaryCacheTTL time.Duration
+	SkillsOverviewLimit   int
+	SkillsOverviewPinned  []string
+	SkillsToolProfile     string
+	SkillsLoadMode        string
+	SkillsMaxLoaded       int
+	SkillsToolResults     bool
+	SkillsSkipFallback    bool
+	SkillsToolingGuide    *string
+	KnowledgesConfig      []knowledgeEntry
 
 	StateDir string
 

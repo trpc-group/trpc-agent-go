@@ -9,6 +9,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/model/gemini => ../../model/gemini
 	trpc.group/trpc-go/trpc-agent-go/model/ollama => ../../model/ollama
 	trpc.group/trpc-go/trpc-agent-go/model/provider => ../../model/provider
+	trpc.group/trpc-go/trpc-agent-go/runner/bestofn => ../../runner/bestofn
 	trpc.group/trpc-go/trpc-agent-go/server/evaluation => ../../server/evaluation
 	trpc.group/trpc-go/trpc-agent-go/server/promptiter => ../../server/promptiter
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../../storage/mysql
@@ -19,6 +20,7 @@ require (
 	github.com/yanyiwu/gojieba v1.4.7
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
 	trpc.group/trpc-go/trpc-agent-go/evaluation v1.6.0
+	trpc.group/trpc-go/trpc-agent-go/runner/bestofn v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/server/evaluation v1.6.0
 	trpc.group/trpc-go/trpc-agent-go/server/promptiter v0.8.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10

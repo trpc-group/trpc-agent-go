@@ -4411,6 +4411,7 @@ func (e *Executor) syncResumeState(execCtx *ExecutionContext, source State) {
 	syncResumeKey(execCtx.State, source, StateKeyResumeMap)
 	syncResumeKey(execCtx.State, source, StateKeyUsedInterrupts)
 	syncResumeKey(execCtx.State, source, StateKeySubgraphInterrupt)
+	syncResumeKey(execCtx.State, source, stateKeyCompletedToolMessages)
 }
 
 // syncResumeKey applies a specific resume key mutation from the node state.
