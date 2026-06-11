@@ -21,7 +21,7 @@ Those user-placement preloads participate in token tailoring and can be trimmed.
 
 ## Prerequisites
 
-- Go 1.21 or later.
+- Go 1.24.6 or later.
 - An OpenAI-compatible model endpoint.
 
 Environment variables:

@@ -693,74 +693,34 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 		return true
 	}
 
-	var messages []model.Message
-	var summaryCutoff summaryHistoryCutoff
-	var summaryText string
 	var userContextBlocks []string
-	// Skip session summary when include_contents=none, but still get current
-	// invocation's events (tool calls/results) to maintain ReAct loop context.
-	if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
-		// Fetch session summary early so we can insert it after other
-		// semi-stable system blocks (for example, preloaded memories).
-		summaryText, summaryCutoff = p.getSessionSummaryText(invocation)
-	}
+	summaryText, summaryCutoff := p.sessionSummaryForRequest(invocation, skipHistory)
+	userContextBlocks = p.appendPreloadMemoryContext(
+		ctx,
+		invocation,
+		req,
+		userContextBlocks,
+	)
+	userContextBlocks = p.appendSummaryContext(
+		invocation,
+		req,
+		summaryText,
+		userContextBlocks,
+	)
+	userContextBlocks = p.appendPreloadSessionRecallContext(
+		ctx,
+		invocation,
+		req,
+		skipHistory,
+		userContextBlocks,
+	)
 
-	// Preload memories into system prompt if configured.
-	// PreloadMemory: 0 = disabled, -1 = all, N > 0 = adaptive preload budget.
-	if p.PreloadMemory != 0 && invocation.MemoryService != nil {
-		if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
-			if p.PreloadMemoryInjectionMode == PreloadMemoryInjectionUser {
-				userContextBlocks = appendUserContextBlock(userContextBlocks, memMsg.Content)
-			} else {
-				p.injectSystemContextMessage(req, *memMsg)
-			}
-		}
-	}
-	if summaryText != "" {
-		invocation.SetState(contentHasSessionSummaryStateKey, true)
-		if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
-			// User-mode injection is deferred until after history messages are
-			// collected, so the summary can be merged with the first user
-			// message in history when applicable.
-			userContextBlocks = appendUserContextBlock(
-				userContextBlocks,
-				p.formatSummaryForUser(summaryText),
-			)
-		} else {
-			// Default system-mode: inject as system context message.
-			summaryMsg := model.Message{
-				Role:    model.RoleSystem,
-				Content: p.formatSummary(summaryText),
-			}
-			p.injectSystemContextMessage(req, summaryMsg)
-		}
-	}
-	if !skipHistory &&
-		p.PreloadSessionRecall > 0 &&
-		invocation.SessionService != nil {
-		if recallMsg := p.getPreloadSessionRecallMessage(ctx, invocation); recallMsg != nil {
-			if p.PreloadSessionRecallInjectionMode == PreloadSessionRecallInjectionUser {
-				userContextBlocks = appendUserContextBlock(userContextBlocks, recallMsg.Content)
-			} else {
-				p.injectSystemContextMessage(req, *recallMsg)
-			}
-		}
-	}
-
-	if skipHistory {
-		// When include_contents=none, only get events from current invocation
-		// to preserve tool call history within the current ReAct loop.
-		// This fixes the infinite loop issue where the agent doesn't see its
-		// own tool calls when running as an isolated subgraph.
-		if includeInvocationMessage {
-			messages = p.getCurrentInvocationMessages(invocation)
-		}
-	} else {
-		messages = p.getIncrementMessagesAfterCutoff(invocation, summaryCutoff)
-		if p.hasCompactedCurrentInvocationToolResultsAfterCutoff(invocation, summaryCutoff) {
-			invocation.SetState(contentHasCompactedToolResultsStateKey, true)
-		}
-	}
+	messages := p.sessionMessagesAfterCutoff(
+		invocation,
+		skipHistory,
+		includeInvocationMessage,
+		summaryCutoff,
+	)
 
 	// When user-mode injection is active for summary or preload context, prepend
 	// it as user content near history. Prefer merging into the first user
@@ -778,6 +738,109 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 
 	req.Messages = append(req.Messages, messages...)
 	return len(messages) == 0
+}
+
+func (p *ContentRequestProcessor) sessionSummaryForRequest(
+	invocation *agent.Invocation,
+	skipHistory bool,
+) (string, summaryHistoryCutoff) {
+	// Skip session summary when include_contents=none, but still get current
+	// invocation's events (tool calls/results) to maintain ReAct loop context.
+	if skipHistory || !p.AddSessionSummary || p.TimelineFilterMode != TimelineFilterAll {
+		return "", summaryHistoryCutoff{}
+	}
+	// Fetch session summary early so we can insert it after other semi-stable
+	// system blocks (for example, preloaded memories).
+	return p.getSessionSummaryText(invocation)
+}
+
+func (p *ContentRequestProcessor) appendPreloadMemoryContext(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	userContextBlocks []string,
+) []string {
+	// PreloadMemory: 0 = disabled, -1 = all, N > 0 = adaptive preload budget.
+	if p.PreloadMemory == 0 || invocation.MemoryService == nil {
+		return userContextBlocks
+	}
+	memMsg := p.getPreloadMemoryMessage(ctx, invocation)
+	if memMsg == nil {
+		return userContextBlocks
+	}
+	if p.PreloadMemoryInjectionMode == PreloadMemoryInjectionUser {
+		return appendUserContextBlock(userContextBlocks, memMsg.Content)
+	}
+	p.injectSystemContextMessage(req, *memMsg)
+	return userContextBlocks
+}
+
+func (p *ContentRequestProcessor) appendSummaryContext(
+	invocation *agent.Invocation,
+	req *model.Request,
+	summaryText string,
+	userContextBlocks []string,
+) []string {
+	if summaryText == "" {
+		return userContextBlocks
+	}
+	invocation.SetState(contentHasSessionSummaryStateKey, true)
+	if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
+		return appendUserContextBlock(
+			userContextBlocks,
+			p.formatSummaryForUser(summaryText),
+		)
+	}
+	summaryMsg := model.Message{
+		Role:    model.RoleSystem,
+		Content: p.formatSummary(summaryText),
+	}
+	p.injectSystemContextMessage(req, summaryMsg)
+	return userContextBlocks
+}
+
+func (p *ContentRequestProcessor) appendPreloadSessionRecallContext(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	skipHistory bool,
+	userContextBlocks []string,
+) []string {
+	if skipHistory || p.PreloadSessionRecall <= 0 || invocation.SessionService == nil {
+		return userContextBlocks
+	}
+	recallMsg := p.getPreloadSessionRecallMessage(ctx, invocation)
+	if recallMsg == nil {
+		return userContextBlocks
+	}
+	if p.PreloadSessionRecallInjectionMode == PreloadSessionRecallInjectionUser {
+		return appendUserContextBlock(userContextBlocks, recallMsg.Content)
+	}
+	p.injectSystemContextMessage(req, *recallMsg)
+	return userContextBlocks
+}
+
+func (p *ContentRequestProcessor) sessionMessagesAfterCutoff(
+	invocation *agent.Invocation,
+	skipHistory bool,
+	includeInvocationMessage bool,
+	summaryCutoff summaryHistoryCutoff,
+) []model.Message {
+	if skipHistory {
+		// When include_contents=none, only get events from current invocation to
+		// preserve tool call history within the current ReAct loop. This fixes
+		// the infinite loop issue where the agent doesn't see its own tool calls
+		// when running as an isolated subgraph.
+		if includeInvocationMessage {
+			return p.getCurrentInvocationMessages(invocation)
+		}
+		return nil
+	}
+	messages := p.getIncrementMessagesAfterCutoff(invocation, summaryCutoff)
+	if p.hasCompactedCurrentInvocationToolResultsAfterCutoff(invocation, summaryCutoff) {
+		invocation.SetState(contentHasCompactedToolResultsStateKey, true)
+	}
+	return messages
 }
 
 // injectSystemContextMessage injects summary or memory context into request.
