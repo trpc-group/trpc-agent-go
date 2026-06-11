@@ -435,6 +435,7 @@ func (dk *BuiltinKnowledge) loadWithRecreate(ctx context.Context, config *loadCo
 
 func (dk *BuiltinKnowledge) load(ctx context.Context, config *loadConfig) error {
 	if dk.enableSourceSync {
+		dk.processedDocIDs = sync.Map{}
 		if err := dk.refreshAllDocInfo(ctx); err != nil {
 			return fmt.Errorf("failed to prepare incremental sync: %w", err)
 		}
