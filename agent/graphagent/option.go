@@ -50,18 +50,14 @@ const (
 	ReasoningContentModeDiscardAll = processor.ReasoningContentModeDiscardAll
 
 	// SessionSummaryInjectionSystem injects the session summary as system
-	// context (default behavior). Enabled preloaded memory and session recall
-	// also use system context in this mode.
+	// context (default behavior).
 	SessionSummaryInjectionSystem = processor.SessionSummaryInjectionSystem
 	// SessionSummaryInjectionUser injects the session summary near user/history
-	// messages. Enabled preloaded memory and session recall use the same
-	// user/history placement in this mode.
+	// messages.
 	SessionSummaryInjectionUser = processor.SessionSummaryInjectionUser
 )
 
 // SessionSummaryInjectionMode controls where session summaries are injected.
-// In user mode, enabled preloaded memory and session recall use the same
-// user/history placement as the summary.
 type SessionSummaryInjectionMode = processor.SessionSummaryInjectionMode
 
 // MessageFilterMode is the mode for filtering messages.
@@ -118,9 +114,8 @@ type Options struct {
 	// when available.
 	AddSessionSummary bool
 	// SessionSummaryInjectionMode controls where session summaries are injected.
-	// Default is "system" (SessionSummaryInjectionSystem). In user mode,
-	// enabled preloaded memory and session recall use the same user/history
-	// placement as the summary and participate in token-budget trimming.
+	// Default is "system" (SessionSummaryInjectionSystem). In user mode, the
+	// summary participates in token-budget trimming.
 	SessionSummaryInjectionMode processor.SessionSummaryInjectionMode
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.

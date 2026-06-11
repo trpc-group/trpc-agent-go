@@ -12,6 +12,13 @@ The demo seeds two sessions with different summaries. Each request injects two s
 
 In system mode, the dynamic summary is merged into block A, so it appears before block B. In user mode, blocks A and B remain contiguous, and the dynamic summary moves later into user/history context.
 
+This example focuses on session summaries. Memory preload and session recall
+preload are independent: they stay in system context by default for
+compatibility. To make those preloads cache-friendly too, explicitly opt in with
+`WithPreloadMemoryInjectionMode(llmagent.PreloadMemoryInjectionUser)` and
+`WithPreloadSessionRecallInjectionMode(llmagent.PreloadSessionRecallInjectionUser)`.
+Those user-placement preloads participate in token tailoring and can be trimmed.
+
 ## Prerequisites
 
 - Go 1.21 or later.

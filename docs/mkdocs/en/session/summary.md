@@ -909,8 +909,28 @@ agent := llmagent.New(
 
 | Mode | Injection Position | Token Tailoring Behavior | Use Case |
 | --- | --- | --- | --- |
-| `SessionSummaryInjectionSystem` (default) | Merged into system message; enabled memory preload / session recall preload also use system context | Session-derived context is in the preserved head and never trimmed | Summary must always be present |
-| `SessionSummaryInjectionUser` | Merged into the first user history/current message when possible; otherwise inserted near history; enabled memory preload / session recall preload use the same user/history path | Summary, memory preload, and session recall preload participate in round trimming and can be evicted; stable system prefixes are easier to cache | Sliding window for very long conversations and prompt-cache-sensitive workloads |
+| `SessionSummaryInjectionSystem` (default) | Merged into system message | Summary is in the preserved head and never trimmed | Summary must always be present |
+| `SessionSummaryInjectionUser` | Merged into the first user history/current message when possible; otherwise inserted near history | Summary participates in round trimming and can be evicted; stable system prefixes are easier to cache | Sliding window for very long conversations and prompt-cache-sensitive workloads |
+
+Memory preload and session recall preload keep their own placement settings.
+They default to system context for compatibility, so they remain in the
+preserved head during token tailoring. For cache-sensitive workloads, opt in to
+user/history placement explicitly:
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithPreloadMemory(10),
+    llmagent.WithPreloadMemoryInjectionMode(llmagent.PreloadMemoryInjectionUser),
+    llmagent.WithPreloadSessionRecall(5),
+    llmagent.WithPreloadSessionRecallInjectionMode(llmagent.PreloadSessionRecallInjectionUser),
+)
+```
+
+User placement keeps stable system prefixes more cache-friendly, but preloaded
+memory and recalled session events participate in token tailoring and can be
+trimmed.
 
 **User mode message structure**:
 

@@ -3,7 +3,7 @@
 This example demonstrates the two session summary injection modes:
 
 - **System mode** (default): Summary is merged into the system message, protected from token tailoring trimming.
-- **User mode**: Summary is injected as a user message before session history, participating in token-budget trimming for a true sliding-window experience. When the first history message is also a user message, the summary is automatically merged into it. When memory preload or session recall preload is enabled, those preload context blocks use the same user/history path.
+- **User mode**: Summary is injected as a user message before session history, participating in token-budget trimming for a true sliding-window experience. When the first history message is also a user message, the summary is automatically merged into it.
 
 ## What it shows
 
@@ -76,6 +76,11 @@ Model: deepseek-v4-flash
 ## Key Observations
 
 1. **System mode**: Summary appears inside `messages[0]` (system role), merged with agent instruction.
-2. **User mode**: Summary is merged into the first user message alongside the follow-up question. Token tailoring can trim it like any other user round. The same mode also keeps enabled memory preload and session recall preload out of the stable system prefix.
+2. **User mode**: Summary is merged into the first user message alongside the follow-up question. Token tailoring can trim it like any other user round.
 3. Both modes produce correct responses — the LLM can access the summary context regardless of injection position.
 4. Phase 2 and Phase 3 run on separate sessions with identical history, ensuring a clean A/B comparison.
+
+Memory preload and session recall preload keep independent injection modes. They
+stay in system context by default; use `WithPreloadMemoryInjectionMode` or
+`WithPreloadSessionRecallInjectionMode` with the `User` mode to opt into
+cache-friendly user/history placement, where token tailoring can trim them.

@@ -36,27 +36,50 @@ import (
 )
 
 // SessionSummaryInjectionMode controls where session summaries are injected.
-// In user mode, enabled preloaded memory and session recall use the same
-// user/history placement as the summary.
 type SessionSummaryInjectionMode string
 
 const (
 	// SessionSummaryInjectionSystem injects the session summary as system
-	// context (default). Enabled preloaded memory and session recall also use
-	// system context in this mode. This makes the context part of the preserved
-	// head in token tailoring and is not subject to sliding-window trimming.
+	// context (default). This makes the summary part of the preserved head in
+	// token tailoring and is not subject to sliding-window trimming.
 	SessionSummaryInjectionSystem SessionSummaryInjectionMode = "system"
 
 	// SessionSummaryInjectionUser injects the session summary near user/history
-	// messages. Enabled preloaded memory and session recall use the same
-	// user/history placement in this mode. The processor prefers merging this
-	// context into the first user history/current message when possible; if none
-	// exists and the existing prompt prefix already ends with a user message, it
-	// falls back to merging there to avoid introducing an extra adjacent user
-	// block. This mode allows the context to participate in token-budget
-	// trimming like any other user-anchored round, enabling a true
-	// sliding-window experience.
+	// messages. The processor prefers merging it into the first user
+	// history/current message when possible; if none exists and the existing
+	// prompt prefix already ends with a user message, it falls back to merging
+	// there to avoid introducing an extra adjacent user block. This mode allows
+	// the summary to participate in token-budget trimming like any other
+	// user-anchored round, enabling a true sliding-window experience.
 	SessionSummaryInjectionUser SessionSummaryInjectionMode = "user"
+)
+
+// PreloadMemoryInjectionMode controls where preloaded memories are injected.
+type PreloadMemoryInjectionMode string
+
+const (
+	// PreloadMemoryInjectionSystem injects preloaded memories as system context
+	// (default), keeping them in the preserved head during token tailoring.
+	PreloadMemoryInjectionSystem PreloadMemoryInjectionMode = "system"
+	// PreloadMemoryInjectionUser injects preloaded memories near user/history
+	// messages. This is more prompt-cache friendly, but the memories participate
+	// in token tailoring and can be trimmed.
+	PreloadMemoryInjectionUser PreloadMemoryInjectionMode = "user"
+)
+
+// PreloadSessionRecallInjectionMode controls where recalled session events are
+// injected.
+type PreloadSessionRecallInjectionMode string
+
+const (
+	// PreloadSessionRecallInjectionSystem injects recalled session events as
+	// system context (default), keeping them in the preserved head during token
+	// tailoring.
+	PreloadSessionRecallInjectionSystem PreloadSessionRecallInjectionMode = "system"
+	// PreloadSessionRecallInjectionUser injects recalled session events near
+	// user/history messages. This is more prompt-cache friendly, but recalled
+	// events participate in token tailoring and can be trimmed.
+	PreloadSessionRecallInjectionUser PreloadSessionRecallInjectionMode = "user"
 )
 
 // Content inclusion options.
@@ -120,9 +143,7 @@ type ContentRequestProcessor struct {
 	// to the request if available.
 	AddSessionSummary bool
 	// SessionSummaryInjectionMode controls where session summaries are injected.
-	// In user mode, enabled preloaded memory and session recall use the same
-	// user/history placement as the summary. Default is
-	// SessionSummaryInjectionSystem.
+	// Default is SessionSummaryInjectionSystem.
 	SessionSummaryInjectionMode SessionSummaryInjectionMode
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
@@ -154,12 +175,20 @@ type ContentRequestProcessor struct {
 	// When 0 (default), no memories are preloaded (use tools instead).
 	// When < 0, all memories are loaded.
 	PreloadMemory int
+	// PreloadMemoryInjectionMode controls where preloaded memories are injected.
+	// Default is PreloadMemoryInjectionSystem. User mode is prompt-cache
+	// friendly, but memory context participates in token tailoring.
+	PreloadMemoryInjectionMode PreloadMemoryInjectionMode
 	// PreloadSessionRecall sets the number of recalled
 	// session events to inject as preload context.
 	// When > 0, query-time search runs across other
 	// sessions for the current user.
 	// When 0 (default), it is disabled.
 	PreloadSessionRecall int
+	// PreloadSessionRecallInjectionMode controls where recalled session events
+	// are injected. Default is PreloadSessionRecallInjectionSystem. User mode is
+	// prompt-cache friendly, but recall context participates in token tailoring.
+	PreloadSessionRecallInjectionMode PreloadSessionRecallInjectionMode
 	// PreloadSessionRecallMinScore filters low-confidence
 	// recall hits before injection.
 	PreloadSessionRecallMinScore float64
@@ -232,16 +261,12 @@ func WithAddSessionSummary(add bool) ContentOption {
 }
 
 // WithSessionSummaryInjectionMode sets where session summaries are injected.
-// In user mode, enabled preloaded memory and session recall use the same
-// user/history placement as the summary.
 //
 // Available modes:
 //   - SessionSummaryInjectionSystem (default): injects session summary as
-//     system context. Enabled preloaded memory and session recall also use
 //     system context.
 //   - SessionSummaryInjectionUser: injects session summary near user/history.
-//     Enabled preloaded memory and session recall use the same placement. The
-//     processor first tries to merge this context into the first user
+//     The processor first tries to merge the summary into the first user
 //     history/current message; if none exists and the existing prompt prefix
 //     already ends with user, it falls back to merging there.
 func WithSessionSummaryInjectionMode(mode SessionSummaryInjectionMode) ContentOption {
@@ -314,11 +339,51 @@ func WithPreloadMemory(limit int) ContentOption {
 	}
 }
 
+// WithPreloadMemoryInjectionMode sets where preloaded memories are injected.
+//
+// Available modes:
+//   - PreloadMemoryInjectionSystem (default): injects memories as system context.
+//   - PreloadMemoryInjectionUser: injects memories near user/history. This is
+//     more prompt-cache friendly, but the memory context participates in token
+//     tailoring and can be trimmed.
+func WithPreloadMemoryInjectionMode(mode PreloadMemoryInjectionMode) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		switch mode {
+		case PreloadMemoryInjectionUser:
+			p.PreloadMemoryInjectionMode = PreloadMemoryInjectionUser
+		default:
+			p.PreloadMemoryInjectionMode = PreloadMemoryInjectionSystem
+		}
+	}
+}
+
 // WithPreloadSessionRecall sets the number of recalled
 // session events to preload as context.
 func WithPreloadSessionRecall(limit int) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.PreloadSessionRecall = limit
+	}
+}
+
+// WithPreloadSessionRecallInjectionMode sets where recalled session events are
+// injected.
+//
+// Available modes:
+//   - PreloadSessionRecallInjectionSystem (default): injects recalled session
+//     events as system context.
+//   - PreloadSessionRecallInjectionUser: injects recalled session events near
+//     user/history. This is more prompt-cache friendly, but the recalled
+//     context participates in token tailoring and can be trimmed.
+func WithPreloadSessionRecallInjectionMode(
+	mode PreloadSessionRecallInjectionMode,
+) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		switch mode {
+		case PreloadSessionRecallInjectionUser:
+			p.PreloadSessionRecallInjectionMode = PreloadSessionRecallInjectionUser
+		default:
+			p.PreloadSessionRecallInjectionMode = PreloadSessionRecallInjectionSystem
+		}
 	}
 }
 
@@ -501,9 +566,11 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 		// Default to append history message.
 		TimelineFilterMode: TimelineFilterAll,
 		// Default to disable memory preloading (use tools instead).
-		PreloadMemory:                  0,
-		PreloadSessionRecall:           0,
-		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
+		PreloadMemory:                     0,
+		PreloadMemoryInjectionMode:        PreloadMemoryInjectionSystem,
+		PreloadSessionRecall:              0,
+		PreloadSessionRecallInjectionMode: PreloadSessionRecallInjectionSystem,
+		PreloadSessionRecallSearchMode:    session.SearchModeHybrid,
 		ContextCompactionConfig: ContextCompactionConfig{
 			KeepRecentRequests:  DefaultContextCompactionKeepRecentRequests,
 			ToolResultMaxTokens: DefaultContextCompactionToolResultMaxTokens,
@@ -642,7 +709,7 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 	// PreloadMemory: 0 = disabled, -1 = all, N > 0 = adaptive preload budget.
 	if p.PreloadMemory != 0 && invocation.MemoryService != nil {
 		if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
-			if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
+			if p.PreloadMemoryInjectionMode == PreloadMemoryInjectionUser {
 				userContextBlocks = appendUserContextBlock(userContextBlocks, memMsg.Content)
 			} else {
 				p.injectSystemContextMessage(req, *memMsg)
@@ -653,8 +720,8 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 		invocation.SetState(contentHasSessionSummaryStateKey, true)
 		if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
 			// User-mode injection is deferred until after history messages are
-			// collected, so the summary and enabled preload context can be merged with the
-			// first user message in history when applicable.
+			// collected, so the summary can be merged with the first user
+			// message in history when applicable.
 			userContextBlocks = appendUserContextBlock(
 				userContextBlocks,
 				p.formatSummaryForUser(summaryText),
@@ -672,7 +739,7 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 		p.PreloadSessionRecall > 0 &&
 		invocation.SessionService != nil {
 		if recallMsg := p.getPreloadSessionRecallMessage(ctx, invocation); recallMsg != nil {
-			if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
+			if p.PreloadSessionRecallInjectionMode == PreloadSessionRecallInjectionUser {
 				userContextBlocks = appendUserContextBlock(userContextBlocks, recallMsg.Content)
 			} else {
 				p.injectSystemContextMessage(req, *recallMsg)
@@ -695,12 +762,12 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 		}
 	}
 
-	// When user-mode injection is active, prepend the summary and enabled
-	// preload context as user content near history. Prefer merging into the
-	// first user history/current message so the context stays attached to the
-	// live user turn. If no such message exists, fall back to a trailing user
-	// message in req.Messages (for example, injected context) to avoid creating
-	// an extra adjacent user block.
+	// When user-mode injection is active for summary or preload context, prepend
+	// it as user content near history. Prefer merging into the first user
+	// history/current message so the context stays attached to the live user
+	// turn. If no such message exists, fall back to a trailing user message in
+	// req.Messages (for example, injected context) to avoid creating an extra
+	// adjacent user block.
 	if len(userContextBlocks) > 0 {
 		messages = prependUserContextMessage(
 			strings.Join(userContextBlocks, mergedUserSeparator),
