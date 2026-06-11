@@ -918,6 +918,17 @@ func (m *Model) convertSystemMessageContent(msg model.Message) openai.ChatComple
 			})
 		}
 	}
+	if m.variantConfig.textOnlyMessageContent {
+		texts := make([]string, 0, len(contentParts))
+		for _, part := range contentParts {
+			texts = append(texts, part.Text)
+		}
+		if content, ok := joinedTextContent(texts); ok {
+			return openai.ChatCompletionSystemMessageParamContentUnion{
+				OfString: openai.String(content),
+			}
+		}
+	}
 	return openai.ChatCompletionSystemMessageParamContentUnion{
 		OfArrayOfContentParts: contentParts,
 	}
@@ -951,6 +962,17 @@ func (m *Model) convertUserMessageContent(
 		contentParts = append(contentParts, userTextPart(omittedHint))
 	}
 	extraFields := m.appendUserContentParts(&contentParts, msg.ContentParts)
+
+	if m.variantConfig.textOnlyMessageContent {
+		if content, ok := textOnlyUserContentString(
+			contentParts,
+			extraFields,
+		); ok {
+			return openai.ChatCompletionUserMessageParamContentUnion{
+				OfString: openai.String(content),
+			}, nil
+		}
+	}
 
 	if strings.TrimSpace(msg.Content) == "" &&
 		fileHint != "" &&
@@ -1193,6 +1215,30 @@ func singleUserContentString(
 	return "", false
 }
 
+func textOnlyUserContentString(
+	contentParts []openai.ChatCompletionContentPartUnionParam,
+	extraFields map[string]any,
+) (string, bool) {
+	if extraFields != nil || len(contentParts) == 0 {
+		return "", false
+	}
+	texts := make([]string, 0, len(contentParts))
+	for _, part := range contentParts {
+		if part.OfText == nil {
+			return "", false
+		}
+		texts = append(texts, part.OfText.Text)
+	}
+	return joinedTextContent(texts)
+}
+
+func joinedTextContent(texts []string) (string, bool) {
+	if len(texts) == 0 {
+		return "", false
+	}
+	return strings.Join(texts, "\n"), true
+}
+
 func fileHintForContentParts(parts []model.ContentPart) string {
 	const (
 		fileHintDefaultName = "attachment"
@@ -1246,6 +1292,22 @@ func (m *Model) convertAssistantMessageContent(
 						Text: *part.Text,
 					},
 				})
+		}
+	}
+	if m.variantConfig.textOnlyMessageContent {
+		texts := make([]string, 0, len(contentParts))
+		for _, part := range contentParts {
+			if part.OfText == nil {
+				return openai.ChatCompletionAssistantMessageParamContentUnion{
+					OfArrayOfContentParts: contentParts,
+				}
+			}
+			texts = append(texts, part.OfText.Text)
+		}
+		if content, ok := joinedTextContent(texts); ok {
+			return openai.ChatCompletionAssistantMessageParamContentUnion{
+				OfString: openai.String(content),
+			}
 		}
 	}
 	return openai.ChatCompletionAssistantMessageParamContentUnion{

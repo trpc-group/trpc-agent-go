@@ -5358,6 +5358,29 @@ func TestConvertUserMessageContent_HunyuanVariant(t *testing.T) {
 func TestConvertUserMessageContent_DeepSeekVariant(t *testing.T) {
 	m := New("deepseek-chat", WithVariant(VariantDeepSeek))
 
+	t.Run("flattens multiple text parts into string", func(t *testing.T) {
+		message := model.Message{
+			Role:    model.RoleUser,
+			Content: "Please inspect this",
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeText,
+					Text: stringPtr("Use the attached context."),
+				},
+			},
+		}
+
+		content, extraFields := m.convertUserMessageContent(message)
+		assert.Empty(t, extraFields, "expected no extra fields")
+		require.True(t, content.OfString.Valid(),
+			"expected string content")
+		assert.Equal(t,
+			"Please inspect this\nUse the attached context.",
+			content.OfString.Value)
+		assert.Empty(t, content.OfArrayOfContentParts,
+			"expected no content parts")
+	})
+
 	t.Run("omits non-text content parts", func(t *testing.T) {
 		message := model.Message{
 			Role:    model.RoleUser,
@@ -5380,16 +5403,14 @@ func TestConvertUserMessageContent_DeepSeekVariant(t *testing.T) {
 
 		content, extraFields := m.convertUserMessageContent(message)
 		assert.Empty(t, extraFields, "expected no extra fields")
-		require.Len(t, content.OfArrayOfContentParts, 2,
-			"expected main text and omission hint")
-		require.NotNil(t, content.OfArrayOfContentParts[0].OfText,
-			"expected first part to be text")
-		require.NotNil(t, content.OfArrayOfContentParts[1].OfText,
-			"expected omission hint to be text")
-		assert.Equal(t, "Please inspect this",
-			content.OfArrayOfContentParts[0].OfText.Text)
+		require.True(t, content.OfString.Valid(),
+			"expected string content")
+		assert.Empty(t, content.OfArrayOfContentParts,
+			"expected no content parts")
+		assert.Contains(t, content.OfString.Value,
+			"Please inspect this")
 		assert.Contains(t,
-			content.OfArrayOfContentParts[1].OfText.Text,
+			content.OfString.Value,
 			"1 image, 1 file")
 	})
 
@@ -5408,14 +5429,12 @@ func TestConvertUserMessageContent_DeepSeekVariant(t *testing.T) {
 
 		content, extraFields := m.convertUserMessageContent(message)
 		assert.Empty(t, extraFields, "expected no extra fields")
-		assert.False(t, content.OfString.Valid(),
-			"expected non-string content")
-		require.Len(t, content.OfArrayOfContentParts, 1,
-			"expected one omission hint")
-		require.NotNil(t, content.OfArrayOfContentParts[0].OfText,
-			"expected omission hint to be text")
+		require.True(t, content.OfString.Valid(),
+			"expected string content")
+		assert.Empty(t, content.OfArrayOfContentParts,
+			"expected no content parts")
 		assert.Contains(t,
-			content.OfArrayOfContentParts[0].OfText.Text,
+			content.OfString.Value,
 			"1 image")
 	})
 }
@@ -5446,6 +5465,25 @@ func TestConvertAssistantMessageContent_WithContentAndParts(t *testing.T) {
 
 		content := m.convertAssistantMessageContent(message)
 		assert.NotNil(t, content.OfString, "expected string content")
+	})
+
+	t.Run("text-only variant flattens text parts", func(t *testing.T) {
+		m := New("deepseek-chat", WithVariant(VariantDeepSeek))
+		message := model.Message{
+			Role:    model.RoleAssistant,
+			Content: "Main content",
+			ContentParts: []model.ContentPart{
+				{Type: "text", Text: stringPtr("Additional text")},
+			},
+		}
+
+		content := m.convertAssistantMessageContent(message)
+		require.True(t, content.OfString.Valid(),
+			"expected string content")
+		assert.Equal(t, "Main content\nAdditional text",
+			content.OfString.Value)
+		assert.Empty(t, content.OfArrayOfContentParts,
+			"expected no content parts")
 	})
 }
 
@@ -5527,6 +5565,25 @@ func TestConvertSystemMessageContent_WithParts(t *testing.T) {
 
 		content := m.convertSystemMessageContent(message)
 		assert.NotNil(t, content.OfString, "expected string content")
+	})
+
+	t.Run("text-only variant flattens text parts", func(t *testing.T) {
+		m := New("deepseek-chat", WithVariant(VariantDeepSeek))
+		message := model.Message{
+			Role:    model.RoleSystem,
+			Content: "System instruction 1",
+			ContentParts: []model.ContentPart{
+				{Type: "text", Text: stringPtr("System instruction 2")},
+			},
+		}
+
+		content := m.convertSystemMessageContent(message)
+		require.True(t, content.OfString.Valid(),
+			"expected string content")
+		assert.Equal(t, "System instruction 1\nSystem instruction 2",
+			content.OfString.Value)
+		assert.Empty(t, content.OfArrayOfContentParts,
+			"expected no content parts")
 	})
 }
 
