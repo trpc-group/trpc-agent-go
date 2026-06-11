@@ -923,6 +923,11 @@ func (m *Model) convertSystemMessageContent(msg model.Message) openai.ChatComple
 		for _, part := range contentParts {
 			texts = append(texts, part.Text)
 		}
+		if omittedHint := m.omittedContentHintCountingFileURLs(
+			msg.ContentParts,
+		); omittedHint != "" {
+			texts = append(texts, omittedHint)
+		}
 		if content, ok := joinedTextContent(texts); ok {
 			return openai.ChatCompletionSystemMessageParamContentUnion{
 				OfString: openai.String(content),
@@ -1110,6 +1115,19 @@ func (m *Model) appendUserContentParts(
 }
 
 func (m *Model) omittedContentHint(parts []model.ContentPart) string {
+	return m.omittedContentHintForParts(parts, true)
+}
+
+func (m *Model) omittedContentHintCountingFileURLs(
+	parts []model.ContentPart,
+) string {
+	return m.omittedContentHintForParts(parts, false)
+}
+
+func (m *Model) omittedContentHintForParts(
+	parts []model.ContentPart,
+	skipFileURLFallback bool,
+) string {
 	if !m.variantConfig.textOnlyMessageContent {
 		return ""
 	}
@@ -1122,7 +1140,8 @@ func (m *Model) omittedContentHint(parts []model.ContentPart) string {
 		case model.ContentTypeAudio:
 			audioCount++
 		case model.ContentTypeFile:
-			if fileURLFallbackText(part.File) != "" {
+			if skipFileURLFallback &&
+				fileURLFallbackText(part.File) != "" {
 				continue
 			}
 			fileCount++
@@ -1303,6 +1322,11 @@ func (m *Model) convertAssistantMessageContent(
 				}
 			}
 			texts = append(texts, part.OfText.Text)
+		}
+		if omittedHint := m.omittedContentHintCountingFileURLs(
+			msg.ContentParts,
+		); omittedHint != "" {
+			texts = append(texts, omittedHint)
 		}
 		if content, ok := joinedTextContent(texts); ok {
 			return openai.ChatCompletionAssistantMessageParamContentUnion{

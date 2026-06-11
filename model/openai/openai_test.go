@@ -5485,6 +5485,30 @@ func TestConvertAssistantMessageContent_WithContentAndParts(t *testing.T) {
 		assert.Empty(t, content.OfArrayOfContentParts,
 			"expected no content parts")
 	})
+
+	t.Run("text-only variant reports omitted non-text parts", func(t *testing.T) {
+		m := New("deepseek-chat", WithVariant(VariantDeepSeek))
+		message := model.Message{
+			Role:    model.RoleAssistant,
+			Content: "Main content",
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeImage,
+					Image: &model.Image{
+						URL: "https://example.com/image.png",
+					},
+				},
+			},
+		}
+
+		content := m.convertAssistantMessageContent(message)
+		require.True(t, content.OfString.Valid(),
+			"expected string content")
+		assert.Contains(t, content.OfString.Value, "Main content")
+		assert.Contains(t, content.OfString.Value, "1 image")
+		assert.Empty(t, content.OfArrayOfContentParts,
+			"expected no content parts")
+	})
 }
 
 // TestConvertTools_ErrorCases tests error handling in convertTools.
@@ -5582,6 +5606,28 @@ func TestConvertSystemMessageContent_WithParts(t *testing.T) {
 			"expected string content")
 		assert.Equal(t, "System instruction 1\nSystem instruction 2",
 			content.OfString.Value)
+		assert.Empty(t, content.OfArrayOfContentParts,
+			"expected no content parts")
+	})
+
+	t.Run("text-only variant reports omitted non-text parts", func(t *testing.T) {
+		m := New("deepseek-chat", WithVariant(VariantDeepSeek))
+		message := model.Message{
+			Role: model.RoleSystem,
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeImage,
+					Image: &model.Image{
+						URL: "https://example.com/image.png",
+					},
+				},
+			},
+		}
+
+		content := m.convertSystemMessageContent(message)
+		require.True(t, content.OfString.Valid(),
+			"expected string content")
+		assert.Contains(t, content.OfString.Value, "1 image")
 		assert.Empty(t, content.OfArrayOfContentParts,
 			"expected no content parts")
 	})
