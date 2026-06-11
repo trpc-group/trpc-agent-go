@@ -50,6 +50,35 @@ func TestFunctionTool_Run_Success(t *testing.T) {
 	}
 }
 
+func TestFunctionTool_EmptyInputArgs(t *testing.T) {
+	type emptyInput struct{}
+	type emptyOutput struct {
+		OK bool `json:"ok"`
+	}
+	fn := func(_ context.Context, _ emptyInput) (emptyOutput, error) {
+		return emptyOutput{OK: true}, nil
+	}
+	fTool := function.NewFunctionTool(fn,
+		function.WithName("EmptyInputTool"),
+		function.WithDescription("No-arg tool"))
+
+	for name, args := range map[string][]byte{
+		"nil":   nil,
+		"empty": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := fTool.Call(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			out, ok := result.(emptyOutput)
+			if !ok || !out.OK {
+				t.Fatalf("expected ok result, got %T %v", result, result)
+			}
+		})
+	}
+}
+
 // Helper function to create Arguments from any struct.
 func toArguments(t *testing.T, v any) json.RawMessage {
 	t.Helper()

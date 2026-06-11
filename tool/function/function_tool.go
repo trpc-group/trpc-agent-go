@@ -173,6 +173,7 @@ func NewFunctionTool[I, O any](fn func(context.Context, I) (O, error), opts ...O
 // Returns:
 //   - The result of the function execution or an error if unmarshalling fails.
 func (ft *FunctionTool[I, O]) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	jsonArgs = normalizeJSONArgs(jsonArgs)
 	var input I
 	if err := ft.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
 		return nil, err
@@ -291,6 +292,7 @@ func NewStreamableFunctionTool[I, O any](fn func(context.Context, I) (*tool.Stre
 //   - A StreamReader[string] containing JSON-encoded results, or an error.
 func (t *StreamableFunctionTool[I, O]) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
 	// FunctionTool does not support streaming calls, so we return an error.
+	jsonArgs = normalizeJSONArgs(jsonArgs)
 	var input I
 	if err := t.unmarshaler.Unmarshal(jsonArgs, &input); err != nil {
 		return nil, err
@@ -339,6 +341,15 @@ type unmarshaler interface {
 }
 
 type jsonUnmarshaler struct{}
+
+// normalizeJSONArgs coerces nil or empty argument payloads to "{}" so zero-parameter
+// tools can be invoked when an LLM omits the input object entirely.
+func normalizeJSONArgs(jsonArgs []byte) []byte {
+	if len(jsonArgs) == 0 {
+		return []byte("{}")
+	}
+	return jsonArgs
+}
 
 // Unmarshal unmarshals JSON data into the provided interface.
 func (j *jsonUnmarshaler) Unmarshal(data []byte, v any) error {
