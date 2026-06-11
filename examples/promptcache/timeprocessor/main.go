@@ -43,6 +43,7 @@ type usageStats struct {
 	PromptTokens   int
 	CachedTokens   int
 	RequestsCached int
+	ToolCalls      int
 }
 
 func (s *usageStats) Add(usage *model.Usage) {
@@ -109,15 +110,17 @@ func main() {
 	fmt.Println(strings.Repeat("=", 72))
 	for _, result := range results {
 		fmt.Printf(
-			"%-18s cached=%5.1f%% cached_tokens=%d prompt_tokens=%d requests_with_cache=%d/%d\n",
+			"%-18s cached=%5.1f%% cached_tokens=%d prompt_tokens=%d requests_with_cache=%d/%d tool_calls=%d\n",
 			result.Name,
 			result.Stats.CacheRate(),
 			result.Stats.CachedTokens,
 			result.Stats.PromptTokens,
 			result.Stats.RequestsCached,
 			result.Stats.Requests,
+			result.Stats.ToolCalls,
 		)
 	}
+	printComparisons(results)
 }
 
 func openAIOptions(apiKey string) []openai.Option {
@@ -162,16 +165,16 @@ func buildCases() []cacheCase {
 		},
 		{
 			Name:        "precise-tool",
-			Description: "Date-only system context plus built-in current_time tool for exact time.",
-			QueryPrefix: "Use current_time only when exact clock time is needed.",
+			Description: "Date-only system context plus built-in environment_context_current_time tool for exact time.",
+			QueryPrefix: "Use environment_context_current_time only when exact clock time is needed.",
 			Options: []llmagent.Option{
 				llmagent.WithAddCurrentTime(true),
 			},
 			Queries: []string{
 				"What is the singleton pattern?",
-				"Use the current_time tool to tell me the current UTC time.",
+				"Use the environment_context_current_time tool to tell me the current UTC time.",
 				"What is the factory method pattern?",
-				"Use the current_time tool again to tell me the current UTC date.",
+				"Use the environment_context_current_time tool again to tell me the current UTC date.",
 			},
 		},
 	}
@@ -227,6 +230,7 @@ func runCase(
 		usage, toolCalls, response := runTurn(ctx, r, sessionID, query)
 		stats.Add(usage)
 		if len(toolCalls) > 0 {
+			stats.ToolCalls += len(toolCalls)
 			fmt.Printf("  tool calls: %s\n", strings.Join(toolCalls, ", "))
 		}
 		if usage != nil {
@@ -241,6 +245,36 @@ func runCase(
 	}
 	fmt.Printf("\nCase cache rate: %.1f%%\n\n", stats.CacheRate())
 	return caseResult{Name: c.Name, Stats: stats}
+}
+
+func printComparisons(results []caseResult) {
+	dateOnly, hasDateOnly := findResult(results, "date-only")
+	fullDatetime, hasFullDatetime := findResult(results, "full-datetime")
+	if hasDateOnly && hasFullDatetime {
+		rateDelta := dateOnly.Stats.CacheRate() - fullDatetime.Stats.CacheRate()
+		tokenDelta := dateOnly.Stats.CachedTokens - fullDatetime.Stats.CachedTokens
+		fmt.Printf(
+			"\nConclusion: date-only improves cache rate by %.1f percentage points over full-datetime and reuses %d more cached tokens in this run.\n",
+			rateDelta,
+			tokenDelta,
+		)
+	}
+	preciseTool, ok := findResult(results, "precise-tool")
+	if ok {
+		fmt.Printf(
+			"Precise-tool called the built-in time tool %d time(s), keeping exact clock values out of the stable system prompt.\n",
+			preciseTool.Stats.ToolCalls,
+		)
+	}
+}
+
+func findResult(results []caseResult, name string) (caseResult, bool) {
+	for _, result := range results {
+		if result.Name == name {
+			return result, true
+		}
+	}
+	return caseResult{}, false
 }
 
 func runTurn(

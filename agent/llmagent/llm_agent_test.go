@@ -312,7 +312,7 @@ func TestBuildRequestProcessors_AddCurrentTimeToolGuidanceWiring(t *testing.T) {
 	}
 	require.NotNil(t, timeProc)
 	require.True(t, timeProc.AddCurrentTime)
-	require.Equal(t, "current_time", timeProc.CurrentTimeToolName)
+	require.Equal(t, "environment_context_current_time", timeProc.CurrentTimeToolName)
 	require.True(t, timeProc.CurrentTimeToolAvailable)
 }
 

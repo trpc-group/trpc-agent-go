@@ -183,7 +183,7 @@ func (p *TimeRequestProcessor) formatTimePrompt(currentTime string) string {
 	}
 	if p.CurrentTimeToolAvailable && strings.TrimSpace(p.CurrentTimeToolName) != "" {
 		b.WriteString("\n\n")
-		b.WriteString("For exact current time or timezone-specific time, call the ")
+		b.WriteString("For exact current time or timezone-specific time, call the built-in ")
 		b.WriteString(p.CurrentTimeToolName)
 		b.WriteString(" tool. Treat its result as valid only for the current request; ")
 		b.WriteString("do not reuse previous time tool results as current time.")

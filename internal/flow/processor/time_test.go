@@ -299,7 +299,7 @@ func TestTimeRequestProcessor_ProcessRequest_WithCustomFormat(t *testing.T) {
 func TestTimeRequestProcessor_ProcessRequest_WithCurrentTimeToolGuidance(t *testing.T) {
 	processor := NewTimeRequestProcessor(
 		WithAddCurrentTime(true),
-		WithCurrentTimeTool("current_time", true),
+		WithCurrentTimeTool("environment_context_current_time", true),
 	)
 	req := &model.Request{
 		Messages: []model.Message{
@@ -313,8 +313,8 @@ func TestTimeRequestProcessor_ProcessRequest_WithCurrentTimeToolGuidance(t *test
 		t.Fatalf("Expected 1 message, got %d", len(req.Messages))
 	}
 	content := req.Messages[0].Content
-	if !strings.Contains(content, "call the current_time tool") {
-		t.Fatalf("Expected current_time tool guidance, got: %s", content)
+	if !strings.Contains(content, "call the built-in environment_context_current_time tool") {
+		t.Fatalf("Expected environment_context_current_time tool guidance, got: %s", content)
 	}
 	if !strings.Contains(content, "valid only for the current request") {
 		t.Fatalf("Expected ephemeral time guidance, got: %s", content)

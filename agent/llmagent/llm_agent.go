@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	toolcurrenttime "trpc.group/trpc-go/trpc-agent-go/internal/tool/currenttime"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -45,7 +46,6 @@ import (
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolawaitreply "trpc.group/trpc-go/trpc-agent-go/tool/awaitreply"
-	toolcurrenttime "trpc.group/trpc-go/trpc-agent-go/tool/currenttime"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
@@ -755,7 +755,11 @@ func registerTools(
 	allTools := append([]tool.Tool(nil), options.Tools...)
 	allTools, userToolNames = appendStaticToolSetTools(allTools, userToolNames, options)
 	allTools = appendKnowledgeTools(allTools, options)
-	allTools = appendCurrentTimeTool(allTools, options)
+	allTools, userToolNames = appendCurrentTimeTool(
+		allTools,
+		userToolNames,
+		options,
+	)
 
 	// Step 2: determine workspace registry and skill_run tool based on
 	// which capabilities the caller configured.
@@ -797,27 +801,23 @@ func registerTools(
 
 func appendCurrentTimeTool(
 	allTools []tool.Tool,
+	userToolNames map[string]bool,
 	options *Options,
-) []tool.Tool {
+) ([]tool.Tool, map[string]bool) {
 	if options == nil || !options.AddCurrentTime || options.OutputSchema != nil {
-		return allTools
+		return allTools, userToolNames
 	}
-	if hasToolNamed(allTools, toolcurrenttime.ToolName) {
-		return allTools
-	}
-	return append(allTools, toolcurrenttime.New())
-}
-
-func hasToolNamed(tools []tool.Tool, name string) bool {
-	for _, tl := range tools {
-		if tl == nil || tl.Declaration() == nil {
-			continue
-		}
-		if tl.Declaration().Name == name {
-			return true
+	filtered := make([]tool.Tool, 0, len(allTools)+1)
+	for _, tl := range allTools {
+		if tl == nil || tl.Declaration() == nil ||
+			tl.Declaration().Name != toolcurrenttime.ToolName {
+			filtered = append(filtered, tl)
 		}
 	}
-	return false
+	if userToolNames != nil {
+		delete(userToolNames, toolcurrenttime.ToolName)
+	}
+	return append(filtered, toolcurrenttime.New(options.Timezone)), userToolNames
 }
 
 func collectUserToolNames(tools []tool.Tool) map[string]bool {
