@@ -431,7 +431,10 @@ func TestBuildRequestProcessors_PreserveForeignMessagesWiring(t *testing.T) {
 
 func TestBuildRequestProcessors_PreloadSessionRecallWiring(t *testing.T) {
 	opts := &Options{}
+	WithPreloadMemory(3)(opts)
+	WithPreloadMemoryInjectionMode(PreloadMemoryInjectionUser)(opts)
 	WithPreloadSessionRecall(4)(opts)
+	WithPreloadSessionRecallInjectionMode(PreloadSessionRecallInjectionUser)(opts)
 	WithPreloadSessionRecallMinScore(0.6)(opts)
 	WithPreloadSessionRecallSearchMode(session.SearchModeDense)(opts)
 
@@ -443,7 +446,18 @@ func TestBuildRequestProcessors_PreloadSessionRecallWiring(t *testing.T) {
 		}
 	}
 	require.NotNil(t, crp)
+	require.Equal(t, 3, crp.PreloadMemory)
+	require.Equal(
+		t,
+		processor.PreloadMemoryInjectionUser,
+		crp.PreloadMemoryInjectionMode,
+	)
 	require.Equal(t, 4, crp.PreloadSessionRecall)
+	require.Equal(
+		t,
+		processor.PreloadSessionRecallInjectionUser,
+		crp.PreloadSessionRecallInjectionMode,
+	)
 	require.Equal(t, 0.6, crp.PreloadSessionRecallMinScore)
 	require.Equal(
 		t,
