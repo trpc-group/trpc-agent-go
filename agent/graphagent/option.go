@@ -49,18 +49,15 @@ const (
 	// ReasoningContentModeDiscardAll discards all reasoning_content from all messages.
 	ReasoningContentModeDiscardAll = processor.ReasoningContentModeDiscardAll
 
-	// SessionSummaryInjectionSystem injects the session summary as a system
-	// message (default behavior).
+	// SessionSummaryInjectionSystem injects the session summary as system
+	// context (default behavior).
 	SessionSummaryInjectionSystem = processor.SessionSummaryInjectionSystem
-	// SessionSummaryInjectionUser injects the session summary as a user
-	// message that participates in token-budget trimming. The processor
-	// prefers merging it into the first user history/current message and only
-	// falls back to a trailing prefix user message when needed.
+	// SessionSummaryInjectionUser injects the session summary near user/history
+	// messages.
 	SessionSummaryInjectionUser = processor.SessionSummaryInjectionUser
 )
 
-// SessionSummaryInjectionMode controls how the session summary is injected
-// into the model request.
+// SessionSummaryInjectionMode controls where session summaries are injected.
 type SessionSummaryInjectionMode = processor.SessionSummaryInjectionMode
 
 // MessageFilterMode is the mode for filtering messages.
@@ -113,13 +110,12 @@ type Options struct {
 	// When empty, GraphAgent uses the Executor default (BSP).
 	ExecutionEngine graph.ExecutionEngine
 
-	// AddSessionSummary controls whether to prepend the current branch summary
-	// as a system message when available.
+	// AddSessionSummary controls whether to include the current branch summary
+	// when available.
 	AddSessionSummary bool
-	// SessionSummaryInjectionMode controls how the session summary is injected
-	// into the model request. Default is "system" (SessionSummaryInjectionSystem).
-	// Set to "user" (SessionSummaryInjectionUser) to inject as a user message
-	// that participates in token-budget trimming for sliding-window behavior.
+	// SessionSummaryInjectionMode controls where session summaries are injected.
+	// Default is "system" (SessionSummaryInjectionSystem). In user mode, the
+	// summary participates in token-budget trimming.
 	SessionSummaryInjectionMode processor.SessionSummaryInjectionMode
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.

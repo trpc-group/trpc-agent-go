@@ -438,7 +438,13 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),
 		processor.WithPreloadMemory(options.PreloadMemory),
+		processor.WithPreloadMemoryInjectionMode(
+			options.PreloadMemoryInjectionMode,
+		),
 		processor.WithPreloadSessionRecall(options.PreloadSessionRecall),
+		processor.WithPreloadSessionRecallInjectionMode(
+			options.PreloadSessionRecallInjectionMode,
+		),
 		processor.WithPreloadSessionRecallMinScore(
 			options.PreloadSessionRecallMinScore,
 		),
