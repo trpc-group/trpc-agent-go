@@ -143,8 +143,22 @@ func (o *options) applyPayloadPolicy(policy PayloadPolicy) {
 	if policy.InlineMaxBytes != 0 {
 		merged.InlineMaxBytes = policy.InlineMaxBytes
 	}
-	merged.OverflowMode = policy.OverflowMode
+	if !isAttributesOnlyPolicy(policy) {
+		merged.OverflowMode = policy.OverflowMode
+	}
 	o.payloadPolicy = &merged
+}
+
+// isAttributesOnlyPolicy reports policies that only merge attribute rules,
+// such as ChatCapturePolicy, without intentionally changing overflow settings.
+func isAttributesOnlyPolicy(policy PayloadPolicy) bool {
+	if policy.InlineMaxBytes != 0 {
+		return false
+	}
+	if len(policy.Attributes.Enabled) == 0 && len(policy.Attributes.Disabled) == 0 {
+		return false
+	}
+	return policy.OverflowMode == OverflowTruncate
 }
 
 func mergeAttributeRules(dst, src AttributeRules) AttributeRules {

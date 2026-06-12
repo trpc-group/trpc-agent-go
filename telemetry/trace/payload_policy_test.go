@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package trace
 
 import (
@@ -139,6 +147,17 @@ func TestWithPayloadPolicy_MergesEnabledAndInlineMaxBytes(t *testing.T) {
 	}
 	if opts.payloadPolicy.OverflowMode != OverflowTruncate {
 		t.Fatalf("overflow mode: got %v want %v", opts.payloadPolicy.OverflowMode, OverflowTruncate)
+	}
+}
+
+func TestWithChatCapture_PreservesOverflowMode(t *testing.T) {
+	opts := &options{}
+	WithOverflowMode(OverflowOmit)(opts)
+	WithChatCapture(ChatPayloadCapture{
+		Request: ChatRequestCapture{InputMessagesOTel: CaptureBool(false)},
+	})(opts)
+	if opts.payloadPolicy.OverflowMode != OverflowOmit {
+		t.Fatalf("overflow mode: got %v want %v", opts.payloadPolicy.OverflowMode, OverflowOmit)
 	}
 }
 
