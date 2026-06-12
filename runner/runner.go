@@ -82,16 +82,6 @@ func WithSessionService(service session.Service) Option {
 	}
 }
 
-// WithSummaryAwareSessionRestore allows storage-backed session services to use
-// existing summary boundaries to avoid restoring already summarized history.
-//
-// Default: false.
-func WithSummaryAwareSessionRestore(enabled bool) Option {
-	return func(opts *Options) {
-		opts.summaryAwareSessionRestore = enabled
-	}
-}
-
 // AgentFactory creates an agent for a single run.
 //
 // This enables request-scoped agent construction (for example, building the
@@ -311,7 +301,6 @@ type runner struct {
 	candidateSelectOptions             candidateSelectOptions
 	awaitUserReplyRouting              bool
 	persistInterruptedAssistantDefault bool
-	summaryAwareSessionRestore         bool
 
 	// Resource management fields.
 	ownedSessionService bool      // Indicates if sessionService was created by this runner.
@@ -343,7 +332,6 @@ type Options struct {
 	candidateSelectOptions             candidateSelectOptions
 	awaitUserReplyRouting              bool
 	persistInterruptedAssistantDefault bool
-	summaryAwareSessionRestore         bool
 }
 
 // newOptions creates a new Options.
@@ -400,7 +388,6 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		candidateSelectOptions:             options.candidateSelectOptions,
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
-		summaryAwareSessionRestore:         options.summaryAwareSessionRestore,
 		ownedSessionService:                ownedSessionService,
 	}
 }
@@ -456,7 +443,6 @@ func NewRunnerWithAgentFactory(
 		candidateSelectOptions:             options.candidateSelectOptions,
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
-		summaryAwareSessionRestore:         options.summaryAwareSessionRestore,
 		ownedSessionService:                ownedSessionService,
 	}
 }
@@ -562,12 +548,10 @@ func (r *runner) Run(
 		runnerLatencySpanGetSession,
 		runnerSessionAttrs(sessionKey, nil)...,
 	)
-	if r.summaryAwareSessionRestore {
-		sessionCtx = sessionsummary.ContextWithSummaryAwareRestoreFilterKey(
-			sessionCtx,
-			sessionRestoreFilterKey(effectiveAppName, ro),
-		)
-	}
+	sessionCtx = sessionsummary.ContextWithSummaryAwareRestoreFilterKey(
+		sessionCtx,
+		sessionRestoreFilterKey(effectiveAppName, ro),
+	)
 	sess, err := r.getOrCreateSession(sessionCtx, ro, sessionKey)
 	if sessionStarted && sess != nil {
 		sessionSpan.SetAttributes(runnerSessionAttrs(sessionKey, sess)...)

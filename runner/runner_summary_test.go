@@ -186,13 +186,12 @@ func TestRunner_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
 }
 
 func TestRunner_SummaryAwareSessionRestoreHint(t *testing.T) {
-	t.Run("enabled passes event filter key", func(t *testing.T) {
+	t.Run("passes event filter key", func(t *testing.T) {
 		svc := &mockSessionService{}
 		r := NewRunner(
 			"test-app",
 			&mockAgent{name: "test-agent"},
 			WithSessionService(svc),
-			WithSummaryAwareSessionRestore(true),
 		)
 
 		_, err := RunWithMessages(
@@ -213,7 +212,7 @@ func TestRunner_SummaryAwareSessionRestoreHint(t *testing.T) {
 		)
 	})
 
-	t.Run("disabled leaves context unchanged", func(t *testing.T) {
+	t.Run("falls back to app name", func(t *testing.T) {
 		svc := &mockSessionService{}
 		r := NewRunner(
 			"test-app",
@@ -230,7 +229,8 @@ func TestRunner_SummaryAwareSessionRestoreHint(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.NotEmpty(t, svc.getSessionCalls)
-		assert.False(t, svc.getSessionCalls[0].restoreHintOK)
+		assert.True(t, svc.getSessionCalls[0].restoreHintOK)
+		assert.Equal(t, "test-app", svc.getSessionCalls[0].restoreHint)
 	})
 }
 
