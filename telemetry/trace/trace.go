@@ -100,14 +100,14 @@ type Option func(*options)
 
 // options holds the configuration options for tracer.
 type options struct {
-	tracesEndpoint     string
-	tracesEndpointURL  string
-	serviceName        string
-	serviceVersion     string
-	serviceNamespace   string
-	protocol           string            // Protocol to use (grpc or http)
-	headers            map[string]string // Headers to send with the request
-	resourceAttributes *[]attribute.KeyValue
+	tracesEndpoint      string
+	tracesEndpointURL   string
+	serviceName         string
+	serviceVersion      string
+	serviceNamespace    string
+	protocol            string            // Protocol to use (grpc or http)
+	headers             map[string]string // Headers to send with the request
+	resourceAttributes  *[]attribute.KeyValue
 	spanAttributePolicy *SpanAttributePolicy
 }
 
