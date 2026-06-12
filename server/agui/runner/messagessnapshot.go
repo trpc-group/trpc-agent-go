@@ -152,6 +152,8 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	if err != nil {
 		err = fmt.Errorf("reduce track events: %w", err)
 	}
+	log.DebugfContext(ctx, "agui messages snapshot: app=%s, user=%s, session=%s, trackEvents=%d, eventsForReduce=%d, safeForFollow=%t, messages=%d, reduceErr=%v",
+		sessionKey.AppName, sessionKey.UserID, sessionKey.SessionID, len(trackEvents.Events), len(eventsForReduce), safeForFollow, len(messages), err)
 	event := aguievents.NewMessagesSnapshotEvent(messages)
 	if r.eventSourceMetadataEnabled {
 		metadata := source.BuildSnapshotMetadata(eventsForReduce)
