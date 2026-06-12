@@ -33,6 +33,7 @@ const (
 	defaultToolResultInputTranslationEnabled      = false
 	defaultToolCallDeltaStreamingEnabled          = false
 	defaultStreamingToolResultActivityEnabled     = false
+	defaultConcurrentMessageStreamsEnabled        = false
 	defaultDistributedCancelEnabled               = false
 	defaultDistributedCancelPollInterval          = time.Second
 )
@@ -66,6 +67,7 @@ type Options struct {
 	ToolResultInputTranslationEnabled         bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
 	ToolCallDeltaStreamingEnabled             bool                  // ToolCallDeltaStreamingEnabled streams partial tool-call arguments.
 	StreamingToolResultActivityEnabled        bool                  // StreamingToolResultActivityEnabled rewrites partial tool results as activity events.
+	ConcurrentMessageStreamsEnabled           bool                  // ConcurrentMessageStreamsEnabled keeps multiple message streams open by message ID.
 	DistributedCancelEnabled                  bool                  // DistributedCancelEnabled enables best-effort cancel signaling through SessionState.
 	DistributedCancelPollInterval             time.Duration         // DistributedCancelPollInterval controls how often owner runs poll cancel markers.
 }
@@ -92,6 +94,7 @@ func NewOptions(opt ...Option) *Options {
 		ToolResultInputTranslationEnabled:      defaultToolResultInputTranslationEnabled,
 		ToolCallDeltaStreamingEnabled:          defaultToolCallDeltaStreamingEnabled,
 		StreamingToolResultActivityEnabled:     defaultStreamingToolResultActivityEnabled,
+		ConcurrentMessageStreamsEnabled:        defaultConcurrentMessageStreamsEnabled,
 		DistributedCancelEnabled:               defaultDistributedCancelEnabled,
 		DistributedCancelPollInterval:          defaultDistributedCancelPollInterval,
 	}
@@ -314,6 +317,14 @@ func WithToolCallDeltaStreamingEnabled(enabled bool) Option {
 func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.StreamingToolResultActivityEnabled = enabled
+	}
+}
+
+// WithConcurrentMessageStreamsEnabled controls whether multiple text and reasoning
+// message streams with different message IDs may stay open concurrently.
+func WithConcurrentMessageStreamsEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.ConcurrentMessageStreamsEnabled = enabled
 	}
 }
 

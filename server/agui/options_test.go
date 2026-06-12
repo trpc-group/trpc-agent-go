@@ -147,6 +147,12 @@ func TestWithStreamingToolResultActivityEnabled(t *testing.T) {
 	assert.True(t, ro.StreamingToolResultActivityEnabled)
 }
 
+func TestWithConcurrentMessageStreamsEnabled(t *testing.T) {
+	opts := newOptions(WithConcurrentMessageStreamsEnabled(true))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.True(t, ro.ConcurrentMessageStreamsEnabled)
+}
+
 func TestWithMessagesSnapshotFollowEnabled(t *testing.T) {
 	opts := newOptions(WithMessagesSnapshotFollowEnabled(true))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)

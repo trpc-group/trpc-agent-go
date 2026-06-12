@@ -222,6 +222,14 @@ func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 	}
 }
 
+// WithConcurrentMessageStreamsEnabled controls whether multiple text and reasoning
+// message streams with different message IDs may stay open concurrently.
+func WithConcurrentMessageStreamsEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithConcurrentMessageStreamsEnabled(enabled))
+	}
+}
+
 // WithMessagesSnapshotPath sets the HTTP path for the messages snapshot handler, "/history" in default.
 func WithMessagesSnapshotPath(p string) Option {
 	return func(o *options) {
