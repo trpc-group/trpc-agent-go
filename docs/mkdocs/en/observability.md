@@ -260,15 +260,22 @@ Trace data can be used to analyze:
 - **Dependencies**: Understand relationships between components.
 - **Concurrency Analysis**: Observe the effects of concurrent execution.
 
-## Payload Policy (Production Side)
+## Span Attribute Policy (Production Side)
 
-`telemetry/trace` provides an opt-in `PayloadPolicy` that controls span attribute production before `json.Marshal`:
-
-1. **Which attributes are serialized** (`AttributeRules` or `ChatCapture`)
-2. **Inline byte limit for large payloads** (`InlineMaxBytes`, `0` = unlimited, current behavior)
-3. **Overflow handling** (`OverflowTruncate` prefix / `OverflowOmit` placeholder)
+`telemetry/trace` provides an opt-in `SpanAttributePolicy` that controls collection and size of large payload **span attributes** at span creation time.
 
 Default (unset) behavior is unchanged.
+
+### Two capabilities
+
+1. **Capture control (reduces marshal heap peaks)**: `Drop()`, `Omit()`, and `MaxBytes(n)` + `Omit()` (inline under the threshold, omit envelope when exceeded). These paths avoid `json.Marshal` when possible.
+2. **Export size limiting (does not reduce marshal peaks)**: `Truncate(n)` still performs a full marshal and only truncates the value written to the span (with SHA256 fingerprint).
+
+To reduce heap usage, prefer **dropping redundant attributes** (for example duplicate `*.otel` and legacy message fields).
+
+### Coverage
+
+Large payload attributes are wired for `chat`, `invoke_agent`, `workflow`, and `execute_tool` (messages, llm request/response, workflow request/response, tool arguments/result, and related keys).
 
 ### Configuration
 
@@ -276,36 +283,33 @@ Default (unset) behavior is unchanged.
 import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 clean, err := atrace.Start(ctx,
-    atrace.WithChatCapture(atrace.ChatPayloadCapture{
-        Request: atrace.ChatRequestCapture{
-            InputMessagesOTel: atrace.CaptureBool(false),
-        },
-        Response: atrace.ChatResponseCapture{
-            OutputMessagesOTel: atrace.CaptureBool(false),
-        },
-    }),
+    atrace.WithSpanAttributePolicy(
+        atrace.WithAttributePolicy(atrace.OperationChat, atrace.AttrInputMessagesOTel, atrace.Drop()),
+        atrace.WithAttributePolicy(atrace.OperationChat, atrace.AttrOutputMessagesOTel, atrace.Drop()),
+        atrace.WithAttributePolicy(atrace.OperationInvokeAgent, atrace.AttrInputMessagesOTel, atrace.Drop()),
+    ),
 )
 ```
 
-If `trace.Start` is not used (for example, zhiyan-llm plugin-only setup), call `atrace.SetPayloadPolicy(...)` before the first LLM invocation.
+If `trace.Start` is not used, call `atrace.SetSpanAttributePolicy(...)` before the first LLM invocation. `trace.Start` installs the policy only after tracer initialization succeeds; `clean()` restores the previous policy.
 
-Generic attribute filtering:
+`MaxBytes` + `Omit()` example:
 
 ```go
-atrace.WithPayloadPolicy(atrace.PayloadPolicy{
-    Attributes: atrace.AttributeRules{
-        Disabled: []atrace.AttributeSelector{
-            {Operation: "chat", Key: "gen_ai.input.messages.otel"},
-        },
-    },
-})
+atrace.WithAttributePolicy(atrace.OperationWorkflow, atrace.AttrWorkflowRequest,
+    atrace.MaxBytes(16<<10), atrace.Omit(),
+)
 ```
 
-### Conservative guidance (Zhiyan LLM monitoring)
+`Truncate` example (full marshal, limited export size):
 
-To reduce memory while keeping observability, **only disabling OTel-format attributes** (`input.messages.otel` / `output.messages.otel`) is suggested. `llm_request` and `gen_ai.input.messages` serve different consumers; whether to disable them is up to your backend and memory budget.
+```go
+atrace.WithAttributePolicy(atrace.OperationWorkflow, atrace.AttrWorkflowResponse, atrace.Truncate(64<<10))
+```
 
-Enabling `InlineMaxBytes` may prevent monitoring backends from parsing structured messages, so full input/output may not appear in the UI.
+### Compatibility
+
+Drop/Omit/Truncate may prevent some backends from reconstructing structured full text from attributes. Opt in based on your backend and memory budget.
 
 ## Advanced Features
 

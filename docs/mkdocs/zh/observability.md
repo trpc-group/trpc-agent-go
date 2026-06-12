@@ -262,15 +262,22 @@ Agent Request
 - **依赖关系**：了解组件间的调用关系
 - **并发分析**：观察并发执行的效果
 
-## Payload 策略（生产侧）
+## Span Attribute 策略（生产侧）
 
-`telemetry/trace` 提供 opt-in 的 `PayloadPolicy`，在 span 创建阶段（`json.Marshal` 之前）控制：
-
-1. **哪些 attribute 参与序列化**（`AttributeRules` 或 `ChatCapture`）
-2. **大 payload 的字节上限**（`InlineMaxBytes`，`0` = 不限制，保持现状）
-3. **超限后的处理方式**（`OverflowTruncate` 前缀 / `OverflowOmit` 占位符）
+`telemetry/trace` 提供 opt-in 的 `SpanAttributePolicy`，在 span 创建阶段控制大 payload **span attribute** 的采集与写入大小。
 
 默认不配置时行为不变。
+
+### 两种能力
+
+1. **采集控制（降 marshal 堆峰值）**：`Drop()`、`Omit()`，以及 `MaxBytes(n)` + `Omit()`（阈值内全文，超限写 omit envelope）。这些路径在可能时**避免** `json.Marshal`。
+2. **导出限长（不降 marshal 峰值）**：`Truncate(n)` 仍会完整 marshal，仅在写入 span 时截断并附带 SHA256 指纹。
+
+减少堆内存时，优先 **Drop 冗余 attribute**（例如同时存在的 `*.otel` 与 legacy messages）。
+
+### 覆盖范围
+
+已接入 `chat`、`invoke_agent`、`workflow`、`execute_tool` 的大 payload attribute（messages、llm request/response、workflow request/response、tool arguments/result 等）。
 
 ### 配置入口
 
@@ -278,36 +285,33 @@ Agent Request
 import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 clean, err := atrace.Start(ctx,
-    atrace.WithChatCapture(atrace.ChatPayloadCapture{
-        Request: atrace.ChatRequestCapture{
-            InputMessagesOTel: atrace.CaptureBool(false),
-        },
-        Response: atrace.ChatResponseCapture{
-            OutputMessagesOTel: atrace.CaptureBool(false),
-        },
-    }),
+    atrace.WithSpanAttributePolicy(
+        atrace.WithAttributePolicy(atrace.OperationChat, atrace.AttrInputMessagesOTel, atrace.Drop()),
+        atrace.WithAttributePolicy(atrace.OperationChat, atrace.AttrOutputMessagesOTel, atrace.Drop()),
+        atrace.WithAttributePolicy(atrace.OperationInvokeAgent, atrace.AttrInputMessagesOTel, atrace.Drop()),
+    ),
 )
 ```
 
-未调用 `trace.Start`（例如仅通过 zhiyan-llm 插件初始化）时，可在首次 LLM 调用前使用 `atrace.SetPayloadPolicy(...)`。
+未调用 `trace.Start` 时，可在首次 LLM 调用前使用 `atrace.SetSpanAttributePolicy(...)`。`trace.Start` 在 tracer 初始化**成功**后安装 policy，`clean()` 会恢复之前的 policy。
 
-通用 attribute 过滤：
+`MaxBytes` + `Omit()` 示例（小 payload 保留全文，大 payload 省略正文）：
 
 ```go
-atrace.WithPayloadPolicy(atrace.PayloadPolicy{
-    Attributes: atrace.AttributeRules{
-        Disabled: []atrace.AttributeSelector{
-            {Operation: "chat", Key: "gen_ai.input.messages.otel"},
-        },
-    },
-})
+atrace.WithAttributePolicy(atrace.OperationWorkflow, atrace.AttrWorkflowRequest,
+    atrace.MaxBytes(16<<10), atrace.Omit(),
+)
 ```
 
-### 保守建议（zhiyan LLM 监控）
+`Truncate` 示例（接受完整 marshal，仅限制导出体积）：
 
-若希望减少内存占用且尽量保留监控页可观测性，**仅建议关闭 OTel 格式**（`input.messages.otel` / `output.messages.otel`）。`llm_request` 与 `gen_ai.input.messages` 各有用途（zhiyan 优先读前者、后者作兜底），是否关闭请按后端与内存压力自行决定。
+```go
+atrace.WithAttributePolicy(atrace.OperationWorkflow, atrace.AttrWorkflowResponse, atrace.Truncate(64<<10))
+```
 
-开启 `InlineMaxBytes` 后，监控后端可能无法将 attribute 解析为结构化 messages，详情页可能无法展示完整输入/输出。
+### 兼容性说明
+
+启用 Drop/Omit/Truncate 后，部分监控后端可能无法从 attribute 还原结构化全文；请按自身后端与内存预算 opt-in 评估。
 
 ## 进阶功能
 
