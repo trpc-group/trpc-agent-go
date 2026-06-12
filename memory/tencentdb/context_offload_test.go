@@ -904,6 +904,202 @@ func TestContextOffloadStorage_ApplyL2MetadataAndIndexHelpers(t *testing.T) {
 	assert.Equal(t, "valid", stored[0].ToolCallID)
 }
 
+func TestContextOffloadStorage_ErrorAndBoundaryBranches(t *testing.T) {
+	opts := defaultOptions()
+	opts.ContextOffload.Enabled = true
+	opts.ContextOffload.DataDir = t.TempDir()
+	sess := &session.Session{AppName: "app", UserID: "user", ID: "sess"}
+	store := newOffloadStorageContext(opts, sess, "agent")
+	require.NoError(t, ensureOffloadDirs(store))
+
+	assert.Equal(t, []string{"x"}, addUniqueString([]string{"x"}, ""))
+	assert.Equal(t, []string{"x"}, addUniqueString([]string{"x"}, "x"))
+	assert.Equal(t, "session", safeFilename(""))
+	assert.Equal(t, "session", safeFilename("...---___"))
+	assert.Equal(t, "task", safeTaskLabel("..."))
+	assert.Equal(t, strings.Repeat("a", 39), safeTaskLabel(strings.Repeat("a", 39)+"."+strings.Repeat("b", 10)))
+	assert.Equal(t, "000", mmdPrefixFromFile("ab.mmd"))
+
+	defaultStore := newOffloadStorageContext(Options{}, nil, "")
+	assert.Equal(t, defaultContextOffloadDataDir, defaultStore.DataRoot)
+	assert.Equal(t, "session", defaultStore.SessionID)
+	assert.NotEmpty(t, defaultSessionKeyWithFunc(defaultOptions(), sess))
+	registerOffloadSession(offloadStorageContext{})
+
+	nodeID := "001-N1"
+	rendered := renderOffloadRef(
+		offloadIndexEntry{
+			ToolCallID: "call-node",
+			ToolCall:   "grep",
+			Timestamp:  "2026-06-12T00:00:00Z",
+			ResultRef:  "refs/node.md",
+			NodeID:     &nodeID,
+		},
+		model.ToolCall{
+			ID: "call-node",
+			Function: model.FunctionDefinitionParam{
+				Name:      "grep",
+				Arguments: []byte(`{"q":"context"}`),
+			},
+		},
+		"node payload",
+	)
+	assert.Contains(t, rendered, "- node_id: 001-N1")
+	assert.Contains(t, rendered, "## Arguments")
+
+	require.NoError(t, appendOffloadEntries(store, nil))
+	require.NoError(t, appendOffloadEntries(store, []offloadIndexEntry{
+		{},
+		{ToolCallID: "call-good", ToolCall: "grep", ResultRef: "refs/good.md"},
+	}))
+	entries, err := readRecentOffloadEntries(store, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "call-good", entries[0].ToolCallID)
+	require.Error(t, appendOffloadEntries(store, []offloadIndexEntry{{
+		ToolCallID: "call-bad-json",
+		Offloaded:  make(chan int),
+	}}))
+	require.Error(t, rewriteOffloadEntries(store, []offloadIndexEntry{{
+		ToolCallID: "call-bad-json",
+		Offloaded:  make(chan int),
+	}}))
+
+	require.NoError(t, os.WriteFile(filepath.Join(store.MMDsDir, ".mmd"), []byte("broken"), offloadFilePerm))
+	metas, err := listMMDMetas(offloadStorageContext{MMDsDir: filepath.Join(t.TempDir(), "missing")})
+	require.NoError(t, err)
+	assert.Empty(t, metas)
+	metas, err = listMMDMetas(store)
+	require.NoError(t, err)
+	assert.Empty(t, metas)
+
+	mmdsFile := filepath.Join(t.TempDir(), "mmds-file")
+	require.NoError(t, os.WriteFile(mmdsFile, []byte("not a dir"), offloadFilePerm))
+	_, err = listMMDMetas(offloadStorageContext{MMDsDir: mmdsFile})
+	require.Error(t, err)
+	require.Error(t, applyL2Response(offloadStorageContext{MMDsDir: mmdsFile}, "001-task.mmd", offloadL2Response{
+		FileAction: "replace",
+	}))
+
+	assert.Equal(t, "same", applyMMDReplaceBlocks("same", nil))
+	assert.Equal(t, "ZERO\none\ntwo\nTAIL", applyMMDReplaceBlocks("one\ntwo", []offloadL2ReplaceBlock{
+		{StartLine: 99, EndLine: 200, Content: "TAIL"},
+		{StartLine: -2, EndLine: -5, Content: "ZERO"},
+	}))
+
+	require.NoError(t, appendOffloadEntries(store, []offloadIndexEntry{{
+		ToolCallID: "call-fallback",
+		ToolCall:   "grep",
+		ResultRef:  "refs/fallback.md",
+	}}))
+	require.NoError(t, backfillOffloadNodeIDs(store, map[string]string{"other": "001-N9"}, []offloadIndexEntry{{
+		ToolCallID: "call-fallback",
+	}}))
+	entries, err = readAllOffloadEntries(store)
+	require.NoError(t, err)
+	var fallbackNode *string
+	for _, entry := range entries {
+		if entry.ToolCallID == "call-fallback" {
+			fallbackNode = entry.NodeID
+			break
+		}
+	}
+	require.NotNil(t, fallbackNode)
+	assert.Equal(t, "001-N9", *fallbackNode)
+	require.NoError(t, backfillOffloadNodeIDs(store, nil, []offloadIndexEntry{{
+		ToolCallID: "call-fallback",
+	}}))
+	require.NoError(t, backfillOffloadNodeIDs(store, nil, nil))
+
+	blockedRoot := t.TempDir()
+	dataDirFile := filepath.Join(blockedRoot, "data-file")
+	require.NoError(t, os.WriteFile(dataDirFile, []byte("x"), offloadFilePerm))
+	blockedData := offloadStorageContext{
+		DataRoot:     blockedRoot,
+		DataDir:      dataDirFile,
+		RefsDir:      filepath.Join(dataDirFile, "refs"),
+		MMDsDir:      filepath.Join(dataDirFile, "mmds"),
+		OffloadJSONL: filepath.Join(dataDirFile, "offload.jsonl"),
+		StateFile:    filepath.Join(dataDirFile, "state.json"),
+	}
+	require.Error(t, ensureOffloadDirs(blockedData))
+	require.Error(t, writeOffloadState(blockedData, &offloadState{}))
+	_, err = writeOffloadRef(blockedData, model.ToolCall{ID: "call"}, model.NewToolMessage("call", "grep", "payload"))
+	require.Error(t, err)
+	require.Error(t, appendOffloadEntries(blockedData, []offloadIndexEntry{{ToolCallID: "call"}}))
+	require.Error(t, rewriteOffloadEntries(blockedData, []offloadIndexEntry{{ToolCallID: "call"}}))
+	require.Error(t, writeMMD(blockedData, "001-task.mmd", "flowchart TD"))
+
+	refsBlockedDir := filepath.Join(t.TempDir(), "data")
+	require.NoError(t, os.MkdirAll(refsBlockedDir, offloadDirPerm))
+	refsFile := filepath.Join(refsBlockedDir, "refs")
+	require.NoError(t, os.WriteFile(refsFile, []byte("x"), offloadFilePerm))
+	require.Error(t, ensureOffloadDirs(offloadStorageContext{
+		DataRoot: refsBlockedDir,
+		DataDir:  refsBlockedDir,
+		RefsDir:  refsFile,
+		MMDsDir:  filepath.Join(refsBlockedDir, "mmds"),
+	}))
+
+	notDir := filepath.Join(t.TempDir(), "not-dir")
+	require.NoError(t, os.WriteFile(notDir, []byte("x"), offloadFilePerm))
+	unreadableIndex := offloadStorageContext{OffloadJSONL: filepath.Join(notDir, "offload.jsonl")}
+	_, err = readAllOffloadEntries(unreadableIndex)
+	require.Error(t, err)
+	_, err = readRecentOffloadEntries(unreadableIndex, 1)
+	require.Error(t, err)
+	require.Error(t, backfillOffloadNodeIDs(unreadableIndex, map[string]string{"call": "001-N1"}, nil))
+
+	state := &offloadState{
+		ActiveMMDFile: "002-other.mmd",
+		Boundaries: []offloadBoundary{{
+			StartIndex: 0,
+			Result:     offloadBoundaryLong,
+			TargetMMD:  "001-task.mmd",
+		}},
+	}
+	assert.Empty(t, eligibleL2Entries(nil, []offloadIndexEntry{{ToolCallID: "call"}}))
+	assert.Empty(t, eligibleL2Entries(state, []offloadIndexEntry{{ToolCallID: "call"}}))
+	assert.Empty(t, boundaryForEntry(nil, offloadIndexEntry{ToolCallID: "call"}, nil))
+	assert.Empty(t, boundaryForEntry(&offloadState{Boundaries: []offloadBoundary{{StartIndex: 0, Result: offloadBoundaryShort}}},
+		offloadIndexEntry{ToolCallID: "call"}, []offloadIndexEntry{{ToolCallID: "call"}}))
+
+	p := &contextOffloadPlugin{opts: opts}
+	p.opts.ContextOffload.L0.MinToolResultBytes = 1
+	_, err = p.collectToolPairs(blockedData, &pluginpkg.AfterToolMessagesArgs{
+		ToolResultMessages: []model.Message{model.NewToolMessage("call", "grep", "payload")},
+	})
+	require.Error(t, err)
+	defaultPlugin := &contextOffloadPlugin{opts: opts}
+	defaultPlugin.opts.ContextOffload.L0.MinToolResultBytes = 0
+	pairs, err := defaultPlugin.collectToolPairs(store, nil)
+	require.NoError(t, err)
+	assert.Empty(t, pairs)
+	pairs, err = defaultPlugin.collectToolPairs(store, &pluginpkg.AfterToolMessagesArgs{
+		ToolResultMessages: []model.Message{model.NewToolMessage("call-small", "grep", "tiny")},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, pairs)
+	assert.Empty(t, defaultPlugin.summarizeToolPairs(context.Background(), nil, nil))
+	summaries := defaultPlugin.summarizeToolPairs(context.Background(), nil, []offloadToolPair{{
+		ToolName:   "grep",
+		ToolCallID: "call-summary",
+		Result:     "payload",
+		ResultRef:  "refs/summary.md",
+	}})
+	require.Len(t, summaries, 1)
+	assert.Equal(t, "call-summary", summaries[0].ToolCallID)
+	assert.Nil(t, replaceCurrentToolResults(
+		[]model.Message{model.NewToolMessage("call-original", "grep", "payload")},
+		[]offloadIndexEntry{{ToolCallID: "call-other"}},
+	))
+	_, err = currentInvocation(context.Background())
+	require.Error(t, err)
+	badInvocation := &agent.Invocation{Session: &session.Session{ID: "sess"}}
+	_, err = currentInvocation(agent.NewInvocationContext(context.Background(), badInvocation).Context)
+	require.Error(t, err)
+}
+
 func TestContextOffloadTools_ValidationTruncationAndSearch(t *testing.T) {
 	dataDir := t.TempDir()
 	svc, err := NewService(
