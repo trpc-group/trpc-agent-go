@@ -1664,14 +1664,16 @@ func Test_toMap(t *testing.T) {
 func TestNewContentRequestProcessor(t *testing.T) {
 
 	defaultWant := &ContentRequestProcessor{
-		BranchFilterMode:               "prefix",
-		AddContextPrefix:               true,
-		PreserveSameBranch:             false,
-		TimelineFilterMode:             "all",
-		AddSessionSummary:              false,
-		MaxHistoryRuns:                 0,
-		PreloadMemory:                  0, // Default to disable preloading.
-		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
+		BranchFilterMode:                  "prefix",
+		AddContextPrefix:                  true,
+		PreserveSameBranch:                false,
+		TimelineFilterMode:                "all",
+		AddSessionSummary:                 false,
+		MaxHistoryRuns:                    0,
+		PreloadMemory:                     0, // Default to disable preloading.
+		PreloadMemoryInjectionMode:        PreloadMemoryInjectionSystem,
+		PreloadSessionRecallInjectionMode: PreloadSessionRecallInjectionSystem,
+		PreloadSessionRecallSearchMode:    session.SearchModeHybrid,
 		ContextCompactionConfig: ContextCompactionConfig{
 			KeepRecentRequests:  DefaultContextCompactionKeepRecentRequests,
 			ToolResultMaxTokens: DefaultContextCompactionToolResultMaxTokens,
