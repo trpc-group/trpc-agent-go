@@ -54,6 +54,9 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 	for _, opt := range opts {
 		opt(options)
 	}
+	if options.payloadPolicy != nil {
+		SetPayloadPolicy(*options.payloadPolicy)
+	}
 
 	// Set endpoint based on protocol if not explicitly set
 	if options.tracesEndpoint == "" {
@@ -98,6 +101,7 @@ type options struct {
 	protocol           string            // Protocol to use (grpc or http)
 	headers            map[string]string // Headers to send with the request
 	resourceAttributes *[]attribute.KeyValue
+	payloadPolicy      *PayloadPolicy
 }
 
 // WithEndpoint sets the traces endpoint(host and port) the Exporter will connect to.

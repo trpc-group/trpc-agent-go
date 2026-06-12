@@ -262,6 +262,53 @@ Agent Request
 - **依赖关系**：了解组件间的调用关系
 - **并发分析**：观察并发执行的效果
 
+## Payload 策略（生产侧）
+
+`telemetry/trace` 提供 opt-in 的 `PayloadPolicy`，在 span 创建阶段（`json.Marshal` 之前）控制：
+
+1. **哪些 attribute 参与序列化**（`AttributeRules` 或 `ChatCapture`）
+2. **大 payload 的字节上限**（`InlineMaxBytes`，`0` = 不限制，保持现状）
+3. **超限后的处理方式**（`OverflowTruncate` 前缀 / `OverflowOmit` 占位符）
+
+默认不配置时行为不变。
+
+### 配置入口
+
+```go
+import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+
+clean, err := atrace.Start(ctx,
+    atrace.WithChatCapture(atrace.ChatPayloadCapture{
+        Request: atrace.ChatRequestCapture{
+            InputMessagesOTel: atrace.CaptureBool(false),
+        },
+        Response: atrace.ChatResponseCapture{
+            OutputMessagesOTel: atrace.CaptureBool(false),
+        },
+    }),
+)
+```
+
+未调用 `trace.Start`（例如仅通过 zhiyan-llm 插件初始化）时，可在首次 LLM 调用前使用 `atrace.SetPayloadPolicy(...)`。
+
+通用 attribute 过滤：
+
+```go
+atrace.WithPayloadPolicy(atrace.PayloadPolicy{
+    Attributes: atrace.AttributeRules{
+        Disabled: []atrace.AttributeSelector{
+            {Operation: "chat", Key: "gen_ai.input.messages.otel"},
+        },
+    },
+})
+```
+
+### 保守建议（zhiyan LLM 监控）
+
+若希望减少内存占用且尽量保留监控页可观测性，**仅建议关闭 OTel 格式**（`input.messages.otel` / `output.messages.otel`）。`llm_request` 与 `gen_ai.input.messages` 各有用途（zhiyan 优先读前者、后者作兜底），是否关闭请按后端与内存压力自行决定。
+
+开启 `InlineMaxBytes` 后，监控后端可能无法将 attribute 解析为结构化 messages，详情页可能无法展示完整输入/输出。
+
 ## 进阶功能
 
 ### 自定义 Exporter

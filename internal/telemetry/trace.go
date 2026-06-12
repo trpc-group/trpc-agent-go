@@ -580,11 +580,9 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	}
 
 	// Add request body
-	if bts, err := json.Marshal(req); err == nil {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMRequest, string(bts)))
-	} else {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMRequest, "<not json serializable>"))
-	}
+	attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyLLMRequest, "<not json serializable>", func() ([]byte, error) {
+		return json.Marshal(req)
+	})
 
 	// Add tool definitions as best-effort structured array (JSON string fallback)
 	if len(req.Tools) > 0 {
@@ -592,25 +590,20 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 		for _, t := range toolorder.SortedTools(req.Tools) {
 			definitions = append(definitions, t.Declaration())
 		}
-
 		if len(definitions) > 0 {
-			if bts, err := json.Marshal(definitions); err == nil {
-				attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIRequestToolDefinitions, string(bts)))
-			}
+			attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIRequestToolDefinitions, "", func() ([]byte, error) {
+				return json.Marshal(definitions)
+			})
 		}
 	}
 
 	// Add messages
-	if bts, err := marshalTelemetryMessages(req.Messages); err == nil {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, string(bts)))
-	} else {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessages, "<not json serializable>"))
-	}
-	if bts, err := marshalOTelTelemetryMessages(req.Messages); err == nil {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, string(bts)))
-	} else {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIInputMessagesOTel, "<not json serializable>"))
-	}
+	attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIInputMessages, "<not json serializable>", func() ([]byte, error) {
+		return marshalTelemetryMessages(req.Messages)
+	})
+	attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIInputMessagesOTel, "<not json serializable>", func() ([]byte, error) {
+		return marshalOTelTelemetryMessages(req.Messages)
+	})
 
 	return attrs
 }
@@ -654,12 +647,12 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 
 	// Add choices attributes
 	if len(rsp.Choices) > 0 {
-		if bts, err := marshalTelemetryChoices(rsp.Choices); err == nil {
-			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessages, string(bts)))
-		}
-		if bts, err := marshalOTelTelemetryChoices(rsp.Choices); err == nil {
-			attrs = append(attrs, attribute.String(semconvtrace.KeyGenAIOutputMessagesOTel, string(bts)))
-		}
+		attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIOutputMessages, "", func() ([]byte, error) {
+			return marshalTelemetryChoices(rsp.Choices)
+		})
+		attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIOutputMessagesOTel, "", func() ([]byte, error) {
+			return marshalOTelTelemetryChoices(rsp.Choices)
+		})
 
 		// Extract finish reasons
 		finishReasons := make([]string, 0, len(rsp.Choices))
@@ -674,11 +667,9 @@ func buildResponseAttributes(rsp *model.Response, errorTypeFallback string) []at
 	}
 
 	// Add response body
-	if bts, err := json.Marshal(rsp); err == nil {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMResponse, string(bts)))
-	} else {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyLLMResponse, "<not json serializable>"))
-	}
+	attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyLLMResponse, "<not json serializable>", func() ([]byte, error) {
+		return json.Marshal(rsp)
+	})
 
 	return attrs
 }

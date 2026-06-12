@@ -260,6 +260,53 @@ Trace data can be used to analyze:
 - **Dependencies**: Understand relationships between components.
 - **Concurrency Analysis**: Observe the effects of concurrent execution.
 
+## Payload Policy (Production Side)
+
+`telemetry/trace` provides an opt-in `PayloadPolicy` that controls span attribute production before `json.Marshal`:
+
+1. **Which attributes are serialized** (`AttributeRules` or `ChatCapture`)
+2. **Inline byte limit for large payloads** (`InlineMaxBytes`, `0` = unlimited, current behavior)
+3. **Overflow handling** (`OverflowTruncate` prefix / `OverflowOmit` placeholder)
+
+Default (unset) behavior is unchanged.
+
+### Configuration
+
+```go
+import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+
+clean, err := atrace.Start(ctx,
+    atrace.WithChatCapture(atrace.ChatPayloadCapture{
+        Request: atrace.ChatRequestCapture{
+            InputMessagesOTel: atrace.CaptureBool(false),
+        },
+        Response: atrace.ChatResponseCapture{
+            OutputMessagesOTel: atrace.CaptureBool(false),
+        },
+    }),
+)
+```
+
+If `trace.Start` is not used (for example, zhiyan-llm plugin-only setup), call `atrace.SetPayloadPolicy(...)` before the first LLM invocation.
+
+Generic attribute filtering:
+
+```go
+atrace.WithPayloadPolicy(atrace.PayloadPolicy{
+    Attributes: atrace.AttributeRules{
+        Disabled: []atrace.AttributeSelector{
+            {Operation: "chat", Key: "gen_ai.input.messages.otel"},
+        },
+    },
+})
+```
+
+### Conservative guidance (Zhiyan LLM monitoring)
+
+To reduce memory while keeping observability, **only disabling OTel-format attributes** (`input.messages.otel` / `output.messages.otel`) is suggested. `llm_request` and `gen_ai.input.messages` serve different consumers; whether to disable them is up to your backend and memory budget.
+
+Enabling `InlineMaxBytes` may prevent monitoring backends from parsing structured messages, so full input/output may not appear in the UI.
+
 ## Advanced Features
 
 ### Custom Exporter
