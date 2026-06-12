@@ -234,6 +234,9 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 ) bool {
 	trackEvents, err := r.tracker.GetEvents(ctx, input.key, session.WithEventTime(*cursorTime))
 	if err != nil {
+		if isEmptyTrackEventsError(err) {
+			return true
+		}
 		r.emitEvent(ctx, events, aguievents.NewRunErrorEvent(fmt.Sprintf("follow track events: %v", err),
 			aguievents.WithRunID(input.runID)), input)
 		return false
@@ -269,6 +272,10 @@ func (r *runner) handleMessagesSnapshotFollowTick(
 		}
 	}
 	return true
+}
+
+func isEmptyTrackEventsError(err error) bool {
+	return errors.Is(err, session.ErrTracksEmpty) || errors.Is(err, session.ErrTrackEventsNotFound)
 }
 
 func trackEndsWithTerminalRunEvent(events []session.TrackEvent) bool {
