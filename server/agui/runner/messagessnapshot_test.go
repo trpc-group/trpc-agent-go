@@ -314,6 +314,10 @@ func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
 					Content: "hi",
 				}),
 			), baseTime), baseTime.Add(time.Hour)),
+			newTrackEventAt(t, withSnapshotTimestamp(
+				aguievents.NewRunFinishedEvent("thread", "real-run"),
+				baseTime.Add(500*time.Millisecond),
+			), baseTime.Add(time.Hour)),
 			newTrackEventAt(t, withSnapshotRawEvent(
 				withSnapshotTimestamp(aguievents.NewToolCallStartEvent(
 					"tool-call-1",
@@ -360,6 +364,8 @@ func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
 	require.True(t, ok)
 	got, ok := snapshot.GetBaseEvent().RawEvent.(source.SnapshotMetadata)
 	require.True(t, ok)
+	require.Len(t, got.Messages, 3)
+	require.Len(t, got.ToolCalls, 1)
 	require.Contains(t, got.Messages, "user-1")
 	require.Contains(t, got.Messages, "assistant-1")
 	require.Contains(t, got.Messages, "tool-msg-1")

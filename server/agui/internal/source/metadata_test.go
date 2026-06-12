@@ -563,6 +563,32 @@ func TestBuildSnapshotMetadataIgnoresInvalidEntries(t *testing.T) {
 	assert.True(t, metadata.IsZero())
 }
 
+func TestBuildSnapshotMetadataSkipsRunLifecycleEventsByDefault(t *testing.T) {
+	timestampTime := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
+	runStarted := aguievents.NewRunStartedEvent("thread", "run")
+	withTimestamp(runStarted, timestampTime)
+	metadata := BuildSnapshotMetadata([]session.TrackEvent{
+		newTrackEventAt(t, runStarted, timestampTime.Add(time.Hour)),
+	})
+	assert.True(t, metadata.IsZero())
+}
+
+func TestBuildSnapshotMetadataIncludesRunLifecycleEventsWhenEnabled(t *testing.T) {
+	timestampTime := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
+	runStarted := aguievents.NewRunStartedEvent("thread", "run")
+	withTimestamp(runStarted, timestampTime)
+	metadata := BuildSnapshotMetadata(
+		[]session.TrackEvent{
+			newTrackEventAt(t, runStarted, timestampTime.Add(time.Hour)),
+		},
+		WithRunLifecycleEvents(true),
+	)
+	require.Contains(t, metadata.Messages, runStarted.ID())
+	got := metadata.Messages[runStarted.ID()]
+	require.NotNil(t, got.Timestamp)
+	assert.Equal(t, timestampTime.UnixMilli(), *got.Timestamp)
+}
+
 func TestBuildSnapshotMetadataFallsBackToToolResultSource(t *testing.T) {
 	timestampTime := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
 	toolMetadata := Metadata{

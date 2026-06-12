@@ -41,6 +41,21 @@ type SnapshotMetadata struct {
 	ToolCalls map[string]Metadata `json:"toolCalls,omitempty"`
 }
 
+// SnapshotMetadataOption configures how snapshot metadata is built.
+type SnapshotMetadataOption func(*snapshotMetadataOptions)
+
+type snapshotMetadataOptions struct {
+	includeRunLifecycleEvents bool
+}
+
+// WithRunLifecycleEvents controls whether RUN_* lifecycle events are included
+// in message snapshot metadata.
+func WithRunLifecycleEvents(include bool) SnapshotMetadataOption {
+	return func(o *snapshotMetadataOptions) {
+		o.includeRunLifecycleEvents = include
+	}
+}
+
 // IsZero reports whether the metadata is empty.
 func (m Metadata) IsZero() bool {
 	return m == (Metadata{})
@@ -128,7 +143,14 @@ func FromRawEvent(raw any) (Metadata, bool) {
 
 // BuildSnapshotMetadata derives message and tool-call source indexes from
 // persisted AG-UI track events.
-func BuildSnapshotMetadata(events []session.TrackEvent) SnapshotMetadata {
+func BuildSnapshotMetadata(
+	events []session.TrackEvent,
+	opts ...SnapshotMetadataOption,
+) SnapshotMetadata {
+	options := snapshotMetadataOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
 	metadata := SnapshotMetadata{
 		Messages:  make(map[string]Metadata),
 		ToolCalls: make(map[string]Metadata),
@@ -143,6 +165,9 @@ func BuildSnapshotMetadata(events []session.TrackEvent) SnapshotMetadata {
 		}
 		base := evt.GetBaseEvent()
 		if base == nil {
+			continue
+		}
+		if !options.includeRunLifecycleEvents && isRunLifecycleEvent(evt) {
 			continue
 		}
 		sourceMetadata, ok := FromRawEvent(base.RawEvent)
@@ -166,6 +191,17 @@ func BuildSnapshotMetadata(events []session.TrackEvent) SnapshotMetadata {
 		metadata.ToolCalls = nil
 	}
 	return metadata
+}
+
+func isRunLifecycleEvent(evt aguievents.Event) bool {
+	switch evt.(type) {
+	case *aguievents.RunStartedEvent,
+		*aguievents.RunFinishedEvent,
+		*aguievents.RunErrorEvent:
+		return true
+	default:
+		return false
+	}
 }
 
 func fromEventOverride(ev *agentevent.Event) (Metadata, bool) {

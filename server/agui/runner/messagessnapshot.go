@@ -143,7 +143,10 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	}
 	event := aguievents.NewMessagesSnapshotEvent(messages)
 	if r.eventSourceMetadataEnabled {
-		metadata := source.BuildSnapshotMetadata(eventsForReduce)
+		metadata := source.BuildSnapshotMetadata(
+			eventsForReduce,
+			source.WithRunLifecycleEvents(r.messagesSnapshotRunLifecycleEventsEnabled),
+		)
 		if !metadata.IsZero() {
 			event.GetBaseEvent().RawEvent = metadata
 		}
