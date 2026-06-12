@@ -176,6 +176,61 @@ func TestFromRawEventSupportsMapPayload(t *testing.T) {
 	}, metadata)
 }
 
+func TestFromRawEventParsesMapTimestampValues(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     any
+		want      int64
+		wantValue bool
+	}{
+		{
+			name:      "int64",
+			value:     int64(1781258400000),
+			want:      1781258400000,
+			wantValue: true,
+		},
+		{
+			name:      "int",
+			value:     int(1781258400000),
+			want:      1781258400000,
+			wantValue: true,
+		},
+		{
+			name:      "json number",
+			value:     json.Number("1781258400000"),
+			want:      1781258400000,
+			wantValue: true,
+		},
+		{
+			name:  "fractional float",
+			value: float64(1781258400000.5),
+		},
+		{
+			name:  "invalid json number",
+			value: json.Number("invalid"),
+		},
+		{
+			name:  "unsupported value",
+			value: "1781258400000",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metadata, ok := FromRawEvent(map[string]any{
+				"eventId":   "evt-1",
+				"timestamp": tt.value,
+			})
+			require.True(t, ok)
+			if tt.wantValue {
+				require.NotNil(t, metadata.Timestamp)
+				assert.Equal(t, tt.want, *metadata.Timestamp)
+				return
+			}
+			assert.Nil(t, metadata.Timestamp)
+		})
+	}
+}
+
 func TestRecordSnapshotMetadataIndexesSupportedEvents(t *testing.T) {
 	metadata := testMetadata("evt-1")
 	messageID := testMessageID
@@ -499,6 +554,15 @@ func TestRecordSnapshotMetadataSkipsChunkEventsWithoutMessageID(
 	}
 }
 
+func TestRecordMetadataSkipsEmptyIDs(t *testing.T) {
+	messages := map[string]Metadata{}
+	toolCalls := map[string]Metadata{}
+	recordMessageMetadata(messages, "", testMetadata("evt-1"))
+	recordToolCallMetadata(toolCalls, "", testMetadata("evt-1"))
+	assert.Empty(t, messages)
+	assert.Empty(t, toolCalls)
+}
+
 func TestBuildSnapshotMetadataIndexesMessagesAndToolCalls(t *testing.T) {
 	assistantTime := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
 	toolTime := assistantTime.Add(time.Second)
@@ -695,6 +759,40 @@ func TestBuildSnapshotMetadataIndexesCustomUserMessageID(t *testing.T) {
 	got := metadata.Messages["user-1"]
 	require.NotNil(t, got.Timestamp)
 	assert.Equal(t, timestampTime.UnixMilli(), *got.Timestamp)
+}
+
+func TestCustomUserMessageIDRejectsInvalidPayloads(t *testing.T) {
+	tests := []struct {
+		name  string
+		event *aguievents.CustomEvent
+	}{
+		{
+			name: "nil event",
+		},
+		{
+			name:  "nil value",
+			event: aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage),
+		},
+		{
+			name: "marshal error",
+			event: aguievents.NewCustomEvent(
+				multimodal.CustomEventNameUserMessage,
+				aguievents.WithValue(make(chan int)),
+			),
+		},
+		{
+			name: "unmarshal error",
+			event: aguievents.NewCustomEvent(
+				multimodal.CustomEventNameUserMessage,
+				aguievents.WithValue("invalid"),
+			),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Empty(t, customUserMessageID(tt.event))
+		})
+	}
 }
 
 func testMetadata(eventID string) Metadata {
