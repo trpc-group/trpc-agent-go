@@ -785,7 +785,9 @@ func buildSessionSummarizer(cfg SummaryRuntimeConfig) summary.SessionSummarizer 
             cfg.RetainTokenLimit,
         )),
         summary.WithSystemPrompt(cfg.SummaryPrompt),
-        summary.WithPrompt("{conversation_text}"),
+        summary.WithPrompt(
+            "请在 {max_summary_words} 词以内生成一份可恢复任务状态的结构化摘要。\n\n{conversation_text}",
+        ),
         summary.WithMaxSummaryWords(2000),
         summary.WithModelCallbacks(cfg.Callbacks),
     )

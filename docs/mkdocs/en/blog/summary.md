@@ -653,7 +653,9 @@ func buildSessionSummarizer(cfg SummaryRuntimeConfig) summary.SessionSummarizer 
             cfg.RetainTokenLimit,
         )),
         summary.WithSystemPrompt(cfg.SummaryPrompt),
-        summary.WithPrompt("{conversation_text}"),
+        summary.WithPrompt(
+            "Create a structured state-recovery summary in no more than {max_summary_words} words.\n\n{conversation_text}",
+        ),
         summary.WithMaxSummaryWords(2000),
         summary.WithModelCallbacks(cfg.Callbacks),
     )
