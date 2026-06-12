@@ -242,6 +242,101 @@ func TestManager_ModelCallbacks_EarlyExit(t *testing.T) {
 	require.Equal(t, []string{"p1"}, calls)
 }
 
+func TestManager_AfterToolMessagesCanonicalizesReplacements(t *testing.T) {
+	original := []model.Message{
+		model.NewToolMessage("call-1", "search", "raw 1"),
+		model.NewToolMessage("call-2", "search", "raw 2"),
+	}
+	finishReason := "tool_calls"
+	toolEvent := event.NewResponseEvent("inv", "agent", &model.Response{
+		Object: model.ObjectTypeToolResponse,
+		Choices: []model.Choice{
+			{Index: 10, Message: original[0], FinishReason: &finishReason},
+			{Index: 11, Message: original[1], FinishReason: &finishReason},
+		},
+	})
+	var secondHookMessages []model.Message
+	var secondHookChoices []model.Choice
+	m := plugin.MustNewManager(
+		&testPlugin{
+			name: "p1",
+			reg: func(r *plugin.Registry) {
+				r.AfterToolMessages(func(
+					context.Context,
+					*plugin.AfterToolMessagesArgs,
+				) (*plugin.AfterToolMessagesResult, error) {
+					return &plugin.AfterToolMessagesResult{
+						ToolResultMessages: []model.Message{
+							model.NewToolMessage("call-2", "search", "summary 2"),
+							model.NewToolMessage("call-1", "search", "summary 1"),
+						},
+					}, nil
+				})
+			},
+		},
+		&testPlugin{
+			name: "p2",
+			reg: func(r *plugin.Registry) {
+				r.AfterToolMessages(func(
+					_ context.Context,
+					args *plugin.AfterToolMessagesArgs,
+				) (*plugin.AfterToolMessagesResult, error) {
+					secondHookMessages = append([]model.Message(nil), args.ToolResultMessages...)
+					secondHookChoices = append([]model.Choice(nil), args.ToolResultEvent.Response.Choices...)
+					return nil, nil
+				})
+			},
+		},
+	)
+
+	args := &plugin.AfterToolMessagesArgs{
+		ToolResultEvent:    toolEvent,
+		Messages:           append([]model.Message{model.NewUserMessage("query")}, original...),
+		ToolResultMessages: original,
+	}
+	result, err := m.AfterToolMessages(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.ToolResultMessages, 2)
+	require.Equal(t, "call-1", result.ToolResultMessages[0].ToolID)
+	require.Equal(t, "summary 1", result.ToolResultMessages[0].Content)
+	require.Equal(t, "call-2", result.ToolResultMessages[1].ToolID)
+	require.Equal(t, "summary 2", result.ToolResultMessages[1].Content)
+	require.Equal(t, result.ToolResultMessages, args.ToolResultMessages)
+	require.Equal(t, result.ToolResultMessages, secondHookMessages)
+	require.Equal(t, "summary 1", secondHookChoices[0].Message.Content)
+	require.Equal(t, "summary 2", secondHookChoices[1].Message.Content)
+	require.Equal(t, 10, toolEvent.Response.Choices[0].Index)
+	require.Same(t, &finishReason, toolEvent.Response.Choices[0].FinishReason)
+	require.Equal(t, "summary 1", toolEvent.Response.Choices[0].Message.Content)
+	require.Equal(t, 11, toolEvent.Response.Choices[1].Index)
+	require.Same(t, &finishReason, toolEvent.Response.Choices[1].FinishReason)
+	require.Equal(t, "summary 2", toolEvent.Response.Choices[1].Message.Content)
+}
+
+func TestManager_AfterToolMessagesRejectsInvalidReplacement(t *testing.T) {
+	m := plugin.MustNewManager(&testPlugin{
+		name: "p1",
+		reg: func(r *plugin.Registry) {
+			r.AfterToolMessages(func(
+				context.Context,
+				*plugin.AfterToolMessagesArgs,
+			) (*plugin.AfterToolMessagesResult, error) {
+				return &plugin.AfterToolMessagesResult{
+					ToolResultMessages: []model.Message{model.NewAssistantMessage("bad")},
+				}, nil
+			})
+		},
+	})
+	_, err := m.AfterToolMessages(context.Background(), &plugin.AfterToolMessagesArgs{
+		ToolResultMessages: []model.Message{
+			model.NewToolMessage("call-1", "search", "raw"),
+		},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "missing tool id")
+}
+
 func TestManager_OnEvent_Order(t *testing.T) {
 	var calls []string
 	p1 := &testPlugin{
