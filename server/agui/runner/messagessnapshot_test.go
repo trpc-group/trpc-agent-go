@@ -278,6 +278,7 @@ func TestMessagesSnapshotOmitsRunEventsByDefault(t *testing.T) {
 }
 
 func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
+	baseTime := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
 	assistantMetadata := source.Metadata{
 		EventID:      "evt-assistant",
 		Author:       "member-a",
@@ -298,34 +299,41 @@ func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
 	}
 	svc := &testSessionService{
 		trackEvents: []session.TrackEvent{
-			newTrackEvent(t, withSnapshotRawEvent(
-				aguievents.NewTextMessageStartEvent(
+			newTrackEventAt(t, withSnapshotRawEvent(
+				withSnapshotTimestamp(aguievents.NewTextMessageStartEvent(
 					"orphan-assistant",
 					aguievents.WithRole("assistant"),
-				),
+				), baseTime.Add(-time.Second)),
 				orphanMetadata,
-			)),
-			newUserMessageTrackEvent(t, "user-1", "hi"),
-			newTrackEvent(t, withSnapshotRawEvent(
-				aguievents.NewToolCallStartEvent(
+			), baseTime.Add(time.Hour)),
+			newTrackEventAt(t, withSnapshotTimestamp(aguievents.NewCustomEvent(
+				multimodal.CustomEventNameUserMessage,
+				aguievents.WithValue(types.Message{
+					ID:      "user-1",
+					Role:    types.RoleUser,
+					Content: "hi",
+				}),
+			), baseTime), baseTime.Add(time.Hour)),
+			newTrackEventAt(t, withSnapshotRawEvent(
+				withSnapshotTimestamp(aguievents.NewToolCallStartEvent(
 					"tool-call-1",
 					"calc",
 					aguievents.WithParentMessageID("assistant-1"),
-				),
+				), baseTime.Add(time.Second)),
 				assistantMetadata,
-			)),
-			newTrackEvent(t, withSnapshotRawEvent(
-				aguievents.NewToolCallEndEvent("tool-call-1"),
+			), baseTime.Add(time.Hour)),
+			newTrackEventAt(t, withSnapshotRawEvent(
+				withSnapshotTimestamp(aguievents.NewToolCallEndEvent("tool-call-1"), baseTime.Add(2*time.Second)),
 				assistantMetadata,
-			)),
-			newTrackEvent(t, withSnapshotRawEvent(
-				aguievents.NewToolCallResultEvent(
+			), baseTime.Add(time.Hour)),
+			newTrackEventAt(t, withSnapshotRawEvent(
+				withSnapshotTimestamp(aguievents.NewToolCallResultEvent(
 					"tool-msg-1",
 					"tool-call-1",
 					"42",
-				),
+				), baseTime.Add(3*time.Second)),
 				toolMetadata,
-			)),
+			), baseTime.Add(time.Hour)),
 		},
 	}
 	tracker, err := track.New(svc)
@@ -352,15 +360,18 @@ func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
 	require.True(t, ok)
 	got, ok := snapshot.GetBaseEvent().RawEvent.(source.SnapshotMetadata)
 	require.True(t, ok)
-	assert.Equal(t, source.SnapshotMetadata{
-		Messages: map[string]source.Metadata{
-			"assistant-1": assistantMetadata,
-			"tool-msg-1":  toolMetadata,
-		},
-		ToolCalls: map[string]source.Metadata{
-			"tool-call-1": assistantMetadata,
-		},
-	}, got)
+	require.Contains(t, got.Messages, "user-1")
+	require.Contains(t, got.Messages, "assistant-1")
+	require.Contains(t, got.Messages, "tool-msg-1")
+	require.Contains(t, got.ToolCalls, "tool-call-1")
+	assertSnapshotSourceMetadata(t, source.Metadata{}, got.Messages["user-1"])
+	assertSnapshotMetadataTimestamp(t, got.Messages["user-1"], baseTime)
+	assertSnapshotSourceMetadata(t, assistantMetadata, got.Messages["assistant-1"])
+	assertSnapshotMetadataTimestamp(t, got.Messages["assistant-1"], baseTime.Add(time.Second))
+	assertSnapshotSourceMetadata(t, toolMetadata, got.Messages["tool-msg-1"])
+	assertSnapshotMetadataTimestamp(t, got.Messages["tool-msg-1"], baseTime.Add(3*time.Second))
+	assertSnapshotSourceMetadata(t, assistantMetadata, got.ToolCalls["tool-call-1"])
+	assertSnapshotMetadataTimestamp(t, got.ToolCalls["tool-call-1"], baseTime.Add(time.Second))
 }
 
 func TestMessagesSnapshotUsesResolvedAppName(t *testing.T) {
@@ -1256,6 +1267,34 @@ func withSnapshotRawEvent(
 ) aguievents.Event {
 	event.GetBaseEvent().RawEvent = metadata
 	return event
+}
+
+func withSnapshotTimestamp(event aguievents.Event, timestamp time.Time) aguievents.Event {
+	event.GetBaseEvent().SetTimestamp(timestamp.UnixMilli())
+	return event
+}
+
+func assertSnapshotSourceMetadata(
+	t *testing.T,
+	want source.Metadata,
+	got source.Metadata,
+) {
+	t.Helper()
+	assert.Equal(t, want.EventID, got.EventID)
+	assert.Equal(t, want.Author, got.Author)
+	assert.Equal(t, want.InvocationID, got.InvocationID)
+	assert.Equal(t, want.ParentInvocationID, got.ParentInvocationID)
+	assert.Equal(t, want.Branch, got.Branch)
+}
+
+func assertSnapshotMetadataTimestamp(
+	t *testing.T,
+	got source.Metadata,
+	wantTimestamp time.Time,
+) {
+	t.Helper()
+	require.NotNil(t, got.Timestamp)
+	assert.Equal(t, wantTimestamp.UnixMilli(), *got.Timestamp)
 }
 
 func newTrackEvent(t *testing.T, evt aguievents.Event) session.TrackEvent {
