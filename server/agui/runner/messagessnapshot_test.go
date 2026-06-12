@@ -719,8 +719,10 @@ func TestMessagesSnapshotRecoversUserIDResolverPanic(t *testing.T) {
 	)
 	require.Error(t, err)
 	assert.Nil(t, stream)
-	assert.Contains(t, err.Error(), "messages snapshot panic")
-	assert.Contains(t, err.Error(), "bad forwarded props")
+	assert.Equal(t, "messages snapshot internal error", err.Error())
+	// The panic payload may carry request internals and must stay out of the
+	// error returned to HTTP clients.
+	assert.NotContains(t, err.Error(), "bad forwarded props")
 }
 
 func TestMessagesSnapshotAppNameResolverError(t *testing.T) {

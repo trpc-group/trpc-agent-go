@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
@@ -37,8 +38,11 @@ func (r *runner) MessagesSnapshot(ctx context.Context,
 	runAgentInput *adapter.RunAgentInput) (eventCh <-chan aguievents.Event, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
+			// The error is written back to the HTTP client; keep the panic
+			// payload (hooks/resolvers may embed request internals) in logs only.
+			log.ErrorfContext(ctx, "agui messages snapshot: panic: %v\n%s", rec, debug.Stack())
 			eventCh = nil
-			err = fmt.Errorf("messages snapshot panic: %v", rec)
+			err = errors.New("messages snapshot internal error")
 		}
 	}()
 	if r.runner == nil {
