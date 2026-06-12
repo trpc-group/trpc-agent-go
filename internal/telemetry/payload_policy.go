@@ -16,7 +16,9 @@ import (
 type OverflowMode int
 
 const (
+	// OverflowTruncate keeps a UTF-8 safe prefix and wraps it in PayloadEnvelope.
 	OverflowTruncate OverflowMode = iota
+	// OverflowOmit writes a placeholder envelope without message content.
 	OverflowOmit
 )
 

@@ -65,3 +65,44 @@ func TestAllowAttribute_OperationScopedDisabled(t *testing.T) {
 		t.Fatal("expected operation-agnostic disable to apply to all operations")
 	}
 }
+
+func TestCurrentPayloadPolicy(t *testing.T) {
+	t.Cleanup(func() { SetPayloadPolicy(PayloadPolicy{}) })
+
+	if got := CurrentPayloadPolicy(); got.InlineMaxBytes != 0 {
+		t.Fatalf("expected empty policy, got %+v", got)
+	}
+
+	want := PayloadPolicy{InlineMaxBytes: 512, OverflowMode: OverflowOmit}
+	SetPayloadPolicy(want)
+	got := CurrentPayloadPolicy()
+	if got.InlineMaxBytes != want.InlineMaxBytes || got.OverflowMode != want.OverflowMode {
+		t.Fatalf("got %+v want %+v", got, want)
+	}
+}
+
+func TestMergeAttributeRules(t *testing.T) {
+	dst := AttributeRules{
+		Enabled:  []AttributeSelector{{Key: "a"}},
+		Disabled: []AttributeSelector{{Key: "b"}},
+	}
+	src := AttributeRules{
+		Enabled:  []AttributeSelector{{Key: "c"}},
+		Disabled: []AttributeSelector{{Key: "d"}},
+	}
+	got := MergeAttributeRules(dst, src)
+	if len(got.Enabled) != 2 || len(got.Disabled) != 2 {
+		t.Fatalf("expected merged rules, got %+v", got)
+	}
+	if got.Enabled[1].Key != "c" || got.Disabled[1].Key != "d" {
+		t.Fatalf("unexpected merge order: %+v", got)
+	}
+}
+
+func TestOverflowModeValue_Default(t *testing.T) {
+	t.Cleanup(func() { SetPayloadPolicy(PayloadPolicy{}) })
+
+	if got := OverflowModeValue(); got != OverflowTruncate {
+		t.Fatalf("expected default overflow mode, got %v", got)
+	}
+}
