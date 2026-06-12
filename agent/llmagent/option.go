@@ -80,20 +80,38 @@ const (
 	// invocations until cleared or the session expires.
 	SkillLoadModeSession = processor.SkillLoadModeSession
 
-	// SessionSummaryInjectionSystem injects the session summary as a system
-	// message (default behavior).
+	// SessionSummaryInjectionSystem injects the session summary as system
+	// context (default behavior).
 	SessionSummaryInjectionSystem = processor.SessionSummaryInjectionSystem
-	// SessionSummaryInjectionUser injects the session summary as a user
-	// message that participates in token-budget trimming for sliding-window
-	// behavior. The processor prefers merging it into the first user
-	// history/current message and only falls back to a trailing prefix user
-	// message when needed.
+	// SessionSummaryInjectionUser injects the session summary near user/history
+	// messages. The summary participates in token-budget trimming for
+	// sliding-window behavior.
 	SessionSummaryInjectionUser = processor.SessionSummaryInjectionUser
+	// PreloadMemoryInjectionSystem injects preloaded memories as system context
+	// (default behavior).
+	PreloadMemoryInjectionSystem = processor.PreloadMemoryInjectionSystem
+	// PreloadMemoryInjectionUser injects preloaded memories near user/history.
+	// This is more prompt-cache friendly, but memory context participates in
+	// token-budget trimming.
+	PreloadMemoryInjectionUser = processor.PreloadMemoryInjectionUser
+	// PreloadSessionRecallInjectionSystem injects recalled session events as
+	// system context (default behavior).
+	PreloadSessionRecallInjectionSystem = processor.PreloadSessionRecallInjectionSystem
+	// PreloadSessionRecallInjectionUser injects recalled session events near
+	// user/history. This is more prompt-cache friendly, but recall context
+	// participates in token-budget trimming.
+	PreloadSessionRecallInjectionUser = processor.PreloadSessionRecallInjectionUser
 )
 
-// SessionSummaryInjectionMode controls how the session summary is injected
-// into the model request.
+// SessionSummaryInjectionMode controls where session summaries are injected.
 type SessionSummaryInjectionMode = processor.SessionSummaryInjectionMode
+
+// PreloadMemoryInjectionMode controls where preloaded memories are injected.
+type PreloadMemoryInjectionMode = processor.PreloadMemoryInjectionMode
+
+// PreloadSessionRecallInjectionMode controls where recalled session events are
+// injected.
+type PreloadSessionRecallInjectionMode = processor.PreloadSessionRecallInjectionMode
 
 // MessageFilterMode is the mode for filtering messages.
 type MessageFilterMode int
@@ -162,10 +180,12 @@ var (
 		//     usage and API costs, especially for users with many stored
 		//     memories. Consider using a positive budget (e.g., 10-50) for
 		//     production use.
-		PreloadMemory: 0,
+		PreloadMemory:              0,
+		PreloadMemoryInjectionMode: processor.PreloadMemoryInjectionSystem,
 		// Default to disabling query-time session recall preload.
-		PreloadSessionRecall:           0,
-		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
+		PreloadSessionRecall:              0,
+		PreloadSessionRecallInjectionMode: processor.PreloadSessionRecallInjectionSystem,
+		PreloadSessionRecallSearchMode:    session.SearchModeHybrid,
 
 		SkillLoadMode: SkillLoadModeTurn,
 
@@ -316,13 +336,12 @@ type Options struct {
 	// When false, foreign agent events are passed directly without the prefix.
 	AddContextPrefix bool
 
-	// AddSessionSummary controls whether to prepend the current branch summary
-	// as a system message when available (default: false).
+	// AddSessionSummary controls whether to include the current branch summary
+	// when available (default: false).
 	AddSessionSummary bool
-	// SessionSummaryInjectionMode controls how the session summary is injected
-	// into the model request. Default is "system" (SessionSummaryInjectionSystem).
-	// Set to "user" (SessionSummaryInjectionUser) to inject as a user message
-	// that participates in token-budget trimming for sliding-window behavior.
+	// SessionSummaryInjectionMode controls where session summaries are injected.
+	// Default is "system" (SessionSummaryInjectionSystem). In user mode, the
+	// summary participates in token-budget trimming.
 	SessionSummaryInjectionMode processor.SessionSummaryInjectionMode
 	// SyncSummaryIntraRun controls whether to refresh session summary
 	// synchronously between LLM loop iterations inside the same run.
@@ -544,12 +563,22 @@ type Options struct {
 	// When 0 (default), no memories are preloaded (use tools instead).
 	// When < 0, all memories are loaded.
 	PreloadMemory int
-	// PreloadSessionRecall sets the number of recalled
-	// session events to preload into the system prompt.
+	// PreloadMemoryInjectionMode controls where preloaded memories are injected.
+	// Default is "system" (PreloadMemoryInjectionSystem). User mode is more
+	// prompt-cache friendly, but memory context participates in token-budget
+	// trimming.
+	PreloadMemoryInjectionMode processor.PreloadMemoryInjectionMode
+	// PreloadSessionRecall sets the number of recalled session events to
+	// preload as context.
 	// When > 0, search runs across other sessions owned by
 	// the current user. When 0 (default), recall preload is
 	// disabled.
 	PreloadSessionRecall int
+	// PreloadSessionRecallInjectionMode controls where recalled session events
+	// are injected. Default is "system" (PreloadSessionRecallInjectionSystem).
+	// User mode is more prompt-cache friendly, but recall context participates
+	// in token-budget trimming.
+	PreloadSessionRecallInjectionMode processor.PreloadSessionRecallInjectionMode
 	// PreloadSessionRecallMinScore filters low-confidence
 	// recalled session hits before injection.
 	PreloadSessionRecallMinScore float64
@@ -1530,14 +1559,15 @@ func WithAddSessionSummary(addSummary bool) Option {
 	}
 }
 
-// WithSessionSummaryInjectionMode sets the injection mode for session summaries.
+// WithSessionSummaryInjectionMode sets where session summaries are injected.
 //
 // Available modes:
-//   - processor.SessionSummaryInjectionSystem (default): injects as system message.
-//   - processor.SessionSummaryInjectionUser: injects as a user message that
-//     participates in token-budget trimming for sliding-window behavior.
-//     If the first history message is also a user message, the summary is
-//     merged into it to avoid consecutive user messages.
+//   - processor.SessionSummaryInjectionSystem (default): injects session
+//     summary as system context.
+//   - processor.SessionSummaryInjectionUser: injects session summary near
+//     user/history. The summary participates in token-budget trimming. If the
+//     first history message is also a user message, the summary is merged into
+//     it to avoid consecutive user messages.
 func WithSessionSummaryInjectionMode(mode processor.SessionSummaryInjectionMode) Option {
 	return func(opts *Options) {
 		opts.SessionSummaryInjectionMode = mode
@@ -1818,11 +1848,52 @@ func WithPreloadMemory(limit int) Option {
 	}
 }
 
-// WithPreloadSessionRecall sets the number of recalled
-// session events to preload into the system prompt.
+// WithPreloadMemoryInjectionMode sets where preloaded memories are injected.
+//
+// Available modes:
+//   - processor.PreloadMemoryInjectionSystem (default): injects preloaded
+//     memories as system context.
+//   - processor.PreloadMemoryInjectionUser: injects preloaded memories near
+//     user/history. This is more prompt-cache friendly, but memory context
+//     participates in token-budget trimming and can be trimmed.
+func WithPreloadMemoryInjectionMode(mode processor.PreloadMemoryInjectionMode) Option {
+	return func(opts *Options) {
+		switch mode {
+		case processor.PreloadMemoryInjectionUser:
+			opts.PreloadMemoryInjectionMode = processor.PreloadMemoryInjectionUser
+		default:
+			opts.PreloadMemoryInjectionMode = processor.PreloadMemoryInjectionSystem
+		}
+	}
+}
+
+// WithPreloadSessionRecall sets the number of recalled session events to
+// preload as context.
 func WithPreloadSessionRecall(limit int) Option {
 	return func(opts *Options) {
 		opts.PreloadSessionRecall = limit
+	}
+}
+
+// WithPreloadSessionRecallInjectionMode sets where recalled session events are
+// injected.
+//
+// Available modes:
+//   - processor.PreloadSessionRecallInjectionSystem (default): injects recalled
+//     session events as system context.
+//   - processor.PreloadSessionRecallInjectionUser: injects recalled session
+//     events near user/history. This is more prompt-cache friendly, but recall
+//     context participates in token-budget trimming and can be trimmed.
+func WithPreloadSessionRecallInjectionMode(
+	mode processor.PreloadSessionRecallInjectionMode,
+) Option {
+	return func(opts *Options) {
+		switch mode {
+		case processor.PreloadSessionRecallInjectionUser:
+			opts.PreloadSessionRecallInjectionMode = processor.PreloadSessionRecallInjectionUser
+		default:
+			opts.PreloadSessionRecallInjectionMode = processor.PreloadSessionRecallInjectionSystem
+		}
 	}
 }
 

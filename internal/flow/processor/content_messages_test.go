@@ -1775,6 +1775,19 @@ func TestPrependSummaryUserMessage(t *testing.T) {
 		require.Equal(t, model.RoleAssistant, result[1].Role)
 	})
 
+	t.Run("zero_role_history_message_merges_as_user", func(t *testing.T) {
+		msgs := []model.Message{
+			{Content: "zero role current request"},
+			model.NewAssistantMessage("hi"),
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, nil)
+		require.Len(t, result, 2)
+		require.Equal(t, model.Role(""), result[0].Role)
+		require.Contains(t, result[0].Content, "some summary")
+		require.Contains(t, result[0].Content, "zero role current request")
+		require.Equal(t, model.RoleAssistant, result[1].Role)
+	})
+
 	t.Run("does_not_mutate_original", func(t *testing.T) {
 		original := []model.Message{
 			model.NewUserMessage("original content"),
@@ -1859,6 +1872,21 @@ func TestPrependSummaryUserMessage(t *testing.T) {
 		// trailing prefix user message.
 		require.Contains(t, prefix[len(prefix)-1].Content, "some summary")
 		require.Contains(t, prefix[len(prefix)-1].Content, "few-shot user example")
+		require.Equal(t, msgs, result)
+	})
+
+	t.Run("req_prefix_ends_with_zero_role_user_merges_as_fallback", func(t *testing.T) {
+		prefix := []model.Message{
+			model.NewSystemMessage("system prompt"),
+			{Content: "zero role user example"},
+		}
+		msgs := []model.Message{
+			model.NewAssistantMessage("history assistant"),
+		}
+		result := p.prependSummaryUserMessage("some summary", msgs, prefix)
+		require.Equal(t, model.Role(""), prefix[len(prefix)-1].Role)
+		require.Contains(t, prefix[len(prefix)-1].Content, "some summary")
+		require.Contains(t, prefix[len(prefix)-1].Content, "zero role user example")
 		require.Equal(t, msgs, result)
 	})
 
