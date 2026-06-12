@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
@@ -42,7 +43,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/appid"
 )
 
@@ -548,7 +548,7 @@ func (r *runner) Run(
 		runnerLatencySpanGetSession,
 		runnerSessionAttrs(sessionKey, nil)...,
 	)
-	sessionCtx = sessionsummary.ContextWithSummaryAwareRestoreFilterKey(
+	sessionCtx = summaryrestore.ContextWithFilterKey(
 		sessionCtx,
 		sessionRestoreFilterKey(effectiveAppName, ro),
 	)

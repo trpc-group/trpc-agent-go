@@ -7,7 +7,7 @@
 //
 //
 
-package summary
+package summaryrestore
 
 import (
 	"context"
@@ -16,18 +16,18 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSummaryAwareRestoreFilterKeyContext(t *testing.T) {
-	filterKey, ok := SummaryAwareRestoreFilterKeyFromContext(nil)
+func TestFilterKeyContext(t *testing.T) {
+	filterKey, ok := FilterKeyFromContext(nil)
 	assert.False(t, ok)
 	assert.Empty(t, filterKey)
 
-	ctx := ContextWithSummaryAwareRestoreFilterKey(nil, "")
-	filterKey, ok = SummaryAwareRestoreFilterKeyFromContext(ctx)
+	ctx := ContextWithFilterKey(nil, "")
+	filterKey, ok = FilterKeyFromContext(ctx)
 	assert.False(t, ok)
 	assert.Empty(t, filterKey)
 
-	ctx = ContextWithSummaryAwareRestoreFilterKey(context.Background(), "app/branch")
-	filterKey, ok = SummaryAwareRestoreFilterKeyFromContext(ctx)
+	ctx = ContextWithFilterKey(context.Background(), "app/branch")
+	filterKey, ok = FilterKeyFromContext(ctx)
 	assert.True(t, ok)
 	assert.Equal(t, "app/branch", filterKey)
 }

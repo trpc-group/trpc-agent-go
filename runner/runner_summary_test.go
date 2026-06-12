@@ -18,9 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -398,7 +398,7 @@ func (m *mockSessionService) CreateSession(ctx context.Context, key session.Key,
 }
 
 func (m *mockSessionService) GetSession(ctx context.Context, key session.Key, options ...session.Option) (*session.Session, error) {
-	hint, ok := sessionsummary.SummaryAwareRestoreFilterKeyFromContext(ctx)
+	hint, ok := summaryrestore.FilterKeyFromContext(ctx)
 	m.getSessionCalls = append(m.getSessionCalls, getSessionCall{
 		key:           key,
 		options:       options,

@@ -19,9 +19,9 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 const (
@@ -787,7 +787,7 @@ func shouldUseSummaryAwareRestore(
 }
 
 func summaryRestoreFilterKeyFromContext(ctx context.Context) (string, bool) {
-	return sessionsummary.SummaryAwareRestoreFilterKeyFromContext(ctx)
+	return summaryrestore.FilterKeyFromContext(ctx)
 }
 
 func summaryRestoreAfterTime(
