@@ -952,6 +952,9 @@ func (s *Service) getEventsByRefs(
 		if !ok {
 			continue
 		}
+		if evt.Timestamp.IsZero() && !ref.eventTimestamp.IsZero() {
+			evt.Timestamp = ref.eventTimestamp
+		}
 		events = append(events, evt)
 	}
 	return events, nil
@@ -1069,6 +1072,7 @@ func (s *Service) getEventRefsWithTimestamp(
 		if err := rows.Scan(&ref.id, &ref.createdAt, &eventTimestamp); err != nil {
 			return err
 		}
+		ref.eventTimestamp = ref.createdAt
 		if eventTimestamp.Valid && eventTimestamp.String != "" {
 			parsed, err := time.Parse(time.RFC3339Nano, eventTimestamp.String)
 			if err != nil {
