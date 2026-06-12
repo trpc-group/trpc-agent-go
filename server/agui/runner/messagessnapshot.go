@@ -119,7 +119,8 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 		return
 	}
 
-	if r.messagesSnapshotFollowEnabled && trackEvents != nil && !trackEndsWithTerminalRunEvent(trackEvents.Events) {
+	if r.messagesSnapshotFollowEnabled && trackEvents != nil && len(trackEvents.Events) > 0 &&
+		!trackEndsWithTerminalRunEvent(trackEvents.Events) {
 		r.messagesSnapshotFollow(ctx, input, events, trackEvents)
 		return
 	}
