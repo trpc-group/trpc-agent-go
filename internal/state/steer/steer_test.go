@@ -108,6 +108,27 @@ func TestQueue_DiscardClearsQueuedMessagesWithoutClosing(t *testing.T) {
 	require.Equal(t, "three", drained[0].Content)
 }
 
+// TestAttach_NotInheritedByPlainClone pins the member-isolation invariant: the
+// steer queue is deliberately NOT in the invocation clone allowlist, so a plain
+// Clone (the path delegated sub-agents take — agent_tool clones the parent
+// invocation) does NOT inherit it. Otherwise a member sub-agent would drain a
+// steer the user meant for the lead. The ralph loop re-attaches the queue to its
+// inner (lead) invocation explicitly; see runner.newInnerInvocation.
+func TestAttach_NotInheritedByPlainClone(t *testing.T) {
+	root := agent.NewInvocation()
+	queue := NewQueue()
+	Attach(root, queue)
+	require.True(t, IsAttached(root))
+
+	clone := root.Clone()
+	require.False(t, IsAttached(clone),
+		"a plain clone (delegated sub-agent) must NOT inherit the steer queue")
+
+	// A steer enqueued on the root is invisible to the clone — it cannot drain it.
+	require.True(t, queue.Enqueue(model.NewUserMessage("steer")))
+	require.Nil(t, Drain(clone), "sub-agent clone must not drain the lead's steer")
+}
+
 func TestNilSafety(t *testing.T) {
 	var (
 		invocation *agent.Invocation

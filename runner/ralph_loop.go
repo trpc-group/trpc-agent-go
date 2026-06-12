@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -297,7 +298,19 @@ func (a *ralphLoopAgent) newInnerInvocation(
 	if len(entryPredecessors) > 0 {
 		invocationOpts = append(invocationOpts, agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors))
 	}
-	return base.Clone(invocationOpts...)
+	inner := base.Clone(invocationOpts...)
+
+	// Carry the steer queue across the iteration boundary so user messages
+	// enqueued onto the run (Runner.EnqueueUserMessage) reach the inner agent and
+	// drain at its next safe boundary. The queue is intentionally NOT in the
+	// clone allowlist: that would also propagate it into delegated sub-agent
+	// invocations (which Clone the inner agent), and a member would then drain a
+	// steer meant for the lead. Re-attaching here scopes it to exactly the
+	// loop's inner agent — the lead the user is steering.
+	if queue, ok := agent.GetStateValue[*steer.Queue](base, steer.StateKeyQueuedUserMessages); ok && queue != nil {
+		steer.Attach(inner, queue)
+	}
+	return inner
 }
 
 func (a *ralphLoopAgent) forwardEvents(
