@@ -21,9 +21,11 @@ pr*.md
 claude3.7.sh
 dpskv3.sh
 dpskv4.sh
+glm.sh
 .cursorignore
 !LICENSE
 !.github/CODEOWNERS
+!openclaw/examples/sandbox_service_execution/Dockerfile
 .kiro
 .claude*
 CLAUDE.md

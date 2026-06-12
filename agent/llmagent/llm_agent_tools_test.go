@@ -11,11 +11,13 @@ package llmagent
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -27,6 +29,7 @@ const (
 	testUserToolNameTwo       = "user_tool_2"
 	testTransferToolName      = "transfer_to_agent"
 	testKnowledgeToolName     = "knowledge_search"
+	testCurrentTimeToolName   = "environment_context_current_time"
 	testDynamicToolSetName    = "dynamic"
 	testFirstToolSetName      = "set_one"
 	testSecondToolSetName     = "set_two"
@@ -127,6 +130,151 @@ func TestLLMAgent_Tools_IncludesAwaitUserReplyWhenEnabled(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected await_user_reply tool when enabled")
+	}
+}
+
+func TestLLMAgent_Tools_IncludesCurrentTimeWhenAddCurrentTime(t *testing.T) {
+	agt := New("main", WithAddCurrentTime(true))
+
+	ts := agt.Tools()
+	found := false
+	for _, tl := range ts {
+		if tl.Declaration().Name == testCurrentTimeToolName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected environment_context_current_time tool when AddCurrentTime is enabled")
+	}
+
+	for _, tl := range agt.UserTools() {
+		if tl.Declaration().Name == testCurrentTimeToolName {
+			t.Fatalf("environment_context_current_time should be a framework tool, not a user tool")
+		}
+	}
+}
+
+func TestLLMAgent_CurrentTimeToolUsesAgentTimezone(t *testing.T) {
+	agt := New("main", WithAddCurrentTime(true), WithTimezone("Asia/Shanghai"))
+
+	var currentTimeTool tool.CallableTool
+	for _, tl := range agt.Tools() {
+		if tl.Declaration().Name == testCurrentTimeToolName {
+			callable, ok := tl.(tool.CallableTool)
+			if !ok {
+				t.Fatalf("current time tool should be callable")
+			}
+			currentTimeTool = callable
+			break
+		}
+	}
+	if currentTimeTool == nil {
+		t.Fatalf("expected environment_context_current_time tool")
+	}
+
+	result, err := currentTimeTool.Call(context.Background(), []byte(`{}`))
+	if err != nil {
+		t.Fatalf("current time tool call failed: %v", err)
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal current time result: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal current time result: %v", err)
+	}
+	if payload["timezone"] != "Asia/Shanghai" {
+		t.Fatalf("expected agent timezone, got %#v", payload["timezone"])
+	}
+}
+
+func TestLLMAgent_CurrentTimeToolOverridesSameNamedUserTool(t *testing.T) {
+	userTool := dummyTool{
+		decl: &tool.Declaration{Name: testCurrentTimeToolName},
+	}
+	agt := New(
+		"main",
+		WithTools([]tool.Tool{userTool}),
+		WithAddCurrentTime(true),
+		WithTimezone("UTC"),
+	)
+
+	var matches []tool.Tool
+	for _, tl := range agt.Tools() {
+		if tl.Declaration().Name == testCurrentTimeToolName {
+			matches = append(matches, tl)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one reserved current time tool, got %d", len(matches))
+	}
+	callable, ok := matches[0].(tool.CallableTool)
+	if !ok {
+		t.Fatalf("reserved current time tool should be callable")
+	}
+	result, err := callable.Call(context.Background(), []byte(`{}`))
+	if err != nil {
+		t.Fatalf("reserved current time tool call failed: %v", err)
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal current time result: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal current time result: %v", err)
+	}
+	if payload["timezone"] != "UTC" {
+		t.Fatalf("expected built-in current time tool, got payload %#v", payload)
+	}
+	for _, tl := range agt.UserTools() {
+		if tl.Declaration().Name == testCurrentTimeToolName {
+			t.Fatalf("reserved current time tool should not be tracked as user tool")
+		}
+	}
+}
+
+func TestLLMAgent_InvocationToolSurface_IncludesCurrentTimeWhenAddCurrentTime(t *testing.T) {
+	agt := New("main", WithAddCurrentTime(true))
+
+	tools, userToolNames := agt.InvocationToolSurface(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		),
+	)
+	found := false
+	for _, tl := range tools {
+		if tl.Declaration().Name == testCurrentTimeToolName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected environment_context_current_time tool in invocation tool surface")
+	}
+	if userToolNames[testCurrentTimeToolName] {
+		t.Fatalf("environment_context_current_time should not be tracked as a user tool")
+	}
+}
+
+func TestLLMAgent_Tools_SkipsCurrentTimeWithOutputSchema(t *testing.T) {
+	agt := New("main",
+		WithAddCurrentTime(true),
+		WithOutputSchema(map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"answer": map[string]any{"type": "string"},
+			},
+		}),
+	)
+
+	for _, tl := range agt.Tools() {
+		if tl.Declaration().Name == testCurrentTimeToolName {
+			t.Fatalf("environment_context_current_time should be disabled when output schema forbids tools")
+		}
 	}
 }
 
@@ -422,7 +570,7 @@ func TestLLMAgent_FilterTools_PassesContextToToolSets(t *testing.T) {
 		t.Fatalf("expected %q in Tools output", expectedNoCtx)
 	}
 
-	filteredNil := agt.FilterTools(nil)
+	filteredNil := agt.FilterTools(context.TODO())
 	foundNoCtx = false
 	for _, tl := range filteredNil {
 		if tl.Declaration().Name == expectedNoCtx {

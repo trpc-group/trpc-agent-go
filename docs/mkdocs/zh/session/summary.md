@@ -895,7 +895,26 @@ agent := llmagent.New(
 | 模式 | 注入位置 | Token Tailoring 行为 | 适用场景 |
 | --- | --- | --- | --- |
 | `SessionSummaryInjectionSystem`（默认） | 合并到 system message | 摘要在 preserved head 中，不会被裁剪 | 需要摘要始终存在的场景 |
-| `SessionSummaryInjectionUser` | 优先合并到第一条 user history/current message；否则在靠近 history 的位置注入 | 摘要参与普通轮次裁剪，可被滑动窗口淘汰 | 超长对话的滑动窗口场景 |
+| `SessionSummaryInjectionUser` | 优先合并到第一条 user history/current message；否则在靠近 history 的位置注入 | 摘要参与普通轮次裁剪，可被滑动窗口淘汰；也更利于保持稳定 system 前缀 | 超长对话、prompt cache 敏感场景 |
+
+Memory preload 和 session recall preload 有各自独立的 placement 设置。为了兼容
+已有用户，它们默认仍注入 system context，因此会留在 token tailoring 的
+preserved head 中。如果 cache-sensitive 场景希望把它们也放到 user/history
+路径，需要显式 opt in：
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithPreloadMemory(10),
+    llmagent.WithPreloadMemoryInjectionMode(llmagent.PreloadMemoryInjectionUser),
+    llmagent.WithPreloadSessionRecall(5),
+    llmagent.WithPreloadSessionRecallInjectionMode(llmagent.PreloadSessionRecallInjectionUser),
+)
+```
+
+User placement 能让稳定 system 前缀更利于 prompt cache，但 preloaded memory
+和 recalled session events 会参与 token tailoring，可能被裁剪。
 
 **User 模式的消息结构**：
 

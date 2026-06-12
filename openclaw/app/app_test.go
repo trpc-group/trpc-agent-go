@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	sandboxexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -2103,6 +2104,46 @@ func TestNewAgent_LocalExecKeepsExecCommandButOmitsWorkspaceExec(
 		EnableLocalExec: true,
 	}, nil, nil)
 	require.NoError(t, err)
+
+	names := make(map[string]bool)
+	for _, tl := range agt.Tools() {
+		if decl := tl.Declaration(); decl != nil {
+			names[decl.Name] = true
+		}
+	}
+
+	require.False(t, names["workspace_exec"])
+	require.False(t, names["workspace_write_stdin"])
+	require.False(t, names["workspace_kill_session"])
+}
+
+func TestNewAgent_SandboxExecOmitsWorkspaceExec(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	agt, _, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: root,
+		StateDir:   t.TempDir(),
+		CodeExecutor: codeExecutorOptions{
+			Type: codeExecutorTypeSandbox,
+			Sandbox: sandboxCodeExecutorOptions{
+				Backend:        sandboxBackendAuto,
+				Profile:        sandboxProfileWorkspaceWrite,
+				Network:        sandboxNetworkRestricted,
+				DefaultTimeout: time.Second,
+				OutputMaxBytes: 1024,
+				ShellEnv: sandboxShellEnvOptions{
+					Inherit:              sandboxShellEnvInheritCore,
+					ApplyDefaultExcludes: true,
+				},
+			},
+		},
+	}, nil, nil)
+	require.NoError(t, err)
+	llm, ok := agt.(*llmagent.LLMAgent)
+	require.True(t, ok)
+	require.IsType(t, &sandboxexec.CodeExecutor{}, llm.CodeExecutor())
 
 	names := make(map[string]bool)
 	for _, tl := range agt.Tools() {
@@ -6095,4 +6136,101 @@ func TestChannelsFromRegistry_ChannelErrorWrapped(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "channel")
 	require.Contains(t, err.Error(), "boom")
+}
+
+func TestCodeExecutorFromConfigBranches(t *testing.T) {
+	t.Parallel()
+
+	exec, err := codeExecutorFromConfig("/state", false, codeExecutorOptions{})
+	require.NoError(t, err)
+	require.Nil(t, exec)
+
+	exec, err = codeExecutorFromConfig("/state", true, codeExecutorOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, exec)
+
+	exec, err = codeExecutorFromConfig("/state", false, codeExecutorOptions{
+		Type: " NONE ",
+	})
+	require.NoError(t, err)
+	require.Nil(t, exec)
+
+	exec, err = codeExecutorFromConfig("/state", false, codeExecutorOptions{
+		Type: codeExecutorTypeLocal,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, exec)
+
+	exec, err = codeExecutorFromConfig(t.TempDir(), false, codeExecutorOptions{
+		Type: codeExecutorTypeSandbox,
+		Sandbox: sandboxCodeExecutorOptions{
+			Network: sandboxNetworkEnabled,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, exec)
+
+	_, err = codeExecutorFromConfig("/state", false, codeExecutorOptions{
+		Type: "remote",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported code executor type")
+}
+
+func TestSandboxProfileAndBackendConfigBranches(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		sandboxexec.BackendLinuxBubblewrap,
+		sandboxBackendFromConfig(" LINUX-BUBBLEWRAP "),
+	)
+	require.Equal(t, sandboxexec.BackendAuto, sandboxBackendFromConfig("unknown"))
+
+	enabledReadOnly := sandboxPermissionProfileFromConfig(sandboxCodeExecutorOptions{
+		Profile: sandboxProfileReadOnly,
+		Network: sandboxNetworkEnabled,
+	})
+	enabledRuntime := sandboxexec.NewRuntime(
+		sandboxexec.WithPermissionProfile(enabledReadOnly),
+	)
+	require.True(t, enabledRuntime.Describe().NetworkAllowed)
+
+	disabled := sandboxPermissionProfileFromConfig(sandboxCodeExecutorOptions{
+		Profile: sandboxProfileDisabled,
+		Network: sandboxNetworkRestricted,
+	})
+	disabledRuntime := sandboxexec.NewRuntime(
+		sandboxexec.WithPermissionProfile(disabled),
+	)
+	disabledCaps := disabledRuntime.Describe()
+	require.Equal(t, "none", disabledCaps.Isolation)
+	require.True(t, disabledCaps.NetworkAllowed)
+}
+
+func TestSandboxShellEnvAndCopyStringMapBranches(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(
+		t,
+		sandboxexec.ShellEnvironmentPolicyInheritAll,
+		sandboxShellEnvInheritFromConfig(" ALL "),
+	)
+	require.Equal(
+		t,
+		sandboxexec.ShellEnvironmentPolicyInheritNone,
+		sandboxShellEnvInheritFromConfig("none"),
+	)
+	require.Equal(
+		t,
+		sandboxexec.ShellEnvironmentPolicyInheritCore,
+		sandboxShellEnvInheritFromConfig("unknown"),
+	)
+
+	require.Nil(t, copyStringMap(nil))
+	original := map[string]string{"A": "1"}
+	copied := copyStringMap(original)
+	require.Equal(t, original, copied)
+	copied["A"] = "2"
+	require.Equal(t, "1", original["A"])
 }

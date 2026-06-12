@@ -1527,9 +1527,11 @@ import "trpc.group/trpc-go/trpc-agent-go/model"
 
 // LLMCriterion represents the LLM Judge criterion.
 type LLMCriterion struct {
-	Rubrics    []*Rubric             // Rubrics is the list of evaluation rubrics.
-	JudgeModel *JudgeModelOptions    // JudgeModel is the judge model configuration.
-	Template   *JudgeTemplateOptions // Template is the template evaluator configuration.
+	Rubrics                  []*Rubric             // Rubrics is the list of evaluation rubrics.
+	JudgeModel               *JudgeModelOptions    // JudgeModel is the judge model configuration.
+	SampleParallelismEnabled bool                  // SampleParallelismEnabled enables parallel sample requests.
+	SampleParallelism        int                   // SampleParallelism caps concurrent sample requests.
+	Template                 *JudgeTemplateOptions // Template is the template evaluator configuration.
 }
 
 // JudgeModelOptions represents judge model configuration.
@@ -1601,6 +1603,55 @@ type RubricContent struct {
 `Generation` defaults to `MaxTokens=2000`, `Temperature=0.8`, `Stream=false`.
 
 `numSamples` controls the number of samples per turn. The default is 1. More samples reduce judge variance but increase cost.
+
+`sampleParallelismEnabled` controls whether judge samples can be requested concurrently for one turn. The default is `false`, which keeps the original serial behavior. `sampleParallelism` only caps the concurrency after sample parallelism is enabled. When `sampleParallelismEnabled=true` and `sampleParallelism=0`, the evaluator uses `runtime.GOMAXPROCS(0)` and then caps it at `numSamples`. When `sampleParallelism>0`, the evaluator uses `min(sampleParallelism, numSamples)`. If the model provider has QPS or concurrency limits, set `sampleParallelism` explicitly to a conservative value.
+
+Example configurations:
+
+When `sampleParallelismEnabled` is not configured, the evaluator keeps the default serial behavior:
+
+```json
+{
+  "llmJudge": {
+    "judgeModel": {
+      "providerName": "openai",
+      "modelName": "gpt-4o-mini",
+      "numSamples": 3
+    }
+  }
+}
+```
+
+When `sampleParallelismEnabled=true` and `sampleParallelism` is not configured, sample parallelism is enabled, and the parallelism defaults to `runtime.GOMAXPROCS(0)` before being capped by `numSamples`:
+
+```json
+{
+  "llmJudge": {
+    "sampleParallelismEnabled": true,
+    "judgeModel": {
+      "providerName": "openai",
+      "modelName": "gpt-4o-mini",
+      "numSamples": 3
+    }
+  }
+}
+```
+
+When `sampleParallelismEnabled=true` and `sampleParallelism=2`, the parallelism is 2:
+
+```json
+{
+  "llmJudge": {
+    "sampleParallelismEnabled": true,
+    "sampleParallelism": 2,
+    "judgeModel": {
+      "providerName": "openai",
+      "modelName": "gpt-4o-mini",
+      "numSamples": 3
+    }
+  }
+}
+```
 
 `providerName` indicates the judge model provider, which maps to the framework Model Provider. The framework creates a judge model instance based on `providerName` and `modelName`. Common values include `openai`, `anthropic`, and `gemini`. See [Provider](./model.md#provider) for details.
 

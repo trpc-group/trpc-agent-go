@@ -562,6 +562,18 @@ func TestWithPreloadMemory(t *testing.T) {
 	}
 }
 
+func TestWithPreloadMemoryInjectionMode(t *testing.T) {
+	opts := &Options{}
+	WithPreloadMemoryInjectionMode(PreloadMemoryInjectionUser)(opts)
+	require.Equal(t, PreloadMemoryInjectionUser, opts.PreloadMemoryInjectionMode)
+
+	WithPreloadMemoryInjectionMode(PreloadMemoryInjectionSystem)(opts)
+	require.Equal(t, PreloadMemoryInjectionSystem, opts.PreloadMemoryInjectionMode)
+
+	WithPreloadMemoryInjectionMode(processor.PreloadMemoryInjectionMode("invalid"))(opts)
+	require.Equal(t, PreloadMemoryInjectionSystem, opts.PreloadMemoryInjectionMode)
+}
+
 func TestWithPreloadSessionRecall(t *testing.T) {
 	opts := &Options{}
 	WithPreloadSessionRecall(6)(opts)
@@ -569,6 +581,32 @@ func TestWithPreloadSessionRecall(t *testing.T) {
 
 	WithPreloadSessionRecall(0)(opts)
 	require.Equal(t, 0, opts.PreloadSessionRecall)
+}
+
+func TestWithPreloadSessionRecallInjectionMode(t *testing.T) {
+	opts := &Options{}
+	WithPreloadSessionRecallInjectionMode(PreloadSessionRecallInjectionUser)(opts)
+	require.Equal(
+		t,
+		PreloadSessionRecallInjectionUser,
+		opts.PreloadSessionRecallInjectionMode,
+	)
+
+	WithPreloadSessionRecallInjectionMode(PreloadSessionRecallInjectionSystem)(opts)
+	require.Equal(
+		t,
+		PreloadSessionRecallInjectionSystem,
+		opts.PreloadSessionRecallInjectionMode,
+	)
+
+	WithPreloadSessionRecallInjectionMode(
+		processor.PreloadSessionRecallInjectionMode("invalid"),
+	)(opts)
+	require.Equal(
+		t,
+		PreloadSessionRecallInjectionSystem,
+		opts.PreloadSessionRecallInjectionMode,
+	)
 }
 
 func TestWithPreloadSessionRecallMinScore(t *testing.T) {

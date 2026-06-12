@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	toolcurrenttime "trpc.group/trpc-go/trpc-agent-go/internal/tool/currenttime"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -445,7 +446,13 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),
 		processor.WithPreloadMemory(options.PreloadMemory),
+		processor.WithPreloadMemoryInjectionMode(
+			options.PreloadMemoryInjectionMode,
+		),
 		processor.WithPreloadSessionRecall(options.PreloadSessionRecall),
+		processor.WithPreloadSessionRecallInjectionMode(
+			options.PreloadSessionRecallInjectionMode,
+		),
 		processor.WithPreloadSessionRecallMinScore(
 			options.PreloadSessionRecallMinScore,
 		),
@@ -606,6 +613,10 @@ func appendTimeProcessor(options *Options, requestProcessors []flow.RequestProce
 		processor.WithAddCurrentTime(true),
 		processor.WithTimezone(options.Timezone),
 		processor.WithTimeFormat(options.TimeFormat),
+		processor.WithCurrentTimeTool(
+			toolcurrenttime.ToolName,
+			options.OutputSchema == nil,
+		),
 	)
 	return append(requestProcessors, timeProcessor)
 }
@@ -772,6 +783,11 @@ func registerTools(
 	allTools := append([]tool.Tool(nil), options.Tools...)
 	allTools, userToolNames = appendStaticToolSetTools(allTools, userToolNames, options)
 	allTools = appendKnowledgeTools(allTools, options)
+	allTools, userToolNames = appendCurrentTimeTool(
+		allTools,
+		userToolNames,
+		options,
+	)
 
 	// Step 2: determine workspace registry and skill_run tool based on
 	// which capabilities the caller configured.
@@ -809,6 +825,27 @@ func registerTools(
 	// skill repository is configured.
 	allTools = appendSkillTools(allTools, options, runTool)
 	return allTools, userToolNames, workspaceRegistry
+}
+
+func appendCurrentTimeTool(
+	allTools []tool.Tool,
+	userToolNames map[string]bool,
+	options *Options,
+) ([]tool.Tool, map[string]bool) {
+	if options == nil || !options.AddCurrentTime || options.OutputSchema != nil {
+		return allTools, userToolNames
+	}
+	filtered := make([]tool.Tool, 0, len(allTools)+1)
+	for _, tl := range allTools {
+		if tl == nil || tl.Declaration() == nil ||
+			tl.Declaration().Name != toolcurrenttime.ToolName {
+			filtered = append(filtered, tl)
+		}
+	}
+	if userToolNames != nil {
+		delete(userToolNames, toolcurrenttime.ToolName)
+	}
+	return append(filtered, toolcurrenttime.New(options.Timezone)), userToolNames
 }
 
 func collectUserToolNames(tools []tool.Tool) map[string]bool {

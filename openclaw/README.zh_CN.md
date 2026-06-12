@@ -272,6 +272,20 @@ tools:
   # 可选：覆盖内置的 OpenClaw tooling guidance 提示词。
   # 不设置时使用内置默认值，设为 "" 可禁用它。
   openclaw_tooling_guidance: ""
+  # 可选：配置 fenced-code 执行，但不暴露 workspace_exec。
+  code_executor:
+    type: "sandbox" # none|local|sandbox
+    auto_execute_code_blocks: true
+    sandbox:
+      workspace_root: "" # 默认 state_dir/sandbox
+      backend: "auto" # auto|linux-bubblewrap
+      profile: "workspace_write" # workspace_write|read_only|disabled
+      network: "restricted" # restricted|enabled
+      default_timeout: "30s"
+      output_max_bytes: 1048576
+      shell_env:
+        inherit: "core" # all|core|none
+        apply_default_excludes: true
   providers:
     - type: "browser"
       name: "browser-runtime"
@@ -316,6 +330,9 @@ go run ./cmd/openclaw -config ./openclaw.yaml
 - 时长字段使用 Go 风格的字符串，如 `60s`、`10m`、`1h`。
 - 对于密钥（模型 key、Telegram token），请勿将其纳入版本控制。
   建议尽可能使用环境变量。
+- `tools.code_executor.type: sandbox` 会把 `codeexecutor/sandbox`
+  接入 fenced-code 执行，同时继续隐藏通用 `workspace_exec` tool 表面。
+  宿主机侧工具工作仍使用 OpenClaw 的 `exec_command`。
 - `knowledges` 当前只负责把 embedder / vector store 接到 runtime；
   文档加载是独立的运行时动作。
 - `pgvector` knowledge 配置示例：
