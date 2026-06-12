@@ -527,7 +527,7 @@ func parseMMDMeta(filename, content string) offloadMMDMeta {
 	}
 	if start := strings.Index(content, "%%{"); start >= 0 {
 		if end := strings.Index(content[start:], "}%%"); end >= 0 {
-			raw := strings.TrimSpace(content[start+3 : start+end+1])
+			raw := strings.TrimSpace(content[start+2 : start+end+1])
 			var parsed map[string]any
 			if json.Unmarshal([]byte(raw), &parsed) == nil {
 				if v, ok := parsed["taskGoal"].(string); ok {

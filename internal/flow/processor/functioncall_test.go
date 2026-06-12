@@ -2299,6 +2299,119 @@ func TestReplacementToolChoices_PreservesOriginalOrder(t *testing.T) {
 	assert.Equal(t, "summary 2", choices[1].Message.Content)
 }
 
+func TestAfterToolMessagesHelpers_EdgeCases(t *testing.T) {
+	assert.Nil(t, toolResultMessagesFromEvent(nil))
+	assert.Nil(t, toolResultMessagesFromEvent(&event.Event{}))
+
+	toolEvent := event.NewResponseEvent("inv", "agent", &model.Response{
+		Object: model.ObjectTypeToolResponse,
+		Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleTool, ToolID: "empty"}},
+			{Delta: model.NewToolMessage("call-delta", "lookup", "delta payload")},
+			{Message: model.NewToolMessage("call-message", "lookup", "message payload")},
+		},
+	})
+	messages := toolResultMessagesFromEvent(toolEvent)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "call-delta", messages[0].ToolID)
+	assert.Equal(t, "call-message", messages[1].ToolID)
+
+	msg, ok := assistantMessageFromToolCallResponse(nil)
+	assert.False(t, ok)
+	assert.Empty(t, msg)
+	msg, ok = assistantMessageFromToolCallResponse(&model.Response{})
+	assert.False(t, ok)
+	assert.Empty(t, msg)
+	msg, ok = assistantMessageFromToolCallResponse(&model.Response{Choices: []model.Choice{{
+		Message: model.NewAssistantMessage("assistant payload"),
+	}}})
+	assert.True(t, ok)
+	assert.Equal(t, "assistant payload", msg.Content)
+	msg, ok = assistantMessageFromToolCallResponse(&model.Response{Choices: []model.Choice{{
+		Delta: model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:       "call-1",
+				Function: model.FunctionDefinitionParam{Name: "lookup"},
+			}},
+		},
+	}}})
+	assert.True(t, ok)
+	assert.Len(t, msg.ToolCalls, 1)
+	msg, ok = assistantMessageFromToolCallResponse(&model.Response{Choices: []model.Choice{{}}})
+	assert.False(t, ok)
+	assert.Empty(t, msg)
+
+	assert.Nil(t, toolCallsFromResponse(nil))
+	assert.Nil(t, toolCallsFromResponse(&model.Response{}))
+	assert.Nil(t, toolCallsFromResponse(&model.Response{Choices: []model.Choice{{}}}))
+	calls := toolCallsFromResponse(&model.Response{Choices: []model.Choice{{
+		Delta: model.Message{ToolCalls: []model.ToolCall{{
+			ID:       "call-delta",
+			Function: model.FunctionDefinitionParam{Name: "lookup"},
+		}}},
+	}}})
+	require.Len(t, calls, 1)
+	assert.Equal(t, "call-delta", calls[0].ID)
+
+	_, err := replacementToolChoices(nil, []model.Message{model.NewToolMessage("call-1", "lookup", "summary")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "original tool result messages are empty")
+	_, err = replacementToolChoices(
+		[]model.Choice{{Message: model.NewToolMessage("call-1", "lookup", "raw")}},
+		[]model.Message{
+			model.NewToolMessage("call-1", "lookup", "summary"),
+			model.NewToolMessage("call-2", "lookup", "summary"),
+		},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "replacement count")
+	_, err = replacementToolChoices(
+		[]model.Choice{{Message: model.NewToolMessage("call-1", "lookup", "raw")}},
+		[]model.Message{{Role: model.RoleTool, Content: "missing id"}},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing tool id")
+	_, err = replacementToolChoices(
+		[]model.Choice{{Message: model.NewToolMessage("call-1", "lookup", "raw")}},
+		[]model.Message{{Role: model.RoleAssistant, ToolID: "call-1", Content: "summary"}},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must use role")
+	_, err = replacementToolChoices(
+		[]model.Choice{
+			{Message: model.NewToolMessage("call-1", "lookup", "raw")},
+			{Message: model.NewToolMessage("call-2", "lookup", "raw")},
+		},
+		[]model.Message{
+			model.NewToolMessage("call-1", "lookup", "summary"),
+			model.NewToolMessage("call-1", "lookup", "summary again"),
+		},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate tool id")
+	_, err = replacementToolChoices(
+		[]model.Choice{{Message: model.NewToolMessage("call-1", "lookup", "raw")}},
+		[]model.Message{model.NewToolMessage("call-2", "lookup", "summary")},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "replacement missing tool id")
+
+	updated := replaceChoiceToolMessage(model.Choice{}, model.NewToolMessage("call-new", "lookup", "summary"))
+	assert.Equal(t, "call-new", updated.Message.ToolID)
+	assert.Equal(t, "summary", updated.Message.Content)
+	index := toolChoiceIndexByID([]model.Choice{
+		{Index: 4, Delta: model.NewToolMessage("call-delta", "lookup", "raw")},
+		{Index: 5, Message: model.Message{Role: model.RoleAssistant}},
+	})
+	assert.Equal(t, 4, index["call-delta"])
+	assert.Len(t, index, 1)
+	assert.Nil(t, cloneModelMessages(nil))
+	cloned := cloneModelMessages([]model.Message{model.NewUserMessage("hello")})
+	require.Len(t, cloned, 1)
+	assert.Equal(t, "hello", cloned[0].Content)
+}
+
 func TestExecuteToolCallsInParallel(t *testing.T) {
 	tools := map[string]tool.Tool{
 		"func-1": &mockCallableTool{
