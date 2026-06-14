@@ -343,6 +343,25 @@ func TestWithHostConfigOption(t *testing.T) {
 	assert.Equal(t, optionCfg.NetworkMode, exec.hostConfig.NetworkMode)
 }
 
+func TestWithHostConfig_MergesBinds(t *testing.T) {
+	// WithHostConfig should merge Binds instead of replacing them.
+	exec := &CodeExecutor{}
+	WithBindMount("/host/a", "/ctr/a", "rw")(exec)
+	assert.Len(t, exec.hostConfig.Binds, 1)
+
+	// Apply WithHostConfig with additional binds.
+	WithHostConfig(tcontainer.HostConfig{
+		Binds:      []string{"/host/b:/ctr/b:ro"},
+		AutoRemove: true,
+	})(exec)
+
+	// Both binds should be present.
+	assert.Len(t, exec.hostConfig.Binds, 2)
+	assert.Equal(t, "/host/a:/ctr/a:rw", exec.hostConfig.Binds[0])
+	assert.Equal(t, "/host/b:/ctr/b:ro", exec.hostConfig.Binds[1])
+	assert.True(t, exec.hostConfig.AutoRemove)
+}
+
 func TestWithBindMountOption(t *testing.T) {
 	exec := &CodeExecutor{}
 	WithBindMount("/host/src", "/ctr/dst", "ro")(exec)

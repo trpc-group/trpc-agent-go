@@ -132,8 +132,13 @@ func WithDockerFilePath(path string) Option {
 }
 
 // WithHostConfig sets the configuration for the Docker container.
+// It merges the provided HostConfig with the existing configuration,
+// appending Binds instead of replacing them.
 func WithHostConfig(hostConfig container.HostConfig) Option {
 	return func(c *CodeExecutor) {
+		// Merge Binds: preserve existing bind mounts (e.g. from WithBindMount)
+		// and append any new ones from the provided HostConfig.
+		hostConfig.Binds = append(c.hostConfig.Binds, hostConfig.Binds...)
 		c.hostConfig = hostConfig
 	}
 }
