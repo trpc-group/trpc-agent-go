@@ -45,7 +45,7 @@ This example demonstrates how to use the `ContainerCodeExecutor` to run model-ge
 | `WithHost()`             | Base URL of the Docker daemon                                     | Docker client defaults        |
 | `WithDockerFilePath()`   | Path to a directory containing a `Dockerfile` to build an image   | ``                            |
 | `WithContainerConfig()`  | Full `container.Config` override (image, working dir, command...) | `python:3.9-slim`, `/`        |
-| `WithHostConfig()`       | Full `container.HostConfig` override                              | `AutoRemove`, `NetworkMode=none` |
+| `WithHostConfig()`       | `container.HostConfig` merge: `Binds` are appended, other fields replace | `AutoRemove`, `NetworkMode=none` |
 | `WithContainerName()`    | Fixed container name                                              | auto-generated                |
 | `WithBindMount()`        | Append a host→container bind mount (`src`, `dest`, `mode`)        | none                          |
 | `WithAutoInputs()`       | Map the inputs host directory under workspace `inputs/`           | `true`                        |
