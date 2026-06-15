@@ -137,6 +137,22 @@ func expectLimitedEventRefs(
 		WillReturnRows(rows)
 }
 
+func expectLimitedEventRefsWithTimestamp(
+	mock sqlmock.Sqlmock,
+	key session.Key,
+	afterTime any,
+	limit int,
+	refs ...eventRef,
+) *sqlmock.ExpectedQuery {
+	rows := sqlmock.NewRows([]string{"id", "created_at", "event_timestamp"})
+	for _, ref := range refs {
+		rows.AddRow(ref.id, ref.createdAt, ref.eventTimestamp.Format(time.RFC3339Nano))
+	}
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, created_at, JSON_UNQUOTE(JSON_EXTRACT(event, '$.timestamp')) FROM session_events")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, afterTime, limit).
+		WillReturnRows(rows)
+}
+
 func expectEventsByRefs(
 	mock sqlmock.Sqlmock,
 	key session.Key,
@@ -180,6 +196,20 @@ func expectNoUserAnchor(
 	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, created_at FROM session_events")).
 		WithArgs(args...).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}))
+}
+
+func expectNoUserAnchorWithTimestamp(
+	mock sqlmock.Sqlmock,
+	key session.Key,
+	sessionCreatedAt driver.Value,
+	extraArgs ...driver.Value,
+) *sqlmock.ExpectedQuery {
+	args := []driver.Value{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
+	args = append(args, extraArgs...)
+	args = append(args, userAnchorSearchBatchSize)
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, created_at, JSON_UNQUOTE(JSON_EXTRACT(event, '$.timestamp')) FROM session_events")).
+		WithArgs(args...).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "event_timestamp"}))
 }
 
 func expectPreviousEventRefs(
