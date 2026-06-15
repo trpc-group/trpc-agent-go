@@ -79,6 +79,7 @@ nav:
   - Ecosystem: ecosystem.md
   - Blog:
       - "A Go Agent Framework for Building Intelligent AI Applications": blog/trpcagentgo.md
+      - "Context Management Design and Evaluation for Long-Running Agents": blog/summary.md
       - "GraphAgent Seamlessly Combines AI Workflows and Agents": blog/graphagent.md
       - "Quickly Build AG-UI-Based Agent Services": blog/agui.md
       - "A Go-Native Implementation of the Anthropic Agent Skills Specification": blog/skill.md
@@ -173,6 +174,7 @@ plugins:
             - 生态: ecosystem.md
             - 博客:
                 - "构建智能 AI 应用的 Go 语言 Agent 框架": blog/trpcagentgo.md
+                - "长任务 Agent 上下文管理的设计与评测": blog/summary.md
                 - "GraphAgent 让 AI 工作流与 Agent 无缝融合": blog/graphagent.md
                 - "快速构建基于 AG-UI 的 Agent 服务": blog/agui.md
                 - "Anthropic Agent Skills 规范的 Go 原生实现": blog/skill.md
