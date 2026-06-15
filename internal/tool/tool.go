@@ -225,9 +225,19 @@ func applyKVTag(fieldType reflect.Type, key, value string, schema *tool.Schema) 
 	case "enum":
 		return appendEnumValue(fieldType, value, schema)
 	case "pattern":
+		if !isStringFieldType(fieldType) {
+			return fmt.Errorf("pattern tag unsupported for field type: %v", fieldType)
+		}
 		schema.Pattern = value
 	}
 	return nil
+}
+
+func isStringFieldType(fieldType reflect.Type) bool {
+	for fieldType.Kind() == reflect.Ptr {
+		fieldType = fieldType.Elem()
+	}
+	return fieldType.Kind() == reflect.String
 }
 
 // appendEnumValue parses and appends a typed enum value to the schema.
