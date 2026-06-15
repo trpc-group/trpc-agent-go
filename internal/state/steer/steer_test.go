@@ -129,6 +129,42 @@ func TestAttach_NotInheritedByPlainClone(t *testing.T) {
 	require.Nil(t, Drain(clone), "sub-agent clone must not drain the lead's steer")
 }
 
+// TestAttachBorrowed_DrainsButCloseIsNoOp pins the non-owning attachment: a
+// borrowed invocation may drain the queue, but Close (and Clear) must leave it
+// open so the owner keeps accepting enqueues. This is what lets the ralph loop
+// share the run's live queue with each iteration's inner agent without the
+// inner llmflow's Close closing the run-level queue.
+func TestAttachBorrowed_DrainsButCloseIsNoOp(t *testing.T) {
+	inv := agent.NewInvocation()
+	queue := NewQueue()
+	AttachBorrowed(inv, queue)
+	require.True(t, IsAttached(inv))
+
+	// Borrowing still drains.
+	require.True(t, queue.Enqueue(model.NewUserMessage("steer")))
+	drained := Drain(inv)
+	require.Len(t, drained, 1)
+	require.Equal(t, "steer", drained[0].Content)
+
+	// Close on a borrowed attachment is a no-op: the queue stays open.
+	Close(inv)
+	require.True(t, queue.Enqueue(model.NewUserMessage("after close")),
+		"Close on a borrowed attachment must not close the queue")
+
+	// Clear on a borrowed attachment detaches without closing.
+	Clear(inv)
+	require.False(t, IsAttached(inv))
+	require.True(t, queue.Enqueue(model.NewUserMessage("after clear")),
+		"Clear on a borrowed attachment must not close the queue")
+
+	// An owning attachment, by contrast, closes on Close.
+	owner := agent.NewInvocation()
+	Attach(owner, queue)
+	Close(owner)
+	require.False(t, queue.Enqueue(model.NewUserMessage("rejected")),
+		"Close on an owning attachment must close the queue")
+}
+
 func TestNilSafety(t *testing.T) {
 	var (
 		invocation *agent.Invocation

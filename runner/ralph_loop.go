@@ -300,15 +300,22 @@ func (a *ralphLoopAgent) newInnerInvocation(
 	}
 	inner := base.Clone(invocationOpts...)
 
-	// Carry the steer queue across the iteration boundary so user messages
-	// enqueued onto the run (Runner.EnqueueUserMessage) reach the inner agent and
-	// drain at its next safe boundary. The queue is intentionally NOT in the
-	// clone allowlist: that would also propagate it into delegated sub-agent
-	// invocations (which Clone the inner agent), and a member would then drain a
-	// steer meant for the lead. Re-attaching here scopes it to exactly the
-	// loop's inner agent — the lead the user is steering.
+	// Carry the run's steer queue across the iteration boundary so user
+	// messages enqueued onto the run (Runner.EnqueueUserMessage) reach the inner
+	// agent and drain at its next safe boundary.
+	//
+	// The attachment is borrowed, not owning: the inner llmflow closes its
+	// invocation queue when it finishes an iteration, but the run-level queue
+	// must stay open across iterations — otherwise EnqueueUserMessage returns
+	// ErrRunNotFound for every steer after the first iteration. The runner owns
+	// the queue and closes it once when the whole run ends.
+	//
+	// It is also intentionally NOT in the clone allowlist: that would propagate
+	// it into delegated sub-agent invocations (which Clone the inner agent), and
+	// a member would then drain a steer meant for the lead. Re-attaching here
+	// scopes it to exactly the loop's inner agent — the lead the user is steering.
 	if queue, ok := agent.GetStateValue[*steer.Queue](base, steer.StateKeyQueuedUserMessages); ok && queue != nil {
-		steer.Attach(inner, queue)
+		steer.AttachBorrowed(inner, queue)
 	}
 	return inner
 }

@@ -49,6 +49,13 @@ func TestNewInnerInvocation_ReattachesSteerQueue(t *testing.T) {
 	require.Len(t, drained, 1)
 	require.Equal(t, "steer", drained[0].Content)
 
+	// The inner llmflow closes its invocation queue when an iteration ends. That
+	// must NOT close the run-level queue: the runner keeps accepting steers
+	// across iterations. The attachment is borrowed, so Close is a no-op here.
+	steer.Close(inner)
+	require.True(t, queue.Enqueue(model.NewUserMessage("next iteration")),
+		"closing a borrowed inner invocation must leave the run-level queue open")
+
 	// A delegated sub-agent (agent_tool clones the inner invocation) must NOT
 	// inherit the queue — otherwise a member would drain the lead's steer.
 	member := inner.Clone()
