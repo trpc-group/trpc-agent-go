@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
@@ -34,7 +35,16 @@ type MessagesSnapshotter interface {
 
 // MessagesSnapshot sends a MessagesSnapshot event stream by replaying persisted AG-UI track events.
 func (r *runner) MessagesSnapshot(ctx context.Context,
-	runAgentInput *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+	runAgentInput *adapter.RunAgentInput) (eventCh <-chan aguievents.Event, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			// The error is written back to the HTTP client; keep the panic
+			// payload (hooks/resolvers may embed request internals) in logs only.
+			log.ErrorfContext(ctx, "agui messages snapshot: panic: %v\n%s", rec, debug.Stack())
+			eventCh = nil
+			err = errors.New("messages snapshot internal error")
+		}
+	}()
 	if r.runner == nil {
 		return nil, errors.New("runner is nil")
 	}
@@ -44,7 +54,7 @@ func (r *runner) MessagesSnapshot(ctx context.Context,
 	if r.tracker == nil {
 		return nil, errors.New("tracker is nil")
 	}
-	runAgentInput, err := r.applyRunAgentInputHook(ctx, runAgentInput)
+	runAgentInput, err = r.applyRunAgentInputHook(ctx, runAgentInput)
 	if err != nil {
 		return nil, fmt.Errorf("run input hook: %w", err)
 	}
@@ -113,7 +123,8 @@ func (r *runner) messagesSnapshot(ctx context.Context, input *runInput, events c
 		return
 	}
 
-	if r.messagesSnapshotFollowEnabled && trackEvents != nil && !trackEndsWithTerminalRunEvent(trackEvents.Events) {
+	if r.messagesSnapshotFollowEnabled && trackEvents != nil && len(trackEvents.Events) > 0 &&
+		!trackEndsWithTerminalRunEvent(trackEvents.Events) {
 		r.messagesSnapshotFollow(ctx, input, events, trackEvents)
 		return
 	}
@@ -132,6 +143,10 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 		return nil, nil, fmt.Errorf("get track events: %w", err)
 	}
 	eventsForReduce, safeForFollow := trimTrackEventsToHistoryStart(trackEvents.Events)
+	if !safeForFollow && len(trackEvents.Events) > 0 {
+		log.WarnfContext(ctx, "agui messages snapshot: no safe user message boundary, app=%s, user=%s, session=%s, trackEvents=%d",
+			sessionKey.AppName, sessionKey.UserID, sessionKey.SessionID, len(trackEvents.Events))
+	}
 	messages, err := reduce.Reduce(
 		sessionKey.AppName,
 		sessionKey.UserID,
@@ -141,6 +156,8 @@ func (r *runner) getMessagesSnapshotEvent(ctx context.Context,
 	if err != nil {
 		err = fmt.Errorf("reduce track events: %w", err)
 	}
+	log.DebugfContext(ctx, "agui messages snapshot: app=%s, user=%s, session=%s, trackEvents=%d, eventsForReduce=%d, safeForFollow=%t, messages=%d, reduceErr=%v",
+		sessionKey.AppName, sessionKey.UserID, sessionKey.SessionID, len(trackEvents.Events), len(eventsForReduce), safeForFollow, len(messages), err)
 	event := aguievents.NewMessagesSnapshotEvent(messages)
 	if r.eventSourceMetadataEnabled {
 		metadata := source.BuildSnapshotMetadata(

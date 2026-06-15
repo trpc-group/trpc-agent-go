@@ -2330,7 +2330,7 @@ func TestGetTrackEvents_WithLimit(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"event"}).AddRow(eventBytes)
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
-		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), sqlmock.AnyArg(), 1).
+		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), 1).
 		WillReturnRows(rows)
 
 	result, err := s.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, 1, time.Time{})
@@ -2339,6 +2339,96 @@ func TestGetTrackEvents_WithLimit(t *testing.T) {
 	alpha := result[0]["alpha"]
 	require.Len(t, alpha, 1)
 	assert.Equal(t, json.RawMessage(`"limited"`), alpha[0].Payload)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetTrackEvents_ZeroAfterTimeOmitsCreatedAtFilter guards against binding
+// a zero time.Time into the created_at predicate: go-sql-driver encodes
+// time.Time{} as '0000-00-00', which strict-mode MySQL rejects or matches
+// nothing, silently dropping every persisted track event.
+func TestGetTrackEvents_ZeroAfterTimeOmitsCreatedAtFilter(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "session-1",
+	}
+	sessState := &SessionState{
+		State: session.StateMap{
+			"tracks": []byte(`["alpha"]`),
+		},
+	}
+
+	event := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"kept"`),
+		Timestamp: time.Now(),
+	}
+	eventBytes, _ := json.Marshal(event)
+	rows := sqlmock.NewRows([]string{"event"}).AddRow(eventBytes)
+
+	// Without limit and with a zero afterTime, only the key, track, and
+	// expiry arguments may be bound; no created_at predicate may be added.
+	mock.ExpectQuery(`SELECT event FROM session_track_events\s+`+
+		`WHERE app_name = \? AND user_id = \? AND session_id = \? AND track = \?\s+`+
+		`AND \(expires_at IS NULL OR expires_at > \?\)\s+`+
+		`AND deleted_at IS NULL\s+`+
+		`ORDER BY created_at DESC$`).
+		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg()).
+		WillReturnRows(rows)
+
+	result, err := s.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	alpha := result[0]["alpha"]
+	require.Len(t, alpha, 1)
+	assert.Equal(t, json.RawMessage(`"kept"`), alpha[0].Payload)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetTrackEvents_AfterTimeBindsCreatedAtFilter verifies a non-zero
+// afterTime still narrows the query through the created_at predicate.
+func TestGetTrackEvents_AfterTimeBindsCreatedAtFilter(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "session-1",
+	}
+	sessState := &SessionState{
+		State: session.StateMap{
+			"tracks": []byte(`["alpha"]`),
+		},
+	}
+
+	afterTime := time.Now().Add(-time.Hour)
+	mock.ExpectQuery(`SELECT event FROM session_track_events\s+`+
+		`WHERE app_name = \? AND user_id = \? AND session_id = \? AND track = \?\s+`+
+		`AND \(expires_at IS NULL OR expires_at > \?\)\s+`+
+		`AND deleted_at IS NULL\s+`+
+		`AND created_at > \?\s+`+
+		`ORDER BY created_at DESC$`).
+		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), afterTime).
+		WillReturnRows(sqlmock.NewRows([]string{"event"}))
+
+	result, err := s.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, 0, afterTime)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.Empty(t, result[0]["alpha"])
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }

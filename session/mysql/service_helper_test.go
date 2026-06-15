@@ -451,7 +451,7 @@ func TestGetSession_WithTrackEvents(t *testing.T) {
 	}
 	trackBytes, _ := json.Marshal(trackEvent)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
-		WithArgs(key.AppName, key.UserID, key.SessionID, "alpha", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(key.AppName, key.UserID, key.SessionID, "alpha", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"event"}).AddRow(trackBytes))
 
 	sess, err := s.GetSession(ctx, key)
@@ -649,7 +649,7 @@ func TestListSessions_WithTrackEvents(t *testing.T) {
 	}
 	trackBytes, _ := json.Marshal(trackEvent)
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
-		WithArgs(userKey.AppName, userKey.UserID, "session-1", "alpha", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(userKey.AppName, userKey.UserID, "session-1", "alpha", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"event"}).AddRow(trackBytes))
 
 	sessions, err := s.ListSessions(ctx, userKey)
@@ -1382,7 +1382,7 @@ func TestGetTrackEventsHelper_WithLimit(t *testing.T) {
 	eventBytes, _ := json.Marshal(event)
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
-		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), sqlmock.AnyArg(), 1).
+		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), 1).
 		WillReturnRows(sqlmock.NewRows([]string{"event"}).AddRow(eventBytes))
 
 	result, err := s.getTrackEvents(context.Background(), []session.Key{key}, []*SessionState{sessState}, 1, time.Time{})
@@ -1428,7 +1428,7 @@ func TestGetTrackEventsHelper_NoLimit_ReversedOrder(t *testing.T) {
 
 	// Rows come in reverse chronological order, but getTrackEvents should reverse them.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
-		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"event"}).
 			AddRow(event2Bytes).
 			AddRow(event1Bytes))
@@ -1463,7 +1463,7 @@ func TestGetTrackEventsHelper_QueryError(t *testing.T) {
 	}
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
-		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), sqlmock.AnyArg(), 1).
+		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), 1).
 		WillReturnError(fmt.Errorf("db error"))
 
 	result, err := s.getTrackEvents(context.Background(), []session.Key{key}, []*SessionState{sessState}, 1, time.Time{})
@@ -1493,7 +1493,7 @@ func TestGetTrackEventsHelper_UnmarshalError(t *testing.T) {
 
 	// Invalid JSON for track event.
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
-		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), sqlmock.AnyArg(), 1).
+		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), 1).
 		WillReturnRows(sqlmock.NewRows([]string{"event"}).
 			AddRow([]byte("{invalid")))
 
