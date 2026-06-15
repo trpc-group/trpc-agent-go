@@ -165,6 +165,22 @@ func TestAttachBorrowed_DrainsButCloseIsNoOp(t *testing.T) {
 		"Close on an owning attachment must close the queue")
 }
 
+// TestAttach_AfterBorrowedReestablishesOwnership pins that Attach establishes
+// owning semantics unconditionally: re-attaching (owning) over a prior borrowed
+// attachment on the same invocation clears the stale borrowed marker, so Close
+// closes the queue rather than treating it as still borrowed.
+func TestAttach_AfterBorrowedReestablishesOwnership(t *testing.T) {
+	inv := agent.NewInvocation()
+	queue := NewQueue()
+
+	AttachBorrowed(inv, queue)
+	Attach(inv, queue) // re-attach as owner
+
+	Close(inv)
+	require.False(t, queue.Enqueue(model.NewUserMessage("rejected")),
+		"Attach must clear a stale borrowed marker so Close closes the queue")
+}
+
 func TestNilSafety(t *testing.T) {
 	var (
 		invocation *agent.Invocation

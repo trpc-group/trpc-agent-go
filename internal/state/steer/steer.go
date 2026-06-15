@@ -118,6 +118,10 @@ func Attach(inv *agent.Invocation, queue *Queue) {
 		return
 	}
 	inv.SetState(StateKeyQueuedUserMessages, queue)
+	// Establish owning semantics unconditionally: clear any stale borrowed
+	// marker so Close/Clear close the queue regardless of a prior
+	// AttachBorrowed on this invocation.
+	inv.DeleteState(stateKeyBorrowed)
 }
 
 // AttachBorrowed binds a queue to the invocation without ownership: the
