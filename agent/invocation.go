@@ -1208,6 +1208,9 @@ type RunOptions struct {
 	// Key: agent type, Value: agent-specific config.
 	CustomAgentConfigs map[string]any
 
+	// Plugins contains plugin managers that apply only to this run.
+	Plugins []PluginManager
+
 	// Agent overrides the runner's default agent for this run.
 	Agent Agent
 
