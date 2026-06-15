@@ -228,7 +228,7 @@ func applyKVTag(fieldType reflect.Type, key, value string, schema *tool.Schema) 
 		if !isStringFieldType(fieldType) {
 			return fmt.Errorf("pattern tag unsupported for field type: %v", fieldType)
 		}
-		schema.Pattern = value
+		schema.SetPattern(value)
 	}
 	return nil
 }

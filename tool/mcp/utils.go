@@ -39,7 +39,7 @@ func convertMCPSchemaToSchema(mcpSchema any) *tool.Schema {
 		schema.Description = descVal
 	}
 	if patternVal, ok := schemaMap["pattern"].(string); ok {
-		schema.Pattern = patternVal
+		schema.SetPattern(patternVal)
 	}
 	if propsVal, ok := schemaMap["properties"].(map[string]any); ok {
 		schema.Properties = convertProperties(propsVal)
@@ -91,7 +91,7 @@ func convertProperties(props map[string]any) map[string]*tool.Schema {
 				propSchema.Description = descVal
 			}
 			if patternVal, ok := propMap["pattern"].(string); ok {
-				propSchema.Pattern = patternVal
+				propSchema.SetPattern(patternVal)
 			}
 			if defaultVal, exists := propMap["default"]; exists {
 				propSchema.Default = defaultVal

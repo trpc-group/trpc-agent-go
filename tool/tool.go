@@ -12,6 +12,7 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 )
 
 // Tool defines the interface for tools that can be used by agents.
@@ -63,11 +64,9 @@ type Declaration struct {
 // and to validate that incoming data conforms to the expected structure.
 type Schema struct {
 	//  Type Specifies the data type (e.g., "object", "array", "string", "number")
-	Type        string `json:"type,omitempty"`
-	Description string `json:"description,omitempty"`
-	// Pattern restricts string values to a regular expression.
-	Pattern  string   `json:"pattern,omitempty"`
-	Required []string `json:"required,omitempty"`
+	Type        string   `json:"type,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Required    []string `json:"required,omitempty"`
 	// Properties of the arguments, each with its own schema
 	Properties map[string]*Schema `json:"properties,omitempty"`
 	// For array types, defines the schema of items in the array
@@ -82,4 +81,93 @@ type Schema struct {
 	Ref string `json:"$ref,omitempty"`
 	// Defs contains reusable schema definitions
 	Defs map[string]*Schema `json:"$defs,omitempty"`
+}
+
+type schemaPattern string
+
+type schemaJSON struct {
+	Type                 string             `json:"type,omitempty"`
+	Description          string             `json:"description,omitempty"`
+	Pattern              string             `json:"pattern,omitempty"`
+	Required             []string           `json:"required,omitempty"`
+	Properties           map[string]*Schema `json:"properties,omitempty"`
+	Items                *Schema            `json:"items,omitempty"`
+	AdditionalProperties any                `json:"additionalProperties,omitempty"`
+	Default              any                `json:"default,omitempty"`
+	Enum                 []any              `json:"enum,omitempty"`
+	Ref                  string             `json:"$ref,omitempty"`
+	Defs                 map[string]*Schema `json:"$defs,omitempty"`
+}
+
+// SetPattern sets the JSON Schema pattern keyword for string schemas.
+func (s *Schema) SetPattern(pattern string) {
+	if s == nil {
+		return
+	}
+	if pattern == "" {
+		if _, ok := s.AdditionalProperties.(schemaPattern); ok {
+			s.AdditionalProperties = nil
+		}
+		return
+	}
+	s.AdditionalProperties = schemaPattern(pattern)
+}
+
+// GetPattern returns the JSON Schema pattern keyword for string schemas.
+func (s *Schema) GetPattern() string {
+	if s == nil {
+		return ""
+	}
+	pattern, ok := s.AdditionalProperties.(schemaPattern)
+	if !ok {
+		return ""
+	}
+	return string(pattern)
+}
+
+// MarshalJSON emits Schema as JSON Schema while preserving pattern support
+// without adding a public struct field.
+func (s Schema) MarshalJSON() ([]byte, error) {
+	additionalProperties := s.AdditionalProperties
+	if _, ok := additionalProperties.(schemaPattern); ok {
+		additionalProperties = nil
+	}
+	return json.Marshal(schemaJSON{
+		Type:                 s.Type,
+		Description:          s.Description,
+		Pattern:              (&s).GetPattern(),
+		Required:             s.Required,
+		Properties:           s.Properties,
+		Items:                s.Items,
+		AdditionalProperties: additionalProperties,
+		Default:              s.Default,
+		Enum:                 s.Enum,
+		Ref:                  s.Ref,
+		Defs:                 s.Defs,
+	})
+}
+
+// UnmarshalJSON reads the JSON Schema pattern keyword without adding a public
+// struct field to Schema.
+func (s *Schema) UnmarshalJSON(data []byte) error {
+	var raw schemaJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*s = Schema{
+		Type:                 raw.Type,
+		Description:          raw.Description,
+		Required:             raw.Required,
+		Properties:           raw.Properties,
+		Items:                raw.Items,
+		AdditionalProperties: raw.AdditionalProperties,
+		Default:              raw.Default,
+		Enum:                 raw.Enum,
+		Ref:                  raw.Ref,
+		Defs:                 raw.Defs,
+	}
+	if raw.Pattern != "" {
+		s.SetPattern(raw.Pattern)
+	}
+	return nil
 }

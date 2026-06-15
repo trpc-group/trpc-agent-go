@@ -5148,6 +5148,8 @@ func TestTool_StreamableCall_EmptyMessage(t *testing.T) {
 }
 
 func TestConvertMapToToolSchema(t *testing.T) {
+	expectedField := &tool.Schema{Type: "string"}
+	expectedField.SetPattern("^[a-z]+$")
 	tests := []struct {
 		name     string
 		input    map[string]any
@@ -5181,7 +5183,7 @@ func TestConvertMapToToolSchema(t *testing.T) {
 				Type:        "object",
 				Description: "test schema",
 				Properties: map[string]*tool.Schema{
-					"field1": {Type: "string", Pattern: "^[a-z]+$"},
+					"field1": expectedField,
 				},
 			},
 		},

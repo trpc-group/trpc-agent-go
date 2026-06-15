@@ -48,7 +48,8 @@ func (d *testStreamableTool) Declaration() *Declaration {
 }
 
 func TestSchemaPatternJSON(t *testing.T) {
-	schema := &Schema{Type: "string", Pattern: "^[a-z0-9_-]+$"}
+	schema := &Schema{Type: "string"}
+	schema.SetPattern("^[a-z0-9_-]+$")
 	data, err := json.Marshal(schema)
 	if err != nil {
 		t.Fatalf("marshal schema: %v", err)
@@ -61,7 +62,7 @@ func TestSchemaPatternJSON(t *testing.T) {
 	if err := json.Unmarshal(data, &roundTrip); err != nil {
 		t.Fatalf("unmarshal schema: %v", err)
 	}
-	if roundTrip.Pattern != schema.Pattern {
-		t.Fatalf("pattern = %q, want %q", roundTrip.Pattern, schema.Pattern)
+	if roundTrip.GetPattern() != schema.GetPattern() {
+		t.Fatalf("pattern = %q, want %q", roundTrip.GetPattern(), schema.GetPattern())
 	}
 }

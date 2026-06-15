@@ -360,10 +360,10 @@ func validateStringValueAgainstSchema(value any, schema *tool.Schema, path strin
 	if !ok {
 		return false, fmt.Sprintf("expected string at %s", path)
 	}
-	if schema == nil || schema.Pattern == "" {
+	if schema == nil || schema.GetPattern() == "" {
 		return true, ""
 	}
-	re, err := regexp.Compile(schema.Pattern)
+	re, err := regexp.Compile(schema.GetPattern())
 	if err != nil {
 		// JSON Schema patterns use ECMA-262 syntax; Go regexp supports a subset.
 		return true, ""
