@@ -709,12 +709,25 @@ server, err := agui.New(
     "author": "member-a",
     "invocationId": "inv-1",
     "parentInvocationId": "parent-1",
+    "parentMetadata": {
+      "triggerType": "tool_call",
+      "triggerId": "call-abc-123",
+      "triggerName": "researcher"
+    },
     "branch": "root.member-a"
   }
 }
 ```
 
 其中 `author` 表示事件作者，通常可用于按 Agent 或成员分组。`invocationId` 表示本次执行，`parentInvocationId` 表示父级执行，`branch` 表示当前执行在调用链中的分支位置。同名 Agent 在单次运行中被多次调用时，`branch` 可以用于区分不同执行分支。
+
+`parentMetadata` 描述触发本次 invocation 的「直接父级触发边」：
+
+- `triggerType`：父级触发类型。当前取值为 `tool_call`（AgentTool 调用）或 `transfer`（`transfer_to_agent` 转交）。
+- `triggerId`：父级的 `toolCallId`，用作与父级 `TOOL_CALL_START` 事件关联的 join key。前端可据此把子 Agent 的事件挂回到具体的那一次 `TOOL_CALL_START`。
+- `triggerName`：人类可读的触发名称。`tool_call` 时是 AgentTool 的名字，`transfer` 时为 `transfer_to_agent`。
+
+之所以需要 `parentMetadata`，是因为 `parentInvocationId` 只标识父级执行，并不能区分父级内部的具体哪一次 tool call。当模型在一轮里对同一个子 Agent 发起多个并行 AgentTool 调用时，所有派生出的 invocation 共享相同的 `parentInvocationId`；只有 `parentMetadata.triggerId` 才能区分每个子 invocation 对应的是哪一次 `TOOL_CALL_START`。当父级不是通过工具调用触发本次执行时（例如顶层 run），`parentMetadata` 字段缺省。
 
 消息快照路由返回的 `MESSAGES_SNAPSHOT` 事件也可以携带来源信息。此时 `rawEvent` 不是单条事件的来源信息，而是按消息和工具调用建立的来源索引：
 
@@ -736,6 +749,11 @@ server, err := agui.New(
         "eventId": "evt-tool-call",
         "author": "member-a",
         "invocationId": "inv-1",
+        "parentMetadata": {
+          "triggerType": "tool_call",
+          "triggerId": "call-abc-123",
+          "triggerName": "researcher"
+        },
         "branch": "root.member-a",
         "timestamp": 1781258401000
       }
