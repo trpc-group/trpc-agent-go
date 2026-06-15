@@ -821,6 +821,12 @@ func TestValidateValueAgainstSchema_StringPatternMatchesAnywhere(t *testing.T) {
 	assert.Empty(t, reason)
 }
 
+func TestValidateStringValueAgainstSchema_EmptyPatternSkips(t *testing.T) {
+	ok, reason := validateStringValueAgainstSchema("bad value", &tool.Schema{Type: "string"}, "$.value")
+	assert.True(t, ok)
+	assert.Empty(t, reason)
+}
+
 func TestValidateValueAgainstSchema_InvalidStringPatternIsSkipped(t *testing.T) {
 	schema := &tool.Schema{Type: "string", Pattern: "(?=abc)abc"}
 

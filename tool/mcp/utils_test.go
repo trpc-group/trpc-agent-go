@@ -47,6 +47,17 @@ func TestConvertMCPSchema_InvalidJSON(t *testing.T) {
 	require.Equal(t, &tool.Schema{Type: "object"}, schema)
 }
 
+func TestConvertMCPSchema_RootPattern(t *testing.T) {
+	mcpSchema := map[string]any{
+		"type":    "string",
+		"pattern": "^[a-z]+$",
+	}
+
+	schema := convertMCPSchemaToSchema(mcpSchema)
+	require.Equal(t, "string", schema.Type)
+	require.Equal(t, "^[a-z]+$", schema.Pattern)
+}
+
 func TestConvertMCPSchema_NestedObjects(t *testing.T) {
 	// Test nested object mapping issue
 	mcpSchema := map[string]any{
