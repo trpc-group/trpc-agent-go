@@ -1751,6 +1751,11 @@ The boundary is intentionally different from built-in backends:
 - Native tools expose read-oriented search through `tdai_conversation_search`
   (session-scoped, on by default) and `tdai_memory_search` (opt-in via
   `WithMemorySearchTool(true)`).
+- An optional short-term context offload plugin can externalize large tool
+  results into local `refs/*.md` files, maintain L1 JSONL summaries, judge
+  L1.5 task boundaries, generate L2 Mermaid task maps, and apply L3
+  token-pressure compression before model calls. It is separate from recall and
+  is off by default.
 
 > **Multi-tenant note:** automatic recall and `tdai_memory_search` read from the
 > gateway's shared long-term store, which does not currently enforce
@@ -1808,6 +1813,22 @@ memSvc, err := memorytencentdb.NewService(
     // Opt-in cross-session/user reads; enable only for a trusted/isolated gateway.
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
+    // Optional short-term tool result offload; separate from long-term recall.
+    // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
+    //     Enabled: true,
+    //     DataDir: ".tdai-offload",
+    //     Mode:    memorytencentdb.ContextOffloadModeLocal,
+    //     Model:   openai.New("deepseek-v4-flash"),
+    // }),
+    // Or route L1/L1.5/L2 through a compatible offload backend:
+    // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
+    //     Enabled: true,
+    //     Mode:    memorytencentdb.ContextOffloadModeBackend,
+    //     Backend: memorytencentdb.ContextOffloadBackendConfig{
+    //         URL:    gatewayURL,
+    //         APIKey: os.Getenv("TDAI_GATEWAY_API_KEY"),
+    //     },
+    // }),
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
 if err != nil {
@@ -1827,7 +1848,10 @@ r := runner.NewRunner(
     agent,
     runner.WithSessionService(sessionSvc),
     runner.WithSessionIngestor(memSvc),
-    runner.WithPlugins(memSvc.Plugin()),
+    runner.WithPlugins(
+        memSvc.Plugin(),
+        // memSvc.ContextOffloadPlugin(),
+    ),
 )
 defer r.Close()
 ```
@@ -1839,6 +1863,12 @@ defer r.Close()
   transcripts to `/capture`
 - Use `runner.WithPlugins(memSvc.Plugin())` to enable automatic `/recall`
   before model calls
+- Use `runner.WithPlugins(memSvc.ContextOffloadPlugin())` only when
+  `WithContextOffload(memorytencentdb.ContextOffloadConfig{Enabled: true})` is
+  set and you want short-term tool result offload. Companion tools
+  `tdai_read_offload_ref`,
+  `tdai_read_offload_node`, and `tdai_search_offload_index` are exposed
+  through `memSvc.Tools()` when enabled.
 - Do **not** use `runner.WithMemoryService(...)` with this integration
 
 ### Interactive Example
@@ -1881,6 +1911,28 @@ tools even after conversation history is reset.
 | `WithConversationSearchTool(bool)` | Expose `tdai_conversation_search`. | `true` |
 | `WithStandardAliases(bool)` | Also expose standard `memory_search` alias (requires memory search enabled). | `false` |
 | `WithToolPrefix(prefix)` | Change native tool prefix. | `tdai` |
+| `WithContextOffload(ContextOffloadConfig)` | Configure explicit short-term context offload for large tool results. | disabled |
+
+`ContextOffloadConfig` groups the detailed settings by offload layer. Zero
+values are filled from defaults except `Enabled`, which must be set explicitly.
+
+| Field | Purpose | Default |
+| ----- | ------- | ------- |
+| `Enabled` | Enable context offload plugin and companion tools. | `false` |
+| `DataDir` | Directory for `refs/`, JSONL indexes, and Mermaid files. | `.tdai-offload` |
+| `Mode` | Select `local`, `backend`, or `collect` offload mode. | `local` |
+| `Model` | Model used for local L1/L1.5/L2 offload tasks. When unset, deterministic fallback summaries are used. | none |
+| `MaxEntries` | Maximum offload entries rendered into the current task Mermaid context. | `20` |
+| `Backend.URL`, `Backend.APIKey` | Backend endpoint and optional API key for backend-mode L1/L1.5/L2. | none |
+| `L0.MinToolResultBytes` | Minimum tool result size to externalize. | `8192` |
+| `L0.MaxRefBytes` | Maximum bytes returned by `tdai_read_offload_ref`. | `1048576` |
+| `L1.MaxPairsPerBatch` | Maximum tool pairs sent to one L1 summarization request. | `20` |
+| `L2.NullThreshold` | Number of unmapped L1 rows that trigger L2 Mermaid generation. | `4` |
+| `L2.Timeout` | Time-based L2 trigger interval. | `5m` |
+| `L3.ContextWindow` | Context window used for L3 token-pressure checks when the offload model does not report one. | `200000` |
+| `L3.MildRatio` | Token ratio that triggers L3 summary replacement. | `0.50` |
+| `L3.AggressiveRatio` | Token ratio that triggers deletion of old offloaded tool blocks. | `0.85` |
+| `L3.EmergencyRatio`, `L3.EmergencyTargetRatio` | Emergency compression trigger and target ratios. | `0.95`, `0.60` |
 
 ### Notes
 
@@ -1896,6 +1948,20 @@ tools even after conversation history is reset.
   searchable.
 - `tdai_conversation_search` searches conversation history and defaults to the
   current gateway `session_key`.
+- Context offload is local, opt-in, and runtime-scoped. It does not call
+  `/capture` or `/recall`, and enabling recall alone will not rewrite tool
+  result messages or create Mermaid task maps.
+- Context offload has three model modes. `local` calls the configured
+  `ContextOffloadConfig.Model` for L1/L1.5/L2 and falls back deterministically
+  when unset; `backend` calls compatible `/offload/v1/...` endpoints;
+  `collect` records refs and JSONL state without rewriting model-facing
+  messages.
+- The offload tools are scoped to the current invocation's agent/session data
+  directory. `read_offload_ref` validates `result_ref` reads against path
+  traversal; `read_offload_node` reads by `node_id` and does not accept
+  `result_ref`.
+- Live model coverage is behind the `integration` build tag, for example:
+  `TDAI_CONTEXT_OFFLOAD_INTEGRATION=1 OPENAI_API_KEY=... go test -tags=integration ./memory/tencentdb -run TestContextOffloadPlugin_IntegrationLocalModel`.
 - Call `Close()` on the service so background capture workers shut down cleanly.
 
 ## References

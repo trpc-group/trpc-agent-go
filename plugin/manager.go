@@ -164,6 +164,18 @@ func (r *Registry) AfterTool(cb tool.AfterToolCallbackStructured) {
 	)
 }
 
+// AfterToolMessages registers a callback that can replace model-facing tool
+// result messages after tool execution and before the event is emitted.
+func (r *Registry) AfterToolMessages(cb AfterToolMessagesCallback) {
+	if r == nil || r.mgr == nil || cb == nil {
+		return
+	}
+	r.mgr.afterToolMessagesHooks = append(
+		r.mgr.afterToolMessagesHooks,
+		namedAfterToolMessagesHook{name: r.name, hook: cb},
+	)
+}
+
 // OnEvent registers an event hook.
 func (r *Registry) OnEvent(hook EventHook) {
 	if r == nil || r.mgr == nil || hook == nil {
@@ -179,16 +191,22 @@ func (r *Registry) OnEvent(hook EventHook) {
 //
 // Manager implements agent.PluginManager.
 type Manager struct {
-	plugins        []Plugin
-	agentCallbacks *agent.Callbacks
-	modelCallbacks *model.Callbacks
-	toolCallbacks  *tool.Callbacks
-	eventHooks     []namedEventHook
+	plugins                []Plugin
+	agentCallbacks         *agent.Callbacks
+	modelCallbacks         *model.Callbacks
+	toolCallbacks          *tool.Callbacks
+	eventHooks             []namedEventHook
+	afterToolMessagesHooks []namedAfterToolMessagesHook
 }
 
 type namedEventHook struct {
 	name string
 	hook EventHook
+}
+
+type namedAfterToolMessagesHook struct {
+	name string
+	hook AfterToolMessagesCallback
 }
 
 // NewManager builds a Manager and registers all plugin hooks.
@@ -294,6 +312,200 @@ func (m *Manager) OnEvent(
 	return curr, nil
 }
 
+// AfterToolMessages runs registered after-tool-messages hooks in plugin order.
+func (m *Manager) AfterToolMessages(
+	ctx context.Context,
+	args *AfterToolMessagesArgs,
+) (*AfterToolMessagesResult, error) {
+	if m == nil || args == nil {
+		return nil, nil
+	}
+	var last *AfterToolMessagesResult
+	for _, h := range m.afterToolMessagesHooks {
+		res, err := h.hook(ctx, args)
+		if err != nil {
+			return res, fmt.Errorf("plugin %q: %w", h.name, err)
+		}
+		if res == nil || len(res.ToolResultMessages) == 0 {
+			continue
+		}
+		current := cloneMessages(args.ToolResultMessages)
+		if len(current) == 0 {
+			current = toolResultMessagesFromEvent(args.ToolResultEvent)
+		}
+		replacements, err := normalizeToolResultReplacements(
+			current,
+			res.ToolResultMessages,
+		)
+		if err != nil {
+			return res, fmt.Errorf("plugin %q: %w", h.name, err)
+		}
+		if err := replaceToolResultEventChoices(
+			args.ToolResultEvent,
+			replacements,
+		); err != nil {
+			return res, fmt.Errorf("plugin %q: %w", h.name, err)
+		}
+		tailLen := len(args.ToolResultMessages)
+		if tailLen == 0 {
+			tailLen = len(current)
+		}
+		args.Messages = replaceTailMessages(
+			args.Messages,
+			tailLen,
+			replacements,
+		)
+		args.ToolResultMessages = cloneMessages(replacements)
+		last = &AfterToolMessagesResult{
+			ToolResultMessages: cloneMessages(replacements),
+		}
+	}
+	return last, nil
+}
+
+func normalizeToolResultReplacements(
+	original []model.Message,
+	replacements []model.Message,
+) ([]model.Message, error) {
+	if len(original) == 0 {
+		return nil, errors.New("after tool messages: original tool result messages are empty")
+	}
+	if len(replacements) != len(original) {
+		return nil, fmt.Errorf(
+			"after tool messages: replacement count %d does not match original tool result count %d",
+			len(replacements),
+			len(original),
+		)
+	}
+	byID := make(map[string]model.Message, len(replacements))
+	for _, msg := range replacements {
+		if msg.ToolID == "" {
+			return nil, errors.New("after tool messages: replacement tool message missing tool id")
+		}
+		if msg.Role != model.RoleTool {
+			return nil, fmt.Errorf(
+				"after tool messages: replacement for tool id %q must use role %q",
+				msg.ToolID,
+				model.RoleTool,
+			)
+		}
+		if _, ok := byID[msg.ToolID]; ok {
+			return nil, fmt.Errorf(
+				"after tool messages: replacement contains duplicate tool id %q",
+				msg.ToolID,
+			)
+		}
+		byID[msg.ToolID] = msg
+	}
+	out := make([]model.Message, 0, len(original))
+	for _, msg := range original {
+		if msg.ToolID == "" {
+			return nil, errors.New("after tool messages: original tool message missing tool id")
+		}
+		if msg.Role != model.RoleTool {
+			return nil, fmt.Errorf(
+				"after tool messages: original for tool id %q must use role %q",
+				msg.ToolID,
+				model.RoleTool,
+			)
+		}
+		replacement, ok := byID[msg.ToolID]
+		if !ok {
+			return nil, fmt.Errorf(
+				"after tool messages: replacement missing tool id %q",
+				msg.ToolID,
+			)
+		}
+		out = append(out, replacement)
+		delete(byID, msg.ToolID)
+	}
+	for toolID := range byID {
+		return nil, fmt.Errorf(
+			"after tool messages: replacement contains unknown tool id %q",
+			toolID,
+		)
+	}
+	return cloneMessages(out), nil
+}
+
+func replaceToolResultEventChoices(
+	ev *event.Event,
+	replacements []model.Message,
+) error {
+	if ev == nil || ev.Response == nil || len(replacements) == 0 {
+		return nil
+	}
+	byID := make(map[string]model.Message, len(replacements))
+	for _, msg := range replacements {
+		byID[msg.ToolID] = msg
+	}
+	choices := make([]model.Choice, 0, len(ev.Response.Choices))
+	seen := make(map[string]struct{}, len(replacements))
+	for _, choice := range ev.Response.Choices {
+		toolID := toolChoiceID(choice)
+		if toolID == "" {
+			return errors.New("after tool messages: original tool result choice missing tool id")
+		}
+		msg, ok := byID[toolID]
+		if !ok {
+			return fmt.Errorf(
+				"after tool messages: replacement missing tool id %q",
+				toolID,
+			)
+		}
+		choices = append(choices, replaceChoiceToolMessage(choice, msg))
+		seen[toolID] = struct{}{}
+	}
+	for _, msg := range replacements {
+		if _, ok := seen[msg.ToolID]; !ok {
+			return fmt.Errorf(
+				"after tool messages: replacement contains unknown tool id %q",
+				msg.ToolID,
+			)
+		}
+	}
+	ev.Response.Choices = choices
+	return nil
+}
+
+func replaceChoiceToolMessage(choice model.Choice, msg model.Message) model.Choice {
+	updated := choice
+	if updated.Message.ToolID != "" {
+		updated.Message = msg
+	}
+	if updated.Delta.ToolID != "" {
+		updated.Delta = msg
+	}
+	if updated.Message.ToolID == "" && updated.Delta.ToolID == "" {
+		updated.Message = msg
+	}
+	return updated
+}
+
+func toolResultMessagesFromEvent(ev *event.Event) []model.Message {
+	if ev == nil || ev.Response == nil {
+		return nil
+	}
+	out := make([]model.Message, 0, len(ev.Response.Choices))
+	for _, choice := range ev.Response.Choices {
+		msg := choice.Message
+		if msg.ToolID == "" && choice.Delta.ToolID != "" {
+			msg = choice.Delta
+		}
+		if msg.ToolID != "" {
+			out = append(out, msg)
+		}
+	}
+	return cloneMessages(out)
+}
+
+func toolChoiceID(choice model.Choice) string {
+	if choice.Message.ToolID != "" {
+		return choice.Message.ToolID
+	}
+	return choice.Delta.ToolID
+}
+
 // Close implements agent.PluginManager.
 func (m *Manager) Close(ctx context.Context) error {
 	if m == nil {
@@ -321,4 +533,27 @@ func (m *Manager) Close(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func replaceTailMessages(
+	messages []model.Message,
+	oldTailLen int,
+	replacement []model.Message,
+) []model.Message {
+	if oldTailLen < 0 || oldTailLen > len(messages) {
+		return cloneMessages(messages)
+	}
+	out := make([]model.Message, 0, len(messages)-oldTailLen+len(replacement))
+	out = append(out, messages[:len(messages)-oldTailLen]...)
+	out = append(out, replacement...)
+	return cloneMessages(out)
+}
+
+func cloneMessages(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+	out := make([]model.Message, len(messages))
+	copy(out, messages)
+	return out
 }
