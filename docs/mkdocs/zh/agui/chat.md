@@ -1354,6 +1354,66 @@ server, err := agui.New(
 
 与 Langfuse 可观测平台的结合示例可参考 [examples/agui/server/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse)。
 
+## 并发消息流
+
+多 Agent 或子 Agent 流式透传场景下，同一轮实时对话事件流中可能同时存在多个正在生成的文本消息。例如父 Agent 并行执行多个 `AgentTool`，并且子 Agent 都在流式输出时，不同子 Agent 的文本分片可能交错到达 AG-UI 服务端。
+
+AG-UI 消息事件通过 `messageId` 关联生命周期。前端处理流式消息时，应按 `messageId` 维护消息状态，并将相同 `messageId` 的 `TEXT_MESSAGE_CONTENT` 归并到同一条消息。
+
+默认情况下，AG-UI 服务端保持兼容行为：同一时刻只保持一条消息流处于打开状态。当后续事件切换到新的 `messageId` 时，Translator 会先关闭当前消息流，再开始新的消息流。该行为适合只按线性输出渲染的前端。
+
+默认事件序列如下：
+
+```text
+RUN_STARTED
+→ TEXT_MESSAGE_START messageId=msg-a
+→ TEXT_MESSAGE_CONTENT messageId=msg-a delta=a1
+→ TEXT_MESSAGE_END messageId=msg-a
+→ TEXT_MESSAGE_START messageId=msg-b
+→ TEXT_MESSAGE_CONTENT messageId=msg-b delta=b1
+→ TEXT_MESSAGE_END messageId=msg-b
+→ TEXT_MESSAGE_START messageId=msg-a
+→ TEXT_MESSAGE_CONTENT messageId=msg-a delta=a2
+→ TEXT_MESSAGE_END messageId=msg-a
+→ TEXT_MESSAGE_START messageId=msg-b
+→ TEXT_MESSAGE_CONTENT messageId=msg-b delta=b2
+→ TEXT_MESSAGE_END messageId=msg-b
+→ RUN_FINISHED
+```
+
+如果前端支持按 `messageId` 维护多条同时打开的消息流，可以开启并发消息流：
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
+server, err := agui.New(
+    runner,
+    agui.WithConcurrentMessageStreamsEnabled(true),
+)
+```
+
+开启后，不同 `messageId` 的消息流可以同时保持打开。同一条逻辑消息在其他消息分片插入后仍保持原有生命周期；后续属于同一 `messageId` 的分片会继续追加到原消息上，直到该消息收到自己的结束事件，或运行结束收尾阶段补齐结束事件。
+
+开启后的事件序列如下：
+
+```text
+RUN_STARTED
+→ TEXT_MESSAGE_START messageId=msg-a
+→ TEXT_MESSAGE_CONTENT messageId=msg-a delta=a1
+→ TEXT_MESSAGE_START messageId=msg-b
+→ TEXT_MESSAGE_CONTENT messageId=msg-b delta=b1
+→ TEXT_MESSAGE_CONTENT messageId=msg-a delta=a2
+→ TEXT_MESSAGE_CONTENT messageId=msg-b delta=b2
+→ TEXT_MESSAGE_END messageId=msg-a
+→ TEXT_MESSAGE_END messageId=msg-b
+→ RUN_FINISHED
+```
+
+前端处理时需要关注两点：
+
+- 同一 `messageId` 的 `TEXT_MESSAGE_CONTENT` 可能分散在事件流的不同位置；应按 `messageId` 累积内容。
+- 不同 `messageId` 的 `TEXT_MESSAGE_END` 顺序取决于对应消息实际结束顺序；结束顺序以事件流中的 `TEXT_MESSAGE_END` 为准。
+
 ## 最佳实践
 
 默认优先使用服务端工具执行路径。工具必须在客户端或业务侧执行时，采用“外部工具”模式；这类场景适合作为进阶用法来设计与评估。

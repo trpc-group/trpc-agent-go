@@ -18,6 +18,7 @@ type options struct {
 	eventSourceMetadataEnabled             bool // eventSourceMetadataEnabled attaches trpc-agent-go source metadata to translated AG-UI events.
 	toolCallDeltaStreamingEnabled          bool // toolCallDeltaStreamingEnabled streams partial tool-call arguments.
 	streamingToolResultActivityEnabled     bool // streamingToolResultActivityEnabled rewrites partial tool results as activity events.
+	concurrentMessageStreamsEnabled        bool // concurrentMessageStreamsEnabled keeps multiple message streams open by message ID.
 }
 
 // Option is a function that configures the options.
@@ -86,5 +87,13 @@ func WithToolCallDeltaStreamingEnabled(enabled bool) Option {
 func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.streamingToolResultActivityEnabled = enabled
+	}
+}
+
+// WithConcurrentMessageStreamsEnabled controls whether multiple text and reasoning
+// message streams with different message IDs may stay open concurrently.
+func WithConcurrentMessageStreamsEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.concurrentMessageStreamsEnabled = enabled
 	}
 }

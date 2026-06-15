@@ -37,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
@@ -3438,6 +3439,321 @@ func TestRunStreamingToolResultActivityEnabledUsesExplicitFinalResultChunk(t *te
 		tool.FinalResultChunk{Result: map[string]any{"final": "done"}},
 	})
 	assertStreamingToolResultActivityOutcome(t, outcome, "line-1", "line-1 line-2", `{"final":"done"}`)
+}
+
+func TestRunConcurrentAgentToolStreamsEndToEnd(t *testing.T) {
+	a1Gate := make(chan struct{})
+	b1Gate := make(chan struct{})
+	a2Gate := make(chan struct{})
+	b2Gate := make(chan struct{})
+	aEndGate := make(chan struct{})
+	bEndGate := make(chan struct{})
+	childA := llmagent.New("child_a", llmagent.WithModel(&gatedAGUIStreamModel{
+		name:      "child-a-model",
+		messageID: "child-a-msg",
+		steps: []gatedAGUIStreamStep{
+			{gate: a1Gate, content: "a1"},
+			{gate: a2Gate, content: "a2"},
+			{gate: aEndGate, finish: true},
+		},
+	}))
+	childB := llmagent.New("child_b", llmagent.WithModel(&gatedAGUIStreamModel{
+		name:      "child-b-model",
+		messageID: "child-b-msg",
+		steps: []gatedAGUIStreamStep{
+			{gate: b1Gate, content: "b1"},
+			{gate: b2Gate, content: "b2"},
+			{gate: bEndGate, finish: true},
+		},
+	}))
+	parentModel := &toolCallIDRunnerIntegrationModel{
+		responses: [][]*model.Response{
+			{concurrentAgentToolParentToolCallResponse()},
+			{{
+				ID:     "parent-final",
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("parent done"),
+				}},
+			}},
+		},
+	}
+	parent := llmagent.New(
+		"parent",
+		llmagent.WithModel(parentModel),
+		llmagent.WithTools([]tool.Tool{
+			agenttool.NewTool(childA, agenttool.WithStreamInner(true)),
+			agenttool.NewTool(childB, agenttool.WithStreamInner(true)),
+		}),
+		llmagent.WithEnableParallelTools(true),
+	)
+	sessionService := inmemory.NewSessionService()
+	t.Cleanup(func() { require.NoError(t, sessionService.Close()) })
+	underlying := baserunner.NewRunner(
+		"concurrent-agenttool-agui-app",
+		parent,
+		baserunner.WithSessionService(sessionService),
+	)
+	t.Cleanup(func() { require.NoError(t, underlying.Close()) })
+	rr, ok := New(
+		underlying,
+		WithAppName("demo"),
+		WithSessionService(sessionService),
+		WithConcurrentMessageStreamsEnabled(true),
+	).(*runner)
+	require.True(t, ok)
+	eventsCh, err := rr.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "delegate"}},
+	})
+	require.NoError(t, err)
+	events := collectConcurrentAgentToolEvents(t, eventsCh, concurrentAgentToolGates{
+		a1: a1Gate, b1: b1Gate,
+		a2: a2Gate, b2: b2Gate,
+		aEnd: aEndGate, bEnd: bEndGate,
+	})
+	require.NoError(t, aguievents.ValidateSequence(events))
+	assert.Equal(t, []string{
+		"start:child-a-msg",
+		"content:child-a-msg:a1",
+		"start:child-b-msg",
+		"content:child-b-msg:b1",
+		"content:child-a-msg:a2",
+		"content:child-b-msg:b2",
+		"end:child-a-msg",
+		"end:child-b-msg",
+	}, childTextLifecycle(events))
+	snapshotMessages := loadSnapshotMessages(t, rr)
+	assert.True(t, containsSnapshotMessageContent(snapshotMessages, types.RoleAssistant, "a1a2"))
+	assert.True(t, containsSnapshotMessageContent(snapshotMessages, types.RoleAssistant, "b1b2"))
+}
+
+func concurrentAgentToolParentToolCallResponse() *model.Response {
+	return &model.Response{
+		ID:     "parent-tool-calls",
+		Object: model.ObjectTypeChatCompletion,
+		Done:   true,
+		Choices: []model.Choice{{
+			Index: 0,
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						ID:   "call-child-a",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "child_a",
+							Arguments: []byte(`{"request":"ask child a"}`),
+						},
+					},
+					{
+						ID:   "call-child-b",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "child_b",
+							Arguments: []byte(`{"request":"ask child b"}`),
+						},
+					},
+				},
+			},
+		}},
+	}
+}
+
+type concurrentAgentToolGates struct {
+	a1   chan struct{}
+	b1   chan struct{}
+	a2   chan struct{}
+	b2   chan struct{}
+	aEnd chan struct{}
+	bEnd chan struct{}
+}
+
+func collectConcurrentAgentToolEvents(
+	t *testing.T,
+	ch <-chan aguievents.Event,
+	gates concurrentAgentToolGates,
+) []aguievents.Event {
+	t.Helper()
+	close(gates.a1)
+	releasedB1 := false
+	releasedA2 := false
+	releasedB2 := false
+	releasedAEnd := false
+	releasedBEnd := false
+	var out []aguievents.Event
+	for {
+		select {
+		case evt, ok := <-ch:
+			if !ok {
+				return out
+			}
+			out = append(out, evt)
+			releaseConcurrentAgentToolGate(
+				evt,
+				gates,
+				&releasedB1,
+				&releasedA2,
+				&releasedB2,
+				&releasedAEnd,
+				&releasedBEnd,
+			)
+		case <-time.After(time.Second):
+			assert.FailNow(t, "timeout collecting concurrent agent tool events")
+			return out
+		}
+	}
+}
+
+func releaseConcurrentAgentToolGate(
+	evt aguievents.Event,
+	gates concurrentAgentToolGates,
+	releasedB1 *bool,
+	releasedA2 *bool,
+	releasedB2 *bool,
+	releasedAEnd *bool,
+	releasedBEnd *bool,
+) {
+	content, ok := evt.(*aguievents.TextMessageContentEvent)
+	if ok {
+		if content.MessageID == "child-a-msg" && content.Delta == "a1" && !*releasedB1 {
+			close(gates.b1)
+			*releasedB1 = true
+		}
+		if content.MessageID == "child-b-msg" && content.Delta == "b1" && !*releasedA2 {
+			close(gates.a2)
+			*releasedA2 = true
+		}
+		if content.MessageID == "child-a-msg" && content.Delta == "a2" && !*releasedB2 {
+			close(gates.b2)
+			*releasedB2 = true
+		}
+		if content.MessageID == "child-b-msg" && content.Delta == "b2" && !*releasedAEnd {
+			close(gates.aEnd)
+			*releasedAEnd = true
+		}
+		return
+	}
+	end, ok := evt.(*aguievents.TextMessageEndEvent)
+	if ok && end.MessageID == "child-a-msg" && !*releasedBEnd {
+		close(gates.bEnd)
+		*releasedBEnd = true
+	}
+}
+
+type gatedAGUIStreamModel struct {
+	name      string
+	messageID string
+	steps     []gatedAGUIStreamStep
+}
+
+type gatedAGUIStreamStep struct {
+	gate    <-chan struct{}
+	content string
+	finish  bool
+}
+
+func (m *gatedAGUIStreamModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *gatedAGUIStreamModel) GenerateContent(
+	ctx context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	steps := append([]gatedAGUIStreamStep(nil), m.steps...)
+	ch := make(chan *model.Response)
+	go func() {
+		defer close(ch)
+		for _, step := range steps {
+			if step.gate != nil {
+				select {
+				case <-ctx.Done():
+					return
+				case <-step.gate:
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- gatedAGUIStreamResponse(m.messageID, step):
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case ch <- &model.Response{
+			ID:     m.messageID,
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: model.Message{Role: model.RoleAssistant},
+			}},
+		}:
+		}
+	}()
+	return ch, nil
+}
+
+func gatedAGUIStreamResponse(messageID string, step gatedAGUIStreamStep) *model.Response {
+	choice := model.Choice{
+		Index: 0,
+		Delta: model.Message{Role: model.RoleAssistant, Content: step.content},
+	}
+	if step.finish {
+		reason := "stop"
+		choice.Delta = model.Message{Role: model.RoleAssistant}
+		choice.FinishReason = &reason
+	}
+	return &model.Response{
+		ID:        messageID,
+		Object:    model.ObjectTypeChatCompletionChunk,
+		IsPartial: true,
+		Choices:   []model.Choice{choice},
+	}
+}
+
+func childTextLifecycle(events []aguievents.Event) []string {
+	var lifecycle []string
+	for _, evt := range events {
+		switch e := evt.(type) {
+		case *aguievents.TextMessageStartEvent:
+			if isChildAGUIMessageID(e.MessageID) {
+				lifecycle = append(lifecycle, "start:"+e.MessageID)
+			}
+		case *aguievents.TextMessageContentEvent:
+			if isChildAGUIMessageID(e.MessageID) {
+				lifecycle = append(lifecycle, "content:"+e.MessageID+":"+e.Delta)
+			}
+		case *aguievents.TextMessageEndEvent:
+			if isChildAGUIMessageID(e.MessageID) {
+				lifecycle = append(lifecycle, "end:"+e.MessageID)
+			}
+		}
+	}
+	return lifecycle
+}
+
+func isChildAGUIMessageID(messageID string) bool {
+	return messageID == "child-a-msg" || messageID == "child-b-msg"
+}
+
+func containsSnapshotMessageContent(
+	messages []types.Message,
+	role types.Role,
+	content string,
+) bool {
+	for _, msg := range messages {
+		got, ok := msg.ContentString()
+		if ok && msg.Role == role && got == content {
+			return true
+		}
+	}
+	return false
 }
 
 type toolCallIDRunnerIntegrationModel struct {
