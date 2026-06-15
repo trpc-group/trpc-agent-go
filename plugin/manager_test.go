@@ -82,6 +82,35 @@ func TestMustNewManager_PanicsOnError(t *testing.T) {
 	})
 }
 
+func TestWithPlugins_AppendsRunPluginManager(t *testing.T) {
+	var opts agent.RunOptions
+	called := false
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.BeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+				called = true
+				return nil, nil
+			})
+		},
+	}
+	plugin.WithPlugins(p)(&opts)
+	require.Len(t, opts.Plugins, 1)
+	callbacks := opts.Plugins[0].AgentCallbacks()
+	require.NotNil(t, callbacks)
+	_, err := callbacks.RunBeforeAgent(context.Background(), &agent.BeforeAgentArgs{})
+	require.NoError(t, err)
+	require.True(t, called)
+}
+
+func TestWithPlugins_InvalidPluginDoesNotAppendRunPluginManager(t *testing.T) {
+	var opts agent.RunOptions
+	require.NotPanics(t, func() {
+		plugin.WithPlugins(nil)(&opts)
+	})
+	require.Empty(t, opts.Plugins)
+}
+
 func TestManager_CallbackSetsNilWhenEmpty(t *testing.T) {
 	m, err := plugin.NewManager()
 	require.NoError(t, err)

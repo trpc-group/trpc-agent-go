@@ -152,6 +152,29 @@ runnerInstance := runner.NewRunner(
 defer runnerInstance.Close()
 ```
 
+## Per-run Plugins
+
+If a plugin should affect only the current request instead of the whole Runner,
+inject it into `Runner.Run(...)` through `plugin.WithPlugins(...)`:
+
+```go
+events, err := runnerInstance.Run(
+	ctx,
+	userID,
+	sessionID,
+	message,
+	plugin.WithPlugins(&RequestScopedPlugin{}),
+)
+```
+
+`plugin.WithPlugins(...)` is a RunOption and only affects this run. It reuses
+the same `plugin.Plugin` interface and hook points, which makes it suitable for
+request-scoped policies, test doubles, and temporary audit tagging. Plugin names
+within the same `plugin.WithPlugins(...)` call still must be unique; if the
+configuration is invalid, the framework logs the error and skips that set of
+run-level plugins. Runner does not call `Close()` on these plugins when the
+single run ends. If a plugin owns resources, the caller must manage them.
+
 ## Tool Identity Injection
 
 Plugins can add pre-processing or post-processing to every tool call through
@@ -263,7 +286,15 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 
 ### Order and early-exit (short-circuit)
 
-Plugins run **in the order they are registered**.
+Plugins run by scope and registration order:
+
+1. Runner-level plugins registered through `runner.WithPlugins(...)` run first.
+2. Per-run plugins injected through `plugin.WithPlugins(...)` run next; multiple
+   RunOptions run in the order passed to `Runner.Run(...)`.
+3. Agent callbacks run last, if any.
+
+Multiple plugins in the same `WithPlugins(...)` call still run in argument
+order.
 
 Some “before” hooks can short-circuit default behavior:
 
@@ -314,9 +345,15 @@ stores shared state, make it safe for concurrent use (for example, by using
 
 ### Close (resource cleanup)
 
-If a plugin implements `plugin.Closer`, Runner calls `Close()` when you call
-`Runner.Close()`. Plugins are closed in **reverse registration order**, so
-later plugins can depend on earlier ones during shutdown.
+If a plugin registered through `runner.WithPlugins(...)` implements
+`plugin.Closer`, Runner calls `Close()` when you call `Runner.Close()`.
+Plugins are closed in **reverse registration order**, so later plugins can
+depend on earlier ones during shutdown.
+
+Per-run plugins injected through `plugin.WithPlugins(...)` are not closed by
+Runner when the run ends. They are usually objects temporarily provided by the
+caller for this run; if they own resources that must be released, close them at
+the appropriate time in the caller.
 
 ## Hook Points (What you can intercept)
 
