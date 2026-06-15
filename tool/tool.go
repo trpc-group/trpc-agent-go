@@ -63,9 +63,11 @@ type Declaration struct {
 // and to validate that incoming data conforms to the expected structure.
 type Schema struct {
 	//  Type Specifies the data type (e.g., "object", "array", "string", "number")
-	Type        string   `json:"type,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Required    []string `json:"required,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Pattern restricts string values to a regular expression.
+	Pattern  string   `json:"pattern,omitempty"`
+	Required []string `json:"required,omitempty"`
 	// Properties of the arguments, each with its own schema
 	Properties map[string]*Schema `json:"properties,omitempty"`
 	// For array types, defines the schema of items in the array

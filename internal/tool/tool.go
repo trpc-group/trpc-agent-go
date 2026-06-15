@@ -158,7 +158,7 @@ func generateDefName(t reflect.Type) string {
 // applyFieldTags parses all supported struct tags and applies them to the schema.
 //
 // It handles:
-//   - jsonschema:"description=xxx,enum=yyy,required" (primary, canonical form)
+//   - jsonschema:"description=xxx,enum=yyy,pattern=xxx,required" (primary, canonical form)
 //   - description:"xxx"             (legacy compat, widely used in examples)
 //
 // Description priority (highest → lowest):
@@ -190,6 +190,7 @@ func applyFieldTags(fieldType reflect.Type, tag reflect.StructTag, schema *tool.
 // Supported key-value pairs (comma-separated):
 //   - description=xxx
 //   - enum=xxx  (repeatable; type-aware conversion)
+//   - pattern=xxx
 //   - required  (standalone flag)
 func parseJSONSchemaTag(fieldType reflect.Type, tag reflect.StructTag, schema *tool.Schema) (bool, error) {
 	jsonSchemaTag := tag.Get("jsonschema")
@@ -223,6 +224,8 @@ func applyKVTag(fieldType reflect.Type, key, value string, schema *tool.Schema) 
 		schema.Description = value
 	case "enum":
 		return appendEnumValue(fieldType, value, schema)
+	case "pattern":
+		schema.Pattern = value
 	}
 	return nil
 }
