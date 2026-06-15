@@ -354,6 +354,22 @@ defer r.Close()
 - 插件按注册顺序执行。
 - 如果插件实现了 `plugin.Closer`，Runner 会在 `Close()` 时调用它。
 
+如果插件只需要影响某一次运行，可以把它作为 RunOption 传给 `Run`：
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    plugin.WithPlugins(requestPlugin),
+)
+```
+
+单次 Run 插件会排在 Runner 级插件之后执行，只对本次 `Run` 生效。Runner 不会在
+本次运行结束时调用这些插件的 `Close()`；如果插件持有外部资源，调用方需要自行管理。
+更完整的作用域、执行顺序和生命周期说明见 [插件文档](plugin.md)。
+
 ### 🔄 Ralph Loop Mode
 
 Ralph Loop 是一种“外部循环（outer loop）”模式：不依赖 LLM 主观判断“我已经完成了”，

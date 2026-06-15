@@ -192,6 +192,27 @@ runnerInstance := runner.NewRunner(
 defer runnerInstance.Close()
 ```
 
+## 单次 Run 插件
+
+如果插件只应该影响当前请求，而不是挂到整个 Runner 上，可以在
+`Runner.Run(...)` 中通过 `plugin.WithPlugins(...)` 临时注入：
+
+```go
+events, err := runnerInstance.Run(
+	ctx,
+	userID,
+	sessionID,
+	message,
+	plugin.WithPlugins(&RequestScopedPlugin{}),
+)
+```
+
+`plugin.WithPlugins(...)` 是 RunOption，只对本次运行生效。它复用同一套
+`plugin.Plugin` 接口和 Hook 点，适合请求级策略、测试替身和临时审计打标。同一次
+`plugin.WithPlugins(...)` 里的插件名仍然需要唯一；配置无效时，框架会记录错误并跳过
+这组 Run 级插件。Runner 不会因为单次 Run 结束而调用这些插件的 `Close()`，如果插件
+持有资源，需要调用方自行管理。
+
 ## 工具身份注入
 
 插件可以通过 `BeforeTool` 和 `AfterTool` 对所有工具调用增加前置或后置处理。
@@ -299,7 +320,14 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 
 ### 执行顺序与短路（short-circuit）
 
-插件会 **按注册顺序执行**。
+插件会按作用域和注册顺序执行：
+
+1. 先执行 `runner.WithPlugins(...)` 注册的 Runner 级插件。
+2. 再执行 `plugin.WithPlugins(...)` 注入的单次 Run 插件；多个 RunOption 按传入
+   `Runner.Run(...)` 的顺序执行。
+3. 最后执行 Agent 自己配置的回调（如果有）。
+
+同一个 `WithPlugins(...)` 调用里的多个插件仍按传入顺序执行。
 
 某些 Before* 回调支持“短路”默认行为：
 
@@ -342,8 +370,13 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 
 ### Close（资源释放）
 
-如果插件实现了 `plugin.Closer`，当你调用 `Runner.Close()` 时，Runner 会调用插件的
-`Close()` 来释放资源。关闭顺序是 **按注册顺序的反向**（后注册的先关闭）。
+如果通过 `runner.WithPlugins(...)` 注册的插件实现了 `plugin.Closer`，当你调用
+`Runner.Close()` 时，Runner 会调用插件的 `Close()` 来释放资源。关闭顺序是
+**按注册顺序的反向**（后注册的先关闭）。
+
+通过 `plugin.WithPlugins(...)` 注入的单次 Run 插件不会在本次运行结束时被 Runner
+关闭。它们通常是调用方临时借给本次运行的对象；如果插件持有需要释放的资源，请由
+调用方在合适的时机关闭。
 
 ## Hook 点（Hook Points）
 
