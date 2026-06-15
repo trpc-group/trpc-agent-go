@@ -100,6 +100,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		toolResultInputTranslationEnabled:         opts.ToolResultInputTranslationEnabled,
 		toolCallDeltaStreamingEnabled:             opts.ToolCallDeltaStreamingEnabled,
 		streamingToolResultActivityEnabled:        opts.StreamingToolResultActivityEnabled,
+		concurrentMessageStreamsEnabled:           opts.ConcurrentMessageStreamsEnabled,
 		distributedCancelEnabled:                  opts.DistributedCancelEnabled,
 		distributedCancelPollInterval:             opts.DistributedCancelPollInterval,
 	}
@@ -137,6 +138,7 @@ type runner struct {
 	toolResultInputTranslationEnabled         bool
 	toolCallDeltaStreamingEnabled             bool
 	streamingToolResultActivityEnabled        bool
+	concurrentMessageStreamsEnabled           bool
 	distributedCancelEnabled                  bool
 	distributedCancelPollInterval             time.Duration
 }
@@ -385,6 +387,7 @@ func (r *runner) Run(ctx context.Context, runAgentInput *adapter.RunAgentInput) 
 		translator.WithEventSourceMetadataEnabled(r.eventSourceMetadataEnabled),
 		translator.WithToolCallDeltaStreamingEnabled(r.toolCallDeltaStreamingEnabled),
 		translator.WithStreamingToolResultActivityEnabled(r.streamingToolResultActivityEnabled),
+		translator.WithConcurrentMessageStreamsEnabled(r.concurrentMessageStreamsEnabled),
 	)
 	if err != nil {
 		span.End()
