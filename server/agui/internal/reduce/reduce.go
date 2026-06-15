@@ -683,7 +683,15 @@ func (r *reducer) handleToolResult(e *aguievents.ToolCallResultEvent) error {
 	}
 	state, ok := r.toolCalls[e.ToolCallID]
 	if !ok || state.phase != toolAwaitingResult {
-		return fmt.Errorf("tool call result without completed call: %s", e.ToolCallID)
+		// The matching tool call start/end may be absent from the replayed
+		// track. Interrupt (human-in-the-loop) tools land their result in a
+		// later run, and resume/replay runs can emit only the interrupt
+		// activity without TOOL_CALL_START/END, so the result has no started
+		// call to attach to (!ok), an unfinished one (toolAwaitingArgs), or an
+		// already completed one (duplicate result, toolCompleted). Skip the
+		// unpaired result instead of failing the whole reduce, otherwise the
+		// history snapshot is truncated at this point.
+		return nil
 	}
 	role := string(model.RoleTool)
 	if e.Role != nil && *e.Role != "" {

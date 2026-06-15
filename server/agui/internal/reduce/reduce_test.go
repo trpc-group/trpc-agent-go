@@ -1055,10 +1055,6 @@ func TestReduceToolEndErrors(t *testing.T) {
 }
 
 func TestReduceToolResultErrors(t *testing.T) {
-	assistant := trackEventsFrom(
-		aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant")),
-		aguievents.NewTextMessageEndEvent("assistant-1"),
-	)
 	tests := []struct {
 		name   string
 		events []session.TrackEvent
@@ -1069,19 +1065,72 @@ func TestReduceToolResultErrors(t *testing.T) {
 			events: trackEventsFrom(aguievents.NewToolCallResultEvent("", "", "oops")),
 			want:   "tool call result missing identifiers",
 		},
-		{
-			name: "missing completion",
-			events: combineEvents(assistant, trackEventsFrom(
-				aguievents.NewToolCallStartEvent("tool-call-1", "calc", aguievents.WithParentMessageID("assistant-1")),
-				aguievents.NewToolCallArgsEvent("tool-call-1", "{}"),
-				aguievents.NewToolCallResultEvent("tool-msg-1", "tool-call-1", "oops"),
-			)),
-			want: "tool call result without completed call: tool-call-1",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertReduceError(t, tt.events, tt.want)
+		})
+	}
+}
+
+// TestReduceSkipsUnpairedToolResult ensures an unpaired TOOL_CALL_RESULT does
+// not fail the reduce or truncate the history. Interrupt (human-in-the-loop)
+// tools land their result in a later run, and resume/replay runs can persist
+// the result without the matching TOOL_CALL_START/END, so the reduced snapshot
+// must skip the orphan result and keep replaying the remaining events.
+func TestReduceSkipsUnpairedToolResult(t *testing.T) {
+	lead := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("user-1", aguievents.WithRole("user")),
+		aguievents.NewTextMessageContentEvent("user-1", "hi"),
+		aguievents.NewTextMessageEndEvent("user-1"),
+	)
+	// History that must survive after the unpaired result.
+	tail := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant")),
+		aguievents.NewTextMessageContentEvent("assistant-1", "ok"),
+		aguievents.NewTextMessageEndEvent("assistant-1"),
+	)
+	tests := []struct {
+		name   string
+		middle []session.TrackEvent
+	}{
+		{
+			name: "orphan result without start",
+			middle: trackEventsFrom(
+				aguievents.NewToolCallResultEvent("tool-msg-1", "call-orphan", "r"),
+			),
+		},
+		{
+			name: "result without end",
+			middle: trackEventsFrom(
+				aguievents.NewToolCallStartEvent("call-1", "calc", aguievents.WithParentMessageID("assistant-mid")),
+				aguievents.NewToolCallArgsEvent("call-1", "{}"),
+				aguievents.NewToolCallResultEvent("tool-msg-1", "call-1", "r"),
+			),
+		},
+		{
+			name: "duplicate result",
+			middle: trackEventsFrom(
+				aguievents.NewToolCallStartEvent("call-1", "calc", aguievents.WithParentMessageID("assistant-mid")),
+				aguievents.NewToolCallEndEvent("call-1"),
+				aguievents.NewToolCallResultEvent("tool-msg-1", "call-1", "r"),
+				aguievents.NewToolCallResultEvent("tool-msg-2", "call-1", "r-dup"),
+			),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msgs, err := Reduce(testAppName, testUserID, combineEvents(lead, tt.middle, tail))
+			require.NoError(t, err)
+			ids := make([]string, 0, len(msgs))
+			for _, m := range msgs {
+				ids = append(ids, m.ID)
+			}
+			// History before and after the unpaired result is preserved.
+			assert.Contains(t, ids, "user-1")
+			assert.Contains(t, ids, "assistant-1")
+			// A duplicate result must not be emitted a second time.
+			assert.NotContains(t, ids, "tool-msg-2")
 		})
 	}
 }
