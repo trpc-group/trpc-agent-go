@@ -43,20 +43,7 @@ const (
 	AttrOutputMessages AttributeKey = semconvtrace.KeyGenAIOutputMessages
 	// AttrOutputMessagesOTel is the OTel output messages attribute key.
 	AttrOutputMessagesOTel AttributeKey = semconvtrace.KeyGenAIOutputMessagesOTel
-	// AttrToolDefinitions is the tool definitions attribute key.
-	AttrToolDefinitions AttributeKey = semconvtrace.KeyGenAIRequestToolDefinitions
-	// AttrWorkflowRequest is the workflow request attribute key.
-	AttrWorkflowRequest AttributeKey = semconvtrace.KeyGenAIWorkflowRequest
-	// AttrWorkflowResponse is the workflow response attribute key.
-	AttrWorkflowResponse AttributeKey = semconvtrace.KeyGenAIWorkflowResponse
-	// AttrToolCallArguments is the tool call arguments attribute key.
-	AttrToolCallArguments AttributeKey = semconvtrace.KeyGenAIToolCallArguments
-	// AttrToolCallResult is the tool call result attribute key.
-	AttrToolCallResult AttributeKey = semconvtrace.KeyGenAIToolCallResult
 )
-
-// AttributeEnvelope is the JSON shape written for omitted or truncated attribute values.
-type AttributeEnvelope = itelemetry.AttributeEnvelope
 
 // SpanAttributePolicy controls production-side span attribute behavior.
 // Zero value preserves current behavior.
@@ -87,9 +74,9 @@ func WithSpanAttributePolicy(opts ...AttributePolicyOption) Option {
 	}
 }
 
-// WithAttributePolicy registers a rule for operation/key.
+// WithAttributeRule registers a rule for operation/key.
 // Later rules override earlier rules for the same operation/key pair.
-func WithAttributePolicy(op SpanOperation, key AttributeKey, opts ...AttributeOption) AttributePolicyOption {
+func WithAttributeRule(op SpanOperation, key AttributeKey, opts ...AttributeOption) AttributePolicyOption {
 	return func(p *SpanAttributePolicy) {
 		rule := attributeRule{
 			operation: op,
@@ -111,7 +98,8 @@ func Drop() AttributeOption {
 }
 
 // Omit writes an omitted envelope without original content.
-// Combine with MaxBytes to inline values within the limit and omit when exceeded.
+// Without MaxBytes, marshal is skipped. With MaxBytes, JSON-backed payloads are
+// still fully marshaled to compare size; only raw []byte paths can omit without marshal.
 func Omit() AttributeOption {
 	return func(r *attributeRule) {
 		r.action = itelemetry.AttributeOmit
@@ -139,11 +127,6 @@ func SetSpanAttributePolicy(policy SpanAttributePolicy) {
 	itelemetry.SetSpanAttributePolicy(toInternalSpanAttributePolicy(policy))
 }
 
-// GetSpanAttributePolicy returns the currently installed span attribute policy.
-func GetSpanAttributePolicy() SpanAttributePolicy {
-	return fromInternalSpanAttributePolicy(itelemetry.CurrentSpanAttributePolicy())
-}
-
 func (o *options) ensureSpanAttributePolicy() {
 	if o.spanAttributePolicy == nil {
 		o.spanAttributePolicy = &SpanAttributePolicy{}
@@ -162,23 +145,6 @@ func toInternalSpanAttributePolicy(policy SpanAttributePolicy) itelemetry.SpanAt
 			Action:    r.action,
 			MaxBytes:  r.maxBytes,
 		})
-	}
-	return out
-}
-
-func fromInternalSpanAttributePolicy(policy itelemetry.SpanAttributePolicy) SpanAttributePolicy {
-	rules := policy.Rules()
-	if len(rules) == 0 {
-		return SpanAttributePolicy{}
-	}
-	out := SpanAttributePolicy{rules: make([]attributeRule, len(rules))}
-	for i, r := range rules {
-		out.rules[i] = attributeRule{
-			operation: SpanOperation(r.Operation),
-			key:       AttributeKey(r.Key),
-			action:    r.Action,
-			maxBytes:  r.MaxBytes,
-		}
 	}
 	return out
 }

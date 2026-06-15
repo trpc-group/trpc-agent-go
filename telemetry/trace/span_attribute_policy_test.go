@@ -16,11 +16,11 @@ import (
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 )
 
-func TestWithAttributePolicy_BuildsRule(t *testing.T) {
+func TestWithAttributeRule_BuildsRule(t *testing.T) {
 	opts := &options{}
 	WithSpanAttributePolicy(
-		WithAttributePolicy(OperationChat, AttrInputMessagesOTel, Drop()),
-		WithAttributePolicy(OperationWorkflow, AttrWorkflowRequest, Truncate(1024)),
+		WithAttributeRule(OperationChat, AttrInputMessagesOTel, Drop()),
+		WithAttributeRule(OperationWorkflow, AttributeKey(semconvtrace.KeyGenAIWorkflowRequest), Truncate(1024)),
 	)(opts)
 	if opts.spanAttributePolicy == nil {
 		t.Fatal("expected span attribute policy")
@@ -34,23 +34,10 @@ func TestSetSpanAttributePolicy_FromDropRule(t *testing.T) {
 	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
 
 	policy := SpanAttributePolicy{}
-	WithAttributePolicy(OperationChat, AttrInputMessagesOTel, Drop())(&policy)
+	WithAttributeRule(OperationChat, AttrInputMessagesOTel, Drop())(&policy)
 	SetSpanAttributePolicy(policy)
 	if itelemetry.Resolve(itelemetry.OperationChat, semconvtrace.KeyGenAIInputMessagesOTel).Action != itelemetry.AttributeDrop {
 		t.Fatal("expected drop rule to be installed")
-	}
-}
-
-func TestGetSpanAttributePolicy_RoundTrip(t *testing.T) {
-	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
-
-	want := SpanAttributePolicy{}
-	WithAttributePolicy(OperationInvokeAgent, AttrOutputMessages, Omit())(&want)
-	WithAttributePolicy(OperationInvokeAgent, AttrOutputMessages, MaxBytes(4096))(&want)
-	SetSpanAttributePolicy(want)
-	got := GetSpanAttributePolicy()
-	if len(got.rules) != 2 {
-		t.Fatalf("expected 2 rules, got %d", len(got.rules))
 	}
 }
 
@@ -69,7 +56,7 @@ func TestStart_WithSpanAttributePolicy(t *testing.T) {
 	clean, err := Start(ctx,
 		WithEndpoint("localhost:4317"),
 		WithSpanAttributePolicy(
-			WithAttributePolicy(OperationChat, AttrInputMessagesOTel, Drop()),
+			WithAttributeRule(OperationChat, AttrInputMessagesOTel, Drop()),
 		),
 	)
 	if err != nil {
@@ -96,7 +83,7 @@ func TestStart_FailedInitDoesNotInstallPolicy(t *testing.T) {
 		WithEndpoint("localhost:4318"),
 		WithEndpointURL("http:///bad"),
 		WithSpanAttributePolicy(
-			WithAttributePolicy(OperationChat, AttrInputMessagesOTel, Drop()),
+			WithAttributeRule(OperationChat, AttrInputMessagesOTel, Drop()),
 		),
 	)
 	if clean != nil {

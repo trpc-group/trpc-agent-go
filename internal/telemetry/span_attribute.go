@@ -18,13 +18,14 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// AttributeEnvelope is the JSON shape for omitted or truncated span attribute values.
-type AttributeEnvelope struct {
+// attributeEnvelope is the JSON shape for omitted or truncated span attribute values.
+type attributeEnvelope struct {
 	Truncated     bool   `json:"truncated,omitempty"`
 	Omitted       bool   `json:"omitted,omitempty"`
+	// Prefix is a UTF-8-safe byte-prefix of the original serialized value, not necessarily valid JSON.
 	Prefix        string `json:"prefix,omitempty"`
-	SHA256        string `json:"sha256"`
-	OriginalBytes int64  `json:"original_bytes"`
+	SHA256        string `json:"sha256,omitempty"`
+	OriginalBytes int64  `json:"original_bytes,omitempty"`
 }
 
 // appendStringAttribute adds a marshaled string attribute according to span attribute policy.
@@ -117,7 +118,7 @@ func unconditionalOmitEnvelope() string {
 
 func overflowOmitEnvelope(bts []byte) (string, bool) {
 	sum := sha256.Sum256(bts)
-	envelope := AttributeEnvelope{
+	envelope := attributeEnvelope{
 		Omitted:       true,
 		SHA256:        hex.EncodeToString(sum[:]),
 		OriginalBytes: int64(len(bts)),
@@ -131,7 +132,7 @@ func overflowOmitEnvelope(bts []byte) (string, bool) {
 
 func overflowTruncateEnvelope(bts []byte, limit int64) (string, bool) {
 	sum := sha256.Sum256(bts)
-	envelope := AttributeEnvelope{
+	envelope := attributeEnvelope{
 		Truncated:     true,
 		Prefix:        utf8SafePrefix(bts, int(limit)),
 		SHA256:        hex.EncodeToString(sum[:]),

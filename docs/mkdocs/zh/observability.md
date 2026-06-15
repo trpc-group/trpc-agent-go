@@ -270,8 +270,10 @@ Agent Request
 
 ### 两种能力
 
-1. **采集控制（降 marshal 堆峰值）**：`Drop()`、`Omit()`，以及 `MaxBytes(n)` + `Omit()`（阈值内全文，超限写 omit envelope）。这些路径在可能时**避免** `json.Marshal`。
-2. **导出限长（不降 marshal 峰值）**：`Truncate(n)` 仍会完整 marshal，仅在写入 span 时截断并附带 SHA256 指纹。
+1. **采集控制（降 marshal 堆峰值）**：仅 `Drop()` 与**无条件** `Omit()`（未设置 `MaxBytes`）会在 `json.Marshal` 之前短路。
+2. **导出体积控制（通常不降 marshal 堆峰值）**：
+   - `MaxBytes(n)` + `Omit()`：阈值内全文，超限写 omit envelope；对 chat/workflow/invoke 等 **JSON 序列化路径仍需完整 marshal** 才能判断长度，**不降低 marshal 堆峰值**，仅限制最终写入 span 的 attribute 大小。对已是 `[]byte` 的路径（如 tool arguments）可按长度判断，无需额外 marshal。
+   - `Truncate(n)`：始终完整 marshal，仅在写入 span 时截断并附带 SHA256 指纹。
 
 减少堆内存时，优先 **Drop 冗余 attribute**（例如同时存在的 `*.otel` 与 legacy messages）。
 
@@ -286,19 +288,19 @@ import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 clean, err := atrace.Start(ctx,
     atrace.WithSpanAttributePolicy(
-        atrace.WithAttributePolicy(atrace.OperationChat, atrace.AttrInputMessagesOTel, atrace.Drop()),
-        atrace.WithAttributePolicy(atrace.OperationChat, atrace.AttrOutputMessagesOTel, atrace.Drop()),
-        atrace.WithAttributePolicy(atrace.OperationInvokeAgent, atrace.AttrInputMessagesOTel, atrace.Drop()),
+        atrace.WithAttributeRule(atrace.OperationChat, atrace.AttrInputMessagesOTel, atrace.Drop()),
+        atrace.WithAttributeRule(atrace.OperationChat, atrace.AttrOutputMessagesOTel, atrace.Drop()),
+        atrace.WithAttributeRule(atrace.OperationInvokeAgent, atrace.AttrInputMessagesOTel, atrace.Drop()),
     ),
 )
 ```
 
 未调用 `trace.Start` 时，可在首次 LLM 调用前使用 `atrace.SetSpanAttributePolicy(...)`。`trace.Start` 在 tracer 初始化**成功**后安装 policy，`clean()` 会恢复之前的 policy。
 
-`MaxBytes` + `Omit()` 示例（小 payload 保留全文，大 payload 省略正文）：
+`MaxBytes` + `Omit()` 示例（限制 attribute 体积；JSON 路径仍会 marshal）：
 
 ```go
-atrace.WithAttributePolicy(atrace.OperationWorkflow, atrace.AttrWorkflowRequest,
+atrace.WithAttributeRule(atrace.OperationWorkflow, atrace.AttributeKey("gen_ai.workflow.request"),
     atrace.MaxBytes(16<<10), atrace.Omit(),
 )
 ```
@@ -306,7 +308,7 @@ atrace.WithAttributePolicy(atrace.OperationWorkflow, atrace.AttrWorkflowRequest,
 `Truncate` 示例（接受完整 marshal，仅限制导出体积）：
 
 ```go
-atrace.WithAttributePolicy(atrace.OperationWorkflow, atrace.AttrWorkflowResponse, atrace.Truncate(64<<10))
+atrace.WithAttributeRule(atrace.OperationWorkflow, atrace.AttributeKey("gen_ai.workflow.response"), atrace.Truncate(64<<10))
 ```
 
 ### 兼容性说明

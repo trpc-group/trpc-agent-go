@@ -107,7 +107,7 @@ func TestSetBytesAttribute_MaxBytesOmitOverLimitSkipsMarshal(t *testing.T) {
 	if !ok {
 		t.Fatal("expected omitted attribute")
 	}
-	var envelope AttributeEnvelope
+	var envelope attributeEnvelope
 	if err := json.Unmarshal([]byte(got), &envelope); err != nil {
 		t.Fatalf("unmarshal envelope: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestFormatAttributeValue_Truncate(t *testing.T) {
 	if !ok {
 		t.Fatal("expected truncated value")
 	}
-	var envelope AttributeEnvelope
+	var envelope attributeEnvelope
 	if err := json.Unmarshal([]byte(got), &envelope); err != nil {
 		t.Fatalf("unmarshal envelope: %v", err)
 	}
@@ -146,12 +146,25 @@ func TestFormatAttributeValue_OmitOverLimit(t *testing.T) {
 	if !ok {
 		t.Fatal("expected omitted value")
 	}
-	var envelope AttributeEnvelope
+	var envelope attributeEnvelope
 	if err := json.Unmarshal([]byte(got), &envelope); err != nil {
 		t.Fatalf("unmarshal envelope: %v", err)
 	}
 	if !envelope.Omitted || envelope.Truncated || envelope.Prefix != "" {
 		t.Fatalf("expected omitted envelope, got %+v", envelope)
+	}
+	if envelope.SHA256 == "" || envelope.OriginalBytes == 0 {
+		t.Fatal("expected sha256 and original_bytes for omit-over-limit envelope")
+	}
+}
+
+func TestAttributeEnvelope_OmittedOmitemptyFields(t *testing.T) {
+	out, err := json.Marshal(attributeEnvelope{Omitted: true})
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	if string(out) != `{"omitted":true}` {
+		t.Fatalf("expected omitted-only JSON, got %s", out)
 	}
 }
 
@@ -216,7 +229,7 @@ func TestBuildRequestAttributes_TruncateEnvelope(t *testing.T) {
 	if !ok {
 		t.Fatal("expected input messages attribute")
 	}
-	var envelope AttributeEnvelope
+	var envelope attributeEnvelope
 	if err := json.Unmarshal([]byte(got), &envelope); err != nil {
 		t.Fatalf("expected truncated envelope, got %q: %v", got, err)
 	}
@@ -231,7 +244,7 @@ func TestFormatAttributeValue_UTF8SafePrefix(t *testing.T) {
 	if !ok {
 		t.Fatal("expected truncated value")
 	}
-	var envelope AttributeEnvelope
+	var envelope attributeEnvelope
 	if err := json.Unmarshal([]byte(got), &envelope); err != nil {
 		t.Fatalf("unmarshal envelope: %v", err)
 	}
