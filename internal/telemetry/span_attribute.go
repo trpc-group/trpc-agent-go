@@ -20,8 +20,8 @@ import (
 
 // attributeEnvelope is the JSON shape for omitted or truncated span attribute values.
 type attributeEnvelope struct {
-	Truncated     bool   `json:"truncated,omitempty"`
-	Omitted       bool   `json:"omitted,omitempty"`
+	Truncated bool `json:"truncated,omitempty"`
+	Omitted   bool `json:"omitted,omitempty"`
 	// Prefix is a UTF-8-safe byte-prefix of the original serialized value, not necessarily valid JSON.
 	Prefix        string `json:"prefix,omitempty"`
 	SHA256        string `json:"sha256,omitempty"`
