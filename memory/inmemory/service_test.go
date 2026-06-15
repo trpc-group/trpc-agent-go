@@ -34,6 +34,183 @@ func TestNewMemoryService(t *testing.T) {
 	require.NotNil(t, service, "NewMemoryService should not return nil")
 }
 
+func TestMemoryService_Associations_IndexSearchExpandLoad(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	require.NoError(t, service.IndexAssociations(ctx, memory.IndexAssociationsRequest{
+		UserKey: userKey,
+		Documents: []memory.AssociationDocument{
+			{
+				Text: "Alice booked a Kyoto hiking trip with the user.",
+				Cues: []string{"Kyoto hiking", "Alice"},
+				Tags: []string{"travel", "plan"},
+				Ref: memory.ContentRef{
+					Kind:      memory.RefKindSessionEvent,
+					SessionID: "session-1",
+					EventID:   "event-1",
+					TurnID:    "answer_1",
+				},
+				Metadata: memory.AssociationMetadata{
+					Topics:       []string{"travel"},
+					Participants: []string{"Alice"},
+					Location:     "Kyoto",
+				},
+			},
+		},
+	}))
+
+	cues, err := service.SearchCues(ctx, memory.CueSearchRequest{
+		UserKey:    userKey,
+		Query:      "kyoto",
+		MaxResults: 5,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, cues.Cues)
+	assert.Equal(t, "kyoto hiking", cues.Cues[0].Text)
+
+	expanded, err := service.ExpandTags(ctx, memory.TagExpandRequest{
+		UserKey:        userKey,
+		CueIDs:         []string{cues.Cues[0].ID},
+		MaxTagsPerCue:  10,
+		MaxContents:    10,
+		IncludeContent: true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, expanded.Paths)
+	require.NotNil(t, expanded.Paths[0].Content)
+	assert.Equal(t, "answer_1", expanded.Paths[0].Content.Ref.TurnID)
+
+	loaded, err := service.LoadContents(ctx, memory.ContentLoadRequest{
+		UserKey: userKey,
+		Refs: []memory.ContentRef{
+			{
+				Kind:      memory.RefKindSessionEvent,
+				SessionID: "session-1",
+				EventID:   "event-1",
+				TurnID:    "answer_1",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, loaded.Contents, 1)
+	assert.Contains(t, loaded.Contents[0].Text, "Kyoto hiking")
+}
+
+func TestMemoryService_Associations_ReindexReplacesContentEdges(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+	ref := memory.ContentRef{
+		Kind:      memory.RefKindSessionEvent,
+		SessionID: "session-1",
+		EventID:   "event-1",
+		TurnID:    "answer_1",
+	}
+
+	require.NoError(t, service.IndexAssociations(ctx, memory.IndexAssociationsRequest{
+		UserKey: userKey,
+		Documents: []memory.AssociationDocument{
+			{
+				Text: "The user liked coffee.",
+				Cues: []string{"coffee"},
+				Tags: []string{"preference"},
+				Ref:  ref,
+			},
+		},
+	}))
+	require.NoError(t, service.IndexAssociations(ctx, memory.IndexAssociationsRequest{
+		UserKey: userKey,
+		Documents: []memory.AssociationDocument{
+			{
+				Text: "The user switched to tea.",
+				Cues: []string{"tea"},
+				Tags: []string{"preference"},
+				Ref:  ref,
+			},
+		},
+	}))
+
+	oldCues, err := service.SearchCues(ctx, memory.CueSearchRequest{
+		UserKey: userKey,
+		Query:   "coffee",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, oldCues.Cues)
+
+	newCues, err := service.SearchCues(ctx, memory.CueSearchRequest{
+		UserKey: userKey,
+		Query:   "tea",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, newCues.Cues)
+	newPaths, err := service.ExpandTags(ctx, memory.TagExpandRequest{
+		UserKey:        userKey,
+		CueIDs:         []string{newCues.Cues[0].ID},
+		IncludeContent: true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, newPaths.Paths)
+	require.NotNil(t, newPaths.Paths[0].Content)
+	assert.Contains(t, newPaths.Paths[0].Content.Text, "tea")
+}
+
+func TestMemoryService_Associations_InferredCuesAvoidWeakTokens(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+
+	require.NoError(t, service.IndexAssociations(ctx, memory.IndexAssociationsRequest{
+		UserKey: userKey,
+		Documents: []memory.AssociationDocument{
+			{
+				Text: "[SessionDate: 2023/05/30 (Tue) 17:27] " +
+					"I graduated with a degree in Business Administration.",
+				Ref: memory.ContentRef{
+					Kind:      memory.RefKindSessionEvent,
+					SessionID: "seed-answer_280352e9",
+					EventID:   "answer_280352e9_5",
+					TurnID:    "answer_280352e9_5",
+				},
+			},
+		},
+		Replace: true,
+	}))
+
+	degree, err := service.SearchCues(ctx, memory.CueSearchRequest{
+		UserKey: userKey,
+		Query:   "what degree did I graduate with",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, degree.Cues)
+	assert.Contains(t, degree.Cues[0].Text, "degree")
+
+	weak, err := service.SearchCues(ctx, memory.CueSearchRequest{
+		UserKey: userKey,
+		Query:   "time",
+	})
+	require.NoError(t, err)
+	for _, cue := range weak.Cues {
+		assert.NotEqual(t, "me", cue.Text)
+		assert.NotEqual(t, "it", cue.Text)
+		assert.NotEqual(t, "re", cue.Text)
+	}
+}
+
+func TestScoreAssociationText_TokenAndPhraseScoring(t *testing.T) {
+	assert.Zero(t, scoreAssociationText("me", "time"))
+	assert.Zero(t, scoreAssociationText("it", "with"))
+	assert.Greater(t, scoreAssociationText("graduated degree", "what degree did I graduate with"), 0.8)
+	assert.Greater(t, scoreAssociationText("daily commute", "daily commute duration"), 0.8)
+}
+
 func TestMemoryService_AddMemory(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()

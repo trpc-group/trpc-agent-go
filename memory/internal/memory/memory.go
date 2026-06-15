@@ -187,15 +187,45 @@ func metadataIdentityLocation(mem *memory.Memory) string {
 	return strings.TrimSpace(mem.Location)
 }
 
-// AllToolCreators contains creators for all valid memory tools.
-// This is shared between different memory service implementations.
-var AllToolCreators = map[string]memory.ToolCreator{
+// DefaultToolCreators contains creators for core memory tools.
+// This is shared between memory service implementations that only support the
+// base memory.Service contract.
+var DefaultToolCreators = map[string]memory.ToolCreator{
 	memory.AddToolName:    func() tool.Tool { return memorytool.NewAddTool() },
 	memory.UpdateToolName: func() tool.Tool { return memorytool.NewUpdateTool() },
 	memory.SearchToolName: func() tool.Tool { return memorytool.NewSearchTool() },
 	memory.LoadToolName:   func() tool.Tool { return memorytool.NewLoadTool() },
 	memory.DeleteToolName: func() tool.Tool { return memorytool.NewDeleteTool() },
 	memory.ClearToolName:  func() tool.Tool { return memorytool.NewClearTool() },
+}
+
+// AssociativeToolCreators contains creators for optional cue-tag-content
+// memory tools. Only services implementing memory.AssociativeService should
+// expose these creators by default.
+var AssociativeToolCreators = map[string]memory.ToolCreator{
+	memory.CueSearchToolName: func() tool.Tool {
+		return memorytool.NewCueSearchTool()
+	},
+	memory.TagExpandToolName: func() tool.Tool {
+		return memorytool.NewTagExpandTool()
+	},
+	memory.ContentLoadToolName: func() tool.Tool {
+		return memorytool.NewContentLoadTool()
+	},
+}
+
+// AllToolCreators contains creators for all valid memory tools.
+var AllToolCreators = MergeToolCreators(DefaultToolCreators, AssociativeToolCreators)
+
+// MergeToolCreators returns a merged copy of tool creator maps.
+func MergeToolCreators(maps ...map[string]memory.ToolCreator) map[string]memory.ToolCreator {
+	out := make(map[string]memory.ToolCreator)
+	for _, creators := range maps {
+		for name, creator := range creators {
+			out[name] = creator
+		}
+	}
+	return out
 }
 
 // DefaultEnabledTools are the tool names that are enabled by default.
@@ -209,12 +239,15 @@ var DefaultEnabledTools = map[string]struct{}{
 
 // validToolNames contains all valid memory tool names.
 var validToolNames = map[string]struct{}{
-	memory.AddToolName:    {},
-	memory.UpdateToolName: {},
-	memory.DeleteToolName: {},
-	memory.ClearToolName:  {},
-	memory.SearchToolName: {},
-	memory.LoadToolName:   {},
+	memory.AddToolName:         {},
+	memory.UpdateToolName:      {},
+	memory.DeleteToolName:      {},
+	memory.ClearToolName:       {},
+	memory.SearchToolName:      {},
+	memory.LoadToolName:        {},
+	memory.CueSearchToolName:   {},
+	memory.TagExpandToolName:   {},
+	memory.ContentLoadToolName: {},
 }
 
 // IsValidToolName checks if the given tool name is valid.

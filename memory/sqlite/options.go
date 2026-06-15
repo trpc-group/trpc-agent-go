@@ -29,7 +29,7 @@ var defaultOptions = ServiceOpts{
 	memoryLimit:      imemory.DefaultMemoryLimit,
 	searchMinScore:   imemory.DefaultSearchMinScore,
 	maxSearchResults: imemory.DefaultMaxSearchResults,
-	toolCreators:     imemory.AllToolCreators,
+	toolCreators:     imemory.DefaultToolCreators,
 	enabledTools:     imemory.DefaultEnabledTools,
 	asyncMemoryNum:   imemory.DefaultAsyncMemoryNum,
 	memoryQueueSize:  imemory.DefaultMemoryQueueSize,

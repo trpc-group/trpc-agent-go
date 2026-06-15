@@ -357,6 +357,21 @@ func TestService_Tools_EnqueueAutoMemoryJob(t *testing.T) {
 	require.NoError(t, svc.EnqueueAutoMemoryJob(context.Background(), nil))
 }
 
+func TestService_Tools_AssociativeToolNotExposedWithoutCreator(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db, WithToolEnabled(memory.CueSearchToolName, true))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	for _, tl := range svc.Tools() {
+		require.NotEqual(t, memory.CueSearchToolName, tl.Declaration().Name)
+		require.NotEqual(t, memory.TagExpandToolName, tl.Declaration().Name)
+		require.NotEqual(t, memory.ContentLoadToolName, tl.Declaration().Name)
+	}
+}
+
 func TestWithTableName_InvalidPanics(t *testing.T) {
 	require.Panics(t, func() {
 		opt := WithTableName("bad-name")

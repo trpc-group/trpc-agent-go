@@ -35,6 +35,9 @@ func TestAllToolCreators(t *testing.T) {
 		memory.LoadToolName,
 		memory.DeleteToolName,
 		memory.ClearToolName,
+		memory.CueSearchToolName,
+		memory.TagExpandToolName,
+		memory.ContentLoadToolName,
 	}
 
 	for _, toolName := range expectedTools {
@@ -75,6 +78,9 @@ func TestDefaultEnabledTools(t *testing.T) {
 	// Verify that delete and clear tools are not included.
 	assert.NotContains(t, DefaultEnabledTools, memory.DeleteToolName)
 	assert.NotContains(t, DefaultEnabledTools, memory.ClearToolName)
+	assert.NotContains(t, DefaultEnabledTools, memory.CueSearchToolName)
+	assert.NotContains(t, DefaultEnabledTools, memory.TagExpandToolName)
+	assert.NotContains(t, DefaultEnabledTools, memory.ContentLoadToolName)
 
 	// Verify no extra tools are in the map.
 	assert.Len(t, DefaultEnabledTools, len(expectedTools), "DefaultEnabledTools should contain exactly the expected tools")
@@ -92,6 +98,9 @@ func TestIsValidToolName(t *testing.T) {
 		{"valid clear tool", memory.ClearToolName, true},
 		{"valid search tool", memory.SearchToolName, true},
 		{"valid load tool", memory.LoadToolName, true},
+		{"valid cue search tool", memory.CueSearchToolName, true},
+		{"valid tag expand tool", memory.TagExpandToolName, true},
+		{"valid content load tool", memory.ContentLoadToolName, true},
 		{"invalid tool", "invalid_tool", false},
 		{"empty tool name", "", false},
 		{"case sensitive", "ADD_MEMORY", false},

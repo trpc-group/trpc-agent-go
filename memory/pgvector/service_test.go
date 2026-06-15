@@ -675,6 +675,179 @@ func setupMockService(
 	return svc
 }
 
+func TestService_Associations_LoadContentsByRef(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+	svc.associationInited = true
+
+	var _ memory.AssociativeService = svc
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+	now := time.Now()
+	mock.ExpectQuery("SELECT content_id, app_name, user_id, content_text, ref_kind, session_id, event_id, turn_id, source_id, metadata, created_at, updated_at FROM memories_association_contents").
+		WithArgs(
+			userKey.AppName,
+			userKey.UserID,
+			string(memory.RefKindSessionEvent),
+			"session-1",
+			"event-1",
+			"answer_1",
+			"",
+		).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"content_id", "app_name", "user_id", "content_text", "ref_kind", "session_id", "event_id",
+			"turn_id", "source_id", "metadata", "created_at", "updated_at",
+		}).AddRow(
+			"content-1",
+			userKey.AppName,
+			userKey.UserID,
+			"Alice booked a Kyoto hiking trip.",
+			string(memory.RefKindSessionEvent),
+			"session-1",
+			"event-1",
+			"answer_1",
+			nil,
+			[]byte(`{"topics":["travel"]}`),
+			now,
+			now,
+		))
+
+	loaded, err := svc.LoadContents(ctx, memory.ContentLoadRequest{
+		UserKey: userKey,
+		Refs: []memory.ContentRef{
+			{
+				Kind:      memory.RefKindSessionEvent,
+				SessionID: "session-1",
+				EventID:   "event-1",
+				TurnID:    "answer_1",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, loaded.Contents, 1)
+	assert.Equal(t, "content-1", loaded.Contents[0].ID)
+	assert.Equal(t, userKey.AppName, loaded.Contents[0].Ref.AppName)
+	assert.Equal(t, userKey.UserID, loaded.Contents[0].Ref.UserID)
+	assert.Equal(t, "answer_1", loaded.Contents[0].Ref.TurnID)
+	assert.Equal(t, []string{"travel"}, loaded.Contents[0].Metadata.Topics)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_Associations_SearchUsesPrecreatedTablesWithoutDDL(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	for range []string{
+		svc.associationTables.cues,
+		svc.associationTables.tags,
+		svc.associationTables.contents,
+	} {
+		mock.ExpectQuery("SELECT to_regclass").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	}
+	mock.ExpectQuery("SELECT c.cue_id, c.cue_text FROM memories_association_cues c").
+		WithArgs("test-app", "test-user", sqlmock.AnyArg(), "%kyoto%", "kyoto").
+		WillReturnRows(sqlmock.NewRows([]string{"cue_id", "cue_text"}).
+			AddRow("cue-1", "kyoto"))
+
+	result, err := svc.SearchCues(context.Background(), memory.CueSearchRequest{
+		UserKey: memory.UserKey{AppName: "test-app", UserID: "test-user"},
+		Query:   "kyoto",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Cues, 1)
+	assert.Equal(t, "cue-1", result.Cues[0].ID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAssociations_ScoreAvoidsWeakSubstringMatches(t *testing.T) {
+	assert.Zero(t, scoreAssociationText("me", "time"))
+	assert.Zero(t, scoreAssociationText("it", "with"))
+	assert.Greater(t, scoreAssociationText("graduated degree", "what degree did I graduate with"), 0.8)
+	assert.Greater(t, scoreAssociationText("daily commute", "daily commute duration"), 0.8)
+}
+
+func TestService_Associations_IndexUsesScopedContentConflict(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+	svc.associationInited = true
+
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	ref := memory.ContentRef{
+		Kind:      memory.RefKindSessionEvent,
+		SessionID: "session-1",
+		EventID:   "event-1",
+		TurnID:    "turn-1",
+	}
+	emptyContentRows := sqlmock.NewRows([]string{
+		"content_id", "app_name", "user_id", "content_text", "ref_kind",
+		"session_id", "event_id", "turn_id", "source_id", "metadata",
+		"created_at", "updated_at",
+	})
+	mock.ExpectQuery("SELECT content_id, app_name, user_id, content_text").
+		WithArgs(userKey.AppName, userKey.UserID, string(ref.Kind),
+			ref.SessionID, ref.EventID, ref.TurnID, "").
+		WillReturnRows(emptyContentRows)
+	mock.ExpectExec("DELETE FROM memories_association_tags").
+		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DELETE FROM memories_association_contents").
+		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DELETE FROM memories_association_cues c").
+		WithArgs(userKey.AppName, userKey.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO memories_association_contents .*ON CONFLICT \\(app_name, user_id, content_id\\)").
+		WithArgs(
+			sqlmock.AnyArg(),
+			userKey.AppName,
+			userKey.UserID,
+			"Alice booked Kyoto hiking.",
+			string(ref.Kind),
+			ref.SessionID,
+			ref.EventID,
+			ref.TurnID,
+			nil,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO memories_association_cues").
+		WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, "kyoto", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO memories_association_tags .*ON CONFLICT \\(app_name, user_id, cue_id, content_id, tag_text\\)").
+		WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, "travel", sqlmock.AnyArg(), sqlmock.AnyArg(), 1.0, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.IndexAssociations(context.Background(), memory.IndexAssociationsRequest{
+		UserKey: userKey,
+		Documents: []memory.AssociationDocument{
+			{
+				ID:   "shared-content-id",
+				Text: "Alice booked Kyoto hiking.",
+				Cues: []string{"kyoto"},
+				Tags: []string{"travel"},
+				Ref:  ref,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestService_AddMemory(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()

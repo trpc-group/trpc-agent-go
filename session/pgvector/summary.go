@@ -206,7 +206,7 @@ func (s *Service) GetSessionSummaryText(
 			WHERE app_name = $1 AND user_id = $2
 			AND session_id = $3 AND filter_key = $4
 			AND (expires_at IS NULL
-				OR expires_at > NOW() AT TIME ZONE 'localtime')
+				OR expires_at > LOCALTIMESTAMP)
 			AND updated_at >= $5
 			AND deleted_at IS NULL`,
 			s.tableSessionSummaries,
@@ -251,7 +251,7 @@ func (s *Service) GetSessionSummaryText(
 				AND session_id = $3
 				AND filter_key = $4
 				AND (expires_at IS NULL
-					OR expires_at > NOW() AT TIME ZONE 'localtime')
+					OR expires_at > LOCALTIMESTAMP)
 				AND updated_at >= $5
 				AND deleted_at IS NULL`,
 				s.tableSessionSummaries,

@@ -36,7 +36,7 @@ var defaultOptions = ServiceOpts{
 	maxResults:     defaultMaxResults,
 
 	memoryLimit:      imemory.DefaultMemoryLimit,
-	toolCreators:     imemory.AllToolCreators,
+	toolCreators:     imemory.DefaultToolCreators,
 	enabledTools:     imemory.DefaultEnabledTools,
 	asyncMemoryNum:   imemory.DefaultAsyncMemoryNum,
 	memoryQueueSize:  imemory.DefaultMemoryQueueSize,

@@ -25,6 +25,7 @@ import (
 )
 
 var _ memory.Service = (*MemoryService)(nil)
+var _ memory.AssociativeService = (*MemoryService)(nil)
 
 // appMemories represents memories for a specific app.
 type appMemories struct {
@@ -53,6 +54,8 @@ type MemoryService struct {
 	precomputedTools []tool.Tool
 	// autoMemoryWorker handles async memory extraction.
 	autoMemoryWorker *imemory.AutoMemoryWorker
+	// associations stores cue-tag-content associations.
+	associations *associationStore
 }
 
 // NewMemoryService creates a new in-memory memory service.
@@ -70,9 +73,10 @@ func NewMemoryService(options ...ServiceOpt) *MemoryService {
 	}
 
 	svc := &MemoryService{
-		apps:        make(map[string]*appMemories),
-		opts:        opts,
-		cachedTools: make(map[string]tool.Tool),
+		apps:         make(map[string]*appMemories),
+		opts:         opts,
+		cachedTools:  make(map[string]tool.Tool),
+		associations: newAssociationStore(),
 	}
 
 	// Pre-compute tools list to avoid lock contention in Tools() method.

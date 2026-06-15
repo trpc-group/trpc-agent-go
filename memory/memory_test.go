@@ -10,13 +10,40 @@
 package memory
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+func TestAssociativeService_IsIndependentFromService(t *testing.T) {
+	var _ AssociativeService = (*mockAssociativeService)(nil)
+	var _ Service = (*mockMemoryService)(nil)
+}
+
+func TestContentRef_JSONTags(t *testing.T) {
+	ref := ContentRef{
+		Kind:      RefKindSessionEvent,
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "session",
+		EventID:   "event",
+		TurnID:    "turn",
+		SourceID:  "source",
+	}
+
+	data, err := json.Marshal(ref)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"kind":"session_event"`)
+	assert.Contains(t, string(data), `"turn_id":"turn"`)
+}
 
 func TestMemory_JSONTags(t *testing.T) {
 	now := time.Now()
@@ -276,6 +303,9 @@ func TestToolNames(t *testing.T) {
 		ClearToolName,
 		SearchToolName,
 		LoadToolName,
+		CueSearchToolName,
+		TagExpandToolName,
+		ContentLoadToolName,
 	}
 
 	for _, name := range toolNames {
@@ -356,6 +386,43 @@ func TestResolveUpdateResult(t *testing.T) {
 	}))
 }
 
+func TestBuildAssociationDocumentsFromSessionEvents_InferFullCTC(t *testing.T) {
+	now := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	ev := event.Event{
+		ID:        "answer_280352e9_5",
+		Timestamp: now,
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleUser,
+					Content: "[SessionDate: 2023/05/30 (Tue) 17:27] " +
+						"I graduated with a degree in Business Administration, which helped me understand how companies operate.",
+				},
+			}},
+		},
+	}
+
+	docs := BuildAssociationDocumentsFromSessionEvents([]event.Event{ev}, AssociationBuildOptions{
+		CaseID: "case-1",
+		SessionKey: session.Key{
+			AppName:   "app",
+			UserID:    "user",
+			SessionID: "seed-answer_280352e9",
+		},
+		TurnIDs: map[string]string{"answer_280352e9_5": "answer_280352e9_5"},
+	})
+
+	require.Len(t, docs, 1)
+	assert.Contains(t, docs[0].Cues, "graduated degree business administration")
+	assert.Contains(t, docs[0].Cues, "business administration")
+	assert.Contains(t, docs[0].Cues, "degree")
+	assert.NotContains(t, docs[0].Cues, "it")
+	assert.NotContains(t, docs[0].Cues, "with")
+	assert.Contains(t, docs[0].Tags, "education")
+	assert.Equal(t, "answer_280352e9_5", docs[0].Ref.TurnID)
+	assert.Equal(t, now, docs[0].Metadata.EventTime)
+}
+
 func TestResolveSearchOptions(t *testing.T) {
 	t.Run("default query is preserved", func(t *testing.T) {
 		got := ResolveSearchOptions("coffee", nil)
@@ -383,4 +450,103 @@ func TestResolveSearchOptions(t *testing.T) {
 
 		assert.Equal(t, expected, got)
 	})
+}
+
+type mockAssociativeService struct{}
+
+func (m *mockAssociativeService) IndexAssociations(
+	ctx context.Context,
+	req IndexAssociationsRequest,
+) error {
+	return nil
+}
+
+func (m *mockAssociativeService) SearchCues(
+	ctx context.Context,
+	req CueSearchRequest,
+) (*CueSearchResult, error) {
+	return nil, nil
+}
+
+func (m *mockAssociativeService) ExpandTags(
+	ctx context.Context,
+	req TagExpandRequest,
+) (*TagExpandResult, error) {
+	return nil, nil
+}
+
+func (m *mockAssociativeService) LoadContents(
+	ctx context.Context,
+	req ContentLoadRequest,
+) (*ContentLoadResult, error) {
+	return nil, nil
+}
+
+func (m *mockAssociativeService) DeleteAssociations(
+	ctx context.Context,
+	req DeleteAssociationsRequest,
+) error {
+	return nil
+}
+
+type mockMemoryService struct{}
+
+func (m *mockMemoryService) AddMemory(
+	ctx context.Context,
+	userKey UserKey,
+	memory string,
+	topics []string,
+	opts ...AddOption,
+) error {
+	return nil
+}
+
+func (m *mockMemoryService) UpdateMemory(
+	ctx context.Context,
+	memoryKey Key,
+	memory string,
+	topics []string,
+	opts ...UpdateOption,
+) error {
+	return nil
+}
+
+func (m *mockMemoryService) DeleteMemory(ctx context.Context, memoryKey Key) error {
+	return nil
+}
+
+func (m *mockMemoryService) ClearMemories(ctx context.Context, userKey UserKey) error {
+	return nil
+}
+
+func (m *mockMemoryService) ReadMemories(
+	ctx context.Context,
+	userKey UserKey,
+	limit int,
+) ([]*Entry, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryService) SearchMemories(
+	ctx context.Context,
+	userKey UserKey,
+	query string,
+	opts ...SearchOption,
+) ([]*Entry, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryService) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *mockMemoryService) EnqueueAutoMemoryJob(
+	ctx context.Context,
+	sess *session.Session,
+) error {
+	return nil
+}
+
+func (m *mockMemoryService) Close() error {
+	return nil
 }

@@ -121,7 +121,7 @@ func (s *Service) loadWindowAnchor(
 		WHERE se.app_name = $1 AND se.user_id = $2
 		AND se.session_id = $3
 		AND se.deleted_at IS NULL
-		AND (se.expires_at IS NULL OR se.expires_at > NOW() AT TIME ZONE 'localtime')
+		AND (se.expires_at IS NULL OR se.expires_at > LOCALTIMESTAMP)
 		AND se.content_text <> ''
 		AND se.event->>'id' = $4`,
 		s.tableSessionEvents,
@@ -208,7 +208,7 @@ func (s *Service) loadWindowNeighbors(
 		WHERE se.app_name = $1 AND se.user_id = $2
 		AND se.session_id = $3
 		AND se.deleted_at IS NULL
-		AND (se.expires_at IS NULL OR se.expires_at > NOW() AT TIME ZONE 'localtime')
+		AND (se.expires_at IS NULL OR se.expires_at > LOCALTIMESTAMP)
 		AND se.content_text <> ''
 		AND %s`,
 		s.tableSessionEvents,

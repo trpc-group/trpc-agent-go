@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lib/pq"
@@ -29,6 +30,7 @@ import (
 )
 
 var _ memory.Service = (*Service)(nil)
+var _ memory.AssociativeService = (*Service)(nil)
 
 // Service is the pgvector memory service.
 // Storage structure.
@@ -45,6 +47,10 @@ type Service struct {
 	cachedTools      map[string]tool.Tool
 	precomputedTools []tool.Tool
 	autoMemoryWorker *imemory.AutoMemoryWorker
+
+	associationTables associationTables
+	associationInitMu sync.Mutex
+	associationInited bool
 }
 
 // NewService creates a new pgvector memory service.
@@ -96,10 +102,11 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	fullTableName := buildFullTableName(opts.schema, opts.tableName)
 
 	s := &Service{
-		opts:        opts,
-		db:          db,
-		tableName:   fullTableName,
-		cachedTools: make(map[string]tool.Tool),
+		opts:              opts,
+		db:                db,
+		tableName:         fullTableName,
+		cachedTools:       make(map[string]tool.Tool),
+		associationTables: buildAssociationTables(opts.schema, opts.tableName),
 	}
 
 	// Initialize database schema unless skipped.
