@@ -1435,6 +1435,22 @@ func TestRuntimeGatewayRunOptionsEdgeCases(t *testing.T) {
 	require.Nil(t, input.Extensions)
 }
 
+func TestRuntimePostToolPromptOption(t *testing.T) {
+	t.Parallel()
+
+	runtimeOpts := buildRuntimeOptions([]RuntimeOption{
+		WithEnablePostToolPrompt(false),
+	})
+	require.NotNil(t, runtimeOpts.postToolPromptEnabled)
+	require.False(t, *runtimeOpts.postToolPromptEnabled)
+
+	runtimeOpts = buildRuntimeOptions([]RuntimeOption{
+		WithEnablePostToolPrompt(true),
+	})
+	require.NotNil(t, runtimeOpts.postToolPromptEnabled)
+	require.True(t, *runtimeOpts.postToolPromptEnabled)
+}
+
 func TestMain_HelpSkipsErrorLog(t *testing.T) {
 	t.Parallel()
 
@@ -2007,6 +2023,35 @@ func TestNewAgent_OpenClawPostToolPrompt_AppliedWithoutToolResult(
 	system := joinSystemMessages(req)
 	require.Contains(t, system, openClawPostToolPrompt)
 	require.Contains(
+		t,
+		system,
+		"Do not answer only with what you will do next.",
+	)
+}
+
+func TestNewAgent_OpenClawPostToolPrompt_Disabled(t *testing.T) {
+	t.Parallel()
+
+	enabled := false
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:               "demo",
+		SkillsRoot:            root,
+		StateDir:              t.TempDir(),
+		PostToolPromptEnabled: &enabled,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		session.NewSession("demo", "user", "sess"),
+	)
+	system := joinSystemMessages(req)
+	require.NotContains(t, system, openClawPostToolPrompt)
+	require.NotContains(
 		t,
 		system,
 		"Do not answer only with what you will do next.",
