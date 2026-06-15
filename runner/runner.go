@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
@@ -547,6 +548,10 @@ func (r *runner) Run(
 		runnerLatencySpanGetSession,
 		runnerSessionAttrs(sessionKey, nil)...,
 	)
+	sessionCtx = summaryrestore.ContextWithFilterKey(
+		sessionCtx,
+		sessionRestoreFilterKey(effectiveAppName, ro),
+	)
 	sess, err := r.getOrCreateSession(sessionCtx, ro, sessionKey)
 	if sessionStarted && sess != nil {
 		sessionSpan.SetAttributes(runnerSessionAttrs(sessionKey, sess)...)
@@ -741,10 +746,7 @@ func (r *runner) newRunInvocation(
 	awaitUserReplyRootName string,
 	awaitUserReplyLookupPath string,
 ) *agent.Invocation {
-	eventFilterKey := effectiveAppName
-	if ro.EventFilterKey != "" {
-		eventFilterKey = ro.EventFilterKey
-	}
+	eventFilterKey := sessionRestoreFilterKey(effectiveAppName, ro)
 	invocationOpts := []agent.InvocationOptions{
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationSessionService(r.sessionService),
@@ -772,6 +774,13 @@ func (r *runner) newRunInvocation(
 		agent.SetAwaitUserReplyRootLookupName(invocation, rootLookupName)
 	}
 	return invocation
+}
+
+func sessionRestoreFilterKey(effectiveAppName string, ro agent.RunOptions) string {
+	if ro.EventFilterKey != "" {
+		return ro.EventFilterKey
+	}
+	return effectiveAppName
 }
 
 func (r *runner) attachSessionAppender(
