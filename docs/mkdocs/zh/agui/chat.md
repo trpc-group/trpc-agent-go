@@ -702,6 +702,7 @@ server, err := agui.New(
 ```json
 {
   "type": "TOOL_CALL_START",
+  "timestamp": 1781258400000,
   "toolCallId": "tool-call-1",
   "rawEvent": {
     "eventId": "evt-tool-call",
@@ -726,7 +727,8 @@ server, err := agui.New(
         "eventId": "evt-assistant",
         "author": "member-a",
         "invocationId": "inv-1",
-        "branch": "root.member-a"
+        "branch": "root.member-a",
+        "timestamp": 1781258400000
       }
     },
     "toolCalls": {
@@ -734,7 +736,8 @@ server, err := agui.New(
         "eventId": "evt-tool-call",
         "author": "member-a",
         "invocationId": "inv-1",
-        "branch": "root.member-a"
+        "branch": "root.member-a",
+        "timestamp": 1781258401000
       }
     }
   }
