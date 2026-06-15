@@ -801,8 +801,7 @@ func TestValidateValueAgainstSchema_ScalarTypes(t *testing.T) {
 }
 
 func TestValidateValueAgainstSchema_StringPattern(t *testing.T) {
-	schema := &tool.Schema{Type: "string"}
-	schema.SetPattern("^[a-z0-9_-]+$")
+	schema := &tool.Schema{Type: "string", Pattern: "^[a-z0-9_-]+$"}
 
 	ok, reason := validateValueAgainstSchema("user_123", schema, nil, "$.user_id")
 	assert.True(t, ok)
@@ -815,8 +814,7 @@ func TestValidateValueAgainstSchema_StringPattern(t *testing.T) {
 }
 
 func TestValidateValueAgainstSchema_StringPatternMatchesAnywhere(t *testing.T) {
-	schema := &tool.Schema{Type: "string"}
-	schema.SetPattern("abc")
+	schema := &tool.Schema{Type: "string", Pattern: "abc"}
 
 	ok, reason := validateValueAgainstSchema("123abc456", schema, nil, "$.value")
 	assert.True(t, ok)
@@ -824,8 +822,7 @@ func TestValidateValueAgainstSchema_StringPatternMatchesAnywhere(t *testing.T) {
 }
 
 func TestValidateValueAgainstSchema_InvalidStringPatternIsSkipped(t *testing.T) {
-	schema := &tool.Schema{Type: "string"}
-	schema.SetPattern("(?=abc)abc")
+	schema := &tool.Schema{Type: "string", Pattern: "(?=abc)abc"}
 
 	ok, reason := validateValueAgainstSchema("abc", schema, nil, "$.value")
 	assert.True(t, ok)

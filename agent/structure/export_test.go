@@ -443,12 +443,10 @@ func TestValidateSurfaceValue_CoversAdditionalBranches(t *testing.T) {
 }
 
 func TestExport_ClonesToolSchemas(t *testing.T) {
-	nameSchema := &tool.Schema{Type: "string"}
-	nameSchema.SetPattern("^[a-z]+$")
 	inputSchema := &tool.Schema{
 		Type: "object",
 		Properties: map[string]*tool.Schema{
-			"name": nameSchema,
+			"name": {Type: "string", Pattern: "^[a-z]+$"},
 		},
 		AdditionalProperties: &tool.Schema{Type: "string"},
 		Default: map[string]any{
@@ -492,7 +490,7 @@ func TestExport_ClonesToolSchemas(t *testing.T) {
 	require.NotSame(t, inputSchema, exported.InputSchema)
 	require.NotSame(t, outputSchema, exported.OutputSchema)
 	require.NotNil(t, exported.InputSchema.Properties["name"])
-	assert.Equal(t, "^[a-z]+$", exported.InputSchema.Properties["name"].GetPattern())
+	assert.Equal(t, "^[a-z]+$", exported.InputSchema.Properties["name"].Pattern)
 	require.NotNil(t, exported.OutputSchema.Items)
 	inputSchema.Properties["name"].Type = "integer"
 	assert.Equal(t, "string", exported.InputSchema.Properties["name"].Type)

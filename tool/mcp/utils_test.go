@@ -32,7 +32,7 @@ func TestConvertMCPSchema_Basic(t *testing.T) {
 	require.Equal(t, "test schema", s.Description)
 	require.ElementsMatch(t, []string{"a", "b"}, s.Required)
 	require.Equal(t, "string", s.Properties["a"].Type)
-	require.Equal(t, "^[a-z]+$", s.Properties["a"].GetPattern())
+	require.Equal(t, "^[a-z]+$", s.Properties["a"].Pattern)
 	require.Equal(t, "number", s.Properties["b"].Type)
 	require.Equal(t, "bbb", s.Properties["b"].Description)
 }
