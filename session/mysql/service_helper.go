@@ -1025,25 +1025,25 @@ func (s *Service) getTrackEvents(
 			return nil, fmt.Errorf("get track list failed: %w", err)
 		}
 		for _, track := range tracks {
-			var query string
-			var args []any
+			query := fmt.Sprintf(`SELECT event FROM %s
+					WHERE app_name = ? AND user_id = ? AND session_id = ? AND track = ?
+					AND (expires_at IS NULL OR expires_at > ?)
+					AND deleted_at IS NULL`, s.tableSessionTracks)
+			args := []any{key.AppName, key.UserID, key.SessionID, track, now}
+			// A zero afterTime must not reach the driver: go-sql-driver encodes
+			// time.Time{} as '0000-00-00', which strict-mode MySQL rejects or
+			// matches nothing, silently dropping every track event.
+			if !afterTime.IsZero() {
+				query += `
+					AND created_at > ?`
+				args = append(args, afterTime)
+			}
+			query += `
+					ORDER BY created_at DESC`
 			if limit > 0 {
-				query = fmt.Sprintf(`SELECT event FROM %s
-					WHERE app_name = ? AND user_id = ? AND session_id = ? AND track = ?
-					AND (expires_at IS NULL OR expires_at > ?)
-					AND created_at > ?
-					AND deleted_at IS NULL
-					ORDER BY created_at DESC
-					LIMIT ?`, s.tableSessionTracks)
-				args = []any{key.AppName, key.UserID, key.SessionID, track, now, afterTime, limit}
-			} else {
-				query = fmt.Sprintf(`SELECT event FROM %s
-					WHERE app_name = ? AND user_id = ? AND session_id = ? AND track = ?
-					AND (expires_at IS NULL OR expires_at > ?)
-					AND created_at > ?
-					AND deleted_at IS NULL
-					ORDER BY created_at DESC`, s.tableSessionTracks)
-				args = []any{key.AppName, key.UserID, key.SessionID, track, now, afterTime}
+				query += `
+					LIMIT ?`
+				args = append(args, limit)
 			}
 			queries = append(queries, &trackQuery{
 				sessionIdx: i,
