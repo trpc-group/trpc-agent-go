@@ -758,7 +758,7 @@ func (r *runner) newRunInvocation(
 		agent.WithInvocationMemoryService(r.memoryService),
 		agent.WithInvocationArtifactService(r.artifactService),
 		agent.WithInvocationEventFilterKey(eventFilterKey),
-		agent.WithInvocationPlugins(r.pluginManager),
+		agent.WithInvocationPlugins(combineRunPlugins(r.pluginManager, ro.Plugins)),
 	}
 	if awaitUserReplyLookupPath != "" {
 		invocationOpts = append(
