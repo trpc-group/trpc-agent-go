@@ -17,6 +17,7 @@ import (
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
@@ -81,6 +82,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.False(t, opts.ToolResultInputTranslationEnabled)
 	assert.False(t, opts.ToolCallDeltaStreamingEnabled)
 	assert.False(t, opts.StreamingToolResultActivityEnabled)
+	assert.False(t, opts.ConcurrentMessageStreamsEnabled)
 	assert.False(t, opts.MessagesSnapshotRunLifecycleEventsEnabled)
 	assert.False(t, opts.DistributedCancelEnabled)
 	assert.Equal(t, time.Second, opts.DistributedCancelPollInterval)
@@ -161,6 +163,15 @@ func TestWithToolCallDeltaStreamingEnabled(t *testing.T) {
 func TestWithStreamingToolResultActivityEnabled(t *testing.T) {
 	opts := NewOptions(WithStreamingToolResultActivityEnabled(true))
 	assert.True(t, opts.StreamingToolResultActivityEnabled)
+}
+
+func TestWithConcurrentMessageStreamsEnabled(t *testing.T) {
+	opts := NewOptions(WithConcurrentMessageStreamsEnabled(true))
+	assert.True(t, opts.ConcurrentMessageStreamsEnabled)
+	run := New(nil, WithConcurrentMessageStreamsEnabled(true))
+	impl, ok := run.(*runner)
+	require.True(t, ok)
+	assert.True(t, impl.concurrentMessageStreamsEnabled)
 }
 
 func TestWithMessagesSnapshotRunLifecycleEventsEnabled(t *testing.T) {
