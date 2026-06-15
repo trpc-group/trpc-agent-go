@@ -368,6 +368,24 @@ Notes:
 - Plugins run in the order they are registered.
 - If a plugin implements `plugin.Closer`, Runner will call it in `Close()`.
 
+If a plugin should affect only one run, pass it to `Run` as a RunOption:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    plugin.WithPlugins(requestPlugin),
+)
+```
+
+Per-run plugins run after Runner-level plugins and only affect this `Run`.
+Runner does not call `Close()` on these plugins when the run ends; if a plugin
+owns external resources, the caller must manage them. See the
+[plugin documentation](plugin.md) for the full scope, execution order, and
+lifecycle details.
+
 ### 🔄 Ralph Loop Mode
 
 Ralph Loop is an "outer loop" mode. Instead of trusting a Large Language Model
