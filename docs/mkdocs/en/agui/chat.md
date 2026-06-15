@@ -1357,6 +1357,66 @@ On the output side, accumulate text events in the `AfterTranslate` event transla
 
 For the Langfuse observability integration example, see [examples/agui/server/langfuse](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse).
 
+## Concurrent Message Streams
+
+In multi-agent or sub-agent stream forwarding scenarios, a single real-time conversation event stream may contain multiple text messages being generated at the same time. For example, when a parent agent executes multiple `AgentTool`s in parallel and the child agents all produce streaming output, text chunks from different child agents may arrive at the AG-UI server interleaved.
+
+AG-UI message events use `messageId` to associate lifecycle events. When handling streaming messages, the frontend should maintain message state by `messageId` and merge `TEXT_MESSAGE_CONTENT` events with the same `messageId` into the same message.
+
+By default, the AG-UI server keeps the compatible behavior: only one message stream stays open at a time. When later events switch to a new `messageId`, the Translator closes the current message stream before starting the new message stream. This behavior is suitable for frontends that render output as a linear stream.
+
+The default event sequence looks like this:
+
+```text
+RUN_STARTED
+→ TEXT_MESSAGE_START messageId=msg-a
+→ TEXT_MESSAGE_CONTENT messageId=msg-a delta=a1
+→ TEXT_MESSAGE_END messageId=msg-a
+→ TEXT_MESSAGE_START messageId=msg-b
+→ TEXT_MESSAGE_CONTENT messageId=msg-b delta=b1
+→ TEXT_MESSAGE_END messageId=msg-b
+→ TEXT_MESSAGE_START messageId=msg-a
+→ TEXT_MESSAGE_CONTENT messageId=msg-a delta=a2
+→ TEXT_MESSAGE_END messageId=msg-a
+→ TEXT_MESSAGE_START messageId=msg-b
+→ TEXT_MESSAGE_CONTENT messageId=msg-b delta=b2
+→ TEXT_MESSAGE_END messageId=msg-b
+→ RUN_FINISHED
+```
+
+If the frontend supports maintaining multiple open message streams by `messageId`, enable concurrent message streams:
+
+```go
+import "trpc.group/trpc-go/trpc-agent-go/server/agui"
+
+server, err := agui.New(
+    runner,
+    agui.WithConcurrentMessageStreamsEnabled(true),
+)
+```
+
+After this is enabled, message streams with different `messageId` values can stay open at the same time. The same logical message keeps its lifecycle when chunks from other messages are inserted; later chunks with the same `messageId` continue to append to the original message until that message receives its own end event, or the run finalization phase fills in the end event.
+
+The enabled event sequence looks like this:
+
+```text
+RUN_STARTED
+→ TEXT_MESSAGE_START messageId=msg-a
+→ TEXT_MESSAGE_CONTENT messageId=msg-a delta=a1
+→ TEXT_MESSAGE_START messageId=msg-b
+→ TEXT_MESSAGE_CONTENT messageId=msg-b delta=b1
+→ TEXT_MESSAGE_CONTENT messageId=msg-a delta=a2
+→ TEXT_MESSAGE_CONTENT messageId=msg-b delta=b2
+→ TEXT_MESSAGE_END messageId=msg-a
+→ TEXT_MESSAGE_END messageId=msg-b
+→ RUN_FINISHED
+```
+
+Frontend handling needs to follow two rules:
+
+- `TEXT_MESSAGE_CONTENT` events with the same `messageId` may appear in different positions in the event stream. Accumulate content by `messageId`.
+- The order of `TEXT_MESSAGE_END` for different `messageId` values depends on the actual end order of those messages. Use the `TEXT_MESSAGE_END` events in the stream as the end order.
+
 ## Best Practices
 
 Prefer server-side tool execution by default. Use the external tool pattern when a tool must run on the client side or business side. Treat this scenario as an advanced use case that should be designed and evaluated carefully.

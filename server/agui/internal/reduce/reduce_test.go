@@ -610,6 +610,30 @@ func TestReduceEventDispatchesChunk(t *testing.T) {
 	assert.Equal(t, "hi", content)
 }
 
+func TestReduceInterleavedTextMessageEvents(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("msg-a", aguievents.WithRole("assistant")),
+		aguievents.NewTextMessageContentEvent("msg-a", "a1"),
+		aguievents.NewTextMessageStartEvent("msg-b", aguievents.WithRole("assistant")),
+		aguievents.NewTextMessageContentEvent("msg-b", "b1"),
+		aguievents.NewTextMessageContentEvent("msg-a", "a2"),
+		aguievents.NewTextMessageContentEvent("msg-b", "b2"),
+		aguievents.NewTextMessageEndEvent("msg-a"),
+		aguievents.NewTextMessageEndEvent("msg-b"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "msg-a", msgs[0].ID)
+	contentA, ok := msgs[0].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "a1a2", contentA)
+	assert.Equal(t, "msg-b", msgs[1].ID)
+	contentB, ok := msgs[1].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "b1b2", contentB)
+}
+
 func TestAssistantOnlyToolCall(t *testing.T) {
 	events := []session.TrackEvent{
 		newTrackEvent(aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant"))),
