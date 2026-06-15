@@ -141,11 +141,17 @@ func (r *reducer) reduce(trackEvent session.TrackEvent) error {
 func (r *reducer) reduceEvent(evt aguievents.Event) error {
 	switch e := evt.(type) {
 	case *aguievents.RunStartedEvent:
-		return r.handleRunStarted(e)
+		err := r.handleRunStarted(e)
+		r.finishRun()
+		return err
 	case *aguievents.RunFinishedEvent:
-		return r.handleRunFinished(e)
+		err := r.handleRunFinished(e)
+		r.finishRun()
+		return err
 	case *aguievents.RunErrorEvent:
-		return r.handleRunError(e)
+		err := r.handleRunError(e)
+		r.finishRun()
+		return err
 	case *aguievents.TextMessageStartEvent:
 		return r.handleTextStart(e)
 	case *aguievents.TextMessageContentEvent:
@@ -184,6 +190,20 @@ func (r *reducer) reduceEvent(evt aguievents.Event) error {
 	default:
 		return r.handleActivity(e)
 	}
+}
+
+func (r *reducer) finishRun() {
+	r.finalizePartial()
+	r.texts = make(map[string]*textState)
+	r.reasonings = make(map[string]*reasoningState)
+	r.lastReasoningChunkID = ""
+	pendingToolCalls := make(map[string]*toolCallState)
+	for id, state := range r.toolCalls {
+		if state.phase == toolAwaitingResult {
+			pendingToolCalls[id] = state
+		}
+	}
+	r.toolCalls = pendingToolCalls
 }
 
 func (r *reducer) handleUserMessageCustomEvent(e *aguievents.CustomEvent) error {
