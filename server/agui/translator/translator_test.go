@@ -230,6 +230,51 @@ func TestTranslateQueuedUserMessageConsumedClosesOpenMessage(t *testing.T) {
 	assert.False(t, translator.receivingMessage)
 }
 
+func TestTranslateQueuedUserMessageConsumedClosesConcurrentOpenMessages(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithConcurrentMessageStreamsEnabled(true))
+	if translator == nil {
+		return
+	}
+	for _, rsp := range []*model.Response{
+		{
+			ID:     "assistant-a",
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{Role: model.RoleAssistant, Content: "a"},
+			}},
+		},
+		{
+			ID:     "assistant-b",
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{Role: model.RoleAssistant, Content: "b"},
+			}},
+		},
+	} {
+		_, err := translator.Translate(context.Background(), &agentevent.Event{Response: rsp})
+		require.NoError(t, err)
+	}
+	require.True(t, translator.textStreams.isOpen("assistant-a"))
+	require.True(t, translator.textStreams.isOpen("assistant-b"))
+	evt := queuedUserMessageEventForTest(t, &model.Response{
+		ID: "queued-message-3",
+		Choices: []model.Choice{{
+			Message: model.NewUserMessage("Use the shorter version"),
+		}},
+	})
+	events, err := translator.Translate(context.Background(), evt)
+	require.NoError(t, err)
+	require.Len(t, events, 6)
+	endA, ok := events[0].(*aguievents.TextMessageEndEvent)
+	require.True(t, ok)
+	assert.Equal(t, "assistant-a", endA.MessageID)
+	endB, ok := events[1].(*aguievents.TextMessageEndEvent)
+	require.True(t, ok)
+	assert.Equal(t, "assistant-b", endB.MessageID)
+	assert.False(t, translator.receivingMessage)
+	assert.False(t, translator.textStreams.hasOpen())
+}
+
 func TestTranslateQueuedUserMessageConsumedWithEventIDFallback(t *testing.T) {
 	translator := newTranslatorForTest(t)
 	if translator == nil {
@@ -1060,6 +1105,55 @@ func TestTextMessageEventInterleavedStreamsEndOnOwnFinishReason(t *testing.T) {
 	endB, ok := allEvents[7].(*aguievents.TextMessageEndEvent)
 	require.True(t, ok)
 	assert.Equal(t, "msg-b", endB.MessageID)
+}
+
+func TestTextMessageEventConcurrentModeSkipsEmptyResponseID(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithConcurrentMessageStreamsEnabled(true))
+	if translator == nil {
+		return
+	}
+	rsp := &model.Response{
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "orphan"},
+		}},
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: rsp})
+	require.NoError(t, err)
+	assert.Empty(t, events)
+	assert.False(t, translator.receivingMessage)
+	assert.False(t, translator.textStreams.hasStarted(""))
+	assert.False(t, translator.textStreams.isOpen(""))
+}
+
+func TestTextMessageEventConcurrentModeNonStreamClosesMessage(t *testing.T) {
+	translator := newTranslatorImplForTest(t, WithConcurrentMessageStreamsEnabled(true))
+	if translator == nil {
+		return
+	}
+	rsp := &model.Response{
+		ID:     "msg-final",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, Content: "done"},
+		}},
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: rsp})
+	require.NoError(t, err)
+	require.Len(t, events, 3)
+	start, ok := events[0].(*aguievents.TextMessageStartEvent)
+	require.True(t, ok)
+	assert.Equal(t, "msg-final", start.MessageID)
+	content, ok := events[1].(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	assert.Equal(t, "msg-final", content.MessageID)
+	assert.Equal(t, "done", content.Delta)
+	end, ok := events[2].(*aguievents.TextMessageEndEvent)
+	require.True(t, ok)
+	assert.Equal(t, "msg-final", end.MessageID)
+	assert.False(t, translator.receivingMessage)
+	assert.True(t, translator.textStreams.hasStarted("msg-final"))
+	assert.False(t, translator.textStreams.isOpen("msg-final"))
 }
 
 func TestTextMessageEventNonStream(t *testing.T) {
@@ -2929,6 +3023,151 @@ func TestTranslateReasoningStreamIDChangeKeepsPreviousMessageOpen(t *testing.T) 
 	assert.Equal(t, "msg-2", tr.lastReasoningMessageID)
 	assert.True(t, tr.reasoningStreams.isOpen("msg-1"))
 	assert.True(t, tr.reasoningStreams.isOpen("msg-2"))
+}
+
+func TestTranslateReasoningConcurrentModeSkipsEmptyResponseID(t *testing.T) {
+	tr := newTranslatorImplForTest(t,
+		WithReasoningContentEnabled(true),
+		WithConcurrentMessageStreamsEnabled(true),
+	)
+	if tr == nil {
+		return
+	}
+	rsp := &model.Response{
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, ReasoningContent: "orphan"},
+		}},
+		IsPartial: true,
+	}
+	events, err := tr.Translate(context.Background(), &agentevent.Event{Response: rsp})
+	require.NoError(t, err)
+	assert.Empty(t, events)
+	assert.False(t, tr.receivingReasoning)
+	assert.False(t, tr.reasoningStreams.hasStarted(""))
+	assert.False(t, tr.reasoningStreams.isOpen(""))
+}
+
+func TestTranslateReasoningConcurrentModeClosesOnContentDelta(t *testing.T) {
+	tr := newTranslatorImplForTest(t,
+		WithReasoningContentEnabled(true),
+		WithConcurrentMessageStreamsEnabled(true),
+	)
+	if tr == nil {
+		return
+	}
+	first := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, ReasoningContent: "think"},
+		}},
+		IsPartial: true,
+	}
+	_, err := tr.Translate(context.Background(), &agentevent.Event{Response: first})
+	require.NoError(t, err)
+	require.True(t, tr.reasoningStreams.isOpen("msg-1"))
+	next := &model.Response{
+		ID:     "msg-1",
+		Object: model.ObjectTypeChatCompletionChunk,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "answer"},
+		}},
+		IsPartial: true,
+	}
+	events, err := tr.Translate(context.Background(), &agentevent.Event{Response: next})
+	require.NoError(t, err)
+	require.Len(t, events, 4)
+	assert.IsType(t, (*aguievents.ReasoningMessageEndEvent)(nil), events[0])
+	assert.IsType(t, (*aguievents.ReasoningEndEvent)(nil), events[1])
+	start, ok := events[2].(*aguievents.TextMessageStartEvent)
+	require.True(t, ok)
+	assert.Equal(t, "msg-1", start.MessageID)
+	content, ok := events[3].(*aguievents.TextMessageContentEvent)
+	require.True(t, ok)
+	assert.Equal(t, "msg-1", content.MessageID)
+	assert.Equal(t, "answer", content.Delta)
+	assert.False(t, tr.receivingReasoning)
+	assert.False(t, tr.reasoningStreams.isOpen("msg-1"))
+}
+
+func TestTranslateReasoningConcurrentModeNonStreamClosesMessage(t *testing.T) {
+	tr := newTranslatorImplForTest(t,
+		WithReasoningContentEnabled(true),
+		WithConcurrentMessageStreamsEnabled(true),
+	)
+	if tr == nil {
+		return
+	}
+	rsp := &model.Response{
+		ID:     "msg-final",
+		Object: model.ObjectTypeChatCompletion,
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, ReasoningContent: "done"},
+		}},
+	}
+	events, err := tr.Translate(context.Background(), &agentevent.Event{Response: rsp})
+	require.NoError(t, err)
+	require.Len(t, events, 5)
+	assert.IsType(t, (*aguievents.ReasoningStartEvent)(nil), events[0])
+	assert.IsType(t, (*aguievents.ReasoningMessageStartEvent)(nil), events[1])
+	content, ok := events[2].(*aguievents.ReasoningMessageContentEvent)
+	require.True(t, ok)
+	assert.Equal(t, "msg-final", content.MessageID)
+	assert.Equal(t, "done", content.Delta)
+	assert.IsType(t, (*aguievents.ReasoningMessageEndEvent)(nil), events[3])
+	assert.IsType(t, (*aguievents.ReasoningEndEvent)(nil), events[4])
+	assert.False(t, tr.receivingReasoning)
+	assert.True(t, tr.reasoningStreams.hasStarted("msg-final"))
+	assert.False(t, tr.reasoningStreams.isOpen("msg-final"))
+}
+
+func TestTranslateRunnerCompletionClosesConcurrentReasoningStreams(t *testing.T) {
+	tr := newTranslatorImplForTest(t,
+		WithReasoningContentEnabled(true),
+		WithConcurrentMessageStreamsEnabled(true),
+	)
+	if tr == nil {
+		return
+	}
+	for _, rsp := range []*model.Response{
+		{
+			ID:     "msg-1",
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{Role: model.RoleAssistant, ReasoningContent: "think"},
+			}},
+			IsPartial: true,
+		},
+		{
+			ID:     "msg-2",
+			Object: model.ObjectTypeChatCompletionChunk,
+			Choices: []model.Choice{{
+				Delta: model.Message{Role: model.RoleAssistant, ReasoningContent: "again"},
+			}},
+			IsPartial: true,
+		},
+	} {
+		_, err := tr.Translate(context.Background(), &agentevent.Event{Response: rsp})
+		require.NoError(t, err)
+	}
+	require.True(t, tr.reasoningStreams.isOpen("msg-1"))
+	require.True(t, tr.reasoningStreams.isOpen("msg-2"))
+	runCompletionRsp := &model.Response{
+		ID:     "msg-run-completion",
+		Object: model.ObjectTypeRunnerCompletion,
+		Done:   true,
+	}
+	events, err := tr.Translate(context.Background(), &agentevent.Event{Response: runCompletionRsp})
+	require.NoError(t, err)
+	require.Len(t, events, 5)
+	assert.IsType(t, (*aguievents.ReasoningMessageEndEvent)(nil), events[0])
+	assert.IsType(t, (*aguievents.ReasoningEndEvent)(nil), events[1])
+	assert.IsType(t, (*aguievents.ReasoningMessageEndEvent)(nil), events[2])
+	assert.IsType(t, (*aguievents.ReasoningEndEvent)(nil), events[3])
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), events[4])
+	assert.False(t, tr.receivingReasoning)
+	assert.False(t, tr.reasoningStreams.hasOpen())
 }
 
 func TestTranslateRunnerCompletionClosesReasoningStream(t *testing.T) {

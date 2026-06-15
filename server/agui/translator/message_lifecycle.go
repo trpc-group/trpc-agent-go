@@ -275,6 +275,9 @@ func (t *translator) concurrentTextMessageEvent(rsp *model.Response) ([]aguieven
 	if rsp == nil || len(rsp.Choices) == 0 {
 		return nil, nil
 	}
+	if rsp.ID == "" {
+		return nil, nil
+	}
 	wasStarted := t.textStreams.hasStarted(rsp.ID)
 	t.recordResponseID(rsp.ID)
 	var events []aguievents.Event
