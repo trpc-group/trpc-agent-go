@@ -2376,6 +2376,15 @@
         <li class="md-nav__item">
   <a href="#_17" class="md-nav__link">
     <span class="md-ellipsis">
+      并发消息流
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
       最佳实践
     </span>
   </a>
@@ -2384,7 +2393,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_18" class="md-nav__link">
+  <a href="#_19" class="md-nav__link">
     <span class="md-ellipsis">
       生成文档
     </span>
@@ -3202,6 +3211,15 @@
         <li class="md-nav__item">
   <a href="#_17" class="md-nav__link">
     <span class="md-ellipsis">
+      并发消息流
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_18" class="md-nav__link">
+    <span class="md-ellipsis">
       最佳实践
     </span>
   </a>
@@ -3210,7 +3228,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_18" class="md-nav__link">
+  <a href="#_19" class="md-nav__link">
     <span class="md-ellipsis">
       生成文档
     </span>
@@ -5146,21 +5164,11 @@ resolver 只需要返回业务额外需要的 run options。</p>
 </span></code></pre></div></td></tr></table></div>
 <p>输出侧可以在事件翻译回调 <code>AfterTranslate</code> 中累积文本事件，并在输出结束后写入 <code>trace.output</code>。这样前端流式事件与后端 trace 可以按同一次运行对齐，便于在可观测平台中同时查看输入和最终输出。</p>
 <p>与 Langfuse 可观测平台的结合示例可参考 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/langfuse">examples/agui/server/langfuse</a>。</p>
-<h2 id="_17">最佳实践</h2>
-<p>默认优先使用服务端工具执行路径。工具必须在客户端或业务侧执行时，采用“外部工具”模式；这类场景适合作为进阶用法来设计与评估。</p>
-<h3 id="_18">生成文档</h3>
-<p>长篇文档如果直接插入到对话正文，很容易把主对话“刷屏”，用户也难以区分对话内容和文档内容。为了解决这个问题，建议使用“文档面板”来承载长文档。通过 AG-UI 的事件流约定一套“打开文档面板 → 写入文档内容 → 关闭文档面板”的工作流，将长文档从对话中“抽离”出来，避免干扰正常交流，示例方案如下。</p>
-<ol>
-<li>
-<p><strong>后端：定义工具并约束调用顺序</strong></p>
-<p>为 Agent 提供两个工具：<strong>打开文档面板</strong> 和 <strong>关闭文档面板</strong>，并在 prompt 中约束生成顺序：
- 当进入文档生成流程时，按以下顺序执行：</p>
-<ol>
-<li>先调用“打开文档面板”工具</li>
-<li>紧接着输出文档内容</li>
-<li>最后调用“关闭文档面板”工具</li>
-</ol>
-<p>转换为 AG-UI 事件流，大致形态如下：</p>
+<h2 id="_17">并发消息流</h2>
+<p>多 Agent 或子 Agent 流式透传场景下，同一轮实时对话事件流中可能同时存在多个正在生成的文本消息。例如父 Agent 并行执行多个 <code>AgentTool</code>，并且子 Agent 都在流式输出时，不同子 Agent 的文本分片可能交错到达 AG-UI 服务端。</p>
+<p>AG-UI 消息事件通过 <code>messageId</code> 关联生命周期。前端处理流式消息时，应按 <code>messageId</code> 维护消息状态，并将相同 <code>messageId</code> 的 <code>TEXT_MESSAGE_CONTENT</code> 归并到同一条消息。</p>
+<p>默认情况下，AG-UI 服务端保持兼容行为：同一时刻只保持一条消息流处于打开状态。当后续事件切换到新的 <code>messageId</code> 时，Translator 会先关闭当前消息流，再开始新的消息流。该行为适合只按线性输出渲染的前端。</p>
+<p>默认事件序列如下：</p>
 <div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-50-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-50-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-50-3"> 3</a></span>
@@ -5174,24 +5182,107 @@ resolver 只需要返回业务额外需要的 run options。</p>
 <span class="normal"><a href="#__codelineno-50-11">11</a></span>
 <span class="normal"><a href="#__codelineno-50-12">12</a></span>
 <span class="normal"><a href="#__codelineno-50-13">13</a></span>
-<span class="normal"><a href="#__codelineno-50-14">14</a></span>
-<span class="normal"><a href="#__codelineno-50-15">15</a></span>
-<span class="normal"><a href="#__codelineno-50-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1"></a>打开文档面板工具
-</span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2"></a>  → ToolCallStart
-</span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3"></a>  → ToolCallArgs
-</span><span id="__span-50-4"><a id="__codelineno-50-4" name="__codelineno-50-4"></a>  → ToolCallEnd
-</span><span id="__span-50-5"><a id="__codelineno-50-5" name="__codelineno-50-5"></a>  → ToolCallResult
-</span><span id="__span-50-6"><a id="__codelineno-50-6" name="__codelineno-50-6"></a>
-</span><span id="__span-50-7"><a id="__codelineno-50-7" name="__codelineno-50-7"></a>文档内容
-</span><span id="__span-50-8"><a id="__codelineno-50-8" name="__codelineno-50-8"></a>  → TextMessageStart
-</span><span id="__span-50-9"><a id="__codelineno-50-9" name="__codelineno-50-9"></a>  → TextMessageContent
-</span><span id="__span-50-10"><a id="__codelineno-50-10" name="__codelineno-50-10"></a>  → TextMessageEnd
-</span><span id="__span-50-11"><a id="__codelineno-50-11" name="__codelineno-50-11"></a>
-</span><span id="__span-50-12"><a id="__codelineno-50-12" name="__codelineno-50-12"></a>关闭文档面板工具
-</span><span id="__span-50-13"><a id="__codelineno-50-13" name="__codelineno-50-13"></a>  → ToolCallStart
-</span><span id="__span-50-14"><a id="__codelineno-50-14" name="__codelineno-50-14"></a>  → ToolCallArgs
-</span><span id="__span-50-15"><a id="__codelineno-50-15" name="__codelineno-50-15"></a>  → ToolCallEnd
-</span><span id="__span-50-16"><a id="__codelineno-50-16" name="__codelineno-50-16"></a>  → ToolCallResult
+<span class="normal"><a href="#__codelineno-50-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-50-1"><a id="__codelineno-50-1" name="__codelineno-50-1"></a>RUN_STARTED
+</span><span id="__span-50-2"><a id="__codelineno-50-2" name="__codelineno-50-2"></a>→ TEXT_MESSAGE_START messageId=msg-a
+</span><span id="__span-50-3"><a id="__codelineno-50-3" name="__codelineno-50-3"></a>→ TEXT_MESSAGE_CONTENT messageId=msg-a delta=a1
+</span><span id="__span-50-4"><a id="__codelineno-50-4" name="__codelineno-50-4"></a>→ TEXT_MESSAGE_END messageId=msg-a
+</span><span id="__span-50-5"><a id="__codelineno-50-5" name="__codelineno-50-5"></a>→ TEXT_MESSAGE_START messageId=msg-b
+</span><span id="__span-50-6"><a id="__codelineno-50-6" name="__codelineno-50-6"></a>→ TEXT_MESSAGE_CONTENT messageId=msg-b delta=b1
+</span><span id="__span-50-7"><a id="__codelineno-50-7" name="__codelineno-50-7"></a>→ TEXT_MESSAGE_END messageId=msg-b
+</span><span id="__span-50-8"><a id="__codelineno-50-8" name="__codelineno-50-8"></a>→ TEXT_MESSAGE_START messageId=msg-a
+</span><span id="__span-50-9"><a id="__codelineno-50-9" name="__codelineno-50-9"></a>→ TEXT_MESSAGE_CONTENT messageId=msg-a delta=a2
+</span><span id="__span-50-10"><a id="__codelineno-50-10" name="__codelineno-50-10"></a>→ TEXT_MESSAGE_END messageId=msg-a
+</span><span id="__span-50-11"><a id="__codelineno-50-11" name="__codelineno-50-11"></a>→ TEXT_MESSAGE_START messageId=msg-b
+</span><span id="__span-50-12"><a id="__codelineno-50-12" name="__codelineno-50-12"></a>→ TEXT_MESSAGE_CONTENT messageId=msg-b delta=b2
+</span><span id="__span-50-13"><a id="__codelineno-50-13" name="__codelineno-50-13"></a>→ TEXT_MESSAGE_END messageId=msg-b
+</span><span id="__span-50-14"><a id="__codelineno-50-14" name="__codelineno-50-14"></a>→ RUN_FINISHED
+</span></code></pre></div></td></tr></table></div>
+<p>如果前端支持按 <code>messageId</code> 维护多条同时打开的消息流，可以开启并发消息流：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-51-1">1</a></span>
+<span class="normal"><a href="#__codelineno-51-2">2</a></span>
+<span class="normal"><a href="#__codelineno-51-3">3</a></span>
+<span class="normal"><a href="#__codelineno-51-4">4</a></span>
+<span class="normal"><a href="#__codelineno-51-5">5</a></span>
+<span class="normal"><a href="#__codelineno-51-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
+</span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2"></a>
+</span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-51-4"><a id="__codelineno-51-4" name="__codelineno-51-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
+</span><span id="__span-51-5"><a id="__codelineno-51-5" name="__codelineno-51-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithConcurrentMessageStreamsEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-51-6"><a id="__codelineno-51-6" name="__codelineno-51-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>开启后，不同 <code>messageId</code> 的消息流可以同时保持打开。同一条逻辑消息在其他消息分片插入后仍保持原有生命周期；后续属于同一 <code>messageId</code> 的分片会继续追加到原消息上，直到该消息收到自己的结束事件，或运行结束收尾阶段补齐结束事件。</p>
+<p>开启后的事件序列如下：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-52-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-52-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-52-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-52-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-52-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-52-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-52-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-52-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-52-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-52-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1"></a>RUN_STARTED
+</span><span id="__span-52-2"><a id="__codelineno-52-2" name="__codelineno-52-2"></a>→ TEXT_MESSAGE_START messageId=msg-a
+</span><span id="__span-52-3"><a id="__codelineno-52-3" name="__codelineno-52-3"></a>→ TEXT_MESSAGE_CONTENT messageId=msg-a delta=a1
+</span><span id="__span-52-4"><a id="__codelineno-52-4" name="__codelineno-52-4"></a>→ TEXT_MESSAGE_START messageId=msg-b
+</span><span id="__span-52-5"><a id="__codelineno-52-5" name="__codelineno-52-5"></a>→ TEXT_MESSAGE_CONTENT messageId=msg-b delta=b1
+</span><span id="__span-52-6"><a id="__codelineno-52-6" name="__codelineno-52-6"></a>→ TEXT_MESSAGE_CONTENT messageId=msg-a delta=a2
+</span><span id="__span-52-7"><a id="__codelineno-52-7" name="__codelineno-52-7"></a>→ TEXT_MESSAGE_CONTENT messageId=msg-b delta=b2
+</span><span id="__span-52-8"><a id="__codelineno-52-8" name="__codelineno-52-8"></a>→ TEXT_MESSAGE_END messageId=msg-a
+</span><span id="__span-52-9"><a id="__codelineno-52-9" name="__codelineno-52-9"></a>→ TEXT_MESSAGE_END messageId=msg-b
+</span><span id="__span-52-10"><a id="__codelineno-52-10" name="__codelineno-52-10"></a>→ RUN_FINISHED
+</span></code></pre></div></td></tr></table></div>
+<p>前端处理时需要关注两点：</p>
+<ul>
+<li>同一 <code>messageId</code> 的 <code>TEXT_MESSAGE_CONTENT</code> 可能分散在事件流的不同位置；应按 <code>messageId</code> 累积内容。</li>
+<li>不同 <code>messageId</code> 的 <code>TEXT_MESSAGE_END</code> 顺序取决于对应消息实际结束顺序；结束顺序以事件流中的 <code>TEXT_MESSAGE_END</code> 为准。</li>
+</ul>
+<h2 id="_18">最佳实践</h2>
+<p>默认优先使用服务端工具执行路径。工具必须在客户端或业务侧执行时，采用“外部工具”模式；这类场景适合作为进阶用法来设计与评估。</p>
+<h3 id="_19">生成文档</h3>
+<p>长篇文档如果直接插入到对话正文，很容易把主对话“刷屏”，用户也难以区分对话内容和文档内容。为了解决这个问题，建议使用“文档面板”来承载长文档。通过 AG-UI 的事件流约定一套“打开文档面板 → 写入文档内容 → 关闭文档面板”的工作流，将长文档从对话中“抽离”出来，避免干扰正常交流，示例方案如下。</p>
+<ol>
+<li>
+<p><strong>后端：定义工具并约束调用顺序</strong></p>
+<p>为 Agent 提供两个工具：<strong>打开文档面板</strong> 和 <strong>关闭文档面板</strong>，并在 prompt 中约束生成顺序：
+ 当进入文档生成流程时，按以下顺序执行：</p>
+<ol>
+<li>先调用“打开文档面板”工具</li>
+<li>紧接着输出文档内容</li>
+<li>最后调用“关闭文档面板”工具</li>
+</ol>
+<p>转换为 AG-UI 事件流，大致形态如下：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-53-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-53-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-53-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-53-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-53-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-53-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-53-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-53-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-53-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-53-10">10</a></span>
+<span class="normal"><a href="#__codelineno-53-11">11</a></span>
+<span class="normal"><a href="#__codelineno-53-12">12</a></span>
+<span class="normal"><a href="#__codelineno-53-13">13</a></span>
+<span class="normal"><a href="#__codelineno-53-14">14</a></span>
+<span class="normal"><a href="#__codelineno-53-15">15</a></span>
+<span class="normal"><a href="#__codelineno-53-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1"></a>打开文档面板工具
+</span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2"></a>  → ToolCallStart
+</span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3"></a>  → ToolCallArgs
+</span><span id="__span-53-4"><a id="__codelineno-53-4" name="__codelineno-53-4"></a>  → ToolCallEnd
+</span><span id="__span-53-5"><a id="__codelineno-53-5" name="__codelineno-53-5"></a>  → ToolCallResult
+</span><span id="__span-53-6"><a id="__codelineno-53-6" name="__codelineno-53-6"></a>
+</span><span id="__span-53-7"><a id="__codelineno-53-7" name="__codelineno-53-7"></a>文档内容
+</span><span id="__span-53-8"><a id="__codelineno-53-8" name="__codelineno-53-8"></a>  → TextMessageStart
+</span><span id="__span-53-9"><a id="__codelineno-53-9" name="__codelineno-53-9"></a>  → TextMessageContent
+</span><span id="__span-53-10"><a id="__codelineno-53-10" name="__codelineno-53-10"></a>  → TextMessageEnd
+</span><span id="__span-53-11"><a id="__codelineno-53-11" name="__codelineno-53-11"></a>
+</span><span id="__span-53-12"><a id="__codelineno-53-12" name="__codelineno-53-12"></a>关闭文档面板工具
+</span><span id="__span-53-13"><a id="__codelineno-53-13" name="__codelineno-53-13"></a>  → ToolCallStart
+</span><span id="__span-53-14"><a id="__codelineno-53-14" name="__codelineno-53-14"></a>  → ToolCallArgs
+</span><span id="__span-53-15"><a id="__codelineno-53-15" name="__codelineno-53-15"></a>  → ToolCallEnd
+</span><span id="__span-53-16"><a id="__codelineno-53-16" name="__codelineno-53-16"></a>  → ToolCallResult
 </span></code></pre></div></td></tr></table></div>
 </li>
 <li>
@@ -5227,7 +5318,7 @@ resolver 只需要返回业务额外需要的 run options。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月10日 09:21:51 UTC">2026-06-10 09:21:51</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月15日 03:14:48 UTC">2026-06-15 03:14:48</span>
   </span>
 
     
