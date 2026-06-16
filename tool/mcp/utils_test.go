@@ -22,7 +22,7 @@ func TestConvertMCPSchema_Basic(t *testing.T) {
 		"description": "test schema",
 		"required":    []any{"a", "b"},
 		"properties": map[string]any{
-			"a": map[string]any{"type": "string"},
+			"a": map[string]any{"type": "string", "pattern": "^[a-z]+$"},
 			"b": map[string]any{"type": "number", "description": "bbb"},
 		},
 	}
@@ -32,6 +32,7 @@ func TestConvertMCPSchema_Basic(t *testing.T) {
 	require.Equal(t, "test schema", s.Description)
 	require.ElementsMatch(t, []string{"a", "b"}, s.Required)
 	require.Equal(t, "string", s.Properties["a"].Type)
+	require.Equal(t, "^[a-z]+$", s.Properties["a"].Pattern)
 	require.Equal(t, "number", s.Properties["b"].Type)
 	require.Equal(t, "bbb", s.Properties["b"].Description)
 }
@@ -44,6 +45,17 @@ func TestConvertMCPSchema_InvalidJSON(t *testing.T) {
 	// Channel cannot marshal, expect fallback schema.
 	schema := convertMCPSchemaToSchema(make(chan int))
 	require.Equal(t, &tool.Schema{Type: "object"}, schema)
+}
+
+func TestConvertMCPSchema_RootPattern(t *testing.T) {
+	mcpSchema := map[string]any{
+		"type":    "string",
+		"pattern": "^[a-z]+$",
+	}
+
+	schema := convertMCPSchemaToSchema(mcpSchema)
+	require.Equal(t, "string", schema.Type)
+	require.Equal(t, "^[a-z]+$", schema.Pattern)
 }
 
 func TestConvertMCPSchema_NestedObjects(t *testing.T) {

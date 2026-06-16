@@ -800,6 +800,77 @@ func TestValidateValueAgainstSchema_ScalarTypes(t *testing.T) {
 	assert.Contains(t, reason, "expected integer")
 }
 
+func TestValidateValueAgainstSchema_StringPattern(t *testing.T) {
+	schema := &tool.Schema{Type: "string", Pattern: "^[a-z0-9_-]+$"}
+
+	ok, reason := validateValueAgainstSchema("user_123", schema, nil, "$.user_id")
+	assert.True(t, ok)
+	assert.Empty(t, reason)
+
+	ok, reason = validateValueAgainstSchema("bad value", schema, nil, "$.user_id")
+	assert.False(t, ok)
+	assert.Contains(t, reason, "does not match pattern")
+	assert.Contains(t, reason, "$.user_id")
+}
+
+func TestValidateValueAgainstSchema_StringPatternMatchesAnywhere(t *testing.T) {
+	schema := &tool.Schema{Type: "string", Pattern: "abc"}
+
+	ok, reason := validateValueAgainstSchema("123abc456", schema, nil, "$.value")
+	assert.True(t, ok)
+	assert.Empty(t, reason)
+}
+
+func TestValidateStringValueAgainstSchema_EmptyPatternSkips(t *testing.T) {
+	ok, reason := validateStringValueAgainstSchema("bad value", &tool.Schema{Type: "string"}, "$.value")
+	assert.True(t, ok)
+	assert.Empty(t, reason)
+}
+
+func TestValidateValueAgainstSchema_InvalidStringPatternIsSkipped(t *testing.T) {
+	schema := &tool.Schema{Type: "string", Pattern: "(?=abc)abc"}
+
+	ok, reason := validateValueAgainstSchema("abc", schema, nil, "$.value")
+	assert.True(t, ok)
+	assert.Empty(t, reason)
+}
+
+func TestSanitizeMessagesWithTools_DowngradesSchemaPatternMismatch(t *testing.T) {
+	fn := function.NewFunctionTool(
+		func(context.Context, struct {
+			UserID string `json:"user_id" jsonschema:"pattern=^[a-z0-9_-]+$"`
+		}) (string, error) {
+			return "", nil
+		},
+		function.WithName("test_tool"),
+		function.WithDescription("test tool"),
+	)
+	tools := map[string]tool.Tool{
+		"test_tool": fn,
+	}
+	in := []model.Message{
+		{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{
+					ID: "call_1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "test_tool",
+						Arguments: []byte(`{"user_id":"bad value"}`),
+					},
+				},
+			},
+		},
+	}
+	out := SanitizeMessagesWithTools(context.Background(), in, tools)
+	if assert.Len(t, out, 1) {
+		assert.Equal(t, model.RoleUser, out[0].Role)
+		assert.Contains(t, out[0].Content, invalidToolCallTag)
+		assert.Contains(t, out[0].Content, "does not match pattern")
+		assert.Contains(t, out[0].Content, "$.user_id")
+	}
+}
+
 func TestValidateValueAgainstSchema_ArrayItemsNil(t *testing.T) {
 	ok, reason := validateValueAgainstSchema([]any{json.Number("1")}, &tool.Schema{Type: "array"}, nil, "$")
 	assert.True(t, ok)
