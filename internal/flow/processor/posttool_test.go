@@ -45,6 +45,8 @@ func TestPostToolRequestProcessor_WithoutToolResults(t *testing.T) {
 	assert.Contains(t, req.Messages[0].Content, testSystemContent)
 	assert.Contains(t, req.Messages[0].Content, testPromptMarker)
 	assert.Contains(t, req.Messages[0].Content, "Analyze the tool result")
+	assert.Contains(t, req.Messages[0].Content, "Do NOT call the same data-fetch tool")
+	assert.Contains(t, req.Messages[0].Content, "required artifact is still missing")
 }
 
 func TestPostToolRequestProcessor_WithToolResults_DefaultPrompt(
@@ -134,6 +136,9 @@ func TestPostToolRequestProcessor_StablePrefixAcrossToolLoop(
 		firstReq.Messages[0].Content,
 		nextReq.Messages[0].Content,
 	)
+	assert.Contains(t, firstReq.Messages[0].Content, testPromptMarker)
+	assert.Contains(t, firstReq.Messages[0].Content, "Analyze the tool result")
+	assert.Contains(t, firstReq.Messages[0].Content, "Reuse successful tool results you already have")
 }
 
 func TestPostToolRequestProcessor_DoesNotDuplicatePrompt(t *testing.T) {

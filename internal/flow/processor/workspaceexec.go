@@ -28,7 +28,7 @@ const (
 type workspaceExecRequestProcessorOptions struct {
 	sessionTools     bool
 	hasSkillsRepo    bool
-	repoResolver     func(*agent.Invocation) skill.Repository
+	repoResolver     func(context.Context, *agent.Invocation) skill.Repository
 	enabledResolver  func(*agent.Invocation) bool
 	sessionsResolver func(*agent.Invocation) bool
 }
@@ -75,7 +75,7 @@ func WithWorkspaceExecSkillsRepo() WorkspaceExecRequestProcessorOption {
 
 // WithWorkspaceExecSkillsRepositoryResolver sets an invocation-aware skills repository resolver.
 func WithWorkspaceExecSkillsRepositoryResolver(
-	resolver func(*agent.Invocation) skill.Repository,
+	resolver func(context.Context, *agent.Invocation) skill.Repository,
 ) WorkspaceExecRequestProcessorOption {
 	return func(o *workspaceExecRequestProcessorOptions) {
 		o.repoResolver = resolver
@@ -87,7 +87,7 @@ func WithWorkspaceExecSkillsRepositoryResolver(
 type WorkspaceExecRequestProcessor struct {
 	sessionTools     bool
 	staticSkillsRepo bool
-	repoResolver     func(*agent.Invocation) skill.Repository
+	repoResolver     func(context.Context, *agent.Invocation) skill.Repository
 	enabledResolver  func(*agent.Invocation) bool
 	sessionsResolver func(*agent.Invocation) bool
 }
@@ -124,7 +124,7 @@ func (p *WorkspaceExecRequestProcessor) ProcessRequest(
 		return
 	}
 
-	guidance := p.guidanceText(inv)
+	guidance := p.guidanceText(ctx, inv)
 	if guidance == "" {
 		return
 	}
@@ -161,6 +161,7 @@ func hasWorkspaceExecGuidance(content string) bool {
 }
 
 func (p *WorkspaceExecRequestProcessor) guidanceText(
+	ctx context.Context,
 	inv *agent.Invocation,
 ) string {
 	if !p.enabledForInvocation(inv) {
@@ -211,7 +212,7 @@ func (p *WorkspaceExecRequestProcessor) guidanceText(
 		b.WriteString("existing file in work/, out/, or runs/. ")
 		b.WriteString("Intermediate files usually stay in the workspace.\n")
 	}
-	if p.hasSkillsRepo(inv) {
+	if p.hasSkillsRepo(ctx, inv) {
 		b.WriteString("- Skill working copies appear under skills/<name> ")
 		b.WriteString("only after skill_load <name>. Use the loaded ")
 		b.WriteString("SKILL.md as the source of truth for scripts, ")
@@ -280,10 +281,11 @@ func (p *WorkspaceExecRequestProcessor) sessionToolsForInvocation(
 }
 
 func (p *WorkspaceExecRequestProcessor) hasSkillsRepo(
+	ctx context.Context,
 	inv *agent.Invocation,
 ) bool {
 	if p.repoResolver != nil {
-		return p.repoResolver(inv) != nil
+		return p.repoResolver(ctx, inv) != nil
 	}
 	return p.staticSkillsRepo
 }

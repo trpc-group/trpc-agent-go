@@ -190,7 +190,7 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_UsesSkillsRepoResolver(
 ) {
 	p := NewWorkspaceExecRequestProcessor(
 		WithWorkspaceExecSkillsRepositoryResolver(
-			func(*agent.Invocation) skill.Repository {
+			func(context.Context, *agent.Invocation) skill.Repository {
 				return workspaceExecStubRepo{}
 			},
 		),
@@ -216,7 +216,7 @@ func TestWorkspaceExecRequestProcessor_ProcessRequest_ResolverCanDisableSkillsGu
 	p := NewWorkspaceExecRequestProcessor(
 		WithWorkspaceExecSkillsRepo(),
 		WithWorkspaceExecSkillsRepositoryResolver(
-			func(*agent.Invocation) skill.Repository {
+			func(context.Context, *agent.Invocation) skill.Repository {
 				return nil
 			},
 		),
