@@ -1518,6 +1518,7 @@ func TestAddEvent_UnpersistedInvalidExtension(t *testing.T) {
 	err = s.addEvent(ctx, key, evt)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "marshal event failed")
+	require.Contains(t, err.Error(), `invalid extension "bad" JSON`)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

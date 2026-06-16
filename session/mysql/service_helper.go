@@ -469,7 +469,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
 			 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-			string(updatedStateBytes), updatedAt, expiresAt,
+			updatedStateBytes, updatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -479,7 +479,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at, expires_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, s.tableSessionTracks),
-			key.AppName, key.UserID, key.SessionID, trackEvent.Track, string(eventBytes),
+			key.AppName, key.UserID, key.SessionID, trackEvent.Track, eventBytes,
 			trackEvent.Timestamp, trackEvent.Timestamp, expiresAt)
 		if err != nil {
 			return fmt.Errorf("insert track event failed: %w", err)

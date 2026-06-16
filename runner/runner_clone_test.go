@@ -104,3 +104,28 @@ func TestCloneChoicesDeepCopiesMutableFields(t *testing.T) {
 	require.Equal(t, []int{1, 2}, cloned[0].Logprobs.Content[0].Bytes)
 	require.Equal(t, []int{3, 4}, cloned[0].Logprobs.Content[0].TopLogprobs[0].Bytes)
 }
+
+func TestCloneChoicesHandlesEmptyValues(t *testing.T) {
+	require.Nil(t, cloneChoices(nil))
+	require.Nil(t, cloneChoices([]model.Choice{}))
+
+	choices := []model.Choice{
+		{
+			Index: 1,
+			Message: model.Message{
+				Role:         model.RoleAssistant,
+				ContentParts: []model.ContentPart{},
+			},
+		},
+	}
+	cloned := cloneChoices(choices)
+	require.Len(t, cloned, 1)
+	require.Nil(t, cloned[0].Logprobs)
+	require.Empty(t, cloned[0].Message.ContentParts)
+
+	originalJSON, err := json.Marshal(choices)
+	require.NoError(t, err)
+	clonedJSON, err := json.Marshal(cloned)
+	require.NoError(t, err)
+	require.JSONEq(t, string(originalJSON), string(clonedJSON))
+}
