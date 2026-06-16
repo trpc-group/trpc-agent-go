@@ -593,6 +593,57 @@ func (p *ToolArgsPlugin) Register(reg *plugin.Registry) {
 `plugin.NewLogging()` 会记录 agent/model/tool 的开始与结束信息，适合用于调试与
 性能分析。
 
+### DebugLog
+
+`debuglog.New(opts...)` 通过框架 debug logger 输出单行 JSON，用于临时排查 model
+request/response 和 tool arguments/result。
+
+默认跳过 Runner event 和 model partial response；需要时打开
+`debuglog.WithEventEnabled(true)`、`debuglog.WithModelPartialResponseEnabled(true)`。
+
+使用示例如下：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/plugin/debuglog"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(debuglog.New()),
+)
+```
+
+也可以只在单次 Run 临时启用：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/debuglog"
+)
+
+events, err := runnerInstance.Run(
+	ctx,
+	userID,
+	sessionID,
+	message,
+	plugin.WithPlugins(
+		debuglog.New(
+			debuglog.WithEventEnabled(true),
+			debuglog.WithModelPartialResponseEnabled(true),
+		),
+	),
+)
+```
+
+输出是一行 JSON debug message，例如：
+
+```json
+{"time":"2026-06-16T10:20:30.123456789+08:00","sequence":7,"plugin":"debug_log","phase":"before_tool","tool_name":"calculator","tool_call_id":"call-1","payload":{"arguments":{"operation":"add","a":1,"b":2},"arguments_bytes":33}}
+```
+
 ### GlobalInstruction
 
 `plugin.NewGlobalInstruction(text)` 会在每一次模型请求前，统一追加一条 system
@@ -973,7 +1024,7 @@ FinishReason：
 
 完整示例见 [examples/plugin/errormessage](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/errormessage)。
 
-说明：目前仓库内置了 Logging、GlobalInstruction、ToolCallID、MessageMerger、ErrorMessage、Guardrail 六类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
+说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、MessageMerger、ErrorMessage、Guardrail 七类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
 
 ## 如何扩展：写一个自己的插件
 
