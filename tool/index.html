@@ -4763,7 +4763,11 @@ invent a UI flow for <code>ask</code>.</p>
 <ul>
 <li><strong>Field name</strong>: use <code>json:"..."</code> as the schema property name.</li>
 <li><strong>Field description (recommended)</strong>: use <code>jsonschema:"description=..."</code> to populate <code>properties.&lt;field&gt;.description</code>.</li>
+<li><strong>String pattern constraint</strong>: use <code>jsonschema:"pattern=^[a-z0-9_-]+$"</code> to populate <code>properties.&lt;field&gt;.pattern</code>.</li>
+<li><strong>Manual schemas</strong>: when constructing <code>tool.Schema</code> directly, set <code>Pattern: "^[a-z0-9_-]+$"</code> to emit the JSON Schema <code>pattern</code> keyword.</li>
 <li><strong>Note</strong>: the <code>jsonschema</code> tag uses comma <code>,</code> as the separator, so <strong>the description value must not contain <code>,</code></strong>; otherwise it will be parsed as multiple tag items.</li>
+<li><strong>Note</strong>: <code>pattern</code> is subject to the same comma separator limitation. If the regular expression itself needs commas, use <code>function.WithInputSchema(customInputSchema)</code> to define the schema directly.</li>
+<li><strong>Runtime compatibility</strong>: tool-call sanitization enforces <code>pattern</code> with Go <code>regexp</code>, not strict JSON Schema ECMA-262 regular expressions. Patterns that cannot compile with Go <code>regexp</code> are treated as non-enforcing at runtime.</li>
 <li><strong>Compatibility</strong>: <code>description:"..."</code> is also supported for legacy code. If both <code>jsonschema:"description=..."</code> and <code>description:"..."</code> are present, the <code>jsonschema</code> description wins.</li>
 <li><strong>More flexible schema</strong>: if you need full control over the input schema (e.g. complex JSON Schema constraints), use <code>function.WithInputSchema(customInputSchema)</code> to bypass auto-generation.</li>
 </ul>
@@ -7903,7 +7907,7 @@ explicitly at the right time.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 9, 2026 08:52:25 UTC">2026-06-09 08:52:25</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 16, 2026 04:35:19 UTC">2026-06-16 04:35:19</span>
   </span>
 
     
