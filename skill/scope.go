@@ -30,7 +30,16 @@ const (
 	SkillScopeUser SkillScopeMode = "user"
 )
 
-// SkillScope identifies the app/user boundary for a skill repository view.
+// SkillScope identifies the current skill-library sharing boundary.
+//
+// AppName is the stable first-level boundary. Multi-tenant adopters may
+// encode tenant/org/project into AppName when that is their sharing unit.
+//
+// UserID is only used when the selected SkillScopeMode is SkillScopeUser.
+//
+// Keep this struct intentionally small. Future dimensions should be added via
+// a resolver/key/labels extension instead of adding fields here, so existing
+// callers using composite literals remain source-compatible.
 type SkillScope struct {
 	AppName string
 	UserID  string

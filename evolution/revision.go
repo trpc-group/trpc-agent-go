@@ -43,9 +43,10 @@ const (
 	// async gate pipelines can park revisions in this state.
 	RevisionPending RevisionStatus = "pending"
 
-	// RevisionActive marks the revision currently pointed to by
-	// ActivePointer for its SkillID. Exactly zero or one revision per
-	// SkillID is Active at any time.
+	// RevisionActive marks a promoted revision. Create/update revisions
+	// are pointed to by ActivePointer. Delete revisions act as tombstones:
+	// the delete revision is active for audit purposes, while ActivePointer
+	// is cleared so no skill body remains visible at runtime.
 	RevisionActive RevisionStatus = "active"
 
 	// RevisionRejected means one or more gates rejected the revision
@@ -77,6 +78,28 @@ const (
 	RevisionPendingApproval RevisionStatus = "pending_approval"
 )
 
+// RevisionAction classifies the logical operation represented by a revision.
+type RevisionAction string
+
+// Revision actions.
+const (
+	RevisionActionCreate RevisionAction = "create"
+	RevisionActionUpdate RevisionAction = "update"
+	RevisionActionDelete RevisionAction = "delete"
+)
+
+// AuditAction classifies one audit-log entry.
+type AuditAction string
+
+// Audit actions.
+const (
+	AuditActionApprove AuditAction = "approve"
+	AuditActionArchive AuditAction = "archive"
+	AuditActionDelete  AuditAction = "delete"
+	AuditActionPromote AuditAction = "promote"
+	AuditActionReject  AuditAction = "reject"
+)
+
 // Revision is an immutable snapshot of a SkillSpec plus the metadata
 // that makes it safe to ship, audit, and roll back.
 //
@@ -89,8 +112,9 @@ type Revision struct {
 	SkillID    string         `json:"skill_id"`
 	RevisionID string         `json:"revision_id"`
 	ParentID   string         `json:"parent_id,omitempty"`
+	TargetName string         `json:"target_name,omitempty"`
 	Source     string         `json:"source"` // e.g. "reviewer", "benchmark-seed".
-	Action     string         `json:"action"` // "create" | "update" | "delete".
+	Action     RevisionAction `json:"action"`
 	Spec       *SkillSpec     `json:"spec,omitempty"`
 	Status     RevisionStatus `json:"status"`
 	CreatedAt  time.Time      `json:"created_at"`
@@ -123,10 +147,15 @@ type EffectivenessReport struct {
 	Reasons []string `json:"reasons,omitempty"`
 }
 
-// HumanReport is the human gate verdict.
+// HumanReport records the human gate verdict and any external approval
+// decision applied later through ApprovalService.
 type HumanReport struct {
-	Held    bool     `json:"held"`
-	Reasons []string `json:"reasons,omitempty"`
+	Held      bool       `json:"held"`
+	Approved  *bool      `json:"approved,omitempty"`
+	Reviewer  string     `json:"reviewer,omitempty"`
+	Comment   string     `json:"comment,omitempty"`
+	DecidedAt *time.Time `json:"decided_at,omitempty"`
+	Reasons   []string   `json:"reasons,omitempty"`
 }
 
 // AuditEvent is one entry in the append-only audit log. Each
@@ -134,12 +163,14 @@ type HumanReport struct {
 // AuditEvent to a JSON-lines file so operators can reconstruct "what
 // the worker did and why" without replaying the reviewer.
 type AuditEvent struct {
-	At         time.Time `json:"at"`
-	Action     string    `json:"action"` // "write_revision" | "reject" | "promote" | "archive" | "rollback".
-	SkillID    string    `json:"skill_id"`
-	RevisionID string    `json:"revision_id,omitempty"`
-	Status     string    `json:"status,omitempty"`
-	Reason     string    `json:"reason,omitempty"`
+	At         time.Time   `json:"at"`
+	Action     AuditAction `json:"action"`
+	SkillID    string      `json:"skill_id"`
+	RevisionID string      `json:"revision_id,omitempty"`
+	Status     string      `json:"status,omitempty"`
+	Reason     string      `json:"reason,omitempty"`
+	Actor      string      `json:"actor,omitempty"`
+	Comment    string      `json:"comment,omitempty"`
 }
 
 // CandidateStore persists immutable revisions plus an append-only
@@ -477,4 +508,17 @@ func newRevisionID() string {
 // both are enabled.
 func skillIDFromName(name string) string {
 	return sanitizeSkillName(name)
+}
+
+func revisionTargetName(rev *Revision) string {
+	if rev == nil {
+		return ""
+	}
+	if strings.TrimSpace(rev.TargetName) != "" {
+		return rev.TargetName
+	}
+	if rev.Spec != nil && strings.TrimSpace(rev.Spec.Name) != "" {
+		return rev.Spec.Name
+	}
+	return rev.SkillID
 }

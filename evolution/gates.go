@@ -147,7 +147,7 @@ func (g *outcomeBasedEffectivenessGate) Evaluate(
 	}
 	// Delete revisions always pass: the reviewer decided to remove a
 	// skill, which is a valid learning signal even from a failed run.
-	if rev.Action == "delete" {
+	if rev.Action == RevisionActionDelete {
 		return &EffectivenessReport{Passed: true}, nil
 	}
 	// When no outcome is attached (online service without evaluator),
@@ -198,7 +198,7 @@ func (g *defaultSpecGate) Validate(_ context.Context, c *Revision, existing []Ex
 	reasons := make([]string, 0, 4)
 
 	// Deletion revisions skip spec-body checks by design.
-	if c.Action == "delete" {
+	if c.Action == RevisionActionDelete {
 		return &SpecReport{Passed: true}, nil
 	}
 
@@ -233,7 +233,7 @@ func (g *defaultSpecGate) Validate(_ context.Context, c *Revision, existing []Ex
 	// Duplicate detection: reject if the proposed name normalizes to
 	// an existing skill name AND action == "create". Updates are
 	// expected to share the SkillID.
-	if c.Action == "create" {
+	if c.Action == RevisionActionCreate {
 		cand := canonicalSkillName(c.Spec.Name)
 		for _, ex := range existing {
 			if canonicalSkillName(ex.Name) == cand {
@@ -249,7 +249,7 @@ func (g *defaultSpecGate) Validate(_ context.Context, c *Revision, existing []Ex
 	// when a generic parent "Foo - Multi-City" already exists. The
 	// reconciler also rewrites these on reviewer output; the SpecGate
 	// is the last line of defense.
-	if c.Action == "create" {
+	if c.Action == RevisionActionCreate {
 		if matched := matchesQuantifiedSibling(c.Spec.Name, existing); matched != "" {
 			reasons = append(reasons,
 				fmt.Sprintf("count-specific sibling of generic parent %q; should be an update", matched))
@@ -444,5 +444,5 @@ func NewCreateOnlyHoldGate() HumanGate { return &createOnlyHoldGate{} }
 
 // ShouldHold implements HumanGate.
 func (g *createOnlyHoldGate) ShouldHold(_ context.Context, rev *Revision, _ *Outcome) (bool, error) {
-	return rev.Action == "create", nil
+	return rev.Action == RevisionActionCreate, nil
 }

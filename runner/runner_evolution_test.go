@@ -121,16 +121,19 @@ func TestRunner_WithEvolutionService_Integration(t *testing.T) {
 		"runner-driven hook must not synthesize an outcome")
 }
 
-func TestRunnerClose_ClosesEvolutionService(t *testing.T) {
+func TestRunnerClose_DoesNotCloseEvolutionService(t *testing.T) {
 	mockEvolutionSvc := &mockEvolutionService{}
 	mockAgent := &mockAgent{name: "test-agent"}
 
 	r := NewRunner("test-app", mockAgent, WithEvolutionService(mockEvolutionSvc))
 	require.NoError(t, r.Close())
-	require.Equal(t, 1, mockEvolutionSvc.closeCalled)
+	require.Equal(t, 0, mockEvolutionSvc.closeCalled)
 
 	// Close should be idempotent.
 	require.NoError(t, r.Close())
+	require.Equal(t, 0, mockEvolutionSvc.closeCalled)
+
+	require.NoError(t, mockEvolutionSvc.Close())
 	require.Equal(t, 1, mockEvolutionSvc.closeCalled)
 }
 

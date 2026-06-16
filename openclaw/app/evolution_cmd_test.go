@@ -267,7 +267,7 @@ func TestReadAuditLog(t *testing.T) {
 	events, err := readAuditLog(dir, "recipe-cookbook")
 	require.NoError(t, err)
 	require.Len(t, events, 1)
-	assert.Equal(t, "promote", events[0].Action)
+	assert.Equal(t, evolution.AuditActionPromote, events[0].Action)
 
 	_, err = readAuditLog(dir, "nonexistent")
 	assert.Error(t, err)

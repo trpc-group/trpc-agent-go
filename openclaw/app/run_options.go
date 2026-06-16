@@ -1937,9 +1937,13 @@ func (cfg *fileConfig) apply(
 		}
 		if cfg.Evolution.SkillScope != nil &&
 			cfg.Evolution.SkillScope.Mode != nil {
-			opts.EvolutionSkillScopeMode = skill.SkillScopeMode(
-				strings.TrimSpace(*cfg.Evolution.SkillScope.Mode),
+			mode, err := parseEvolutionSkillScopeMode(
+				*cfg.Evolution.SkillScope.Mode,
 			)
+			if err != nil {
+				return fmt.Errorf("evolution.skill_scope.mode: %w", err)
+			}
+			opts.EvolutionSkillScopeMode = mode
 		}
 	}
 
@@ -2433,6 +2437,19 @@ func parseDuration(raw string) (time.Duration, error) {
 		return 0, nil
 	}
 	return time.ParseDuration(v)
+}
+
+func parseEvolutionSkillScopeMode(raw string) (skill.SkillScopeMode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return skill.SkillScopeNone, nil
+	case string(skill.SkillScopeApp):
+		return skill.SkillScopeApp, nil
+	case string(skill.SkillScopeUser):
+		return skill.SkillScopeUser, nil
+	default:
+		return skill.SkillScopeNone, fmt.Errorf("unsupported mode %q", raw)
+	}
 }
 
 func flagWasSet(set map[string]struct{}, name string) bool {

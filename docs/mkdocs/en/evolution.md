@@ -107,6 +107,7 @@ func main() {
         runner.WithEvolutionService(evoSvc),
     )
     defer r.Close()
+    // WithEvolutionService borrows evoSvc; keep the explicit evoSvc.Close.
 
     // 5. Run tasks normally — skills are extracted in background
     //    and loaded via skill_load on subsequent matching tasks.
@@ -222,7 +223,7 @@ evoSvc.EnqueueLearningJob(ctx, evolution.LearningJob{
 
 ### HumanGate (Optional)
 
-Holds revisions after all automatic gates pass:
+Holds create/update/delete revisions after all automatic gates pass:
 
 ```go
 // Hold all revisions
@@ -242,8 +243,14 @@ approvalSvc.Decide(ctx, evolution.ApprovalDecision{
     SkillID:    pending[0].SkillID,
     Approved:   true,
     Reviewer:   "alice@example.com",
+    Comment:    "looks good",
 })
 ```
+
+The decision is stored on `HumanReport` (`Approved`, `Reviewer`, `Comment`,
+`DecidedAt`) and appended to the audit log. Delete revisions held by a
+`HumanGate` do not mutate the live skill until approval; approving the delete
+calls `Publisher.DeleteSkill` and clears the active pointer.
 
 ### Custom Gates
 
@@ -284,6 +291,9 @@ pending_approval ──→ [approve] ──→ active
 
 active ──→ [superseded] ──→ archived (rollback possible)
 ```
+
+For approved delete revisions, the delete revision is recorded and the active
+pointer is cleared so no previous revision remains visible.
 
 On-disk structure:
 

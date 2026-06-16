@@ -162,11 +162,11 @@ func WithEffectivenessGate(g EffectivenessGate) Option {
 	return func(o *serviceOpts) { o.effectivenessGate = g }
 }
 
-// WithHumanGate configures human approval. When set, revisions that
-// pass all automatic gates are held in pending_approval state until
-// an external system approves or rejects them. The gate itself only
-// decides "should we hold?" — the actual approve/reject action is
-// driven externally (via CLI, HTTP API, or webhook).
+// WithHumanGate configures human approval. When set, create/update/delete
+// revisions that pass all automatic gates are held in pending_approval state
+// until an external system approves or rejects them. The gate itself only
+// decides "should we hold?" — the actual approve/reject action is driven
+// externally (via CLI, HTTP API, or webhook).
 func WithHumanGate(g HumanGate) Option {
 	return func(o *serviceOpts) { o.humanGate = g }
 }

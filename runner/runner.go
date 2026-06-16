@@ -118,7 +118,7 @@ func WithArtifactService(service artifact.Service) Option {
 
 // WithEvolutionService sets the evolution service that reviews
 // completed sessions and extracts reusable skills.
-// The runner closes the service when Runner.Close is called.
+// The caller owns the service lifecycle; Runner.Close does not close it.
 func WithEvolutionService(service evolution.Service) Option {
 	return func(opts *Options) {
 		opts.evolutionService = service
@@ -462,8 +462,8 @@ func NewRunnerWithAgentFactory(
 
 // Close closes the runner and cleans up owned resources.
 // It's safe to call Close multiple times.
-// User-provided evolution services registered via WithEvolutionService are also
-// closed so their background workers do not leak across runs.
+// User-provided evolution services registered via WithEvolutionService are
+// borrowed and remain owned by the caller.
 func (r *runner) Close() error {
 	var closeErr error
 	r.closeOnce.Do(func() {
@@ -472,12 +472,6 @@ func (r *runner) Close() error {
 			if err := r.pluginManager.Close(context.Background()); err != nil {
 				closeErr = err
 				log.Errorf("close plugins failed: %v", err)
-			}
-		}
-		if r.evolutionService != nil {
-			if err := r.evolutionService.Close(); err != nil {
-				closeErr = err
-				log.Errorf("close evolution service failed: %v", err)
 			}
 		}
 		// Only close resources that we own (created by this runner).

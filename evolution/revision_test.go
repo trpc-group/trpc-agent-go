@@ -35,7 +35,7 @@ func TestFileCandidateStoreRoundTrip(t *testing.T) {
 		SkillID:    skillIDFromName(spec.Name),
 		RevisionID: newRevisionID(),
 		Source:     "reviewer",
-		Action:     "create",
+		Action:     RevisionActionCreate,
 		Spec:       spec,
 		Status:     RevisionActive,
 	}
@@ -60,7 +60,7 @@ func TestFileCandidateStoreRoundTrip(t *testing.T) {
 	}
 	// Audit log is appended and readable.
 	if err := store.AppendAudit(ctx, AuditEvent{
-		Action:     "promote",
+		Action:     AuditActionPromote,
 		SkillID:    rev.SkillID,
 		RevisionID: rev.RevisionID,
 		Status:     string(RevisionActive),
@@ -114,7 +114,7 @@ func TestFileActivePointerSetClearGet(t *testing.T) {
 
 func TestDefaultSpecGateRejectsMissingFields(t *testing.T) {
 	g := NewDefaultSpecGate()
-	rev := &Revision{Action: "create", Spec: &SkillSpec{
+	rev := &Revision{Action: RevisionActionCreate, Spec: &SkillSpec{
 		Name: "", // empty
 	}}
 	report, err := g.Validate(context.Background(), rev, nil)
@@ -131,7 +131,7 @@ func TestDefaultSpecGateRejectsMissingFields(t *testing.T) {
 
 func TestDefaultSpecGateAcceptsGoodCreate(t *testing.T) {
 	g := NewDefaultSpecGate()
-	rev := &Revision{Action: "create", Spec: &SkillSpec{
+	rev := &Revision{Action: RevisionActionCreate, Spec: &SkillSpec{
 		Name:        "Weather Report",
 		Description: "Collects weather.",
 		WhenToUse:   "weather tasks",
@@ -146,7 +146,7 @@ func TestDefaultSpecGateAcceptsGoodCreate(t *testing.T) {
 func TestDefaultSpecGateRejectsDuplicateCreate(t *testing.T) {
 	g := NewDefaultSpecGate()
 	existing := []ExistingSkill{{Name: "Weather Report"}}
-	rev := &Revision{Action: "create", Spec: &SkillSpec{
+	rev := &Revision{Action: RevisionActionCreate, Spec: &SkillSpec{
 		Name:        "Weather Report",
 		Description: "dup",
 		WhenToUse:   "dup",
@@ -161,7 +161,7 @@ func TestDefaultSpecGateRejectsDuplicateCreate(t *testing.T) {
 func TestDefaultSpecGateRejectsCountSibling(t *testing.T) {
 	g := NewDefaultSpecGate()
 	existing := []ExistingSkill{{Name: "Weather Monitor - Multi-City"}}
-	rev := &Revision{Action: "create", Spec: &SkillSpec{
+	rev := &Revision{Action: RevisionActionCreate, Spec: &SkillSpec{
 		Name:        "Weather Monitor - 3 Cities",
 		Description: "siblings",
 		WhenToUse:   "dup",
@@ -247,7 +247,7 @@ func TestOutcomeBasedEffectivenessGatePassesOnSuccess(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate()
 	score := 95.0
 	report, err := g.Evaluate(context.Background(),
-		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
+		&Revision{Action: RevisionActionUpdate, Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomeSuccess, Score: &score},
 	)
 	if err != nil || !report.Passed {
@@ -258,7 +258,7 @@ func TestOutcomeBasedEffectivenessGatePassesOnSuccess(t *testing.T) {
 func TestOutcomeBasedEffectivenessGateHoldsOnFail(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate()
 	report, err := g.Evaluate(context.Background(),
-		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
+		&Revision{Action: RevisionActionUpdate, Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomeFail},
 	)
 	if err != nil {
@@ -276,7 +276,7 @@ func TestOutcomeBasedEffectivenessGateHoldsOnLowScore(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate()
 	score := 0.5
 	report, _ := g.Evaluate(context.Background(),
-		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
+		&Revision{Action: RevisionActionUpdate, Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomePartial, Score: &score},
 	)
 	if report.Passed {
@@ -287,7 +287,7 @@ func TestOutcomeBasedEffectivenessGateHoldsOnLowScore(t *testing.T) {
 func TestOutcomeBasedEffectivenessGatePassesOnNoOutcome(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate()
 	report, _ := g.Evaluate(context.Background(),
-		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
+		&Revision{Action: RevisionActionUpdate, Spec: &SkillSpec{Name: "x"}},
 		nil,
 	)
 	if !report.Passed {
@@ -298,7 +298,7 @@ func TestOutcomeBasedEffectivenessGatePassesOnNoOutcome(t *testing.T) {
 func TestOutcomeBasedEffectivenessGatePassesDeleteOnFail(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate()
 	report, _ := g.Evaluate(context.Background(),
-		&Revision{Action: "delete"},
+		&Revision{Action: RevisionActionDelete},
 		&Outcome{Status: OutcomeFail},
 	)
 	if !report.Passed {
@@ -338,7 +338,7 @@ func TestWriteRevision_RejectsPathTraversal(t *testing.T) {
 		SkillID:    "my-skill",
 		RevisionID: "..escape",
 		Source:     "test",
-		Action:     "create",
+		Action:     RevisionActionCreate,
 		Spec:       &SkillSpec{Name: "x"},
 		Status:     RevisionPending,
 	}
@@ -353,7 +353,7 @@ func TestWriteRevision_RejectsSlashInID(t *testing.T) {
 		SkillID:    "my-skill",
 		RevisionID: "foo/bar",
 		Source:     "test",
-		Action:     "create",
+		Action:     RevisionActionCreate,
 		Spec:       &SkillSpec{Name: "x"},
 		Status:     RevisionPending,
 	}
@@ -403,7 +403,7 @@ func TestWriteRevision_DeletionRevisionNoSpec(t *testing.T) {
 		SkillID:    "doomed",
 		RevisionID: "rev-del-1",
 		Source:     "reviewer",
-		Action:     "delete",
+		Action:     RevisionActionDelete,
 		Spec:       nil, // deletions have no spec
 		Status:     RevisionActive,
 	}
@@ -437,7 +437,7 @@ func TestListRevisions_MultipleRevisions(t *testing.T) {
 			SkillID:    "multi",
 			RevisionID: id,
 			Source:     "test",
-			Action:     "create",
+			Action:     RevisionActionCreate,
 			Spec:       &SkillSpec{Name: "Multi", Description: "d", WhenToUse: "w", Steps: []string{"s"}},
 			Status:     RevisionActive,
 		})
@@ -452,7 +452,7 @@ func TestListRevisions_MultipleRevisions(t *testing.T) {
 func TestAppendAudit_EmptySkillID(t *testing.T) {
 	store := NewFileCandidateStore(t.TempDir())
 	err := store.AppendAudit(context.Background(), AuditEvent{
-		Action:  "promote",
+		Action:  AuditActionPromote,
 		SkillID: "  ",
 	})
 	require.Error(t, err)
@@ -463,7 +463,7 @@ func TestAppendAudit_FillsTimestamp(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileCandidateStore(dir)
 	err := store.AppendAudit(context.Background(), AuditEvent{
-		Action:  "promote",
+		Action:  AuditActionPromote,
 		SkillID: "fill-time",
 	})
 	require.NoError(t, err)
@@ -509,7 +509,7 @@ func TestOutcomeBasedEffectivenessGate_NilRevision(t *testing.T) {
 func TestOutcomeBasedEffectivenessGate_AgentErrorHeld(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate()
 	report, _ := g.Evaluate(context.Background(),
-		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
+		&Revision{Action: RevisionActionUpdate, Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomeAgentError},
 	)
 	assert.False(t, report.Passed)
@@ -525,7 +525,7 @@ func TestDefaultSpecGate_NilCandidate(t *testing.T) {
 
 func TestDefaultSpecGate_NilSpec(t *testing.T) {
 	g := NewDefaultSpecGate()
-	report, err := g.Validate(context.Background(), &Revision{Action: "create", Spec: nil}, nil)
+	report, err := g.Validate(context.Background(), &Revision{Action: RevisionActionCreate, Spec: nil}, nil)
 	require.NoError(t, err)
 	assert.False(t, report.Passed)
 	assert.Contains(t, report.Reasons[0], "missing spec body")
@@ -533,14 +533,14 @@ func TestDefaultSpecGate_NilSpec(t *testing.T) {
 
 func TestDefaultSpecGate_DeleteAction_AlwaysPasses(t *testing.T) {
 	g := NewDefaultSpecGate()
-	report, err := g.Validate(context.Background(), &Revision{Action: "delete"}, nil)
+	report, err := g.Validate(context.Background(), &Revision{Action: RevisionActionDelete}, nil)
 	require.NoError(t, err)
 	assert.True(t, report.Passed)
 }
 
 func TestDefaultSpecGate_NameTooLong(t *testing.T) {
 	g := &defaultSpecGate{minSteps: 1, maxNameLen: 10}
-	rev := &Revision{Action: "create", Spec: &SkillSpec{
+	rev := &Revision{Action: RevisionActionCreate, Spec: &SkillSpec{
 		Name:        "This is a very long skill name exceeding 10 chars",
 		Description: "desc",
 		WhenToUse:   "when",

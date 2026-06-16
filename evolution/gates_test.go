@@ -23,7 +23,7 @@ func TestDefaultSpecGate_UpdateActionNotCheckedForDuplicates(t *testing.T) {
 	g := NewDefaultSpecGate()
 	existing := []ExistingSkill{{Name: "Weather Report"}}
 	// An update action with the same name as existing should pass
-	rev := &Revision{Action: "update", Spec: &SkillSpec{
+	rev := &Revision{Action: RevisionActionUpdate, Spec: &SkillSpec{
 		Name:        "Weather Report",
 		Description: "updated",
 		WhenToUse:   "always",
@@ -37,7 +37,7 @@ func TestDefaultSpecGate_UpdateActionNotCheckedForDuplicates(t *testing.T) {
 func TestDefaultSpecGate_MinStepsDefault(t *testing.T) {
 	// When MinSteps is 0, default is 2
 	g := &defaultSpecGate{minSteps: 0, maxNameLen: 0}
-	rev := &Revision{Action: "create", Spec: &SkillSpec{
+	rev := &Revision{Action: RevisionActionCreate, Spec: &SkillSpec{
 		Name:        "One Step",
 		Description: "desc",
 		WhenToUse:   "when",
@@ -58,7 +58,7 @@ func TestDefaultSpecGate_MaxNameLenDefault(t *testing.T) {
 	for i := range longName {
 		longName[i] = 'a'
 	}
-	rev := &Revision{Action: "create", Spec: &SkillSpec{
+	rev := &Revision{Action: RevisionActionCreate, Spec: &SkillSpec{
 		Name:        string(longName),
 		Description: "desc",
 		WhenToUse:   "when",
@@ -149,7 +149,7 @@ func TestOutcomeBasedEffectivenessGate_NoScoreThreshold(t *testing.T) {
 	g := &outcomeBasedEffectivenessGate{minScore: 0, rejectOnFail: false}
 	score := 10.0
 	report, err := g.Evaluate(context.Background(),
-		&Revision{Action: "create", Spec: &SkillSpec{Name: "x"}},
+		&Revision{Action: RevisionActionCreate, Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomePartial, Score: &score},
 	)
 	require.NoError(t, err)
@@ -159,7 +159,7 @@ func TestOutcomeBasedEffectivenessGate_NoScoreThreshold(t *testing.T) {
 func TestOutcomeBasedEffectivenessGate_RejectOnFailDisabled(t *testing.T) {
 	g := &outcomeBasedEffectivenessGate{minScore: 0, rejectOnFail: false}
 	report, _ := g.Evaluate(context.Background(),
-		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
+		&Revision{Action: RevisionActionUpdate, Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomeFail},
 	)
 	assert.True(t, report.Passed, "RejectOnFail=false means failures pass")
@@ -169,7 +169,7 @@ func TestOutcomeBasedEffectivenessGate_ScoreNil(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate()
 	// No score provided (nil), should not trigger score check
 	report, _ := g.Evaluate(context.Background(),
-		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
+		&Revision{Action: RevisionActionUpdate, Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomeSuccess, Score: nil},
 	)
 	assert.True(t, report.Passed)
@@ -179,7 +179,7 @@ func TestOutcomeBasedEffectivenessGate_ExactMinScore(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate() // MinScore = 0.8
 	score := 0.8
 	report, _ := g.Evaluate(context.Background(),
-		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
+		&Revision{Action: RevisionActionUpdate, Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomeSuccess, Score: &score},
 	)
 	assert.True(t, report.Passed, "exactly at MinScore should pass")
@@ -189,7 +189,7 @@ func TestOutcomeBasedEffectivenessGate_BothReasons(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate() // MinScore=0.8, RejectOnFail=true
 	score := 0.5
 	report, _ := g.Evaluate(context.Background(),
-		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
+		&Revision{Action: RevisionActionUpdate, Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomeFail, Score: &score},
 	)
 	assert.False(t, report.Passed)
@@ -266,7 +266,7 @@ func TestContainsPathTraversal_DoubleDotWrite(t *testing.T) {
 
 func TestNewDefaultSpecGate_Defaults(t *testing.T) {
 	g := NewDefaultSpecGate()
-	rev := &Revision{Action: "create", Spec: &SkillSpec{
+	rev := &Revision{Action: RevisionActionCreate, Spec: &SkillSpec{
 		Name:        "One Step",
 		Description: "desc",
 		WhenToUse:   "when",
@@ -291,7 +291,7 @@ func TestNewOutcomeBasedEffectivenessGate_Defaults(t *testing.T) {
 	g := NewOutcomeBasedEffectivenessGate()
 	score := 0.5
 	report, err := g.Evaluate(context.Background(),
-		&Revision{Action: "update", Spec: &SkillSpec{Name: "x"}},
+		&Revision{Action: RevisionActionUpdate, Spec: &SkillSpec{Name: "x"}},
 		&Outcome{Status: OutcomeFail, Score: &score},
 	)
 	require.NoError(t, err)
@@ -305,12 +305,12 @@ func TestNewOutcomeBasedEffectivenessGate_Defaults(t *testing.T) {
 
 func TestAlwaysHoldGate(t *testing.T) {
 	g := NewAlwaysHoldGate()
-	rev := &Revision{Action: "create", Spec: &SkillSpec{Name: "test"}}
+	rev := &Revision{Action: RevisionActionCreate, Spec: &SkillSpec{Name: "test"}}
 	hold, err := g.ShouldHold(context.Background(), rev, nil)
 	assert.NoError(t, err)
 	assert.True(t, hold)
 
-	rev.Action = "update"
+	rev.Action = RevisionActionUpdate
 	hold, err = g.ShouldHold(context.Background(), rev, nil)
 	assert.NoError(t, err)
 	assert.True(t, hold)
@@ -318,7 +318,7 @@ func TestAlwaysHoldGate(t *testing.T) {
 
 func TestCreateOnlyHoldGate_Create(t *testing.T) {
 	g := NewCreateOnlyHoldGate()
-	rev := &Revision{Action: "create", Spec: &SkillSpec{Name: "new-skill"}}
+	rev := &Revision{Action: RevisionActionCreate, Spec: &SkillSpec{Name: "new-skill"}}
 	hold, err := g.ShouldHold(context.Background(), rev, nil)
 	assert.NoError(t, err)
 	assert.True(t, hold)
@@ -326,7 +326,7 @@ func TestCreateOnlyHoldGate_Create(t *testing.T) {
 
 func TestCreateOnlyHoldGate_Update(t *testing.T) {
 	g := NewCreateOnlyHoldGate()
-	rev := &Revision{Action: "update", Spec: &SkillSpec{Name: "existing-skill"}}
+	rev := &Revision{Action: RevisionActionUpdate, Spec: &SkillSpec{Name: "existing-skill"}}
 	hold, err := g.ShouldHold(context.Background(), rev, nil)
 	assert.NoError(t, err)
 	assert.False(t, hold)
@@ -334,7 +334,7 @@ func TestCreateOnlyHoldGate_Update(t *testing.T) {
 
 func TestCreateOnlyHoldGate_Delete(t *testing.T) {
 	g := NewCreateOnlyHoldGate()
-	rev := &Revision{Action: "delete", Spec: &SkillSpec{Name: "old-skill"}}
+	rev := &Revision{Action: RevisionActionDelete, Spec: &SkillSpec{Name: "old-skill"}}
 	hold, err := g.ShouldHold(context.Background(), rev, nil)
 	assert.NoError(t, err)
 	assert.False(t, hold)

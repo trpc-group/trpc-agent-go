@@ -1227,7 +1227,7 @@ func TestWorker_ApprovalGate_PromoteArchivesPreviousActive(t *testing.T) {
 		SkillID:    skillIDFromName("Clean Skill"),
 		RevisionID: "rev-old",
 		Source:     "reviewer",
-		Action:     "create",
+		Action:     RevisionActionCreate,
 		Status:     RevisionActive,
 		Spec:       &SkillSpec{Name: "Clean Skill", Description: "old", WhenToUse: "use", Steps: []string{"a", "b"}},
 		CreatedAt:  time.Now().UTC(),
@@ -2012,6 +2012,66 @@ func TestWorker_HumanGate_HoldsRevision(t *testing.T) {
 	stored, _ := store.ReadRevision(context.Background(), skillIDFromName("New Skill"), list[0])
 	assert.Equal(t, RevisionPendingApproval, stored.Status)
 	assert.NotNil(t, stored.HumanReport)
+	assert.True(t, stored.HumanReport.Held)
+}
+
+func TestWorker_HumanGate_HoldsDeleteRevision(t *testing.T) {
+	dir := t.TempDir()
+	pub := &mockPublisher{}
+	repo := &mockSkillRepo{
+		summaries: []skill.Summary{{Name: "Stale Skill"}},
+		bodies:    map[string]string{"Stale Skill": "old body"},
+	}
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+
+	rev := &mockReviewer{decision: &ReviewDecision{
+		Deletions: []string{"Stale Skill"},
+	}}
+	w := newWorker(workerConfig{
+		Reviewer:       rev,
+		Publisher:      pub,
+		ReviewPolicy:   alwaysReviewPolicy{},
+		SkillRepo:      repo,
+		CandidateStore: store,
+		ActivePointer:  ptr,
+		HumanGate:      NewAlwaysHoldGate(),
+	})
+
+	sess := newTestSession()
+	addEvents(sess,
+		model.Message{Role: model.RoleUser, Content: "drop stale skill"},
+		model.Message{Role: model.RoleAssistant, Content: "done"},
+	)
+	w.processJob(&pendingJob{
+		ctx: context.Background(),
+		job: LearningJob{
+			Session: sess,
+			Outcome: &Outcome{Status: OutcomeSuccess},
+		},
+	})
+
+	pub.mu.Lock()
+	assert.Empty(t, pub.deletions, "publisher should NOT delete a revision held by human gate")
+	pub.mu.Unlock()
+
+	metrics := w.approvalGateMetrics()
+	assert.Equal(t, 1, metrics.CandidatesSeen)
+	assert.Equal(t, 1, metrics.RevisionsWritten)
+	assert.Equal(t, 0, metrics.RevisionsPromoted)
+	assert.Equal(t, 1, metrics.HumanGateHeld)
+	assert.Equal(t, 0, metrics.DeletionsApplied)
+
+	list, err := store.ListRevisions(context.Background(), skillIDFromName("Stale Skill"))
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	stored, err := store.ReadRevision(context.Background(), skillIDFromName("Stale Skill"), list[0])
+	require.NoError(t, err)
+	assert.Equal(t, RevisionActionDelete, stored.Action)
+	assert.Equal(t, "Stale Skill", stored.TargetName)
+	assert.Nil(t, stored.Spec)
+	assert.Equal(t, RevisionPendingApproval, stored.Status)
+	require.NotNil(t, stored.HumanReport)
 	assert.True(t, stored.HumanReport.Held)
 }
 

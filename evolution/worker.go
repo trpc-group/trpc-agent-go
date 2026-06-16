@@ -401,7 +401,7 @@ func (w *worker) applyDecision(ctx context.Context, decision *ReviewDecision, ou
 		if w.applyUpdatesWithGate(ctx, decision.Updates, existing, outcome, scope, scoped, repo) {
 			mutated = true
 		}
-		if w.applyDeletionsWithGate(ctx, decision.Deletions, scope, scoped, repo) {
+		if w.applyDeletionsWithGate(ctx, decision.Deletions, existing, outcome, scope, scoped, repo) {
 			mutated = true
 		}
 	} else {
@@ -633,8 +633,8 @@ func (w *worker) applySkillsWithGate(ctx context.Context, skills []*SkillSpec, e
 		if spec == nil {
 			continue
 		}
-		rev := w.buildRevision(spec, "create", "")
-		if w.processRevision(ctx, rev, existing, "create", outcome, scope, scoped) {
+		rev := w.buildRevision(spec, RevisionActionCreate, "")
+		if w.processRevision(ctx, rev, existing, RevisionActionCreate, outcome, scope, scoped) {
 			mutated = true
 		}
 	}
@@ -657,91 +657,37 @@ func (w *worker) applyUpdatesWithGate(ctx context.Context, updates []*SkillUpdat
 		}
 		spec := *upd.NewSpec
 		spec.Name = upd.Name // force stable on-disk name
-		rev := w.buildRevision(&spec, "update", upd.Name)
-		if w.processRevision(ctx, rev, existing, "update", outcome, scope, scoped) {
+		rev := w.buildRevision(&spec, RevisionActionUpdate, upd.Name)
+		if w.processRevision(ctx, rev, existing, RevisionActionUpdate, outcome, scope, scoped) {
 			mutated = true
 		}
 	}
 	return mutated
 }
 
-func (w *worker) applyDeletionsWithGate(ctx context.Context, names []string, scope skill.SkillScope, scoped bool, repo skill.Repository) bool {
+func (w *worker) applyDeletionsWithGate(ctx context.Context, names []string, existing []ExistingSkill, outcome *Outcome, scope skill.SkillScope, scoped bool, repo skill.Repository) bool {
 	mutated := false
-	publisher, err := w.publisherForScope(scope, scoped)
-	if err != nil {
-		log.WarnfContext(ctx, "evolution: resolve publisher failed: %v", err)
-		return false
-	}
-	store, err := w.candidateStoreForScope(scope, scoped)
-	if err != nil {
-		log.WarnfContext(ctx, "evolution: resolve candidate store failed: %v", err)
-		return false
-	}
-	pointer, err := w.activePointerForScope(scope, scoped)
-	if err != nil {
-		log.WarnfContext(ctx, "evolution: resolve active pointer failed: %v", err)
-		return false
-	}
 	for _, name := range names {
-		if name == "" || !skillExists(repo, name) {
+		if strings.TrimSpace(name) == "" || !skillExists(repo, name) {
 			continue
 		}
-		rev := &Revision{
-			SkillID:    skillIDFromName(name),
-			RevisionID: newRevisionID(),
-			Source:     "reviewer",
-			Action:     "delete",
-			Status:     RevisionPending,
-			CreatedAt:  time.Now().UTC(),
-		}
-		w.bumpGateMetric(func(m *approvalGateCounters) { m.CandidatesSeen++ })
-		// No spec gate / safety gate for deletes — the Spec is nil by
-		// design. We still log the revision for audit and rollback.
-		if store != nil {
-			if err := store.WriteRevision(ctx, rev); err != nil {
-				log.WarnfContext(ctx, "evolution: write delete revision failed: %v", err)
-			} else {
-				w.bumpGateMetric(func(m *approvalGateCounters) { m.RevisionsWritten++ })
-			}
-		}
-		if publisher != nil {
-			if err := publisher.DeleteSkill(ctx, name); err != nil {
-				log.WarnfContext(ctx, "evolution: delete skill %q failed: %v", name, err)
-				continue
-			}
-			rev.Status = RevisionActive
-			now := time.Now().UTC()
-			rev.PromotedAt = &now
-		} else {
-			// No publisher means we cannot actually delete the skill
-			// from the live repository. Skip pointer/audit/metrics to
-			// avoid diverging state.
+		if !w.isEvolutionManagedSkill(name, repo, scope, scoped) {
+			log.WarnfContext(ctx, "evolution: delete skill %q skipped: not evolution-managed (protected)", name)
 			continue
 		}
-		if pointer != nil {
-			if err := pointer.Clear(ctx, rev.SkillID); err != nil {
-				log.WarnfContext(ctx, "evolution: clear active pointer %q failed: %v", rev.SkillID, err)
-			}
+		rev := w.buildDeleteRevision(name)
+		if w.processRevision(ctx, rev, existing, RevisionActionDelete, outcome, scope, scoped) {
+			mutated = true
 		}
-		if store != nil {
-			_ = store.AppendAudit(ctx, AuditEvent{
-				Action:     "delete",
-				SkillID:    rev.SkillID,
-				RevisionID: rev.RevisionID,
-				Status:     string(rev.Status),
-				Reason:     "reviewer-driven deletion",
-			})
-		}
-		w.bumpGateMetric(func(m *approvalGateCounters) { m.DeletionsApplied++ })
-		mutated = true
 	}
 	return mutated
 }
 
 // buildRevision constructs a fresh Revision for a create or update.
-func (w *worker) buildRevision(spec *SkillSpec, action, parentName string) *Revision {
+func (w *worker) buildRevision(spec *SkillSpec, action RevisionAction, parentName string) *Revision {
 	rev := &Revision{
 		SkillID:    skillIDFromName(spec.Name),
+		TargetName: spec.Name,
 		RevisionID: newRevisionID(),
 		Source:     "reviewer",
 		Action:     action,
@@ -755,10 +701,22 @@ func (w *worker) buildRevision(spec *SkillSpec, action, parentName string) *Revi
 	return rev
 }
 
+func (w *worker) buildDeleteRevision(name string) *Revision {
+	return &Revision{
+		SkillID:    skillIDFromName(name),
+		TargetName: name,
+		RevisionID: newRevisionID(),
+		Source:     "reviewer",
+		Action:     RevisionActionDelete,
+		Status:     RevisionPending,
+		CreatedAt:  time.Now().UTC(),
+	}
+}
+
 // processRevision runs the full gate + publish + audit pipeline for
 // one revision. Returns true when the live publisher was actually
 // updated (so the worker knows to refresh the repository).
-func (w *worker) processRevision(ctx context.Context, rev *Revision, existing []ExistingSkill, actionLabel string, outcome *Outcome, scope skill.SkillScope, scoped bool) bool {
+func (w *worker) processRevision(ctx context.Context, rev *Revision, existing []ExistingSkill, actionLabel RevisionAction, outcome *Outcome, scope skill.SkillScope, scoped bool) bool {
 	w.bumpGateMetric(func(m *approvalGateCounters) { m.CandidatesSeen++ })
 	store, err := w.candidateStoreForScope(scope, scoped)
 	if err != nil {
@@ -801,12 +759,12 @@ func (w *worker) processRevision(ctx context.Context, rev *Revision, existing []
 // Returns true if all gates pass (or if no gates are configured).
 func (w *worker) runGates(ctx context.Context, rev *Revision, existing []ExistingSkill, outcome *Outcome) bool {
 	passed := true
-	if w.specGate != nil {
+	if rev.Action != RevisionActionDelete && w.specGate != nil {
 		if !w.runSpecGate(ctx, rev, existing) {
 			passed = false
 		}
 	}
-	if w.safetyGate != nil {
+	if rev.Action != RevisionActionDelete && w.safetyGate != nil {
 		if !w.runSafetyGate(ctx, rev) {
 			passed = false
 		}
@@ -829,7 +787,7 @@ func (w *worker) runGates(ctx context.Context, rev *Revision, existing []Existin
 func (w *worker) runSpecGate(ctx context.Context, rev *Revision, existing []ExistingSkill) bool {
 	report, err := w.specGate.Validate(ctx, rev, existing)
 	if err != nil {
-		log.WarnfContext(ctx, "evolution: spec gate error on %q: %v", rev.Spec.Name, err)
+		log.WarnfContext(ctx, "evolution: spec gate error on %q: %v", revisionTargetName(rev), err)
 		return false // fail closed on error
 	}
 	rev.SpecReport = report
@@ -846,7 +804,7 @@ func (w *worker) runSpecGate(ctx context.Context, rev *Revision, existing []Exis
 func (w *worker) runSafetyGate(ctx context.Context, rev *Revision) bool {
 	report, err := w.safetyGate.Scan(ctx, rev)
 	if err != nil {
-		log.WarnfContext(ctx, "evolution: safety gate error on %q: %v", rev.Spec.Name, err)
+		log.WarnfContext(ctx, "evolution: safety gate error on %q: %v", revisionTargetName(rev), err)
 		return false // fail closed on error
 	}
 	rev.SafetyReport = report
@@ -863,7 +821,7 @@ func (w *worker) runSafetyGate(ctx context.Context, rev *Revision) bool {
 func (w *worker) runEffectivenessGate(ctx context.Context, rev *Revision, outcome *Outcome) bool {
 	report, err := w.effectivenessGate.Evaluate(ctx, rev, outcome)
 	if err != nil {
-		log.WarnfContext(ctx, "evolution: effectiveness gate error on %q: %v", rev.Spec.Name, err)
+		log.WarnfContext(ctx, "evolution: effectiveness gate error on %q: %v", revisionTargetName(rev), err)
 		return false // fail closed on error
 	}
 	rev.EffectivenessReport = report
@@ -872,7 +830,7 @@ func (w *worker) runEffectivenessGate(ctx context.Context, rev *Revision, outcom
 		w.bumpGateMetric(func(m *approvalGateCounters) { m.EffectivenessGateRejected++ })
 		log.InfofContext(ctx,
 			"evolution: effectiveness gate held %q revision=%s reasons=%v",
-			rev.Spec.Name, rev.RevisionID, report.Reasons)
+			revisionTargetName(rev), rev.RevisionID, report.Reasons)
 		return false
 	}
 	return true
@@ -881,7 +839,7 @@ func (w *worker) runEffectivenessGate(ctx context.Context, rev *Revision, outcom
 func (w *worker) runHumanGate(ctx context.Context, rev *Revision, outcome *Outcome) bool {
 	hold, err := w.humanGate.ShouldHold(ctx, rev, outcome)
 	if err != nil {
-		log.WarnfContext(ctx, "evolution: human gate error on %q: %v", rev.Spec.Name, err)
+		log.WarnfContext(ctx, "evolution: human gate error on %q: %v", revisionTargetName(rev), err)
 		hold = true // fail-closed
 	}
 	rev.HumanReport = &HumanReport{Held: hold}
@@ -889,7 +847,7 @@ func (w *worker) runHumanGate(ctx context.Context, rev *Revision, outcome *Outco
 		rev.Status = RevisionPendingApproval
 		w.bumpGateMetric(func(m *approvalGateCounters) { m.HumanGateHeld++ })
 		log.InfofContext(ctx, "evolution: human gate held %q revision=%s for approval",
-			rev.Spec.Name, rev.RevisionID)
+			revisionTargetName(rev), rev.RevisionID)
 		return false
 	}
 	return true
@@ -899,7 +857,7 @@ func (w *worker) runHumanGate(ctx context.Context, rev *Revision, outcome *Outco
 func (w *worker) auditReject(ctx context.Context, rev *Revision, store CandidateStore) {
 	if store != nil {
 		_ = store.AppendAudit(ctx, AuditEvent{
-			Action:     "reject",
+			Action:     AuditActionReject,
 			SkillID:    rev.SkillID,
 			RevisionID: rev.RevisionID,
 			Status:     string(rev.Status),
@@ -910,7 +868,7 @@ func (w *worker) auditReject(ctx context.Context, rev *Revision, store Candidate
 
 // publishRevision writes the skill, updates the active pointer,
 // and appends a promotion audit event.
-func (w *worker) publishRevision(ctx context.Context, rev *Revision, actionLabel string, gatePassed bool, scope skill.SkillScope, scoped bool, store CandidateStore) bool {
+func (w *worker) publishRevision(ctx context.Context, rev *Revision, actionLabel RevisionAction, gatePassed bool, scope skill.SkillScope, scoped bool, store CandidateStore) bool {
 	publisher, err := w.publisherForScope(scope, scoped)
 	if err != nil {
 		log.WarnfContext(ctx, "evolution: resolve publisher failed: %v", err)
@@ -924,9 +882,20 @@ func (w *worker) publishRevision(ctx context.Context, rev *Revision, actionLabel
 	if publisher == nil {
 		return false
 	}
-	if err := publisher.UpsertSkill(ctx, rev.Spec); err != nil {
-		log.WarnfContext(ctx, "evolution: publish revision %s failed: %v", rev.RevisionID, err)
-		return false
+	switch rev.Action {
+	case RevisionActionDelete:
+		if err := publisher.DeleteSkill(ctx, revisionTargetName(rev)); err != nil {
+			log.WarnfContext(ctx, "evolution: delete revision %s failed: %v", rev.RevisionID, err)
+			return false
+		}
+	default:
+		if rev.Spec == nil {
+			return false
+		}
+		if err := publisher.UpsertSkill(ctx, rev.Spec); err != nil {
+			log.WarnfContext(ctx, "evolution: publish revision %s failed: %v", rev.RevisionID, err)
+			return false
+		}
 	}
 	if gatePassed {
 		rev.Status = RevisionActive
@@ -942,29 +911,44 @@ func (w *worker) publishRevision(ctx context.Context, rev *Revision, actionLabel
 			log.WarnfContext(ctx, "evolution: archive active revision %q failed: %v", rev.SkillID, err)
 			return false
 		}
-		if err := pointer.Set(ctx, rev.SkillID, rev.RevisionID); err != nil {
+		var err error
+		if rev.Action == RevisionActionDelete {
+			err = pointer.Clear(ctx, rev.SkillID)
+		} else {
+			err = pointer.Set(ctx, rev.SkillID, rev.RevisionID)
+		}
+		if err != nil {
 			log.WarnfContext(ctx, "evolution: active pointer set %s failed: %v", rev.SkillID, err)
 		}
 	}
 	if store != nil {
 		_ = store.AppendAudit(ctx, AuditEvent{
-			Action:     "promote",
+			Action:     auditActionForRevisionPromotion(rev),
 			SkillID:    rev.SkillID,
 			RevisionID: rev.RevisionID,
 			Status:     string(rev.Status),
-			Reason:     actionLabel,
+			Reason:     string(actionLabel),
 		})
 	}
 	w.bumpGateMetric(func(m *approvalGateCounters) {
 		m.RevisionsPromoted++
 		switch actionLabel {
-		case "create":
+		case RevisionActionCreate:
 			m.CreatesApplied++
-		case "update":
+		case RevisionActionUpdate:
 			m.UpdatesApplied++
+		case RevisionActionDelete:
+			m.DeletionsApplied++
 		}
 	})
 	return true
+}
+
+func auditActionForRevisionPromotion(rev *Revision) AuditAction {
+	if rev != nil && rev.Action == RevisionActionDelete {
+		return AuditActionDelete
+	}
+	return AuditActionPromote
 }
 
 // gateRejectReason returns a short human-readable reason from the
@@ -1016,7 +1000,6 @@ func (w *worker) applySkills(ctx context.Context, skills []*SkillSpec, scope ski
 // isEvolutionManagedSkill checks whether the named skill resides within
 // the evolution-managed directory. Returns true (allow write) if:
 //   - managedSkillsDir is not configured (no isolation enforced)
-//   - skill does not exist yet in the repo (create is always safe)
 //   - skill's on-disk path is under managedSkillsDir
 func (w *worker) isEvolutionManagedSkill(name string, repo skill.Repository, scope skill.SkillScope, scoped bool) bool {
 	managedDir, err := w.scopedRoot(w.managedSkillsDir, scope, scoped)
@@ -1028,7 +1011,7 @@ func (w *worker) isEvolutionManagedSkill(name string, repo skill.Repository, sco
 	}
 	p, err := repo.Path(name)
 	if err != nil {
-		return true // doesn't exist yet → safe to create
+		return !skillExists(repo, name)
 	}
 	rel, err := filepath.Rel(managedDir, p)
 	if err != nil {

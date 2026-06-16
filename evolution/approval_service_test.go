@@ -41,7 +41,7 @@ func TestApprovalService_ListPending_FindsPendingApproval(t *testing.T) {
 		SkillID:    "test-skill",
 		RevisionID: "rev-001",
 		Source:     "reviewer",
-		Action:     "create",
+		Action:     RevisionActionCreate,
 		Status:     RevisionPendingApproval,
 		Spec:       &SkillSpec{Name: "Test Skill", Description: "d", WhenToUse: "w", Steps: []string{"a"}},
 		CreatedAt:  time.Now().UTC(),
@@ -53,7 +53,7 @@ func TestApprovalService_ListPending_FindsPendingApproval(t *testing.T) {
 		SkillID:    "other-skill",
 		RevisionID: "rev-002",
 		Source:     "reviewer",
-		Action:     "create",
+		Action:     RevisionActionCreate,
 		Status:     RevisionActive,
 		Spec:       &SkillSpec{Name: "Other Skill", Description: "d", WhenToUse: "w", Steps: []string{"a"}},
 		CreatedAt:  time.Now().UTC(),
@@ -79,13 +79,14 @@ func TestApprovalService_Decide_Approve(t *testing.T) {
 		SkillID:    "my-skill",
 		RevisionID: "rev-approve",
 		Source:     "reviewer",
-		Action:     "create",
+		Action:     RevisionActionCreate,
 		Status:     RevisionPendingApproval,
 		Spec:       &SkillSpec{Name: "My Skill", Description: "d", WhenToUse: "w", Steps: []string{"s1", "s2"}},
 		CreatedAt:  time.Now().UTC(),
 	}
 	require.NoError(t, store.WriteRevision(ctx, rev))
 
+	decidedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	svc := NewApprovalService(store, ptr, pub)
 	err := svc.Decide(ctx, ApprovalDecision{
 		RevisionID: "rev-approve",
@@ -93,7 +94,7 @@ func TestApprovalService_Decide_Approve(t *testing.T) {
 		Approved:   true,
 		Reviewer:   "alice@example.com",
 		Comment:    "looks good",
-		DecidedAt:  time.Now().UTC(),
+		DecidedAt:  decidedAt,
 	})
 	require.NoError(t, err)
 
@@ -102,6 +103,13 @@ func TestApprovalService_Decide_Approve(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, RevisionActive, stored.Status)
 	assert.NotNil(t, stored.PromotedAt)
+	require.NotNil(t, stored.HumanReport)
+	require.NotNil(t, stored.HumanReport.Approved)
+	assert.True(t, *stored.HumanReport.Approved)
+	assert.Equal(t, "alice@example.com", stored.HumanReport.Reviewer)
+	assert.Equal(t, "looks good", stored.HumanReport.Comment)
+	require.NotNil(t, stored.HumanReport.DecidedAt)
+	assert.True(t, decidedAt.Equal(*stored.HumanReport.DecidedAt))
 
 	// Verify publisher was called
 	pub.mu.Lock()
@@ -112,6 +120,11 @@ func TestApprovalService_Decide_Approve(t *testing.T) {
 	activeRev, err := ptr.Get(ctx, "my-skill")
 	require.NoError(t, err)
 	assert.Equal(t, "rev-approve", activeRev)
+	raw, err := os.ReadFile(filepath.Join(dir, "my-skill", "audit.log"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"action":"approve"`)
+	assert.Contains(t, string(raw), `"actor":"alice@example.com"`)
+	assert.Contains(t, string(raw), `"comment":"looks good"`)
 }
 
 func TestApprovalService_Decide_ApproveArchivesPreviousActive(t *testing.T) {
@@ -125,7 +138,7 @@ func TestApprovalService_Decide_ApproveArchivesPreviousActive(t *testing.T) {
 		SkillID:    "my-skill",
 		RevisionID: "rev-old",
 		Source:     "reviewer",
-		Action:     "create",
+		Action:     RevisionActionCreate,
 		Status:     RevisionActive,
 		Spec:       &SkillSpec{Name: "My Skill", Description: "old", WhenToUse: "w", Steps: []string{"s1", "s2"}},
 		CreatedAt:  time.Now().UTC(),
@@ -134,7 +147,7 @@ func TestApprovalService_Decide_ApproveArchivesPreviousActive(t *testing.T) {
 		SkillID:    "my-skill",
 		RevisionID: "rev-new",
 		Source:     "reviewer",
-		Action:     "update",
+		Action:     RevisionActionUpdate,
 		Status:     RevisionPendingApproval,
 		Spec:       &SkillSpec{Name: "My Skill", Description: "new", WhenToUse: "w", Steps: []string{"s1", "s2"}},
 		CreatedAt:  time.Now().UTC(),
@@ -165,6 +178,79 @@ func TestApprovalService_Decide_ApproveArchivesPreviousActive(t *testing.T) {
 	assert.Contains(t, string(raw), `"revision_id":"rev-old"`)
 }
 
+func TestApprovalService_Decide_ApproveDeleteRevision(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+	pub := &mockPublisher{}
+	ctx := context.Background()
+	skillID := skillIDFromName("Stale Skill")
+
+	oldRev := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-old",
+		Source:     "reviewer",
+		Action:     RevisionActionCreate,
+		Status:     RevisionActive,
+		Spec:       &SkillSpec{Name: "Stale Skill", Description: "old", WhenToUse: "old", Steps: []string{"s1", "s2"}},
+		CreatedAt:  time.Now().UTC(),
+	}
+	pendingRev := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-delete",
+		Source:     "reviewer",
+		Action:     RevisionActionDelete,
+		TargetName: "Stale Skill",
+		Status:     RevisionPendingApproval,
+		CreatedAt:  time.Now().UTC(),
+		HumanReport: &HumanReport{
+			Held:    true,
+			Reasons: []string{"human approval required"},
+		},
+	}
+	require.NoError(t, store.WriteRevision(ctx, oldRev))
+	require.NoError(t, store.WriteRevision(ctx, pendingRev))
+	require.NoError(t, ptr.Set(ctx, skillID, "rev-old"))
+
+	svc := NewApprovalService(store, ptr, pub)
+	err := svc.Decide(ctx, ApprovalDecision{
+		RevisionID: "rev-delete",
+		SkillID:    skillID,
+		Approved:   true,
+		Reviewer:   "alice@example.com",
+		Comment:    "remove stale skill",
+	})
+	require.NoError(t, err)
+
+	pub.mu.Lock()
+	require.Equal(t, []string{"Stale Skill"}, pub.deletions)
+	pub.mu.Unlock()
+
+	storedDelete, err := store.ReadRevision(ctx, skillID, "rev-delete")
+	require.NoError(t, err)
+	assert.Equal(t, RevisionActive, storedDelete.Status)
+	assert.NotNil(t, storedDelete.PromotedAt)
+	require.NotNil(t, storedDelete.HumanReport)
+	require.NotNil(t, storedDelete.HumanReport.Approved)
+	assert.True(t, *storedDelete.HumanReport.Approved)
+	assert.Equal(t, "alice@example.com", storedDelete.HumanReport.Reviewer)
+	assert.Equal(t, "remove stale skill", storedDelete.HumanReport.Comment)
+	assert.Equal(t, []string{"human approval required"}, storedDelete.HumanReport.Reasons)
+
+	storedOld, err := store.ReadRevision(ctx, skillID, "rev-old")
+	require.NoError(t, err)
+	assert.Equal(t, RevisionArchived, storedOld.Status)
+	activeRev, err := ptr.Get(ctx, skillID)
+	require.NoError(t, err)
+	assert.Empty(t, activeRev)
+
+	raw, err := os.ReadFile(filepath.Join(dir, skillID, "audit.log"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"action":"archive"`)
+	assert.Contains(t, string(raw), `"action":"approve"`)
+	assert.Contains(t, string(raw), `"comment":"remove stale skill"`)
+}
+
 func TestApprovalService_Decide_Reject(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileCandidateStore(dir)
@@ -174,13 +260,14 @@ func TestApprovalService_Decide_Reject(t *testing.T) {
 		SkillID:    "bad-skill",
 		RevisionID: "rev-reject",
 		Source:     "reviewer",
-		Action:     "create",
+		Action:     RevisionActionCreate,
 		Status:     RevisionPendingApproval,
 		Spec:       &SkillSpec{Name: "Bad Skill", Description: "d", WhenToUse: "w", Steps: []string{"s1", "s2"}},
 		CreatedAt:  time.Now().UTC(),
 	}
 	require.NoError(t, store.WriteRevision(ctx, rev))
 
+	decidedAt := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
 	svc := NewApprovalService(store, nil, nil)
 	err := svc.Decide(ctx, ApprovalDecision{
 		RevisionID: "rev-reject",
@@ -188,13 +275,25 @@ func TestApprovalService_Decide_Reject(t *testing.T) {
 		Approved:   false,
 		Reviewer:   "bob@example.com",
 		Comment:    "steps too vague",
-		DecidedAt:  time.Now().UTC(),
+		DecidedAt:  decidedAt,
 	})
 	require.NoError(t, err)
 
 	stored, err := store.ReadRevision(ctx, "bad-skill", "rev-reject")
 	require.NoError(t, err)
 	assert.Equal(t, RevisionRejected, stored.Status)
+	require.NotNil(t, stored.HumanReport)
+	require.NotNil(t, stored.HumanReport.Approved)
+	assert.False(t, *stored.HumanReport.Approved)
+	assert.Equal(t, "bob@example.com", stored.HumanReport.Reviewer)
+	assert.Equal(t, "steps too vague", stored.HumanReport.Comment)
+	require.NotNil(t, stored.HumanReport.DecidedAt)
+	assert.True(t, decidedAt.Equal(*stored.HumanReport.DecidedAt))
+	raw, err := os.ReadFile(filepath.Join(dir, "bad-skill", "audit.log"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"action":"reject"`)
+	assert.Contains(t, string(raw), `"actor":"bob@example.com"`)
+	assert.Contains(t, string(raw), `"comment":"steps too vague"`)
 }
 
 func TestApprovalService_Decide_AlreadyDecided(t *testing.T) {
@@ -206,7 +305,7 @@ func TestApprovalService_Decide_AlreadyDecided(t *testing.T) {
 		SkillID:    "decided-skill",
 		RevisionID: "rev-decided",
 		Source:     "reviewer",
-		Action:     "create",
+		Action:     RevisionActionCreate,
 		Status:     RevisionActive, // already promoted
 		Spec:       &SkillSpec{Name: "Decided Skill", Description: "d", WhenToUse: "w", Steps: []string{"s1", "s2"}},
 		CreatedAt:  time.Now().UTC(),
@@ -234,7 +333,7 @@ func TestApprovalService_ListPending_WithLimit(t *testing.T) {
 			SkillID:    name,
 			RevisionID: fmt.Sprintf("rev-%d", i),
 			Source:     "reviewer",
-			Action:     "create",
+			Action:     RevisionActionCreate,
 			Status:     RevisionPendingApproval,
 			Spec:       &SkillSpec{Name: name, Description: "d", WhenToUse: "w", Steps: []string{"s"}},
 			CreatedAt:  time.Now().UTC(),
@@ -284,7 +383,7 @@ func TestApprovalService_Decide_PublisherError(t *testing.T) {
 		SkillID:    "skill",
 		RevisionID: "rev",
 		Source:     "reviewer",
-		Action:     "create",
+		Action:     RevisionActionCreate,
 		Status:     RevisionPendingApproval,
 		Spec:       &SkillSpec{Name: "Skill", Description: "d", WhenToUse: "w", Steps: []string{"s1", "s2"}},
 		CreatedAt:  time.Now().UTC(),

@@ -102,21 +102,66 @@ func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision)
 		return ErrAlreadyDecided
 	}
 
-	persisted := false
+	decidedAt := decision.DecidedAt
+	if decidedAt.IsZero() {
+		decidedAt = time.Now().UTC()
+	}
+	rev.HumanReport = mergeHumanDecision(rev.HumanReport, decision, decidedAt)
+
 	if decision.Approved {
-		// Promote: publish skill + set active pointer
+		if err := s.approveRevision(ctx, rev); err != nil {
+			return err
+		}
+		rev.Status = RevisionActive
+		rev.PromotedAt = &decidedAt
+	} else {
+		rev.Status = RevisionRejected
+	}
+
+	// Persist updated status
+	if err := s.store.WriteRevision(ctx, rev); err != nil {
+		return fmt.Errorf("write revision: %w", err)
+	}
+
+	// Audit trail
+	_ = s.store.AppendAudit(ctx, AuditEvent{
+		At:         decidedAt,
+		Action:     auditActionForDecision(decision.Approved),
+		SkillID:    decision.SkillID,
+		RevisionID: decision.RevisionID,
+		Status:     string(rev.Status),
+		Reason:     humanDecisionReason(decision),
+		Actor:      decision.Reviewer,
+		Comment:    decision.Comment,
+	})
+
+	return nil
+}
+
+func (s *ApprovalService) approveRevision(ctx context.Context, rev *Revision) error {
+	switch rev.Action {
+	case RevisionActionDelete:
+		if s.publisher == nil {
+			return fmt.Errorf("delete skill: no publisher configured")
+		}
+		name := revisionTargetName(rev)
+		if err := s.publisher.DeleteSkill(ctx, name); err != nil {
+			return fmt.Errorf("delete skill: %w", err)
+		}
+		if s.pointer != nil {
+			if err := archiveCurrentActiveRevision(ctx, s.store, s.pointer, rev.SkillID, rev.RevisionID); err != nil {
+				return err
+			}
+			if err := s.pointer.Clear(ctx, rev.SkillID); err != nil {
+				return fmt.Errorf("clear active pointer: %w", err)
+			}
+		}
+	default:
 		if s.publisher != nil && rev.Spec != nil {
 			if err := s.publisher.UpsertSkill(ctx, rev.Spec); err != nil {
 				return fmt.Errorf("publish skill: %w", err)
 			}
 		}
-		rev.Status = RevisionActive
-		now := time.Now().UTC()
-		rev.PromotedAt = &now
-		if err := s.store.WriteRevision(ctx, rev); err != nil {
-			return fmt.Errorf("write revision: %w", err)
-		}
-		persisted = true
 		if s.pointer != nil {
 			if err := archiveCurrentActiveRevision(ctx, s.store, s.pointer, rev.SkillID, rev.RevisionID); err != nil {
 				return err
@@ -125,34 +170,35 @@ func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision)
 				return fmt.Errorf("set active pointer: %w", err)
 			}
 		}
-	} else {
-		rev.Status = RevisionRejected
 	}
-
-	// Persist updated status
-	if !persisted {
-		err = s.store.WriteRevision(ctx, rev)
-	}
-	if err != nil {
-		return fmt.Errorf("write revision: %w", err)
-	}
-
-	// Audit trail
-	action := "approve"
-	if !decision.Approved {
-		action = "reject"
-	}
-	reason := decision.Comment
-	if reason == "" {
-		reason = "human decision by " + decision.Reviewer
-	}
-	_ = s.store.AppendAudit(ctx, AuditEvent{
-		Action:     action,
-		SkillID:    decision.SkillID,
-		RevisionID: decision.RevisionID,
-		Status:     string(rev.Status),
-		Reason:     reason,
-	})
-
 	return nil
+}
+
+func mergeHumanDecision(report *HumanReport, decision ApprovalDecision, decidedAt time.Time) *HumanReport {
+	if report == nil {
+		report = &HumanReport{Held: true}
+	}
+	approved := decision.Approved
+	report.Approved = &approved
+	report.Reviewer = decision.Reviewer
+	report.Comment = decision.Comment
+	report.DecidedAt = &decidedAt
+	return report
+}
+
+func auditActionForDecision(approved bool) AuditAction {
+	if approved {
+		return AuditActionApprove
+	}
+	return AuditActionReject
+}
+
+func humanDecisionReason(decision ApprovalDecision) string {
+	if decision.Comment != "" {
+		return decision.Comment
+	}
+	if decision.Reviewer != "" {
+		return "human decision by " + decision.Reviewer
+	}
+	return "human decision"
 }

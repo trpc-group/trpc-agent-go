@@ -106,6 +106,7 @@ func main() {
         runner.WithEvolutionService(evoSvc),
     )
     defer r.Close()
+    // WithEvolutionService 只借用 evoSvc；仍需保留显式 evoSvc.Close。
 
     // 5. 正常运行任务 — 技能在后台自动提取
     //    后续任务如果匹配已有 skill，agent 会通过 skill_load 加载
@@ -245,7 +246,8 @@ evolution.WithHumanGate(evolution.NewAlwaysHoldGate())
 evolution.WithHumanGate(evolution.NewCreateOnlyHoldGate())
 ```
 
-被拦截的 revision 状态为 `pending_approval`，需通过 `ApprovalService` 审批：
+HumanGate 可拦截 create/update/delete revision。被拦截的 revision 状态为
+`pending_approval`，需通过 `ApprovalService` 审批：
 
 ```go
 approvalSvc := evolution.NewApprovalService(store, pointer, publisher)
@@ -267,9 +269,13 @@ approvalSvc.Decide(ctx, evolution.ApprovalDecision{
     RevisionID: pending[0].RevisionID,
     SkillID:    pending[0].SkillID,
     Approved:   false,
+    Reviewer:   "alice@example.com",
     Comment:    "steps too vague",
 })
 ```
+
+审批结果会结构化写入 `HumanReport`（`Approved`、`Reviewer`、`Comment`、
+`DecidedAt`）并追加 audit log。被 HumanGate 拦截的 delete revision 在批准前不会删除 live skill；批准后会调用 `Publisher.DeleteSkill` 并清空 active pointer。
 
 ### 自定义 Gate
 
@@ -324,6 +330,8 @@ pending_approval ──→ [批准] ──→ active
 
 active ──→ [被新版本取代] ──→ archived（可回滚）
 ```
+
+delete revision 被批准后会记录该删除 revision，并清空 active pointer，避免旧版本继续可见。
 
 磁盘结构：
 

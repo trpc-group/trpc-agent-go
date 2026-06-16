@@ -49,7 +49,7 @@ func archiveCurrentActiveRevision(
 		return fmt.Errorf("archive active revision: %w", err)
 	}
 	_ = store.AppendAudit(ctx, AuditEvent{
-		Action:     "archive",
+		Action:     AuditActionArchive,
 		SkillID:    skillID,
 		RevisionID: currentRevisionID,
 		Status:     string(RevisionArchived),
