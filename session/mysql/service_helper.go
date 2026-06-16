@@ -329,9 +329,17 @@ func (s *Service) listSessions(
 
 // addEvent adds an event to a session (MySQL syntax).
 func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Event) error {
-	eventBytes, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("marshal event failed: %w", err)
+	shouldPersistEvent := event != nil &&
+		event.Response != nil &&
+		!event.IsPartial &&
+		event.IsValidContent()
+	var eventBytes []byte
+	var err error
+	if shouldPersistEvent {
+		eventBytes, err = json.Marshal(event)
+		if err != nil {
+			return fmt.Errorf("marshal event failed: %w", err)
+		}
 	}
 	var updatedAt time.Time
 	var updatedStateBytes []byte
@@ -373,18 +381,18 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = ?, updated_at = ?, expires_at = ?
 			 WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
-			string(updatedStateBytes), updatedAt, expiresAt,
+			updatedStateBytes, updatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
 		}
 
 		// Insert event if it has response and is not partial
-		if event.Response != nil && !event.IsPartial && event.IsValidContent() {
+		if shouldPersistEvent {
 			_, err = tx.ExecContext(ctx,
 				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?)`, s.tableSessionEvents),
-				key.AppName, key.UserID, key.SessionID, string(eventBytes), now, now)
+				key.AppName, key.UserID, key.SessionID, eventBytes, now, now)
 			if err != nil {
 				return fmt.Errorf("insert event failed: %w", err)
 			}

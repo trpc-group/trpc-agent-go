@@ -2912,10 +2912,7 @@ func (r *runner) propagateGraphCompletion(
 		runnerCompletionEvent.Response != nil &&
 		len(runnerCompletionEvent.Response.Choices) == 0 &&
 		len(finalChoices) > 0 {
-		// Keep only content to avoid carrying tool deltas etc.
-		// Use JSON marshal/unmarshal to deep-copy minimal fields safely.
-		b, _ := json.Marshal(finalChoices)
-		_ = json.Unmarshal(b, &runnerCompletionEvent.Response.Choices)
+		runnerCompletionEvent.Response.Choices = cloneChoices(finalChoices)
 	}
 }
 
@@ -3112,9 +3109,137 @@ func cloneChoices(choices []model.Choice) []model.Choice {
 	if len(choices) == 0 {
 		return nil
 	}
-	b, _ := json.Marshal(choices)
-	var cloned []model.Choice
-	_ = json.Unmarshal(b, &cloned)
+	cloned := make([]model.Choice, len(choices))
+	for i, choice := range choices {
+		cloned[i] = choice
+		cloned[i].Message = cloneMessage(choice.Message)
+		cloned[i].Delta = cloneMessage(choice.Delta)
+		if choice.FinishReason != nil {
+			reason := *choice.FinishReason
+			cloned[i].FinishReason = &reason
+		}
+		cloned[i].Logprobs = cloneChoiceLogprobs(choice.Logprobs)
+	}
+	return cloned
+}
+
+func cloneMessage(message model.Message) model.Message {
+	cloned := message
+	cloned.ContentParts = cloneContentParts(message.ContentParts)
+	cloned.ToolCalls = cloneToolCalls(message.ToolCalls)
+	return cloned
+}
+
+func cloneContentParts(parts []model.ContentPart) []model.ContentPart {
+	if parts == nil {
+		return nil
+	}
+	cloned := make([]model.ContentPart, len(parts))
+	for i, part := range parts {
+		cloned[i] = part
+		if part.Text != nil {
+			text := *part.Text
+			cloned[i].Text = &text
+		}
+		if part.Image != nil {
+			image := *part.Image
+			image.Data = append([]byte(nil), part.Image.Data...)
+			cloned[i].Image = &image
+		}
+		if part.Audio != nil {
+			audio := *part.Audio
+			audio.Data = append([]byte(nil), part.Audio.Data...)
+			cloned[i].Audio = &audio
+		}
+		if part.File != nil {
+			file := *part.File
+			file.Data = append([]byte(nil), part.File.Data...)
+			cloned[i].File = &file
+		}
+	}
+	return cloned
+}
+
+func cloneToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
+	if toolCalls == nil {
+		return nil
+	}
+	cloned := make([]model.ToolCall, len(toolCalls))
+	for i, toolCall := range toolCalls {
+		cloned[i] = toolCall
+		cloned[i].Function.Arguments = append([]byte(nil), toolCall.Function.Arguments...)
+		if toolCall.Index != nil {
+			index := *toolCall.Index
+			cloned[i].Index = &index
+		}
+		cloned[i].ExtraFields = cloneAnyMap(toolCall.ExtraFields)
+	}
+	return cloned
+}
+
+func cloneAnyMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(values))
+	for key, value := range values {
+		cloned[key] = cloneAnyValue(value)
+	}
+	return cloned
+}
+
+func cloneAnySlice(values []any) []any {
+	if values == nil {
+		return nil
+	}
+	cloned := make([]any, len(values))
+	for i, value := range values {
+		cloned[i] = cloneAnyValue(value)
+	}
+	return cloned
+}
+
+func cloneAnyValue(value any) any {
+	switch typed := value.(type) {
+	case json.RawMessage:
+		return append(json.RawMessage(nil), typed...)
+	case []byte:
+		return append([]byte(nil), typed...)
+	case map[string]any:
+		return cloneAnyMap(typed)
+	case []any:
+		return cloneAnySlice(typed)
+	default:
+		return typed
+	}
+}
+
+func cloneChoiceLogprobs(logprobs *model.Logprobs) *model.Logprobs {
+	if logprobs == nil {
+		return nil
+	}
+	cloned := &model.Logprobs{}
+	if logprobs.Content == nil {
+		return cloned
+	}
+	cloned.Content = make([]model.TokenLogprob, len(logprobs.Content))
+	for i, token := range logprobs.Content {
+		cloned.Content[i] = model.TokenLogprob{
+			Token:   token.Token,
+			Logprob: token.Logprob,
+			Bytes:   append([]int(nil), token.Bytes...),
+		}
+		if token.TopLogprobs != nil {
+			cloned.Content[i].TopLogprobs = make([]model.TopLogprob, len(token.TopLogprobs))
+			for j, top := range token.TopLogprobs {
+				cloned.Content[i].TopLogprobs[j] = model.TopLogprob{
+					Token:   top.Token,
+					Logprob: top.Logprob,
+					Bytes:   append([]int(nil), top.Bytes...),
+				}
+			}
+		}
+	}
 	return cloned
 }
 
