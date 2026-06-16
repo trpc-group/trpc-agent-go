@@ -22,7 +22,7 @@ import (
 )
 
 func TestMaybeCreateEvolutionService_NilRepo(t *testing.T) {
-	opts := runOptions{StateDir: t.TempDir()}
+	opts := runOptions{EvolutionEnabled: true, StateDir: t.TempDir()}
 	svc := maybeCreateEvolutionService(opts, nil)
 	assert.Nil(t, svc, "should return nil when repo is nil")
 }
@@ -31,9 +31,22 @@ func TestMaybeCreateEvolutionService_NoStateDir(t *testing.T) {
 	repo, err := skill.NewFSRepository(t.TempDir())
 	require.NoError(t, err)
 
-	opts := runOptions{StateDir: ""}
+	opts := runOptions{EvolutionEnabled: true, StateDir: ""}
 	svc := maybeCreateEvolutionService(opts, repo)
 	assert.Nil(t, svc, "should return nil when state dir is empty")
+}
+
+func TestMaybeCreateEvolutionService_Disabled(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := skill.NewFSRepository(dir)
+	require.NoError(t, err)
+
+	opts := runOptions{
+		StateDir:  dir,
+		ModelMode: modeOpenAI,
+	}
+	svc := maybeCreateEvolutionService(opts, repo)
+	assert.Nil(t, svc, "should require explicit evolution opt-in")
 }
 
 func TestMaybeCreateEvolutionService_MockMode(t *testing.T) {
@@ -42,8 +55,9 @@ func TestMaybeCreateEvolutionService_MockMode(t *testing.T) {
 	require.NoError(t, err)
 
 	opts := runOptions{
-		StateDir:  dir,
-		ModelMode: modeMock,
+		EvolutionEnabled: true,
+		StateDir:         dir,
+		ModelMode:        modeMock,
 	}
 	svc := maybeCreateEvolutionService(opts, repo)
 	assert.Nil(t, svc, "should return nil when model mode is mock")
@@ -55,12 +69,14 @@ func TestMaybeCreateEvolutionService_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	opts := runOptions{
-		StateDir:    dir,
-		ModelMode:   modeOpenAI,
-		OpenAIModel: "gpt-4o-mini",
+		EvolutionEnabled: true,
+		StateDir:         dir,
+		ModelMode:        modeOpenAI,
+		OpenAIModel:      "gpt-4o-mini",
 	}
 	svc := maybeCreateEvolutionService(opts, repo)
 	assert.NotNil(t, svc, "should create evolution service with valid config")
+	t.Cleanup(func() { _ = svc.Close() })
 
 	// Verify directories were created.
 	_, err = os.Stat(filepath.Join(dir, defaultSkillsDir, "evolution"))
@@ -75,12 +91,14 @@ func TestMaybeCreateEvolutionService_DefaultModel(t *testing.T) {
 	require.NoError(t, err)
 
 	opts := runOptions{
-		StateDir:    dir,
-		ModelMode:   modeOpenAI,
-		OpenAIModel: "", // empty → uses defaultOpenAIModel
+		EvolutionEnabled: true,
+		StateDir:         dir,
+		ModelMode:        modeOpenAI,
+		OpenAIModel:      "", // empty → uses defaultOpenAIModel
 	}
 	svc := maybeCreateEvolutionService(opts, repo)
 	assert.NotNil(t, svc, "should create service with default model name")
+	t.Cleanup(func() { _ = svc.Close() })
 }
 
 func TestMaybeCreateEvolutionService_WithBaseURL(t *testing.T) {
@@ -89,13 +107,15 @@ func TestMaybeCreateEvolutionService_WithBaseURL(t *testing.T) {
 	require.NoError(t, err)
 
 	opts := runOptions{
-		StateDir:      dir,
-		ModelMode:     modeOpenAI,
-		OpenAIModel:   "gpt-4o-mini",
-		OpenAIBaseURL: "https://custom.api/v1",
+		EvolutionEnabled: true,
+		StateDir:         dir,
+		ModelMode:        modeOpenAI,
+		OpenAIModel:      "gpt-4o-mini",
+		OpenAIBaseURL:    "https://custom.api/v1",
 	}
 	svc := maybeCreateEvolutionService(opts, repo)
 	assert.NotNil(t, svc, "should create service with custom base URL")
+	t.Cleanup(func() { _ = svc.Close() })
 }
 
 func TestMaybeCreateEvolutionService_InvalidManagedDir(t *testing.T) {
@@ -112,9 +132,10 @@ func TestMaybeCreateEvolutionService_InvalidManagedDir(t *testing.T) {
 	defer os.Chmod(blockerPath, 0o644)
 
 	opts := runOptions{
-		StateDir:    dir,
-		ModelMode:   modeOpenAI,
-		OpenAIModel: "gpt-4o-mini",
+		EvolutionEnabled: true,
+		StateDir:         dir,
+		ModelMode:        modeOpenAI,
+		OpenAIModel:      "gpt-4o-mini",
 	}
 	svc := maybeCreateEvolutionService(opts, repo)
 	assert.Nil(t, svc, "should return nil when skills dir cannot be created")

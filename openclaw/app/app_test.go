@@ -36,6 +36,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	sandboxexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
@@ -1717,6 +1718,116 @@ func TestNewAgent_UsesConfiguredSkillRepositoryProvider(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, scopedRepo.path, path)
 	require.Equal(t, 1, calls)
+}
+
+func TestNewAgent_SkillListUsesInvocationScopedRepository(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	baseRoot := t.TempDir()
+	currentRoot := filepath.Join(
+		stateDir,
+		defaultSkillsDir,
+		"evolution",
+		"users",
+		"demo",
+		"u1",
+	)
+	otherRoot := filepath.Join(
+		stateDir,
+		defaultSkillsDir,
+		"evolution",
+		"users",
+		"demo",
+		"u2",
+	)
+	createNamedAppTestSkill(t, baseRoot, "base-only")
+	createNamedAppTestSkill(t, currentRoot, "current-only")
+	createNamedAppTestSkill(t, otherRoot, "other-user-only")
+
+	agt, _, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:                 "demo",
+		SkillsRoot:              baseRoot,
+		StateDir:                stateDir,
+		EvolutionSkillScopeMode: skill.SkillScopeUser,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	var listTool tool.CallableTool
+	for _, tl := range agt.Tools() {
+		if tl == nil || tl.Declaration() == nil {
+			continue
+		}
+		if tl.Declaration().Name == "skill_list" {
+			callable, ok := tl.(tool.CallableTool)
+			require.True(t, ok)
+			listTool = callable
+			break
+		}
+	}
+	require.NotNil(t, listTool)
+
+	inv := agent.NewInvocation(agent.WithInvocationSession(
+		session.NewSession("demo", "u1", "s1"),
+	))
+	out, err := listTool.Call(
+		agent.NewInvocationContext(context.Background(), inv),
+		[]byte(`{}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	got := string(data)
+	require.Contains(t, got, "current-only")
+	require.Contains(t, got, "base-only")
+	require.NotContains(t, got, "other-user-only")
+}
+
+func TestNewAgent_ScopedSkillListWithoutInvocationFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	baseRoot := t.TempDir()
+	otherRoot := filepath.Join(
+		stateDir,
+		defaultSkillsDir,
+		"evolution",
+		"users",
+		"demo",
+		"u2",
+	)
+	createNamedAppTestSkill(t, baseRoot, "base-only")
+	createNamedAppTestSkill(t, otherRoot, "other-user-only")
+
+	agt, _, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:                 "demo",
+		SkillsRoot:              baseRoot,
+		StateDir:                stateDir,
+		EvolutionSkillScopeMode: skill.SkillScopeUser,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	var listTool tool.CallableTool
+	for _, tl := range agt.Tools() {
+		if tl == nil || tl.Declaration() == nil {
+			continue
+		}
+		if tl.Declaration().Name == "skill_list" {
+			callable, ok := tl.(tool.CallableTool)
+			require.True(t, ok)
+			listTool = callable
+			break
+		}
+	}
+	require.NotNil(t, listTool)
+
+	out, err := listTool.Call(context.Background(), []byte(`{}`))
+	require.NoError(t, err)
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	got := string(data)
+	require.NotContains(t, got, "base-only")
+	require.NotContains(t, got, "other-user-only")
 }
 
 func TestNewAgent_SkillsToolingGuidance_ConfigApplied(t *testing.T) {
@@ -3963,6 +4074,29 @@ func TestRuntime_Close_ReturnsRunnerCloseError(t *testing.T) {
 	require.True(t, runnerClosed)
 }
 
+func TestRuntime_Close_ClosesEvolutionService(t *testing.T) {
+	t.Parallel()
+
+	evolutionErr := errors.New("evolution close boom")
+	runnerClosed := false
+	evolutionClosed := false
+
+	rt := &Runtime{
+		runner: &stubRunner{
+			closed: &runnerClosed,
+		},
+		evolutionService: &stubEvolutionService{
+			closeErr: evolutionErr,
+			closed:   &evolutionClosed,
+		},
+	}
+
+	err := rt.Close()
+	require.ErrorIs(t, err, evolutionErr)
+	require.True(t, runnerClosed)
+	require.True(t, evolutionClosed)
+}
+
 func TestRuntime_Close_JoinsTelemetryShutdownError(t *testing.T) {
 	t.Parallel()
 
@@ -5918,6 +6052,25 @@ func (s *stubRunner) Run(
 }
 
 func (s *stubRunner) Close() error {
+	if s.closed != nil {
+		*s.closed = true
+	}
+	return s.closeErr
+}
+
+type stubEvolutionService struct {
+	closeErr error
+	closed   *bool
+}
+
+func (s *stubEvolutionService) EnqueueLearningJob(
+	context.Context,
+	evolution.LearningJob,
+) error {
+	return nil
+}
+
+func (s *stubEvolutionService) Close() error {
 	if s.closed != nil {
 		*s.closed = true
 	}

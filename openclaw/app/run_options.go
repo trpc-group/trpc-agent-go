@@ -229,6 +229,7 @@ type runOptions struct {
 	SkillsToolingGuide    *string
 	StateDir              string
 
+	EvolutionEnabled        bool
 	EvolutionHumanGate      string
 	EvolutionSkillScopeMode skill.SkillScopeMode
 
@@ -1249,6 +1250,9 @@ type memoryConfig struct {
 }
 
 type evolutionConfig struct {
+	// Enabled explicitly opts the runtime into the async evolution service.
+	Enabled *bool `yaml:"enabled,omitempty"`
+
 	// HumanGate controls the human approval gate for skill revisions.
 	// Values: "always" (hold all), "create" (hold new skills only), "" (disabled).
 	HumanGate  *string                    `yaml:"human_gate,omitempty"`
@@ -1932,6 +1936,9 @@ func (cfg *fileConfig) apply(
 	}
 
 	if cfg.Evolution != nil {
+		if cfg.Evolution.Enabled != nil {
+			opts.EvolutionEnabled = *cfg.Evolution.Enabled
+		}
 		if cfg.Evolution.HumanGate != nil {
 			opts.EvolutionHumanGate = strings.TrimSpace(*cfg.Evolution.HumanGate)
 		}

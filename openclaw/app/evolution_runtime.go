@@ -23,7 +23,8 @@ import (
 )
 
 // maybeCreateEvolutionService creates an evolution service when the
-// runtime has a skills repository and state directory configured.
+// runtime explicitly enables it and has a skills repository and state
+// directory configured.
 // The service uses the agent's model as its reviewer.
 //
 // Directory layout under state_dir:
@@ -38,6 +39,9 @@ func maybeCreateEvolutionService(
 	repo skill.Repository,
 	providers ...skill.RepositoryProvider,
 ) evolution.Service {
+	if !opts.EvolutionEnabled {
+		return nil
+	}
 	if repo == nil {
 		return nil
 	}

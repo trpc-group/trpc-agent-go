@@ -14,6 +14,14 @@ agent:
 model:
   mode: "mock"
 
+# Evolution is disabled by default. Set enabled to true to opt into
+# asynchronous skill learning.
+# evolution:
+#   enabled: false
+#   skill_scope:
+#     mode: "app" # none|app|user
+#   human_gate: "" # always|create
+
 channels:
   - type: "stdin"
     name: "terminal"

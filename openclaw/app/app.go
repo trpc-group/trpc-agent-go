@@ -1427,6 +1427,11 @@ func (r *Runtime) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	if r.evolutionService != nil {
+		if err := r.evolutionService.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if err := shutdownTelemetry(r.telemetryShutdown); err != nil {
 		errs = append(errs, err)
 	}
@@ -1713,7 +1718,13 @@ func run(
 			runner.WithRalphLoop(*rlCfg),
 		)
 	}
-	evoSvc := maybeCreateEvolutionService(
+	var evoSvc evolution.Service
+	defer func() {
+		if evoSvc != nil {
+			_ = evoSvc.Close()
+		}
+	}()
+	evoSvc = maybeCreateEvolutionService(
 		opts,
 		skillsRepo,
 		skillsProv,
@@ -2542,12 +2553,23 @@ func newAgent(
 	if err != nil {
 		return nil, nil, err
 	}
+	repoProvider := cfg.SkillRepositoryProvider
+	if repoProvider == nil {
+		repoProvider = newScopedSkillRepositoryProvider(cwd, cfg)
+	}
 
 	tools := append([]tool.Tool(nil), extraTools...)
 	if knowledgeTools != nil && len(knowledgeTools.tools) > 0 {
 		tools = append(tools, knowledgeTools.tools...)
 	}
-	tools = append(tools, ocskills.NewListTool(repo))
+	tools = append(
+		tools,
+		newScopedSkillListTool(
+			repo,
+			repoProvider,
+			cfg.EvolutionSkillScopeMode,
+		),
+	)
 	if len(cfg.ToolProviders) > 0 {
 		extra, err := toolsFromProviders(
 			mdl,
@@ -2565,11 +2587,6 @@ func newAgent(
 			instruction + "\n\n" + browserToolingGuidance,
 		)
 	}
-	repoProvider := cfg.SkillRepositoryProvider
-	if repoProvider == nil {
-		repoProvider = newScopedSkillRepositoryProvider(cwd, cfg)
-	}
-
 	genConfig := model.GenerationConfig{Stream: true}
 	if cfg.GenerationConfig != nil {
 		genConfig = *cfg.GenerationConfig

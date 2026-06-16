@@ -1662,6 +1662,19 @@ evolution:
 	}
 }
 
+func TestParseRunOptions_EvolutionEnabledConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+evolution:
+  enabled: true
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.True(t, opts.EvolutionEnabled)
+}
+
 func TestParseRunOptions_EvolutionSkillScopeModeConfigInvalidFails(
 	t *testing.T,
 ) {
