@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
@@ -113,6 +114,15 @@ func WithSessionIngestor(ingestor session.Ingestor) Option {
 func WithArtifactService(service artifact.Service) Option {
 	return func(opts *Options) {
 		opts.artifactService = service
+	}
+}
+
+// WithEvolutionService sets the evolution service that reviews
+// completed sessions and extracts reusable skills.
+// The caller owns the service lifecycle; Runner.Close does not close it.
+func WithEvolutionService(service evolution.Service) Option {
+	return func(opts *Options) {
+		opts.evolutionService = service
 	}
 }
 
@@ -295,6 +305,7 @@ type runner struct {
 	memoryService                      memory.Service
 	ingestor                           session.Ingestor
 	artifactService                    artifact.Service
+	evolutionService                   evolution.Service
 	pluginManager                      agent.PluginManager
 	ralphLoop                          *RalphLoopConfig
 	candidateSelector                  CandidateSelector
@@ -324,6 +335,7 @@ type Options struct {
 	memoryService                      memory.Service
 	ingestor                           session.Ingestor
 	artifactService                    artifact.Service
+	evolutionService                   evolution.Service
 	agents                             map[string]agent.Agent
 	agentFactories                     map[string]AgentFactory
 	plugins                            []plugin.Plugin
@@ -382,6 +394,7 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		memoryService:                      options.memoryService,
 		ingestor:                           options.ingestor,
 		artifactService:                    options.artifactService,
+		evolutionService:                   options.evolutionService,
 		pluginManager:                      pm,
 		ralphLoop:                          options.ralphLoop,
 		candidateSelector:                  options.candidateSelector,
@@ -437,6 +450,7 @@ func NewRunnerWithAgentFactory(
 		memoryService:                      options.memoryService,
 		ingestor:                           options.ingestor,
 		artifactService:                    options.artifactService,
+		evolutionService:                   options.evolutionService,
 		pluginManager:                      pm,
 		ralphLoop:                          options.ralphLoop,
 		candidateSelector:                  options.candidateSelector,
@@ -449,7 +463,8 @@ func NewRunnerWithAgentFactory(
 
 // Close closes the runner and cleans up owned resources.
 // It's safe to call Close multiple times.
-// Only resources created by this runner will be closed.
+// User-provided evolution services registered via WithEvolutionService are
+// borrowed and remain owned by the caller.
 func (r *runner) Close() error {
 	var closeErr error
 	r.closeOnce.Do(func() {
@@ -2832,6 +2847,10 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 
 	// Enqueue auto memory extraction job if memory service is configured.
 	r.enqueueAutoMemoryJob(ctx, loop.sess)
+
+	// Enqueue evolution learning job if the evolution service is configured.
+	r.enqueueEvolutionLearningJob(ctx, loop.sess)
+
 	// Enqueue external session ingestion if configured.
 	r.enqueueSessionIngest(ctx, loop.sess, loop.invocation)
 }
@@ -3705,6 +3724,28 @@ func (r *runner) enqueueAutoMemoryJob(ctx context.Context, sess *session.Session
 	}
 	if err := r.memoryService.EnqueueAutoMemoryJob(ctx, sess); err != nil {
 		log.DebugfContext(ctx, "Auto memory extraction skipped or failed: %v", err)
+		return
+	}
+}
+
+// enqueueEvolutionLearningJob triggers evolution extraction if the evolution
+// service is configured. The runner-driven hook submits the session
+// without an Outcome (online services have no evaluator); benchmark
+// runners and RLHF pipelines that DO have an evaluator should attach
+// the service themselves and call EnqueueLearningJob with a populated
+// Outcome instead of relying on this hook.
+//
+// NOTE: We use context.WithoutCancel because this is called from the
+// runner completion handler (defer), at which point the request context
+// may already be cancelled (e.g. WeCom one-shot response mode). The
+// evolution worker manages its own timeouts internally.
+func (r *runner) enqueueEvolutionLearningJob(ctx context.Context, sess *session.Session) {
+	if r.evolutionService == nil || sess == nil {
+		return
+	}
+	enqueueCtx := context.WithoutCancel(ctx)
+	if err := r.evolutionService.EnqueueLearningJob(enqueueCtx, evolution.LearningJob{Session: sess}); err != nil {
+		log.DebugfContext(ctx, "Evolution learning job skipped or failed: %v", err)
 		return
 	}
 }

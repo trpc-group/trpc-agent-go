@@ -18,6 +18,14 @@ model:
   name: "gpt-5.2"
   openai_variant: "auto"
 
+# Evolution is disabled by default. Set enabled to true to opt into
+# asynchronous skill learning.
+# evolution:
+#   enabled: false
+#   skill_scope:
+#     mode: "app" # none|app|user
+#   human_gate: "" # always|create
+
 # Mock mode example for local smoke tests:
 # model:
 #   mode: "mock"

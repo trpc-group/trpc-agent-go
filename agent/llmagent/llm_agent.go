@@ -384,6 +384,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			),
 		)
 	}
+	if options.MaxOverviewSkills > 0 {
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithMaxOverviewSkills(
+				options.MaxOverviewSkills,
+			),
+		)
+	}
 	if options.SkillsLoadedContentInToolResults {
 		skillsOpts = append(
 			skillsOpts,
@@ -647,14 +655,28 @@ func cloneTextPromptMap(src map[string]string) map[string]prompt.Text {
 
 func prepareSkillsRepository(options *Options) {
 	if options == nil ||
-		options.skillsRepository == nil ||
 		options.skillFilter == nil {
 		return
 	}
-	options.skillsRepository = skill.NewFilteredRepository(
-		options.skillsRepository,
-		options.skillFilter,
-	)
+	if options.skillsRepository != nil {
+		options.skillsRepository = skill.NewFilteredRepository(
+			options.skillsRepository,
+			options.skillFilter,
+		)
+	}
+	if options.skillsRepositoryProvider != nil {
+		provider := options.skillsRepositoryProvider
+		filter := options.skillFilter
+		options.skillsRepositoryProvider = skill.RepositoryProviderFunc(
+			func(ctx context.Context, scope skill.SkillScope) (skill.Repository, error) {
+				repo, err := provider.Repository(ctx, scope)
+				if err != nil || repo == nil {
+					return repo, err
+				}
+				return skill.NewFilteredRepository(repo, filter), nil
+			},
+		)
+	}
 }
 
 // applySkillsExecutorFallback auto-wires a local code executor when the
@@ -685,7 +707,7 @@ func prepareSkillsRepository(options *Options) {
 // that option (true or false) keep their configured value.
 func applySkillsExecutorFallback(options *Options) {
 	if options == nil ||
-		options.skillsRepository == nil ||
+		(options.skillsRepository == nil && options.skillsRepositoryProvider == nil) ||
 		options.codeExecutor != nil ||
 		options.allowedSkillTools != nil ||
 		skillprofile.IsExplicitKnowledgeOnly(options.skillToolProfile) {

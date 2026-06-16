@@ -39,7 +39,13 @@ const (
 	// means "framework will not modify tool results".
 	DefaultContextCompactionOversizedToolResultMaxTokens = 8192
 
-	historicalToolResultPlaceholder = "Historical tool result omitted to save context."
+	// historicalToolResultPlaceholder replaces historical tool result content
+	// after context compaction. The message MUST make it clear that the call
+	// succeeded and returned data that was already consumed, otherwise the
+	// model may interpret the elided payload as a failed/missing call and
+	// re-invoke the same tool with identical arguments, producing infinite
+	// retry loops at the top of the context window.
+	historicalToolResultPlaceholder = "[elided] Previous tool call succeeded and its result was already consumed by the assistant; payload has been dropped to save context. Do NOT re-invoke the same tool with the same arguments to re-fetch this data."
 	sessionLoadToolName             = "session_load"
 	policyToolResultPlaceholder     = "Tool result omitted by context compaction policy."
 )

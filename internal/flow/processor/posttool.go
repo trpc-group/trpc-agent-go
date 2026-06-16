@@ -27,6 +27,8 @@ const systemPromptSeparator = "\n\n"
 const DefaultPostToolPrompt = "[Tool Prompt] Analyze the tool result. " +
 	"If requirements are met, provide the Final Answer. " +
 	"Otherwise, call the next tool. \n" +
+	"Reuse successful tool results you already have. Do NOT call the same data-fetch tool with the same effective inputs again unless the earlier call failed or the task explicitly requires a refresh.\n" +
+	"If the task requires writing a file or calling a finalize/completion tool, do that before ending with a prose answer. Do not stop at a narrative summary while the required artifact is still missing.\n" +
 	"Final Answer Requirement:\n" +
 	"Only output the exact answer the user needs. " +
 	"Answer as if you already know the information. Do NOT expose any " +
