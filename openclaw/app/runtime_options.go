@@ -54,6 +54,7 @@ type runtimeOptions struct {
 	runtimeProfileCatalog  runtimeprofile.Catalog
 	runtimeProfileRequired bool
 	gatewayResolvers       []GatewayRunOptionResolver
+	postToolPromptEnabled  *bool
 }
 
 // WithRuntimeProfileResolver injects per-request runtime profile resolution.
@@ -98,6 +99,14 @@ func WithRuntimeProfileStore(
 		opts.runtimeProfileResolver = resolver
 		opts.runtimeProfileCatalog = resolver
 		opts.runtimeProfileRequired = required
+	}
+}
+
+// WithEnablePostToolPrompt controls whether OpenClaw injects post-tool
+// guidance into agent requests.
+func WithEnablePostToolPrompt(enable bool) RuntimeOption {
+	return func(opts *runtimeOptions) {
+		opts.postToolPromptEnabled = &enable
 	}
 }
 
