@@ -233,6 +233,49 @@ func TestEvent_Marshal_And_Unmarshal(t *testing.T) {
 	require.Empty(t, nullEvt)
 }
 
+// TestEvent_ParentMetadata_JSONRoundTrip locks down the JSON wire format for
+// ParentInvocationMetadata. AGUI consumers depend on these exact field names;
+// regressions in the json tags would break the lyrricliu-style frontend
+// integration silently (fields just turn up as undefined).
+func TestEvent_ParentMetadata_JSONRoundTrip(t *testing.T) {
+	original := New("inv-1", "author")
+	original.ParentMetadata = &ParentInvocationMetadata{
+		TriggerType: TriggerTypeToolCall,
+		TriggerID:   "call-abc",
+		TriggerName: "video-complaint",
+	}
+
+	data, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	// Lock the exact wire format: lower-camel-case keys consistent with the
+	// rest of the framework (parentInvocationId, toolCallId, eventId, etc.).
+	rawObj := map[string]any{}
+	require.NoError(t, json.Unmarshal(data, &rawObj))
+	pmRaw, ok := rawObj["parentMetadata"].(map[string]any)
+	require.True(t, ok, "parentMetadata must be present in JSON output")
+	require.Equal(t, "tool_call", pmRaw["triggerType"])
+	require.Equal(t, "call-abc", pmRaw["triggerId"])
+	require.Equal(t, "video-complaint", pmRaw["triggerName"])
+
+	// Round-trip back into a typed Event must preserve every field.
+	roundTrip := &Event{}
+	require.NoError(t, json.Unmarshal(data, roundTrip))
+	require.NotNil(t, roundTrip.ParentMetadata)
+	require.Equal(t, TriggerTypeToolCall, roundTrip.ParentMetadata.TriggerType)
+	require.Equal(t, "call-abc", roundTrip.ParentMetadata.TriggerID)
+	require.Equal(t, "video-complaint", roundTrip.ParentMetadata.TriggerName)
+
+	// Nil ParentMetadata must omit the field entirely (omitempty).
+	bare := New("inv-2", "author")
+	bareData, err := json.Marshal(bare)
+	require.NoError(t, err)
+	bareObj := map[string]any{}
+	require.NoError(t, json.Unmarshal(bareData, &bareObj))
+	_, hasField := bareObj["parentMetadata"]
+	require.False(t, hasField, "nil ParentMetadata must be omitted from JSON")
+}
+
 func TestEvent_MarshalOmitsExecutionTrace(t *testing.T) {
 	evt := New("inv-1", "author", WithResponse(&model.Response{Done: true}))
 	evt.ExecutionTrace = &trace.Trace{

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -145,11 +146,23 @@ func (t *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
 		}, nil
 	}
 
-	// Set transfer information in the invocation with just the agent name.
-	invocation.TransferInfo = &agent.TransferInfo{
+	// Set transfer information in the invocation. Capture the originating
+	// toolCallId from this tool's ctx; the transfer response processor will
+	// use it to build the target invocation's ParentInvocationMetadata. The
+	// toolCallId only exists in this tool's per-call ctx; downstream code
+	// (the response processor) runs with the flow-level ctx and would
+	// otherwise lose it.
+	transferInfo := &agent.TransferInfo{
 		TargetAgentName: targetAgentInfo.Name,
 		Message:         req.Message,
 	}
+	if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok && toolCallID != "" {
+		transferInfo.ToolCallID = toolCallID
+	} else {
+		log.DebugfContext(ctx,
+			"transfer_to_agent: no toolCallId in context; target invocation will have no ParentMetadata correlation")
+	}
+	invocation.TransferInfo = transferInfo
 
 	return Response{
 		Success:      true,

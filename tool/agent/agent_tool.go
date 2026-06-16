@@ -489,7 +489,7 @@ func (at *Tool) callWithParentInvocation(
 			message = model.Message{}
 		}
 	}
-	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey, runtimeState)...)
+	subInv := parentInv.Clone(at.childInvocationOptions(ctx, parentInv, message, childKey, runtimeState)...)
 
 	// Run the agent and collect response.
 	subCtx := agent.NewInvocationContext(ctx, subInv)
@@ -550,6 +550,7 @@ func (at *Tool) surfaceRootNodeIDForParentInvocation(
 }
 
 func (at *Tool) childInvocationOptions(
+	ctx context.Context,
 	parentInv *agent.Invocation,
 	message model.Message,
 	childKey string,
@@ -560,6 +561,28 @@ func (at *Tool) childInvocationOptions(
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationEventFilterKey(childKey),
 	}
+	// Override the inherited ParentMetadata at the AgentTool boundary: the
+	// child invocation is freshly triggered by *this* AgentTool call, so its
+	// ParentMetadata must describe this call — not whatever spawned the
+	// parent invocation. Invocation.Clone copies ParentMetadata by default,
+	// so we must overwrite it unconditionally; otherwise a child spawned
+	// without a toolCallId in ctx would inherit the parent's ParentMetadata
+	// and AG-UI would correlate child events to the wrong parent edge.
+	//
+	// When toolCallId is unavailable in ctx (degraded path), set
+	// ParentMetadata to nil rather than fabricating one or leaving the
+	// inherited value. Critical for parallel AgentTool calls to the same
+	// sub-agent: parentInvocationId alone cannot disambiguate parallel
+	// branches; ParentMetadata.TriggerID can.
+	var childParentMetadata *agent.ParentInvocationMetadata
+	if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok && toolCallID != "" {
+		childParentMetadata = &agent.ParentInvocationMetadata{
+			TriggerType: agent.TriggerTypeToolCall,
+			TriggerID:   toolCallID,
+			TriggerName: at.name,
+		}
+	}
+	invocationOpts = append(invocationOpts, agent.WithInvocationParentMetadata(childParentMetadata))
 	if runtimeState != nil {
 		invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
 			runOptions := inv.RunOptions
@@ -714,6 +737,9 @@ func ensureInvocationEventFields(inv *agent.Invocation, evt *event.Event) {
 		if parent := inv.GetParentInvocation(); parent != nil {
 			evt.ParentInvocationID = parent.InvocationID
 		}
+	}
+	if evt.ParentMetadata == nil && inv.ParentMetadata != nil {
+		evt.ParentMetadata = inv.ParentMetadata
 	}
 	if evt.Branch == "" {
 		evt.Branch = inv.Branch
@@ -1274,7 +1300,7 @@ func (at *Tool) streamFromParentInvocation(
 	// forever.
 	parentInv = parentInvocationWithLiveSession(parentInv)
 	childKey := at.buildChildFilterKey(ctx, parentInv, []byte(message.Content))
-	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey, nil)...)
+	subInv := parentInv.Clone(at.childInvocationOptions(ctx, parentInv, message, childKey, nil)...)
 	subCtx := agent.NewInvocationContext(ctx, subInv)
 	evCh, err := agent.RunWithPlugins(subCtx, subInv, at.agent)
 	if err != nil {
