@@ -268,12 +268,18 @@ Default (unset) behavior is unchanged.
 
 ### Two capabilities
 
-1. **Capture control (reduces marshal heap peaks)**: only `Drop()` and **unconditional** `Omit()` (without `MaxBytes`) short-circuit before `json.Marshal`.
-2. **Export size control (usually does not reduce marshal heap peaks)**:
-   - `MaxBytes(n)` + `Omit()`: inline under the threshold, omit envelope when exceeded; for **JSON-backed** paths (chat/workflow/invoke) a **full marshal is still required** to compare size, so it **does not reduce marshal heap peaks**—it only limits the final attribute value written to the span. Raw `[]byte` paths (for example tool arguments) can compare length without an extra marshal.
-   - `Truncate(n)`: always performs a full marshal and only truncates the value written to the span (with SHA256 fingerprint).
+- `Drop()` and unconditional `Omit()` (without `MaxBytes`) skip `json.Marshal`.
+- `MaxBytes()` + `Omit()`: raw `[]byte` paths (for example `execute_tool` tool arguments) compare length without an extra marshal; **JSON-backed** paths (chat / workflow / invoke_agent) still require a full marshal and **do not** reduce heap peaks.
+- `Truncate()` always marshals the full payload; it only limits the value written to the span.
 
-To reduce heap usage, prefer **dropping redundant attributes** (for example duplicate `*.otel` and legacy message fields).
+| Rule | Reduces marshal heap peak? | Notes |
+|------|----------------------------|-------|
+| `Drop()` | Yes | Skips marshaling; attribute not written |
+| `Omit()` (no `MaxBytes`) | Yes | Skips payload marshaling |
+| `MaxBytes(n)` + `Omit()` | JSON: no; `[]byte`: yes | JSON paths marshal fully before comparing size; `[]byte` paths use `len` only |
+| `Truncate(n)` | No | Full marshal, then truncate on export |
+
+To reduce memory, prefer `Drop()` on attributes you do not need (for example redundant `*.otel`).
 
 ### Coverage
 

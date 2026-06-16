@@ -268,14 +268,20 @@ Agent Request
 
 默认不配置时行为不变。
 
-### 两种能力
+### 能力
 
-1. **采集控制（降 marshal 堆峰值）**：仅 `Drop()` 与**无条件** `Omit()`（未设置 `MaxBytes`）会在 `json.Marshal` 之前短路。
-2. **导出体积控制（通常不降 marshal 堆峰值）**：
-   - `MaxBytes(n)` + `Omit()`：阈值内全文，超限写 omit envelope；对 chat/workflow/invoke 等 **JSON 序列化路径仍需完整 marshal** 才能判断长度，**不降低 marshal 堆峰值**，仅限制最终写入 span 的 attribute 大小。对已是 `[]byte` 的路径（如 tool arguments）可按长度判断，无需额外 marshal。
-   - `Truncate(n)`：始终完整 marshal，仅在写入 span 时截断并附带 SHA256 指纹。
+- `Drop()` 与无条件 `Omit()`（未配 `MaxBytes`）可避免 `json.Marshal`。
+- `MaxBytes()` + `Omit()`：`[]byte` 路径（如 `execute_tool` 的 tool arguments）按长度判断，无需额外 marshal；JSON 路径（chat / workflow / invoke_agent）仍需完整 marshal，**不能**降低堆峰值。
+- `Truncate()` 始终完整 marshal，仅限制写入 span 的值大小。
 
-减少堆内存时，优先 **Drop 冗余 attribute**（例如同时存在的 `*.otel` 与 legacy messages）。
+| 规则 | 能否降低 marshal 堆峰值 | 说明 |
+|------|-------------------------|------|
+| `Drop()` | 是 | 跳过序列化，不写 attribute |
+| `Omit()`（无 `MaxBytes`） | 是 | 跳过 payload 序列化 |
+| `MaxBytes(n)` + `Omit()` | JSON：否；`[]byte`：是 | JSON 路径需完整 marshal 后再比阈值；`[]byte` 路径仅 `len` 判断 |
+| `Truncate(n)` | 否 | 完整序列化后截断导出 |
+
+想降内存，优先 `Drop()` 去掉不需要的 attribute（如冗余 `*.otel`）。
 
 ### 覆盖范围
 
