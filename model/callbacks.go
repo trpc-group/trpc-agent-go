@@ -20,7 +20,7 @@ import (
 
 const (
 	callbackPanicErrFmt = "%s: %v"
-	callbackPanicLogFmt = "%s: %v\n%s"
+	callbackPanicLogFmt = log.PanicPrefix + " %s: %v\n%s"
 
 	beforeModelCallbackPanic = "before model callback panic"
 	afterModelCallbackPanic  = "after model callback panic"

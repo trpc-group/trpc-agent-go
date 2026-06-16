@@ -1496,7 +1496,7 @@ func runGraphModelSelector(
 ) (selected model.Model, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Errorf("model selector panic: %v\n%s", r, debug.Stack())
+			log.Errorf(log.PanicPrefix+" model selector panic: %v\n%s", r, debug.Stack())
 			err = fmt.Errorf("panic: %v", r)
 		}
 	}()

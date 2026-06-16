@@ -164,7 +164,7 @@ func (a *ParallelAgent) startSubAgents(
 			defer func() {
 				if r := recover(); r != nil {
 					stack := debug.Stack()
-					log.Errorf("Sub-agent execution panic for %s (index: %d, parent: %s): %v\n%s",
+					log.Errorf(log.PanicPrefix+" Sub-agent execution panic for %s (index: %d, parent: %s): %v\n%s",
 						sa.Info().Name, idx, invocation.AgentName, r, string(stack))
 					// Send error event for the panic.
 					errorEvent := event.NewErrorEvent(
@@ -337,7 +337,7 @@ func (a *ParallelAgent) mergeEventStreams(
 				if r := recover(); r != nil {
 					// Log the panic but don't propagate error events here since
 					// we're already in the event merging phase.
-					log.Errorf("Event merging panic in parallel agent %s: %v", a.name, r)
+					log.Errorf(log.PanicPrefix+" Event merging panic in parallel agent %s: %v", a.name, r)
 				}
 			}()
 			for evt := range stream.ch {

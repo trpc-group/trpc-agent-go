@@ -57,7 +57,7 @@ func (c *inmemoryConverter) Convert(cond *searchfilter.UniversalFilterCondition)
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
-			log.Errorf("panic in inmemoryConverter Convert: %v\n%s", r, string(stack))
+			log.Errorf(log.PanicPrefix+" panic in inmemoryConverter Convert: %v\n%s", r, string(stack))
 		}
 	}()
 
@@ -70,7 +70,7 @@ func (c *inmemoryConverter) Convert(cond *searchfilter.UniversalFilterCondition)
 		defer func() {
 			if r := recover(); r != nil {
 				stack := debug.Stack()
-				log.Errorf("panic in condition function: %v\n%s", r, string(stack))
+				log.Errorf(log.PanicPrefix+" panic in condition function: %v\n%s", r, string(stack))
 			}
 		}()
 		return condFunc(doc)

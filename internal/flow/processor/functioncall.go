@@ -895,7 +895,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		if r := recover(); r != nil {
 			log.ErrorfContext(
 				ctx,
-				"Tool execution panic for %s (index: %d, ID: %s, agent: %s): %v",
+				log.PanicPrefix+" Tool execution panic for %s (index: %d, ID: %s, agent: %s): %v",
 				tc.Function.Name,
 				index,
 				tc.ID,

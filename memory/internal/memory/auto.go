@@ -365,7 +365,7 @@ func (w *AutoMemoryWorker) tryEnqueueJob(
 func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.ErrorfContext(context.Background(), "panic in memory worker: %v", r)
+			log.ErrorfContext(context.Background(), log.PanicPrefix+" panic in memory worker: %v", r)
 		}
 	}()
 	ctx := job.Ctx
