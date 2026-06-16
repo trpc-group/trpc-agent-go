@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -3735,6 +3736,8 @@ func TestDeepCopyAny_Branches(t *testing.T) {
 	require.Equal(t, []pair{{1}, {2}}, s) // original unchanged
 }
 
+var errorfContextHookMu sync.Mutex
+
 // TestExecuteNodeFunction_RecoversFromPanic ensures that panics in user node functions
 // are recovered and converted into errors, without crashing the executor.
 func TestExecuteNodeFunction_RecoversFromPanic(t *testing.T) {
@@ -3756,6 +3759,7 @@ func TestExecuteNodeFunction_RecoversFromPanic(t *testing.T) {
 	}
 	task := &Task{NodeID: "boom", TaskID: "boom-0"}
 
+	errorfContextHookMu.Lock()
 	oldErrorfContext := agentlog.ErrorfContext
 	var logFormat string
 	var logArgs []any
@@ -3763,9 +3767,10 @@ func TestExecuteNodeFunction_RecoversFromPanic(t *testing.T) {
 		logFormat = format
 		logArgs = append([]any(nil), args...)
 	}
-	defer func() {
+	t.Cleanup(func() {
 		agentlog.ErrorfContext = oldErrorfContext
-	}()
+		errorfContextHookMu.Unlock()
+	})
 
 	res, runErr := exec.executeNodeFunction(context.Background(), execCtx, task)
 	require.Error(t, runErr)
