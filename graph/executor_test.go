@@ -29,6 +29,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	teletrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -3755,11 +3756,28 @@ func TestExecuteNodeFunction_RecoversFromPanic(t *testing.T) {
 	}
 	task := &Task{NodeID: "boom", TaskID: "boom-0"}
 
+	oldErrorfContext := agentlog.ErrorfContext
+	var logFormat string
+	var logArgs []any
+	agentlog.ErrorfContext = func(_ context.Context, format string, args ...any) {
+		logFormat = format
+		logArgs = append([]any(nil), args...)
+	}
+	defer func() {
+		agentlog.ErrorfContext = oldErrorfContext
+	}()
+
 	res, runErr := exec.executeNodeFunction(context.Background(), execCtx, task)
 	require.Error(t, runErr)
 	require.Nil(t, res)
 	require.Contains(t, runErr.Error(), "kaboom")
 	require.Contains(t, runErr.Error(), "node boom panic")
+	require.True(t, strings.HasPrefix(logFormat, agentlog.PanicPrefix+" "))
+	require.Contains(t, logFormat, "panic in node %s")
+	renderedLog := fmt.Sprintf(logFormat, logArgs...)
+	require.Contains(t, renderedLog, "panic in node boom")
+	require.Contains(t, renderedLog, "kaboom")
+	require.Contains(t, renderedLog, "goroutine")
 }
 
 func TestExecuteNodeFunction_AgentNodeFunctionOverrideHonored(t *testing.T) {

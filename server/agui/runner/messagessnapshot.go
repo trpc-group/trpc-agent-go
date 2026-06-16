@@ -40,7 +40,7 @@ func (r *runner) MessagesSnapshot(ctx context.Context,
 		if rec := recover(); rec != nil {
 			// The error is written back to the HTTP client; keep the panic
 			// payload (hooks/resolvers may embed request internals) in logs only.
-			log.ErrorfContext(ctx, "agui messages snapshot: panic: %v\n%s", rec, debug.Stack())
+			log.ErrorfContext(ctx, log.PanicPrefix+" agui messages snapshot: panic: %v\n%s", rec, debug.Stack())
 			eventCh = nil
 			err = errors.New("messages snapshot internal error")
 		}

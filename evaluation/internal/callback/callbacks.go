@@ -54,7 +54,15 @@ func callCallbackWithRecoveryInto[Args any, Result any, CallbackFn ~func(context
 			return
 		}
 		stack := debug.Stack()
-		log.ErrorfContext(ctx, "%s (callback: %s, idx: %d): %v\n%s", point, name, idx, recovered, string(stack))
+		log.ErrorfContext(
+			ctx,
+			log.PanicPrefix+" %s (callback: %s, idx: %d): %v\n%s",
+			point,
+			name,
+			idx,
+			recovered,
+			string(stack),
+		)
 		*errp = fmt.Errorf("callback panic: %v", recovered)
 	}()
 	result, err := callback(ctx, args)
