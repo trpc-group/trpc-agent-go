@@ -47,6 +47,7 @@ import (
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
 	occhannel "trpc.group/trpc-go/trpc-agent-go/openclaw/channel"
@@ -59,6 +60,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/memoryfile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/persona"
+	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	tgapi "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/telegram"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
@@ -553,6 +555,20 @@ func findToolDeclaration(
 			continue
 		}
 		return decl
+	}
+	return nil
+}
+
+func findTool(tools []tool.Tool, name string) tool.Tool {
+	for _, item := range tools {
+		if item == nil {
+			continue
+		}
+		decl := item.Declaration()
+		if decl == nil || decl.Name != name {
+			continue
+		}
+		return item
 	}
 	return nil
 }
@@ -2673,6 +2689,359 @@ func TestNewAgent_KnowledgeOnlyProfileUsesToolingGuidance(
 	)
 }
 
+func TestNewAgent_DeferToolSurfaceUsesDynamicAgent(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:             "demo",
+		SkillsRoot:          root,
+		StateDir:            t.TempDir(),
+		EnableOpenClawTools: true,
+		DeferToolSurface:    true,
+	}, []tool.Tool{
+		stubTool{name: "exec_command"},
+	}, nil)
+	require.NoError(t, err)
+
+	parentTools := agt.Tools()
+	require.NotNil(
+		t,
+		findToolDeclaration(
+			parentTools,
+			agenttool.DefaultDynamicToolName,
+		),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(
+			parentTools,
+			agenttool.DefaultCapabilitySearchToolName,
+		),
+	)
+	require.Nil(t, findToolDeclaration(parentTools, "exec_command"))
+	require.Nil(t, findToolDeclaration(parentTools, skillprofile.ToolLoad))
+
+	req := runAgentAndCapture(t, agt, mdl, &session.Session{})
+	require.NotNil(t, req.Tools[agenttool.DefaultDynamicToolName])
+	require.NotNil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
+	require.Nil(t, req.Tools["exec_command"])
+	require.Nil(t, req.Tools[skillprofile.ToolLoad])
+	system := joinSystemMessages(req)
+	require.Contains(t, system, "dynamic_agent")
+	require.Contains(t, system, "tool_search")
+	require.Contains(t, system, "Tool-backed work is available")
+	require.NotContains(t, system, "OPENCLAW_LAST_UPLOAD_PATH")
+
+	searchTool := findTool(
+		parentTools,
+		agenttool.DefaultCapabilitySearchToolName,
+	)
+	searchCallable, ok := searchTool.(tool.CallableTool)
+	require.True(t, ok)
+	searchOut, err := searchCallable.Call(
+		agent.NewInvocationContext(context.Background(), agent.NewInvocation(
+			agent.WithInvocationAgent(agt),
+			agent.WithInvocationSession(
+				session.NewSession("demo", "user", "session"),
+			),
+		)),
+		[]byte(`{"query":"exec"}`),
+	)
+	require.NoError(t, err)
+	searchResult := searchOut.(agenttool.CapabilitySearchResult)
+	require.Equal(
+		t,
+		[]agenttool.CapabilityToolSummary{{
+			Name:        "exec_command",
+			Description: "stub tool",
+		}},
+		searchResult.Tools,
+	)
+
+	dynamicTool := findTool(parentTools, agenttool.DefaultDynamicToolName)
+	callable, ok := dynamicTool.(tool.CallableTool)
+	require.True(t, ok)
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(agt),
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(
+			session.NewSession("demo", "user", "session"),
+		),
+		agent.WithInvocationEventFilterKey("parent"),
+	)
+	_, err = callable.Call(
+		agent.NewInvocationContext(context.Background(), parent),
+		[]byte(`{"request":"inspect available tools"}`),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, mdl.got.Tools["exec_command"])
+	require.NotNil(t, mdl.got.Tools[skillprofile.ToolLoad])
+	require.Contains(
+		t,
+		joinSystemMessages(mdl.got),
+		"OPENCLAW_LAST_UPLOAD_PATH",
+	)
+}
+
+func TestNewAgent_DeferToolSurfaceAutoKeepsSmallToolSurface(t *testing.T) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:                        "demo",
+		StateDir:                       t.TempDir(),
+		DeferToolSurfaceMode:           deferToolSurfaceModeAuto,
+		DeferToolSurfaceThresholdChars: 10000,
+	}, []tool.Tool{
+		stubTool{name: "exec_command"},
+	}, nil)
+	require.NoError(t, err)
+
+	parentTools := agt.Tools()
+	require.NotNil(t, findToolDeclaration(parentTools, "exec_command"))
+	require.Nil(
+		t,
+		findToolDeclaration(parentTools, agenttool.DefaultDynamicToolName),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(
+			parentTools,
+			agenttool.DefaultCapabilitySearchToolName,
+		),
+	)
+
+	req := runAgentAndCapture(t, agt, mdl, &session.Session{})
+	require.NotNil(t, req.Tools["exec_command"])
+	require.Nil(t, req.Tools[agenttool.DefaultDynamicToolName])
+	require.Nil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
+	require.NotContains(
+		t,
+		joinSystemMessages(req),
+		"Tool-backed work is available",
+	)
+}
+
+func TestNewAgent_DeferToolSurfaceAutoDefersLargeToolSurface(t *testing.T) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:                        "demo",
+		StateDir:                       t.TempDir(),
+		DeferToolSurfaceMode:           deferToolSurfaceModeAuto,
+		DeferToolSurfaceThresholdChars: 1,
+	}, []tool.Tool{
+		stubTool{
+			name:        "exec_command",
+			description: strings.Repeat("large ", 100),
+		},
+	}, nil)
+	require.NoError(t, err)
+
+	parentTools := agt.Tools()
+	require.Nil(t, findToolDeclaration(parentTools, "exec_command"))
+	require.NotNil(
+		t,
+		findToolDeclaration(parentTools, agenttool.DefaultDynamicToolName),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(
+			parentTools,
+			agenttool.DefaultCapabilitySearchToolName,
+		),
+	)
+}
+
+func TestNewAgent_DeferToolSurfaceKeepsConfiguredDirectTools(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:                     "demo",
+		StateDir:                    t.TempDir(),
+		DeferToolSurface:            true,
+		DeferToolSurfaceDirectTools: []string{"exec_command"},
+	}, []tool.Tool{
+		stubTool{name: "exec_command"},
+		stubTool{name: "message"},
+	}, nil)
+	require.NoError(t, err)
+
+	parentTools := agt.Tools()
+	require.NotNil(t, findToolDeclaration(parentTools, "exec_command"))
+	require.Nil(t, findToolDeclaration(parentTools, "message"))
+	require.NotNil(
+		t,
+		findToolDeclaration(parentTools, agenttool.DefaultDynamicToolName),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(
+			parentTools,
+			agenttool.DefaultCapabilitySearchToolName,
+		),
+	)
+
+	req := runAgentAndCapture(t, agt, mdl, &session.Session{})
+	require.NotNil(t, req.Tools["exec_command"])
+	require.Nil(t, req.Tools["message"])
+	require.NotNil(t, req.Tools[agenttool.DefaultDynamicToolName])
+	require.NotNil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
+}
+
+func TestNewDeferredToolSurfaceToolOptionalBranches(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	repo, err := ocskills.NewRepository([]string{root})
+	require.NoError(t, err)
+	autoExecute := true
+	postToolPrompt := false
+
+	dynamicTool := newDeferredToolSurfaceTool(deferredToolSurfaceConfig{
+		Model: &captureRequestModel{},
+		Config: agentConfig{
+			AppName:               "demo",
+			StateDir:              t.TempDir(),
+			SkillsMaxLoaded:       1,
+			PostToolPromptEnabled: &postToolPrompt,
+			RefreshToolSetsOnRun:  true,
+			CodeExecutor: codeExecutorOptions{
+				AutoExecuteCodeBlocks: &autoExecute,
+			},
+		},
+		Instruction:  "worker",
+		SystemPrompt: "system",
+		Generation:   model.GenerationConfig{Stream: true},
+		Repository:   repo,
+		RepoProvider: skill.RepositoryProviderFunc(
+			func(context.Context, skill.SkillScope) (skill.Repository, error) {
+				return repo, nil
+			},
+		),
+		Tools: []tool.Tool{stubTool{name: "exec_command"}},
+		ToolSets: []tool.ToolSet{
+			&stubToolSet{
+				name:  "files",
+				tools: []tool.Tool{stubTool{name: "read"}},
+			},
+		},
+		ToolCallbacks: tool.NewCallbacks(),
+	})
+
+	decl := dynamicTool.Declaration()
+	require.Equal(t, agenttool.DefaultDynamicToolName, decl.Name)
+	require.Contains(t, decl.Description, "worker")
+}
+
+func TestDeferredCapabilitySkillsProviderUsesInvocationScope(t *testing.T) {
+	t.Parallel()
+
+	staticRepo := &testSkillRepository{
+		summary: skill.Summary{Name: "static", Description: "static"},
+		body:    "static body",
+	}
+	scopedRepo := &testSkillRepository{
+		summary: skill.Summary{Name: "scoped", Description: "scoped"},
+		body:    "scoped body",
+	}
+	var scopes []skill.SkillScope
+	provider := skill.RepositoryProviderFunc(
+		func(_ context.Context, scope skill.SkillScope) (skill.Repository, error) {
+			scopes = append(scopes, scope)
+			return scopedRepo, nil
+		},
+	)
+	resolve := deferredCapabilitySkillsProvider(
+		staticRepo,
+		provider,
+		skill.SkillScopeUser,
+	)
+
+	got := resolve(nil, agent.NewInvocation(agent.WithInvocationSession(
+		session.NewSession("demo", "user", "session"),
+	)))
+	require.Equal(t, scopedRepo.Summaries(), got.Summaries())
+	require.Equal(
+		t,
+		[]skill.SkillScope{{AppName: "demo", UserID: "user"}},
+		scopes,
+	)
+	require.Equal(t, staticRepo.Summaries(), resolve(nil, nil).Summaries())
+
+	missingUser := resolve(nil, agent.NewInvocation(agent.WithInvocationSession(
+		session.NewSession("demo", "", "session"),
+	)))
+	require.Nil(t, missingUser)
+
+	fallback := deferredCapabilitySkillsProvider(
+		staticRepo,
+		nil,
+		skill.SkillScopeApp,
+	)
+	require.Equal(t, staticRepo.Summaries(), fallback(nil, nil).Summaries())
+
+	errProvider := skill.RepositoryProviderFunc(
+		func(context.Context, skill.SkillScope) (skill.Repository, error) {
+			return nil, errors.New("repo unavailable")
+		},
+	)
+	errApp := deferredCapabilitySkillsProvider(
+		staticRepo,
+		errProvider,
+		skill.SkillScopeApp,
+	)
+	require.Equal(
+		t,
+		staticRepo.Summaries(),
+		errApp(nil, agent.NewInvocation(agent.WithInvocationSession(
+			session.NewSession("demo", "user", "session"),
+		))).Summaries(),
+	)
+	errUser := deferredCapabilitySkillsProvider(
+		staticRepo,
+		errProvider,
+		skill.SkillScopeUser,
+	)
+	require.Nil(t, errUser(nil, agent.NewInvocation(agent.WithInvocationSession(
+		session.NewSession("demo", "user", "session"),
+	))))
+}
+
+func TestDeferredCapabilityToolsDedupeAndSkipInvalid(t *testing.T) {
+	t.Parallel()
+
+	got := deferredCapabilityTools(nil, []tool.Tool{
+		nil,
+		nilDeclTool{},
+		stubTool{name: "exec_command"},
+		stubTool{name: "exec_command"},
+	}, []tool.ToolSet{
+		nil,
+		&stubToolSet{
+			tools: []tool.Tool{stubTool{name: "search"}},
+		},
+		&stubToolSet{
+			name:  "wiki",
+			tools: []tool.Tool{stubTool{name: "lookup"}},
+		},
+	})
+
+	names := toolNames(got)
+	require.Len(t, names, 3)
+	require.Contains(t, names, "exec_command")
+	require.Contains(t, names, "search")
+	require.Contains(t, names, "wiki_lookup")
+	require.Empty(t, toolDeclName(nil))
+	require.Empty(t, toolDeclName(nilDeclTool{}))
+}
+
 func TestNewAgent_FullProfileUsesToolingGuidance(t *testing.T) {
 	t.Parallel()
 
@@ -3938,13 +4307,20 @@ type toolProviderCfg struct {
 }
 
 type stubTool struct {
-	name string
+	name        string
+	description string
+	inputSchema *tool.Schema
 }
 
 func (t stubTool) Declaration() *tool.Declaration {
+	description := t.description
+	if description == "" {
+		description = "stub tool"
+	}
 	return &tool.Declaration{
 		Name:        t.name,
-		Description: "stub tool",
+		Description: description,
+		InputSchema: t.inputSchema,
 	}
 }
 
@@ -6066,11 +6442,14 @@ func (s stubCloser) Close() error { return s.closeErr }
 
 type stubToolSet struct {
 	name     string
+	tools    []tool.Tool
 	closeErr error
 	closed   *bool
 }
 
-func (s *stubToolSet) Tools(context.Context) []tool.Tool { return nil }
+func (s *stubToolSet) Tools(context.Context) []tool.Tool {
+	return append([]tool.Tool(nil), s.tools...)
+}
 
 func (s *stubToolSet) Close() error {
 	if s.closed != nil {

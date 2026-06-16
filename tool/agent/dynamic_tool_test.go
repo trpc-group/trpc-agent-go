@@ -215,6 +215,76 @@ func TestNewDynamicTool_ExposeToggles(t *testing.T) {
 	require.Contains(t, props, fieldSkills)
 }
 
+func TestDynamicTool_CapabilitySkillsProviderOverridesFixed(t *testing.T) {
+	fixed := newDynTestSkillRepo(t, "fixed")
+	dynamic := newDynTestSkillRepo(t, "dynamic")
+	calls := 0
+	at := NewDynamicTool(
+		WithCapabilitySkills(fixed),
+		WithCapabilitySkillsProvider(
+			func(context.Context, *agent.Invocation) skill.Repository {
+				calls++
+				return dynamic
+			},
+		),
+	)
+
+	got := at.dynamicMaxSkillRepo(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+	require.Equal(t, dynamic.Summaries(), got.Summaries())
+	require.Equal(t, 1, calls)
+}
+
+func TestCapabilitySearchTool_SearchesToolsAndSkills(t *testing.T) {
+	repo := newDynTestSkillRepo(t, "coding", "weather")
+	parent := agent.NewInvocation()
+	search := NewCapabilitySearchTool(
+		WithCapabilitySearchProvider(
+			func(
+				_ context.Context,
+				got *agent.Invocation,
+			) ([]tool.Tool, map[string]bool) {
+				require.Same(t, parent, got)
+				return stubTools("read_file", "search_web"), nil
+			},
+		),
+		WithCapabilitySearchSkillsProvider(
+			func(
+				_ context.Context,
+				got *agent.Invocation,
+			) skill.Repository {
+				require.Same(t, parent, got)
+				return repo
+			},
+		),
+	)
+	callable, ok := search.(tool.CallableTool)
+	require.True(t, ok)
+
+	out, err := callable.Call(
+		agent.NewInvocationContext(context.Background(), parent),
+		[]byte(`{"query":"read","limit":10}`),
+	)
+	require.NoError(t, err)
+	got := out.(CapabilitySearchResult)
+	require.Equal(t, []CapabilityToolSummary{{Name: "read_file"}}, got.Tools)
+	require.Empty(t, got.Skills)
+	require.False(t, got.Truncated)
+	require.Contains(t, got.Note, "dynamic_agent")
+
+	out, err = callable.Call(
+		agent.NewInvocationContext(context.Background(), parent),
+		[]byte(`{"query":"","limit":2}`),
+	)
+	require.NoError(t, err)
+	got = out.(CapabilitySearchResult)
+	require.Len(t, got.Tools, 2)
+	require.Empty(t, got.Skills)
+	require.True(t, got.Truncated)
+}
+
 func TestNewDynamicTool_CustomFieldDescriptions(t *testing.T) {
 	at := NewDynamicTool(
 		WithRequestDescription("req-desc"),
