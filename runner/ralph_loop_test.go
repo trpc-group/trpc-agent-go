@@ -22,11 +22,46 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+// TestNewInnerInvocation_ReattachesSteerQueue verifies the ralph loop carries
+// the steer queue across the per-iteration clone to its inner (lead) agent, so
+// EnqueueUserMessage reaches the agent the user is steering — while a delegated
+// sub-agent (a plain clone of the inner invocation) does NOT inherit it.
+func TestNewInnerInvocation_ReattachesSteerQueue(t *testing.T) {
+	a := &ralphLoopAgent{inner: &scriptedAgent{name: "lead"}}
+	base := agent.NewInvocation()
+	queue := steer.NewQueue()
+	steer.Attach(base, queue)
+
+	inner := a.newInnerInvocation(base, nil)
+	require.True(t, steer.IsAttached(inner),
+		"ralph must re-attach the steer queue to its inner (lead) invocation")
+
+	// The re-attached queue is the SAME object the runner enqueues onto.
+	require.True(t, queue.Enqueue(model.NewUserMessage("steer")))
+	drained := steer.Drain(inner)
+	require.Len(t, drained, 1)
+	require.Equal(t, "steer", drained[0].Content)
+
+	// The inner llmflow closes its invocation queue when an iteration ends. That
+	// must NOT close the run-level queue: the runner keeps accepting steers
+	// across iterations. The attachment is borrowed, so Close is a no-op here.
+	steer.Close(inner)
+	require.True(t, queue.Enqueue(model.NewUserMessage("next iteration")),
+		"closing a borrowed inner invocation must leave the run-level queue open")
+
+	// A delegated sub-agent (agent_tool clones the inner invocation) must NOT
+	// inherit the queue — otherwise a member would drain the lead's steer.
+	member := inner.Clone()
+	require.False(t, steer.IsAttached(member),
+		"a delegated sub-agent must not inherit the lead's steer queue")
+}
 
 type scriptedAgent struct {
 	name    string
