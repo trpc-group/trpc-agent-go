@@ -54,7 +54,6 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 	for _, opt := range opts {
 		opt(options)
 	}
-
 	// Set endpoint based on protocol if not explicitly set
 	if options.tracesEndpoint == "" {
 		options.tracesEndpoint = tracesEndpoint(options.protocol)
@@ -75,9 +74,20 @@ func Start(ctx context.Context, opts ...Option) (clean func() error, err error) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize tracer provider: %w", err)
 	}
+
+	var restoreSpanAttributePolicy func()
+	if options.spanAttributePolicy != nil {
+		restoreSpanAttributePolicy = itelemetry.InstallSpanAttributePolicy(
+			toInternalSpanAttributePolicy(*options.spanAttributePolicy),
+		)
+	}
+
 	// Update global tracer
 	Tracer = otel.Tracer(itelemetry.InstrumentName)
 	return func() error {
+		if restoreSpanAttributePolicy != nil {
+			restoreSpanAttributePolicy()
+		}
 		if err := shutdownTracerProvider(ctx); err != nil {
 			return fmt.Errorf("failed to shutdown TracerProvider: %w", err)
 		}
@@ -90,14 +100,15 @@ type Option func(*options)
 
 // options holds the configuration options for tracer.
 type options struct {
-	tracesEndpoint     string
-	tracesEndpointURL  string
-	serviceName        string
-	serviceVersion     string
-	serviceNamespace   string
-	protocol           string            // Protocol to use (grpc or http)
-	headers            map[string]string // Headers to send with the request
-	resourceAttributes *[]attribute.KeyValue
+	tracesEndpoint      string
+	tracesEndpointURL   string
+	serviceName         string
+	serviceVersion      string
+	serviceNamespace    string
+	protocol            string            // Protocol to use (grpc or http)
+	headers             map[string]string // Headers to send with the request
+	resourceAttributes  *[]attribute.KeyValue
+	spanAttributePolicy *SpanAttributePolicy
 }
 
 // WithEndpoint sets the traces endpoint(host and port) the Exporter will connect to.
