@@ -639,6 +639,17 @@ agenttool.NewTool(subAgent,
 )
 ```
 
+#### 关联子 Agent 事件到父级工具调用
+
+通过 `AgentTool` 调用的子 Agent 发出的事件会带有 `ParentMetadata` 字段，其
+`TriggerID` 即父级的 `toolCallId`。AG-UI 调用方可以用它作为 join key，把子
+Agent 的事件挂回到具体那一次 `TOOL_CALL_START`。这在模型于一轮里对同一子
+Agent 发起多个并行 AgentTool 调用时尤为重要——所有派生 invocation 共享同一
+`ParentInvocationID`，只有 `ParentMetadata.TriggerID` 才能区分。具体线上格式
+和字段语义见 AG-UI chat 文档的
+[事件来源元数据](agui/chat.md#事件来源元数据) 章节，以及 Event 文档的
+[ParentMetadata 字段](event.md#requestidparentinvocationidinvocationid三者的关系与使用场景)。
+
 ### Agent 委托 (Agent Transfer)
 
 Agent 委托通过 `transfer_to_agent` 工具实现 Agent 间的任务委托，允许主 Agent 根据任务类型自动选择合适的 SubAgent。
@@ -881,6 +892,15 @@ for evt := range events {
 
 如果你不是用 `LLMAgent`，而是自己实现 `agent.Agent`，请看 `runner`
 文档里的底层 API：`agent.MarkAwaitingUserReply(...)`。
+
+#### 关联 Transfer 目标事件到触发的工具调用
+
+`transfer_to_agent` 把控制权转交给目标 Agent 后，目标 invocation 发出的事件会
+带有 `ParentMetadata` 字段：`TriggerType=transfer`、`TriggerID=<父级的
+toolCallId>`、`TriggerName=transfer_to_agent`。AG-UI 调用方可以用 `TriggerID`
+把目标的事件挂回到具体那一次 `transfer_to_agent` 的 `TOOL_CALL_START`。线上
+格式见 AG-UI chat 文档的
+[事件来源元数据](agui/chat.md#事件来源元数据) 章节。
 
 ## 内置 Explorer（只读探索 Agent）
 

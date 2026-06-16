@@ -5530,7 +5530,7 @@ func TestTool_WithPinModel_ClearsModelName(t *testing.T) {
 		}),
 	)
 
-	opts := agentTool.childInvocationOptions(parentInv, model.NewUserMessage("test"), "child-key", nil)
+	opts := agentTool.childInvocationOptions(context.Background(), parentInv, model.NewUserMessage("test"), "child-key", nil)
 
 	// Apply options to a new invocation to verify ModelName is cleared
 	childInv := parentInv.Clone(opts...)
@@ -5555,7 +5555,7 @@ func TestTool_WithPinModel_ClearsModel(t *testing.T) {
 		}),
 	)
 
-	opts := agentTool.childInvocationOptions(parentInv, model.NewUserMessage("test"), "child-key", nil)
+	opts := agentTool.childInvocationOptions(context.Background(), parentInv, model.NewUserMessage("test"), "child-key", nil)
 
 	childInv := parentInv.Clone(opts...)
 	if childInv.RunOptions.Model != nil {
@@ -5579,7 +5579,7 @@ func TestTool_WithPinModel_ClearsModelSelector(t *testing.T) {
 		}),
 	)
 
-	opts := agentTool.childInvocationOptions(parentInv, model.NewUserMessage("test"), "child-key", nil)
+	opts := agentTool.childInvocationOptions(context.Background(), parentInv, model.NewUserMessage("test"), "child-key", nil)
 
 	childInv := parentInv.Clone(opts...)
 	if childInv.RunOptions.ModelSelector != nil {
@@ -5606,7 +5606,7 @@ func TestTool_WithPinModel_Disabled_PreservesModelName(t *testing.T) {
 		}),
 	)
 
-	opts := agentTool.childInvocationOptions(parentInv, model.NewUserMessage("test"), "child-key", nil)
+	opts := agentTool.childInvocationOptions(context.Background(), parentInv, model.NewUserMessage("test"), "child-key", nil)
 
 	childInv := parentInv.Clone(opts...)
 	if childInv.RunOptions.ModelName != "parent-model" {
@@ -5618,4 +5618,124 @@ func TestTool_WithPinModel_Disabled_PreservesModelName(t *testing.T) {
 	if childInv.RunOptions.ModelSelector == nil {
 		t.Error("Expected ModelSelector to be preserved when WithPinModel is disabled")
 	}
+}
+
+// parentMetadataCapturingAgent records the ParentMetadata observed on the
+// invocation it receives. Used to verify AgentTool propagates the parent's
+// toolCallId into the sub-agent's invocation as ParentInvocationMetadata.
+type parentMetadataCapturingAgent struct {
+	name              string
+	gotParentMetadata *agent.ParentInvocationMetadata
+	gotInvocationID   string
+}
+
+func (a *parentMetadataCapturingAgent) Info() agent.Info {
+	return agent.Info{Name: a.name, Description: "capturing"}
+}
+func (a *parentMetadataCapturingAgent) SubAgents() []agent.Agent        { return nil }
+func (a *parentMetadataCapturingAgent) FindSubAgent(string) agent.Agent { return nil }
+func (a *parentMetadataCapturingAgent) Tools() []tool.Tool              { return nil }
+func (a *parentMetadataCapturingAgent) Run(
+	ctx context.Context, inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	a.gotParentMetadata = inv.ParentMetadata
+	a.gotInvocationID = inv.InvocationID
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		InvocationID: inv.InvocationID,
+		Author:       a.name,
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("ok")},
+			},
+		},
+	}
+	close(ch)
+	return ch, nil
+}
+
+// TestTool_Call_PropagatesParentMetadataFromToolCallID verifies that when the
+// AgentTool is invoked with a toolCallId in the per-call ctx, the sub-agent's
+// invocation receives a ParentMetadata describing the parent tool call. This
+// is the join key consumed by AG-UI to correlate the sub-agent's events with
+// the parent's TOOL_CALL_START.
+func TestTool_Call_PropagatesParentMetadataFromToolCallID(t *testing.T) {
+	child := &parentMetadataCapturingAgent{name: "captor"}
+	at := NewTool(child)
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+	)
+	invCtx := agent.NewInvocationContext(context.Background(), parent)
+	const toolCallID = "call-pm-001"
+	ctx := context.WithValue(invCtx, tool.ContextKeyToolCallID{}, toolCallID)
+
+	_, err := at.Call(ctx, []byte(`{"request":"hello"}`))
+	require.NoError(t, err)
+	require.NotNil(t, child.gotParentMetadata,
+		"sub-agent invocation should carry ParentMetadata when parent ctx has toolCallId")
+	require.Equal(t, agent.TriggerTypeToolCall, child.gotParentMetadata.TriggerType)
+	require.Equal(t, toolCallID, child.gotParentMetadata.TriggerID)
+	require.Equal(t, child.name, child.gotParentMetadata.TriggerName,
+		"TriggerName should match the AgentTool's name (which is the sub-agent name by default)")
+}
+
+// TestTool_Call_NoParentMetadataWithoutToolCallID verifies the degraded path:
+// when the AgentTool is invoked without a toolCallId in ctx (e.g., direct test
+// invocation), the sub-agent's invocation has no ParentMetadata rather than a
+// fabricated one.
+func TestTool_Call_NoParentMetadataWithoutToolCallID(t *testing.T) {
+	child := &parentMetadataCapturingAgent{name: "captor-no-pm"}
+	at := NewTool(child)
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	_, err := at.Call(ctx, []byte(`{"request":"hello"}`))
+	require.NoError(t, err)
+	require.Nil(t, child.gotParentMetadata,
+		"sub-agent should have no ParentMetadata when parent ctx has no toolCallId")
+}
+
+// TestTool_Call_DoesNotInheritParentMetadataFromParentInvocation is a regression
+// test: when the parent invocation itself already carries a ParentMetadata
+// (e.g., the parent was spawned by an upstream AgentTool / transfer), and the
+// AgentTool is invoked without a toolCallId in ctx, the child invocation must
+// NOT inherit the parent's ParentMetadata via Invocation.Clone's default copy
+// behavior. Instead, the child's ParentMetadata must be cleared to nil,
+// because the AgentTool boundary creates a new parent edge — the parent
+// invocation is the immediate parent now, not whatever spawned it.
+//
+// Without the fix at the AgentTool boundary, AG-UI would correlate the
+// child's events to the wrong parent edge (the parent's parent).
+func TestTool_Call_DoesNotInheritParentMetadataFromParentInvocation(t *testing.T) {
+	child := &parentMetadataCapturingAgent{name: "captor-inherit"}
+	at := NewTool(child)
+
+	// Parent invocation already carries ParentMetadata — simulating a parent
+	// that was itself spawned by an upstream AgentTool call.
+	upstreamMeta := &agent.ParentInvocationMetadata{
+		TriggerType: agent.TriggerTypeToolCall,
+		TriggerID:   "upstream-call-id",
+		TriggerName: "upstream-tool",
+	}
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationParentMetadata(upstreamMeta),
+	)
+	require.NotNil(t, parent.ParentMetadata,
+		"sanity: parent invocation should carry the upstream ParentMetadata")
+
+	// Invoke the AgentTool without a toolCallId in ctx (degraded path).
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	_, err := at.Call(ctx, []byte(`{"request":"hello"}`))
+	require.NoError(t, err)
+
+	require.Nil(t, child.gotParentMetadata,
+		"child must NOT inherit parent's ParentMetadata across the AgentTool boundary; "+
+			"the AgentTool call is itself the new parent edge, and absent a toolCallId in ctx, "+
+			"that edge has no representable ParentMetadata (must be nil, not inherited)")
 }
