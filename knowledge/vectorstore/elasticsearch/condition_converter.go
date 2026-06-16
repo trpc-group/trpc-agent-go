@@ -41,7 +41,7 @@ func (c *esConverter) Convert(cond *searchfilter.UniversalFilterCondition) (type
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
-			log.Errorf("panic in esConverter Convert: %v\n%s", r, string(stack))
+			log.Errorf(log.PanicPrefix+" panic in esConverter Convert: %v\n%s", r, string(stack))
 		}
 	}()
 

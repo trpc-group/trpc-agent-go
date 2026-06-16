@@ -192,7 +192,7 @@ func (w *AsyncSummaryWorker) tryEnqueueJob(ctx context.Context, job *summaryJob)
 func (w *AsyncSummaryWorker) processJob(job *summaryJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.ErrorfContext(context.Background(), "panic in summary worker: %v", r)
+			log.ErrorfContext(context.Background(), log.PanicPrefix+" panic in summary worker: %v", r)
 		}
 	}()
 
