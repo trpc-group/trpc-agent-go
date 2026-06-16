@@ -129,3 +129,51 @@ func TestCloneChoicesHandlesEmptyValues(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, string(originalJSON), string(clonedJSON))
 }
+
+func TestCloneAnyValueCopiesJSONContainers(t *testing.T) {
+	raw := json.RawMessage(`{"ok":true}`)
+	clonedRaw := cloneAnyValue(raw).(json.RawMessage)
+	raw[0] = '['
+	require.Equal(t, json.RawMessage(`{"ok":true}`), clonedRaw)
+
+	bytes := []byte("bytes")
+	clonedBytes := cloneAnyValue(bytes).([]byte)
+	bytes[0] = 'X'
+	require.Equal(t, []byte("bytes"), clonedBytes)
+
+	values := map[string]any{
+		"list": []any{json.RawMessage(`{"nested":true}`)},
+	}
+	clonedMap := cloneAnyValue(values).(map[string]any)
+	values["list"].([]any)[0].(json.RawMessage)[0] = '['
+	require.Equal(t, json.RawMessage(`{"nested":true}`), clonedMap["list"].([]any)[0])
+
+	require.Nil(t, cloneAnyValue(nil))
+	require.Nil(t, cloneAnyMap(nil))
+	require.Nil(t, cloneAnySlice(nil))
+}
+
+func TestCloneAnyValueCopiesTypedContainers(t *testing.T) {
+	typedMap := map[string][]string{"key": {"value"}}
+	clonedMap := cloneAnyValue(typedMap).(map[string][]string)
+	typedMap["key"][0] = "changed"
+	require.Equal(t, "value", clonedMap["key"][0])
+
+	typedSlice := [][]string{{"value"}}
+	clonedSlice := cloneAnyValue(typedSlice).([][]string)
+	typedSlice[0][0] = "changed"
+	require.Equal(t, "value", clonedSlice[0][0])
+
+	typedArray := [1][]string{{"value"}}
+	clonedArray := cloneAnyValue(typedArray).([1][]string)
+	typedArray[0][0] = "changed"
+	require.Equal(t, "value", clonedArray[0][0])
+
+	var nilMap map[string][]string
+	require.Nil(t, cloneAnyValue(nilMap).(map[string][]string))
+
+	var nilSlice [][]string
+	require.Nil(t, cloneAnyValue(nilSlice).([][]string))
+
+	require.Equal(t, "primitive", cloneAnyValue("primitive"))
+}
