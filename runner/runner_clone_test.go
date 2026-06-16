@@ -107,7 +107,7 @@ func TestCloneChoicesDeepCopiesMutableFields(t *testing.T) {
 
 func TestCloneChoicesHandlesEmptyValues(t *testing.T) {
 	require.Nil(t, cloneChoices(nil))
-	require.Nil(t, cloneChoices([]model.Choice{}))
+	require.Empty(t, cloneChoices([]model.Choice{}))
 
 	choices := []model.Choice{
 		{
