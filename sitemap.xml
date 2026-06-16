@@ -113,6 +113,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/event/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/evolution/</loc>
+        <lastmod>2026-06-16</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/evolution/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/evolution/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/gateway/</loc>
         <lastmod>2026-06-16</lastmod>
         <changefreq>daily</changefreq>
@@ -629,6 +636,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/event/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/event/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/evolution/</loc>
+        <lastmod>2026-06-16</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/evolution/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/evolution/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/gateway/</loc>
