@@ -260,6 +260,65 @@ Trace data can be used to analyze:
 - **Dependencies**: Understand relationships between components.
 - **Concurrency Analysis**: Observe the effects of concurrent execution.
 
+## Span Attribute Policy (Production Side)
+
+`telemetry/trace` provides an opt-in `SpanAttributePolicy` that controls collection and size of large payload **span attributes** at span creation time.
+
+Default (unset) behavior is unchanged.
+
+### Two capabilities
+
+- `Drop()` and unconditional `Omit()` (without `MaxBytes`) skip `json.Marshal`.
+- `MaxBytes()` + `Omit()`: raw `[]byte` paths (for example `execute_tool` tool arguments) compare length without an extra marshal; **JSON-backed** paths (chat / workflow / invoke_agent) still require a full marshal and **do not** reduce heap peaks.
+- `Truncate()` always marshals the full payload; it only limits the value written to the span.
+
+| Rule | Reduces marshal heap peak? | Notes |
+|------|----------------------------|-------|
+| `Drop()` | Yes | Skips marshaling; attribute not written |
+| `Omit()` (no `MaxBytes`) | Yes | Skips payload marshaling |
+| `MaxBytes(n)` + `Omit()` | JSON: no; `[]byte`: yes | JSON paths marshal fully before comparing size; `[]byte` paths use `len` only |
+| `Truncate(n)` | No | Full marshal, then truncate on export |
+
+To reduce memory, prefer `Drop()` on attributes you do not need (for example redundant `*.otel`).
+
+### Coverage
+
+Large payload attributes are wired for `chat`, `invoke_agent`, `workflow`, and `execute_tool` (messages, llm request/response, workflow request/response, tool arguments/result, and related keys).
+
+### Configuration
+
+```go
+import atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
+
+clean, err := atrace.Start(ctx,
+    atrace.WithSpanAttributePolicy(
+        atrace.WithAttributeRule(atrace.OperationChat, atrace.AttrInputMessagesOTel, atrace.Drop()),
+        atrace.WithAttributeRule(atrace.OperationChat, atrace.AttrOutputMessagesOTel, atrace.Drop()),
+        atrace.WithAttributeRule(atrace.OperationInvokeAgent, atrace.AttrInputMessagesOTel, atrace.Drop()),
+    ),
+)
+```
+
+If `trace.Start` is not used, call `atrace.SetSpanAttributePolicy(...)` before the first LLM invocation. `trace.Start` installs the policy only after tracer initialization succeeds; `clean()` restores the previous policy.
+
+`MaxBytes` + `Omit()` example (limits attribute size; JSON paths still marshal):
+
+```go
+atrace.WithAttributeRule(atrace.OperationWorkflow, atrace.AttributeKey("gen_ai.workflow.request"),
+    atrace.MaxBytes(16<<10), atrace.Omit(),
+)
+```
+
+`Truncate` example (full marshal, limited export size):
+
+```go
+atrace.WithAttributeRule(atrace.OperationWorkflow, atrace.AttributeKey("gen_ai.workflow.response"), atrace.Truncate(64<<10))
+```
+
+### Compatibility
+
+Drop/Omit/Truncate may prevent some backends from reconstructing structured full text from attributes. Opt in based on your backend and memory budget.
+
 ## Advanced Features
 
 ### Custom Exporter
