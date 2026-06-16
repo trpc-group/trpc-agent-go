@@ -455,6 +455,19 @@ type Options struct {
 	// When <= 0, no cap is applied (default behavior).
 	MaxLoadedSkills int
 
+	// MaxOverviewSkills caps how many skill summaries (name + full
+	// description) are rendered into the system-prompt overview.
+	//
+	// When > 0 and the repository exposes more than this many skills,
+	// only the first N are rendered with descriptions; the remaining
+	// skill names are listed as a compact tail so the agent can still
+	// discover them via skill_load.
+	//
+	// When <= 0, no cap is applied (default behavior) and every skill
+	// summary is rendered. Use this to bound the per-invocation prompt
+	// budget when the managed-skill library grows large.
+	MaxOverviewSkills int
+
 	// SkillsLoadedContentInToolResults controls where loaded skill bodies
 	// and selected docs are materialized.
 	//
@@ -476,6 +489,10 @@ type Options struct {
 
 	// skillsRepository enables agent skills when non-nil.
 	skillsRepository skill.Repository
+	// skillsRepositoryProvider resolves a scoped skills repository per run.
+	skillsRepositoryProvider skill.RepositoryProvider
+	// skillScopeMode controls app-level sharing vs app+user isolation.
+	skillScopeMode skill.SkillScopeMode
 	// skillFilter narrows the visible skill set per run context.
 	skillFilter skill.VisibilityFilter
 	// skillToolProfile controls which built-in skill tools are registered.
@@ -884,6 +901,22 @@ func WithSkills(repo skill.Repository) Option {
 	}
 }
 
+// WithSkillRepositoryProvider enables model-agnostic Agent Skills support
+// using a repository selected from the current app/user scope.
+func WithSkillRepositoryProvider(provider skill.RepositoryProvider) Option {
+	return func(opts *Options) {
+		opts.skillsRepositoryProvider = provider
+	}
+}
+
+// WithSkillScopeMode configures whether scoped skills are shared per app or
+// isolated per app+user.
+func WithSkillScopeMode(mode skill.SkillScopeMode) Option {
+	return func(opts *Options) {
+		opts.skillScopeMode = mode
+	}
+}
+
 // WithSkillFilter narrows visible skills per run context without changing the
 // mounted repository roots. The filter is evaluated against skill summaries
 // and can read runtime state from ctx.
@@ -989,6 +1022,24 @@ func WithSkillLoadMode(mode string) Option {
 func WithMaxLoadedSkills(max int) Option {
 	return func(opts *Options) {
 		opts.MaxLoadedSkills = max
+	}
+}
+
+// WithMaxOverviewSkills caps how many skill summaries are rendered
+// into the system-prompt overview with full descriptions.
+//
+// When max <= 0, no cap is applied (default behavior). When max > 0
+// and the repository exposes more than max skills, only the first max
+// summaries are rendered fully; the remaining skill names are listed
+// as a compact, comma-separated tail so the agent can still load them
+// on demand via skill_load.
+//
+// Use this to bound the per-invocation prompt budget when the managed-
+// skill library grows large enough to push the request close to the
+// model's context window.
+func WithMaxOverviewSkills(max int) Option {
+	return func(opts *Options) {
+		opts.MaxOverviewSkills = max
 	}
 }
 

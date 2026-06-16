@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 const (
@@ -228,6 +229,10 @@ type runOptions struct {
 	SkillsToolingGuide    *string
 	StateDir              string
 
+	EvolutionEnabled        bool
+	EvolutionHumanGate      string
+	EvolutionSkillScopeMode skill.SkillScopeMode
+
 	DebugRecorderEnabled bool
 	DebugRecorderDir     string
 	DebugRecorderMode    string
@@ -304,6 +309,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 		SkillsLoadMode:      defaultSkillsLoadMode,
 		SkillsToolResults:   true,
 		SkillsSkipFallback:  true,
+
+		EvolutionSkillScopeMode: skill.SkillScopeApp,
 
 		SessionBackend: sessionBackendInMemory,
 		MemoryBackend:  memoryBackendInMemory,
@@ -1005,6 +1012,8 @@ type fileConfig struct {
 
 	Session *sessionConfig `yaml:"session,omitempty"`
 	Memory  *memoryConfig  `yaml:"memory,omitempty"`
+
+	Evolution *evolutionConfig `yaml:"evolution,omitempty"`
 }
 
 type httpConfig struct {
@@ -1238,6 +1247,20 @@ type memoryConfig struct {
 	Limit   *int         `yaml:"limit,omitempty"`
 	Auto    *memoryAuto  `yaml:"auto,omitempty"`
 	Config  *rawYAMLNode `yaml:"config,omitempty"`
+}
+
+type evolutionConfig struct {
+	// Enabled explicitly opts the runtime into the async evolution service.
+	Enabled *bool `yaml:"enabled,omitempty"`
+
+	// HumanGate controls the human approval gate for skill revisions.
+	// Values: "always" (hold all), "create" (hold new skills only), "" (disabled).
+	HumanGate  *string                    `yaml:"human_gate,omitempty"`
+	SkillScope *evolutionSkillScopeConfig `yaml:"skill_scope,omitempty"`
+}
+
+type evolutionSkillScopeConfig struct {
+	Mode *string `yaml:"mode,omitempty"`
 }
 
 type knowledgesConfig struct {
@@ -1912,6 +1935,25 @@ func (cfg *fileConfig) apply(
 		}
 	}
 
+	if cfg.Evolution != nil {
+		if cfg.Evolution.Enabled != nil {
+			opts.EvolutionEnabled = *cfg.Evolution.Enabled
+		}
+		if cfg.Evolution.HumanGate != nil {
+			opts.EvolutionHumanGate = strings.TrimSpace(*cfg.Evolution.HumanGate)
+		}
+		if cfg.Evolution.SkillScope != nil &&
+			cfg.Evolution.SkillScope.Mode != nil {
+			mode, err := parseEvolutionSkillScopeMode(
+				*cfg.Evolution.SkillScope.Mode,
+			)
+			if err != nil {
+				return fmt.Errorf("evolution.skill_scope.mode: %w", err)
+			}
+			opts.EvolutionSkillScopeMode = mode
+		}
+	}
+
 	return nil
 }
 
@@ -2404,6 +2446,19 @@ func parseDuration(raw string) (time.Duration, error) {
 	return time.ParseDuration(v)
 }
 
+func parseEvolutionSkillScopeMode(raw string) (skill.SkillScopeMode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return skill.SkillScopeNone, nil
+	case string(skill.SkillScopeApp):
+		return skill.SkillScopeApp, nil
+	case string(skill.SkillScopeUser):
+		return skill.SkillScopeUser, nil
+	default:
+		return skill.SkillScopeNone, fmt.Errorf("unsupported mode %q", raw)
+	}
+}
+
 func flagWasSet(set map[string]struct{}, name string) bool {
 	_, ok := set[name]
 	return ok
@@ -2449,6 +2504,9 @@ func finalizeRunOptions(opts *runOptions) error {
 			opts.SkillsOverviewLimit,
 		)
 	}
+	opts.EvolutionSkillScopeMode = skill.NormalizeSkillScopeMode(
+		opts.EvolutionSkillScopeMode,
+	)
 	opts.MemoryBackend = resolveMemoryBackendType(opts.MemoryBackend)
 	opts.AdminAddr = strings.TrimSpace(opts.AdminAddr)
 	if opts.AdminEnabled && opts.AdminAddr == "" {

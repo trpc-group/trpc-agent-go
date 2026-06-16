@@ -28,6 +28,7 @@ nav:
       - Memory: memory.md
       - Artifact: artifact.md
       - Skill: skill.md
+      - Evolution: evolution.md
       - Tool: tool.md
       - Session:
           - Overview: session/index.md
@@ -123,6 +124,7 @@ plugins:
                 - Memory: memory.md
                 - Artifact: artifact.md
                 - Skill: skill.md
+                - Evolution: evolution.md
                 - Tool: tool.md
                 - Session:
                     - Overview: session/index.md

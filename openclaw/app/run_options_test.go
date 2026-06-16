@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 func TestMain(m *testing.M) {
@@ -1629,6 +1630,69 @@ func TestParseRunOptions_SkillsDefaults(t *testing.T) {
 	require.Nil(t, opts.SkillsToolingGuide)
 	require.False(t, opts.LatencyDiagnosticsEnabled)
 	require.False(t, opts.LatencyDiagnosticsEvents)
+}
+
+func TestParseRunOptions_EvolutionSkillScopeModeConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		mode string
+		want skill.SkillScopeMode
+	}{
+		{name: "app", mode: " app ", want: skill.SkillScopeApp},
+		{name: "user", mode: "USER", want: skill.SkillScopeUser},
+		{name: "none", mode: " ", want: skill.SkillScopeNone},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfgPath := writeTempConfig(t, fmt.Sprintf(`
+evolution:
+  skill_scope:
+    mode: %q
+`, tt.mode))
+
+			opts, err := parseRunOptions([]string{"-config", cfgPath})
+			require.NoError(t, err)
+			require.Equal(t, tt.want, opts.EvolutionSkillScopeMode)
+		})
+	}
+}
+
+func TestParseRunOptions_EvolutionEnabledConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+evolution:
+  enabled: true
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.True(t, opts.EvolutionEnabled)
+}
+
+func TestParseRunOptions_EvolutionSkillScopeModeConfigInvalidFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+evolution:
+  skill_scope:
+    mode: tenant
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.Contains(t, err.Error(), "evolution.skill_scope.mode")
+	require.Contains(t, err.Error(), "tenant")
 }
 
 func TestParseRunOptions_SkillsLoadMode_InvalidFails(t *testing.T) {
