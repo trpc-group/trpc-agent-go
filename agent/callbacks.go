@@ -25,7 +25,7 @@ const ErrorTypeAgentCallbackError = "agent_callback_error"
 
 const (
 	callbackPanicErrFmt = "%s: %v"
-	callbackPanicLogFmt = "%s (invocation: %s, agent: %s): " +
+	callbackPanicLogFmt = log.PanicPrefix + " %s (invocation: %s, agent: %s): " +
 		"%v\n%s"
 
 	beforeAgentCallbackPanic = "before agent callback panic"

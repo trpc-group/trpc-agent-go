@@ -376,7 +376,7 @@ func (e *Enforcer) notify(evt EnforceEvent) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			log.Errorf("todoenforcer: OnEnforce panic: %v", r)
+			log.Errorf(log.PanicPrefix+" todoenforcer: OnEnforce panic: %v", r)
 		}
 	}()
 	e.opts.OnEnforce(evt)

@@ -28,6 +28,9 @@ const (
 	LevelFatal = "fatal"
 )
 
+// PanicPrefix marks recovered panic logs so log-based collectors can report them.
+const PanicPrefix = "[PANIC]"
+
 var (
 	zapLevel = zap.NewAtomicLevelAt(zapcore.InfoLevel)
 

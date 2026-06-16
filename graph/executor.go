@@ -315,7 +315,7 @@ func (e *Executor) Execute(
 				stack := debug.Stack()
 				log.ErrorfContext(
 					ctx,
-					"panic in executor goroutine: %v\n%s",
+					log.PanicPrefix+" panic in executor goroutine: %v\n%s",
 					r,
 					string(stack),
 				)
@@ -2689,7 +2689,7 @@ func (e *Executor) executeStepTask(
 		if r := recover(); r != nil {
 			log.ErrorfContext(
 				runCtx,
-				"panic executing task %s: %v\n%s",
+				log.PanicPrefix+" panic executing task %s: %v\n%s",
 				t.NodeID,
 				r,
 				string(debug.Stack()),
@@ -4082,7 +4082,7 @@ func (e *Executor) executeNodeFunction(
 			stack := debug.Stack()
 			log.ErrorfContext(
 				ctx,
-				"panic in node %s: %v\n%s",
+				log.PanicPrefix+" panic in node %s: %v\n%s",
 				t.NodeID,
 				r,
 				string(stack),

@@ -21,7 +21,7 @@ func RecoverCallbackPanic(ctx context.Context, stage string) {
 	if recovered := recover(); recovered != nil {
 		log.ErrorfContext(
 			ctx,
-			"%s panic: %v\n%s",
+			log.PanicPrefix+" %s panic: %v\n%s",
 			stage,
 			recovered,
 			string(debug.Stack()),
