@@ -1054,8 +1054,10 @@ func NewRuntimeWithOptions(
 			MaxHistoryRuns:   opts.MaxHistoryRuns,
 			PreloadMemory:    opts.PreloadMemory,
 			GenerationConfig: opts.GenerationConfig,
-			Instruction:      prompts.Instruction,
-			SystemPrompt:     prompts.SystemPrompt,
+			PostToolPromptEnabled: runtimeOpts.
+				postToolPromptEnabled,
+			Instruction:  prompts.Instruction,
+			SystemPrompt: prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -1605,8 +1607,10 @@ func run(
 			MaxHistoryRuns:   opts.MaxHistoryRuns,
 			PreloadMemory:    opts.PreloadMemory,
 			GenerationConfig: opts.GenerationConfig,
-			Instruction:      prompts.Instruction,
-			SystemPrompt:     prompts.SystemPrompt,
+			PostToolPromptEnabled: runtimeOpts.
+				postToolPromptEnabled,
+			Instruction:  prompts.Instruction,
+			SystemPrompt: prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -2560,6 +2564,14 @@ func newAgent(
 			runtimeprofile.SkillVisibilityFilterForRepository(repo),
 		),
 	}
+	if cfg.PostToolPromptEnabled != nil {
+		opts = append(
+			opts,
+			llmagent.WithEnablePostToolPrompt(
+				*cfg.PostToolPromptEnabled,
+			),
+		)
+	}
 	opts = append(opts, llmagent.WithSkills(repo))
 	opts = append(
 		opts,
@@ -2942,6 +2954,7 @@ type agentConfig struct {
 	MaxHistoryRuns                                int
 	PreloadMemory                                 int
 	GenerationConfig                              *model.GenerationConfig
+	PostToolPromptEnabled                         *bool
 	Instruction                                   string
 	SystemPrompt                                  string
 
