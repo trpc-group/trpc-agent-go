@@ -351,7 +351,7 @@ func prepareTransferTargetInvocation(
 ) (*agent.Invocation, model.Message, error) {
 	// Do NOT propagate EndInvocation from the coordinator.
 	// end_invocation is intended to end the current invocation.
-	targetInvocation := invocation.Clone(
+	cloneOpts := []agent.InvocationOptions{
 		agent.WithInvocationAgent(targetAgent),
 		agent.WithInvocationTraceNodeID(
 			transferTargetTraceNodeID(invocation, targetAgent),
@@ -364,7 +364,32 @@ func prepareTransferTargetInvocation(
 				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
 			}
 		},
-	)
+	}
+	// Override the inherited ParentMetadata: target invocation came from a
+	// transfer, so its ParentMetadata must describe the transfer (not
+	// whatever spawned the source invocation). Invocation.Clone copies
+	// ParentMetadata by default, so we must overwrite it unconditionally —
+	// otherwise a transfer originating from an AgentTool-spawned invocation
+	// would inherit the source's tool_call ParentMetadata and AG-UI would
+	// correlate the target to the wrong parent edge.
+	//
+	// The toolCallId was captured by transfer_to_agent from its per-call ctx
+	// and stashed on TransferInfo because the per-tool ctx is gone by the
+	// time this processor runs. When the toolCallId is unavailable, set
+	// ParentMetadata to nil rather than fabricating one or leaving the
+	// inherited value.
+	var targetParentMetadata *agent.ParentInvocationMetadata
+	if transferInfo.ToolCallID != "" {
+		targetParentMetadata = &agent.ParentInvocationMetadata{
+			TriggerType: agent.TriggerTypeTransfer,
+			TriggerID:   transferInfo.ToolCallID,
+			// Defined as TransferToolName in tool/transfer; inlined to
+			// avoid pulling that package into internal/flow/processor.
+			TriggerName: "transfer_to_agent",
+		}
+	}
+	cloneOpts = append(cloneOpts, agent.WithInvocationParentMetadata(targetParentMetadata))
+	targetInvocation := invocation.Clone(cloneOpts...)
 	if transferInfo.Message != "" {
 		targetInvocation.Message = model.Message{
 			Role:    model.RoleUser,

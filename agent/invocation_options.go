@@ -139,3 +139,13 @@ func WithInvocationEventFilterKey(key string) InvocationOptions {
 		inv.eventFilterKey = key
 	}
 }
+
+// WithInvocationParentMetadata sets the ParentMetadata for the Invocation.
+// This records how the parent created this child invocation (e.g., which
+// AgentTool call or transfer triggered it), enabling correlation of
+// sub-agent events with their originating parent action.
+func WithInvocationParentMetadata(meta *ParentInvocationMetadata) InvocationOptions {
+	return func(inv *Invocation) {
+		inv.ParentMetadata = meta
+	}
+}

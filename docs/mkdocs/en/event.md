@@ -38,6 +38,13 @@ type Event struct {
     // Branch is a branch identifier for multi-Agent collaboration.
     Branch string `json:"branch,omitempty"`
 
+    // ParentMetadata describes the immediate parent edge that triggered this
+    // event's invocation. It carries the parent's toolCallId so that
+    // sub-agent events can be correlated to the specific parent tool call
+    // that spawned them. See the section on RequestID/ParentInvocationID/
+    // InvocationID/ParentMetadata for details.
+    ParentMetadata *ParentInvocationMetadata `json:"parentMetadata,omitempty"`
+
     // Tag uses tags to annotate events with business-specific labels.
     Tag string `json:"tag,omitempty"`
 
@@ -724,6 +731,12 @@ func (c *multiTurnChat) displayContent(
 - `RequestID string`​​: Used to identify and distinguish multiple user interaction requests within the same session. It can be bound to the business layer's own request ID via runner.Runu agent.WithRequestID. This ensures unique identification for each request cycle, similar to how request IDs are employed to guarantee idempotency and de-duplication in API interactions.
 - `​​ParentInvocationID string`​​: Used to associate the parent execution context. This ID can link to related events in the parent execution, enabling hierarchical tracking of nested operations. This mirrors concepts where a parent request ID groups multiple sub-requests, each with distinct identifiers but shared parent context for cohesive management.
 - `​​InvocationID string`​​: The current execution context ID. This ID associates related events within the same execution context, allowing precise correlation of actions and outcomes for a specific invocation. It functions similarly to child request IDs in systems where individual operations are tracked under a parent scope.
+- `ParentMetadata *ParentInvocationMetadata`: Describes how this invocation was triggered by its **immediate** parent. While `ParentInvocationID` only points to the parent execution, `ParentMetadata` adds the join key needed to attach the child to the exact tool call inside the parent:
+    - `TriggerType`: `tool_call` for AgentTool, `transfer` for `transfer_to_agent`.
+    - `TriggerID`: the parent's `toolCallId`. Use this to correlate the child's events with the parent's `TOOL_CALL_START`.
+    - `TriggerName`: human-readable name (AgentTool name, or `transfer_to_agent`).
+
+  This field is the disambiguator for parallel AgentTool calls: when a model issues multiple parallel calls to the same sub-agent in one turn, all spawned invocations share the same `ParentInvocationID`; only `ParentMetadata.TriggerID` distinguishes which `TOOL_CALL_START` each child belongs to. When the invocation was not triggered through a parent tool call (e.g., a top-level run), this field is `nil`.
 
 Using these three IDs, the event flow can be organized in a hierarchical structure as follows:
 - requestID-1:

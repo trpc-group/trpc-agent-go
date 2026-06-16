@@ -634,3 +634,17 @@ func TestModelResponseRunOptionSetters(t *testing.T) {
 	WithDisablePartialEventTimestamps(true)(opts)
 	require.True(t, opts.DisablePartialEventTimestamps)
 }
+
+func TestWithInvocationParentMetadata(t *testing.T) {
+	meta := &ParentInvocationMetadata{
+		TriggerType: TriggerTypeToolCall,
+		TriggerID:   "call-abc-123",
+		TriggerName: "tool-x",
+	}
+	inv := NewInvocation(WithInvocationParentMetadata(meta))
+	require.NotNil(t, inv)
+	require.NotNil(t, inv.ParentMetadata)
+	assert.Equal(t, "call-abc-123", inv.ParentMetadata.TriggerID)
+	assert.Equal(t, TriggerTypeToolCall, inv.ParentMetadata.TriggerType)
+	assert.Equal(t, "tool-x", inv.ParentMetadata.TriggerName)
+}

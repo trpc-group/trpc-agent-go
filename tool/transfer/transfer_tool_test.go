@@ -186,3 +186,60 @@ func findSubstring(s, substr string) bool {
 	}
 	return false
 }
+
+// TestTransferTool_CapturesToolCallIDIntoTransferInfo verifies that when the
+// transfer_to_agent tool runs with a toolCallId in its per-call ctx, the
+// captured ID is written into TransferInfo.ToolCallID. The transfer response
+// processor consumes this field to build ParentInvocationMetadata for the
+// target invocation; without this capture, the toolCallId would be lost when
+// the per-tool ctx is discarded.
+func TestTransferTool_CapturesToolCallIDIntoTransferInfo(t *testing.T) {
+	agentInfos := []agent.Info{{Name: "calculator", Description: "calc"}}
+	tr := New(agentInfos)
+
+	request := Request{AgentName: "calculator"}
+	requestBytes, _ := json.Marshal(request)
+
+	inv := &agent.Invocation{InvocationID: "inv-with-toolcall"}
+	invCtx := agent.NewInvocationContext(context.Background(), inv)
+	const toolCallID = "call-transfer-001"
+	ctx := context.WithValue(invCtx, tool.ContextKeyToolCallID{}, toolCallID)
+
+	if _, err := tr.Call(ctx, requestBytes); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inv.TransferInfo == nil {
+		t.Fatal("TransferInfo should be set on the invocation")
+	}
+	if inv.TransferInfo.ToolCallID != toolCallID {
+		t.Errorf("TransferInfo.ToolCallID = %q, want %q",
+			inv.TransferInfo.ToolCallID, toolCallID)
+	}
+}
+
+// TestTransferTool_NoToolCallIDLeavesTransferInfoIDEmpty verifies the degraded
+// path: when the transfer_to_agent tool runs without a toolCallId in ctx,
+// TransferInfo.ToolCallID is left empty rather than fabricated. Downstream
+// consumers (transfer response processor) treat empty ToolCallID as "no
+// ParentMetadata correlation available".
+func TestTransferTool_NoToolCallIDLeavesTransferInfoIDEmpty(t *testing.T) {
+	agentInfos := []agent.Info{{Name: "calculator", Description: "calc"}}
+	tr := New(agentInfos)
+
+	request := Request{AgentName: "calculator"}
+	requestBytes, _ := json.Marshal(request)
+
+	inv := &agent.Invocation{InvocationID: "inv-no-toolcall"}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	if _, err := tr.Call(ctx, requestBytes); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inv.TransferInfo == nil {
+		t.Fatal("TransferInfo should be set on the invocation")
+	}
+	if inv.TransferInfo.ToolCallID != "" {
+		t.Errorf("TransferInfo.ToolCallID should be empty when ctx has no toolCallId, got %q",
+			inv.TransferInfo.ToolCallID)
+	}
+}
