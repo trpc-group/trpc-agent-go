@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
@@ -307,7 +308,7 @@ func validateValueAgainstSchema(value any, schema *tool.Schema, defs map[string]
 	case "array":
 		return validateArrayValueAgainstSchema(value, schema, defs, path)
 	case "string":
-		return validateStringValueAgainstSchema(value, path)
+		return validateStringValueAgainstSchema(value, schema, path)
 	case "boolean":
 		return validateBooleanValueAgainstSchema(value, path)
 	case "integer":
@@ -354,11 +355,23 @@ func validateArrayValueAgainstSchema(value any, schema *tool.Schema, defs map[st
 	return true, ""
 }
 
-func validateStringValueAgainstSchema(value any, path string) (bool, string) {
-	if _, ok := value.(string); ok {
+func validateStringValueAgainstSchema(value any, schema *tool.Schema, path string) (bool, string) {
+	str, ok := value.(string)
+	if !ok {
+		return false, fmt.Sprintf("expected string at %s", path)
+	}
+	if schema == nil || schema.Pattern == "" {
 		return true, ""
 	}
-	return false, fmt.Sprintf("expected string at %s", path)
+	re, err := regexp.Compile(schema.Pattern)
+	if err != nil {
+		// JSON Schema patterns use ECMA-262 syntax; Go regexp supports a subset.
+		return true, ""
+	}
+	if re.MatchString(str) {
+		return true, ""
+	}
+	return false, fmt.Sprintf("string at %s does not match pattern", path)
 }
 
 func validateBooleanValueAgainstSchema(value any, path string) (bool, string) {

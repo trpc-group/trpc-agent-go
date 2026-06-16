@@ -5171,14 +5171,17 @@ func TestConvertMapToToolSchema(t *testing.T) {
 				"type":        "object",
 				"description": "test schema",
 				"properties": map[string]any{
-					"field1": map[string]any{"type": "string"},
+					"field1": map[string]any{
+						"type":    "string",
+						"pattern": "^[a-z]+$",
+					},
 				},
 			},
 			expected: &tool.Schema{
 				Type:        "object",
 				Description: "test schema",
 				Properties: map[string]*tool.Schema{
-					"field1": {Type: "string"},
+					"field1": {Type: "string", Pattern: "^[a-z]+$"},
 				},
 			},
 		},
@@ -5196,6 +5199,8 @@ func TestConvertMapToToolSchema(t *testing.T) {
 					t.Errorf("Expected non-nil result, got nil")
 				} else if result.Type != tt.expected.Type || result.Description != tt.expected.Description {
 					t.Errorf("Expected %+v, got %+v", tt.expected, result)
+				} else if tt.expected.Properties != nil {
+					require.Equal(t, tt.expected.Properties, result.Properties)
 				}
 			}
 		})
