@@ -279,6 +279,28 @@ func TestWithMaxLoadedSkills(t *testing.T) {
 	require.Equal(t, 0, c.option.MaxLoadedSkills)
 }
 
+func TestWithMaxOverviewSkills(t *testing.T) {
+	const (
+		agentName = "test-agent"
+		maxSkills = 8
+	)
+
+	a := New(agentName)
+	require.Equal(t, 0, a.option.MaxOverviewSkills,
+		"default must be 0 (no cap) so existing callers see no behavior change")
+
+	b := New(agentName, WithMaxOverviewSkills(maxSkills))
+	require.Equal(t, maxSkills, b.option.MaxOverviewSkills)
+
+	c := New(agentName, WithMaxOverviewSkills(0))
+	require.Equal(t, 0, c.option.MaxOverviewSkills,
+		"explicit 0 must remain a no-op")
+
+	d := New(agentName, WithMaxOverviewSkills(-1))
+	require.Equal(t, -1, d.option.MaxOverviewSkills,
+		"negative values are stored as-is; processor treats them as no-cap")
+}
+
 func TestWithSkillsLoadedContentInToolResults(t *testing.T) {
 	a := New("test-agent")
 	require.False(t, a.option.SkillsLoadedContentInToolResults)

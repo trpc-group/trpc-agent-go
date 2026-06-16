@@ -1387,6 +1387,7 @@ func TestLLMAgent_WithAllowedSkillTools_LoadOnly_WiresPrompt(
 	require.NotContains(t, sys, "skill discovery and knowledge loading only")
 	require.Contains(t, sys, skillsToolingGuidanceHeader)
 	require.Contains(t, sys, "skill_load.docs or include_all_docs")
+	require.Contains(t, sys, "prefer loading it before repeating the same domain workflow")
 	require.NotContains(t, sys, "skill_list_docs")
 	require.NotContains(t, sys, "skill_select_docs")
 	require.NotContains(t, sys, "skill_run runs with CWD")

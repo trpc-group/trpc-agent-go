@@ -33,7 +33,7 @@ const (
 type skillsToolResultProcessorOptions struct {
 	loadMode                     string
 	skipFallbackOnSessionSummary bool
-	repoResolver                 func(*agent.Invocation) skill.Repository
+	repoResolver                 func(context.Context, *agent.Invocation) skill.Repository
 	directoryHints               bool
 	filePathHints                bool
 }
@@ -74,7 +74,7 @@ func WithSkipSkillsFallbackOnSessionSummary(
 
 // WithSkillsToolResultRepositoryResolver sets an invocation-aware repository resolver.
 func WithSkillsToolResultRepositoryResolver(
-	resolver func(*agent.Invocation) skill.Repository,
+	resolver func(context.Context, *agent.Invocation) skill.Repository,
 ) SkillsToolResultRequestProcessorOption {
 	return func(o *skillsToolResultProcessorOptions) {
 		o.repoResolver = resolver
@@ -114,7 +114,7 @@ func WithSkillsToolResultFilePathHints(
 // loaded skill content is already represented elsewhere in the prompt.
 type SkillsToolResultRequestProcessor struct {
 	repo         skill.Repository
-	repoResolver func(*agent.Invocation) skill.Repository
+	repoResolver func(context.Context, *agent.Invocation) skill.Repository
 	loadMode     string
 
 	skipFallbackOnSessionSummary bool
@@ -156,7 +156,7 @@ func (p *SkillsToolResultRequestProcessor) ProcessRequest(
 	if req == nil || inv == nil || inv.Session == nil {
 		return
 	}
-	repo := p.repositoryForInvocation(inv)
+	repo := p.repositoryForInvocation(ctx, inv)
 	if repo == nil {
 		return
 	}
@@ -190,7 +190,7 @@ func (p *SkillsToolResultRequestProcessor) RebuildRequestForContextCompaction(
 	if req == nil || inv == nil || inv.Session == nil {
 		return
 	}
-	repo := p.repositoryForInvocation(inv)
+	repo := p.repositoryForInvocation(ctx, inv)
 	if repo == nil {
 		return
 	}
@@ -256,10 +256,11 @@ func (p *SkillsToolResultRequestProcessor) applyLoadedSkillContext(
 }
 
 func (p *SkillsToolResultRequestProcessor) repositoryForInvocation(
+	ctx context.Context,
 	inv *agent.Invocation,
 ) skill.Repository {
 	if p.repoResolver != nil {
-		return p.repoResolver(inv)
+		return p.repoResolver(ctx, inv)
 	}
 	return p.repo
 }
