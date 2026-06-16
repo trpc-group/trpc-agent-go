@@ -226,7 +226,11 @@ For Function Tools, the input `req` is automatically converted into a JSON Schem
 
 - **Field name**: use `json:"..."` as the schema property name.
 - **Field description (recommended)**: use `jsonschema:"description=..."` to populate `properties.<field>.description`.
+- **String pattern constraint**: use `jsonschema:"pattern=^[a-z0-9_-]+$"` to populate `properties.<field>.pattern`.
+- **Manual schemas**: when constructing `tool.Schema` directly, set `Pattern: "^[a-z0-9_-]+$"` to emit the JSON Schema `pattern` keyword.
 - **Note**: the `jsonschema` tag uses comma `,` as the separator, so **the description value must not contain `,`**; otherwise it will be parsed as multiple tag items.
+- **Note**: `pattern` is subject to the same comma separator limitation. If the regular expression itself needs commas, use `function.WithInputSchema(customInputSchema)` to define the schema directly.
+- **Runtime compatibility**: tool-call sanitization enforces `pattern` with Go `regexp`, not strict JSON Schema ECMA-262 regular expressions. Patterns that cannot compile with Go `regexp` are treated as non-enforcing at runtime.
 - **Compatibility**: `description:"..."` is also supported for legacy code. If both `jsonschema:"description=..."` and `description:"..."` are present, the `jsonschema` description wins.
 - **More flexible schema**: if you need full control over the input schema (e.g. complex JSON Schema constraints), use `function.WithInputSchema(customInputSchema)` to bypass auto-generation.
 

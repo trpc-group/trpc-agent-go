@@ -503,6 +503,43 @@ func TestGenerateJSONSchema_JSONSchemaTag_StringEnum(t *testing.T) {
 	}
 }
 
+func TestGenerateJSONSchema_JSONSchemaTag_Pattern(t *testing.T) {
+	type TestStruct struct {
+		UserID string `json:"user_id" jsonschema:"description=User ID,pattern=^[a-z0-9_-]+$"`
+	}
+
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	userIDSchema := result.Properties["user_id"]
+	require.Equal(t, "string", userIDSchema.Type)
+	require.Equal(t, "User ID", userIDSchema.Description)
+	require.Equal(t, "^[a-z0-9_-]+$", userIDSchema.Pattern)
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_PatternPointerString(t *testing.T) {
+	type TestStruct struct {
+		UserID *string `json:"user_id,omitempty" jsonschema:"pattern=^[a-z0-9_-]+$"`
+	}
+
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	userIDSchema := result.Properties["user_id"]
+	require.Equal(t, "string", userIDSchema.Type)
+	require.Equal(t, "^[a-z0-9_-]+$", userIDSchema.Pattern)
+}
+
+func TestGenerateJSONSchema_JSONSchemaTag_PatternNonStringIgnored(t *testing.T) {
+	type TestStruct struct {
+		Count int `json:"count" jsonschema:"pattern=^[0-9]+$"`
+	}
+
+	result := GenerateJSONSchema(reflect.TypeOf(TestStruct{}))
+
+	countSchema := result.Properties["count"]
+	require.Equal(t, "integer", countSchema.Type)
+	require.Empty(t, countSchema.Pattern)
+}
+
 func TestGenerateJSONSchema_JSONSchemaTag_IntEnum(t *testing.T) {
 	type TestStruct struct {
 		Priority int `json:"priority" jsonschema:"enum=1,enum=2,enum=3"`
