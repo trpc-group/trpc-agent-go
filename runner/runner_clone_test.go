@@ -43,8 +43,10 @@ func TestCloneChoicesDeepCopiesMutableFields(t *testing.T) {
 							Arguments: []byte(`{"value":"original"}`),
 						},
 						ExtraFields: map[string]any{
-							"nested": map[string]any{"key": "value"},
-							"list":   []any{"first"},
+							"nested":     map[string]any{"key": "value"},
+							"list":       []any{"first"},
+							"typed_map":  map[string][]string{"key": {"value"}},
+							"typed_list": []string{"first"},
 						},
 					},
 				},
@@ -83,6 +85,8 @@ func TestCloneChoicesDeepCopiesMutableFields(t *testing.T) {
 	choices[0].Message.ToolCalls[0].Function.Arguments[0] = '['
 	choices[0].Message.ToolCalls[0].ExtraFields["nested"].(map[string]any)["key"] = "changed"
 	choices[0].Message.ToolCalls[0].ExtraFields["list"].([]any)[0] = "changed"
+	choices[0].Message.ToolCalls[0].ExtraFields["typed_map"].(map[string][]string)["key"][0] = "changed"
+	choices[0].Message.ToolCalls[0].ExtraFields["typed_list"].([]string)[0] = "changed"
 	choices[0].Logprobs.Content[0].Bytes[0] = 9
 	choices[0].Logprobs.Content[0].TopLogprobs[0].Bytes[0] = 9
 
@@ -95,6 +99,8 @@ func TestCloneChoicesDeepCopiesMutableFields(t *testing.T) {
 	require.Equal(t, []byte(`{"value":"original"}`), cloned[0].Message.ToolCalls[0].Function.Arguments)
 	require.Equal(t, "value", cloned[0].Message.ToolCalls[0].ExtraFields["nested"].(map[string]any)["key"])
 	require.Equal(t, "first", cloned[0].Message.ToolCalls[0].ExtraFields["list"].([]any)[0])
+	require.Equal(t, "value", cloned[0].Message.ToolCalls[0].ExtraFields["typed_map"].(map[string][]string)["key"][0])
+	require.Equal(t, "first", cloned[0].Message.ToolCalls[0].ExtraFields["typed_list"].([]string)[0])
 	require.Equal(t, []int{1, 2}, cloned[0].Logprobs.Content[0].Bytes)
 	require.Equal(t, []int{3, 4}, cloned[0].Logprobs.Content[0].TopLogprobs[0].Bytes)
 }

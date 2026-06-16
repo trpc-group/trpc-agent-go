@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -3210,7 +3211,60 @@ func cloneAnyValue(value any) any {
 	case []any:
 		return cloneAnySlice(typed)
 	default:
+		if cloned, ok := cloneReflectContainer(reflect.ValueOf(value)); ok {
+			return cloned.Interface()
+		}
 		return typed
+	}
+}
+
+func cloneReflectContainer(value reflect.Value) (reflect.Value, bool) {
+	if !value.IsValid() {
+		return value, false
+	}
+	switch value.Kind() {
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type()), true
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			mapValue := iter.Value()
+			if clonedValue, ok := cloneReflectContainer(mapValue); ok &&
+				clonedValue.Type().AssignableTo(value.Type().Elem()) {
+				mapValue = clonedValue
+			}
+			cloned.SetMapIndex(iter.Key(), mapValue)
+		}
+		return cloned, true
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type()), true
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			item := value.Index(i)
+			if clonedItem, ok := cloneReflectContainer(item); ok &&
+				clonedItem.Type().AssignableTo(value.Type().Elem()) {
+				item = clonedItem
+			}
+			cloned.Index(i).Set(item)
+		}
+		return cloned, true
+	case reflect.Array:
+		cloned := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.Len(); i++ {
+			item := value.Index(i)
+			if clonedItem, ok := cloneReflectContainer(item); ok &&
+				clonedItem.Type().AssignableTo(value.Type().Elem()) {
+				item = clonedItem
+			}
+			cloned.Index(i).Set(item)
+		}
+		return cloned, true
+	default:
+		return value, false
 	}
 }
 

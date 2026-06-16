@@ -340,6 +340,8 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		if err != nil {
 			return fmt.Errorf("marshal event failed: %w", err)
 		}
+	} else if err := validateEventRawMessages(event); err != nil {
+		return fmt.Errorf("marshal event failed: %w", err)
 	}
 	var updatedAt time.Time
 	var updatedStateBytes []byte
@@ -402,6 +404,18 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 
 	if err != nil {
 		return fmt.Errorf("store event failed: %w", err)
+	}
+	return nil
+}
+
+func validateEventRawMessages(event *event.Event) error {
+	if event == nil {
+		return nil
+	}
+	for key, raw := range event.Extensions {
+		if raw != nil && !json.Valid(raw) {
+			return fmt.Errorf("invalid extension %q JSON", key)
+		}
 	}
 	return nil
 }
