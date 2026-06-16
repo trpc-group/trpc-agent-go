@@ -44,6 +44,7 @@ type Tool struct {
 	persistentHistory      *persistentHistoryOptions
 	responseMode           ResponseMode
 	pinModel               bool
+	pinStructuredOutput    bool
 	name                   string
 	description            string
 	inputSchema            *tool.Schema
@@ -75,6 +76,7 @@ type agentToolOptions struct {
 	description            *string
 	name                   *string
 	pinModel               bool
+	pinStructuredOutput    bool
 
 	// Dynamic AgentTool options. They are only meaningful for NewDynamicTool;
 	// NewTool ignores them.
@@ -332,6 +334,26 @@ func WithPinModel(enabled bool) Option {
 	}
 }
 
+// WithPinStructuredOutput pins the sub-agent's structured-output contract so
+// it always uses its own configured structured output (for example,
+// llmagent.WithStructuredOutputJSON or llmagent.WithStructuredOutputJSONSchema)
+// regardless of the caller's runtime structured output propagated through
+// RunOptions.
+//
+// Background: when the caller passes agent.WithStructuredOutputJSON(...) or
+// agent.WithStructuredOutputJSONSchema(...) at runner.Run time, RunOptions
+// propagate to child invocations via Clone(). LLMAgent setup prefers those
+// run-scoped structured-output values over the sub-agent's own configuration.
+//
+// WithPinStructuredOutput(true) clears RunOptions.StructuredOutput and
+// RunOptions.StructuredOutputType for the child invocation so the sub-agent's
+// own structured output takes effect.
+func WithPinStructuredOutput(enabled bool) Option {
+	return func(opts *agentToolOptions) {
+		opts.pinStructuredOutput = enabled
+	}
+}
+
 // NewTool creates a new Tool that wraps the given agent.
 //
 // Note: The tool name is derived from the agent's info (agent.Info().Name).
@@ -418,6 +440,7 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		persistentHistory:      persistent,
 		responseMode:           normalizeResponseMode(options.responseMode),
 		pinModel:               options.pinModel,
+		pinStructuredOutput:    options.pinStructuredOutput,
 		name:                   name,
 		description:            description,
 		inputSchema:            inputSchema,
@@ -597,17 +620,12 @@ func (at *Tool) childInvocationOptions(
 	if parentInv == nil {
 		return invocationOpts
 	}
-	// When pinModel is set, clear the inherited model selection so the
-	// sub-agent's own model (configured via llmagent.WithModel) takes effect
-	// instead of the parent's runtime model selection.
-	if at.pinModel && (parentInv.RunOptions.ModelName != "" ||
-		parentInv.RunOptions.Model != nil ||
-		parentInv.RunOptions.ModelSelector != nil) {
-		clearedOpts := parentInv.RunOptions
-		clearedOpts.ModelName = ""
-		clearedOpts.Model = nil
-		clearedOpts.ModelSelector = nil
-		invocationOpts = append(invocationOpts, agent.WithInvocationRunOptions(clearedOpts))
+	if at.hasPinnedRunOptions() {
+		invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
+			runOptions := inv.RunOptions
+			at.clearPinnedRunOptions(&runOptions)
+			inv.RunOptions = runOptions
+		})
 	}
 	if surfaceRootNodeID := at.surfaceRootNodeIDForParentInvocation(parentInv); surfaceRootNodeID != "" {
 		invocationOpts = append(
@@ -618,6 +636,25 @@ func (at *Tool) childInvocationOptions(
 		)
 	}
 	return invocationOpts
+}
+
+func (at *Tool) hasPinnedRunOptions() bool {
+	return at.pinModel || at.pinStructuredOutput
+}
+
+func (at *Tool) clearPinnedRunOptions(runOptions *agent.RunOptions) {
+	if runOptions == nil {
+		return
+	}
+	if at.pinModel {
+		runOptions.ModelName = ""
+		runOptions.Model = nil
+		runOptions.ModelSelector = nil
+	}
+	if at.pinStructuredOutput {
+		runOptions.StructuredOutput = nil
+		runOptions.StructuredOutputType = nil
+	}
 }
 
 // wrapWithCompletion consumes events, notifies completion when required, and forwards to a new channel.
