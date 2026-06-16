@@ -44,7 +44,7 @@ func (c *pgVectorConverter) Convert(cond *searchfilter.UniversalFilterCondition)
 	defer func() {
 		if r := recover(); r != nil {
 			stack := debug.Stack()
-			log.Errorf("panic in pgVectorConverter Convert: %v\n%s", r, string(stack))
+			log.Errorf(log.PanicPrefix+" panic in pgVectorConverter Convert: %v\n%s", r, string(stack))
 		}
 	}()
 

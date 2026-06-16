@@ -1305,7 +1305,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		}
 		finishRunnerLatencySpan(span, started, nil)
 		if rr := recover(); rr != nil {
-			log.Errorf("panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
+			log.Errorf(log.PanicPrefix+" panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
 		}
 		// Agent event stream completed.
 		steer.Close(loop.invocation)
@@ -2124,7 +2124,7 @@ func (r *runner) safePersistInterruptedAssistant(ctx context.Context, loop *even
 	defer func() {
 		finishRunnerLatencySpan(span, started, nil)
 		if rr := recover(); rr != nil {
-			log.Errorf("panic persisting interrupted assistant: %v\n%s", rr, string(debug.Stack()))
+			log.Errorf(log.PanicPrefix+" panic persisting interrupted assistant: %v\n%s", rr, string(debug.Stack()))
 		}
 	}()
 	r.persistInterruptedAssistant(ctx, loop)
@@ -2361,7 +2361,7 @@ func (r *runner) safeEmitRunnerCompletion(ctx context.Context, loop *eventLoopCo
 	defer func() {
 		finishRunnerLatencySpan(span, started, nil)
 		if rr := recover(); rr != nil {
-			log.Errorf("panic emitting runner completion: %v\n%s", rr, string(debug.Stack()))
+			log.Errorf(log.PanicPrefix+" panic emitting runner completion: %v\n%s", rr, string(debug.Stack()))
 		}
 	}()
 	r.emitRunnerCompletion(ctx, loop)
