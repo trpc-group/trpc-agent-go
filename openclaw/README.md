@@ -283,6 +283,13 @@ tools:
   # Optional: override the built-in OpenClaw tooling guidance prompt.
   # Leave unset to use the built-in default, or set to "" to disable it.
   openclaw_tooling_guidance: ""
+  # Optional: reduce large parent model requests by exposing compact
+  # tool_search + dynamic_agent entrypoints when the direct tool surface
+  # exceeds the auto threshold. Set defer_to_dynamic_agent: true to force on.
+  defer_to_dynamic_agent_mode: auto # off|on|auto
+  defer_to_dynamic_agent_threshold_chars: 4000
+  # Optional: keep a small set of tools directly callable by the parent agent.
+  # defer_direct_tools: ["exec_command"]
   # Optional: configure fenced-code execution without exposing workspace_exec.
   code_executor:
     type: "sandbox" # none|local|sandbox

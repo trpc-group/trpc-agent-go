@@ -846,3 +846,49 @@ func TestBuildAdminOptions_ExposesOpenClawToolingGuidanceField(
 		field.InputType,
 	)
 }
+
+func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(
+		t,
+		"tools:\n"+
+			"  defer_to_dynamic_agent_mode: auto\n"+
+			"  defer_to_dynamic_agent_threshold_chars: 1234\n"+
+			"  defer_direct_tools: [exec_command]\n",
+	)
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	opts.DeferToolSurfaceMode = deferToolSurfaceModeAuto
+	opts.DeferToolSurfaceChars = 1234
+	opts.DeferToolSurfaceDirect = "exec_command"
+
+	provider, ok := buildAdminRuntimeConfigProvider(
+		opts,
+	).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	mode := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.defer_to_dynamic_agent_mode",
+	)
+	require.Equal(t, deferToolSurfaceModeAuto, mode.RuntimeValue)
+	require.Equal(t, deferToolSurfaceModeAuto, mode.ConfiguredValue)
+	threshold := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.defer_to_dynamic_agent_threshold_chars",
+	)
+	require.Equal(t, "1234", threshold.RuntimeValue)
+	require.Equal(t, "1234", threshold.ConfiguredValue)
+	direct := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.defer_direct_tools",
+	)
+	require.Equal(t, "exec_command", direct.RuntimeValue)
+}
