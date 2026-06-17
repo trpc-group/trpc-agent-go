@@ -599,9 +599,9 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 				adminRuntimeTextField(
 					"tools.defer_direct_tools",
 					"Deferred Direct Tools",
-					"Comma-separated tool names to keep directly on "+
-						"the parent agent when deferred mode is "+
-						"active.",
+					"Comma-separated additional tool names to keep "+
+						"directly on the parent agent when deferred "+
+						"mode is active.",
 					"",
 					[]adminRuntimeConfigKeyRef{
 						adminRuntimeKey("tools"),

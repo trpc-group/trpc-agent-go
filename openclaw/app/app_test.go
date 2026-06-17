@@ -2720,13 +2720,13 @@ func TestNewAgent_DeferToolSurfaceUsesDynamicAgent(t *testing.T) {
 			agenttool.DefaultCapabilitySearchToolName,
 		),
 	)
-	require.Nil(t, findToolDeclaration(parentTools, "exec_command"))
+	require.NotNil(t, findToolDeclaration(parentTools, "exec_command"))
 	require.Nil(t, findToolDeclaration(parentTools, skillprofile.ToolLoad))
 
 	req := runAgentAndCapture(t, agt, mdl, &session.Session{})
 	require.NotNil(t, req.Tools[agenttool.DefaultDynamicToolName])
 	require.NotNil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
-	require.Nil(t, req.Tools["exec_command"])
+	require.NotNil(t, req.Tools["exec_command"])
 	require.Nil(t, req.Tools[skillprofile.ToolLoad])
 	system := joinSystemMessages(req)
 	require.Contains(t, system, "dynamic_agent")
@@ -2842,7 +2842,7 @@ func TestNewAgent_DeferToolSurfaceAutoDefersLargeToolSurface(t *testing.T) {
 	require.NoError(t, err)
 
 	parentTools := agt.Tools()
-	require.Nil(t, findToolDeclaration(parentTools, "exec_command"))
+	require.NotNil(t, findToolDeclaration(parentTools, "exec_command"))
 	require.NotNil(
 		t,
 		findToolDeclaration(parentTools, agenttool.DefaultDynamicToolName),
@@ -2856,7 +2856,7 @@ func TestNewAgent_DeferToolSurfaceAutoDefersLargeToolSurface(t *testing.T) {
 	)
 }
 
-func TestNewAgent_DeferToolSurfaceKeepsConfiguredDirectTools(
+func TestNewAgent_DeferToolSurfaceKeepsDefaultAndConfiguredDirectTools(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -2866,7 +2866,7 @@ func TestNewAgent_DeferToolSurfaceKeepsConfiguredDirectTools(
 		AppName:                     "demo",
 		StateDir:                    t.TempDir(),
 		DeferToolSurface:            true,
-		DeferToolSurfaceDirectTools: []string{"exec_command"},
+		DeferToolSurfaceDirectTools: []string{"message"},
 	}, []tool.Tool{
 		stubTool{name: "exec_command"},
 		stubTool{name: "message"},
@@ -2875,7 +2875,7 @@ func TestNewAgent_DeferToolSurfaceKeepsConfiguredDirectTools(
 
 	parentTools := agt.Tools()
 	require.NotNil(t, findToolDeclaration(parentTools, "exec_command"))
-	require.Nil(t, findToolDeclaration(parentTools, "message"))
+	require.NotNil(t, findToolDeclaration(parentTools, "message"))
 	require.NotNil(
 		t,
 		findToolDeclaration(parentTools, agenttool.DefaultDynamicToolName),
@@ -2890,7 +2890,7 @@ func TestNewAgent_DeferToolSurfaceKeepsConfiguredDirectTools(
 
 	req := runAgentAndCapture(t, agt, mdl, &session.Session{})
 	require.NotNil(t, req.Tools["exec_command"])
-	require.Nil(t, req.Tools["message"])
+	require.NotNil(t, req.Tools["message"])
 	require.NotNil(t, req.Tools[agenttool.DefaultDynamicToolName])
 	require.NotNil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
 }

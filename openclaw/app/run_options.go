@@ -914,8 +914,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.DeferToolSurfaceDirect,
 		flagDeferToolSurfaceDirect,
 		"",
-		"Comma-separated tool names to keep directly on the "+
-			"parent agent when deferred mode is active",
+		"Comma-separated additional tool names to keep directly on "+
+			"the parent agent when deferred mode is active",
 	)
 
 	if err := fs.Parse(args); err != nil {

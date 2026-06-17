@@ -26,6 +26,12 @@ const (
 	defaultDeferToolSurfaceThresholdChars = 4000
 )
 
+var defaultDeferToolSurfaceDirectTools = []string{
+	configKeyExecCommand,
+	configKeyWriteStdin,
+	configKeyKillSession,
+}
+
 func normalizeDeferToolSurfaceMode(raw string) (string, error) {
 	mode := strings.ToLower(strings.TrimSpace(raw))
 	switch mode {
@@ -76,7 +82,9 @@ func resolveDeferredToolSurface(
 	}
 	return true, directToolSurfaceTools(
 		context.Background(),
-		cfg.DeferToolSurfaceDirectTools,
+		defaultedDirectToolSurfaceNames(
+			cfg.DeferToolSurfaceDirectTools,
+		),
 		baseTools,
 		toolSets,
 	), nil
@@ -87,6 +95,17 @@ func deferToolSurfaceThresholdChars(value int) int {
 		return value
 	}
 	return defaultDeferToolSurfaceThresholdChars
+}
+
+func defaultedDirectToolSurfaceNames(names []string) []string {
+	all := make(
+		[]string,
+		0,
+		len(defaultDeferToolSurfaceDirectTools)+len(names),
+	)
+	all = append(all, defaultDeferToolSurfaceDirectTools...)
+	all = append(all, names...)
+	return normalizeStringList(all)
 }
 
 func toolSurfaceDeclarationChars(

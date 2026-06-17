@@ -11,8 +11,8 @@ package agent
 
 import (
 	"context"
-	"sort"
 	"strings"
+	"sync"
 
 	coreagent "trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -24,10 +24,11 @@ import (
 // NewCapabilitySearchTool.
 const DefaultCapabilitySearchToolName = "tool_search"
 
-const defaultCapabilitySearchDescription = "Search the tools and skills " +
-	"available to a dynamic sub-agent. Use this to discover exact tool or skill " +
-	"names, then pass those names to dynamic_agent when running tool-backed " +
-	"work."
+const defaultCapabilitySearchDescription = "Search deferred tool and skill " +
+	"metadata for a dynamic sub-agent. Use natural-language queries to find " +
+	"relevant capabilities, `select:name1,name2` to fetch exact names, or an " +
+	"empty query for a compact name catalog. Pass selected names to " +
+	"dynamic_agent.tools or dynamic_agent.skills when running tool-backed work."
 
 const defaultCapabilitySearchLimit = 20
 const maxCapabilitySearchLimit = 50
@@ -38,6 +39,7 @@ type capabilitySearchOptions struct {
 	toolProvider   CapabilitySurfaceProvider
 	skillsProvider CapabilitySkillsProvider
 	defaultLimit   int
+	cache          *capabilitySearchCache
 }
 
 // CapabilitySearchOption configures NewCapabilitySearchTool.
@@ -51,7 +53,9 @@ func WithCapabilitySearchName(name string) CapabilitySearchOption {
 }
 
 // WithCapabilitySearchDescription overrides the search tool description.
-func WithCapabilitySearchDescription(description string) CapabilitySearchOption {
+func WithCapabilitySearchDescription(
+	description string,
+) CapabilitySearchOption {
 	return func(opts *capabilitySearchOptions) {
 		opts.description = strings.TrimSpace(description)
 	}
@@ -90,10 +94,14 @@ type CapabilitySearchInput struct {
 
 // CapabilitySearchResult is the output schema for tool_search.
 type CapabilitySearchResult struct {
-	Tools     []CapabilityToolSummary  `json:"tools,omitempty"`
-	Skills    []CapabilitySkillSummary `json:"skills,omitempty"`
-	Truncated bool                     `json:"truncated,omitempty"`
-	Note      string                   `json:"note,omitempty"`
+	Tools      []CapabilityToolSummary  `json:"tools,omitempty"`
+	Skills     []CapabilitySkillSummary `json:"skills,omitempty"`
+	Groups     []CapabilityNameGroup    `json:"groups,omitempty"`
+	Missing    []string                 `json:"missing,omitempty"`
+	Total      int                      `json:"total,omitempty"`
+	Truncated  bool                     `json:"truncated,omitempty"`
+	SearchMode string                   `json:"search_mode,omitempty"`
+	Note       string                   `json:"note,omitempty"`
 }
 
 // CapabilityToolSummary describes one available tool capability.
@@ -108,12 +116,19 @@ type CapabilitySkillSummary struct {
 	Description string `json:"description,omitempty"`
 }
 
+// CapabilityNameGroup is a compact name-only catalog section.
+type CapabilityNameGroup struct {
+	Kind  string   `json:"kind"`
+	Names []string `json:"names,omitempty"`
+}
+
 // NewCapabilitySearchTool returns a lightweight tool/skill discovery tool.
 func NewCapabilitySearchTool(opts ...CapabilitySearchOption) tool.Tool {
 	cfg := capabilitySearchOptions{
 		name:         DefaultCapabilitySearchToolName,
 		description:  defaultCapabilitySearchDescription,
 		defaultLimit: defaultCapabilitySearchLimit,
+		cache:        &capabilitySearchCache{},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -151,25 +166,84 @@ func searchCapabilities(
 	if limit == 0 {
 		limit = cfg.defaultLimit
 	}
-	query := strings.ToLower(strings.TrimSpace(in.Query))
-	tools := searchCapabilityTools(ctx, parentInv, cfg.toolProvider, query)
-	skills := searchCapabilitySkills(ctx, parentInv, cfg.skillsProvider, query)
-	total := len(tools) + len(skills)
-	truncated := total > limit
-	for total > limit && len(skills) > 0 {
-		skills = skills[:len(skills)-1]
-		total--
+	query := strings.TrimSpace(in.Query)
+	items := collectCapabilityItems(ctx, parentInv, cfg)
+	if selection, ok := parseCapabilitySelectQuery(query); ok {
+		selected, missing := selectCapabilityItems(items, selection)
+		return buildCapabilitySearchResult(
+			selected,
+			len(selected),
+			limit,
+			"select",
+			false,
+			missing,
+			nil,
+		)
 	}
-	for total > limit && len(tools) > 0 {
-		tools = tools[:len(tools)-1]
-		total--
+	if query == "" {
+		return buildCapabilitySearchResult(
+			items,
+			len(items),
+			limit,
+			"catalog",
+			true,
+			nil,
+			capabilityNameGroups(items),
+		)
+	}
+	index := cfg.cache.indexFor(items)
+	matches := index.search(query)
+	return buildCapabilitySearchResult(
+		matches,
+		len(matches),
+		limit,
+		"bm25",
+		false,
+		nil,
+		nil,
+	)
+}
+
+func collectCapabilityItems(
+	ctx context.Context,
+	parentInv *coreagent.Invocation,
+	cfg capabilitySearchOptions,
+) []capabilitySearchItem {
+	items := searchCapabilityTools(ctx, parentInv, cfg.toolProvider)
+	items = append(
+		items,
+		searchCapabilitySkills(ctx, parentInv, cfg.skillsProvider)...,
+	)
+	sortCapabilityItems(items)
+	return items
+}
+
+func buildCapabilitySearchResult(
+	items []capabilitySearchItem,
+	total int,
+	limit int,
+	mode string,
+	includeGroups bool,
+	missing []string,
+	groups []CapabilityNameGroup,
+) CapabilitySearchResult {
+	truncated := len(items) > limit
+	if truncated {
+		items = items[:limit]
+	}
+	tools, skills := capabilitySummaries(items)
+	if includeGroups && groups == nil {
+		groups = capabilityNameGroups(items)
 	}
 	return CapabilitySearchResult{
-		Tools:     tools,
-		Skills:    skills,
-		Truncated: truncated,
-		Note: "Pass selected names to dynamic_agent.tools or " +
-			"dynamic_agent.skills when running the tool-backed task.",
+		Tools:      tools,
+		Skills:     skills,
+		Groups:     groups,
+		Missing:    missing,
+		Total:      total,
+		Truncated:  truncated,
+		SearchMode: mode,
+		Note:       capabilitySearchResultNote,
 	}
 }
 
@@ -177,13 +251,12 @@ func searchCapabilityTools(
 	ctx context.Context,
 	parentInv *coreagent.Invocation,
 	provider CapabilitySurfaceProvider,
-	query string,
-) []CapabilityToolSummary {
+) []capabilitySearchItem {
 	if provider == nil {
 		return nil
 	}
 	tools, _ := provider(ctx, parentInv)
-	out := make([]CapabilityToolSummary, 0, len(tools))
+	out := make([]capabilitySearchItem, 0, len(tools))
 	seen := map[string]bool{}
 	for _, t := range tools {
 		if t == nil {
@@ -199,17 +272,13 @@ func searchCapabilityTools(
 		}
 		seen[name] = true
 		desc := strings.TrimSpace(decl.Description)
-		if !capabilitySearchMatches(query, name, desc) {
-			continue
-		}
-		out = append(out, CapabilityToolSummary{
+		out = append(out, capabilitySearchItem{
+			kind:        capabilityKindTool,
 			Name:        name,
 			Description: desc,
+			SearchText:  capabilityToolSearchText(decl),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Name < out[j].Name
-	})
 	return out
 }
 
@@ -217,8 +286,7 @@ func searchCapabilitySkills(
 	ctx context.Context,
 	parentInv *coreagent.Invocation,
 	provider CapabilitySkillsProvider,
-	query string,
-) []CapabilitySkillSummary {
+) []capabilitySearchItem {
 	if provider == nil {
 		return nil
 	}
@@ -227,34 +295,21 @@ func searchCapabilitySkills(
 		return nil
 	}
 	summaries := skill.SummariesForContext(ctx, repo)
-	out := make([]CapabilitySkillSummary, 0, len(summaries))
+	out := make([]capabilitySearchItem, 0, len(summaries))
 	for _, summary := range summaries {
 		name := strings.TrimSpace(summary.Name)
 		desc := strings.TrimSpace(summary.Description)
-		if name == "" || !capabilitySearchMatches(query, name, desc) {
+		if name == "" {
 			continue
 		}
-		out = append(out, CapabilitySkillSummary{
+		out = append(out, capabilitySearchItem{
+			kind:        capabilityKindSkill,
 			Name:        name,
 			Description: desc,
+			SearchText:  capabilitySkillSearchText(name, desc),
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].Name < out[j].Name
-	})
 	return out
-}
-
-func capabilitySearchMatches(query string, values ...string) bool {
-	if query == "" {
-		return true
-	}
-	for _, value := range values {
-		if strings.Contains(strings.ToLower(value), query) {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeCapabilitySearchLimit(limit int) int {
@@ -265,4 +320,31 @@ func normalizeCapabilitySearchLimit(limit int) int {
 		return maxCapabilitySearchLimit
 	}
 	return limit
+}
+
+const capabilitySearchResultNote = "Pass selected names to " +
+	"dynamic_agent.tools or dynamic_agent.skills when running the " +
+	"tool-backed task."
+
+type capabilitySearchCache struct {
+	mu          sync.Mutex
+	fingerprint string
+	index       *capabilitySearchIndex
+}
+
+func (c *capabilitySearchCache) indexFor(
+	items []capabilitySearchItem,
+) *capabilitySearchIndex {
+	if c == nil {
+		return newCapabilitySearchIndex(items)
+	}
+	fingerprint := capabilityItemsFingerprint(items)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.index != nil && c.fingerprint == fingerprint {
+		return c.index
+	}
+	c.index = newCapabilitySearchIndex(items)
+	c.fingerprint = fingerprint
+	return c.index
 }

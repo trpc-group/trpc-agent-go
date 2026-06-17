@@ -383,13 +383,16 @@ const (
 		"recurring work."
 
 	openClawDeferredToolingGuidance = "Tool-backed work is available " +
-		"through `tool_search` and `dynamic_agent`. Use `tool_search` " +
-		"when you need exact tool or skill names, then call " +
-		"`dynamic_agent` for files, uploads, browser automation, shell " +
-		"work, messaging, cron, memory, skills, knowledge, external " +
-		"tools, or verification. Give the sub-agent a self-contained " +
-		"request and ask it to complete the concrete action or return " +
-		"the exact blocker. Answer directly only when no tool work is " +
+		"through `tool_search` and `dynamic_agent`, with some " +
+		"latency-sensitive tools kept directly available when " +
+		"configured. Use direct tools for simple local actions when " +
+		"they are present. Use `tool_search` when you need exact " +
+		"tool or skill names, then call `dynamic_agent` for broader " +
+		"files, uploads, browser automation, shell work, messaging, " +
+		"cron, memory, skills, knowledge, external tools, or " +
+		"verification. Give the sub-agent a self-contained request " +
+		"and ask it to complete the concrete action or return the " +
+		"exact blocker. Answer directly only when no tool work is " +
 		"needed."
 
 	openClawDeferredToolDescription = "Run a focused OpenClaw tool " +
