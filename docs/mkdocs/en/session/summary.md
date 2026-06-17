@@ -384,10 +384,20 @@ the context window in this order:
 2. Model instance configuration from providers such as `openai.WithContextWindow(tokens)` or `provider.WithContextWindow(tokens)`
 3. Process-wide model-name registry from `model.RegisterModelContextWindow(name, tokens)`
 
-The threshold is then computed as `contextWindow * ratio` (default 50%). For
-private deployments, endpoint IDs, fine-tuned models, newly released models, or
-multi-tenant custom model configuration, prefer the instance or per-run option
-so different users do not overwrite a process-wide registry entry:
+The threshold is then computed as `contextWindow * ratio` (default 50%). To
+avoid premature summarization on very small contexts, `WithContextThreshold`
+also applies a 2000-token minimum trigger threshold by default. In other words,
+the effective threshold is `max(contextWindow * ratio, minTokenThreshold)`, and
+the built-in checker only triggers when the estimated token count is **greater
+than** that threshold. If you set a very small ratio, for example `0.001`, and
+expect summarization around 1000 tokens, pass
+`summary.WithContextThresholdMinTokens(0)` explicitly, or set it to the
+application-specific minimum you want.
+
+For private deployments, endpoint IDs, fine-tuned models, newly released
+models, or multi-tenant custom model configuration, prefer the instance or
+per-run option so different users do not overwrite a process-wide registry
+entry:
 
 ```go
 modelInstance := openai.New(
@@ -421,6 +431,14 @@ meaning:
 ```go
 model.RegisterModelContextWindow("my-custom-model", 32768)
 ```
+
+Common `ContextThresholdOption` values:
+
+| Option | Description |
+| --- | --- |
+| `WithContextThresholdRatio(ratio float64)` | Sets the context-window ratio that triggers summarization; default `0.5` |
+| `WithContextThresholdMinTokens(tokens int)` | Sets the absolute minimum trigger token count; default `2000`. Pass `0` to remove this lower bound |
+| `WithContextThresholdFallbackWindow(tokens int)` | Fallback context window when the runtime context or model configuration cannot resolve one; default `8192` |
 
 ### Combined Conditions
 
@@ -626,6 +644,24 @@ Notes:
 By default, `CheckTokenThreshold` uses a built-in `SimpleTokenCounter` that estimates token count based on text length. To customize token counting behavior, use `summary.SetTokenCounter` to set a global token counter:
 
 For `SimpleTokenCounter`, `WithApproxRunesPerToken(v)` means roughly `v` UTF-8 characters per token. The formula is `estimatedTokens = countedUTF8Runes / v`. For example, `v=1.5` means about `1.5` characters per token; do not treat it as a token multiplier.
+
+> **Token estimation trade-off**
+>
+> The built-in `SimpleTokenCounter` is a lightweight local heuristic based on
+> UTF-8 character count. Its default `4.0` characters/token is mainly an
+> English-text approximation. Chinese, Japanese, Korean, and mixed-language
+> prompts often need a lower `WithApproxRunesPerToken` value calibrated from
+> workload tests or production traces, for example a more conservative range
+> around `1.2` to `2.0`.
+>
+> The framework does not call provider token-count APIs by default. Many model
+> tokenizers are not open source, tokenizers are model-version-specific, and a
+> remote token-count call on every summary check would add latency, cost, and
+> rate-limit risk while not being available consistently across providers.
+> Summary checkers therefore use a replaceable local estimator as a fast gate.
+> Applications that need tighter accounting should implement `model.TokenCounter`
+> and install it once during application initialization with
+> `summary.SetTokenCounter`.
 
 ```go
 import (

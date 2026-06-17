@@ -374,8 +374,14 @@ resolver 返回 nil 会跳过自动摘要检查；如果直接调用 `Summarize`
 2. 模型实例配置：例如 `openai.WithContextWindow(tokens)` 或 `provider.WithContextWindow(tokens)`
 3. 进程级模型名注册表：`model.RegisterModelContextWindow(name, tokens)`
 
-然后按 `contextWindow * ratio` 计算阈值（默认 50%）。对于私有部署、endpoint ID、
-微调模型、新模型或多租户自定义模型配置，优先使用模型实例或单次运行 option，
+然后按 `contextWindow * ratio` 计算阈值（默认 50%）。为了避免在极短上下文中
+过早摘要，`WithContextThreshold` 默认还会施加 2000 token 的最小触发阈值。
+也就是说，实际阈值是 `max(contextWindow * ratio, minTokenThreshold)`，且内置
+checker 只有在估算 token 数**大于**阈值时才触发。如果把 ratio 设置得很小，
+例如 `0.001`，但希望 1000 token 左右就开始摘要，需要显式传入
+`summary.WithContextThresholdMinTokens(0)`，或设置成业务希望的最小值。
+
+对于私有部署、endpoint ID、微调模型、新模型或多租户自定义模型配置，优先使用模型实例或单次运行 option，
 避免不同用户覆盖同一个进程级注册表：
 
 ```go
@@ -409,6 +415,14 @@ eventChan, err = r.Run(
 ```go
 model.RegisterModelContextWindow("my-custom-model", 32768)
 ```
+
+常用 `ContextThresholdOption`：
+
+| 选项 | 说明 |
+| --- | --- |
+| `WithContextThresholdRatio(ratio float64)` | 设置 context window 的触发比例，默认 `0.5` |
+| `WithContextThresholdMinTokens(tokens int)` | 设置绝对最小触发 token 数，默认 `2000`；传入 `0` 可以取消这层下限 |
+| `WithContextThresholdFallbackWindow(tokens int)` | 当无法从运行上下文或模型配置解析 context window 时使用的 fallback，默认 `8192` |
 
 ### 组合条件
 
@@ -612,6 +626,20 @@ summarizer := summary.NewSummarizer(
 默认情况下，`CheckTokenThreshold` 使用内置的 `SimpleTokenCounter` 基于文本长度估算 token 数量。如果需要自定义 token 计数行为，可以使用 `summary.SetTokenCounter` 设置全局 token 计数器：
 
 `SimpleTokenCounter` 的 `WithApproxRunesPerToken(v)` 表示约 `v` 个 UTF-8 字符对应 1 个 token，估算公式是 `estimatedTokens = countedUTF8Runes / v`。例如 `v=1.5` 表示约 `1.5` 字符/token；不要把它当成 token 乘数。
+
+> **Token 估算取舍**
+>
+> 内置 `SimpleTokenCounter` 只按 UTF-8 字符数做轻量估算，默认 `4.0`
+> 字符/token 更接近英文文本的经验值。中文、日文、韩文以及中英文混合内容通常会偏离这个比例，
+> 建议结合业务压测或线上观测按模型和语料校准，例如把
+> `WithApproxRunesPerToken` 调整到更保守的 `1.2` 到 `2.0` 区间。
+>
+> 框架没有默认调用模型厂商的精确 token API：很多模型的 tokenizer 并未开源，
+> tokenizer 也会随模型版本演进；如果在每次摘要检查中远程调用 token 统计接口，
+> 会引入额外延迟、成本和限流风险，而且不同 provider 的接口能力也不一致。
+> 因此 summary checker 使用可替换的本地估算器作为快速 gate。如果业务需要更高精度，
+> 建议实现 `model.TokenCounter`，并在应用初始化时通过 `summary.SetTokenCounter`
+> 统一设置。
 
 ```go
 import (
