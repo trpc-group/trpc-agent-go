@@ -69,6 +69,11 @@ const (
 	scheduledRunTemplateMarker = "{{"
 
 	debugTraceSourceCron = "cron"
+
+	wecomChannelID         = "wecom"
+	wecomDMUserPrefix      = "wecom:dm:"
+	wecomChatUserPrefix    = "wecom:chat:"
+	wecomGroupTargetPrefix = "group:"
 )
 
 // Service runs and persists scheduled jobs.
@@ -1306,18 +1311,63 @@ func matchesJobScope(
 	userID string,
 	delivery outbound.DeliveryTarget,
 ) bool {
-	if job == nil || strings.TrimSpace(job.UserID) != userID {
+	if job == nil {
+		return false
+	}
+	if strings.TrimSpace(job.UserID) == userID {
+		return matchesDeliveryFilter(job, delivery)
+	}
+	return matchesLegacyWeComGroupScope(job, userID, delivery)
+}
+
+func matchesDeliveryFilter(
+	job *Job,
+	delivery outbound.DeliveryTarget,
+) bool {
+	if job == nil {
 		return false
 	}
 	if delivery.Channel != "" &&
-		job.Delivery.Channel != delivery.Channel {
+		strings.TrimSpace(job.Delivery.Channel) != delivery.Channel {
 		return false
 	}
 	if delivery.Target != "" &&
-		job.Delivery.Target != delivery.Target {
+		strings.TrimSpace(job.Delivery.Target) != delivery.Target {
 		return false
 	}
 	return true
+}
+
+func matchesLegacyWeComGroupScope(
+	job *Job,
+	userID string,
+	delivery outbound.DeliveryTarget,
+) bool {
+	groupID, ok := strings.CutPrefix(
+		strings.TrimSpace(userID),
+		wecomChatUserPrefix,
+	)
+	if !ok {
+		return false
+	}
+	groupID = strings.TrimSpace(groupID)
+	if groupID == "" {
+		return false
+	}
+	if !strings.HasPrefix(
+		strings.TrimSpace(job.UserID),
+		wecomDMUserPrefix,
+	) {
+		return false
+	}
+	if strings.TrimSpace(job.Delivery.Channel) != wecomChannelID {
+		return false
+	}
+	if strings.TrimSpace(job.Delivery.Target) !=
+		wecomGroupTargetPrefix+groupID {
+		return false
+	}
+	return matchesDeliveryFilter(job, delivery)
 }
 
 func scheduledRunBase(job *Job, fallback time.Time) time.Time {
