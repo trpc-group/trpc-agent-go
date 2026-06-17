@@ -12,7 +12,7 @@
 
 **tRPC-Agent-Go 是一个用于构建生产级 Agent 系统的 Go 框架。**
 它把 LLM Agent、图工作流、工具调用、Session/Memory 状态、知识检索、
-评测与 OpenTelemetry 可观测性整合到一套 Go-native 技术栈中。
+Agent 自进化、评测与 OpenTelemetry 可观测性整合到一套 Go-native 技术栈中。
 
 如果你希望 Agent 应用天然适配 Go 服务开发、并发执行、可观测部署，并能接入
 A2A、AG-UI、MCP 等协议，tRPC-Agent-Go 可以作为底层框架。
@@ -25,6 +25,8 @@ A2A、AG-UI、MCP 等协议，tRPC-Agent-Go 可以作为底层框架。
 - **丰富的 Tool 生态系统**：Function Tool、MCP Tool、Web 搜索、代码执行和自定义服务
 - **持久化状态**：Session、Memory、Artifacts 与知识检索
 - **Agent Skills**：可复用的 `SKILL.md` 工作流，支持安全执行
+- **Agent 自进化**：Hermes-style 会话复盘，自动提取、门禁校验并发布可复用
+  `SKILL.md` 工作流
 - **Prompt Caching**：自动优化成本，缓存内容最高可节省 90%
 - **评测与基准**：EvalSet + Metric 用于长期质量度量
 - **协议集成**：AG-UI 对接前端、A2A 实现 Agent 互通、MCP 接入工具生态
@@ -146,6 +148,26 @@ tools := []tool.Tool{
 </td>
 <td valign="top">
 
+### Agent 自进化
+
+```go
+repo, _ := skill.NewFSRepository("./managed_skills")
+evo := evolution.NewService(reviewerModel,
+    evolution.WithManagedSkillsDir("./managed_skills"),
+    evolution.WithSkillRepository(repo))
+
+runner := runner.NewRunner("app", agent,
+    runner.WithEvolutionService(evo))
+```
+
+已完成的会话可以被异步复盘，通过质量门禁后发布为托管 Agent Skill，
+供后续轮次直接复用。
+
+</td>
+</tr>
+<tr>
+<td colspan="2" valign="top">
+
 ### 评测与基准
 
 ```go
@@ -169,6 +191,7 @@ _ = result.OverallStatus
     - [**丰富的 Tool 集成**](#丰富的-tool-集成)
     - [**生产可观测性**](#生产可观测性)
     - [**Agent Skills**](#agent-skills)
+    - [**Agent 自进化**](#agent-自进化)
     - [**评测与基准**](#评测与基准)
   - [目录](#目录)
   - [文档](#文档)
@@ -190,9 +213,10 @@ _ = result.OverallStatus
     - [9. AG-UI Demo](#9-ag-ui-demo)
     - [10. 评测（Evaluation）](#10-评测evaluation)
     - [11. Agent Skills](#11-agent-skills)
-    - [12. Artifacts](#12-artifacts)
-    - [13. A2A 互通](#13-a2a-互通)
-    - [14. Gateway 服务](#14-gateway-服务)
+    - [12. Agent 自进化](#12-agent-自进化)
+    - [13. Artifacts](#13-artifacts)
+    - [14. A2A 互通](#14-a2a-互通)
+    - [15. Gateway 服务](#15-gateway-服务)
   - [架构概览](#架构概览)
     - [**执行流程**](#执行流程)
   - [使用内置 Agents](#使用内置-agents)
@@ -576,21 +600,29 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
   `examples/structuredoutputskills`
   都采用了这种配置，避免自动执行 assistant 文本里的围栏代码块。
 
-### 12. Artifacts
+### 12. Agent 自进化
+
+示例：[examples/evolution](examples/evolution)
+
+- 在后台复盘已完成会话，并提取可复用的 `SKILL.md` 工作流。
+- 支持 revision 存储、质量门禁、人工审批，以及技能在后续运行中的 warm-start。
+- Runner 集成只需要一个选项：`runner.WithEvolutionService(...)`。
+
+### 13. Artifacts
 
 示例：[examples/artifact](examples/artifact)
 
 - 保存并读取工具产出的版本化文件（图片、文本、报告等）。
 - 支持多种后端（in-memory、S3、COS）。
 
-### 13. A2A 互通
+### 14. A2A 互通
 
 示例：[examples/a2aadk](examples/a2aadk)
 
 - Agent-to-Agent（A2A）与 ADK Python A2A Server 的互通示例。
 - 演示跨运行时的流式输出、工具调用与代码执行。
 
-### 14. Gateway 服务
+### 15. Gateway 服务
 
 示例：[openclaw](openclaw)
 
@@ -620,6 +652,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 4. **Tools** 执行特定任务（API 调用、计算、web 搜索）
 5. **Memory** 维护上下文并从交互中学习
 6. **Knowledge** 为文档理解提供 RAG 能力
+7. **Evolution** 复盘已完成会话，并把可复用过程沉淀为托管技能
 
 关键包：
 
@@ -635,6 +668,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 | `planner`   | 提供 agent 的规划与推理能力。                                         |
 | `artifact`  | 存储并读取工具/agent 产出的版本化文件（图片、报告等）。                    |
 | `skill`     | 管理并执行以 `SKILL.md` 定义的可复用 Agent Skills。                   |
+| `evolution` | 复盘已完成会话，并将可复用过程发布为托管 Agent Skills。                 |
 | `event`     | 定义 Runner 与各类服务使用的事件结构与流式载荷。                        |
 | `evaluation`| 提供 EvalSet/Metric 驱动的评测框架并管理评测结果。                     |
 | `server`    | 提供 Gateway、AG-UI、A2A 等 HTTP 服务端能力。                       |
