@@ -85,9 +85,15 @@ func GetMongoDBInstance(name string) ([]ClientBuilderOpt, bool) {
 	return instance, ok
 }
 
-// Client defines the interface for MongoDB operations.
-// This is a subset of the internal mongodb.Client interface,
-// containing only the methods needed by the session layer.
+// Client defines the interface for MongoDB operations shared by the storage
+// backends (session, memory, etc.).
+//
+// It is intentionally a minimal, generic CRUD subset so it can be backed by the
+// default official-driver client below, or — when MongoDB is routed through a
+// custom client via SetClientBuilder — by a thin adapter over that client.
+// Keep any new method aligned with the official mongo-driver signature so such
+// adapters stay trivial; capabilities a backend may add later include Aggregate
+// (memory semantic search) and index management (TTL / unique constraints).
 type Client interface {
 	// InsertOne executes an insert command to insert a single document into the collection.
 	InsertOne(ctx context.Context, database string, coll string, document any,

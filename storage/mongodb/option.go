@@ -19,7 +19,7 @@ type ClientBuilderOpts struct {
 	// Format: "mongodb://username:password@host:port/database?options"
 	URI string
 
-	// ExtraOptions is the extra options for the redis client.
+	// ExtraOptions is the extra options for the mongodb client.
 	ExtraOptions []any
 }
 
