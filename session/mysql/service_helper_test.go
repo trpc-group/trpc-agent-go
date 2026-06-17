@@ -1495,6 +1495,33 @@ func TestAddEvent_PartialEvent(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestAddEvent_UnpersistedInvalidExtension(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	evt := event.New("inv-1", "author")
+	evt.StateDelta = session.StateMap{"state-key": []byte(`"state-value"`)}
+	evt.Extensions = map[string]json.RawMessage{
+		"bad": json.RawMessage(`{`),
+	}
+
+	err = s.addEvent(ctx, key, evt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "marshal event failed")
+	require.Contains(t, err.Error(), `invalid extension "bad" JSON`)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestAddTrackEvent_PreservesExistingSkillMarker(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
