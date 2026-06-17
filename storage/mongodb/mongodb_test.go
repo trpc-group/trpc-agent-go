@@ -12,734 +12,633 @@ package mongodb
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-func TestRegisterAndGetMongoDBInstance(t *testing.T) {
-	// Clean up registry
+// resetRegistry resets the package-level registry before a test and restores
+// it afterwards. This keeps registry tests isolated from each other.
+func resetRegistry(t *testing.T) {
+	t.Helper()
+	old := mongodbRegistry
 	mongodbRegistry = make(map[string][]ClientBuilderOpt)
-
-	// Register an instance
-	RegisterMongoDBInstance("test-instance", WithClientBuilderDSN("mongodb://localhost:27017"))
-
-	// Get the instance
-	opts, ok := GetMongoDBInstance("test-instance")
-	assert.True(t, ok)
-	assert.Len(t, opts, 1)
-
-	// Get non-existent instance
-	_, ok = GetMongoDBInstance("non-existent")
-	assert.False(t, ok)
+	t.Cleanup(func() { mongodbRegistry = old })
 }
 
-func TestRegisterMongoDBInstanceAppend(t *testing.T) {
-	mongodbRegistry = make(map[string][]ClientBuilderOpt)
+// resetBuilder resets the package-level builder before a test and restores
+// it afterwards.
+func resetBuilder(t *testing.T) {
+	t.Helper()
+	old := globalBuilder
+	t.Cleanup(func() { globalBuilder = old })
+}
 
-	RegisterMongoDBInstance("test", WithClientBuilderDSN("mongodb://localhost:27017"))
-	RegisterMongoDBInstance("test", WithExtraOptions("extra"))
+func TestRegisterAndGetMongoDBInstance(t *testing.T) {
+	resetRegistry(t)
 
-	opts, ok := GetMongoDBInstance("test")
-	assert.True(t, ok)
-	assert.Len(t, opts, 2)
+	const (
+		name = "test-instance"
+		uri  = "mongodb://localhost:27017"
+	)
+	RegisterMongoDBInstance(name, WithClientBuilderURI(uri))
+
+	opts, ok := GetMongoDBInstance(name)
+	require.True(t, ok)
+	require.Len(t, opts, 1)
+
+	cfg := &ClientBuilderOpts{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	assert.Equal(t, uri, cfg.URI)
+}
+
+func TestGetMongoDBInstance_NotFound(t *testing.T) {
+	resetRegistry(t)
+
+	opts, ok := GetMongoDBInstance("missing")
+	assert.False(t, ok)
+	assert.Nil(t, opts)
+}
+
+func TestRegisterMongoDBInstance_Append(t *testing.T) {
+	resetRegistry(t)
+
+	const name = "appendable"
+	RegisterMongoDBInstance(name, WithClientBuilderURI("mongodb://localhost:27017"))
+	RegisterMongoDBInstance(name, WithExtraOptions("alpha"), WithExtraOptions("beta"))
+
+	opts, ok := GetMongoDBInstance(name)
+	require.True(t, ok)
+	require.Len(t, opts, 3)
+
+	cfg := &ClientBuilderOpts{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	assert.Equal(t, []any{"alpha", "beta"}, cfg.ExtraOptions)
 }
 
 func TestSetAndGetClientBuilder(t *testing.T) {
-	// Save original builder
-	original := globalBuilder
-	defer func() { globalBuilder = original }()
+	resetBuilder(t)
 
-	// Set custom builder
-	customBuilder := func(ctx context.Context, opts ...ClientBuilderOpt) (Client, error) {
+	invoked := false
+	custom := func(ctx context.Context, opts ...ClientBuilderOpt) (Client, error) {
+		invoked = true
 		return nil, errors.New("custom builder")
 	}
-	SetClientBuilder(customBuilder)
+	SetClientBuilder(custom)
 
-	// Get builder
-	builder := GetClientBuilder()
-	assert.NotNil(t, builder)
+	b := GetClientBuilder()
+	require.NotNil(t, b)
 
-	// Verify it's the custom builder
-	_, err := builder(context.Background())
+	_, err := b(context.Background(), WithClientBuilderURI("mongodb://localhost:27017"))
 	assert.EqualError(t, err, "custom builder")
+	assert.True(t, invoked)
 }
 
-// mockMongoClient is a mock implementation of the Client interface for testing.
-type mockMongoClient struct {
-	insertOneFunc   func(ctx context.Context, database, coll string, document any) error
-	updateOneFunc   func(ctx context.Context, database, coll string, filter, update any) error
-	deleteOneFunc   func(ctx context.Context, database, coll string, filter any) error
-	deleteManyFunc  func(ctx context.Context, database, coll string, filter any) error
-	findOneFunc     func(ctx context.Context, database, coll string, filter any)
-	findFunc        func(ctx context.Context, database, coll string, filter any) error
-	countFunc       func(ctx context.Context, database, coll string, filter any) (int64, error)
-	transactionFunc func(ctx context.Context) error
-	disconnectFunc  func(ctx context.Context) error
+func TestDefaultClientBuilder_EmptyURI(t *testing.T) {
+	_, err := defaultClientBuilder(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, "mongodb: uri is empty", err.Error())
 }
 
-func (m *mockMongoClient) InsertOne(ctx context.Context, database, coll string, document any,
-	opts ...*options.InsertOneOptions) (*mongo.InsertOneResult, error) {
-	if m.insertOneFunc != nil {
-		err := m.insertOneFunc(ctx, database, coll, document)
-		return &mongo.InsertOneResult{}, err
+func TestDefaultClientBuilder_InvalidURI(t *testing.T) {
+	// A syntactically invalid URI is rejected by the driver during
+	// options.Client().ApplyURI parsing inside mongo.Connect, before any
+	// network I/O. The error must be wrapped under "mongodb: connect".
+	_, err := defaultClientBuilder(context.Background(),
+		WithClientBuilderURI("not-a-mongo-uri"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mongodb: connect")
+}
+
+func TestDefaultClientBuilder_PingError(t *testing.T) {
+	// Use a connection string that resolves quickly but cannot be reached, so
+	// Ping (called inside defaultClientBuilder) fails.
+	const uri = "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=50&connectTimeoutMS=50"
+
+	_, err := defaultClientBuilder(context.Background(), WithClientBuilderURI(uri))
+	require.Error(t, err)
+	// Either the connect or ping path may fire first depending on driver
+	// internals, but the error must be wrapped under our "mongodb:" prefix.
+	assert.Contains(t, err.Error(), "mongodb:")
+}
+
+// mockClient is a manual mock of Client used for table-driven tests.
+type mockClient struct {
+	insertOneFn     func(ctx context.Context, db, coll string, doc any) (*mongo.InsertOneResult, error)
+	updateOneFn     func(ctx context.Context, db, coll string, filter, update any) (*mongo.UpdateResult, error)
+	deleteOneFn     func(ctx context.Context, db, coll string, filter any) (*mongo.DeleteResult, error)
+	deleteManyFn    func(ctx context.Context, db, coll string, filter any) (*mongo.DeleteResult, error)
+	findOneFn       func(ctx context.Context, db, coll string, filter any) *mongo.SingleResult
+	findFn          func(ctx context.Context, db, coll string, filter any) (*mongo.Cursor, error)
+	ensureIndexesFn func(ctx context.Context, db, coll string, models []mongo.IndexModel) ([]string, error)
+	transactionFn   func(ctx context.Context, fn TxFunc, opts ...TxOption) error
+	closeFn         func(ctx context.Context) error
+}
+
+func (m *mockClient) InsertOne(ctx context.Context, db, coll string, doc any,
+	_ ...*options.InsertOneOptions) (*mongo.InsertOneResult, error) {
+	if m.insertOneFn != nil {
+		return m.insertOneFn(ctx, db, coll, doc)
 	}
-	return &mongo.InsertOneResult{InsertedID: "test-id"}, nil
+	return &mongo.InsertOneResult{}, nil
 }
 
-func (m *mockMongoClient) UpdateOne(ctx context.Context, database, coll string, filter, update any,
-	opts ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
-	if m.updateOneFunc != nil {
-		err := m.updateOneFunc(ctx, database, coll, filter, update)
-		return &mongo.UpdateResult{}, err
+func (m *mockClient) UpdateOne(ctx context.Context, db, coll string, filter, update any,
+	_ ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
+	if m.updateOneFn != nil {
+		return m.updateOneFn(ctx, db, coll, filter, update)
 	}
-	return &mongo.UpdateResult{ModifiedCount: 1}, nil
+	return &mongo.UpdateResult{}, nil
 }
 
-func (m *mockMongoClient) DeleteOne(ctx context.Context, database, coll string, filter any,
-	opts ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
-	if m.deleteOneFunc != nil {
-		err := m.deleteOneFunc(ctx, database, coll, filter)
-		return &mongo.DeleteResult{}, err
+func (m *mockClient) DeleteOne(ctx context.Context, db, coll string, filter any,
+	_ ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
+	if m.deleteOneFn != nil {
+		return m.deleteOneFn(ctx, db, coll, filter)
 	}
-	return &mongo.DeleteResult{DeletedCount: 1}, nil
+	return &mongo.DeleteResult{}, nil
 }
 
-func (m *mockMongoClient) DeleteMany(ctx context.Context, database, coll string, filter any,
-	opts ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
-	if m.deleteManyFunc != nil {
-		err := m.deleteManyFunc(ctx, database, coll, filter)
-		return &mongo.DeleteResult{}, err
+func (m *mockClient) DeleteMany(ctx context.Context, db, coll string, filter any,
+	_ ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
+	if m.deleteManyFn != nil {
+		return m.deleteManyFn(ctx, db, coll, filter)
 	}
-	return &mongo.DeleteResult{DeletedCount: 5}, nil
+	return &mongo.DeleteResult{}, nil
 }
 
-func (m *mockMongoClient) FindOne(ctx context.Context, database, coll string, filter any,
-	opts ...*options.FindOneOptions) *mongo.SingleResult {
-	if m.findOneFunc != nil {
-		m.findOneFunc(ctx, database, coll, filter)
+func (m *mockClient) FindOne(ctx context.Context, db, coll string, filter any,
+	_ ...*options.FindOneOptions) *mongo.SingleResult {
+	if m.findOneFn != nil {
+		return m.findOneFn(ctx, db, coll, filter)
 	}
 	return nil
 }
 
-func (m *mockMongoClient) Find(ctx context.Context, database, coll string, filter any,
-	opts ...*options.FindOptions) (*mongo.Cursor, error) {
-	if m.findFunc != nil {
-		err := m.findFunc(ctx, database, coll, filter)
-		return nil, err
+func (m *mockClient) Find(ctx context.Context, db, coll string, filter any,
+	_ ...*options.FindOptions) (*mongo.Cursor, error) {
+	if m.findFn != nil {
+		return m.findFn(ctx, db, coll, filter)
 	}
 	return nil, nil
 }
 
-func (m *mockMongoClient) CountDocuments(ctx context.Context, database, coll string, filter any,
-	opts ...*options.CountOptions) (int64, error) {
-	if m.countFunc != nil {
-		return m.countFunc(ctx, database, coll, filter)
+func (m *mockClient) EnsureIndexes(ctx context.Context, db, coll string, models []mongo.IndexModel,
+	_ ...*options.CreateIndexesOptions) ([]string, error) {
+	if m.ensureIndexesFn != nil {
+		return m.ensureIndexesFn(ctx, db, coll, models)
 	}
-	return 10, nil
+	return nil, nil
 }
 
-func (m *mockMongoClient) Transaction(ctx context.Context, sf func(sc mongo.SessionContext) error,
-	tOpts []*options.TransactionOptions, opts ...*options.SessionOptions) error {
-	if m.transactionFunc != nil {
-		return m.transactionFunc(ctx)
-	}
-	return nil
-}
-
-func (m *mockMongoClient) Disconnect(ctx context.Context) error {
-	if m.disconnectFunc != nil {
-		return m.disconnectFunc(ctx)
+func (m *mockClient) Transaction(ctx context.Context, fn TxFunc, opts ...TxOption) error {
+	if m.transactionFn != nil {
+		return m.transactionFn(ctx, fn, opts...)
 	}
 	return nil
 }
 
-func TestMockClientOperations(t *testing.T) {
-	ctx := context.Background()
-	mock := &mockMongoClient{}
-
-	t.Run("InsertOne", func(t *testing.T) {
-		result, err := mock.InsertOne(ctx, "testdb", "testcoll", map[string]string{"key": "value"})
-		assert.NoError(t, err)
-		assert.NotNil(t, result)
-	})
-
-	t.Run("UpdateOne", func(t *testing.T) {
-		result, err := mock.UpdateOne(ctx, "testdb", "testcoll",
-			map[string]string{"_id": "1"}, map[string]any{"$set": map[string]string{"key": "newvalue"}})
-		assert.NoError(t, err)
-		assert.Equal(t, int64(1), result.ModifiedCount)
-	})
-
-	t.Run("DeleteOne", func(t *testing.T) {
-		result, err := mock.DeleteOne(ctx, "testdb", "testcoll", map[string]string{"_id": "1"})
-		assert.NoError(t, err)
-		assert.Equal(t, int64(1), result.DeletedCount)
-	})
-
-	t.Run("DeleteMany", func(t *testing.T) {
-		result, err := mock.DeleteMany(ctx, "testdb", "testcoll", map[string]string{"status": "inactive"})
-		assert.NoError(t, err)
-		assert.Equal(t, int64(5), result.DeletedCount)
-	})
-
-	t.Run("FindOne", func(t *testing.T) {
-		result := mock.FindOne(ctx, "testdb", "testcoll", map[string]string{"_id": "1"})
-		assert.Nil(t, result)
-	})
-
-	t.Run("Find", func(t *testing.T) {
-		cursor, err := mock.Find(ctx, "testdb", "testcoll", map[string]string{})
-		assert.NoError(t, err)
-		assert.Nil(t, cursor)
-	})
-
-	t.Run("CountDocuments", func(t *testing.T) {
-		count, err := mock.CountDocuments(ctx, "testdb", "testcoll", map[string]string{})
-		assert.NoError(t, err)
-		assert.Equal(t, int64(10), count)
-	})
-
-	t.Run("Transaction", func(t *testing.T) {
-		err := mock.Transaction(ctx, func(sc mongo.SessionContext) error {
-			return nil
-		}, nil)
-		assert.NoError(t, err)
-	})
-
-	t.Run("Disconnect", func(t *testing.T) {
-		err := mock.Disconnect(ctx)
-		assert.NoError(t, err)
-	})
+func (m *mockClient) Close(ctx context.Context) error {
+	if m.closeFn != nil {
+		return m.closeFn(ctx)
+	}
+	return nil
 }
 
-func TestMockClientWithCustomFuncs(t *testing.T) {
+// TestMockClientInterfaceCompliance verifies mockClient implements Client.
+func TestMockClientInterfaceCompliance(t *testing.T) {
+	var _ Client = (*mockClient)(nil)
+}
+
+// TestDefaultClientInterfaceCompliance verifies defaultClient implements Client.
+func TestDefaultClientInterfaceCompliance(t *testing.T) {
+	var _ Client = (*defaultClient)(nil)
+}
+
+func TestMockClientDispatch(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("InsertOne with error", func(t *testing.T) {
-		mock := &mockMongoClient{
-			insertOneFunc: func(ctx context.Context, database, coll string, document any) error {
-				return errors.New("insert error")
+	t.Run("InsertOne dispatches and propagates error", func(t *testing.T) {
+		want := errors.New("insert err")
+		mc := &mockClient{
+			insertOneFn: func(_ context.Context, _, _ string, _ any) (*mongo.InsertOneResult, error) {
+				return nil, want
 			},
 		}
-		_, err := mock.InsertOne(ctx, "testdb", "testcoll", nil)
-		assert.EqualError(t, err, "insert error")
+		_, err := mc.InsertOne(ctx, "db", "c", bson.M{"k": "v"})
+		assert.ErrorIs(t, err, want)
 	})
 
-	t.Run("UpdateOne with error", func(t *testing.T) {
-		mock := &mockMongoClient{
-			updateOneFunc: func(ctx context.Context, database, coll string, filter, update any) error {
-				return errors.New("update error")
-			},
-		}
-		_, err := mock.UpdateOne(ctx, "testdb", "testcoll", nil, nil)
-		assert.EqualError(t, err, "update error")
-	})
-
-	t.Run("DeleteOne with error", func(t *testing.T) {
-		mock := &mockMongoClient{
-			deleteOneFunc: func(ctx context.Context, database, coll string, filter any) error {
-				return errors.New("delete error")
-			},
-		}
-		_, err := mock.DeleteOne(ctx, "testdb", "testcoll", nil)
-		assert.EqualError(t, err, "delete error")
-	})
-
-	t.Run("DeleteMany with error", func(t *testing.T) {
-		mock := &mockMongoClient{
-			deleteManyFunc: func(ctx context.Context, database, coll string, filter any) error {
-				return errors.New("delete many error")
-			},
-		}
-		_, err := mock.DeleteMany(ctx, "testdb", "testcoll", nil)
-		assert.EqualError(t, err, "delete many error")
-	})
-
-	t.Run("Find with error", func(t *testing.T) {
-		mock := &mockMongoClient{
-			findFunc: func(ctx context.Context, database, coll string, filter any) error {
-				return errors.New("find error")
-			},
-		}
-		_, err := mock.Find(ctx, "testdb", "testcoll", nil)
-		assert.EqualError(t, err, "find error")
-	})
-
-	t.Run("CountDocuments with error", func(t *testing.T) {
-		mock := &mockMongoClient{
-			countFunc: func(ctx context.Context, database, coll string, filter any) (int64, error) {
-				return 0, errors.New("count error")
-			},
-		}
-		_, err := mock.CountDocuments(ctx, "testdb", "testcoll", nil)
-		assert.EqualError(t, err, "count error")
-	})
-
-	t.Run("Transaction with error", func(t *testing.T) {
-		mock := &mockMongoClient{
-			transactionFunc: func(ctx context.Context) error {
-				return errors.New("transaction error")
-			},
-		}
-		err := mock.Transaction(ctx, nil, nil)
-		assert.EqualError(t, err, "transaction error")
-	})
-
-	t.Run("Disconnect with error", func(t *testing.T) {
-		mock := &mockMongoClient{
-			disconnectFunc: func(ctx context.Context) error {
-				return errors.New("disconnect error")
-			},
-		}
-		err := mock.Disconnect(ctx)
-		assert.EqualError(t, err, "disconnect error")
-	})
-
-	t.Run("FindOne with custom func", func(t *testing.T) {
+	t.Run("UpdateOne dispatches", func(t *testing.T) {
 		called := false
-		mock := &mockMongoClient{
-			findOneFunc: func(ctx context.Context, database, coll string, filter any) {
+		mc := &mockClient{
+			updateOneFn: func(_ context.Context, _, _ string, _, _ any) (*mongo.UpdateResult, error) {
 				called = true
+				return &mongo.UpdateResult{ModifiedCount: 1}, nil
 			},
 		}
-		mock.FindOne(ctx, "testdb", "testcoll", nil)
+		res, err := mc.UpdateOne(ctx, "db", "c", bson.M{}, bson.M{"$set": bson.M{"k": "v"}})
+		require.NoError(t, err)
+		assert.True(t, called)
+		assert.Equal(t, int64(1), res.ModifiedCount)
+	})
+
+	t.Run("DeleteOne / DeleteMany default to empty results", func(t *testing.T) {
+		res1, err := (&mockClient{}).DeleteOne(ctx, "db", "c", bson.M{})
+		require.NoError(t, err)
+		assert.NotNil(t, res1)
+
+		res2, err := (&mockClient{}).DeleteMany(ctx, "db", "c", bson.M{})
+		require.NoError(t, err)
+		assert.NotNil(t, res2)
+	})
+
+	t.Run("FindOne / Find dispatch", func(t *testing.T) {
+		var calls int
+		mc := &mockClient{
+			findOneFn: func(_ context.Context, _, _ string, _ any) *mongo.SingleResult {
+				calls++
+				return nil
+			},
+			findFn: func(_ context.Context, _, _ string, _ any) (*mongo.Cursor, error) {
+				calls++
+				return nil, nil
+			},
+		}
+		mc.FindOne(ctx, "db", "c", bson.M{})
+		_, _ = mc.Find(ctx, "db", "c", bson.M{})
+		assert.Equal(t, 2, calls)
+	})
+
+	t.Run("EnsureIndexes dispatches", func(t *testing.T) {
+		mc := &mockClient{
+			ensureIndexesFn: func(_ context.Context, _, _ string, models []mongo.IndexModel) ([]string, error) {
+				names := make([]string, len(models))
+				for i := range models {
+					names[i] = "idx"
+				}
+				return names, nil
+			},
+		}
+		got, err := mc.EnsureIndexes(ctx, "db", "c",
+			[]mongo.IndexModel{{Keys: bson.D{{Key: "k", Value: 1}}}, {Keys: bson.D{{Key: "k2", Value: 1}}}})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"idx", "idx"}, got)
+	})
+
+	t.Run("Transaction dispatches and forwards options", func(t *testing.T) {
+		var receivedOpts int
+		mc := &mockClient{
+			transactionFn: func(_ context.Context, fn TxFunc, opts ...TxOption) error {
+				receivedOpts = len(opts)
+				return fn(nil)
+			},
+		}
+		called := false
+		err := mc.Transaction(ctx, func(_ mongo.SessionContext) error {
+			called = true
+			return nil
+		}, WithTransactionOptions(options.Transaction()))
+		require.NoError(t, err)
+		assert.True(t, called)
+		assert.Equal(t, 1, receivedOpts)
+	})
+
+	t.Run("Close dispatches", func(t *testing.T) {
+		var called bool
+		mc := &mockClient{
+			closeFn: func(_ context.Context) error {
+				called = true
+				return nil
+			},
+		}
+		require.NoError(t, mc.Close(ctx))
 		assert.True(t, called)
 	})
 }
 
-func TestClientInterfaceCompliance(t *testing.T) {
-	// Verify that mockMongoClient implements Client interface
-	var _ Client = (*mockMongoClient)(nil)
+func TestEnsureIndexesEmpty(t *testing.T) {
+	dc := &defaultClient{}
+	names, err := dc.EnsureIndexes(context.Background(), "db", "c", nil)
+	require.NoError(t, err)
+	assert.Nil(t, names)
 }
 
-// TestDefaultClientErrorCases tests defaultClient methods with empty client to improve coverage
-func TestDefaultClientErrorCases(t *testing.T) {
+func TestTxOptionConstructors(t *testing.T) {
+	t.Run("WithTransactionOptions sets field", func(t *testing.T) {
+		o := &TxOptions{}
+		got := options.Transaction()
+		WithTransactionOptions(got)(o)
+		assert.Same(t, got, o.Transaction)
+	})
+
+	t.Run("WithSessionOptions sets field", func(t *testing.T) {
+		o := &TxOptions{}
+		got := options.Session()
+		WithSessionOptions(got)(o)
+		assert.Same(t, got, o.Session)
+	})
+}
+
+// -- ClientBuilderOpt tests ---------------------------------------------------
+
+func TestWithClientBuilderURI(t *testing.T) {
+	opts := &ClientBuilderOpts{}
+
+	WithClientBuilderURI("mongodb://localhost:27017")(opts)
+	assert.Equal(t, "mongodb://localhost:27017", opts.URI)
+
+	// Test overwrite
+	WithClientBuilderURI("mongodb://otherhost:27017")(opts)
+	assert.Equal(t, "mongodb://otherhost:27017", opts.URI)
+}
+
+func TestWithExtraOptions(t *testing.T) {
+	opts := &ClientBuilderOpts{}
+
+	WithExtraOptions("opt1", "opt2")(opts)
+	assert.Len(t, opts.ExtraOptions, 2)
+	assert.Equal(t, "opt1", opts.ExtraOptions[0])
+	assert.Equal(t, "opt2", opts.ExtraOptions[1])
+}
+
+func TestWithExtraOptions_Append(t *testing.T) {
+	opts := &ClientBuilderOpts{}
+
+	WithExtraOptions("opt1")(opts)
+	WithExtraOptions("opt2", "opt3")(opts)
+	assert.Equal(t, []any{"opt1", "opt2", "opt3"}, opts.ExtraOptions)
+}
+
+func TestClientBuilderOptsDefaults(t *testing.T) {
+	opts := &ClientBuilderOpts{}
+	assert.Empty(t, opts.URI)
+	assert.Nil(t, opts.ExtraOptions)
+}
+
+func TestWithExtraOptions_Empty(t *testing.T) {
+	opts := &ClientBuilderOpts{}
+	WithExtraOptions()(opts)
+	assert.Empty(t, opts.ExtraOptions)
+}
+
+func TestWithExtraOptions_MixedTypes(t *testing.T) {
+	opts := &ClientBuilderOpts{}
+
+	type custom struct{ Name string }
+	WithExtraOptions("string", 123, true, custom{"test"})(opts)
+	require.Len(t, opts.ExtraOptions, 4)
+	assert.Equal(t, "string", opts.ExtraOptions[0])
+	assert.Equal(t, 123, opts.ExtraOptions[1])
+	assert.Equal(t, true, opts.ExtraOptions[2])
+	assert.Equal(t, custom{"test"}, opts.ExtraOptions[3])
+}
+
+// -- Integration tests --------------------------------------------------------
+//
+// The tests below exercise defaultClient against a real MongoDB deployment
+// when MONGO_URI is set; they skip otherwise. Tests that exercise multi-doc
+// transactions skip cleanly on standalone deployments that do not support
+// them.
+
+// integrationURI returns the MongoDB URI to use for integration tests, or
+// skips the calling test when the environment variable is unset.
+func integrationURI(t *testing.T) string {
+	t.Helper()
+	uri := os.Getenv("MONGO_URI")
+	if uri == "" {
+		t.Skip("MONGO_URI not set; skipping integration test")
+	}
+	return uri
+}
+
+// integrationDB returns a unique database name for the current test run, so
+// concurrent runs and leftover state from previous runs do not collide.
+func integrationDB(t *testing.T) string {
+	t.Helper()
+	return fmt.Sprintf("trpc_agent_go_storage_mongodb_test_%d", time.Now().UnixNano())
+}
+
+// newIntegrationClient connects to the MongoDB deployment described by
+// MONGO_URI and registers cleanup for both the client and the test database.
+func newIntegrationClient(t *testing.T) (Client, string) {
+	t.Helper()
+
+	uri := integrationURI(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	client, err := defaultClientBuilder(ctx, WithClientBuilderURI(uri))
+	require.NoError(t, err, "connect to MongoDB at %s", uri)
+
+	dbName := integrationDB(t)
+	t.Cleanup(func() {
+		// Best-effort cleanup; ignore errors so tests still report the
+		// underlying assertion failure rather than a teardown failure.
+		dropCtx, dropCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer dropCancel()
+		if dc, ok := client.(*defaultClient); ok {
+			_ = dc.client.Database(dbName).Drop(dropCtx)
+		}
+		_ = client.Close(dropCtx)
+	})
+	return client, dbName
+}
+
+func TestIntegration_CRUD(t *testing.T) {
+	client, db := newIntegrationClient(t)
 	ctx := context.Background()
+	const coll = "items"
 
-	// Create a defaultClient with nil mongo.Client to test method coverage
-	client := &defaultClient{client: &mongo.Client{}}
+	// Seed three documents via InsertOne (the only insert primitive on
+	// Client).
+	for _, doc := range []bson.M{
+		{"_id": "a", "v": 1},
+		{"_id": "b", "v": 2},
+		{"_id": "c", "v": 3},
+	} {
+		_, err := client.InsertOne(ctx, db, coll, doc)
+		require.NoError(t, err)
+	}
 
-	t.Run("InsertOne with nil client", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				// Expected panic due to nil client
-				assert.NotNil(t, r)
-			}
-		}()
-		_, _ = client.InsertOne(ctx, "testdb", "testcoll", map[string]any{"test": "data"})
-	})
+	// FindOne round-trip.
+	var doc struct {
+		ID string `bson:"_id"`
+		V  int    `bson:"v"`
+	}
+	require.NoError(t, client.FindOne(ctx, db, coll, bson.M{"_id": "a"}).Decode(&doc))
+	assert.Equal(t, "a", doc.ID)
+	assert.Equal(t, 1, doc.V)
 
-	t.Run("UpdateOne with nil client", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				assert.NotNil(t, r)
-			}
-		}()
-		_, _ = client.UpdateOne(ctx, "testdb", "testcoll", map[string]any{"_id": "1"}, map[string]any{"$set": map[string]any{"updated": true}})
-	})
+	// UpdateOne.
+	updRes, err := client.UpdateOne(ctx, db, coll,
+		bson.M{"_id": "a"}, bson.M{"$set": bson.M{"v": 10}})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), updRes.ModifiedCount)
 
-	t.Run("DeleteOne with nil client", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				assert.NotNil(t, r)
-			}
-		}()
-		_, _ = client.DeleteOne(ctx, "testdb", "testcoll", map[string]any{"_id": "1"})
-	})
+	// Find + cursor iteration returns all three documents in id order.
+	cursor, err := client.Find(ctx, db, coll, bson.M{},
+		options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
+	require.NoError(t, err)
+	defer cursor.Close(ctx)
 
-	t.Run("DeleteMany with nil client", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				assert.NotNil(t, r)
-			}
-		}()
-		_, _ = client.DeleteMany(ctx, "testdb", "testcoll", map[string]any{"status": "inactive"})
-	})
+	var all []bson.M
+	require.NoError(t, cursor.All(ctx, &all))
+	require.Len(t, all, 3)
+	assert.Equal(t, "a", all[0]["_id"])
+	assert.EqualValues(t, 10, all[0]["v"])
 
-	t.Run("FindOne with nil client", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				assert.NotNil(t, r)
-			}
-		}()
-		_ = client.FindOne(ctx, "testdb", "testcoll", map[string]any{"_id": "1"})
-	})
+	// DeleteOne removes a single matching document.
+	delRes, err := client.DeleteOne(ctx, db, coll, bson.M{"_id": "a"})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), delRes.DeletedCount)
 
-	t.Run("Find with nil client", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				assert.NotNil(t, r)
-			}
-		}()
-		_, _ = client.Find(ctx, "testdb", "testcoll", map[string]any{})
-	})
-
-	t.Run("CountDocuments with nil client", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				assert.NotNil(t, r)
-			}
-		}()
-		_, _ = client.CountDocuments(ctx, "testdb", "testcoll", map[string]any{})
-	})
-
-	t.Run("Transaction with nil client", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				assert.NotNil(t, r)
-			}
-		}()
-		_ = client.Transaction(ctx, func(sc mongo.SessionContext) error {
-			return nil
-		}, nil)
-	})
-
-	t.Run("Disconnect with nil client", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				assert.NotNil(t, r)
-			}
-		}()
-		_ = client.Disconnect(ctx)
-	})
-
-	t.Run("Methods with options", func(t *testing.T) {
-		defer func() { recover() }()
-
-		// Test all methods with options in one sub-test to reduce redundancy
-		insertOpts := options.InsertOne()
-		_, _ = client.InsertOne(ctx, "db", "coll", bson.M{"test": "data"}, insertOpts)
-
-		updateOpts := options.Update()
-		_, _ = client.UpdateOne(ctx, "db", "coll", bson.M{"_id": "1"}, bson.M{"$set": bson.M{"updated": true}}, updateOpts)
-
-		deleteOpts := options.Delete()
-		_, _ = client.DeleteOne(ctx, "db", "coll", bson.M{"_id": "1"}, deleteOpts)
-		_, _ = client.DeleteMany(ctx, "db", "coll", bson.M{"status": "inactive"}, deleteOpts)
-
-		findOpts := options.Find()
-		_, _ = client.Find(ctx, "db", "coll", bson.M{}, findOpts)
-
-		findOneOpts := options.FindOne()
-		_ = client.FindOne(ctx, "db", "coll", bson.M{"_id": "1"}, findOneOpts)
-
-		countOpts := options.Count()
-		_, _ = client.CountDocuments(ctx, "db", "coll", bson.M{}, countOpts)
-	})
+	// DeleteMany removes the rest.
+	delMany, err := client.DeleteMany(ctx, db, coll, bson.M{})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), delMany.DeletedCount)
 }
 
-// TestRegistryEdgeCases tests edge cases for registry operations
-func TestRegistryEdgeCases(t *testing.T) {
-	originalRegistry := mongodbRegistry
-	defer func() { mongodbRegistry = originalRegistry }()
-
-	t.Run("Empty instance name", func(t *testing.T) {
-		mongodbRegistry = make(map[string][]ClientBuilderOpt)
-		RegisterMongoDBInstance("", WithClientBuilderDSN("mongodb://localhost:27017"))
-		opts, exists := GetMongoDBInstance("")
-		assert.True(t, exists)
-		assert.Len(t, opts, 1)
-	})
-
-	t.Run("Register with no options", func(t *testing.T) {
-		mongodbRegistry = make(map[string][]ClientBuilderOpt)
-		RegisterMongoDBInstance("no-opts")
-		opts, exists := GetMongoDBInstance("no-opts")
-		assert.True(t, exists)
-		assert.Len(t, opts, 0)
-	})
-}
-
-// TestDefaultClientBuilderErrorCases tests various error scenarios
-func TestDefaultClientBuilderErrorCases(t *testing.T) {
+func TestIntegration_EnsureIndexes(t *testing.T) {
+	client, db := newIntegrationClient(t)
 	ctx := context.Background()
+	const coll = "indexed"
 
-	t.Run("Empty URI", func(t *testing.T) {
-		_, err := defaultClientBuilder(ctx)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "URI is empty")
-	})
+	models := []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "app_name", Value: 1}, {Key: "user_id", Value: 1}},
+			Options: options.Index().SetName("by_app_user"),
+		},
+		{
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().SetName("ttl_expires_at").SetExpireAfterSeconds(0),
+		},
+	}
 
-	t.Run("Invalid URI format", func(t *testing.T) {
-		_, err := defaultClientBuilder(ctx, WithClientBuilderDSN("invalid-uri-format"))
-		assert.Error(t, err)
-	})
+	// First call creates the indexes.
+	names, err := client.EnsureIndexes(ctx, db, coll, models)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"by_app_user", "ttl_expires_at"}, names)
 
-	t.Run("Builder processes options correctly", func(t *testing.T) {
-		// Test that options are processed without panicking
-		opts := []ClientBuilderOpt{
-			WithClientBuilderDSN("mongodb://localhost:27017/testdb"),
-			WithExtraOptions("option1", "option2"),
-		}
-
-		// Verify options were processed by applying them to a ClientBuilderOpts struct
-		builderOpts := &ClientBuilderOpts{}
-		for _, opt := range opts {
-			opt(builderOpts)
-		}
-
-		assert.Equal(t, "mongodb://localhost:27017/testdb", builderOpts.URI)
-		assert.Len(t, builderOpts.ExtraOptions, 2)
-		assert.Equal(t, "option1", builderOpts.ExtraOptions[0])
-		assert.Equal(t, "option2", builderOpts.ExtraOptions[1])
-	})
+	// Second call is idempotent: same models returned, no error.
+	namesAgain, err := client.EnsureIndexes(ctx, db, coll, models)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, names, namesAgain)
 }
 
-// TestConnectionEdgeCases tests various edge cases in connection handling
-func TestConnectionEdgeCases(t *testing.T) {
+func TestIntegration_Transaction_CommitAndAbort(t *testing.T) {
+	client, db := newIntegrationClient(t)
 	ctx := context.Background()
+	const coll = "tx"
 
-	t.Run("Connection attempts with various parameters", func(t *testing.T) {
-		// Try various MongoDB connection parameters that might trigger different error paths
-		testCases := []string{
-			"mongodb://localhost:27017/?serverSelectionTimeoutMS=50&connectTimeoutMS=50",
-			"mongodb://127.0.0.1:27017/?serverSelectionTimeoutMS=50&socketTimeoutMS=50",
-			"mongodb://localhost:27017/?maxPoolSize=1&serverSelectionTimeoutMS=50",
-			"mongodb://localhost:27017/?replicaSet=nonexistent&serverSelectionTimeoutMS=50",
+	t.Run("commit on success", func(t *testing.T) {
+		err := client.Transaction(ctx, func(sc mongo.SessionContext) error {
+			_, err := client.InsertOne(sc, db, coll, bson.M{"_id": "ok", "v": 1})
+			return err
+		})
+		// Transactions require a replica set / sharded cluster. If the
+		// configured deployment is standalone, the driver returns a clear
+		// error and we skip the rest of this subtest.
+		if err != nil && isUnsupportedTransactionError(err) {
+			t.Skipf("MongoDB deployment does not support transactions: %v", err)
 		}
+		require.NoError(t, err)
 
-		for _, uri := range testCases {
-			_, err := defaultClientBuilder(ctx, WithClientBuilderDSN(uri))
-			// We expect these to fail quickly due to short timeouts
-			assert.Error(t, err)
-			// The error should contain either "connect failed" or "ping failed"
-			assert.True(t,
-				containsAny(err.Error(), []string{"connect failed", "ping failed", "server selection timeout"}),
-				"Expected connection/ping/timeout error, got: %s", err.Error())
+		var got bson.M
+		require.NoError(t, client.FindOne(ctx, db, coll, bson.M{"_id": "ok"}).Decode(&got))
+	})
+
+	t.Run("rollback on error", func(t *testing.T) {
+		boom := errors.New("rollback please")
+		err := client.Transaction(ctx, func(sc mongo.SessionContext) error {
+			if _, err := client.InsertOne(sc, db, coll, bson.M{"_id": "abort", "v": 1}); err != nil {
+				return err
+			}
+			return boom
+		})
+		if err != nil && isUnsupportedTransactionError(err) {
+			t.Skipf("MongoDB deployment does not support transactions: %v", err)
 		}
+		require.ErrorIs(t, err, boom)
+
+		// The aborted insert must not be visible.
+		err = client.FindOne(ctx, db, coll, bson.M{"_id": "abort"}).Err()
+		assert.ErrorIs(t, err, mongo.ErrNoDocuments)
 	})
 }
 
-// Helper function to check if string contains any of the given substrings
-func containsAny(s string, substrings []string) bool {
-	for _, substr := range substrings {
-		if len(s) >= len(substr) {
-			for i := 0; i <= len(s)-len(substr); i++ {
-				if s[i:i+len(substr)] == substr {
-					return true
-				}
-			}
+// isUnsupportedTransactionError reports whether err looks like
+// "transactions are not supported by this deployment". The MongoDB driver
+// does not export a sentinel for this, so we match on the well-known
+// message fragments.
+func isUnsupportedTransactionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, frag := range []string{
+		"Transaction numbers are only allowed on a replica set",
+		"Transactions are not supported",
+		"transactions are not supported",
+	} {
+		if containsFold(msg, frag) {
+			return true
 		}
 	}
 	return false
 }
 
-// TestTransactionComprehensive tests transaction scenarios
-func TestTransactionComprehensive(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("Default client code path coverage", func(t *testing.T) {
-		client := &defaultClient{client: nil}
-
-		testCases := []struct {
-			name  string
-			tOpts []*options.TransactionOptions
-			sOpts []*options.SessionOptions
-			fn    func(sc mongo.SessionContext) error
-		}{
-			{
-				name:  "nil transaction options",
-				tOpts: nil,
-				sOpts: nil,
-				fn:    func(sc mongo.SessionContext) error { return nil },
-			},
-			{
-				name:  "single transaction option",
-				tOpts: []*options.TransactionOptions{options.Transaction()},
-				sOpts: nil,
-				fn:    func(sc mongo.SessionContext) error { return nil },
-			},
-			{
-				name:  "with session options",
-				tOpts: nil,
-				sOpts: []*options.SessionOptions{options.Session()},
-				fn:    func(sc mongo.SessionContext) error { return errors.New("test error") },
-			},
-		}
-
-		for _, tc := range testCases {
-			t.Run(tc.name, func(t *testing.T) {
-				defer func() {
-					if r := recover(); r != nil {
-						assert.NotNil(t, r)
-					}
-				}()
-				_ = client.Transaction(ctx, tc.fn, tc.tOpts, tc.sOpts...)
-			})
-		}
-	})
-}
-
-// TestInitFunction tests the init function behavior
-func TestInitFunction(t *testing.T) {
-	assert.NotNil(t, mongodbRegistry)
-}
-
-// mockSession implements the session interface for testing
-type mockSession struct {
-	endSessionCalled bool
-	withTxErr        error
-	withTxResult     any
-}
-
-func (m *mockSession) EndSession(ctx context.Context) {
-	m.endSessionCalled = true
-}
-
-func (m *mockSession) WithTransaction(ctx context.Context, fn func(sc mongo.SessionContext) (any, error),
-	opts ...*options.TransactionOptions) (any, error) {
-	if m.withTxErr != nil {
-		return nil, m.withTxErr
+// containsFold is a tiny case-insensitive substring check; we avoid pulling
+// in strings.EqualFold-based helpers for one site.
+func containsFold(s, sub string) bool {
+	if len(sub) > len(s) {
+		return false
 	}
-	return m.withTxResult, nil
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if equalFoldASCII(s[i:i+len(sub)], sub) {
+			return true
+		}
+	}
+	return false
 }
 
-// TestNewDefaultClient tests the newDefaultClient function
-func TestNewDefaultClient(t *testing.T) {
-	// Create a minimal mongo.Client for testing
-	client := &mongo.Client{}
-	dc := newDefaultClient(client)
-
-	assert.NotNil(t, dc)
-	assert.Equal(t, client, dc.client)
-	assert.NotNil(t, dc.startSession)
+func equalFoldASCII(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca, cb := a[i], b[i]
+		if 'A' <= ca && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if 'A' <= cb && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
 }
 
-// TestTransactionWithMockSession tests Transaction method with mock session
-func TestTransactionWithMockSession(t *testing.T) {
-	ctx := context.Background()
+func TestIntegration_Close(t *testing.T) {
+	uri := integrationURI(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	t.Run("Session start error", func(t *testing.T) {
-		dc := &defaultClient{
-			client: &mongo.Client{},
-			startSession: func(opts ...*options.SessionOptions) (session, error) {
-				return nil, errors.New("session start error")
-			},
-		}
+	client, err := defaultClientBuilder(ctx, WithClientBuilderURI(uri))
+	require.NoError(t, err)
 
-		err := dc.Transaction(ctx, func(sc mongo.SessionContext) error {
-			return nil
-		}, nil)
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "start session failed")
-	})
-
-	t.Run("Transaction success with nil tOpts", func(t *testing.T) {
-		ms := &mockSession{}
-		dc := &defaultClient{
-			client: &mongo.Client{},
-			startSession: func(opts ...*options.SessionOptions) (session, error) {
-				return ms, nil
-			},
-		}
-
-		err := dc.Transaction(ctx, func(sc mongo.SessionContext) error {
-			return nil
-		}, nil)
-
-		assert.NoError(t, err)
-		assert.True(t, ms.endSessionCalled)
-	})
-
-	t.Run("Transaction success with tOpts", func(t *testing.T) {
-		ms := &mockSession{}
-		dc := &defaultClient{
-			client: &mongo.Client{},
-			startSession: func(opts ...*options.SessionOptions) (session, error) {
-				return ms, nil
-			},
-		}
-
-		tOpts := []*options.TransactionOptions{options.Transaction()}
-		err := dc.Transaction(ctx, func(sc mongo.SessionContext) error {
-			return nil
-		}, tOpts)
-
-		assert.NoError(t, err)
-		assert.True(t, ms.endSessionCalled)
-	})
-
-	t.Run("Transaction with WithTransaction error", func(t *testing.T) {
-		ms := &mockSession{withTxErr: errors.New("transaction failed")}
-		dc := &defaultClient{
-			client: &mongo.Client{},
-			startSession: func(opts ...*options.SessionOptions) (session, error) {
-				return ms, nil
-			},
-		}
-
-		err := dc.Transaction(ctx, func(sc mongo.SessionContext) error {
-			return nil
-		}, nil)
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "transaction failed")
-	})
-
-	t.Run("Transaction with session options", func(t *testing.T) {
-		ms := &mockSession{}
-		var receivedOpts []*options.SessionOptions
-		dc := &defaultClient{
-			client: &mongo.Client{},
-			startSession: func(opts ...*options.SessionOptions) (session, error) {
-				receivedOpts = opts
-				return ms, nil
-			},
-		}
-
-		sOpts := []*options.SessionOptions{options.Session()}
-		err := dc.Transaction(ctx, func(sc mongo.SessionContext) error {
-			return nil
-		}, nil, sOpts...)
-
-		assert.NoError(t, err)
-		assert.Len(t, receivedOpts, 1)
-	})
-
-	t.Run("Transaction with multiple tOpts uses first", func(t *testing.T) {
-		ms := &mockSession{}
-		dc := &defaultClient{
-			client: &mongo.Client{},
-			startSession: func(opts ...*options.SessionOptions) (session, error) {
-				return ms, nil
-			},
-		}
-
-		tOpts := []*options.TransactionOptions{
-			options.Transaction(),
-			options.Transaction(),
-		}
-		err := dc.Transaction(ctx, func(sc mongo.SessionContext) error {
-			return nil
-		}, tOpts)
-
-		assert.NoError(t, err)
-	})
-}
-
-// TestDefaultClientBuilderWithMockConnector tests defaultClientBuilder with mock connector
-func TestDefaultClientBuilderWithMockConnector(t *testing.T) {
-	ctx := context.Background()
-	originalConnector := mongoConnector
-	defer func() { mongoConnector = originalConnector }()
-
-	t.Run("Connect error", func(t *testing.T) {
-		mongoConnector = func(ctx context.Context, opts ...*options.ClientOptions) (*mongo.Client, error) {
-			return nil, errors.New("connect error")
-		}
-
-		_, err := defaultClientBuilder(ctx, WithClientBuilderDSN("mongodb://localhost:27017"))
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "connect failed")
-	})
-}
-
-// TestDefaultClientInterfaceCompliance verifies defaultClient implements Client
-func TestDefaultClientInterfaceCompliance(t *testing.T) {
-	var _ Client = (*defaultClient)(nil)
+	require.NoError(t, client.Close(ctx))
 }
