@@ -244,6 +244,70 @@ func TestBuildInjectedContextMessagesFallsBackToTimestampBoundary(
 	require.Equal(t, "later answer", got[1].Content)
 }
 
+func TestBuildInjectedContextMessagesSkipsVolatileCronInvocation(
+	t *testing.T,
+) {
+	base := time.Now().Add(-10 * time.Minute)
+	cronQuestion := userEvent(
+		"u1",
+		"Alice",
+		"list cron jobs",
+		base,
+	)
+	cronQuestion.InvocationID = "cron-inv"
+	nextQuestion := userEvent(
+		"u2",
+		"Bob",
+		"next question",
+		base.Add(4*time.Minute),
+	)
+	nextQuestion.InvocationID = "next-inv"
+	nextAnswer := assistantEvent(
+		"regular answer",
+		base.Add(5*time.Minute),
+	)
+	nextAnswer.InvocationID = "next-inv"
+
+	sess := &session.Session{
+		Events: []event.Event{
+			cronQuestion,
+			cronToolCallEvent(
+				"cron-inv",
+				"checking cron",
+				base.Add(time.Minute),
+			),
+			cronToolResultEvent(
+				"cron-inv",
+				`{"jobs":[{"name":"lunch reminder"}]}`,
+				base.Add(2*time.Minute),
+			),
+			assistantEventWithInvocation(
+				"cron-inv",
+				"lunch reminder runs at noon",
+				base.Add(3*time.Minute),
+			),
+			nextQuestion,
+			nextAnswer,
+		},
+	}
+
+	got := BuildInjectedContextMessages(sess, HistoryOptions{
+		MaxHistoryRuns: 10,
+	})
+	require.Len(t, got, 3)
+	require.Equal(t, model.RoleUser, got[0].Role)
+	require.Contains(t, got[0].Content, "list cron jobs")
+	require.Equal(t, model.RoleUser, got[1].Role)
+	require.Contains(t, got[1].Content, "next question")
+	require.Equal(t, model.RoleAssistant, got[2].Role)
+	require.Equal(t, "regular answer", got[2].Content)
+
+	rendered := got[0].Content + "\n" + got[1].Content + "\n" +
+		got[2].Content
+	require.NotContains(t, rendered, "checking cron")
+	require.NotContains(t, rendered, "lunch reminder")
+}
+
 func TestProjectEventMessage(t *testing.T) {
 	inv := agent.NewInvocation(
 		agent.WithInvocationMessage(model.Message{
@@ -656,6 +720,58 @@ func TestBuildSummaryText(t *testing.T) {
 	require.Contains(t, got, "Assistant: here is the update")
 }
 
+func TestBuildSummaryTextSkipsVolatileCronInvocationOutputs(
+	t *testing.T,
+) {
+	base := time.Now()
+	cronQuestion := userEvent(
+		"u1",
+		"Alice",
+		"list cron jobs",
+		base,
+	)
+	cronQuestion.InvocationID = "cron-inv"
+	nextQuestion := userEvent(
+		"u2",
+		"Bob",
+		"next question",
+		base.Add(4*time.Minute),
+	)
+	nextQuestion.InvocationID = "next-inv"
+	nextAnswer := assistantEvent(
+		"regular answer",
+		base.Add(5*time.Minute),
+	)
+	nextAnswer.InvocationID = "next-inv"
+
+	got := BuildSummaryText([]event.Event{
+		cronQuestion,
+		cronToolCallEvent(
+			"cron-inv",
+			"checking cron",
+			base.Add(time.Minute),
+		),
+		cronToolResultEvent(
+			"cron-inv",
+			`{"jobs":[{"name":"lunch reminder"}]}`,
+			base.Add(2*time.Minute),
+		),
+		assistantEventWithInvocation(
+			"cron-inv",
+			"lunch reminder runs at noon",
+			base.Add(3*time.Minute),
+		),
+		nextQuestion,
+		nextAnswer,
+	})
+
+	require.Contains(t, got, "Alice: list cron jobs")
+	require.Contains(t, got, "Bob: next question")
+	require.Contains(t, got, "Assistant: regular answer")
+	require.NotContains(t, got, "checking cron")
+	require.NotContains(t, got, "lunch reminder")
+}
+
 func TestBuildTurns(t *testing.T) {
 	base := time.Now()
 	sess := &session.Session{
@@ -913,6 +1029,66 @@ func assistantEvent(content string, ts time.Time) event.Event {
 		&model.Response{
 			Choices: []model.Choice{{
 				Message: model.NewAssistantMessage(content),
+			}},
+		},
+	)
+	evt.Timestamp = ts
+	return *evt
+}
+
+func assistantEventWithInvocation(
+	invocationID string,
+	content string,
+	ts time.Time,
+) event.Event {
+	evt := assistantEvent(content, ts)
+	evt.InvocationID = invocationID
+	return evt
+}
+
+func cronToolCallEvent(
+	invocationID string,
+	content string,
+	ts time.Time,
+) event.Event {
+	evt := event.NewResponseEvent(
+		invocationID,
+		authorAssistant,
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: content,
+					ToolCalls: []model.ToolCall{{
+						ID:   "call-cron",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name: volatileHistoryToolCron,
+						},
+					}},
+				},
+			}},
+		},
+	)
+	evt.Timestamp = ts
+	return *evt
+}
+
+func cronToolResultEvent(
+	invocationID string,
+	content string,
+	ts time.Time,
+) event.Event {
+	evt := event.NewResponseEvent(
+		invocationID,
+		authorAssistant,
+		&model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewToolMessage(
+					"call-cron",
+					volatileHistoryToolCron,
+					content,
+				),
 			}},
 		},
 	)

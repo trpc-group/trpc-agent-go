@@ -134,11 +134,13 @@ func buildVisibleHistory(
 	boundary *session.SummaryBoundary,
 	labelOverrides map[string]string,
 ) []model.Message {
+	volatileInvocations := volatileToolInvocationIDs(events)
 	if boundary != nil && strings.TrimSpace(boundary.LastEventID) != "" {
 		if history, ok := buildVisibleHistoryAfterEvent(
 			events,
 			boundary.LastEventID,
 			labelOverrides,
+			volatileInvocations,
 		); ok {
 			return history
 		}
@@ -151,7 +153,8 @@ func buildVisibleHistory(
 	}
 	for i := range events {
 		evt := events[i]
-		if !includeEvent(evt, since) {
+		if !includeEvent(evt, since) ||
+			skipVolatileToolHistoryEvent(evt, volatileInvocations) {
 			continue
 		}
 		msgs := visibleMessagesFromEvent(
@@ -167,6 +170,7 @@ func buildVisibleHistoryAfterEvent(
 	events []event.Event,
 	lastEventID string,
 	labelOverrides map[string]string,
+	volatileInvocations map[string]struct{},
 ) ([]model.Message, bool) {
 	out := make([]model.Message, 0, len(events))
 	var foundBoundary bool
@@ -178,7 +182,8 @@ func buildVisibleHistoryAfterEvent(
 			}
 			continue
 		}
-		if !includeEvent(evt, time.Time{}) {
+		if !includeEvent(evt, time.Time{}) ||
+			skipVolatileToolHistoryEvent(evt, volatileInvocations) {
 			continue
 		}
 		msgs := visibleMessagesFromEvent(
@@ -211,8 +216,12 @@ func buildTurns(
 func buildSummaryLines(events []event.Event) []string {
 	lines := make([]string, 0, len(events))
 	var hasAnnotatedUser bool
+	volatileInvocations := volatileToolInvocationIDs(events)
 	for i := range events {
 		evt := events[i]
+		if skipVolatileToolHistoryEvent(evt, volatileInvocations) {
+			continue
+		}
 		rendered, annotated := summaryLinesFromEvent(
 			evt,
 			nil,
@@ -237,6 +246,69 @@ func includeEvent(evt event.Event, since time.Time) bool {
 		return false
 	}
 	return true
+}
+
+func volatileToolInvocationIDs(events []event.Event) map[string]struct{} {
+	out := make(map[string]struct{})
+	for i := range events {
+		evt := events[i]
+		if strings.TrimSpace(evt.InvocationID) == "" ||
+			!eventHasVolatileTool(evt) {
+			continue
+		}
+		out[evt.InvocationID] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func skipVolatileToolHistoryEvent(
+	evt event.Event,
+	volatileInvocations map[string]struct{},
+) bool {
+	if evt.Author == authorUser || evt.Author == authorSystem {
+		return false
+	}
+	if eventHasVolatileTool(evt) {
+		return true
+	}
+	if len(volatileInvocations) == 0 ||
+		strings.TrimSpace(evt.InvocationID) == "" {
+		return false
+	}
+	_, ok := volatileInvocations[evt.InvocationID]
+	return ok
+}
+
+func eventHasVolatileTool(evt event.Event) bool {
+	if evt.Response == nil {
+		return false
+	}
+	for _, choice := range evt.Response.Choices {
+		if messageHasVolatileTool(choice.Message) ||
+			messageHasVolatileTool(choice.Delta) {
+			return true
+		}
+	}
+	return false
+}
+
+func messageHasVolatileTool(msg model.Message) bool {
+	if isVolatileHistoryTool(msg.ToolName) {
+		return true
+	}
+	for _, toolCall := range msg.ToolCalls {
+		if isVolatileHistoryTool(toolCall.Function.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+func isVolatileHistoryTool(name string) bool {
+	return strings.TrimSpace(name) == volatileHistoryToolCron
 }
 
 func turnsFromEvent(
