@@ -851,6 +851,7 @@ tools:
   openclaw_tooling_guidance: ""
   enable_parallel_tools: true
   refresh_toolsets_on_run: true
+  defer_to_dynamic_agent: true
   providers:
     - type: "duckduckgo"
       name: "ddg"
@@ -1061,6 +1062,7 @@ memory:
 	require.Equal(t, "", *opts.OpenClawToolingGuide)
 	require.True(t, opts.EnableParallelTools)
 	require.True(t, opts.RefreshToolSetsOnRun)
+	require.True(t, opts.DeferToolSurface)
 
 	require.Len(t, opts.ToolProviders, 1)
 	require.Equal(t, "duckduckgo", opts.ToolProviders[0].Type)
@@ -1154,6 +1156,49 @@ tools:
 		opts.CodeExecutor.Sandbox.ShellEnv.Inherit,
 	)
 	require.True(t, opts.CodeExecutor.Sandbox.ShellEnv.ApplyDefaultExcludes)
+}
+
+func TestParseRunOptions_DeferToolSurfacePolicyConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_to_dynamic_agent_mode: auto
+  defer_to_dynamic_agent_threshold_chars: 1234
+  defer_direct_tools: ["exec_command", "message", "exec_command"]
+`)
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.False(t, opts.DeferToolSurface)
+	require.Equal(t, deferToolSurfaceModeAuto, opts.DeferToolSurfaceMode)
+	require.Equal(t, 1234, opts.DeferToolSurfaceChars)
+	require.Equal(t, "exec_command,message", opts.DeferToolSurfaceDirect)
+}
+
+func TestParseRunOptions_DeferDirectToolsStringConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_direct_tools: "exec_command, message, exec_command"
+`)
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, "exec_command,message", opts.DeferToolSurfaceDirect)
+}
+
+func TestParseRunOptions_DeferToolSurfaceInvalidModeFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_to_dynamic_agent_mode: sometimes
+`)
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid defer tool surface mode")
 }
 
 func TestParseRunOptions_CodeExecutorInvalidEnumFails(t *testing.T) {
