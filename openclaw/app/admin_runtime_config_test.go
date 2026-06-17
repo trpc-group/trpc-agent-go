@@ -208,6 +208,179 @@ func TestAdminRuntimeConfigProvider_StatusSaveReset(t *testing.T) {
 	require.False(t, field.Resettable)
 }
 
+func TestAdminRuntimeConfigProvider_CodeExecutorSandboxFields(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(
+		t,
+		""+
+			"tools:\n"+
+			"  code_executor:\n"+
+			"    type: sandbox\n"+
+			"    auto_execute_code_blocks: true\n"+
+			"    sandbox:\n"+
+			"      workspace_root: /tmp/openclaw-sandbox\n"+
+			"      profile: read_only\n"+
+			"      network: enabled\n"+
+			"      default_timeout: 45s\n"+
+			"      output_max_bytes: 2048\n"+
+			"      shell_env:\n"+
+			"        inherit: all\n"+
+			"        apply_default_excludes: false\n",
+	)
+	autoExecute := true
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	opts.CodeExecutor = codeExecutorOptions{
+		Type:                  codeExecutorTypeSandbox,
+		AutoExecuteCodeBlocks: &autoExecute,
+		Sandbox: sandboxCodeExecutorOptions{
+			WorkspaceRoot:  "/tmp/openclaw-sandbox",
+			Profile:        sandboxProfileReadOnly,
+			Network:        sandboxNetworkEnabled,
+			DefaultTimeout: 45 * time.Second,
+			OutputMaxBytes: 2048,
+			ShellEnv: sandboxShellEnvOptions{
+				Inherit:              sandboxShellEnvInheritAll,
+				ApplyDefaultExcludes: false,
+			},
+		},
+	}
+
+	provider, ok := buildAdminRuntimeConfigProvider(opts).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		codeExecutorTypeSandbox,
+		findAdminRuntimeConfigField(t, status, "tools.code_executor.type").RuntimeValue,
+	)
+	require.Equal(
+		t,
+		"45s",
+		findAdminRuntimeConfigField(
+			t,
+			status,
+			"tools.code_executor.sandbox.default_timeout",
+		).RuntimeValue,
+	)
+	require.Equal(
+		t,
+		"false",
+		findAdminRuntimeConfigField(
+			t,
+			status,
+			"tools.code_executor.sandbox.shell_env.apply_default_excludes",
+		).RuntimeValue,
+	)
+	_, ok = adminRuntimeConfigFieldSpecByKey(
+		"tools.code_executor.sandbox.backend",
+	)
+	require.False(t, ok)
+	localExecField := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.enable_local_exec",
+	)
+	require.Contains(t, localExecField.Summary, "Legacy compatibility")
+	require.Contains(t, localExecField.Summary, "takes precedence")
+
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.sandbox.profile",
+		sandboxProfileDisabled,
+	))
+	status, err = provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	field := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.code_executor.sandbox.profile",
+	)
+	require.Equal(t, sandboxProfileDisabled, field.ConfiguredValue)
+	require.Equal(t, sandboxProfileReadOnly, field.RuntimeValue)
+	require.True(t, field.PendingRestart)
+
+	require.NoError(t, provider.ResetRuntimeConfigValue(
+		"tools.code_executor.sandbox.profile",
+	))
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "profile:")
+}
+
+func TestAdminRuntimeConfigProvider_SaveCodeExecutorSandboxCreatesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := filepath.Join(t.TempDir(), "openclaw.yaml")
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	provider, ok := buildAdminRuntimeConfigProvider(opts).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.type",
+		codeExecutorTypeSandbox,
+	))
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.sandbox.profile",
+		sandboxProfileReadOnly,
+	))
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.sandbox.network",
+		sandboxNetworkEnabled,
+	))
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.sandbox.default_timeout",
+		"45s",
+	))
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.sandbox.output_max_bytes",
+		"2048",
+	))
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.sandbox.shell_env.inherit",
+		sandboxShellEnvInheritNone,
+	))
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.sandbox.shell_env.apply_default_excludes",
+		"false",
+	))
+
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	text := string(data)
+	require.Contains(t, text, "tools:")
+	require.Contains(t, text, "code_executor:")
+	require.Contains(t, text, "type: sandbox")
+	require.Contains(t, text, "sandbox:")
+	require.Contains(t, text, "profile: read_only")
+	require.Contains(t, text, "network: enabled")
+	require.Contains(t, text, "default_timeout: 45s")
+	require.Contains(t, text, "output_max_bytes: 2048")
+	require.Contains(t, text, "shell_env:")
+	require.Contains(t, text, "inherit: none")
+	require.Contains(t, text, "apply_default_excludes: false")
+
+	parsedOpts := adminRuntimeConfigTestOptions(cfgPath)
+	cfg, err := loadConfigFile(cfgPath)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NoError(t, cfg.apply(&parsedOpts, map[string]struct{}{}))
+	require.Equal(t, codeExecutorTypeSandbox, parsedOpts.CodeExecutor.Type)
+	require.Equal(t, sandboxProfileReadOnly, parsedOpts.CodeExecutor.Sandbox.Profile)
+	require.Equal(t, sandboxNetworkEnabled, parsedOpts.CodeExecutor.Sandbox.Network)
+	require.Equal(t, 45*time.Second, parsedOpts.CodeExecutor.Sandbox.DefaultTimeout)
+	require.Equal(t, 2048, parsedOpts.CodeExecutor.Sandbox.OutputMaxBytes)
+	require.Equal(
+		t,
+		sandboxShellEnvInheritNone,
+		parsedOpts.CodeExecutor.Sandbox.ShellEnv.Inherit,
+	)
+	require.False(t, parsedOpts.CodeExecutor.Sandbox.ShellEnv.ApplyDefaultExcludes)
+}
+
 func TestAdminRuntimeConfigProvider_SaveBoolFieldCreatesConfig(t *testing.T) {
 	t.Parallel()
 
@@ -280,6 +453,15 @@ func TestAdminRuntimeConfigProvider_ErrorPaths(t *testing.T) {
 	require.Error(t, provider.SaveRuntimeConfigValue("skills.max_loaded_skills", "nan"))
 	require.Error(t, provider.SaveRuntimeConfigValue("skills.tool_profile", "invalid"))
 	require.Error(t, provider.SaveRuntimeConfigValue("skills.load_mode", "invalid"))
+	require.Error(t, provider.SaveRuntimeConfigValue("tools.code_executor.type", "remote"))
+	require.Error(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.sandbox.profile",
+		"everything",
+	))
+	require.Error(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.sandbox.network",
+		"egress-only",
+	))
 
 	badPath := writeAdminRuntimeConfigTestFile(
 		t,
