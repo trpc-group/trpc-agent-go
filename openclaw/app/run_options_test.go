@@ -1171,8 +1171,59 @@ tools:
 	require.NoError(t, err)
 	require.False(t, opts.DeferToolSurface)
 	require.Equal(t, deferToolSurfaceModeAuto, opts.DeferToolSurfaceMode)
+	require.True(t, opts.deferToolSurfaceModeExplicit)
 	require.Equal(t, 1234, opts.DeferToolSurfaceChars)
 	require.Equal(t, "exec_command,message", opts.DeferToolSurfaceDirect)
+}
+
+func TestParseRunOptions_DeferToolSurfaceDefaultsToAuto(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  enable_parallel_tools: true
+`)
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.False(t, opts.DeferToolSurface)
+	require.Equal(t, deferToolSurfaceModeAuto, opts.DeferToolSurfaceMode)
+	require.False(t, opts.deferToolSurfaceModeExplicit)
+}
+
+func TestParseRunOptions_DeferToolSurfaceFalseDisablesAuto(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_to_dynamic_agent: false
+`)
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.False(t, opts.DeferToolSurface)
+	require.Equal(t, deferToolSurfaceModeOff, opts.DeferToolSurfaceMode)
+	require.False(t, opts.deferToolSurfaceModeExplicit)
+}
+
+func TestParseRunOptions_DeferToolSurfaceFlagFalseDisablesAuto(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  enable_parallel_tools: true
+`)
+	opts, err := parseRunOptions([]string{
+		"-config",
+		cfgPath,
+		"--defer-tools-to-dynamic-agent=false",
+	})
+	require.NoError(t, err)
+	require.False(t, opts.DeferToolSurface)
+	require.Equal(t, deferToolSurfaceModeOff, opts.DeferToolSurfaceMode)
+	require.False(t, opts.deferToolSurfaceModeExplicit)
 }
 
 func TestParseRunOptions_DeferDirectToolsStringConfig(t *testing.T) {
