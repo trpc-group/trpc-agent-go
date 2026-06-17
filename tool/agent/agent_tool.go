@@ -83,18 +83,19 @@ type agentToolOptions struct {
 
 // dynamicOptions holds the configuration knobs for the dynamic AgentTool mode.
 type dynamicOptions struct {
-	templateAgent          agent.Agent
-	capabilityProvider     CapabilitySurfaceProvider
-	capabilityTools        []tool.Tool
-	capabilitySkills       skillRepository
-	capabilityToolsSet     bool
-	exposeToolSelection    bool
-	exposeSkillSelection   bool
-	exposeInstruction      bool
-	requestDescription     *string
-	instructionDescription *string
-	toolsDescription       *string
-	skillsDescription      *string
+	templateAgent           agent.Agent
+	capabilityProvider      CapabilitySurfaceProvider
+	capabilitySkillProvider CapabilitySkillsProvider
+	capabilityTools         []tool.Tool
+	capabilitySkills        skillRepository
+	capabilityToolsSet      bool
+	exposeToolSelection     bool
+	exposeSkillSelection    bool
+	exposeInstruction       bool
+	requestDescription      *string
+	instructionDescription  *string
+	toolsDescription        *string
+	skillsDescription       *string
 }
 
 func defaultDynamicOptions() *dynamicOptions {

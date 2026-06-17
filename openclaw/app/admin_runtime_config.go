@@ -550,6 +550,72 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 						return strconv.FormatBool(opts.RefreshToolSetsOnRun)
 					},
 				),
+				adminRuntimeSelectField(
+					"tools.defer_to_dynamic_agent_mode",
+					"Deferred Tool Surface Mode",
+					"Control whether broad tool surfaces are loaded "+
+						"directly or through tool_search and "+
+						"dynamic_agent.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"defer_to_dynamic_agent_mode",
+							"deferToDynamicAgentMode",
+						),
+					},
+					func(opts runOptions) string {
+						mode, _ := normalizeDeferToolSurfaceMode(
+							opts.DeferToolSurfaceMode,
+						)
+						if opts.DeferToolSurface {
+							return deferToolSurfaceModeOn
+						}
+						return mode
+					},
+					deferToolSurfaceModeOff,
+					deferToolSurfaceModeOn,
+					deferToolSurfaceModeAuto,
+				),
+				adminRuntimeNumberField(
+					"tools.defer_to_dynamic_agent_threshold_chars",
+					"Deferred Tool Surface Threshold Chars",
+					"Auto mode defers when direct tool declarations "+
+						"exceed this approximate character count.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"defer_to_dynamic_agent_threshold_chars",
+							"deferToDynamicAgentThresholdChars",
+						),
+					},
+					func(opts runOptions) string {
+						return strconv.Itoa(
+							deferToolSurfaceThresholdChars(
+								opts.DeferToolSurfaceChars,
+							),
+						)
+					},
+				),
+				adminRuntimeTextField(
+					"tools.defer_direct_tools",
+					"Deferred Direct Tools",
+					"Comma-separated additional tool names to keep "+
+						"directly on the parent agent when deferred "+
+						"mode is active.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"defer_direct_tools",
+							"deferDirectTools",
+						),
+					},
+					func(opts runOptions) string {
+						return strings.TrimSpace(
+							opts.DeferToolSurfaceDirect,
+						)
+					},
+				),
 			},
 		},
 		{
