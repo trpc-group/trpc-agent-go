@@ -854,6 +854,34 @@ Tool naming:
 If you set `tools.refresh_toolsets_on_run: true`, ToolSet tools are
 reloaded on each agent run (useful for MCP where tools can change).
 
+### Deferred tool surface (optional)
+
+Large tool and skill surfaces can dominate the parent model request even
+when a turn is answered directly. The default
+`tools.defer_to_dynamic_agent_mode: auto` exposes compact `tool_search` and
+`dynamic_agent` tools only when the configured tool declarations exceed the
+auto threshold. The parent can discover exact tool and skill names with
+`tool_search`, while the configured tools, toolsets, skills, memory, and code
+execution surface are loaded only inside the short-lived worker call. Existing
+`tools.defer_to_dynamic_agent: true` configs remain supported and force
+deferred mode on; use `tools.defer_to_dynamic_agent_mode: off` or
+`tools.defer_to_dynamic_agent: false` to disable it.
+
+YAML:
+
+```yaml
+tools:
+  defer_to_dynamic_agent_mode: auto # off|on|auto
+  defer_to_dynamic_agent_threshold_chars: 4000 # optional
+  defer_direct_tools: ["exec_command"] # optional keep-list
+```
+
+This is best for broad assistant runtimes where many turns do not need
+tools. The tradeoff is that the first cold tool-backed action may run through
+a worker agent call, so tasks that always require immediate tool execution may
+prefer `off`, a higher auto threshold, or a small `defer_direct_tools` list.
+This option is only supported by the `llm` agent.
+
 ### Parallel tool execution (optional)
 
 By default, OpenClaw executes tool calls **serially**.

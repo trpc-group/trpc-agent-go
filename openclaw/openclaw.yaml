@@ -38,6 +38,13 @@ model:
 
 tools:
   enable_parallel_tools: true
+  # Optional: expose compact tool_search + dynamic_agent entrypoints
+  # when direct tool declarations exceed the auto threshold.
+  # Default mode is auto. Set defer_to_dynamic_agent_mode: on to force
+  # it on, or defer_to_dynamic_agent_mode: off to disable it.
+  # defer_to_dynamic_agent_mode: auto # off|on|auto
+  # defer_to_dynamic_agent_threshold_chars: 4000
+  # defer_direct_tools: ["exec_command"]
   # code_executor:
   #   type: "sandbox" # sandbox; leave empty/unset to inherit enable_local_exec
   #   auto_execute_code_blocks: true

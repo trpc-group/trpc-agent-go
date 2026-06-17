@@ -576,6 +576,59 @@ func (p *ToolArgsPlugin) Register(reg *plugin.Registry) {
 `plugin.NewLogging()` logs high-level start/end markers for agent/model/tool
 operations. It is useful for debugging and performance profiling.
 
+### DebugLog
+
+`debuglog.New(opts...)` writes single-line JSON through the framework debug
+logger for temporary diagnosis of model requests/responses and tool
+arguments/results.
+
+Runner event logging and model partial response logging are disabled by
+default. Enable them with `debuglog.WithEventEnabled(true)` and
+`debuglog.WithModelPartialResponseEnabled(true)`.
+
+A typical runner-level setup looks like this:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/plugin/debuglog"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(debuglog.New()),
+)
+```
+
+You can also enable DebugLog for a single run:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/debuglog"
+)
+
+events, err := runnerInstance.Run(
+	ctx,
+	userID,
+	sessionID,
+	message,
+	plugin.WithPlugins(
+		debuglog.New(
+			debuglog.WithEventEnabled(true),
+			debuglog.WithModelPartialResponseEnabled(true),
+		),
+	),
+)
+```
+
+The output is one JSON debug message per line, for example:
+
+```json
+{"time":"2026-06-16T10:20:30.123456789+08:00","sequence":7,"plugin":"debug_log","phase":"before_tool","tool_name":"calculator","tool_call_id":"call-1","payload":{"arguments":{"operation":"add","a":1,"b":2},"arguments_bytes":33}}
+```
+
 ### GlobalInstruction
 
 `plugin.NewGlobalInstruction(text)` prepends a system message to every model
@@ -997,10 +1050,11 @@ The example includes verified scenarios for:
 - A clearly unsafe request that is blocked
 - A defensive analysis request that is allowed
 
-The repository currently includes Logging, GlobalInstruction, ToolCallID,
-MessageMerger, ErrorMessage, and Guardrail as built-in plugins. Tool Approval,
-Prompt Injection, and Unsafe Intent are currently built-in capabilities under
-the Guardrail plugin. Additional plugins can be implemented as custom plugins.
+The repository currently includes Logging, DebugLog, GlobalInstruction,
+ToolCallID, MessageMerger, ErrorMessage, and Guardrail as built-in plugins.
+Tool Approval, Prompt Injection, and Unsafe Intent are currently built-in
+capabilities under the Guardrail plugin. Additional plugins can be implemented
+as custom plugins.
 
 ## Writing Your Own Plugin
 

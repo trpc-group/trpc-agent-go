@@ -130,6 +130,10 @@ const (
 
 	flagLatencyDiagnostics       = "latency-diagnostics"
 	flagLatencyDiagnosticsEvents = "latency-diagnostics-events"
+	flagDeferToolSurface         = "defer-tools-to-dynamic-agent"
+	flagDeferToolSurfaceMode     = "defer-tools-to-dynamic-agent-mode"
+	flagDeferToolSurfaceChars    = "defer-tools-to-dynamic-agent-threshold-chars"
+	flagDeferToolSurfaceDirect   = "defer-tools-to-dynamic-agent-direct-tools"
 
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
@@ -269,13 +273,18 @@ type runOptions struct {
 	SessionSummaryMaxWords            int
 	SessionSummaryApproxRunesPerToken float64
 
-	EnableLocalExec      bool
-	CodeExecutor         codeExecutorOptions
-	EnableOpenClawTools  bool
-	OpenClawToolingGuide *string
-	EnableParallelTools  bool
+	EnableLocalExec        bool
+	CodeExecutor           codeExecutorOptions
+	EnableOpenClawTools    bool
+	OpenClawToolingGuide   *string
+	EnableParallelTools    bool
+	DeferToolSurface       bool
+	DeferToolSurfaceMode   string
+	DeferToolSurfaceChars  int
+	DeferToolSurfaceDirect string
 
-	enableOpenClawToolsExplicit bool
+	enableOpenClawToolsExplicit  bool
+	deferToolSurfaceModeExplicit bool
 
 	ToolProviders []pluginSpec
 	ToolSets      []pluginSpec
@@ -316,6 +325,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 		SessionSummaryPolicy: summaryPolicyAny,
 
 		MemoryAutoPolicy: summaryPolicyAny,
+
+		DeferToolSurfaceMode: deferToolSurfaceModeAuto,
 	}
 
 	fs.StringVar(
@@ -880,6 +891,33 @@ func parseRunOptions(args []string) (runOptions, error) {
 		false,
 		"Refresh ToolSets tool list on each run (optional)",
 	)
+	fs.BoolVar(
+		&opts.DeferToolSurface,
+		flagDeferToolSurface,
+		false,
+		"Expose configured tools through dynamic_agent instead of "+
+			"the main agent tool surface",
+	)
+	fs.StringVar(
+		&opts.DeferToolSurfaceMode,
+		flagDeferToolSurfaceMode,
+		deferToolSurfaceModeAuto,
+		"Deferred tool surface mode: off, on, auto",
+	)
+	fs.IntVar(
+		&opts.DeferToolSurfaceChars,
+		flagDeferToolSurfaceChars,
+		0,
+		"Auto-defer when direct tool declarations exceed this "+
+			"many characters (0 uses default)",
+	)
+	fs.StringVar(
+		&opts.DeferToolSurfaceDirect,
+		flagDeferToolSurfaceDirect,
+		"",
+		"Comma-separated additional tool names to keep directly on "+
+			"the parent agent when deferred mode is active",
+	)
 
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, &exitError{Code: 2, Err: err}
@@ -899,6 +937,15 @@ func parseRunOptions(args []string) (runOptions, error) {
 		setFlags,
 		"enable-openclaw-tools",
 	)
+	opts.deferToolSurfaceModeExplicit = flagWasSet(
+		setFlags,
+		flagDeferToolSurfaceMode,
+	)
+	if flagWasSet(setFlags, flagDeferToolSurface) &&
+		!opts.DeferToolSurface &&
+		!flagWasSet(setFlags, flagDeferToolSurfaceMode) {
+		opts.DeferToolSurfaceMode = deferToolSurfaceModeOff
+	}
 
 	cfgPath := resolveConfigPath(opts.ConfigPath)
 	if cfgPath == "" {
@@ -1172,13 +1219,21 @@ type skillEntryConfig struct {
 }
 
 type toolsConfig struct {
-	EnableLocalExec           *bool               `yaml:"enable_local_exec,omitempty"`
-	CodeExecutor              *codeExecutorConfig `yaml:"code_executor,omitempty"`
-	EnableOpenClawTools       *bool               `yaml:"enable_openclaw_tools,omitempty"`
-	OpenClawToolingGuide      *string             `yaml:"openclaw_tooling_guidance,omitempty"`
-	OpenClawToolingGuideCamel *string             `yaml:"openClawToolingGuidance,omitempty"`
-	EnableParallelTools       *bool               `yaml:"enable_parallel_tools,omitempty"`
-	RefreshToolSetsOnRun      *bool               `yaml:"refresh_toolsets_on_run,omitempty"`
+	EnableLocalExec               *bool               `yaml:"enable_local_exec,omitempty"`
+	CodeExecutor                  *codeExecutorConfig `yaml:"code_executor,omitempty"`
+	EnableOpenClawTools           *bool               `yaml:"enable_openclaw_tools,omitempty"`
+	OpenClawToolingGuide          *string             `yaml:"openclaw_tooling_guidance,omitempty"`
+	OpenClawToolingGuideCamel     *string             `yaml:"openClawToolingGuidance,omitempty"`
+	EnableParallelTools           *bool               `yaml:"enable_parallel_tools,omitempty"`
+	RefreshToolSetsOnRun          *bool               `yaml:"refresh_toolsets_on_run,omitempty"`
+	DeferToDynamicAgent           *bool               `yaml:"defer_to_dynamic_agent,omitempty"`
+	DeferToDynamicAgentCamel      *bool               `yaml:"deferToDynamicAgent,omitempty"`
+	DeferToDynamicAgentMode       *string             `yaml:"defer_to_dynamic_agent_mode,omitempty"`
+	DeferToDynamicAgentModeCamel  *string             `yaml:"deferToDynamicAgentMode,omitempty"`
+	DeferToDynamicAgentChars      *int                `yaml:"defer_to_dynamic_agent_threshold_chars,omitempty"`
+	DeferToDynamicAgentCharsCamel *int                `yaml:"deferToDynamicAgentThresholdChars,omitempty"`
+	DeferDirectTools              yamlStringList      `yaml:"defer_direct_tools,omitempty"`
+	DeferDirectToolsCamel         yamlStringList      `yaml:"deferDirectTools,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
@@ -1292,6 +1347,28 @@ type rawYAMLNode struct {
 func (r *rawYAMLNode) UnmarshalYAML(node *yaml.Node) error {
 	r.Node = node
 	return nil
+}
+
+type yamlStringList []string
+
+func (l *yamlStringList) UnmarshalYAML(node *yaml.Node) error {
+	if node == nil {
+		return nil
+	}
+	switch node.Kind {
+	case yaml.SequenceNode:
+		values := make([]string, 0, len(node.Content))
+		for _, item := range node.Content {
+			values = append(values, item.Value)
+		}
+		*l = yamlStringList(values)
+		return nil
+	case yaml.ScalarNode:
+		*l = yamlStringList(splitCSV(node.Value))
+		return nil
+	default:
+		return fmt.Errorf("expected string or list, got %v", node.Kind)
+	}
 }
 
 type filePluginSpec struct {
@@ -1841,6 +1918,56 @@ func (cfg *fileConfig) apply(
 		if cfg.Tools.RefreshToolSetsOnRun != nil &&
 			!flagWasSet(set, "refresh-toolsets-on-run") {
 			opts.RefreshToolSetsOnRun = *cfg.Tools.RefreshToolSetsOnRun
+		}
+		if !flagWasSet(set, flagDeferToolSurface) {
+			deferConfigured := false
+			if cfg.Tools.DeferToDynamicAgent != nil {
+				deferConfigured = true
+				opts.DeferToolSurface = *cfg.Tools.DeferToDynamicAgent
+			}
+			if cfg.Tools.DeferToDynamicAgentCamel != nil {
+				deferConfigured = true
+				opts.DeferToolSurface =
+					*cfg.Tools.DeferToDynamicAgentCamel
+			}
+			if deferConfigured &&
+				!opts.DeferToolSurface &&
+				!flagWasSet(set, flagDeferToolSurfaceMode) {
+				opts.DeferToolSurfaceMode = deferToolSurfaceModeOff
+			}
+		}
+		deferMode := firstStringPtr(
+			cfg.Tools.DeferToDynamicAgentMode,
+			cfg.Tools.DeferToDynamicAgentModeCamel,
+		)
+		if deferMode != nil &&
+			!flagWasSet(set, flagDeferToolSurface) &&
+			!flagWasSet(set, flagDeferToolSurfaceMode) {
+			opts.DeferToolSurface = false
+			opts.DeferToolSurfaceMode = *deferMode
+			opts.deferToolSurfaceModeExplicit = true
+		}
+		deferChars := firstIntPtr(
+			cfg.Tools.DeferToDynamicAgentChars,
+			cfg.Tools.DeferToDynamicAgentCharsCamel,
+		)
+		if deferChars != nil &&
+			!flagWasSet(set, flagDeferToolSurfaceChars) {
+			opts.DeferToolSurfaceChars = *deferChars
+		}
+		if !flagWasSet(set, flagDeferToolSurfaceDirect) {
+			if len(cfg.Tools.DeferDirectTools) > 0 {
+				opts.DeferToolSurfaceDirect = strings.Join(
+					[]string(cfg.Tools.DeferDirectTools),
+					",",
+				)
+			}
+			if len(cfg.Tools.DeferDirectToolsCamel) > 0 {
+				opts.DeferToolSurfaceDirect = strings.Join(
+					[]string(cfg.Tools.DeferDirectToolsCamel),
+					",",
+				)
+			}
 		}
 		if len(cfg.Tools.Providers) > 0 {
 			opts.ToolProviders = convertPluginSpecs(cfg.Tools.Providers)
@@ -2520,6 +2647,27 @@ func finalizeRunOptions(opts *runOptions) error {
 			"invalid session-summary-approx-runes-per-token: %v", v,
 		)
 	}
+	if opts.DeferToolSurface {
+		opts.DeferToolSurfaceMode = deferToolSurfaceModeOn
+	} else {
+		mode, err := normalizeDeferToolSurfaceMode(
+			opts.DeferToolSurfaceMode,
+		)
+		if err != nil {
+			return err
+		}
+		opts.DeferToolSurfaceMode = mode
+	}
+	if opts.DeferToolSurfaceChars < 0 {
+		return fmt.Errorf(
+			"invalid defer tool surface threshold chars: %d",
+			opts.DeferToolSurfaceChars,
+		)
+	}
+	opts.DeferToolSurfaceDirect = strings.Join(
+		normalizeStringList(splitCSV(opts.DeferToolSurfaceDirect)),
+		",",
+	)
 	normalizeA2AOptions(opts)
 	return nil
 }

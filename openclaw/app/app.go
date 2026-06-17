@@ -70,7 +70,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/subagentrun"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/uploads"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
-	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	openclawsubagent "trpc.group/trpc-go/trpc-agent-go/openclaw/subagent"
 )
 
@@ -382,6 +381,26 @@ const (
 		"tasks over brittle shell transcripts unless exact " +
 		"commands are truly required. Use cron for future or " +
 		"recurring work."
+
+	openClawDeferredToolingGuidance = "Tool-backed work is available " +
+		"through `tool_search` and `dynamic_agent`, with some " +
+		"latency-sensitive tools kept directly available when " +
+		"configured. Use direct tools for simple local actions when " +
+		"they are present. Use `tool_search` when you need exact " +
+		"tool or skill names, then call `dynamic_agent` for broader " +
+		"files, uploads, browser automation, shell work, messaging, " +
+		"cron, memory, skills, knowledge, external tools, or " +
+		"verification. Give the sub-agent a self-contained request " +
+		"and ask it to complete the concrete action or return the " +
+		"exact blocker. Answer directly only when no tool work is " +
+		"needed."
+
+	openClawDeferredToolDescription = "Run a focused OpenClaw tool " +
+		"worker with access to configured local tools, toolsets, " +
+		"skills, memory, knowledge, and messaging capabilities. Use " +
+		"this for any task that needs tool work; include all relevant " +
+		"user context in the request and ask for the completed result " +
+		"or exact blocker."
 
 	browserToolingGuidance = "For real browser automation, use " +
 		"browser. Prefer browser snapshot plus act for page " +
@@ -1125,6 +1144,13 @@ func NewRuntimeWithOptions(
 			ToolSets:      opts.ToolSets,
 
 			RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
+			DeferToolSurface:     opts.DeferToolSurface,
+			DeferToolSurfaceMode: opts.DeferToolSurfaceMode,
+			DeferToolSurfaceThresholdChars: opts.
+				DeferToolSurfaceChars,
+			DeferToolSurfaceDirectTools: splitCSV(
+				opts.DeferToolSurfaceDirect,
+			),
 		}
 		cwd, _ := os.Getwd()
 		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
@@ -1722,6 +1748,13 @@ func run(
 			ToolSets:      opts.ToolSets,
 
 			RefreshToolSetsOnRun: opts.RefreshToolSetsOnRun,
+			DeferToolSurface:     opts.DeferToolSurface,
+			DeferToolSurfaceMode: opts.DeferToolSurfaceMode,
+			DeferToolSurfaceThresholdChars: opts.
+				DeferToolSurfaceChars,
+			DeferToolSurfaceDirectTools: splitCSV(
+				opts.DeferToolSurfaceDirect,
+			),
 		}
 		cwd, _ := os.Getwd()
 		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
@@ -2431,6 +2464,20 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support refresh-toolsets-on-run",
 		)
 	}
+	deferMode, _ := normalizeDeferToolSurfaceMode(opts.DeferToolSurfaceMode)
+	if opts.DeferToolSurface {
+		deferMode = deferToolSurfaceModeOn
+	}
+	if deferMode == deferToolSurfaceModeAuto &&
+		!opts.deferToolSurfaceModeExplicit &&
+		!opts.DeferToolSurface {
+		deferMode = deferToolSurfaceModeOff
+	}
+	if deferMode != deferToolSurfaceModeOff {
+		return errors.New(
+			"claude-code agent does not support defer-tools-to-dynamic-agent",
+		)
+	}
 	return nil
 }
 
@@ -2566,17 +2613,9 @@ func newAgent(
 	extraTools []tool.Tool,
 	toolSets []tool.ToolSet,
 ) (agent.Agent, *ocskills.Repository, error) {
-	instruction := strings.TrimSpace(cfg.Instruction)
-	if instruction == "" {
-		instruction = defaultAgentInstruction
-	}
-	if cfg.EnableOpenClawTools {
-		guidance := buildOpenClawToolingGuidance(cfg)
-		if strings.TrimSpace(guidance) != "" {
-			instruction = strings.TrimSpace(
-				instruction + "\n\n" + guidance,
-			)
-		}
+	baseInstruction := strings.TrimSpace(cfg.Instruction)
+	if baseInstruction == "" {
+		baseInstruction = defaultAgentInstruction
 	}
 	knowledgeTools, err := buildKnowledgeTools(
 		cfg.KnowledgesConfig,
@@ -2635,88 +2674,60 @@ func newAgent(
 		}
 		tools = append(tools, extra...)
 	}
-	if hasToolNamed(tools, ocbrowser.ToolName) {
-		instruction = strings.TrimSpace(
-			instruction + "\n\n" + browserToolingGuidance,
+
+	deferToolSurface, directTools, err := resolveDeferredToolSurface(
+		cfg,
+		tools,
+		toolSets,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	instruction := baseInstruction
+	childInstruction := baseInstruction
+	if deferToolSurface {
+		instruction = joinPromptParts(
+			instruction,
+			openClawDeferredToolingGuidance,
 		)
+	} else if cfg.EnableOpenClawTools {
+		instruction = joinPromptParts(
+			instruction,
+			buildOpenClawToolingGuidance(cfg),
+		)
+	}
+	if cfg.EnableOpenClawTools {
+		childInstruction = joinPromptParts(
+			childInstruction,
+			buildOpenClawToolingGuidance(cfg),
+		)
+	}
+	if hasToolNamed(tools, ocbrowser.ToolName) {
+		if deferToolSurface {
+			childInstruction = joinPromptParts(
+				childInstruction,
+				browserToolingGuidance,
+			)
+		} else {
+			instruction = joinPromptParts(
+				instruction,
+				browserToolingGuidance,
+			)
+		}
 	}
 	genConfig := model.GenerationConfig{Stream: true}
 	if cfg.GenerationConfig != nil {
 		genConfig = *cfg.GenerationConfig
 	}
 
-	opts := []llmagent.Option{
-		llmagent.WithModel(mdl),
-		llmagent.WithInstruction(instruction),
-		llmagent.WithGlobalInstruction(strings.TrimSpace(cfg.SystemPrompt)),
-		llmagent.WithGenerationConfig(genConfig),
-		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
-		llmagent.WithEnableContextCompaction(cfg.EnableContextCompaction),
-		llmagent.WithContextCompactionOversizedToolResultMaxTokens(
-			cfg.ContextCompactionOversizedToolResultMaxTokens,
-		),
-		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
-		llmagent.WithPreloadMemory(cfg.PreloadMemory),
-		llmagent.WithEventMessageProjector(
-			conversation.ProjectEventMessage,
-		),
-		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
-		llmagent.WithPostToolPrompt(openClawPostToolPrompt),
-		llmagent.WithSkillFilter(
-			runtimeprofile.SkillVisibilityFilterForRepository(repo),
-		),
-	}
-	if cfg.PostToolPromptEnabled != nil {
-		opts = append(
-			opts,
-			llmagent.WithEnablePostToolPrompt(
-				*cfg.PostToolPromptEnabled,
-			),
-		)
-	}
-	opts = append(opts, llmagent.WithSkills(repo))
-	opts = append(
-		opts,
-		llmagent.WithSkillRepositoryProvider(repoProvider),
-		llmagent.WithSkillScopeMode(cfg.EvolutionSkillScopeMode),
+	callbacks := tool.NewCallbacks()
+	registerMemoryFileToolCallback(
+		callbacks,
+		cfg.MemoryFileStore,
+		cfg.StateDir,
 	)
-	opts = append(
-		opts,
-		llmagent.WithSkillToolProfile(
-			llmagent.SkillToolProfile(cfg.SkillsToolProfile),
-		),
-		llmagent.WithSkillsFilePathHints(true),
-		llmagent.WithSkillsDirectoryHints(true),
-		llmagent.WithSkillLoadMode(cfg.SkillsLoadMode),
-		llmagent.WithSkillsLoadedContentInToolResults(
-			cfg.SkillsToolResults,
-		),
-		llmagent.WithSkillLoadToolDescription(
-			openClawSkillLoadToolDescription,
-		),
-		llmagent.WithWorkspaceExecSurfaceEnabled(false),
-		llmagent.WithSkipSkillsFallbackOnSessionSummary(
-			cfg.SkillsSkipFallback,
-		),
-		llmagent.WithSkillsProtocolGuidance(
-			buildOpenClawSkillsGuidance(cfg),
-		),
-	)
-	if cfg.SkillsMaxLoaded > 0 {
-		opts = append(
-			opts,
-			llmagent.WithMaxLoadedSkills(cfg.SkillsMaxLoaded),
-		)
-	}
-	if len(tools) > 0 {
-		opts = append(opts, llmagent.WithTools(tools))
-	}
-	if len(toolSets) > 0 {
-		opts = append(opts, llmagent.WithToolSets(toolSets))
-	}
-	if cfg.RefreshToolSetsOnRun {
-		opts = append(opts, llmagent.WithRefreshToolSetsOnRun(true))
-	}
+	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
+
 	exec := cfg.codeExecutor
 	if exec == nil {
 		var err error
@@ -2729,25 +2740,67 @@ func newAgent(
 			return nil, nil, err
 		}
 	}
-	if exec != nil {
-		opts = append(opts, llmagent.WithCodeExecutor(exec))
-	}
-	if cfg.CodeExecutor.AutoExecuteCodeBlocks != nil {
+
+	opts := baseLLMAgentOptions(
+		mdl,
+		cfg,
+		instruction,
+		strings.TrimSpace(cfg.SystemPrompt),
+		genConfig,
+		repo,
+	)
+	if cfg.PostToolPromptEnabled != nil {
 		opts = append(
 			opts,
-			llmagent.WithEnableCodeExecutionResponseProcessor(
-				*cfg.CodeExecutor.AutoExecuteCodeBlocks,
+			llmagent.WithEnablePostToolPrompt(
+				*cfg.PostToolPromptEnabled,
 			),
 		)
 	}
-
-	callbacks := tool.NewCallbacks()
-	registerMemoryFileToolCallback(
-		callbacks,
-		cfg.MemoryFileStore,
-		cfg.StateDir,
-	)
-	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
+	if deferToolSurface {
+		searchTool := newDeferredCapabilitySearchTool(
+			deferredToolSurfaceConfig{
+				Model:         mdl,
+				Config:        cfg,
+				Instruction:   childInstruction,
+				SystemPrompt:  strings.TrimSpace(cfg.SystemPrompt),
+				Generation:    genConfig,
+				Repository:    repo,
+				RepoProvider:  repoProvider,
+				Tools:         tools,
+				ToolSets:      toolSets,
+				CodeExecutor:  exec,
+				ToolCallbacks: callbacks,
+			})
+		dynamicTool := newDeferredToolSurfaceTool(deferredToolSurfaceConfig{
+			Model:         mdl,
+			Config:        cfg,
+			Instruction:   childInstruction,
+			SystemPrompt:  strings.TrimSpace(cfg.SystemPrompt),
+			Generation:    genConfig,
+			Repository:    repo,
+			RepoProvider:  repoProvider,
+			Tools:         tools,
+			ToolSets:      toolSets,
+			CodeExecutor:  exec,
+			ToolCallbacks: callbacks,
+		})
+		parentTools := []tool.Tool{searchTool, dynamicTool}
+		parentTools = append(parentTools, directTools...)
+		opts = append(opts, llmagent.WithTools(parentTools))
+	} else {
+		opts = appendOpenClawSkillOptions(opts, cfg, repo, repoProvider)
+		if len(tools) > 0 {
+			opts = append(opts, llmagent.WithTools(tools))
+		}
+		if len(toolSets) > 0 {
+			opts = append(opts, llmagent.WithToolSets(toolSets))
+		}
+		if cfg.RefreshToolSetsOnRun {
+			opts = append(opts, llmagent.WithRefreshToolSetsOnRun(true))
+		}
+		opts = appendCodeExecutionOptions(opts, exec, cfg.CodeExecutor)
+	}
 	opts = append(opts, llmagent.WithToolCallbacks(callbacks))
 
 	return llmagent.New(defaultAgentName, opts...), repo, nil
@@ -3115,7 +3168,11 @@ type agentConfig struct {
 
 	ToolSets []pluginSpec
 
-	RefreshToolSetsOnRun bool
+	RefreshToolSetsOnRun           bool
+	DeferToolSurface               bool
+	DeferToolSurfaceMode           string
+	DeferToolSurfaceThresholdChars int
+	DeferToolSurfaceDirectTools    []string
 }
 
 type openClawToolsBundle struct {

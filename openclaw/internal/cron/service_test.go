@@ -1264,6 +1264,168 @@ func TestNewServicePreservesLoadedNextRunAt(t *testing.T) {
 	require.Equal(t, *job.NextRunAt, *jobs[0].NextRunAt)
 }
 
+func TestNewServiceListsLegacyWeComGroupJobOwner(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	now := time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC)
+	legacyUser := wecomDMUserPrefix + "shadowding"
+	groupUser := wecomChatUserPrefix + "room-1"
+	target := wecomGroupTargetPrefix + "room-1"
+	delivery := outbound.DeliveryTarget{
+		Channel: wecomChannelID,
+		Target:  target,
+	}
+
+	path := filepath.Join(dir, defaultCronDir, defaultJobsFile)
+	require.NoError(t, saveJobs(path, []*Job{{
+		ID:      "job-1",
+		Name:    "lunch",
+		Enabled: true,
+		Schedule: Schedule{
+			Kind:     ScheduleKindCron,
+			CronExpr: "30 11 * * *",
+			Timezone: "Asia/Shanghai",
+		},
+		Message:  "reply lunch",
+		UserID:   legacyUser,
+		Delivery: delivery,
+	}}))
+
+	svc, err := NewService(
+		dir,
+		&stubRunner{reply: "done"},
+		outbound.NewRouter(),
+		WithClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+
+	jobs := svc.ListForUser(groupUser, delivery)
+	require.Len(t, jobs, 1)
+	require.Equal(t, "job-1", jobs[0].ID)
+	require.Equal(t, legacyUser, jobs[0].UserID)
+
+	jobs = svc.ListForUser(legacyUser, delivery)
+	require.Len(t, jobs, 1)
+	require.Equal(t, "job-1", jobs[0].ID)
+	require.Empty(t, svc.ListForUser(wecomChatUserPrefix+"room-2", delivery))
+}
+
+func TestMatchesLegacyWeComGroupScope(t *testing.T) {
+	t.Parallel()
+
+	legacyJob := &Job{
+		UserID: wecomDMUserPrefix + "user-1",
+		Delivery: outbound.DeliveryTarget{
+			Channel: wecomChannelID,
+			Target:  wecomGroupTargetPrefix + "room-1",
+		},
+	}
+	delivery := outbound.DeliveryTarget{
+		Channel: wecomChannelID,
+		Target:  wecomGroupTargetPrefix + "room-1",
+	}
+	require.False(
+		t,
+		matchesJobScope(nil, wecomChatUserPrefix+"room-1", delivery),
+	)
+	require.False(t, matchesDeliveryFilter(nil, delivery))
+
+	tests := []struct {
+		name     string
+		job      *Job
+		userID   string
+		delivery outbound.DeliveryTarget
+		want     bool
+	}{
+		{
+			name:     "legacy group owner",
+			job:      legacyJob,
+			userID:   wecomChatUserPrefix + "room-1",
+			delivery: delivery,
+			want:     true,
+		},
+		{
+			name: "direct owner",
+			job: &Job{
+				UserID:   wecomChatUserPrefix + "room-1",
+				Delivery: delivery,
+			},
+			userID:   wecomChatUserPrefix + "room-1",
+			delivery: delivery,
+			want:     true,
+		},
+		{
+			name:     "wrong group owner",
+			job:      legacyJob,
+			userID:   wecomChatUserPrefix + "room-2",
+			delivery: delivery,
+		},
+		{
+			name:   "delivery target mismatch",
+			job:    legacyJob,
+			userID: wecomChatUserPrefix + "room-1",
+			delivery: outbound.DeliveryTarget{
+				Channel: wecomChannelID,
+				Target:  wecomGroupTargetPrefix + "room-2",
+			},
+		},
+		{
+			name: "other channel",
+			job: &Job{
+				UserID: wecomDMUserPrefix + "user-1",
+				Delivery: outbound.DeliveryTarget{
+					Channel: "telegram",
+					Target:  wecomGroupTargetPrefix + "room-1",
+				},
+			},
+			userID:   wecomChatUserPrefix + "room-1",
+			delivery: delivery,
+		},
+		{
+			name: "direct message target",
+			job: &Job{
+				UserID: wecomDMUserPrefix + "user-1",
+				Delivery: outbound.DeliveryTarget{
+					Channel: wecomChannelID,
+					Target:  "dm:user-1",
+				},
+			},
+			userID:   wecomChatUserPrefix + "room-1",
+			delivery: delivery,
+		},
+		{
+			name:     "empty group owner",
+			job:      legacyJob,
+			userID:   wecomChatUserPrefix + " ",
+			delivery: delivery,
+		},
+		{
+			name:     "non chat owner",
+			job:      legacyJob,
+			userID:   wecomDMUserPrefix + "user-1",
+			delivery: delivery,
+			want:     true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			require.Equal(
+				t,
+				tc.want,
+				matchesJobScope(tc.job, tc.userID, tc.delivery),
+			)
+		})
+	}
+}
+
 func TestServiceRunNowDoesNotShiftSchedule(t *testing.T) {
 	t.Parallel()
 
