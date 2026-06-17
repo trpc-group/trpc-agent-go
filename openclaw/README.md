@@ -285,7 +285,8 @@ tools:
   openclaw_tooling_guidance: ""
   # Optional: reduce large parent model requests by exposing compact
   # tool_search + dynamic_agent entrypoints when the direct tool surface
-  # exceeds the auto threshold. Set defer_to_dynamic_agent: true to force on.
+  # exceeds the auto threshold. Default mode is auto; set
+  # defer_to_dynamic_agent_mode: on to force it on, or off to disable it.
   defer_to_dynamic_agent_mode: auto # off|on|auto
   defer_to_dynamic_agent_threshold_chars: 4000
   # Optional: keep a small set of tools directly callable by the parent agent.
