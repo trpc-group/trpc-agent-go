@@ -131,6 +131,22 @@ const (
 	ReasoningContentModeDiscardAll = "discard_all"
 )
 
+// ToolTranscriptMode controls how historical tool-call/tool-result transcripts
+// are projected into model requests.
+type ToolTranscriptMode string
+
+const (
+	// ToolTranscriptModeKeepAll keeps all historical tool-call/tool-result
+	// transcripts in model requests.
+	ToolTranscriptModeKeepAll ToolTranscriptMode = "keep_all"
+
+	// ToolTranscriptModeOmitPreviousCompleted omits completed historical
+	// tool-call/tool-result pairs from previous requests when projecting session
+	// history into model requests. Current-request and incomplete tool rounds are
+	// preserved to keep active tool loops valid.
+	ToolTranscriptModeOmitPreviousCompleted ToolTranscriptMode = "omit_previous_completed"
+)
+
 // ContentRequestProcessor implements content processing logic for agent requests.
 type ContentRequestProcessor struct {
 	// BranchFilterMode determines how to include content from session events.
@@ -165,6 +181,10 @@ type ContentRequestProcessor struct {
 	// keeps reasoning needed for tool-call replay while dropping ordinary older
 	// reasoning history.
 	ReasoningContentMode string
+	// ToolTranscriptMode controls how historical tool-call/tool-result
+	// transcripts are projected into model requests. Default is
+	// ToolTranscriptModeKeepAll.
+	ToolTranscriptMode ToolTranscriptMode
 	// PreloadMemory controls framework-side memory preload.
 	// When > 0, it acts as an adaptive preload budget:
 	//   - If total memories <= N, preload all memories.
@@ -320,6 +340,19 @@ func WithPreserveForeignMessages(preserve bool) ContentOption {
 func WithReasoningContentMode(mode string) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.ReasoningContentMode = mode
+	}
+}
+
+// WithToolTranscriptMode sets how historical tool-call/tool-result transcripts
+// are projected into model requests.
+func WithToolTranscriptMode(mode ToolTranscriptMode) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		switch mode {
+		case ToolTranscriptModeOmitPreviousCompleted:
+			p.ToolTranscriptMode = mode
+		default:
+			p.ToolTranscriptMode = ToolTranscriptModeKeepAll
+		}
 	}
 }
 
@@ -565,6 +598,8 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 		PreserveSameBranch: false,
 		// Default to append history message.
 		TimelineFilterMode: TimelineFilterAll,
+		// Default to preserving the full historical tool transcript.
+		ToolTranscriptMode: ToolTranscriptModeKeepAll,
 		// Default to disable memory preloading (use tools instead).
 		PreloadMemory:                     0,
 		PreloadMemoryInjectionMode:        PreloadMemoryInjectionSystem,
@@ -1235,6 +1270,7 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 
 	resultEvents := p.rearrangeLatestFuncResp(events)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
+	resultEvents = p.applyToolTranscriptMode(resultEvents, inv)
 	// Apply compaction to the already timeline-filtered projection. Tool-result
 	// policy (force-clean/keep) and historical passes must run for scoped modes
 	// such as request/invocation, not only when TimelineFilterAll is selected.
@@ -2479,6 +2515,182 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 		}
 	}
 	return *convertedEvent
+}
+
+func (p *ContentRequestProcessor) applyToolTranscriptMode(
+	events []event.Event,
+	inv *agent.Invocation,
+) []event.Event {
+	if p == nil || p.ToolTranscriptMode != ToolTranscriptModeOmitPreviousCompleted {
+		return events
+	}
+
+	responseMatchesByCallEvent := toolResponseMatchesByCallEvent(events)
+	if len(responseMatchesByCallEvent) == 0 {
+		return events
+	}
+
+	dropCallEvents := make(map[int]struct{})
+	dropResultChoices := make(map[int]map[int]struct{})
+	for callEventIndex, responseMatches := range responseMatchesByCallEvent {
+		if callEventIndex < 0 || callEventIndex >= len(events) {
+			continue
+		}
+		if !isPreviousToolTranscriptEvent(events[callEventIndex], inv) {
+			continue
+		}
+		if !allMatchedToolResultsArePrevious(events, responseMatches, inv) {
+			continue
+		}
+		if !allToolCallIDsMatched(
+			events[callEventIndex].GetToolCallIDs(),
+			events,
+			responseMatches,
+		) {
+			continue
+		}
+		dropCallEvents[callEventIndex] = struct{}{}
+		for _, match := range responseMatches {
+			if dropResultChoices[match.eventIndex] == nil {
+				dropResultChoices[match.eventIndex] = make(map[int]struct{})
+			}
+			for _, choiceIndex := range match.choiceIndices {
+				dropResultChoices[match.eventIndex][choiceIndex] = struct{}{}
+			}
+		}
+	}
+	if len(dropCallEvents) == 0 && len(dropResultChoices) == 0 {
+		return events
+	}
+
+	resultEvents := make([]event.Event, 0, len(events))
+	for i, evt := range events {
+		if _, drop := dropCallEvents[i]; drop {
+			if stripped, keep := stripToolCallsFromEvent(evt); keep {
+				resultEvents = append(resultEvents, stripped)
+			}
+			continue
+		}
+		if choices := dropResultChoices[i]; len(choices) > 0 {
+			if filtered, keep := omitToolResultChoices(evt, choices); keep {
+				resultEvents = append(resultEvents, filtered)
+			}
+			continue
+		}
+		resultEvents = append(resultEvents, evt)
+	}
+	return resultEvents
+}
+
+func isPreviousToolTranscriptEvent(evt event.Event, inv *agent.Invocation) bool {
+	if inv == nil {
+		return false
+	}
+	if inv.RunOptions.RequestID != "" && evt.RequestID == inv.RunOptions.RequestID {
+		return false
+	}
+	if inv.InvocationID != "" && evt.InvocationID == inv.InvocationID {
+		return false
+	}
+	return evt.RequestID != "" || evt.InvocationID != ""
+}
+
+func allMatchedToolResultsArePrevious(
+	events []event.Event,
+	matches []matchedToolResponseEvent,
+	inv *agent.Invocation,
+) bool {
+	if len(matches) == 0 {
+		return false
+	}
+	for _, match := range matches {
+		if match.eventIndex < 0 || match.eventIndex >= len(events) {
+			return false
+		}
+		if !isPreviousToolTranscriptEvent(events[match.eventIndex], inv) {
+			return false
+		}
+	}
+	return true
+}
+
+func allToolCallIDsMatched(
+	callIDs []string,
+	events []event.Event,
+	matches []matchedToolResponseEvent,
+) bool {
+	pendingCallIDs := make(map[string]struct{}, len(callIDs))
+	for _, callID := range callIDs {
+		if callID != "" {
+			pendingCallIDs[callID] = struct{}{}
+		}
+	}
+	if len(pendingCallIDs) == 0 {
+		return false
+	}
+	for _, match := range matches {
+		if match.eventIndex < 0 || match.eventIndex >= len(events) {
+			continue
+		}
+		evt := events[match.eventIndex]
+		if evt.Response == nil {
+			continue
+		}
+		for _, choiceIndex := range match.choiceIndices {
+			if choiceIndex < 0 || choiceIndex >= len(evt.Response.Choices) {
+				continue
+			}
+			responseID := toolResponseIDFromChoice(evt.Response.Choices[choiceIndex])
+			delete(pendingCallIDs, responseID)
+		}
+	}
+	return len(pendingCallIDs) == 0
+}
+
+func stripToolCallsFromEvent(evt event.Event) (event.Event, bool) {
+	if evt.Response == nil {
+		return evt, false
+	}
+	response := *evt.Response
+	response.Choices = make([]model.Choice, 0, len(evt.Response.Choices))
+	for _, choice := range evt.Response.Choices {
+		choice.Message.ToolCalls = nil
+		choice.Delta.ToolCalls = nil
+		if hasNonToolPayload(choice.Message) || hasNonToolPayload(choice.Delta) {
+			response.Choices = append(response.Choices, choice)
+		}
+	}
+	if len(response.Choices) == 0 {
+		return evt, false
+	}
+	evt.Response = &response
+	return evt, true
+}
+
+func omitToolResultChoices(
+	evt event.Event,
+	dropChoiceIndices map[int]struct{},
+) (event.Event, bool) {
+	if evt.Response == nil {
+		return evt, false
+	}
+	response := *evt.Response
+	response.Choices = make([]model.Choice, 0, len(evt.Response.Choices))
+	for choiceIndex, choice := range evt.Response.Choices {
+		if _, drop := dropChoiceIndices[choiceIndex]; drop {
+			continue
+		}
+		response.Choices = append(response.Choices, choice)
+	}
+	if len(response.Choices) == 0 {
+		return evt, false
+	}
+	evt.Response = &response
+	return evt, true
+}
+
+func hasNonToolPayload(msg model.Message) bool {
+	return msg.Content != "" || len(msg.ContentParts) > 0
 }
 
 // rearrangeEventsForLatestFunctionResponse rearranges the events for the latest function_response.
