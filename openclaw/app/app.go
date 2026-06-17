@@ -2419,6 +2419,11 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 	if opts.DeferToolSurface {
 		deferMode = deferToolSurfaceModeOn
 	}
+	if deferMode == deferToolSurfaceModeAuto &&
+		!opts.deferToolSurfaceModeExplicit &&
+		!opts.DeferToolSurface {
+		deferMode = deferToolSurfaceModeOff
+	}
 	if deferMode != deferToolSurfaceModeOff {
 		return errors.New(
 			"claude-code agent does not support defer-tools-to-dynamic-agent",
