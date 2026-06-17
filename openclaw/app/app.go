@@ -1020,11 +1020,35 @@ func NewRuntimeWithOptions(
 		opts.MemoryBackend,
 		stores.memoryFiles,
 	)
+	codeExec, err := codeExecutorFromConfig(
+		resolvedStateDir,
+		opts.EnableLocalExec,
+		opts.CodeExecutor,
+	)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create code executor failed: %w", err),
+		}
+	}
+	var sandboxExecEngine codeexecutor.Engine
+	if isSandboxCodeExecutor(opts.CodeExecutor) {
+		sandboxExecEngine = codeExecutorEngine(codeExec)
+		if sandboxExecEngine == nil {
+			return nil, &exitError{
+				Code: 1,
+				Err: errors.New(
+					"sandbox code executor does not expose a program runner",
+				),
+			}
+		}
+	}
 	openClawTools := buildOpenClawTools(
 		opts.EnableOpenClawTools,
 		resolvedStateDir,
 		stores.uploads,
 		fileMemoryStore,
+		sandboxExecEngine,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1095,6 +1119,7 @@ func NewRuntimeWithOptions(
 			EnableOpenClawTools:  opts.EnableOpenClawTools,
 			OpenClawToolingGuide: opts.OpenClawToolingGuide,
 			EnableParallelTools:  opts.EnableParallelTools,
+			codeExecutor:         codeExec,
 
 			ToolProviders: opts.ToolProviders,
 			ToolSets:      opts.ToolSets,
@@ -1582,11 +1607,35 @@ func run(
 		opts.MemoryBackend,
 		stores.memoryFiles,
 	)
+	codeExec, err := codeExecutorFromConfig(
+		resolvedStateDir,
+		opts.EnableLocalExec,
+		opts.CodeExecutor,
+	)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create code executor failed: %w", err),
+		}
+	}
+	var sandboxExecEngine codeexecutor.Engine
+	if isSandboxCodeExecutor(opts.CodeExecutor) {
+		sandboxExecEngine = codeExecutorEngine(codeExec)
+		if sandboxExecEngine == nil {
+			return &exitError{
+				Code: 1,
+				Err: errors.New(
+					"sandbox code executor does not expose a program runner",
+				),
+			}
+		}
+	}
 	openClawTools := buildOpenClawTools(
 		opts.EnableOpenClawTools,
 		resolvedStateDir,
 		stores.uploads,
 		fileMemoryStore,
+		sandboxExecEngine,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1667,6 +1716,7 @@ func run(
 			CodeExecutor:        opts.CodeExecutor,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
 			EnableParallelTools: opts.EnableParallelTools,
+			codeExecutor:        codeExec,
 
 			ToolProviders: opts.ToolProviders,
 			ToolSets:      opts.ToolSets,
@@ -2346,8 +2396,7 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support enable-local-exec",
 		)
 	}
-	if opts.CodeExecutor.Type != "" &&
-		opts.CodeExecutor.Type != codeExecutorTypeNone {
+	if opts.CodeExecutor.Type != "" {
 		return errors.New(
 			"claude-code agent does not support tools.code_executor",
 		)
@@ -2668,13 +2717,17 @@ func newAgent(
 	if cfg.RefreshToolSetsOnRun {
 		opts = append(opts, llmagent.WithRefreshToolSetsOnRun(true))
 	}
-	exec, err := codeExecutorFromConfig(
-		cfg.StateDir,
-		cfg.EnableLocalExec,
-		cfg.CodeExecutor,
-	)
-	if err != nil {
-		return nil, nil, err
+	exec := cfg.codeExecutor
+	if exec == nil {
+		var err error
+		exec, err = codeExecutorFromConfig(
+			cfg.StateDir,
+			cfg.EnableLocalExec,
+			cfg.CodeExecutor,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	if exec != nil {
 		opts = append(opts, llmagent.WithCodeExecutor(exec))
@@ -2713,15 +2766,23 @@ func codeExecutorFromConfig(
 		return nil, nil
 	}
 	switch typeName {
-	case codeExecutorTypeNone:
-		return nil, nil
-	case codeExecutorTypeLocal:
-		return localexec.New(), nil
 	case codeExecutorTypeSandbox:
 		return sandboxCodeExecutorFromConfig(stateDir, cfg.Sandbox), nil
 	default:
 		return nil, fmt.Errorf("unsupported code executor type: %s", typeName)
 	}
+}
+
+func isSandboxCodeExecutor(cfg codeExecutorOptions) bool {
+	return strings.ToLower(strings.TrimSpace(cfg.Type)) == codeExecutorTypeSandbox
+}
+
+func codeExecutorEngine(exec codeexecutor.CodeExecutor) codeexecutor.Engine {
+	provider, ok := exec.(codeexecutor.EngineProvider)
+	if !ok || provider == nil {
+		return nil
+	}
+	return provider.Engine()
 }
 
 func sandboxCodeExecutorFromConfig(
@@ -3044,6 +3105,7 @@ type agentConfig struct {
 
 	EnableLocalExec bool
 	CodeExecutor    codeExecutorOptions
+	codeExecutor    codeexecutor.CodeExecutor
 
 	EnableOpenClawTools  bool
 	OpenClawToolingGuide *string
@@ -3116,20 +3178,12 @@ func buildOpenClawTools(
 	stateDir string,
 	uploadStore *uploads.Store,
 	memoryFileStore *memoryfile.Store,
+	sandboxExecEngine codeexecutor.Engine,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
 	}
 
-	mgr := octool.NewManager(
-		octool.WithBaseEnv(deps.ToolEnv(stateDir)),
-		octool.WithCommandPolicy(
-			octool.NewChatCommandSafetyPolicy(),
-		),
-		octool.WithOutputRedactor(
-			octool.NewChatCommandOutputRedactor(),
-		),
-	)
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)
 	subagentTools := subagentrun.NewTools(nil)
@@ -3142,23 +3196,54 @@ func buildOpenClawTools(
 		}
 	}
 
-	execTool := octool.NewExecCommandTool(mgr, uploadStore)
-	if memoryFileStore != nil {
-		execTool = octool.NewExecCommandToolWithMemoryFileStore(
-			mgr,
+	var mgr *octool.Manager
+	var execTool tool.Tool
+	if sandboxExecEngine != nil {
+		execTool = octool.NewSandboxExecCommandTool(
+			sandboxExecEngine,
 			uploadStore,
-			memoryFileStore,
 		)
+		if memoryFileStore != nil {
+			execTool = octool.
+				NewSandboxExecCommandToolWithMemoryFileStore(
+					sandboxExecEngine,
+					uploadStore,
+					memoryFileStore,
+				)
+		}
+	} else {
+		mgr = octool.NewManager(
+			octool.WithBaseEnv(deps.ToolEnv(stateDir)),
+			octool.WithCommandPolicy(
+				octool.NewChatCommandSafetyPolicy(),
+			),
+			octool.WithOutputRedactor(
+				octool.NewChatCommandOutputRedactor(),
+			),
+		)
+		execTool = octool.NewExecCommandTool(mgr, uploadStore)
+		if memoryFileStore != nil {
+			execTool = octool.NewExecCommandToolWithMemoryFileStore(
+				mgr,
+				uploadStore,
+				memoryFileStore,
+			)
+		}
 	}
 	tools := []tool.Tool{
 		conversationtool.NewTool(),
 		octool.NewReadDocumentTool(uploadStore),
 		octool.NewReadSpreadsheetTool(uploadStore),
 		execTool,
-		octool.NewWriteStdinTool(mgr),
-		octool.NewKillSessionTool(mgr),
 		outbound.NewTool(router),
 		cronTool,
+	}
+	if mgr != nil {
+		tools = append(
+			tools,
+			octool.NewWriteStdinTool(mgr),
+			octool.NewKillSessionTool(mgr),
+		)
 	}
 	tools = append(tools, subagentTools.All()...)
 	return openClawToolsBundle{

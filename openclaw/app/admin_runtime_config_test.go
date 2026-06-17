@@ -256,6 +256,11 @@ func TestAdminRuntimeConfigProvider_CodeExecutorSandboxFields(t *testing.T) {
 		codeExecutorTypeSandbox,
 		findAdminRuntimeConfigField(t, status, "tools.code_executor.type").RuntimeValue,
 	)
+	typeField := findAdminRuntimeConfigField(t, status, "tools.code_executor.type")
+	require.Equal(t, []admin.RuntimeConfigOption{
+		{Value: "", Label: "inherit"},
+		{Value: codeExecutorTypeSandbox, Label: codeExecutorTypeSandbox},
+	}, typeField.Options)
 	require.Equal(
 		t,
 		"45s",
@@ -278,6 +283,18 @@ func TestAdminRuntimeConfigProvider_CodeExecutorSandboxFields(t *testing.T) {
 		"tools.code_executor.sandbox.backend",
 	)
 	require.False(t, ok)
+	workspaceRootField := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.code_executor.sandbox.workspace_root",
+	)
+	require.Equal(
+		t,
+		"tools.code_executor.type",
+		workspaceRootField.VisibleWhen.Key,
+	)
+	require.Equal(t, codeExecutorTypeSandbox, workspaceRootField.VisibleWhen.Value)
+	require.False(t, workspaceRootField.Hidden)
 	localExecField := findAdminRuntimeConfigField(
 		t,
 		status,
@@ -309,6 +326,28 @@ func TestAdminRuntimeConfigProvider_CodeExecutorSandboxFields(t *testing.T) {
 	require.NotContains(t, string(data), "profile:")
 }
 
+func TestAdminRuntimeConfigProvider_HidesSandboxFieldsForInheritedExecutor(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(t, "")
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	provider, ok := buildAdminRuntimeConfigProvider(opts).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	field := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.code_executor.sandbox.profile",
+	)
+	require.True(t, field.Hidden)
+	require.Equal(t, "tools.code_executor.type", field.VisibleWhen.Key)
+	require.Equal(t, codeExecutorTypeSandbox, field.VisibleWhen.Value)
+}
+
 func TestAdminRuntimeConfigProvider_SaveCodeExecutorSandboxCreatesConfig(
 	t *testing.T,
 ) {
@@ -319,10 +358,6 @@ func TestAdminRuntimeConfigProvider_SaveCodeExecutorSandboxCreatesConfig(
 	provider, ok := buildAdminRuntimeConfigProvider(opts).(*adminRuntimeConfigProvider)
 	require.True(t, ok)
 
-	require.NoError(t, provider.SaveRuntimeConfigValue(
-		"tools.code_executor.type",
-		codeExecutorTypeSandbox,
-	))
 	require.NoError(t, provider.SaveRuntimeConfigValue(
 		"tools.code_executor.sandbox.profile",
 		sandboxProfileReadOnly,
@@ -353,6 +388,8 @@ func TestAdminRuntimeConfigProvider_SaveCodeExecutorSandboxCreatesConfig(
 	text := string(data)
 	require.Contains(t, text, "tools:")
 	require.Contains(t, text, "code_executor:")
+	require.Contains(t, text, "enable_local_exec: false")
+	require.NotContains(t, text, "enable_openclaw_tools:")
 	require.Contains(t, text, "type: sandbox")
 	require.Contains(t, text, "sandbox:")
 	require.Contains(t, text, "profile: read_only")
@@ -368,6 +405,8 @@ func TestAdminRuntimeConfigProvider_SaveCodeExecutorSandboxCreatesConfig(
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 	require.NoError(t, cfg.apply(&parsedOpts, map[string]struct{}{}))
+	require.False(t, parsedOpts.EnableLocalExec)
+	require.True(t, parsedOpts.EnableOpenClawTools)
 	require.Equal(t, codeExecutorTypeSandbox, parsedOpts.CodeExecutor.Type)
 	require.Equal(t, sandboxProfileReadOnly, parsedOpts.CodeExecutor.Sandbox.Profile)
 	require.Equal(t, sandboxNetworkEnabled, parsedOpts.CodeExecutor.Sandbox.Network)
@@ -379,6 +418,143 @@ func TestAdminRuntimeConfigProvider_SaveCodeExecutorSandboxCreatesConfig(
 		parsedOpts.CodeExecutor.Sandbox.ShellEnv.Inherit,
 	)
 	require.False(t, parsedOpts.CodeExecutor.Sandbox.ShellEnv.ApplyDefaultExcludes)
+}
+
+func TestAdminRuntimeConfigProvider_CodeExecutorTypeInheritCleansSandbox(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(
+		t,
+		""+
+			"tools:\n"+
+			"  enable_local_exec: false\n"+
+			"  enable_openclaw_tools: false\n"+
+			"  code_executor:\n"+
+			"    type: sandbox\n"+
+			"    sandbox:\n"+
+			"      profile: read_only\n",
+	)
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	opts.CodeExecutor = codeExecutorOptions{
+		Type: codeExecutorTypeSandbox,
+		Sandbox: sandboxCodeExecutorOptions{
+			Profile: sandboxProfileReadOnly,
+		},
+	}
+	provider, ok := buildAdminRuntimeConfigProvider(opts).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.type",
+		"",
+	))
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	text := string(data)
+	require.Contains(t, text, "enable_local_exec: false")
+	require.Contains(t, text, "enable_openclaw_tools: false")
+	require.NotContains(t, text, "type:")
+	require.NotContains(t, text, "sandbox:")
+	require.NotContains(t, text, "profile:")
+
+	parsedOpts := adminRuntimeConfigTestOptions(cfgPath)
+	cfg, err := loadConfigFile(cfgPath)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NoError(t, cfg.apply(&parsedOpts, map[string]struct{}{}))
+	require.Empty(t, parsedOpts.CodeExecutor.Type)
+}
+
+func TestAdminRuntimeConfigProvider_CodeExecutorAutoExecutePreservesLegacyLocal(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := filepath.Join(t.TempDir(), "openclaw.yaml")
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	opts.EnableLocalExec = true
+	provider, ok := buildAdminRuntimeConfigProvider(opts).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.auto_execute_code_blocks",
+		"false",
+	))
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	text := string(data)
+	require.Contains(t, text, "code_executor:")
+	require.Contains(t, text, "auto_execute_code_blocks: false")
+	require.NotContains(t, text, "type:")
+
+	parsedOpts := adminRuntimeConfigTestOptions(cfgPath)
+	parsedOpts.EnableLocalExec = true
+	cfg, err := loadConfigFile(cfgPath)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NoError(t, cfg.apply(&parsedOpts, map[string]struct{}{}))
+	require.Empty(t, parsedOpts.CodeExecutor.Type)
+	require.NotNil(t, parsedOpts.CodeExecutor.AutoExecuteCodeBlocks)
+	require.False(t, *parsedOpts.CodeExecutor.AutoExecuteCodeBlocks)
+	exec, err := codeExecutorFromConfig(
+		t.TempDir(),
+		parsedOpts.EnableLocalExec,
+		parsedOpts.CodeExecutor,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, exec)
+}
+
+func TestAdminRuntimeConfigProvider_ResetCodeExecutorTypeCleansSandbox(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(
+		t,
+		""+
+			"tools:\n"+
+			"  enable_local_exec: true\n"+
+			"  code_executor:\n"+
+			"    type: sandbox\n"+
+			"    sandbox:\n"+
+			"      profile: read_only\n",
+	)
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	opts.EnableLocalExec = true
+	opts.CodeExecutor = codeExecutorOptions{
+		Type: codeExecutorTypeSandbox,
+		Sandbox: sandboxCodeExecutorOptions{
+			Profile: sandboxProfileReadOnly,
+		},
+	}
+	provider, ok := buildAdminRuntimeConfigProvider(opts).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	require.NoError(t, provider.ResetRuntimeConfigValue(
+		"tools.code_executor.type",
+	))
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	text := string(data)
+	require.NotContains(t, text, "type:")
+	require.NotContains(t, text, "sandbox:")
+
+	parsedOpts := adminRuntimeConfigTestOptions(cfgPath)
+	cfg, err := loadConfigFile(cfgPath)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	require.NoError(t, cfg.apply(&parsedOpts, map[string]struct{}{}))
+	require.Empty(t, parsedOpts.CodeExecutor.Type)
+	exec, err := codeExecutorFromConfig(
+		t.TempDir(),
+		parsedOpts.EnableLocalExec,
+		parsedOpts.CodeExecutor,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, exec)
 }
 
 func TestAdminRuntimeConfigProvider_SaveBoolFieldCreatesConfig(t *testing.T) {

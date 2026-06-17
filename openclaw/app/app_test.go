@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	sandboxexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
@@ -635,7 +636,7 @@ func TestFileMemoryStoreForBackend_FileOnly(t *testing.T) {
 func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -654,7 +655,7 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	store, err := memoryfile.NewStore(root)
 	require.NoError(t, err)
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, store)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, nil)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
@@ -667,12 +668,25 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	)
 }
 
+func TestBuildOpenClawTools_UsesSandboxExecCommand(t *testing.T) {
+	t.Parallel()
+
+	engine := codeexecutor.NewEngine(nil, nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, engine)
+	decl := findToolDeclaration(bundle.tools, "exec_command")
+	require.NotNil(t, decl)
+	require.Contains(t, decl.Description, "inside the configured sandbox")
+	require.Nil(t, findToolDeclaration(bundle.tools, "write_stdin"))
+	require.Nil(t, findToolDeclaration(bundle.tools, "kill_session"))
+	require.Nil(t, bundle.execMgr)
+}
+
 func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 	t *testing.T,
 ) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil)
 	decl := findToolDeclaration(bundle.tools, "conversation_history")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -685,7 +699,7 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil)
 	require.NotNil(
 		t,
 		findToolDeclaration(bundle.tools, "subagents_spawn"),
@@ -6347,18 +6361,6 @@ func TestCodeExecutorFromConfigBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, exec)
 
-	exec, err = codeExecutorFromConfig("/state", false, codeExecutorOptions{
-		Type: " NONE ",
-	})
-	require.NoError(t, err)
-	require.Nil(t, exec)
-
-	exec, err = codeExecutorFromConfig("/state", false, codeExecutorOptions{
-		Type: codeExecutorTypeLocal,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, exec)
-
 	exec, err = codeExecutorFromConfig(t.TempDir(), false, codeExecutorOptions{
 		Type: codeExecutorTypeSandbox,
 		Sandbox: sandboxCodeExecutorOptions{
@@ -6368,11 +6370,13 @@ func TestCodeExecutorFromConfigBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, exec)
 
-	_, err = codeExecutorFromConfig("/state", false, codeExecutorOptions{
-		Type: "remote",
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported code executor type")
+	for _, typ := range []string{"none", "local", "remote"} {
+		_, err = codeExecutorFromConfig("/state", false, codeExecutorOptions{
+			Type: typ,
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unsupported code executor type")
+	}
 }
 
 func TestSandboxProfileAndBackendConfigBranches(t *testing.T) {

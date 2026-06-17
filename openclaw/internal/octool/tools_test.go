@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
@@ -46,6 +47,85 @@ func newWriteStdinTool(mgr *Manager) tool.CallableTool {
 
 func newKillSessionTool(mgr *Manager) tool.CallableTool {
 	return NewKillSessionTool(mgr).(tool.CallableTool)
+}
+
+func newSandboxExecCommandTool(engine codeexecutor.Engine) tool.CallableTool {
+	return NewSandboxExecCommandTool(engine).(tool.CallableTool)
+}
+
+func TestSandboxExecTool_Foreground(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{
+		runResult: codeexecutor.RunResult{
+			Stdout:   "hello\n",
+			Stderr:   "warn\n",
+			ExitCode: 7,
+		},
+	}
+	tl := newSandboxExecCommandTool(engine)
+
+	out, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command":     "echo hello",
+		"workdir":     "subdir",
+		"timeout_sec": 3,
+		"env": map[string]string{
+			"OPENCLAW_TEST_ENV": "ok",
+		},
+	}))
+	require.NoError(t, err)
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.Equal(t, "hello\nwarn\n", res.Output)
+	require.Equal(t, 7, res.ExitCode)
+
+	require.Len(t, engine.runner.specs, 1)
+	spec := engine.runner.specs[0]
+	require.Equal(t, shellProgram, spec.Cmd)
+	require.Equal(t, []string{shellLoginFlag, "echo hello"}, spec.Args)
+	require.Equal(t, "subdir", spec.Cwd)
+	require.Equal(t, 3*time.Second, spec.Timeout)
+	require.Equal(t, "ok", spec.Env["OPENCLAW_TEST_ENV"])
+	require.Len(t, engine.manager.workspaces, 1)
+}
+
+func TestSandboxExecTool_RejectsUnsupportedSessionModes(t *testing.T) {
+	t.Parallel()
+
+	tl := newSandboxExecCommandTool(&fakeSandboxExecEngine{})
+	cases := []map[string]any{
+		{"command": "sleep 1", "background": true},
+		{"command": "vim", "tty": true},
+		{"command": "vim", "pty": true},
+		{"command": "sleep 1", "yield_time_ms": 10},
+		{"command": "pwd", "workdir": "/tmp"},
+	}
+	for _, args := range cases {
+		_, err := tl.Call(context.Background(), mustJSON(t, args))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), errSandboxExecUnsupported)
+	}
+}
+
+func TestSandboxExecTool_TimeoutResult(t *testing.T) {
+	t.Parallel()
+
+	tl := newSandboxExecCommandTool(&fakeSandboxExecEngine{
+		runResult: codeexecutor.RunResult{
+			Stderr:   "timed out\n",
+			ExitCode: 124,
+			TimedOut: true,
+		},
+	})
+	out, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command":     "sleep 10",
+		"timeout_sec": 1,
+	}))
+	require.NoError(t, err)
+	res := out.(execResult)
+	require.Equal(t, "timeout", res.Status)
+	require.Equal(t, 124, res.ExitCode)
+	require.Contains(t, res.Output, "timed out")
 }
 
 func TestExecTool_Foreground(t *testing.T) {
@@ -1691,6 +1771,65 @@ func mustJSON(t *testing.T, v any) []byte {
 	b, err := json.Marshal(v)
 	require.NoError(t, err)
 	return b
+}
+
+type fakeSandboxExecEngine struct {
+	manager   fakeSandboxExecManager
+	runner    fakeSandboxExecRunner
+	runResult codeexecutor.RunResult
+}
+
+func (e *fakeSandboxExecEngine) Manager() codeexecutor.WorkspaceManager {
+	return &e.manager
+}
+
+func (e *fakeSandboxExecEngine) FS() codeexecutor.WorkspaceFS { return nil }
+
+func (e *fakeSandboxExecEngine) Runner() codeexecutor.ProgramRunner {
+	e.runner.result = e.runResult
+	return &e.runner
+}
+
+func (e *fakeSandboxExecEngine) Describe() codeexecutor.Capabilities {
+	return codeexecutor.Capabilities{}
+}
+
+type fakeSandboxExecManager struct {
+	workspaces []codeexecutor.Workspace
+}
+
+func (m *fakeSandboxExecManager) CreateWorkspace(
+	ctx context.Context,
+	execID string,
+	pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	_ = ctx
+	ws := codeexecutor.Workspace{ID: execID, Path: execID}
+	m.workspaces = append(m.workspaces, ws)
+	return ws, nil
+}
+
+func (m *fakeSandboxExecManager) Cleanup(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+) error {
+	_, _ = ctx, ws
+	return nil
+}
+
+type fakeSandboxExecRunner struct {
+	specs  []codeexecutor.RunProgramSpec
+	result codeexecutor.RunResult
+}
+
+func (r *fakeSandboxExecRunner) RunProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	_, _ = ctx, ws
+	r.specs = append(r.specs, spec)
+	return r.result, nil
 }
 
 func outputField(result map[string]any) string {

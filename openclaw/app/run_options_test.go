@@ -1180,20 +1180,31 @@ func TestConvertCodeExecutorConfigBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, codeExecutorOptions{}, empty)
 
-	local, err := convertCodeExecutorConfig(&codeExecutorConfig{
-		Type: " LOCAL ",
+	autoExecute := false
+	inherited, err := convertCodeExecutorConfig(&codeExecutorConfig{
+		AutoExecuteCodeBlocks: &autoExecute,
 	})
 	require.NoError(t, err)
-	require.Equal(t, codeExecutorTypeLocal, local.Type)
+	require.Empty(t, inherited.Type)
+	require.NotNil(t, inherited.AutoExecuteCodeBlocks)
+	require.False(t, *inherited.AutoExecuteCodeBlocks)
 
 	_, err = convertCodeExecutorConfig(&codeExecutorConfig{
-		Type:    "local",
 		Sandbox: &sandboxCodeExecutorConfig{},
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "sandbox config requires type")
 
-	_, err = convertCodeExecutorConfig(&codeExecutorConfig{Type: "remote"})
+	for _, typ := range []string{"none", "local", "remote"} {
+		_, err = convertCodeExecutorConfig(&codeExecutorConfig{Type: typ})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid type")
+	}
+
+	_, err = convertCodeExecutorConfig(&codeExecutorConfig{
+		Type:    "local",
+		Sandbox: &sandboxCodeExecutorConfig{},
+	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid type")
 }

@@ -71,6 +71,7 @@ type adminRuntimeConfigFieldSpec struct {
 	InputType   string
 	Placeholder string
 	ApplyMode   string
+	VisibleWhen admin.RuntimeConfigVisibleWhen
 	ValueType   string
 	Path        []adminRuntimeConfigKeyRef
 	Options     []admin.RuntimeConfigOption
@@ -170,6 +171,7 @@ func (p *adminRuntimeConfigProvider) RuntimeConfigStatus() (
 			len(adminRuntimeConfigSectionSpecs()),
 		),
 	}
+	visibleValues := map[string]string{}
 	for _, section := range adminRuntimeConfigSectionSpecs() {
 		view := admin.RuntimeConfigSection{
 			Key:     section.Key,
@@ -196,6 +198,7 @@ func (p *adminRuntimeConfigProvider) RuntimeConfigStatus() (
 					configured.Value,
 				)
 			}
+			hidden := adminRuntimeConfigFieldHidden(field, visibleValues)
 			view.Fields = append(view.Fields, admin.RuntimeConfigField{
 				Key:                   field.Key,
 				Title:                 field.Title,
@@ -203,6 +206,8 @@ func (p *adminRuntimeConfigProvider) RuntimeConfigStatus() (
 				InputType:             field.InputType,
 				Placeholder:           field.Placeholder,
 				ApplyMode:             field.ApplyMode,
+				VisibleWhen:           field.VisibleWhen,
+				Hidden:                hidden,
 				EditorValue:           editorValue,
 				ConfiguredValue:       configured.Value,
 				ConfiguredSource:      adminRuntimeConfiguredSource(configured.Explicit),
@@ -216,6 +221,7 @@ func (p *adminRuntimeConfigProvider) RuntimeConfigStatus() (
 					field.Options...,
 				),
 			})
+			visibleValues[field.Key] = editorValue
 		}
 		status.Sections = append(status.Sections, view)
 	}
@@ -238,11 +244,18 @@ func (p *adminRuntimeConfigProvider) SaveRuntimeConfigValue(
 	if err != nil {
 		return err
 	}
-	parent, err := adminRuntimeEnsureFieldParent(root, spec.Path)
-	if err != nil {
-		return err
+	if spec.Key == "tools.code_executor.type" && strings.TrimSpace(value) == "" {
+		adminRuntimeDeleteField(root, spec.Path)
+	} else {
+		parent, err := adminRuntimeEnsureFieldParent(root, spec.Path)
+		if err != nil {
+			return err
+		}
+		if err := adminRuntimeSetFieldValue(parent, spec, value); err != nil {
+			return err
+		}
 	}
-	if err := adminRuntimeSetFieldValue(parent, spec, value); err != nil {
+	if err := p.normalizeCodeExecutorConfig(root, spec.Key); err != nil {
 		return err
 	}
 	return writeConfigDocument(p.configPath, &doc)
@@ -264,6 +277,9 @@ func (p *adminRuntimeConfigProvider) ResetRuntimeConfigValue(
 		return err
 	}
 	adminRuntimeDeleteField(root, spec.Path)
+	if err := p.normalizeCodeExecutorConfig(root, spec.Key); err != nil {
+		return err
+	}
 	return writeConfigDocument(p.configPath, &doc)
 }
 
@@ -496,7 +512,7 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 				adminRuntimeBoolField(
 					"tools.enable_openclaw_tools",
 					"Enable OpenClaw Tools",
-					"Expose host-side OpenClaw runtime tools such as exec_command. These tool calls are separate from Code Executor and are not governed by the sandbox network/profile settings.",
+					"Expose OpenClaw runtime tools such as exec_command. When Executor Type is sandbox, exec_command uses the sandbox; other OpenClaw tools keep their normal runtime behavior.",
 					[]adminRuntimeConfigKeyRef{
 						adminRuntimeKey("tools"),
 						adminRuntimeKey("enable_openclaw_tools"),
@@ -557,10 +573,10 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 			Title:   "Code Executor",
 			Summary: "Code block execution mode and sandbox runtime settings. These settings take precedence over the legacy Enable Local Exec fallback.",
 			Fields: []adminRuntimeConfigFieldSpec{
-				adminRuntimeSelectField(
+				adminRuntimeCodeExecutorTypeField(
 					"tools.code_executor.type",
 					"Executor Type",
-					"Select whether assistant code blocks are disabled, run locally, or run in the sandbox. This does not control host-side OpenClaw tools such as exec_command.",
+					"Leave empty to inherit the legacy local-exec behavior, or select sandbox to run assistant code blocks and OpenClaw exec_command in the sandbox.",
 					[]adminRuntimeConfigKeyRef{
 						adminRuntimeKey("tools"),
 						adminRuntimeKey("code_executor"),
@@ -569,9 +585,6 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					func(opts runOptions) string {
 						return adminRuntimeCodeExecutorType(opts)
 					},
-					codeExecutorTypeNone,
-					codeExecutorTypeLocal,
-					codeExecutorTypeSandbox,
 				),
 				adminRuntimeBoolField(
 					"tools.code_executor.auto_execute_code_blocks",
@@ -589,7 +602,7 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 						)
 					},
 				),
-				adminRuntimeTextField(
+				adminRuntimeSandboxField(adminRuntimeTextField(
 					"tools.code_executor.sandbox.workspace_root",
 					"Sandbox Workspace Root",
 					"Workspace root for sandbox sessions. Only used when Executor Type is sandbox; reset to use state_dir/sandbox.",
@@ -608,8 +621,8 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 							opts.CodeExecutor.Sandbox.WorkspaceRoot,
 						)
 					},
-				),
-				adminRuntimeSelectField(
+				)),
+				adminRuntimeSandboxField(adminRuntimeSelectField(
 					"tools.code_executor.sandbox.profile",
 					"Sandbox Profile",
 					"Filesystem permission profile. Only used when Executor Type is sandbox.",
@@ -630,8 +643,8 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					sandboxProfileWorkspaceWrite,
 					sandboxProfileReadOnly,
 					sandboxProfileDisabled,
-				),
-				adminRuntimeSelectField(
+				)),
+				adminRuntimeSandboxField(adminRuntimeSelectField(
 					"tools.code_executor.sandbox.network",
 					"Sandbox Network",
 					"Network access policy. Only used when Executor Type is sandbox.",
@@ -651,8 +664,8 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					},
 					sandboxNetworkRestricted,
 					sandboxNetworkEnabled,
-				),
-				adminRuntimeTextField(
+				)),
+				adminRuntimeSandboxField(adminRuntimeTextField(
 					"tools.code_executor.sandbox.default_timeout",
 					"Default Timeout",
 					"Default timeout for sandbox program runs, for example 30s. Only used when Executor Type is sandbox.",
@@ -670,8 +683,8 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 						}
 						return opts.CodeExecutor.Sandbox.DefaultTimeout.String()
 					},
-				),
-				adminRuntimeNumberField(
+				)),
+				adminRuntimeSandboxField(adminRuntimeNumberField(
 					"tools.code_executor.sandbox.output_max_bytes",
 					"Output Max Bytes",
 					"Maximum stdout/stderr bytes captured per stream. Only used when Executor Type is sandbox.",
@@ -690,8 +703,8 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 							opts.CodeExecutor.Sandbox.OutputMaxBytes,
 						)
 					},
-				),
-				adminRuntimeSelectField(
+				)),
+				adminRuntimeSandboxField(adminRuntimeSelectField(
 					"tools.code_executor.sandbox.shell_env.inherit",
 					"Shell Env Inherit",
 					"Host environment inheritance policy for sandbox commands. Only used when Executor Type is sandbox.",
@@ -713,8 +726,8 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					sandboxShellEnvInheritAll,
 					sandboxShellEnvInheritCore,
 					sandboxShellEnvInheritNone,
-				),
-				adminRuntimeBoolField(
+				)),
+				adminRuntimeSandboxField(adminRuntimeBoolField(
 					"tools.code_executor.sandbox.shell_env.apply_default_excludes",
 					"Apply Default Env Excludes",
 					"Drop inherited environment variables whose names look like secrets, such as KEY, TOKEN, SECRET, PASSWORD, or CREDENTIAL. Only used when Executor Type is sandbox.",
@@ -733,7 +746,7 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 							opts.CodeExecutor.Sandbox.ShellEnv.ApplyDefaultExcludes,
 						)
 					},
-				),
+				)),
 			},
 		},
 		{
@@ -868,6 +881,51 @@ func adminRuntimeSelectField(
 	}
 }
 
+func adminRuntimeCodeExecutorTypeField(
+	key string,
+	title string,
+	summary string,
+	path []adminRuntimeConfigKeyRef,
+	runtime func(runOptions) string,
+) adminRuntimeConfigFieldSpec {
+	return adminRuntimeConfigFieldSpec{
+		Key:       key,
+		Title:     title,
+		Summary:   summary,
+		InputType: adminRuntimeConfigInputSelect,
+		ApplyMode: adminRuntimeConfigApplyRestart,
+		ValueType: adminRuntimeConfigValueString,
+		Path:      path,
+		Options: []admin.RuntimeConfigOption{
+			{Value: "", Label: "inherit"},
+			{Value: codeExecutorTypeSandbox, Label: codeExecutorTypeSandbox},
+		},
+		Runtime: runtime,
+	}
+}
+
+func adminRuntimeSandboxField(
+	field adminRuntimeConfigFieldSpec,
+) adminRuntimeConfigFieldSpec {
+	field.VisibleWhen = admin.RuntimeConfigVisibleWhen{
+		Key:   "tools.code_executor.type",
+		Value: codeExecutorTypeSandbox,
+	}
+	return field
+}
+
+func adminRuntimeConfigFieldHidden(
+	field adminRuntimeConfigFieldSpec,
+	values map[string]string,
+) bool {
+	if strings.TrimSpace(field.VisibleWhen.Key) == "" {
+		return false
+	}
+	want := strings.TrimSpace(field.VisibleWhen.Value)
+	got := strings.TrimSpace(values[field.VisibleWhen.Key])
+	return got != want
+}
+
 func adminRuntimeStringOptions(
 	values ...string,
 ) []admin.RuntimeConfigOption {
@@ -886,14 +944,7 @@ func adminRuntimeStringOptions(
 }
 
 func adminRuntimeCodeExecutorType(opts runOptions) string {
-	typeName := strings.TrimSpace(opts.CodeExecutor.Type)
-	if typeName != "" {
-		return typeName
-	}
-	if opts.EnableLocalExec {
-		return codeExecutorTypeLocal
-	}
-	return codeExecutorTypeNone
+	return strings.TrimSpace(opts.CodeExecutor.Type)
 }
 
 func adminRuntimeOptionalBoolValueOrDefault(value *bool, fallback bool) string {
@@ -905,6 +956,65 @@ func adminRuntimeOptionalBoolValueOrDefault(value *bool, fallback bool) string {
 
 func adminRuntimeSandboxCodeExecutorEnabled(opts runOptions) bool {
 	return strings.TrimSpace(opts.CodeExecutor.Type) == codeExecutorTypeSandbox
+}
+
+func (p *adminRuntimeConfigProvider) normalizeCodeExecutorConfig(
+	root *yaml.Node,
+	key string,
+) error {
+	if !strings.HasPrefix(key, "tools.code_executor.") {
+		return nil
+	}
+	toolsNode := adminRuntimeLookupMappingValue(
+		root,
+		adminRuntimeKey("tools"),
+	)
+	codeExecutorNode := adminRuntimeLookupMappingValue(
+		toolsNode,
+		adminRuntimeKey("code_executor"),
+	)
+	if codeExecutorNode == nil {
+		return nil
+	}
+	if codeExecutorNode.Kind != yaml.MappingNode {
+		return fmt.Errorf("expected mapping node")
+	}
+	switch {
+	case key == "tools.code_executor.type":
+		typeName := strings.ToLower(strings.TrimSpace(
+			adminRuntimeScalarMappingValue(
+				codeExecutorNode,
+				adminRuntimeKey("type"),
+			),
+		))
+		if typeName != codeExecutorTypeSandbox {
+			adminRuntimeDeleteMappingValue(
+				codeExecutorNode,
+				adminRuntimeKey("sandbox"),
+			)
+		}
+		if typeName == codeExecutorTypeSandbox {
+			return adminRuntimeDisableLocalExec(toolsNode)
+		}
+	case strings.HasPrefix(key, "tools.code_executor.sandbox."):
+		if err := adminRuntimeSetMappingString(
+			codeExecutorNode,
+			adminRuntimeKey("type"),
+			codeExecutorTypeSandbox,
+		); err != nil {
+			return err
+		}
+		return adminRuntimeDisableLocalExec(toolsNode)
+	}
+	return nil
+}
+
+func adminRuntimeDisableLocalExec(toolsNode *yaml.Node) error {
+	return adminRuntimeSetMappingBool(
+		toolsNode,
+		adminRuntimeKey("enable_local_exec"),
+		false,
+	)
 }
 
 func adminRuntimeConfiguredSource(explicit bool) string {
@@ -1241,6 +1351,17 @@ func adminRuntimeLookupMappingValue(
 		}
 	}
 	return nil
+}
+
+func adminRuntimeScalarMappingValue(
+	parent *yaml.Node,
+	key adminRuntimeConfigKeyRef,
+) string {
+	node := adminRuntimeLookupMappingValue(parent, key)
+	if node == nil || node.Kind != yaml.ScalarNode {
+		return ""
+	}
+	return strings.TrimSpace(node.Value)
 }
 
 func adminRuntimeDeleteMappingValue(

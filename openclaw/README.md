@@ -285,7 +285,7 @@ tools:
   openclaw_tooling_guidance: ""
   # Optional: configure fenced-code execution without exposing workspace_exec.
   code_executor:
-    type: "sandbox" # none|local|sandbox
+    type: "sandbox" # sandbox; leave empty/unset to inherit enable_local_exec
     auto_execute_code_blocks: true
     sandbox:
       workspace_root: "" # default: state_dir/sandbox
