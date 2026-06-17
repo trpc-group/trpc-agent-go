@@ -155,6 +155,7 @@ repo, _ := skill.NewFSRepository("./managed_skills")
 evo := evolution.NewService(reviewerModel,
     evolution.WithManagedSkillsDir("./managed_skills"),
     evolution.WithSkillRepository(repo))
+defer evo.Close()
 
 runner := runner.NewRunner("app", agent,
     runner.WithEvolutionService(evo))
