@@ -3347,6 +3347,22 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			agentType: agentTypeClaudeCode,
 		},
 		{
+			name:      "claude default defer auto ok",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				DeferToolSurfaceMode: deferToolSurfaceModeAuto,
+			},
+		},
+		{
+			name:      "claude explicit defer auto",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				DeferToolSurfaceMode:         deferToolSurfaceModeAuto,
+				deferToolSurfaceModeExplicit: true,
+			},
+			wantErr: true,
+		},
+		{
 			name:      "claude ralph loop",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{

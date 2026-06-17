@@ -285,7 +285,8 @@ type runOptions struct {
 	DeferToolSurfaceChars  int
 	DeferToolSurfaceDirect string
 
-	enableOpenClawToolsExplicit bool
+	enableOpenClawToolsExplicit  bool
+	deferToolSurfaceModeExplicit bool
 
 	ToolProviders []pluginSpec
 	ToolSets      []pluginSpec
@@ -326,6 +327,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 		SessionSummaryPolicy: summaryPolicyAny,
 
 		MemoryAutoPolicy: summaryPolicyAny,
+
+		DeferToolSurfaceMode: deferToolSurfaceModeAuto,
 	}
 
 	fs.StringVar(
@@ -900,7 +903,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 	fs.StringVar(
 		&opts.DeferToolSurfaceMode,
 		flagDeferToolSurfaceMode,
-		"",
+		deferToolSurfaceModeAuto,
 		"Deferred tool surface mode: off, on, auto",
 	)
 	fs.IntVar(
@@ -936,6 +939,15 @@ func parseRunOptions(args []string) (runOptions, error) {
 		setFlags,
 		"enable-openclaw-tools",
 	)
+	opts.deferToolSurfaceModeExplicit = flagWasSet(
+		setFlags,
+		flagDeferToolSurfaceMode,
+	)
+	if flagWasSet(setFlags, flagDeferToolSurface) &&
+		!opts.DeferToolSurface &&
+		!flagWasSet(setFlags, flagDeferToolSurfaceMode) {
+		opts.DeferToolSurfaceMode = deferToolSurfaceModeOff
+	}
 
 	cfgPath := resolveConfigPath(opts.ConfigPath)
 	if cfgPath == "" {
@@ -1910,12 +1922,20 @@ func (cfg *fileConfig) apply(
 			opts.RefreshToolSetsOnRun = *cfg.Tools.RefreshToolSetsOnRun
 		}
 		if !flagWasSet(set, flagDeferToolSurface) {
+			deferConfigured := false
 			if cfg.Tools.DeferToDynamicAgent != nil {
+				deferConfigured = true
 				opts.DeferToolSurface = *cfg.Tools.DeferToDynamicAgent
 			}
 			if cfg.Tools.DeferToDynamicAgentCamel != nil {
+				deferConfigured = true
 				opts.DeferToolSurface =
 					*cfg.Tools.DeferToDynamicAgentCamel
+			}
+			if deferConfigured &&
+				!opts.DeferToolSurface &&
+				!flagWasSet(set, flagDeferToolSurfaceMode) {
+				opts.DeferToolSurfaceMode = deferToolSurfaceModeOff
 			}
 		}
 		deferMode := firstStringPtr(
@@ -1927,6 +1947,7 @@ func (cfg *fileConfig) apply(
 			!flagWasSet(set, flagDeferToolSurfaceMode) {
 			opts.DeferToolSurface = false
 			opts.DeferToolSurfaceMode = *deferMode
+			opts.deferToolSurfaceModeExplicit = true
 		}
 		deferChars := firstIntPtr(
 			cfg.Tools.DeferToDynamicAgentChars,

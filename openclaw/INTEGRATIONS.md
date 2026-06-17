@@ -857,13 +857,15 @@ reloaded on each agent run (useful for MCP where tools can change).
 ### Deferred tool surface (optional)
 
 Large tool and skill surfaces can dominate the parent model request even
-when a turn is answered directly. Set `tools.defer_to_dynamic_agent_mode:
-auto` to expose compact `tool_search` and `dynamic_agent` tools only when
-the configured tool declarations exceed the auto threshold. The parent can
-discover exact tool and skill names with `tool_search`, while the configured
-tools, toolsets, skills, memory, and code execution surface are loaded only
-inside the short-lived worker call. Existing `tools.defer_to_dynamic_agent:
-true` configs remain supported and force deferred mode on.
+when a turn is answered directly. The default
+`tools.defer_to_dynamic_agent_mode: auto` exposes compact `tool_search` and
+`dynamic_agent` tools only when the configured tool declarations exceed the
+auto threshold. The parent can discover exact tool and skill names with
+`tool_search`, while the configured tools, toolsets, skills, memory, and code
+execution surface are loaded only inside the short-lived worker call. Existing
+`tools.defer_to_dynamic_agent: true` configs remain supported and force
+deferred mode on; use `tools.defer_to_dynamic_agent_mode: off` or
+`tools.defer_to_dynamic_agent: false` to disable it.
 
 YAML:
 

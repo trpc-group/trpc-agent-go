@@ -40,7 +40,8 @@ tools:
   enable_parallel_tools: true
   # Optional: expose compact tool_search + dynamic_agent entrypoints
   # when direct tool declarations exceed the auto threshold.
-  # Set defer_to_dynamic_agent: true to force deferred mode on.
+  # Default mode is auto. Set defer_to_dynamic_agent_mode: on to force
+  # it on, or defer_to_dynamic_agent_mode: off to disable it.
   # defer_to_dynamic_agent_mode: auto # off|on|auto
   # defer_to_dynamic_agent_threshold_chars: 4000
   # defer_direct_tools: ["exec_command"]
