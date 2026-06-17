@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/outbound"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -91,7 +92,7 @@ func (t *Tool) Declaration() *tool.Declaration {
 			"control what happens when one run is still busy. " +
 			cronTemplateHint + " " +
 			"Listing and mutating jobs is scoped to the " +
-			"current user.",
+			"current conversation.",
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"action"},
@@ -760,7 +761,7 @@ func currentUserID(ctx context.Context) (string, error) {
 	if userID == "" {
 		return "", fmt.Errorf("cron: current user id is unavailable")
 	}
-	return userID, nil
+	return conversationscope.StorageUserIDFromContext(ctx, userID), nil
 }
 
 func currentOwnedJob(
@@ -777,7 +778,7 @@ func currentOwnedJob(
 	if job == nil {
 		return nil, fmt.Errorf("cron: unknown job: %s", jobID)
 	}
-	if strings.TrimSpace(job.UserID) != userID {
+	if !matchesJobScope(job, userID, outbound.DeliveryTarget{}) {
 		return nil, fmt.Errorf("cron: unknown job: %s", jobID)
 	}
 	return job, nil
