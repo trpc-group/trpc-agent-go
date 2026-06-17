@@ -38,11 +38,17 @@ import (
 // dynStubTool is a minimal tool.Tool used to exercise the dynamic tool's
 // selection logic without a runtime.
 type dynStubTool struct {
-	name string
+	name        string
+	description string
+	inputSchema *tool.Schema
 }
 
 func (s dynStubTool) Declaration() *tool.Declaration {
-	return &tool.Declaration{Name: s.name}
+	return &tool.Declaration{
+		Name:        s.name,
+		Description: s.description,
+		InputSchema: s.inputSchema,
+	}
 }
 
 func stubTools(names ...string) []tool.Tool {
@@ -213,6 +219,211 @@ func TestNewDynamicTool_ExposeToggles(t *testing.T) {
 	require.NotContains(t, props, fieldInstruction)
 	require.NotContains(t, props, fieldTools)
 	require.Contains(t, props, fieldSkills)
+}
+
+func TestDynamicTool_CapabilitySkillsProviderOverridesFixed(t *testing.T) {
+	fixed := newDynTestSkillRepo(t, "fixed")
+	dynamic := newDynTestSkillRepo(t, "dynamic")
+	calls := 0
+	at := NewDynamicTool(
+		WithCapabilitySkills(fixed),
+		WithCapabilitySkillsProvider(
+			func(context.Context, *agent.Invocation) skill.Repository {
+				calls++
+				return dynamic
+			},
+		),
+	)
+
+	got := at.dynamicMaxSkillRepo(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+	require.Equal(t, dynamic.Summaries(), got.Summaries())
+	require.Equal(t, 1, calls)
+}
+
+func TestCapabilitySearchTool_SearchesToolsAndSkills(t *testing.T) {
+	repo := newDynTestSkillRepo(t, "coding", "weather")
+	parent := agent.NewInvocation()
+	search := NewCapabilitySearchTool(
+		WithCapabilitySearchProvider(
+			func(
+				_ context.Context,
+				got *agent.Invocation,
+			) ([]tool.Tool, map[string]bool) {
+				require.Same(t, parent, got)
+				return stubTools("read_file", "search_web"), nil
+			},
+		),
+		WithCapabilitySearchSkillsProvider(
+			func(
+				_ context.Context,
+				got *agent.Invocation,
+			) skill.Repository {
+				require.Same(t, parent, got)
+				return repo
+			},
+		),
+	)
+	callable, ok := search.(tool.CallableTool)
+	require.True(t, ok)
+
+	out, err := callable.Call(
+		agent.NewInvocationContext(context.Background(), parent),
+		[]byte(`{"query":"read","limit":10}`),
+	)
+	require.NoError(t, err)
+	got := out.(CapabilitySearchResult)
+	require.Equal(t, []CapabilityToolSummary{{Name: "read_file"}}, got.Tools)
+	require.Empty(t, got.Skills)
+	require.False(t, got.Truncated)
+	require.Contains(t, got.Note, "dynamic_agent")
+
+	out, err = callable.Call(
+		agent.NewInvocationContext(context.Background(), parent),
+		[]byte(`{"query":"","limit":2}`),
+	)
+	require.NoError(t, err)
+	got = out.(CapabilitySearchResult)
+	require.Len(t, got.Tools, 2)
+	require.Empty(t, got.Skills)
+	require.Equal(t, "catalog", got.SearchMode)
+	require.Equal(t, 4, got.Total)
+	require.True(t, got.Truncated)
+	require.Equal(t, []CapabilityNameGroup{
+		{Kind: "tools", Names: []string{"read_file", "search_web"}},
+		{Kind: "skills", Names: []string{"coding", "weather"}},
+	}, got.Groups)
+}
+
+func TestCapabilitySearchTool_SelectsExactNames(t *testing.T) {
+	repo := newDynTestSkillRepo(t, "coding", "weather")
+	search := NewCapabilitySearchTool(
+		WithCapabilitySearchProvider(
+			func(
+				context.Context,
+				*agent.Invocation,
+			) ([]tool.Tool, map[string]bool) {
+				return stubTools("read_file", "search_web"), nil
+			},
+		),
+		WithCapabilitySearchSkillsProvider(
+			func(context.Context, *agent.Invocation) skill.Repository {
+				return repo
+			},
+		),
+	)
+	callable := search.(tool.CallableTool)
+
+	out, err := callable.Call(
+		context.Background(),
+		[]byte(`{"query":"select:search_web,coding,missing"}`),
+	)
+	require.NoError(t, err)
+	got := out.(CapabilitySearchResult)
+	require.Equal(t, "select", got.SearchMode)
+	require.Equal(t, []CapabilityToolSummary{{Name: "search_web"}}, got.Tools)
+	require.Equal(t, []CapabilitySkillSummary{{
+		Name:        "coding",
+		Description: "test skill",
+	}}, got.Skills)
+	require.Equal(t, []string{"missing"}, got.Missing)
+	require.False(t, got.Truncated)
+}
+
+func TestCapabilitySearchTool_SearchesSchemaMetadataWithBM25(
+	t *testing.T,
+) {
+	search := NewCapabilitySearchTool(
+		WithCapabilitySearchProvider(
+			func(
+				context.Context,
+				*agent.Invocation,
+			) ([]tool.Tool, map[string]bool) {
+				return []tool.Tool{
+					dynStubTool{
+						name:        "write_file",
+						description: "Modify file contents.",
+						inputSchema: &tool.Schema{
+							Type: "object",
+							Properties: map[string]*tool.Schema{
+								"path": {
+									Type:        "string",
+									Description: "Workspace path to update.",
+								},
+							},
+						},
+					},
+					dynStubTool{
+						name:        "search_web",
+						description: "Search public web pages.",
+					},
+				}, nil
+			},
+		),
+	)
+	callable := search.(tool.CallableTool)
+
+	out, err := callable.Call(
+		context.Background(),
+		[]byte(`{"query":"workspace path","limit":5}`),
+	)
+	require.NoError(t, err)
+	got := out.(CapabilitySearchResult)
+	require.Equal(t, "bm25", got.SearchMode)
+	require.Equal(t, []CapabilityToolSummary{{
+		Name:        "write_file",
+		Description: "Modify file contents.",
+	}}, got.Tools)
+	require.Empty(t, got.Skills)
+	require.Equal(t, 1, got.Total)
+}
+
+func TestCapabilitySearchTool_RebuildsCachedIndexOnCapabilityChange(
+	t *testing.T,
+) {
+	tools := []tool.Tool{dynStubTool{
+		name:        "alpha_tool",
+		description: "Alpha-only capability.",
+	}}
+	search := NewCapabilitySearchTool(
+		WithCapabilitySearchProvider(
+			func(
+				context.Context,
+				*agent.Invocation,
+			) ([]tool.Tool, map[string]bool) {
+				return tools, nil
+			},
+		),
+	)
+	callable := search.(tool.CallableTool)
+
+	out, err := callable.Call(
+		context.Background(),
+		[]byte(`{"query":"alpha"}`),
+	)
+	require.NoError(t, err)
+	got := out.(CapabilitySearchResult)
+	require.Equal(t, []CapabilityToolSummary{{
+		Name:        "alpha_tool",
+		Description: "Alpha-only capability.",
+	}}, got.Tools)
+
+	tools = []tool.Tool{dynStubTool{
+		name:        "beta_tool",
+		description: "Beta-only capability.",
+	}}
+	out, err = callable.Call(
+		context.Background(),
+		[]byte(`{"query":"beta"}`),
+	)
+	require.NoError(t, err)
+	got = out.(CapabilitySearchResult)
+	require.Equal(t, []CapabilityToolSummary{{
+		Name:        "beta_tool",
+		Description: "Beta-only capability.",
+	}}, got.Tools)
 }
 
 func TestNewDynamicTool_CustomFieldDescriptions(t *testing.T) {

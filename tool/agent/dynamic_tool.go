@@ -87,6 +87,13 @@ type CapabilitySurfaceProvider func(
 	parentInv *agent.Invocation,
 ) ([]tool.Tool, map[string]bool)
 
+// CapabilitySkillsProvider returns the maximum skill repository the model may
+// select from for one dynamic sub-agent invocation.
+type CapabilitySkillsProvider func(
+	ctx context.Context,
+	parentInv *agent.Invocation,
+) skill.Repository
+
 // WithTemplateAgent sets the base/template agent that defines the execution
 // boundary for the dynamic sub-agent (model, executor, callbacks, permission
 // policy, max calls, ...).
@@ -127,6 +134,16 @@ func WithCapabilityTools(tools []tool.Tool) Option {
 func WithCapabilitySkills(repo skill.Repository) Option {
 	return func(opts *agentToolOptions) {
 		opts.ensureDynamicOptions().capabilitySkills = repo
+	}
+}
+
+// WithCapabilitySkillsProvider overrides how the maximum skill repository is
+// resolved for a dynamic sub-agent. By default the repository is derived from
+// the parent invocation's effective skills. This takes precedence over
+// WithCapabilitySkills.
+func WithCapabilitySkillsProvider(provider CapabilitySkillsProvider) Option {
+	return func(opts *agentToolOptions) {
+		opts.ensureDynamicOptions().capabilitySkillProvider = provider
 	}
 }
 
@@ -693,14 +710,18 @@ func (at *Tool) selectDynamicTools(
 }
 
 // dynamicMaxSkillRepo resolves the maximum skill repository the model may
-// select from: the code-side WithCapabilitySkills repository when set, else the
-// parent invocation's effective repository. It never returns the template
-// agent's own repository — the boundary is always the parent's skills (or an
-// explicit capability override).
+// select from: the code-side WithCapabilitySkillsProvider repository when set,
+// else the code-side WithCapabilitySkills repository when set, else the parent
+// invocation's effective repository. It never returns the template agent's own
+// repository — the boundary is always the parent's skills (or an explicit
+// capability override).
 func (at *Tool) dynamicMaxSkillRepo(
 	ctx context.Context,
 	parentInv *agent.Invocation,
 ) skill.Repository {
+	if at.dynamicCfg.capabilitySkillProvider != nil {
+		return at.dynamicCfg.capabilitySkillProvider(ctx, parentInv)
+	}
 	if at.dynamicCfg.capabilitySkills != nil {
 		return at.dynamicCfg.capabilitySkills
 	}
