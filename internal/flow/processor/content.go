@@ -1268,9 +1268,9 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 		events = p.insertInvocationMessage(events, inv)
 	}
 
-	resultEvents := p.rearrangeLatestFuncResp(events)
+	resultEvents := p.applyToolTranscriptMode(events, inv)
+	resultEvents = p.rearrangeLatestFuncResp(resultEvents)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
-	resultEvents = p.applyToolTranscriptMode(resultEvents, inv)
 	// Apply compaction to the already timeline-filtered projection. Tool-result
 	// policy (force-clean/keep) and historical passes must run for scoped modes
 	// such as request/invocation, not only when TimelineFilterAll is selected.
@@ -2586,8 +2586,13 @@ func isPreviousToolTranscriptEvent(evt event.Event, inv *agent.Invocation) bool 
 	if inv == nil {
 		return false
 	}
-	if inv.RunOptions.RequestID != "" && evt.RequestID == inv.RunOptions.RequestID {
-		return false
+	if inv.RunOptions.RequestID != "" {
+		if evt.RequestID == inv.RunOptions.RequestID {
+			return false
+		}
+		if evt.RequestID != "" {
+			return true
+		}
 	}
 	if inv.InvocationID != "" && evt.InvocationID == inv.InvocationID {
 		return false

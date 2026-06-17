@@ -4385,6 +4385,42 @@ func TestContentRequestProcessor_ToolTranscriptModeOmitPreviousCompleted(t *test
 	require.Empty(t, messages[0].ToolCalls)
 }
 
+func TestContentRequestProcessor_ToolTranscriptModeOmitsPreviousRequestInSameInvocation(t *testing.T) {
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			toolTranscriptTestEvent("req1", "inv2", toolTranscriptTestCall("call_1", ""), ""),
+			toolTranscriptTestEvent(
+				"req1",
+				"inv2",
+				model.NewToolMessage("call_1", "lookup", "result"),
+				model.ObjectTypeToolResponse,
+			),
+			toolTranscriptTestEvent(
+				"req1",
+				"inv2",
+				model.NewAssistantMessage("final answer"),
+				"",
+			),
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv2"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req2"}),
+	)
+	inv.AgentName = "test-agent"
+
+	messages := NewContentRequestProcessor(
+		WithToolTranscriptMode(ToolTranscriptModeOmitPreviousCompleted),
+	).getIncrementMessages(inv, time.Time{})
+
+	require.Len(t, messages, 1)
+	require.Equal(t, model.RoleAssistant, messages[0].Role)
+	require.Equal(t, "final answer", messages[0].Content)
+	require.Empty(t, messages[0].ToolCalls)
+}
+
 func TestContentRequestProcessor_ToolTranscriptModeKeepsCurrentRequest(t *testing.T) {
 	sess := &session.Session{
 		EventMu: sync.RWMutex{},
@@ -4522,6 +4558,68 @@ func TestContentRequestProcessor_ToolTranscriptModeKeepsPreviousCallWithCurrentR
 	require.Equal(t, model.RoleTool, messages[1].Role)
 	require.Equal(t, "call_1", messages[1].ToolID)
 	require.Equal(t, "current result", messages[1].Content)
+}
+
+func TestContentRequestProcessor_ToolTranscriptModeKeepsMultiToolCallWithCurrentResult(t *testing.T) {
+	toolCallMsg := model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{
+			{
+				Type: "function",
+				ID:   "call_1",
+				Function: model.FunctionDefinitionParam{
+					Name:      "lookup",
+					Arguments: []byte(`{"q":"old"}`),
+				},
+			},
+			{
+				Type: "function",
+				ID:   "call_2",
+				Function: model.FunctionDefinitionParam{
+					Name:      "lookup",
+					Arguments: []byte(`{"q":"current"}`),
+				},
+			},
+		},
+	}
+	sess := &session.Session{
+		EventMu: sync.RWMutex{},
+		Events: []event.Event{
+			toolTranscriptTestEvent("req1", "inv1", toolCallMsg, ""),
+			toolTranscriptTestEvent(
+				"req1",
+				"inv1",
+				model.NewToolMessage("call_1", "lookup", "old result"),
+				model.ObjectTypeToolResponse,
+			),
+			toolTranscriptTestEvent(
+				"req2",
+				"inv2",
+				model.NewToolMessage("call_2", "lookup", "current result"),
+				model.ObjectTypeToolResponse,
+			),
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationID("inv2"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req2"}),
+	)
+	inv.AgentName = "test-agent"
+
+	messages := NewContentRequestProcessor(
+		WithToolTranscriptMode(ToolTranscriptModeOmitPreviousCompleted),
+	).getIncrementMessages(inv, time.Time{})
+
+	require.Len(t, messages, 3)
+	require.Equal(t, model.RoleAssistant, messages[0].Role)
+	require.Len(t, messages[0].ToolCalls, 2)
+	require.Equal(t, model.RoleTool, messages[1].Role)
+	require.Equal(t, "call_1", messages[1].ToolID)
+	require.Equal(t, "old result", messages[1].Content)
+	require.Equal(t, model.RoleTool, messages[2].Role)
+	require.Equal(t, "call_2", messages[2].ToolID)
+	require.Equal(t, "current result", messages[2].Content)
 }
 
 func TestContentRequestProcessor_ToolTranscriptModeKeepsAssistantText(t *testing.T) {
