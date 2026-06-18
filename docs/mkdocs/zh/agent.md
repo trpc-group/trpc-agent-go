@@ -349,6 +349,45 @@ agent := llmagent.New(
 
 **注意：** 此选项仅影响发送给模型之前对历史消息的处理方式。当前响应的 `reasoning_content` 始终会被捕获并存储在会话事件中。
 
+### 工具调用记录历史模式
+
+默认情况下，LLMAgent 会在后续请求中继续把历史工具调用及其对应工具结果发送给模型。这是最保守、兼容性最强的行为；但在包含大量已完成工具调用轮次的长会话中，这些历史 tool transcript 可能会占用不必要的上下文。
+
+LLMAgent 提供 `WithToolTranscriptMode` 来控制已完成历史工具调用/工具结果对在模型请求中的投影方式：
+
+| 模式 | 常量 | 描述 |
+|------|------|------|
+| 保留全部 | `ToolTranscriptModeKeepAll` | 在模型请求中保留所有历史工具调用和工具结果记录。**（默认）** |
+| 省略之前已完成记录 | `ToolTranscriptModeOmitPreviousCompleted` | 省略之前请求中已完成的工具调用/工具结果对，同时保留当前请求或未完成的工具轮次。 |
+
+**使用示例：**
+
+```go
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("You are a helpful assistant."),
+    // 省略之前请求中已完成的工具调用记录，降低 prompt 大小。
+    llmagent.WithToolTranscriptMode(llmagent.ToolTranscriptModeOmitPreviousCompleted),
+)
+```
+
+**工作原理：**
+
+- **`keep_all`**：所有历史工具调用和工具结果都会保留在模型请求中。
+- **`omit_previous_completed`**：构建新请求的消息列表时，之前请求中已经完整闭环的工具调用/工具结果对会从投影出的历史消息中省略。
+
+省略模式会保守处理以下情况：
+
+- 当前请求内的工具调用循环会保留，确保模型仍能看到正在处理的工具调用。
+- 未完成的历史工具调用会保留，避免生成无效的 tool-call transcript。
+- 如果被省略的工具调用事件里带有普通 assistant 文本，这部分文本会保留；只移除工具调用及其匹配的工具结果。
+- session event 不会被删除。该模式只影响发送给模型请求的消息投影。
+
+当历史中已完成的工具调用记录不再需要被模型逐字读取、且希望降低 prompt 大小时，可以启用 `ToolTranscriptModeOmitPreviousCompleted`。如果后续回答仍需要精确查看之前的原始工具调用或工具结果，请保留默认的 `ToolTranscriptModeKeepAll`。
+
+它和 context compaction 不同：tool transcript mode 可以在请求投影中省略完整的历史工具调用/工具结果对；context compaction 则保留 tool result 消息形态，只压缩较大的工具结果内容。
+
 ### 委托可见性选项
 
 在构建多 Agent（智能体）系统（Agent 之间的任务委托）时，LLMAgent 提供“默认占位消息”的统一配置。转移（transfer）事件始终包含提示文本，并统一打上 `transfer` 标签，前端（UI, User Interface）可按标签过滤。
