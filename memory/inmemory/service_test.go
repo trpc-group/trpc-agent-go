@@ -833,6 +833,12 @@ func TestWithMemoryJobTimeout(t *testing.T) {
 	assert.Equal(t, time.Minute, service.opts.memoryJobTimeout)
 }
 
+func TestWithDisableAutoMemoryOnExternalContext(t *testing.T) {
+	service := NewMemoryService(WithDisableAutoMemoryOnExternalContext(true))
+	require.NotNil(t, service)
+	assert.True(t, service.opts.disableAutoMemoryOnExternalContext)
+}
+
 func TestEnqueueAutoMemoryJob_NoExtractor(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()
@@ -869,6 +875,33 @@ func TestEnqueueAutoMemoryJob_WithExtractor(t *testing.T) {
 	// Wait for async processing.
 	time.Sleep(50 * time.Millisecond)
 	assert.True(t, ext.extractCalled)
+}
+
+func TestEnqueueAutoMemoryJob_DisableOnExternalContext(t *testing.T) {
+	ext := &mockExtractor{}
+	service := NewMemoryService(
+		WithExtractor(ext),
+		WithDisableAutoMemoryOnExternalContext(true),
+	)
+	defer service.Close()
+
+	ctx := context.Background()
+	sess := session.NewSession("test-app", "test-user", "test-session")
+	sess.SetState(memory.SessionStateKeyMemoryMode, []byte(memory.MemoryModePolluted))
+	sess.Events = []event.Event{
+		{
+			Timestamp: time.Now(),
+			Response: &model.Response{
+				Choices: []model.Choice{{Message: model.NewUserMessage("hello")}},
+			},
+		},
+	}
+
+	err := service.EnqueueAutoMemoryJob(ctx, sess)
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+	assert.False(t, ext.extractCalled)
 }
 
 func TestClose(t *testing.T) {

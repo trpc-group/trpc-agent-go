@@ -75,12 +75,18 @@ runner := runner.NewRunner(
 
 ### Auto Memory Configuration Options
 
-| Option                     | Description                            | Default        |
-| -------------------------- | -------------------------------------- | -------------- |
-| `WithExtractor(extractor)` | Enable auto mode with LLM extractor    | nil (disabled) |
-| `WithAsyncMemoryNum(n)`    | Number of background worker goroutines | 3              |
-| `WithMemoryQueueSize(n)`   | Size of memory job queue               | 100            |
-| `WithMemoryJobTimeout(d)`  | Timeout for each extraction job        | 30s            |
+| Option                                             | Description                                        | Default        |
+| -------------------------------------------------- | -------------------------------------------------- | -------------- |
+| `WithExtractor(extractor)`                         | Enable auto mode with LLM extractor                | nil (disabled) |
+| `WithAsyncMemoryNum(n)`                            | Number of background worker goroutines             | 3              |
+| `WithMemoryQueueSize(n)`                           | Size of memory job queue                           | 100            |
+| `WithMemoryJobTimeout(d)`                          | Timeout for each extraction job                    | 30s            |
+| `WithDisableAutoMemoryOnExternalContext(disable)`  | Skip future auto extraction after knowledge search | false          |
+
+When `WithDisableAutoMemoryOnExternalContext(true)` is enabled, framework-owned
+knowledge search tools mark the session state `memory:mode = polluted`. The
+guard only stops future automatic extraction for that session. It does not block
+memory preload, `memory_search`, `memory_load`, or explicit memory write tools.
 
 ### Extraction Checkers (>= 1.3.0)
 
@@ -232,6 +238,8 @@ memoryService := memoryinmemory.NewMemoryService(
 | `-memory`    | Memory service type: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `postgres`, `pgvector`, `mysql` | `inmemory` |
 | `-streaming` | Enable streaming mode for responses                                       | `true`           |
 | `-debug`     | Enable debug mode to print messages sent to model                         | `false`          |
+| `-knowledge` | Enable a local knowledge base and expose `knowledge_search`                | `false`          |
+| `-disable-auto-memory-on-external-context` | Stop future auto extraction after knowledge search | `false` |
 
 ## Usage
 
@@ -300,6 +308,21 @@ go run . -debug
 ```bash
 go run . -streaming=false
 ```
+
+### External Context Guard Smoke
+
+```bash
+go run . \
+  -memory inmemory \
+  -streaming=false \
+  -knowledge \
+  -disable-auto-memory-on-external-context
+```
+
+Use `/state` to inspect the current session state. After `knowledge_search`
+returns successfully with the guard enabled, `/state` prints
+`memory:mode = polluted`, and future automatic extraction for that session is
+skipped.
 
 ### Help
 
@@ -379,6 +402,7 @@ work at TechCorp as a backend engineer.
 ### Session Commands
 
 - `/memory` - Show stored memories for the current user
+- `/state` - Show the current memory guard state
 - `/new` - Start a new session (memories persist across sessions)
 - `/exit` - End the conversation
 
