@@ -438,7 +438,7 @@ Common `ContextThresholdOption` values:
 | --- | --- |
 | `WithContextThresholdRatio(ratio float64)` | Sets the context-window ratio that triggers summarization; default `0.5` |
 | `WithContextThresholdMinTokens(tokens int)` | Sets the absolute minimum trigger token count; default `2000`. Pass `0` to remove this lower bound |
-| `WithContextThresholdFallbackWindow(tokens int)` | Fallback context window when the runtime context or model configuration cannot resolve one; default `8192` |
+| `WithContextThresholdFallbackWindow(tokens int)` | Sets the summary checker's fallback context window; default `8192`. In the `WithContextThreshold` path, this is used only when the runtime context, model instance or registry, and summarizer model cannot resolve a context window. This is separate from token tailoring's `128000` unknown-model fallback |
 
 ### Combined Conditions
 
@@ -822,6 +822,44 @@ The Runner automatically checks trigger conditions after each conversation compl
 - Custom combined conditions met (`WithChecksAny` / `WithChecksAll`)
 
 `WithTimeThreshold` is not a standalone background timer. The condition is only evaluated when a summary check runs, typically after a conversation turn completes or when you call summary APIs manually. It checks the last event of the session being evaluated; in the Runner's normal delta-summary flow, that session contains only pending events, so this effectively means the latest unsummarized event. For example, `5*time.Minute` means "on the next summary check, if the checked session's last event is already older than 5 minutes, summarize now."
+
+### Same-Run Sync Summary for Long ReAct Loops
+
+The default automatic path is asynchronous: after the Runner appends an event,
+it enqueues a summary job and a background worker later checks whether a summary
+should be generated. This keeps the main request path light, but it may be too
+late when one `Run` contains multiple LLM/tool iterations and the next LLM call
+needs the freshly summarized state immediately.
+
+For agents that frequently call tools repeatedly inside the same `Run`, and
+where tool results can quickly grow the prompt, enable same-run sync summary:
+
+```go
+agent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithSyncSummaryIntraRun(true),
+)
+```
+
+When enabled, the Flow performs one synchronous summary check between LLM loop
+iterations in the same `Run`. It calls `CreateSessionSummary(..., force=false)`,
+so it still respects the summarizer's event, token, time, or context-window
+thresholds; it does not force summary generation. With
+`WithAddSessionSummary(true)`, the next LLM request can inject the refreshed
+summary and append only events after the summary boundary.
+
+To avoid duplicate work, intermediate `tool result` events skip redundant async
+summary enqueueing when same-run sync summary is active. The final assistant
+response can still enqueue an async job so the persisted session summary is
+up-to-date after the run ends. This option does not replace the default
+cross-run async summary behavior.
+
+Same-run sync summary may put an extra summary LLM call on the main path. Use
+it for long ReAct loops, coding agents, repeated large tool outputs, or
+near-context-window situations. For general online Q&A and latency-sensitive
+traffic, prefer the default async summary path.
 
 ### Manual Trigger
 
