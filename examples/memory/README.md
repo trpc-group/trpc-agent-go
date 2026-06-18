@@ -294,28 +294,6 @@ Both examples provide an interactive chat interface:
 - Use `/new` to start a new session
 - Use `/exit` to exit
 
-## Read Path Playbook Smoke Test
-
-The preload memory prompt includes read-path guidance that tells the model when
-to use preloaded memories, when to call `memory_search` / `memory_load`, and
-when to fall back to session recall. To validate this behavior with a real
-OpenAI-compatible model, run the smoke script from the repository root:
-
-```bash
-source ./glm.sh
-bash ./examples/memory/playbook_smoke.sh
-```
-
-You can also export equivalent `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and
-`MODEL_NAME` values yourself. The script never prints secret values.
-
-The smoke test runs two real LLM-backed flows:
-
-- `examples/memory/auto` with `-debug`, verifying the request sent to the model
-  contains the built-in playbook and preloaded memory block markers.
-- `examples/memory/simple`, verifying the agentic memory tool path still
-  produces memory tool calls after the richer preload prompt is enabled.
-
 ## Advanced Usage
 
 ### Using Different Memory Backends
