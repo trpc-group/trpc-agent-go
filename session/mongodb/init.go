@@ -22,11 +22,12 @@ import (
 
 // ensureIndexes creates the indexes required by the session backend.
 //
-// All unique indexes filter on `deleted_at $exists false` so soft-deleted
-// documents do not occupy a unique slot, mirroring the partial unique index
-// used by the PostgreSQL backend.
+// All unique indexes filter on active documents so soft-deleted documents do
+// not occupy a unique slot, mirroring the partial unique index used by the
+// PostgreSQL backend. MongoDB partial indexes do not support `$exists: false`,
+// so both indexes and active-document queries use `deleted_at: nil`.
 func (s *Service) ensureIndexes(ctx context.Context) error {
-	notDeleted := bson.M{"deleted_at": bson.M{"$exists": false}}
+	notDeleted := bson.M{"deleted_at": nil}
 	expiresExists := bson.M{"expires_at": bson.M{"$exists": true}}
 	ttlIndex := func(tableName string) mongo.IndexModel {
 		return mongo.IndexModel{

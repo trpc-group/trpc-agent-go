@@ -11,9 +11,11 @@ package mongodb
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 func TestEncodeDecode_RoundTrip(t *testing.T) {
@@ -68,4 +70,16 @@ func TestDecodeKey_UnknownEscapePreserved(t *testing.T) {
 	// Unknown escape sequences are passed through (forward-compat).
 	assert.Equal(t, `\x`, decodeKey(`\x`))
 	assert.Equal(t, `a\xb`, decodeKey(`a\xb`))
+}
+
+func TestActiveFiltersUseDeletedAtNilPredicate(t *testing.T) {
+	active := activeFilter(time.Now(), bson.M{"app_name": "app"})
+	assert.Equal(t, nil, active["deleted_at"])
+	assert.Equal(t, "app", active["app_name"])
+	assert.Contains(t, active, "$or")
+
+	noExpiry := activeFilterNoExpiry(bson.M{"app_name": "app"})
+	assert.Equal(t, nil, noExpiry["deleted_at"])
+	assert.Equal(t, "app", noExpiry["app_name"])
+	assert.NotContains(t, noExpiry, "$or")
 }

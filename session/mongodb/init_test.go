@@ -56,7 +56,7 @@ func TestEnsureIndexes_CoversAllSixCollectionsInOrder(t *testing.T) {
 	}, order)
 }
 
-func TestEnsureIndexes_ActiveIndexesFilterOnDeletedAtAbsent(t *testing.T) {
+func TestEnsureIndexes_ActiveIndexesFilterOnDeletedAtNil(t *testing.T) {
 	_, models := captureIndexes(t)
 	for coll, ms := range models {
 		require.NotEmpty(t, ms, "no indexes on %s", coll)
@@ -69,9 +69,8 @@ func TestEnsureIndexes_ActiveIndexesFilterOnDeletedAtAbsent(t *testing.T) {
 			require.NotNil(t, m.Options.PartialFilterExpression, "%s: nil PartialFilterExpression", coll)
 			expr, ok := m.Options.PartialFilterExpression.(bson.M)
 			require.True(t, ok, "%s: PartialFilterExpression not a bson.M", coll)
-			inner, ok := expr["deleted_at"].(bson.M)
-			require.True(t, ok, "%s: missing deleted_at clause", coll)
-			assert.Equal(t, false, inner["$exists"], "%s: $exists value", coll)
+			assert.Contains(t, expr, "deleted_at", "%s: missing deleted_at clause", coll)
+			assert.Nil(t, expr["deleted_at"], "%s: deleted_at value", coll)
 		}
 	}
 }

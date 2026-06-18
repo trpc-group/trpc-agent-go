@@ -55,9 +55,31 @@ func TestCreateSessionSummary_PersistsViaUpsert(t *testing.T) {
 			upd := op.update.(bson.M)
 			assert.Contains(t, upd, "$set")
 			assert.Contains(t, upd, "$setOnInsert")
+			set := upd["$set"].(bson.M)
+			assert.NotContains(t, set, "expires_at")
+			unset := upd["$unset"].(bson.M)
+			assert.Contains(t, unset, "expires_at")
 		}
 	}
 	assert.True(t, sawUpsert, "expected an UpdateOne(upsert) on session_summaries")
+}
+
+func TestCreateSessionSummary_TTLSetsExpiresAt(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.summarizer = &stubSummarizer{text: "hello"}
+		o.sessionTTL = time.Hour
+	})
+
+	sess := newSessionForTest("app", "u", "s")
+	require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "", true))
+
+	upd := mc.recorded()[0].update.(bson.M)
+	set := upd["$set"].(bson.M)
+	exp, ok := set["expires_at"].(*time.Time)
+	require.True(t, ok)
+	assert.WithinDuration(t, time.Now().Add(time.Hour), *exp, 5*time.Second)
+	assert.NotContains(t, upd, "$unset")
 }
 
 func TestCreateSessionSummary_RespectsAllowlist(t *testing.T) {

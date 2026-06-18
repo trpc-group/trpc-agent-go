@@ -188,6 +188,46 @@ func TestIntegrationWindowIgnoresEventsBeforeRecreatedSession(t *testing.T) {
 	assert.Equal(t, "new", window.Entries[0].Event.ID)
 }
 
+func TestIntegrationCreateSessionReplacesExpiredSameKey(t *testing.T) {
+	ctx, svc, _ := newIntegrationService(t, WithSessionTTL(time.Hour))
+	key := session.Key{AppName: "it-app", UserID: "it-user", SessionID: "expired-recreate"}
+	oldTime := time.Now().Add(-2 * time.Hour)
+	oldExpiresAt := time.Now().Add(-time.Hour)
+	oldEventBytes, err := json.Marshal(integrationEvent("old", model.RoleUser, "old"))
+	require.NoError(t, err)
+
+	_, err = svc.client.InsertOne(ctx, svc.database, svc.collSessionStates, sessionStateDoc{
+		AppName:   key.AppName,
+		UserID:    key.UserID,
+		SessionID: key.SessionID,
+		State:     bson.M{"old": []byte("state")},
+		CreatedAt: oldTime,
+		UpdatedAt: oldTime,
+		ExpiresAt: &oldExpiresAt,
+	})
+	require.NoError(t, err)
+	_, err = svc.client.InsertOne(ctx, svc.database, svc.collSessionEvents, sessionEventDoc{
+		AppName:   key.AppName,
+		UserID:    key.UserID,
+		SessionID: key.SessionID,
+		Event:     oldEventBytes,
+		CreatedAt: oldTime,
+		UpdatedAt: oldTime,
+	})
+	require.NoError(t, err)
+
+	sess, err := svc.CreateSession(ctx, key, session.StateMap{"fresh": []byte("state")})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, []byte("state"), sess.State["fresh"])
+
+	got, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []byte("state"), got.State["fresh"])
+	assert.Empty(t, got.Events)
+}
+
 func TestIntegrationIndexesAndGroupedCleanup(t *testing.T) {
 	ctx, svc, database := newIntegrationService(t,
 		WithSessionTTL(time.Hour),

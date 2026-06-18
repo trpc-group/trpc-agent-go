@@ -46,7 +46,7 @@ type ServiceOpts struct {
 
 	enableAsyncPersist bool
 	asyncPersisterNum  int
-	cleanupInterval    time.Duration // interval for session_events cleanup ticker
+	cleanupInterval    time.Duration // interval for session_events / session_tracks cleanup ticker
 	softDelete         bool
 
 	skipDBInit       bool

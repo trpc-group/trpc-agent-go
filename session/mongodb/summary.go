@@ -20,6 +20,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 )
@@ -70,6 +71,7 @@ func (s *Service) CreateSessionSummary(
 	}
 
 	now := time.Now()
+	expiresAt := expiresAtPtr(now, s.opts.sessionTTL)
 	filter := activeFilterNoExpiry(bson.M{
 		"app_name":   sess.AppName,
 		"user_id":    sess.UserID,
@@ -88,6 +90,11 @@ func (s *Service) CreateSessionSummary(
 			"filter_key": filterKey,
 			"created_at": now,
 		},
+	}
+	if expiresAt != nil {
+		update["$set"].(bson.M)["expires_at"] = expiresAt
+	} else {
+		update["$unset"] = bson.M{"expires_at": ""}
 	}
 	if _, err := s.client.UpdateOne(ctx, s.database, s.collSessionSummaries, filter, update,
 		options.Update().SetUpsert(true)); err != nil {
@@ -183,7 +190,10 @@ func (s *Service) loadSummaryText(
 	})
 	var doc sessionSummaryDoc
 	err := s.client.FindOne(ctx, s.database, s.collSessionSummaries, filter).Decode(&doc)
-	if errors.Is(err, mongo.ErrNoDocuments) || err != nil {
+	if err != nil {
+		if !errors.Is(err, mongo.ErrNoDocuments) {
+			log.ErrorfContext(ctx, "mongodb session service load summary text failed: %v", err)
+		}
 		return "", false
 	}
 	var sum session.Summary
