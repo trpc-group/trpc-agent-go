@@ -21,6 +21,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -290,6 +291,28 @@ func applyOptions(opts ...session.Option) *session.Options {
 		o(opt)
 	}
 	return opt
+}
+
+func (s *Service) startAsyncPersistWorker() {
+	persisterNum := s.opts.asyncPersisterNum
+	s.eventPairChans = make([]chan *sessionEventPair, persisterNum)
+	for i := 0; i < persisterNum; i++ {
+		s.eventPairChans[i] = make(chan *sessionEventPair, defaultChanBufferSize)
+	}
+
+	s.persistWg.Add(persisterNum)
+	for _, eventPairChan := range s.eventPairChans {
+		go func(eventPairChan chan *sessionEventPair) {
+			defer s.persistWg.Done()
+			for pair := range eventPairChan {
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
+				if err := s.persistEvent(ctx, pair.key, pair.event); err != nil {
+					log.ErrorfContext(ctx, "mongodb session async persist failed: %v", err)
+				}
+				cancel()
+			}
+		}(eventPairChan)
+	}
 }
 
 // getEventsList batch-loads events for the given sessions.

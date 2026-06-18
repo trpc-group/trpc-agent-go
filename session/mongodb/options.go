@@ -19,8 +19,12 @@ import (
 )
 
 const (
-	defaultDatabase          = "trpc-agent-go-mongo-session"
-	defaultSessionEventLimit = 1000
+	defaultDatabase              = "trpc-agent-go-mongo-session"
+	defaultSessionEventLimit     = 1000
+	defaultChanBufferSize        = 100
+	defaultAsyncPersisterNum     = 10
+	defaultCleanupIntervalSecond = 5 * time.Minute
+	defaultAsyncPersistTimeout   = 5 * time.Second
 )
 
 // ServiceOpts is the options for the mongodb session service.
@@ -36,7 +40,10 @@ type ServiceOpts struct {
 	appStateTTL       time.Duration // TTL for app state
 	userStateTTL      time.Duration // TTL for user state
 
-	softDelete bool
+	enableAsyncPersist bool
+	asyncPersisterNum  int
+	cleanupInterval    time.Duration // interval for session_events cleanup ticker
+	softDelete         bool
 
 	skipDBInit       bool
 	collectionPrefix string
@@ -55,8 +62,11 @@ type ServiceOpts struct {
 type ServiceOpt func(*ServiceOpts)
 
 var defaultOptions = ServiceOpts{
-	sessionEventLimit: defaultSessionEventLimit,
-	softDelete:        true,
+	sessionEventLimit:  defaultSessionEventLimit,
+	asyncPersisterNum:  defaultAsyncPersisterNum,
+	enableAsyncPersist: false,
+	cleanupInterval:    0,
+	softDelete:         true,
 }
 
 func (opts ServiceOpts) shouldCascadeFullSessionSummary() bool {
@@ -131,6 +141,34 @@ func WithAppStateTTL(ttl time.Duration) ServiceOpt {
 func WithUserStateTTL(ttl time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.userStateTTL = ttl
+	}
+}
+
+// WithEnableAsyncPersist enables async persistence for session state and events.
+// If not set, AppendEvent persists synchronously.
+func WithEnableAsyncPersist(enable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.enableAsyncPersist = enable
+	}
+}
+
+// WithAsyncPersisterNum sets the number of workers for async event persistence.
+// Values below 1 fall back to the default.
+func WithAsyncPersisterNum(num int) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if num < 1 {
+			num = defaultAsyncPersisterNum
+		}
+		opts.asyncPersisterNum = num
+	}
+}
+
+// WithCleanupInterval sets the session_events cleanup interval.
+// If session TTL is configured and this option is left as zero, NewService uses
+// the default cleanup interval. Other collections rely on MongoDB TTL indexes.
+func WithCleanupInterval(interval time.Duration) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.cleanupInterval = interval
 	}
 }
 

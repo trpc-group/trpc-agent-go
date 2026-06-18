@@ -55,11 +55,15 @@ func TestEnsureIndexes_CoversAllFiveCollectionsInOrder(t *testing.T) {
 	}, order)
 }
 
-func TestEnsureIndexes_AllIndexesFilterOnDeletedAtAbsent(t *testing.T) {
+func TestEnsureIndexes_ActiveIndexesFilterOnDeletedAtAbsent(t *testing.T) {
 	_, models := captureIndexes(t)
 	for coll, ms := range models {
 		require.NotEmpty(t, ms, "no indexes on %s", coll)
 		for _, m := range ms {
+			keys := m.Keys.(bson.D)
+			if len(keys) == 1 && keys[0].Key == "expires_at" {
+				continue
+			}
 			require.NotNil(t, m.Options, "%s: nil Options", coll)
 			require.NotNil(t, m.Options.PartialFilterExpression, "%s: nil PartialFilterExpression", coll)
 			expr, ok := m.Options.PartialFilterExpression.(bson.M)
@@ -111,11 +115,45 @@ func TestEnsureIndexes_SessionEventsIsLookupOnCreatedAt(t *testing.T) {
 func TestEnsureIndexes_SessionSummariesUniqueOnFilterKey(t *testing.T) {
 	_, models := captureIndexes(t)
 	ms := models["session_summaries"]
-	require.Len(t, ms, 1)
+	require.NotEmpty(t, ms)
 	keys := ms[0].Keys.(bson.D)
 	require.Len(t, keys, 4)
 	assert.Equal(t, "app_name", keys[0].Key)
 	assert.Equal(t, "user_id", keys[1].Key)
 	assert.Equal(t, "session_id", keys[2].Key)
 	assert.Equal(t, "filter_key", keys[3].Key)
+}
+
+func TestEnsureIndexes_FourCollectionsHaveTTLIndex(t *testing.T) {
+	_, models := captureIndexes(t)
+	ttlCollections := map[string]bool{
+		"session_states":    true,
+		"session_summaries": true,
+		"app_states":        true,
+		"user_states":       true,
+	}
+
+	for coll, ms := range models {
+		var ttlCount int
+		for _, m := range ms {
+			keys := m.Keys.(bson.D)
+			if len(keys) != 1 || keys[0].Key != "expires_at" {
+				continue
+			}
+			ttlCount++
+			require.NotNil(t, m.Options)
+			require.NotNil(t, m.Options.ExpireAfterSeconds, "%s: TTL index missing expireAfterSeconds", coll)
+			assert.Equal(t, int32(0), *m.Options.ExpireAfterSeconds, "%s: TTL expiry", coll)
+			expr, ok := m.Options.PartialFilterExpression.(bson.M)
+			require.True(t, ok, "%s: TTL partial filter should be bson.M", coll)
+			inner, ok := expr["expires_at"].(bson.M)
+			require.True(t, ok, "%s: TTL partial filter missing expires_at", coll)
+			assert.Equal(t, true, inner["$exists"], "%s: TTL partial filter", coll)
+		}
+		if ttlCollections[coll] {
+			assert.Equal(t, 1, ttlCount, "%s should have one TTL index", coll)
+		} else {
+			assert.Zero(t, ttlCount, "%s should not have a TTL index", coll)
+		}
+	}
 }

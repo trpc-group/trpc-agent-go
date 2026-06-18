@@ -142,6 +142,7 @@ type mockClient struct {
 	deleteManyFn    func(ctx context.Context, db, coll string, filter any) (*mongo.DeleteResult, error)
 	findOneFn       func(ctx context.Context, db, coll string, filter any) *mongo.SingleResult
 	findFn          func(ctx context.Context, db, coll string, filter any) (*mongo.Cursor, error)
+	aggregateFn     func(ctx context.Context, db, coll string, pipeline any) (*mongo.Cursor, error)
 	ensureIndexesFn func(ctx context.Context, db, coll string, models []mongo.IndexModel) ([]string, error)
 	transactionFn   func(ctx context.Context, fn TxFunc, opts ...TxOption) error
 	closeFn         func(ctx context.Context) error
@@ -199,6 +200,14 @@ func (m *mockClient) Find(ctx context.Context, db, coll string, filter any,
 	_ ...*options.FindOptions) (*mongo.Cursor, error) {
 	if m.findFn != nil {
 		return m.findFn(ctx, db, coll, filter)
+	}
+	return nil, nil
+}
+
+func (m *mockClient) Aggregate(ctx context.Context, db, coll string, pipeline any,
+	_ ...*options.AggregateOptions) (*mongo.Cursor, error) {
+	if m.aggregateFn != nil {
+		return m.aggregateFn(ctx, db, coll, pipeline)
 	}
 	return nil, nil
 }
@@ -302,6 +311,21 @@ func TestMockClientDispatch(t *testing.T) {
 		mc.FindOne(ctx, "db", "c", bson.M{})
 		_, _ = mc.Find(ctx, "db", "c", bson.M{})
 		assert.Equal(t, 2, calls)
+	})
+
+	t.Run("Aggregate dispatches", func(t *testing.T) {
+		called := false
+		mc := &mockClient{
+			aggregateFn: func(_ context.Context, _, _ string, pipeline any) (*mongo.Cursor, error) {
+				called = true
+				assert.Equal(t, bson.A{bson.M{"$match": bson.M{"k": "v"}}}, pipeline)
+				return mongo.NewCursorFromDocuments(nil, nil, nil)
+			},
+		}
+		cursor, err := mc.Aggregate(ctx, "db", "c", bson.A{bson.M{"$match": bson.M{"k": "v"}}})
+		require.NoError(t, err)
+		require.NotNil(t, cursor)
+		assert.True(t, called)
 	})
 
 	t.Run("EnsureIndexes dispatches", func(t *testing.T) {

@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mongodb"
 )
@@ -37,8 +39,14 @@ var errSessionNotFound = errors.New("session not found")
 
 // Service is the mongodb session service.
 type Service struct {
-	opts   ServiceOpts
-	client storage.Client
+	opts           ServiceOpts
+	client         storage.Client
+	eventPairChans []chan *sessionEventPair // channel for session events to persistence
+	cleanupTicker  *time.Ticker             // ticker for automatic session_events cleanup
+	cleanupDone    chan struct{}            // signal to stop cleanup routine
+	cleanupOnce    sync.Once                // ensure cleanup routine is stopped only once
+	persistWg      sync.WaitGroup           // wait group for persist workers
+	once           sync.Once                // ensure Close is called only once
 
 	// database holds the resolved mongodb database name (defaults to a constant
 	// when WithDatabase was not used).
@@ -50,6 +58,11 @@ type Service struct {
 	collSessionSummaries string
 	collAppStates        string
 	collUserStates       string
+}
+
+type sessionEventPair struct {
+	key   session.Key
+	event *event.Event
 }
 
 // buildClientOpts assembles the storage.ClientBuilderOpt list from ServiceOpts,
@@ -93,6 +106,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	if database == "" {
 		database = defaultDatabase
 	}
+	if opts.sessionTTL > 0 && opts.cleanupInterval == 0 {
+		opts.cleanupInterval = defaultCleanupIntervalSecond
+	}
 
 	s := &Service{
 		opts:                 opts,
@@ -116,6 +132,13 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 				"multi-document transactions (replica set or sharded cluster); ensure the "+
 				"target deployment is not standalone: %w", err)
 		}
+	}
+	if opts.enableAsyncPersist {
+		s.startAsyncPersistWorker()
+	}
+	if opts.sessionTTL > 0 && opts.cleanupInterval > 0 {
+		s.cleanupDone = make(chan struct{})
+		s.startCleanupRoutine()
 	}
 
 	return s, nil
@@ -657,6 +680,30 @@ func (s *Service) appendEventInternal(
 	// the postgres backend's behavior.
 	sess.UpdateUserSession(e, opts...)
 
+	if s.opts.enableAsyncPersist {
+		defer func() {
+			if r := recover(); r != nil {
+				if fmt.Sprint(r) == "send on closed channel" {
+					log.ErrorfContext(ctx, "mongodb session async persist failed: %v", r)
+					return
+				}
+				panic(r)
+			}
+		}()
+
+		n := len(s.eventPairChans)
+		if n == 0 {
+			return fmt.Errorf("async persist workers are not initialized")
+		}
+		index := sess.Hash % n
+		select {
+		case s.eventPairChans[index] <- &sessionEventPair{key: key, event: e}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}
+
 	if err := s.persistEvent(ctx, key, e); err != nil {
 		return fmt.Errorf("mongodb session service append event failed: %w", err)
 	}
@@ -798,7 +845,137 @@ func (s *Service) getSession(
 	return mergeState(appState, userState, sess), nil
 }
 
-// Close closes the underlying mongodb client.
+// Close closes the service.
 func (s *Service) Close() error {
-	return s.client.Close(context.Background())
+	s.once.Do(func() {
+		s.stopCleanupRoutine()
+		for _, ch := range s.eventPairChans {
+			close(ch)
+		}
+		s.persistWg.Wait()
+		if s.client != nil {
+			_ = s.client.Close(context.Background())
+		}
+	})
+	return nil
+}
+
+// cleanupExpired removes or soft-deletes expired session_events.
+//
+// Other collections rely on MongoDB TTL indexes. Events need backend cleanup so
+// the session event list stays all-or-nothing: a session's events are cleaned
+// only when the latest event in that session is older than the TTL cutoff.
+func (s *Service) cleanupExpired() {
+	if s.opts.sessionTTL <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := s.cleanupExpiredEvents(ctx, time.Now()); err != nil {
+		log.ErrorfContext(ctx, "mongodb cleanup expired events failed: %v", err)
+	}
+}
+
+func (s *Service) cleanupExpiredEvents(ctx context.Context, now time.Time) error {
+	if s.opts.sessionTTL <= 0 {
+		return nil
+	}
+	cutoff := now.Add(-s.opts.sessionTTL)
+	pipeline := bson.A{
+		bson.M{"$match": bson.M{"deleted_at": bson.M{"$exists": false}}},
+		bson.M{"$group": bson.M{
+			"_id": bson.M{
+				"app_name":   "$app_name",
+				"user_id":    "$user_id",
+				"session_id": "$session_id",
+			},
+			"max_updated_at": bson.M{"$max": "$updated_at"},
+		}},
+		bson.M{"$match": bson.M{"max_updated_at": bson.M{"$lte": cutoff}}},
+	}
+
+	cursor, err := s.client.Aggregate(ctx, s.database, s.collSessionEvents, pipeline)
+	if err != nil {
+		return fmt.Errorf("aggregate expired sessions: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	type triple struct {
+		AppName   string `bson:"app_name"`
+		UserID    string `bson:"user_id"`
+		SessionID string `bson:"session_id"`
+	}
+	var triples []triple
+	for cursor.Next(ctx) {
+		var row struct {
+			ID triple `bson:"_id"`
+		}
+		if err := cursor.Decode(&row); err != nil {
+			return fmt.Errorf("decode aggregate row: %w", err)
+		}
+		triples = append(triples, row.ID)
+	}
+	if err := cursor.Err(); err != nil {
+		return fmt.Errorf("iterate aggregate: %w", err)
+	}
+	if len(triples) == 0 {
+		return nil
+	}
+
+	or := make(bson.A, 0, len(triples))
+	for _, t := range triples {
+		or = append(or, bson.M{
+			"app_name":   t.AppName,
+			"user_id":    t.UserID,
+			"session_id": t.SessionID,
+		})
+	}
+	filter := bson.M{
+		"$or":        or,
+		"deleted_at": bson.M{"$exists": false},
+	}
+	if s.opts.softDelete {
+		if _, err := s.client.UpdateMany(ctx, s.database, s.collSessionEvents, filter,
+			bson.M{"$set": bson.M{"deleted_at": now}}); err != nil {
+			return fmt.Errorf("soft delete expired events: %w", err)
+		}
+		return nil
+	}
+	if _, err := s.client.DeleteMany(ctx, s.database, s.collSessionEvents, filter); err != nil {
+		return fmt.Errorf("hard delete expired events: %w", err)
+	}
+	return nil
+}
+
+// startCleanupRoutine starts the background cleanup routine.
+func (s *Service) startCleanupRoutine() {
+	if s.cleanupDone == nil {
+		s.cleanupDone = make(chan struct{})
+	}
+	s.cleanupTicker = time.NewTicker(s.opts.cleanupInterval)
+	ticker := s.cleanupTicker
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.cleanupExpired()
+			case <-s.cleanupDone:
+				return
+			}
+		}
+	}()
+}
+
+// stopCleanupRoutine stops the background cleanup routine.
+func (s *Service) stopCleanupRoutine() {
+	s.cleanupOnce.Do(func() {
+		if s.cleanupTicker != nil {
+			if s.cleanupDone != nil {
+				close(s.cleanupDone)
+			}
+			s.cleanupTicker = nil
+		}
+	})
 }

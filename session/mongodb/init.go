@@ -27,6 +27,17 @@ import (
 // used by the PostgreSQL backend.
 func (s *Service) ensureIndexes(ctx context.Context) error {
 	notDeleted := bson.M{"deleted_at": bson.M{"$exists": false}}
+	expiresExists := bson.M{"expires_at": bson.M{"$exists": true}}
+	ttlIndex := func(tableName string) mongo.IndexModel {
+		return mongo.IndexModel{
+			Keys: bson.D{{Key: "expires_at", Value: 1}},
+			Options: options.Index().
+				SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
+					tableName, sqldb.IndexSuffixExpires)).
+				SetExpireAfterSeconds(0).
+				SetPartialFilterExpression(expiresExists),
+		}
+	}
 
 	plan := []struct {
 		coll   string
@@ -47,6 +58,7 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 						SetUnique(true).
 						SetPartialFilterExpression(notDeleted),
 				},
+				ttlIndex(sqldb.TableNameSessionStates),
 			},
 		},
 		{
@@ -87,6 +99,7 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 						SetUnique(true).
 						SetPartialFilterExpression(notDeleted),
 				},
+				ttlIndex(sqldb.TableNameSessionSummaries),
 			},
 		},
 		{
@@ -103,6 +116,7 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 						SetUnique(true).
 						SetPartialFilterExpression(notDeleted),
 				},
+				ttlIndex(sqldb.TableNameAppStates),
 			},
 		},
 		{
@@ -120,6 +134,7 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 						SetUnique(true).
 						SetPartialFilterExpression(notDeleted),
 				},
+				ttlIndex(sqldb.TableNameUserStates),
 			},
 		},
 	}

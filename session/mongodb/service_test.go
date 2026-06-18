@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -834,6 +835,66 @@ func TestAppendEvent_RejectsNilSession(t *testing.T) {
 	require.ErrorIs(t, s.AppendEvent(context.Background(), nil, nil), session.ErrNilSession)
 }
 
+func TestAppendEvent_AsyncPathDispatchesToChan(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.enableAsyncPersist = true
+		o.asyncPersisterNum = 1
+	})
+	s.eventPairChans = []chan *sessionEventPair{make(chan *sessionEventPair, 1)}
+	sess := newSessionForTest("app", "u", "s")
+	evt := nonPartialResponseEvent(t)
+
+	require.NoError(t, s.AppendEvent(context.Background(), sess, evt))
+	require.Len(t, s.eventPairChans[0], 1)
+	pair := <-s.eventPairChans[0]
+	assert.Equal(t, session.Key{AppName: "app", UserID: "u", SessionID: "s"}, pair.key)
+	assert.Same(t, evt, pair.event)
+	assert.Empty(t, mc.recorded(), "async enqueue should not persist synchronously")
+}
+
+func TestClose_DrainsAsyncWorker(t *testing.T) {
+	var inserts atomic.Int64
+	mc := &mockClient{
+		transactionFn: func(fn storage.TxFunc) error {
+			return fn(nil)
+		},
+		insertOneFn: func(_ any) (*mongo.InsertOneResult, error) {
+			inserts.Add(1)
+			return &mongo.InsertOneResult{}, nil
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.enableAsyncPersist = true
+		o.asyncPersisterNum = 2
+	})
+	s.startAsyncPersistWorker()
+	sess := newSessionForTest("app", "u", "s")
+	const n = 5
+	for i := 0; i < n; i++ {
+		require.NoError(t, s.AppendEvent(context.Background(), sess, nonPartialResponseEvent(t)))
+	}
+
+	require.NoError(t, s.Close())
+	assert.Equal(t, int64(n), inserts.Load())
+}
+
+func TestClose_AfterCloseAppendEventDoesNotPanic(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.enableAsyncPersist = true
+		o.asyncPersisterNum = 1
+	})
+	s.eventPairChans = []chan *sessionEventPair{make(chan *sessionEventPair, 1)}
+	require.NoError(t, s.Close())
+
+	sess := newSessionForTest("app", "u", "s")
+	require.NotPanics(t, func() {
+		err := s.AppendEvent(context.Background(), sess, nonPartialResponseEvent(t))
+		require.NoError(t, err)
+	})
+}
+
 func TestCreateSessionSummary_NoOpWithoutSummarizer(t *testing.T) {
 	mc := &mockClient{}
 	s := newServiceForTest(t, mc)
@@ -862,16 +923,112 @@ func TestGetSessionSummaryText_NilSession(t *testing.T) {
 // -- Close ------------------------------------------------------------------
 
 func TestClose_DelegatesToClient(t *testing.T) {
-	called := false
+	var calls int
 	mc := &mockClient{
 		closeFn: func() error {
-			called = true
+			calls++
 			return nil
 		},
 	}
 	s := newServiceForTest(t, mc)
 	require.NoError(t, s.Close())
-	assert.True(t, called)
+	require.NoError(t, s.Close())
+	assert.Equal(t, 1, calls)
+}
+
+func TestCleanupExpiredEvents_AggregationIntegrity(t *testing.T) {
+	now := time.Now()
+	mc := &mockClient{
+		aggregateFn: func(pipeline any) (*mongo.Cursor, error) {
+			stages := pipeline.(bson.A)
+			require.Len(t, stages, 3)
+			group := stages[1].(bson.M)["$group"].(bson.M)
+			assert.Contains(t, group, "max_updated_at")
+			return docsCursor([]any{
+				bson.M{"_id": bson.M{"app_name": "app", "user_id": "u1", "session_id": "s1"}},
+				bson.M{"_id": bson.M{"app_name": "app", "user_id": "u2", "session_id": "s2"}},
+			})
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+
+	require.NoError(t, s.cleanupExpiredEvents(context.Background(), now))
+
+	ops := mc.recorded()
+	require.Len(t, ops, 2)
+	assert.Equal(t, "Aggregate", ops[0].name)
+	assert.Equal(t, "UpdateMany", ops[1].name)
+	filter := ops[1].filter.(bson.M)
+	or := filter["$or"].(bson.A)
+	require.Len(t, or, 2)
+	assert.Contains(t, or, bson.M{"app_name": "app", "user_id": "u1", "session_id": "s1"})
+	assert.Contains(t, or, bson.M{"app_name": "app", "user_id": "u2", "session_id": "s2"})
+	upd := ops[1].update.(bson.M)
+	set := upd["$set"].(bson.M)
+	assert.Equal(t, now, set["deleted_at"])
+}
+
+func TestCleanupExpiredEvents_NoMatchIsNoOp(t *testing.T) {
+	mc := &mockClient{
+		aggregateFn: func(_ any) (*mongo.Cursor, error) {
+			return emptyCursor()
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+
+	require.NoError(t, s.cleanupExpiredEvents(context.Background(), time.Now()))
+
+	ops := mc.recorded()
+	require.Len(t, ops, 1)
+	assert.Equal(t, "Aggregate", ops[0].name)
+}
+
+func TestCleanupExpired_NoSessionTTLIsNoOp(t *testing.T) {
+	mc := &mockClient{
+		aggregateFn: func(_ any) (*mongo.Cursor, error) {
+			t.Fatal("Aggregate should not be called when sessionTTL is zero")
+			return nil, nil
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	s.cleanupExpired()
+	assert.Empty(t, mc.recorded())
+}
+
+func TestCleanupExpiredEvents_HardDeletePath(t *testing.T) {
+	mc := &mockClient{
+		aggregateFn: func(_ any) (*mongo.Cursor, error) {
+			return docsCursor([]any{
+				bson.M{"_id": bson.M{"app_name": "app", "user_id": "u", "session_id": "s"}},
+			})
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.sessionTTL = time.Hour
+		o.softDelete = false
+	})
+
+	require.NoError(t, s.cleanupExpiredEvents(context.Background(), time.Now()))
+
+	ops := mc.recorded()
+	require.Len(t, ops, 2)
+	assert.Equal(t, "Aggregate", ops[0].name)
+	assert.Equal(t, "DeleteMany", ops[1].name)
+	assert.Equal(t, "session_events", ops[1].coll)
+}
+
+func TestCleanupTicker_StartStop(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.sessionTTL = time.Hour
+		o.cleanupInterval = time.Hour
+	})
+
+	s.startCleanupRoutine()
+	require.NotNil(t, s.cleanupTicker)
+	s.stopCleanupRoutine()
+	assert.Nil(t, s.cleanupTicker)
 }
 
 // -- buildClientOpts (NewService precondition logic) ------------------------
@@ -960,6 +1117,47 @@ func TestNewService_SkipDBInitSkipsTransactionProbe(t *testing.T) {
 		assert.NotEqual(t, "EnsureIndexes", op.name)
 		assert.NotEqual(t, "Transaction", op.name)
 	}
+}
+
+func TestNewService_SessionTTLAutoCleanupInterval(t *testing.T) {
+	oldBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(oldBuilder)
+
+	mc := &mockClient{}
+	storage.SetClientBuilder(func(context.Context, ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return mc, nil
+	})
+
+	s, err := NewService(
+		WithMongoClientURI("mongodb://example"),
+		WithSkipDBInit(true),
+		WithSessionTTL(time.Hour),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	assert.Equal(t, defaultCleanupIntervalSecond, s.opts.cleanupInterval)
+	assert.NotNil(t, s.cleanupTicker)
+	require.NoError(t, s.Close())
+}
+
+func TestNewService_CleanupTickerRequiresSessionTTL(t *testing.T) {
+	oldBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(oldBuilder)
+
+	mc := &mockClient{}
+	storage.SetClientBuilder(func(context.Context, ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return mc, nil
+	})
+
+	s, err := NewService(
+		WithMongoClientURI("mongodb://example"),
+		WithSkipDBInit(true),
+		WithCleanupInterval(time.Millisecond),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	assert.Nil(t, s.cleanupTicker)
+	require.NoError(t, s.Close())
 }
 
 func TestNewService_TransactionProbeFailureClosesClient(t *testing.T) {

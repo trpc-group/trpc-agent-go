@@ -135,6 +135,11 @@ type Client interface {
 	Find(ctx context.Context, database, coll string, filter any,
 		opts ...*options.FindOptions) (*mongo.Cursor, error)
 
+	// Aggregate returns a cursor over documents produced by an aggregation pipeline.
+	// Callers must close the returned cursor when done.
+	Aggregate(ctx context.Context, database, coll string, pipeline any,
+		opts ...*options.AggregateOptions) (*mongo.Cursor, error)
+
 	// EnsureIndexes creates the given indexes on the collection if they do not exist.
 	// Index creation is idempotent: existing indexes with matching keys and options
 	// are left unchanged.
@@ -222,6 +227,11 @@ func (c *defaultClient) FindOne(ctx context.Context, database, coll string, filt
 func (c *defaultClient) Find(ctx context.Context, database, coll string, filter any,
 	opts ...*options.FindOptions) (*mongo.Cursor, error) {
 	return c.coll(database, coll).Find(ctx, filter, opts...)
+}
+
+func (c *defaultClient) Aggregate(ctx context.Context, database, coll string, pipeline any,
+	opts ...*options.AggregateOptions) (*mongo.Cursor, error) {
+	return c.coll(database, coll).Aggregate(ctx, pipeline, opts...)
 }
 
 func (c *defaultClient) EnsureIndexes(ctx context.Context, database, coll string,

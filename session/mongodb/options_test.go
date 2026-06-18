@@ -22,6 +22,8 @@ import (
 func TestServiceOpts_Defaults(t *testing.T) {
 	o := defaultOptions
 	assert.True(t, o.softDelete)
+	assert.Equal(t, defaultAsyncPersisterNum, o.asyncPersisterNum)
+	assert.False(t, o.enableAsyncPersist)
 }
 
 func TestWithMongoClientURI(t *testing.T) {
@@ -57,6 +59,30 @@ func TestTTLOptions(t *testing.T) {
 	assert.Equal(t, time.Hour, o.sessionTTL)
 	assert.Equal(t, 2*time.Hour, o.appStateTTL)
 	assert.Equal(t, 3*time.Hour, o.userStateTTL)
+}
+
+func TestWithEnableAsyncPersist(t *testing.T) {
+	o := defaultOptions
+	WithEnableAsyncPersist(true)(&o)
+	assert.True(t, o.enableAsyncPersist)
+}
+
+func TestWithAsyncPersisterNum(t *testing.T) {
+	o := defaultOptions
+	WithAsyncPersisterNum(3)(&o)
+	assert.Equal(t, 3, o.asyncPersisterNum)
+
+	WithAsyncPersisterNum(0)(&o)
+	assert.Equal(t, defaultAsyncPersisterNum, o.asyncPersisterNum)
+
+	WithAsyncPersisterNum(-1)(&o)
+	assert.Equal(t, defaultAsyncPersisterNum, o.asyncPersisterNum)
+}
+
+func TestWithCleanupInterval(t *testing.T) {
+	o := defaultOptions
+	WithCleanupInterval(time.Minute)(&o)
+	assert.Equal(t, time.Minute, o.cleanupInterval)
 }
 
 func TestWithSoftDelete(t *testing.T) {

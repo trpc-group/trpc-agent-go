@@ -56,6 +56,7 @@ type mockClient struct {
 	deleteOneFn     func(filter any) (*mongo.DeleteResult, error)
 	findOneFn       func(filter any) *mongo.SingleResult
 	findFn          func(filter any) (*mongo.Cursor, error)
+	aggregateFn     func(pipeline any) (*mongo.Cursor, error)
 	ensureIndexesFn func(models []mongo.IndexModel) ([]string, error)
 	transactionFn   func(fn storage.TxFunc) error
 	closeFn         func() error
@@ -136,6 +137,15 @@ func (m *mockClient) Find(_ context.Context, db, coll string, filter any,
 	m.record(mockOp{name: "Find", database: db, coll: coll, filter: filter})
 	if m.findFn != nil {
 		return m.findFn(filter)
+	}
+	return emptyCursor()
+}
+
+func (m *mockClient) Aggregate(_ context.Context, db, coll string, pipeline any,
+	_ ...*options.AggregateOptions) (*mongo.Cursor, error) {
+	m.record(mockOp{name: "Aggregate", database: db, coll: coll, filter: pipeline})
+	if m.aggregateFn != nil {
+		return m.aggregateFn(pipeline)
 	}
 	return emptyCursor()
 }
