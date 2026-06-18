@@ -10,12 +10,17 @@
 package mongodb
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -121,6 +126,35 @@ type stateKVDoc struct {
 	Key       string     `bson:"key"`
 	Value     []byte     `bson:"value,omitempty"`
 	CreatedAt time.Time  `bson:"created_at"`
+	UpdatedAt time.Time  `bson:"updated_at"`
+	ExpiresAt *time.Time `bson:"expires_at,omitempty"`
+	DeletedAt *time.Time `bson:"deleted_at,omitempty"`
+}
+
+// sessionEventDoc is the BSON shape of a session_events document.
+//
+// Per D3: `_id` is a driver-generated ObjectId. Event order within a session
+// is `(created_at ASC, _id ASC)` — _id is the tie-breaker for events sharing
+// the same created_at, equivalent to postgres BIGSERIAL but free of cost.
+type sessionEventDoc struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty"`
+	AppName   string             `bson:"app_name"`
+	UserID    string             `bson:"user_id"`
+	SessionID string             `bson:"session_id"`
+	Event     []byte             `bson:"event"`
+	CreatedAt time.Time          `bson:"created_at"`
+	UpdatedAt time.Time          `bson:"updated_at"`
+	ExpiresAt *time.Time         `bson:"expires_at,omitempty"`
+	DeletedAt *time.Time         `bson:"deleted_at,omitempty"`
+}
+
+// sessionSummaryDoc is the BSON shape of a session_summaries document.
+type sessionSummaryDoc struct {
+	AppName   string     `bson:"app_name"`
+	UserID    string     `bson:"user_id"`
+	SessionID string     `bson:"session_id"`
+	FilterKey string     `bson:"filter_key"`
+	Summary   []byte     `bson:"summary"`
 	UpdatedAt time.Time  `bson:"updated_at"`
 	ExpiresAt *time.Time `bson:"expires_at,omitempty"`
 	DeletedAt *time.Time `bson:"deleted_at,omitempty"`
@@ -256,4 +290,233 @@ func applyOptions(opts ...session.Option) *session.Options {
 		o(opt)
 	}
 	return opt
+}
+
+// getEventsList batch-loads events for the given sessions.
+//
+// Sessions all share (app_name, user_id); only session_id varies. The cursor
+// is sorted by (session_id, created_at ASC, _id ASC) — _id (ObjectId) is the
+// stable tie-breaker for events sharing a created_at, mirroring postgres'
+// (created_at ASC, id ASC) ordering.
+//
+// When page is nil (context-window mode), time and limit filtering happens
+// in memory via session.ApplyEventFiltering on the full per-session history.
+// When page is non-nil (pagination mode), strict offset/limit is applied to
+// the cursor for the single supplied session and ApplyEventFiltering is
+// skipped — same semantics as postgres' getPagedEvents.
+func (s *Service) getEventsList(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	limit int,
+	afterTime time.Time,
+	page *session.EventPage,
+) ([][]event.Event, error) {
+	if len(sessionKeys) == 0 {
+		return nil, nil
+	}
+	if page != nil {
+		if len(sessionKeys) != 1 {
+			return nil, fmt.Errorf("event paging only supports a single session")
+		}
+		return s.getPagedEvents(ctx, sessionKeys[0], afterTime, page)
+	}
+
+	if limit <= 0 {
+		limit = s.opts.sessionEventLimit
+	}
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+
+	sessionIDs := make([]string, len(sessionKeys))
+	for i, k := range sessionKeys {
+		sessionIDs[i] = k.SessionID
+	}
+
+	filter := activeFilter(time.Now(), bson.M{
+		"app_name":   sessionKeys[0].AppName,
+		"user_id":    sessionKeys[0].UserID,
+		"session_id": bson.M{"$in": sessionIDs},
+	})
+	findOpts := options.Find().SetSort(bson.D{
+		{Key: "session_id", Value: 1},
+		{Key: "created_at", Value: 1},
+		{Key: "_id", Value: 1},
+	})
+
+	cursor, err := s.client.Find(ctx, s.database, s.collSessionEvents, filter, findOpts)
+	if err != nil {
+		return nil, fmt.Errorf("query events: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	eventsMap := make(map[string][]event.Event)
+	for cursor.Next(ctx) {
+		var doc sessionEventDoc
+		if err := cursor.Decode(&doc); err != nil {
+			return nil, fmt.Errorf("decode event: %w", err)
+		}
+		if len(doc.Event) == 0 {
+			continue
+		}
+		var evt event.Event
+		if err := json.Unmarshal(doc.Event, &evt); err != nil {
+			return nil, fmt.Errorf("unmarshal event: %w", err)
+		}
+		eventsMap[doc.SessionID] = append(eventsMap[doc.SessionID], evt)
+	}
+	if err := cursor.Err(); err != nil {
+		return nil, fmt.Errorf("iterate events: %w", err)
+	}
+
+	result := make([][]event.Event, len(sessionKeys))
+	for i, k := range sessionKeys {
+		evts := eventsMap[k.SessionID]
+		if evts == nil {
+			result[i] = []event.Event{}
+			continue
+		}
+		// Apply context-window filtering in memory.
+		filtering := &session.Session{Events: evts}
+		filtering.ApplyEventFiltering(session.WithEventNum(limit), session.WithEventTime(afterTime))
+		result[i] = filtering.Events
+	}
+	return result, nil
+}
+
+// getPagedEvents implements EventPage-based pagination over a single session.
+//
+// We first fetch the page in (created_at DESC, _id DESC) order to obtain the
+// most-recent N events, then reverse to ascending in memory so callers see
+// the conventional chronological order — same shape as postgres'
+// `ORDER BY created_at DESC ... LIMIT/OFFSET` outer-then-inner trick.
+func (s *Service) getPagedEvents(
+	ctx context.Context,
+	key session.Key,
+	afterTime time.Time,
+	page *session.EventPage,
+) ([][]event.Event, error) {
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+
+	filter := activeFilter(time.Now(), bson.M{
+		"app_name":   key.AppName,
+		"user_id":    key.UserID,
+		"session_id": key.SessionID,
+		"created_at": bson.M{"$gte": afterTime},
+	})
+	findOpts := options.Find().
+		SetSort(bson.D{{Key: "created_at", Value: -1}, {Key: "_id", Value: -1}}).
+		SetSkip(int64(page.Offset)).
+		SetLimit(int64(page.Limit))
+
+	cursor, err := s.client.Find(ctx, s.database, s.collSessionEvents, filter, findOpts)
+	if err != nil {
+		return nil, fmt.Errorf("query paged events: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	events := make([]event.Event, 0, page.Limit)
+	for cursor.Next(ctx) {
+		var doc sessionEventDoc
+		if err := cursor.Decode(&doc); err != nil {
+			return nil, fmt.Errorf("decode paged event: %w", err)
+		}
+		if len(doc.Event) == 0 {
+			continue
+		}
+		var evt event.Event
+		if err := json.Unmarshal(doc.Event, &evt); err != nil {
+			return nil, fmt.Errorf("unmarshal paged event: %w", err)
+		}
+		events = append(events, evt)
+	}
+	if err := cursor.Err(); err != nil {
+		return nil, fmt.Errorf("iterate paged events: %w", err)
+	}
+
+	// Cursor returned events in DESC order; flip to ASC chronological.
+	for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+		events[i], events[j] = events[j], events[i]
+	}
+	return [][]event.Event{events}, nil
+}
+
+// getSummariesList batch-loads summaries for the given sessions.
+//
+// When sessionCreatedAts is supplied, summaries with `updated_at < createdAt`
+// are filtered out — this protects against stale summaries surviving a
+// session recreate, matching postgres' behavior.
+func (s *Service) getSummariesList(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	sessionCreatedAts ...[]time.Time,
+) ([]map[string]*session.Summary, error) {
+	if len(sessionKeys) == 0 {
+		return []map[string]*session.Summary{}, nil
+	}
+
+	createdAtMap := map[string]time.Time(nil)
+	if len(sessionCreatedAts) > 0 {
+		if len(sessionKeys) != len(sessionCreatedAts[0]) {
+			return nil, fmt.Errorf("session keys and createdAts length mismatch")
+		}
+		createdAtMap = make(map[string]time.Time, len(sessionKeys))
+		for i, k := range sessionKeys {
+			createdAtMap[k.SessionID] = sessionCreatedAts[0][i]
+		}
+	}
+
+	sessionIDs := make([]string, len(sessionKeys))
+	for i, k := range sessionKeys {
+		sessionIDs[i] = k.SessionID
+	}
+
+	filter := activeFilter(time.Now(), bson.M{
+		"app_name":   sessionKeys[0].AppName,
+		"user_id":    sessionKeys[0].UserID,
+		"session_id": bson.M{"$in": sessionIDs},
+	})
+
+	cursor, err := s.client.Find(ctx, s.database, s.collSessionSummaries, filter)
+	if err != nil {
+		return nil, fmt.Errorf("query summaries: %w", err)
+	}
+	defer cursor.Close(ctx)
+
+	summariesMap := make(map[string]map[string]*session.Summary)
+	for cursor.Next(ctx) {
+		var doc sessionSummaryDoc
+		if err := cursor.Decode(&doc); err != nil {
+			return nil, fmt.Errorf("decode summary: %w", err)
+		}
+		if createdAtMap != nil {
+			createdAt, exists := createdAtMap[doc.SessionID]
+			if !exists || doc.UpdatedAt.Before(createdAt) {
+				continue
+			}
+		}
+		var sum session.Summary
+		if err := json.Unmarshal(doc.Summary, &sum); err != nil {
+			return nil, fmt.Errorf("unmarshal summary: %w", err)
+		}
+		if summariesMap[doc.SessionID] == nil {
+			summariesMap[doc.SessionID] = make(map[string]*session.Summary)
+		}
+		summariesMap[doc.SessionID][doc.FilterKey] = &sum
+	}
+	if err := cursor.Err(); err != nil {
+		return nil, fmt.Errorf("iterate summaries: %w", err)
+	}
+
+	result := make([]map[string]*session.Summary, len(sessionKeys))
+	for i, k := range sessionKeys {
+		m := summariesMap[k.SessionID]
+		if m == nil {
+			m = make(map[string]*session.Summary)
+		}
+		result[i] = m
+	}
+	return result, nil
 }

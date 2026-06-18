@@ -11,6 +11,7 @@ package mongodb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -22,7 +23,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/mongodb"
 )
 
 // -- CreateSession ----------------------------------------------------------
@@ -170,25 +174,138 @@ func TestGetSession_DecodesStateAndMergesAppUser(t *testing.T) {
 	assert.Equal(t, []byte("g"), v)
 }
 
+func TestGetSession_LoadsEventsAndSummaries(t *testing.T) {
+	now := time.Now()
+	stored := sessionStateDoc{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+		State:     bson.M{},
+		CreatedAt: now.Add(-time.Hour),
+		UpdatedAt: now,
+	}
+	e1 := event.Event{
+		ID:           "e1",
+		InvocationID: "i",
+		Author:       "user",
+		Timestamp:    now.Add(-time.Minute),
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleUser, Content: "hello"},
+		}}},
+	}
+	e2 := event.Event{
+		ID:           "e2",
+		InvocationID: "i",
+		Author:       "assistant",
+		Timestamp:    now,
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, Content: "hi"},
+		}}},
+	}
+	e1Bytes, err := json.Marshal(e1)
+	require.NoError(t, err)
+	e2Bytes, err := json.Marshal(e2)
+	require.NoError(t, err)
+	summaryBytes, err := json.Marshal(&session.Summary{Summary: "short", UpdatedAt: now})
+	require.NoError(t, err)
+
+	findCalls := 0
+	mc := &mockClient{
+		findOneFn: func(_ any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(stored, nil, nil)
+		},
+		findFn: func(_ any) (*mongo.Cursor, error) {
+			findCalls++
+			switch findCalls {
+			case 1, 2: // app_states, user_states.
+				return emptyCursor()
+			case 3: // session_events.
+				return docsCursor([]any{
+					sessionEventDoc{AppName: "app", UserID: "u", SessionID: "s", Event: e1Bytes, CreatedAt: e1.Timestamp},
+					sessionEventDoc{AppName: "app", UserID: "u", SessionID: "s", Event: e2Bytes, CreatedAt: e2.Timestamp},
+				})
+			case 4: // session_summaries.
+				return docsCursor([]any{
+					sessionSummaryDoc{AppName: "app", UserID: "u", SessionID: "s", Summary: summaryBytes, UpdatedAt: now},
+				})
+			default:
+				return emptyCursor()
+			}
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	sess, err := s.GetSession(context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+	assert.Equal(t, "e1", sess.Events[0].ID)
+	assert.Equal(t, "e2", sess.Events[1].ID)
+	text, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.True(t, ok)
+	assert.Equal(t, "short", text)
+}
+
+func TestGetSession_EventPagePath(t *testing.T) {
+	now := time.Now()
+	stored := sessionStateDoc{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+		State:     bson.M{},
+		CreatedAt: now.Add(-time.Hour),
+		UpdatedAt: now,
+	}
+	e1 := event.Event{ID: "e1", InvocationID: "i", Author: "user", Timestamp: now.Add(-time.Minute)}
+	e2 := event.Event{ID: "e2", InvocationID: "i", Author: "assistant", Timestamp: now}
+	e1Bytes, err := json.Marshal(e1)
+	require.NoError(t, err)
+	e2Bytes, err := json.Marshal(e2)
+	require.NoError(t, err)
+
+	findCalls := 0
+	mc := &mockClient{
+		findOneFn: func(_ any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(stored, nil, nil)
+		},
+		findFn: func(_ any) (*mongo.Cursor, error) {
+			findCalls++
+			switch findCalls {
+			case 1, 2: // app_states, user_states.
+				return emptyCursor()
+			case 3: // paged events are read newest-first by query, then reversed.
+				return docsCursor([]any{
+					sessionEventDoc{AppName: "app", UserID: "u", SessionID: "s", Event: e2Bytes, CreatedAt: e2.Timestamp},
+					sessionEventDoc{AppName: "app", UserID: "u", SessionID: "s", Event: e1Bytes, CreatedAt: e1.Timestamp},
+				})
+			case 4: // summaries.
+				return emptyCursor()
+			default:
+				return emptyCursor()
+			}
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	sess, err := s.GetSession(context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+		session.WithGetSessionEventPage(0, 10))
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.Events, 2)
+	assert.Equal(t, "e1", sess.Events[0].ID)
+	assert.Equal(t, "e2", sess.Events[1].ID)
+}
+
 // -- ListSessions -----------------------------------------------------------
 
 func TestListSessions_AppliesPagination(t *testing.T) {
-	var seenOpts []*options.FindOptions
 	mc := &mockClient{
 		findFn: func(_ any) (*mongo.Cursor, error) {
 			return emptyCursor()
 		},
 	}
-	// Wrap Find so we can capture the options that were passed.
-	original := mc.findFn
-	mc.findFn = func(filter any) (*mongo.Cursor, error) {
-		// session/mongodb passes options as the trailing variadic; we have to
-		// peek through mockClient.Find's signature, which records only the
-		// filter. To capture options in this test, rebuild the wrapper at the
-		// mockClient layer below.
-		return original(filter)
-	}
-	_ = seenOpts // no-op: this test is satisfied by the recorded call list
 
 	s := newServiceForTest(t, mc)
 	_, err := s.ListSessions(context.Background(),
@@ -220,7 +337,8 @@ func TestListSessions_DecodesAndMergesEachSession(t *testing.T) {
 			if calls == 1 {
 				return docsCursor(docs)
 			}
-			// Subsequent Find calls (app_states, user_states) yield empty.
+			// Subsequent Find calls (app_states, user_states, events,
+			// summaries) yield empty.
 			return emptyCursor()
 		},
 	}
@@ -233,37 +351,158 @@ func TestListSessions_DecodesAndMergesEachSession(t *testing.T) {
 	assert.Equal(t, "s2", got[1].ID)
 }
 
+func TestListSessions_OnlyMetaSkipsEventsAndSummaries(t *testing.T) {
+	now := time.Now()
+	docs := []any{
+		sessionStateDoc{AppName: "app", UserID: "u", SessionID: "s1", State: bson.M{}, CreatedAt: now, UpdatedAt: now},
+	}
+	calls := 0
+	mc := &mockClient{
+		findFn: func(_ any) (*mongo.Cursor, error) {
+			calls++
+			if calls == 1 {
+				return docsCursor(docs)
+			}
+			return emptyCursor()
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	got, err := s.ListSessions(context.Background(),
+		session.UserKey{AppName: "app", UserID: "u"},
+		session.WithListSessionOnlyMeta())
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0].Events)
+	assert.Equal(t, 3, calls, "session/app/user state reads only; no event/summary reads")
+}
+
+func TestListSessions_NonMetaLoadsEventsAndSummaries(t *testing.T) {
+	now := time.Now()
+	evt := event.Event{
+		ID:           "e1",
+		InvocationID: "i",
+		Author:       "user",
+		Timestamp:    now,
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleUser, Content: "hello"},
+		}}},
+	}
+	evtBytes, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	findCalls := 0
+	mc := &mockClient{
+		findFn: func(_ any) (*mongo.Cursor, error) {
+			findCalls++
+			switch findCalls {
+			case 1: // session_states.
+				return docsCursor([]any{
+					sessionStateDoc{
+						AppName:   "app",
+						UserID:    "u",
+						SessionID: "s",
+						State:     bson.M{},
+						CreatedAt: now.Add(-time.Hour),
+						UpdatedAt: now,
+					},
+				})
+			case 2, 3: // app_states, user_states.
+				return emptyCursor()
+			case 4: // session_events.
+				return docsCursor([]any{
+					sessionEventDoc{
+						AppName:   "app",
+						UserID:    "u",
+						SessionID: "s",
+						Event:     evtBytes,
+						CreatedAt: evt.Timestamp,
+					},
+				})
+			case 5: // session_summaries.
+				return emptyCursor()
+			default:
+				return emptyCursor()
+			}
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	got, err := s.ListSessions(context.Background(), session.UserKey{AppName: "app", UserID: "u"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Len(t, got[0].Events, 1)
+	assert.Equal(t, "e1", got[0].Events[0].ID)
+}
+
 // -- DeleteSession ----------------------------------------------------------
 
 func TestDeleteSession_SoftDeleteStampsDeletedAt(t *testing.T) {
-	mc := &mockClient{}
+	mc := &mockClient{
+		transactionFn: func(fn storage.TxFunc) error {
+			return fn(nil)
+		},
+	}
 	s := newServiceForTest(t, mc) // default: softDelete=true
 
 	require.NoError(t, s.DeleteSession(context.Background(),
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"}))
 
 	ops := mc.recorded()
-	require.Len(t, ops, 1)
-	assert.Equal(t, "UpdateOne", ops[0].name)
+	require.Len(t, ops, 4)
+	assert.Equal(t, "Transaction", ops[0].name)
+	assert.Equal(t, "UpdateOne", ops[1].name)
+	assert.Equal(t, "session_states", ops[1].coll)
+	assert.Equal(t, "UpdateMany", ops[2].name)
+	assert.Equal(t, "session_events", ops[2].coll)
+	assert.Equal(t, "UpdateMany", ops[3].name)
+	assert.Equal(t, "session_summaries", ops[3].coll)
 
-	upd, ok := ops[0].update.(bson.M)
-	require.True(t, ok)
-	set, ok := upd["$set"].(bson.M)
-	require.True(t, ok)
-	_, hasDeletedAt := set["deleted_at"]
-	assert.True(t, hasDeletedAt, "soft delete should $set deleted_at")
+	for _, op := range ops[1:] {
+		upd, ok := op.update.(bson.M)
+		require.True(t, ok)
+		set, ok := upd["$set"].(bson.M)
+		require.True(t, ok)
+		_, hasDeletedAt := set["deleted_at"]
+		assert.True(t, hasDeletedAt, "soft delete should $set deleted_at")
+	}
 }
 
-func TestDeleteSession_HardDeleteCallsDeleteOne(t *testing.T) {
-	mc := &mockClient{}
+func TestDeleteSession_HardDeleteFanOut(t *testing.T) {
+	mc := &mockClient{
+		transactionFn: func(fn storage.TxFunc) error {
+			return fn(nil)
+		},
+	}
 	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.softDelete = false })
 
 	require.NoError(t, s.DeleteSession(context.Background(),
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"}))
 
 	ops := mc.recorded()
-	require.Len(t, ops, 1)
-	assert.Equal(t, "DeleteOne", ops[0].name)
+	require.Len(t, ops, 4)
+	assert.Equal(t, "Transaction", ops[0].name)
+	assert.Equal(t, "DeleteOne", ops[1].name)
+	assert.Equal(t, "session_states", ops[1].coll)
+	assert.Equal(t, "DeleteMany", ops[2].name)
+	assert.Equal(t, "session_events", ops[2].coll)
+	assert.Equal(t, "DeleteMany", ops[3].name)
+	assert.Equal(t, "session_summaries", ops[3].coll)
+}
+
+func TestDeleteSession_TransactionErrorPropagates(t *testing.T) {
+	want := errors.New("tx failed")
+	mc := &mockClient{
+		transactionFn: func(_ storage.TxFunc) error {
+			return want
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	err := s.DeleteSession(context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, want)
 }
 
 // -- App state --------------------------------------------------------------
@@ -457,16 +696,164 @@ func TestUpdateSessionState_NoMatchReturnsSessionNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
-// -- Stub methods (event / summary surface, not yet implemented) ---------
+// -- AppendEvent ----------------------------------------------------------
 
-func TestStubMethods_ReturnsNotImplemented(t *testing.T) {
+// nonPartialResponseEvent constructs an event that AppendEvent will treat as
+// "persistable" — Response set, IsPartial=false, IsValidContent()=true. This
+// drives the transactional path that inserts a session_events document.
+func nonPartialResponseEvent(t *testing.T) *event.Event {
+	t.Helper()
+	e := event.New("test-invocation", "test-author")
+	e.Response = &model.Response{
+		Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleAssistant, Content: "hi"}},
+		},
+	}
+	e.IsPartial = false
+	return e
+}
+
+func TestAppendEvent_PersistableGoesThroughTransaction(t *testing.T) {
+	mc := &mockClient{
+		transactionFn: func(fn storage.TxFunc) error {
+			return fn(nil)
+		},
+	}
+	s := newServiceForTest(t, mc)
+	sess := newSessionForTest("app", "u", "s")
+
+	require.NoError(t, s.AppendEvent(context.Background(), sess, nonPartialResponseEvent(t)))
+
+	// Expect: Transaction wrapper recorded plus the inner UpdateOne + InsertOne.
+	var sawTransaction, sawUpdate, sawInsert bool
+	for _, op := range mc.recorded() {
+		switch op.name {
+		case "Transaction":
+			sawTransaction = true
+		case "UpdateOne":
+			if op.coll == "session_states" {
+				sawUpdate = true
+			}
+		case "InsertOne":
+			if op.coll == "session_events" {
+				sawInsert = true
+			}
+		}
+	}
+	assert.True(t, sawTransaction, "expected Transaction call")
+	assert.True(t, sawUpdate, "expected UpdateOne on session_states")
+	assert.True(t, sawInsert, "expected InsertOne on session_events")
+}
+
+func TestAppendEvent_StateDeltaOnly_NoTransactionNoEventInsert(t *testing.T) {
 	mc := &mockClient{}
 	s := newServiceForTest(t, mc)
 
-	require.Error(t, s.AppendEvent(context.Background(), nil, nil))
-	require.Error(t, s.CreateSessionSummary(context.Background(), nil, "", false))
-	require.Error(t, s.EnqueueSummaryJob(context.Background(), nil, "", false))
+	sess := newSessionForTest("app", "u", "s")
+	e := &event.Event{
+		StateDelta: map[string][]byte{"k1": []byte("v1")},
+	}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
 
+	ops := mc.recorded()
+	// State-delta-only events: a single UpdateOne, no transaction, no event insert.
+	require.Len(t, ops, 1)
+	assert.Equal(t, "UpdateOne", ops[0].name)
+	assert.Equal(t, "session_states", ops[0].coll)
+
+	// In-memory session is updated.
+	v, ok := sess.GetState("k1")
+	require.True(t, ok)
+	assert.Equal(t, []byte("v1"), v)
+}
+
+func TestAppendEvent_StateDeltaUsesDotNotation(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc)
+
+	sess := newSessionForTest("app", "u", "s")
+	e := &event.Event{
+		StateDelta: map[string][]byte{
+			"plain":    []byte("v1"),
+			"with.dot": []byte("v2"),
+		},
+	}
+	require.NoError(t, s.AppendEvent(context.Background(), sess, e))
+
+	upd := mc.recorded()[0].update.(bson.M)
+	set := upd["$set"].(bson.M)
+	_, hasPlain := set["state.plain"]
+	_, hasEncoded := set[`state.with\ddot`]
+	assert.True(t, hasPlain)
+	assert.True(t, hasEncoded, "key with '.' must be encoded into BSON dot path")
+}
+
+func TestAppendEvent_RejectsBadSessionKey(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc)
+	// AppName empty makes CheckSessionKey fail.
+	sess := newSessionForTest("", "u", "s")
+	require.Error(t, s.AppendEvent(context.Background(), sess, &event.Event{}))
+	assert.Empty(t, mc.recorded(), "no client traffic on validation failure")
+}
+
+func TestAppendEvent_NoMatchingSessionReturnsNotFound(t *testing.T) {
+	mc := &mockClient{
+		updateOneFn: func(_, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return &mongo.UpdateResult{}, nil // MatchedCount=0
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	sess := newSessionForTest("app", "u", "s")
+	err := s.AppendEvent(context.Background(), sess,
+		&event.Event{StateDelta: map[string][]byte{"k": []byte("v")}})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errSessionNotFound)
+}
+
+func TestAppendEvent_RunsHookChain(t *testing.T) {
+	called := false
+	hook := session.AppendEventHook(func(ctx *session.AppendEventContext, next func() error) error {
+		called = true
+		return next()
+	})
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.appendEventHooks = []session.AppendEventHook{hook}
+	})
+	sess := newSessionForTest("app", "u", "s")
+	require.NoError(t, s.AppendEvent(context.Background(), sess,
+		&event.Event{StateDelta: map[string][]byte{"k": []byte("v")}}))
+	assert.True(t, called)
+}
+
+func TestAppendEvent_RejectsNilSession(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc)
+	require.ErrorIs(t, s.AppendEvent(context.Background(), nil, nil), session.ErrNilSession)
+}
+
+func TestCreateSessionSummary_NoOpWithoutSummarizer(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc)
+	// No summarizer configured -> no error, no client traffic.
+	require.NoError(t, s.CreateSessionSummary(context.Background(),
+		newSessionForTest("app", "u", "s"), "", false))
+	assert.Empty(t, mc.recorded())
+}
+
+func TestEnqueueSummaryJob_NoOpWithoutSummarizer(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc)
+	require.NoError(t, s.EnqueueSummaryJob(context.Background(),
+		newSessionForTest("app", "u", "s"), "", false))
+	assert.Empty(t, mc.recorded())
+}
+
+func TestGetSessionSummaryText_NilSession(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc)
 	got, ok := s.GetSessionSummaryText(context.Background(), nil)
 	assert.False(t, ok)
 	assert.Empty(t, got)
@@ -511,6 +898,94 @@ func TestBuildClientOpts_UnknownInstance(t *testing.T) {
 	_, err := buildClientOpts(opts)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestNewService_ProbesTransactionSupport(t *testing.T) {
+	oldBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(oldBuilder)
+
+	mc := &mockClient{
+		transactionFn: func(fn storage.TxFunc) error {
+			return fn(nil)
+		},
+	}
+	storage.SetClientBuilder(func(context.Context, ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return mc, nil
+	})
+
+	s, err := NewService(WithMongoClientURI("mongodb://example"))
+	require.NoError(t, err)
+	require.NotNil(t, s)
+
+	var sawTransaction, sawProbeFind bool
+	for _, op := range mc.recorded() {
+		if op.name == "Transaction" {
+			sawTransaction = true
+		}
+		if op.name == "FindOne" && op.coll == "session_states" {
+			sawProbeFind = true
+			assert.Equal(t, bson.M{}, op.filter)
+		}
+	}
+	assert.True(t, sawTransaction, "NewService must fail fast by probing transactions")
+	assert.True(t, sawProbeFind, "transaction probe should perform a harmless read")
+}
+
+func TestNewService_SkipDBInitSkipsTransactionProbe(t *testing.T) {
+	oldBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(oldBuilder)
+
+	mc := &mockClient{
+		ensureIndexesFn: func(_ []mongo.IndexModel) ([]string, error) {
+			t.Fatal("EnsureIndexes should not be called when WithSkipDBInit(true) is set")
+			return nil, nil
+		},
+		transactionFn: func(_ storage.TxFunc) error {
+			t.Fatal("Transaction should not be called when WithSkipDBInit(true) is set")
+			return nil
+		},
+	}
+	storage.SetClientBuilder(func(context.Context, ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return mc, nil
+	})
+
+	s, err := NewService(
+		WithMongoClientURI("mongodb://example"),
+		WithSkipDBInit(true),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+
+	for _, op := range mc.recorded() {
+		assert.NotEqual(t, "EnsureIndexes", op.name)
+		assert.NotEqual(t, "Transaction", op.name)
+	}
+}
+
+func TestNewService_TransactionProbeFailureClosesClient(t *testing.T) {
+	oldBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(oldBuilder)
+
+	want := errors.New("transactions unsupported")
+	closed := false
+	mc := &mockClient{
+		transactionFn: func(_ storage.TxFunc) error {
+			return want
+		},
+		closeFn: func() error {
+			closed = true
+			return nil
+		},
+	}
+	storage.SetClientBuilder(func(context.Context, ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return mc, nil
+	})
+
+	_, err := NewService(WithMongoClientURI("mongodb://example"))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, want)
+	assert.Contains(t, err.Error(), "replica set or sharded cluster")
+	assert.True(t, closed)
 }
 
 // -- Sanity: errSessionNotFound is referenced in service code paths. --------

@@ -19,60 +19,103 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
-func TestEnsureIndexes_CreatesPartialUniqueIndexesOnAllThreeCollections(t *testing.T) {
-	type indexCall struct {
-		coll   string
-		models []mongo.IndexModel
-	}
-	var calls []indexCall
+// captureIndexes runs ensureIndexes against a recording mockClient and
+// returns the index models keyed by collection name, preserving the call
+// order on the side. It is the single setup helper used by every init test.
+func captureIndexes(t *testing.T) (order []string, models map[string][]mongo.IndexModel) {
+	t.Helper()
+	models = map[string][]mongo.IndexModel{}
 
-	mc := &mockClient{
-		ensureIndexesFn: func(models []mongo.IndexModel) ([]string, error) {
-			// mockClient records the coll via mockOp; we re-collect by length
-			// here to cross-check downstream.
-			return make([]string, len(models)), nil
-		},
+	mc := &mockClient{}
+	mc.ensureIndexesFn = func(in []mongo.IndexModel) ([]string, error) {
+		// The most recent recorded op is this very EnsureIndexes call, so
+		// its coll is correct.
+		ops := mc.recorded()
+		coll := ops[len(ops)-1].coll
+		order = append(order, coll)
+		cp := make([]mongo.IndexModel, len(in))
+		copy(cp, in)
+		models[coll] = cp
+		return make([]string, len(in)), nil
 	}
+
 	s := newServiceForTest(t, mc)
 	require.NoError(t, s.ensureIndexes(context.Background()))
-
-	for _, op := range mc.recorded() {
-		if op.name == "EnsureIndexes" {
-			calls = append(calls, indexCall{coll: op.coll})
-		}
-	}
-	require.Len(t, calls, 3)
-	assert.Equal(t, "session_states", calls[0].coll)
-	assert.Equal(t, "app_states", calls[1].coll)
-	assert.Equal(t, "user_states", calls[2].coll)
+	return order, models
 }
 
-func TestEnsureIndexes_PartialFilterIsDeletedAtAbsent(t *testing.T) {
-	var capturedModels [][]mongo.IndexModel
-	mc := &mockClient{
-		ensureIndexesFn: func(models []mongo.IndexModel) ([]string, error) {
-			cp := make([]mongo.IndexModel, len(models))
-			copy(cp, models)
-			capturedModels = append(capturedModels, cp)
-			return make([]string, len(models)), nil
-		},
-	}
-	s := newServiceForTest(t, mc)
-	require.NoError(t, s.ensureIndexes(context.Background()))
-	require.Len(t, capturedModels, 3)
+func TestEnsureIndexes_CoversAllFiveCollectionsInOrder(t *testing.T) {
+	order, _ := captureIndexes(t)
+	assert.Equal(t, []string{
+		"session_states",
+		"session_events",
+		"session_summaries",
+		"app_states",
+		"user_states",
+	}, order)
+}
 
-	for _, ms := range capturedModels {
-		require.Len(t, ms, 1)
-		opts := ms[0].Options
-		require.NotNil(t, opts)
-		require.NotNil(t, opts.Unique)
-		assert.True(t, *opts.Unique)
-		require.NotNil(t, opts.PartialFilterExpression)
-		// Partial filter expression should be `{ deleted_at: { $exists: false } }`.
-		expr, ok := opts.PartialFilterExpression.(bson.M)
-		require.True(t, ok)
-		inner, ok := expr["deleted_at"].(bson.M)
-		require.True(t, ok)
-		assert.Equal(t, false, inner["$exists"])
+func TestEnsureIndexes_AllIndexesFilterOnDeletedAtAbsent(t *testing.T) {
+	_, models := captureIndexes(t)
+	for coll, ms := range models {
+		require.NotEmpty(t, ms, "no indexes on %s", coll)
+		for _, m := range ms {
+			require.NotNil(t, m.Options, "%s: nil Options", coll)
+			require.NotNil(t, m.Options.PartialFilterExpression, "%s: nil PartialFilterExpression", coll)
+			expr, ok := m.Options.PartialFilterExpression.(bson.M)
+			require.True(t, ok, "%s: PartialFilterExpression not a bson.M", coll)
+			inner, ok := expr["deleted_at"].(bson.M)
+			require.True(t, ok, "%s: missing deleted_at clause", coll)
+			assert.Equal(t, false, inner["$exists"], "%s: $exists value", coll)
+		}
 	}
+}
+
+func TestEnsureIndexes_UniqueOnlyOnPrimaryKeys(t *testing.T) {
+	// session_events is a lookup index (multiple rows per session); the
+	// other four collections each have a unique key.
+	uniqueByColl := map[string]bool{
+		"session_states":    true,
+		"session_events":    false,
+		"session_summaries": true,
+		"app_states":        true,
+		"user_states":       true,
+	}
+	_, models := captureIndexes(t)
+	for coll, want := range uniqueByColl {
+		ms, ok := models[coll]
+		require.True(t, ok, "missing models for %s", coll)
+		require.NotEmpty(t, ms)
+		got := ms[0].Options.Unique
+		if want {
+			require.NotNil(t, got, "expected unique on %s", coll)
+			assert.True(t, *got, "expected unique on %s", coll)
+		} else if got != nil {
+			assert.False(t, *got, "did not expect unique on %s", coll)
+		}
+	}
+}
+
+func TestEnsureIndexes_SessionEventsIsLookupOnCreatedAt(t *testing.T) {
+	_, models := captureIndexes(t)
+	ms := models["session_events"]
+	require.Len(t, ms, 1)
+	keys := ms[0].Keys.(bson.D)
+	require.Len(t, keys, 4)
+	assert.Equal(t, "app_name", keys[0].Key)
+	assert.Equal(t, "user_id", keys[1].Key)
+	assert.Equal(t, "session_id", keys[2].Key)
+	assert.Equal(t, "created_at", keys[3].Key)
+}
+
+func TestEnsureIndexes_SessionSummariesUniqueOnFilterKey(t *testing.T) {
+	_, models := captureIndexes(t)
+	ms := models["session_summaries"]
+	require.Len(t, ms, 1)
+	keys := ms[0].Keys.(bson.D)
+	require.Len(t, keys, 4)
+	assert.Equal(t, "app_name", keys[0].Key)
+	assert.Equal(t, "user_id", keys[1].Key)
+	assert.Equal(t, "session_id", keys[2].Key)
+	assert.Equal(t, "filter_key", keys[3].Key)
 }

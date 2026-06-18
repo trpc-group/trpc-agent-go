@@ -15,10 +15,12 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
 const (
-	defaultDatabase = "trpc-agent-go-mongo-session"
+	defaultDatabase          = "trpc-agent-go-mongo-session"
+	defaultSessionEventLimit = 1000
 )
 
 // ServiceOpts is the options for the mongodb session service.
@@ -29,23 +31,39 @@ type ServiceOpts struct {
 	instanceName string
 	extraOptions []any
 
-	sessionTTL   time.Duration // TTL for session state
-	appStateTTL  time.Duration // TTL for app state
-	userStateTTL time.Duration // TTL for user state
+	sessionEventLimit int           // limit of events returned per session in context-window mode
+	sessionTTL        time.Duration // TTL for session state
+	appStateTTL       time.Duration // TTL for app state
+	userStateTTL      time.Duration // TTL for user state
 
 	softDelete bool
 
 	skipDBInit       bool
 	collectionPrefix string
 
-	getSessionHooks []session.GetSessionHook
+	// Summary options. The async worker is wired in a follow-up PR; for now
+	// EnqueueSummaryJob falls back to synchronous CreateSessionSummary.
+	summarizer                summary.SessionSummarizer
+	summaryFilterAllowlist    []string
+	cascadeFullSessionSummary *bool
+
+	appendEventHooks []session.AppendEventHook
+	getSessionHooks  []session.GetSessionHook
 }
 
 // ServiceOpt is the option for the mongodb session service.
 type ServiceOpt func(*ServiceOpts)
 
 var defaultOptions = ServiceOpts{
-	softDelete: true,
+	sessionEventLimit: defaultSessionEventLimit,
+	softDelete:        true,
+}
+
+func (opts ServiceOpts) shouldCascadeFullSessionSummary() bool {
+	if opts.cascadeFullSessionSummary == nil {
+		return true
+	}
+	return *opts.cascadeFullSessionSummary
 }
 
 // WithMongoClientURI sets the MongoDB connection URI directly (recommended).
@@ -81,6 +99,14 @@ func WithDatabase(database string) ServiceOpt {
 func WithExtraOptions(extraOptions ...any) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.extraOptions = append(opts.extraOptions, extraOptions...)
+	}
+}
+
+// WithSessionEventLimit sets the upper bound on events returned by GetSession
+// / ListSessions in context-window mode. Default: 1000.
+func WithSessionEventLimit(limit int) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.sessionEventLimit = limit
 	}
 }
 
@@ -152,5 +178,38 @@ func WithCollectionPrefix(prefix string) ServiceOpt {
 func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.getSessionHooks = append(opts.getSessionHooks, hooks...)
+	}
+}
+
+// WithAppendEventHook adds AppendEvent hooks.
+func WithAppendEventHook(hooks ...session.AppendEventHook) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.appendEventHooks = append(opts.appendEventHooks, hooks...)
+	}
+}
+
+// WithSummarizer injects a summarizer for LLM-based summaries.
+// Without a summarizer CreateSessionSummary / EnqueueSummaryJob become no-ops.
+func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.summarizer = s
+	}
+}
+
+// WithSummaryFilterAllowlist restricts which non-empty filter keys may
+// trigger branch summaries. Keys use the same exact format as event filter
+// keys.
+func WithSummaryFilterAllowlist(filterKeys ...string) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.summaryFilterAllowlist = append([]string{}, filterKeys...)
+	}
+}
+
+// WithCascadeFullSessionSummary controls whether an allowed branch summary
+// also refreshes the full-session summary keyed by SummaryFilterKeyAllContents.
+func WithCascadeFullSessionSummary(enable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		v := enable
+		opts.cascadeFullSessionSummary = &v
 	}
 }

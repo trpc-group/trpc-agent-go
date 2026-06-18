@@ -20,14 +20,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 )
 
-// ensureIndexes creates the unique indexes required by the session backend.
-// Indexes filter on `deleted_at $exists false` so soft-deleted documents do
-// not occupy a unique slot, mirroring the partial unique index used by the
-// PostgreSQL backend.
+// ensureIndexes creates the indexes required by the session backend.
 //
-// Only the three collections this service writes to are managed here:
-// session_states, app_states, user_states.
+// All unique indexes filter on `deleted_at $exists false` so soft-deleted
+// documents do not occupy a unique slot, mirroring the partial unique index
+// used by the PostgreSQL backend.
 func (s *Service) ensureIndexes(ctx context.Context) error {
+	notDeleted := bson.M{"deleted_at": bson.M{"$exists": false}}
+
 	plan := []struct {
 		coll   string
 		models []mongo.IndexModel
@@ -45,7 +45,47 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
 							sqldb.TableNameSessionStates, sqldb.IndexSuffixUniqueActive)).
 						SetUnique(true).
-						SetPartialFilterExpression(bson.M{"deleted_at": bson.M{"$exists": false}}),
+						SetPartialFilterExpression(notDeleted),
+				},
+			},
+		},
+		{
+			coll: s.collSessionEvents,
+			models: []mongo.IndexModel{
+				// Lookup index used by AppendEvent reads / GetSession event
+				// loading. Mirrors postgres' (app_name, user_id, session_id,
+				// created_at) lookup index. _id (ObjectId) is the implicit
+				// tie-breaker for events with identical created_at — see
+				// D3 in the plan.
+				{
+					Keys: bson.D{
+						{Key: "app_name", Value: 1},
+						{Key: "user_id", Value: 1},
+						{Key: "session_id", Value: 1},
+						{Key: "created_at", Value: 1},
+					},
+					Options: options.Index().
+						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
+							sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup)).
+						SetPartialFilterExpression(notDeleted),
+				},
+			},
+		},
+		{
+			coll: s.collSessionSummaries,
+			models: []mongo.IndexModel{
+				{
+					Keys: bson.D{
+						{Key: "app_name", Value: 1},
+						{Key: "user_id", Value: 1},
+						{Key: "session_id", Value: 1},
+						{Key: "filter_key", Value: 1},
+					},
+					Options: options.Index().
+						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
+							sqldb.TableNameSessionSummaries, sqldb.IndexSuffixUniqueActive)).
+						SetUnique(true).
+						SetPartialFilterExpression(notDeleted),
 				},
 			},
 		},
@@ -61,7 +101,7 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
 							sqldb.TableNameAppStates, sqldb.IndexSuffixUniqueActive)).
 						SetUnique(true).
-						SetPartialFilterExpression(bson.M{"deleted_at": bson.M{"$exists": false}}),
+						SetPartialFilterExpression(notDeleted),
 				},
 			},
 		},
@@ -78,7 +118,7 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
 							sqldb.TableNameUserStates, sqldb.IndexSuffixUniqueActive)).
 						SetUnique(true).
-						SetPartialFilterExpression(bson.M{"deleted_at": bson.M{"$exists": false}}),
+						SetPartialFilterExpression(notDeleted),
 				},
 			},
 		},

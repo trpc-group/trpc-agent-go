@@ -118,6 +118,9 @@ type Client interface {
 	UpdateOne(ctx context.Context, database, coll string, filter, update any,
 		opts ...*options.UpdateOptions) (*mongo.UpdateResult, error)
 
+	UpdateMany(ctx context.Context, database, coll string, filter, update any,
+		opts ...*options.UpdateOptions) (*mongo.UpdateResult, error)
+
 	DeleteOne(ctx context.Context, database, coll string, filter any,
 		opts ...*options.DeleteOptions) (*mongo.DeleteResult, error)
 
@@ -194,6 +197,11 @@ func (c *defaultClient) InsertOne(ctx context.Context, database, coll string, do
 func (c *defaultClient) UpdateOne(ctx context.Context, database, coll string, filter, update any,
 	opts ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
 	return c.coll(database, coll).UpdateOne(ctx, filter, update, opts...)
+}
+
+func (c *defaultClient) UpdateMany(ctx context.Context, database, coll string, filter, update any,
+	opts ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
+	return c.coll(database, coll).UpdateMany(ctx, filter, update, opts...)
 }
 
 func (c *defaultClient) DeleteOne(ctx context.Context, database, coll string, filter any,

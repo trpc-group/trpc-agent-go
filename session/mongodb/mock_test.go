@@ -18,6 +18,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mongodb"
 )
 
@@ -51,6 +52,7 @@ type mockClient struct {
 
 	insertOneFn     func(doc any) (*mongo.InsertOneResult, error)
 	updateOneFn     func(filter, update any, opts []*options.UpdateOptions) (*mongo.UpdateResult, error)
+	updateManyFn    func(filter, update any, opts []*options.UpdateOptions) (*mongo.UpdateResult, error)
 	deleteOneFn     func(filter any) (*mongo.DeleteResult, error)
 	findOneFn       func(filter any) *mongo.SingleResult
 	findFn          func(filter any) (*mongo.Cursor, error)
@@ -88,6 +90,15 @@ func (m *mockClient) UpdateOne(_ context.Context, db, coll string, filter, updat
 	m.record(mockOp{name: "UpdateOne", database: db, coll: coll, filter: filter, update: update})
 	if m.updateOneFn != nil {
 		return m.updateOneFn(filter, update, opts)
+	}
+	return &mongo.UpdateResult{MatchedCount: 1, ModifiedCount: 1}, nil
+}
+
+func (m *mockClient) UpdateMany(_ context.Context, db, coll string, filter, update any,
+	opts ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
+	m.record(mockOp{name: "UpdateMany", database: db, coll: coll, filter: filter, update: update})
+	if m.updateManyFn != nil {
+		return m.updateManyFn(filter, update, opts)
 	}
 	return &mongo.UpdateResult{MatchedCount: 1, ModifiedCount: 1}, nil
 }
@@ -164,15 +175,7 @@ func emptyCursor() (*mongo.Cursor, error) {
 // Each element is encoded with bson.Marshal so callers can pass typed structs
 // or bson.M values.
 func docsCursor(docs []any) (*mongo.Cursor, error) {
-	encoded := make([]any, 0, len(docs))
-	for _, d := range docs {
-		raw, err := bson.Marshal(d)
-		if err != nil {
-			return nil, err
-		}
-		encoded = append(encoded, raw)
-	}
-	return mongo.NewCursorFromDocuments(encoded, nil, nil)
+	return mongo.NewCursorFromDocuments(docs, nil, nil)
 }
 
 // newServiceForTest builds a Service backed by the supplied mockClient with
@@ -183,11 +186,19 @@ func newServiceForTest(t interface{ Fatalf(string, ...any) }, mc *mockClient, mo
 		m(&opts)
 	}
 	return &Service{
-		opts:              opts,
-		client:            mc,
-		database:          defaultDatabase,
-		collSessionStates: "session_states",
-		collAppStates:     "app_states",
-		collUserStates:    "user_states",
+		opts:                 opts,
+		client:               mc,
+		database:             defaultDatabase,
+		collSessionStates:    "session_states",
+		collSessionEvents:    "session_events",
+		collSessionSummaries: "session_summaries",
+		collAppStates:        "app_states",
+		collUserStates:       "user_states",
 	}
+}
+
+// newSessionForTest constructs a minimal in-memory session to feed into tests
+// that need a non-nil *session.Session but don't care about its contents.
+func newSessionForTest(appName, userID, sessionID string) *session.Session {
+	return session.NewSession(appName, userID, sessionID)
 }

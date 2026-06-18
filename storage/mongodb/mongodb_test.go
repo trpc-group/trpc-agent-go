@@ -137,6 +137,7 @@ func TestDefaultClientBuilder_PingError(t *testing.T) {
 type mockClient struct {
 	insertOneFn     func(ctx context.Context, db, coll string, doc any) (*mongo.InsertOneResult, error)
 	updateOneFn     func(ctx context.Context, db, coll string, filter, update any) (*mongo.UpdateResult, error)
+	updateManyFn    func(ctx context.Context, db, coll string, filter, update any) (*mongo.UpdateResult, error)
 	deleteOneFn     func(ctx context.Context, db, coll string, filter any) (*mongo.DeleteResult, error)
 	deleteManyFn    func(ctx context.Context, db, coll string, filter any) (*mongo.DeleteResult, error)
 	findOneFn       func(ctx context.Context, db, coll string, filter any) *mongo.SingleResult
@@ -158,6 +159,14 @@ func (m *mockClient) UpdateOne(ctx context.Context, db, coll string, filter, upd
 	_ ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
 	if m.updateOneFn != nil {
 		return m.updateOneFn(ctx, db, coll, filter, update)
+	}
+	return &mongo.UpdateResult{}, nil
+}
+
+func (m *mockClient) UpdateMany(ctx context.Context, db, coll string, filter, update any,
+	_ ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
+	if m.updateManyFn != nil {
+		return m.updateManyFn(ctx, db, coll, filter, update)
 	}
 	return &mongo.UpdateResult{}, nil
 }
@@ -252,6 +261,20 @@ func TestMockClientDispatch(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, called)
 		assert.Equal(t, int64(1), res.ModifiedCount)
+	})
+
+	t.Run("UpdateMany dispatches", func(t *testing.T) {
+		called := false
+		mc := &mockClient{
+			updateManyFn: func(_ context.Context, _, _ string, _, _ any) (*mongo.UpdateResult, error) {
+				called = true
+				return &mongo.UpdateResult{MatchedCount: 2, ModifiedCount: 2}, nil
+			},
+		}
+		res, err := mc.UpdateMany(ctx, "db", "c", bson.M{"kind": "old"}, bson.M{"$set": bson.M{"deleted_at": true}})
+		require.NoError(t, err)
+		assert.True(t, called)
+		assert.Equal(t, int64(2), res.ModifiedCount)
 	})
 
 	t.Run("DeleteOne / DeleteMany default to empty results", func(t *testing.T) {
@@ -486,6 +509,12 @@ func TestIntegration_CRUD(t *testing.T) {
 		bson.M{"_id": "a"}, bson.M{"$set": bson.M{"v": 10}})
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), updRes.ModifiedCount)
+
+	// UpdateMany.
+	updMany, err := client.UpdateMany(ctx, db, coll,
+		bson.M{"v": bson.M{"$gte": 2}}, bson.M{"$set": bson.M{"kind": "bulk"}})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), updMany.ModifiedCount)
 
 	// Find + cursor iteration returns all three documents in id order.
 	cursor, err := client.Find(ctx, db, coll, bson.M{},
