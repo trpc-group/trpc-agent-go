@@ -142,6 +142,7 @@ type sessionEventDoc struct {
 	AppName   string             `bson:"app_name"`
 	UserID    string             `bson:"user_id"`
 	SessionID string             `bson:"session_id"`
+	EventID   string             `bson:"event_id,omitempty"`
 	Event     []byte             `bson:"event"`
 	CreatedAt time.Time          `bson:"created_at"`
 	UpdatedAt time.Time          `bson:"updated_at"`

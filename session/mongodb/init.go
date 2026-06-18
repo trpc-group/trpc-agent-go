@@ -82,6 +82,18 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 							sqldb.TableNameSessionEvents, sqldb.IndexSuffixLookup)).
 						SetPartialFilterExpression(notDeleted),
 				},
+				{
+					Keys: bson.D{
+						{Key: "app_name", Value: 1},
+						{Key: "user_id", Value: 1},
+						{Key: "session_id", Value: 1},
+						{Key: "event_id", Value: 1},
+					},
+					Options: options.Index().
+						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
+							sqldb.TableNameSessionEvents, "event_id_lookup")).
+						SetPartialFilterExpression(notDeleted),
+				},
 			},
 		},
 		{

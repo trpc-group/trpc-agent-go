@@ -843,6 +843,7 @@ func (s *Service) persistEvent(ctx context.Context, key session.Key, e *event.Ev
 			AppName:   key.AppName,
 			UserID:    key.UserID,
 			SessionID: key.SessionID,
+			EventID:   e.ID,
 			Event:     eventBytes,
 			CreatedAt: now,
 			UpdatedAt: now,

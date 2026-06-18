@@ -104,13 +104,29 @@ func TestEnsureIndexes_UniqueOnlyOnPrimaryKeys(t *testing.T) {
 func TestEnsureIndexes_SessionEventsIsLookupOnCreatedAt(t *testing.T) {
 	_, models := captureIndexes(t)
 	ms := models["session_events"]
-	require.Len(t, ms, 1)
+	require.Len(t, ms, 2)
 	keys := ms[0].Keys.(bson.D)
 	require.Len(t, keys, 4)
 	assert.Equal(t, "app_name", keys[0].Key)
 	assert.Equal(t, "user_id", keys[1].Key)
 	assert.Equal(t, "session_id", keys[2].Key)
 	assert.Equal(t, "created_at", keys[3].Key)
+}
+
+func TestEnsureIndexes_SessionEventsHasEventIDLookup(t *testing.T) {
+	_, models := captureIndexes(t)
+	ms := models["session_events"]
+	require.Len(t, ms, 2)
+	keys := ms[1].Keys.(bson.D)
+	require.Len(t, keys, 4)
+	assert.Equal(t, "app_name", keys[0].Key)
+	assert.Equal(t, "user_id", keys[1].Key)
+	assert.Equal(t, "session_id", keys[2].Key)
+	assert.Equal(t, "event_id", keys[3].Key)
+	require.NotNil(t, ms[1].Options)
+	require.NotNil(t, ms[1].Options.PartialFilterExpression)
+	expr := ms[1].Options.PartialFilterExpression.(bson.M)
+	assert.Equal(t, nil, expr["deleted_at"])
 }
 
 func TestEnsureIndexes_SessionTracksIsLookupOnTrackCreatedAt(t *testing.T) {

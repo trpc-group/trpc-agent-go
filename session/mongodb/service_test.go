@@ -898,8 +898,9 @@ func TestAppendEvent_PersistableGoesThroughTransaction(t *testing.T) {
 	}
 	s := newServiceForTest(t, mc)
 	sess := newSessionForTest("app", "u", "s")
+	evt := nonPartialResponseEvent(t)
 
-	require.NoError(t, s.AppendEvent(context.Background(), sess, nonPartialResponseEvent(t)))
+	require.NoError(t, s.AppendEvent(context.Background(), sess, evt))
 
 	// Expect: Transaction wrapper recorded plus the inner UpdateOne + InsertOne.
 	var sawTransaction, sawUpdate, sawInsert bool
@@ -917,6 +918,8 @@ func TestAppendEvent_PersistableGoesThroughTransaction(t *testing.T) {
 		case "InsertOne":
 			if op.coll == "session_events" {
 				sawInsert = true
+				doc := op.doc.(*sessionEventDoc)
+				assert.Equal(t, evt.ID, doc.EventID)
 			}
 		}
 	}
@@ -1372,6 +1375,7 @@ func TestGetEventWindow_LoadsOrderedEntries(t *testing.T) {
 			AppName:   "app",
 			UserID:    "u",
 			SessionID: "s",
+			EventID:   evt.ID,
 			Event:     b,
 			CreatedAt: evt.Timestamp,
 			UpdatedAt: evt.Timestamp,
@@ -1379,7 +1383,16 @@ func TestGetEventWindow_LoadsOrderedEntries(t *testing.T) {
 	}
 	findCalls := 0
 	mc := &mockClient{
-		findOneFn: func(_ any) *mongo.SingleResult {
+		findOneFn: func(filter any) *mongo.SingleResult {
+			f := filter.(bson.M)
+			if f["event_id"] == "a1" {
+				createdAtFilter, ok := f["created_at"].(bson.M)
+				require.True(t, ok)
+				gotCreatedAt, ok := createdAtFilter["$gte"].(time.Time)
+				require.True(t, ok)
+				assert.WithinDuration(t, sessionCreatedAt, gotCreatedAt, time.Millisecond)
+				return mongo.NewSingleResultFromDocument(docs[1], nil, nil)
+			}
 			return mongo.NewSingleResultFromDocument(sessionStateDoc{
 				AppName:   "app",
 				UserID:    "u",
@@ -1394,16 +1407,9 @@ func TestGetEventWindow_LoadsOrderedEntries(t *testing.T) {
 			assert.Equal(t, nil, f["deleted_at"])
 			switch findCalls {
 			case 1:
-				createdAtFilter, ok := f["created_at"].(bson.M)
-				require.True(t, ok)
-				gotCreatedAt, ok := createdAtFilter["$gte"].(time.Time)
-				require.True(t, ok)
-				assert.WithinDuration(t, sessionCreatedAt, gotCreatedAt, time.Millisecond)
-				return docsCursor(docs)
-			case 2:
 				assert.Contains(t, f, "$or")
 				return docsCursor([]any{docs[0]})
-			case 3:
+			case 2:
 				assert.Contains(t, f, "$or")
 				return docsCursor([]any{docs[2]})
 			default:
@@ -1425,7 +1431,7 @@ func TestGetEventWindow_LoadsOrderedEntries(t *testing.T) {
 	assert.Equal(t, "a1", got.Entries[1].Event.ID)
 	assert.Equal(t, "u2", got.Entries[2].Event.ID)
 	assert.False(t, got.Entries[1].CreatedAt.IsZero())
-	assert.Equal(t, 3, findCalls)
+	assert.Equal(t, 2, findCalls)
 }
 
 func TestGetEventWindow_RejectsInvalidRequestBeforeQuery(t *testing.T) {

@@ -96,29 +96,31 @@ func (s *Service) loadWindowAnchor(
 	anchorEventID string,
 	roleFilter map[model.Role]struct{},
 ) (*mongoWindowEntry, error) {
-	var after *mongoWindowEntry
-	for {
-		rows, err := s.queryWindowBatch(ctx, key, sessionCreatedAt, after, false)
-		if err != nil {
-			return nil, fmt.Errorf("load event window anchor: %w", err)
-		}
-		if len(rows) == 0 {
-			return nil, nil
-		}
-		for _, row := range rows {
-			after = row
-			if row.entry.Event.ID != anchorEventID {
-				continue
-			}
-			if !sessionwindow.EventAllowed(&row.entry.Event, roleFilter) {
-				continue
-			}
-			return row, nil
-		}
-		if len(rows) < eventWindowBatchSize {
-			return nil, nil
-		}
+	filter := activeFilterNoExpiry(bson.M{
+		"app_name":   key.AppName,
+		"user_id":    key.UserID,
+		"session_id": key.SessionID,
+		"event_id":   anchorEventID,
+		"created_at": bson.M{"$gte": sessionCreatedAt},
+	})
+	var doc sessionEventDoc
+	err := s.client.FindOne(ctx, s.database, s.collSessionEvents, filter,
+		options.FindOne().SetSort(bson.D{{Key: "created_at", Value: 1}, {Key: "_id", Value: 1}})).
+		Decode(&doc)
+	if errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, nil
 	}
+	if err != nil {
+		return nil, fmt.Errorf("load event window anchor: %w", err)
+	}
+	row, err := scanWindowDoc(doc)
+	if err != nil {
+		return nil, err
+	}
+	if !sessionwindow.EventAllowed(&row.entry.Event, roleFilter) {
+		return nil, nil
+	}
+	return row, nil
 }
 
 func (s *Service) loadActiveSessionCreatedAt(
