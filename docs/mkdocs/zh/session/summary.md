@@ -1006,7 +1006,7 @@ Pass 2 默认是关闭的（`0`），需要满足两个条件才会生效：(1) 
 
 如果同一个 tool name 同时出现在 `ForceCleanToolNames` 和 `KeepToolNames` 中，`KeepToolNames` 优先。
 
-当被压缩的事件有 `event_id` 时，占位符或截断标记会携带 `event_id`、`tool_call_id`、`tool_name` 等恢复线索。开启 `WithEnableOnDemandSession(true)` 且后端实现 `session.WindowService` 后，模型可以调用 `session_load`，用 `content_offset` / `content_limit` 精确加载原始 tool result 的小片段。`session_load` 的返回大小由它自己的窗口参数和 `content_limit` 控制；读取超大结果时建议分片加载，而不是一次请求全文。
+当 Pass 1 占位符或 Pass 2 截断标记对应的事件有 `event_id` 时，会携带 `event_id`、`tool_call_id`、`tool_name` 等恢复线索；Pass 0 的策略占位符不携带这些恢复线索。开启 `WithEnableOnDemandSession(true)` 且后端实现 `session.WindowService` 后，模型可以调用 `session_load`，用 `content_offset` / `content_limit` 精确加载原始 tool result 的小片段。`session_load` 的返回大小由它自己的窗口参数和 `content_limit` 控制；读取超大结果时建议分片加载，而不是一次请求全文。
 
 此外：
 

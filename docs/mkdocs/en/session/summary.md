@@ -1025,7 +1025,7 @@ Use `WithToolResultCompactionConfig(...)` when you need tool-name or recency pol
 
 If the same tool name appears in both `ForceCleanToolNames` and `KeepToolNames`, `KeepToolNames` wins.
 
-When the compacted event has an `event_id`, placeholders and truncation markers include recovery hints such as `event_id`, `tool_call_id`, and `tool_name`. With `WithEnableOnDemandSession(true)` and a session backend that implements `session.WindowService`, the model can call `session_load` with `content_offset` / `content_limit` to reload a precise slice of the original tool result. `session_load` output size is controlled by its own window parameters and `content_limit`; reload very large results in slices instead of requesting the full payload at once.
+When a Pass 1 placeholder or Pass 2 truncation marker is created from an event with an `event_id`, it includes recovery hints such as `event_id`, `tool_call_id`, and `tool_name`; Pass 0 policy placeholders do not include these recovery hints. With `WithEnableOnDemandSession(true)` and a session backend that implements `session.WindowService`, the model can call `session_load` with `content_offset` / `content_limit` to reload a precise slice of the original tool result. `session_load` output size is controlled by its own window parameters and `content_limit`; reload very large results in slices instead of requesting the full payload at once.
 
 Additionally:
 
