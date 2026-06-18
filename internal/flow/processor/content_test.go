@@ -4652,6 +4652,85 @@ func TestContentRequestProcessor_ToolTranscriptModeKeepsAssistantText(t *testing
 	require.Empty(t, messages[0].ToolCalls)
 }
 
+func TestContentRequestProcessor_ToolTranscriptModeKeepsUnmatchedResultChoices(t *testing.T) {
+	resultEvent := toolTranscriptTestEvent(
+		"req1",
+		"inv1",
+		model.Message{},
+		model.ObjectTypeToolResponse,
+	)
+	resultEvent.Response.Choices = []model.Choice{
+		{Message: model.NewToolMessage("call_1", "lookup", "old result")},
+		{Message: model.NewToolMessage("call_extra", "lookup", "kept result")},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv2"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req2"}),
+	)
+
+	events := NewContentRequestProcessor(
+		WithToolTranscriptMode(ToolTranscriptModeOmitPreviousCompleted),
+	).applyToolTranscriptMode([]event.Event{
+		toolTranscriptTestEvent("req1", "inv1", toolTranscriptTestCall("call_1", ""), ""),
+		resultEvent,
+	}, inv)
+
+	require.Len(t, events, 1)
+	require.Len(t, events[0].Response.Choices, 1)
+	require.Equal(t, "call_extra", events[0].Response.Choices[0].Message.ToolID)
+	require.Equal(t, "kept result", events[0].Response.Choices[0].Message.Content)
+}
+
+func TestContentRequestProcessor_ToolTranscriptModeHelperBranches(t *testing.T) {
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv2"),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req2"}),
+	)
+
+	require.False(t, isPreviousToolTranscriptEvent(event.Event{RequestID: "req1"}, nil))
+	require.False(t, isPreviousToolTranscriptEvent(
+		event.Event{InvocationID: "inv2"},
+		agent.NewInvocation(agent.WithInvocationID("inv2")),
+	))
+	require.False(t, isPreviousToolTranscriptEvent(event.Event{}, &agent.Invocation{}))
+	require.True(t, isPreviousToolTranscriptEvent(
+		event.Event{InvocationID: "inv1"},
+		agent.NewInvocation(agent.WithInvocationID("inv2")),
+	))
+
+	require.False(t, allMatchedToolResultsArePrevious(nil, nil, inv))
+	require.False(t, allMatchedToolResultsArePrevious(
+		[]event.Event{{}},
+		[]matchedToolResponseEvent{{eventIndex: 1}},
+		inv,
+	))
+
+	require.False(t, allToolCallIDsMatched(nil, nil, nil))
+	require.False(t, allToolCallIDsMatched(
+		[]string{"call_1"},
+		[]event.Event{{}},
+		[]matchedToolResponseEvent{{eventIndex: 0, choiceIndices: []int{0}}},
+	))
+	require.False(t, allToolCallIDsMatched(
+		[]string{"call_1"},
+		[]event.Event{toolTranscriptTestEvent(
+			"req1",
+			"inv1",
+			model.NewToolMessage("call_1", "lookup", "result"),
+			model.ObjectTypeToolResponse,
+		)},
+		[]matchedToolResponseEvent{
+			{eventIndex: -1, choiceIndices: []int{0}},
+			{eventIndex: 0, choiceIndices: []int{42}},
+		},
+	))
+
+	_, keep := stripToolCallsFromEvent(event.Event{})
+	require.False(t, keep)
+	_, keep = omitToolResultChoices(event.Event{}, map[int]struct{}{})
+	require.False(t, keep)
+}
+
 func toolTranscriptTestCall(id string, content string) model.Message {
 	return model.Message{
 		Role:    model.RoleAssistant,
