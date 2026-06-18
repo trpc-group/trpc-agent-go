@@ -489,6 +489,11 @@ func (w *WeaviateKnowledge) buildQuery(req *knowledge.SearchRequest) *weaviate.Q
 
 - [InMemory Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/inmemory)
 - [Redis Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/redis)
+- [SQLite Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/sqlite)
+- [PostgreSQL Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/postgres)
+- [MySQL Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/mysql)
+- [ClickHouse Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/clickhouse)
+- [MongoDB Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/mongodb)
 
 **实现注意事项：**
 
@@ -601,7 +606,6 @@ func (p *PostgreSQLService) unmarshalState(data []byte) session.StateMap {
 **可以集成的开源组件示例：**
 
 - PostgreSQL 会话存储
-- MongoDB 会话存储
 - MySQL 会话存储
 - Cassandra 会话存储
 

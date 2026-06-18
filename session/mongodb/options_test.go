@@ -24,6 +24,9 @@ func TestServiceOpts_Defaults(t *testing.T) {
 	assert.True(t, o.softDelete)
 	assert.Equal(t, defaultAsyncPersisterNum, o.asyncPersisterNum)
 	assert.False(t, o.enableAsyncPersist)
+	assert.Equal(t, defaultAsyncSummaryNum, o.asyncSummaryNum)
+	assert.Equal(t, defaultSummaryQueueSize, o.summaryQueueSize)
+	assert.Equal(t, defaultSummaryJobTimeout, o.summaryJobTimeout)
 }
 
 func TestWithMongoClientURI(t *testing.T) {
@@ -42,6 +45,12 @@ func TestWithDatabase(t *testing.T) {
 	o := defaultOptions
 	WithDatabase("mydb")(&o)
 	assert.Equal(t, "mydb", o.database)
+}
+
+func TestWithSessionEventLimit(t *testing.T) {
+	o := defaultOptions
+	WithSessionEventLimit(12)(&o)
+	assert.Equal(t, 12, o.sessionEventLimit)
 }
 
 func TestWithExtraOptions_Appends(t *testing.T) {
@@ -83,6 +92,33 @@ func TestWithCleanupInterval(t *testing.T) {
 	o := defaultOptions
 	WithCleanupInterval(time.Minute)(&o)
 	assert.Equal(t, time.Minute, o.cleanupInterval)
+}
+
+func TestWithAsyncSummaryNum(t *testing.T) {
+	o := defaultOptions
+	WithAsyncSummaryNum(2)(&o)
+	assert.Equal(t, 2, o.asyncSummaryNum)
+
+	WithAsyncSummaryNum(0)(&o)
+	assert.Equal(t, defaultAsyncSummaryNum, o.asyncSummaryNum)
+}
+
+func TestWithSummaryQueueSize(t *testing.T) {
+	o := defaultOptions
+	WithSummaryQueueSize(8)(&o)
+	assert.Equal(t, 8, o.summaryQueueSize)
+
+	WithSummaryQueueSize(0)(&o)
+	assert.Equal(t, defaultSummaryQueueSize, o.summaryQueueSize)
+}
+
+func TestWithSummaryJobTimeout(t *testing.T) {
+	o := defaultOptions
+	WithSummaryJobTimeout(2 * time.Second)(&o)
+	assert.Equal(t, 2*time.Second, o.summaryJobTimeout)
+
+	WithSummaryJobTimeout(0)(&o)
+	assert.Equal(t, 2*time.Second, o.summaryJobTimeout)
 }
 
 func TestWithSoftDelete(t *testing.T) {
@@ -130,4 +166,28 @@ func TestWithGetSessionHook_AppendsInOrder(t *testing.T) {
 	})
 	WithGetSessionHook(h, h)(&o)
 	assert.Len(t, o.getSessionHooks, 2)
+}
+
+func TestWithAppendEventHook_AppendsInOrder(t *testing.T) {
+	o := defaultOptions
+	h := session.AppendEventHook(func(_ *session.AppendEventContext, next func() error) error {
+		return next()
+	})
+	WithAppendEventHook(h, h)(&o)
+	assert.Len(t, o.appendEventHooks, 2)
+}
+
+func TestWithSummaryFilterAllowlist(t *testing.T) {
+	o := defaultOptions
+	WithSummaryFilterAllowlist("a", "b")(&o)
+	assert.Equal(t, []string{"a", "b"}, o.summaryFilterAllowlist)
+}
+
+func TestWithCascadeFullSessionSummary(t *testing.T) {
+	o := defaultOptions
+	assert.True(t, o.shouldCascadeFullSessionSummary())
+
+	WithCascadeFullSessionSummary(false)(&o)
+	require.NotNil(t, o.cascadeFullSessionSummary)
+	assert.False(t, o.shouldCascadeFullSessionSummary())
 }

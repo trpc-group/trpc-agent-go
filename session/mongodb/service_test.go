@@ -215,12 +215,14 @@ func TestGetSession_LoadsEventsAndSummaries(t *testing.T) {
 		findOneFn: func(_ any) *mongo.SingleResult {
 			return mongo.NewSingleResultFromDocument(stored, nil, nil)
 		},
-		findFn: func(_ any) (*mongo.Cursor, error) {
+		findFn: func(filter any) (*mongo.Cursor, error) {
 			findCalls++
 			switch findCalls {
 			case 1, 2: // app_states, user_states.
 				return emptyCursor()
 			case 3: // session_events.
+				f := filter.(bson.M)
+				assert.NotContains(t, f, "$or", "session_events reads must not filter by per-row expires_at")
 				return docsCursor([]any{
 					sessionEventDoc{AppName: "app", UserID: "u", SessionID: "s", Event: e1Bytes, CreatedAt: e1.Timestamp},
 					sessionEventDoc{AppName: "app", UserID: "u", SessionID: "s", Event: e2Bytes, CreatedAt: e2.Timestamp},
@@ -270,12 +272,14 @@ func TestGetSession_EventPagePath(t *testing.T) {
 		findOneFn: func(_ any) *mongo.SingleResult {
 			return mongo.NewSingleResultFromDocument(stored, nil, nil)
 		},
-		findFn: func(_ any) (*mongo.Cursor, error) {
+		findFn: func(filter any) (*mongo.Cursor, error) {
 			findCalls++
 			switch findCalls {
 			case 1, 2: // app_states, user_states.
 				return emptyCursor()
 			case 3: // paged events are read newest-first by query, then reversed.
+				f := filter.(bson.M)
+				assert.NotContains(t, f, "$or", "paged session_events reads must not filter by per-row expires_at")
 				return docsCursor([]any{
 					sessionEventDoc{AppName: "app", UserID: "u", SessionID: "s", Event: e2Bytes, CreatedAt: e2.Timestamp},
 					sessionEventDoc{AppName: "app", UserID: "u", SessionID: "s", Event: e1Bytes, CreatedAt: e1.Timestamp},
@@ -450,14 +454,16 @@ func TestDeleteSession_SoftDeleteStampsDeletedAt(t *testing.T) {
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"}))
 
 	ops := mc.recorded()
-	require.Len(t, ops, 4)
+	require.Len(t, ops, 5)
 	assert.Equal(t, "Transaction", ops[0].name)
 	assert.Equal(t, "UpdateOne", ops[1].name)
 	assert.Equal(t, "session_states", ops[1].coll)
 	assert.Equal(t, "UpdateMany", ops[2].name)
 	assert.Equal(t, "session_events", ops[2].coll)
 	assert.Equal(t, "UpdateMany", ops[3].name)
-	assert.Equal(t, "session_summaries", ops[3].coll)
+	assert.Equal(t, "session_tracks", ops[3].coll)
+	assert.Equal(t, "UpdateMany", ops[4].name)
+	assert.Equal(t, "session_summaries", ops[4].coll)
 
 	for _, op := range ops[1:] {
 		upd, ok := op.update.(bson.M)
@@ -481,14 +487,16 @@ func TestDeleteSession_HardDeleteFanOut(t *testing.T) {
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"}))
 
 	ops := mc.recorded()
-	require.Len(t, ops, 4)
+	require.Len(t, ops, 5)
 	assert.Equal(t, "Transaction", ops[0].name)
 	assert.Equal(t, "DeleteOne", ops[1].name)
 	assert.Equal(t, "session_states", ops[1].coll)
 	assert.Equal(t, "DeleteMany", ops[2].name)
 	assert.Equal(t, "session_events", ops[2].coll)
 	assert.Equal(t, "DeleteMany", ops[3].name)
-	assert.Equal(t, "session_summaries", ops[3].coll)
+	assert.Equal(t, "session_tracks", ops[3].coll)
+	assert.Equal(t, "DeleteMany", ops[4].name)
+	assert.Equal(t, "session_summaries", ops[4].coll)
 }
 
 func TestDeleteSession_TransactionErrorPropagates(t *testing.T) {
@@ -895,6 +903,289 @@ func TestClose_AfterCloseAppendEventDoesNotPanic(t *testing.T) {
 	})
 }
 
+// -- Track events -----------------------------------------------------------
+
+func trackEventForTest(track session.Track, payload string, ts time.Time) *session.TrackEvent {
+	return &session.TrackEvent{
+		Track:     track,
+		Payload:   json.RawMessage(payload),
+		Timestamp: ts,
+	}
+}
+
+func mustTrackIndex(t *testing.T, tracks []session.Track) []byte {
+	t.Helper()
+	b, err := json.Marshal(tracks)
+	require.NoError(t, err)
+	return b
+}
+
+func TestAppendTrackEvent_UsesTransactionAndSessionTracks(t *testing.T) {
+	now := time.Now()
+	mc := &mockClient{
+		transactionFn: func(fn storage.TxFunc) error {
+			return fn(nil)
+		},
+		findOneFn: func(_ any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{
+				AppName:   "app",
+				UserID:    "u",
+				SessionID: "s",
+				State:     bson.M{},
+				CreatedAt: now,
+				UpdatedAt: now,
+			}, nil, nil)
+		},
+	}
+	s := newServiceForTest(t, mc)
+	sess := newSessionForTest("app", "u", "s")
+	evt := trackEventForTest("alpha", `"payload"`, now)
+
+	require.NoError(t, s.AppendTrackEvent(context.Background(), sess, evt))
+
+	ops := mc.recorded()
+	var sawTransaction, sawStateUpdate, sawTrackInsert bool
+	for _, op := range ops {
+		switch op.name {
+		case "Transaction":
+			sawTransaction = true
+		case "UpdateOne":
+			if op.coll == "session_states" {
+				sawStateUpdate = true
+				set := op.update.(bson.M)["$set"].(bson.M)
+				assert.Contains(t, set, "state.tracks")
+			}
+		case "InsertOne":
+			if op.coll == "session_tracks" {
+				sawTrackInsert = true
+				doc := op.doc.(sessionTrackDoc)
+				assert.Equal(t, session.Track("alpha"), doc.Track)
+				var persisted session.TrackEvent
+				require.NoError(t, json.Unmarshal(doc.Event, &persisted))
+				assert.Equal(t, evt.Track, persisted.Track)
+			}
+		}
+	}
+	assert.True(t, sawTransaction)
+	assert.True(t, sawStateUpdate)
+	assert.True(t, sawTrackInsert)
+	tracks, err := session.TracksFromState(sess.State)
+	require.NoError(t, err)
+	assert.Equal(t, []session.Track{"alpha"}, tracks)
+}
+
+func TestAppendTrackEvent_AsyncPathDispatchesToChan(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.enableAsyncPersist = true
+		o.asyncPersisterNum = 1
+	})
+	s.trackEventChans = []chan *trackEventPair{make(chan *trackEventPair, 1)}
+	sess := newSessionForTest("app", "u", "s")
+	evt := trackEventForTest("alpha", `"payload"`, time.Now())
+
+	require.NoError(t, s.AppendTrackEvent(context.Background(), sess, evt))
+	require.Len(t, s.trackEventChans[0], 1)
+	pair := <-s.trackEventChans[0]
+	assert.Equal(t, session.Key{AppName: "app", UserID: "u", SessionID: "s"}, pair.key)
+	assert.Same(t, evt, pair.event)
+	assert.Empty(t, mc.recorded(), "async track enqueue should not persist synchronously")
+}
+
+func TestGetSession_LoadsTrackEvents(t *testing.T) {
+	now := time.Now()
+	trackEvent := trackEventForTest("alpha", `"payload"`, now)
+	eventBytes, err := json.Marshal(trackEvent)
+	require.NoError(t, err)
+	stored := sessionStateDoc{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+		State:     bson.M{"tracks": mustTrackIndex(t, []session.Track{"alpha"})},
+		CreatedAt: now.Add(-time.Hour),
+		UpdatedAt: now,
+	}
+
+	findCalls := 0
+	mc := &mockClient{
+		findOneFn: func(_ any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(stored, nil, nil)
+		},
+		findFn: func(_ any) (*mongo.Cursor, error) {
+			findCalls++
+			switch findCalls {
+			case 1, 2, 3: // app_states, user_states, session_events.
+				return emptyCursor()
+			case 4: // session_tracks.
+				return docsCursor([]any{
+					sessionTrackDoc{
+						AppName:   "app",
+						UserID:    "u",
+						SessionID: "s",
+						Track:     "alpha",
+						Event:     eventBytes,
+						CreatedAt: now,
+						UpdatedAt: now,
+					},
+				})
+			default:
+				return emptyCursor()
+			}
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	sess, err := s.GetSession(context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"})
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Contains(t, sess.Tracks, session.Track("alpha"))
+	require.Len(t, sess.Tracks["alpha"].Events, 1)
+	assert.Equal(t, json.RawMessage(`"payload"`), sess.Tracks["alpha"].Events[0].Payload)
+}
+
+func TestCleanupExpiredTracks_UsesSessionGroupCleanup(t *testing.T) {
+	now := time.Now()
+	mc := &mockClient{
+		aggregateFn: func(pipeline any) (*mongo.Cursor, error) {
+			stages := pipeline.(bson.A)
+			require.Len(t, stages, 3)
+			group := stages[1].(bson.M)["$group"].(bson.M)
+			assert.Contains(t, group, "max_updated_at")
+			return docsCursor([]any{
+				bson.M{"_id": bson.M{"app_name": "app", "user_id": "u", "session_id": "s"}},
+			})
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+
+	require.NoError(t, s.cleanupExpiredTracks(context.Background(), now))
+
+	ops := mc.recorded()
+	require.Len(t, ops, 2)
+	assert.Equal(t, "Aggregate", ops[0].name)
+	assert.Equal(t, "session_tracks", ops[0].coll)
+	assert.Equal(t, "UpdateMany", ops[1].name)
+	assert.Equal(t, "session_tracks", ops[1].coll)
+}
+
+// -- WindowService ----------------------------------------------------------
+
+func windowEventForTest(id string, role model.Role, content string, ts time.Time) event.Event {
+	return event.Event{
+		ID:        id,
+		Author:    string(role),
+		Timestamp: ts,
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{Role: role, Content: content},
+		}}},
+	}
+}
+
+func TestGetEventWindow_LoadsOrderedEntries(t *testing.T) {
+	now := time.Now()
+	sessionCreatedAt := now.Add(-10 * time.Minute)
+	evts := []event.Event{
+		windowEventForTest("u1", model.RoleUser, "one", now.Add(-3*time.Minute)),
+		windowEventForTest("a1", model.RoleAssistant, "two", now.Add(-2*time.Minute)),
+		windowEventForTest("u2", model.RoleUser, "three", now.Add(-time.Minute)),
+	}
+	docs := make([]any, 0, len(evts))
+	for _, evt := range evts {
+		b, err := json.Marshal(evt)
+		require.NoError(t, err)
+		docs = append(docs, sessionEventDoc{
+			AppName:   "app",
+			UserID:    "u",
+			SessionID: "s",
+			Event:     b,
+			CreatedAt: evt.Timestamp,
+			UpdatedAt: evt.Timestamp,
+		})
+	}
+	mc := &mockClient{
+		findOneFn: func(_ any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{
+				AppName:   "app",
+				UserID:    "u",
+				SessionID: "s",
+				CreatedAt: sessionCreatedAt,
+				UpdatedAt: now,
+			}, nil, nil)
+		},
+		findFn: func(filter any) (*mongo.Cursor, error) {
+			f := filter.(bson.M)
+			assert.NotContains(t, f, "$or", "window event reads must not filter by per-row expires_at")
+			createdAtFilter, ok := f["created_at"].(bson.M)
+			require.True(t, ok)
+			gotCreatedAt, ok := createdAtFilter["$gte"].(time.Time)
+			require.True(t, ok)
+			assert.WithinDuration(t, sessionCreatedAt, gotCreatedAt, time.Millisecond)
+			return docsCursor(docs)
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	got, err := s.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+		AnchorEventID: "a1",
+		Before:        1,
+		After:         1,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Entries, 3)
+	assert.Equal(t, "u1", got.Entries[0].Event.ID)
+	assert.Equal(t, "a1", got.Entries[1].Event.ID)
+	assert.Equal(t, "u2", got.Entries[2].Event.ID)
+	assert.False(t, got.Entries[1].CreatedAt.IsZero())
+}
+
+func TestGetEventWindow_RejectsInvalidRequestBeforeQuery(t *testing.T) {
+	mc := &mockClient{
+		findOneFn: func(_ any) *mongo.SingleResult {
+			t.Fatal("FindOne should not run for invalid window request")
+			return nil
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	_, err := s.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key: session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "anchor event id is required")
+
+	_, err = s.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+		AnchorEventID: "a1",
+		Before:        -1,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "before >= 0")
+}
+
+func TestGetEventWindow_MissingActiveSessionReturnsAnchorNotFound(t *testing.T) {
+	mc := &mockClient{
+		findOneFn: func(filter any) *mongo.SingleResult {
+			f := filter.(bson.M)
+			assert.Contains(t, f, "$or", "active session lookup must honor session expiry")
+			return mongo.NewSingleResultFromDocument(bson.D{}, mongo.ErrNoDocuments, nil)
+		},
+		findFn: func(_ any) (*mongo.Cursor, error) {
+			t.Fatal("event lookup should not run when active session is missing")
+			return nil, nil
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	_, err := s.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+		AnchorEventID: "a1",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "anchor event not found: a1")
+}
+
 func TestCreateSessionSummary_NoOpWithoutSummarizer(t *testing.T) {
 	mc := &mockClient{}
 	s := newServiceForTest(t, mc)
@@ -994,6 +1285,23 @@ func TestCleanupExpired_NoSessionTTLIsNoOp(t *testing.T) {
 
 	s.cleanupExpired()
 	assert.Empty(t, mc.recorded())
+}
+
+func TestCleanupExpired_CleansEventsAndTracks(t *testing.T) {
+	var collections []string
+	var mc *mockClient
+	mc = &mockClient{
+		aggregateFn: func(_ any) (*mongo.Cursor, error) {
+			ops := mc.recorded()
+			collections = append(collections, ops[len(ops)-1].coll)
+			return emptyCursor()
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+
+	s.cleanupExpired()
+
+	assert.Equal(t, []string{"session_events", "session_tracks"}, collections)
 }
 
 func TestCleanupExpiredEvents_HardDeletePath(t *testing.T) {

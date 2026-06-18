@@ -98,9 +98,9 @@ func (s *Service) CreateSessionSummary(
 
 // EnqueueSummaryJob enqueues a summary job for asynchronous processing.
 //
-// Async workers are wired in a follow-up PR; for now we fall back to
-// synchronous CreateSessionSummary, applying the same dispatch policy that
-// the async worker would.
+// When a summarizer is configured, NewService starts an async summary worker
+// and this method prefers enqueueing to it. If the worker is unavailable, the
+// shared async summary helper falls back to synchronous cascade processing.
 func (s *Service) EnqueueSummaryJob(
 	ctx context.Context,
 	sess *session.Session,
@@ -116,6 +116,9 @@ func (s *Service) EnqueueSummaryJob(
 	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
 	if err := key.CheckSessionKey(); err != nil {
 		return fmt.Errorf("check session key failed: %w", err)
+	}
+	if s.asyncWorker != nil {
+		return s.asyncWorker.EnqueueJob(ctx, sess, filterKey, force)
 	}
 	return isummary.CreateSessionSummaryWithCascade(
 		isummary.DetachContext(ctx),

@@ -84,6 +84,24 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 			},
 		},
 		{
+			coll: s.collSessionTracks,
+			models: []mongo.IndexModel{
+				{
+					Keys: bson.D{
+						{Key: "app_name", Value: 1},
+						{Key: "user_id", Value: 1},
+						{Key: "session_id", Value: 1},
+						{Key: "track", Value: 1},
+						{Key: "created_at", Value: 1},
+					},
+					Options: options.Index().
+						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
+							collectionNameSessionTracks, sqldb.IndexSuffixLookup)).
+						SetPartialFilterExpression(notDeleted),
+				},
+			},
+		},
+		{
 			coll: s.collSessionSummaries,
 			models: []mongo.IndexModel{
 				{

@@ -201,6 +201,7 @@ func newServiceForTest(t interface{ Fatalf(string, ...any) }, mc *mockClient, mo
 		database:             defaultDatabase,
 		collSessionStates:    "session_states",
 		collSessionEvents:    "session_events",
+		collSessionTracks:    "session_tracks",
 		collSessionSummaries: "session_summaries",
 		collAppStates:        "app_states",
 		collUserStates:       "user_states",

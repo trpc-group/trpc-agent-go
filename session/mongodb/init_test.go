@@ -44,11 +44,12 @@ func captureIndexes(t *testing.T) (order []string, models map[string][]mongo.Ind
 	return order, models
 }
 
-func TestEnsureIndexes_CoversAllFiveCollectionsInOrder(t *testing.T) {
+func TestEnsureIndexes_CoversAllSixCollectionsInOrder(t *testing.T) {
 	order, _ := captureIndexes(t)
 	assert.Equal(t, []string{
 		"session_states",
 		"session_events",
+		"session_tracks",
 		"session_summaries",
 		"app_states",
 		"user_states",
@@ -76,11 +77,12 @@ func TestEnsureIndexes_ActiveIndexesFilterOnDeletedAtAbsent(t *testing.T) {
 }
 
 func TestEnsureIndexes_UniqueOnlyOnPrimaryKeys(t *testing.T) {
-	// session_events is a lookup index (multiple rows per session); the
-	// other four collections each have a unique key.
+	// session_events and session_tracks are lookup indexes (multiple rows per
+	// session); the other four collections each have a unique key.
 	uniqueByColl := map[string]bool{
 		"session_states":    true,
 		"session_events":    false,
+		"session_tracks":    false,
 		"session_summaries": true,
 		"app_states":        true,
 		"user_states":       true,
@@ -110,6 +112,19 @@ func TestEnsureIndexes_SessionEventsIsLookupOnCreatedAt(t *testing.T) {
 	assert.Equal(t, "user_id", keys[1].Key)
 	assert.Equal(t, "session_id", keys[2].Key)
 	assert.Equal(t, "created_at", keys[3].Key)
+}
+
+func TestEnsureIndexes_SessionTracksIsLookupOnTrackCreatedAt(t *testing.T) {
+	_, models := captureIndexes(t)
+	ms := models["session_tracks"]
+	require.Len(t, ms, 1)
+	keys := ms[0].Keys.(bson.D)
+	require.Len(t, keys, 5)
+	assert.Equal(t, "app_name", keys[0].Key)
+	assert.Equal(t, "user_id", keys[1].Key)
+	assert.Equal(t, "session_id", keys[2].Key)
+	assert.Equal(t, "track", keys[3].Key)
+	assert.Equal(t, "created_at", keys[4].Key)
 }
 
 func TestEnsureIndexes_SessionSummariesUniqueOnFilterKey(t *testing.T) {

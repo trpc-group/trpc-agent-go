@@ -29,24 +29,28 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummary "trpc.group/trpc-go/trpc-agent-go/session/internal/summary"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mongodb"
 )
 
 // Compile-time interface assertion.
 var _ session.Service = (*Service)(nil)
+var _ session.TrackService = (*Service)(nil)
 
 var errSessionNotFound = errors.New("session not found")
 
 // Service is the mongodb session service.
 type Service struct {
-	opts           ServiceOpts
-	client         storage.Client
-	eventPairChans []chan *sessionEventPair // channel for session events to persistence
-	cleanupTicker  *time.Ticker             // ticker for automatic session_events cleanup
-	cleanupDone    chan struct{}            // signal to stop cleanup routine
-	cleanupOnce    sync.Once                // ensure cleanup routine is stopped only once
-	persistWg      sync.WaitGroup           // wait group for persist workers
-	once           sync.Once                // ensure Close is called only once
+	opts            ServiceOpts
+	client          storage.Client
+	eventPairChans  []chan *sessionEventPair // channel for session events to persistence
+	trackEventChans []chan *trackEventPair   // channel for session track events to persistence
+	asyncWorker     *isummary.AsyncSummaryWorker
+	cleanupTicker   *time.Ticker   // ticker for automatic session_events cleanup
+	cleanupDone     chan struct{}  // signal to stop cleanup routine
+	cleanupOnce     sync.Once      // ensure cleanup routine is stopped only once
+	persistWg       sync.WaitGroup // wait group for persist workers
+	once            sync.Once      // ensure Close is called only once
 
 	// database holds the resolved mongodb database name (defaults to a constant
 	// when WithDatabase was not used).
@@ -55,6 +59,7 @@ type Service struct {
 	// Collection names with optional prefix applied.
 	collSessionStates    string
 	collSessionEvents    string
+	collSessionTracks    string
 	collSessionSummaries string
 	collAppStates        string
 	collUserStates       string
@@ -63,6 +68,11 @@ type Service struct {
 type sessionEventPair struct {
 	key   session.Key
 	event *event.Event
+}
+
+type trackEventPair struct {
+	key   session.Key
+	event *session.TrackEvent
 }
 
 // buildClientOpts assembles the storage.ClientBuilderOpt list from ServiceOpts,
@@ -116,6 +126,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		database:             database,
 		collSessionStates:    sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameSessionStates),
 		collSessionEvents:    sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameSessionEvents),
+		collSessionTracks:    sqldb.BuildTableName(opts.collectionPrefix, collectionNameSessionTracks),
 		collSessionSummaries: sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameSessionSummaries),
 		collAppStates:        sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameAppStates),
 		collUserStates:       sqldb.BuildTableName(opts.collectionPrefix, sqldb.TableNameUserStates),
@@ -135,6 +146,17 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	}
 	if opts.enableAsyncPersist {
 		s.startAsyncPersistWorker()
+	}
+	if isummary.HasSummarizer(opts.summarizer) {
+		s.asyncWorker = isummary.NewAsyncSummaryWorker(isummary.AsyncSummaryConfig{
+			Summarizer:            opts.summarizer,
+			AsyncSummaryNum:       opts.asyncSummaryNum,
+			SummaryQueueSize:      opts.summaryQueueSize,
+			SummaryJobTimeout:     opts.summaryJobTimeout,
+			SummaryDispatchPolicy: isummary.NewSummaryDispatchPolicy(opts.summaryFilterAllowlist, opts.shouldCascadeFullSessionSummary()),
+			CreateSummaryFunc:     s.CreateSessionSummary,
+		})
+		s.asyncWorker.Start()
 	}
 	if opts.sessionTTL > 0 && opts.cleanupInterval > 0 {
 		s.cleanupDone = make(chan struct{})
@@ -323,6 +345,10 @@ func (s *Service) ListSessions(
 	if err != nil {
 		return nil, fmt.Errorf("mongodb session service list sessions failed: get summaries: %w", err)
 	}
+	trackEventsList, err := s.getTrackEvents(ctx, sessionKeys, docs, opt.EventNum, opt.EventTime)
+	if err != nil {
+		return nil, fmt.Errorf("mongodb session service list sessions failed: get track events: %w", err)
+	}
 
 	sessions := make([]*session.Session, 0, len(docs))
 	for i, d := range docs {
@@ -338,6 +364,7 @@ func (s *Service) ListSessions(
 			session.WithSessionCreatedAt(d.CreatedAt),
 			session.WithSessionUpdatedAt(d.UpdatedAt),
 		)
+		attachTrackEvents(sess, trackEventsList[i])
 		sessions = append(sessions, mergeState(appState, userState, sess))
 	}
 	return sessions, nil
@@ -345,8 +372,8 @@ func (s *Service) ListSessions(
 
 // DeleteSession deletes a session.
 //
-// PR3 owns the session-scoped fan-out for state / events / summaries. Track
-// events are added in a later PR and will join this fan-out there.
+// Deletes session-scoped state, events, tracks, and summaries in one
+// transaction.
 func (s *Service) DeleteSession(
 	ctx context.Context,
 	key session.Key,
@@ -367,6 +394,10 @@ func (s *Service) DeleteSession(
 				activeFilterNoExpiry(filter), update); err != nil {
 				return fmt.Errorf("delete session events: %w", err)
 			}
+			if _, err := s.client.UpdateMany(sc, s.database, s.collSessionTracks,
+				activeFilterNoExpiry(filter), update); err != nil {
+				return fmt.Errorf("delete session tracks: %w", err)
+			}
 			if _, err := s.client.UpdateMany(sc, s.database, s.collSessionSummaries,
 				activeFilterNoExpiry(filter), update); err != nil {
 				return fmt.Errorf("delete session summaries: %w", err)
@@ -378,6 +409,9 @@ func (s *Service) DeleteSession(
 		}
 		if _, err := s.client.DeleteMany(sc, s.database, s.collSessionEvents, filter); err != nil {
 			return fmt.Errorf("delete session events: %w", err)
+		}
+		if _, err := s.client.DeleteMany(sc, s.database, s.collSessionTracks, filter); err != nil {
+			return fmt.Errorf("delete session tracks: %w", err)
 		}
 		if _, err := s.client.DeleteMany(sc, s.database, s.collSessionSummaries, filter); err != nil {
 			return fmt.Errorf("delete session summaries: %w", err)
@@ -790,6 +824,125 @@ func (s *Service) persistEvent(ctx context.Context, key session.Key, e *event.Ev
 	return s.client.Transaction(ctx, tx)
 }
 
+// AppendTrackEvent appends a protocol-specific track event to a session.
+func (s *Service) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	trackEvent *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	if sess == nil {
+		return session.ErrNilSession
+	}
+	key := session.Key{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+	if err := key.CheckSessionKey(); err != nil {
+		return err
+	}
+	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
+		return fmt.Errorf("mongodb session service append track event failed: %w", err)
+	}
+
+	if s.opts.enableAsyncPersist {
+		defer func() {
+			if r := recover(); r != nil {
+				if fmt.Sprint(r) == "send on closed channel" {
+					log.ErrorfContext(ctx, "mongodb session async persist track event failed: %v", r)
+					return
+				}
+				panic(r)
+			}
+		}()
+
+		n := len(s.trackEventChans)
+		if n == 0 {
+			return fmt.Errorf("async persist workers are not initialized")
+		}
+		hashKey := fmt.Sprintf("%s:%s:%s:%s", key.AppName, key.UserID, key.SessionID, trackEvent.Track)
+		index := session.HashString(hashKey) % n
+		select {
+		case s.trackEventChans[index] <- &trackEventPair{key: key, event: trackEvent}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}
+
+	if err := s.persistTrackEvent(ctx, key, trackEvent); err != nil {
+		return fmt.Errorf("mongodb session service append track event failed: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) persistTrackEvent(ctx context.Context, key session.Key, trackEvent *session.TrackEvent) error {
+	if trackEvent == nil {
+		return fmt.Errorf("track event is nil")
+	}
+	eventBytes, err := json.Marshal(trackEvent)
+	if err != nil {
+		return fmt.Errorf("marshal track event failed: %w", err)
+	}
+	now := time.Now()
+	expiresAt := expiresAtPtr(now, s.opts.sessionTTL)
+
+	return s.client.Transaction(ctx, func(sc mongo.SessionContext) error {
+		var doc sessionStateDoc
+		err := s.client.FindOne(sc, s.database, s.collSessionStates,
+			activeFilterNoExpiry(sessionKeyFilter(key))).Decode(&doc)
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return errSessionNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("get session state: %w", err)
+		}
+
+		state := bsonToStateMap(doc.State)
+		if state == nil {
+			state = make(session.StateMap)
+		}
+		tmp := session.NewSession(key.AppName, key.UserID, key.SessionID,
+			session.WithSessionState(state))
+		if err := tmp.AppendTrackEvent(trackEvent); err != nil {
+			return err
+		}
+		trackState := tmp.SnapshotState()["tracks"]
+		set := bson.M{
+			"updated_at":                   now,
+			"state." + encodeKey("tracks"): trackState,
+		}
+		if expiresAt != nil {
+			set["expires_at"] = expiresAt
+		}
+		res, err := s.client.UpdateOne(sc, s.database, s.collSessionStates,
+			activeFilterNoExpiry(sessionKeyFilter(key)),
+			bson.M{"$set": set})
+		if err != nil {
+			return fmt.Errorf("update session state: %w", err)
+		}
+		if res.MatchedCount == 0 {
+			return errSessionNotFound
+		}
+
+		trackDoc := sessionTrackDoc{
+			AppName:   key.AppName,
+			UserID:    key.UserID,
+			SessionID: key.SessionID,
+			Track:     trackEvent.Track,
+			Event:     eventBytes,
+			CreatedAt: trackEvent.Timestamp,
+			UpdatedAt: trackEvent.Timestamp,
+			ExpiresAt: expiresAt,
+		}
+		if _, err := s.client.InsertOne(sc, s.database, s.collSessionTracks, trackDoc); err != nil {
+			return fmt.Errorf("insert track event: %w", err)
+		}
+		return nil
+	})
+}
+
 // getSession is the no-events implementation backing GetSession. Splitting it
 // keeps the hook plumbing in GetSession itself and mirrors the postgres layout.
 func (s *Service) getSession(
@@ -842,6 +995,11 @@ func (s *Service) getSession(
 		session.WithSessionCreatedAt(doc.CreatedAt),
 		session.WithSessionUpdatedAt(doc.UpdatedAt),
 	)
+	trackEventsList, err := s.getTrackEvents(ctx, []session.Key{key}, []sessionStateDoc{doc}, limit, afterTime)
+	if err != nil {
+		return nil, fmt.Errorf("get track events: %w", err)
+	}
+	attachTrackEvents(sess, trackEventsList[0])
 	return mergeState(appState, userState, sess), nil
 }
 
@@ -852,7 +1010,13 @@ func (s *Service) Close() error {
 		for _, ch := range s.eventPairChans {
 			close(ch)
 		}
+		for _, ch := range s.trackEventChans {
+			close(ch)
+		}
 		s.persistWg.Wait()
+		if s.asyncWorker != nil {
+			s.asyncWorker.Stop()
+		}
 		if s.client != nil {
 			_ = s.client.Close(context.Background())
 		}
@@ -860,11 +1024,11 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// cleanupExpired removes or soft-deletes expired session_events.
+// cleanupExpired removes or soft-deletes expired session_events and session_tracks.
 //
-// Other collections rely on MongoDB TTL indexes. Events need backend cleanup so
-// the session event list stays all-or-nothing: a session's events are cleaned
-// only when the latest event in that session is older than the TTL cutoff.
+// Other collections rely on MongoDB TTL indexes. Events and track events need
+// backend cleanup so histories stay all-or-nothing: a session group is cleaned
+// only when its latest row in that collection is older than the TTL cutoff.
 func (s *Service) cleanupExpired() {
 	if s.opts.sessionTTL <= 0 {
 		return
@@ -875,9 +1039,20 @@ func (s *Service) cleanupExpired() {
 	if err := s.cleanupExpiredEvents(ctx, time.Now()); err != nil {
 		log.ErrorfContext(ctx, "mongodb cleanup expired events failed: %v", err)
 	}
+	if err := s.cleanupExpiredTracks(ctx, time.Now()); err != nil {
+		log.ErrorfContext(ctx, "mongodb cleanup expired tracks failed: %v", err)
+	}
 }
 
 func (s *Service) cleanupExpiredEvents(ctx context.Context, now time.Time) error {
+	return s.cleanupExpiredCollection(ctx, now, s.collSessionEvents, "events")
+}
+
+func (s *Service) cleanupExpiredTracks(ctx context.Context, now time.Time) error {
+	return s.cleanupExpiredCollection(ctx, now, s.collSessionTracks, "tracks")
+}
+
+func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, collection string, label string) error {
 	if s.opts.sessionTTL <= 0 {
 		return nil
 	}
@@ -895,9 +1070,9 @@ func (s *Service) cleanupExpiredEvents(ctx context.Context, now time.Time) error
 		bson.M{"$match": bson.M{"max_updated_at": bson.M{"$lte": cutoff}}},
 	}
 
-	cursor, err := s.client.Aggregate(ctx, s.database, s.collSessionEvents, pipeline)
+	cursor, err := s.client.Aggregate(ctx, s.database, collection, pipeline)
 	if err != nil {
-		return fmt.Errorf("aggregate expired sessions: %w", err)
+		return fmt.Errorf("aggregate expired %s sessions: %w", label, err)
 	}
 	defer cursor.Close(ctx)
 
@@ -936,14 +1111,14 @@ func (s *Service) cleanupExpiredEvents(ctx context.Context, now time.Time) error
 		"deleted_at": bson.M{"$exists": false},
 	}
 	if s.opts.softDelete {
-		if _, err := s.client.UpdateMany(ctx, s.database, s.collSessionEvents, filter,
+		if _, err := s.client.UpdateMany(ctx, s.database, collection, filter,
 			bson.M{"$set": bson.M{"deleted_at": now}}); err != nil {
-			return fmt.Errorf("soft delete expired events: %w", err)
+			return fmt.Errorf("soft delete expired %s: %w", label, err)
 		}
 		return nil
 	}
-	if _, err := s.client.DeleteMany(ctx, s.database, s.collSessionEvents, filter); err != nil {
-		return fmt.Errorf("hard delete expired events: %w", err)
+	if _, err := s.client.DeleteMany(ctx, s.database, collection, filter); err != nil {
+		return fmt.Errorf("hard delete expired %s: %w", label, err)
 	}
 	return nil
 }

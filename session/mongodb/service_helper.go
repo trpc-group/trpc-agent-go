@@ -149,6 +149,20 @@ type sessionEventDoc struct {
 	DeletedAt *time.Time         `bson:"deleted_at,omitempty"`
 }
 
+// sessionTrackDoc is the BSON shape of a session_tracks document.
+type sessionTrackDoc struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty"`
+	AppName   string             `bson:"app_name"`
+	UserID    string             `bson:"user_id"`
+	SessionID string             `bson:"session_id"`
+	Track     session.Track      `bson:"track"`
+	Event     []byte             `bson:"event"`
+	CreatedAt time.Time          `bson:"created_at"`
+	UpdatedAt time.Time          `bson:"updated_at"`
+	ExpiresAt *time.Time         `bson:"expires_at,omitempty"`
+	DeletedAt *time.Time         `bson:"deleted_at,omitempty"`
+}
+
 // sessionSummaryDoc is the BSON shape of a session_summaries document.
 type sessionSummaryDoc struct {
 	AppName   string     `bson:"app_name"`
@@ -296,11 +310,13 @@ func applyOptions(opts ...session.Option) *session.Options {
 func (s *Service) startAsyncPersistWorker() {
 	persisterNum := s.opts.asyncPersisterNum
 	s.eventPairChans = make([]chan *sessionEventPair, persisterNum)
+	s.trackEventChans = make([]chan *trackEventPair, persisterNum)
 	for i := 0; i < persisterNum; i++ {
 		s.eventPairChans[i] = make(chan *sessionEventPair, defaultChanBufferSize)
+		s.trackEventChans[i] = make(chan *trackEventPair, defaultChanBufferSize)
 	}
 
-	s.persistWg.Add(persisterNum)
+	s.persistWg.Add(persisterNum * 2)
 	for _, eventPairChan := range s.eventPairChans {
 		go func(eventPairChan chan *sessionEventPair) {
 			defer s.persistWg.Done()
@@ -312,6 +328,18 @@ func (s *Service) startAsyncPersistWorker() {
 				cancel()
 			}
 		}(eventPairChan)
+	}
+	for _, trackEventChan := range s.trackEventChans {
+		go func(trackEventChan chan *trackEventPair) {
+			defer s.persistWg.Done()
+			for pair := range trackEventChan {
+				ctx, cancel := context.WithTimeout(context.Background(), defaultAsyncPersistTimeout)
+				if err := s.persistTrackEvent(ctx, pair.key, pair.event); err != nil {
+					log.ErrorfContext(ctx, "mongodb session async persist track event failed: %v", err)
+				}
+				cancel()
+			}
+		}(trackEventChan)
 	}
 }
 
@@ -356,7 +384,7 @@ func (s *Service) getEventsList(
 		sessionIDs[i] = k.SessionID
 	}
 
-	filter := activeFilter(time.Now(), bson.M{
+	filter := activeFilterNoExpiry(bson.M{
 		"app_name":   sessionKeys[0].AppName,
 		"user_id":    sessionKeys[0].UserID,
 		"session_id": bson.M{"$in": sessionIDs},
@@ -423,7 +451,7 @@ func (s *Service) getPagedEvents(
 		afterTime = time.Now().Add(-s.opts.sessionTTL)
 	}
 
-	filter := activeFilter(time.Now(), bson.M{
+	filter := activeFilterNoExpiry(bson.M{
 		"app_name":   key.AppName,
 		"user_id":    key.UserID,
 		"session_id": key.SessionID,
@@ -464,6 +492,106 @@ func (s *Service) getPagedEvents(
 		events[i], events[j] = events[j], events[i]
 	}
 	return [][]event.Event{events}, nil
+}
+
+func (s *Service) getTrackEvents(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	sessionStates []sessionStateDoc,
+	limit int,
+	afterTime time.Time,
+) ([]map[session.Track][]session.TrackEvent, error) {
+	if len(sessionKeys) == 0 {
+		return nil, nil
+	}
+	if len(sessionStates) != len(sessionKeys) {
+		return nil, fmt.Errorf("session states count mismatch: %d != %d", len(sessionStates), len(sessionKeys))
+	}
+	if afterTime.IsZero() && s.opts.sessionTTL > 0 {
+		afterTime = time.Now().Add(-s.opts.sessionTTL)
+	}
+
+	results := make([]map[session.Track][]session.TrackEvent, len(sessionKeys))
+	now := time.Now()
+	for i, key := range sessionKeys {
+		tracks, err := session.TracksFromState(bsonToStateMap(sessionStates[i].State))
+		if err != nil {
+			return nil, fmt.Errorf("get track list failed: %w", err)
+		}
+		if len(tracks) == 0 {
+			results[i] = make(map[session.Track][]session.TrackEvent)
+			continue
+		}
+		for _, track := range tracks {
+			filter := activeFilter(now, bson.M{
+				"app_name":   key.AppName,
+				"user_id":    key.UserID,
+				"session_id": key.SessionID,
+				"track":      track,
+				"created_at": bson.M{"$gt": afterTime},
+			})
+			findOpts := options.Find().SetSort(bson.D{
+				{Key: "created_at", Value: -1},
+				{Key: "_id", Value: -1},
+			})
+			if limit > 0 {
+				findOpts.SetLimit(int64(limit))
+			}
+
+			cursor, err := s.client.Find(ctx, s.database, s.collSessionTracks, filter, findOpts)
+			if err != nil {
+				return nil, fmt.Errorf("query track events: %w", err)
+			}
+			events := make([]session.TrackEvent, 0)
+			for cursor.Next(ctx) {
+				var doc sessionTrackDoc
+				if err := cursor.Decode(&doc); err != nil {
+					_ = cursor.Close(ctx)
+					return nil, fmt.Errorf("decode track event: %w", err)
+				}
+				var trackEvent session.TrackEvent
+				if err := json.Unmarshal(doc.Event, &trackEvent); err != nil {
+					_ = cursor.Close(ctx)
+					return nil, fmt.Errorf("unmarshal track event: %w", err)
+				}
+				events = append(events, trackEvent)
+			}
+			if err := cursor.Err(); err != nil {
+				_ = cursor.Close(ctx)
+				return nil, fmt.Errorf("iterate track events: %w", err)
+			}
+			if err := cursor.Close(ctx); err != nil {
+				return nil, fmt.Errorf("close track events cursor: %w", err)
+			}
+			for left, right := 0, len(events)-1; left < right; left, right = left+1, right-1 {
+				events[left], events[right] = events[right], events[left]
+			}
+			if results[i] == nil {
+				results[i] = make(map[session.Track][]session.TrackEvent)
+			}
+			results[i][track] = events
+		}
+		if results[i] == nil {
+			results[i] = make(map[session.Track][]session.TrackEvent)
+		}
+	}
+	return results, nil
+}
+
+func attachTrackEvents(sess *session.Session, trackEvents map[session.Track][]session.TrackEvent) {
+	if sess == nil || len(trackEvents) == 0 {
+		return
+	}
+	sess.Tracks = make(map[session.Track]*session.TrackEvents, len(trackEvents))
+	for trackName, history := range trackEvents {
+		if len(history) == 0 {
+			continue
+		}
+		sess.Tracks[trackName] = &session.TrackEvents{
+			Track:  trackName,
+			Events: history,
+		}
+	}
 }
 
 // getSummariesList batch-loads summaries for the given sessions.

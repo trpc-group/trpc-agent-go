@@ -25,6 +25,10 @@ const (
 	defaultAsyncPersisterNum     = 10
 	defaultCleanupIntervalSecond = 5 * time.Minute
 	defaultAsyncPersistTimeout   = 5 * time.Second
+	defaultAsyncSummaryNum       = 3
+	defaultSummaryQueueSize      = 100
+	defaultSummaryJobTimeout     = 60 * time.Second
+	collectionNameSessionTracks  = "session_tracks"
 )
 
 // ServiceOpts is the options for the mongodb session service.
@@ -48,9 +52,12 @@ type ServiceOpts struct {
 	skipDBInit       bool
 	collectionPrefix string
 
-	// Summary options. The async worker is wired in a follow-up PR; for now
-	// EnqueueSummaryJob falls back to synchronous CreateSessionSummary.
+	// Summary options. When a summarizer is configured, NewService starts an
+	// async summary worker using these settings.
 	summarizer                summary.SessionSummarizer
+	asyncSummaryNum           int
+	summaryQueueSize          int
+	summaryJobTimeout         time.Duration
 	summaryFilterAllowlist    []string
 	cascadeFullSessionSummary *bool
 
@@ -65,6 +72,9 @@ var defaultOptions = ServiceOpts{
 	sessionEventLimit:  defaultSessionEventLimit,
 	asyncPersisterNum:  defaultAsyncPersisterNum,
 	enableAsyncPersist: false,
+	asyncSummaryNum:    defaultAsyncSummaryNum,
+	summaryQueueSize:   defaultSummaryQueueSize,
+	summaryJobTimeout:  defaultSummaryJobTimeout,
 	cleanupInterval:    0,
 	softDelete:         true,
 }
@@ -231,6 +241,36 @@ func WithAppendEventHook(hooks ...session.AppendEventHook) ServiceOpt {
 func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.summarizer = s
+	}
+}
+
+// WithAsyncSummaryNum sets the number of workers for async summary processing.
+func WithAsyncSummaryNum(num int) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if num < 1 {
+			num = defaultAsyncSummaryNum
+		}
+		opts.asyncSummaryNum = num
+	}
+}
+
+// WithSummaryQueueSize sets the async summary queue size.
+func WithSummaryQueueSize(size int) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if size < 1 {
+			size = defaultSummaryQueueSize
+		}
+		opts.summaryQueueSize = size
+	}
+}
+
+// WithSummaryJobTimeout sets the timeout for processing a single summary job.
+func WithSummaryJobTimeout(timeout time.Duration) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		if timeout <= 0 {
+			return
+		}
+		opts.summaryJobTimeout = timeout
 	}
 }
 

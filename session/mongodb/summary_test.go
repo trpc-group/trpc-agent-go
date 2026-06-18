@@ -19,8 +19,10 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	storage "trpc.group/trpc-go/trpc-agent-go/storage/mongodb"
 )
 
 // stubSummarizer is the smallest viable session.summary.SessionSummarizer
@@ -119,4 +121,59 @@ func TestGetSessionSummaryText_FallsBackToFullSession(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "fallback", got)
 	assert.Equal(t, 2, calls)
+}
+
+func TestEnqueueSummaryJob_FallsBackWithoutWorker(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.summarizer = &stubSummarizer{text: "queued"}
+	})
+
+	sess := newSessionForTest("app", "u", "s")
+	sess.Events = []event.Event{
+		windowEventForTest("u1", model.RoleUser, "hello", time.Now()),
+	}
+	require.NoError(t, s.EnqueueSummaryJob(context.Background(), sess, "", true))
+
+	got, ok := s.GetSessionSummaryText(context.Background(), sess)
+	require.True(t, ok)
+	assert.Equal(t, "queued", got)
+	var sawSummaryUpsert bool
+	for _, op := range mc.recorded() {
+		if op.name == "UpdateOne" && op.coll == "session_summaries" {
+			sawSummaryUpsert = true
+			break
+		}
+	}
+	assert.True(t, sawSummaryUpsert)
+}
+
+func TestEnqueueSummaryJob_RejectsNilSessionWithSummarizer(t *testing.T) {
+	s := newServiceForTest(t, &mockClient{}, func(o *ServiceOpts) {
+		o.summarizer = &stubSummarizer{text: "x"}
+	})
+
+	require.ErrorIs(t, s.EnqueueSummaryJob(context.Background(), nil, "", false), session.ErrNilSession)
+}
+
+func TestNewService_WithSummarizerStartsAsyncWorker(t *testing.T) {
+	oldBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(oldBuilder)
+
+	mc := &mockClient{}
+	storage.SetClientBuilder(func(context.Context, ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return mc, nil
+	})
+
+	s, err := NewService(
+		WithMongoClientURI("mongodb://example"),
+		WithSkipDBInit(true),
+		WithSummarizer(&stubSummarizer{text: "async"}),
+		WithAsyncSummaryNum(1),
+		WithSummaryQueueSize(2),
+		WithSummaryJobTimeout(10*time.Millisecond),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, s.asyncWorker)
+	require.NoError(t, s.Close())
 }
