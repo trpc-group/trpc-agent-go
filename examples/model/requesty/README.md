@@ -44,7 +44,6 @@ base URL and API key:
 import (
     "os"
 
-    "trpc.group/trpc-go/trpc-agent-go/model"
     "trpc.group/trpc-go/trpc-agent-go/model/openai"
 )
 
