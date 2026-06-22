@@ -379,11 +379,56 @@ func TestEnsureIndexesEmpty(t *testing.T) {
 	assert.Nil(t, names)
 }
 
+func newDisconnectedDefaultClient(t *testing.T) *defaultClient {
+	t.Helper()
+	client, err := mongo.NewClient(options.Client().ApplyURI(
+		"mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=1&connectTimeoutMS=1"))
+	require.NoError(t, err)
+	return &defaultClient{client: client}
+}
+
+func TestDefaultClientCollectionWrappersReturnDriverErrors(t *testing.T) {
+	ctx := context.Background()
+	dc := newDisconnectedDefaultClient(t)
+	assert.NotNil(t, dc.coll("db", "c"))
+
+	_, err := dc.InsertOne(ctx, "db", "c", bson.M{"k": "v"})
+	require.Error(t, err)
+	_, err = dc.UpdateOne(ctx, "db", "c", bson.M{"k": "v"}, bson.M{"$set": bson.M{"k": "v2"}})
+	require.Error(t, err)
+	_, err = dc.UpdateMany(ctx, "db", "c", bson.M{"k": "v"}, bson.M{"$set": bson.M{"k": "v2"}})
+	require.Error(t, err)
+	_, err = dc.DeleteOne(ctx, "db", "c", bson.M{"k": "v"})
+	require.Error(t, err)
+	_, err = dc.DeleteMany(ctx, "db", "c", bson.M{"k": "v"})
+	require.Error(t, err)
+	err = dc.FindOne(ctx, "db", "c", bson.M{"k": "v"}).Decode(&bson.M{})
+	require.Error(t, err)
+	_, err = dc.Find(ctx, "db", "c", bson.M{"k": "v"})
+	require.Error(t, err)
+	_, err = dc.Aggregate(ctx, "db", "c", bson.A{bson.M{"$match": bson.M{"k": "v"}}})
+	require.Error(t, err)
+	_, err = dc.EnsureIndexes(ctx, "db", "c",
+		[]mongo.IndexModel{{Keys: bson.D{{Key: "k", Value: 1}}}})
+	require.Error(t, err)
+	require.Error(t, dc.Close(ctx))
+}
+
 func TestTransactionRejectsNilCallback(t *testing.T) {
 	dc := &defaultClient{}
 	err := dc.Transaction(context.Background(), nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "TxFunc must not be nil")
+}
+
+func TestTransactionAppliesOptionsBeforeStartSessionError(t *testing.T) {
+	dc := newDisconnectedDefaultClient(t)
+	err := dc.Transaction(context.Background(), func(_ mongo.SessionContext) error {
+		t.Fatal("callback should not run when StartSession fails")
+		return nil
+	}, WithTransactionOptions(options.Transaction()), WithSessionOptions(options.Session()))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "start session")
 }
 
 func TestTxOptionConstructors(t *testing.T) {
