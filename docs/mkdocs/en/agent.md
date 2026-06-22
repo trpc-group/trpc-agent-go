@@ -371,6 +371,63 @@ agent := llmagent.New(
 
 **Note:** This option only affects how historical messages are processed before sending to the model. The current response's `reasoning_content` is always captured and stored in session events.
 
+### Tool Transcript History Mode
+
+By default, LLMAgent sends historical tool calls and their matching tool
+results back to the model on later requests. This is the most conservative
+behavior and preserves full compatibility, but long sessions with many completed
+tool rounds can spend unnecessary context on tool transcripts that the model no
+longer needs.
+
+LLMAgent provides `WithToolTranscriptMode` to control how completed historical
+tool-call/tool-result pairs are projected into model requests:
+
+| Mode | Constant | Description |
+|------|----------|-------------|
+| Keep All | `ToolTranscriptModeKeepAll` | Keep all historical tool-call/tool-result transcripts in model requests. **(Default)** |
+| Omit Previous Completed | `ToolTranscriptModeOmitPreviousCompleted` | Omit completed tool-call/tool-result pairs from previous requests while preserving active or incomplete tool rounds. |
+
+**Usage Example:**
+
+```go
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("You are a helpful assistant."),
+    // Reduce prompt size by omitting completed tool transcripts from previous requests.
+    llmagent.WithToolTranscriptMode(llmagent.ToolTranscriptModeOmitPreviousCompleted),
+)
+```
+
+**How It Works:**
+
+- **`keep_all`**: All historical tool calls and tool results are preserved in
+  model requests.
+- **`omit_previous_completed`**: When building the message list for a new
+  request, completed tool-call/tool-result pairs from previous requests are
+  omitted from the projected history.
+
+The omit mode is intentionally conservative:
+
+- Current-request tool loops are preserved, so the model can still see the tool
+  calls it is actively resolving.
+- Incomplete historical tool calls are preserved because dropping them could
+  produce an invalid tool-call transcript.
+- Assistant text attached to an omitted tool-call event is retained; only the
+  tool calls and matching tool results are removed.
+- Session events are not deleted. The mode only changes what is sent to the
+  model request.
+
+Use `ToolTranscriptModeOmitPreviousCompleted` when completed historical tool
+transcripts are no longer needed by the model and prompt size matters. Keep the
+default `ToolTranscriptModeKeepAll` if later answers must inspect previous raw
+tool calls or tool results exactly.
+
+This option is different from context compaction: tool transcript mode can omit
+whole completed historical tool-call/tool-result pairs from request projection,
+while context compaction keeps the tool result message shape and only shrinks
+large tool-result content.
+
 ### Delegation Visibility Options
 
 When building multi‑Agent systems (task delegation between Agents), LLMAgent provides a unified fallback option for delegation events. Transfer events always include announcement text and are tagged `transfer` so UIs (User Interfaces) can filter them if desired.

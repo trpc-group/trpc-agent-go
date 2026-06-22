@@ -131,6 +131,22 @@ const (
 	ReasoningContentModeDiscardAll = "discard_all"
 )
 
+// ToolTranscriptMode controls how historical tool-call/tool-result transcripts
+// are projected into model requests.
+type ToolTranscriptMode string
+
+const (
+	// ToolTranscriptModeKeepAll keeps all historical tool-call/tool-result
+	// transcripts in model requests.
+	ToolTranscriptModeKeepAll ToolTranscriptMode = "keep_all"
+
+	// ToolTranscriptModeOmitPreviousCompleted omits completed historical
+	// tool-call/tool-result pairs from previous requests when projecting session
+	// history into model requests. Current-request and incomplete tool rounds are
+	// preserved to keep active tool loops valid.
+	ToolTranscriptModeOmitPreviousCompleted ToolTranscriptMode = "omit_previous_completed"
+)
+
 // ContentRequestProcessor implements content processing logic for agent requests.
 type ContentRequestProcessor struct {
 	// BranchFilterMode determines how to include content from session events.
@@ -165,6 +181,10 @@ type ContentRequestProcessor struct {
 	// keeps reasoning needed for tool-call replay while dropping ordinary older
 	// reasoning history.
 	ReasoningContentMode string
+	// ToolTranscriptMode controls how historical tool-call/tool-result
+	// transcripts are projected into model requests. Default is
+	// ToolTranscriptModeKeepAll.
+	ToolTranscriptMode ToolTranscriptMode
 	// PreloadMemory controls framework-side memory preload.
 	// When > 0, it acts as an adaptive preload budget:
 	//   - If total memories <= N, preload all memories.
@@ -179,6 +199,9 @@ type ContentRequestProcessor struct {
 	// Default is PreloadMemoryInjectionSystem. User mode is prompt-cache
 	// friendly, but memory context participates in token tailoring.
 	PreloadMemoryInjectionMode PreloadMemoryInjectionMode
+	// PreloadMemoryPlaybook overrides the built-in read-path guidance prepended
+	// to preloaded memories. Empty keeps the built-in playbook.
+	PreloadMemoryPlaybook string
 	// PreloadSessionRecall sets the number of recalled
 	// session events to inject as preload context.
 	// When > 0, query-time search runs across other
@@ -323,6 +346,19 @@ func WithReasoningContentMode(mode string) ContentOption {
 	}
 }
 
+// WithToolTranscriptMode sets how historical tool-call/tool-result transcripts
+// are projected into model requests.
+func WithToolTranscriptMode(mode ToolTranscriptMode) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		switch mode {
+		case ToolTranscriptModeOmitPreviousCompleted:
+			p.ToolTranscriptMode = mode
+		default:
+			p.ToolTranscriptMode = ToolTranscriptModeKeepAll
+		}
+	}
+}
+
 // WithPreloadMemory sets the framework-side memory preload behavior.
 //   - Set to 0 (default) to disable preloading (use tools instead).
 //   - Set to N (N > 0) to use adaptive preload with budget N.
@@ -354,6 +390,14 @@ func WithPreloadMemoryInjectionMode(mode PreloadMemoryInjectionMode) ContentOpti
 		default:
 			p.PreloadMemoryInjectionMode = PreloadMemoryInjectionSystem
 		}
+	}
+}
+
+// WithPreloadMemoryPlaybook overrides the built-in read-path guidance prepended
+// to preloaded memories. Passing an empty string keeps the built-in playbook.
+func WithPreloadMemoryPlaybook(playbook string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.PreloadMemoryPlaybook = playbook
 	}
 }
 
@@ -565,6 +609,8 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 		PreserveSameBranch: false,
 		// Default to append history message.
 		TimelineFilterMode: TimelineFilterAll,
+		// Default to preserving the full historical tool transcript.
+		ToolTranscriptMode: ToolTranscriptModeKeepAll,
 		// Default to disable memory preloading (use tools instead).
 		PreloadMemory:                     0,
 		PreloadMemoryInjectionMode:        PreloadMemoryInjectionSystem,
@@ -1233,7 +1279,8 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 		events = p.insertInvocationMessage(events, inv)
 	}
 
-	resultEvents := p.rearrangeLatestFuncResp(events)
+	resultEvents := p.applyToolTranscriptMode(events, inv)
+	resultEvents = p.rearrangeLatestFuncResp(resultEvents)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 	// Apply compaction to the already timeline-filtered projection. Tool-result
 	// policy (force-clean/keep) and historical passes must run for scoped modes
@@ -2481,6 +2528,187 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 	return *convertedEvent
 }
 
+func (p *ContentRequestProcessor) applyToolTranscriptMode(
+	events []event.Event,
+	inv *agent.Invocation,
+) []event.Event {
+	if p == nil || p.ToolTranscriptMode != ToolTranscriptModeOmitPreviousCompleted {
+		return events
+	}
+
+	responseMatchesByCallEvent := toolResponseMatchesByCallEvent(events)
+	if len(responseMatchesByCallEvent) == 0 {
+		return events
+	}
+
+	dropCallEvents := make(map[int]struct{})
+	dropResultChoices := make(map[int]map[int]struct{})
+	for callEventIndex, responseMatches := range responseMatchesByCallEvent {
+		if callEventIndex < 0 || callEventIndex >= len(events) {
+			continue
+		}
+		if !isPreviousToolTranscriptEvent(events[callEventIndex], inv) {
+			continue
+		}
+		if !allMatchedToolResultsArePrevious(events, responseMatches, inv) {
+			continue
+		}
+		if !allToolCallIDsMatched(
+			events[callEventIndex].GetToolCallIDs(),
+			events,
+			responseMatches,
+		) {
+			continue
+		}
+		dropCallEvents[callEventIndex] = struct{}{}
+		for _, match := range responseMatches {
+			if dropResultChoices[match.eventIndex] == nil {
+				dropResultChoices[match.eventIndex] = make(map[int]struct{})
+			}
+			for _, choiceIndex := range match.choiceIndices {
+				dropResultChoices[match.eventIndex][choiceIndex] = struct{}{}
+			}
+		}
+	}
+	if len(dropCallEvents) == 0 && len(dropResultChoices) == 0 {
+		return events
+	}
+
+	resultEvents := make([]event.Event, 0, len(events))
+	for i, evt := range events {
+		if _, drop := dropCallEvents[i]; drop {
+			if stripped, keep := stripToolCallsFromEvent(evt); keep {
+				resultEvents = append(resultEvents, stripped)
+			}
+			continue
+		}
+		if choices := dropResultChoices[i]; len(choices) > 0 {
+			if filtered, keep := omitToolResultChoices(evt, choices); keep {
+				resultEvents = append(resultEvents, filtered)
+			}
+			continue
+		}
+		resultEvents = append(resultEvents, evt)
+	}
+	return resultEvents
+}
+
+func isPreviousToolTranscriptEvent(evt event.Event, inv *agent.Invocation) bool {
+	if inv == nil {
+		return false
+	}
+	if inv.RunOptions.RequestID != "" {
+		if evt.RequestID == inv.RunOptions.RequestID {
+			return false
+		}
+		if evt.RequestID != "" {
+			return true
+		}
+	}
+	if inv.InvocationID != "" && evt.InvocationID == inv.InvocationID {
+		return false
+	}
+	return evt.RequestID != "" || evt.InvocationID != ""
+}
+
+func allMatchedToolResultsArePrevious(
+	events []event.Event,
+	matches []matchedToolResponseEvent,
+	inv *agent.Invocation,
+) bool {
+	if len(matches) == 0 {
+		return false
+	}
+	for _, match := range matches {
+		if match.eventIndex < 0 || match.eventIndex >= len(events) {
+			return false
+		}
+		if !isPreviousToolTranscriptEvent(events[match.eventIndex], inv) {
+			return false
+		}
+	}
+	return true
+}
+
+func allToolCallIDsMatched(
+	callIDs []string,
+	events []event.Event,
+	matches []matchedToolResponseEvent,
+) bool {
+	pendingCallIDs := make(map[string]struct{}, len(callIDs))
+	for _, callID := range callIDs {
+		if callID != "" {
+			pendingCallIDs[callID] = struct{}{}
+		}
+	}
+	if len(pendingCallIDs) == 0 {
+		return false
+	}
+	for _, match := range matches {
+		if match.eventIndex < 0 || match.eventIndex >= len(events) {
+			continue
+		}
+		evt := events[match.eventIndex]
+		if evt.Response == nil {
+			continue
+		}
+		for _, choiceIndex := range match.choiceIndices {
+			if choiceIndex < 0 || choiceIndex >= len(evt.Response.Choices) {
+				continue
+			}
+			responseID := toolResponseIDFromChoice(evt.Response.Choices[choiceIndex])
+			delete(pendingCallIDs, responseID)
+		}
+	}
+	return len(pendingCallIDs) == 0
+}
+
+func stripToolCallsFromEvent(evt event.Event) (event.Event, bool) {
+	if evt.Response == nil {
+		return evt, false
+	}
+	response := *evt.Response
+	response.Choices = make([]model.Choice, 0, len(evt.Response.Choices))
+	for _, choice := range evt.Response.Choices {
+		choice.Message.ToolCalls = nil
+		choice.Delta.ToolCalls = nil
+		if hasNonToolPayload(choice.Message) || hasNonToolPayload(choice.Delta) {
+			response.Choices = append(response.Choices, choice)
+		}
+	}
+	if len(response.Choices) == 0 {
+		return evt, false
+	}
+	evt.Response = &response
+	return evt, true
+}
+
+func omitToolResultChoices(
+	evt event.Event,
+	dropChoiceIndices map[int]struct{},
+) (event.Event, bool) {
+	if evt.Response == nil {
+		return evt, false
+	}
+	response := *evt.Response
+	response.Choices = make([]model.Choice, 0, len(evt.Response.Choices))
+	for choiceIndex, choice := range evt.Response.Choices {
+		if _, drop := dropChoiceIndices[choiceIndex]; drop {
+			continue
+		}
+		response.Choices = append(response.Choices, choice)
+	}
+	if len(response.Choices) == 0 {
+		return evt, false
+	}
+	evt.Response = &response
+	return evt, true
+}
+
+func hasNonToolPayload(msg model.Message) bool {
+	return msg.Content != "" || len(msg.ContentParts) > 0
+}
+
 // rearrangeEventsForLatestFunctionResponse rearranges the events for the latest function_response.
 func (p *ContentRequestProcessor) rearrangeLatestFuncResp(
 	events []event.Event,
@@ -2792,7 +3020,7 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 		return nil
 	}
 	if len(probeEntries) <= budget {
-		return newPreloadMemoryMessage(probeEntries)
+		return newPreloadMemoryMessage(probeEntries, p.PreloadMemoryPlaybook)
 	}
 
 	query := buildPreloadSearchQuery(inv.Message)
@@ -2819,7 +3047,7 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 	if len(memories) == 0 {
 		return p.loadPreloadMemoryMessage(ctx, inv, userKey, budget)
 	}
-	return newPreloadMemoryMessage(memories)
+	return newPreloadMemoryMessage(memories, p.PreloadMemoryPlaybook)
 }
 
 // loadPreloadMemoryMessage loads memories directly and formats them as preload
@@ -2835,16 +3063,19 @@ func (p *ContentRequestProcessor) loadPreloadMemoryMessage(
 		log.WarnfContext(ctx, "Failed to preload memories: %v", err)
 		return nil
 	}
-	return newPreloadMemoryMessage(memories)
+	return newPreloadMemoryMessage(memories, p.PreloadMemoryPlaybook)
 }
 
-func newPreloadMemoryMessage(memories []*memory.Entry) *model.Message {
+func newPreloadMemoryMessage(
+	memories []*memory.Entry,
+	playbookOverride string,
+) *model.Message {
 	if len(memories) == 0 {
 		return nil
 	}
 	return &model.Message{
 		Role:    model.RoleSystem,
-		Content: formatMemoryContent(memories),
+		Content: buildPreloadMemoryPrompt(playbookOverride, memories),
 	}
 }
 
@@ -2866,44 +3097,6 @@ func buildPreloadSearchQuery(msg model.Message) string {
 		parts = append(parts, text)
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
-}
-
-// formatMemoryContent formats memories for preload context injection.
-func formatMemoryContent(memories []*memory.Entry) string {
-	var sb strings.Builder
-	sb.WriteString("## User Memories\n\n")
-	sb.WriteString("The following are stored memories about the user. ")
-	sb.WriteString("Use these to answer questions. Episodic memories include ")
-	sb.WriteString("event details (time, participants, location).\n\n")
-	for _, mem := range memories {
-		if mem == nil || mem.Memory == nil {
-			continue
-		}
-		fmt.Fprintf(&sb, "- [%s] %s", mem.ID, mem.Memory.Memory)
-		// Append metadata inline for richer context.
-		var meta []string
-		if mem.Memory.Kind != "" {
-			meta = append(meta, fmt.Sprintf("kind=%s", mem.Memory.Kind))
-		}
-		if mem.Memory.EventTime != nil {
-			meta = append(meta, fmt.Sprintf("date=%s", mem.Memory.EventTime.Format("2006-01-02")))
-		}
-		if len(mem.Memory.Participants) > 0 {
-			meta = append(meta, fmt.Sprintf("with=%s", strings.Join(mem.Memory.Participants, ", ")))
-		}
-		if mem.Memory.Location != "" {
-			meta = append(meta, fmt.Sprintf("at=%s", mem.Memory.Location))
-		}
-		// Do not render topic labels in the preload prompt. The memory_add
-		// tool expects topics as []string, and showing inline
-		// "topics=foo, bar" text can lead models to copy a scalar value into
-		// tool arguments.
-		if len(meta) > 0 {
-			fmt.Fprintf(&sb, " (%s)", strings.Join(meta, "; "))
-		}
-		sb.WriteString("\n")
-	}
-	return sb.String()
 }
 
 func (p *ContentRequestProcessor) getPreloadSessionRecallMessage(

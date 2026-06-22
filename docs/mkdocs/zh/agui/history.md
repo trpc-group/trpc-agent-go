@@ -98,6 +98,7 @@ curl -N -X POST http://localhost:8080/history \
 
 - `aggregator.WithEnabled(true)` 用于控制是否开启事件聚合，默认开启。
 - `agui.WithFlushInterval(time.Second)` 用于控制聚合结果的定时刷新间隔，默认 `1s`。设置为 `0` 表示不开启定时刷新。
+- `agui.WithTrackPersistenceTimeout(5*time.Second)` 用于限制事件历史记录持久化的最长执行时间，默认 `5s`。设置为 `0` 表示不设置超时。
 - `agui.WithPostRunFinalizationTimeout(5*time.Second)` 用于限制运行结束后收尾流程的最长执行时间，默认 `5s`。收尾流程需要补齐协议结束事件，并将聚合缓存写入 `SessionService`；如果会话存储变慢或异常，超时可以避免请求长时间阻塞。设置为 `0` 表示不设置超时事件。
 
 ```go
@@ -116,6 +117,7 @@ server, err := agui.New(
     agui.WithSessionService(sessionService),
     agui.WithMessagesSnapshotEnabled(true),
     agui.WithFlushInterval(time.Second),
+    agui.WithTrackPersistenceTimeout(5*time.Second),
     agui.WithPostRunFinalizationTimeout(5*time.Second),
     agui.WithAGUIRunnerOptions(
         aguirunner.WithAggregationOption(aggregator.WithEnabled(true)),
