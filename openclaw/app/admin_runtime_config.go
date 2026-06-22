@@ -192,7 +192,10 @@ func (p *adminRuntimeConfigProvider) RuntimeConfigStatus() (
 			nextValue := runtimeValue
 			editorValue := runtimeValue
 			if configured.Explicit {
-				editorValue = configured.Value
+				editorValue = adminRuntimeConfiguredEditorValue(
+					field,
+					configured.Value,
+				)
 				nextValue = adminRuntimeComparableConfiguredValue(
 					field,
 					configured.Value,
@@ -992,6 +995,17 @@ func adminRuntimeConfigFieldHidden(
 	return got != want
 }
 
+func adminRuntimeConfiguredEditorValue(
+	spec adminRuntimeConfigFieldSpec,
+	value string,
+) string {
+	value = strings.TrimSpace(value)
+	if spec.InputType != adminRuntimeConfigInputSelect {
+		return value
+	}
+	return adminRuntimeCanonicalOptionValue(spec.Options, value)
+}
+
 func adminRuntimeStringOptions(
 	values ...string,
 ) []admin.RuntimeConfigOption {
@@ -1102,6 +1116,9 @@ func adminRuntimeComparableConfiguredValue(
 	value string,
 ) string {
 	value = strings.TrimSpace(os.ExpandEnv(value))
+	if spec.InputType == adminRuntimeConfigInputSelect {
+		value = adminRuntimeCanonicalOptionValue(spec.Options, value)
+	}
 	switch spec.ValueType {
 	case adminRuntimeConfigValueBool:
 		parsed, err := strconv.ParseBool(value)
@@ -1118,6 +1135,18 @@ func adminRuntimeComparableConfiguredValue(
 	default:
 		return value
 	}
+}
+
+func adminRuntimeCanonicalOptionValue(
+	options []admin.RuntimeConfigOption,
+	value string,
+) string {
+	for _, option := range options {
+		if strings.EqualFold(strings.TrimSpace(option.Value), value) {
+			return strings.TrimSpace(option.Value)
+		}
+	}
+	return value
 }
 
 func adminRuntimeConfigFieldSpecByKey(

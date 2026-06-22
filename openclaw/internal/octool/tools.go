@@ -17,11 +17,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspacesession"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -109,9 +109,7 @@ type sandboxExecTool struct {
 	engine      codeexecutor.Engine
 	uploads     *uploads.Store
 	memoryStore *memoryfile.Store
-
-	mu sync.Mutex
-	ws codeexecutor.Workspace
+	registry    *codeexecutor.WorkspaceRegistry
 }
 
 // NewExecCommandTool creates the canonical host command tool.
@@ -131,7 +129,8 @@ func NewExecCommandTool(
 
 // NewSandboxExecCommandTool creates an exec_command tool backed by a sandbox
 // code executor. The first version supports foreground non-interactive commands
-// only; host sessions remain the backend for background or TTY workflows.
+// only; background, TTY, and session-continuation workflows are rejected in
+// sandbox mode and do not fall back to host execution.
 func NewSandboxExecCommandTool(
 	engine codeexecutor.Engine,
 	stores ...*uploads.Store,
@@ -141,8 +140,9 @@ func NewSandboxExecCommandTool(
 		store = stores[0]
 	}
 	return &sandboxExecTool{
-		engine:  engine,
-		uploads: store,
+		engine:   engine,
+		uploads:  store,
+		registry: codeexecutor.NewWorkspaceRegistry(),
 	}
 }
 
@@ -157,6 +157,7 @@ func NewSandboxExecCommandToolWithMemoryFileStore(
 		engine:      engine,
 		uploads:     uploadStore,
 		memoryStore: memoryStore,
+		registry:    codeexecutor.NewWorkspaceRegistry(),
 	}
 }
 
@@ -465,21 +466,20 @@ func (t *sandboxExecTool) Call(ctx context.Context, args []byte) (any, error) {
 func (t *sandboxExecTool) workspace(
 	ctx context.Context,
 ) (codeexecutor.Workspace, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if strings.TrimSpace(t.ws.Path) != "" {
-		return t.ws, nil
+	workspaceID := "openclaw-exec-command"
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+		if key := workspacesession.KeyFromInvocation(inv); key != "" {
+			workspaceID = key
+		}
 	}
-	ws, err := t.engine.Manager().CreateWorkspace(
-		ctx,
-		"openclaw-exec-command",
-		codeexecutor.WorkspacePolicy{Persist: true},
-	)
-	if err != nil {
-		return codeexecutor.Workspace{}, err
+	if t.registry == nil {
+		return codeexecutor.NewWorkspaceRegistry().Acquire(
+			ctx,
+			t.engine.Manager(),
+			workspaceID,
+		)
 	}
-	t.ws = ws
-	return ws, nil
+	return t.registry.Acquire(ctx, t.engine.Manager(), workspaceID)
 }
 
 func sandboxExecCwd(workdir string) (string, error) {

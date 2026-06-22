@@ -2343,6 +2343,62 @@ func TestNewAgent_SandboxExecOmitsWorkspaceExec(t *testing.T) {
 	require.False(t, names["workspace_kill_session"])
 }
 
+func TestNewAgent_SandboxOpenClawToolingGuidanceMatchesTools(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:             "demo",
+		SkillsRoot:          root,
+		StateDir:            t.TempDir(),
+		EnableOpenClawTools: true,
+		CodeExecutor: codeExecutorOptions{
+			Type: codeExecutorTypeSandbox,
+			Sandbox: sandboxCodeExecutorOptions{
+				Backend:        sandboxBackendAuto,
+				Profile:        sandboxProfileWorkspaceWrite,
+				Network:        sandboxNetworkRestricted,
+				DefaultTimeout: time.Second,
+				OutputMaxBytes: 1024,
+				ShellEnv: sandboxShellEnvOptions{
+					Inherit:              sandboxShellEnvInheritCore,
+					ApplyDefaultExcludes: true,
+				},
+			},
+		},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	content := joinAllMessageContent(req)
+	require.Contains(
+		t,
+		content,
+		"exec_command only supports foreground non-interactive commands",
+	)
+	require.Contains(
+		t,
+		content,
+		"does not automatically mount host paths",
+	)
+	require.NotContains(
+		t,
+		content,
+		"write_stdin and kill_session when needed",
+	)
+	require.NotContains(
+		t,
+		content,
+		"When exec_command or write_stdin generates images",
+	)
+}
+
 func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
 	t.Parallel()
 

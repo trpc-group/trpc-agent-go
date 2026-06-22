@@ -348,6 +348,49 @@ func TestAdminRuntimeConfigProvider_HidesSandboxFieldsForInheritedExecutor(
 	require.Equal(t, codeExecutorTypeSandbox, field.VisibleWhen.Value)
 }
 
+func TestAdminRuntimeConfigProvider_CanonicalizesCodeExecutorTypeSelect(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(
+		t,
+		""+
+			"tools:\n"+
+			"  code_executor:\n"+
+			"    type: Sandbox\n"+
+			"    sandbox:\n"+
+			"      profile: read_only\n",
+	)
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	opts.CodeExecutor = codeExecutorOptions{
+		Type: codeExecutorTypeSandbox,
+		Sandbox: sandboxCodeExecutorOptions{
+			Profile: sandboxProfileReadOnly,
+		},
+	}
+	provider, ok := buildAdminRuntimeConfigProvider(opts).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	typeField := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.code_executor.type",
+	)
+	require.Equal(t, "Sandbox", typeField.ConfiguredValue)
+	require.Equal(t, codeExecutorTypeSandbox, typeField.EditorValue)
+	require.False(t, typeField.PendingRestart)
+
+	profileField := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.code_executor.sandbox.profile",
+	)
+	require.False(t, profileField.Hidden)
+}
+
 func TestAdminRuntimeConfigProvider_SaveCodeExecutorSandboxCreatesConfig(
 	t *testing.T,
 ) {

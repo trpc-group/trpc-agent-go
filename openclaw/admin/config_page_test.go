@@ -172,7 +172,31 @@ func TestServiceHandlerRendersConditionalConfigFields(t *testing.T) {
 	require.Contains(t, body, `data-config-field-key="tools.code_executor.sandbox.profile"`)
 	require.Contains(t, body, `data-visible-when-key="tools.code_executor.type"`)
 	require.Contains(t, body, `data-visible-when-value="sandbox"`)
-	require.Contains(t, body, "field.hidden = fieldValue(dependencyKey) !== expectedValue")
+	conditionalIdx := strings.Index(
+		body,
+		`id="config-field-tools.code_executor.sandbox.profile"`,
+	)
+	require.NotEqual(t, -1, conditionalIdx)
+	conditionalHTML := body[conditionalIdx:]
+	if len(conditionalHTML) > 300 {
+		conditionalHTML = conditionalHTML[:300]
+	}
+	require.Contains(
+		t,
+		conditionalHTML,
+		`data-config-field-key="tools.code_executor.sandbox.profile"`,
+	)
+	require.Contains(
+		t,
+		conditionalHTML,
+		`data-visible-when-key="tools.code_executor.type"`,
+	)
+	require.Contains(
+		t,
+		conditionalHTML,
+		`data-visible-when-value="sandbox"`,
+	)
+	require.Contains(t, conditionalHTML, "hidden")
 }
 
 func TestServiceHandlerRendersReadOnlyConfigField(t *testing.T) {

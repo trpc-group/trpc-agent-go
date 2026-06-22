@@ -2933,7 +2933,48 @@ func buildOpenClawToolingGuidance(cfg agentConfig) string {
 	if cfg.OpenClawToolingGuide != nil {
 		return strings.TrimSpace(*cfg.OpenClawToolingGuide)
 	}
-	return strings.TrimSpace(openClawToolingGuidance)
+	guidance := strings.TrimSpace(openClawToolingGuidance)
+	if !isSandboxCodeExecutor(cfg.CodeExecutor) {
+		return guidance
+	}
+	guidance = strings.Replace(
+		guidance,
+		"For other general local shell work, use exec_command. For interactive follow-up "+
+			"input, use write_stdin and kill_session when needed. Use message "+
+			"to send to the current chat or an explicit target. ",
+		"For other general local shell work, use exec_command. In sandbox mode, "+
+			"exec_command only supports foreground non-interactive commands; "+
+			"write_stdin, kill_session, background execution, TTY allocation, "+
+			"and session continuation are unavailable. Use message to send to "+
+			"the current chat or an explicit target. ",
+		1,
+	)
+	guidance = strings.Replace(
+		guidance,
+		"Chat uploads are saved to stable host paths. For host "+
+			"commands, prefer OPENCLAW_LAST_UPLOAD_PATH or "+
+			"OPENCLAW_SESSION_UPLOADS_DIR, OPENCLAW_LAST_UPLOAD_HOST_REF, "+
+			"OPENCLAW_LAST_UPLOAD_NAME, "+
+			"OPENCLAW_LAST_UPLOAD_MIME, OPENCLAW_MEMORY_FILE, "+
+			"OPENCLAW_USER_MEMORY_FILE, OPENCLAW_CHAT_MEMORY_FILE, and "+
+			"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing "+
+			"attachment paths. ",
+		"Chat uploads still provide stable OPENCLAW_* metadata, but sandbox "+
+			"exec_command does not automatically mount host paths such as "+
+			"OPENCLAW_LAST_UPLOAD_PATH, OPENCLAW_SESSION_UPLOADS_DIR, "+
+			"OPENCLAW_MEMORY_FILE, OPENCLAW_USER_MEMORY_FILE, or "+
+			"OPENCLAW_CHAT_MEMORY_FILE. Use that metadata for filenames and "+
+			"host refs, and avoid assuming those host paths are directly "+
+			"readable inside the sandbox. ",
+		1,
+	)
+	guidance = strings.Replace(
+		guidance,
+		"When exec_command or write_stdin generates images",
+		"When exec_command generates images",
+		1,
+	)
+	return guidance
 }
 
 func buildOpenClawSkillsGuidance(cfg agentConfig) string {

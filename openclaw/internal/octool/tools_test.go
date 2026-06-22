@@ -89,6 +89,67 @@ func TestSandboxExecTool_Foreground(t *testing.T) {
 	require.Len(t, engine.manager.workspaces, 1)
 }
 
+func TestSandboxExecTool_ReusesWorkspacePerSession(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := newSandboxExecCommandTool(engine)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				sessionpkg.NewSession("app", "u1", "s1"),
+			),
+		),
+	)
+
+	for i := 0; i < 2; i++ {
+		_, err := tl.Call(ctx, mustJSON(t, map[string]any{
+			"command": "pwd",
+		}))
+		require.NoError(t, err)
+	}
+
+	require.Len(t, engine.manager.workspaces, 1)
+	require.Equal(t, "app/u1/s1", engine.manager.workspaces[0].ID)
+}
+
+func TestSandboxExecTool_IsolatesWorkspacesAcrossSessions(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := newSandboxExecCommandTool(engine)
+	ctx1 := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				sessionpkg.NewSession("app", "u1", "s1"),
+			),
+		),
+	)
+	ctx2 := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				sessionpkg.NewSession("app", "u1", "s2"),
+			),
+		),
+	)
+
+	_, err := tl.Call(ctx1, mustJSON(t, map[string]any{
+		"command": "pwd",
+	}))
+	require.NoError(t, err)
+	_, err = tl.Call(ctx2, mustJSON(t, map[string]any{
+		"command": "pwd",
+	}))
+	require.NoError(t, err)
+
+	require.Len(t, engine.manager.workspaces, 2)
+	require.Equal(t, "app/u1/s1", engine.manager.workspaces[0].ID)
+	require.Equal(t, "app/u1/s2", engine.manager.workspaces[1].ID)
+}
+
 func TestSandboxExecTool_RejectsUnsupportedSessionModes(t *testing.T) {
 	t.Parallel()
 

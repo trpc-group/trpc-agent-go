@@ -350,8 +350,22 @@ Notes:
 - For secrets (model keys, Telegram tokens), keep them out of version control.
   Prefer environment variables when available.
 - `tools.code_executor.type: sandbox` wires `codeexecutor/sandbox` into
-  fenced-code execution while keeping the generic `workspace_exec` tool surface
-  disabled. Use OpenClaw `exec_command` for host-side tool work.
+  both fenced-code execution and OpenClaw `exec_command` while keeping the
+  generic `workspace_exec` tool surface disabled. In this mode,
+  `exec_command` only supports foreground non-interactive commands;
+  `write_stdin` and `kill_session` are unavailable.
+- Sandbox decision table:
+
+  | Setting | Fenced code blocks | OpenClaw `exec_command` | Interactive follow-up | Typical reason |
+  | --- | --- | --- | --- | --- |
+  | `tools.code_executor.type: "sandbox"` | Runs in sandbox | Runs in sandbox | Not available (`write_stdin` / `kill_session` are omitted) | Need filesystem, network, timeout, or env isolation |
+  | `tools.code_executor.type: ""` | Runs on host when `enable_local_exec: true`; disabled when `false` | Runs on host | Available for host `exec_command` sessions | Need host shell semantics or interactive shell workflows |
+
+- In sandbox mode, upload and memory variables still expose stable
+  `OPENCLAW_*` metadata, but host paths such as
+  `OPENCLAW_LAST_UPLOAD_PATH`, `OPENCLAW_SESSION_UPLOADS_DIR`,
+  `OPENCLAW_MEMORY_FILE`, `OPENCLAW_USER_MEMORY_FILE`, and
+  `OPENCLAW_CHAT_MEMORY_FILE` are not automatically mounted into the sandbox.
 - `knowledges` currently configures only embedder / vector store wiring.
   Loading documents into a knowledge base is a separate runtime action.
 - Example `pgvector` knowledge config:
