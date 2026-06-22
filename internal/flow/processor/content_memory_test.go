@@ -74,6 +74,14 @@ func TestWithPreloadMemoryInjectionMode(t *testing.T) {
 	require.Equal(t, PreloadMemoryInjectionSystem, p.PreloadMemoryInjectionMode)
 }
 
+func TestWithPreloadMemoryPlaybook(t *testing.T) {
+	p := NewContentRequestProcessor(WithPreloadMemoryPlaybook("custom guidance"))
+	require.Equal(t, "custom guidance", p.PreloadMemoryPlaybook)
+
+	p = NewContentRequestProcessor(WithPreloadMemoryPlaybook(""))
+	require.Empty(t, p.PreloadMemoryPlaybook)
+}
+
 func TestWithPreloadSessionRecall(t *testing.T) {
 	p := NewContentRequestProcessor(
 		WithPreloadSessionRecall(4),
@@ -124,7 +132,12 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 		{
 			name:     "empty memories",
 			memories: []*memory.Entry{},
-			contains: []string{"## User Memories"},
+			contains: []string{
+				"## Memory",
+				"Decision boundary",
+				"PRELOADED_USER_MEMORIES BEGINS",
+				"## User Memories",
+			},
 		},
 		{
 			name: "single memory",
@@ -179,6 +192,7 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 				},
 			},
 			contains: []string{
+				"Quick memory pass",
 				"The following are stored memories about the user.",
 				"[mem-episode] User hiked in Kyoto",
 				"kind=episode",
@@ -264,6 +278,19 @@ func TestFormatMemoriesForPrompt(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildPreloadMemoryPromptOverride(t *testing.T) {
+	result := buildPreloadMemoryPrompt(
+		"Custom memory instructions.",
+		[]*memory.Entry{newTestMemoryEntry("mem-1", "User likes coffee")},
+	)
+
+	assert.Contains(t, result, "Custom memory instructions.")
+	assert.NotContains(t, result, "Decision boundary")
+	assert.Contains(t, result, "PRELOADED_USER_MEMORIES BEGINS")
+	assert.Contains(t, result, "[mem-1] User likes coffee")
+	assert.Contains(t, result, "PRELOADED_USER_MEMORIES ENDS")
 }
 
 // mockMemoryService implements memory.Service for testing.
@@ -519,8 +546,28 @@ func TestGetPreloadMemoryMessage(t *testing.T) {
 		msg := p.getPreloadMemoryMessage(context.Background(), inv)
 		assert.NotNil(t, msg)
 		assert.Equal(t, model.RoleSystem, msg.Role)
+		assert.Contains(t, msg.Content, "Decision boundary")
+		assert.Contains(t, msg.Content, "Quick memory pass")
 		assert.Contains(t, msg.Content, "User likes coffee")
 		assert.Contains(t, msg.Content, "mem-1")
+	})
+
+	t.Run("uses preload memory playbook override", func(t *testing.T) {
+		p := NewContentRequestProcessor(
+			WithPreloadMemory(-1),
+			WithPreloadMemoryPlaybook("Custom preload playbook."),
+		)
+		mockSvc := &mockMemoryService{
+			memories: []*memory.Entry{
+				newTestMemoryEntry("mem-1", "User likes coffee"),
+			},
+		}
+		inv := newTestInvocation(model.NewUserMessage("hello"), mockSvc)
+		msg := p.getPreloadMemoryMessage(context.Background(), inv)
+		require.NotNil(t, msg)
+		assert.Contains(t, msg.Content, "Custom preload playbook.")
+		assert.NotContains(t, msg.Content, "Decision boundary")
+		assert.Contains(t, msg.Content, "User likes coffee")
 	})
 
 	t.Run("preload disabled returns nil without calling service", func(t *testing.T) {
@@ -864,6 +911,7 @@ func TestProcessRequest_WithPreloadMemory(t *testing.T) {
 		assert.Equal(t, 2, len(req.Messages))
 		assert.Equal(t, model.RoleSystem, req.Messages[0].Role)
 		assert.Contains(t, req.Messages[0].Content, "You are a helpful assistant.")
+		assert.Contains(t, req.Messages[0].Content, "Decision boundary")
 		assert.Contains(t, req.Messages[0].Content, "User Memories")
 		assert.Contains(t, req.Messages[0].Content, "User prefers dark mode")
 	})
@@ -1102,6 +1150,7 @@ func TestProcessRequest_PreloadMemory_UserInjectionMode(t *testing.T) {
 	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
 	require.Equal(t, "Base system prompt", req.Messages[0].Content)
 	require.Equal(t, model.RoleUser, req.Messages[1].Role)
+	require.Contains(t, req.Messages[1].Content, "Decision boundary")
 	require.Contains(t, req.Messages[1].Content, "User Memories")
 	require.Contains(t, req.Messages[1].Content, "User prefers dark mode")
 	require.Contains(t, req.Messages[1].Content, "hello")
