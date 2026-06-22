@@ -4,7 +4,7 @@
 >
 > This article focuses on Session Summary in tRPC-Agent-Go. Summary is not just a way to make history shorter. It separates long-running Agent context into state summary, original events, recent raw context, and on-demand retrieval, so applications can balance cost, latency, and factual recoverability. If this project is useful to you, a GitHub star and community feedback are welcome.
 
-![Summary comic: from growing history to on-demand evidence](../../assets/img/blog/summary/comic_banner.png)
+![Summary comic: from growing history to on-demand evidence](../../assets/img/blog/summary/en/comic_banner_en.jpg)
 
 Knowledge and productivity Agents are valuable not because they answer one isolated question, but because they connect scattered materials and actions across a user workflow.
 
@@ -81,7 +81,7 @@ With these goals in mind, the limits of common approaches become easier to see.
 
 Several common techniques help, but none is sufficient by itself.
 
-![Boundaries of common context strategies](../../assets/img/blog/summary/strategy_comparison.png)
+![Boundaries of common context strategies](../../assets/img/blog/summary/en/strategy_comparison_en.png)
 
 ### 2.1 Long Context Alone
 
@@ -133,7 +133,7 @@ The resulting design is:
 
 > Summary is a compressed view of the current session. Events remain the source of truth. The next prompt uses summary plus events after the boundary.
 
-![tRPC-Agent-Go Summary context architecture](../../assets/img/blog/summary/context_layers.png)
+![tRPC-Agent-Go Summary context architecture](../../assets/img/blog/summary/en/context_layers_en.png)
 
 The design can be understood in five parts:
 
@@ -195,13 +195,7 @@ session summary
 
 The flow is:
 
-```mermaid
-flowchart LR
-    O[Older events before boundary] --> S[Session summary]
-    N[Events after boundary] --> P[Next prompt]
-    S --> P
-    P --> L[LLM]
-```
+![Prompt assembly after summary boundary](../../assets/img/blog/summary/en/diagram_boundary_en.png)
 
 One subtle failure mode is worth calling out: when `AddSessionSummary=true`, events after the summary boundary must not be trimmed by `MaxHistoryRuns`. Otherwise the model may see an old state summary but miss the latest tool result or user feedback.
 
@@ -527,18 +521,7 @@ The framework now generates summaries during the conversation according to the c
 
 The simplified flow:
 
-```mermaid
-flowchart TB
-    R[Runner] -->|Append qualifying event| Q[EnqueueSummaryJob]
-    Q --> W[Async Summary Worker]
-    W --> C[Checker: event/token/time/context]
-    C --> SUM[Summarizer]
-    SUM --> M[Summary LLM]
-    SUM --> B[Summary text + boundary]
-    B --> SS[Session Service]
-    SS --> P[Content Processor]
-    P -->|summary + events after boundary| L[Next LLM request]
-```
+![Async summary generation flow](../../assets/img/blog/summary/en/diagram_async_flow_en.png)
 
 Implementation details:
 
@@ -605,16 +588,7 @@ Layer 1 is the **tool-result entry guard**. Before tool results enter messages, 
 
 Layer 2 is **session compaction**. When the total token count approaches a context-window threshold, for example around 70%, older history is compressed into structured summary while recent complete rounds remain raw.
 
-```mermaid
-flowchart TB
-    T[Tool result] --> G["Layer 1: entry guard<br/>truncate / summarize / archive"]
-    G --> E[Session events]
-    E --> C{"tokens >= context window * ratio?"}
-    C -- No --> N[Normal LLM request]
-    C -- Yes --> S["Layer 2: session summary<br/>old events -> structured summary"]
-    S --> R["Prompt rebuild<br/>summary + recent events"]
-    R --> N
-```
+![Two-layer context governance](../../assets/img/blog/summary/en/diagram_two_layer_en.png)
 
 Several engineering rules follow.
 
@@ -744,26 +718,7 @@ The task checks whether the system can recover early facts from a long conversat
 
 **Summary + On-Demand Retrieval** gives the model summary by default. If the question depends on hidden history, the model can call `session_search` and, when needed, `session_load`.
 
-```mermaid
-sequenceDiagram
-    participant U as User Question
-    participant A as Agent
-    participant S as Summary
-    participant H as Hidden History Index
-    participant L as LLM
-
-    U->>A: Ask a long-term memory question
-    A->>L: Summary + current question
-    alt needs hidden detail
-        A->>H: session_search(query)
-        H-->>A: relevant event snippets
-        opt snippet not enough
-            A->>H: session_load(event_id)
-            H-->>A: local context
-        end
-    end
-    A->>L: answer with focused evidence
-```
+![Summary plus on-demand retrieval](../../assets/img/blog/summary/en/diagram_retrieval_en.png)
 
 ### 6.2 Results
 
@@ -785,7 +740,7 @@ Cost and latency:
 
 The trade-off is easier to see visually: pure summary is very cheap but loses facts; long context is complete but heavy; summary plus retrieval uses far fewer prompt tokens while recovering better factual answers.
 
-![LongMemEval quality-cost trade-off](../../assets/img/blog/summary/benchmark_tradeoff.png)
+![LongMemEval quality-cost trade-off](../../assets/img/blog/summary/en/benchmark_tradeoff_en.png)
 
 Several observations stand out.
 
