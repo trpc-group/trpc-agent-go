@@ -11,6 +11,7 @@ package mongodb
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -38,6 +39,20 @@ func (s *stubSummarizer) Summarize(_ context.Context, _ *session.Session) (strin
 func (s *stubSummarizer) SetPrompt(_ string)       {}
 func (s *stubSummarizer) SetModel(_ model.Model)   {}
 func (s *stubSummarizer) Metadata() map[string]any { return nil }
+
+type configurableSummarizer struct {
+	should bool
+	text   string
+	err    error
+}
+
+func (s *configurableSummarizer) ShouldSummarize(_ *session.Session) bool { return s.should }
+func (s *configurableSummarizer) Summarize(_ context.Context, _ *session.Session) (string, error) {
+	return s.text, s.err
+}
+func (s *configurableSummarizer) SetPrompt(_ string)       {}
+func (s *configurableSummarizer) SetModel(_ model.Model)   {}
+func (s *configurableSummarizer) Metadata() map[string]any { return nil }
 
 func TestCreateSessionSummary_PersistsViaUpsert(t *testing.T) {
 	mc := &mockClient{}
@@ -81,6 +96,23 @@ func TestCreateSessionSummary_DuplicateKeyIsNoop(t *testing.T) {
 	require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "", true))
 }
 
+func TestCreateSessionSummary_PropagatesNonDuplicateUpsertError(t *testing.T) {
+	want := errors.New("write failed")
+	mc := &mockClient{
+		updateOneFn: func(_, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return nil, want
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.summarizer = &stubSummarizer{text: "hello"}
+	})
+
+	sess := newSessionForTest("app", "u", "s")
+	err := s.CreateSessionSummary(context.Background(), sess, "", true)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, want)
+}
+
 func TestCreateSessionSummary_TTLSetsExpiresAt(t *testing.T) {
 	mc := &mockClient{}
 	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
@@ -111,6 +143,31 @@ func TestCreateSessionSummary_RespectsAllowlist(t *testing.T) {
 	// without touching the client.
 	require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "blocked", false))
 	assert.Empty(t, mc.recorded(), "filter-key not in allowlist must short-circuit")
+}
+
+func TestCreateSessionSummary_SkipAndSummarizeErrorShortCircuit(t *testing.T) {
+	t.Run("skip", func(t *testing.T) {
+		mc := &mockClient{}
+		s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+			o.summarizer = &configurableSummarizer{should: false, text: "unused"}
+		})
+		sess := newSessionForTest("app", "u", "s")
+		require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "", false))
+		assert.Empty(t, mc.recorded())
+	})
+
+	t.Run("error", func(t *testing.T) {
+		want := errors.New("summarize failed")
+		mc := &mockClient{}
+		s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+			o.summarizer = &configurableSummarizer{should: true, err: want}
+		})
+		sess := newSessionForTest("app", "u", "s")
+		err := s.CreateSessionSummary(context.Background(), sess, "", true)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+		assert.Empty(t, mc.recorded())
+	})
 }
 
 func TestGetSessionSummaryText_FromInMemorySummariesFirst(t *testing.T) {
@@ -160,6 +217,46 @@ func TestGetSessionSummaryText_FallsBackToFullSession(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "fallback", got)
 	assert.Equal(t, 2, calls)
+}
+
+func TestGetSessionSummaryText_IgnoresInvalidOrEmptyPersistedSummary(t *testing.T) {
+	t.Run("invalid json", func(t *testing.T) {
+		mc := &mockClient{
+			findOneFn: func(_ any) *mongo.SingleResult {
+				return mongo.NewSingleResultFromDocument(sessionSummaryDoc{
+					AppName:   "app",
+					UserID:    "u",
+					SessionID: "s",
+					FilterKey: session.SummaryFilterKeyAllContents,
+					Summary:   []byte(`{`),
+					UpdatedAt: time.Now(),
+				}, nil, nil)
+			},
+		}
+		s := newServiceForTest(t, mc)
+		got, ok := s.GetSessionSummaryText(context.Background(), newSessionForTest("app", "u", "s"))
+		assert.False(t, ok)
+		assert.Empty(t, got)
+	})
+
+	t.Run("empty summary", func(t *testing.T) {
+		mc := &mockClient{
+			findOneFn: func(_ any) *mongo.SingleResult {
+				return mongo.NewSingleResultFromDocument(sessionSummaryDoc{
+					AppName:   "app",
+					UserID:    "u",
+					SessionID: "s",
+					FilterKey: session.SummaryFilterKeyAllContents,
+					Summary:   []byte(`{"summary":""}`),
+					UpdatedAt: time.Now(),
+				}, nil, nil)
+			},
+		}
+		s := newServiceForTest(t, mc)
+		got, ok := s.GetSessionSummaryText(context.Background(), newSessionForTest("app", "u", "s"))
+		assert.False(t, ok)
+		assert.Empty(t, got)
+	})
 }
 
 func TestEnqueueSummaryJob_FallsBackWithoutWorker(t *testing.T) {

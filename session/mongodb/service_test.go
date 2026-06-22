@@ -225,6 +225,72 @@ func TestCreateSession_ReplacesExpiredSessionHardDeleteUsesActiveStateFilter(t *
 	assert.Contains(t, stateDeleteFilter, "expires_at")
 }
 
+func TestCreateSession_ReplacesExpiredSessionSoftDeleteRequiresExpiredMatch(t *testing.T) {
+	expiresAt := time.Now().Add(-time.Hour)
+	mc := &mockClient{
+		findOneFn: func(_ any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{
+				AppName:   "app",
+				UserID:    "u",
+				SessionID: "s",
+				ExpiresAt: &expiresAt,
+			}, nil, nil)
+		},
+		transactionFn: func(fn storage.TxFunc) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		},
+		updateOneFn: func(filter, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			f := filter.(bson.M)
+			assert.Equal(t, nil, f["deleted_at"])
+			assert.Contains(t, f, "expires_at")
+			return &mongo.UpdateResult{}, nil
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	_, err := s.CreateSession(context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"}, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errSessionNotFound)
+	for _, op := range mc.recorded() {
+		assert.NotEqual(t, "InsertOne", op.name)
+		assert.NotEqual(t, "UpdateMany", op.name)
+	}
+}
+
+func TestCreateSession_ReplacesExpiredSessionHardDeleteRequiresExpiredMatch(t *testing.T) {
+	expiresAt := time.Now().Add(-time.Hour)
+	mc := &mockClient{
+		findOneFn: func(_ any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{
+				AppName:   "app",
+				UserID:    "u",
+				SessionID: "s",
+				ExpiresAt: &expiresAt,
+			}, nil, nil)
+		},
+		transactionFn: func(fn storage.TxFunc) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		},
+		deleteOneFn: func(filter any) (*mongo.DeleteResult, error) {
+			f := filter.(bson.M)
+			assert.Equal(t, nil, f["deleted_at"])
+			assert.Contains(t, f, "expires_at")
+			return &mongo.DeleteResult{}, nil
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.softDelete = false })
+
+	_, err := s.CreateSession(context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"}, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errSessionNotFound)
+	for _, op := range mc.recorded() {
+		assert.NotEqual(t, "InsertOne", op.name)
+		assert.NotEqual(t, "DeleteMany", op.name)
+	}
+}
+
 func TestCreateSession_RejectsMissingAppName(t *testing.T) {
 	mc := &mockClient{}
 	s := newServiceForTest(t, mc)
@@ -420,6 +486,63 @@ func TestGetSession_EventPagePath(t *testing.T) {
 	require.Len(t, sess.Events, 2)
 	assert.Equal(t, "e1", sess.Events[0].ID)
 	assert.Equal(t, "e2", sess.Events[1].ID)
+}
+
+func TestGetEventsList_PageValidationAndErrors(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
+	page := &session.EventPage{Offset: 0, Limit: 10}
+
+	t.Run("empty keys", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{})
+		got, err := s.getEventsList(context.Background(), nil, 0, time.Time{}, nil)
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("paged multiple sessions", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{})
+		_, err := s.getEventsList(context.Background(), []session.Key{key, key}, 0, time.Time{}, page)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "single session")
+	})
+
+	t.Run("paged query error", func(t *testing.T) {
+		want := errors.New("find failed")
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return nil, want
+			},
+		}
+		s := newServiceForTest(t, mc)
+		_, err := s.getEventsList(context.Background(), []session.Key{key}, 0, time.Time{}, page)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+	})
+
+	t.Run("paged invalid event json", func(t *testing.T) {
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return docsCursor([]any{sessionEventDoc{Event: []byte(`{`)}})
+			},
+		}
+		s := newServiceForTest(t, mc)
+		_, err := s.getEventsList(context.Background(), []session.Key{key}, 0, time.Time{}, page)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unmarshal paged event")
+	})
+
+	t.Run("unpaged cursor error", func(t *testing.T) {
+		want := errors.New("cursor failed")
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return mongo.NewCursorFromDocuments(nil, want, nil)
+			},
+		}
+		s := newServiceForTest(t, mc)
+		_, err := s.getEventsList(context.Background(), []session.Key{key}, 0, time.Time{}, nil)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+	})
 }
 
 // -- ListSessions -----------------------------------------------------------
@@ -716,6 +839,39 @@ func TestListAppStates_DecodesValues(t *testing.T) {
 	assert.Equal(t, []byte("v2"), out["k2"])
 }
 
+func TestListAppStates_NilValueCopyAndFindError(t *testing.T) {
+	t.Run("nil and copy", func(t *testing.T) {
+		value := []byte("v")
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return docsCursor([]any{
+					stateKVDoc{AppName: "app", Key: "nil"},
+					stateKVDoc{AppName: "app", Key: "copy", Value: value},
+				})
+			},
+		}
+		s := newServiceForTest(t, mc)
+		out, err := s.ListAppStates(context.Background(), "app")
+		require.NoError(t, err)
+		assert.Nil(t, out["nil"])
+		value[0] = 'x'
+		assert.Equal(t, []byte("v"), out["copy"])
+	})
+
+	t.Run("find error", func(t *testing.T) {
+		want := errors.New("find failed")
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return nil, want
+			},
+		}
+		s := newServiceForTest(t, mc)
+		_, err := s.ListAppStates(context.Background(), "app")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+	})
+}
+
 func TestDeleteAppState_SoftAndHard(t *testing.T) {
 	t.Run("soft", func(t *testing.T) {
 		mc := &mockClient{}
@@ -775,6 +931,40 @@ func TestListUserStates_RejectsBadKey(t *testing.T) {
 	s := newServiceForTest(t, mc)
 	_, err := s.ListUserStates(context.Background(), session.UserKey{AppName: ""})
 	require.Error(t, err)
+}
+
+func TestListUserStates_NilValueCopyAndFindError(t *testing.T) {
+	userKey := session.UserKey{AppName: "app", UserID: "u"}
+	t.Run("nil and copy", func(t *testing.T) {
+		value := []byte("v")
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return docsCursor([]any{
+					stateKVDoc{AppName: "app", UserID: "u", Key: "nil"},
+					stateKVDoc{AppName: "app", UserID: "u", Key: "copy", Value: value},
+				})
+			},
+		}
+		s := newServiceForTest(t, mc)
+		out, err := s.ListUserStates(context.Background(), userKey)
+		require.NoError(t, err)
+		assert.Nil(t, out["nil"])
+		value[0] = 'x'
+		assert.Equal(t, []byte("v"), out["copy"])
+	})
+
+	t.Run("find error", func(t *testing.T) {
+		want := errors.New("find failed")
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return nil, want
+			},
+		}
+		s := newServiceForTest(t, mc)
+		_, err := s.ListUserStates(context.Background(), userKey)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+	})
 }
 
 func TestDeleteUserState_HardDelete(t *testing.T) {
@@ -999,6 +1189,71 @@ func TestAppendEvent_StateDeltaRoutesScopedState(t *testing.T) {
 	assert.True(t, sawSession)
 }
 
+func TestAppendEvent_ScopedStateHonorsTTL(t *testing.T) {
+	mc := &mockClient{
+		transactionFn: func(fn storage.TxFunc) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.appStateTTL = time.Hour
+		o.userStateTTL = 2 * time.Hour
+	})
+	sess := newSessionForTest("app", "u", "s")
+	evt := nonPartialResponseEvent(t)
+	evt.StateDelta = map[string][]byte{
+		session.StateAppPrefix + "ak":  []byte("av"),
+		session.StateUserPrefix + "uk": []byte("uv"),
+	}
+
+	require.NoError(t, s.AppendEvent(context.Background(), sess, evt))
+
+	var sawAppExpiresAt, sawUserExpiresAt bool
+	for _, op := range mc.recorded() {
+		if op.name != "UpdateOne" {
+			continue
+		}
+		upd := op.update.(bson.M)
+		set := upd["$set"].(bson.M)
+		switch op.coll {
+		case "app_states":
+			_, sawAppExpiresAt = set["expires_at"]
+			assert.NotContains(t, upd, "$unset")
+		case "user_states":
+			_, sawUserExpiresAt = set["expires_at"]
+			assert.NotContains(t, upd, "$unset")
+		}
+	}
+	assert.True(t, sawAppExpiresAt)
+	assert.True(t, sawUserExpiresAt)
+}
+
+func TestAppendEvent_ScopedStateErrorAbortsTransaction(t *testing.T) {
+	want := errors.New("app state failed")
+	mc := &mockClient{
+		transactionFn: func(fn storage.TxFunc) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		},
+		updateOneFn: func(filter, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			if _, ok := filter.(bson.M)["key"]; ok {
+				return nil, want
+			}
+			return &mongo.UpdateResult{MatchedCount: 1}, nil
+		},
+	}
+	s := newServiceForTest(t, mc)
+	sess := newSessionForTest("app", "u", "s")
+	evt := nonPartialResponseEvent(t)
+	evt.StateDelta = map[string][]byte{session.StateAppPrefix + "ak": []byte("av")}
+
+	err := s.AppendEvent(context.Background(), sess, evt)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, want)
+	for _, op := range mc.recorded() {
+		assert.False(t, op.name == "InsertOne" && op.coll == "session_events")
+	}
+}
+
 func TestAppendEvent_StateDeltaUsesDotNotation(t *testing.T) {
 	mc := &mockClient{}
 	s := newServiceForTest(t, mc)
@@ -1064,6 +1319,23 @@ func TestAppendEvent_RejectsNilSession(t *testing.T) {
 	mc := &mockClient{}
 	s := newServiceForTest(t, mc)
 	require.ErrorIs(t, s.AppendEvent(context.Background(), nil, nil), session.ErrNilSession)
+}
+
+func TestAppendTrackEvent_RejectsNilSession(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc)
+	require.ErrorIs(t, s.AppendTrackEvent(context.Background(), nil, nil), session.ErrNilSession)
+}
+
+func TestAppendTrackEvent_RejectsBadSessionKey(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc)
+	sess := newSessionForTest("", "u", "s")
+
+	err := s.AppendTrackEvent(context.Background(), sess,
+		trackEventForTest("alpha", `"payload"`, time.Now()))
+	require.Error(t, err)
+	assert.Empty(t, mc.recorded())
 }
 
 func TestAppendEvent_AsyncPathDispatchesToChan(t *testing.T) {
@@ -1231,6 +1503,122 @@ func TestAppendTrackEvent_UsesTransactionAndSessionTracks(t *testing.T) {
 	assert.Equal(t, []session.Track{"alpha"}, tracks)
 }
 
+func TestPersistTrackEvent_ErrorBranches(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
+	trackEvent := trackEventForTest("alpha", `"payload"`, time.Now())
+
+	t.Run("nil track event", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{})
+		err := s.persistTrackEvent(context.Background(), key, nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "track event is nil")
+	})
+
+	t.Run("missing session", func(t *testing.T) {
+		mc := &mockClient{
+			transactionFn: func(fn storage.TxFunc) error {
+				return fn(mongo.NewSessionContext(context.Background(), nil))
+			},
+		}
+		s := newServiceForTest(t, mc)
+		err := s.persistTrackEvent(context.Background(), key, trackEvent)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, errSessionNotFound)
+	})
+
+	t.Run("find error", func(t *testing.T) {
+		want := errors.New("find failed")
+		mc := &mockClient{
+			transactionFn: func(fn storage.TxFunc) error {
+				return fn(mongo.NewSessionContext(context.Background(), nil))
+			},
+			findOneFn: func(_ any) *mongo.SingleResult {
+				return mongo.NewSingleResultFromDocument(bson.D{}, want, nil)
+			},
+		}
+		s := newServiceForTest(t, mc)
+		err := s.persistTrackEvent(context.Background(), key, trackEvent)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+	})
+
+	t.Run("update no match", func(t *testing.T) {
+		mc := &mockClient{
+			transactionFn: func(fn storage.TxFunc) error {
+				return fn(mongo.NewSessionContext(context.Background(), nil))
+			},
+			findOneFn: func(_ any) *mongo.SingleResult {
+				return mongo.NewSingleResultFromDocument(sessionStateDoc{State: bson.M{}}, nil, nil)
+			},
+			updateOneFn: func(_, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+				return &mongo.UpdateResult{}, nil
+			},
+		}
+		s := newServiceForTest(t, mc)
+		err := s.persistTrackEvent(context.Background(), key, trackEvent)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, errSessionNotFound)
+	})
+
+	t.Run("insert error", func(t *testing.T) {
+		want := errors.New("insert failed")
+		mc := &mockClient{
+			transactionFn: func(fn storage.TxFunc) error {
+				return fn(mongo.NewSessionContext(context.Background(), nil))
+			},
+			findOneFn: func(_ any) *mongo.SingleResult {
+				return mongo.NewSingleResultFromDocument(sessionStateDoc{State: bson.M{}}, nil, nil)
+			},
+			insertOneFn: func(_ any) (*mongo.InsertOneResult, error) {
+				return nil, want
+			},
+		}
+		s := newServiceForTest(t, mc)
+		err := s.persistTrackEvent(context.Background(), key, trackEvent)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+	})
+}
+
+func TestAppendTrackEvent_TTLSetsExpiresAt(t *testing.T) {
+	now := time.Now()
+	mc := &mockClient{
+		transactionFn: func(fn storage.TxFunc) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		},
+		findOneFn: func(_ any) *mongo.SingleResult {
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{State: bson.M{}}, nil, nil)
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+	sess := newSessionForTest("app", "u", "s")
+
+	require.NoError(t, s.AppendTrackEvent(context.Background(), sess,
+		trackEventForTest("alpha", `"payload"`, now)))
+
+	var sawStateExpiresAt, sawTrackExpiresAt bool
+	for _, op := range mc.recorded() {
+		switch op.coll {
+		case "session_states":
+			if op.name != "UpdateOne" {
+				continue
+			}
+			upd := op.update.(bson.M)
+			set := upd["$set"].(bson.M)
+			_, sawStateExpiresAt = set["expires_at"]
+			assert.NotContains(t, upd, "$unset")
+		case "session_tracks":
+			if op.name != "InsertOne" {
+				continue
+			}
+			doc := op.doc.(sessionTrackDoc)
+			sawTrackExpiresAt = doc.ExpiresAt != nil
+		}
+	}
+	assert.True(t, sawStateExpiresAt)
+	assert.True(t, sawTrackExpiresAt)
+}
+
 func TestAppendTrackEvent_AsyncPathDispatchesToChan(t *testing.T) {
 	mc := &mockClient{}
 	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
@@ -1260,6 +1648,38 @@ func TestAppendTrackEvent_AsyncPathDispatchesToChan(t *testing.T) {
 	assert.Same(t, evtOtherTrack, job.trackEvent)
 	assert.Nil(t, job.event)
 	assert.Empty(t, mc.recorded(), "async track enqueue should not persist synchronously")
+}
+
+func TestAppendTrackEvent_AsyncPathRequiresWorkers(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.enableAsyncPersist = true
+	})
+	sess := newSessionForTest("app", "u", "s")
+
+	err := s.AppendTrackEvent(context.Background(), sess,
+		trackEventForTest("alpha", `"payload"`, time.Now()))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "async persist workers are not initialized")
+	assert.Empty(t, mc.recorded())
+}
+
+func TestClose_AfterCloseAppendTrackEventDoesNotPanic(t *testing.T) {
+	mc := &mockClient{}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.enableAsyncPersist = true
+		o.asyncPersisterNum = 1
+	})
+	s.persistChans = []chan *persistJob{make(chan *persistJob, 1)}
+	require.NoError(t, s.Close())
+	sess := newSessionForTest("app", "u", "s")
+
+	require.NotPanics(t, func() {
+		err := s.AppendTrackEvent(context.Background(), sess,
+			trackEventForTest("alpha", `"payload"`, time.Now()))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "closed channel")
+	})
 }
 
 func TestGetSession_LoadsTrackEvents(t *testing.T) {
@@ -1360,6 +1780,144 @@ func TestGetTrackEvents_BatchesSessionsAndTracks(t *testing.T) {
 	assert.Equal(t, json.RawMessage(`"new"`), got[0]["alpha"][0].Payload)
 	require.Len(t, got[1]["beta"], 1)
 	assert.Equal(t, json.RawMessage(`"beta"`), got[1]["beta"][0].Payload)
+}
+
+func TestGetTrackEvents_ErrorsAndNoTrackFastPath(t *testing.T) {
+	key := []session.Key{{AppName: "app", UserID: "u", SessionID: "s"}}
+
+	t.Run("empty keys", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{})
+		got, err := s.getTrackEvents(context.Background(), nil, nil, 0, time.Time{})
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("state count mismatch", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{})
+		_, err := s.getTrackEvents(context.Background(), key, nil, 0, time.Time{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "session states count mismatch")
+	})
+
+	t.Run("no tracks", func(t *testing.T) {
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				t.Fatal("Find should not run when sessions have no tracks")
+				return nil, nil
+			},
+		}
+		s := newServiceForTest(t, mc)
+		got, err := s.getTrackEvents(context.Background(), key, []sessionStateDoc{{State: bson.M{}}}, 0, time.Time{})
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Empty(t, got[0])
+	})
+
+	t.Run("invalid track state", func(t *testing.T) {
+		s := newServiceForTest(t, &mockClient{})
+		_, err := s.getTrackEvents(context.Background(), key,
+			[]sessionStateDoc{{State: bson.M{"tracks": []byte(`{`)}}},
+			0, time.Time{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "get track list failed")
+	})
+
+	t.Run("query error", func(t *testing.T) {
+		want := errors.New("find failed")
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return nil, want
+			},
+		}
+		s := newServiceForTest(t, mc)
+		_, err := s.getTrackEvents(context.Background(), key,
+			[]sessionStateDoc{{State: bson.M{"tracks": mustTrackIndex(t, []session.Track{"alpha"})}}},
+			0, time.Time{})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+	})
+
+	t.Run("unmarshal error", func(t *testing.T) {
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return docsCursor([]any{sessionTrackDoc{SessionID: "s", Track: "alpha", Event: []byte(`{`)}})
+			},
+		}
+		s := newServiceForTest(t, mc)
+		_, err := s.getTrackEvents(context.Background(), key,
+			[]sessionStateDoc{{State: bson.M{"tracks": mustTrackIndex(t, []session.Track{"alpha"})}}},
+			0, time.Time{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unmarshal track event")
+	})
+}
+
+func TestGetSummariesList_EmptyAndCreatedAtValidation(t *testing.T) {
+	s := newServiceForTest(t, &mockClient{})
+	got, err := s.getSummariesList(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	_, err = s.getSummariesList(context.Background(),
+		[]session.Key{{AppName: "app", UserID: "u", SessionID: "s"}},
+		[]time.Time{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "createdAts length mismatch")
+}
+
+func TestGetSummariesList_FiltersStaleAndDecodesBySession(t *testing.T) {
+	now := time.Now()
+	oldSummary, err := json.Marshal(&session.Summary{Summary: "old", UpdatedAt: now.Add(-time.Hour)})
+	require.NoError(t, err)
+	newSummary, err := json.Marshal(&session.Summary{Summary: "new", UpdatedAt: now})
+	require.NoError(t, err)
+	mc := &mockClient{
+		findFn: func(_ any) (*mongo.Cursor, error) {
+			return docsCursor([]any{
+				sessionSummaryDoc{SessionID: "s1", FilterKey: "old", Summary: oldSummary, UpdatedAt: now.Add(-time.Hour)},
+				sessionSummaryDoc{SessionID: "s1", FilterKey: "new", Summary: newSummary, UpdatedAt: now},
+				sessionSummaryDoc{SessionID: "missing", FilterKey: "x", Summary: newSummary, UpdatedAt: now},
+			})
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	got, err := s.getSummariesList(context.Background(),
+		[]session.Key{{AppName: "app", UserID: "u", SessionID: "s1"}},
+		[]time.Time{now.Add(-time.Minute)})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.NotContains(t, got[0], "old")
+	require.Contains(t, got[0], "new")
+	assert.Equal(t, "new", got[0]["new"].Summary)
+}
+
+func TestGetSummariesList_PropagatesQueryAndUnmarshalErrors(t *testing.T) {
+	key := []session.Key{{AppName: "app", UserID: "u", SessionID: "s"}}
+	t.Run("query", func(t *testing.T) {
+		want := errors.New("find failed")
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return nil, want
+			},
+		}
+		s := newServiceForTest(t, mc)
+		_, err := s.getSummariesList(context.Background(), key)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+	})
+
+	t.Run("unmarshal", func(t *testing.T) {
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return docsCursor([]any{sessionSummaryDoc{SessionID: "s", Summary: []byte(`{`)}})
+			},
+		}
+		s := newServiceForTest(t, mc)
+		_, err := s.getSummariesList(context.Background(), key)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unmarshal summary")
+	})
 }
 
 func TestCleanupExpiredTracks_UsesSessionGroupCleanup(t *testing.T) {
@@ -1527,6 +2085,131 @@ func TestGetEventWindow_MissingActiveSessionReturnsAnchorNotFound(t *testing.T) 
 	assert.Contains(t, err.Error(), "anchor event not found: a1")
 }
 
+func TestGetEventWindow_RoleFilteredAnchorIsNotFound(t *testing.T) {
+	now := time.Now()
+	sessionCreatedAt := now.Add(-time.Hour)
+	evt := windowEventForTest("u1", model.RoleUser, "hello", now)
+	eventBytes, err := json.Marshal(evt)
+	require.NoError(t, err)
+	findOneCalls := 0
+	mc := &mockClient{
+		findOneFn: func(filter any) *mongo.SingleResult {
+			findOneCalls++
+			f := filter.(bson.M)
+			if f["event_id"] == "u1" {
+				return mongo.NewSingleResultFromDocument(sessionEventDoc{
+					ID:        primitive.NewObjectID(),
+					EventID:   "u1",
+					Event:     eventBytes,
+					CreatedAt: now,
+				}, nil, nil)
+			}
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{
+				AppName:   "app",
+				UserID:    "u",
+				SessionID: "s",
+				CreatedAt: sessionCreatedAt,
+				UpdatedAt: now,
+			}, nil, nil)
+		},
+		findFn: func(_ any) (*mongo.Cursor, error) {
+			t.Fatal("neighbors should not load when anchor role is rejected")
+			return nil, nil
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	_, err = s.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+		AnchorEventID: "u1",
+		Roles:         []model.Role{model.RoleAssistant},
+		Before:        1,
+		After:         1,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "anchor event not found: u1")
+	assert.Equal(t, 2, findOneCalls)
+}
+
+func TestGetEventWindow_InvalidAnchorEventJSON(t *testing.T) {
+	now := time.Now()
+	sessionCreatedAt := now.Add(-time.Hour)
+	mc := &mockClient{
+		findOneFn: func(filter any) *mongo.SingleResult {
+			f := filter.(bson.M)
+			if f["event_id"] == "bad" {
+				return mongo.NewSingleResultFromDocument(sessionEventDoc{
+					ID:        primitive.NewObjectID(),
+					EventID:   "bad",
+					Event:     []byte(`{`),
+					CreatedAt: now,
+				}, nil, nil)
+			}
+			return mongo.NewSingleResultFromDocument(sessionStateDoc{
+				AppName:   "app",
+				UserID:    "u",
+				SessionID: "s",
+				CreatedAt: sessionCreatedAt,
+				UpdatedAt: now,
+			}, nil, nil)
+		},
+	}
+	s := newServiceForTest(t, mc)
+
+	_, err := s.GetEventWindow(context.Background(), session.EventWindowRequest{
+		Key:           session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+		AnchorEventID: "bad",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal event window entry")
+}
+
+func TestQueryWindowBatch_PropagatesFindAndCursorErrors(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "u", SessionID: "s"}
+	cursor := &mongoWindowEntry{
+		id: primitive.NewObjectID(),
+		entry: session.EventWindowEntry{
+			Event:     windowEventForTest("anchor", model.RoleUser, "anchor", time.Now()),
+			CreatedAt: time.Now(),
+		},
+	}
+	t.Run("find", func(t *testing.T) {
+		want := errors.New("find failed")
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return nil, want
+			},
+		}
+		s := newServiceForTest(t, mc)
+		_, err := s.queryWindowBatch(context.Background(), key, time.Now().Add(-time.Hour), cursor, true)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+	})
+
+	t.Run("cursor", func(t *testing.T) {
+		want := errors.New("cursor failed")
+		mc := &mockClient{
+			findFn: func(_ any) (*mongo.Cursor, error) {
+				return mongo.NewCursorFromDocuments(nil, want, nil)
+			},
+		}
+		s := newServiceForTest(t, mc)
+		_, err := s.queryWindowBatch(context.Background(), key, time.Now().Add(-time.Hour), nil, false)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+	})
+}
+
+func TestReverseWindowEntries(t *testing.T) {
+	entries := []session.EventWindowEntry{
+		{Event: windowEventForTest("one", model.RoleUser, "one", time.Now())},
+		{Event: windowEventForTest("two", model.RoleUser, "two", time.Now())},
+	}
+	reverseWindowEntries(entries)
+	assert.Equal(t, "two", entries[0].Event.ID)
+	assert.Equal(t, "one", entries[1].Event.ID)
+}
+
 func TestCreateSessionSummary_NoOpWithoutSummarizer(t *testing.T) {
 	mc := &mockClient{}
 	s := newServiceForTest(t, mc)
@@ -1670,6 +2353,81 @@ func TestCleanupExpiredEvents_HardDeletePath(t *testing.T) {
 	assert.Equal(t, "Aggregate", ops[0].name)
 	assert.Equal(t, "DeleteMany", ops[1].name)
 	assert.Equal(t, "session_events", ops[1].coll)
+}
+
+func TestCleanupExpiredEvents_FlushesInBatches(t *testing.T) {
+	docs := make([]any, 0, cleanupBatchSize+1)
+	for i := 0; i < cleanupBatchSize+1; i++ {
+		docs = append(docs, bson.M{
+			"_id": bson.M{"app_name": "app", "user_id": "u", "session_id": primitive.NewObjectID().Hex()},
+		})
+	}
+	updateCalls := 0
+	mc := &mockClient{
+		aggregateFn: func(_ any) (*mongo.Cursor, error) {
+			return docsCursor(docs)
+		},
+		updateManyFn: func(filter, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			updateCalls++
+			or := filter.(bson.M)["$or"].(bson.A)
+			if updateCalls == 1 {
+				assert.Len(t, or, cleanupBatchSize)
+			} else {
+				assert.Len(t, or, 1)
+			}
+			return &mongo.UpdateResult{}, nil
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+
+	require.NoError(t, s.cleanupExpiredEvents(context.Background(), time.Now()))
+	assert.Equal(t, 2, updateCalls)
+}
+
+func TestCleanupExpiredEvents_PropagatesAggregateAndDecodeErrors(t *testing.T) {
+	want := errors.New("aggregate failed")
+	t.Run("aggregate", func(t *testing.T) {
+		mc := &mockClient{
+			aggregateFn: func(_ any) (*mongo.Cursor, error) {
+				return nil, want
+			},
+		}
+		s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+		err := s.cleanupExpiredEvents(context.Background(), time.Now())
+		require.Error(t, err)
+		assert.ErrorIs(t, err, want)
+	})
+
+	t.Run("decode", func(t *testing.T) {
+		mc := &mockClient{
+			aggregateFn: func(_ any) (*mongo.Cursor, error) {
+				return docsCursor([]any{bson.M{"_id": "not-a-triple"}})
+			},
+		}
+		s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+		err := s.cleanupExpiredEvents(context.Background(), time.Now())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "decode aggregate row")
+	})
+}
+
+func TestCleanupExpiredEvents_PropagatesFlushErrors(t *testing.T) {
+	want := errors.New("delete failed")
+	mc := &mockClient{
+		aggregateFn: func(_ any) (*mongo.Cursor, error) {
+			return docsCursor([]any{
+				bson.M{"_id": bson.M{"app_name": "app", "user_id": "u", "session_id": "s"}},
+			})
+		},
+		updateManyFn: func(_, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return nil, want
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+
+	err := s.cleanupExpiredEvents(context.Background(), time.Now())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, want)
 }
 
 func TestCleanupTicker_StartStop(t *testing.T) {
