@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1672" height="941" viewBox="0 0 1672 941" role="img" aria-labelledby="title desc">
+  <title id="title">Async Summary Generation Flow</title>
+  <desc id="desc">Runner events enqueue summary work. An async worker checks pressure before calling a summary model, then stores summary text and boundary data for the next request.</desc>
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#1f5fbf"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#238a45"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#f28a00"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#7255d9"/>
+    </marker>
+  </defs>
+  <style>
+    .bg{fill:#f4f8ff}.title{font:700 46px Arial,sans-serif;fill:#102b63;text-anchor:middle}.note{font:700 30px Arial,sans-serif;fill:#203454;text-anchor:middle}.node{font:700 23px Arial,sans-serif;fill:#102b63;text-anchor:middle}.flow-blue{fill:none;stroke:#1f5fbf;stroke-width:5;marker-end:url(#arrow-blue)}.flow-green{fill:none;stroke:#238a45;stroke-width:5;marker-end:url(#arrow-green)}.flow-orange{fill:none;stroke:#f28a00;stroke-width:5;marker-end:url(#arrow-orange)}.flow-purple{fill:none;stroke:#7255d9;stroke-width:5;marker-end:url(#arrow-purple)}
+  </style>
+  <rect class="bg" width="1672" height="941"/>
+  <text class="title" x="836" y="64">Async Summary Generation Flow</text>
+
+  <rect x="65" y="150" width="170" height="95" rx="14" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="node" x="150" y="204">Runner</text>
+  <rect x="270" y="150" width="225" height="95" rx="14" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="node" x="382.5" y="190">
+    <tspan x="382.5" dy="0">Append qualifying</tspan>
+    <tspan x="382.5" dy="28">event</tspan>
+  </text>
+  <rect x="540" y="150" width="240" height="95" rx="14" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="node" x="660" y="190">
+    <tspan x="660" dy="0">Enqueue summary</tspan>
+    <tspan x="660" dy="28">job</tspan>
+  </text>
+  <rect x="815" y="150" width="220" height="95" rx="14" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="node" x="925" y="204">Async worker</text>
+  <rect x="1080" y="150" width="225" height="95" rx="14" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="node" x="1192.5" y="204">Check thresholds</text>
+  <rect x="1330" y="150" width="230" height="95" rx="14" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="node" x="1445" y="204">Summarizer</text>
+
+  <rect x="1030" y="390" width="260" height="105" rx="14" fill="#f0ebff" stroke="#7255d9" stroke-width="3"/>
+  <text class="node" x="1160" y="449">Summary LLM</text>
+  <rect x="1330" y="390" width="280" height="105" rx="14" fill="#eaf7ed" stroke="#238a45" stroke-width="3"/>
+  <text class="node" x="1470" y="434">
+    <tspan x="1470" dy="0">Summary text</tspan>
+    <tspan x="1470" dy="28">+ boundary</tspan>
+  </text>
+
+  <rect x="820" y="620" width="260" height="105" rx="14" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="node" x="950" y="679">Session Service</text>
+  <rect x="1135" y="620" width="270" height="105" rx="14" fill="#fff4e4" stroke="#f28a00" stroke-width="3"/>
+  <text class="node" x="1270" y="679">Content Processor</text>
+  <rect x="1450" y="620" width="165" height="105" rx="14" fill="#f0ebff" stroke="#7255d9" stroke-width="3"/>
+  <text class="node" x="1532.5" y="664">
+    <tspan x="1532.5" dy="0">Next LLM</tspan>
+    <tspan x="1532.5" dy="28">request</tspan>
+  </text>
+
+  <line class="flow-blue" x1="235" y1="197.5" x2="268" y2="197.5"/>
+  <line class="flow-blue" x1="495" y1="197.5" x2="538" y2="197.5"/>
+  <line class="flow-blue" x1="780" y1="197.5" x2="813" y2="197.5"/>
+  <line class="flow-blue" x1="1035" y1="197.5" x2="1078" y2="197.5"/>
+  <line class="flow-blue" x1="1305" y1="197.5" x2="1328" y2="197.5"/>
+  <polyline class="flow-purple" points="1445,245 1445,290 1160,388"/>
+  <line class="flow-green" x1="1290" y1="442.5" x2="1328" y2="442.5"/>
+  <polyline class="flow-green" points="1470,495 1470,550 950,618"/>
+  <line class="flow-orange" x1="1080" y1="672.5" x2="1133" y2="672.5"/>
+  <line class="flow-blue" x1="1405" y1="672.5" x2="1448" y2="672.5"/>
+
+  <text class="note" x="836" y="840">Workers check real pressure before calling the summary model.</text>
+</svg>
