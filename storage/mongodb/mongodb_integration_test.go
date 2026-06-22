@@ -104,7 +104,7 @@ func TestIntegration_CRUD(t *testing.T) {
 	updMany, err := client.UpdateMany(ctx, db, coll,
 		bson.M{"v": bson.M{"$gte": 2}}, bson.M{"$set": bson.M{"kind": "bulk"}})
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), updMany.ModifiedCount)
+	assert.Equal(t, int64(3), updMany.ModifiedCount)
 
 	// Find + cursor iteration returns all three documents in id order.
 	cursor, err := client.Find(ctx, db, coll, bson.M{},

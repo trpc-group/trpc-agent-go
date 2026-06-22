@@ -12,7 +12,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	go.mongodb.org/mongo-driver v1.17.1
 	trpc.group/trpc-go/trpc-agent-go v0.2.0
-	trpc.group/trpc-go/trpc-agent-go/storage/mongodb v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/storage/mongodb v1.10.0
 )
 
 require (
