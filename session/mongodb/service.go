@@ -41,10 +41,20 @@ var errSessionNotFound = errors.New("session not found")
 
 const cleanupBatchSize = 500
 
+type mongoClient interface {
+	storage.Client
+	UpdateMany(ctx context.Context, database string, coll string, filter any, update any,
+		opts ...*options.UpdateOptions) (*mongo.UpdateResult, error)
+	Aggregate(ctx context.Context, database string, coll string, pipeline any,
+		opts ...*options.AggregateOptions) (*mongo.Cursor, error)
+	EnsureIndexes(ctx context.Context, database string, coll string,
+		models []mongo.IndexModel, opts ...*options.CreateIndexesOptions) ([]string, error)
+}
+
 // Service is the mongodb session service.
 type Service struct {
-	opts          ServiceOpts
-	client        storage.Client
+	opts          serviceOpts
+	client        mongoClient
 	persistChans  []chan *persistJob
 	asyncWorker   *isummary.AsyncSummaryWorker
 	cleanupTicker *time.Ticker // ticker for automatic session_events cleanup
@@ -75,14 +85,14 @@ type persistJob struct {
 	trackEvent *session.TrackEvent
 }
 
-// buildClientOpts assembles the storage.ClientBuilderOpt list from ServiceOpts,
+// buildClientOpts assembles the storage.ClientBuilderOpt list from serviceOpts,
 // honoring the priority: URI > registered instance.
-func buildClientOpts(opts ServiceOpts) ([]storage.ClientBuilderOpt, error) {
+func buildClientOpts(opts serviceOpts) ([]storage.ClientBuilderOpt, error) {
 	builderOpts := []storage.ClientBuilderOpt{
 		storage.WithExtraOptions(opts.extraOptions...),
 	}
 	if opts.uri != "" {
-		builderOpts = append(builderOpts, storage.WithClientBuilderURI(opts.uri))
+		builderOpts = append(builderOpts, storage.WithClientBuilderDSN(opts.uri))
 		return builderOpts, nil
 	}
 	if opts.instanceName != "" {
@@ -108,9 +118,14 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		return nil, err
 	}
 
-	client, err := storage.GetClientBuilder()(context.Background(), builderOpts...)
+	baseClient, err := storage.GetClientBuilder()(context.Background(), builderOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("create mongodb client failed: %w", err)
+	}
+	client, ok := baseClient.(mongoClient)
+	if !ok {
+		_ = baseClient.Disconnect(context.Background())
+		return nil, fmt.Errorf("mongodb session service requires storage/mongodb default client or a compatible extended client")
 	}
 
 	database := opts.database
@@ -135,11 +150,11 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	if !opts.skipDBInit {
 		if err := s.ensureIndexes(context.Background()); err != nil {
-			_ = s.client.Close(context.Background())
+			_ = s.client.Disconnect(context.Background())
 			return nil, fmt.Errorf("ensure mongodb indexes failed: %w", err)
 		}
 		if err := s.ensureTransactionSupport(context.Background()); err != nil {
-			_ = s.client.Close(context.Background())
+			_ = s.client.Disconnect(context.Background())
 			return nil, fmt.Errorf("mongodb session service requires a deployment that supports "+
 				"multi-document transactions (replica set or sharded cluster); ensure the "+
 				"target deployment is not standalone: %w", err)
@@ -179,7 +194,7 @@ func (s *Service) ensureTransactionSupport(ctx context.Context) error {
 			return nil
 		}
 		return err
-	})
+	}, nil)
 }
 
 // CreateSession creates a new session.
@@ -295,7 +310,7 @@ func (s *Service) replaceExpiredSession(ctx context.Context, key session.Key, do
 			return fmt.Errorf("insert session state: %w", err)
 		}
 		return nil
-	})
+	}, nil)
 }
 
 // GetSession gets a session and its events / summaries.
@@ -484,7 +499,7 @@ func (s *Service) DeleteSession(
 			return fmt.Errorf("delete session summaries: %w", err)
 		}
 		return nil
-	})
+	}, nil)
 	if err != nil {
 		return fmt.Errorf("mongodb session service delete session failed: %w", err)
 	}
@@ -986,7 +1001,7 @@ func (s *Service) persistEvent(ctx context.Context, key session.Key, e *event.Ev
 		}
 		return nil
 	}
-	return s.client.Transaction(ctx, tx)
+	return s.client.Transaction(ctx, tx, nil)
 }
 
 // AppendTrackEvent appends a protocol-specific track event to a session.
@@ -1102,7 +1117,7 @@ func (s *Service) persistTrackEvent(ctx context.Context, key session.Key, trackE
 			return fmt.Errorf("insert track event: %w", err)
 		}
 		return nil
-	})
+	}, nil)
 }
 
 // getSession is the no-events implementation backing GetSession. Splitting it
@@ -1178,7 +1193,7 @@ func (s *Service) Close() error {
 			s.asyncWorker.Stop()
 		}
 		if s.client != nil {
-			_ = s.client.Close(context.Background())
+			_ = s.client.Disconnect(context.Background())
 		}
 	})
 	return nil

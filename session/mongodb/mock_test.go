@@ -19,7 +19,6 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	storage "trpc.group/trpc-go/trpc-agent-go/storage/mongodb"
 )
 
 // mockOp records a single Client method invocation for after-the-fact
@@ -58,7 +57,7 @@ type mockClient struct {
 	findFn          func(filter any) (*mongo.Cursor, error)
 	aggregateFn     func(pipeline any) (*mongo.Cursor, error)
 	ensureIndexesFn func(models []mongo.IndexModel) ([]string, error)
-	transactionFn   func(fn storage.TxFunc) error
+	transactionFn   func(fn func(mongo.SessionContext) error) error
 	closeFn         func() error
 	deleteManyFn    func(filter any) (*mongo.DeleteResult, error)
 }
@@ -141,6 +140,12 @@ func (m *mockClient) Find(_ context.Context, db, coll string, filter any,
 	return emptyCursor()
 }
 
+func (m *mockClient) CountDocuments(_ context.Context, db, coll string, filter any,
+	_ ...*options.CountOptions) (int64, error) {
+	m.record(mockOp{name: "CountDocuments", database: db, coll: coll, filter: filter})
+	return 0, nil
+}
+
 func (m *mockClient) Aggregate(_ context.Context, db, coll string, pipeline any,
 	_ ...*options.AggregateOptions) (*mongo.Cursor, error) {
 	m.record(mockOp{name: "Aggregate", database: db, coll: coll, filter: pipeline})
@@ -159,7 +164,12 @@ func (m *mockClient) EnsureIndexes(_ context.Context, db, coll string, models []
 	return make([]string, len(models)), nil
 }
 
-func (m *mockClient) Transaction(_ context.Context, fn storage.TxFunc, _ ...storage.TxOption) error {
+func (m *mockClient) Transaction(
+	_ context.Context,
+	fn func(mongo.SessionContext) error,
+	_ []*options.TransactionOptions,
+	_ ...*options.SessionOptions,
+) error {
 	m.record(mockOp{name: "Transaction"})
 	if m.transactionFn != nil {
 		return m.transactionFn(fn)
@@ -167,8 +177,8 @@ func (m *mockClient) Transaction(_ context.Context, fn storage.TxFunc, _ ...stor
 	return errors.New("mockClient: Transaction was called without a programmed result")
 }
 
-func (m *mockClient) Close(_ context.Context) error {
-	m.record(mockOp{name: "Close"})
+func (m *mockClient) Disconnect(_ context.Context) error {
+	m.record(mockOp{name: "Disconnect"})
 	if m.closeFn != nil {
 		return m.closeFn()
 	}
@@ -190,7 +200,7 @@ func docsCursor(docs []any) (*mongo.Cursor, error) {
 
 // newServiceForTest builds a Service backed by the supplied mockClient with
 // default options (soft-delete on, no TTL, no prefix).
-func newServiceForTest(t interface{ Fatalf(string, ...any) }, mc *mockClient, mods ...func(*ServiceOpts)) *Service {
+func newServiceForTest(t interface{ Fatalf(string, ...any) }, mc *mockClient, mods ...func(*serviceOpts)) *Service {
 	opts := defaultOptions
 	for _, m := range mods {
 		m(&opts)

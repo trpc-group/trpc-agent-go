@@ -16,6 +16,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestEncodeDecode_RoundTrip(t *testing.T) {
@@ -82,4 +85,48 @@ func TestActiveFiltersUseDeletedAtNilPredicate(t *testing.T) {
 	assert.Equal(t, nil, noExpiry["deleted_at"])
 	assert.Equal(t, "app", noExpiry["app_name"])
 	assert.NotContains(t, noExpiry, "$or")
+}
+
+func TestStateMapToBSONHandlesNilAndCopiesBytes(t *testing.T) {
+	src := []byte("value")
+	got := stateMapToBSON(session.StateMap{
+		"a.b": src,
+		"nil": nil,
+	})
+
+	assert.Nil(t, got[encodeKey("nil")])
+	copied := got[encodeKey("a.b")].([]byte)
+	src[0] = 'X'
+	assert.Equal(t, "value", string(copied))
+}
+
+func TestBSONToStateMapHandlesNilBinaryAndUnexpectedValues(t *testing.T) {
+	raw := []byte("raw")
+	bin := []byte("bin")
+	got := bsonToStateMap(bson.M{
+		encodeKey("nil"): nil,
+		encodeKey("raw"): raw,
+		encodeKey("bin"): primitive.Binary{Data: bin},
+		encodeKey("bad"): "not-bytes",
+	})
+
+	assert.Contains(t, got, "nil")
+	assert.Nil(t, got["nil"])
+	assert.Equal(t, []byte("raw"), got["raw"])
+	assert.Equal(t, []byte("bin"), got["bin"])
+	assert.NotContains(t, got, "bad")
+
+	raw[0] = 'X'
+	bin[0] = 'Y'
+	assert.Equal(t, []byte("raw"), got["raw"])
+	assert.Equal(t, []byte("bin"), got["bin"])
+}
+
+func TestCopyStateBytesHandlesNilAndCopiesBytes(t *testing.T) {
+	assert.Nil(t, copyStateBytes(nil))
+
+	src := []byte("state")
+	got := copyStateBytes(src)
+	src[0] = 'X'
+	assert.Equal(t, []byte("state"), got)
 }

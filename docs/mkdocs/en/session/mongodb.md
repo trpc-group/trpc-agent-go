@@ -97,7 +97,7 @@ import (
 )
 
 storagemongodb.RegisterMongoDBInstance("my-mongodb-instance",
-    storagemongodb.WithClientBuilderURI("mongodb://user:password@localhost:27017/?replicaSet=rs0"),
+    storagemongodb.WithClientBuilderDSN("mongodb://user:password@localhost:27017/?replicaSet=rs0"),
 )
 
 sessionService, err := sessionmongodb.NewService(

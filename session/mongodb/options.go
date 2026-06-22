@@ -31,8 +31,8 @@ const (
 	collectionNameSessionTracks  = "session_tracks"
 )
 
-// ServiceOpts is the options for the mongodb session service.
-type ServiceOpts struct {
+// serviceOpts is the options for the mongodb session service.
+type serviceOpts struct {
 	// MongoDB connection settings.
 	uri          string
 	database     string
@@ -66,9 +66,9 @@ type ServiceOpts struct {
 }
 
 // ServiceOpt is the option for the mongodb session service.
-type ServiceOpt func(*ServiceOpts)
+type ServiceOpt func(*serviceOpts)
 
-var defaultOptions = ServiceOpts{
+var defaultOptions = serviceOpts{
 	sessionEventLimit:  defaultSessionEventLimit,
 	asyncPersisterNum:  defaultAsyncPersisterNum,
 	enableAsyncPersist: false,
@@ -79,7 +79,7 @@ var defaultOptions = ServiceOpts{
 	softDelete:         true,
 }
 
-func (opts ServiceOpts) shouldCascadeFullSessionSummary() bool {
+func (opts serviceOpts) shouldCascadeFullSessionSummary() bool {
 	if opts.cascadeFullSessionSummary == nil {
 		return true
 	}
@@ -92,7 +92,7 @@ func (opts ServiceOpts) shouldCascadeFullSessionSummary() bool {
 // Note: WithMongoClientURI has the highest priority.
 // If both WithMongoClientURI and WithMongoInstance are specified, the URI is used.
 func WithMongoClientURI(uri string) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.uri = uri
 	}
 }
@@ -101,14 +101,14 @@ func WithMongoClientURI(uri string) ServiceOpt {
 // storage/mongodb.RegisterMongoDBInstance.
 // Direct WithMongoClientURI takes precedence over WithMongoInstance.
 func WithMongoInstance(instanceName string) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.instanceName = instanceName
 	}
 }
 
 // WithDatabase sets the MongoDB database name. If unset, a default is used.
 func WithDatabase(database string) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.database = database
 	}
 }
@@ -117,7 +117,7 @@ func WithDatabase(database string) ServiceOpt {
 // This option is mainly used by customized client builders, it will be passed
 // through verbatim and ignored by the default builder.
 func WithExtraOptions(extraOptions ...any) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.extraOptions = append(opts.extraOptions, extraOptions...)
 	}
 }
@@ -125,7 +125,7 @@ func WithExtraOptions(extraOptions ...any) ServiceOpt {
 // WithSessionEventLimit sets the upper bound on events returned by GetSession
 // / ListSessions in context-window mode. Default: 1000.
 func WithSessionEventLimit(limit int) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.sessionEventLimit = limit
 	}
 }
@@ -133,7 +133,7 @@ func WithSessionEventLimit(limit int) ServiceOpt {
 // WithSessionTTL sets the TTL for session state.
 // If not set, sessions will not expire.
 func WithSessionTTL(ttl time.Duration) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.sessionTTL = ttl
 	}
 }
@@ -141,7 +141,7 @@ func WithSessionTTL(ttl time.Duration) ServiceOpt {
 // WithAppStateTTL sets the TTL for app state.
 // If not set, app state will not expire.
 func WithAppStateTTL(ttl time.Duration) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.appStateTTL = ttl
 	}
 }
@@ -149,7 +149,7 @@ func WithAppStateTTL(ttl time.Duration) ServiceOpt {
 // WithUserStateTTL sets the TTL for user state.
 // If not set, user state will not expire.
 func WithUserStateTTL(ttl time.Duration) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.userStateTTL = ttl
 	}
 }
@@ -157,7 +157,7 @@ func WithUserStateTTL(ttl time.Duration) ServiceOpt {
 // WithEnableAsyncPersist enables async persistence for session state and events.
 // If not set, AppendEvent persists synchronously.
 func WithEnableAsyncPersist(enable bool) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.enableAsyncPersist = enable
 	}
 }
@@ -165,7 +165,7 @@ func WithEnableAsyncPersist(enable bool) ServiceOpt {
 // WithAsyncPersisterNum sets the number of workers for async event persistence.
 // Values below 1 fall back to the default.
 func WithAsyncPersisterNum(num int) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		if num < 1 {
 			num = defaultAsyncPersisterNum
 		}
@@ -177,7 +177,7 @@ func WithAsyncPersisterNum(num int) ServiceOpt {
 // If session TTL is configured and this option is left as zero, NewService uses
 // the default cleanup interval. Other collections rely on MongoDB TTL indexes.
 func WithCleanupInterval(interval time.Duration) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.cleanupInterval = interval
 	}
 }
@@ -186,7 +186,7 @@ func WithCleanupInterval(interval time.Duration) ServiceOpt {
 // Default: true. When enabled, DeleteSession / DeleteAppState / DeleteUserState
 // set deleted_at instead of removing the document.
 func WithSoftDelete(enable bool) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.softDelete = enable
 	}
 }
@@ -195,7 +195,7 @@ func WithSoftDelete(enable bool) ServiceOpt {
 // Useful when the user does not have createIndex permission or indexes are
 // managed externally.
 func WithSkipDBInit(skip bool) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.skipDBInit = skip
 	}
 }
@@ -209,7 +209,7 @@ func WithSkipDBInit(skip bool) ServiceOpt {
 // An underscore is appended automatically when missing. The prefix is
 // validated via internal/session/sqldb.MustValidateTablePrefix.
 func WithCollectionPrefix(prefix string) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		if prefix == "" {
 			opts.collectionPrefix = ""
 			return
@@ -224,14 +224,14 @@ func WithCollectionPrefix(prefix string) ServiceOpt {
 
 // WithGetSessionHook adds GetSession hooks.
 func WithGetSessionHook(hooks ...session.GetSessionHook) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.getSessionHooks = append(opts.getSessionHooks, hooks...)
 	}
 }
 
 // WithAppendEventHook adds AppendEvent hooks.
 func WithAppendEventHook(hooks ...session.AppendEventHook) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.appendEventHooks = append(opts.appendEventHooks, hooks...)
 	}
 }
@@ -239,14 +239,14 @@ func WithAppendEventHook(hooks ...session.AppendEventHook) ServiceOpt {
 // WithSummarizer injects a summarizer for LLM-based summaries.
 // Without a summarizer CreateSessionSummary / EnqueueSummaryJob become no-ops.
 func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.summarizer = s
 	}
 }
 
 // WithAsyncSummaryNum sets the number of workers for async summary processing.
 func WithAsyncSummaryNum(num int) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		if num < 1 {
 			num = defaultAsyncSummaryNum
 		}
@@ -256,7 +256,7 @@ func WithAsyncSummaryNum(num int) ServiceOpt {
 
 // WithSummaryQueueSize sets the async summary queue size.
 func WithSummaryQueueSize(size int) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		if size < 1 {
 			size = defaultSummaryQueueSize
 		}
@@ -266,7 +266,7 @@ func WithSummaryQueueSize(size int) ServiceOpt {
 
 // WithSummaryJobTimeout sets the timeout for processing a single summary job.
 func WithSummaryJobTimeout(timeout time.Duration) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		if timeout <= 0 {
 			return
 		}
@@ -278,7 +278,7 @@ func WithSummaryJobTimeout(timeout time.Duration) ServiceOpt {
 // trigger branch summaries. Keys use the same exact format as event filter
 // keys.
 func WithSummaryFilterAllowlist(filterKeys ...string) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		opts.summaryFilterAllowlist = append([]string{}, filterKeys...)
 	}
 }
@@ -286,7 +286,7 @@ func WithSummaryFilterAllowlist(filterKeys ...string) ServiceOpt {
 // WithCascadeFullSessionSummary controls whether an allowed branch summary
 // also refreshes the full-session summary keyed by SummaryFilterKeyAllContents.
 func WithCascadeFullSessionSummary(enable bool) ServiceOpt {
-	return func(opts *ServiceOpts) {
+	return func(opts *serviceOpts) {
 		v := enable
 		opts.cascadeFullSessionSummary = &v
 	}

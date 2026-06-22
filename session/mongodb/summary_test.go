@@ -56,7 +56,7 @@ func (s *configurableSummarizer) Metadata() map[string]any { return nil }
 
 func TestCreateSessionSummary_PersistsViaUpsert(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "hello"}
 	})
 
@@ -88,7 +88,7 @@ func TestCreateSessionSummary_DuplicateKeyIsNoop(t *testing.T) {
 			return nil, mongo.WriteException{WriteErrors: []mongo.WriteError{{Code: 11000}}}
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "hello"}
 	})
 
@@ -103,7 +103,7 @@ func TestCreateSessionSummary_PropagatesNonDuplicateUpsertError(t *testing.T) {
 			return nil, want
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "hello"}
 	})
 
@@ -115,7 +115,7 @@ func TestCreateSessionSummary_PropagatesNonDuplicateUpsertError(t *testing.T) {
 
 func TestCreateSessionSummary_TTLSetsExpiresAt(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "hello"}
 		o.sessionTTL = time.Hour
 	})
@@ -133,7 +133,7 @@ func TestCreateSessionSummary_TTLSetsExpiresAt(t *testing.T) {
 
 func TestCreateSessionSummary_RespectsAllowlist(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "x"}
 		o.summaryFilterAllowlist = []string{"only-this"}
 	})
@@ -148,7 +148,7 @@ func TestCreateSessionSummary_RespectsAllowlist(t *testing.T) {
 func TestCreateSessionSummary_SkipAndSummarizeErrorShortCircuit(t *testing.T) {
 	t.Run("skip", func(t *testing.T) {
 		mc := &mockClient{}
-		s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		s := newServiceForTest(t, mc, func(o *serviceOpts) {
 			o.summarizer = &configurableSummarizer{should: false, text: "unused"}
 		})
 		sess := newSessionForTest("app", "u", "s")
@@ -159,7 +159,7 @@ func TestCreateSessionSummary_SkipAndSummarizeErrorShortCircuit(t *testing.T) {
 	t.Run("error", func(t *testing.T) {
 		want := errors.New("summarize failed")
 		mc := &mockClient{}
-		s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		s := newServiceForTest(t, mc, func(o *serviceOpts) {
 			o.summarizer = &configurableSummarizer{should: true, err: want}
 		})
 		sess := newSessionForTest("app", "u", "s")
@@ -168,6 +168,36 @@ func TestCreateSessionSummary_SkipAndSummarizeErrorShortCircuit(t *testing.T) {
 		assert.ErrorIs(t, err, want)
 		assert.Empty(t, mc.recorded())
 	})
+}
+
+func TestSummaryMethodsValidateSessionInput(t *testing.T) {
+	s := newServiceForTest(t, &mockClient{}, func(o *serviceOpts) {
+		o.summarizer = &stubSummarizer{text: "unused"}
+	})
+	ctx := context.Background()
+
+	err := s.CreateSessionSummary(ctx, nil, "", false)
+	require.ErrorIs(t, err, session.ErrNilSession)
+
+	bad := newSessionForTest("", "u", "s")
+	err = s.CreateSessionSummary(ctx, bad, "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "check session key failed")
+
+	err = s.EnqueueSummaryJob(ctx, nil, "", false)
+	require.ErrorIs(t, err, session.ErrNilSession)
+
+	err = s.EnqueueSummaryJob(ctx, bad, "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "check session key failed")
+
+	text, ok := s.GetSessionSummaryText(ctx, nil)
+	assert.False(t, ok)
+	assert.Empty(t, text)
+
+	text, ok = s.GetSessionSummaryText(ctx, bad)
+	assert.False(t, ok)
+	assert.Empty(t, text)
 }
 
 func TestGetSessionSummaryText_FromInMemorySummariesFirst(t *testing.T) {
@@ -261,7 +291,7 @@ func TestGetSessionSummaryText_IgnoresInvalidOrEmptyPersistedSummary(t *testing.
 
 func TestEnqueueSummaryJob_FallsBackWithoutWorker(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "queued"}
 	})
 
@@ -285,7 +315,7 @@ func TestEnqueueSummaryJob_FallsBackWithoutWorker(t *testing.T) {
 }
 
 func TestEnqueueSummaryJob_RejectsNilSessionWithSummarizer(t *testing.T) {
-	s := newServiceForTest(t, &mockClient{}, func(o *ServiceOpts) {
+	s := newServiceForTest(t, &mockClient{}, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "x"}
 	})
 

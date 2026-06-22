@@ -46,15 +46,17 @@ func integrationDB(t *testing.T) string {
 
 // newIntegrationClient connects to the MongoDB deployment described by
 // MONGO_URI and registers cleanup for both the client and the test database.
-func newIntegrationClient(t *testing.T) (Client, string) {
+func newIntegrationClient(t *testing.T) (*defaultClient, string) {
 	t.Helper()
 
 	uri := integrationURI(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := defaultClientBuilder(ctx, WithClientBuilderURI(uri))
+	baseClient, err := defaultClientBuilder(ctx, WithClientBuilderDSN(uri))
 	require.NoError(t, err, "connect to MongoDB")
+	client, ok := baseClient.(*defaultClient)
+	require.True(t, ok, "defaultClientBuilder must return *defaultClient")
 
 	dbName := integrationDB(t)
 	t.Cleanup(func() {
@@ -62,10 +64,8 @@ func newIntegrationClient(t *testing.T) (Client, string) {
 		// underlying assertion failure rather than a teardown failure.
 		dropCtx, dropCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer dropCancel()
-		if dc, ok := client.(*defaultClient); ok {
-			_ = dc.client.Database(dbName).Drop(dropCtx)
-		}
-		_ = client.Close(dropCtx)
+		_ = client.client.Database(dbName).Drop(dropCtx)
+		_ = client.Disconnect(dropCtx)
 	})
 	return client, dbName
 }
@@ -165,7 +165,7 @@ func TestIntegration_Transaction_CommitAndAbort(t *testing.T) {
 		err := client.Transaction(ctx, func(sc mongo.SessionContext) error {
 			_, err := client.InsertOne(sc, db, coll, bson.M{"_id": "ok", "v": 1})
 			return err
-		})
+		}, nil)
 		// Transactions require a replica set / sharded cluster. If the
 		// configured deployment is standalone, the driver returns a clear
 		// error and we skip the rest of this subtest.
@@ -185,7 +185,7 @@ func TestIntegration_Transaction_CommitAndAbort(t *testing.T) {
 				return err
 			}
 			return boom
-		})
+		}, nil)
 		if err != nil && isUnsupportedTransactionError(err) {
 			t.Skipf("MongoDB deployment does not support transactions: %v", err)
 		}
@@ -256,8 +256,8 @@ func TestIntegration_Close(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := defaultClientBuilder(ctx, WithClientBuilderURI(uri))
+	client, err := defaultClientBuilder(ctx, WithClientBuilderDSN(uri))
 	require.NoError(t, err)
 
-	require.NoError(t, client.Close(ctx))
+	require.NoError(t, client.Disconnect(ctx))
 }

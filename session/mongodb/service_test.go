@@ -68,7 +68,7 @@ func TestCreateSession_AssignsUUIDWhenSessionIDEmpty(t *testing.T) {
 
 func TestCreateSession_TTLSetsExpiresAt(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 
 	_, err := s.CreateSession(context.Background(),
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
@@ -152,7 +152,7 @@ func TestCreateSession_ReplacesExpiredSession(t *testing.T) {
 				ExpiresAt: &expiresAt,
 			}, nil, nil)
 		},
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
@@ -202,11 +202,11 @@ func TestCreateSession_ReplacesExpiredSessionHardDeleteUsesActiveStateFilter(t *
 				ExpiresAt: &expiresAt,
 			}, nil, nil)
 		},
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.softDelete = false })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.softDelete = false })
 
 	_, err := s.CreateSession(context.Background(),
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
@@ -236,7 +236,7 @@ func TestCreateSession_ReplacesExpiredSessionSoftDeleteRequiresExpiredMatch(t *t
 				ExpiresAt: &expiresAt,
 			}, nil, nil)
 		},
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 		updateOneFn: func(filter, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
@@ -269,7 +269,7 @@ func TestCreateSession_ReplacesExpiredSessionHardDeleteRequiresExpiredMatch(t *t
 				ExpiresAt: &expiresAt,
 			}, nil, nil)
 		},
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 		deleteOneFn: func(filter any) (*mongo.DeleteResult, error) {
@@ -279,7 +279,7 @@ func TestCreateSession_ReplacesExpiredSessionHardDeleteRequiresExpiredMatch(t *t
 			return &mongo.DeleteResult{}, nil
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.softDelete = false })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.softDelete = false })
 
 	_, err := s.CreateSession(context.Background(),
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"}, nil)
@@ -686,7 +686,7 @@ func TestListSessions_NonMetaLoadsEventsAndSummaries(t *testing.T) {
 
 func TestDeleteSession_SoftDeleteStampsDeletedAt(t *testing.T) {
 	mc := &mockClient{
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
@@ -719,11 +719,11 @@ func TestDeleteSession_SoftDeleteStampsDeletedAt(t *testing.T) {
 
 func TestDeleteSession_HardDeleteFanOut(t *testing.T) {
 	mc := &mockClient{
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.softDelete = false })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.softDelete = false })
 
 	require.NoError(t, s.DeleteSession(context.Background(),
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"}))
@@ -746,7 +746,7 @@ func TestDeleteSession_HardDeleteFanOut(t *testing.T) {
 func TestDeleteSession_TransactionErrorPropagates(t *testing.T) {
 	want := errors.New("tx failed")
 	mc := &mockClient{
-		transactionFn: func(_ storage.TxFunc) error {
+		transactionFn: func(_ func(mongo.SessionContext) error) error {
 			return want
 		},
 	}
@@ -786,7 +786,7 @@ func TestUpdateAppState_PerKeyUpsert_StripsAppPrefix(t *testing.T) {
 
 func TestUpdateAppState_TTLSetsExpiresAt(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.appStateTTL = time.Hour })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.appStateTTL = time.Hour })
 
 	require.NoError(t, s.UpdateAppState(context.Background(), "app",
 		session.StateMap{"foo": []byte("v")}))
@@ -881,7 +881,7 @@ func TestDeleteAppState_SoftAndHard(t *testing.T) {
 	})
 	t.Run("hard", func(t *testing.T) {
 		mc := &mockClient{}
-		s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.softDelete = false })
+		s := newServiceForTest(t, mc, func(o *serviceOpts) { o.softDelete = false })
 		require.NoError(t, s.DeleteAppState(context.Background(), "app", "k"))
 		assert.Equal(t, "DeleteOne", mc.recorded()[0].name)
 		filter := mc.recorded()[0].filter.(bson.M)
@@ -969,7 +969,7 @@ func TestListUserStates_NilValueCopyAndFindError(t *testing.T) {
 
 func TestDeleteUserState_HardDelete(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.softDelete = false })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.softDelete = false })
 	require.NoError(t, s.DeleteUserState(context.Background(),
 		session.UserKey{AppName: "app", UserID: "u"}, "k"))
 	assert.Equal(t, "DeleteOne", mc.recorded()[0].name)
@@ -1021,7 +1021,7 @@ func TestUpdateSessionState_RejectsUserPrefix(t *testing.T) {
 
 func TestUpdateSessionState_TTLBumpsExpiresAt(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 
 	require.NoError(t, s.UpdateSessionState(context.Background(),
 		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
@@ -1083,7 +1083,7 @@ func nonPartialResponseEvent(t *testing.T) *event.Event {
 
 func TestAppendEvent_PersistableGoesThroughTransaction(t *testing.T) {
 	mc := &mockClient{
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
@@ -1146,7 +1146,7 @@ func TestAppendEvent_StateDeltaOnly_NoTransactionNoEventInsert(t *testing.T) {
 
 func TestAppendEvent_StateDeltaRoutesScopedState(t *testing.T) {
 	mc := &mockClient{
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
@@ -1191,11 +1191,11 @@ func TestAppendEvent_StateDeltaRoutesScopedState(t *testing.T) {
 
 func TestAppendEvent_ScopedStateHonorsTTL(t *testing.T) {
 	mc := &mockClient{
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.appStateTTL = time.Hour
 		o.userStateTTL = 2 * time.Hour
 	})
@@ -1231,7 +1231,7 @@ func TestAppendEvent_ScopedStateHonorsTTL(t *testing.T) {
 func TestAppendEvent_ScopedStateErrorAbortsTransaction(t *testing.T) {
 	want := errors.New("app state failed")
 	mc := &mockClient{
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 		updateOneFn: func(filter, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
@@ -1306,7 +1306,7 @@ func TestAppendEvent_RunsHookChain(t *testing.T) {
 		return next()
 	})
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.appendEventHooks = []session.AppendEventHook{hook}
 	})
 	sess := newSessionForTest("app", "u", "s")
@@ -1340,7 +1340,7 @@ func TestAppendTrackEvent_RejectsBadSessionKey(t *testing.T) {
 
 func TestAppendEvent_AsyncPathDispatchesToChan(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.enableAsyncPersist = true
 		o.asyncPersisterNum = 1
 	})
@@ -1359,7 +1359,7 @@ func TestAppendEvent_AsyncPathDispatchesToChan(t *testing.T) {
 
 func TestAsyncPersist_EventAndTrackShareSessionQueue(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.enableAsyncPersist = true
 		o.asyncPersisterNum = 2
 	})
@@ -1389,7 +1389,7 @@ func TestAsyncPersist_EventAndTrackShareSessionQueue(t *testing.T) {
 func TestClose_DrainsAsyncWorker(t *testing.T) {
 	var inserts atomic.Int64
 	mc := &mockClient{
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 		insertOneFn: func(_ any) (*mongo.InsertOneResult, error) {
@@ -1397,7 +1397,7 @@ func TestClose_DrainsAsyncWorker(t *testing.T) {
 			return &mongo.InsertOneResult{}, nil
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.enableAsyncPersist = true
 		o.asyncPersisterNum = 2
 	})
@@ -1414,7 +1414,7 @@ func TestClose_DrainsAsyncWorker(t *testing.T) {
 
 func TestClose_AfterCloseAppendEventDoesNotPanic(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.enableAsyncPersist = true
 		o.asyncPersisterNum = 1
 	})
@@ -1449,7 +1449,7 @@ func mustTrackIndex(t *testing.T, tracks []session.Track) []byte {
 func TestAppendTrackEvent_UsesTransactionAndSessionTracks(t *testing.T) {
 	now := time.Now()
 	mc := &mockClient{
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 		findOneFn: func(_ any) *mongo.SingleResult {
@@ -1516,7 +1516,7 @@ func TestPersistTrackEvent_ErrorBranches(t *testing.T) {
 
 	t.Run("missing session", func(t *testing.T) {
 		mc := &mockClient{
-			transactionFn: func(fn storage.TxFunc) error {
+			transactionFn: func(fn func(mongo.SessionContext) error) error {
 				return fn(mongo.NewSessionContext(context.Background(), nil))
 			},
 		}
@@ -1529,7 +1529,7 @@ func TestPersistTrackEvent_ErrorBranches(t *testing.T) {
 	t.Run("find error", func(t *testing.T) {
 		want := errors.New("find failed")
 		mc := &mockClient{
-			transactionFn: func(fn storage.TxFunc) error {
+			transactionFn: func(fn func(mongo.SessionContext) error) error {
 				return fn(mongo.NewSessionContext(context.Background(), nil))
 			},
 			findOneFn: func(_ any) *mongo.SingleResult {
@@ -1544,7 +1544,7 @@ func TestPersistTrackEvent_ErrorBranches(t *testing.T) {
 
 	t.Run("update no match", func(t *testing.T) {
 		mc := &mockClient{
-			transactionFn: func(fn storage.TxFunc) error {
+			transactionFn: func(fn func(mongo.SessionContext) error) error {
 				return fn(mongo.NewSessionContext(context.Background(), nil))
 			},
 			findOneFn: func(_ any) *mongo.SingleResult {
@@ -1563,7 +1563,7 @@ func TestPersistTrackEvent_ErrorBranches(t *testing.T) {
 	t.Run("insert error", func(t *testing.T) {
 		want := errors.New("insert failed")
 		mc := &mockClient{
-			transactionFn: func(fn storage.TxFunc) error {
+			transactionFn: func(fn func(mongo.SessionContext) error) error {
 				return fn(mongo.NewSessionContext(context.Background(), nil))
 			},
 			findOneFn: func(_ any) *mongo.SingleResult {
@@ -1583,14 +1583,14 @@ func TestPersistTrackEvent_ErrorBranches(t *testing.T) {
 func TestAppendTrackEvent_TTLSetsExpiresAt(t *testing.T) {
 	now := time.Now()
 	mc := &mockClient{
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 		findOneFn: func(_ any) *mongo.SingleResult {
 			return mongo.NewSingleResultFromDocument(sessionStateDoc{State: bson.M{}}, nil, nil)
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 	sess := newSessionForTest("app", "u", "s")
 
 	require.NoError(t, s.AppendTrackEvent(context.Background(), sess,
@@ -1621,7 +1621,7 @@ func TestAppendTrackEvent_TTLSetsExpiresAt(t *testing.T) {
 
 func TestAppendTrackEvent_AsyncPathDispatchesToChan(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.enableAsyncPersist = true
 		o.asyncPersisterNum = 2
 	})
@@ -1652,7 +1652,7 @@ func TestAppendTrackEvent_AsyncPathDispatchesToChan(t *testing.T) {
 
 func TestAppendTrackEvent_AsyncPathRequiresWorkers(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.enableAsyncPersist = true
 	})
 	sess := newSessionForTest("app", "u", "s")
@@ -1666,7 +1666,7 @@ func TestAppendTrackEvent_AsyncPathRequiresWorkers(t *testing.T) {
 
 func TestClose_AfterCloseAppendTrackEventDoesNotPanic(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.enableAsyncPersist = true
 		o.asyncPersisterNum = 1
 	})
@@ -1933,7 +1933,7 @@ func TestCleanupExpiredTracks_UsesSessionGroupCleanup(t *testing.T) {
 			})
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 
 	require.NoError(t, s.cleanupExpiredTracks(context.Background(), now))
 
@@ -2267,7 +2267,7 @@ func TestCleanupExpiredEvents_AggregationIntegrity(t *testing.T) {
 			})
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 
 	require.NoError(t, s.cleanupExpiredEvents(context.Background(), now))
 
@@ -2294,7 +2294,7 @@ func TestCleanupExpiredEvents_NoMatchIsNoOp(t *testing.T) {
 			return emptyCursor()
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 
 	require.NoError(t, s.cleanupExpiredEvents(context.Background(), time.Now()))
 
@@ -2326,7 +2326,7 @@ func TestCleanupExpired_CleansEventsAndTracks(t *testing.T) {
 			return emptyCursor()
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 
 	s.cleanupExpired(context.Background())
 
@@ -2341,7 +2341,7 @@ func TestCleanupExpiredEvents_HardDeletePath(t *testing.T) {
 			})
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.sessionTTL = time.Hour
 		o.softDelete = false
 	})
@@ -2378,7 +2378,7 @@ func TestCleanupExpiredEvents_FlushesInBatches(t *testing.T) {
 			return &mongo.UpdateResult{}, nil
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 
 	require.NoError(t, s.cleanupExpiredEvents(context.Background(), time.Now()))
 	assert.Equal(t, 2, updateCalls)
@@ -2392,7 +2392,7 @@ func TestCleanupExpiredEvents_PropagatesAggregateAndDecodeErrors(t *testing.T) {
 				return nil, want
 			},
 		}
-		s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+		s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 		err := s.cleanupExpiredEvents(context.Background(), time.Now())
 		require.Error(t, err)
 		assert.ErrorIs(t, err, want)
@@ -2404,7 +2404,7 @@ func TestCleanupExpiredEvents_PropagatesAggregateAndDecodeErrors(t *testing.T) {
 				return docsCursor([]any{bson.M{"_id": "not-a-triple"}})
 			},
 		}
-		s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+		s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 		err := s.cleanupExpiredEvents(context.Background(), time.Now())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "decode aggregate row")
@@ -2423,7 +2423,7 @@ func TestCleanupExpiredEvents_PropagatesFlushErrors(t *testing.T) {
 			return nil, want
 		},
 	}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.sessionTTL = time.Hour })
 
 	err := s.cleanupExpiredEvents(context.Background(), time.Now())
 	require.Error(t, err)
@@ -2432,7 +2432,7 @@ func TestCleanupExpiredEvents_PropagatesFlushErrors(t *testing.T) {
 
 func TestCleanupTicker_StartStop(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.sessionTTL = time.Hour
 		o.cleanupInterval = time.Hour
 	})
@@ -2471,7 +2471,7 @@ func TestBuildClientOpts_UnknownInstance(t *testing.T) {
 }
 
 func TestBuildClientOpts_InstancePreservesExtraOptions(t *testing.T) {
-	storage.RegisterMongoDBInstance("mongodb-extra-test", storage.WithClientBuilderURI("mongodb://example"))
+	storage.RegisterMongoDBInstance("mongodb-extra-test", storage.WithClientBuilderDSN("mongodb://example"))
 
 	opts := defaultOptions
 	opts.instanceName = "mongodb-extra-test"
@@ -2492,7 +2492,7 @@ func TestNewService_ProbesTransactionSupport(t *testing.T) {
 	defer storage.SetClientBuilder(oldBuilder)
 
 	mc := &mockClient{
-		transactionFn: func(fn storage.TxFunc) error {
+		transactionFn: func(fn func(mongo.SessionContext) error) error {
 			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
@@ -2527,7 +2527,7 @@ func TestNewService_SkipDBInitSkipsTransactionProbe(t *testing.T) {
 			t.Fatal("EnsureIndexes should not be called when WithSkipDBInit(true) is set")
 			return nil, nil
 		},
-		transactionFn: func(_ storage.TxFunc) error {
+		transactionFn: func(_ func(mongo.SessionContext) error) error {
 			t.Fatal("Transaction should not be called when WithSkipDBInit(true) is set")
 			return nil
 		},
@@ -2597,7 +2597,7 @@ func TestNewService_TransactionProbeFailureClosesClient(t *testing.T) {
 	want := errors.New("transactions unsupported")
 	closed := false
 	mc := &mockClient{
-		transactionFn: func(_ storage.TxFunc) error {
+		transactionFn: func(_ func(mongo.SessionContext) error) error {
 			return want
 		},
 		closeFn: func() error {
@@ -2690,7 +2690,7 @@ func TestUpdateUserState_RejectsBadKey(t *testing.T) {
 
 func TestUpdateUserState_TTLSetsExpiresAt(t *testing.T) {
 	mc := &mockClient{}
-	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.userStateTTL = 30 * time.Minute })
+	s := newServiceForTest(t, mc, func(o *serviceOpts) { o.userStateTTL = 30 * time.Minute })
 	require.NoError(t, s.UpdateUserState(context.Background(),
 		session.UserKey{AppName: "app", UserID: "u"},
 		session.StateMap{"k": []byte("v")}))
