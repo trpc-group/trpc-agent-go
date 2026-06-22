@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -52,6 +53,8 @@ func TestCreateSessionSummary_PersistsViaUpsert(t *testing.T) {
 	for _, op := range mc.recorded() {
 		if op.name == "UpdateOne" && op.coll == "session_summaries" {
 			sawUpsert = true
+			filter := op.filter.(bson.M)
+			assert.Contains(t, filter, "$or")
 			upd := op.update.(bson.M)
 			assert.Contains(t, upd, "$set")
 			assert.Contains(t, upd, "$setOnInsert")
@@ -62,6 +65,20 @@ func TestCreateSessionSummary_PersistsViaUpsert(t *testing.T) {
 		}
 	}
 	assert.True(t, sawUpsert, "expected an UpdateOne(upsert) on session_summaries")
+}
+
+func TestCreateSessionSummary_DuplicateKeyIsNoop(t *testing.T) {
+	mc := &mockClient{
+		updateOneFn: func(_, _ any, _ []*options.UpdateOptions) (*mongo.UpdateResult, error) {
+			return nil, mongo.WriteException{WriteErrors: []mongo.WriteError{{Code: 11000}}}
+		},
+	}
+	s := newServiceForTest(t, mc, func(o *ServiceOpts) {
+		o.summarizer = &stubSummarizer{text: "hello"}
+	})
+
+	sess := newSessionForTest("app", "u", "s")
+	require.NoError(t, s.CreateSessionSummary(context.Background(), sess, "", true))
 }
 
 func TestCreateSessionSummary_TTLSetsExpiresAt(t *testing.T) {

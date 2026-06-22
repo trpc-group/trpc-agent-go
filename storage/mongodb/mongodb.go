@@ -149,6 +149,8 @@ type Client interface {
 	// Transaction executes fn within a multi-document transaction.
 	// Note: MongoDB transactions require a replica set or sharded cluster deployment;
 	// they are not supported on standalone servers.
+	// The MongoDB driver may retry fn on transient transaction errors, so fn must
+	// be idempotent and must not perform non-transactional side effects.
 	Transaction(ctx context.Context, fn TxFunc, opts ...TxOption) error
 
 	// Close terminates all connections to the MongoDB deployment.
@@ -157,7 +159,11 @@ type Client interface {
 }
 
 // TxFunc is a user transaction function.
-// Return nil to commit, or any error to rollback.
+// Return nil to commit, or any error to rollback. The MongoDB driver may retry
+// TxFunc on transient errors (for example TransientTransactionError or
+// UnknownTransactionCommitResult, up to the driver's default 120-second
+// transaction timeout), so callbacks must be idempotent and must not perform
+// non-transactional side effects.
 type TxFunc func(sc mongo.SessionContext) error
 
 // TxOption configures transaction options.
@@ -244,8 +250,12 @@ func (c *defaultClient) EnsureIndexes(ctx context.Context, database, coll string
 
 // Transaction starts a session, executes fn inside session.WithTransaction
 // (which handles commit, rollback and transient-error retries internally),
-// and ends the session.
+// and ends the session. The callback may be retried by the MongoDB driver, so
+// it must be idempotent and avoid non-transactional side effects.
 func (c *defaultClient) Transaction(ctx context.Context, fn TxFunc, opts ...TxOption) error {
+	if fn == nil {
+		return errors.New("mongodb: TxFunc must not be nil")
+	}
 	txOpts := &TxOptions{}
 	for _, opt := range opts {
 		opt(txOpts)

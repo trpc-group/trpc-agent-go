@@ -153,7 +153,7 @@ func TestCreateSession_ReplacesExpiredSession(t *testing.T) {
 			}, nil, nil)
 		},
 		transactionFn: func(fn storage.TxFunc) error {
-			return fn(nil)
+			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
 	s := newServiceForTest(t, mc)
@@ -203,7 +203,7 @@ func TestCreateSession_ReplacesExpiredSessionHardDeleteUsesActiveStateFilter(t *
 			}, nil, nil)
 		},
 		transactionFn: func(fn storage.TxFunc) error {
-			return fn(nil)
+			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
 	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.softDelete = false })
@@ -222,6 +222,7 @@ func TestCreateSession_ReplacesExpiredSessionHardDeleteUsesActiveStateFilter(t *
 	}
 	require.NotNil(t, stateDeleteFilter)
 	assert.Equal(t, nil, stateDeleteFilter["deleted_at"])
+	assert.Contains(t, stateDeleteFilter, "expires_at")
 }
 
 func TestCreateSession_RejectsMissingAppName(t *testing.T) {
@@ -563,7 +564,7 @@ func TestListSessions_NonMetaLoadsEventsAndSummaries(t *testing.T) {
 func TestDeleteSession_SoftDeleteStampsDeletedAt(t *testing.T) {
 	mc := &mockClient{
 		transactionFn: func(fn storage.TxFunc) error {
-			return fn(nil)
+			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
 	s := newServiceForTest(t, mc) // default: softDelete=true
@@ -596,7 +597,7 @@ func TestDeleteSession_SoftDeleteStampsDeletedAt(t *testing.T) {
 func TestDeleteSession_HardDeleteFanOut(t *testing.T) {
 	mc := &mockClient{
 		transactionFn: func(fn storage.TxFunc) error {
-			return fn(nil)
+			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
 	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.softDelete = false })
@@ -893,7 +894,7 @@ func nonPartialResponseEvent(t *testing.T) *event.Event {
 func TestAppendEvent_PersistableGoesThroughTransaction(t *testing.T) {
 	mc := &mockClient{
 		transactionFn: func(fn storage.TxFunc) error {
-			return fn(nil)
+			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
 	s := newServiceForTest(t, mc)
@@ -951,6 +952,51 @@ func TestAppendEvent_StateDeltaOnly_NoTransactionNoEventInsert(t *testing.T) {
 	v, ok := sess.GetState("k1")
 	require.True(t, ok)
 	assert.Equal(t, []byte("v1"), v)
+}
+
+func TestAppendEvent_StateDeltaRoutesScopedState(t *testing.T) {
+	mc := &mockClient{
+		transactionFn: func(fn storage.TxFunc) error {
+			return fn(mongo.NewSessionContext(context.Background(), nil))
+		},
+	}
+	s := newServiceForTest(t, mc)
+	sess := newSessionForTest("app", "u", "s")
+	evt := nonPartialResponseEvent(t)
+	evt.StateDelta = map[string][]byte{
+		session.StateAppPrefix + "ak":  []byte("av"),
+		session.StateUserPrefix + "uk": []byte("uv"),
+		"sk":                           []byte("sv"),
+	}
+
+	require.NoError(t, s.AppendEvent(context.Background(), sess, evt))
+
+	var sawApp, sawUser, sawSession bool
+	for _, op := range mc.recorded() {
+		if op.name != "UpdateOne" {
+			continue
+		}
+		upd := op.update.(bson.M)
+		set := upd["$set"].(bson.M)
+		switch op.coll {
+		case "app_states":
+			sawApp = true
+			assert.Equal(t, []byte("av"), set["value"])
+			assert.Equal(t, "ak", op.filter.(bson.M)["key"])
+		case "user_states":
+			sawUser = true
+			assert.Equal(t, []byte("uv"), set["value"])
+			assert.Equal(t, "uk", op.filter.(bson.M)["key"])
+		case "session_states":
+			sawSession = true
+			assert.Equal(t, []byte("sv"), set["state."+encodeKey("sk")])
+			assert.NotContains(t, set, "state."+encodeKey(session.StateAppPrefix+"ak"))
+			assert.NotContains(t, set, "state."+encodeKey(session.StateUserPrefix+"uk"))
+		}
+	}
+	assert.True(t, sawApp)
+	assert.True(t, sawUser)
+	assert.True(t, sawSession)
 }
 
 func TestAppendEvent_StateDeltaUsesDotNotation(t *testing.T) {
@@ -1072,7 +1118,7 @@ func TestClose_DrainsAsyncWorker(t *testing.T) {
 	var inserts atomic.Int64
 	mc := &mockClient{
 		transactionFn: func(fn storage.TxFunc) error {
-			return fn(nil)
+			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 		insertOneFn: func(_ any) (*mongo.InsertOneResult, error) {
 			inserts.Add(1)
@@ -1106,7 +1152,8 @@ func TestClose_AfterCloseAppendEventDoesNotPanic(t *testing.T) {
 	sess := newSessionForTest("app", "u", "s")
 	require.NotPanics(t, func() {
 		err := s.AppendEvent(context.Background(), sess, nonPartialResponseEvent(t))
-		require.NoError(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "closed channel")
 	})
 }
 
@@ -1131,7 +1178,7 @@ func TestAppendTrackEvent_UsesTransactionAndSessionTracks(t *testing.T) {
 	now := time.Now()
 	mc := &mockClient{
 		transactionFn: func(fn storage.TxFunc) error {
-			return fn(nil)
+			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 		findOneFn: func(_ any) *mongo.SingleResult {
 			return mongo.NewSingleResultFromDocument(sessionStateDoc{
@@ -1582,7 +1629,7 @@ func TestCleanupExpired_NoSessionTTLIsNoOp(t *testing.T) {
 	}
 	s := newServiceForTest(t, mc)
 
-	s.cleanupExpired()
+	s.cleanupExpired(context.Background())
 	assert.Empty(t, mc.recorded())
 }
 
@@ -1598,7 +1645,7 @@ func TestCleanupExpired_CleansEventsAndTracks(t *testing.T) {
 	}
 	s := newServiceForTest(t, mc, func(o *ServiceOpts) { o.sessionTTL = time.Hour })
 
-	s.cleanupExpired()
+	s.cleanupExpired(context.Background())
 
 	assert.Equal(t, []string{"session_events", "session_tracks"}, collections)
 }
@@ -1635,6 +1682,7 @@ func TestCleanupTicker_StartStop(t *testing.T) {
 	s.startCleanupRoutine()
 	require.NotNil(t, s.cleanupTicker)
 	s.stopCleanupRoutine()
+	s.cleanupWg.Wait()
 	assert.Nil(t, s.cleanupTicker)
 }
 
@@ -1664,13 +1712,30 @@ func TestBuildClientOpts_UnknownInstance(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
+func TestBuildClientOpts_InstancePreservesExtraOptions(t *testing.T) {
+	storage.RegisterMongoDBInstance("mongodb-extra-test", storage.WithClientBuilderURI("mongodb://example"))
+
+	opts := defaultOptions
+	opts.instanceName = "mongodb-extra-test"
+	opts.extraOptions = []any{"extra"}
+	got, err := buildClientOpts(opts)
+	require.NoError(t, err)
+
+	cfg := &storage.ClientBuilderOpts{}
+	for _, opt := range got {
+		opt(cfg)
+	}
+	assert.Equal(t, "mongodb://example", cfg.URI)
+	assert.Equal(t, []any{"extra"}, cfg.ExtraOptions)
+}
+
 func TestNewService_ProbesTransactionSupport(t *testing.T) {
 	oldBuilder := storage.GetClientBuilder()
 	defer storage.SetClientBuilder(oldBuilder)
 
 	mc := &mockClient{
 		transactionFn: func(fn storage.TxFunc) error {
-			return fn(nil)
+			return fn(mongo.NewSessionContext(context.Background(), nil))
 		},
 	}
 	storage.SetClientBuilder(func(context.Context, ...storage.ClientBuilderOpt) (storage.Client, error) {

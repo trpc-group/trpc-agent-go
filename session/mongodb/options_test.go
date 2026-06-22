@@ -10,12 +10,14 @@
 package mongodb
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -161,20 +163,52 @@ func TestWithCollectionPrefix_RejectsInvalid(t *testing.T) {
 
 func TestWithGetSessionHook_AppendsInOrder(t *testing.T) {
 	o := defaultOptions
-	h := session.GetSessionHook(func(_ *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+	var calls []string
+	h1 := session.GetSessionHook(func(_ *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+		calls = append(calls, "first")
 		return next()
 	})
-	WithGetSessionHook(h, h)(&o)
+	h2 := session.GetSessionHook(func(_ *session.GetSessionContext, next func() (*session.Session, error)) (*session.Session, error) {
+		calls = append(calls, "second")
+		return next()
+	})
+	WithGetSessionHook(h1, h2)(&o)
 	assert.Len(t, o.getSessionHooks, 2)
+
+	_, err := hook.RunGetSessionHooks(o.getSessionHooks,
+		&session.GetSessionContext{Context: context.Background()},
+		func(_ *session.GetSessionContext, _ func() (*session.Session, error)) (*session.Session, error) {
+			calls = append(calls, "final")
+			return &session.Session{}, nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"first", "second", "final"}, calls)
 }
 
 func TestWithAppendEventHook_AppendsInOrder(t *testing.T) {
 	o := defaultOptions
-	h := session.AppendEventHook(func(_ *session.AppendEventContext, next func() error) error {
+	var calls []string
+	h1 := session.AppendEventHook(func(_ *session.AppendEventContext, next func() error) error {
+		calls = append(calls, "first")
 		return next()
 	})
-	WithAppendEventHook(h, h)(&o)
+	h2 := session.AppendEventHook(func(_ *session.AppendEventContext, next func() error) error {
+		calls = append(calls, "second")
+		return next()
+	})
+	WithAppendEventHook(h1, h2)(&o)
 	assert.Len(t, o.appendEventHooks, 2)
+
+	err := hook.RunAppendEventHooks(o.appendEventHooks,
+		&session.AppendEventContext{Context: context.Background()},
+		func(_ *session.AppendEventContext, _ func() error) error {
+			calls = append(calls, "final")
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"first", "second", "final"}, calls)
 }
 
 func TestWithSummaryFilterAllowlist(t *testing.T) {

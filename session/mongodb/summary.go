@@ -78,6 +78,10 @@ func (s *Service) CreateSessionSummary(
 		"session_id": sess.ID,
 		"filter_key": filterKey,
 	})
+	filter["$or"] = bson.A{
+		bson.M{"updated_at": bson.M{"$exists": false}},
+		bson.M{"updated_at": bson.M{"$lte": sum.UpdatedAt}},
+	}
 	update := bson.M{
 		"$set": bson.M{
 			"summary":    summaryBytes,
@@ -98,6 +102,9 @@ func (s *Service) CreateSessionSummary(
 	}
 	if _, err := s.client.UpdateOne(ctx, s.database, s.collSessionSummaries, filter, update,
 		options.Update().SetUpsert(true)); err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return nil
+		}
 		return fmt.Errorf("upsert summary failed: %w", err)
 	}
 	return nil
@@ -128,7 +135,7 @@ func (s *Service) EnqueueSummaryJob(
 		return s.asyncWorker.EnqueueJob(ctx, sess, filterKey, force)
 	}
 	return isummary.CreateSessionSummaryWithCascade(
-		isummary.DetachContext(ctx),
+		ctx,
 		sess,
 		filterKey,
 		force,

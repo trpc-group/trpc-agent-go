@@ -39,15 +39,20 @@ var _ session.TrackService = (*Service)(nil)
 
 var errSessionNotFound = errors.New("session not found")
 
+const cleanupBatchSize = 500
+
 // Service is the mongodb session service.
 type Service struct {
 	opts          ServiceOpts
 	client        storage.Client
 	persistChans  []chan *persistJob
 	asyncWorker   *isummary.AsyncSummaryWorker
-	cleanupTicker *time.Ticker   // ticker for automatic session_events cleanup
+	cleanupTicker *time.Ticker // ticker for automatic session_events cleanup
+	cleanupCtx    context.Context
+	cleanupCancel context.CancelFunc
 	cleanupDone   chan struct{}  // signal to stop cleanup routine
 	cleanupOnce   sync.Once      // ensure cleanup routine is stopped only once
+	cleanupWg     sync.WaitGroup // wait group for cleanup routine
 	persistWg     sync.WaitGroup // wait group for persist workers
 	once          sync.Once      // ensure Close is called only once
 
@@ -85,7 +90,8 @@ func buildClientOpts(opts ServiceOpts) ([]storage.ClientBuilderOpt, error) {
 		if !ok {
 			return nil, fmt.Errorf("mongodb instance %s not found", opts.instanceName)
 		}
-		return registered, nil
+		builderOpts = append(builderOpts, registered...)
+		return builderOpts, nil
 	}
 	return nil, fmt.Errorf("mongodb session service: one of WithMongoClientURI or WithMongoInstance is required")
 }
@@ -243,12 +249,17 @@ func (s *Service) CreateSession(
 
 func (s *Service) replaceExpiredSession(ctx context.Context, key session.Key, doc sessionStateDoc, now time.Time) error {
 	filter := sessionKeyFilter(key)
+	stateFilter := activeFilterNoExpiry(filter)
+	stateFilter["expires_at"] = bson.M{"$lte": now}
 	return s.client.Transaction(ctx, func(sc mongo.SessionContext) error {
 		if s.opts.softDelete {
 			update := bson.M{"$set": bson.M{"deleted_at": now}}
-			if _, err := s.client.UpdateOne(sc, s.database, s.collSessionStates,
-				activeFilterNoExpiry(filter), update); err != nil {
+			res, err := s.client.UpdateOne(sc, s.database, s.collSessionStates, stateFilter, update)
+			if err != nil {
 				return fmt.Errorf("delete expired session state: %w", err)
+			}
+			if res.MatchedCount == 0 {
+				return errSessionNotFound
 			}
 			if _, err := s.client.UpdateMany(sc, s.database, s.collSessionEvents,
 				activeFilterNoExpiry(filter), update); err != nil {
@@ -263,9 +274,12 @@ func (s *Service) replaceExpiredSession(ctx context.Context, key session.Key, do
 				return fmt.Errorf("delete expired session summaries: %w", err)
 			}
 		} else {
-			if _, err := s.client.DeleteOne(sc, s.database, s.collSessionStates,
-				activeFilterNoExpiry(filter)); err != nil {
+			res, err := s.client.DeleteOne(sc, s.database, s.collSessionStates, stateFilter)
+			if err != nil {
 				return fmt.Errorf("delete expired session state: %w", err)
+			}
+			if res.DeletedCount == 0 {
+				return errSessionNotFound
 			}
 			if _, err := s.client.DeleteMany(sc, s.database, s.collSessionEvents, filter); err != nil {
 				return fmt.Errorf("delete expired session events: %w", err)
@@ -703,6 +717,83 @@ func sessionStateUpdate(set bson.M, expiresAt *time.Time) bson.M {
 	return update
 }
 
+func copyStateBytes(v []byte) []byte {
+	if v == nil {
+		return nil
+	}
+	copied := make([]byte, len(v))
+	copy(copied, v)
+	return copied
+}
+
+func (s *Service) updateScopedEventState(
+	ctx context.Context,
+	key session.Key,
+	appState session.StateMap,
+	userState session.StateMap,
+	now time.Time,
+) error {
+	if len(appState) > 0 {
+		expiresAt := expiresAtPtr(now, s.opts.appStateTTL)
+		for k, v := range appState {
+			set := bson.M{
+				"value":      v,
+				"updated_at": now,
+			}
+			if expiresAt != nil {
+				set["expires_at"] = expiresAt
+			}
+			update := bson.M{
+				"$set": set,
+				"$setOnInsert": bson.M{
+					"app_name":   key.AppName,
+					"key":        k,
+					"created_at": now,
+				},
+			}
+			if expiresAt == nil {
+				update["$unset"] = bson.M{"expires_at": ""}
+			}
+			if _, err := s.client.UpdateOne(ctx, s.database, s.collAppStates,
+				activeFilterNoExpiry(appStateKeyFilter(key.AppName, k)), update,
+				options.Update().SetUpsert(true)); err != nil {
+				return fmt.Errorf("update app state: %w", err)
+			}
+		}
+	}
+	if len(userState) > 0 {
+		expiresAt := expiresAtPtr(now, s.opts.userStateTTL)
+		userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
+		for k, v := range userState {
+			set := bson.M{
+				"value":      v,
+				"updated_at": now,
+			}
+			if expiresAt != nil {
+				set["expires_at"] = expiresAt
+			}
+			update := bson.M{
+				"$set": set,
+				"$setOnInsert": bson.M{
+					"app_name":   key.AppName,
+					"user_id":    key.UserID,
+					"key":        k,
+					"created_at": now,
+				},
+			}
+			if expiresAt == nil {
+				update["$unset"] = bson.M{"expires_at": ""}
+			}
+			if _, err := s.client.UpdateOne(ctx, s.database, s.collUserStates,
+				activeFilterNoExpiry(userStateKeyFilter(userKey, k)), update,
+				options.Update().SetUpsert(true)); err != nil {
+				return fmt.Errorf("update user state: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
 // DeleteUserState deletes the state by target scope and key.
 func (s *Service) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
 	if err := userKey.CheckUserKey(); err != nil {
@@ -774,7 +865,7 @@ func (s *Service) appendEventInternal(
 	e *event.Event,
 	key session.Key,
 	opts ...session.Option,
-) error {
+) (err error) {
 	// Apply the event to the in-memory session first; any error from
 	// persistence below leaves the in-memory copy ahead of disk, matching
 	// the postgres backend's behavior.
@@ -785,6 +876,7 @@ func (s *Service) appendEventInternal(
 			if r := recover(); r != nil {
 				if fmt.Sprint(r) == "send on closed channel" {
 					log.ErrorfContext(ctx, "mongodb session async persist failed: %v", r)
+					err = fmt.Errorf("async persist failed due to closed channel")
 					return
 				}
 				panic(r)
@@ -819,15 +911,20 @@ func (s *Service) persistEvent(ctx context.Context, key session.Key, e *event.Ev
 	// We merge state per key via dot-notation (D4=B), so concurrent writes
 	// touching disjoint keys commute and same-key writes are last-writer-wins.
 	stateSet := bson.M{"updated_at": now}
+	appState := make(session.StateMap)
+	userState := make(session.StateMap)
 	expiresAt := expiresAtPtr(now, s.opts.sessionTTL)
 	if e != nil {
 		for k, v := range e.StateDelta {
-			var copied []byte
-			if v != nil {
-				copied = make([]byte, len(v))
-				copy(copied, v)
+			copied := copyStateBytes(v)
+			switch {
+			case strings.HasPrefix(k, session.StateAppPrefix):
+				appState[strings.TrimPrefix(k, session.StateAppPrefix)] = copied
+			case strings.HasPrefix(k, session.StateUserPrefix):
+				userState[strings.TrimPrefix(k, session.StateUserPrefix)] = copied
+			default:
+				stateSet["state."+encodeKey(k)] = copied
 			}
-			stateSet["state."+encodeKey(k)] = copied
 		}
 	}
 
@@ -852,6 +949,9 @@ func (s *Service) persistEvent(ctx context.Context, key session.Key, e *event.Ev
 	}
 
 	tx := func(sc mongo.SessionContext) error {
+		if err := s.updateScopedEventState(sc, key, appState, userState, now); err != nil {
+			return err
+		}
 		res, err := s.client.UpdateOne(sc, s.database, s.collSessionStates,
 			activeFilterNoExpiry(sessionKeyFilter(key)),
 			sessionStateUpdate(stateSet, expiresAt))
@@ -874,7 +974,7 @@ func (s *Service) persistEvent(ctx context.Context, key session.Key, e *event.Ev
 	// write, so we can skip the transaction overhead. This keeps fast-path
 	// AppendEvent calls (partial events, status pings) cheap and avoids the
 	// replica-set requirement for those callers.
-	if eventDoc == nil {
+	if eventDoc == nil && len(appState) == 0 && len(userState) == 0 {
 		res, err := s.client.UpdateOne(ctx, s.database, s.collSessionStates,
 			activeFilterNoExpiry(sessionKeyFilter(key)),
 			sessionStateUpdate(stateSet, expiresAt))
@@ -895,7 +995,7 @@ func (s *Service) AppendTrackEvent(
 	sess *session.Session,
 	trackEvent *session.TrackEvent,
 	opts ...session.Option,
-) error {
+) (err error) {
 	if sess == nil {
 		return session.ErrNilSession
 	}
@@ -916,6 +1016,7 @@ func (s *Service) AppendTrackEvent(
 			if r := recover(); r != nil {
 				if fmt.Sprint(r) == "send on closed channel" {
 					log.ErrorfContext(ctx, "mongodb session async persist track event failed: %v", r)
+					err = fmt.Errorf("async persist track event failed due to closed channel")
 					return
 				}
 				panic(r)
@@ -1068,6 +1169,7 @@ func (s *Service) getSession(
 func (s *Service) Close() error {
 	s.once.Do(func() {
 		s.stopCleanupRoutine()
+		s.cleanupWg.Wait()
 		for _, ch := range s.persistChans {
 			close(ch)
 		}
@@ -1087,11 +1189,11 @@ func (s *Service) Close() error {
 // Other collections rely on MongoDB TTL indexes. Events and track events need
 // backend cleanup so histories stay all-or-nothing: a session group is cleaned
 // only when its latest row in that collection is older than the TTL cutoff.
-func (s *Service) cleanupExpired() {
+func (s *Service) cleanupExpired(ctx context.Context) {
 	if s.opts.sessionTTL <= 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	if err := s.cleanupExpiredEvents(ctx, time.Now()); err != nil {
@@ -1139,7 +1241,29 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, c
 		UserID    string `bson:"user_id"`
 		SessionID string `bson:"session_id"`
 	}
-	var triples []triple
+	or := make(bson.A, 0, cleanupBatchSize)
+	flush := func() error {
+		if len(or) == 0 {
+			return nil
+		}
+		filter := bson.M{
+			"$or":        or,
+			"deleted_at": nil,
+			"updated_at": bson.M{"$lte": cutoff},
+		}
+		if s.opts.softDelete {
+			if _, err := s.client.UpdateMany(ctx, s.database, collection, filter,
+				bson.M{"$set": bson.M{"deleted_at": now}}); err != nil {
+				return fmt.Errorf("soft delete expired %s: %w", label, err)
+			}
+		} else {
+			if _, err := s.client.DeleteMany(ctx, s.database, collection, filter); err != nil {
+				return fmt.Errorf("hard delete expired %s: %w", label, err)
+			}
+		}
+		or = or[:0]
+		return nil
+	}
 	for cursor.Next(ctx) {
 		var row struct {
 			ID triple `bson:"_id"`
@@ -1147,39 +1271,21 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, c
 		if err := cursor.Decode(&row); err != nil {
 			return fmt.Errorf("decode aggregate row: %w", err)
 		}
-		triples = append(triples, row.ID)
+		or = append(or, bson.M{
+			"app_name":   row.ID.AppName,
+			"user_id":    row.ID.UserID,
+			"session_id": row.ID.SessionID,
+		})
+		if len(or) >= cleanupBatchSize {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
 	}
 	if err := cursor.Err(); err != nil {
 		return fmt.Errorf("iterate aggregate: %w", err)
 	}
-	if len(triples) == 0 {
-		return nil
-	}
-
-	or := make(bson.A, 0, len(triples))
-	for _, t := range triples {
-		or = append(or, bson.M{
-			"app_name":   t.AppName,
-			"user_id":    t.UserID,
-			"session_id": t.SessionID,
-		})
-	}
-	filter := bson.M{
-		"$or":        or,
-		"deleted_at": nil,
-		"updated_at": bson.M{"$lte": cutoff},
-	}
-	if s.opts.softDelete {
-		if _, err := s.client.UpdateMany(ctx, s.database, collection, filter,
-			bson.M{"$set": bson.M{"deleted_at": now}}); err != nil {
-			return fmt.Errorf("soft delete expired %s: %w", label, err)
-		}
-		return nil
-	}
-	if _, err := s.client.DeleteMany(ctx, s.database, collection, filter); err != nil {
-		return fmt.Errorf("hard delete expired %s: %w", label, err)
-	}
-	return nil
+	return flush()
 }
 
 // startCleanupRoutine starts the background cleanup routine.
@@ -1187,15 +1293,22 @@ func (s *Service) startCleanupRoutine() {
 	if s.cleanupDone == nil {
 		s.cleanupDone = make(chan struct{})
 	}
+	if s.cleanupCtx == nil {
+		s.cleanupCtx, s.cleanupCancel = context.WithCancel(context.Background())
+	}
 	s.cleanupTicker = time.NewTicker(s.opts.cleanupInterval)
 	ticker := s.cleanupTicker
+	s.cleanupWg.Add(1)
 	go func() {
+		defer s.cleanupWg.Done()
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				s.cleanupExpired()
+				s.cleanupExpired(s.cleanupCtx)
 			case <-s.cleanupDone:
+				return
+			case <-s.cleanupCtx.Done():
 				return
 			}
 		}
@@ -1205,6 +1318,9 @@ func (s *Service) startCleanupRoutine() {
 // stopCleanupRoutine stops the background cleanup routine.
 func (s *Service) stopCleanupRoutine() {
 	s.cleanupOnce.Do(func() {
+		if s.cleanupCancel != nil {
+			s.cleanupCancel()
+		}
 		if s.cleanupTicker != nil {
 			if s.cleanupDone != nil {
 				close(s.cleanupDone)

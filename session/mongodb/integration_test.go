@@ -52,7 +52,7 @@ func newIntegrationService(t *testing.T, opts ...ServiceOpt) (context.Context, *
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	t.Cleanup(cancel)
+	defer cancel()
 
 	dbName := fmt.Sprintf("trpc_agent_go_mongodb_it_%d", time.Now().UnixNano())
 	cleanupClient, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
@@ -73,13 +73,13 @@ func newIntegrationService(t *testing.T, opts ...ServiceOpt) (context.Context, *
 	svc, err := NewService(allOpts...)
 	require.NoError(t, err, "integration MongoDB must support multi-document transactions")
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
-	return ctx, svc, database
+	return context.Background(), svc, database
 }
 
-func integrationEvent(id string, role model.Role, content string) *event.Event {
+func integrationEvent(id string, role model.Role, content string, ts time.Time) *event.Event {
 	evt := event.New("integration-invocation", string(role))
 	evt.ID = id
-	evt.Timestamp = time.Now()
+	evt.Timestamp = ts
 	evt.Response = &model.Response{
 		Choices: []model.Choice{{
 			Message: model.Message{Role: role, Content: content},
@@ -100,11 +100,10 @@ func TestIntegrationLifecycleTrackWindowSummary(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	require.NoError(t, svc.AppendEvent(ctx, sess, integrationEvent("u1", model.RoleUser, "hello")))
-	time.Sleep(time.Millisecond)
-	require.NoError(t, svc.AppendEvent(ctx, sess, integrationEvent("a1", model.RoleAssistant, "hi")))
-	time.Sleep(time.Millisecond)
-	require.NoError(t, svc.AppendEvent(ctx, sess, integrationEvent("u2", model.RoleUser, "again")))
+	baseTime := time.Now()
+	require.NoError(t, svc.AppendEvent(ctx, sess, integrationEvent("u1", model.RoleUser, "hello", baseTime)))
+	require.NoError(t, svc.AppendEvent(ctx, sess, integrationEvent("a1", model.RoleAssistant, "hi", baseTime.Add(time.Second))))
+	require.NoError(t, svc.AppendEvent(ctx, sess, integrationEvent("u2", model.RoleUser, "again", baseTime.Add(2*time.Second))))
 
 	trackEvent := &session.TrackEvent{
 		Track:     session.Track("tool"),
@@ -156,7 +155,7 @@ func TestIntegrationWindowIgnoresEventsBeforeRecreatedSession(t *testing.T) {
 	key := session.Key{AppName: "it-app", UserID: "it-user", SessionID: "recreated"}
 
 	oldTime := time.Now().Add(-time.Hour)
-	oldEventBytes, err := json.Marshal(integrationEvent("old", model.RoleUser, "old"))
+	oldEventBytes, err := json.Marshal(integrationEvent("old", model.RoleUser, "old", oldTime))
 	require.NoError(t, err)
 	_, err = svc.client.InsertOne(ctx, svc.database, svc.collSessionEvents, sessionEventDoc{
 		AppName:   key.AppName,
@@ -171,7 +170,7 @@ func TestIntegrationWindowIgnoresEventsBeforeRecreatedSession(t *testing.T) {
 
 	second, err := svc.CreateSession(ctx, key, nil)
 	require.NoError(t, err)
-	require.NoError(t, svc.AppendEvent(ctx, second, integrationEvent("new", model.RoleUser, "new")))
+	require.NoError(t, svc.AppendEvent(ctx, second, integrationEvent("new", model.RoleUser, "new", time.Now())))
 
 	_, err = svc.GetEventWindow(ctx, session.EventWindowRequest{
 		Key:           key,
@@ -194,7 +193,7 @@ func TestIntegrationCreateSessionReplacesExpiredSameKey(t *testing.T) {
 	key := session.Key{AppName: "it-app", UserID: "it-user", SessionID: "expired-recreate"}
 	oldTime := time.Now().Add(-2 * time.Hour)
 	oldExpiresAt := time.Now().Add(-time.Hour)
-	oldEventBytes, err := json.Marshal(integrationEvent("old", model.RoleUser, "old"))
+	oldEventBytes, err := json.Marshal(integrationEvent("old", model.RoleUser, "old", oldTime))
 	require.NoError(t, err)
 
 	_, err = svc.client.InsertOne(ctx, svc.database, svc.collSessionStates, sessionStateDoc{
@@ -250,7 +249,7 @@ func TestIntegrationIndexesAndGroupedCleanup(t *testing.T) {
 		"idx_user_states_unique_active", "idx_user_states_expires")
 
 	oldTime := time.Now().Add(-2 * time.Hour)
-	eventBytes, err := json.Marshal(integrationEvent("old-event", model.RoleUser, "old"))
+	eventBytes, err := json.Marshal(integrationEvent("old-event", model.RoleUser, "old", oldTime))
 	require.NoError(t, err)
 	trackBytes, err := json.Marshal(&session.TrackEvent{
 		Track:     session.Track("tool"),

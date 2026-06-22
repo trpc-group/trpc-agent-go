@@ -30,7 +30,10 @@ import (
 
 var _ session.WindowService = (*Service)(nil)
 
-const eventWindowBatchSize = 64
+const (
+	eventWindowBatchSize = 64
+	eventWindowMaxScan   = 4096
+)
 
 type mongoWindowEntry struct {
 	id    primitive.ObjectID
@@ -153,7 +156,8 @@ func (s *Service) loadWindowNeighbors(
 	}
 	cursor := anchor
 	out := make([]session.EventWindowEntry, 0, limit)
-	for len(out) < limit {
+	scanned := 0
+	for len(out) < limit && scanned < eventWindowMaxScan {
 		rows, err := s.queryWindowBatch(ctx, key, sessionCreatedAt, cursor, before)
 		if err != nil {
 			return nil, fmt.Errorf("load event window neighbors: %w", err)
@@ -161,6 +165,7 @@ func (s *Service) loadWindowNeighbors(
 		if len(rows) == 0 {
 			break
 		}
+		scanned += len(rows)
 		for _, row := range rows {
 			cursor = row
 			if !sessionwindow.EventAllowed(&row.entry.Event, roleFilter) {
