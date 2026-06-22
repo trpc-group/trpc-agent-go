@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1672" height="941" viewBox="0 0 1672 941" role="img" aria-labelledby="title desc">
+  <title id="title">Summary Plus On-Demand Retrieval</title>
+  <desc id="desc">A user question is answered with the current summary first. If hidden detail is needed, the agent queries the hidden history index and loads local context before answering with focused evidence.</desc>
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#1f5fbf"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#238a45"/>
+    </marker>
+    <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#7255d9"/>
+    </marker>
+  </defs>
+  <style>
+    .bg{fill:#f4f8ff}.title{font:700 46px Arial,sans-serif;fill:#102b63;text-anchor:middle}.head{font:700 24px Arial,sans-serif;fill:#102b63;text-anchor:middle}.label{font:700 20px Arial,sans-serif;fill:#203454;text-anchor:middle}.group-label{font:700 25px Arial,sans-serif;fill:#a26000;text-anchor:middle}.life{stroke:#c4d2e8;stroke-width:3}.flow-blue{fill:none;stroke:#1f5fbf;stroke-width:4;marker-end:url(#arrow-blue)}.flow-green{fill:none;stroke:#238a45;stroke-width:4;marker-end:url(#arrow-green)}.flow-purple{fill:none;stroke:#7255d9;stroke-width:4;marker-end:url(#arrow-purple)}
+  </style>
+  <rect class="bg" width="1672" height="941"/>
+  <text class="title" x="836" y="64">Summary Plus On-Demand Retrieval</text>
+
+  <rect x="35" y="125" width="220" height="70" rx="13" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="head" x="145" y="153">
+    <tspan x="145" dy="0">User</tspan>
+    <tspan x="145" dy="26">Question</tspan>
+  </text>
+  <rect x="355" y="125" width="220" height="70" rx="13" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="head" x="465" y="167">Agent</text>
+  <rect x="675" y="125" width="220" height="70" rx="13" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="head" x="785" y="167">Summary</text>
+  <rect x="970" y="125" width="270" height="70" rx="13" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="head" x="1105" y="153">
+    <tspan x="1105" dy="0">Hidden History</tspan>
+    <tspan x="1105" dy="26">Index</tspan>
+  </text>
+  <rect x="1315" y="125" width="220" height="70" rx="13" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="head" x="1425" y="167">LLM</text>
+
+  <line class="life" x1="145" y1="210" x2="145" y2="765"/>
+  <line class="life" x1="465" y1="210" x2="465" y2="765"/>
+  <line class="life" x1="785" y1="210" x2="785" y2="765"/>
+  <line class="life" x1="1105" y1="210" x2="1105" y2="765"/>
+  <line class="life" x1="1425" y1="210" x2="1425" y2="765"/>
+
+  <line class="flow-blue" x1="145" y1="270" x2="463" y2="270"/>
+  <text class="label" x="300" y="257">Ask a long-term memory question</text>
+  <line class="flow-blue" x1="465" y1="350" x2="1423" y2="350"/>
+  <text class="label" x="944" y="337">Summary + current question</text>
+
+  <rect x="520" y="400" width="850" height="235" rx="14" fill="#fffdfa" stroke="#f6aa42" stroke-width="2"/>
+  <text class="group-label" x="945" y="435">If hidden detail is needed</text>
+  <line class="flow-purple" x1="465" y1="485" x2="1103" y2="485"/>
+  <text class="label" x="785" y="473">session_search(query)</text>
+  <line class="flow-purple" x1="1105" y1="535" x2="467" y2="535"/>
+  <text class="label" x="785" y="523">relevant event snippets</text>
+  <line class="flow-purple" x1="465" y1="595" x2="1103" y2="595"/>
+  <text class="label" x="785" y="583">session_load(event_id), optional</text>
+  <line class="flow-purple" x1="1105" y1="645" x2="467" y2="645"/>
+  <text class="label" x="785" y="633">local context</text>
+
+  <line class="flow-green" x1="465" y1="725" x2="1423" y2="725"/>
+  <text class="label" x="945" y="712">Answer with focused evidence</text>
+</svg>
