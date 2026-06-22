@@ -195,7 +195,7 @@ session summary
 
 The flow is:
 
-![Prompt assembly after summary boundary](../../assets/img/blog/summary/en/diagram_boundary_en.png)
+![Prompt assembly after summary boundary](../../assets/img/blog/summary/en/diagram_boundary_en.svg)
 
 One subtle failure mode is worth calling out: when `AddSessionSummary=true`, events after the summary boundary must not be trimmed by `MaxHistoryRuns`. Otherwise the model may see an old state summary but miss the latest tool result or user feedback.
 
@@ -521,7 +521,7 @@ The framework now generates summaries during the conversation according to the c
 
 The simplified flow:
 
-![Async summary generation flow](../../assets/img/blog/summary/en/diagram_async_flow_en.png)
+![Async summary generation flow](../../assets/img/blog/summary/en/diagram_async_flow_en.svg)
 
 Implementation details:
 
@@ -588,7 +588,7 @@ Layer 1 is the **tool-result entry guard**. Before tool results enter messages, 
 
 Layer 2 is **session compaction**. When the total token count approaches a context-window threshold, for example around 70%, older history is compressed into structured summary while recent complete rounds remain raw.
 
-![Two-layer context governance](../../assets/img/blog/summary/en/diagram_two_layer_en.png)
+![Two-layer context governance](../../assets/img/blog/summary/en/diagram_two_layer_en.svg)
 
 Several engineering rules follow.
 
@@ -718,7 +718,7 @@ The task checks whether the system can recover early facts from a long conversat
 
 **Summary + On-Demand Retrieval** gives the model summary by default. If the question depends on hidden history, the model can call `session_search` and, when needed, `session_load`.
 
-![Summary plus on-demand retrieval](../../assets/img/blog/summary/en/diagram_retrieval_en.png)
+![Summary plus on-demand retrieval](../../assets/img/blog/summary/en/diagram_retrieval_en.svg)
 
 ### 6.2 Results
 

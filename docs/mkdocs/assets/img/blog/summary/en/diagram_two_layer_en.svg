@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1672" height="941" viewBox="0 0 1672 941" role="img" aria-labelledby="title desc">
+  <title id="title">Two-Layer Context Governance</title>
+  <desc id="desc">Tool results first pass an entry guard. If the context window threshold is reached, session summary compresses old events, then prompt rebuild sends summary plus recent events into the normal LLM request.</desc>
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#1f5fbf"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#238a45"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#f28a00"/>
+    </marker>
+  </defs>
+  <style>
+    .bg{fill:#f4f8ff}.title{font:700 46px Arial,sans-serif;fill:#102b63;text-anchor:middle}.note{font:700 29px Arial,sans-serif;fill:#203454;text-anchor:middle}.node{font:700 23px Arial,sans-serif;fill:#102b63;text-anchor:middle}.label-green{font:700 21px Arial,sans-serif;fill:#238a45}.label-orange{font:700 21px Arial,sans-serif;fill:#f28a00}.flow-blue{fill:none;stroke:#1f5fbf;stroke-width:5;marker-end:url(#arrow-blue)}.flow-green{fill:none;stroke:#238a45;stroke-width:5;marker-end:url(#arrow-green)}.flow-orange{fill:none;stroke:#f28a00;stroke-width:5;marker-end:url(#arrow-orange)}
+  </style>
+  <rect class="bg" width="1672" height="941"/>
+  <text class="title" x="836" y="76">Two-Layer Context Governance</text>
+
+  <rect x="70" y="230" width="190" height="105" rx="13" fill="#f0ebff" stroke="#7255d9" stroke-width="3"/>
+  <text class="node" x="165" y="289">Tool result</text>
+  <rect x="330" y="195" width="303" height="170" rx="13" fill="#e8f1ff" stroke="#1767d8" stroke-width="3"/>
+  <text class="node" x="481.5" y="266">
+    <tspan x="481.5" dy="0">Layer 1: entry guard</tspan>
+    <tspan x="481.5" dy="28">truncate / summarize /</tspan>
+    <tspan x="481.5" dy="28">archive</tspan>
+  </text>
+  <rect x="700" y="230" width="252" height="105" rx="13" fill="#eaf7ed" stroke="#238a45" stroke-width="3"/>
+  <text class="node" x="826" y="289">Session events</text>
+  <polygon points="1110,187 1260,282 1110,377 960,282" fill="#fff4e4" stroke="#f28a00" stroke-width="4"/>
+  <text class="node" x="1110" y="275">
+    <tspan x="1110" dy="0">tokens &gt;= context</tspan>
+    <tspan x="1110" dy="28">window ratio?</tspan>
+  </text>
+  <rect x="1325" y="227" width="253" height="110" rx="13" fill="#eaf7ed" stroke="#238a45" stroke-width="3"/>
+  <text class="node" x="1451.5" y="289">Normal LLM request</text>
+  <rect x="1325" y="462" width="253" height="126" rx="13" fill="#fff4e4" stroke="#f28a00" stroke-width="3"/>
+  <text class="node" x="1451.5" y="511">
+    <tspan x="1451.5" dy="0">Layer 2: session</tspan>
+    <tspan x="1451.5" dy="28">summary old events -&gt;</tspan>
+    <tspan x="1451.5" dy="28">state</tspan>
+  </text>
+  <rect x="890" y="650" width="320" height="120" rx="13" fill="#e8f1ff" stroke="#1767d8" stroke-width="3"/>
+  <text class="node" x="1050" y="706">
+    <tspan x="1050" dy="0">Prompt rebuild</tspan>
+    <tspan x="1050" dy="28">summary + recent events</tspan>
+  </text>
+
+  <line class="flow-blue" x1="260" y1="282.5" x2="328" y2="282.5"/>
+  <line class="flow-blue" x1="633" y1="282.5" x2="698" y2="282.5"/>
+  <line class="flow-blue" x1="952" y1="282.5" x2="958" y2="282.5"/>
+  <line class="flow-green" x1="1260" y1="282" x2="1323" y2="282"/>
+  <text class="label-green" x="1278" y="246">No</text>
+  <polyline class="flow-orange" points="1218,348 1288,412 1323,510"/>
+  <text class="label-orange" x="1262" y="409">Yes</text>
+  <line class="flow-orange" x1="1325" y1="575" x2="1212" y2="710"/>
+  <polyline class="flow-blue" points="1050,650 1050,420 1452,420 1452,339"/>
+
+  <text class="note" x="836" y="850">First control large tool outputs, then compress accumulated history before the next request.</text>
+</svg>
