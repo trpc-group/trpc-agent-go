@@ -1779,10 +1779,9 @@ tRPC-Agent-Go 侧继续负责 Runner、Session、Plugin 和 Tool 生命周期的
 - Go adapter 通过 `session.Ingestor` 把每轮完成后的会话内容发送给 gateway。
 - Runner plugin 在每次模型调用前请求 `/recall`，并把返回的上下文注入模型请求（需通过 `WithRecallEnabled(true)` 显式开启）。
 - 通过 `tdai_conversation_search`（按 session 作用域，默认开启）和 `tdai_memory_search`（需 `WithMemorySearchTool(true)` 显式开启）暴露只读检索工具。
-- 可选的短期上下文卸载 plugin 可以把较大的工具结果外置到本地
-  `refs/*.md`，维护 L1 JSONL 摘要、判断 L1.5 任务边界、生成 L2
-  Mermaid 任务图，并在模型调用前执行 L3 token 压力压缩。它与 recall
-  相互独立，默认关闭。
+- 可选的短期上下文卸载 plugin 会把工具结果外置化、L1/L1.5/L2/L3、
+  drill-down 和持久化委托给 TencentDB Agent Memory gateway hook API。
+  Go adapter 不写本地 offload 文件。它与 recall 相互独立，默认关闭。
 
 > **多租户提示**：自动 recall 和 `tdai_memory_search` 会读取 gateway 的共享长期
 > 存储，而当前 gateway 并不会在这些路径上强制按 user/session 隔离，因此它们默认
@@ -1838,21 +1837,10 @@ memSvc, err := memorytencentdb.NewService(
     // 跨 session/user 的读取属于 opt-in，仅在 gateway 可信/隔离时开启。
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
-    // 可选短期工具结果卸载；它与长期 recall 是独立能力。
+    // 可选短期工具结果卸载；需要 gateway 支持 /offload/v1/hooks/*
+    // 和 /offload/v1/tools/*。
     // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     //     Enabled: true,
-    //     DataDir: ".tdai-offload",
-    //     Mode:    memorytencentdb.ContextOffloadModeLocal,
-    //     Model:   openai.New("deepseek-v4-flash"),
-    // }),
-    // 或将 L1/L1.5/L2 交给兼容的 offload backend：
-    // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
-    //     Enabled: true,
-    //     Mode:    memorytencentdb.ContextOffloadModeBackend,
-    //     Backend: memorytencentdb.ContextOffloadBackendConfig{
-    //         URL:    gatewayURL,
-    //         APIKey: os.Getenv("TDAI_GATEWAY_API_KEY"),
-    //     },
     // }),
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
@@ -1932,26 +1920,14 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 | `WithToolPrefix(prefix)` | 修改原生工具名前缀。 | `tdai` |
 | `WithContextOffload(ContextOffloadConfig)` | 配置较大工具结果的显式短期上下文卸载。 | 关闭 |
 
-`ContextOffloadConfig` 按 offload 层级组织详细配置。除 `Enabled` 必须显式设置外，
-其余零值都会补全为保守默认值。
+`ContextOffloadConfig` 只控制 Go adapter 的 gateway 对接。offload 层级、
+状态、存储、TTL 和隔离由 TencentDB Agent Memory gateway 负责。
 
 | 字段 | 作用 | 默认值 |
 | ---- | ---- | ------ |
 | `Enabled` | 是否启用 context offload plugin 和配套工具。 | `false` |
-| `DataDir` | `refs/`、JSONL 索引和 Mermaid 文件目录。 | `.tdai-offload` |
-| `Mode` | 选择 `local`、`backend` 或 `collect` offload 模式。 | `local` |
-| `Model` | local 模式下执行 L1/L1.5/L2 offload 任务的模型。未设置时使用确定性 fallback 摘要。 | 无 |
-| `MaxEntries` | 注入当前任务 Mermaid 上下文的最大 offload 条目数。 | `20` |
-| `Backend.URL`、`Backend.APIKey` | backend 模式下的 L1/L1.5/L2 endpoint 和可选 API key。 | 无 |
-| `L0.MinToolResultBytes` | 触发外置化的最小工具结果大小。 | `8192` |
-| `L0.MaxRefBytes` | `tdai_read_offload_ref` 最多返回的字节数。 | `1048576` |
-| `L1.MaxPairsPerBatch` | 单次 L1 摘要请求最多处理的工具调用对数量。 | `20` |
-| `L2.NullThreshold` | 触发 L2 Mermaid 生成的未映射 L1 行数。 | `4` |
-| `L2.Timeout` | 基于时间的 L2 触发间隔。 | `5m` |
-| `L3.ContextWindow` | offload model 未报告窗口时，L3 token 压力检查使用的上下文窗口。 | `200000` |
-| `L3.MildRatio` | 触发 L3 摘要替换的 token 比例。 | `0.50` |
-| `L3.AggressiveRatio` | 触发删除旧 offloaded 工具块的 token 比例。 | `0.85` |
-| `L3.EmergencyRatio`、`L3.EmergencyTargetRatio` | emergency 压缩的触发比例和目标比例。 | `0.95`、`0.60` |
+| `GatewayURL` | context offload hook/tool 调用的可选 gateway URL 覆盖。为空时复用 `WithGatewayURL`。 | 无 |
+| `APIKey` | context offload hook/tool 调用的可选 API key 覆盖。为空时复用 `WithAPIKey`。 | 无 |
 
 ### 注意事项
 
@@ -1959,17 +1935,16 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 - 当 gateway 设置了 `TDAI_GATEWAY_API_KEY` 时，请用 `WithAPIKey(...)` 让请求携带 `Authorization: Bearer <key>`，否则除 `/health` 外的路由都会返回 401（health 仍可通过）。
 - `tdai_memory_search` 检索已提取的长期记忆；提取是异步的，新捕获的信息可能需要短暂等待后才可检索。
 - `tdai_conversation_search` 检索对话历史，默认使用当前 gateway `session_key`。
-- context offload 是本地、显式开启、运行时作用域的能力。它不调用 `/capture` 或
+- context offload 是显式开启、由 gateway 承载的能力。它不调用 `/capture` 或
   `/recall`；单独开启 recall 不会改写工具结果消息，也不会生成 Mermaid 任务图。
-- context offload 有三种模型模式：`local` 使用 `ContextOffloadConfig.Model`
-  配置的模型执行 L1/L1.5/L2，未配置时使用确定性 fallback；`backend`
-  调用兼容的 `/offload/v1/...` endpoint；`collect` 只记录 refs 和 JSONL
-  状态，不改写模型侧 messages。
-- offload 工具只读取当前 invocation 的 agent/session 数据目录。
-  `read_offload_ref` 会对 `result_ref` 读取做 path traversal 防护；
-  `read_offload_node` 按 `node_id` 读取，不接收 `result_ref`。
-- live model 覆盖放在 `integration` build tag 后，例如：
-  `TDAI_CONTEXT_OFFLOAD_INTEGRATION=1 OPENAI_API_KEY=... go test -tags=integration ./memory/tencentdb -run TestContextOffloadPlugin_IntegrationLocalModel`。
+- Go adapter 调用 gateway hook endpoints：
+  `/offload/v1/hooks/after-tool-messages` 和
+  `/offload/v1/hooks/before-model`。它不会创建 `.tdai-offload`、本地 refs、
+  JSONL 索引、Mermaid 文件或本地 state。
+- offload 工具调用 gateway drill-down endpoints：
+  `/offload/v1/tools/read-ref`、`/offload/v1/tools/read-node` 和
+  `/offload/v1/tools/search-index`。scope 校验、存储 ACL、返回字节限制和持久化
+  都由 gateway 负责。
 - 使用完成后请调用 `Close()`，确保后台 capture worker 干净退出。
 
 ## 参考链接
