@@ -69,6 +69,14 @@ const (
 	// Use this for maximum bandwidth savings when reasoning history is not needed.
 	ReasoningContentModeDiscardAll = processor.ReasoningContentModeDiscardAll
 
+	// ToolTranscriptModeKeepAll keeps all historical tool-call/tool-result
+	// transcripts in model requests.
+	ToolTranscriptModeKeepAll = processor.ToolTranscriptModeKeepAll
+	// ToolTranscriptModeOmitPreviousCompleted omits completed historical
+	// tool-call/tool-result pairs from previous requests when projecting session
+	// history into model requests.
+	ToolTranscriptModeOmitPreviousCompleted = processor.ToolTranscriptModeOmitPreviousCompleted
+
 	// SkillLoadModeOnce injects loaded skill content for the next model
 	// request, then offloads it from session state.
 	SkillLoadModeOnce = processor.SkillLoadModeOnce
@@ -112,6 +120,10 @@ type PreloadMemoryInjectionMode = processor.PreloadMemoryInjectionMode
 // PreloadSessionRecallInjectionMode controls where recalled session events are
 // injected.
 type PreloadSessionRecallInjectionMode = processor.PreloadSessionRecallInjectionMode
+
+// ToolTranscriptMode controls how historical tool-call/tool-result transcripts
+// are projected into model requests.
+type ToolTranscriptMode = processor.ToolTranscriptMode
 
 // MessageFilterMode is the mode for filtering messages.
 type MessageFilterMode int
@@ -191,6 +203,7 @@ var (
 
 		SkipSkillsFallbackOnSessionSummary: true,
 
+		ToolTranscriptMode:                   processor.ToolTranscriptModeKeepAll,
 		EnableContextCompaction:              false,
 		ContextCompactionThresholdRatio:      0.7,
 		ContextCompactionToolResultMaxTokens: processor.DefaultContextCompactionToolResultMaxTokens,
@@ -352,6 +365,9 @@ type Options struct {
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
 	MaxHistoryRuns int
+	// ToolTranscriptMode controls how historical tool-call/tool-result
+	// transcripts are projected into model requests. Default is keep_all.
+	ToolTranscriptMode processor.ToolTranscriptMode
 	// EnableContextCompaction enables prompt-side context compaction.
 	// Historical oversized tool results can be compacted during request
 	// projection even when AddSessionSummary is false. When AddSessionSummary
@@ -1643,6 +1659,14 @@ func WithSyncSummaryIntraRun(enable bool) Option {
 func WithMaxHistoryRuns(maxRuns int) Option {
 	return func(opts *Options) {
 		opts.MaxHistoryRuns = maxRuns
+	}
+}
+
+// WithToolTranscriptMode sets how historical tool-call/tool-result transcripts
+// are projected into model requests.
+func WithToolTranscriptMode(mode ToolTranscriptMode) Option {
+	return func(opts *Options) {
+		opts.ToolTranscriptMode = processor.ToolTranscriptMode(mode)
 	}
 }
 
