@@ -179,6 +179,9 @@ type ContentRequestProcessor struct {
 	// Default is PreloadMemoryInjectionSystem. User mode is prompt-cache
 	// friendly, but memory context participates in token tailoring.
 	PreloadMemoryInjectionMode PreloadMemoryInjectionMode
+	// PreloadMemoryPlaybook overrides the built-in read-path guidance prepended
+	// to preloaded memories. Empty keeps the built-in playbook.
+	PreloadMemoryPlaybook string
 	// PreloadSessionRecall sets the number of recalled
 	// session events to inject as preload context.
 	// When > 0, query-time search runs across other
@@ -354,6 +357,14 @@ func WithPreloadMemoryInjectionMode(mode PreloadMemoryInjectionMode) ContentOpti
 		default:
 			p.PreloadMemoryInjectionMode = PreloadMemoryInjectionSystem
 		}
+	}
+}
+
+// WithPreloadMemoryPlaybook overrides the built-in read-path guidance prepended
+// to preloaded memories. Passing an empty string keeps the built-in playbook.
+func WithPreloadMemoryPlaybook(playbook string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.PreloadMemoryPlaybook = playbook
 	}
 }
 
@@ -2792,7 +2803,7 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 		return nil
 	}
 	if len(probeEntries) <= budget {
-		return newPreloadMemoryMessage(probeEntries)
+		return newPreloadMemoryMessage(probeEntries, p.PreloadMemoryPlaybook)
 	}
 
 	query := buildPreloadSearchQuery(inv.Message)
@@ -2819,7 +2830,7 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 	if len(memories) == 0 {
 		return p.loadPreloadMemoryMessage(ctx, inv, userKey, budget)
 	}
-	return newPreloadMemoryMessage(memories)
+	return newPreloadMemoryMessage(memories, p.PreloadMemoryPlaybook)
 }
 
 // loadPreloadMemoryMessage loads memories directly and formats them as preload
@@ -2835,16 +2846,19 @@ func (p *ContentRequestProcessor) loadPreloadMemoryMessage(
 		log.WarnfContext(ctx, "Failed to preload memories: %v", err)
 		return nil
 	}
-	return newPreloadMemoryMessage(memories)
+	return newPreloadMemoryMessage(memories, p.PreloadMemoryPlaybook)
 }
 
-func newPreloadMemoryMessage(memories []*memory.Entry) *model.Message {
+func newPreloadMemoryMessage(
+	memories []*memory.Entry,
+	playbookOverride string,
+) *model.Message {
 	if len(memories) == 0 {
 		return nil
 	}
 	return &model.Message{
 		Role:    model.RoleSystem,
-		Content: formatMemoryContent(memories),
+		Content: buildPreloadMemoryPrompt(playbookOverride, memories),
 	}
 }
 
@@ -2866,44 +2880,6 @@ func buildPreloadSearchQuery(msg model.Message) string {
 		parts = append(parts, text)
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
-}
-
-// formatMemoryContent formats memories for preload context injection.
-func formatMemoryContent(memories []*memory.Entry) string {
-	var sb strings.Builder
-	sb.WriteString("## User Memories\n\n")
-	sb.WriteString("The following are stored memories about the user. ")
-	sb.WriteString("Use these to answer questions. Episodic memories include ")
-	sb.WriteString("event details (time, participants, location).\n\n")
-	for _, mem := range memories {
-		if mem == nil || mem.Memory == nil {
-			continue
-		}
-		fmt.Fprintf(&sb, "- [%s] %s", mem.ID, mem.Memory.Memory)
-		// Append metadata inline for richer context.
-		var meta []string
-		if mem.Memory.Kind != "" {
-			meta = append(meta, fmt.Sprintf("kind=%s", mem.Memory.Kind))
-		}
-		if mem.Memory.EventTime != nil {
-			meta = append(meta, fmt.Sprintf("date=%s", mem.Memory.EventTime.Format("2006-01-02")))
-		}
-		if len(mem.Memory.Participants) > 0 {
-			meta = append(meta, fmt.Sprintf("with=%s", strings.Join(mem.Memory.Participants, ", ")))
-		}
-		if mem.Memory.Location != "" {
-			meta = append(meta, fmt.Sprintf("at=%s", mem.Memory.Location))
-		}
-		// Do not render topic labels in the preload prompt. The memory_add
-		// tool expects topics as []string, and showing inline
-		// "topics=foo, bar" text can lead models to copy a scalar value into
-		// tool arguments.
-		if len(meta) > 0 {
-			fmt.Fprintf(&sb, " (%s)", strings.Join(meta, "; "))
-		}
-		sb.WriteString("\n")
-	}
-	return sb.String()
 }
 
 func (p *ContentRequestProcessor) getPreloadSessionRecallMessage(

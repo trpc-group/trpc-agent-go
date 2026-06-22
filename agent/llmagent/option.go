@@ -585,6 +585,9 @@ type Options struct {
 	// prompt-cache friendly, but memory context participates in token-budget
 	// trimming.
 	PreloadMemoryInjectionMode processor.PreloadMemoryInjectionMode
+	// PreloadMemoryPlaybook overrides the built-in read-path guidance prepended
+	// to preloaded memories. Empty keeps the built-in playbook.
+	PreloadMemoryPlaybook string
 	// PreloadSessionRecall sets the number of recalled session events to
 	// preload as context.
 	// When > 0, search runs across other sessions owned by
@@ -1915,6 +1918,14 @@ func WithPreloadMemoryInjectionMode(mode processor.PreloadMemoryInjectionMode) O
 		default:
 			opts.PreloadMemoryInjectionMode = processor.PreloadMemoryInjectionSystem
 		}
+	}
+}
+
+// WithPreloadMemoryPlaybook overrides the built-in read-path guidance prepended
+// to preloaded memories. Passing an empty string keeps the built-in playbook.
+func WithPreloadMemoryPlaybook(playbook string) Option {
+	return func(opts *Options) {
+		opts.PreloadMemoryPlaybook = playbook
 	}
 }
 

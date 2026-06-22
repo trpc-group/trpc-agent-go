@@ -574,6 +574,15 @@ func TestWithPreloadMemoryInjectionMode(t *testing.T) {
 	require.Equal(t, PreloadMemoryInjectionSystem, opts.PreloadMemoryInjectionMode)
 }
 
+func TestWithPreloadMemoryPlaybook(t *testing.T) {
+	opts := &Options{}
+	WithPreloadMemoryPlaybook("custom playbook")(opts)
+	require.Equal(t, "custom playbook", opts.PreloadMemoryPlaybook)
+
+	WithPreloadMemoryPlaybook("")(opts)
+	require.Empty(t, opts.PreloadMemoryPlaybook)
+}
+
 func TestWithPreloadSessionRecall(t *testing.T) {
 	opts := &Options{}
 	WithPreloadSessionRecall(6)(opts)

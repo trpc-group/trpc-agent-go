@@ -449,6 +449,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithPreloadMemoryInjectionMode(
 			options.PreloadMemoryInjectionMode,
 		),
+		processor.WithPreloadMemoryPlaybook(options.PreloadMemoryPlaybook),
 		processor.WithPreloadSessionRecall(options.PreloadSessionRecall),
 		processor.WithPreloadSessionRecallInjectionMode(
 			options.PreloadSessionRecallInjectionMode,
