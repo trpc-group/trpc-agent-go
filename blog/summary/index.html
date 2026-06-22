@@ -3460,7 +3460,7 @@
 <p><a href="https://github.com/trpc-group/trpc-agent-go">tRPC-Agent-Go</a> is a Go framework for autonomous multi-Agent systems. It provides tool calling, session and memory management, artifact management, multi-Agent collaboration, graph orchestration, knowledge integration, and observability.</p>
 <p>This article focuses on Session Summary in tRPC-Agent-Go. Summary is not just a way to make history shorter. It separates long-running Agent context into state summary, original events, recent raw context, and on-demand retrieval, so applications can balance cost, latency, and factual recoverability. If this project is useful to you, a GitHub star and community feedback are welcome.</p>
 </blockquote>
-<p><img alt="Summary comic: from growing history to on-demand evidence" src="../../assets/img/blog/summary/comic_banner.png" /></p>
+<p><img alt="Summary comic: from growing history to on-demand evidence" src="../../assets/img/blog/summary/en/comic_banner_en.jpg" /></p>
 <p>Knowledge and productivity Agents are valuable not because they answer one isolated question, but because they connect scattered materials and actions across a user workflow.</p>
 <p>For example, a knowledge-oriented Agent may read pages, search a knowledge base, open files, organize notes, call tools, launch sub-tasks, and finally assemble a report or another deliverable. From the user's point of view, these actions should feel continuous: the page may change, more materials may appear, and the task may shift direction, but the assistant should still understand what happened earlier.</p>
 <p>That experience looks like a product interaction problem, but the first engineering problem behind it is context management. If context is handled well, users repeat less background, tool results remain useful, and long tasks can continue with controlled cost and latency. If context is handled poorly, the assistant may reread the same materials, miss constraints that were just confirmed, or repeat failed attempts.</p>
@@ -3534,7 +3534,7 @@
 <p>With these goals in mind, the limits of common approaches become easier to see.</p>
 <h2 id="2-why-common-approaches-are-not-enough">2. Why Common Approaches Are Not Enough</h2>
 <p>Several common techniques help, but none is sufficient by itself.</p>
-<p><img alt="Boundaries of common context strategies" src="../../assets/img/blog/summary/strategy_comparison.png" /></p>
+<p><img alt="Boundaries of common context strategies" src="../../assets/img/blog/summary/en/strategy_comparison_en.png" /></p>
 <h3 id="21-long-context-alone">2.1 Long Context Alone</h3>
 <p>A long context window is like a bigger desk. It lets you put more material on the table, but it does not guarantee the model will find the one note that matters next.</p>
 <p>Large-context models reduce the "does it fit" problem, but selection, ordering, structure, and cost remain system responsibilities.</p>
@@ -3564,7 +3564,7 @@
 <blockquote>
 <p>Summary is a compressed view of the current session. Events remain the source of truth. The next prompt uses summary plus events after the boundary.</p>
 </blockquote>
-<p><img alt="tRPC-Agent-Go Summary context architecture" src="../../assets/img/blog/summary/context_layers.png" /></p>
+<p><img alt="tRPC-Agent-Go Summary context architecture" src="../../assets/img/blog/summary/en/context_layers_en.png" /></p>
 <p>The design can be understood in five parts:</p>
 <table>
 <thead>
@@ -3645,11 +3645,7 @@
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a>+ current user message
 </span></code></pre></div></td></tr></table></div>
 <p>The flow is:</p>
-<pre class="mermaid"><code>flowchart LR
-    O[Older events before boundary] --&gt; S[Session summary]
-    N[Events after boundary] --&gt; P[Next prompt]
-    S --&gt; P
-    P --&gt; L[LLM]</code></pre>
+<p><img alt="Prompt assembly after summary boundary" src="../../assets/img/blog/summary/en/diagram_boundary_en.svg" /></p>
 <p>One subtle failure mode is worth calling out: when <code>AddSessionSummary=true</code>, events after the summary boundary must not be trimmed by <code>MaxHistoryRuns</code>. Otherwise the model may see an old state summary but miss the latest tool result or user feedback.</p>
 <p>The boundary also evolved from time-only to event-ID anchored. Multiple events may share nearby timestamps, so using only time can accidentally include or exclude the wrong event. <code>last_event_id</code> provides a more stable anchor.</p>
 <h4 id="filterkey-and-branch">filterKey and Branch</h4>
@@ -4032,16 +4028,7 @@
 </span></code></pre></div></td></tr></table></div>
 <p>The framework now generates summaries during the conversation according to the configured triggers and injects "historical summary plus events after the boundary" into later requests.</p>
 <p>The simplified flow:</p>
-<pre class="mermaid"><code>flowchart TB
-    R[Runner] --&gt;|Append qualifying event| Q[EnqueueSummaryJob]
-    Q --&gt; W[Async Summary Worker]
-    W --&gt; C[Checker: event/token/time/context]
-    C --&gt; SUM[Summarizer]
-    SUM --&gt; M[Summary LLM]
-    SUM --&gt; B[Summary text + boundary]
-    B --&gt; SS[Session Service]
-    SS --&gt; P[Content Processor]
-    P --&gt;|summary + events after boundary| L[Next LLM request]</code></pre>
+<p><img alt="Async summary generation flow" src="../../assets/img/blog/summary/en/diagram_async_flow_en.svg" /></p>
 <p>Implementation details:</p>
 <ul>
 <li>Runner only triggers summary after qualifying events and skips user, assistant tool call, and invalid events.</li>
@@ -4130,14 +4117,7 @@
 </blockquote>
 <p>Layer 1 is the <strong>tool-result entry guard</strong>. Before tool results enter messages, format them by tool type: truncate, summarize, archive, or preview. File reads, search results, shell output, and web fetches should not all be treated the same.</p>
 <p>Layer 2 is <strong>session compaction</strong>. When the total token count approaches a context-window threshold, for example around 70%, older history is compressed into structured summary while recent complete rounds remain raw.</p>
-<pre class="mermaid"><code>flowchart TB
-    T[Tool result] --&gt; G["Layer 1: entry guard&lt;br/&gt;truncate / summarize / archive"]
-    G --&gt; E[Session events]
-    E --&gt; C{"tokens &gt;= context window * ratio?"}
-    C -- No --&gt; N[Normal LLM request]
-    C -- Yes --&gt; S["Layer 2: session summary&lt;br/&gt;old events -&gt; structured summary"]
-    S --&gt; R["Prompt rebuild&lt;br/&gt;summary + recent events"]
-    R --&gt; N</code></pre>
+<p><img alt="Two-layer context governance" src="../../assets/img/blog/summary/en/diagram_two_layer_en.svg" /></p>
 <p>Several engineering rules follow.</p>
 <p><strong>First, trigger summary according to the model window.</strong></p>
 <p>Long-running assistants may switch models, and different models have different context windows. A fixed token threshold treats an 8K model and a 100K model the same. Prefer a ratio of the runtime model window, or compute token thresholds from model configuration.</p>
@@ -4305,24 +4285,7 @@
 <p><strong>Long Context</strong> sends the full history to the model. The model can theoretically see everything, but the context is long and expensive.</p>
 <p><strong>Summary</strong> replaces most history with a compact summary. It is extremely cheap, but specific facts may not enter the summary.</p>
 <p><strong>Summary + On-Demand Retrieval</strong> gives the model summary by default. If the question depends on hidden history, the model can call <code>session_search</code> and, when needed, <code>session_load</code>.</p>
-<pre class="mermaid"><code>sequenceDiagram
-    participant U as User Question
-    participant A as Agent
-    participant S as Summary
-    participant H as Hidden History Index
-    participant L as LLM
-
-    U-&gt;&gt;A: Ask a long-term memory question
-    A-&gt;&gt;L: Summary + current question
-    alt needs hidden detail
-        A-&gt;&gt;H: session_search(query)
-        H--&gt;&gt;A: relevant event snippets
-        opt snippet not enough
-            A-&gt;&gt;H: session_load(event_id)
-            H--&gt;&gt;A: local context
-        end
-    end
-    A-&gt;&gt;L: answer with focused evidence</code></pre>
+<p><img alt="Summary plus on-demand retrieval" src="../../assets/img/blog/summary/en/diagram_retrieval_en.svg" /></p>
 <h3 id="62-results">6.2 Results</h3>
 <p>Quality metrics:</p>
 <table>
@@ -4395,7 +4358,7 @@
 </tbody>
 </table>
 <p>The trade-off is easier to see visually: pure summary is very cheap but loses facts; long context is complete but heavy; summary plus retrieval uses far fewer prompt tokens while recovering better factual answers.</p>
-<p><img alt="LongMemEval quality-cost trade-off" src="../../assets/img/blog/summary/benchmark_tradeoff.png" /></p>
+<p><img alt="LongMemEval quality-cost trade-off" src="../../assets/img/blog/summary/en/benchmark_tradeoff_en.png" /></p>
 <p>Several observations stand out.</p>
 <p>First, pure summary has a tiny prompt, averaging only <code>445</code> tokens, but its factual quality is poor. Exact Match is only <code>0.0143</code>.</p>
 <p>Second, <code>summary_ondemand</code> recovers quality strongly. ROUGE-L rises from <code>0.0477</code> to <code>0.2694</code>, and Exact Match rises from <code>0.0143</code> to <code>0.7571</code>.</p>
@@ -4831,7 +4794,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 15, 2026 03:20:11 UTC">2026-06-15 03:20:11</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 22, 2026 09:46:28 UTC">2026-06-22 09:46:28</span>
   </span>
 
     
