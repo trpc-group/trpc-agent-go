@@ -94,6 +94,12 @@ func TestWithPostRunFinalizationTimeout(t *testing.T) {
 	assert.Equal(t, 2*time.Second, ro.PostRunFinalizationTimeout)
 }
 
+func TestWithTrackPersistenceTimeout(t *testing.T) {
+	opts := newOptions(WithTrackPersistenceTimeout(2 * time.Second))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	assert.Equal(t, 2*time.Second, ro.TrackPersistenceTimeout)
+}
+
 func TestWithHeartbeatInterval(t *testing.T) {
 	opts := newOptions(WithHeartbeatInterval(2 * time.Second))
 	assert.Equal(t, 2*time.Second, opts.heartbeatInterval)

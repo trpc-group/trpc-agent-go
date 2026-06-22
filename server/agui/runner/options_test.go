@@ -72,6 +72,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.NotNil(t, span)
 
 	assert.Equal(t, 5*time.Second, opts.PostRunFinalizationTimeout)
+	assert.Equal(t, 5*time.Second, opts.TrackPersistenceTimeout)
 	assert.Equal(t, time.Hour, opts.Timeout)
 	assert.False(t, opts.CancelOnContextDoneEnabled)
 	assert.False(t, opts.GraphNodeLifecycleActivityEnabled)
@@ -293,6 +294,11 @@ func TestWithStartSpan(t *testing.T) {
 func TestWithTimeout(t *testing.T) {
 	opts := NewOptions(WithTimeout(2 * time.Second))
 	assert.Equal(t, 2*time.Second, opts.Timeout)
+}
+
+func TestWithTrackPersistenceTimeout(t *testing.T) {
+	opts := NewOptions(WithTrackPersistenceTimeout(2 * time.Second))
+	assert.Equal(t, 2*time.Second, opts.TrackPersistenceTimeout)
 }
 
 func TestWithCancelOnContextDoneEnabled(t *testing.T) {
