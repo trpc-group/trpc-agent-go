@@ -5109,12 +5109,18 @@ prompt-side tool result compaction/pruning. Semantic summaries are still
 controlled by <code>WithAddSessionSummary(true)</code> and the configured session
 summarizer.</p>
 </blockquote>
-<p>When <code>WithEnableContextCompaction(true)</code> is enabled, the framework adds two compaction passes before the LLM call:</p>
+<p>When <code>WithEnableContextCompaction(true)</code> is enabled, the framework applies the following <code>tool result</code> compaction passes before the LLM call, depending on configuration:</p>
+<p><strong>Pass 0 — Tool-name forced placeholder</strong> (<code>ForceCleanToolNames</code>, empty by default):</p>
+<ul>
+<li>Applies only to historical <code>tool result</code> payloads whose tool name appears in <code>ForceCleanToolNames</code>; it does not require the payload to exceed <code>ContextCompactionToolResultMaxTokens</code></li>
+<li>The current request and recent protected request/invocation units are not affected; <code>KeepToolNames</code> has higher priority</li>
+<li>Useful for noisy historical outputs from tools such as shell, grep, and log dump tools</li>
+</ul>
 <p><strong>Pass 1 — Historical tool result placeholder</strong> (<code>ContextCompactionToolResultMaxTokens</code>, default 1024 tokens):</p>
 <ul>
 <li>Tool results from <strong>older</strong> requests that exceed the threshold are replaced entirely with a short placeholder while keeping <code>ToolID</code> and <code>ToolName</code></li>
-<li>The current request and the latest <code>ContextCompactionKeepRecentRequests</code> completed requests are never affected</li>
-<li>If <code>ToolResultCompactionConfig.SkipRecentFunc</code> returns a positive number, the request/invocation units that own those tail events are also treated as recent and skipped by Pass 1</li>
+<li>The current/recent protected set is never affected. This set includes the current request, the latest <code>ContextCompactionKeepRecentRequests</code> completed requests, and the request/invocation units that own the tail events returned by <code>ToolResultCompactionConfig.SkipRecentFunc</code></li>
+<li><code>SkipRecentFunc</code> and <code>ContextCompactionKeepRecentRequests</code> are additive. Set <code>ContextCompactionKeepRecentRequests</code> to <code>0</code> if you want the custom recency function to define the recent boundary by itself</li>
 <li>This cleans up accumulated long tool outputs from earlier conversation turns</li>
 </ul>
 <p><strong>Pass 2 — Oversized tool result truncation</strong> (<code>ContextCompactionOversizedToolResultMaxTokens</code>, <strong>default 0 / disabled</strong>):</p>
@@ -5123,16 +5129,16 @@ summarizer.</p>
 <li>Tool results exceeding this threshold are truncated using head+tail preservation: the beginning and end of the content are kept, with a <code>[...N characters truncated...]</code> marker in the middle</li>
 <li>This is the safety net for single tool results large enough to overflow the context window on their own (e.g. <code>web_fetch</code> returning 800K+ chars of HTML)</li>
 </ul>
-<p>The two passes have different roles: Pass 1 aggressively cleans old history (low threshold, full replacement); Pass 2 is a high-threshold guard that only kicks in for extreme cases but protects the current request too.</p>
+<p>The passes have different roles: Pass 0 is an explicit tool-name policy; Pass 1 aggressively cleans old history (low threshold, full replacement); Pass 2 is a high-threshold guard that only kicks in for extreme cases and can also apply to the current request.</p>
 <p>Pass 2 is disabled by default (<code>0</code>). It only fires when both (1) <code>WithEnableContextCompaction(true)</code> is set and (2) <code>ContextCompactionOversizedToolResultMaxTokens &gt; 0</code> (recommended opt-in value: <code>8192</code>, exposed as the constant <code>processor.DefaultContextCompactionOversizedToolResultMaxTokens</code>). This guarantees that <code>EnableContextCompaction=false</code> always means "the framework will not modify any tool result".</p>
 <p>Use <code>WithToolResultCompactionConfig(...)</code> when you need tool-name or recency policy:</p>
 <ul>
-<li><code>ForceCleanToolNames</code>: historical results from these tools are replaced with a policy placeholder whenever context compaction is enabled, after current/recent protection is applied. This is useful for noisy tools such as shell, grep, or log dump tools.</li>
+<li><code>ForceCleanToolNames</code>: historical results from these tools are replaced by Pass 0 with a policy placeholder whenever context compaction is enabled, after current/recent protection is applied. This is useful for noisy tools such as shell, grep, or log dump tools.</li>
 <li><code>KeepToolNames</code>: results from these tools are left untouched by context compaction. This is useful for recovery tools such as <code>session_load</code> and <code>session_search</code> when the model may need to read the exact payload.</li>
-<li><code>SkipRecentFunc</code>: customizes how many tail events are considered recent. It affects Pass 0 force-clean and Pass 1 historical classification; Pass 2 can still truncate oversized recent/current tool results.</li>
+<li><code>SkipRecentFunc</code>: customizes how many tail events are considered recent. Together with <code>ContextCompactionKeepRecentRequests</code>, it forms the recent protected set used by Pass 0 force-clean and Pass 1 historical classification; Pass 2 can still truncate oversized recent/current tool results.</li>
 </ul>
 <p>If the same tool name appears in both <code>ForceCleanToolNames</code> and <code>KeepToolNames</code>, <code>KeepToolNames</code> wins.</p>
-<p>When the compacted event has an <code>event_id</code>, placeholders and truncation markers include recovery hints such as <code>event_id</code>, <code>tool_call_id</code>, and <code>tool_name</code>. With <code>WithEnableOnDemandSession(true)</code> and a session backend that implements <code>session.WindowService</code>, the model can call <code>session_load</code> with <code>content_offset</code> / <code>content_limit</code> to reload a precise slice of the original tool result. <code>session_load</code> output size is controlled by its own window parameters and <code>content_limit</code>; reload very large results in slices instead of requesting the full payload at once.</p>
+<p>When a Pass 1 placeholder or Pass 2 truncation marker is created from an event with an <code>event_id</code>, it includes recovery hints such as <code>event_id</code>, <code>tool_call_id</code>, and <code>tool_name</code>; Pass 0 policy placeholders do not include these recovery hints. With <code>WithEnableOnDemandSession(true)</code> and a session backend that implements <code>session.WindowService</code>, the model can call <code>session_load</code> with <code>content_offset</code> / <code>content_limit</code> to reload a precise slice of the original tool result. <code>session_load</code> output size is controlled by its own window parameters and <code>content_limit</code>; reload very large results in slices instead of requesting the full payload at once.</p>
 <p>Additionally:</p>
 <ul>
 <li>If <code>WithAddSessionSummary(true)</code> is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous <code>CreateSessionSummary(...)</code> retry before calling the model</li>
@@ -5679,7 +5685,7 @@ cascade:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 12, 2026 03:13:55 UTC">2026-06-12 03:13:55</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 22, 2026 02:46:52 UTC">2026-06-22 02:46:52</span>
   </span>
 
     
