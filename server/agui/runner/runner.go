@@ -92,6 +92,7 @@ func New(r trunner.Runner, opt ...Option) Runner {
 		startSpan:                              opts.StartSpan,
 		flushInterval:                          opts.FlushInterval,
 		postRunFinalizationTimeout:             opts.PostRunFinalizationTimeout,
+		trackPersistenceTimeout:                opts.TrackPersistenceTimeout,
 		timeout:                                opts.Timeout,
 		cancelOnContextDoneEnabled:             opts.CancelOnContextDoneEnabled,
 		messagesSnapshotFollowEnabled:          opts.MessagesSnapshotFollowEnabled,
@@ -130,6 +131,7 @@ type runner struct {
 	startSpan                                 StartSpan
 	flushInterval                             time.Duration
 	postRunFinalizationTimeout                time.Duration
+	trackPersistenceTimeout                   time.Duration
 	timeout                                   time.Duration
 	cancelOnContextDoneEnabled                bool
 	messagesSnapshotFollowEnabled             bool
@@ -511,13 +513,8 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 }
 
 func (r *runner) flushTrack(ctx context.Context, key session.Key) error {
-	flushCtx := agent.CloneContext(ctx)
-	flushCtx = context.WithoutCancel(flushCtx)
-	if r.postRunFinalizationTimeout > 0 {
-		timeoutCtx, cancel := context.WithTimeout(flushCtx, r.postRunFinalizationTimeout)
-		defer cancel()
-		flushCtx = timeoutCtx
-	}
+	flushCtx, cancel := r.newTrackPersistenceContext(ctx)
+	defer cancel()
 	return r.tracker.Flush(flushCtx, key)
 }
 
@@ -526,7 +523,7 @@ func (r *runner) emitPostRunTerminalEvent(ctx context.Context, events chan<- agu
 	if input.terminalEmitted {
 		return
 	}
-	emitCtx, cancel := r.newPostRunContext(ctx)
+	emitCtx, cancel := r.newPostRunFinalizationContext(ctx)
 	defer cancel()
 	var terminalEvent aguievents.Event
 	if finalizationErr != nil {
@@ -545,17 +542,24 @@ func (r *runner) emitPostRunTerminalEvent(ctx context.Context, events chan<- agu
 	r.emitEvent(emitCtx, events, terminalEvent, input)
 }
 
-func (r *runner) newPostRunContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	emitCtx := agent.CloneContext(ctx)
-	emitCtx = context.WithoutCancel(emitCtx)
-	if r.postRunFinalizationTimeout > 0 {
-		return context.WithTimeout(emitCtx, r.postRunFinalizationTimeout)
+func (r *runner) newPostRunFinalizationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return newDetachedBoundedContext(ctx, r.postRunFinalizationTimeout)
+}
+
+func (r *runner) newTrackPersistenceContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return newDetachedBoundedContext(ctx, r.trackPersistenceTimeout)
+}
+
+func newDetachedBoundedContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	emitCtx := context.WithoutCancel(agent.CloneContext(ctx))
+	if timeout > 0 {
+		return context.WithTimeout(emitCtx, timeout)
 	}
 	return context.WithCancel(emitCtx)
 }
 
 func (r *runner) emitPostRunFinalization(ctx context.Context, events chan<- aguievents.Event, input *runInput) error {
-	emitCtx, cancel := r.newPostRunContext(ctx)
+	emitCtx, cancel := r.newPostRunFinalizationContext(ctx)
 	defer cancel()
 	finalizationErr := r.emitPostRunFinalizationEvents(emitCtx, events, input)
 	if finalizationErr != nil {
@@ -998,7 +1002,9 @@ func (r *runner) unregister(key session.Key) {
 }
 
 func (r *runner) recordTrackEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
-	return r.tracker.AppendEvent(ctx, key, event)
+	trackCtx, cancel := r.newTrackPersistenceContext(ctx)
+	defer cancel()
+	return r.tracker.AppendEvent(trackCtx, key, event)
 }
 
 func isExplicitRunCancel(ctx context.Context) bool {
