@@ -6830,6 +6830,29 @@ func TestCodeExecutorFromConfigBranches(t *testing.T) {
 	}
 }
 
+func TestIsSandboxCodeExecutor(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, isSandboxCodeExecutor(codeExecutorOptions{
+		Type: " SandBox ",
+	}))
+	require.False(t, isSandboxCodeExecutor(codeExecutorOptions{}))
+	require.False(t, isSandboxCodeExecutor(codeExecutorOptions{Type: "local"}))
+}
+
+func TestCodeExecutorEngine(t *testing.T) {
+	t.Parallel()
+
+	eng := codeexecutor.NewEngine(nil, nil, nil)
+	require.Same(
+		t,
+		eng,
+		codeExecutorEngine(&testEngineProviderExecutor{eng: eng}),
+	)
+	require.Nil(t, codeExecutorEngine(&testCodeExecutor{}))
+	require.Nil(t, codeExecutorEngine(nil))
+}
+
 func TestSandboxProfileAndBackendConfigBranches(t *testing.T) {
 	t.Parallel()
 
@@ -6886,4 +6909,26 @@ func TestSandboxShellEnvAndCopyStringMapBranches(t *testing.T) {
 	require.Equal(t, original, copied)
 	copied["A"] = "2"
 	require.Equal(t, "1", original["A"])
+}
+
+type testCodeExecutor struct{}
+
+func (testCodeExecutor) ExecuteCode(
+	context.Context,
+	codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (testCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{}
+}
+
+type testEngineProviderExecutor struct {
+	testCodeExecutor
+	eng codeexecutor.Engine
+}
+
+func (e *testEngineProviderExecutor) Engine() codeexecutor.Engine {
+	return e.eng
 }

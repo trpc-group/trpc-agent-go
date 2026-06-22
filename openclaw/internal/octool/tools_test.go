@@ -53,6 +53,48 @@ func newSandboxExecCommandTool(engine codeexecutor.Engine) tool.CallableTool {
 	return NewSandboxExecCommandTool(engine).(tool.CallableTool)
 }
 
+func TestSandboxExecToolDescription(t *testing.T) {
+	t.Parallel()
+
+	withoutMemory := sandboxExecToolDescription(false)
+	require.Contains(t, withoutMemory, "inside the configured sandbox")
+	require.Contains(
+		t,
+		withoutMemory,
+		"Only foreground non-interactive commands are supported",
+	)
+	require.NotContains(
+		t,
+		withoutMemory,
+		"host paths are not automatically mounted into the sandbox",
+	)
+
+	withMemory := sandboxExecToolDescription(true)
+	require.Contains(
+		t,
+		withMemory,
+		"host paths are not automatically mounted into the sandbox",
+	)
+}
+
+func TestNewSandboxExecCommandToolWithMemoryFileStore_WiresRegistry(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	tool := NewSandboxExecCommandToolWithMemoryFileStore(
+		&fakeSandboxExecEngine{},
+		nil,
+		store,
+	)
+	sandboxTool, ok := tool.(*sandboxExecTool)
+	require.True(t, ok)
+	require.Same(t, store, sandboxTool.memoryStore)
+	require.NotNil(t, sandboxTool.registry)
+}
+
 func TestSandboxExecTool_Foreground(t *testing.T) {
 	t.Parallel()
 
