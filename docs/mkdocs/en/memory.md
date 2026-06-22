@@ -1903,10 +1903,8 @@ tools even after conversation history is reset.
 
 `ContextOffloadConfig` only controls the Go adapter's gateway integration.
 Offload layers, state, storage, TTL, and isolation are owned by the TencentDB
-Agent Memory gateway. The unreleased local/backend offload fields are retained
-only for source compatibility; they no longer make the Go adapter write local
-offload state. Legacy `Backend.URL` and `Backend.APIKey` are treated as
-fallbacks for `GatewayURL` and `APIKey`.
+Agent Memory gateway. The Go adapter does not expose local/backend offload
+modes and does not write local offload state.
 
 | Field | Purpose | Default |
 | ----- | ------- | ------- |
