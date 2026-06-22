@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1672" height="941" viewBox="0 0 1672 941" role="img" aria-labelledby="title desc">
+  <title id="title">Prompt Assembly After Summary Boundary</title>
+  <desc id="desc">Older events become a session summary, while events after the boundary stay raw. Both are assembled into the next prompt before the LLM request.</desc>
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#1f5fbf"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#238a45"/>
+    </marker>
+  </defs>
+  <style>
+    .bg{fill:#f4f8ff}.title{font:700 46px Arial,sans-serif;fill:#102b63;text-anchor:middle}.note{font:700 30px Arial,sans-serif;fill:#203454;text-anchor:middle}.node{font:700 24px Arial,sans-serif;fill:#102b63;text-anchor:middle}.flow-blue{fill:none;stroke:#1f5fbf;stroke-width:5;marker-end:url(#arrow-blue)}.flow-green{fill:none;stroke:#238a45;stroke-width:5;marker-end:url(#arrow-green)}
+  </style>
+  <rect class="bg" width="1672" height="941"/>
+  <text class="title" x="836" y="70">Prompt Assembly After Summary Boundary</text>
+
+  <rect x="110" y="270" width="340" height="120" rx="14" fill="#e8f1ff" stroke="#7da6e8" stroke-width="3"/>
+  <text class="node" x="280" y="324">
+    <tspan x="280" dy="0">Older events</tspan>
+    <tspan x="280" dy="30">before boundary</tspan>
+  </text>
+
+  <rect x="525" y="270" width="300" height="120" rx="14" fill="#f8fbff" stroke="#1767d8" stroke-width="3"/>
+  <text class="node" x="675" y="337">Session summary</text>
+
+  <rect x="525" y="120" width="300" height="120" rx="14" fill="#eaf7ed" stroke="#238a45" stroke-width="3"/>
+  <text class="node" x="675" y="187">Events after boundary</text>
+
+  <rect x="950" y="205" width="270" height="120" rx="14" fill="#fff4e4" stroke="#f28a00" stroke-width="3"/>
+  <text class="node" x="1085" y="272">Next prompt</text>
+
+  <rect x="1340" y="205" width="210" height="120" rx="14" fill="#f0ebff" stroke="#7255d9" stroke-width="3"/>
+  <text class="node" x="1445" y="272">LLM</text>
+
+  <line class="flow-blue" x1="450" y1="330" x2="523" y2="330"/>
+  <polyline class="flow-blue" points="825,330 890,330 948,265"/>
+  <polyline class="flow-green" points="825,180 890,225 948,265"/>
+  <line class="flow-blue" x1="1220" y1="265" x2="1338" y2="265"/>
+
+  <text class="note" x="836" y="505">Summary compresses old history; post-boundary events stay raw.</text>
+</svg>
