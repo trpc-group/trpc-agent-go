@@ -120,7 +120,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	client, ok := baseClient.(mongoClient)
 	if !ok {
 		_ = baseClient.Disconnect(context.Background())
-		return nil, fmt.Errorf("mongodb session service requires storage/mongodb default client or a compatible extended client")
+		return nil, fmt.Errorf("mongodb session service client must implement storage.Client and storage.IndexViewer")
 	}
 
 	database := opts.database

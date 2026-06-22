@@ -842,4 +842,5 @@ func TestDefaultClientBuilderWithMockConnector(t *testing.T) {
 // TestDefaultClientInterfaceCompliance verifies defaultClient implements Client
 func TestDefaultClientInterfaceCompliance(t *testing.T) {
 	var _ Client = (*defaultClient)(nil)
+	var _ IndexViewer = (*defaultClient)(nil)
 }

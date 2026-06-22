@@ -62,6 +62,8 @@ type mockClient struct {
 	deleteManyFn    func(filter any) (*mongo.DeleteResult, error)
 }
 
+var _ mongoClient = (*mockClient)(nil)
+
 func (m *mockClient) record(op mockOp) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
