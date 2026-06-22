@@ -2984,6 +2984,14 @@ func (m *structuredOutputCaptureModel) Snapshot() (bool, string) {
 	return m.seen, m.schemaName
 }
 
+type agentToolParentStructuredOutput struct {
+	Summary string `json:"summary"`
+}
+
+type agentToolChildStructuredOutput struct {
+	Status string `json:"status"`
+}
+
 func TestTool_Call_MirrorsChildEventsToSession(t *testing.T) {
 	sa := &sessionMirrorAgent{name: "session-mirror"}
 	at := NewTool(sa)
@@ -5269,6 +5277,44 @@ func TestTool_callWithParentInvocation_PreservesRunStructuredOutput(t *testing.T
 	require.Equal(t, "tool_output", schemaName)
 }
 
+func TestTool_callWithParentInvocation_PinStructuredOutputUsesChildContract(t *testing.T) {
+	modelImpl := &structuredOutputCaptureModel{name: "capture-model"}
+	child := llmagent.New(
+		"structured-output-child",
+		llmagent.WithModel(modelImpl),
+		llmagent.WithStructuredOutputJSON(
+			new(agentToolChildStructuredOutput),
+			true,
+			"Child output.",
+		),
+	)
+	at := NewTool(child, WithPinStructuredOutput(true))
+	runOpts := agent.RunOptions{}
+	agent.WithStructuredOutputJSON(
+		new(agentToolParentStructuredOutput),
+		true,
+		"Parent output.",
+	)(&runOpts)
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(runOpts),
+		agent.WithInvocationStructuredOutput(runOpts.StructuredOutput),
+		agent.WithInvocationStructuredOutputType(runOpts.StructuredOutputType),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	res, err := at.callWithParentInvocation(
+		context.Background(),
+		parent,
+		model.NewUserMessage("hi"),
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, res)
+	seen, schemaName := modelImpl.Snapshot()
+	require.True(t, seen)
+	require.Equal(t, "agentToolChildStructuredOutput", schemaName)
+}
+
 func TestTool_callWithParentInvocation_RestoresLiveSessionFromParallelClone(
 	t *testing.T,
 ) {
@@ -5517,6 +5563,18 @@ func TestTool_WithPinModel_Enabled(t *testing.T) {
 	}
 }
 
+func TestTool_WithPinStructuredOutput_DefaultAndEnabled(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	defaultTool := NewTool(mockAgent)
+	require.False(t, defaultTool.pinStructuredOutput)
+
+	agentTool := NewTool(mockAgent, WithPinStructuredOutput(true))
+	require.True(t, agentTool.pinStructuredOutput)
+}
+
 func TestTool_WithPinModel_ClearsModelName(t *testing.T) {
 	mockAgent := &mockAgent{
 		name:        "test-agent",
@@ -5585,6 +5643,60 @@ func TestTool_WithPinModel_ClearsModelSelector(t *testing.T) {
 	if childInv.RunOptions.ModelSelector != nil {
 		t.Error("Expected ModelSelector to be nil when WithPinModel is enabled")
 	}
+}
+
+func TestTool_WithPinStructuredOutput_ClearsRunStructuredOutput(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinStructuredOutput(true))
+
+	runOpts := agent.RunOptions{}
+	agent.WithStructuredOutputJSON(
+		new(agentToolParentStructuredOutput),
+		true,
+		"Parent output.",
+	)(&runOpts)
+	parentInv := agent.NewInvocation(agent.WithInvocationRunOptions(runOpts))
+
+	opts := agentTool.childInvocationOptions(
+		context.Background(),
+		parentInv,
+		model.NewUserMessage("test"),
+		"child-key",
+		nil,
+	)
+
+	childInv := parentInv.Clone(opts...)
+	require.Nil(t, childInv.RunOptions.StructuredOutput)
+	require.Nil(t, childInv.RunOptions.StructuredOutputType)
+}
+
+func TestTool_WithPinRunOptions_PreservesRuntimeState(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinModel(true))
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ModelName: "parent-model",
+		}),
+	)
+	runtimeState := map[string]any{"room_id": "r1"}
+
+	opts := agentTool.childInvocationOptions(
+		context.Background(),
+		parentInv,
+		model.NewUserMessage("test"),
+		"child-key",
+		runtimeState,
+	)
+
+	childInv := parentInv.Clone(opts...)
+	require.Empty(t, childInv.RunOptions.ModelName)
+	require.Equal(t, runtimeState, childInv.RunOptions.RuntimeState)
 }
 
 func TestTool_WithPinModel_Disabled_PreservesModelName(t *testing.T) {

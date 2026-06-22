@@ -622,22 +622,32 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 使用 `ResponseModeFinalOnly`。如果还希望在流式 UI 中隐藏子 Agent 的正文，
 再单独组合 `InnerTextModeExclude`。
 
-#### 模型钉住 (Pin Model)
+#### 钉住模型与结构化输出
 
-默认情况下，子 Agent 会继承调用方的 `RunOptions.ModelName`、
-`RunOptions.Model` 和 `RunOptions.ModelSelector`。这仅在调用方通过
-`agent.WithModelName(...)`、`agent.WithModel(...)` 或
-`agent.WithModelSelector(...)` 在 `runner.Run` 时指定了模型才会生效（例如 AGUI
-服务端转发终端用户的模型选择）。如果 RunOptions 中未设置模型，子 Agent 自然使用
-自己通过 `llmagent.WithModel` 配置的模型。
+默认情况下，子 Agent 会继承调用方从 `RunOptions` 带下来的运行时覆盖项。
+这只在调用方于 `runner.Run` 时传入选项时才会产生影响（例如 AGUI 服务端转发
+终端用户选择的模型或输出格式）。如果 `RunOptions` 中没有设置运行时覆盖项，
+子 Agent 自然使用自己的静态配置。
 
-当子 Agent 需要始终使用自己的模型，不受 RunOptions 传入的运行时模型选择的影响：
+对固定的 `AgentTool` 子 Agent，可以在 AgentTool 边界清掉指定的继承覆盖项，
+让子 Agent 自己的配置重新生效：
 
 ```go
 agenttool.NewTool(subAgent,
     agenttool.WithPinModel(true),
+    agenttool.WithPinStructuredOutput(true),
 )
 ```
+
+这几个选项分别对应不同的继承字段：
+
+- `WithPinModel(true)`：清掉 `RunOptions.ModelName`、`RunOptions.Model` 和
+  `RunOptions.ModelSelector`，让子 Agent 自己的 `llmagent.WithModel(...)`
+  或模型选择器生效。
+- `WithPinStructuredOutput(true)`：清掉 `RunOptions.StructuredOutput` 和
+  `RunOptions.StructuredOutputType`，让子 Agent 自己的
+  `llmagent.WithStructuredOutputJSON(...)` 或
+  `llmagent.WithStructuredOutputJSONSchema(...)` 生效。
 
 #### 关联子 Agent 事件到父级工具调用
 
