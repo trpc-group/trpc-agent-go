@@ -992,13 +992,19 @@ tailoring may.
 > controlled by `WithAddSessionSummary(true)` and the configured session
 > summarizer.
 
-When `WithEnableContextCompaction(true)` is enabled, the framework adds two compaction passes before the LLM call:
+When `WithEnableContextCompaction(true)` is enabled, the framework applies the following `tool result` compaction passes before the LLM call, depending on configuration:
+
+**Pass 0 — Tool-name forced placeholder** (`ForceCleanToolNames`, empty by default):
+
+- Applies only to historical `tool result` payloads whose tool name appears in `ForceCleanToolNames`; it does not require the payload to exceed `ContextCompactionToolResultMaxTokens`
+- The current request and recent protected request/invocation units are not affected; `KeepToolNames` has higher priority
+- Useful for noisy historical outputs from tools such as shell, grep, and log dump tools
 
 **Pass 1 — Historical tool result placeholder** (`ContextCompactionToolResultMaxTokens`, default 1024 tokens):
 
 - Tool results from **older** requests that exceed the threshold are replaced entirely with a short placeholder while keeping `ToolID` and `ToolName`
-- The current request and the latest `ContextCompactionKeepRecentRequests` completed requests are never affected
-- If `ToolResultCompactionConfig.SkipRecentFunc` returns a positive number, the request/invocation units that own those tail events are also treated as recent and skipped by Pass 1
+- The current/recent protected set is never affected. This set includes the current request, the latest `ContextCompactionKeepRecentRequests` completed requests, and the request/invocation units that own the tail events returned by `ToolResultCompactionConfig.SkipRecentFunc`
+- `SkipRecentFunc` and `ContextCompactionKeepRecentRequests` are additive. Set `ContextCompactionKeepRecentRequests` to `0` if you want the custom recency function to define the recent boundary by itself
 - This cleans up accumulated long tool outputs from earlier conversation turns
 
 **Pass 2 — Oversized tool result truncation** (`ContextCompactionOversizedToolResultMaxTokens`, **default 0 / disabled**):
@@ -1007,19 +1013,19 @@ When `WithEnableContextCompaction(true)` is enabled, the framework adds two comp
 - Tool results exceeding this threshold are truncated using head+tail preservation: the beginning and end of the content are kept, with a `[...N characters truncated...]` marker in the middle
 - This is the safety net for single tool results large enough to overflow the context window on their own (e.g. `web_fetch` returning 800K+ chars of HTML)
 
-The two passes have different roles: Pass 1 aggressively cleans old history (low threshold, full replacement); Pass 2 is a high-threshold guard that only kicks in for extreme cases but protects the current request too.
+The passes have different roles: Pass 0 is an explicit tool-name policy; Pass 1 aggressively cleans old history (low threshold, full replacement); Pass 2 is a high-threshold guard that only kicks in for extreme cases and can also apply to the current request.
 
 Pass 2 is disabled by default (`0`). It only fires when both (1) `WithEnableContextCompaction(true)` is set and (2) `ContextCompactionOversizedToolResultMaxTokens > 0` (recommended opt-in value: `8192`, exposed as the constant `processor.DefaultContextCompactionOversizedToolResultMaxTokens`). This guarantees that `EnableContextCompaction=false` always means "the framework will not modify any tool result".
 
 Use `WithToolResultCompactionConfig(...)` when you need tool-name or recency policy:
 
-- `ForceCleanToolNames`: historical results from these tools are replaced with a policy placeholder whenever context compaction is enabled, after current/recent protection is applied. This is useful for noisy tools such as shell, grep, or log dump tools.
+- `ForceCleanToolNames`: historical results from these tools are replaced by Pass 0 with a policy placeholder whenever context compaction is enabled, after current/recent protection is applied. This is useful for noisy tools such as shell, grep, or log dump tools.
 - `KeepToolNames`: results from these tools are left untouched by context compaction. This is useful for recovery tools such as `session_load` and `session_search` when the model may need to read the exact payload.
-- `SkipRecentFunc`: customizes how many tail events are considered recent. It affects Pass 0 force-clean and Pass 1 historical classification; Pass 2 can still truncate oversized recent/current tool results.
+- `SkipRecentFunc`: customizes how many tail events are considered recent. Together with `ContextCompactionKeepRecentRequests`, it forms the recent protected set used by Pass 0 force-clean and Pass 1 historical classification; Pass 2 can still truncate oversized recent/current tool results.
 
 If the same tool name appears in both `ForceCleanToolNames` and `KeepToolNames`, `KeepToolNames` wins.
 
-When the compacted event has an `event_id`, placeholders and truncation markers include recovery hints such as `event_id`, `tool_call_id`, and `tool_name`. With `WithEnableOnDemandSession(true)` and a session backend that implements `session.WindowService`, the model can call `session_load` with `content_offset` / `content_limit` to reload a precise slice of the original tool result. `session_load` output size is controlled by its own window parameters and `content_limit`; reload very large results in slices instead of requesting the full payload at once.
+When a Pass 1 placeholder or Pass 2 truncation marker is created from an event with an `event_id`, it includes recovery hints such as `event_id`, `tool_call_id`, and `tool_name`; Pass 0 policy placeholders do not include these recovery hints. With `WithEnableOnDemandSession(true)` and a session backend that implements `session.WindowService`, the model can call `session_load` with `content_offset` / `content_limit` to reload a precise slice of the original tool result. `session_load` output size is controlled by its own window parameters and `content_limit`; reload very large results in slices instead of requesting the full payload at once.
 
 Additionally:
 
