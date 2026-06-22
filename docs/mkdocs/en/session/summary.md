@@ -438,7 +438,7 @@ Common `ContextThresholdOption` values:
 | --- | --- |
 | `WithContextThresholdRatio(ratio float64)` | Sets the context-window ratio that triggers summarization; default `0.5` |
 | `WithContextThresholdMinTokens(tokens int)` | Sets the absolute minimum trigger token count; default `2000`. Pass `0` to remove this lower bound |
-| `WithContextThresholdFallbackWindow(tokens int)` | Sets the summary checker's fallback context window; default `8192`. In the `WithContextThreshold` path, this is used only when the runtime context, model instance or registry, and summarizer model cannot resolve a context window. This is separate from token tailoring's `128000` unknown-model fallback |
+| `WithContextThresholdFallbackWindow(tokens int)` | Sets the summary checker's fallback context window; default `8192`. In the `WithContextThreshold` path, omitting this option lets the framework derive the fallback from the summarizer model when possible; setting it explicitly uses your value and skips that summarizer-model fallback. At check time, the fallback is used only when the runtime context, model instance, and registry cannot resolve a context window. This is separate from token tailoring's `128000` unknown-model fallback |
 
 ### Combined Conditions
 
@@ -825,11 +825,14 @@ The Runner automatically checks trigger conditions after each conversation compl
 
 ### Same-Run Sync Summary for Long ReAct Loops
 
-The default automatic path is asynchronous: after the Runner appends an event,
-it enqueues a summary job and a background worker later checks whether a summary
-should be generated. This keeps the main request path light, but it may be too
-late when one `Run` contains multiple LLM/tool iterations and the next LLM call
-needs the freshly summarized state immediately.
+The default automatic path is asynchronous: after the Runner appends a
+qualifying complete response event, such as a `tool result` or final assistant
+response, it enqueues a summary job and a background worker later checks whether
+a summary should be generated. User messages, tool-call responses, invalid
+content, `SkipSummarization` events, and sync-summary intermediate tool results
+do not enqueue async summary jobs. This keeps the main request path light, but
+it may be too late when one `Run` contains multiple LLM/tool iterations and the
+next LLM call needs the freshly summarized state immediately.
 
 For agents that frequently call tools repeatedly inside the same `Run`, and
 where tool results can quickly grow the prompt, enable same-run sync summary:
