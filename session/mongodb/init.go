@@ -171,7 +171,7 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 	}
 
 	for _, p := range plan {
-		if _, err := s.client.EnsureIndexes(ctx, s.database, p.coll, p.models); err != nil {
+		if _, err := s.client.CreateMany(ctx, s.database, p.coll, p.models); err != nil {
 			return fmt.Errorf("ensure indexes on %s: %w", p.coll, err)
 		}
 	}

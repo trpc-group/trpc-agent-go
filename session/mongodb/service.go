@@ -43,12 +43,7 @@ const cleanupBatchSize = 500
 
 type mongoClient interface {
 	storage.Client
-	UpdateMany(ctx context.Context, database string, coll string, filter any, update any,
-		opts ...*options.UpdateOptions) (*mongo.UpdateResult, error)
-	Aggregate(ctx context.Context, database string, coll string, pipeline any,
-		opts ...*options.AggregateOptions) (*mongo.Cursor, error)
-	EnsureIndexes(ctx context.Context, database string, coll string,
-		models []mongo.IndexModel, opts ...*options.CreateIndexesOptions) ([]string, error)
+	storage.IndexViewer
 }
 
 // Service is the mongodb session service.

@@ -2524,7 +2524,7 @@ func TestNewService_SkipDBInitSkipsTransactionProbe(t *testing.T) {
 
 	mc := &mockClient{
 		ensureIndexesFn: func(_ []mongo.IndexModel) ([]string, error) {
-			t.Fatal("EnsureIndexes should not be called when WithSkipDBInit(true) is set")
+			t.Fatal("CreateMany should not be called when WithSkipDBInit(true) is set")
 			return nil, nil
 		},
 		transactionFn: func(_ func(mongo.SessionContext) error) error {
@@ -2544,7 +2544,7 @@ func TestNewService_SkipDBInitSkipsTransactionProbe(t *testing.T) {
 	require.NotNil(t, s)
 
 	for _, op := range mc.recorded() {
-		assert.NotEqual(t, "EnsureIndexes", op.name)
+		assert.NotEqual(t, "CreateMany", op.name)
 		assert.NotEqual(t, "Transaction", op.name)
 	}
 }

@@ -28,7 +28,7 @@ func captureIndexes(t *testing.T) (order []string, models map[string][]mongo.Ind
 
 	mc := &mockClient{}
 	mc.ensureIndexesFn = func(in []mongo.IndexModel) ([]string, error) {
-		// The most recent recorded op is this very EnsureIndexes call, so
+		// The most recent recorded op is this very CreateMany call, so
 		// its coll is correct.
 		ops := mc.recorded()
 		coll := ops[len(ops)-1].coll

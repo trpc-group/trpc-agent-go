@@ -155,13 +155,31 @@ func (m *mockClient) Aggregate(_ context.Context, db, coll string, pipeline any,
 	return emptyCursor()
 }
 
-func (m *mockClient) EnsureIndexes(_ context.Context, db, coll string, models []mongo.IndexModel,
+func (m *mockClient) CreateMany(_ context.Context, db, coll string, models []mongo.IndexModel,
 	_ ...*options.CreateIndexesOptions) ([]string, error) {
-	m.record(mockOp{name: "EnsureIndexes", database: db, coll: coll})
+	m.record(mockOp{name: "CreateMany", database: db, coll: coll})
 	if m.ensureIndexesFn != nil {
 		return m.ensureIndexesFn(models)
 	}
 	return make([]string, len(models)), nil
+}
+
+func (m *mockClient) CreateOne(_ context.Context, db, coll string, model mongo.IndexModel,
+	_ ...*options.CreateIndexesOptions) (string, error) {
+	m.record(mockOp{name: "CreateOne", database: db, coll: coll, doc: model})
+	return "", nil
+}
+
+func (m *mockClient) DropOne(_ context.Context, db, coll string, name string,
+	_ ...*options.DropIndexesOptions) (bson.Raw, error) {
+	m.record(mockOp{name: "DropOne", database: db, coll: coll, filter: name})
+	return nil, nil
+}
+
+func (m *mockClient) DropAll(_ context.Context, db, coll string,
+	_ ...*options.DropIndexesOptions) (bson.Raw, error) {
+	m.record(mockOp{name: "DropAll", database: db, coll: coll})
+	return nil, nil
 }
 
 func (m *mockClient) Transaction(
@@ -183,6 +201,10 @@ func (m *mockClient) Disconnect(_ context.Context) error {
 		return m.closeFn()
 	}
 	return nil
+}
+
+func (m *mockClient) Indexes(_ context.Context, _ string, _ string) (mongo.IndexView, error) {
+	return mongo.IndexView{}, nil
 }
 
 // emptyCursor returns a cursor that immediately yields no documents.

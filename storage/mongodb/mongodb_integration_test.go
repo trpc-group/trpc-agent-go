@@ -129,7 +129,7 @@ func TestIntegration_CRUD(t *testing.T) {
 	assert.Equal(t, int64(2), delMany.DeletedCount)
 }
 
-func TestIntegration_EnsureIndexes(t *testing.T) {
+func TestIntegration_CreateMany(t *testing.T) {
 	client, db := newIntegrationClient(t)
 	ctx := context.Background()
 	const coll = "indexed"
@@ -146,12 +146,12 @@ func TestIntegration_EnsureIndexes(t *testing.T) {
 	}
 
 	// First call creates the indexes.
-	names, err := client.EnsureIndexes(ctx, db, coll, models)
+	names, err := client.CreateMany(ctx, db, coll, models)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"by_app_user", "ttl_expires_at"}, names)
 
 	// Second call is idempotent: same models returned, no error.
-	namesAgain, err := client.EnsureIndexes(ctx, db, coll, models)
+	namesAgain, err := client.CreateMany(ctx, db, coll, models)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, names, namesAgain)
 }

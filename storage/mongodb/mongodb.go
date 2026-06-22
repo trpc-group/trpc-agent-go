@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -85,9 +86,12 @@ func GetMongoDBInstance(name string) ([]ClientBuilderOpt, bool) {
 	return instance, ok
 }
 
+// TxFunc is a transaction logic function.
+// If it returns an error, the transaction will be rolled back.
+type TxFunc = func(sc mongo.SessionContext) error
+
 // Client defines the interface for MongoDB operations.
-// This is a subset of the internal mongodb.Client interface,
-// containing only the methods needed by the session layer.
+// It keeps the storage client aligned with trpc-database/mongodb for the operations used by this repo.
 type Client interface {
 	// InsertOne executes an insert command to insert a single document into the collection.
 	InsertOne(ctx context.Context, database string, coll string, document any,
@@ -95,6 +99,10 @@ type Client interface {
 
 	// UpdateOne executes an update command to update at most one document in the collection.
 	UpdateOne(ctx context.Context, database string, coll string, filter any, update any,
+		opts ...*options.UpdateOptions) (*mongo.UpdateResult, error)
+
+	// UpdateMany executes an update command to update documents in the collection.
+	UpdateMany(ctx context.Context, database string, coll string, filter any, update any,
 		opts ...*options.UpdateOptions) (*mongo.UpdateResult, error)
 
 	// DeleteOne executes a delete command to delete at most one document from the collection.
@@ -113,17 +121,40 @@ type Client interface {
 	Find(ctx context.Context, database string, coll string, filter any,
 		opts ...*options.FindOptions) (*mongo.Cursor, error)
 
+	// Aggregate executes an aggregate command and returns a cursor over the results.
+	Aggregate(ctx context.Context, database string, coll string, pipeline any,
+		opts ...*options.AggregateOptions) (*mongo.Cursor, error)
+
 	// CountDocuments returns the number of documents in the collection.
 	CountDocuments(ctx context.Context, database string, coll string, filter any,
 		opts ...*options.CountOptions) (int64, error)
 
 	// Transaction executes a transaction.
 	// The sf parameter is a function that receives a mongo.SessionContext for transaction operations.
-	Transaction(ctx context.Context, sf func(sc mongo.SessionContext) error, tOpts []*options.TransactionOptions,
+	Transaction(ctx context.Context, sf TxFunc, tOpts []*options.TransactionOptions,
 		opts ...*options.SessionOptions) error
 
 	// Disconnect closes the mongo client.
 	Disconnect(ctx context.Context) error
+
+	// Indexes gets the original index operation object.
+	Indexes(ctx context.Context, database string, collection string) (mongo.IndexView, error)
+}
+
+// IndexViewer defines MongoDB index operations.
+type IndexViewer interface {
+	// CreateMany creates multiple indexes.
+	CreateMany(ctx context.Context, database string, coll string,
+		models []mongo.IndexModel, opts ...*options.CreateIndexesOptions) ([]string, error)
+	// CreateOne creates a single index.
+	CreateOne(ctx context.Context, database string, coll string,
+		model mongo.IndexModel, opts ...*options.CreateIndexesOptions) (string, error)
+	// DropOne drops a single index by name.
+	DropOne(ctx context.Context, database string, coll string,
+		name string, opts ...*options.DropIndexesOptions) (bson.Raw, error)
+	// DropAll drops all indexes on the collection.
+	DropAll(ctx context.Context, database string, coll string,
+		opts ...*options.DropIndexesOptions) (bson.Raw, error)
 }
 
 // session defines the interface for MongoDB session operations.
@@ -195,12 +226,32 @@ func (c *defaultClient) Aggregate(ctx context.Context, database string, coll str
 	return c.client.Database(database).Collection(coll).Aggregate(ctx, pipeline, opts...)
 }
 
-func (c *defaultClient) EnsureIndexes(ctx context.Context, database string, coll string,
+func (c *defaultClient) CreateMany(ctx context.Context, database string, coll string,
 	models []mongo.IndexModel, opts ...*options.CreateIndexesOptions) ([]string, error) {
 	if len(models) == 0 {
 		return nil, nil
 	}
 	return c.client.Database(database).Collection(coll).Indexes().CreateMany(ctx, models, opts...)
+}
+
+func (c *defaultClient) CreateOne(ctx context.Context, database string, coll string,
+	model mongo.IndexModel, opts ...*options.CreateIndexesOptions) (string, error) {
+	return c.client.Database(database).Collection(coll).Indexes().CreateOne(ctx, model, opts...)
+}
+
+func (c *defaultClient) DropOne(ctx context.Context, database string, coll string,
+	name string, opts ...*options.DropIndexesOptions) (bson.Raw, error) {
+	return c.client.Database(database).Collection(coll).Indexes().DropOne(ctx, name, opts...)
+}
+
+func (c *defaultClient) DropAll(ctx context.Context, database string, coll string,
+	opts ...*options.DropIndexesOptions) (bson.Raw, error) {
+	return c.client.Database(database).Collection(coll).Indexes().DropAll(ctx, opts...)
+}
+
+// Indexes implements Client.Indexes.
+func (c *defaultClient) Indexes(_ context.Context, database string, collection string) (mongo.IndexView, error) {
+	return c.client.Database(database).Collection(collection).Indexes(), nil
 }
 
 // CountDocuments implements Client.CountDocuments.
@@ -210,7 +261,7 @@ func (c *defaultClient) CountDocuments(ctx context.Context, database string, col
 }
 
 // Transaction implements Client.Transaction.
-func (c *defaultClient) Transaction(ctx context.Context, sf func(sc mongo.SessionContext) error,
+func (c *defaultClient) Transaction(ctx context.Context, sf TxFunc,
 	tOpts []*options.TransactionOptions, opts ...*options.SessionOptions) error {
 	session, err := c.startSession(opts...)
 	if err != nil {
