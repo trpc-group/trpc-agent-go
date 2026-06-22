@@ -312,7 +312,15 @@ prefer the explicit DeepSeek v4 model names for new code.
 - Base URL: `https://api.hunyuan.cloud.tencent.com/v1`
 - Model Names: `hunyuan-2.0-thinking-20251109`, `hunyuan-2.0-instruct-20251111`, etc.
 
-**4. Other Providers**
+**4. Requesty**
+
+- Base URL: `https://router.requesty.ai/v1`
+- Auth: bearer key from `REQUESTY_API_KEY`
+- Model Names: `provider/model`, e.g. `openai/gpt-4o-mini` (browse models at <https://app.requesty.ai/router/list>)
+
+See the runnable example in `examples/model/requesty`.
+
+**5. Other Providers**
 
 - **Qwen**: Base URL `https://dashscope.aliyuncs.com/compatible-mode/v1`, Model Names: various qwen models
 
