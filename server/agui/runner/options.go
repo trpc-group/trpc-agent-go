@@ -24,6 +24,7 @@ import (
 
 const (
 	defaultPostRunFinalizationTimeout             = 5 * time.Second
+	defaultTrackPersistenceTimeout                = 5 * time.Second
 	defaultTimeout                                = time.Hour
 	defaultGraphNodeLifecycleActivityEnabled      = false
 	defaultGraphNodeInterruptActivityEnabled      = false
@@ -57,6 +58,7 @@ type Options struct {
 	MessagesSnapshotRunLifecycleEventsEnabled bool                  // MessagesSnapshotRunLifecycleEventsEnabled includes persisted RUN_* events as activity messages in MESSAGES_SNAPSHOT.
 	StartSpan                                 StartSpan             // StartSpan starts a span for an AG-UI run.
 	PostRunFinalizationTimeout                time.Duration         // PostRunFinalizationTimeout bounds how long post-run finalization is allowed to take.
+	TrackPersistenceTimeout                   time.Duration         // TrackPersistenceTimeout bounds how long AG-UI track persistence is allowed to take.
 	Timeout                                   time.Duration         // Timeout controls how long a run is allowed to execute.
 	CancelOnContextDoneEnabled                bool                  // CancelOnContextDoneEnabled cancels the run when the parent context is done.
 	GraphNodeLifecycleActivityEnabled         bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
@@ -85,6 +87,7 @@ func NewOptions(opt ...Option) *Options {
 		FlushInterval:                          track.DefaultFlushInterval,
 		StartSpan:                              defaultStartSpan,
 		PostRunFinalizationTimeout:             defaultPostRunFinalizationTimeout,
+		TrackPersistenceTimeout:                defaultTrackPersistenceTimeout,
 		Timeout:                                defaultTimeout,
 		GraphNodeLifecycleActivityEnabled:      defaultGraphNodeLifecycleActivityEnabled,
 		GraphNodeInterruptActivityEnabled:      defaultGraphNodeInterruptActivityEnabled,
@@ -251,6 +254,13 @@ func WithTimeout(d time.Duration) Option {
 func WithPostRunFinalizationTimeout(d time.Duration) Option {
 	return func(o *Options) {
 		o.PostRunFinalizationTimeout = d
+	}
+}
+
+// WithTrackPersistenceTimeout sets the maximum duration allowed for AG-UI track persistence.
+func WithTrackPersistenceTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		o.TrackPersistenceTimeout = d
 	}
 }
 
