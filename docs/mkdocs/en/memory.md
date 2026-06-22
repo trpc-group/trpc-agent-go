@@ -1859,6 +1859,65 @@ defer r.Close()
   through `memSvc.Tools()` when enabled.
 - Do **not** use `runner.WithMemoryService(...)` with this integration
 
+### Enable Context Offload
+
+Context offload is a separate, opt-in path for large tool results. Use it only
+with a TencentDB Agent Memory gateway build that exposes the offload routes
+listed in the notes below. The Go adapter does not provide local storage,
+summarization models, or local/backend/collect modes.
+
+Minimal setup:
+
+```go
+memSvc, err := memorytencentdb.NewService(
+    memorytencentdb.WithGatewayURL(gatewayURL),
+    memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
+        Enabled: true,
+    }),
+)
+if err != nil {
+    panic(err)
+}
+
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(openai.New("deepseek-v4-flash")),
+    llmagent.WithTools(memSvc.Tools()),
+)
+
+r := runner.NewRunner(
+    "my-app",
+    agent,
+    runner.WithSessionService(sessionSvc),
+    runner.WithSessionIngestor(memSvc),
+    runner.WithPlugins(memSvc.ContextOffloadPlugin()),
+)
+```
+
+If offload traffic should use a different gateway or key from normal
+capture/search/recall traffic, set `GatewayURL` and `APIKey` on
+`ContextOffloadConfig`:
+
+```go
+memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
+    Enabled:    true,
+    GatewayURL: "http://127.0.0.1:8420",
+    APIKey:     os.Getenv("TDAI_OFFLOAD_GATEWAY_API_KEY"),
+})
+```
+
+At runtime:
+
+- `ContextOffloadPlugin()` calls the gateway after tool execution. The gateway
+  may replace large tool result messages with compact references or summaries.
+- Before the next model call, the plugin asks the gateway whether the current
+  request should be rewritten with offloaded context.
+- `memSvc.Tools()` exposes `tdai_read_offload_ref`,
+  `tdai_read_offload_node`, and `tdai_search_offload_index` when context
+  offload is enabled, so the model can drill into gateway-owned offload data.
+- Do not configure local directories, local models, or L0-L3 policies in the Go
+  adapter; those concerns belong to TencentDB Agent Memory.
+
 ### Interactive Example
 
 Run the example after the gateway is ready:

@@ -1881,6 +1881,64 @@ defer r.Close()
   `tdai_search_offload_index` 工具会通过 `memSvc.Tools()` 暴露。
 - 不要对该集成使用 `runner.WithMemoryService(...)`。
 
+### 启用 Context Offload
+
+context offload 是独立、显式开启的短期大工具结果卸载路径。只有在
+TencentDB Agent Memory gateway 已经提供下方 notes 中列出的 offload routes
+时才应启用它。Go adapter 不提供本地存储、摘要模型，也不再暴露
+local/backend/collect 模式。
+
+最小接入方式：
+
+```go
+memSvc, err := memorytencentdb.NewService(
+    memorytencentdb.WithGatewayURL(gatewayURL),
+    memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
+        Enabled: true,
+    }),
+)
+if err != nil {
+    panic(err)
+}
+
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(openai.New("deepseek-v4-flash")),
+    llmagent.WithTools(memSvc.Tools()),
+)
+
+r := runner.NewRunner(
+    "my-app",
+    agent,
+    runner.WithSessionService(sessionSvc),
+    runner.WithSessionIngestor(memSvc),
+    runner.WithPlugins(memSvc.ContextOffloadPlugin()),
+)
+```
+
+如果 offload 流量需要使用与普通 capture/search/recall 不同的 gateway 或 key，
+可以在 `ContextOffloadConfig` 中单独设置 `GatewayURL` 和 `APIKey`：
+
+```go
+memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
+    Enabled:    true,
+    GatewayURL: "http://127.0.0.1:8420",
+    APIKey:     os.Getenv("TDAI_OFFLOAD_GATEWAY_API_KEY"),
+})
+```
+
+运行时行为：
+
+- `ContextOffloadPlugin()` 会在工具执行后调用 gateway。gateway 可以把较大的
+  tool result message 替换成紧凑引用或摘要。
+- 下一次模型调用前，plugin 会询问 gateway 是否需要用已卸载上下文改写当前请求。
+- 启用 context offload 后，`memSvc.Tools()` 会暴露
+  `tdai_read_offload_ref`、`tdai_read_offload_node` 和
+  `tdai_search_offload_index`，模型可以通过这些工具继续下钻 gateway 托管的
+  offload 数据。
+- 不要在 Go adapter 中配置本地目录、本地模型或 L0-L3 策略；这些职责属于
+  TencentDB Agent Memory。
+
 ### 交互式示例
 
 gateway 就绪后运行示例：
