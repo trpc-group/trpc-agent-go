@@ -634,24 +634,34 @@ and the parent Agent should only consume its final answer. Use
 `InnerTextModeExclude` separately when you also want to hide child assistant
 text from the streamed UI.
 
-#### Model Pinning
+#### Model and Structured Output Pinning
 
-By default, a sub-agent inherits the caller's `RunOptions.ModelName`,
-`RunOptions.Model` and `RunOptions.ModelSelector`. This only takes effect
-when the caller passes `agent.WithModelName(...)`, `agent.WithModel(...)`
-or `agent.WithModelSelector(...)` at `runner.Run` time (for example, an
-AGUI server forwarding the end-user's model choice). If no runtime model
-is set in RunOptions, the sub-agent naturally uses its own model
-configured via `llmagent.WithModel`.
+By default, a sub-agent inherits the caller's run-scoped overrides from
+`RunOptions`. This only matters when the caller passes options at
+`runner.Run` time (for example, an AGUI server forwarding the end-user's model
+or output-format choice). If no runtime override is set in `RunOptions`, the
+sub-agent naturally uses its own static configuration.
 
-When the sub-agent should always use its own model regardless of the
-runtime model selection propagated through RunOptions:
+For fixed `AgentTool` sub-agents, you can pin selected child-side
+configuration so the inherited runtime overrides are cleared at the AgentTool
+boundary:
 
 ```go
 agenttool.NewTool(subAgent,
     agenttool.WithPinModel(true),
+    agenttool.WithPinStructuredOutput(true),
 )
 ```
+
+The options map to different inherited fields:
+
+- `WithPinModel(true)`: clears `RunOptions.ModelName`, `RunOptions.Model` and
+  `RunOptions.ModelSelector`, so the sub-agent's own `llmagent.WithModel(...)`
+  or model selector takes effect.
+- `WithPinStructuredOutput(true)`: clears `RunOptions.StructuredOutput` and
+  `RunOptions.StructuredOutputType`, so the sub-agent's own
+  `llmagent.WithStructuredOutputJSON(...)` or
+  `llmagent.WithStructuredOutputJSONSchema(...)` takes effect.
 
 #### Correlating Sub-Agent Events to the Parent Tool Call
 
