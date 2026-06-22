@@ -213,6 +213,138 @@ func TestContextOffloadPlugin_UsesOffloadGatewayOverride(t *testing.T) {
 	assert.Equal(t, "Bearer offload-key", gotAuth)
 }
 
+func TestContextOffloadPlugin_GatewayFailuresLeaveContextUnchanged(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	plugin := NewContextOffloadPlugin(
+		WithGatewayURL(server.URL),
+		WithContextOffload(ContextOffloadConfig{Enabled: true}),
+	)
+	assert.Equal(t, contextOffloadPluginName, plugin.Name())
+	mgr, err := pluginpkg.NewManager(plugin)
+	require.NoError(t, err)
+
+	sess := &session.Session{ID: "sess", AppName: "app", UserID: "user"}
+	inv := &agent.Invocation{Session: sess}
+	ctx := agent.NewInvocationContext(context.Background(), inv).Context
+
+	afterRsp, err := mgr.AfterToolMessages(ctx, &pluginpkg.AfterToolMessagesArgs{
+		Invocation: inv,
+		ToolResultMessages: []model.Message{
+			model.NewToolMessage("call", "tool", "payload"),
+		},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, afterRsp)
+
+	req := &model.Request{Messages: []model.Message{model.NewUserMessage("original")}}
+	_, err = mgr.ModelCallbacks().RunBeforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	require.Len(t, req.Messages, 1)
+	assert.Equal(t, "original", req.Messages[0].Content)
+}
+
+func TestContextOffloadPlugin_BeforeModelResponseShapes(t *testing.T) {
+	tests := []struct {
+		name        string
+		response    offloadBeforeModelResponse
+		wantContent string
+	}{
+		{
+			name: "messages",
+			response: offloadBeforeModelResponse{
+				Messages: []model.Message{model.NewSystemMessage("from messages")},
+			},
+			wantContent: "from messages",
+		},
+		{
+			name: "request messages override",
+			response: offloadBeforeModelResponse{
+				Messages: []model.Message{model.NewSystemMessage("ignored")},
+				Request: &model.Request{
+					Messages: []model.Message{model.NewSystemMessage("from request")},
+				},
+			},
+			wantContent: "from request",
+		},
+		{
+			name: "orphan tool result ignored",
+			response: offloadBeforeModelResponse{
+				Messages: []model.Message{
+					model.NewToolMessage("missing-call", "tool", "orphan"),
+				},
+			},
+			wantContent: "original",
+		},
+		{
+			name:        "empty response ignored",
+			response:    offloadBeforeModelResponse{},
+			wantContent: "original",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, pathOffloadBeforeModel, r.URL.Path)
+				_ = json.NewEncoder(w).Encode(tt.response)
+			}))
+			defer server.Close()
+
+			svc, err := NewService(
+				WithGatewayURL(server.URL),
+				WithContextOffload(ContextOffloadConfig{Enabled: true}),
+			)
+			require.NoError(t, err)
+			defer svc.Close()
+
+			mgr, err := pluginpkg.NewManager(svc.ContextOffloadPlugin())
+			require.NoError(t, err)
+			ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+				Session: &session.Session{ID: "sess", AppName: "app", UserID: "user"},
+			}).Context
+			req := &model.Request{Messages: []model.Message{model.NewUserMessage("original")}}
+
+			_, err = mgr.ModelCallbacks().RunBeforeModel(ctx, &model.BeforeModelArgs{Request: req})
+			require.NoError(t, err)
+			require.Len(t, req.Messages, 1)
+			assert.Equal(t, tt.wantContent, req.Messages[0].Content)
+		})
+	}
+}
+
+func TestContextOffloadPlugin_SkipsInvalidInputs(t *testing.T) {
+	mgr, err := pluginpkg.NewManager(NewContextOffloadPlugin(
+		WithContextOffload(ContextOffloadConfig{Enabled: true}),
+	))
+	require.NoError(t, err)
+
+	afterRsp, err := mgr.AfterToolMessages(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Nil(t, afterRsp)
+
+	afterRsp, err = mgr.AfterToolMessages(context.Background(), &pluginpkg.AfterToolMessagesArgs{
+		Invocation: &agent.Invocation{
+			Session: &session.Session{ID: "sess", AppName: "app"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, afterRsp)
+
+	callbacks := mgr.ModelCallbacks()
+	_, err = callbacks.RunBeforeModel(context.Background(), &model.BeforeModelArgs{Request: nil})
+	require.NoError(t, err)
+
+	req := &model.Request{Messages: []model.Message{model.NewUserMessage("original")}}
+	_, err = callbacks.RunBeforeModel(context.Background(), &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	require.Len(t, req.Messages, 1)
+	assert.Equal(t, "original", req.Messages[0].Content)
+}
+
 func TestContextOffloadTools_DelegateToGateway(t *testing.T) {
 	var gotRef offloadReadRefRequest
 	var gotNode offloadReadNodeRequest
@@ -293,6 +425,44 @@ func TestContextOffloadTools_DelegateToGateway(t *testing.T) {
 	assert.Equal(t, maxSearchLimit, gotSearch.Limit)
 }
 
+func TestContextOffloadTools_ErrorPaths(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	svc, err := NewService(
+		WithGatewayURL(server.URL),
+		WithContextOffload(ContextOffloadConfig{Enabled: true}),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{ID: "sess", AppName: "app", UserID: "user"},
+	}).Context
+
+	readRef := findCallableTool(t, svc.Tools(), "tdai_read_offload_ref")
+	_, err = callToolJSON(t, readRef, ctx, &readOffloadRefToolRequest{})
+	require.ErrorContains(t, err, "result_ref is required")
+	_, err = callToolJSON(t, readRef, context.Background(), &readOffloadRefToolRequest{ResultRef: "refs/a.md"})
+	require.ErrorContains(t, err, "invocation session is required")
+	_, err = callToolJSON(t, readRef, ctx, &readOffloadRefToolRequest{ResultRef: "refs/a.md"})
+	require.Error(t, err)
+
+	readNode := findCallableTool(t, svc.Tools(), "tdai_read_offload_node")
+	_, err = callToolJSON(t, readNode, ctx, &readOffloadNodeToolRequest{})
+	require.ErrorContains(t, err, "node_id is required")
+	_, err = callToolJSON(t, readNode, ctx, &readOffloadNodeToolRequest{NodeID: "node"})
+	require.Error(t, err)
+
+	search := findCallableTool(t, svc.Tools(), "tdai_search_offload_index")
+	_, err = callToolJSON(t, search, ctx, &searchOffloadIndexToolRequest{})
+	require.ErrorContains(t, err, "query is required")
+	_, err = callToolJSON(t, search, ctx, &searchOffloadIndexToolRequest{Query: "needle"})
+	require.Error(t, err)
+}
+
 func TestContextOffloadPlugin_DisabledByDefault(t *testing.T) {
 	svc, err := NewService()
 	require.NoError(t, err)
@@ -304,6 +474,36 @@ func TestContextOffloadPlugin_DisabledByDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, after)
 	assert.Nil(t, findTool(svc.Tools(), "tdai_read_offload_ref"))
+}
+
+func TestContextOffloadHelpers(t *testing.T) {
+	assert.NotNil(t, (*Service)(nil).ContextOffloadPlugin())
+
+	standalone := &contextOffloadPlugin{opts: Options{}}
+	client, err := standalone.contextOffloadClient()
+	require.Error(t, err)
+	assert.Nil(t, client)
+
+	client, err = (*contextOffloadPlugin)(nil).contextOffloadClient()
+	require.NoError(t, err)
+	assert.Nil(t, client)
+
+	assert.Nil(t, cloneModelRequest(nil))
+	assistant := model.NewAssistantMessage("")
+	assistant.ToolCalls = []model.ToolCall{{ID: "call-1"}}
+	assert.False(t, hasOrphanToolResults([]model.Message{
+		assistant,
+		{Role: model.RoleTool, ToolID: "call-1"},
+	}))
+	assert.False(t, hasOrphanToolResults([]model.Message{
+		{Role: model.RoleTool},
+	}))
+
+	var rsp offloadAfterToolMessagesResponse
+	require.NoError(t, json.Unmarshal([]byte(`{"toolResultMessages":[{"role":"tool","tool_id":"call","content":"camel"}]}`), &rsp))
+	require.Len(t, rsp.ToolResultMessages, 1)
+	assert.Equal(t, "camel", rsp.ToolResultMessages[0].Content)
+	require.Error(t, json.Unmarshal([]byte(`{`), &rsp))
 }
 
 func findTool(tools []tool.Tool, name string) tool.Tool {
