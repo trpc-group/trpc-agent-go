@@ -95,6 +95,28 @@ func TestNewSandboxExecCommandToolWithMemoryFileStore_WiresRegistry(t *testing.T
 	require.NotNil(t, sandboxTool.registry)
 }
 
+func TestSandboxExecTool_WorkspaceFallsBackWithoutRegistry(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := &sandboxExecTool{engine: engine}
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				sessionpkg.NewSession("app", "u1", "s1"),
+			),
+		),
+	)
+
+	ws, err := tl.workspace(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "app/u1/s1", ws.ID)
+	require.Equal(t, "app/u1/s1", ws.Path)
+	require.Len(t, engine.manager.workspaces, 1)
+	require.Equal(t, ws, engine.manager.workspaces[0])
+}
+
 func TestSandboxExecTool_Foreground(t *testing.T) {
 	t.Parallel()
 

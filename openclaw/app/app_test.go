@@ -697,6 +697,31 @@ func TestBuildOpenClawTools_UsesSandboxExecCommand(t *testing.T) {
 	require.Nil(t, bundle.execMgr)
 }
 
+func TestBuildOpenClawTools_UsesSandboxExecCommandWithMemoryFileStore(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	engine := codeexecutor.NewEngine(nil, nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, engine)
+	decl := findToolDeclaration(bundle.tools, "exec_command")
+	require.NotNil(t, decl)
+	require.Contains(t, decl.Description, "inside the configured sandbox")
+	require.Contains(
+		t,
+		decl.Description,
+		"Memory-file environment metadata may be present",
+	)
+	require.Nil(t, findToolDeclaration(bundle.tools, "write_stdin"))
+	require.Nil(t, findToolDeclaration(bundle.tools, "kill_session"))
+	require.Nil(t, bundle.execMgr)
+}
+
 func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 	t *testing.T,
 ) {
@@ -1590,6 +1615,77 @@ func TestRun_CreateAgentFailsExitCode(t *testing.T) {
 	var exitErr *exitError
 	require.True(t, errors.As(err, &exitErr))
 	require.Equal(t, 1, exitErr.Code)
+}
+
+func TestNewRuntimeWithOptions_SandboxExecutorRequiresProgramRunner(t *testing.T) {
+	cfgPath := writeSandboxCodeExecutorConfig(t)
+	orig := loadCodeExecutorFromConfig
+	loadCodeExecutorFromConfig = func(
+		stateDir string,
+		enableLocal bool,
+		cfg codeExecutorOptions,
+	) (codeexecutor.CodeExecutor, error) {
+		if isSandboxCodeExecutor(cfg) {
+			return &testCodeExecutor{}, nil
+		}
+		return orig(stateDir, enableLocal, cfg)
+	}
+	t.Cleanup(func() {
+		loadCodeExecutorFromConfig = orig
+	})
+
+	rt, err := NewRuntimeWithOptions(context.Background(), []string{
+		"-config", cfgPath,
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+	})
+	require.Nil(t, rt)
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.EqualError(
+		t,
+		exitErr.Err,
+		"sandbox code executor does not expose a program runner",
+	)
+}
+
+func TestRun_SandboxExecutorRequiresProgramRunner(t *testing.T) {
+	cfgPath := writeSandboxCodeExecutorConfig(t)
+	orig := loadCodeExecutorFromConfig
+	loadCodeExecutorFromConfig = func(
+		stateDir string,
+		enableLocal bool,
+		cfg codeExecutorOptions,
+	) (codeexecutor.CodeExecutor, error) {
+		if isSandboxCodeExecutor(cfg) {
+			return &testCodeExecutor{}, nil
+		}
+		return orig(stateDir, enableLocal, cfg)
+	}
+	t.Cleanup(func() {
+		loadCodeExecutorFromConfig = orig
+	})
+
+	err := run(context.Background(), []string{
+		"-config", cfgPath,
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+	})
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.EqualError(
+		t,
+		exitErr.Err,
+		"sandbox code executor does not expose a program runner",
+	)
 }
 
 func TestRun_ClaudeCode_Smoke(t *testing.T) {
@@ -6931,4 +7027,21 @@ type testEngineProviderExecutor struct {
 
 func (e *testEngineProviderExecutor) Engine() codeexecutor.Engine {
 	return e.eng
+}
+
+func writeSandboxCodeExecutorConfig(t *testing.T) string {
+	t.Helper()
+
+	cfgData, err := yaml.Marshal(map[string]any{
+		"tools": map[string]any{
+			"code_executor": map[string]any{
+				"type": "sandbox",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
+	return cfgPath
 }

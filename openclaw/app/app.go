@@ -1039,7 +1039,7 @@ func NewRuntimeWithOptions(
 		opts.MemoryBackend,
 		stores.memoryFiles,
 	)
-	codeExec, err := codeExecutorFromConfig(
+	codeExec, err := loadCodeExecutorFromConfig(
 		resolvedStateDir,
 		opts.EnableLocalExec,
 		opts.CodeExecutor,
@@ -1633,7 +1633,7 @@ func run(
 		opts.MemoryBackend,
 		stores.memoryFiles,
 	)
-	codeExec, err := codeExecutorFromConfig(
+	codeExec, err := loadCodeExecutorFromConfig(
 		resolvedStateDir,
 		opts.EnableLocalExec,
 		opts.CodeExecutor,
@@ -2731,7 +2731,7 @@ func newAgent(
 	exec := cfg.codeExecutor
 	if exec == nil {
 		var err error
-		exec, err = codeExecutorFromConfig(
+		exec, err = loadCodeExecutorFromConfig(
 			cfg.StateDir,
 			cfg.EnableLocalExec,
 			cfg.CodeExecutor,
@@ -2837,6 +2837,8 @@ func codeExecutorEngine(exec codeexecutor.CodeExecutor) codeexecutor.Engine {
 	}
 	return provider.Engine()
 }
+
+var loadCodeExecutorFromConfig = codeExecutorFromConfig
 
 func sandboxCodeExecutorFromConfig(
 	stateDir string,
