@@ -255,6 +255,48 @@ func TestContextOffloadPlugin_UsesLegacyBackendOverride(t *testing.T) {
 	assert.True(t, gotAfter)
 }
 
+func TestContextOffloadPlugin_ExplicitGatewayIgnoresLegacyBackendAPIKey(t *testing.T) {
+	var gotAfter bool
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("primary gateway should not receive offload request: %s", r.URL.Path)
+	}))
+	defer primary.Close()
+	offload := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, pathOffloadAfterTool, r.URL.Path)
+		assert.Equal(t, "Bearer service-key", r.Header.Get(httpHeaderAuthorization))
+		gotAfter = true
+		_ = json.NewEncoder(w).Encode(offloadAfterToolMessagesResponse{})
+	}))
+	defer offload.Close()
+
+	svc, err := NewService(
+		WithGatewayURL(primary.URL),
+		WithAPIKey("service-key"),
+		WithContextOffload(ContextOffloadConfig{
+			Enabled:    true,
+			GatewayURL: offload.URL,
+			Backend: ContextOffloadBackendConfig{
+				APIKey: "legacy-key",
+			},
+		}),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	mgr, err := pluginpkg.NewManager(svc.ContextOffloadPlugin())
+	require.NoError(t, err)
+	_, err = mgr.AfterToolMessages(context.Background(), &pluginpkg.AfterToolMessagesArgs{
+		Invocation: &agent.Invocation{
+			Session: &session.Session{ID: "sess", AppName: "app", UserID: "user"},
+		},
+		ToolResultMessages: []model.Message{
+			model.NewToolMessage("call", "tool", "payload"),
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, gotAfter)
+}
+
 func TestContextOffloadTools_DelegateToGateway(t *testing.T) {
 	var gotRef offloadReadRefRequest
 	var gotNode offloadReadNodeRequest

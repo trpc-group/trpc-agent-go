@@ -229,12 +229,13 @@ func defaultContextOffloadConfig() ContextOffloadConfig {
 func normalizeContextOffloadConfig(cfg ContextOffloadConfig) ContextOffloadConfig {
 	cfg.GatewayURL = strings.TrimRight(strings.TrimSpace(cfg.GatewayURL), "/")
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	hasExplicitGatewayURL := cfg.GatewayURL != ""
 	cfg.Backend.URL = strings.TrimRight(strings.TrimSpace(cfg.Backend.URL), "/")
 	cfg.Backend.APIKey = strings.TrimSpace(cfg.Backend.APIKey)
-	if cfg.GatewayURL == "" {
+	if !hasExplicitGatewayURL {
 		cfg.GatewayURL = cfg.Backend.URL
 	}
-	if cfg.APIKey == "" {
+	if cfg.APIKey == "" && !hasExplicitGatewayURL {
 		cfg.APIKey = cfg.Backend.APIKey
 	}
 	return cfg
