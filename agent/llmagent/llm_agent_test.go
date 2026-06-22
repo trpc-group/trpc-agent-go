@@ -346,6 +346,21 @@ func TestBuildRequestProcessors_MaxHistoryRunsWiring(t *testing.T) {
 	require.Equal(t, 0, crp.MaxHistoryRuns)
 }
 
+func TestBuildRequestProcessors_ToolTranscriptModeWiring(t *testing.T) {
+	opts := &Options{}
+	WithToolTranscriptMode(ToolTranscriptModeOmitPreviousCompleted)(opts)
+
+	procs := buildRequestProcessors("test-agent", opts)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.Equal(t, processor.ToolTranscriptModeOmitPreviousCompleted, crp.ToolTranscriptMode)
+}
+
 func TestBuildRequestProcessors_ContextCompactionWiring(t *testing.T) {
 	opts := &Options{}
 	WithEnableContextCompaction(true)(opts)
