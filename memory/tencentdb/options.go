@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -26,6 +27,26 @@ const (
 	defaultIngestWorkers    = 1
 	defaultIngestQueueSize  = 10
 	defaultIngestJobTimeout = 30 * time.Second
+)
+
+const (
+	// ContextOffloadModeLocal is retained for source compatibility with the
+	// unreleased context offload API. The Go adapter now delegates all offload
+	// processing to the TencentDB Agent Memory gateway regardless of mode.
+	//
+	// Deprecated: configure the TencentDB Agent Memory gateway instead.
+	ContextOffloadModeLocal = "local"
+	// ContextOffloadModeBackend is retained for source compatibility with the
+	// unreleased context offload API.
+	//
+	// Deprecated: use ContextOffloadConfig.GatewayURL and APIKey.
+	ContextOffloadModeBackend = "backend"
+	// ContextOffloadModeCollect is retained for source compatibility with the
+	// unreleased context offload API.
+	//
+	// Deprecated: collection behavior is owned by the TencentDB Agent Memory
+	// gateway.
+	ContextOffloadModeCollect = "collect"
 )
 
 // SessionKeyFunc maps a framework session to the TencentDB Agent Memory
@@ -47,6 +68,107 @@ type ContextOffloadConfig struct {
 	// APIKey optionally overrides Service.APIKey for context offload calls.
 	// Empty reuses Service.APIKey.
 	APIKey string
+
+	// DataDir is retained for source compatibility with the unreleased local
+	// offload API.
+	//
+	// Deprecated: storage is owned by the TencentDB Agent Memory gateway and
+	// this field is ignored.
+	DataDir string
+	// Mode is retained for source compatibility with the unreleased local
+	// offload API.
+	//
+	// Deprecated: all modes delegate to the TencentDB Agent Memory gateway.
+	Mode string
+	// Model is retained for source compatibility with the unreleased local
+	// offload API.
+	//
+	// Deprecated: offload model calls are owned by the TencentDB Agent Memory
+	// gateway and this field is ignored.
+	Model model.Model
+	// MaxEntries is retained for source compatibility with the unreleased local
+	// offload API.
+	//
+	// Deprecated: context assembly is owned by the TencentDB Agent Memory
+	// gateway and this field is ignored.
+	MaxEntries int
+	// Backend is retained for source compatibility with the unreleased backend
+	// offload API. URL and APIKey are treated as fallbacks for GatewayURL and
+	// APIKey when those new fields are empty.
+	//
+	// Deprecated: use GatewayURL and APIKey directly.
+	Backend ContextOffloadBackendConfig
+	// L0 is retained for source compatibility with the unreleased local offload
+	// API.
+	//
+	// Deprecated: L0 policy is owned by the TencentDB Agent Memory gateway and
+	// this field is ignored.
+	L0 ContextOffloadL0Config
+	// L1 is retained for source compatibility with the unreleased local offload
+	// API.
+	//
+	// Deprecated: L1 policy is owned by the TencentDB Agent Memory gateway and
+	// this field is ignored.
+	L1 ContextOffloadL1Config
+	// L2 is retained for source compatibility with the unreleased local offload
+	// API.
+	//
+	// Deprecated: L2 policy is owned by the TencentDB Agent Memory gateway and
+	// this field is ignored.
+	L2 ContextOffloadL2Config
+	// L3 is retained for source compatibility with the unreleased local offload
+	// API.
+	//
+	// Deprecated: L3 policy is owned by the TencentDB Agent Memory gateway and
+	// this field is ignored.
+	L3 ContextOffloadL3Config
+}
+
+// ContextOffloadBackendConfig is retained for source compatibility with the
+// unreleased backend offload API.
+//
+// Deprecated: use ContextOffloadConfig.GatewayURL and APIKey.
+type ContextOffloadBackendConfig struct {
+	URL    string
+	APIKey string
+}
+
+// ContextOffloadL0Config is retained for source compatibility with the
+// unreleased local offload API.
+//
+// Deprecated: L0 policy is owned by the TencentDB Agent Memory gateway.
+type ContextOffloadL0Config struct {
+	MinToolResultBytes int
+	MaxRefBytes        int64
+}
+
+// ContextOffloadL1Config is retained for source compatibility with the
+// unreleased local offload API.
+//
+// Deprecated: L1 policy is owned by the TencentDB Agent Memory gateway.
+type ContextOffloadL1Config struct {
+	MaxPairsPerBatch int
+}
+
+// ContextOffloadL2Config is retained for source compatibility with the
+// unreleased local offload API.
+//
+// Deprecated: L2 policy is owned by the TencentDB Agent Memory gateway.
+type ContextOffloadL2Config struct {
+	NullThreshold int
+	Timeout       time.Duration
+}
+
+// ContextOffloadL3Config is retained for source compatibility with the
+// unreleased local offload API.
+//
+// Deprecated: L3 policy is owned by the TencentDB Agent Memory gateway.
+type ContextOffloadL3Config struct {
+	ContextWindow        int
+	MildRatio            float64
+	AggressiveRatio      float64
+	EmergencyRatio       float64
+	EmergencyTargetRatio float64
 }
 
 // Options configures Service.
@@ -107,6 +229,14 @@ func defaultContextOffloadConfig() ContextOffloadConfig {
 func normalizeContextOffloadConfig(cfg ContextOffloadConfig) ContextOffloadConfig {
 	cfg.GatewayURL = strings.TrimRight(strings.TrimSpace(cfg.GatewayURL), "/")
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	cfg.Backend.URL = strings.TrimRight(strings.TrimSpace(cfg.Backend.URL), "/")
+	cfg.Backend.APIKey = strings.TrimSpace(cfg.Backend.APIKey)
+	if cfg.GatewayURL == "" {
+		cfg.GatewayURL = cfg.Backend.URL
+	}
+	if cfg.APIKey == "" {
+		cfg.APIKey = cfg.Backend.APIKey
+	}
 	return cfg
 }
 

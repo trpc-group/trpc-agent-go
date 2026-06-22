@@ -1921,7 +1921,10 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 | `WithContextOffload(ContextOffloadConfig)` | 配置较大工具结果的显式短期上下文卸载。 | 关闭 |
 
 `ContextOffloadConfig` 只控制 Go adapter 的 gateway 对接。offload 层级、
-状态、存储、TTL 和隔离由 TencentDB Agent Memory gateway 负责。
+状态、存储、TTL 和隔离由 TencentDB Agent Memory gateway 负责。未发版的
+local/backend offload 字段仅保留源码兼容；它们不会让 Go adapter 重新写本地
+offload state。旧 `Backend.URL` 和 `Backend.APIKey` 会作为 `GatewayURL` 和
+`APIKey` 的 fallback。
 
 | 字段 | 作用 | 默认值 |
 | ---- | ---- | ------ |
