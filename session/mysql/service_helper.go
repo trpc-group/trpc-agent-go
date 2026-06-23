@@ -741,7 +741,7 @@ func (s *Service) getRecentEventRefs(
 		WHERE app_name = ? AND user_id = ? AND session_id = ?
 		AND created_at >= ?
 		AND deleted_at IS NULL
-		ORDER BY created_at DESC, id DESC
+		ORDER BY created_at DESC
 		LIMIT ?`,
 		s.tableSessionEvents)
 
@@ -883,7 +883,7 @@ func (s *Service) getPreviousEventRefs(
 		query += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
 		args = append(args, before.createdAt, before.createdAt, before.id)
 	}
-	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
+	query += ` ORDER BY created_at DESC LIMIT ?`
 	args = append(args, limit)
 
 	refs := make([]eventRef, 0, limit)
@@ -970,7 +970,7 @@ func (s *Service) getPagedEvents(
 		WHERE app_name = ? AND user_id = ? AND session_id = ?
 		AND created_at >= ?
 		AND deleted_at IS NULL
-		ORDER BY created_at DESC, id DESC
+		ORDER BY created_at DESC
 		LIMIT ? OFFSET ?`,
 		s.tableSessionEvents)
 
