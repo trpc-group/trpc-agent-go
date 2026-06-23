@@ -489,6 +489,11 @@ func (w *WeaviateKnowledge) buildQuery(req *knowledge.SearchRequest) *weaviate.Q
 
 - [InMemory Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/inmemory)
 - [Redis Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/redis)
+- [SQLite Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/sqlite)
+- [PostgreSQL Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/postgres)
+- [MySQL Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/mysql)
+- [ClickHouse Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/clickhouse)
+- [MongoDB Session](https://github.com/trpc-group/trpc-agent-go/tree/main/session/mongodb)
 
 **Implementation Notes:**
 
@@ -604,7 +609,6 @@ func (p *PostgreSQLService) unmarshalState(data []byte) session.StateMap {
 **Open Source Components That Can Be Integrated:**
 
 - PostgreSQL session storage
-- MongoDB session storage
 - MySQL session storage
 - Cassandra session storage
 
