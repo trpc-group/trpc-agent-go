@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/debugrecorder"
 )
 
 func TestPromptCacheUsageRecord(t *testing.T) {
@@ -93,4 +94,47 @@ func TestPromptCacheUsageRecordPrefersLastCacheReadTokens(
 	require.Equal(t, 30, record["last_uncached_tokens"])
 	require.Equal(t, 70, record["last_cache_read_tokens"])
 	require.InDelta(t, 0.7, record["last_cache_hit_ratio"], 0.0001)
+}
+
+func TestRecordPromptCacheUsageWritesTraceEvent(t *testing.T) {
+	t.Parallel()
+
+	rec, err := debugrecorder.New(t.TempDir(), "")
+	require.NoError(t, err)
+	trace, err := rec.Start(debugrecorder.TraceStart{
+		SessionID: "session-1",
+		RequestID: "request-1",
+	})
+	require.NoError(t, err)
+
+	recordPromptCacheUsage(nil, "session-1", "request-1", nil)
+	recordPromptCacheUsage(trace, "session-1", "request-1", nil)
+	recordPromptCacheUsage(
+		trace,
+		"session-1",
+		"request-1",
+		&gwproto.Usage{
+			PromptTokens: 100,
+			PromptDetails: &gwproto.PromptDetails{
+				CacheCreationTokens: 12,
+				CacheReadTokens:     64,
+			},
+			LastPromptTokens: 80,
+			LastDetails: &gwproto.PromptDetails{
+				CacheCreationTokens: 5,
+				CacheReadTokens:     32,
+			},
+		},
+	)
+	require.NoError(t, trace.Close(debugrecorder.TraceEnd{
+		Status: "ok",
+	}))
+
+	raw, err := debugrecorder.ReadEventsFile(trace.Dir())
+	require.NoError(t, err)
+	require.Contains(t, string(raw), debugrecorder.KindPromptCache)
+	require.Contains(t, string(raw), `"cache_creation_tokens":12`)
+	require.Contains(t, string(raw), `"cache_read_tokens":64`)
+	require.Contains(t, string(raw), `"last_cache_creation_tokens":5`)
+	require.Contains(t, string(raw), `"last_cache_read_tokens":32`)
 }
