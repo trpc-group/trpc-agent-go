@@ -11,14 +11,10 @@ package tencentdb
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	memorypkg "trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -207,33 +203,26 @@ func (s *Service) newReadOffloadRefTool(name string) tool.CallableTool {
 		if err != nil {
 			return nil, err
 		}
-		ref := strings.TrimSpace(req.ResultRef)
-		path, err := s.contextOffloadRefPath(inv.Session, inv.AgentName, ref)
+		client := s.contextOffloadClient()
+		if client == nil {
+			return nil, fmt.Errorf("%s: context offload gateway is unavailable", name)
+		}
+		rsp, err := client.offloadReadRef(ctx, offloadReadRefRequest{
+			Scope:     newOffloadScope(s.opts, inv.Session, inv.AgentName),
+			ResultRef: strings.TrimSpace(req.ResultRef),
+		})
 		if err != nil {
 			return nil, err
 		}
-		maxBytes := s.opts.ContextOffload.L0.MaxRefBytes
-		if maxBytes <= 0 {
-			maxBytes = defaultContextOffloadMaxRefBytes
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
-		limited := io.LimitReader(f, maxBytes+1)
-		b, err := io.ReadAll(limited)
-		if err != nil {
-			return nil, err
-		}
-		truncated := int64(len(b)) > maxBytes
-		if truncated {
-			b = b[:maxBytes]
+		if rsp == nil {
+			return &readOffloadRefToolResponse{
+				ResultRef: strings.TrimSpace(req.ResultRef),
+			}, nil
 		}
 		return &readOffloadRefToolResponse{
-			ResultRef: ref,
-			Content:   string(b),
-			Truncated: truncated,
+			ResultRef: rsp.ResultRef,
+			Content:   rsp.Content,
+			Truncated: rsp.Truncated,
 		}, nil
 	}
 	return function.NewFunctionTool(
@@ -253,24 +242,30 @@ func (s *Service) newReadOffloadNodeTool(name string) tool.CallableTool {
 		if err != nil {
 			return nil, err
 		}
-		store := newOffloadStorageContext(s.opts, inv.Session, inv.AgentName)
-		entries, err := readAllOffloadEntries(store)
+		client := s.contextOffloadClient()
+		if client == nil {
+			return nil, fmt.Errorf("%s: context offload gateway is unavailable", name)
+		}
+		nodeID := strings.TrimSpace(req.NodeID)
+		rsp, err := client.offloadReadNode(ctx, offloadReadNodeRequest{
+			Scope:  newOffloadScope(s.opts, inv.Session, inv.AgentName),
+			NodeID: nodeID,
+		})
 		if err != nil {
 			return nil, err
 		}
-		nodeID := strings.TrimSpace(req.NodeID)
-		var matches []offloadIndexEntry
-		for _, entry := range entries {
-			if entry.NodeID != nil && *entry.NodeID == nodeID {
-				matches = append(matches, entry)
-			}
+		if rsp == nil {
+			return &readOffloadNodeToolResponse{NodeID: nodeID}, nil
 		}
-		return &readOffloadNodeToolResponse{NodeID: nodeID, Entries: matches}, nil
+		return &readOffloadNodeToolResponse{
+			NodeID:  rsp.NodeID,
+			Entries: rsp.Entries,
+		}, nil
 	}
 	return function.NewFunctionTool(
 		fn,
 		function.WithName(name),
-		function.WithDescription("Read TencentDB context offload JSONL entries mapped to a Mermaid node_id. "+
+		function.WithDescription("Read TencentDB context offload entries mapped to a Mermaid node_id. "+
 			"Use this to drill down from the active task Mermaid graph."),
 	)
 }
@@ -284,26 +279,27 @@ func (s *Service) newSearchOffloadIndexTool(name string) tool.CallableTool {
 		if err != nil {
 			return nil, err
 		}
-		store := newOffloadStorageContext(s.opts, inv.Session, inv.AgentName)
-		entries, err := readAllOffloadEntries(store)
+		client := s.contextOffloadClient()
+		if client == nil {
+			return nil, fmt.Errorf("%s: context offload gateway is unavailable", name)
+		}
+		query := strings.TrimSpace(req.Query)
+		limit := normalizeLimit(req.Limit)
+		rsp, err := client.offloadSearchIndex(ctx, offloadSearchIndexRequest{
+			Scope: newOffloadScope(s.opts, inv.Session, inv.AgentName),
+			Query: query,
+			Limit: limit,
+		})
 		if err != nil {
 			return nil, err
 		}
-		query := strings.ToLower(strings.TrimSpace(req.Query))
-		limit := normalizeLimit(req.Limit)
-		var matches []offloadIndexEntry
-		for _, entry := range entries {
-			if offloadEntryMatches(entry, query) {
-				matches = append(matches, entry)
-				if len(matches) >= limit {
-					break
-				}
-			}
+		if rsp == nil {
+			return &searchOffloadIndexToolResponse{Query: query}, nil
 		}
 		return &searchOffloadIndexToolResponse{
-			Query:   strings.TrimSpace(req.Query),
-			Entries: matches,
-			Total:   len(matches),
+			Query:   rsp.Query,
+			Entries: rsp.Entries,
+			Total:   rsp.Total,
 		}, nil
 	}
 	return function.NewFunctionTool(
@@ -312,31 +308,6 @@ func (s *Service) newSearchOffloadIndexTool(name string) tool.CallableTool {
 		function.WithDescription("Search TencentDB context offload L1 summaries and refs for the current session. "+
 			"Use this when the active Mermaid graph does not show the exact result_ref needed."),
 	)
-}
-
-func (s *Service) contextOffloadRefPath(
-	sess *session.Session,
-	agentName string,
-	resultRef string,
-) (string, error) {
-	if s == nil {
-		return "", errors.New("tencentdb context offload: nil service")
-	}
-	root := contextOffloadSessionDirForAgent(s.opts, sess, agentName)
-	cleaned := filepath.ToSlash(filepath.Clean(resultRef))
-	if cleaned == "." || strings.HasPrefix(cleaned, "../") ||
-		strings.HasPrefix(cleaned, "/") ||
-		!strings.HasPrefix(cleaned, "refs/") {
-		return "", fmt.Errorf("tencentdb context offload: invalid result_ref %q", resultRef)
-	}
-	path := filepath.Join(root, filepath.FromSlash(cleaned))
-	rootClean := filepath.Clean(root)
-	pathClean := filepath.Clean(path)
-	rel, err := filepath.Rel(rootClean, pathClean)
-	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
-		return "", fmt.Errorf("tencentdb context offload: invalid result_ref %q", resultRef)
-	}
-	return pathClean, nil
 }
 
 func currentSession(ctx context.Context) (*session.Session, error) {
@@ -357,22 +328,13 @@ func normalizeLimit(limit int) int {
 	return limit
 }
 
-func offloadEntryMatches(entry offloadIndexEntry, query string) bool {
-	fields := []string{
-		entry.ToolCall,
-		entry.Summary,
-		entry.ResultRef,
-		entry.ToolCallID,
-		entry.displayNodeID(),
+func currentInvocation(ctx context.Context) (*agent.Invocation, error) {
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil || inv.Session == nil {
+		return nil, fmt.Errorf("tencentdb memory: invocation session is required")
 	}
-	for _, keyword := range entry.Keywords {
-		fields = append(fields, keyword)
+	if err := validateSessionScope(inv.Session); err != nil {
+		return nil, err
 	}
-	for _, field := range fields {
-		if strings.Contains(strings.ToLower(field), query) {
-			return true
-		}
-	}
-	b, err := json.Marshal(entry)
-	return err == nil && strings.Contains(strings.ToLower(string(b)), query)
+	return inv, nil
 }

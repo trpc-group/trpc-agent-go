@@ -16,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -27,31 +26,6 @@ const (
 	defaultIngestWorkers    = 1
 	defaultIngestQueueSize  = 10
 	defaultIngestJobTimeout = 30 * time.Second
-
-	defaultContextOffloadDataDir            = ".tdai-offload"
-	defaultContextOffloadMinToolResultBytes = 8 << 10
-	defaultContextOffloadMaxRefBytes        = 1 << 20
-	defaultContextOffloadMaxEntries         = 20
-	defaultContextOffloadMaxPairsPerBatch   = 20
-	defaultContextOffloadL2NullThreshold    = 4
-	defaultContextOffloadL2Timeout          = 5 * time.Minute
-	defaultContextOffloadContextWindow      = 200000
-	defaultContextOffloadMildRatio          = 0.50
-	defaultContextOffloadAggressiveRatio    = 0.85
-	defaultContextOffloadEmergencyRatio     = 0.95
-	defaultContextOffloadEmergencyTarget    = 0.60
-)
-
-const (
-	// ContextOffloadModeLocal runs L1/L1.5/L2 through the configured local
-	// model, falling back to deterministic summaries when no model is set.
-	ContextOffloadModeLocal = "local"
-	// ContextOffloadModeBackend sends L1/L1.5/L2 to a TencentDB Agent Memory
-	// offload backend.
-	ContextOffloadModeBackend = "backend"
-	// ContextOffloadModeCollect records refs and JSONL state without rewriting
-	// model-facing messages.
-	ContextOffloadModeCollect = "collect"
 )
 
 // SessionKeyFunc maps a framework session to the TencentDB Agent Memory
@@ -59,61 +33,20 @@ const (
 // does not provide strong multi-tenant isolation in a shared sidecar.
 type SessionKeyFunc func(*session.Session) string
 
-// ContextOffloadConfig configures the optional short-term context offload
-// plugin. Zero values are filled from conservative defaults.
+// ContextOffloadConfig configures the optional TencentDB Agent Memory context
+// offload gateway integration. Zero values reuse the Service gateway settings.
 type ContextOffloadConfig struct {
-	// Enabled controls whether ContextOffloadPlugin and its tools are active.
+	// Enabled controls whether ContextOffloadPlugin and companion tools are
+	// active.
 	Enabled bool
-	// DataDir stores refs, JSONL indexes, Mermaid files, and state.
-	DataDir string
-	// Mode selects local, backend, or collect processing.
-	Mode string
-	// Model is used in local mode for L1/L1.5/L2 offload tasks.
-	Model model.Model
-	// MaxEntries limits recent entries rendered into injected task context.
-	MaxEntries int
-	// Backend configures backend-mode L1/L1.5/L2 calls.
-	Backend ContextOffloadBackendConfig
-	// L0 configures raw tool result externalization.
-	L0 ContextOffloadL0Config
-	// L1 configures tool pair summarization.
-	L1 ContextOffloadL1Config
-	// L2 configures Mermaid task map generation.
-	L2 ContextOffloadL2Config
-	// L3 configures token-pressure compression.
-	L3 ContextOffloadL3Config
-}
 
-// ContextOffloadBackendConfig configures backend-mode offload calls.
-type ContextOffloadBackendConfig struct {
-	URL    string
+	// GatewayURL optionally overrides Service.GatewayURL for context offload
+	// hook and drill-down tool calls. Empty reuses Service.GatewayURL.
+	GatewayURL string
+
+	// APIKey optionally overrides Service.APIKey for context offload calls.
+	// Empty reuses Service.APIKey.
 	APIKey string
-}
-
-// ContextOffloadL0Config configures raw tool result externalization.
-type ContextOffloadL0Config struct {
-	MinToolResultBytes int
-	MaxRefBytes        int64
-}
-
-// ContextOffloadL1Config configures tool pair summarization.
-type ContextOffloadL1Config struct {
-	MaxPairsPerBatch int
-}
-
-// ContextOffloadL2Config configures Mermaid task map generation.
-type ContextOffloadL2Config struct {
-	NullThreshold int
-	Timeout       time.Duration
-}
-
-// ContextOffloadL3Config configures token-pressure compression.
-type ContextOffloadL3Config struct {
-	ContextWindow        int
-	MildRatio            float64
-	AggressiveRatio      float64
-	EmergencyRatio       float64
-	EmergencyTargetRatio float64
 }
 
 // Options configures Service.
@@ -168,78 +101,12 @@ func defaultOptions() Options {
 }
 
 func defaultContextOffloadConfig() ContextOffloadConfig {
-	return ContextOffloadConfig{
-		Mode:       ContextOffloadModeLocal,
-		DataDir:    defaultContextOffloadDataDir,
-		MaxEntries: defaultContextOffloadMaxEntries,
-		L0: ContextOffloadL0Config{
-			MinToolResultBytes: defaultContextOffloadMinToolResultBytes,
-			MaxRefBytes:        defaultContextOffloadMaxRefBytes,
-		},
-		L1: ContextOffloadL1Config{
-			MaxPairsPerBatch: defaultContextOffloadMaxPairsPerBatch,
-		},
-		L2: ContextOffloadL2Config{
-			NullThreshold: defaultContextOffloadL2NullThreshold,
-			Timeout:       defaultContextOffloadL2Timeout,
-		},
-		L3: ContextOffloadL3Config{
-			ContextWindow:        defaultContextOffloadContextWindow,
-			MildRatio:            defaultContextOffloadMildRatio,
-			AggressiveRatio:      defaultContextOffloadAggressiveRatio,
-			EmergencyRatio:       defaultContextOffloadEmergencyRatio,
-			EmergencyTargetRatio: defaultContextOffloadEmergencyTarget,
-		},
-	}
+	return ContextOffloadConfig{}
 }
 
 func normalizeContextOffloadConfig(cfg ContextOffloadConfig) ContextOffloadConfig {
-	def := defaultContextOffloadConfig()
-	cfg.DataDir = strings.TrimSpace(cfg.DataDir)
-	if cfg.DataDir == "" {
-		cfg.DataDir = def.DataDir
-	}
-	switch strings.TrimSpace(cfg.Mode) {
-	case ContextOffloadModeLocal, ContextOffloadModeBackend, ContextOffloadModeCollect:
-		cfg.Mode = strings.TrimSpace(cfg.Mode)
-	default:
-		cfg.Mode = def.Mode
-	}
-	cfg.Backend.URL = strings.TrimRight(strings.TrimSpace(cfg.Backend.URL), "/")
-	cfg.Backend.APIKey = strings.TrimSpace(cfg.Backend.APIKey)
-	if cfg.MaxEntries <= 0 {
-		cfg.MaxEntries = def.MaxEntries
-	}
-	if cfg.L0.MinToolResultBytes <= 0 {
-		cfg.L0.MinToolResultBytes = def.L0.MinToolResultBytes
-	}
-	if cfg.L0.MaxRefBytes <= 0 {
-		cfg.L0.MaxRefBytes = def.L0.MaxRefBytes
-	}
-	if cfg.L1.MaxPairsPerBatch <= 0 {
-		cfg.L1.MaxPairsPerBatch = def.L1.MaxPairsPerBatch
-	}
-	if cfg.L2.NullThreshold <= 0 {
-		cfg.L2.NullThreshold = def.L2.NullThreshold
-	}
-	if cfg.L2.Timeout <= 0 {
-		cfg.L2.Timeout = def.L2.Timeout
-	}
-	if cfg.L3.ContextWindow <= 0 {
-		cfg.L3.ContextWindow = def.L3.ContextWindow
-	}
-	if cfg.L3.MildRatio <= 0 || cfg.L3.MildRatio >= 1 {
-		cfg.L3.MildRatio = def.L3.MildRatio
-	}
-	if cfg.L3.AggressiveRatio <= 0 || cfg.L3.AggressiveRatio >= 1 {
-		cfg.L3.AggressiveRatio = def.L3.AggressiveRatio
-	}
-	if cfg.L3.EmergencyRatio <= 0 || cfg.L3.EmergencyRatio >= 1 {
-		cfg.L3.EmergencyRatio = def.L3.EmergencyRatio
-	}
-	if cfg.L3.EmergencyTargetRatio <= 0 || cfg.L3.EmergencyTargetRatio >= 1 {
-		cfg.L3.EmergencyTargetRatio = def.L3.EmergencyTargetRatio
-	}
+	cfg.GatewayURL = strings.TrimRight(strings.TrimSpace(cfg.GatewayURL), "/")
+	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
 	return cfg
 }
 
@@ -380,9 +247,10 @@ func WithToolPrefix(prefix string) Option {
 	}
 }
 
-// WithContextOffload configures the explicit context offload plugin and its
-// read-ref tool. It is disabled by default; set ContextOffloadConfig.Enabled
-// to true before registering ContextOffloadPlugin.
+// WithContextOffload configures the explicit TencentDB Agent Memory context
+// offload gateway integration and companion drill-down tools. It is disabled
+// by default; set ContextOffloadConfig.Enabled to true before registering
+// ContextOffloadPlugin.
 func WithContextOffload(cfg ContextOffloadConfig) Option {
 	return func(o *Options) {
 		o.ContextOffload = normalizeContextOffloadConfig(cfg)

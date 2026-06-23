@@ -26,6 +26,11 @@ const (
 	httpHeaderAccept        = "Accept"
 	httpHeaderContentType   = "Content-Type"
 	httpHeaderAuthorization = "Authorization"
+	httpHeaderAppName       = "X-App-Name"
+	httpHeaderUserID        = "X-User-Id"
+	httpHeaderSessionID     = "X-Session-Id"
+	httpHeaderSessionKey    = "X-Session-Key"
+	httpHeaderAgentName     = "X-Agent-Name"
 	httpContentTypeJSON     = "application/json"
 	httpAuthBearerPrefix    = "Bearer "
 
@@ -38,6 +43,11 @@ const (
 	pathSearchConversations = "/search/conversations"
 	pathEndSession          = "/session/end"
 	pathHealth              = "/health"
+	pathOffloadAfterTool    = "/offload/v1/hooks/after-tool-messages"
+	pathOffloadBeforeModel  = "/offload/v1/hooks/before-model"
+	pathOffloadReadRef      = "/offload/v1/tools/read-ref"
+	pathOffloadReadNode     = "/offload/v1/tools/read-node"
+	pathOffloadSearchIndex  = "/offload/v1/tools/search-index"
 
 	maxErrorBodyPreview = 512
 )
@@ -137,12 +147,113 @@ func (c *gatewayClient) health(ctx context.Context) (*HealthResponse, error) {
 	return &rsp, nil
 }
 
+func (c *gatewayClient) offloadAfterToolMessages(
+	ctx context.Context,
+	req offloadAfterToolMessagesRequest,
+) (*offloadAfterToolMessagesResponse, error) {
+	var rsp offloadAfterToolMessagesResponse
+	if err := c.doJSONWithHeaders(
+		ctx,
+		httpMethodPost,
+		pathOffloadAfterTool,
+		req,
+		&rsp,
+		offloadScopeHeaders(req.Scope),
+	); err != nil {
+		return nil, err
+	}
+	return &rsp, nil
+}
+
+func (c *gatewayClient) offloadBeforeModel(
+	ctx context.Context,
+	req offloadBeforeModelRequest,
+) (*offloadBeforeModelResponse, error) {
+	var rsp offloadBeforeModelResponse
+	if err := c.doJSONWithHeaders(
+		ctx,
+		httpMethodPost,
+		pathOffloadBeforeModel,
+		req,
+		&rsp,
+		offloadScopeHeaders(req.Scope),
+	); err != nil {
+		return nil, err
+	}
+	return &rsp, nil
+}
+
+func (c *gatewayClient) offloadReadRef(
+	ctx context.Context,
+	req offloadReadRefRequest,
+) (*offloadReadRefResponse, error) {
+	var rsp offloadReadRefResponse
+	if err := c.doJSONWithHeaders(
+		ctx,
+		httpMethodPost,
+		pathOffloadReadRef,
+		req,
+		&rsp,
+		offloadScopeHeaders(req.Scope),
+	); err != nil {
+		return nil, err
+	}
+	return &rsp, nil
+}
+
+func (c *gatewayClient) offloadReadNode(
+	ctx context.Context,
+	req offloadReadNodeRequest,
+) (*offloadReadNodeResponse, error) {
+	var rsp offloadReadNodeResponse
+	if err := c.doJSONWithHeaders(
+		ctx,
+		httpMethodPost,
+		pathOffloadReadNode,
+		req,
+		&rsp,
+		offloadScopeHeaders(req.Scope),
+	); err != nil {
+		return nil, err
+	}
+	return &rsp, nil
+}
+
+func (c *gatewayClient) offloadSearchIndex(
+	ctx context.Context,
+	req offloadSearchIndexRequest,
+) (*offloadSearchIndexResponse, error) {
+	var rsp offloadSearchIndexResponse
+	if err := c.doJSONWithHeaders(
+		ctx,
+		httpMethodPost,
+		pathOffloadSearchIndex,
+		req,
+		&rsp,
+		offloadScopeHeaders(req.Scope),
+	); err != nil {
+		return nil, err
+	}
+	return &rsp, nil
+}
+
 func (c *gatewayClient) doJSON(
 	ctx context.Context,
 	method string,
 	path string,
 	in any,
 	out any,
+) error {
+	return c.doJSONWithHeaders(ctx, method, path, in, out, nil)
+}
+
+func (c *gatewayClient) doJSONWithHeaders(
+	ctx context.Context,
+	method string,
+	path string,
+	in any,
+	out any,
+	headers map[string]string,
 ) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -160,7 +271,7 @@ func (c *gatewayClient) doJSON(
 			return fmt.Errorf("tencentdb memory: marshal request failed: %w", err)
 		}
 	}
-	return c.doJSONOnce(ctx, method, c.baseURL+path, payload, out, path != pathHealth)
+	return c.doJSONOnce(ctx, method, c.baseURL+path, payload, out, path != pathHealth, headers)
 }
 
 func (c *gatewayClient) doJSONOnce(
@@ -170,6 +281,7 @@ func (c *gatewayClient) doJSONOnce(
 	payload []byte,
 	out any,
 	authorize bool,
+	extraHeaders ...map[string]string,
 ) error {
 	var body io.Reader
 	if payload != nil {
@@ -185,6 +297,13 @@ func (c *gatewayClient) doJSONOnce(
 	}
 	if authorize && c.apiKey != "" {
 		req.Header.Set(httpHeaderAuthorization, httpAuthBearerPrefix+c.apiKey)
+	}
+	for _, headers := range extraHeaders {
+		for key, value := range headers {
+			if strings.TrimSpace(key) != "" && strings.TrimSpace(value) != "" {
+				req.Header.Set(key, value)
+			}
+		}
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
@@ -213,4 +332,14 @@ func (c *gatewayClient) doJSONOnce(
 		return fmt.Errorf("tencentdb memory: unmarshal response failed: %w", err)
 	}
 	return nil
+}
+
+func offloadScopeHeaders(scope offloadScope) map[string]string {
+	return map[string]string{
+		httpHeaderAppName:    scope.AppName,
+		httpHeaderUserID:     scope.UserID,
+		httpHeaderSessionID:  scope.SessionID,
+		httpHeaderSessionKey: scope.SessionKey,
+		httpHeaderAgentName:  scope.AgentName,
+	}
 }
