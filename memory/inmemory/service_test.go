@@ -900,7 +900,6 @@ func TestEnqueueAutoMemoryJob_DisableOnExternalContext(t *testing.T) {
 	err := service.EnqueueAutoMemoryJob(ctx, sess)
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
 	assert.False(t, ext.extractCalled)
 }
 

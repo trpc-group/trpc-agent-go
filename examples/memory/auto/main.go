@@ -316,6 +316,7 @@ func (c *autoMemoryChat) setup(ctx context.Context) error {
 	if c.enableKnowledge {
 		knowledgeTools, err := buildLocalKnowledgeTools(ctx)
 		if err != nil {
+			_ = c.memoryService.Close()
 			return fmt.Errorf("failed to build local knowledge tools: %w", err)
 		}
 		tools = append(tools, knowledgeTools...)

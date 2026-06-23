@@ -1053,6 +1053,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			agentName = invocation.AgentName
 		}
 	}
+	markSessionAutoMemoryPolluted(invocation, toolCallResponseEvent, tc.Function.Name)
 	stateDelta := p.buildToolEventStateDelta(
 		ctx,
 		invocation,

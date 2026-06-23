@@ -235,11 +235,11 @@ memoryService := memoryinmemory.NewMemoryService(
 | ------------ | ------------------------------------------------------------------------- | ---------------- |
 | `-model`     | Name of the model for chat responses                                      | `deepseek-v4-flash`  |
 | `-ext-model` | Name of the model for memory extraction                                   | Same as `-model` |
-| `-memory`    | Memory service type: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `postgres`, `pgvector`, `mysql` | `inmemory` |
+| `-memory`    | Memory service type: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `postgres`, `pgvector`, `mysql`, `mysqlvec` | `inmemory` |
 | `-streaming` | Enable streaming mode for responses                                       | `true`           |
 | `-debug`     | Enable debug mode to print messages sent to model                         | `false`          |
-| `-knowledge` | Enable a local knowledge base and expose `knowledge_search`                | `false`          |
-| `-disable-auto-memory-on-external-context` | Stop future auto extraction after knowledge search | `false` |
+| `-knowledge` | Enable a small local knowledge base with `knowledge_search`                | `false`          |
+| `-disable-auto-memory-on-external-context` | Stop future auto-memory extraction after `knowledge_search` is used | `false` |
 
 ## Usage
 
@@ -336,10 +336,14 @@ Output:
 Usage of ./auto:
   -debug
         Enable debug mode to print messages sent to model
+  -disable-auto-memory-on-external-context
+        Stop future auto-memory extraction after knowledge_search is used
   -ext-model string
         Model for memory extraction (defaults to chat model)
+  -knowledge
+        Enable a small local knowledge base with knowledge_search
   -memory string
-        Memory service type: inmemory, sqlite, sqlitevec, redis, postgres, pgvector, mysql (default "inmemory")
+        Memory service type: inmemory, sqlite, sqlitevec, redis, postgres, pgvector, mysql, mysqlvec (default "inmemory")
   -model string
         Model for chat responses (default "deepseek-v4-flash")
   -streaming
@@ -354,7 +358,10 @@ The interface is simple and intuitive:
 🧠 Auto Memory Demo
 Chat Model: deepseek-v4-flash
 Extractor Model: deepseek-v4-flash
+Memory Service: inmemory
 Streaming: true
+Knowledge: false
+Disable Auto Memory On External Context: false
 ==================================================
 
 💡 Auto memory mode extracts user information automatically.
@@ -365,6 +372,7 @@ Streaming: true
 
 💡 Special commands:
    /memory   - Show what the system remembers about you
+   /state    - Show current memory guard session state
    /new      - Start a new session
    /exit     - End the conversation
 
@@ -385,7 +393,7 @@ backend engineer from TechCorp. How can I help you today?
    (Memories persist across sessions)
 
 👤 You: What do you know about me?
-🔧 Memory tool calls:
+🔧 Tool calls:
    • memory_search (ID: call_xyz789)
      Args: {"query":"user information"}
 
@@ -402,7 +410,7 @@ work at TechCorp as a backend engineer.
 ### Session Commands
 
 - `/memory` - Show stored memories for the current user
-- `/state` - Show the current memory guard state
+- `/state` - Show current memory guard session state
 - `/new` - Start a new session (memories persist across sessions)
 - `/exit` - End the conversation
 
