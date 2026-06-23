@@ -2558,7 +2558,11 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 	}
 
 	// Convert usage information.
-	if chatCompletion.Usage.PromptTokens > 0 || chatCompletion.Usage.CompletionTokens > 0 {
+	// Only set Usage when there are actual token counts, consistent with the
+	// streaming createFinalResponse path. This prevents the Langfuse exporter
+	// from seeing zero-valued usage attributes that get filtered out by
+	// usageDetails.empty().
+	if chatCompletion.Usage.PromptTokens > 0 || chatCompletion.Usage.CompletionTokens > 0 || chatCompletion.Usage.TotalTokens > 0 {
 		usage := completionUsageToModelUsage(chatCompletion.Usage)
 		response.Usage = &usage
 	}
