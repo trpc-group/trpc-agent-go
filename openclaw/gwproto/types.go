@@ -58,12 +58,24 @@ type Usage struct {
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
 
+	PromptDetails *PromptDetails `json:"prompt_tokens_details,omitempty"`
+
 	// LastPromptTokens is the prompt_tokens from the most recent LLM call
 	// within the request. Unlike PromptTokens which aggregates across all
 	// LLM calls in a request (tool-call loops), this field reflects the
 	// actual context window occupancy of the final call and is used for
 	// accurate context usage display.
 	LastPromptTokens int `json:"last_prompt_tokens,omitempty"`
+
+	LastDetails *PromptDetails `json:"last_prompt_tokens_details,omitempty"`
+}
+
+// PromptDetails describes prompt-side cache usage when the provider
+// reports it.
+type PromptDetails struct {
+	CachedTokens        int `json:"cached_tokens,omitempty"`
+	CacheCreationTokens int `json:"cache_creation_tokens,omitempty"`
+	CacheReadTokens     int `json:"cache_read_tokens,omitempty"`
 }
 
 // MessageResponse matches the gateway /messages response JSON.

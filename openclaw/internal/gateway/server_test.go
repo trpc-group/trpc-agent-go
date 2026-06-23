@@ -2813,6 +2813,9 @@ func TestReplyAccumulator_CapturesUsage(t *testing.T) {
 				PromptTokens:     12000,
 				CompletionTokens: 345,
 				TotalTokens:      12345,
+				PromptTokensDetails: model.PromptTokensDetails{
+					CachedTokens: 8192,
+				},
 			},
 		},
 		RequestID: "req-1",
@@ -2822,6 +2825,11 @@ func TestReplyAccumulator_CapturesUsage(t *testing.T) {
 	require.Equal(t, 12000, acc.Usage.PromptTokens)
 	require.Equal(t, 345, acc.Usage.CompletionTokens)
 	require.Equal(t, 12345, acc.Usage.TotalTokens)
+	require.Equal(t, 12000, acc.Usage.LastPromptTokens)
+	require.NotNil(t, acc.Usage.PromptDetails)
+	require.Equal(t, 8192, acc.Usage.PromptDetails.CachedTokens)
+	require.NotNil(t, acc.Usage.LastDetails)
+	require.Equal(t, 8192, acc.Usage.LastDetails.CachedTokens)
 }
 
 func TestReplyAccumulator_AggregatesUsageAcrossResponses(
@@ -2844,6 +2852,9 @@ func TestReplyAccumulator_AggregatesUsageAcrossResponses(
 				PromptTokens:     100,
 				CompletionTokens: 50,
 				TotalTokens:      150,
+				PromptTokensDetails: model.PromptTokensDetails{
+					CachedTokens: 64,
+				},
 			},
 		},
 		RequestID: "req-1",
@@ -2858,6 +2869,9 @@ func TestReplyAccumulator_AggregatesUsageAcrossResponses(
 				PromptTokens:     200,
 				CompletionTokens: 30,
 				TotalTokens:      230,
+				PromptTokensDetails: model.PromptTokensDetails{
+					CachedTokens: 128,
+				},
 			},
 		},
 		RequestID: "req-1",
@@ -2868,6 +2882,11 @@ func TestReplyAccumulator_AggregatesUsageAcrossResponses(
 	require.Equal(t, 300, acc.Usage.PromptTokens)
 	require.Equal(t, 80, acc.Usage.CompletionTokens)
 	require.Equal(t, 380, acc.Usage.TotalTokens)
+	require.Equal(t, 200, acc.Usage.LastPromptTokens)
+	require.NotNil(t, acc.Usage.PromptDetails)
+	require.Equal(t, 192, acc.Usage.PromptDetails.CachedTokens)
+	require.NotNil(t, acc.Usage.LastDetails)
+	require.Equal(t, 128, acc.Usage.LastDetails.CachedTokens)
 }
 
 func TestReplyAccumulator_IgnoresUsageWithoutTokenCounts(
