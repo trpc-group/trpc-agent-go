@@ -2199,6 +2199,43 @@ func TestRunFlushesTracker(t *testing.T) {
 	assert.Equal(t, 1, recorder.flushCount)
 }
 
+func TestRecordTrackEventUsesDetachedPersistenceContext(t *testing.T) {
+	recorder := &contextRecorderTracker{}
+	r := &runner{
+		tracker:                 recorder,
+		trackPersistenceTimeout: time.Second,
+	}
+	parentCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := r.recordTrackEvent(
+		parentCtx,
+		session.Key{AppName: "app", UserID: "user", SessionID: "thread"},
+		aguievents.NewRunStartedEvent("thread", "run"),
+	)
+	require.NoError(t, err)
+
+	assert.NoError(t, recorder.ctxErr)
+	assert.True(t, recorder.hasDeadline)
+	assert.False(t, recorder.deadline.IsZero())
+}
+
+func TestRecordTrackEventTimeoutBoundsDetachedPersistence(t *testing.T) {
+	r := &runner{
+		tracker:                 deadlineWaitingTracker{},
+		trackPersistenceTimeout: 10 * time.Millisecond,
+	}
+
+	start := time.Now()
+	err := r.recordTrackEvent(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "user", SessionID: "thread"},
+		aguievents.NewRunStartedEvent("thread", "run"),
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), time.Second)
+}
+
 func TestNewWithSessionServiceEnablesTracker(t *testing.T) {
 	underlying := &fakeRunner{
 		run: func(context.Context, string, string, model.Message, ...agent.RunOption) (<-chan *agentevent.Event, error) {
@@ -2960,6 +2997,43 @@ func (f *flushRecorder) GetEvents(ctx context.Context, key session.Key, opts ...
 
 func (f *flushRecorder) Flush(ctx context.Context, key session.Key) error {
 	f.flushCount++
+	return nil
+}
+
+type contextRecorderTracker struct {
+	ctxErr      error
+	deadline    time.Time
+	hasDeadline bool
+}
+
+func (c *contextRecorderTracker) AppendEvent(ctx context.Context, _ session.Key, _ aguievents.Event) error {
+	c.ctxErr = ctx.Err()
+	c.deadline, c.hasDeadline = ctx.Deadline()
+	return nil
+}
+
+func (c *contextRecorderTracker) GetEvents(context.Context, session.Key,
+	...session.Option) (*session.TrackEvents, error) {
+	return nil, nil
+}
+
+func (c *contextRecorderTracker) Flush(context.Context, session.Key) error {
+	return nil
+}
+
+type deadlineWaitingTracker struct{}
+
+func (deadlineWaitingTracker) AppendEvent(ctx context.Context, _ session.Key, _ aguievents.Event) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (deadlineWaitingTracker) GetEvents(context.Context, session.Key,
+	...session.Option) (*session.TrackEvents, error) {
+	return nil, nil
+}
+
+func (deadlineWaitingTracker) Flush(context.Context, session.Key) error {
 	return nil
 }
 

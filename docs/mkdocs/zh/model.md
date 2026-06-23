@@ -309,7 +309,15 @@ type CompletionTokensDetails struct {
 - 基础 URL：`https://api.hunyuan.cloud.tencent.com/v1`
 - 模型名称：`hunyuan-2.0-thinking-20251109`、`hunyuan-2.0-instruct-20251111` 等
 
-**4. 其他提供商**
+**4. Requesty**
+
+- 基础 URL：`https://router.requesty.ai/v1`
+- 鉴权：通过 `REQUESTY_API_KEY` 传入 bearer key
+- 模型名称：`provider/model`，例如 `openai/gpt-4o-mini`（可在 <https://app.requesty.ai/router/list> 浏览可用模型）
+
+可运行示例见 `examples/model/requesty`。
+
+**5. 其他提供商**
 
 - **Qwen**：基础 URL `https://dashscope.aliyuncs.com/compatible-mode/v1`，模型名称：各种 Qwen 模型
 
