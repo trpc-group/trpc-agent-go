@@ -765,6 +765,9 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 	if toolEvent == nil {
 		return toolResult{index: index, toolArgs: modifiedArgs}, nil
 	}
+	if err != nil {
+		annotateToolResultError(toolEvent, toolCall.ID)
+	}
 	decl := p.lookupDeclaration(tools, toolCall.Function.Name)
 	var stateDelta *toolEventStateDelta
 	if err == nil {
@@ -909,6 +912,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			errorEvent := newToolCallResponseEvent(
 				invocation, llmResponse, []model.Choice{*errorChoice},
 			)
+			annotateToolResultError(errorEvent, tc.ID)
 			annotateToolCallArgs(errorEvent, tc, toolArgs)
 			if tc.Function.Name == transfer.TransferToolName {
 				errorEvent.Tag = event.TransferTag
@@ -955,6 +959,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		errorEvent := newToolCallResponseEvent(
 			invocation, llmResponse, []model.Choice{*errorChoice},
 		)
+		annotateToolResultError(errorEvent, tc.ID)
 		annotateToolCallArgs(errorEvent, tc, modifiedArgs)
 		errorEvent = p.decorateToolCallResponseEvent(
 			errorEvent,
@@ -1131,6 +1136,31 @@ func setToolCallArgs(
 		event.ToolCallArgsExtensionKey,
 		args,
 	)
+}
+
+func annotateToolResultError(ev *event.Event, toolCallID string) {
+	if ev == nil || toolCallID == "" {
+		return
+	}
+	errorsByCall, _, err := event.GetExtension[map[string]bool](
+		ev,
+		event.ToolResultErrorExtensionKey,
+	)
+	if err != nil {
+		log.Warnf("Failed to read tool result error extension: %v", err)
+		return
+	}
+	if errorsByCall == nil {
+		errorsByCall = make(map[string]bool)
+	}
+	errorsByCall[toolCallID] = true
+	if err := event.SetExtension(
+		ev,
+		event.ToolResultErrorExtensionKey,
+		errorsByCall,
+	); err != nil {
+		log.Warnf("Failed to set tool result error extension: %v", err)
+	}
 }
 
 func (p *FunctionCallResponseProcessor) decorateToolCallResponseEvent(
@@ -2868,6 +2898,7 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 	mergedChoices := collectMergedChoices(es)
 	mergedDelta := collectStateDelta(es)
 	mergedToolArgs := collectToolCallArgs(es)
+	mergedToolErrors := collectToolResultErrors(es)
 	baseEvent := findBaseEvent(es)
 	resp := buildMergedToolResponse(baseEvent, mergedChoices)
 	mergedEvent := buildMergedEvent(baseEvent, resp)
@@ -2884,10 +2915,42 @@ func mergeParallelToolCallResponseEvents(es []*event.Event) *event.Event {
 			log.Warnf("Failed to merge tool call args extension: %v", err)
 		}
 	}
+	if len(mergedToolErrors) > 0 {
+		if err := event.SetExtension(
+			mergedEvent,
+			event.ToolResultErrorExtensionKey,
+			mergedToolErrors,
+		); err != nil {
+			log.Warnf("Failed to merge tool result error extension: %v", err)
+		}
+	}
 	if shouldSkipSummarization(es) {
 		markSkipSummarization(mergedEvent)
 	}
 	return mergedEvent
+}
+
+func collectToolResultErrors(es []*event.Event) map[string]bool {
+	merged := make(map[string]bool)
+	for _, ev := range es {
+		errorsByCall, ok, err := event.GetExtension[map[string]bool](
+			ev,
+			event.ToolResultErrorExtensionKey,
+		)
+		if err != nil {
+			log.Warnf("Failed to read tool result error extension: %v", err)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		for toolCallID, failed := range errorsByCall {
+			if failed {
+				merged[toolCallID] = true
+			}
+		}
+	}
+	return merged
 }
 
 // collectMergedChoices collects the choices from all events.

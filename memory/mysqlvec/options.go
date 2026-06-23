@@ -40,7 +40,7 @@ var defaultOptions = ServiceOpts{
 	maxResults:          defaultMaxResults,
 	memoryLimit:         imemory.DefaultMemoryLimit,
 	similarityThreshold: defaultSimilarityThreshold,
-	toolCreators:        imemory.AllToolCreators,
+	toolCreators:        imemory.DefaultToolCreators,
 	enabledTools:        imemory.DefaultEnabledTools,
 	asyncMemoryNum:      imemory.DefaultAsyncMemoryNum,
 }

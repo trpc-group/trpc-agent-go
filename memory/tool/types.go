@@ -102,6 +102,19 @@ type SearchMemoryResponse struct {
 	Count   int      `json:"count"`   // Count is the number of results found.
 }
 
+// DeepSearchMemoryRequest represents the input for the memory_deepsearch tool.
+// Having at least one optional field keeps the generated JSON Schema non-empty
+// for strict validators.
+type DeepSearchMemoryRequest struct {
+	Reason string `json:"reason,omitempty" description:"Why the first memory_search results are insufficient"`
+}
+
+// DeepSearchMemoryResponse represents the response from memory_deepsearch.
+type DeepSearchMemoryResponse struct {
+	Activated bool   `json:"activated"` // Activated is true when cue/tag tools may be used next.
+	Message   string `json:"message"`   // Message explains the next step.
+}
+
 // LoadMemoryRequest represents the input for the load memory tool.
 type LoadMemoryRequest struct {
 	Limit int `json:"limit,omitempty" description:"Maximum number of memories to load (default: 10)"`

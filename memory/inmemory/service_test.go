@@ -22,6 +22,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -32,6 +33,249 @@ import (
 func TestNewMemoryService(t *testing.T) {
 	service := NewMemoryService()
 	require.NotNil(t, service, "NewMemoryService should not return nil")
+}
+
+func newDeepSearchTestService() *MemoryService {
+	service := NewMemoryService()
+	service.deepSearchStore = newDeepSearchStore()
+	return service
+}
+
+func TestMemoryService_DeepSearchIndexSearchExpandLoad(t *testing.T) {
+	service := newDeepSearchTestService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	require.NoError(t, service.IndexDocuments(ctx, deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				ID:   "memory-1",
+				Text: "Alice booked a Kyoto hiking trip with the user.",
+				Cues: []string{"Kyoto hiking", "Alice"},
+				Tags: []string{"travel", "plan"},
+				Ref: deepsearch.ContentRef{
+					Kind:     deepsearch.RefKindMemoryEntry,
+					SourceID: "memory-1",
+				},
+				Metadata: deepsearch.Metadata{
+					Topics:       []string{"travel"},
+					Participants: []string{"Alice"},
+					Location:     "Kyoto",
+				},
+			},
+		},
+	}))
+
+	cues, err := service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey:    userKey,
+		Query:      "kyoto",
+		MaxResults: 5,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, cues.Cues)
+	assert.Equal(t, "kyoto hiking", cues.Cues[0].Text)
+
+	expanded, err := service.ExpandTags(ctx, deepsearch.TagExpandRequest{
+		UserKey:        userKey,
+		CueIDs:         []string{cues.Cues[0].ID},
+		MaxTagsPerCue:  10,
+		MaxContents:    10,
+		IncludeContent: true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, expanded.Paths)
+	require.NotNil(t, expanded.Paths[0].Content)
+	assert.Equal(t, "memory-1", expanded.Paths[0].Content.Ref.SourceID)
+
+	loaded, err := service.LoadContents(ctx, deepsearch.ContentLoadRequest{
+		UserKey: userKey,
+		Refs: []deepsearch.ContentRef{
+			{
+				Kind:     deepsearch.RefKindMemoryEntry,
+				SourceID: "memory-1",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, loaded.Contents, 1)
+	assert.Contains(t, loaded.Contents[0].Text, "Kyoto hiking")
+}
+
+func TestMemoryService_DeepSearchReindexReplacesContentEdges(t *testing.T) {
+	service := newDeepSearchTestService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+	ref := deepsearch.ContentRef{
+		Kind:     deepsearch.RefKindMemoryEntry,
+		SourceID: "memory-1",
+	}
+
+	require.NoError(t, service.IndexDocuments(ctx, deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				Text: "The user liked coffee.",
+				Cues: []string{"coffee"},
+				Tags: []string{"preference"},
+				Ref:  ref,
+			},
+		},
+	}))
+	require.NoError(t, service.IndexDocuments(ctx, deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				Text: "The user switched to tea.",
+				Cues: []string{"tea"},
+				Tags: []string{"preference"},
+				Ref:  ref,
+			},
+		},
+	}))
+
+	oldCues, err := service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey: userKey,
+		Query:   "coffee",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, oldCues.Cues)
+
+	newCues, err := service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey: userKey,
+		Query:   "tea",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, newCues.Cues)
+	newPaths, err := service.ExpandTags(ctx, deepsearch.TagExpandRequest{
+		UserKey:        userKey,
+		CueIDs:         []string{newCues.Cues[0].ID},
+		IncludeContent: true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, newPaths.Paths)
+	require.NotNil(t, newPaths.Paths[0].Content)
+	assert.Contains(t, newPaths.Paths[0].Content.Text, "tea")
+}
+
+func TestMemoryService_DeepSearchRejectsMissingCuesAndTags(t *testing.T) {
+	service := newDeepSearchTestService()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+
+	err := service.IndexDocuments(ctx, deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				ID: "memory-1",
+				Text: "[SessionDate: 2023/05/30 (Tue) 17:27] " +
+					"I graduated with a degree in Business Administration.",
+				Ref: deepsearch.ContentRef{
+					Kind:     deepsearch.RefKindMemoryEntry,
+					SourceID: "memory-1",
+				},
+			},
+		},
+		Replace: true,
+	})
+	require.ErrorContains(t, err, "cues are required")
+}
+
+func TestMemoryService_DeepSearchQueries(t *testing.T) {
+	service := newDeepSearchTestService()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	day1 := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	day2 := time.Date(2024, 4, 1, 0, 0, 0, 0, time.UTC)
+
+	require.NoError(t, service.IndexDocuments(ctx, deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				ID:   "event-1",
+				Text: "The user started learning Japanese for a Kyoto trip.",
+				Cues: []string{"learning japanese", "kyoto trip"},
+				Tags: []string{"education", "language", "travel"},
+				Ref: deepsearch.ContentRef{
+					Kind:     deepsearch.RefKindMemoryEntry,
+					SourceID: "event-1",
+				},
+				Metadata: deepsearch.Metadata{
+					EventTime: day1,
+					Topics:    []string{"language", "travel"},
+					Kind:      memory.KindEpisode,
+				},
+			},
+			{
+				ID:   "event-2",
+				Text: "The user prefers quiet hotels near train stations.",
+				Cues: []string{"quiet hotels", "train stations"},
+				Tags: []string{"preference", "travel"},
+				Ref: deepsearch.ContentRef{
+					Kind:     deepsearch.RefKindMemoryEntry,
+					SourceID: "event-2",
+				},
+				Metadata: deepsearch.Metadata{
+					EventTime: day2,
+					Topics:    []string{"travel"},
+					Kind:      memory.KindEpisode,
+				},
+			},
+		},
+		Replace: true,
+	}))
+
+	var _ deepsearch.QueryService = service
+	edges, err := service.EdgesByTag(ctx, deepsearch.EdgesByTagRequest{
+		UserKey:        userKey,
+		Tags:           []string{"preference"},
+		IncludeContent: true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, edges.Paths)
+	require.NotNil(t, edges.Paths[0].Content)
+	assert.Contains(t, edges.Paths[0].Content.Text, "quiet hotels")
+
+	topic, err := service.QueryTopicEvents(ctx, deepsearch.QueryTopicEventsRequest{
+		UserKey: userKey,
+		Topic:   "language",
+	})
+	require.NoError(t, err)
+	require.Len(t, topic.Contents, 1)
+	assert.Equal(t, "event-1", topic.Contents[0].Ref.SourceID)
+
+	aspect, err := service.QueryPersonalAspect(ctx, deepsearch.QueryPersonalAspectRequest{
+		UserKey: userKey,
+		Aspect:  "preference",
+		Query:   "hotel",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, aspect.Contents)
+	assert.Contains(t, aspect.Contents[0].Text, "quiet hotels")
+
+	contextResult, err := service.QueryEventContext(ctx, deepsearch.QueryEventContextRequest{
+		UserKey: userKey,
+		Refs: []deepsearch.ContentRef{{
+			Kind:     deepsearch.RefKindMemoryEntry,
+			SourceID: "event-2",
+		}},
+		MaxResults: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, contextResult.Contents, 1)
+}
+
+func TestScoreDeepSearchText_TokenAndPhraseScoring(t *testing.T) {
+	assert.Zero(t, scoreDeepSearchText("me", "time"))
+	assert.Zero(t, scoreDeepSearchText("it", "with"))
+	assert.Greater(t, scoreDeepSearchText("graduated degree", "what degree did I graduate with"), 0.8)
+	assert.Greater(t, scoreDeepSearchText("daily commute", "daily commute duration"), 0.8)
 }
 
 func TestMemoryService_AddMemory(t *testing.T) {

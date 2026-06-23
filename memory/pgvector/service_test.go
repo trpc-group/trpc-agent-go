@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -673,6 +674,171 @@ func setupMockService(
 	svc, err := NewService(opts...)
 	require.NoError(t, err)
 	return svc
+}
+
+func TestService_DeepSearchs_LoadContentsByRef(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+	svc.deepSearchInited = true
+
+	var _ deepsearch.QueryService = svc
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+	now := time.Now()
+	mock.ExpectQuery("SELECT content_id, app_name, user_id, content_text, ref_kind, session_id, event_id, turn_id, source_id, metadata, created_at, updated_at FROM memories_cue_tag_contents").
+		WithArgs(
+			userKey.AppName,
+			userKey.UserID,
+			string(deepsearch.RefKindMemoryEntry),
+			"memory-1",
+		).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"content_id", "app_name", "user_id", "content_text", "ref_kind", "session_id", "event_id",
+			"turn_id", "source_id", "metadata", "created_at", "updated_at",
+		}).AddRow(
+			"content-1",
+			userKey.AppName,
+			userKey.UserID,
+			"Alice booked a Kyoto hiking trip.",
+			string(deepsearch.RefKindMemoryEntry),
+			nil,
+			nil,
+			nil,
+			"memory-1",
+			[]byte(`{"topics":["travel"]}`),
+			now,
+			now,
+		))
+
+	loaded, err := svc.LoadContents(ctx, deepsearch.ContentLoadRequest{
+		UserKey: userKey,
+		Refs: []deepsearch.ContentRef{
+			{
+				Kind:     deepsearch.RefKindMemoryEntry,
+				SourceID: "memory-1",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, loaded.Contents, 1)
+	assert.Equal(t, "content-1", loaded.Contents[0].ID)
+	assert.Equal(t, userKey.AppName, loaded.Contents[0].Ref.AppName)
+	assert.Equal(t, userKey.UserID, loaded.Contents[0].Ref.UserID)
+	assert.Equal(t, "memory-1", loaded.Contents[0].Ref.SourceID)
+	assert.Equal(t, []string{"travel"}, loaded.Contents[0].Metadata.Topics)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_DeepSearchs_SearchUsesPrecreatedTablesWithoutDDL(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	for range []string{
+		svc.deepSearchTables.cues,
+		svc.deepSearchTables.tags,
+		svc.deepSearchTables.contents,
+	} {
+		mock.ExpectQuery("SELECT to_regclass").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	}
+	mock.ExpectQuery("SELECT c.cue_id, c.cue_text FROM memories_cue_tag_cues c").
+		WithArgs("test-app", "test-user", sqlmock.AnyArg(), "%kyoto%", "kyoto").
+		WillReturnRows(sqlmock.NewRows([]string{"cue_id", "cue_text"}).
+			AddRow("cue-1", "kyoto"))
+
+	result, err := svc.SearchCues(context.Background(), deepsearch.CueSearchRequest{
+		UserKey: memory.UserKey{AppName: "test-app", UserID: "test-user"},
+		Query:   "kyoto",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Cues, 1)
+	assert.Equal(t, "cue-1", result.Cues[0].ID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeepSearchs_ScoreAvoidsWeakSubstringMatches(t *testing.T) {
+	assert.Zero(t, scoreDeepSearchText("me", "time"))
+	assert.Zero(t, scoreDeepSearchText("it", "with"))
+	assert.Greater(t, scoreDeepSearchText("graduated degree", "what degree did I graduate with"), 0.8)
+	assert.Greater(t, scoreDeepSearchText("daily commute", "daily commute duration"), 0.8)
+}
+
+func TestService_DeepSearchs_IndexUsesScopedContentConflict(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+	svc.deepSearchInited = true
+
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	ref := deepsearch.ContentRef{
+		Kind:     deepsearch.RefKindMemoryEntry,
+		SourceID: "memory-1",
+	}
+	emptyContentRows := sqlmock.NewRows([]string{
+		"content_id", "app_name", "user_id", "content_text", "ref_kind",
+		"session_id", "event_id", "turn_id", "source_id", "metadata",
+		"created_at", "updated_at",
+	})
+	mock.ExpectQuery("SELECT content_id, app_name, user_id, content_text").
+		WithArgs(userKey.AppName, userKey.UserID, string(ref.Kind), ref.SourceID).
+		WillReturnRows(emptyContentRows)
+	mock.ExpectExec("DELETE FROM memories_cue_tag_tags").
+		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DELETE FROM memories_cue_tag_contents").
+		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DELETE FROM memories_cue_tag_cues c").
+		WithArgs(userKey.AppName, userKey.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO memories_cue_tag_contents .*ON CONFLICT \\(app_name, user_id, content_id\\)").
+		WithArgs(
+			sqlmock.AnyArg(),
+			userKey.AppName,
+			userKey.UserID,
+			"Alice booked Kyoto hiking.",
+			string(ref.Kind),
+			nil,
+			nil,
+			nil,
+			ref.SourceID,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO memories_cue_tag_cues").
+		WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, "kyoto", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO memories_cue_tag_tags .*ON CONFLICT \\(app_name, user_id, cue_id, content_id, tag_text\\)").
+		WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, "travel", sqlmock.AnyArg(), sqlmock.AnyArg(), 1.0, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.IndexDocuments(context.Background(), deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				ID:   "shared-content-id",
+				Text: "Alice booked Kyoto hiking.",
+				Cues: []string{"kyoto"},
+				Tags: []string{"travel"},
+				Ref:  ref,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestService_AddMemory(t *testing.T) {

@@ -43,6 +43,46 @@ Auto Mode is available when an Extractor is configured and is recommended as the
 - **Agentic Mode**: Agent automatically decides when to call memory tools based on conversation content (e.g., when user mentions personal information or preferences), user sees tool calls, suitable for scenarios requiring precise control over memory content
 - **Auto Mode (recommended)**: Natural conversation flow, system passively learns about users, simplified UX
 
+### Progressive DeepSearch
+
+DeepSearch is an optional memory retrieval enhancement. It builds a cue/tag
+index from existing `memory.Entry` records and exposes a progressive second
+retrieval stage to `LLMAgent`. The original memory entry remains the
+authoritative content; DeepSearch does not store raw sessions as independent
+memory content.
+
+DeepSearch is disabled by default and requires two explicit opt-ins:
+
+1. Enable the backend index capability with `WithDeepSearch(indexModel)`.
+2. Enable the progressive agent tool surface with
+   `llmagent.WithMemoryDeepSearch()`.
+
+If either option is missing, the normal memory tools and retrieval behavior stay
+unchanged. `memory_search` always uses the original memory service search. The
+`memory_deepsearch` tool can only be called after a successful
+`memory_search`; once it succeeds, DeepSearch subtools are activated only for
+the current invocation.
+
+```go
+indexModel := openai.New("gpt-4o-mini")
+chatModel := openai.New("gpt-4o-mini")
+
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithDeepSearch(indexModel),
+)
+
+llmAgent := llmagent.New(
+    "memory-assistant",
+    llmagent.WithModel(chatModel),
+    llmagent.WithTools(memoryService.Tools()),
+    llmagent.WithMemoryDeepSearch(),
+)
+```
+
+Supported backends in the experimental implementation are `memory/inmemory` and
+`memory/pgvector`. Other memory backends keep their existing behavior and do not
+expose DeepSearch backend options.
+
 ## Core Values
 
 - **Context Continuity**: Maintain user history across sessions, avoiding

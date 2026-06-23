@@ -297,6 +297,8 @@ type Options struct {
 	activatableToolSets []tool.ToolSet
 	// toolActivationRules stores runtime tool activation rules.
 	toolActivationRules []toolActivationRule
+	// memoryDeepSearch enables the progressive DeepSearch tool surface.
+	memoryDeepSearch bool
 	// Planner is the planner to use for planning instructions.
 	Planner planner.Planner
 	// SubAgents is the list of sub-agents available to the agent.
@@ -958,6 +960,32 @@ func WithToolActivationOnSkillLoad(
 		trigger := toolActivationTrigger{
 			kind:  toolActivationTriggerSkillLoad,
 			skill: skill,
+		}
+		options.toolActivationRules = append(
+			options.toolActivationRules,
+			toolActivationRule{
+				trigger:      trigger,
+				toolSetNames: append([]string(nil), toolSetNames...),
+				mode:         ruleOptions.mode,
+				lifetime:     ruleOptions.lifetime,
+			},
+		)
+	}
+}
+
+// WithToolActivationOnToolResult activates tool sets after a tool returns a
+// successful result. The default mode is include and the default lifetime is
+// invocation. It is incompatible with WithOutputSchema.
+func WithToolActivationOnToolResult(
+	toolName string,
+	toolSetNames []string,
+	opts ...ToolActivationOption,
+) Option {
+	return func(options *Options) {
+		ruleOptions := newToolActivationRuleOptions(opts...)
+		trigger := toolActivationTrigger{
+			kind:     toolActivationTriggerToolResult,
+			toolName: toolName,
 		}
 		options.toolActivationRules = append(
 			options.toolActivationRules,

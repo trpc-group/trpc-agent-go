@@ -100,6 +100,7 @@ func New(name string, opts ...Option) *LLMAgent {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	applyMemoryDeepSearch(&options)
 	prepareSkillsRepository(&options)
 	applySkillsExecutorFallback(&options)
 

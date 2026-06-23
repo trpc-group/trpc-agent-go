@@ -19,6 +19,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -45,7 +46,10 @@ const (
 	timeAfterDescription         = "Optional lower bound for episode event_time in ISO 8601 date format."
 	timeBeforeDescription        = "Optional upper bound for episode event_time in ISO 8601 date format."
 	orderByEventTimeDescription  = "When true order results by event time instead of relevance. Useful for sequence or timeline questions."
+	deepSearchReasonDescription  = "Optional reason the first memory_search results were insufficient."
 	loadLimitDescription         = "Maximum number of recent memories to load. Defaults to 10."
+
+	memorySearchCalledStateKey = "memory:search_called"
 )
 
 // Memory function implementations using function.NewFunctionTool.
@@ -277,6 +281,7 @@ func NewSearchTool() tool.CallableTool {
 		if err != nil {
 			return nil, fmt.Errorf("failed to search memories: %v", err)
 		}
+		markMemorySearchCalled(ctx)
 
 		// Convert MemoryEntry to MemoryResult.
 		results := make([]Result, len(memories))
@@ -307,6 +312,40 @@ func NewSearchTool() tool.CallableTool {
 			"The 'kind' filter is optional and acts as a preference with automatic fallback; "+
 			"omit it when uncertain whether the answer is stored as a fact or episode."),
 		function.WithInputSchema(searchMemoryInputSchema()),
+	)
+}
+
+// NewDeepSearchTool creates a tool that validates and unlocks DeepSearch tools.
+func NewDeepSearchTool() tool.CallableTool {
+	deepSearchFunc := func(ctx context.Context, req *DeepSearchMemoryRequest) (*DeepSearchMemoryResponse, error) {
+		if !memorySearchCalled(ctx) {
+			return nil, fmt.Errorf("memory deepsearch tool: call %s first", memory.SearchToolName)
+		}
+		deepSearchService, err := GetDeepSearchServiceFromContext(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("memory deepsearch tool: %w", err)
+		}
+		appName, userID, err := GetAppAndUserFromContext(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("memory deepsearch tool: %w", err)
+		}
+		userKey := memory.UserKey{AppName: appName, UserID: userID}
+		if err := deepSearchService.EnsureIndex(ctx, userKey); err != nil {
+			return nil, fmt.Errorf("memory deepsearch tool: ensure index: %w", err)
+		}
+		return &DeepSearchMemoryResponse{
+			Activated: true,
+			Message:   "DeepSearch tools are now available. Use them to search deeper memory evidence.",
+		}, nil
+	}
+	return function.NewFunctionTool(
+		deepSearchFunc,
+		function.WithName(memory.DeepSearchToolName),
+		function.WithDescription("Unlock DeepSearch tools when memory_search did not provide enough evidence or left the answer uncertain. "+
+			memoryToolScopeNote+" Call memory_search first; this tool only exposes additional memory search tools and does not return evidence by itself."),
+		function.WithInputSchema(objectSchema(map[string]*tool.Schema{
+			"reason": stringSchema(deepSearchReasonDescription),
+		})),
 	)
 }
 
@@ -469,6 +508,19 @@ func stringEnumSchema(description string, values ...string) *tool.Schema {
 	}
 }
 
+func markMemorySearchCalled(ctx context.Context) {
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok || invocation == nil {
+		return
+	}
+	invocation.SetState(memorySearchCalledStateKey, true)
+}
+
+func memorySearchCalled(ctx context.Context) bool {
+	called, ok := agent.GetStateValueFromContext[bool](ctx, memorySearchCalledStateKey)
+	return ok && called
+}
+
 // GetMemoryServiceFromContext extracts MemoryService from the invocation context.
 // This function looks for the MemoryService in the agent invocation context.
 //
@@ -487,6 +539,22 @@ func GetMemoryServiceFromContext(ctx context.Context) (memory.Service, error) {
 	}
 
 	return invocation.MemoryService, nil
+}
+
+// GetDeepSearchServiceFromContext extracts DeepSearch from the invocation
+// memory service.
+func GetDeepSearchServiceFromContext(
+	ctx context.Context,
+) (deepsearch.Service, error) {
+	invocation, ok := agent.InvocationFromContext(ctx)
+	if !ok || invocation == nil {
+		return nil, errors.New("no invocation context found")
+	}
+	deepSearchService, ok := invocation.MemoryService.(deepsearch.Service)
+	if !ok || deepSearchService == nil {
+		return nil, errors.New("memory deepsearch service is not available")
+	}
+	return deepSearchService, nil
 }
 
 // GetAppAndUserFromContext extracts appName and userID from the context.

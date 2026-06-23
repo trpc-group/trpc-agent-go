@@ -54,12 +54,14 @@ type ToolActivationOption func(*toolActivationRuleOptions)
 type toolActivationTriggerKind string
 
 const (
-	toolActivationTriggerSkillLoad toolActivationTriggerKind = "skill_load"
+	toolActivationTriggerSkillLoad  toolActivationTriggerKind = "skill_load"
+	toolActivationTriggerToolResult toolActivationTriggerKind = "tool_result"
 )
 
 type toolActivationTrigger struct {
-	kind  toolActivationTriggerKind
-	skill string
+	kind     toolActivationTriggerKind
+	skill    string
+	toolName string
 }
 
 type toolActivationRule struct {
@@ -226,6 +228,15 @@ func normalizeToolActivationTrigger(
 			kind:  toolActivationTriggerSkillLoad,
 			skill: skillName,
 		}, nil
+	case toolActivationTriggerToolResult:
+		toolName := strings.TrimSpace(trigger.toolName)
+		if toolName == "" {
+			return toolActivationTrigger{}, fmt.Errorf("tool activation tool name must not be empty")
+		}
+		return toolActivationTrigger{
+			kind:     toolActivationTriggerToolResult,
+			toolName: toolName,
+		}, nil
 	default:
 		return toolActivationTrigger{}, fmt.Errorf(
 			"unsupported tool activation trigger %q",
@@ -238,6 +249,8 @@ func (trigger toolActivationTrigger) describe() string {
 	switch trigger.kind {
 	case toolActivationTriggerSkillLoad:
 		return fmt.Sprintf("%s:%s", trigger.kind, trigger.skill)
+	case toolActivationTriggerToolResult:
+		return fmt.Sprintf("%s:%s", trigger.kind, trigger.toolName)
 	default:
 		return string(trigger.kind)
 	}
@@ -349,14 +362,10 @@ func (a *LLMAgent) handleToolActivationPostToolResult(
 	inv *agent.Invocation,
 	ev *event.Event,
 ) {
-	if inv == nil || ev == nil || len(ev.StateDelta) == 0 {
+	if inv == nil || ev == nil {
 		return
 	}
-	loaded := loadedSkillsFromStateDelta(inv.AgentName, ev.StateDelta)
-	if len(loaded) == 0 {
-		return
-	}
-	records := a.activationRecordsForLoadedSkills(loaded)
+	records := a.activationRecordsForEvent(inv.AgentName, ev)
 	if len(records) == 0 {
 		return
 	}
@@ -366,6 +375,32 @@ func (a *LLMAgent) handleToolActivationPostToolResult(
 	if changed || sessionChanged {
 		toolsnapshot.Invalidate(inv)
 	}
+}
+
+func toolNamesFromToolResult(ev *event.Event) map[string]bool {
+	if ev == nil || ev.Response == nil || !ev.Response.IsToolResultResponse() {
+		return nil
+	}
+	names := map[string]bool{}
+	errorsByCall, _, err := event.GetExtension[map[string]bool](
+		ev,
+		event.ToolResultErrorExtensionKey,
+	)
+	if err != nil {
+		log.Warnf("Failed to read tool result error extension: %v", err)
+	}
+	for _, choice := range ev.Response.Choices {
+		if errorsByCall[choice.Message.ToolID] || errorsByCall[choice.Delta.ToolID] {
+			continue
+		}
+		for _, name := range []string{choice.Message.ToolName, choice.Delta.ToolName} {
+			name = strings.TrimSpace(name)
+			if name != "" {
+				names[name] = true
+			}
+		}
+	}
+	return names
 }
 
 func loadedSkillsFromStateDelta(
@@ -390,12 +425,31 @@ func loadedSkillsFromStateDelta(
 func (a *LLMAgent) activationRecordsForLoadedSkills(
 	loaded map[string]bool,
 ) []toolActivationRecord {
+	return a.activationRecordsForTrigger(func(rule toolActivationRule) bool {
+		return rule.matchesLoadedSkills(loaded)
+	})
+}
+
+func (a *LLMAgent) activationRecordsForEvent(
+	agentName string,
+	ev *event.Event,
+) []toolActivationRecord {
+	loaded := loadedSkillsFromStateDelta(agentName, ev.StateDelta)
+	toolNames := toolNamesFromToolResult(ev)
+	return a.activationRecordsForTrigger(func(rule toolActivationRule) bool {
+		return rule.matchesLoadedSkills(loaded) || rule.matchesToolResults(toolNames)
+	})
+}
+
+func (a *LLMAgent) activationRecordsForTrigger(
+	matches func(toolActivationRule) bool,
+) []toolActivationRecord {
 	a.mu.RLock()
 	rules := append([]toolActivationRule(nil), a.option.toolActivationRules...)
 	a.mu.RUnlock()
 	records := make([]toolActivationRecord, 0, len(rules))
 	for _, rule := range rules {
-		if !rule.matchesLoadedSkills(loaded) {
+		if !matches(rule) {
 			continue
 		}
 		for _, toolSetName := range rule.toolSetNames {
@@ -412,6 +466,15 @@ func (rule toolActivationRule) matchesLoadedSkills(loaded map[string]bool) bool 
 	switch rule.trigger.kind {
 	case toolActivationTriggerSkillLoad:
 		return loaded[rule.trigger.skill]
+	default:
+		return false
+	}
+}
+
+func (rule toolActivationRule) matchesToolResults(toolNames map[string]bool) bool {
+	switch rule.trigger.kind {
+	case toolActivationTriggerToolResult:
+		return toolNames[rule.trigger.toolName]
 	default:
 		return false
 	}

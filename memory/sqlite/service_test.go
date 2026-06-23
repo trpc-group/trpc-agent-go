@@ -20,6 +20,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -355,6 +356,21 @@ func TestService_Tools_EnqueueAutoMemoryJob(t *testing.T) {
 	require.NotEmpty(t, tools)
 
 	require.NoError(t, svc.EnqueueAutoMemoryJob(context.Background(), nil))
+}
+
+func TestService_Tools_CueTagToolNotExposedWithoutCreator(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(db, WithToolEnabled(deepsearch.CueSearchToolName, true))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	for _, tl := range svc.Tools() {
+		require.NotEqual(t, deepsearch.CueSearchToolName, tl.Declaration().Name)
+		require.NotEqual(t, deepsearch.TagExpandToolName, tl.Declaration().Name)
+		require.NotEqual(t, deepsearch.ContentLoadToolName, tl.Declaration().Name)
+	}
 }
 
 func TestWithTableName_InvalidPanics(t *testing.T) {
