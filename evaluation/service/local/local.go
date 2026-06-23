@@ -48,6 +48,7 @@ const reasonSeparator = ";"
 type local struct {
 	runner                            runner.Runner
 	expectedRunner                    runner.Runner
+	toolMockRunner                    runner.Runner
 	evalSetManager                    evalset.Manager
 	evalResultManager                 evalresult.Manager
 	registry                          registry.Registry
@@ -93,6 +94,7 @@ func New(runner runner.Runner, opt ...service.Option) (service.Service, error) {
 	service := &local{
 		runner:                            runner,
 		expectedRunner:                    opts.ExpectedRunner,
+		toolMockRunner:                    opts.ToolMockRunner,
 		evalSetManager:                    opts.EvalSetManager,
 		evalResultManager:                 opts.EvalResultManager,
 		registry:                          opts.Registry,
@@ -707,6 +709,8 @@ func (s *local) inferExpectedInferences(
 		evalCase.SessionInput,
 		sessionID,
 		mergedRunOptions,
+		inference.WithToolMockRunner(opts.ToolMockRunner),
+		inference.WithToolMockMode(inference.ToolMockModeExpected),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("run expected runner: %w", err)

@@ -1,0 +1,200 @@
+{
+  "evalSetResultId": "toolmock-app_toolmock-weather_71fd6a06-d2cd-48a2-99f9-deb27578b3d9",
+  "evalSetResultName": "toolmock-app_toolmock-weather_71fd6a06-d2cd-48a2-99f9-deb27578b3d9",
+  "evalSetId": "toolmock-weather",
+  "evalCaseResults": [
+    {
+      "evalSetId": "toolmock-weather",
+      "evalId": "shenzhen_weather_mock",
+      "runId": 1,
+      "finalEvalStatus": "passed",
+      "overallEvalMetricResults": [
+        {
+          "metricName": "tool_trajectory_avg_score",
+          "score": 1,
+          "evalStatus": "passed",
+          "threshold": 1,
+          "criterion": {
+            "toolTrajectory": {
+              "defaultStrategy": {
+                "name": {
+                  "matchStrategy": "exact"
+                },
+                "arguments": {
+                  "ignore": true
+                },
+                "result": {
+                  "matchStrategy": "exact"
+                }
+              }
+            }
+          },
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "d82f54dd-cec3-470a-a4f8-2ea050ebddcf",
+            "userContent": {
+              "role": "user",
+              "content": "Check the weather in Shenzhen and give one short travel tip."
+            },
+            "finalResponse": {
+              "role": "assistant",
+              "content": "It's sunny and 28°C in Shenzhen — perfect weather to visit the beach or explore outdoor attractions like Window of the World.\u003c｜end▁of▁sentence｜\u003e"
+            },
+            "tools": [
+              {
+                "id": "chatcmpl-tool-070c64c3198c47338823b79fd7bd9bbd",
+                "name": "get_weather",
+                "arguments": {
+                  "city": "Shenzhen"
+                },
+                "result": {
+                  "city": "Shenzhen",
+                  "condition": "sunny",
+                  "source": "evalset-tool-mock",
+                  "tempC": 28,
+                  "updatedAt": "2026-07-01T09:00:00+08:00"
+                }
+              }
+            ]
+          },
+          "expectedInvocation": {
+            "invocationId": "shenzhen_weather_mock-1",
+            "userContent": {
+              "role": "user",
+              "content": "Check the weather in Shenzhen and give one short travel tip."
+            },
+            "tools": [
+              {
+                "id": "tool_use_weather",
+                "name": "get_weather",
+                "arguments": {
+                  "city": "Shenzhen"
+                },
+                "result": {
+                  "city": "Shenzhen",
+                  "condition": "sunny",
+                  "source": "evalset-tool-mock",
+                  "tempC": 28,
+                  "updatedAt": "2026-07-01T09:00:00+08:00"
+                }
+              }
+            ],
+            "toolMock": {
+              "actual": [
+                {
+                  "name": "get_weather",
+                  "arguments": {
+                    "ignore": true
+                  },
+                  "result": {
+                    "city": "Shenzhen",
+                    "condition": "sunny",
+                    "source": "evalset-tool-mock",
+                    "tempC": 28,
+                    "updatedAt": "2026-07-01T09:00:00+08:00"
+                  }
+                }
+              ]
+            }
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "criterion": {
+                "toolTrajectory": {
+                  "defaultStrategy": {
+                    "name": {
+                      "matchStrategy": "exact"
+                    },
+                    "arguments": {
+                      "ignore": true
+                    },
+                    "result": {
+                      "matchStrategy": "exact"
+                    }
+                  }
+                }
+              },
+              "details": {
+                "score": 1
+              }
+            }
+          ]
+        }
+      ],
+      "sessionId": "eba72a2c-0234-4efb-a097-903fe227e846",
+      "userId": "demo-user"
+    }
+  ],
+  "summary": {
+    "overallStatus": "passed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "passed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "passed",
+        "caseStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ]
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "shenzhen_weather_mock",
+        "overallStatus": "passed",
+        "runStatusCounts": {
+          "passed": 1
+        },
+        "metricSummaries": [
+          {
+            "metricName": "tool_trajectory_avg_score",
+            "averageScore": 1,
+            "evalStatus": "passed",
+            "threshold": 1,
+            "statusCounts": {
+              "passed": 1
+            }
+          }
+        ],
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "passed",
+            "metricResults": [
+              {
+                "metricName": "tool_trajectory_avg_score",
+                "score": 1,
+                "evalStatus": "passed",
+                "threshold": 1
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "creationTimestamp": 1782182679.7871935
+}

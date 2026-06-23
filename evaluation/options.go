@@ -41,6 +41,7 @@ type options struct {
 	userSimulator                     usersimulation.Simulator
 	callbacks                         *service.Callbacks
 	judgeRunner                       runner.Runner
+	toolMockRunner                    runner.Runner
 	judgeRunnerNumSamples             *int
 	numRuns                           int
 	evalCaseIDs                       []string
@@ -148,6 +149,13 @@ func WithJudgeRunnerNumSamples(numSamples int) Option {
 func WithExpectedRunner(r runner.Runner) Option {
 	return func(o *options) {
 		o.expectedRunner = r
+	}
+}
+
+// WithToolMockRunner sets the runner used to generate dynamic tool mock results.
+func WithToolMockRunner(r runner.Runner) Option {
+	return func(o *options) {
+		o.toolMockRunner = r
 	}
 }
 
