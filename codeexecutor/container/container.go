@@ -131,7 +131,9 @@ func WithDockerFilePath(path string) Option {
 	}
 }
 
-// WithHostConfig sets the configuration for the Docker container.
+// WithHostConfig replaces the entire HostConfig for the Docker container.
+// Note: This is a replacement operation. If WithBindMount is also used,
+// make sure it is called after this option to avoid bind mounts being overwritten.
 func WithHostConfig(hostConfig container.HostConfig) Option {
 	return func(c *CodeExecutor) {
 		c.hostConfig = hostConfig
@@ -153,8 +155,9 @@ func WithContainerConfig(containerConfig container.Config) Option {
 }
 
 // WithBindMount appends a bind mount in the form source:dest:mode.
-// Example mode: "ro" or "rw". This option is generic and does not
-// imply any domain-specific semantics.
+// Example mode: "ro" or "rw". If WithHostConfig is also used, make sure
+// WithBindMount is called after it, otherwise the bind mount will be overwritten.
+// This option is generic and does not imply any domain-specific semantics.
 func WithBindMount(src, dest, mode string) Option {
 	return func(c *CodeExecutor) {
 		spec := src + ":" + dest
