@@ -429,12 +429,11 @@ func TestBeforeModel_NoPending_NoOp(t *testing.T) {
 	assert.Len(t, req.Messages, 1)
 }
 
-// TestBeforeModel_OpenItems_DisablesStreamingWithoutNudge covers
-// the streaming side of hard compliance. Even when no reminder is
-// pending yet, the enforcer must turn streaming off while open
-// todo items exist; otherwise partial deltas could reach clients
-// before AfterModel can reject the final answer.
-func TestBeforeModel_OpenItems_DisablesStreamingWithoutNudge(t *testing.T) {
+// TestBeforeModel_OpenItems_PreservesStreamingWithoutNudge ensures
+// enforcement does not override the caller's presentation choice.
+// AfterModel still converts an early final response into a non-final
+// control response after the streaming final arrives.
+func TestBeforeModel_OpenItems_PreservesStreamingWithoutNudge(t *testing.T) {
 	ctx, inv, sess := newTestInvocation(t, "a")
 	writeTodos(t, sess, "", []todo.Item{
 		{Content: "Run tests", ActiveForm: "Running tests", Status: todo.StatusInProgress},
@@ -449,8 +448,8 @@ func TestBeforeModel_OpenItems_DisablesStreamingWithoutNudge(t *testing.T) {
 	}
 	_, err := e.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
 	require.NoError(t, err)
-	assert.False(t, req.GenerationConfig.Stream,
-		"hard enforcement must disable streaming while open todos exist")
+	assert.True(t, req.GenerationConfig.Stream,
+		"enforcement must preserve the caller's streaming choice")
 	assert.Len(t, req.Messages, 1,
 		"no pending reminder means no nudge message is injected yet")
 	assert.False(t, reminderPending(inv))
