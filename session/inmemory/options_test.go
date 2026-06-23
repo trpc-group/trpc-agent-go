@@ -84,9 +84,9 @@ func TestWithAsyncSummaryNum(t *testing.T) {
 			expected: 5,
 		},
 		{
-			name:     "zero defaults to defaultAsyncSummaryNum",
+			name:     "zero disables async workers",
 			input:    0,
-			expected: defaultAsyncSummaryNum,
+			expected: 0,
 		},
 		{
 			name:     "negative defaults to defaultAsyncSummaryNum",

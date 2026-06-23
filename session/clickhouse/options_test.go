@@ -157,10 +157,10 @@ func TestServiceOptions(t *testing.T) {
 			name: "WithAsyncSummaryNum",
 			opts: []ServiceOpt{
 				WithAsyncSummaryNum(5),
-				WithAsyncSummaryNum(0), // Should use default
+				WithAsyncSummaryNum(0), // 0 disables async workers
 			},
 			validate: func(t *testing.T, opts *ServiceOpts) {
-				assert.Equal(t, defaultAsyncSummaryNum, opts.asyncSummaryNum)
+				assert.Equal(t, 0, opts.asyncSummaryNum)
 			},
 		},
 		{

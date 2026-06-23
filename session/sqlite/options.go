@@ -154,7 +154,7 @@ func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
 // WithAsyncSummaryNum sets the number of async summary workers.
 func WithAsyncSummaryNum(num int) ServiceOpt {
 	return func(opts *ServiceOpts) {
-		if num < 1 {
+		if num < 0 {
 			num = defaultAsyncSummaryNum
 		}
 		opts.asyncSummaryNum = num
