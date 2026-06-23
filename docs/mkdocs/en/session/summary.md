@@ -97,6 +97,8 @@ sessionService, err := clickhouse.NewService(
 )
 ```
 
+`WithAsyncSummaryNum` only controls the concurrency of background async summary workers. It is not a sync/async mode switch, and it does not disable summary generation. To disable summaries, do not configure `WithSummarizer`. To make a long ReAct loop refresh the summary before the next LLM call within the same `Run`, configure `llmagent.WithSyncSummaryIntraRun(true)` on the Agent.
+
 ### Step 3: Configure Agent and Runner
 
 Create an Agent and configure summary injection behavior:
@@ -111,6 +113,8 @@ llmAgent := llmagent.New(
     "my-agent",
     llmagent.WithModel(summaryModel),
     llmagent.WithAddSessionSummary(true),
+    // Optional: use for long ReAct loops that need same-run strong consistency.
+    llmagent.WithSyncSummaryIntraRun(true),
     llmagent.WithMaxHistoryRuns(10),
 )
 
@@ -776,6 +780,8 @@ summarizer := summary.NewSummarizer(
 ### Automatic Trigger (Recommended)
 
 The Runner automatically checks trigger conditions after each conversation completes, generating summaries asynchronously in the background when conditions are met.
+
+When `WithSyncSummaryIntraRun(true)` is enabled, the Flow synchronously calls `CreateSessionSummary(...)` between LLM iterations in the same `Run`, so the next LLM call can use the latest summary. Redundant async enqueueing for intermediate tool results is skipped; the final assistant response can still enqueue an async summary job to refresh the turn-ending state without blocking user output. The sync path and async workers share the same boundary/delta checks and session/filterKey serialization, so they normally do not issue duplicate expensive LLM summaries for the same events.
 
 **Trigger timing**:
 

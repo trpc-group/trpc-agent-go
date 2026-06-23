@@ -99,6 +99,8 @@ sessionService, err := clickhouse.NewService(
 )
 ```
 
+`WithAsyncSummaryNum` 只控制后台异步摘要 worker 的并发数，不是同步/异步模式开关，也不是关闭摘要功能的开关。如果不需要生成摘要，不配置 `WithSummarizer` 即可；如果需要在同一次 `Run` 的长 ReAct loop 中让下一次 LLM 调用前立刻看到最新摘要，应在 Agent 侧使用 `llmagent.WithSyncSummaryIntraRun(true)`。
+
 ### 步骤 3：配置 Agent 和 Runner
 
 创建 Agent 并配置摘要注入行为：
@@ -114,6 +116,8 @@ llmAgent := llmagent.New(
     "my-agent",
     llmagent.WithModel(summaryModel),
     llmagent.WithAddSessionSummary(true),   // 启用摘要注入
+    // 可选：同一次 Run 内的长 ReAct loop 需要强一致摘要时启用
+    llmagent.WithSyncSummaryIntraRun(true),
     llmagent.WithMaxHistoryRuns(10),        // 当AddSessionSummary=false时限制历史轮次
 )
 
@@ -762,6 +766,8 @@ summarizer := summary.NewSummarizer(
 ### 自动触发（推荐）
 
 Runner 在每次对话完成后自动检查触发条件，满足条件时在后台异步生成摘要。
+
+如果启用了 `WithSyncSummaryIntraRun(true)`，Flow 会在同一次 `Run` 的 LLM 迭代之间同步调用 `CreateSessionSummary(...)`，确保下一次 LLM 调用前可以使用最新摘要。中间 tool result 的冗余异步入队会被跳过；最终 assistant response 仍然可以异步入队，用于刷新本轮结束后的摘要而不阻塞用户输出。同步路径与异步 worker 共享同一套 boundary/delta 判断和 session/filterKey 级别的串行控制，因此通常不会对同一批事件重复发起昂贵的 LLM 摘要。
 
 **触发时机**：
 
