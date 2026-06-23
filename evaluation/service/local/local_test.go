@@ -11,6 +11,7 @@ package local
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -46,6 +47,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type fakeRunner struct {
@@ -81,6 +83,65 @@ func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, m
 }
 
 func (f *fakeRunner) Close() error {
+	return nil
+}
+
+type toolCallbackRunner struct{}
+
+func (r *toolCallbackRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message, runOpts ...agent.RunOption) (<-chan *event.Event, error) {
+	var opts agent.RunOptions
+	for _, opt := range runOpts {
+		opt(&opts)
+	}
+	toolName := "weather"
+	arguments := []byte(`{"city":"Shenzhen"}`)
+	toolResult := any(map[string]any{"source": "real"})
+	for _, manager := range opts.Plugins {
+		callbacks := manager.ToolCallbacks()
+		if callbacks == nil {
+			continue
+		}
+		result, err := callbacks.RunBeforeTool(ctx, &tool.BeforeToolArgs{
+			ToolCallID:  "call-1",
+			ToolName:    toolName,
+			Declaration: &tool.Declaration{Name: toolName},
+			Arguments:   arguments,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if result != nil && result.CustomResult != nil {
+			toolResult = result.CustomResult
+			break
+		}
+	}
+	resultJSON, err := json.Marshal(toolResult)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan *event.Event, 3)
+	ch <- &event.Event{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role: model.RoleAssistant,
+		ToolCalls: []model.ToolCall{{
+			ID: "call-1",
+			Function: model.FunctionDefinitionParam{
+				Name:      toolName,
+				Arguments: arguments,
+			},
+		}},
+	}}}}}
+	ch <- &event.Event{Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+		Role:     model.RoleTool,
+		ToolID:   "call-1",
+		ToolName: toolName,
+		Content:  string(resultJSON),
+	}}}}}
+	ch <- makeFinalEvent("answer")
+	close(ch)
+	return ch, nil
+}
+
+func (r *toolCallbackRunner) Close() error {
 	return nil
 }
 
@@ -154,6 +215,32 @@ func TestInferExpectedInferencesPreservesToolMockInputConfig(t *testing.T) {
 	require.Len(t, calls, 1)
 	assert.Equal(t, "question", calls[0].Content)
 	assert.Equal(t, 1, pluginCount)
+}
+
+func TestInferExpectedInferencesUsesExpectedToolMockResult(t *testing.T) {
+	ctx := context.Background()
+	expectedRunner := &toolCallbackRunner{}
+	svc := &local{expectedRunner: expectedRunner}
+	mock := &toolmock.ToolMock{
+		Expected: []*toolmock.Tool{{
+			Name:      "weather",
+			Arguments: &toolmock.ArgumentsMatch{Ignore: true},
+			Result:    map[string]any{"condition": "sunny"},
+		}},
+	}
+	evalCase := &evalset.EvalCase{
+		EvalID:       "case",
+		SessionInput: &evalset.SessionInput{UserID: "demo-user"},
+	}
+	got, err := svc.inferExpectedInferences(ctx, evalCase, []*evalset.Invocation{{
+		InvocationID: "actual",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "question"},
+		ToolMock:     mock,
+	}}, "session", &service.Options{ExpectedRunner: expectedRunner})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Len(t, got[0].Tools, 1)
+	assert.Equal(t, map[string]any{"condition": "sunny"}, got[0].Tools[0].Result)
 }
 
 func TestInferTraceConversationUsesActualUserContentAndConversationToolMockForExpectedRunner(t *testing.T) {

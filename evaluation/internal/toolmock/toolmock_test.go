@@ -69,6 +69,24 @@ func (r *generatorRunner) Close() error {
 	return nil
 }
 
+type eventStreamRunner struct {
+	events <-chan *event.Event
+}
+
+func (r *eventStreamRunner) Run(
+	ctx context.Context,
+	userID string,
+	sessionID string,
+	message model.Message,
+	runOpts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	return r.events, nil
+}
+
+func (r *eventStreamRunner) Close() error {
+	return nil
+}
+
 func TestStaticRuleMatchesArguments(t *testing.T) {
 	p, err := NewPlugin([]*toolmock.Tool{{
 		Name: "weather",
@@ -314,6 +332,31 @@ func TestLLMGeneratorRejectsInvalidOutput(t *testing.T) {
 	}
 }
 
+func TestLLMGeneratorRejectsNilEventStream(t *testing.T) {
+	p, err := NewPlugin([]*toolmock.Tool{{
+		Name:         "weather",
+		LLMGenerator: &toolmock.LLMGenerator{Prompt: "Return weather mock result."},
+	}}, &eventStreamRunner{})
+	require.NoError(t, err)
+	_, err = runBeforeTool(p, &tool.BeforeToolArgs{ToolName: "weather"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil event stream")
+}
+
+func TestLLMGeneratorStopsOnContextCancellation(t *testing.T) {
+	events := make(chan *event.Event)
+	p, err := NewPlugin([]*toolmock.Tool{{
+		Name:         "weather",
+		LLMGenerator: &toolmock.LLMGenerator{Prompt: "Return weather mock result."},
+	}}, &eventStreamRunner{events: events})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = runBeforeToolWithContext(ctx, p, &tool.BeforeToolArgs{ToolName: "weather"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 func TestLLMGeneratorMatchesArguments(t *testing.T) {
 	generator := &generatorRunner{content: `{"ok":true}`}
 	p, err := NewPlugin([]*toolmock.Tool{{
@@ -455,6 +498,10 @@ func TestNewPluginValidation(t *testing.T) {
 }
 
 func runBeforeTool(p plugin.Plugin, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+	return runBeforeToolWithContext(context.Background(), p, args)
+}
+
+func runBeforeToolWithContext(ctx context.Context, p plugin.Plugin, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
 	manager, err := plugin.NewManager(p)
 	if err != nil {
 		return nil, err
@@ -463,5 +510,5 @@ func runBeforeTool(p plugin.Plugin, args *tool.BeforeToolArgs) (*tool.BeforeTool
 	if callbacks == nil {
 		return nil, nil
 	}
-	return callbacks.RunBeforeTool(context.Background(), args)
+	return callbacks.RunBeforeTool(ctx, args)
 }

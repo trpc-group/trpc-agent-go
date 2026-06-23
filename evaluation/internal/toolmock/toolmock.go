@@ -240,26 +240,36 @@ func (g *llmGenerator) generate(ctx context.Context, args *tool.BeforeToolArgs) 
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
 	}
+	if events == nil {
+		return nil, errors.New("runner run returned nil event stream")
+	}
 	var finalResponse *model.Response
 	var structuredOutput any
-	for event := range events {
-		if event == nil {
-			continue
-		}
-		if event.Error != nil {
-			return nil, fmt.Errorf("event: %w", event.Error)
-		}
-		if event.StructuredOutput != nil {
-			structuredOutput = event.StructuredOutput
-		}
-		if event.Response != nil && event.IsFinalResponse() {
-			finalResponse = event.Response.Clone()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case event, ok := <-events:
+			if !ok {
+				if structuredOutput != nil {
+					return structuredOutput, nil
+				}
+				return parseGeneratorOutput(finalResponse)
+			}
+			if event == nil {
+				continue
+			}
+			if event.Error != nil {
+				return nil, fmt.Errorf("event: %w", event.Error)
+			}
+			if event.StructuredOutput != nil {
+				structuredOutput = event.StructuredOutput
+			}
+			if event.Response != nil && event.IsFinalResponse() {
+				finalResponse = event.Response.Clone()
+			}
 		}
 	}
-	if structuredOutput != nil {
-		return structuredOutput, nil
-	}
-	return parseGeneratorOutput(finalResponse)
 }
 
 func structuredOutputRunOption(args *tool.BeforeToolArgs) (agent.RunOption, bool, error) {

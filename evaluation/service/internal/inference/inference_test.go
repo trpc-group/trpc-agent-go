@@ -439,6 +439,31 @@ func TestInferenceToolMockSelectsActualAndExpectedSides(t *testing.T) {
 	assert.Equal(t, map[string]any{"side": "expected"}, expected.Invocations[0].Tools[0].Result)
 }
 
+func TestInferenceToolMockRejectsInvalidMode(t *testing.T) {
+	input := []*evalset.Invocation{{
+		InvocationID: "input",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "question"},
+		ToolMock: &toolmock.ToolMock{
+			Actual: []*toolmock.Tool{{
+				Name:      "weather",
+				Arguments: &toolmock.ArgumentsMatch{Ignore: true},
+				Result:    map[string]any{"ok": true},
+			}},
+		},
+	}}
+	_, err := Inference(
+		context.Background(),
+		&toolCallbackRunner{},
+		input,
+		&evalset.SessionInput{UserID: "user-1"},
+		"session-1",
+		nil,
+		WithToolMockMode(ToolMockMode("invalid")),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid tool mock mode")
+}
+
 func TestInferenceToolMockMatchesRunOptionAdditionalTool(t *testing.T) {
 	const toolName = "run_lookup"
 	input := []*evalset.Invocation{{
