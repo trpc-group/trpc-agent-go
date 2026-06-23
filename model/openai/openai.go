@@ -2417,10 +2417,16 @@ func (m *Model) createFinalResponse(
 		Created:   acc.Created,
 		Model:     acc.Model,
 		Choices:   make([]model.Choice, len(acc.Choices)),
-		Usage:     &usage,
 		Timestamp: time.Now(),
 		Done:      !hasToolCall,
 		IsPartial: false,
+	}
+	// Only set Usage when there are actual token counts.
+	// This is consistent with the non-streaming createResponseFromCompletion
+	// path and prevents the Langfuse exporter from seeing zero-valued usage
+	// attributes that get filtered out by usageDetails.empty().
+	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
+		finalResponse.Usage = &usage
 	}
 
 	for i, choice := range acc.Choices {
