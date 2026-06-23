@@ -825,8 +825,10 @@ agent := llmagent.New(
 开启后，Flow 会在同一次 `Run` 的 LLM loop 之间同步执行一次摘要检查。它调用
 `CreateSessionSummary(..., force=false)`，因此不会绕过摘要器配置的事件数、token
 数、时间或 context window 阈值；只有条件满足时才会真正生成摘要。配合
-`WithAddSessionSummary(true)` 时，下一次 LLM 请求会注入刚刷新的 summary，并只拼接
-summary 边界之后的增量事件。
+`WithAddSessionSummary(true)` 时，下一次 LLM 请求会注入刚刷新的 summary；对于普通
+已完成历史，通常只拼接 summary 边界之后的增量事件。但在同一次 `Run` 内，请求组装仍
+可能保留或压缩边界前必要的 tool-call/tool-result 消息，以维持当前 ReAct 工具链的合法
+结构。
 
 为避免重复工作，开启同轮同步摘要后，中间 `tool result` 事件会跳过冗余的异步
 summary 入队；最终 assistant response 仍然可以触发异步 job，让本轮结束后的

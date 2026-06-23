@@ -851,7 +851,10 @@ iterations in the same `Run`. It calls `CreateSessionSummary(..., force=false)`,
 so it still respects the summarizer's event, token, time, or context-window
 thresholds; it does not force summary generation. With
 `WithAddSessionSummary(true)`, the next LLM request can inject the refreshed
-summary and append only events after the summary boundary.
+summary and, for ordinary completed history, append only events after the
+summary boundary. During the same `Run`, the request builder may still preserve
+or compact pre-boundary tool-call/tool-result messages that are needed to keep
+the active ReAct chain valid.
 
 To avoid duplicate work, intermediate `tool result` events skip redundant async
 summary enqueueing when same-run sync summary is active. The final assistant
