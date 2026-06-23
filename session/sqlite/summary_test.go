@@ -26,7 +26,7 @@ func TestSessionSQLite_EnqueueSummaryJob_And_Fallback(t *testing.T) {
 	svc, err := NewService(
 		db,
 		WithSummarizer(&fakeSummarizer{}),
-		WithAsyncSummaryNum(0),
+		WithAsyncSummaryNum(3),
 	)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, svc.Close()) }()
