@@ -2110,10 +2110,16 @@ func Test_StreamingMessageAccumulator_ErrorPaths(t *testing.T) {
 		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}`)), "no content block")
 	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,
 		`{"type":"content_block_stop","index":0}`)), "no content block")
+	// Partial JSON in tool-use Input is now handled gracefully:
+	// ensureValidToolInput resets invalid Input to {} before refreshContentBlockRawJSON.
 	acc.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}}
 	acc.inputDeltaStartedAt = []bool{false}
-	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,
-		`{"type":"content_block_stop","index":0}`)), "error converting content block to JSON")
+	require.NoError(t, acc.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_stop","index":0}`)))
+	// The invalid Input should have been reset to {}.
+	assert.Equal(t, json.RawMessage("{}"), acc.message.Content[0].Input)
+	// refreshContentBlockRawJSON and finalizeStreamingMessage still fail on
+	// invalid Input when called directly (no ensureValidToolInput guard).
 	require.Error(t, refreshContentBlockRawJSON(&anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("{")}))
 	require.Error(t, finalizeStreamingMessage(&anthropic.Message{
 		Content: []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}},

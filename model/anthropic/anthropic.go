@@ -689,6 +689,12 @@ func (a *streamingMessageAccumulator) Accumulate(event anthropic.MessageStreamEv
 		if err := block.UnmarshalJSON([]byte(event.ContentBlock.RawJSON())); err != nil {
 			return err
 		}
+		// Some Anthropic-compatible proxies send "input": null instead of
+		// "input": {}. Normalize to empty JSON object so that the first
+		// input_json_delta replaces it correctly.
+		if string(block.Input) == "null" {
+			block.Input = json.RawMessage("{}")
+		}
 		a.message.Content = append(a.message.Content, block)
 		a.inputDeltaStartedAt = append(a.inputDeltaStartedAt, false)
 	case anthropic.ContentBlockDeltaEvent:
@@ -717,6 +723,11 @@ func (a *streamingMessageAccumulator) Accumulate(event anthropic.MessageStreamEv
 		if err != nil {
 			return fmt.Errorf("received event of type %s but %w", event.Type, err)
 		}
+		// Guard against invalid/partial JSON in tool-use Input fields.
+		// Certain Anthropic-compatible APIs send content_block_stop before
+		// all input_json_delta events, leaving accumulated Input as
+		// incomplete JSON.
+		ensureValidToolInput(block)
 		if err := refreshContentBlockRawJSON(block); err != nil {
 			return fmt.Errorf("error converting content block to JSON: %w", err)
 		}
@@ -789,6 +800,20 @@ func refreshContentBlockRawJSON(block *anthropic.ContentBlockUnion) error {
 		return err
 	}
 	return block.UnmarshalJSON(raw)
+}
+
+// ensureValidToolInput resets a ContentBlockUnion's Input to an empty JSON
+// object if it contains invalid or partial JSON. This prevents json.Marshal
+// from failing during accumulation when a stream ends before all
+// input_json_delta events are received (e.g. with Anthropic-compatible APIs
+// that don't strictly follow the streaming protocol).
+func ensureValidToolInput(cb *anthropic.ContentBlockUnion) {
+	if cb == nil {
+		return
+	}
+	if len(cb.Input) > 0 && !json.Valid(cb.Input) {
+		cb.Input = json.RawMessage("{}")
+	}
 }
 
 // buildStreamingPartialResponse builds a partial streaming response for a chunk.
