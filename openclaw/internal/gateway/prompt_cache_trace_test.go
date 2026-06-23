@@ -60,6 +60,7 @@ func TestPromptCacheUsageRecordPrefersCacheReadTokens(t *testing.T) {
 		&gwproto.Usage{
 			PromptTokens: 100,
 			PromptDetails: &gwproto.PromptDetails{
+				CachedTokens:    20,
 				CacheReadTokens: 60,
 			},
 		},
@@ -82,6 +83,7 @@ func TestPromptCacheUsageRecordPrefersLastCacheReadTokens(
 		&gwproto.Usage{
 			LastPromptTokens: 100,
 			LastDetails: &gwproto.PromptDetails{
+				CachedTokens:    20,
 				CacheReadTokens: 70,
 			},
 		},

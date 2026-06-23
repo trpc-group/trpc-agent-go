@@ -90,10 +90,10 @@ func promptCachedTokens(details *gwproto.PromptDetails) int {
 	if details == nil {
 		return 0
 	}
-	if details.CachedTokens > 0 {
-		return details.CachedTokens
+	if details.CacheReadTokens > 0 {
+		return details.CacheReadTokens
 	}
-	return details.CacheReadTokens
+	return details.CachedTokens
 }
 
 func nonNegativeDelta(total int, part int) int {
