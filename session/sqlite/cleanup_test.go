@@ -36,7 +36,7 @@ func TestSessionSQLite_CleanupExpiredData_Soft(t *testing.T) {
 		WithAppStateTTL(appTTL),
 		WithUserStateTTL(userTTL),
 		WithSummarizer(&fakeSummarizer{}),
-		WithAsyncSummaryNum(0),
+		WithAsyncSummaryNum(3),
 	)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, svc.Close()) }()
