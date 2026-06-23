@@ -154,13 +154,12 @@ func TestEnsureIndexes_SessionSummariesUniqueOnFilterKey(t *testing.T) {
 	assert.Equal(t, "filter_key", keys[3].Key)
 }
 
-func TestEnsureIndexes_FourCollectionsHaveTTLIndex(t *testing.T) {
+func TestEnsureIndexes_ThreeCollectionsHaveTTLIndex(t *testing.T) {
 	_, models := captureIndexes(t)
 	ttlCollections := map[string]bool{
-		"session_states":    true,
-		"session_summaries": true,
-		"app_states":        true,
-		"user_states":       true,
+		"session_states": true,
+		"app_states":     true,
+		"user_states":    true,
 	}
 
 	for coll, ms := range models {

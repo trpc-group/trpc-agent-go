@@ -113,7 +113,7 @@ func TestCreateSessionSummary_PropagatesNonDuplicateUpsertError(t *testing.T) {
 	assert.ErrorIs(t, err, want)
 }
 
-func TestCreateSessionSummary_TTLSetsExpiresAt(t *testing.T) {
+func TestCreateSessionSummary_DoesNotSetExpiresAtWhenSessionTTLConfigured(t *testing.T) {
 	mc := &mockClient{}
 	s := newServiceForTest(t, mc, func(o *serviceOpts) {
 		o.summarizer = &stubSummarizer{text: "hello"}
@@ -125,10 +125,9 @@ func TestCreateSessionSummary_TTLSetsExpiresAt(t *testing.T) {
 
 	upd := mc.recorded()[0].update.(bson.M)
 	set := upd["$set"].(bson.M)
-	exp, ok := set["expires_at"].(*time.Time)
-	require.True(t, ok)
-	assert.WithinDuration(t, time.Now().Add(time.Hour), *exp, 5*time.Second)
-	assert.NotContains(t, upd, "$unset")
+	assert.NotContains(t, set, "expires_at")
+	unset := upd["$unset"].(bson.M)
+	assert.Contains(t, unset, "expires_at")
 }
 
 func TestCreateSessionSummary_RespectsAllowlist(t *testing.T) {

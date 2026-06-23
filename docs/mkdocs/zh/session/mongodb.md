@@ -114,7 +114,7 @@ sessionService, err := mongodb.NewService(
 
 ## 过期与清理
 
-会话状态、摘要、应用状态和用户状态使用 MongoDB `expires_at` TTL 索引。
+会话状态、应用状态和用户状态使用 MongoDB `expires_at` TTL 索引。摘要不设置独立 TTL，跟随会话生命周期。
 
 Session events 和 track events 不使用 TTL 索引。它们由服务按会话维度整组清理，避免仍然活跃的会话历史被局部删除。
 

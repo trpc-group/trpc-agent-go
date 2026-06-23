@@ -242,7 +242,7 @@ func TestIntegrationIndexesAndGroupedCleanup(t *testing.T) {
 	assertIndexNames(t, ctx, database, svc.collSessionTracks,
 		"idx_session_tracks_lookup")
 	assertIndexNames(t, ctx, database, svc.collSessionSummaries,
-		"idx_session_summaries_unique_active", "idx_session_summaries_expires")
+		"idx_session_summaries_unique_active")
 	assertIndexNames(t, ctx, database, svc.collAppStates,
 		"idx_app_states_unique_active", "idx_app_states_expires")
 	assertIndexNames(t, ctx, database, svc.collUserStates,

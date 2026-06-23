@@ -130,7 +130,6 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 						SetUnique(true).
 						SetPartialFilterExpression(notDeleted),
 				},
-				ttlIndex(sqldb.TableNameSessionSummaries),
 			},
 		},
 		{

@@ -120,8 +120,8 @@ sessionService, err := mongodb.NewService(
 
 ## Expiration and Cleanup
 
-Session state, summaries, app state, and user state use MongoDB TTL indexes on
-`expires_at`.
+Session state, app state, and user state use MongoDB TTL indexes on `expires_at`.
+Summaries do not have an independent TTL and follow the session lifecycle.
 
 Session events and track events intentionally do not use TTL indexes. They are
 cleaned by the service as whole session groups so a session's history does not

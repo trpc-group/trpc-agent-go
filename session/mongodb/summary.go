@@ -71,7 +71,6 @@ func (s *Service) CreateSessionSummary(
 	}
 
 	now := time.Now()
-	expiresAt := expiresAtPtr(now, s.opts.sessionTTL)
 	filter := activeFilterNoExpiry(bson.M{
 		"app_name":   sess.AppName,
 		"user_id":    sess.UserID,
@@ -94,11 +93,7 @@ func (s *Service) CreateSessionSummary(
 			"filter_key": filterKey,
 			"created_at": now,
 		},
-	}
-	if expiresAt != nil {
-		update["$set"].(bson.M)["expires_at"] = expiresAt
-	} else {
-		update["$unset"] = bson.M{"expires_at": ""}
+		"$unset": bson.M{"expires_at": ""},
 	}
 	if _, err := s.client.UpdateOne(ctx, s.database, s.collSessionSummaries, filter, update,
 		options.Update().SetUpsert(true)); err != nil {
