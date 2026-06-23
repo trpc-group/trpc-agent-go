@@ -2425,7 +2425,7 @@ func (m *Model) createFinalResponse(
 	// This is consistent with the non-streaming createResponseFromCompletion
 	// path and prevents the Langfuse exporter from seeing zero-valued usage
 	// attributes that get filtered out by usageDetails.empty().
-	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
+	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0 {
 		finalResponse.Usage = &usage
 	}
 
