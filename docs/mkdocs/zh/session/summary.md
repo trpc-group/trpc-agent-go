@@ -116,8 +116,6 @@ llmAgent := llmagent.New(
     "my-agent",
     llmagent.WithModel(summaryModel),
     llmagent.WithAddSessionSummary(true),   // 启用摘要注入
-    // 可选：同一次 Run 内的长 ReAct loop 需要强一致摘要时启用
-    llmagent.WithSyncSummaryIntraRun(true),
     llmagent.WithMaxHistoryRuns(10),        // 当AddSessionSummary=false时限制历史轮次
 )
 
@@ -130,6 +128,18 @@ r := runner.NewRunner(
 
 // 运行对话 - 摘要将自动管理
 eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
+```
+
+主示例保持默认异步摘要路径。只有在长 ReAct loop 需要同一次 `Run` 内下一次 LLM 调用前立刻看到最新摘要时，才显式添加同步 intra-run 选项：
+
+```go
+llmAgent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(summaryModel),
+    llmagent.WithAddSessionSummary(true),   // 启用摘要注入
+    llmagent.WithSyncSummaryIntraRun(true),
+    llmagent.WithMaxHistoryRuns(10),        // 当AddSessionSummary=false时限制历史轮次
+)
 ```
 
 完成以上配置后，摘要功能即可自动运行。

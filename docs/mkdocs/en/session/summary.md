@@ -113,8 +113,6 @@ llmAgent := llmagent.New(
     "my-agent",
     llmagent.WithModel(summaryModel),
     llmagent.WithAddSessionSummary(true),
-    // Optional: use for long ReAct loops that need same-run strong consistency.
-    llmagent.WithSyncSummaryIntraRun(true),
     llmagent.WithMaxHistoryRuns(10),
 )
 
@@ -125,6 +123,18 @@ r := runner.NewRunner(
 )
 
 eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
+```
+
+Keep the main setup on the default async summary path. For long ReAct loops that must refresh the summary before the next LLM call in the same `Run`, add the sync intra-run option explicitly:
+
+```go
+llmAgent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(summaryModel),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithSyncSummaryIntraRun(true),
+    llmagent.WithMaxHistoryRuns(10),
+)
 ```
 
 After completing the above configuration, the summary feature runs automatically.
