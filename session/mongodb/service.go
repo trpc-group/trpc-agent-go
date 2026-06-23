@@ -1259,7 +1259,6 @@ func (s *Service) cleanupExpiredCollection(ctx context.Context, now time.Time, c
 		filter := bson.M{
 			"$or":        or,
 			"deleted_at": nil,
-			"updated_at": bson.M{"$lte": cutoff},
 		}
 		if s.opts.softDelete {
 			if _, err := s.client.UpdateMany(ctx, s.database, collection, filter,
