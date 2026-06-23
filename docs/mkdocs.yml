@@ -41,6 +41,7 @@ nav:
           - PostgreSQL Session: session/postgres.md
           - PGVector Session: session/pgvector.md
           - ClickHouse Session: session/clickhouse.md
+          - MongoDB Session: session/mongodb.md
       - Knowledge:
           - Overview: knowledge/index.md
           - Embedder: knowledge/embedder.md
@@ -137,6 +138,7 @@ plugins:
                     - PostgreSQL Session: session/postgres.md
                     - PGVector Session: session/pgvector.md
                     - ClickHouse Session: session/clickhouse.md
+                    - MongoDB Session: session/mongodb.md
                 - Knowledge:
                     - 概述: knowledge/index.md
                     - Embedder: knowledge/embedder.md
