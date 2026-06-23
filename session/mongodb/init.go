@@ -94,6 +94,18 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 							sqldb.TableNameSessionEvents, "event_id_lookup")).
 						SetPartialFilterExpression(notDeleted),
 				},
+				{
+					Keys: bson.D{
+						{Key: "app_name", Value: 1},
+						{Key: "user_id", Value: 1},
+						{Key: "session_id", Value: 1},
+						{Key: "updated_at", Value: 1},
+					},
+					Options: options.Index().
+						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
+							sqldb.TableNameSessionEvents, "cleanup")).
+						SetPartialFilterExpression(notDeleted),
+				},
 			},
 		},
 		{
@@ -110,6 +122,18 @@ func (s *Service) ensureIndexes(ctx context.Context) error {
 					Options: options.Index().
 						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
 							collectionNameSessionTracks, sqldb.IndexSuffixLookup)).
+						SetPartialFilterExpression(notDeleted),
+				},
+				{
+					Keys: bson.D{
+						{Key: "app_name", Value: 1},
+						{Key: "user_id", Value: 1},
+						{Key: "session_id", Value: 1},
+						{Key: "updated_at", Value: 1},
+					},
+					Options: options.Index().
+						SetName(sqldb.BuildIndexName(s.opts.collectionPrefix,
+							collectionNameSessionTracks, "cleanup")).
 						SetPartialFilterExpression(notDeleted),
 				},
 			},

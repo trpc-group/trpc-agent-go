@@ -125,7 +125,8 @@ Summaries do not have an independent TTL and follow the session lifecycle.
 
 Session events and track events intentionally do not use TTL indexes. They are
 cleaned by the service as whole session groups so a session's history does not
-partially disappear while the session is still active.
+partially disappear while the session is still active. Dedicated cleanup indexes
+on `updated_at` support these grouped cleanup scans.
 
 ## Storage Structure
 
