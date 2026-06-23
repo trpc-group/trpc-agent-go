@@ -206,6 +206,38 @@ func TestNewDynamicTool_CapabilityToolsEnumerated(t *testing.T) {
 		}))
 	ts4 := at4.Declaration().InputSchema.Properties[fieldTools]
 	require.Nil(t, ts4.Items.Enum)
+
+	// Provider takes runtime precedence over static tools, so the schema must
+	// not expose the static enum when both options are configured.
+	at4b := NewDynamicTool(
+		WithCapabilityTools(stubTools("static_only")),
+		WithCapabilityProvider(
+			func(context.Context, *agent.Invocation) ([]tool.Tool, map[string]bool) {
+				return stubTools("runtime_only"), nil
+			},
+		),
+	)
+	ts4b := at4b.Declaration().InputSchema.Properties[fieldTools]
+	require.Nil(t, ts4b.Items.Enum)
+
+	// Structured provider: also resolved per call, not enumerable at schema-build time.
+	at5 := NewDynamicTool(WithCapabilitySurfaceProvider(
+		func(context.Context, *agent.Invocation) CapabilitySurface {
+			return CapabilitySurface{Tools: stubTools("x")}
+		}))
+	ts5 := at5.Declaration().InputSchema.Properties[fieldTools]
+	require.Nil(t, ts5.Items.Enum)
+
+	at5b := NewDynamicTool(
+		WithCapabilityTools(stubTools("static_only")),
+		WithCapabilitySurfaceProvider(
+			func(context.Context, *agent.Invocation) CapabilitySurface {
+				return CapabilitySurface{Tools: stubTools("runtime_only")}
+			},
+		),
+	)
+	ts5b := at5b.Declaration().InputSchema.Properties[fieldTools]
+	require.Nil(t, ts5b.Items.Enum)
 }
 
 func TestNewDynamicTool_ExposeToggles(t *testing.T) {
@@ -505,7 +537,7 @@ func TestSelectDynamicTools_ExcludesSelfAndTransfer(t *testing.T) {
 		transfer.TransferToolName, // transfer must be excluded
 	)
 	// No selection => all candidates minus excluded.
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, dynamicSpec{})
+	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, dynamicSpec{})
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"file_read", "file_write"}, selectedNames(selected))
 }
@@ -514,7 +546,7 @@ func TestSelectDynamicTools_OnlyUserTools(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("file_read", "framework_tool")
 	userTools := map[string]bool{"file_read": true} // framework_tool not a user tool
-	selected, warnings := at.selectDynamicTools(maxTools, userTools, nil, dynamicSpec{})
+	selected, warnings := at.selectDynamicTools(maxTools, userTools, nil, nil, dynamicSpec{})
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"file_read"}, selectedNames(selected))
 }
@@ -523,7 +555,7 @@ func TestSelectDynamicTools_SubsetSelection(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("a", "b", "c")
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"a", "c"}}
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, spec)
+	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"a", "c"}, selectedNames(selected))
 }
@@ -532,17 +564,64 @@ func TestSelectDynamicTools_UnknownRequestedToolWarns(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("a", "b")
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"a", "nope"}}
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, spec)
+	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
 	require.Equal(t, []string{"a"}, selectedNames(selected))
 	require.Len(t, warnings, 1)
 	require.Contains(t, warnings[0], "nope")
+}
+
+func TestSelectDynamicTools_UnavailableRequestedToolWarnsWithReason(t *testing.T) {
+	at := NewDynamicTool()
+	maxTools := stubTools("available", "secret")
+	unavailable := map[string]UnavailableCapability{
+		"secret": {
+			Name:   "secret",
+			Reason: CapabilityUnavailableReasonMissingCredential,
+			Detail: "configure SECRET_TOKEN",
+		},
+	}
+
+	// No selection: unavailable tools are simply not mounted and do not add noise.
+	selected, warnings := at.selectDynamicTools(
+		maxTools, toolNameSet(maxTools), nil, unavailable, dynamicSpec{})
+	require.Equal(t, []string{"available"}, selectedNames(selected))
+	require.Empty(t, warnings)
+
+	// Explicit selection: the parent gets an actionable reason instead of a
+	// generic "not available" warning.
+	spec := dynamicSpec{toolsProvided: true, tools: []string{"available", "secret"}}
+	selected, warnings = at.selectDynamicTools(
+		maxTools, toolNameSet(maxTools), nil, unavailable, spec)
+	require.Equal(t, []string{"available"}, selectedNames(selected))
+	require.Len(t, warnings, 1)
+	require.Contains(t, warnings[0], "secret")
+	require.Contains(t, warnings[0], string(CapabilityUnavailableReasonMissingCredential))
+	require.Contains(t, warnings[0], "SECRET_TOKEN")
+}
+
+func TestFormatUnavailableToolWarning_SanitizesDetail(t *testing.T) {
+	warning := formatUnavailableToolWarning("secret", UnavailableCapability{
+		Reason: CapabilityUnavailableReasonPermissionDenied,
+		Detail: "  policy\n\tdenied  ",
+	})
+	require.Contains(t, warning, "detail: policy denied")
+	require.NotContains(t, warning, "\n")
+	require.Contains(t, warning, string(CapabilityUnavailableReasonPermissionDenied))
+
+	longDetail := strings.Repeat("x", maxUnavailableDetailRunes+5)
+	warning = formatUnavailableToolWarning("secret", UnavailableCapability{
+		Detail: longDetail,
+	})
+	require.Contains(t, warning, string(CapabilityUnavailableReasonUnknown))
+	require.Contains(t, warning, strings.Repeat("x", maxUnavailableDetailRunes)+"...")
+	require.NotContains(t, warning, strings.Repeat("x", maxUnavailableDetailRunes+1))
 }
 
 func TestSelectDynamicTools_AllUnknownWarnsNoUserTools(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("a", "b")
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"x", "y"}}
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, spec)
+	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
 	require.Empty(t, selected)
 	require.NotEmpty(t, warnings)
 	require.Contains(t, warnings[len(warnings)-1], "no user tools")
@@ -559,14 +638,14 @@ func TestSelectDynamicTools_ExcludesExternalTools(t *testing.T) {
 
 	// No selection: external tool must not appear among the candidates.
 	selected, warnings := at.selectDynamicTools(
-		maxTools, toolNameSet(maxTools), externalNames, dynamicSpec{})
+		maxTools, toolNameSet(maxTools), externalNames, nil, dynamicSpec{})
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"tool_a"}, selectedNames(selected))
 
 	// Explicit selection of an external tool is rejected as unavailable.
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"ext_tool"}}
 	selected, warnings = at.selectDynamicTools(
-		maxTools, toolNameSet(maxTools), externalNames, spec)
+		maxTools, toolNameSet(maxTools), externalNames, nil, spec)
 	require.Empty(t, selected)
 	require.NotEmpty(t, warnings)
 }
@@ -578,9 +657,82 @@ func TestSelectDynamicTools_EmptyArrayAllowsNoneWithoutWarning(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("a", "b")
 	spec := dynamicSpec{toolsProvided: true, tools: nil} // provided, but empty
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, spec)
+	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
 	require.Empty(t, selected)
 	require.Empty(t, warnings, "an explicit empty selection must not warn")
+}
+
+func TestDynamicMaxToolSurface_DetailedProviderWinsAndReportsUnavailable(t *testing.T) {
+	legacyCalled := false
+	at := NewDynamicTool(
+		WithCapabilityTools(stubTools("static")),
+		WithCapabilityProvider(func(context.Context, *agent.Invocation) ([]tool.Tool, map[string]bool) {
+			legacyCalled = true
+			return stubTools("legacy"), nil
+		}),
+		WithCapabilitySurfaceProvider(func(context.Context, *agent.Invocation) CapabilitySurface {
+			return CapabilitySurface{
+				Tools:             stubTools("available"),
+				UserToolNames:     map[string]bool{"available": true},
+				ExternalToolNames: map[string]bool{"external": true},
+				UnavailableTools: []UnavailableCapability{{
+					Name:   " unavailable ",
+					Reason: CapabilityUnavailableReasonExecutorUnavailable,
+					Detail: " no sandbox ",
+				}},
+			}
+		}),
+	)
+
+	tools, users, externals, unavailable := at.dynamicMaxToolSurface(context.Background(), nil)
+	require.False(t, legacyCalled, "structured provider should take precedence")
+	require.Equal(t, []string{"available"}, selectedNames(tools))
+	require.True(t, users["available"])
+	require.True(t, externals["external"])
+	got := unavailable["unavailable"]
+	require.Equal(t, CapabilityUnavailableReasonExecutorUnavailable, got.Reason)
+	require.Equal(t, "no sandbox", got.Detail)
+}
+
+func TestUnavailableCapabilityMap_NormalizesEntries(t *testing.T) {
+	values := unavailableCapabilityMap([]UnavailableCapability{
+		{Name: "  ", Reason: CapabilityUnavailableReasonPermissionDenied},
+		{Name: " tool_a ", Detail: "  access\n\tdenied  "},
+	})
+	require.Len(t, values, 1)
+	got := values["tool_a"]
+	require.Equal(t, CapabilityUnavailableReasonUnknown, got.Reason)
+	require.Equal(t, "access denied", got.Detail)
+	require.Nil(t, unavailableCapabilityMap(nil))
+	require.Nil(t, unavailableCapabilityMap([]UnavailableCapability{{Name: " "}}))
+}
+
+func TestFormatUnavailableToolWarning_WithoutDetail(t *testing.T) {
+	warning := formatUnavailableToolWarning("tool_a", UnavailableCapability{
+		Reason: CapabilityUnavailableReasonNetworkDisabled,
+	})
+	require.Contains(t, warning, "tool_a")
+	require.Contains(t, warning, string(CapabilityUnavailableReasonNetworkDisabled))
+	require.NotContains(t, warning, "detail:")
+}
+
+func TestDynamicMaxToolSurface_LegacyProviderAndNilParent(t *testing.T) {
+	at := NewDynamicTool(WithCapabilityProvider(
+		func(context.Context, *agent.Invocation) ([]tool.Tool, map[string]bool) {
+			return stubTools("legacy"), map[string]bool{"legacy": true}
+		},
+	))
+	tools, users, externals, unavailable := at.dynamicMaxToolSurface(context.Background(), nil)
+	require.Equal(t, []string{"legacy"}, selectedNames(tools))
+	require.True(t, users["legacy"])
+	require.Nil(t, externals)
+	require.Nil(t, unavailable)
+
+	tools, users, externals, unavailable = NewDynamicTool().dynamicMaxToolSurface(context.Background(), nil)
+	require.Nil(t, tools)
+	require.Nil(t, users)
+	require.Nil(t, externals)
+	require.Nil(t, unavailable)
 }
 
 func TestDedupeNonEmpty(t *testing.T) {
@@ -753,6 +905,48 @@ func TestNewDynamicTool_Integration_DefaultAllTools(t *testing.T) {
 	seen := recModel.snapshot()
 	require.Len(t, seen, 1)
 	require.Equal(t, []string{"tool_a", "tool_b"}, seen[0])
+}
+
+func TestNewDynamicTool_Integration_UnavailableReasonReturnedToParent(t *testing.T) {
+	recModel := &dynRecordingModel{name: "rec", response: "child-done"}
+	main := llmagent.New("main", llmagent.WithModel(recModel))
+	at := NewDynamicTool(WithCapabilitySurfaceProvider(
+		func(context.Context, *agent.Invocation) CapabilitySurface {
+			return CapabilitySurface{
+				Tools: stubTools("available"),
+				UnavailableTools: []UnavailableCapability{{
+					Name:   "secret",
+					Reason: CapabilityUnavailableReasonMissingCredential,
+					Detail: "configure SECRET_TOKEN",
+				}},
+			}
+		},
+	))
+
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(main),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("main"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	got, err := at.Call(ctx, []byte(
+		`{"request":"use both tools","tools":["available","secret"]}`,
+	))
+	require.NoError(t, err)
+	out, ok := got.(string)
+	require.True(t, ok)
+	require.Contains(t, out, "Note from "+at.name)
+	require.Contains(t, out, "secret")
+	require.Contains(t, out, string(CapabilityUnavailableReasonMissingCredential))
+	require.Contains(t, out, "configure SECRET_TOKEN")
+	require.Contains(t, out, "child-done")
+
+	seen := recModel.snapshot()
+	require.Len(t, seen, 1, "child should have run exactly once")
+	require.Equal(t, []string{"available"}, seen[0],
+		"child must not see known-but-unavailable tools")
 }
 
 // TestNewDynamicTool_Integration_WithTemplateAgent verifies that a distinctly
