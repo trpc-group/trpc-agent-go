@@ -21,9 +21,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type fakeRunner struct {
@@ -61,6 +64,114 @@ func (f *fakeRunner) Run(ctx context.Context, userID string, sessionID string, m
 }
 
 func (f fakeRunner) Close() error {
+	return nil
+}
+
+type toolCallbackRunner struct {
+	toolName              string
+	requireAdditionalTool bool
+}
+
+type declarationOnlyTool struct {
+	name string
+}
+
+type staticToolResultPlugin struct {
+	name   string
+	result any
+}
+
+func (p staticToolResultPlugin) Name() string {
+	return p.name
+}
+
+func (p staticToolResultPlugin) Register(r *plugin.Registry) {
+	r.BeforeTool(func(ctx context.Context, args *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		return &tool.BeforeToolResult{CustomResult: p.result}, nil
+	})
+}
+
+func (t *declarationOnlyTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+func (r *toolCallbackRunner) Run(ctx context.Context, userID string, sessionID string, message model.Message, runOpts ...agent.RunOption) (<-chan *event.Event, error) {
+	var opts agent.RunOptions
+	for _, opt := range runOpts {
+		opt(&opts)
+	}
+	toolName := r.toolName
+	if toolName == "" {
+		toolName = "weather"
+	}
+	if r.requireAdditionalTool {
+		found := false
+		for _, tl := range opts.AdditionalTools {
+			if tl != nil && tl.Declaration() != nil && tl.Declaration().Name == toolName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("additional tool %q not found", toolName)
+		}
+	}
+	arguments := []byte(`{"city":"Shenzhen"}`)
+	toolResult := any(map[string]any{"source": "real"})
+	for _, manager := range opts.Plugins {
+		callbacks := manager.ToolCallbacks()
+		if callbacks == nil {
+			continue
+		}
+		result, err := callbacks.RunBeforeTool(ctx, &tool.BeforeToolArgs{
+			ToolCallID:  "call-1",
+			ToolName:    toolName,
+			Declaration: &tool.Declaration{Name: toolName},
+			Arguments:   arguments,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if result != nil && result.CustomResult != nil {
+			toolResult = result.CustomResult
+			break
+		}
+	}
+	resultJSON, err := json.Marshal(toolResult)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan *event.Event, 3)
+	ch <- &event.Event{
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      toolName,
+						Arguments: arguments,
+					},
+				}},
+			},
+		}}},
+	}
+	ch <- &event.Event{
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{
+				Role:     model.RoleTool,
+				ToolID:   "call-1",
+				ToolName: toolName,
+				Content:  string(resultJSON),
+			},
+		}}},
+	}
+	ch <- makeFinalEvent("answer")
+	close(ch)
+	return ch, nil
+}
+
+func (r *toolCallbackRunner) Close() error {
 	return nil
 }
 
@@ -252,6 +363,150 @@ func TestInferenceSuccess(t *testing.T) {
 	assert.Nil(t, result.ExecutionTraces[0])
 	assert.Equal(t, []model.Message{systemMsg}, r.lastInjectedContextMessages)
 	assert.Equal(t, "test-instruction", r.lastInstruction)
+}
+
+func TestInferenceToolMockResultCapturedInTools(t *testing.T) {
+	input := []*evalset.Invocation{{
+		InvocationID: "input",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "question"},
+		ToolMock: &toolmock.ToolMock{
+			Actual: []*toolmock.Tool{{
+				Name:      "weather",
+				Arguments: &toolmock.ArgumentsMatch{Ignore: true},
+				Result:    map[string]any{"condition": "sunny"},
+			}},
+		},
+	}}
+	result, err := Inference(
+		context.Background(),
+		&toolCallbackRunner{},
+		input,
+		&evalset.SessionInput{UserID: "user-1"},
+		"session-1",
+		nil,
+		WithToolMockMode(ToolMockModeActual),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Invocations, 1)
+	require.Len(t, result.Invocations[0].Tools, 1)
+	assert.Equal(t, map[string]any{"condition": "sunny"}, result.Invocations[0].Tools[0].Result)
+}
+
+func TestInferenceToolMockSelectsActualAndExpectedSides(t *testing.T) {
+	input := []*evalset.Invocation{{
+		InvocationID: "input",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "question"},
+		ToolMock: &toolmock.ToolMock{
+			Actual: []*toolmock.Tool{{
+				Name:      "weather",
+				Arguments: &toolmock.ArgumentsMatch{Ignore: true},
+				Result:    map[string]any{"side": "actual"},
+			}},
+			Expected: []*toolmock.Tool{{
+				Name:      "weather",
+				Arguments: &toolmock.ArgumentsMatch{Ignore: true},
+				Result:    map[string]any{"side": "expected"},
+			}},
+		},
+	}}
+	session := &evalset.SessionInput{UserID: "user-1"}
+	actual, err := Inference(
+		context.Background(),
+		&toolCallbackRunner{},
+		input,
+		session,
+		"session-1",
+		nil,
+		WithToolMockMode(ToolMockModeActual),
+	)
+	require.NoError(t, err)
+	expected, err := Inference(
+		context.Background(),
+		&toolCallbackRunner{},
+		input,
+		session,
+		"session-1",
+		nil,
+		WithToolMockMode(ToolMockModeExpected),
+	)
+	require.NoError(t, err)
+	require.Len(t, actual.Invocations, 1)
+	require.Len(t, actual.Invocations[0].Tools, 1)
+	require.Len(t, expected.Invocations, 1)
+	require.Len(t, expected.Invocations[0].Tools, 1)
+	assert.Equal(t, map[string]any{"side": "actual"}, actual.Invocations[0].Tools[0].Result)
+	assert.Equal(t, map[string]any{"side": "expected"}, expected.Invocations[0].Tools[0].Result)
+}
+
+func TestInferenceToolMockMatchesRunOptionAdditionalTool(t *testing.T) {
+	const toolName = "run_lookup"
+	input := []*evalset.Invocation{{
+		InvocationID: "input",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "question"},
+		ToolMock: &toolmock.ToolMock{
+			Actual: []*toolmock.Tool{{
+				Name:      toolName,
+				Arguments: &toolmock.ArgumentsMatch{Ignore: true},
+				Result:    map[string]any{"source": "mocked"},
+			}},
+		},
+	}}
+	result, err := Inference(
+		context.Background(),
+		&toolCallbackRunner{
+			toolName:              toolName,
+			requireAdditionalTool: true,
+		},
+		input,
+		&evalset.SessionInput{UserID: "user-1"},
+		"session-1",
+		[]agent.RunOption{
+			agent.WithAdditionalTools([]tool.Tool{
+				&declarationOnlyTool{name: toolName},
+			}),
+		},
+		WithToolMockMode(ToolMockModeActual),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Invocations, 1)
+	require.Len(t, result.Invocations[0].Tools, 1)
+	assert.Equal(t, toolName, result.Invocations[0].Tools[0].Name)
+	assert.Equal(t, map[string]any{"source": "mocked"}, result.Invocations[0].Tools[0].Result)
+}
+
+func TestInferenceRunOptionPluginPrecedesEvalsetToolMock(t *testing.T) {
+	input := []*evalset.Invocation{{
+		InvocationID: "input",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "question"},
+		ToolMock: &toolmock.ToolMock{
+			Actual: []*toolmock.Tool{{
+				Name:      "weather",
+				Arguments: &toolmock.ArgumentsMatch{Ignore: true},
+				Result:    map[string]any{"source": "evalset"},
+			}},
+		},
+	}}
+	result, err := Inference(
+		context.Background(),
+		&toolCallbackRunner{},
+		input,
+		&evalset.SessionInput{UserID: "user-1"},
+		"session-1",
+		[]agent.RunOption{
+			plugin.WithPlugins(staticToolResultPlugin{
+				name:   "run_option_tool_mock",
+				result: map[string]any{"source": "run-option"},
+			}),
+		},
+		WithToolMockMode(ToolMockModeActual),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Invocations, 1)
+	require.Len(t, result.Invocations[0].Tools, 1)
+	assert.Equal(t, map[string]any{"source": "run-option"}, result.Invocations[0].Tools[0].Result)
 }
 
 func TestInferenceValidation(t *testing.T) {
@@ -543,7 +798,7 @@ func TestInferenceInvocationAppendsSessionRuntimeState(t *testing.T) {
 	_, _, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
-	}, []agent.RunOption{agent.WithRuntimeState(overrideState)})
+	}, []agent.RunOption{agent.WithRuntimeState(overrideState)}, nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, sessionState, r.lastRuntimeState)
@@ -558,7 +813,7 @@ func TestInferenceInvocationSkipsNilEvent(t *testing.T) {
 	result, executionTrace, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
-	}, nil)
+	}, nil, nil)
 
 	assert.NoError(t, err)
 	assert.Nil(t, executionTrace)
@@ -590,7 +845,7 @@ func TestInferenceInvocationRejectsUnexpectedToolResultResponse(t *testing.T) {
 	_, _, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
-	}, nil)
+	}, nil, nil)
 
 	assert.Error(t, err)
 	if err != nil {
@@ -663,7 +918,7 @@ func TestInferenceInvocationSkipsPartialToolResultResponse(t *testing.T) {
 	result, executionTrace, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
-	}, nil)
+	}, nil, nil)
 
 	require.NoError(t, err)
 	assert.Nil(t, executionTrace)
@@ -699,7 +954,7 @@ func TestInferenceInvocation_PreservesTraceOnToolResultMergeError(t *testing.T) 
 	result, gotTrace, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
-	}, nil)
+	}, nil, nil)
 
 	require.Error(t, err)
 	require.NotNil(t, result)
@@ -738,7 +993,7 @@ func TestInferenceInvocation_AggregatesEventErrorsAndPreservesArtifacts(t *testi
 	result, gotTrace, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent:  &model.Message{Role: model.RoleUser, Content: "ok"},
-	}, nil)
+	}, nil, nil)
 	require.Error(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, "generated-inv", result.InvocationID)
@@ -754,13 +1009,13 @@ func TestInferencePerInvocationErrors(t *testing.T) {
 	ctx := context.Background()
 	session := &evalset.SessionInput{UserID: "user"}
 	// It should reject invocations with missing user content.
-	_, _, err := inferenceInvocation(ctx, &fakeRunner{}, "session", session, &evalset.Invocation{}, nil)
+	_, _, err := inferenceInvocation(ctx, &fakeRunner{}, "session", session, &evalset.Invocation{}, nil, nil)
 	assert.Error(t, err)
 	// It should handle an empty event stream.
 	result, executionTrace, err := inferenceInvocation(ctx, &fakeRunner{}, "session", session, &evalset.Invocation{
 		InvocationID: "inv",
 		UserContent:  &model.Message{},
-	}, nil)
+	}, nil, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, executionTrace)
 	assert.Nil(t, result.FinalResponse)
@@ -771,7 +1026,7 @@ func TestInferencePerInvocationErrors(t *testing.T) {
 			Role:         model.RoleUser,
 			ContentParts: []model.ContentPart{{Text: ptr("")}},
 		},
-	}, nil)
+	}, nil, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, executionTrace)
 	assert.Nil(t, result.FinalResponse)
@@ -787,7 +1042,7 @@ func TestInferencePerInvocationErrors(t *testing.T) {
 			Role:    model.RoleUser,
 			Content: "ok",
 		},
-	}, nil)
+	}, nil, nil)
 	assert.Error(t, err)
 	// It should return an error when the runner fails.
 	_, _, err = inferenceInvocation(ctx, &fakeRunner{runErr: errors.New("boom")}, "session", session, &evalset.Invocation{
@@ -796,7 +1051,7 @@ func TestInferencePerInvocationErrors(t *testing.T) {
 			Role:    model.RoleUser,
 			Content: "ok",
 		},
-	}, nil)
+	}, nil, nil)
 	assert.Error(t, err)
 	// This ensures the parent function validates the session input.
 	_, err = Inference(ctx, &fakeRunner{}, []*evalset.Invocation{}, nil, "session", nil)

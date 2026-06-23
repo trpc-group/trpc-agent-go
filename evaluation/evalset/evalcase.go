@@ -11,6 +11,7 @@ package evalset
 
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -104,6 +105,8 @@ type Invocation struct {
 	FinalResponse *model.Message `json:"finalResponse,omitempty"`
 	// Tools represents the tool calls and responses.
 	Tools []*Tool `json:"tools,omitempty"`
+	// ToolMock configures tool execution mocks for this invocation.
+	ToolMock *toolmock.ToolMock `json:"toolMock,omitempty"`
 	// IntermediateResponses contains intermediate responses during execution.
 	IntermediateResponses []*model.Message `json:"intermediateResponses,omitempty"`
 	// CreationTimestamp when this invocation was created.

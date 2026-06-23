@@ -36,6 +36,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/tooltrajectory"
 	criterionxml "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/xml"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
@@ -224,6 +225,17 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 						Result: []any{"ok", []byte{6, 7, 8}},
 					},
 				},
+				ToolMock: &toolmock.ToolMock{
+					Actual: []*toolmock.Tool{{
+						Name: "tool",
+						Arguments: &toolmock.ArgumentsMatch{
+							Expected:        map[string]any{"a": 1},
+							IgnoreTree:      map[string]any{"nonce": true},
+							NumberTolerance: float64Ptr(0.1),
+						},
+						Result: map[string]any{"ok": true},
+					}},
+				},
 				IntermediateResponses: []*model.Message{
 					{
 						Role:    model.RoleAssistant,
@@ -290,6 +302,18 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 
 	dst.Conversation[0].Tools[0].Arguments.(map[string]any)["a"] = 2
 	assert.Equal(t, 1, src.Conversation[0].Tools[0].Arguments.(map[string]any)["a"])
+
+	dst.Conversation[0].ToolMock.Actual[0].Arguments.Expected.(map[string]any)["a"] = 2
+	assert.Equal(t, 1, src.Conversation[0].ToolMock.Actual[0].Arguments.Expected.(map[string]any)["a"])
+
+	dst.Conversation[0].ToolMock.Actual[0].Arguments.IgnoreTree["nonce"] = false
+	assert.Equal(t, true, src.Conversation[0].ToolMock.Actual[0].Arguments.IgnoreTree["nonce"])
+
+	*dst.Conversation[0].ToolMock.Actual[0].Arguments.NumberTolerance = 0.2
+	assert.Equal(t, 0.1, *src.Conversation[0].ToolMock.Actual[0].Arguments.NumberTolerance)
+
+	dst.Conversation[0].ToolMock.Actual[0].Result.(map[string]any)["ok"] = false
+	assert.Equal(t, true, src.Conversation[0].ToolMock.Actual[0].Result.(map[string]any)["ok"])
 
 	dst.Conversation[0].IntermediateResponses[0].ContentParts[0].Audio.Data[0] = 0
 	assert.Equal(t, byte(9), src.Conversation[0].IntermediateResponses[0].ContentParts[0].Audio.Data[0])
