@@ -1714,6 +1714,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#context-offload" class="md-nav__link">
+    <span class="md-ellipsis">
+      启用 Context Offload
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_47" class="md-nav__link">
     <span class="md-ellipsis">
       交互式示例
@@ -4134,6 +4143,15 @@
   <a href="#_46" class="md-nav__link">
     <span class="md-ellipsis">
       配置示例
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#context-offload" class="md-nav__link">
+    <span class="md-ellipsis">
+      启用 Context Offload
     </span>
   </a>
   
@@ -7121,10 +7139,9 @@ tRPC-Agent-Go 侧继续负责 Runner、Session、Plugin 和 Tool 生命周期的
 <li>Go adapter 通过 <code>session.Ingestor</code> 把每轮完成后的会话内容发送给 gateway。</li>
 <li>Runner plugin 在每次模型调用前请求 <code>/recall</code>，并把返回的上下文注入模型请求（需通过 <code>WithRecallEnabled(true)</code> 显式开启）。</li>
 <li>通过 <code>tdai_conversation_search</code>（按 session 作用域，默认开启）和 <code>tdai_memory_search</code>（需 <code>WithMemorySearchTool(true)</code> 显式开启）暴露只读检索工具。</li>
-<li>可选的短期上下文卸载 plugin 可以把较大的工具结果外置到本地
-  <code>refs/*.md</code>，维护 L1 JSONL 摘要、判断 L1.5 任务边界、生成 L2
-  Mermaid 任务图，并在模型调用前执行 L3 token 压力压缩。它与 recall
-  相互独立，默认关闭。</li>
+<li>可选的短期上下文卸载 plugin 会把工具结果外置化、L1/L1.5/L2/L3、
+  drill-down 和持久化委托给 TencentDB Agent Memory gateway hook API。
+  Go adapter 不写本地 offload 文件。它与 recall 相互独立，默认关闭。</li>
 </ul>
 <blockquote>
 <p><strong>多租户提示</strong>：自动 recall 和 <code>tdai_memory_search</code> 会读取 gateway 的共享长期
@@ -7209,18 +7226,7 @@ gateway/SDK 侧。直接访问 VectorDB 或 SQLite 只能访问存储层，不�
 <span class="normal"><a href="#__codelineno-51-47">47</a></span>
 <span class="normal"><a href="#__codelineno-51-48">48</a></span>
 <span class="normal"><a href="#__codelineno-51-49">49</a></span>
-<span class="normal"><a href="#__codelineno-51-50">50</a></span>
-<span class="normal"><a href="#__codelineno-51-51">51</a></span>
-<span class="normal"><a href="#__codelineno-51-52">52</a></span>
-<span class="normal"><a href="#__codelineno-51-53">53</a></span>
-<span class="normal"><a href="#__codelineno-51-54">54</a></span>
-<span class="normal"><a href="#__codelineno-51-55">55</a></span>
-<span class="normal"><a href="#__codelineno-51-56">56</a></span>
-<span class="normal"><a href="#__codelineno-51-57">57</a></span>
-<span class="normal"><a href="#__codelineno-51-58">58</a></span>
-<span class="normal"><a href="#__codelineno-51-59">59</a></span>
-<span class="normal"><a href="#__codelineno-51-60">60</a></span>
-<span class="normal"><a href="#__codelineno-51-61">61</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-51-50">50</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-51-1"><a id="__codelineno-51-1" name="__codelineno-51-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-51-2"><a id="__codelineno-51-2" name="__codelineno-51-2"></a><span class="w">    </span><span class="s">&quot;os&quot;</span>
 </span><span id="__span-51-3"><a id="__codelineno-51-3" name="__codelineno-51-3"></a>
 </span><span id="__span-51-4"><a id="__codelineno-51-4" name="__codelineno-51-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
@@ -7240,47 +7246,36 @@ gateway/SDK 侧。直接访问 VectorDB 或 SQLite 只能访问存储层，不�
 </span><span id="__span-51-18"><a id="__codelineno-51-18" name="__codelineno-51-18"></a><span class="w">    </span><span class="c1">// 跨 session/user 的读取属于 opt-in，仅在 gateway 可信/隔离时开启。</span>
 </span><span id="__span-51-19"><a id="__codelineno-51-19" name="__codelineno-51-19"></a><span class="w">    </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithRecallEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
 </span><span id="__span-51-20"><a id="__codelineno-51-20" name="__codelineno-51-20"></a><span class="w">    </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithMemorySearchTool</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-51-21"><a id="__codelineno-51-21" name="__codelineno-51-21"></a><span class="w">    </span><span class="c1">// 可选短期工具结果卸载；它与长期 recall 是独立能力。</span>
-</span><span id="__span-51-22"><a id="__codelineno-51-22" name="__codelineno-51-22"></a><span class="w">    </span><span class="c1">// memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{</span>
-</span><span id="__span-51-23"><a id="__codelineno-51-23" name="__codelineno-51-23"></a><span class="w">    </span><span class="c1">//     Enabled: true,</span>
-</span><span id="__span-51-24"><a id="__codelineno-51-24" name="__codelineno-51-24"></a><span class="w">    </span><span class="c1">//     DataDir: &quot;.tdai-offload&quot;,</span>
-</span><span id="__span-51-25"><a id="__codelineno-51-25" name="__codelineno-51-25"></a><span class="w">    </span><span class="c1">//     Mode:    memorytencentdb.ContextOffloadModeLocal,</span>
-</span><span id="__span-51-26"><a id="__codelineno-51-26" name="__codelineno-51-26"></a><span class="w">    </span><span class="c1">//     Model:   openai.New(&quot;deepseek-v4-flash&quot;),</span>
-</span><span id="__span-51-27"><a id="__codelineno-51-27" name="__codelineno-51-27"></a><span class="w">    </span><span class="c1">// }),</span>
-</span><span id="__span-51-28"><a id="__codelineno-51-28" name="__codelineno-51-28"></a><span class="w">    </span><span class="c1">// 或将 L1/L1.5/L2 交给兼容的 offload backend：</span>
-</span><span id="__span-51-29"><a id="__codelineno-51-29" name="__codelineno-51-29"></a><span class="w">    </span><span class="c1">// memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{</span>
-</span><span id="__span-51-30"><a id="__codelineno-51-30" name="__codelineno-51-30"></a><span class="w">    </span><span class="c1">//     Enabled: true,</span>
-</span><span id="__span-51-31"><a id="__codelineno-51-31" name="__codelineno-51-31"></a><span class="w">    </span><span class="c1">//     Mode:    memorytencentdb.ContextOffloadModeBackend,</span>
-</span><span id="__span-51-32"><a id="__codelineno-51-32" name="__codelineno-51-32"></a><span class="w">    </span><span class="c1">//     Backend: memorytencentdb.ContextOffloadBackendConfig{</span>
-</span><span id="__span-51-33"><a id="__codelineno-51-33" name="__codelineno-51-33"></a><span class="w">    </span><span class="c1">//         URL:    gatewayURL,</span>
-</span><span id="__span-51-34"><a id="__codelineno-51-34" name="__codelineno-51-34"></a><span class="w">    </span><span class="c1">//         APIKey: os.Getenv(&quot;TDAI_GATEWAY_API_KEY&quot;),</span>
-</span><span id="__span-51-35"><a id="__codelineno-51-35" name="__codelineno-51-35"></a><span class="w">    </span><span class="c1">//     },</span>
-</span><span id="__span-51-36"><a id="__codelineno-51-36" name="__codelineno-51-36"></a><span class="w">    </span><span class="c1">// }),</span>
-</span><span id="__span-51-37"><a id="__codelineno-51-37" name="__codelineno-51-37"></a><span class="w">    </span><span class="c1">// memorytencentdb.WithAPIKey(os.Getenv(&quot;TDAI_GATEWAY_API_KEY&quot;)),</span>
+</span><span id="__span-51-21"><a id="__codelineno-51-21" name="__codelineno-51-21"></a><span class="w">    </span><span class="c1">// 可选短期工具结果卸载；需要 gateway 支持 /offload/v1/hooks/*</span>
+</span><span id="__span-51-22"><a id="__codelineno-51-22" name="__codelineno-51-22"></a><span class="w">    </span><span class="c1">// 和 /offload/v1/tools/*。</span>
+</span><span id="__span-51-23"><a id="__codelineno-51-23" name="__codelineno-51-23"></a><span class="w">    </span><span class="c1">// memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{</span>
+</span><span id="__span-51-24"><a id="__codelineno-51-24" name="__codelineno-51-24"></a><span class="w">    </span><span class="c1">//     Enabled: true,</span>
+</span><span id="__span-51-25"><a id="__codelineno-51-25" name="__codelineno-51-25"></a><span class="w">    </span><span class="c1">// }),</span>
+</span><span id="__span-51-26"><a id="__codelineno-51-26" name="__codelineno-51-26"></a><span class="w">    </span><span class="c1">// memorytencentdb.WithAPIKey(os.Getenv(&quot;TDAI_GATEWAY_API_KEY&quot;)),</span>
+</span><span id="__span-51-27"><a id="__codelineno-51-27" name="__codelineno-51-27"></a><span class="p">)</span>
+</span><span id="__span-51-28"><a id="__codelineno-51-28" name="__codelineno-51-28"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-51-29"><a id="__codelineno-51-29" name="__codelineno-51-29"></a><span class="w">    </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-51-30"><a id="__codelineno-51-30" name="__codelineno-51-30"></a><span class="p">}</span>
+</span><span id="__span-51-31"><a id="__codelineno-51-31" name="__codelineno-51-31"></a><span class="k">defer</span><span class="w"> </span><span class="nx">memSvc</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-51-32"><a id="__codelineno-51-32" name="__codelineno-51-32"></a>
+</span><span id="__span-51-33"><a id="__codelineno-51-33" name="__codelineno-51-33"></a><span class="nx">sessionSvc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessioninmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
+</span><span id="__span-51-34"><a id="__codelineno-51-34" name="__codelineno-51-34"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-51-35"><a id="__codelineno-51-35" name="__codelineno-51-35"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-51-36"><a id="__codelineno-51-36" name="__codelineno-51-36"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">)),</span>
+</span><span id="__span-51-37"><a id="__codelineno-51-37" name="__codelineno-51-37"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span>
 </span><span id="__span-51-38"><a id="__codelineno-51-38" name="__codelineno-51-38"></a><span class="p">)</span>
-</span><span id="__span-51-39"><a id="__codelineno-51-39" name="__codelineno-51-39"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-51-40"><a id="__codelineno-51-40" name="__codelineno-51-40"></a><span class="w">    </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-51-41"><a id="__codelineno-51-41" name="__codelineno-51-41"></a><span class="p">}</span>
-</span><span id="__span-51-42"><a id="__codelineno-51-42" name="__codelineno-51-42"></a><span class="k">defer</span><span class="w"> </span><span class="nx">memSvc</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
-</span><span id="__span-51-43"><a id="__codelineno-51-43" name="__codelineno-51-43"></a>
-</span><span id="__span-51-44"><a id="__codelineno-51-44" name="__codelineno-51-44"></a><span class="nx">sessionSvc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessioninmemory</span><span class="p">.</span><span class="nx">NewSessionService</span><span class="p">()</span>
-</span><span id="__span-51-45"><a id="__codelineno-51-45" name="__codelineno-51-45"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-51-46"><a id="__codelineno-51-46" name="__codelineno-51-46"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
-</span><span id="__span-51-47"><a id="__codelineno-51-47" name="__codelineno-51-47"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">)),</span>
-</span><span id="__span-51-48"><a id="__codelineno-51-48" name="__codelineno-51-48"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span>
+</span><span id="__span-51-39"><a id="__codelineno-51-39" name="__codelineno-51-39"></a>
+</span><span id="__span-51-40"><a id="__codelineno-51-40" name="__codelineno-51-40"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-51-41"><a id="__codelineno-51-41" name="__codelineno-51-41"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
+</span><span id="__span-51-42"><a id="__codelineno-51-42" name="__codelineno-51-42"></a><span class="w">    </span><span class="nx">agent</span><span class="p">,</span>
+</span><span id="__span-51-43"><a id="__codelineno-51-43" name="__codelineno-51-43"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionSvc</span><span class="p">),</span>
+</span><span id="__span-51-44"><a id="__codelineno-51-44" name="__codelineno-51-44"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionIngestor</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">),</span>
+</span><span id="__span-51-45"><a id="__codelineno-51-45" name="__codelineno-51-45"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span>
+</span><span id="__span-51-46"><a id="__codelineno-51-46" name="__codelineno-51-46"></a><span class="w">        </span><span class="nx">memSvc</span><span class="p">.</span><span class="nx">Plugin</span><span class="p">(),</span>
+</span><span id="__span-51-47"><a id="__codelineno-51-47" name="__codelineno-51-47"></a><span class="w">        </span><span class="c1">// memSvc.ContextOffloadPlugin(),</span>
+</span><span id="__span-51-48"><a id="__codelineno-51-48" name="__codelineno-51-48"></a><span class="w">    </span><span class="p">),</span>
 </span><span id="__span-51-49"><a id="__codelineno-51-49" name="__codelineno-51-49"></a><span class="p">)</span>
-</span><span id="__span-51-50"><a id="__codelineno-51-50" name="__codelineno-51-50"></a>
-</span><span id="__span-51-51"><a id="__codelineno-51-51" name="__codelineno-51-51"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
-</span><span id="__span-51-52"><a id="__codelineno-51-52" name="__codelineno-51-52"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
-</span><span id="__span-51-53"><a id="__codelineno-51-53" name="__codelineno-51-53"></a><span class="w">    </span><span class="nx">agent</span><span class="p">,</span>
-</span><span id="__span-51-54"><a id="__codelineno-51-54" name="__codelineno-51-54"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionSvc</span><span class="p">),</span>
-</span><span id="__span-51-55"><a id="__codelineno-51-55" name="__codelineno-51-55"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionIngestor</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">),</span>
-</span><span id="__span-51-56"><a id="__codelineno-51-56" name="__codelineno-51-56"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span>
-</span><span id="__span-51-57"><a id="__codelineno-51-57" name="__codelineno-51-57"></a><span class="w">        </span><span class="nx">memSvc</span><span class="p">.</span><span class="nx">Plugin</span><span class="p">(),</span>
-</span><span id="__span-51-58"><a id="__codelineno-51-58" name="__codelineno-51-58"></a><span class="w">        </span><span class="c1">// memSvc.ContextOffloadPlugin(),</span>
-</span><span id="__span-51-59"><a id="__codelineno-51-59" name="__codelineno-51-59"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-51-60"><a id="__codelineno-51-60" name="__codelineno-51-60"></a><span class="p">)</span>
-</span><span id="__span-51-61"><a id="__codelineno-51-61" name="__codelineno-51-61"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-51-50"><a id="__codelineno-51-50" name="__codelineno-51-50"></a><span class="k">defer</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
 </span></code></pre></div></td></tr></table></div>
 <p><strong>接入要点</strong>：</p>
 <ul>
@@ -7294,22 +7289,98 @@ gateway/SDK 侧。直接访问 VectorDB 或 SQLite 只能访问存储层，不�
   <code>tdai_search_offload_index</code> 工具会通过 <code>memSvc.Tools()</code> 暴露。</li>
 <li>不要对该集成使用 <code>runner.WithMemoryService(...)</code>。</li>
 </ul>
+<h3 id="context-offload">启用 Context Offload</h3>
+<p>context offload 是独立、显式开启的短期大工具结果卸载路径。只有在
+TencentDB Agent Memory gateway 已经提供下方 notes 中列出的 offload routes
+时才应启用它。Go adapter 不提供本地存储、摘要模型，也不再暴露
+local/backend/collect 模式。</p>
+<p>最小接入方式：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-52-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-52-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-52-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-52-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-52-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-52-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-52-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-52-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-52-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-52-10">10</a></span>
+<span class="normal"><a href="#__codelineno-52-11">11</a></span>
+<span class="normal"><a href="#__codelineno-52-12">12</a></span>
+<span class="normal"><a href="#__codelineno-52-13">13</a></span>
+<span class="normal"><a href="#__codelineno-52-14">14</a></span>
+<span class="normal"><a href="#__codelineno-52-15">15</a></span>
+<span class="normal"><a href="#__codelineno-52-16">16</a></span>
+<span class="normal"><a href="#__codelineno-52-17">17</a></span>
+<span class="normal"><a href="#__codelineno-52-18">18</a></span>
+<span class="normal"><a href="#__codelineno-52-19">19</a></span>
+<span class="normal"><a href="#__codelineno-52-20">20</a></span>
+<span class="normal"><a href="#__codelineno-52-21">21</a></span>
+<span class="normal"><a href="#__codelineno-52-22">22</a></span>
+<span class="normal"><a href="#__codelineno-52-23">23</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1"></a><span class="nx">memSvc</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
+</span><span id="__span-52-2"><a id="__codelineno-52-2" name="__codelineno-52-2"></a><span class="w">    </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithGatewayURL</span><span class="p">(</span><span class="nx">gatewayURL</span><span class="p">),</span>
+</span><span id="__span-52-3"><a id="__codelineno-52-3" name="__codelineno-52-3"></a><span class="w">    </span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithContextOffload</span><span class="p">(</span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">ContextOffloadConfig</span><span class="p">{</span>
+</span><span id="__span-52-4"><a id="__codelineno-52-4" name="__codelineno-52-4"></a><span class="w">        </span><span class="nx">Enabled</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-52-5"><a id="__codelineno-52-5" name="__codelineno-52-5"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-52-6"><a id="__codelineno-52-6" name="__codelineno-52-6"></a><span class="p">)</span>
+</span><span id="__span-52-7"><a id="__codelineno-52-7" name="__codelineno-52-7"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-52-8"><a id="__codelineno-52-8" name="__codelineno-52-8"></a><span class="w">    </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-52-9"><a id="__codelineno-52-9" name="__codelineno-52-9"></a><span class="p">}</span>
+</span><span id="__span-52-10"><a id="__codelineno-52-10" name="__codelineno-52-10"></a>
+</span><span id="__span-52-11"><a id="__codelineno-52-11" name="__codelineno-52-11"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-52-12"><a id="__codelineno-52-12" name="__codelineno-52-12"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-52-13"><a id="__codelineno-52-13" name="__codelineno-52-13"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;deepseek-v4-flash&quot;</span><span class="p">)),</span>
+</span><span id="__span-52-14"><a id="__codelineno-52-14" name="__codelineno-52-14"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">.</span><span class="nx">Tools</span><span class="p">()),</span>
+</span><span id="__span-52-15"><a id="__codelineno-52-15" name="__codelineno-52-15"></a><span class="p">)</span>
+</span><span id="__span-52-16"><a id="__codelineno-52-16" name="__codelineno-52-16"></a>
+</span><span id="__span-52-17"><a id="__codelineno-52-17" name="__codelineno-52-17"></a><span class="nx">r</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span>
+</span><span id="__span-52-18"><a id="__codelineno-52-18" name="__codelineno-52-18"></a><span class="w">    </span><span class="s">&quot;my-app&quot;</span><span class="p">,</span>
+</span><span id="__span-52-19"><a id="__codelineno-52-19" name="__codelineno-52-19"></a><span class="w">    </span><span class="nx">agent</span><span class="p">,</span>
+</span><span id="__span-52-20"><a id="__codelineno-52-20" name="__codelineno-52-20"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionService</span><span class="p">(</span><span class="nx">sessionSvc</span><span class="p">),</span>
+</span><span id="__span-52-21"><a id="__codelineno-52-21" name="__codelineno-52-21"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithSessionIngestor</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">),</span>
+</span><span id="__span-52-22"><a id="__codelineno-52-22" name="__codelineno-52-22"></a><span class="w">    </span><span class="nx">runner</span><span class="p">.</span><span class="nx">WithPlugins</span><span class="p">(</span><span class="nx">memSvc</span><span class="p">.</span><span class="nx">ContextOffloadPlugin</span><span class="p">()),</span>
+</span><span id="__span-52-23"><a id="__codelineno-52-23" name="__codelineno-52-23"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>如果 offload 流量需要使用与普通 capture/search/recall 不同的 gateway 或 key，
+可以在 <code>ContextOffloadConfig</code> 中单独设置 <code>GatewayURL</code> 和 <code>APIKey</code>：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-53-1">1</a></span>
+<span class="normal"><a href="#__codelineno-53-2">2</a></span>
+<span class="normal"><a href="#__codelineno-53-3">3</a></span>
+<span class="normal"><a href="#__codelineno-53-4">4</a></span>
+<span class="normal"><a href="#__codelineno-53-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1"></a><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">WithContextOffload</span><span class="p">(</span><span class="nx">memorytencentdb</span><span class="p">.</span><span class="nx">ContextOffloadConfig</span><span class="p">{</span>
+</span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2"></a><span class="w">    </span><span class="nx">Enabled</span><span class="p">:</span><span class="w">    </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3"></a><span class="w">    </span><span class="nx">GatewayURL</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://127.0.0.1:8420&quot;</span><span class="p">,</span>
+</span><span id="__span-53-4"><a id="__codelineno-53-4" name="__codelineno-53-4"></a><span class="w">    </span><span class="nx">APIKey</span><span class="p">:</span><span class="w">     </span><span class="nx">os</span><span class="p">.</span><span class="nx">Getenv</span><span class="p">(</span><span class="s">&quot;TDAI_OFFLOAD_GATEWAY_API_KEY&quot;</span><span class="p">),</span>
+</span><span id="__span-53-5"><a id="__codelineno-53-5" name="__codelineno-53-5"></a><span class="p">})</span>
+</span></code></pre></div></td></tr></table></div>
+<p>运行时行为：</p>
+<ul>
+<li><code>ContextOffloadPlugin()</code> 会在工具执行后调用 gateway。gateway 可以把较大的
+  tool result message 替换成紧凑引用或摘要。</li>
+<li>下一次模型调用前，plugin 会询问 gateway 是否需要用已卸载上下文改写当前请求。</li>
+<li>启用 context offload 后，<code>memSvc.Tools()</code> 会暴露
+  <code>tdai_read_offload_ref</code>、<code>tdai_read_offload_node</code> 和
+  <code>tdai_search_offload_index</code>，模型可以通过这些工具继续下钻 gateway 托管的
+  offload 数据。</li>
+<li>不要在 Go adapter 中配置本地目录、本地模型或 L0-L3 策略；这些职责属于
+  TencentDB Agent Memory。</li>
+</ul>
 <h3 id="_47">交互式示例</h3>
 <p>gateway 就绪后运行示例：</p>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-52-1">1</a></span>
-<span class="normal"><a href="#__codelineno-52-2">2</a></span>
-<span class="normal"><a href="#__codelineno-52-3">3</a></span>
-<span class="normal"><a href="#__codelineno-52-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-52-1"><a id="__codelineno-52-1" name="__codelineno-52-1"></a><span class="nb">cd</span><span class="w"> </span>examples/memory/tencentdb
-</span><span id="__span-52-2"><a id="__codelineno-52-2" name="__codelineno-52-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-openai-compatible-api-key&quot;</span>
-</span><span id="__span-52-3"><a id="__codelineno-52-3" name="__codelineno-52-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TENCENTDB_AGENT_MEMORY_GATEWAY</span><span class="o">=</span><span class="s2">&quot;http://127.0.0.1:8420&quot;</span>
-</span><span id="__span-52-4"><a id="__codelineno-52-4" name="__codelineno-52-4"></a>go<span class="w"> </span>run<span class="w"> </span>.
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-54-1">1</a></span>
+<span class="normal"><a href="#__codelineno-54-2">2</a></span>
+<span class="normal"><a href="#__codelineno-54-3">3</a></span>
+<span class="normal"><a href="#__codelineno-54-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-54-1"><a id="__codelineno-54-1" name="__codelineno-54-1"></a><span class="nb">cd</span><span class="w"> </span>examples/memory/tencentdb
+</span><span id="__span-54-2"><a id="__codelineno-54-2" name="__codelineno-54-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">OPENAI_API_KEY</span><span class="o">=</span><span class="s2">&quot;your-openai-compatible-api-key&quot;</span>
+</span><span id="__span-54-3"><a id="__codelineno-54-3" name="__codelineno-54-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">TENCENTDB_AGENT_MEMORY_GATEWAY</span><span class="o">=</span><span class="s2">&quot;http://127.0.0.1:8420&quot;</span>
+</span><span id="__span-54-4"><a id="__codelineno-54-4" name="__codelineno-54-4"></a>go<span class="w"> </span>run<span class="w"> </span>.
 </span></code></pre></div></td></tr></table></div>
 <p>然后发送事实、flush 后新建会话，再提相关问题：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-53-1">1</a></span>
-<span class="normal"><a href="#__codelineno-53-2">2</a></span>
-<span class="normal"><a href="#__codelineno-53-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-53-1"><a id="__codelineno-53-1" name="__codelineno-53-1"></a>You: 请记住以下信息：我的项目代号是 Apollo Lake，部署窗口是周五晚上，回答偏好是简洁。
-</span><span id="__span-53-2"><a id="__codelineno-53-2" name="__codelineno-53-2"></a>You: /new
-</span><span id="__span-53-3"><a id="__codelineno-53-3" name="__codelineno-53-3"></a>You: 我的项目代号、部署窗口和回答偏好是什么？
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-55-1">1</a></span>
+<span class="normal"><a href="#__codelineno-55-2">2</a></span>
+<span class="normal"><a href="#__codelineno-55-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-55-1"><a id="__codelineno-55-1" name="__codelineno-55-1"></a>You: 请记住以下信息：我的项目代号是 Apollo Lake，部署窗口是周五晚上，回答偏好是简洁。
+</span><span id="__span-55-2"><a id="__codelineno-55-2" name="__codelineno-55-2"></a>You: /new
+</span><span id="__span-55-3"><a id="__codelineno-55-3" name="__codelineno-55-3"></a>You: 我的项目代号、部署窗口和回答偏好是什么？
 </span></code></pre></div></td></tr></table></div>
 <p>前两条消息会被 gateway capture。示例里的 <code>/new</code> 命令会先 flush 当前 gateway session，再切换到新 session；对话历史会重置，但同一个用户仍然可以通过 plugin 和原生检索工具召回已经提取的长期记忆。</p>
 <h3 id="_48">配置选项</h3>
@@ -7389,8 +7460,9 @@ gateway/SDK 侧。直接访问 VectorDB 或 SQLite 只能访问存储层，不�
 </tr>
 </tbody>
 </table>
-<p><code>ContextOffloadConfig</code> 按 offload 层级组织详细配置。除 <code>Enabled</code> 必须显式设置外，
-其余零值都会补全为保守默认值。</p>
+<p><code>ContextOffloadConfig</code> 只控制 Go adapter 的 gateway 对接。offload 层级、
+状态、存储、TTL 和隔离由 TencentDB Agent Memory gateway 负责。Go adapter
+不暴露 local/backend offload 模式，也不会写本地 offload state。</p>
 <table>
 <thead>
 <tr>
@@ -7406,74 +7478,14 @@ gateway/SDK 侧。直接访问 VectorDB 或 SQLite 只能访问存储层，不�
 <td><code>false</code></td>
 </tr>
 <tr>
-<td><code>DataDir</code></td>
-<td><code>refs/</code>、JSONL 索引和 Mermaid 文件目录。</td>
-<td><code>.tdai-offload</code></td>
-</tr>
-<tr>
-<td><code>Mode</code></td>
-<td>选择 <code>local</code>、<code>backend</code> 或 <code>collect</code> offload 模式。</td>
-<td><code>local</code></td>
-</tr>
-<tr>
-<td><code>Model</code></td>
-<td>local 模式下执行 L1/L1.5/L2 offload 任务的模型。未设置时使用确定性 fallback 摘要。</td>
+<td><code>GatewayURL</code></td>
+<td>context offload hook/tool 调用的可选 gateway URL 覆盖。为空时复用 <code>WithGatewayURL</code>。</td>
 <td>无</td>
 </tr>
 <tr>
-<td><code>MaxEntries</code></td>
-<td>注入当前任务 Mermaid 上下文的最大 offload 条目数。</td>
-<td><code>20</code></td>
-</tr>
-<tr>
-<td><code>Backend.URL</code>、<code>Backend.APIKey</code></td>
-<td>backend 模式下的 L1/L1.5/L2 endpoint 和可选 API key。</td>
+<td><code>APIKey</code></td>
+<td>context offload hook/tool 调用的可选 API key 覆盖。为空时复用 <code>WithAPIKey</code>。</td>
 <td>无</td>
-</tr>
-<tr>
-<td><code>L0.MinToolResultBytes</code></td>
-<td>触发外置化的最小工具结果大小。</td>
-<td><code>8192</code></td>
-</tr>
-<tr>
-<td><code>L0.MaxRefBytes</code></td>
-<td><code>tdai_read_offload_ref</code> 最多返回的字节数。</td>
-<td><code>1048576</code></td>
-</tr>
-<tr>
-<td><code>L1.MaxPairsPerBatch</code></td>
-<td>单次 L1 摘要请求最多处理的工具调用对数量。</td>
-<td><code>20</code></td>
-</tr>
-<tr>
-<td><code>L2.NullThreshold</code></td>
-<td>触发 L2 Mermaid 生成的未映射 L1 行数。</td>
-<td><code>4</code></td>
-</tr>
-<tr>
-<td><code>L2.Timeout</code></td>
-<td>基于时间的 L2 触发间隔。</td>
-<td><code>5m</code></td>
-</tr>
-<tr>
-<td><code>L3.ContextWindow</code></td>
-<td>offload model 未报告窗口时，L3 token 压力检查使用的上下文窗口。</td>
-<td><code>200000</code></td>
-</tr>
-<tr>
-<td><code>L3.MildRatio</code></td>
-<td>触发 L3 摘要替换的 token 比例。</td>
-<td><code>0.50</code></td>
-</tr>
-<tr>
-<td><code>L3.AggressiveRatio</code></td>
-<td>触发删除旧 offloaded 工具块的 token 比例。</td>
-<td><code>0.85</code></td>
-</tr>
-<tr>
-<td><code>L3.EmergencyRatio</code>、<code>L3.EmergencyTargetRatio</code></td>
-<td>emergency 压缩的触发比例和目标比例。</td>
-<td><code>0.95</code>、<code>0.60</code></td>
 </tr>
 </tbody>
 </table>
@@ -7483,17 +7495,16 @@ gateway/SDK 侧。直接访问 VectorDB 或 SQLite 只能访问存储层，不�
 <li>当 gateway 设置了 <code>TDAI_GATEWAY_API_KEY</code> 时，请用 <code>WithAPIKey(...)</code> 让请求携带 <code>Authorization: Bearer &lt;key&gt;</code>，否则除 <code>/health</code> 外的路由都会返回 401（health 仍可通过）。</li>
 <li><code>tdai_memory_search</code> 检索已提取的长期记忆；提取是异步的，新捕获的信息可能需要短暂等待后才可检索。</li>
 <li><code>tdai_conversation_search</code> 检索对话历史，默认使用当前 gateway <code>session_key</code>。</li>
-<li>context offload 是本地、显式开启、运行时作用域的能力。它不调用 <code>/capture</code> 或
+<li>context offload 是显式开启、由 gateway 承载的能力。它不调用 <code>/capture</code> 或
   <code>/recall</code>；单独开启 recall 不会改写工具结果消息，也不会生成 Mermaid 任务图。</li>
-<li>context offload 有三种模型模式：<code>local</code> 使用 <code>ContextOffloadConfig.Model</code>
-  配置的模型执行 L1/L1.5/L2，未配置时使用确定性 fallback；<code>backend</code>
-  调用兼容的 <code>/offload/v1/...</code> endpoint；<code>collect</code> 只记录 refs 和 JSONL
-  状态，不改写模型侧 messages。</li>
-<li>offload 工具只读取当前 invocation 的 agent/session 数据目录。
-  <code>read_offload_ref</code> 会对 <code>result_ref</code> 读取做 path traversal 防护；
-  <code>read_offload_node</code> 按 <code>node_id</code> 读取，不接收 <code>result_ref</code>。</li>
-<li>live model 覆盖放在 <code>integration</code> build tag 后，例如：
-  <code>TDAI_CONTEXT_OFFLOAD_INTEGRATION=1 OPENAI_API_KEY=... go test -tags=integration ./memory/tencentdb -run TestContextOffloadPlugin_IntegrationLocalModel</code>。</li>
+<li>Go adapter 调用 gateway hook endpoints：
+  <code>/offload/v1/hooks/after-tool-messages</code> 和
+  <code>/offload/v1/hooks/before-model</code>。它不会创建 <code>.tdai-offload</code>、本地 refs、
+  JSONL 索引、Mermaid 文件或本地 state。</li>
+<li>offload 工具调用 gateway drill-down endpoints：
+  <code>/offload/v1/tools/read-ref</code>、<code>/offload/v1/tools/read-node</code> 和
+  <code>/offload/v1/tools/search-index</code>。scope 校验、存储 ACL、返回字节限制和持久化
+  都由 gateway 负责。</li>
 <li>使用完成后请调用 <code>Close()</code>，确保后台 capture worker 干净退出。</li>
 </ul>
 <h2 id="_50">参考链接</h2>
@@ -7529,7 +7540,7 @@ gateway/SDK 侧。直接访问 VectorDB 或 SQLite 只能访问存储层，不�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月15日 03:09:51 UTC">2026-06-15 03:09:51</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月23日 12:23:02 UTC">2026-06-23 12:23:02</span>
   </span>
 
     
