@@ -837,6 +837,10 @@ func TestWithDisableAutoMemoryOnExternalContext(t *testing.T) {
 	service := NewMemoryService(WithDisableAutoMemoryOnExternalContext(true))
 	require.NotNil(t, service)
 	assert.True(t, service.opts.disableAutoMemoryOnExternalContext)
+
+	service = NewMemoryService(WithDisableAutoMemoryOnExternalContext(false))
+	require.NotNil(t, service)
+	assert.False(t, service.opts.disableAutoMemoryOnExternalContext)
 }
 
 func TestEnqueueAutoMemoryJob_NoExtractor(t *testing.T) {
