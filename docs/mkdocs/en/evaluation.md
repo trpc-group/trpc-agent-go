@@ -537,6 +537,7 @@ EvalSet is a collection of evaluation cases. Each case is an EvalCase. In defaul
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -593,6 +594,7 @@ type Invocation struct {
 	UserContent           *model.Message       // UserContent is the user input for this turn, required.
 	FinalResponse         *model.Message       // FinalResponse is the final response, optional.
 	Tools                 []*Tool              // Tools are tool traces, optional.
+	ToolMock              *toolmock.ToolMock   // ToolMock configures mocked tool results for this turn, optional.
 	IntermediateResponses []*model.Message     // IntermediateResponses are intermediate responses, optional.
 	CreationTimestamp     *epochtime.EpochTime // CreationTimestamp is the creation timestamp, optional.
 }
@@ -618,6 +620,8 @@ EvalSet is identified by `evalSetId` and contains multiple EvalCases, each ident
 In default mode, inference can be organized in two ways. With `conversation`, the framework reads `userContent` turn by turn as input. With `conversationScenario`, the framework first creates the target Agent session and then uses UserSimulator to generate each user turn dynamically from the scenario. Both modes create the session with `sessionInput.userId`, can inject initial state through `sessionInput.state`, and inject additional context through `contextMessages` before each inference. In trace mode, inference is skipped and `actualConversation` is used directly as actual traces.
 
 `tools` and `finalResponse` in EvalSet describe tool traces and final responses. Whether they are needed depends on the selected evaluation metrics.
+
+`toolMock` replaces tool execution results during inference. It is not an expected output for the evaluation phase. It only applies to the invocation where it is configured; the model still decides whether to call tools based on the real tool declarations, and the framework only replaces the return value at the tool execution point. The mocked result is still captured in the actual tool trace.
 
 In trace mode, you can configure actual output traces explicitly via `actualConversation`.
 
@@ -3294,6 +3298,144 @@ agentEvaluator, err := evaluation.New(
 	evaluation.WithExpectedRunner(expectedRunner),
 )
 ```
+
+### ToolMock for Tool Result Simulation
+
+When an evaluation case depends on external tools, live services, or unstable data, configure `toolMock` on an EvalSet `Invocation` to return a fixed result at the tool execution point. ToolMock does not change the tool declarations seen by the model and does not force the model to call a tool; the model still decides whether to issue a tool call, and the framework replaces the tool result only after a configured tool name and argument rule matches.
+
+`toolMock` is invocation-level only. `EvalCase` and `Metric` do not configure ToolMock. `conversationScenario` has no predeclared invocation, so declarative ToolMock is not supported there.
+
+Structure definition:
+
+```go
+package toolmock
+
+type ToolMock struct {
+	Actual   []*Tool // Actual applies to the tested Runner.
+	Expected []*Tool // Expected applies to ExpectedRunner.
+}
+
+type Tool struct {
+	Name         string          // Name is the tool name to mock.
+	Arguments    *ArgumentsMatch // Arguments defines how tool arguments are matched. When it is nil, only the tool name is matched.
+	Result       any             // Result is the static tool result.
+	LLMGenerator *LLMGenerator   // LLMGenerator generates the tool result through ToolMockRunner.
+}
+
+type ArgumentsMatch struct {
+	Ignore          bool           // Ignore skips argument comparison and matches only by tool name.
+	Expected        any            // Expected is the expected tool arguments.
+	OnlyTree        map[string]any // OnlyTree compares only selected fields.
+	IgnoreTree      map[string]any // IgnoreTree skips selected fields.
+	NumberTolerance *float64       // NumberTolerance is the numeric comparison tolerance. The default is 0.
+}
+
+type LLMGenerator struct {
+	Prompt string // Prompt is the ToolMockRunner instruction.
+}
+```
+
+`actual` and `expected` apply to the tested Runner and ExpectedRunner respectively. The two sides can use different mock results for the same tool, which is useful when the candidate implementation and the reference implementation should see different external states. The same tool name can appear multiple times. Rules are checked in configuration order, and the first match returns; put more specific argument rules before a tool-name-only fallback.
+
+Choose argument matching by intent. The common case is returning a fixed result for a tool regardless of its arguments. In that case, omit `arguments`:
+
+```json
+{
+  "name": "get_weather",
+  "result": {"condition": "sunny"}
+}
+```
+
+When the same tool needs different results for different inputs, configure `arguments.expected`. JSON is compared exactly by default, including numbers. Use `onlyTree` when only stable fields matter, `ignoreTree` when unstable fields should be skipped, and a nonnegative `numberTolerance` only when numeric differences should be tolerated.
+
+```json
+{
+  "name": "get_weather",
+  "arguments": {
+    "expected": {"city": "Shenzhen", "date": "2026-07-01"},
+    "onlyTree": {"city": true, "date": true}
+  },
+  "result": {"condition": "sunny"}
+}
+```
+
+`ignore=true` is the explicit form of "do not compare arguments". It has the same matching behavior as omitting `arguments`, and is useful only when the configuration should state that choice explicitly. Do not combine it with `expected`, `onlyTree`, `ignoreTree`, or `numberTolerance`. `onlyTree` and `ignoreTree` should not be configured together.
+
+Static result example:
+
+```json
+{
+  "evalId": "weather-case",
+  "conversation": [
+    {
+      "invocationId": "turn-1",
+      "userContent": {
+        "role": "user",
+        "content": "Is Shenzhen suitable for outdoor activities tomorrow?"
+      },
+      "toolMock": {
+        "actual": [
+          {
+            "name": "get_weather",
+            "arguments": {
+              "expected": {"city": "Shenzhen", "date": "2026-07-01"},
+              "onlyTree": {"city": true, "date": true}
+            },
+            "result": {"city": "Shenzhen", "condition": "sunny", "temperature": 28}
+          }
+        ],
+        "expected": [
+          {
+            "name": "get_weather",
+            "result": {"city": "Shenzhen", "condition": "sunny", "temperature": 28}
+          }
+        ]
+      }
+    }
+  ],
+  "sessionInput": {
+    "appName": "weather-eval-app",
+    "userId": "demo-user"
+  }
+}
+```
+
+If ToolMock is configured for a tool name but a tool call does not match any configured rule, that inference turn fails instead of falling back to the real tool. This keeps evaluations precise and avoids silently reaching real external dependencies when the mock configuration is stale.
+
+In addition to a static `result`, `llmGenerator` can use a separate ToolMockRunner to generate the tool result dynamically. `prompt` is used as the ToolMockRunner instruction, and the current tool arguments JSON is sent as the user message. When tool arguments are empty, the user message is `{}`. Inject ToolMockRunner when creating AgentEvaluator.
+
+```json
+{
+  "toolMock": {
+    "actual": [
+      {
+        "name": "search_hotels",
+        "arguments": {"ignore": true},
+        "llmGenerator": {
+          "prompt": "Return only the tool result JSON, for example {\"hotels\":[]}."
+        }
+      }
+    ]
+  }
+}
+```
+
+```go
+mockRunner := runner.NewRunner(appName, toolMockAgent)
+agentEvaluator, err := evaluation.New(
+	appName,
+	actualRunner,
+	evaluation.WithToolMockRunner(mockRunner),
+)
+```
+
+When using the lower-level `evaluation/service` API directly, inject the same ToolMockRunner with `service.WithToolMockRunner(mockRunner)`.
+
+If the tool declaration contains an `OutputSchema` whose type is `object`, the framework reuses that schema as the structured output constraint when calling ToolMockRunner. The schema name uses the real tool declaration name, and the description uses the tool output schema description. ToolMock does not define an extra output schema field and does not require users to configure a separate schema for mock results. Without structured output, the final text from ToolMockRunner is parsed as JSON when possible; otherwise the raw text is used. Empty output and JSON `null` are invalid.
+
+In trace mode, the actual side does not run the tested Runner, so `toolMock.actual` does not take effect. If `expectedRunnerEnabled` is enabled, ExpectedRunner still runs and `toolMock.expected` can take effect. When a trace case configures both `actualConversation` and `conversation`, ExpectedRunner uses `actualConversation[i].userContent` as input and `conversation[i].toolMock.expected` as the expected-side tool mock configuration.
+
+See the full example at [examples/evaluation/toolmock](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/toolmock).
 
 ### UserSimulation for Dynamic User Turns
 
