@@ -96,6 +96,30 @@ func TestPromptCacheUsageRecordPrefersLastCacheReadTokens(
 	require.InDelta(t, 0.7, record["last_cache_hit_ratio"], 0.0001)
 }
 
+func TestPromptCacheUsageRecordOmitsCacheFieldsWithoutDetails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	record := promptCacheUsageRecord(
+		"session-1",
+		"request-1",
+		&gwproto.Usage{
+			PromptTokens:     100,
+			LastPromptTokens: 80,
+		},
+	)
+
+	require.Equal(t, 100, record["prompt_tokens"])
+	require.Equal(t, 80, record["last_prompt_tokens"])
+	require.NotContains(t, record, "cached_tokens")
+	require.NotContains(t, record, "uncached_tokens")
+	require.NotContains(t, record, "cache_hit_ratio")
+	require.NotContains(t, record, "last_cached_tokens")
+	require.NotContains(t, record, "last_uncached_tokens")
+	require.NotContains(t, record, "last_cache_hit_ratio")
+}
+
 func TestRecordPromptCacheUsageWritesTraceEvent(t *testing.T) {
 	t.Parallel()
 

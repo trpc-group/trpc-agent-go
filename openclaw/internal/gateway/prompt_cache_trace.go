@@ -36,34 +36,38 @@ func promptCacheUsageRecord(
 ) map[string]any {
 	prompt := usage.PromptTokens
 	details := usage.PromptDetails
-	cached := promptCachedTokens(details)
 
 	record := map[string]any{
 		"session_id":        sessionID,
 		"request_id":        requestID,
 		"prompt_tokens":     prompt,
-		"cached_tokens":     cached,
-		"uncached_tokens":   nonNegativeDelta(prompt, cached),
 		"completion_tokens": usage.CompletionTokens,
 		"total_tokens":      usage.TotalTokens,
 	}
-	if prompt > 0 {
-		record["cache_hit_ratio"] = float64(cached) / float64(prompt)
+	if details != nil {
+		cached := promptCachedTokens(details)
+		record["cached_tokens"] = cached
+		record["uncached_tokens"] = nonNegativeDelta(prompt, cached)
+		if prompt > 0 {
+			record["cache_hit_ratio"] = float64(cached) / float64(prompt)
+		}
 	}
 	addPromptCacheDetails(record, "", details)
 
 	lastPrompt := usage.LastPromptTokens
 	if lastPrompt > 0 {
 		lastDetails := usage.LastDetails
-		lastCached := promptCachedTokens(lastDetails)
 		record["last_prompt_tokens"] = lastPrompt
-		record["last_cached_tokens"] = lastCached
-		record["last_uncached_tokens"] = nonNegativeDelta(
-			lastPrompt,
-			lastCached,
-		)
-		record["last_cache_hit_ratio"] = float64(lastCached) /
-			float64(lastPrompt)
+		if lastDetails != nil {
+			lastCached := promptCachedTokens(lastDetails)
+			record["last_cached_tokens"] = lastCached
+			record["last_uncached_tokens"] = nonNegativeDelta(
+				lastPrompt,
+				lastCached,
+			)
+			record["last_cache_hit_ratio"] = float64(lastCached) /
+				float64(lastPrompt)
+		}
 		addPromptCacheDetails(record, "last_", lastDetails)
 	}
 	return record
