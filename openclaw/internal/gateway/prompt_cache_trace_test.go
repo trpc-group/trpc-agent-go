@@ -70,3 +70,25 @@ func TestPromptCacheUsageRecordPrefersCacheReadTokens(t *testing.T) {
 	require.Equal(t, 60, record["cache_read_tokens"])
 	require.InDelta(t, 0.6, record["cache_hit_ratio"], 0.0001)
 }
+
+func TestPromptCacheUsageRecordPrefersLastCacheReadTokens(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	record := promptCacheUsageRecord(
+		"session-1",
+		"request-1",
+		&gwproto.Usage{
+			LastPromptTokens: 100,
+			LastDetails: &gwproto.PromptDetails{
+				CacheReadTokens: 70,
+			},
+		},
+	)
+
+	require.Equal(t, 70, record["last_cached_tokens"])
+	require.Equal(t, 30, record["last_uncached_tokens"])
+	require.Equal(t, 70, record["last_cache_read_tokens"])
+	require.InDelta(t, 0.7, record["last_cache_hit_ratio"], 0.0001)
+}

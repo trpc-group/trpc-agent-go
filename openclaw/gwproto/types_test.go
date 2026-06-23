@@ -43,11 +43,15 @@ func TestUsageJSONIncludesPromptTokenDetails(t *testing.T) {
 			CompletionTokens: 10,
 			TotalTokens:      110,
 			PromptDetails: &PromptDetails{
-				CachedTokens: 80,
+				CachedTokens:        80,
+				CacheCreationTokens: 12,
+				CacheReadTokens:     68,
 			},
 			LastPromptTokens: 100,
 			LastDetails: &PromptDetails{
-				CachedTokens: 80,
+				CachedTokens:        80,
+				CacheCreationTokens: 8,
+				CacheReadTokens:     72,
 			},
 		},
 	})
@@ -60,11 +64,15 @@ func TestUsageJSONIncludesPromptTokenDetails(t *testing.T) {
 				"completion_tokens": 10,
 				"total_tokens": 110,
 				"prompt_tokens_details": {
-					"cached_tokens": 80
+					"cached_tokens": 80,
+					"cache_creation_tokens": 12,
+					"cache_read_tokens": 68
 				},
 				"last_prompt_tokens": 100,
 				"last_prompt_tokens_details": {
-					"cached_tokens": 80
+					"cached_tokens": 80,
+					"cache_creation_tokens": 8,
+					"cache_read_tokens": 72
 				}
 			}
 		}`,

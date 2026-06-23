@@ -2853,7 +2853,9 @@ func TestReplyAccumulator_AggregatesUsageAcrossResponses(
 				CompletionTokens: 50,
 				TotalTokens:      150,
 				PromptTokensDetails: model.PromptTokensDetails{
-					CachedTokens: 64,
+					CachedTokens:        64,
+					CacheCreationTokens: 10,
+					CacheReadTokens:     54,
 				},
 			},
 		},
@@ -2870,7 +2872,9 @@ func TestReplyAccumulator_AggregatesUsageAcrossResponses(
 				CompletionTokens: 30,
 				TotalTokens:      230,
 				PromptTokensDetails: model.PromptTokensDetails{
-					CachedTokens: 128,
+					CachedTokens:        128,
+					CacheCreationTokens: 20,
+					CacheReadTokens:     108,
 				},
 			},
 		},
@@ -2885,8 +2889,12 @@ func TestReplyAccumulator_AggregatesUsageAcrossResponses(
 	require.Equal(t, 200, acc.Usage.LastPromptTokens)
 	require.NotNil(t, acc.Usage.PromptDetails)
 	require.Equal(t, 192, acc.Usage.PromptDetails.CachedTokens)
+	require.Equal(t, 30, acc.Usage.PromptDetails.CacheCreationTokens)
+	require.Equal(t, 162, acc.Usage.PromptDetails.CacheReadTokens)
 	require.NotNil(t, acc.Usage.LastDetails)
 	require.Equal(t, 128, acc.Usage.LastDetails.CachedTokens)
+	require.Equal(t, 20, acc.Usage.LastDetails.CacheCreationTokens)
+	require.Equal(t, 108, acc.Usage.LastDetails.CacheReadTokens)
 }
 
 func TestReplyAccumulator_IgnoresUsageWithoutTokenCounts(
