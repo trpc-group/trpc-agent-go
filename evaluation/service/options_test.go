@@ -122,6 +122,12 @@ func TestWithExpectedRunner(t *testing.T) {
 	assert.Equal(t, custom, opts.ExpectedRunner)
 }
 
+func TestWithToolMockRunner(t *testing.T) {
+	custom := stubRunner{}
+	opts := NewOptions(WithToolMockRunner(custom))
+	assert.Equal(t, custom, opts.ToolMockRunner)
+}
+
 func TestWithRunOptions(t *testing.T) {
 	opts := NewOptions(WithRunOptions(agent.WithInstruction("prompt")))
 	assert.Len(t, opts.RunOptions, 1)

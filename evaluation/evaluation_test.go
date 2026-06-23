@@ -670,6 +670,27 @@ func TestAgentEvaluatorEvaluatePassesExpectedRunnerToInferenceAndEvaluate(t *tes
 	}
 }
 
+func TestNewCreatesLocalServiceWithOptionalRunnersAndSimulator(t *testing.T) {
+	expectedRunner := stubRunner{}
+	toolMockRunner := stubRunner{}
+	ae, err := New(
+		"app",
+		stubRunner{},
+		WithExpectedRunner(expectedRunner),
+		WithToolMockRunner(toolMockRunner),
+		WithUserSimulator(stubSimulator{}),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, ae)
+	defer func() {
+		assert.NoError(t, ae.Close())
+	}()
+	internal := ae.(*agentEvaluator)
+	assert.Equal(t, expectedRunner, internal.expectedRunner)
+	assert.Equal(t, toolMockRunner, internal.toolMockRunner)
+	assert.NotNil(t, internal.evalService)
+}
+
 func TestAgentEvaluatorClose_CollectsErrors(t *testing.T) {
 	ev, err := New(
 		"app",

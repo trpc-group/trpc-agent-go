@@ -9,7 +9,10 @@
 
 package clone
 
-import "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
+)
 
 // CloneEvalSet clones an eval set and all nested eval cases.
 func CloneEvalSet(src *evalset.EvalSet) (*evalset.EvalSet, error) {
@@ -131,6 +134,94 @@ func cloneInvocation(src *evalset.Invocation) (*evalset.Invocation, error) {
 		return nil, err
 	}
 	copied.Tools = tools
+	toolMock, err := cloneToolMock(src.ToolMock)
+	if err != nil {
+		return nil, err
+	}
+	copied.ToolMock = toolMock
+	return &copied, nil
+}
+
+func cloneToolMock(src *toolmock.ToolMock) (*toolmock.ToolMock, error) {
+	if src == nil {
+		return nil, nil
+	}
+	copied := *src
+	actual, err := cloneToolMockList(src.Actual)
+	if err != nil {
+		return nil, err
+	}
+	copied.Actual = actual
+	expected, err := cloneToolMockList(src.Expected)
+	if err != nil {
+		return nil, err
+	}
+	copied.Expected = expected
+	return &copied, nil
+}
+
+func cloneToolMockList(src []*toolmock.Tool) ([]*toolmock.Tool, error) {
+	if src == nil {
+		return nil, nil
+	}
+	copied := make([]*toolmock.Tool, len(src))
+	for i := range src {
+		tool, err := cloneToolMockEntry(src[i])
+		if err != nil {
+			return nil, err
+		}
+		copied[i] = tool
+	}
+	return copied, nil
+}
+
+func cloneToolMockEntry(src *toolmock.Tool) (*toolmock.Tool, error) {
+	if src == nil {
+		return nil, nil
+	}
+	copied := *src
+	arguments, err := cloneArgumentsMatch(src.Arguments)
+	if err != nil {
+		return nil, err
+	}
+	copied.Arguments = arguments
+	result, err := cloneAny(src.Result)
+	if err != nil {
+		return nil, err
+	}
+	copied.Result = result
+	if src.LLMGenerator != nil {
+		generator := *src.LLMGenerator
+		copied.LLMGenerator = &generator
+	}
+	return &copied, nil
+}
+
+func cloneArgumentsMatch(src *toolmock.ArgumentsMatch) (*toolmock.ArgumentsMatch, error) {
+	if src == nil {
+		return nil, nil
+	}
+	copied := *src
+	expected, err := cloneAny(src.Expected)
+	if err != nil {
+		return nil, err
+	}
+	copied.Expected = expected
+	if src.OnlyTree != nil {
+		onlyTree, err := cloneAny(src.OnlyTree)
+		if err != nil {
+			return nil, err
+		}
+		copied.OnlyTree = onlyTree.(map[string]any)
+	}
+	if src.IgnoreTree != nil {
+		ignoreTree, err := cloneAny(src.IgnoreTree)
+		if err != nil {
+			return nil, err
+		}
+		copied.IgnoreTree = ignoreTree.(map[string]any)
+	}
+	copied.NumberTolerance = cloneFloat64Ptr(src.NumberTolerance)
 	return &copied, nil
 }
 
