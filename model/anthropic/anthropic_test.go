@@ -2118,6 +2118,15 @@ func Test_StreamingMessageAccumulator_ErrorPaths(t *testing.T) {
 		`{"type":"content_block_stop","index":0}`)))
 	// The invalid Input should have been reset to {}.
 	assert.Equal(t, json.RawMessage("{}"), acc.message.Content[0].Input)
+	// Proxy sends "input": null (literal JSON null) with no input_json_delta.
+	// ensureValidToolInput must treat this as empty and reset to {}.
+	acc3 := newStreamingMessageAccumulator()
+	acc3.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("null")}}
+	acc3.inputDeltaStartedAt = []bool{false}
+	require.NoError(t, acc3.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_stop","index":0}`)))
+	assert.Equal(t, json.RawMessage("{}"), acc3.message.Content[0].Input)
+
 	// Non-tool_use blocks with malformed Input must NOT be auto-repaired.
 	acc2 := newStreamingMessageAccumulator()
 	acc2.message.Content = []anthropic.ContentBlockUnion{{Type: "text", Input: json.RawMessage("{")}}
@@ -2164,6 +2173,11 @@ func Test_ensureValidToolInput(t *testing.T) {
 	partialInput := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("{")}
 	ensureValidToolInput(partialInput)
 	assert.Equal(t, json.RawMessage("{}"), partialInput.Input)
+
+	// tool_use with literal "null" (json.Valid("null") is true) — reset to {}.
+	nullLiteral := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("null")}
+	ensureValidToolInput(nullLiteral)
+	assert.Equal(t, json.RawMessage("{}"), nullLiteral.Input)
 
 	// tool_use with valid JSON — unchanged.
 	validInput := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage(`{"key":"val"}`)}

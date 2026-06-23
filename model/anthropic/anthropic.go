@@ -798,10 +798,12 @@ func refreshContentBlockRawJSON(block *anthropic.ContentBlockUnion) error {
 
 // ensureValidToolInput resets a ContentBlockUnion's Input to an empty JSON
 // object if it is empty, nil, or contains invalid/partial JSON. This handles
-// two cases with Anthropic-compatible proxies:
+// three cases with Anthropic-compatible proxies:
 //  1. "input": null decodes to nil bytes — normalize to {} so the tool call
 //     arguments stay valid JSON.
-//  2. The stream ends before all input_json_delta events are received, leaving
+//  2. "input":"null" (the literal JSON null) — json.Valid returns true but
+//     null is not a valid tool arguments object, so normalize to {}.
+//  3. The stream ends before all input_json_delta events are received, leaving
 //     accumulated Input as incomplete JSON.
 func ensureValidToolInput(cb *anthropic.ContentBlockUnion) {
 	if cb == nil {
@@ -811,7 +813,7 @@ func ensureValidToolInput(cb *anthropic.ContentBlockUnion) {
 		return
 	}
 	input := bytes.TrimSpace(cb.Input)
-	if len(input) == 0 || !json.Valid(input) {
+	if len(input) == 0 || string(input) == "null" || !json.Valid(input) {
 		cb.Input = json.RawMessage("{}")
 	}
 }
