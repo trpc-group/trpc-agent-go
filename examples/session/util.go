@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	sessionmongodb "trpc.group/trpc-go/trpc-agent-go/session/mongodb"
 	"trpc.group/trpc-go/trpc-agent-go/session/mysql"
 	sessionnoop "trpc.group/trpc-go/trpc-agent-go/session/noop"
 	sessionpgvector "trpc.group/trpc-go/trpc-agent-go/session/pgvector"
@@ -55,6 +56,7 @@ const (
 	SessionMySQL      SessionType = "mysql"
 	SessionTDSQL      SessionType = "tdsql"
 	SessionClickHouse SessionType = "clickhouse"
+	SessionMongoDB    SessionType = "mongodb"
 )
 
 // SessionServiceConfig holds configuration for creating a session service.
@@ -71,7 +73,7 @@ type SessionServiceConfig struct {
 //
 // Parameters:
 //   - sessionType: one of inmemory, noop, sqlite, redis, postgres, pgvector,
-//     mysql, clickhouse
+//     mysql, tdsql, clickhouse, mongodb
 //   - cfg: session service configuration (eventLimit, ttl, hooks)
 //
 // Environment variables by session type:
@@ -88,6 +90,7 @@ type SessionServiceConfig struct {
 //	  TDSQL_DATABASE
 //	clickhouse: CLICKHOUSE_HOST, CLICKHOUSE_PORT, CLICKHOUSE_USER,
 //	  CLICKHOUSE_PASSWORD, CLICKHOUSE_DATABASE
+//	mongodb:    MONGODB_URI, MONGODB_DATABASE
 func NewSessionServiceByType(
 	sessionType SessionType,
 	cfg SessionServiceConfig,
@@ -107,6 +110,8 @@ func NewSessionServiceByType(
 		return newTDSQLSessionService(cfg)
 	case SessionClickHouse:
 		return newClickHouseSessionService(cfg)
+	case SessionMongoDB:
+		return newMongoDBSessionService(cfg)
 	case SessionNoop:
 		return sessionnoop.NewService(), nil
 	case SessionInMemory:
@@ -375,6 +380,30 @@ func newClickHouseSessionService(
 		clickhouse.WithSessionTTL(cfg.TTL),
 		clickhouse.WithAppendEventHook(cfg.AppendEventHooks...),
 		clickhouse.WithGetSessionHook(cfg.GetSessionHooks...),
+	)
+}
+
+// newMongoDBSessionService creates a MongoDB session service.
+// Environment variables:
+//   - MONGODB_URI: MongoDB URI. Use a replica set or sharded cluster because
+//     session events and tracks use MongoDB transactions.
+//     (default: mongodb://localhost:27017)
+//   - MONGODB_DATABASE: MongoDB database name (default:
+//     trpc-agent-go-mongo-session)
+func newMongoDBSessionService(
+	cfg SessionServiceConfig,
+) (session.Service, error) {
+	uri := GetEnvOrDefault("MONGODB_URI", "mongodb://localhost:27017")
+	database := GetEnvOrDefault("MONGODB_DATABASE", "trpc-agent-go-mongo-session")
+
+	return sessionmongodb.NewService(
+		sessionmongodb.WithMongoClientURI(uri),
+		sessionmongodb.WithDatabase(database),
+		sessionmongodb.WithCollectionPrefix("trpc_"),
+		sessionmongodb.WithSessionEventLimit(cfg.EventLimit),
+		sessionmongodb.WithSessionTTL(cfg.TTL),
+		sessionmongodb.WithAppendEventHook(cfg.AppendEventHooks...),
+		sessionmongodb.WithGetSessionHook(cfg.GetSessionHooks...),
 	)
 }
 

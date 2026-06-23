@@ -72,10 +72,12 @@ func TestSetAndGetClientBuilder(t *testing.T) {
 type mockMongoClient struct {
 	insertOneFunc   func(ctx context.Context, database, coll string, document any) error
 	updateOneFunc   func(ctx context.Context, database, coll string, filter, update any) error
+	updateManyFunc  func(ctx context.Context, database, coll string, filter, update any) error
 	deleteOneFunc   func(ctx context.Context, database, coll string, filter any) error
 	deleteManyFunc  func(ctx context.Context, database, coll string, filter any) error
 	findOneFunc     func(ctx context.Context, database, coll string, filter any)
 	findFunc        func(ctx context.Context, database, coll string, filter any) error
+	aggregateFunc   func(ctx context.Context, database, coll string, pipeline any) error
 	countFunc       func(ctx context.Context, database, coll string, filter any) (int64, error)
 	transactionFunc func(ctx context.Context) error
 	disconnectFunc  func(ctx context.Context) error
@@ -97,6 +99,15 @@ func (m *mockMongoClient) UpdateOne(ctx context.Context, database, coll string, 
 		return &mongo.UpdateResult{}, err
 	}
 	return &mongo.UpdateResult{ModifiedCount: 1}, nil
+}
+
+func (m *mockMongoClient) UpdateMany(ctx context.Context, database, coll string, filter, update any,
+	opts ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
+	if m.updateManyFunc != nil {
+		err := m.updateManyFunc(ctx, database, coll, filter, update)
+		return &mongo.UpdateResult{}, err
+	}
+	return &mongo.UpdateResult{ModifiedCount: 5}, nil
 }
 
 func (m *mockMongoClient) DeleteOne(ctx context.Context, database, coll string, filter any,
@@ -134,6 +145,15 @@ func (m *mockMongoClient) Find(ctx context.Context, database, coll string, filte
 	return nil, nil
 }
 
+func (m *mockMongoClient) Aggregate(ctx context.Context, database, coll string, pipeline any,
+	opts ...*options.AggregateOptions) (*mongo.Cursor, error) {
+	if m.aggregateFunc != nil {
+		err := m.aggregateFunc(ctx, database, coll, pipeline)
+		return nil, err
+	}
+	return nil, nil
+}
+
 func (m *mockMongoClient) CountDocuments(ctx context.Context, database, coll string, filter any,
 	opts ...*options.CountOptions) (int64, error) {
 	if m.countFunc != nil {
@@ -157,6 +177,10 @@ func (m *mockMongoClient) Disconnect(ctx context.Context) error {
 	return nil
 }
 
+func (m *mockMongoClient) Indexes(_ context.Context, _ string, _ string) (mongo.IndexView, error) {
+	return mongo.IndexView{}, nil
+}
+
 func TestMockClientOperations(t *testing.T) {
 	ctx := context.Background()
 	mock := &mockMongoClient{}
@@ -172,6 +196,13 @@ func TestMockClientOperations(t *testing.T) {
 			map[string]string{"_id": "1"}, map[string]any{"$set": map[string]string{"key": "newvalue"}})
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), result.ModifiedCount)
+	})
+
+	t.Run("UpdateMany", func(t *testing.T) {
+		result, err := mock.UpdateMany(ctx, "testdb", "testcoll",
+			map[string]string{"status": "inactive"}, map[string]any{"$set": map[string]bool{"deleted": true}})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(5), result.ModifiedCount)
 	})
 
 	t.Run("DeleteOne", func(t *testing.T) {
@@ -193,6 +224,12 @@ func TestMockClientOperations(t *testing.T) {
 
 	t.Run("Find", func(t *testing.T) {
 		cursor, err := mock.Find(ctx, "testdb", "testcoll", map[string]string{})
+		assert.NoError(t, err)
+		assert.Nil(t, cursor)
+	})
+
+	t.Run("Aggregate", func(t *testing.T) {
+		cursor, err := mock.Aggregate(ctx, "testdb", "testcoll", []bson.M{{"$match": bson.M{}}})
 		assert.NoError(t, err)
 		assert.Nil(t, cursor)
 	})
@@ -239,6 +276,16 @@ func TestMockClientWithCustomFuncs(t *testing.T) {
 		assert.EqualError(t, err, "update error")
 	})
 
+	t.Run("UpdateMany with error", func(t *testing.T) {
+		mock := &mockMongoClient{
+			updateManyFunc: func(ctx context.Context, database, coll string, filter, update any) error {
+				return errors.New("update many error")
+			},
+		}
+		_, err := mock.UpdateMany(ctx, "testdb", "testcoll", nil, nil)
+		assert.EqualError(t, err, "update many error")
+	})
+
 	t.Run("DeleteOne with error", func(t *testing.T) {
 		mock := &mockMongoClient{
 			deleteOneFunc: func(ctx context.Context, database, coll string, filter any) error {
@@ -267,6 +314,16 @@ func TestMockClientWithCustomFuncs(t *testing.T) {
 		}
 		_, err := mock.Find(ctx, "testdb", "testcoll", nil)
 		assert.EqualError(t, err, "find error")
+	})
+
+	t.Run("Aggregate with error", func(t *testing.T) {
+		mock := &mockMongoClient{
+			aggregateFunc: func(ctx context.Context, database, coll string, pipeline any) error {
+				return errors.New("aggregate error")
+			},
+		}
+		_, err := mock.Aggregate(ctx, "testdb", "testcoll", nil)
+		assert.EqualError(t, err, "aggregate error")
 	})
 
 	t.Run("CountDocuments with error", func(t *testing.T) {
@@ -342,6 +399,15 @@ func TestDefaultClientErrorCases(t *testing.T) {
 		_, _ = client.UpdateOne(ctx, "testdb", "testcoll", map[string]any{"_id": "1"}, map[string]any{"$set": map[string]any{"updated": true}})
 	})
 
+	t.Run("UpdateMany with nil client", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r != nil {
+				assert.NotNil(t, r)
+			}
+		}()
+		_, _ = client.UpdateMany(ctx, "testdb", "testcoll", map[string]any{"status": "inactive"}, map[string]any{"$set": map[string]any{"deleted": true}})
+	})
+
 	t.Run("DeleteOne with nil client", func(t *testing.T) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -376,6 +442,25 @@ func TestDefaultClientErrorCases(t *testing.T) {
 			}
 		}()
 		_, _ = client.Find(ctx, "testdb", "testcoll", map[string]any{})
+	})
+
+	t.Run("Aggregate with nil client", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r != nil {
+				assert.NotNil(t, r)
+			}
+		}()
+		_, _ = client.Aggregate(ctx, "testdb", "testcoll", []bson.M{{"$match": bson.M{}}})
+	})
+
+	t.Run("CreateMany with nil client", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r != nil {
+				assert.NotNil(t, r)
+			}
+		}()
+		_, _ = client.CreateMany(ctx, "testdb", "testcoll",
+			[]mongo.IndexModel{{Keys: bson.D{{Key: "k", Value: 1}}}})
 	})
 
 	t.Run("CountDocuments with nil client", func(t *testing.T) {
@@ -416,6 +501,7 @@ func TestDefaultClientErrorCases(t *testing.T) {
 
 		updateOpts := options.Update()
 		_, _ = client.UpdateOne(ctx, "db", "coll", bson.M{"_id": "1"}, bson.M{"$set": bson.M{"updated": true}}, updateOpts)
+		_, _ = client.UpdateMany(ctx, "db", "coll", bson.M{"status": "inactive"}, bson.M{"$set": bson.M{"deleted": true}}, updateOpts)
 
 		deleteOpts := options.Delete()
 		_, _ = client.DeleteOne(ctx, "db", "coll", bson.M{"_id": "1"}, deleteOpts)
@@ -427,9 +513,23 @@ func TestDefaultClientErrorCases(t *testing.T) {
 		findOneOpts := options.FindOne()
 		_ = client.FindOne(ctx, "db", "coll", bson.M{"_id": "1"}, findOneOpts)
 
+		aggregateOpts := options.Aggregate()
+		_, _ = client.Aggregate(ctx, "db", "coll", []bson.M{{"$match": bson.M{}}}, aggregateOpts)
+
+		createIndexesOpts := options.CreateIndexes()
+		_, _ = client.CreateMany(ctx, "db", "coll",
+			[]mongo.IndexModel{{Keys: bson.D{{Key: "k", Value: 1}}}}, createIndexesOpts)
+
 		countOpts := options.Count()
 		_, _ = client.CountDocuments(ctx, "db", "coll", bson.M{}, countOpts)
 	})
+}
+
+func TestCreateManyEmpty(t *testing.T) {
+	client := &defaultClient{}
+	names, err := client.CreateMany(context.Background(), "db", "coll", nil)
+	assert.NoError(t, err)
+	assert.Nil(t, names)
 }
 
 // TestRegistryEdgeCases tests edge cases for registry operations
@@ -742,4 +842,5 @@ func TestDefaultClientBuilderWithMockConnector(t *testing.T) {
 // TestDefaultClientInterfaceCompliance verifies defaultClient implements Client
 func TestDefaultClientInterfaceCompliance(t *testing.T) {
 	var _ Client = (*defaultClient)(nil)
+	var _ IndexViewer = (*defaultClient)(nil)
 }
