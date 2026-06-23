@@ -226,14 +226,25 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 					},
 				},
 				ToolMock: &toolmock.ToolMock{
-					Actual: []*toolmock.Tool{{
-						Name: "tool",
-						Arguments: &toolmock.ArgumentsMatch{
-							Expected:        map[string]any{"a": 1},
-							IgnoreTree:      map[string]any{"nonce": true},
-							NumberTolerance: float64Ptr(0.1),
+					Actual: []*toolmock.Tool{
+						{
+							Name: "tool",
+							Arguments: &toolmock.ArgumentsMatch{
+								Expected:        map[string]any{"a": 1},
+								IgnoreTree:      map[string]any{"nonce": true},
+								NumberTolerance: float64Ptr(0.1),
+							},
+							Result: map[string]any{"ok": true},
 						},
-						Result: map[string]any{"ok": true},
+						nil,
+					},
+					Expected: []*toolmock.Tool{{
+						Name: "generated-tool",
+						Arguments: &toolmock.ArgumentsMatch{
+							Expected: map[string]any{"city": "Shenzhen"},
+							OnlyTree: map[string]any{"city": true},
+						},
+						LLMGenerator: &toolmock.LLMGenerator{Prompt: "Generate result."},
 					}},
 				},
 				IntermediateResponses: []*model.Message{
@@ -315,6 +326,14 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 	dst.Conversation[0].ToolMock.Actual[0].Result.(map[string]any)["ok"] = false
 	assert.Equal(t, true, src.Conversation[0].ToolMock.Actual[0].Result.(map[string]any)["ok"])
 
+	require.Nil(t, dst.Conversation[0].ToolMock.Actual[1])
+
+	dst.Conversation[0].ToolMock.Expected[0].Arguments.OnlyTree["city"] = false
+	assert.Equal(t, true, src.Conversation[0].ToolMock.Expected[0].Arguments.OnlyTree["city"])
+
+	dst.Conversation[0].ToolMock.Expected[0].LLMGenerator.Prompt = "changed"
+	assert.Equal(t, "Generate result.", src.Conversation[0].ToolMock.Expected[0].LLMGenerator.Prompt)
+
 	dst.Conversation[0].IntermediateResponses[0].ContentParts[0].Audio.Data[0] = 0
 	assert.Equal(t, byte(9), src.Conversation[0].IntermediateResponses[0].ContentParts[0].Audio.Data[0])
 
@@ -347,6 +366,82 @@ func TestCloneEvalSet_DeepCopy(t *testing.T) {
 
 	dst.EvalCases[0].EvalID = "changed"
 	assert.Equal(t, "case-1", src.EvalCases[0].EvalID)
+}
+
+func TestCloneToolMockHelpersHandleNil(t *testing.T) {
+	mock, err := cloneToolMock(nil)
+	require.NoError(t, err)
+	assert.Nil(t, mock)
+	list, err := cloneToolMockList(nil)
+	require.NoError(t, err)
+	assert.Nil(t, list)
+	entry, err := cloneToolMockEntry(nil)
+	require.NoError(t, err)
+	assert.Nil(t, entry)
+	arguments, err := cloneArgumentsMatch(nil)
+	require.NoError(t, err)
+	assert.Nil(t, arguments)
+}
+
+func TestCloneToolMockReturnsErrorsForUnsupportedValues(t *testing.T) {
+	unsupported := func() {}
+	tests := []struct {
+		name string
+		mock *toolmock.ToolMock
+	}{
+		{
+			name: "actual_expected",
+			mock: &toolmock.ToolMock{
+				Actual: []*toolmock.Tool{{
+					Name:      "tool",
+					Arguments: &toolmock.ArgumentsMatch{Expected: unsupported},
+					Result:    "ok",
+				}},
+			},
+		},
+		{
+			name: "expected_result",
+			mock: &toolmock.ToolMock{
+				Expected: []*toolmock.Tool{{
+					Name:   "tool",
+					Result: unsupported,
+				}},
+			},
+		},
+		{
+			name: "only_tree",
+			mock: &toolmock.ToolMock{
+				Actual: []*toolmock.Tool{{
+					Name: "tool",
+					Arguments: &toolmock.ArgumentsMatch{
+						Expected: map[string]any{"city": "Shenzhen"},
+						OnlyTree: map[string]any{"city": unsupported},
+					},
+					Result: "ok",
+				}},
+			},
+		},
+		{
+			name: "ignore_tree",
+			mock: &toolmock.ToolMock{
+				Expected: []*toolmock.Tool{{
+					Name: "tool",
+					Arguments: &toolmock.ArgumentsMatch{
+						Expected:   map[string]any{"city": "Shenzhen"},
+						IgnoreTree: map[string]any{"traceID": unsupported},
+					},
+					Result: "ok",
+				}},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := cloneToolMock(tc.mock)
+			require.Error(t, err)
+			assert.Nil(t, got)
+		})
+	}
 }
 
 func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testing.T) {

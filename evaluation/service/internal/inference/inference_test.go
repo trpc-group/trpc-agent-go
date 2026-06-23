@@ -464,6 +464,36 @@ func TestInferenceToolMockRejectsInvalidMode(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid tool mock mode")
 }
 
+func TestInferenceToolMockLLMGeneratorRequiresRunner(t *testing.T) {
+	input := []*evalset.Invocation{{
+		InvocationID: "input",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "question"},
+		ToolMock: &toolmock.ToolMock{
+			Actual: []*toolmock.Tool{{
+				Name:         "weather",
+				LLMGenerator: &toolmock.LLMGenerator{Prompt: "Return weather mock result."},
+			}},
+		},
+	}}
+	_, err := Inference(
+		context.Background(),
+		&toolCallbackRunner{},
+		input,
+		&evalset.SessionInput{UserID: "user-1"},
+		"session-1",
+		nil,
+		WithToolMockMode(ToolMockModeActual),
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires tool mock runner")
+}
+
+func TestNewOptionsAppliesToolMockRunner(t *testing.T) {
+	custom := &fakeRunner{}
+	opts := newOptions(nil, WithToolMockRunner(custom))
+	assert.Equal(t, custom, opts.toolMockRunner)
+}
+
 func TestInferenceToolMockMatchesRunOptionAdditionalTool(t *testing.T) {
 	const toolName = "run_lookup"
 	input := []*evalset.Invocation{{

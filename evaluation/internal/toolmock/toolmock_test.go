@@ -11,6 +11,7 @@ package toolmock
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -71,6 +72,7 @@ func (r *generatorRunner) Close() error {
 
 type eventStreamRunner struct {
 	events <-chan *event.Event
+	err    error
 }
 
 func (r *eventStreamRunner) Run(
@@ -80,6 +82,9 @@ func (r *eventStreamRunner) Run(
 	message model.Message,
 	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
 	return r.events, nil
 }
 
@@ -103,6 +108,12 @@ func TestStaticRuleMatchesArguments(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, map[string]any{"condition": "sunny"}, result.CustomResult)
+}
+
+func TestNewPluginWithNoEntriesReturnsNil(t *testing.T) {
+	p, err := NewPlugin(nil, nil)
+	require.NoError(t, err)
+	assert.Nil(t, p)
 }
 
 func TestStaticRuleMatchesNumbersExactly(t *testing.T) {
@@ -143,6 +154,24 @@ func TestStaticRuleMatchesNumbersWithConfiguredTolerance(t *testing.T) {
 	result, err := runBeforeTool(p, &tool.BeforeToolArgs{
 		ToolName:  "payment",
 		Arguments: []byte(`{"amount":1.0000005}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "matched", result.CustomResult)
+}
+
+func TestStaticRuleMatchesNonJSONArguments(t *testing.T) {
+	p, err := NewPlugin([]*toolmock.Tool{{
+		Name: "search",
+		Arguments: &toolmock.ArgumentsMatch{
+			Expected: "raw-query",
+		},
+		Result: "matched",
+	}}, nil)
+	require.NoError(t, err)
+	result, err := runBeforeTool(p, &tool.BeforeToolArgs{
+		ToolName:  "search",
+		Arguments: []byte("raw-query"),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -205,6 +234,17 @@ func TestUnconfiguredToolFallsThrough(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+func TestBeforeToolHandlesNilArgs(t *testing.T) {
+	p, err := NewPlugin([]*toolmock.Tool{{
+		Name:   "weather",
+		Result: "mocked",
+	}}, nil)
+	require.NoError(t, err)
+	result, err := runBeforeTool(p, nil)
+	require.NoError(t, err)
+	assert.Nil(t, result)
+}
+
 func TestConfiguredToolWithoutMatchErrors(t *testing.T) {
 	p, err := NewPlugin([]*toolmock.Tool{{
 		Name: "weather",
@@ -260,7 +300,6 @@ func TestLLMGeneratorUsesToolOutputSchema(t *testing.T) {
 	result, err := runBeforeTool(p, &tool.BeforeToolArgs{
 		ToolName: "weather",
 		Declaration: &tool.Declaration{
-			Name: "weather",
 			OutputSchema: &tool.Schema{
 				Type:        "object",
 				Description: "Weather result.",
@@ -332,6 +371,17 @@ func TestLLMGeneratorRejectsInvalidOutput(t *testing.T) {
 	}
 }
 
+func TestLLMGeneratorSurfacesRunnerError(t *testing.T) {
+	p, err := NewPlugin([]*toolmock.Tool{{
+		Name:         "weather",
+		LLMGenerator: &toolmock.LLMGenerator{Prompt: "Return weather mock result."},
+	}}, &eventStreamRunner{err: errors.New("boom")})
+	require.NoError(t, err)
+	_, err = runBeforeTool(p, &tool.BeforeToolArgs{ToolName: "weather"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "runner run")
+}
+
 func TestLLMGeneratorRejectsNilEventStream(t *testing.T) {
 	p, err := NewPlugin([]*toolmock.Tool{{
 		Name:         "weather",
@@ -341,6 +391,39 @@ func TestLLMGeneratorRejectsNilEventStream(t *testing.T) {
 	_, err = runBeforeTool(p, &tool.BeforeToolArgs{ToolName: "weather"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil event stream")
+}
+
+func TestLLMGeneratorRejectsMissingFinalResponse(t *testing.T) {
+	events := make(chan *event.Event)
+	close(events)
+	p, err := NewPlugin([]*toolmock.Tool{{
+		Name:         "weather",
+		LLMGenerator: &toolmock.LLMGenerator{Prompt: "Return weather mock result."},
+	}}, &eventStreamRunner{events: events})
+	require.NoError(t, err)
+	_, err = runBeforeTool(p, &tool.BeforeToolArgs{ToolName: "weather"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no final response")
+}
+
+func TestLLMGeneratorRejectsFinalResponseWithoutChoices(t *testing.T) {
+	_, err := parseGeneratorOutput(&model.Response{Done: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "final response has no choices")
+}
+
+func TestLLMGeneratorSurfacesEventError(t *testing.T) {
+	events := make(chan *event.Event, 1)
+	events <- &event.Event{Response: &model.Response{Error: &model.ResponseError{Message: "boom"}}}
+	close(events)
+	p, err := NewPlugin([]*toolmock.Tool{{
+		Name:         "weather",
+		LLMGenerator: &toolmock.LLMGenerator{Prompt: "Return weather mock result."},
+	}}, &eventStreamRunner{events: events})
+	require.NoError(t, err)
+	_, err = runBeforeTool(p, &tool.BeforeToolArgs{ToolName: "weather"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "boom")
 }
 
 func TestLLMGeneratorStopsOnContextCancellation(t *testing.T) {
@@ -432,6 +515,11 @@ func TestNewPluginValidation(t *testing.T) {
 		want    string
 	}{
 		{
+			name:    "nil_item",
+			entries: []*toolmock.Tool{nil},
+			want:    "tool mock item is nil",
+		},
+		{
 			name:    "empty_tool_name",
 			entries: []*toolmock.Tool{{Result: "mocked"}},
 			want:    "empty name",
@@ -445,6 +533,15 @@ func TestNewPluginValidation(t *testing.T) {
 			}},
 			runner: &generatorRunner{content: `"mocked"`},
 			want:   "cannot be configured with result",
+		},
+		{
+			name: "empty_generator_prompt",
+			entries: []*toolmock.Tool{{
+				Name:         "weather",
+				LLMGenerator: &toolmock.LLMGenerator{},
+			}},
+			runner: &generatorRunner{content: `"mocked"`},
+			want:   "prompt is empty",
 		},
 		{
 			name: "generator_without_runner",
@@ -474,6 +571,19 @@ func TestNewPluginValidation(t *testing.T) {
 				Result: "mocked",
 			}},
 			want: "ignore cannot be configured",
+		},
+		{
+			name: "only_tree_and_ignore_tree",
+			entries: []*toolmock.Tool{{
+				Name: "weather",
+				Arguments: &toolmock.ArgumentsMatch{
+					Expected:   map[string]any{"city": "Shenzhen"},
+					OnlyTree:   map[string]any{"city": true},
+					IgnoreTree: map[string]any{"traceID": true},
+				},
+				Result: "mocked",
+			}},
+			want: "onlyTree and ignoreTree",
 		},
 		{
 			name: "negative_number_tolerance",
