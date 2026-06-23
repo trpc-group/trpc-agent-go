@@ -30,8 +30,9 @@ var _ session.Ingestor = (*Service)(nil)
 // adapter forwards app/user/session identifiers, but hard multi-tenant isolation
 // depends on the gateway and SDK honoring those fields end-to-end.
 type Service struct {
-	opts   Options
-	client *gatewayClient
+	opts          Options
+	client        *gatewayClient
+	offloadClient *gatewayClient
 
 	queue  chan ingestJob
 	mu     sync.RWMutex
@@ -59,17 +60,43 @@ func NewService(opts ...Option) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	offloadClient := client
+	if options.ContextOffload.Enabled &&
+		(options.ContextOffload.GatewayURL != "" || options.ContextOffload.APIKey != "") {
+		offloadOptions := options
+		if options.ContextOffload.GatewayURL != "" {
+			offloadOptions.GatewayURL = options.ContextOffload.GatewayURL
+		}
+		if options.ContextOffload.APIKey != "" {
+			offloadOptions.APIKey = options.ContextOffload.APIKey
+		}
+		offloadClient, err = newGatewayClient(offloadOptions)
+		if err != nil {
+			return nil, err
+		}
+	}
 	s := &Service{
-		opts:        options,
-		client:      client,
-		queue:       make(chan ingestJob, options.IngestQueueSize),
-		inFlight:    make(map[string]time.Time),
-		lastCapture: make(map[string]time.Time),
-		serialTail:  make(map[string]*captureSerialState),
+		opts:          options,
+		client:        client,
+		offloadClient: offloadClient,
+		queue:         make(chan ingestJob, options.IngestQueueSize),
+		inFlight:      make(map[string]time.Time),
+		lastCapture:   make(map[string]time.Time),
+		serialTail:    make(map[string]*captureSerialState),
 	}
 	s.tools = s.buildTools()
 	s.startWorkers()
 	return s, nil
+}
+
+func (s *Service) contextOffloadClient() *gatewayClient {
+	if s == nil {
+		return nil
+	}
+	if s.offloadClient != nil {
+		return s.offloadClient
+	}
+	return s.client
 }
 
 // IngestSession captures the latest user/assistant exchange and transcript
