@@ -407,10 +407,19 @@ func TestWithAsyncSummaryNum(t *testing.T) {
 	assert.Equal(t, 5, opts.asyncSummaryNum)
 }
 
-func TestWithAsyncSummaryNum_ZeroUsesDefault(
+func TestWithAsyncSummaryNum_ZeroDisablesWorkers(
 	t *testing.T,
 ) {
 	opt := WithAsyncSummaryNum(0)
+	opts := ServiceOpts{}
+	opt(&opts)
+	assert.Equal(t, 0, opts.asyncSummaryNum)
+}
+
+func TestWithAsyncSummaryNum_NegativeUsesDefault(
+	t *testing.T,
+) {
+	opt := WithAsyncSummaryNum(-1)
 	opts := ServiceOpts{}
 	opt(&opts)
 	assert.Equal(t,

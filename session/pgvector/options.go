@@ -249,7 +249,7 @@ func WithSummarizer(s summary.SessionSummarizer) ServiceOpt {
 // async summary processing.
 func WithAsyncSummaryNum(num int) ServiceOpt {
 	return func(o *ServiceOpts) {
-		if num < 1 {
+		if num < 0 {
 			num = defaultAsyncSummaryNum
 		}
 		o.asyncSummaryNum = num

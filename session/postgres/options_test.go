@@ -297,6 +297,18 @@ func TestServiceOptions(t *testing.T) {
 		assert.Equal(t, 5, opts.asyncSummaryNum)
 	})
 
+	t.Run("WithAsyncSummaryNum_ZeroDisablesWorkers", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithAsyncSummaryNum(0)(opts)
+		assert.Equal(t, 0, opts.asyncSummaryNum)
+	})
+
+	t.Run("WithAsyncSummaryNum_NegativeUsesDefault", func(t *testing.T) {
+		opts := &ServiceOpts{}
+		WithAsyncSummaryNum(-1)(opts)
+		assert.Equal(t, defaultAsyncSummaryNum, opts.asyncSummaryNum)
+	})
+
 	t.Run("WithSummaryQueueSize", func(t *testing.T) {
 		opts := &ServiceOpts{}
 		WithSummaryQueueSize(512)(opts)

@@ -105,10 +105,11 @@ func TestWithAsyncSummaryNum(t *testing.T) {
 	WithAsyncSummaryNum(3)(opts)
 	assert.Equal(t, 3, opts.asyncSummaryNum)
 
-	// Invalid number (< 1) should default
+	// Zero disables async workers
 	WithAsyncSummaryNum(0)(opts)
-	assert.Equal(t, defaultAsyncSummaryNum, opts.asyncSummaryNum)
+	assert.Equal(t, 0, opts.asyncSummaryNum)
 
+	// Negative number should default
 	WithAsyncSummaryNum(-5)(opts)
 	assert.Equal(t, defaultAsyncSummaryNum, opts.asyncSummaryNum)
 }
