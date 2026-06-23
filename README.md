@@ -12,8 +12,8 @@ English | [中文](README.zh_CN.md)
 
 **tRPC-Agent-Go is a Go framework for building production agent systems.**
 It provides LLM agents, graph workflows, tool calling, session and memory
-state, knowledge retrieval, evaluation, and OpenTelemetry observability in one
-Go-native stack.
+state, knowledge retrieval, agent self-evolution, evaluation, and OpenTelemetry
+observability in one Go-native stack.
 
 Use it when you want agent applications that fit Go services: concurrent,
 observable, easy to deploy, and ready to integrate with A2A, AG-UI, and MCP.
@@ -29,6 +29,8 @@ observable, easy to deploy, and ready to integrate with A2A, AG-UI, and MCP.
   execution, and custom services
 - **Persistent State**: Session, memory, artifacts, and knowledge retrieval
 - **Agent Skills**: Reusable `SKILL.md` workflows with safe execution
+- **Agent Self-Evolution**: Hermes-style session reviews that extract, gate,
+  and publish reusable `SKILL.md` workflows
 - **Prompt Caching**: Automatic cost optimization with 90% savings on cached content
 - **Evaluation & Benchmarks**: Eval sets + metrics to measure quality over time
 - **Protocol Integration**: AG-UI for frontends, A2A for agent
@@ -159,6 +161,27 @@ enabled.
 </td>
 <td valign="top">
 
+### Agent Self-Evolution
+
+```go
+repo, _ := skill.NewFSRepository("./managed_skills")
+evo := evolution.NewService(reviewerModel,
+    evolution.WithManagedSkillsDir("./managed_skills"),
+    evolution.WithSkillRepository(repo))
+defer evo.Close()
+
+runner := runner.NewRunner("app", agent,
+    runner.WithEvolutionService(evo))
+```
+
+Completed sessions can be reviewed asynchronously, promoted through quality
+gates, and published back as managed Agent Skills for future turns.
+
+</td>
+</tr>
+<tr>
+<td colspan="2" valign="top">
+
 ### Evaluation & Benchmarks
 
 ```go
@@ -182,6 +205,7 @@ _ = result.OverallStatus
     - [Rich Tool Integration](#rich-tool-integration)
     - [Production Observability](#production-observability)
     - [Agent Skills](#agent-skills)
+    - [Agent Self-Evolution](#agent-self-evolution)
     - [Evaluation \& Benchmarks](#evaluation--benchmarks)
   - [Table of Contents](#table-of-contents)
   - [Documentation](#documentation)
@@ -203,9 +227,10 @@ _ = result.OverallStatus
     - [9. AG-UI Demo](#9-ag-ui-demo)
     - [10. Evaluation](#10-evaluation)
     - [11. Agent Skills](#11-agent-skills)
-    - [12. Artifacts](#12-artifacts)
-    - [13. A2A Interop](#13-a2a-interop)
-    - [14. Gateway Server](#14-gateway-server)
+    - [12. Agent Self-Evolution](#12-agent-self-evolution)
+    - [13. Artifacts](#13-artifacts)
+    - [14. A2A Interop](#14-a2a-interop)
+    - [15. Gateway Server](#15-gateway-server)
   - [Architecture Overview](#architecture-overview)
     - [**Execution Flow**](#execution-flow)
   - [Using Built-in Agents](#using-built-in-agents)
@@ -621,21 +646,31 @@ Examples: [examples/skillrun](examples/skillrun),
   Local execution stays off by default and can be enabled explicitly
   when you want to run an installed skill.
 
-### 12. Artifacts
+### 12. Agent Self-Evolution
+
+Example: [examples/evolution](examples/evolution)
+
+- Reviews completed sessions in the background and extracts reusable
+  `SKILL.md` workflows.
+- Supports revision storage, quality gates, human approval, and warm-start
+  behavior when skills are available on later runs.
+- Runner integration is a single option: `runner.WithEvolutionService(...)`.
+
+### 13. Artifacts
 
 Example: [examples/artifact](examples/artifact)
 
 - Save and retrieve versioned files (images, text, reports) produced by tools.
 - Supports multiple backends (in-memory, S3, COS).
 
-### 13. A2A Interop
+### 14. A2A Interop
 
 Example: [examples/a2aadk](examples/a2aadk)
 
 - Agent-to-Agent (A2A) interop with an ADK Python A2A server.
 - Demonstrates streaming, tool calls, and code execution across runtimes.
 
-### 14. Gateway Server
+### 15. Gateway Server
 
 Example: [openclaw](openclaw)
 
@@ -665,6 +700,8 @@ Architecture
 4. **Tools** execute specific tasks (API calls, calculations, web searches)
 5. **Memory** maintains context and learns from interactions
 6. **Knowledge** provides RAG capabilities for document understanding
+7. **Evolution** reviews completed sessions and turns reusable procedures into
+   managed skills
 
 Key packages:
 
@@ -680,6 +717,7 @@ Key packages:
 | `planner`   | Provides Agent planning and reasoning capabilities.                                                         |
 | `artifact`  | Stores and retrieves versioned files produced by agents and tools (images, reports, etc.).                  |
 | `skill`     | Loads and executes reusable Agent Skills defined by `SKILL.md`.                                             |
+| `evolution` | Reviews completed sessions and publishes reusable procedures as managed Agent Skills.                       |
 | `event`     | Defines event types and streaming payloads used across Runner and servers.                                  |
 | `evaluation` | Evaluates agents on eval sets using pluggable metrics and stores results.                                  |
 | `server`    | Exposes HTTP servers (Gateway, AG-UI, A2A) for integration and UIs.                                         |
