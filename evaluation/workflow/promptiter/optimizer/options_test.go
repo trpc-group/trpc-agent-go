@@ -165,6 +165,7 @@ func TestDefaultMessageBuilderUsesToolDescriptionOutput(t *testing.T) {
 	assert.Contains(t, msg.Content, "Return only Description and Reason fields.")
 	assert.Contains(t, msg.Content, "Description is the replacement description for the current tool.")
 	assert.Contains(t, msg.Content, "Only change the tool description.")
+	assert.NotContains(t, msg.Content, "Return only Value and Reason fields.")
 	assert.NotContains(t, msg.Content, "OutputFields")
 	assert.NotContains(t, msg.Content, "PatchRules")
 }

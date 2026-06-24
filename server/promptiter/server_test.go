@@ -785,9 +785,18 @@ func TestValidateTargetSurfaceIDs(t *testing.T) {
 					},
 					Surfaces: []astructure.Surface{
 						{
-							SurfaceID: "tools#tool",
+							SurfaceID: "tools#global_instruction",
 							NodeID:    "tools",
-							Type:      astructure.SurfaceTypeTool,
+							Type:      astructure.SurfaceTypeGlobalInstruction,
+						},
+						{
+							SurfaceID: astructure.SurfaceID(
+								"tools",
+								astructure.SurfaceTypeTool,
+								"lookup_record",
+							),
+							NodeID: "tools",
+							Type:   astructure.SurfaceTypeTool,
 							Value: astructure.SurfaceValue{
 								Tools: []astructure.ToolRef{{ID: "lookup_record"}},
 							},
@@ -813,9 +822,13 @@ func TestValidateTargetSurfaceIDs(t *testing.T) {
 					},
 					Surfaces: []astructure.Surface{
 						{
-							SurfaceID: "graph/llm#tool",
-							NodeID:    "graph/llm",
-							Type:      astructure.SurfaceTypeTool,
+							SurfaceID: astructure.SurfaceID(
+								"graph/llm",
+								astructure.SurfaceTypeTool,
+								"lookup_record",
+							),
+							NodeID: "graph/llm",
+							Type:   astructure.SurfaceTypeTool,
 							Value: astructure.SurfaceValue{
 								Tools: []astructure.ToolRef{{ID: "lookup_record"}},
 							},

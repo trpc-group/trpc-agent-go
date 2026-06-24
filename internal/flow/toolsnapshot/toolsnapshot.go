@@ -45,7 +45,10 @@ func Set(
 	}
 	inv.SetState(ToolsSnapshotKey, copyTools(tools))
 	inv.SetState(HasFilteredUserToolsKey, hasFilteredUserTools)
-	inv.SetState(filteredTraceableUserToolNamesKey, filteredTraceableUserToolNames)
+	inv.SetState(
+		filteredTraceableUserToolNamesKey,
+		copyStrings(filteredTraceableUserToolNames),
+	)
 }
 
 // HasFilteredUserTools reports whether the cached snapshot has user tools.
@@ -59,7 +62,7 @@ func FilteredTraceableUserToolNames(inv *agent.Invocation) ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	return names, true
+	return copyStrings(names), true
 }
 
 // Invalidate clears the cached tool snapshot for this invocation.
@@ -74,4 +77,8 @@ func Invalidate(inv *agent.Invocation) {
 
 func copyTools(tools []tool.Tool) []tool.Tool {
 	return append([]tool.Tool(nil), tools...)
+}
+
+func copyStrings(values []string) []string {
+	return append([]string(nil), values...)
 }

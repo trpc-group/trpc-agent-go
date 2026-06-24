@@ -229,6 +229,12 @@ func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []stri
 	if hasUserTools, ok := llmflow.InvocationHasFilteredUserTools(inv); ok {
 		if inv != nil && surfacepatch.ToolSurfaceTracingEnabled(inv.RunOptions.CustomAgentConfigs) {
 			traceableToolNames, _ := llmflow.InvocationFilteredTraceableUserToolNames(inv)
+			if len(traceableToolNames) == 0 && hasUserTools {
+				appliedSurfaceIDs = append(
+					appliedSurfaceIDs,
+					astructure.SurfaceID(nodeID, astructure.SurfaceTypeTool),
+				)
+			}
 			for _, toolName := range traceableToolNames {
 				appliedSurfaceIDs = append(
 					appliedSurfaceIDs,
@@ -266,13 +272,13 @@ func (a *LLMAgent) InvocationToolSurface(
 	options := a.option
 	subAgents := append([]agent.Agent(nil), a.subAgents...)
 	a.mu.RUnlock()
+	userTools = applyToolDeclarationPatch(userTools, patch)
 	userTools, userToolNames = filterInvocationUserTools(
 		ctx,
 		userTools,
 		userToolNames,
 		options.toolFilter,
 	)
-	userTools = applyToolDeclarationPatch(userTools, patch)
 
 	allTools := append([]tool.Tool(nil), userTools...)
 	allTools = appendKnowledgeTools(allTools, &options)

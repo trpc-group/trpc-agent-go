@@ -2892,7 +2892,7 @@ func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
 	assert.NoError(t, err)
 	targets, err = compileTargetSurfaceIDs(structureWithTool, nil)
 	assert.Nil(t, targets)
-	assert.EqualError(t, err, "target surface ids must be specified when tool surfaces are available")
+	assert.NoError(t, err)
 	targets, err = compileTargetSurfaceIDs(structure, []string{})
 	assert.Nil(t, targets)
 	assert.EqualError(t, err, "target surface ids must not be empty")

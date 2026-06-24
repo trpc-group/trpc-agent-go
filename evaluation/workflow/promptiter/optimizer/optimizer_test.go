@@ -29,6 +29,7 @@ import (
 type fakeRunner struct {
 	runErr        error
 	events        []*event.Event
+	runs          int
 	lastUserID    string
 	lastSessionID string
 	lastMessage   model.Message
@@ -43,6 +44,7 @@ func (f *fakeRunner) Run(
 	runOpts ...agent.RunOption,
 ) (<-chan *event.Event, error) {
 	_ = ctx
+	f.runs++
 	f.lastUserID = userID
 	f.lastSessionID = sessionID
 	f.lastMessage = message
@@ -286,6 +288,18 @@ func TestOptimizeToolSurfaceUsesDescriptionProposal(t *testing.T) {
 	assert.Equal(t, "Look up flight status records.", rsp.Patch.Value.Tools[0].Description)
 	assert.Equal(t, "Lookup request.", rsp.Patch.Value.Tools[0].InputSchema.Description)
 	assert.Equal(t, "Lookup key.", rsp.Patch.Value.Tools[0].InputSchema.Properties["query"].Description)
+}
+
+func TestOptimizeRejectsMalformedToolSurfaceBeforeRunner(t *testing.T) {
+	r := &fakeRunner{}
+	oz, err := New(context.Background(), r)
+	require.NoError(t, err)
+	request := newToolRequest()
+	request.Surface.Value.Tools = []astructure.ToolRef{}
+	rsp, err := oz.Optimize(context.Background(), request)
+	assert.Nil(t, rsp)
+	assert.ErrorContains(t, err, "tools must contain exactly one tool, got 0")
+	assert.Zero(t, r.runs)
 }
 
 func TestOptimizeFallsBackToFinalContent(t *testing.T) {

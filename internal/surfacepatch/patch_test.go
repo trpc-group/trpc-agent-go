@@ -242,6 +242,7 @@ func TestPatch_ClonesMutableValues(t *testing.T) {
 
 	examples[0][0].Content = "changed"
 	tools[0] = dummyTool{name: "changed"}
+	declarations[0].Name = "changed"
 
 	gotExamples, ok := patch.FewShot()
 	require.True(t, ok)
@@ -257,6 +258,20 @@ func TestPatch_ClonesMutableValues(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, gotDeclarations, 1)
 	require.Equal(t, "search", gotDeclarations[0].Name)
+	gotDeclarations[0].Name = "returned"
+	gotDeclarations, ok = patch.ToolDeclarations()
+	require.True(t, ok)
+	require.Len(t, gotDeclarations, 1)
+	require.Equal(t, "search", gotDeclarations[0].Name)
+	clonedDeclarations, ok := patch.Clone().ToolDeclarations()
+	require.True(t, ok)
+	require.Len(t, clonedDeclarations, 1)
+	require.Equal(t, "search", clonedDeclarations[0].Name)
+	var merged Patch
+	mergedDeclarations, ok := merged.Merge(patch).ToolDeclarations()
+	require.True(t, ok)
+	require.Len(t, mergedDeclarations, 1)
+	require.Equal(t, "search", mergedDeclarations[0].Name)
 
 	gotModel, ok := patch.Model()
 	require.True(t, ok)

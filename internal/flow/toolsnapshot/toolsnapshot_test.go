@@ -40,6 +40,14 @@ func TestSetGetCopiesToolSlice(t *testing.T) {
 	traceableNames, ok := FilteredTraceableUserToolNames(inv)
 	require.True(t, ok)
 	require.Equal(t, []string{"first"}, traceableNames)
+	traceableUserToolNames[0] = "changed"
+	traceableAgain, ok := FilteredTraceableUserToolNames(inv)
+	require.True(t, ok)
+	require.Equal(t, []string{"first"}, traceableAgain)
+	traceableNames[0] = "returned"
+	traceableAfterReturnedMutation, ok := FilteredTraceableUserToolNames(inv)
+	require.True(t, ok)
+	require.Equal(t, []string{"first"}, traceableAfterReturnedMutation)
 	tools[0] = second
 	cached, ok := Get(inv)
 	require.True(t, ok)

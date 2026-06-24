@@ -75,6 +75,27 @@
         "appName": "promptiter-flight-tool-app",
         "userId": "traveler"
       }
+    },
+    {
+      "evalId": "flight_direct_no_tool",
+      "conversation": [
+        {
+          "invocationId": "flight_direct_no_tool-1",
+          "userContent": {
+            "role": "user",
+            "content": "I already have the record: flight TR222 is boarding at gate E04, scheduled and updated departure are both 09:20, with no delay. Write the traveler-facing status sentence."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR222 is boarding at gate E04 and remains scheduled to depart at 09:20 with no delay."
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-flight-tool-app",
+        "userId": "traveler"
+      }
     }
   ]
 }

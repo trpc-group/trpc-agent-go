@@ -201,6 +201,12 @@ func normalizeRequest(request *Request) (*Request, error) {
 	if !isurface.IsSupportedType(surface.Type) {
 		return nil, fmt.Errorf("surface type %q is invalid", surface.Type)
 	}
+	if surface.Type == astructure.SurfaceTypeTool && len(surface.Value.Tools) != 1 {
+		return nil, fmt.Errorf(
+			"tools must contain exactly one tool, got %d",
+			len(surface.Value.Tools),
+		)
+	}
 	if gradient.SurfaceID == "" {
 		return nil, errors.New("aggregated gradient surface id is empty")
 	}

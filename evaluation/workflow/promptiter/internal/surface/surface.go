@@ -197,7 +197,7 @@ func SanitizeValue(
 				len(value.Tools),
 			)
 		}
-		return astructure.SurfaceValue{Tools: value.Tools}, nil
+		return astructure.SurfaceValue{Tools: cloneToolRefs(value.Tools)}, nil
 	default:
 		return astructure.SurfaceValue{}, fmt.Errorf("surface type %q is invalid", surfaceType)
 	}
@@ -229,7 +229,7 @@ func CloneValue(value astructure.SurfaceValue) astructure.SurfaceValue {
 		Text:    cloneText(value.Text),
 		FewShot: cloneExamples(value.FewShot),
 		Model:   cloneModel(value.Model),
-		Tools:   value.Tools,
+		Tools:   cloneToolRefs(value.Tools),
 	}
 }
 
@@ -261,6 +261,10 @@ func cloneMessages(messages []astructure.FewShotMessage) []astructure.FewShotMes
 	cloned := make([]astructure.FewShotMessage, len(messages))
 	copy(cloned, messages)
 	return cloned
+}
+
+func cloneToolRefs(refs []astructure.ToolRef) []astructure.ToolRef {
+	return append([]astructure.ToolRef(nil), refs...)
 }
 
 func cloneModel(modelValue *astructure.ModelRef) *astructure.ModelRef {

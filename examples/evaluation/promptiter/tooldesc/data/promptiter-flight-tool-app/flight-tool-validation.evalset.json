@@ -112,6 +112,27 @@
         "appName": "promptiter-flight-tool-app",
         "userId": "traveler"
       }
+    },
+    {
+      "evalId": "flight_direct_gate_no_tool",
+      "conversation": [
+        {
+          "invocationId": "flight_direct_gate_no_tool-1",
+          "userContent": {
+            "role": "user",
+            "content": "The dispatch record is already in front of me: flight TR888 is delayed by 10 minutes, now departing at 17:40 from gate F09. Write the traveler update without looking anything up."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR888 is delayed by 10 minutes and is now estimated to depart at 17:40 from gate F09."
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-flight-tool-app",
+        "userId": "traveler"
+      }
     }
   ]
 }

@@ -115,7 +115,7 @@ func (p *Patch) AppendTools(tools []tool.Tool) {
 // SetToolDeclarations sets model-facing tool declaration overrides.
 func (p *Patch) SetToolDeclarations(declarations []tool.Declaration) {
 	p.toolDeclarations.set = true
-	p.toolDeclarations.value = declarations
+	p.toolDeclarations.value = cloneToolDeclarations(declarations)
 }
 
 // SetSkillRepository sets the skill repository surface override.
@@ -179,7 +179,7 @@ func (p Patch) ToolDeclarations() ([]tool.Declaration, bool) {
 	if !p.toolDeclarations.set {
 		return nil, false
 	}
-	return p.toolDeclarations.value, true
+	return cloneToolDeclarations(p.toolDeclarations.value), true
 }
 
 // SkillRepository returns the skill repository surface override.
@@ -239,7 +239,7 @@ func (p Patch) Merge(other Patch) Patch {
 	if other.toolDeclarations.set {
 		out.toolDeclarations = toolDeclarationSlot{
 			set:   true,
-			value: other.toolDeclarations.value,
+			value: cloneToolDeclarations(other.toolDeclarations.value),
 		}
 	}
 	if other.skillRepo.set {
@@ -268,7 +268,7 @@ func (p Patch) Clone() Patch {
 		},
 		toolDeclarations: toolDeclarationSlot{
 			set:   p.toolDeclarations.set,
-			value: p.toolDeclarations.value,
+			value: cloneToolDeclarations(p.toolDeclarations.value),
 		},
 		skillRepo:                p.skillRepo,
 		suppressSubAgentTransfer: p.suppressSubAgentTransfer,
@@ -410,6 +410,10 @@ func cloneTools(in []tool.Tool) []tool.Tool {
 		return nil
 	}
 	return append([]tool.Tool(nil), in...)
+}
+
+func cloneToolDeclarations(in []tool.Declaration) []tool.Declaration {
+	return append([]tool.Declaration(nil), in...)
 }
 
 func appendTools(base []tool.Tool, appended []tool.Tool) []tool.Tool {

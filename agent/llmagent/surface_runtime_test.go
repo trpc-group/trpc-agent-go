@@ -183,7 +183,9 @@ func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesFilteredToolNames(t *testi
 	toolsnapshot.Set(inv, []tool.Tool{
 		dummyTool{decl: &tool.Declaration{Name: "user_tool"}},
 	}, true, []string{})
-	require.NotContains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "test-agent#tool.user_tool")
+	fallbackSurfaceIDs := agt.ExecutionTraceAppliedSurfaceIDs(inv)
+	require.Contains(t, fallbackSurfaceIDs, "test-agent#tool")
+	require.NotContains(t, fallbackSurfaceIDs, "test-agent#tool.user_tool")
 }
 
 type traceRefreshToolSet struct {
@@ -687,7 +689,8 @@ func TestLLMAgent_Run_SurfacePatch_OverridesToolDeclarations(t *testing.T) {
 			dummyTool{decl: &tool.Declaration{Name: "blocked_user_tool"}},
 		}),
 		WithToolFilter(func(_ context.Context, tl tool.Tool) bool {
-			return tl.Declaration().Name == "allowed_user_tool"
+			declaration := tl.Declaration()
+			return declaration != nil && declaration.Description == "patched description"
 		}),
 	)
 	var patch surfacepatch.Patch

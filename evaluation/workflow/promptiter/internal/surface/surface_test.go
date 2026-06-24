@@ -166,6 +166,16 @@ func TestSanitizeValue(t *testing.T) {
 	}, sanitizedModel.Model)
 	sanitizedModel.Model.Headers["X-Test"] = "2"
 	assert.Equal(t, "1", modelRef.Headers["X-Test"])
+	toolRefs := []astructure.ToolRef{{ID: "lookup", Description: "original"}}
+	sanitizedTool, err := SanitizeValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{Tools: toolRefs},
+	)
+	assert.NoError(t, err)
+	toolRefs[0].Description = "changed"
+	assert.Equal(t, "original", sanitizedTool.Tools[0].Description)
+	sanitizedTool.Tools[0].Description = "returned"
+	assert.Equal(t, "changed", toolRefs[0].Description)
 }
 
 func TestSanitizeValueRejectsInvalidInput(t *testing.T) {
@@ -502,6 +512,7 @@ func TestCloneValueDeepCopiesAllFields(t *testing.T) {
 			Name:     " gpt ",
 			Headers:  map[string]string{"X-Test": "1"},
 		},
+		Tools: []astructure.ToolRef{{ID: "lookup", Description: "original"}},
 	}
 	cloned := CloneValue(value)
 	assert.NotNil(t, cloned.Text)
@@ -511,9 +522,11 @@ func TestCloneValueDeepCopiesAllFields(t *testing.T) {
 	cloned.FewShot[0].Messages[0].Content = "changed"
 	*cloned.Text = "changed"
 	cloned.Model.Headers["X-Test"] = "2"
+	cloned.Tools[0].Description = "changed"
 	assert.Equal(t, "instruction", *value.Text)
 	assert.Equal(t, "hi", value.FewShot[0].Messages[0].Content)
 	assert.Equal(t, " openai ", value.Model.Provider)
 	assert.Equal(t, " gpt ", value.Model.Name)
 	assert.Equal(t, "1", value.Model.Headers["X-Test"])
+	assert.Equal(t, "original", value.Tools[0].Description)
 }
