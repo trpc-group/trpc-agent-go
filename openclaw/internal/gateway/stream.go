@@ -686,6 +686,7 @@ func (s *Server) streamLocked(
 	if reply == "" {
 		reply = emptyReplyFallbackText
 	}
+	recordPromptCacheUsage(trace, run.sessionID, requestID, result.Usage)
 	if !sendStreamEvent(ctx, out, gwproto.StreamEvent{
 		Type:      gwproto.StreamEventTypeMessageCompleted,
 		SessionID: run.sessionID,
