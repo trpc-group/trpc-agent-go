@@ -36,20 +36,20 @@ func TestService_GetEventWindow(t *testing.T) {
 	mock.ExpectQuery("SELECT created_at FROM session_states").
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(base))
-	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+	mock.ExpectQuery("SELECT event, created_at FROM session_events").
 		WithArgs(key.AppName, key.UserID, key.SessionID, base, "u2").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
-			AddRow(int64(3), mysqlWindowEventBytes(t, "u2", model.RoleUser, "three"), base.Add(2*time.Minute)))
-	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+		WillReturnRows(sqlmock.NewRows([]string{"event", "created_at"}).
+			AddRow(mysqlWindowEventBytes(t, "u2", model.RoleUser, "three"), base.Add(2*time.Minute)))
+	mock.ExpectQuery("SELECT event, created_at FROM session_events").
 		WithArgs(key.AppName, key.UserID, key.SessionID, base, base.Add(2*time.Minute), eventWindowBatchSize).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
-			AddRow(int64(2), mysqlWindowEventBytes(t, "a1", model.RoleAssistant, "two"), base.Add(time.Minute)).
-			AddRow(int64(1), mysqlWindowEventBytes(t, "u1", model.RoleUser, "one"), base))
-	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+		WillReturnRows(sqlmock.NewRows([]string{"event", "created_at"}).
+			AddRow(mysqlWindowEventBytes(t, "a1", model.RoleAssistant, "two"), base.Add(time.Minute)).
+			AddRow(mysqlWindowEventBytes(t, "u1", model.RoleUser, "one"), base))
+	mock.ExpectQuery("SELECT event, created_at FROM session_events").
 		WithArgs(key.AppName, key.UserID, key.SessionID, base, base.Add(2*time.Minute), eventWindowBatchSize).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
-			AddRow(int64(4), mysqlWindowToolEventBytes(t, "t1", "calc", "four"), base.Add(3*time.Minute)).
-			AddRow(int64(5), mysqlWindowEventBytes(t, "u3", model.RoleUser, "five"), base.Add(4*time.Minute)))
+		WillReturnRows(sqlmock.NewRows([]string{"event", "created_at"}).
+			AddRow(mysqlWindowToolEventBytes(t, "t1", "calc", "four"), base.Add(3*time.Minute)).
+			AddRow(mysqlWindowEventBytes(t, "u3", model.RoleUser, "five"), base.Add(4*time.Minute)))
 
 	got, err := svc.GetEventWindow(ctx, session.EventWindowRequest{
 		Key:           key,
@@ -75,9 +75,9 @@ func TestService_GetEventWindowAnchorNotFound(t *testing.T) {
 	mock.ExpectQuery("SELECT created_at FROM session_states").
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(base))
-	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+	mock.ExpectQuery("SELECT event, created_at FROM session_events").
 		WithArgs(key.AppName, key.UserID, key.SessionID, base, "missing").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}))
+		WillReturnRows(sqlmock.NewRows([]string{"event", "created_at"}))
 
 	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
 		Key:           key,
@@ -125,10 +125,10 @@ func TestService_GetEventWindowAnchorOnly(t *testing.T) {
 	mock.ExpectQuery("SELECT created_at FROM session_states").
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(base))
-	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+	mock.ExpectQuery("SELECT event, created_at FROM session_events").
 		WithArgs(key.AppName, key.UserID, key.SessionID, base, "anchor").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
-			AddRow(int64(1), mysqlWindowEventBytes(t, "anchor", model.RoleUser, "one"), base))
+		WillReturnRows(sqlmock.NewRows([]string{"event", "created_at"}).
+			AddRow(mysqlWindowEventBytes(t, "anchor", model.RoleUser, "one"), base))
 
 	got, err := svc.GetEventWindow(context.Background(), session.EventWindowRequest{
 		Key:           key,
@@ -193,10 +193,10 @@ func TestService_GetEventWindowAnchorFilteredByRole(t *testing.T) {
 	mock.ExpectQuery("SELECT created_at FROM session_states").
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(base))
-	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+	mock.ExpectQuery("SELECT event, created_at FROM session_events").
 		WithArgs(key.AppName, key.UserID, key.SessionID, base, "a1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
-			AddRow(int64(1), mysqlWindowEventBytes(t, "a1", model.RoleAssistant, "one"), base))
+		WillReturnRows(sqlmock.NewRows([]string{"event", "created_at"}).
+			AddRow(mysqlWindowEventBytes(t, "a1", model.RoleAssistant, "one"), base))
 
 	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
 		Key:           key,
@@ -220,11 +220,11 @@ func TestService_GetEventWindowNeighborQueryError(t *testing.T) {
 	mock.ExpectQuery("SELECT created_at FROM session_states").
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(base))
-	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+	mock.ExpectQuery("SELECT event, created_at FROM session_events").
 		WithArgs(key.AppName, key.UserID, key.SessionID, base, "anchor").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
-			AddRow(int64(1), mysqlWindowEventBytes(t, "anchor", model.RoleUser, "one"), base))
-	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+		WillReturnRows(sqlmock.NewRows([]string{"event", "created_at"}).
+			AddRow(mysqlWindowEventBytes(t, "anchor", model.RoleUser, "one"), base))
+	mock.ExpectQuery("SELECT event, created_at FROM session_events").
 		WithArgs(key.AppName, key.UserID, key.SessionID, base, base, eventWindowBatchSize).
 		WillReturnError(errors.New("neighbors failed"))
 
@@ -250,10 +250,10 @@ func TestService_GetEventWindowUnmarshalError(t *testing.T) {
 	mock.ExpectQuery("SELECT created_at FROM session_states").
 		WithArgs(key.AppName, key.UserID, key.SessionID, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"created_at"}).AddRow(base))
-	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
+	mock.ExpectQuery("SELECT event, created_at FROM session_events").
 		WithArgs(key.AppName, key.UserID, key.SessionID, base, "bad").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
-			AddRow(int64(1), []byte("{bad-json"), base))
+		WillReturnRows(sqlmock.NewRows([]string{"event", "created_at"}).
+			AddRow([]byte("{bad-json"), base))
 
 	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{
 		Key:           key,

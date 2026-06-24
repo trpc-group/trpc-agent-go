@@ -976,7 +976,7 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 			{id: 9, createdAt: now.Add(-time.Minute)},
 			{id: 11, createdAt: now.Add(time.Minute)},
 		})
-		assert.Equal(t, int64(9), oldest.id)
+		assert.Equal(t, now.Add(-time.Minute), oldest.createdAt)
 	})
 
 	t.Run("TimestampFilterAndLoadedAnchor", func(t *testing.T) {

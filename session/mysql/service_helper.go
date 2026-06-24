@@ -1026,6 +1026,9 @@ func (s *Service) getPreviousEventRefs(
 		s.tableSessionEvents)
 	args := []any{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
 	if before != nil {
+		// Keyset cursor: rows sharing the exact same microsecond created_at as
+		// the cursor boundary may be skipped. TIMESTAMP(6) makes this rare in
+		// practice and we accept the tradeoff to avoid filesort on the index.
 		query += ` AND created_at < ?`
 		args = append(args, before.createdAt)
 	}
@@ -1063,6 +1066,9 @@ func (s *Service) getEventRefsWithTimestamp(
 	)
 	args := []any{key.AppName, key.UserID, key.SessionID, afterTime}
 	if before != nil {
+		// Keyset cursor: rows sharing the exact same microsecond created_at as
+		// the cursor boundary may be skipped. TIMESTAMP(6) makes this rare in
+		// practice and we accept the tradeoff to avoid filesort on the index.
 		query += ` AND created_at < ?`
 		args = append(args, before.createdAt)
 	}

@@ -28,7 +28,6 @@ var _ session.WindowService = (*Service)(nil)
 const eventWindowBatchSize = 64
 
 type persistedWindowEntry struct {
-	rowID int64
 	entry session.EventWindowEntry
 }
 
@@ -161,7 +160,7 @@ func (s *Service) loadWindowAnchor(
 			return nil
 		},
 		fmt.Sprintf(
-			`SELECT id, event, created_at FROM %s
+			`SELECT event, created_at FROM %s
 WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND created_at >= ?
 AND JSON_UNQUOTE(JSON_EXTRACT(event, '$.id')) = ?
@@ -237,6 +236,9 @@ func (s *Service) queryWindowNeighborBatch(
 	cursorCreatedAt time.Time,
 	before bool,
 ) ([]*persistedWindowEntry, error) {
+	// Keyset cursor: rows sharing the exact same microsecond created_at as the
+	// batch boundary may be skipped. TIMESTAMP(6) makes this rare in practice
+	// and we accept the tradeoff to avoid filesort on the lookup index.
 	comparator := `(created_at > ?)`
 	orderBy := `ORDER BY created_at ASC`
 	if before {
@@ -256,7 +258,7 @@ func (s *Service) queryWindowNeighborBatch(
 			return nil
 		},
 		fmt.Sprintf(
-			`SELECT id, event, created_at FROM %s
+			`SELECT event, created_at FROM %s
 WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND created_at >= ?
 AND deleted_at IS NULL
@@ -282,11 +284,10 @@ LIMIT ?`,
 
 func scanWindowRow(rows *sql.Rows) (*persistedWindowEntry, error) {
 	var (
-		rowID      int64
 		eventBytes []byte
 		createdAt  time.Time
 	)
-	if err := rows.Scan(&rowID, &eventBytes, &createdAt); err != nil {
+	if err := rows.Scan(&eventBytes, &createdAt); err != nil {
 		return nil, fmt.Errorf("scan event window entry: %w", err)
 	}
 	var evt event.Event
@@ -294,7 +295,6 @@ func scanWindowRow(rows *sql.Rows) (*persistedWindowEntry, error) {
 		return nil, fmt.Errorf("unmarshal event window entry: %w", err)
 	}
 	return &persistedWindowEntry{
-		rowID: rowID,
 		entry: session.EventWindowEntry{
 			Event:     evt,
 			CreatedAt: createdAt,
