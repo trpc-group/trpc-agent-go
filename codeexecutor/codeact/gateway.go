@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -39,17 +40,20 @@ type registeredTool struct {
 func NewGateway(tools ...tool.CallableTool) (*Gateway, error) {
 	g := &Gateway{tools: make(map[string]registeredTool, len(tools))}
 	for _, candidate := range tools {
-		if candidate == nil || candidate.Declaration() == nil {
+		if isNilTool(candidate) {
 			return nil, fmt.Errorf("codeact: tool declaration is required")
 		}
-		name := strings.TrimSpace(candidate.Declaration().Name)
+		decl := candidate.Declaration()
+		if decl == nil {
+			return nil, fmt.Errorf("codeact: tool declaration is required")
+		}
+		name := strings.TrimSpace(decl.Name)
 		if name == "" {
 			return nil, fmt.Errorf("codeact: tool name is required")
 		}
 		if _, ok := g.tools[name]; ok {
 			return nil, fmt.Errorf("codeact: duplicate tool %q", name)
 		}
-		decl := candidate.Declaration()
 		inputSchema, err := compileSchema(decl.InputSchema, name, "input")
 		if err != nil {
 			return nil, err
@@ -65,6 +69,19 @@ func NewGateway(tools ...tool.CallableTool) (*Gateway, error) {
 		}
 	}
 	return g, nil
+}
+
+func isNilTool(candidate tool.CallableTool) bool {
+	if candidate == nil {
+		return true
+	}
+	value := reflect.ValueOf(candidate)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // Names returns the stable list of capabilities available to guest code.

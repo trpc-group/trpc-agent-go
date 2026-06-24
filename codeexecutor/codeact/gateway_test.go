@@ -26,6 +26,13 @@ type testTool struct {
 func (t testTool) Declaration() *tool.Declaration                   { return t.declaration }
 func (t testTool) Call(_ context.Context, args []byte) (any, error) { return t.call(args) }
 
+type pointerTestTool struct{}
+
+func (*pointerTestTool) Declaration() *tool.Declaration { return &tool.Declaration{Name: "pointer"} }
+func (*pointerTestTool) Call(context.Context, []byte) (any, error) {
+	return nil, nil
+}
+
 func TestGatewayValidatesAndOnlyCallsAllowlistedTools(t *testing.T) {
 	called := false
 	add := testTool{declaration: &tool.Declaration{Name: "add", InputSchema: &tool.Schema{Type: "object", Required: []string{"a", "b"}, Properties: map[string]*tool.Schema{"a": {Type: "integer"}, "b": {Type: "integer"}}, AdditionalProperties: false}, OutputSchema: &tool.Schema{Type: "object", Required: []string{"sum"}, Properties: map[string]*tool.Schema{"sum": {Type: "integer"}}}}, call: func(raw []byte) (any, error) {
@@ -143,12 +150,14 @@ func TestGatewayValidatesOutputJSONSchema(t *testing.T) {
 
 func TestNewGatewayRejectsInvalidTools(t *testing.T) {
 	valid := testTool{declaration: &tool.Declaration{Name: "valid"}}
+	var typedNil *pointerTestTool
 	tests := []struct {
 		name  string
 		tools []tool.CallableTool
 		want  string
 	}{
 		{name: "nil tool", tools: []tool.CallableTool{nil}, want: "declaration is required"},
+		{name: "typed nil tool", tools: []tool.CallableTool{typedNil}, want: "declaration is required"},
 		{name: "nil declaration", tools: []tool.CallableTool{testTool{}}, want: "declaration is required"},
 		{name: "blank name", tools: []tool.CallableTool{testTool{declaration: &tool.Declaration{}}}, want: "tool name is required"},
 		{name: "duplicate name", tools: []tool.CallableTool{valid, valid}, want: "duplicate tool"},

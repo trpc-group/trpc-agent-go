@@ -154,7 +154,14 @@ func newQuoteTool() (tool.CallableTool, error) {
 			}
 			var total float64
 			for _, item := range in.Items {
-				total += priceBySKU[item.SKU] * float64(item.Quantity)
+				if item.Quantity <= 0 {
+					return createQuoteOutput{}, fmt.Errorf("invalid quantity for %q: %d", item.SKU, item.Quantity)
+				}
+				price, ok := priceBySKU[item.SKU]
+				if !ok {
+					return createQuoteOutput{}, fmt.Errorf("unknown sku: %q", item.SKU)
+				}
+				total += price * float64(item.Quantity)
 			}
 			return createQuoteOutput{
 				QuoteID: "quote-customer-42-demo",
@@ -176,10 +183,6 @@ func newQuoteTool() (tool.CallableTool, error) {
 
 func printEvents(events <-chan *event.Event) {
 	for evt := range events {
-		if evt.Error != nil {
-			fmt.Printf("Agent error: %s\n", evt.Error.Message)
-			continue
-		}
 		if evt.Response == nil {
 			continue
 		}

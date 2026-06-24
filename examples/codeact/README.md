@@ -57,7 +57,7 @@ return {
 
 ## Prerequisites
 
-- Go 1.23.0 or later
+- Go 1.24.4 or later, matching the examples module toolchain
 - Python 3, used by the local development runtime
 - A model endpoint compatible with the configured OpenAI adapter
 

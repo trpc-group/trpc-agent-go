@@ -150,9 +150,84 @@ func TestExecuteStdioReportsRunnerGuestAndContextErrors(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestExecuteStdioReportsProtocolEdgeCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		stdout io.ReadCloser
+		want   string
+	}{
+		{name: "unknown message", stdout: io.NopCloser(strings.NewReader(`{"type":"surprise"}
+`)), want: `unknown guest message "surprise"`},
+		{name: "scanner error", stdout: errReadCloser{err: errors.New("read failed")}, want: "read failed"},
+		{name: "no completion", stdout: io.NopCloser(strings.NewReader("")), want: "guest exited without a completion message"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := executeStdio(
+				context.Background(),
+				fakeStdioRunner{process: &fakeStdioProcess{stdout: tt.stdout}},
+				Request{Code: "return 1"},
+				fakeToolCallHandler{},
+			)
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
+func TestExecuteStdioReportsWriteErrors(t *testing.T) {
+	t.Run("run request", func(t *testing.T) {
+		_, err := executeStdio(
+			context.Background(),
+			fakeStdioRunner{process: &fakeStdioProcess{
+				stdinWriter: errWriteCloser{err: errors.New("write failed")},
+				stdout:      io.NopCloser(strings.NewReader("")),
+			}},
+			Request{Code: "return 1"},
+			fakeToolCallHandler{},
+		)
+		require.ErrorContains(t, err, "write failed")
+	})
+
+	t.Run("tool result", func(t *testing.T) {
+		process := &fakeStdioProcess{
+			stdout: io.NopCloser(strings.NewReader(`{"type":"tool_call","id":"call-1","name":"add","args":{}}
+`)),
+		}
+		process.stdinWriter = &failAfterWritesWriteCloser{
+			Writer: &process.stdin,
+			After:  1,
+			Err:    errors.New("write failed"),
+			OnClose: func() {
+				process.stdinCloses++
+			},
+		}
+		_, err := executeStdio(
+			context.Background(),
+			fakeStdioRunner{process: process},
+			Request{Code: "return 1"},
+			fakeToolCallHandler{},
+		)
+		require.ErrorContains(t, err, "write failed")
+	})
+}
+
 func TestLocalRunnerReturnsStartError(t *testing.T) {
 	_, err := LocalRunner{Python: "definitely-not-a-python-executable"}.start(context.Background(), "return 1")
 	require.Error(t, err)
+}
+
+func TestLocalProcessKill(t *testing.T) {
+	notStarted := &localProcess{cmd: exec.Command("sleep", "60")}
+	require.NoError(t, notStarted.Kill())
+
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep unavailable")
+	}
+	cmd := exec.Command("sleep", "60")
+	require.NoError(t, cmd.Start())
+	process := &localProcess{cmd: cmd}
+	require.NoError(t, process.Kill())
+	_ = cmd.Wait()
 }
 
 type fakeStdioRunner struct {
@@ -169,6 +244,7 @@ func (r fakeStdioRunner) start(context.Context, string) (stdioProcess, error) {
 
 type fakeStdioProcess struct {
 	stdin       bytes.Buffer
+	stdinWriter io.WriteCloser
 	stdout      io.ReadCloser
 	kills       int
 	waits       int
@@ -177,6 +253,9 @@ type fakeStdioProcess struct {
 }
 
 func (p *fakeStdioProcess) Stdin() io.WriteCloser {
+	if p.stdinWriter != nil {
+		return p.stdinWriter
+	}
 	return fakeWriteCloser{Writer: &p.stdin, onClose: func() { p.stdinCloses++ }}
 }
 func (p *fakeStdioProcess) Stdout() io.ReadCloser { return p.stdout }
@@ -196,6 +275,43 @@ type fakeWriteCloser struct {
 
 func (w fakeWriteCloser) Close() error {
 	w.onClose()
+	return nil
+}
+
+type errReadCloser struct {
+	err error
+}
+
+func (r errReadCloser) Read([]byte) (int, error) { return 0, r.err }
+func (r errReadCloser) Close() error             { return nil }
+
+type errWriteCloser struct {
+	err error
+}
+
+func (w errWriteCloser) Write([]byte) (int, error) { return 0, w.err }
+func (w errWriteCloser) Close() error              { return nil }
+
+type failAfterWritesWriteCloser struct {
+	io.Writer
+	After   int
+	Writes  int
+	Err     error
+	OnClose func()
+}
+
+func (w *failAfterWritesWriteCloser) Write(p []byte) (int, error) {
+	w.Writes++
+	if w.Writes > w.After {
+		return 0, w.Err
+	}
+	return w.Writer.Write(p)
+}
+
+func (w *failAfterWritesWriteCloser) Close() error {
+	if w.OnClose != nil {
+		w.OnClose()
+	}
 	return nil
 }
 
