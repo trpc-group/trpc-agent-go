@@ -12,6 +12,7 @@ package openai
 
 import (
 	"context"
+	"strconv"
 
 	openai "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
