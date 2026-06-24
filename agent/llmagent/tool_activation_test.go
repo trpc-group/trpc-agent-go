@@ -147,7 +147,7 @@ func TestToolActivationPostToolResultWritesRecords(t *testing.T) {
 		AgentName: "agent",
 		Session:   session.NewSession("app", "user", "session"),
 	}
-	toolsnapshot.Set(inv, []tool.Tool{activationTool{name: "old"}}, true)
+	toolsnapshot.Set(inv, []tool.Tool{activationTool{name: "old"}}, true, []string{"old"})
 	ev := &event.Event{
 		StateDelta: map[string][]byte{
 			skill.LoadedKey("agent", "research"): []byte("1"),

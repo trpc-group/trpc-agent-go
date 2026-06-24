@@ -141,15 +141,28 @@ func newTestServer(t *testing.T, opts ...Option) *Server {
 				_ = ctx
 				return &astructure.Snapshot{
 					StructureID: "struct_1",
-					EntryNodeID: "node_1",
+					EntryNodeID: "candidate",
 					Nodes: []astructure.Node{
-						{NodeID: "node_1", Name: "candidate", Kind: astructure.NodeKindLLM},
+						{NodeID: "candidate", Name: "candidate", Kind: astructure.NodeKindLLM},
 					},
 					Surfaces: []astructure.Surface{
 						{
 							SurfaceID: "candidate#instruction",
-							NodeID:    "node_1",
+							NodeID:    "candidate",
 							Type:      astructure.SurfaceTypeInstruction,
+						},
+						{
+							SurfaceID: "candidate#global_instruction",
+							NodeID:    "candidate",
+							Type:      astructure.SurfaceTypeGlobalInstruction,
+						},
+						{
+							SurfaceID: "candidate#tool.lookup_record",
+							NodeID:    "candidate",
+							Type:      astructure.SurfaceTypeTool,
+							Value: astructure.SurfaceValue{
+								Tools: []astructure.ToolRef{{ID: "lookup_record"}},
+							},
 						},
 					},
 				}, nil
@@ -759,6 +772,62 @@ func TestValidateTargetSurfaceIDs(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), `target surface id "unknown#instruction" is unknown`)
 	assert.NoError(t, srv.validateTargetSurfaceIDs(context.Background(), []string{"candidate#instruction"}))
+	assert.NoError(t, srv.validateTargetSurfaceIDs(context.Background(), []string{"candidate#tool.lookup_record"}))
+	toolNodeServer := newTestServer(t,
+		WithEngine(&fakeEngine{
+			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
+				_ = ctx
+				return &astructure.Snapshot{
+					StructureID: "struct_1",
+					EntryNodeID: "tools",
+					Nodes: []astructure.Node{
+						{NodeID: "tools", Name: "tools", Kind: astructure.NodeKindTool},
+					},
+					Surfaces: []astructure.Surface{
+						{
+							SurfaceID: "tools#tool",
+							NodeID:    "tools",
+							Type:      astructure.SurfaceTypeTool,
+							Value: astructure.SurfaceValue{
+								Tools: []astructure.ToolRef{{ID: "lookup_record"}},
+							},
+						},
+					},
+				}, nil
+			},
+		}),
+	)
+	err = toolNodeServer.validateTargetSurfaceIDs(context.Background(), []string{"tools#tool.lookup_record"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), `target surface id "tools#tool.lookup_record" is unknown`)
+	graphLLMServer := newTestServer(t,
+		WithEngine(&fakeEngine{
+			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
+				_ = ctx
+				return &astructure.Snapshot{
+					StructureID: "struct_1",
+					EntryNodeID: "graph",
+					Nodes: []astructure.Node{
+						{NodeID: "graph", Name: "graph", Kind: astructure.NodeKindAgent},
+						{NodeID: "graph/llm", Name: "llm", Kind: astructure.NodeKindLLM},
+					},
+					Surfaces: []astructure.Surface{
+						{
+							SurfaceID: "graph/llm#tool",
+							NodeID:    "graph/llm",
+							Type:      astructure.SurfaceTypeTool,
+							Value: astructure.SurfaceValue{
+								Tools: []astructure.ToolRef{{ID: "lookup_record"}},
+							},
+						},
+					},
+				}, nil
+			},
+		}),
+	)
+	err = graphLLMServer.validateTargetSurfaceIDs(context.Background(), []string{"graph/llm#tool.lookup_record"})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), `target surface id "graph/llm#tool.lookup_record" is unknown`)
 	nilStructureServer := newTestServer(t,
 		WithEngine(&fakeEngine{
 			describe: func(ctx context.Context) (*astructure.Snapshot, error) {

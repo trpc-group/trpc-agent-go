@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"strings"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
@@ -24,7 +25,8 @@ func IsSupportedType(surfaceType astructure.SurfaceType) bool {
 	case astructure.SurfaceTypeInstruction,
 		astructure.SurfaceTypeGlobalInstruction,
 		astructure.SurfaceTypeFewShot,
-		astructure.SurfaceTypeModel:
+		astructure.SurfaceTypeModel,
+		astructure.SurfaceTypeTool:
 		return true
 	default:
 		return false
@@ -70,6 +72,26 @@ func ValidateValue(surfaceType astructure.SurfaceType, value astructure.SurfaceV
 			return errors.New("messages are not empty")
 		}
 		return nil
+	case astructure.SurfaceTypeTool:
+		if value.Text != nil {
+			return errors.New("text is not nil")
+		}
+		if value.PromptSyntax != nil {
+			return errors.New("prompt syntax is not nil")
+		}
+		if len(value.FewShot) > 0 {
+			return errors.New("messages are not empty")
+		}
+		if value.Model != nil {
+			return errors.New("model is not nil")
+		}
+		if len(value.Skills) > 0 {
+			return errors.New("skills are not empty")
+		}
+		if len(value.Tools) != 1 {
+			return fmt.Errorf("tools must contain exactly one tool, got %d", len(value.Tools))
+		}
+		return validateToolRefs(value.Tools)
 	default:
 		return fmt.Errorf("surface type %q is invalid", surfaceType)
 	}
@@ -150,17 +172,64 @@ func SanitizeValue(
 			Model: cloneModel(value.Model),
 		}
 		return sanitized, nil
+	case astructure.SurfaceTypeTool:
+		if value.Text != nil {
+			return astructure.SurfaceValue{}, errors.New("text is not nil")
+		}
+		if value.PromptSyntax != nil {
+			return astructure.SurfaceValue{}, errors.New("prompt syntax is not nil")
+		}
+		if len(value.FewShot) > 0 {
+			return astructure.SurfaceValue{}, errors.New("messages are not empty")
+		}
+		if value.Model != nil {
+			return astructure.SurfaceValue{}, errors.New("model is not nil")
+		}
+		if len(value.Skills) > 0 {
+			return astructure.SurfaceValue{}, errors.New("skills are not empty")
+		}
+		if err := validateToolRefs(value.Tools); err != nil {
+			return astructure.SurfaceValue{}, err
+		}
+		if len(value.Tools) != 1 {
+			return astructure.SurfaceValue{}, fmt.Errorf(
+				"tools must contain exactly one tool, got %d",
+				len(value.Tools),
+			)
+		}
+		return astructure.SurfaceValue{Tools: value.Tools}, nil
 	default:
 		return astructure.SurfaceValue{}, fmt.Errorf("surface type %q is invalid", surfaceType)
 	}
 }
 
-// CloneValue deep-copies one supported PromptIter surface value.
+// SanitizePatchValue validates one replacement value against its baseline surface.
+func SanitizePatchValue(
+	surface astructure.Surface,
+	value astructure.SurfaceValue,
+) (astructure.SurfaceValue, error) {
+	sanitized, err := SanitizeValue(surface.Type, value)
+	if err != nil {
+		return astructure.SurfaceValue{}, err
+	}
+	if surface.Type != astructure.SurfaceTypeTool {
+		return sanitized, nil
+	}
+	tools, err := sanitizeToolRefsDescriptionOnly(surface.Value.Tools, sanitized.Tools)
+	if err != nil {
+		return astructure.SurfaceValue{}, err
+	}
+	sanitized.Tools = tools
+	return sanitized, nil
+}
+
+// CloneValue copies one supported PromptIter surface value.
 func CloneValue(value astructure.SurfaceValue) astructure.SurfaceValue {
 	return astructure.SurfaceValue{
 		Text:    cloneText(value.Text),
 		FewShot: cloneExamples(value.FewShot),
 		Model:   cloneModel(value.Model),
+		Tools:   value.Tools,
 	}
 }
 
@@ -220,4 +289,46 @@ func isEmptyModel(modelValue *astructure.ModelRef) bool {
 		strings.TrimSpace(modelValue.BaseURL) == "" &&
 		strings.TrimSpace(modelValue.APIKey) == "" &&
 		len(modelValue.Headers) == 0
+}
+
+func validateToolRefs(refs []astructure.ToolRef) error {
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		if ref.ID == "" {
+			return errors.New("tool id is empty")
+		}
+		if _, ok := seen[ref.ID]; ok {
+			return fmt.Errorf("duplicate tool id %q", ref.ID)
+		}
+		seen[ref.ID] = struct{}{}
+	}
+	return nil
+}
+
+func sanitizeToolRefsDescriptionOnly(
+	baseline []astructure.ToolRef,
+	candidate []astructure.ToolRef,
+) ([]astructure.ToolRef, error) {
+	if err := validateToolRefs(baseline); err != nil {
+		return nil, fmt.Errorf("validate baseline tools: %w", err)
+	}
+	if len(baseline) != len(candidate) {
+		return nil, fmt.Errorf("tool count changed from %d to %d", len(baseline), len(candidate))
+	}
+	sanitized := make([]astructure.ToolRef, len(candidate))
+	for i := range baseline {
+		if baseline[i].ID != candidate[i].ID {
+			return nil, fmt.Errorf("tool id changed at index %d from %q to %q", i, baseline[i].ID, candidate[i].ID)
+		}
+		if candidate[i].InputSchema != nil && !reflect.DeepEqual(baseline[i].InputSchema, candidate[i].InputSchema) {
+			return nil, fmt.Errorf("tool %q input schema changed", baseline[i].ID)
+		}
+		if candidate[i].OutputSchema != nil && !reflect.DeepEqual(baseline[i].OutputSchema, candidate[i].OutputSchema) {
+			return nil, fmt.Errorf("tool %q output schema changed", baseline[i].ID)
+		}
+		sanitized[i] = candidate[i]
+		sanitized[i].InputSchema = baseline[i].InputSchema
+		sanitized[i].OutputSchema = baseline[i].OutputSchema
+	}
+	return sanitized, nil
 }

@@ -12,6 +12,8 @@ package engine
 import (
 	"errors"
 	"fmt"
+
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 )
 
 type targetSurfaceSet map[string]struct{}
@@ -21,6 +23,14 @@ func compileTargetSurfaceIDs(
 	targetSurfaceIDs []string,
 ) (targetSurfaceSet, error) {
 	if targetSurfaceIDs == nil {
+		if structure == nil {
+			return nil, nil
+		}
+		for _, surface := range structure.surfaceIndex {
+			if surface.Type == astructure.SurfaceTypeTool {
+				return nil, errors.New("target surface ids must be specified when tool surfaces are available")
+			}
+		}
 		return nil, nil
 	}
 	if len(targetSurfaceIDs) == 0 {

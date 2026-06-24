@@ -44,7 +44,7 @@ import (
 
 const (
 	testSurfaceID     = "node_1#instruction"
-	testToolSurfaceID = "node_1#tool"
+	testToolSurfaceID = "node_1#tool.bad_tool"
 )
 
 type fakeBackwarder struct {
@@ -201,6 +201,11 @@ func (s *scriptedEvalService) Inference(
 	if patch, ok := surfacepatch.PatchForNode(runOptions.CustomAgentConfigs, "node_1"); ok {
 		if instruction, ok := patch.Instruction(); ok {
 			profileValue = instruction
+		}
+		if profileValue == "" {
+			if declarations, ok := patch.ToolDeclarations(); ok && len(declarations) > 0 {
+				profileValue = "tool:" + declarations[0].Description
+			}
 		}
 	}
 	if profileValue == "" {
@@ -452,7 +457,7 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 					SurfaceID: request.SurfaceID,
 					NodeID:    request.NodeID,
 					Type:      request.Type,
-					Gradients: append([]promptiter.SurfaceGradient(nil), request.Gradients...),
+					Gradients: request.Gradients,
 				},
 			}, nil
 		},
@@ -519,8 +524,9 @@ func TestRunAllowsToolSurfaceInTraceWhenTargetingInstruction(t *testing.T) {
 	backward := &fakeBackwarder{
 		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
 			_ = ctx
-			require.Len(t, request.Surfaces, 1)
+			require.Len(t, request.Surfaces, 2)
 			assert.Equal(t, testSurfaceID, request.Surfaces[0].SurfaceID)
+			assert.Equal(t, testToolSurfaceID, request.Surfaces[1].SurfaceID)
 			assert.Equal(t, []string{testSurfaceID}, request.AllowedGradientSurfaceIDs)
 			return &backwarder.Result{
 				Gradients: []promptiter.SurfaceGradient{
@@ -544,7 +550,7 @@ func TestRunAllowsToolSurfaceInTraceWhenTargetingInstruction(t *testing.T) {
 					SurfaceID: request.SurfaceID,
 					NodeID:    request.NodeID,
 					Type:      request.Type,
-					Gradients: append([]promptiter.SurfaceGradient(nil), request.Gradients...),
+					Gradients: request.Gradients,
 				},
 			}, nil
 		},
@@ -591,6 +597,101 @@ func TestRunAllowsToolSurfaceInTraceWhenTargetingInstruction(t *testing.T) {
 	assert.Len(t, backward.requests, 1)
 }
 
+func TestRunOptimizesTargetedToolSurface(t *testing.T) {
+	backward := &fakeBackwarder{
+		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
+			_ = ctx
+			require.Len(t, request.Surfaces, 2)
+			assert.Equal(t, testSurfaceID, request.Surfaces[0].SurfaceID)
+			assert.Equal(t, testToolSurfaceID, request.Surfaces[1].SurfaceID)
+			assert.Equal(t, []string{testToolSurfaceID}, request.AllowedGradientSurfaceIDs)
+			return &backwarder.Result{
+				Gradients: []promptiter.SurfaceGradient{
+					{
+						EvalSetID:  request.EvalSetID,
+						EvalCaseID: request.EvalCaseID,
+						StepID:     request.StepID,
+						SurfaceID:  testToolSurfaceID,
+						Severity:   promptiter.LossSeverityP1,
+						Gradient:   "clarify the tool description",
+					},
+				},
+			}, nil
+		},
+	}
+	aggregatorInstance := &fakeAggregator{
+		fn: func(ctx context.Context, request *aggregator.Request) (*aggregator.Result, error) {
+			_ = ctx
+			assert.Equal(t, testToolSurfaceID, request.SurfaceID)
+			assert.Equal(t, astructure.SurfaceTypeTool, request.Type)
+			return &aggregator.Result{
+				Gradient: &promptiter.AggregatedSurfaceGradient{
+					SurfaceID: request.SurfaceID,
+					NodeID:    request.NodeID,
+					Type:      request.Type,
+					Gradients: request.Gradients,
+				},
+			}, nil
+		},
+	}
+	optimizerInstance := &fakeOptimizer{
+		fn: func(ctx context.Context, request *optimizer.Request) (*optimizer.Result, error) {
+			_ = ctx
+			assert.Equal(t, testToolSurfaceID, request.Surface.SurfaceID)
+			assert.Equal(t, astructure.SurfaceTypeTool, request.Surface.Type)
+			return &optimizer.Result{
+				Patch: &promptiter.SurfacePatch{
+					SurfaceID: request.Surface.SurfaceID,
+					Value: astructure.SurfaceValue{
+						Tools: []astructure.ToolRef{
+							{
+								ID:          "bad_tool",
+								Description: "better",
+							},
+						},
+					},
+					Reason: "clarify tool",
+				},
+			}, nil
+		},
+	}
+	evalService := newScriptedEvalService(func(evalSetID string, profileValue string) scriptedEvalOutcome {
+		outcome := scriptedOutcome(evalSetID, profileValue)
+		outcome.appliedSurfaceIDs = []string{testSurfaceID, testToolSurfaceID}
+		if profileValue == "tool:better" {
+			outcome.score = 0.9
+			outcome.metricStatus = status.EvalStatusPassed
+			outcome.reason = "tool accepted"
+		}
+		return outcome
+	})
+	engineInstance, err := New(
+		context.Background(),
+		testTargetAgentWithToolSurface(),
+		newTestAgentEvaluator(t, evalService),
+		backward,
+		aggregatorInstance,
+		optimizerInstance,
+	)
+	assert.NoError(t, err)
+	result, err := engineInstance.Run(context.Background(), &RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{testToolSurfaceID},
+		AcceptancePolicy: AcceptancePolicy{
+			MinScoreGain: 0.1,
+		},
+	})
+	assert.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "better", profileToolDescription(result.AcceptedProfile, testToolSurfaceID))
+	require.Len(t, aggregatorInstance.requests, 1)
+	assert.Equal(t, testToolSurfaceID, aggregatorInstance.requests[0].SurfaceID)
+	require.Len(t, optimizerInstance.requests, 1)
+	assert.Equal(t, testToolSurfaceID, optimizerInstance.requests[0].Surface.SurfaceID)
+}
+
 func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 	backward := &fakeBackwarder{
 		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
@@ -617,7 +718,7 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 					SurfaceID: request.SurfaceID,
 					NodeID:    request.NodeID,
 					Type:      request.Type,
-					Gradients: append([]promptiter.SurfaceGradient(nil), request.Gradients...),
+					Gradients: request.Gradients,
 				},
 			}, nil
 		},
@@ -824,7 +925,7 @@ func TestRunCompilesProfileIntoEvaluationRunOptions(t *testing.T) {
 					SurfaceID: request.SurfaceID,
 					NodeID:    request.NodeID,
 					Type:      request.Type,
-					Gradients: append([]promptiter.SurfaceGradient(nil), request.Gradients...),
+					Gradients: request.Gradients,
 				},
 			}, nil
 		},
@@ -991,6 +1092,210 @@ func TestCompileProfileRunOptionsUsesModelSurfacePatch(t *testing.T) {
 	assert.Equal(t, map[string]string{"X-Test": "1"}, capturedOptions.Headers)
 }
 
+func TestCompileProfileRunOptionsUsesToolDeclarationPatch(t *testing.T) {
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "entry",
+		Nodes: []astructure.Node{
+			{NodeID: "entry", Kind: astructure.NodeKindLLM, Name: "entry"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "entry#global_instruction",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeGlobalInstruction,
+				Value:     astructure.SurfaceValue{Text: stringPtr("global")},
+			},
+			{
+				SurfaceID: "entry#tool.search",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{
+						{
+							ID:          "search",
+							Description: "base search",
+							InputSchema: &tool.Schema{
+								Type:        "object",
+								Description: "base input",
+								Required:    []string{"query"},
+								Properties: map[string]*tool.Schema{
+									"query": {Type: "string", Description: "base query"},
+								},
+							},
+							OutputSchema: &tool.Schema{
+								Type: "object",
+								Properties: map[string]*tool.Schema{
+									"items": {
+										Type:        "array",
+										Description: "base items",
+										Items:       &tool.Schema{Type: "string", Description: "base item"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
+		StructureID: "structure_1",
+		Overrides: []promptiter.SurfaceOverride{
+			{
+				SurfaceID: "entry#tool.search",
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{
+						{
+							ID:          "search",
+							Description: "patched search",
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	opts := agent.NewRunOptions(runOptions...)
+	patch, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "entry")
+	require.True(t, ok)
+	declarations, ok := patch.ToolDeclarations()
+	require.True(t, ok)
+	require.Len(t, declarations, 1)
+	assert.Equal(t, "search", declarations[0].Name)
+	assert.Equal(t, "patched search", declarations[0].Description)
+	assert.Equal(t, "base input", declarations[0].InputSchema.Description)
+	assert.Equal(t, "base query", declarations[0].InputSchema.Properties["query"].Description)
+	assert.Equal(t, "base items", declarations[0].OutputSchema.Properties["items"].Description)
+	assert.Equal(t, "base item", declarations[0].OutputSchema.Properties["items"].Items.Description)
+}
+
+func TestCompileProfileRunOptionsAggregatesToolDeclarationPatches(t *testing.T) {
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "entry",
+		Nodes: []astructure.Node{
+			{NodeID: "entry", Kind: astructure.NodeKindLLM, Name: "entry"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "entry#global_instruction",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeGlobalInstruction,
+				Value:     astructure.SurfaceValue{Text: stringPtr("global")},
+			},
+			{
+				SurfaceID: "entry#tool.lookup",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{{ID: "lookup", Description: "base lookup"}},
+				},
+			},
+			{
+				SurfaceID: "entry#tool.search",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{{ID: "search", Description: "base search"}},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
+		StructureID: "structure_1",
+		Overrides: []promptiter.SurfaceOverride{
+			{
+				SurfaceID: "entry#tool.search",
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{{ID: "search", Description: "patched search"}},
+				},
+			},
+			{
+				SurfaceID: "entry#tool.lookup",
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{{ID: "lookup", Description: "patched lookup"}},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	opts := agent.NewRunOptions(runOptions...)
+	patch, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "entry")
+	require.True(t, ok)
+	declarations, ok := patch.ToolDeclarations()
+	require.True(t, ok)
+	require.Len(t, declarations, 2)
+	assert.Equal(t, "lookup", declarations[0].Name)
+	assert.Equal(t, "patched lookup", declarations[0].Description)
+	assert.Equal(t, "search", declarations[1].Name)
+	assert.Equal(t, "patched search", declarations[1].Description)
+}
+
+func TestCompileProfileRunOptionsRejectsToolSchemaShapeChange(t *testing.T) {
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "entry",
+		Nodes: []astructure.Node{
+			{NodeID: "entry", Kind: astructure.NodeKindLLM, Name: "entry"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "entry#global_instruction",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeGlobalInstruction,
+				Value:     astructure.SurfaceValue{Text: stringPtr("global")},
+			},
+			{
+				SurfaceID: "entry#tool.search",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{
+						{
+							ID:          "search",
+							Description: "base search",
+							InputSchema: &tool.Schema{
+								Type: "object",
+								Properties: map[string]*tool.Schema{
+									"query": {Type: "string", Description: "base query"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	runOptions, err := compileProfileRunOptions(structure, &promptiter.Profile{
+		StructureID: "structure_1",
+		Overrides: []promptiter.SurfaceOverride{
+			{
+				SurfaceID: "entry#tool.search",
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{
+						{
+							ID:          "search",
+							Description: "patched search",
+							InputSchema: &tool.Schema{
+								Type: "object",
+								Properties: map[string]*tool.Schema{
+									"query": {Type: "number", Description: "patched query"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	assert.Nil(t, runOptions)
+	assert.ErrorContains(t, err, `tool "search" input schema changed`)
+}
+
 func TestCompileProfileRunOptionsRejectsEmptyModelProvider(t *testing.T) {
 	structure, err := newStructureState(&astructure.Snapshot{
 		StructureID: "structure_1",
@@ -1131,7 +1436,7 @@ func TestCompileProfileRunOptionsValidationErrors(t *testing.T) {
 }
 
 func TestApplySurfaceOverrideToPatchValidationErrors(t *testing.T) {
-	var patch agent.SurfacePatch
+	var patch surfacepatch.Patch
 	err := applySurfaceOverrideToPatch(nil, astructure.Surface{}, astructure.SurfaceValue{})
 	assert.EqualError(t, err, "surface patch is nil")
 	err = applySurfaceOverrideToPatch(&patch, astructure.Surface{
@@ -1161,8 +1466,8 @@ func TestApplySurfaceOverrideToPatchValidationErrors(t *testing.T) {
 	})
 	assert.ErrorContains(t, err, "few-shot value is invalid")
 	err = applySurfaceOverrideToPatch(&patch, astructure.Surface{
-		SurfaceID: "node_1#tool",
-		Type:      astructure.SurfaceTypeTool,
+		SurfaceID: "node_1#unsupported",
+		Type:      astructure.SurfaceType("unsupported"),
 	}, astructure.SurfaceValue{})
 	assert.ErrorContains(t, err, "is not supported by generic evaluation")
 }
@@ -2226,7 +2531,7 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	state, err = newStructureState(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
-			{NodeID: "node_1"},
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
 		},
 		Surfaces: []astructure.Surface{
 			{
@@ -2244,7 +2549,7 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	state, err = newStructureState(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
-			{NodeID: "node_1"},
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
 		},
 		Surfaces: []astructure.Surface{
 			{
@@ -2267,6 +2572,52 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	})
 	assert.Nil(t, state)
 	assert.EqualError(t, err, `duplicate surface type "instruction" for node id "node_1"`)
+	state, err = newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "node_1#global_instruction",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeGlobalInstruction,
+				Value:     astructure.SurfaceValue{Text: stringPtr("global")},
+			},
+			{
+				SurfaceID: "node_1#tool.search",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{{ID: "lookup"}},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	require.NotNil(t, state)
+	assert.Contains(t, state.surfaceIndex, "node_1#tool.lookup")
+	assert.Contains(t, state.knownSurfaceIDs, "node_1#tool.search")
+	state, err = newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		Nodes: []astructure.Node{
+			{NodeID: "graph/llm", Kind: astructure.NodeKindLLM},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "graph/llm#tool.lookup",
+				NodeID:    "graph/llm",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{{ID: "lookup"}},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	require.NotNil(t, state)
+	assert.NotContains(t, state.surfaceIndex, "graph/llm#tool.lookup")
+	assert.Contains(t, state.knownSurfaceIDs, "graph/llm#tool.lookup")
 	state, err = newStructureState(&astructure.Snapshot{
 		StructureID: "structure_1",
 		Nodes: []astructure.Node{
@@ -2318,6 +2669,26 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	require.NotNil(t, state)
 	assert.Contains(t, state.surfaceIndex, "candidate#instruction")
 	assert.NotContains(t, state.surfaceIndex, "candidate#unsupported")
+	state, err = newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindTool},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "node_1#tool.lookup",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{{ID: "lookup"}},
+				},
+			},
+		},
+	})
+	assert.NoError(t, err)
+	require.NotNil(t, state)
+	assert.NotContains(t, state.surfaceIndex, "node_1#tool.lookup")
+	assert.Contains(t, state.knownSurfaceIDs, "node_1#tool.lookup")
 }
 
 func TestBuildKnownSurfaceIDsValidation(t *testing.T) {
@@ -2330,14 +2701,14 @@ func TestBuildKnownSurfaceIDsValidation(t *testing.T) {
 			NodeID:    "node_1",
 		},
 		{
-			SurfaceID: "node_1#tool",
+			SurfaceID: "node_1#tool.search",
 			NodeID:    "node_1",
 		},
 	}, nodes)
 	assert.NoError(t, err)
 	assert.Equal(t, map[string]struct{}{
 		"node_1#instruction": {},
-		"node_1#tool":        {},
+		"node_1#tool.search": {},
 	}, known)
 	known, err = buildKnownSurfaceIDs([]astructure.Surface{
 		{
@@ -2511,6 +2882,17 @@ func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
 	targets, err := compileTargetSurfaceIDs(nil, []string{testSurfaceID})
 	assert.Nil(t, targets)
 	assert.EqualError(t, err, "structure state is nil")
+	targets, err = compileTargetSurfaceIDs(nil, nil)
+	assert.Nil(t, targets)
+	assert.NoError(t, err)
+	targets, err = compileTargetSurfaceIDs(structure, nil)
+	assert.NoError(t, err)
+	assert.Nil(t, targets)
+	structureWithTool, err := newStructureState(testStructureSnapshotWithToolSurface(t))
+	assert.NoError(t, err)
+	targets, err = compileTargetSurfaceIDs(structureWithTool, nil)
+	assert.Nil(t, targets)
+	assert.EqualError(t, err, "target surface ids must be specified when tool surfaces are available")
 	targets, err = compileTargetSurfaceIDs(structure, []string{})
 	assert.Nil(t, targets)
 	assert.EqualError(t, err, "target surface ids must not be empty")
@@ -2526,6 +2908,7 @@ func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
 	assert.False(t, targets.contains("unknown"))
 	var nilTargets targetSurfaceSet
 	assert.True(t, nilTargets.contains(testSurfaceID))
+	assert.True(t, nilTargets.contains(testToolSurfaceID))
 }
 
 func TestBackwardCoversAdditionalBranches(t *testing.T) {
@@ -2755,7 +3138,7 @@ func TestAggregateRunsSurfacesInParallel(t *testing.T) {
 						SurfaceID: request.SurfaceID,
 						NodeID:    request.NodeID,
 						Type:      request.Type,
-						Gradients: append([]promptiter.SurfaceGradient(nil), request.Gradients...),
+						Gradients: request.Gradients,
 					},
 				}, nil
 			},
@@ -3303,7 +3686,7 @@ func TestBuildBackwardRequestValidationErrors(t *testing.T) {
 	assert.NotNil(t, request.Input)
 }
 
-func TestBuildBackwardRequestSkipsUnsupportedAppliedSurfaces(t *testing.T) {
+func TestBuildBackwardRequestKeepsSupportedToolAppliedSurfaces(t *testing.T) {
 	structure, err := newStructureState(testStructureSnapshotWithToolSurface(t))
 	assert.NoError(t, err)
 	request, err := buildBackwardRequest(
@@ -3321,8 +3704,9 @@ func TestBuildBackwardRequestSkipsUnsupportedAppliedSurfaces(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	require.NotNil(t, request)
-	require.Len(t, request.Surfaces, 1)
+	require.Len(t, request.Surfaces, 2)
 	assert.Equal(t, testSurfaceID, request.Surfaces[0].SurfaceID)
+	assert.Equal(t, testToolSurfaceID, request.Surfaces[1].SurfaceID)
 	assert.Equal(t, []string{testSurfaceID}, request.AllowedGradientSurfaceIDs)
 }
 
@@ -4149,6 +4533,13 @@ func testTargetAgentWithToolSurface() agent.Agent {
 				},
 				{
 					NodeID: "node_1",
+					Type:   astructure.SurfaceTypeGlobalInstruction,
+					Value: astructure.SurfaceValue{
+						Text: stringPtr("global"),
+					},
+				},
+				{
+					NodeID: "node_1",
 					Type:   astructure.SurfaceTypeTool,
 					Value: astructure.SurfaceValue{
 						Tools: []astructure.ToolRef{
@@ -4169,6 +4560,19 @@ func profileText(profile *promptiter.Profile) string {
 		return "base prompt"
 	}
 	return *profile.Overrides[0].Value.Text
+}
+
+func profileToolDescription(profile *promptiter.Profile, surfaceID string) string {
+	if profile == nil {
+		return ""
+	}
+	for _, override := range profile.Overrides {
+		if override.SurfaceID != surfaceID || len(override.Value.Tools) == 0 {
+			continue
+		}
+		return override.Value.Tools[0].Description
+	}
+	return ""
 }
 
 func stringPtr(value string) *string {

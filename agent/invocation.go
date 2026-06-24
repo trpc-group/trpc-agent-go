@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -1413,7 +1414,7 @@ func (opts RunOptions) ShouldExecuteTool(
 	if opts.ToolExecutionFilter == nil {
 		return true
 	}
-	return opts.ToolExecutionFilter(ctx, tl)
+	return opts.ToolExecutionFilter(ctx, itool.ResolveDeclaration(tl))
 }
 
 func (opts RunOptions) isExternalTool(tl tool.Tool) bool {

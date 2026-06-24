@@ -132,6 +132,43 @@ func TestNewPromptDataOmitsSurfaceIdentity(t *testing.T) {
 	assert.NotContains(t, string(payload), "StepID")
 }
 
+func TestDefaultMessageBuilderUsesToolDescriptionOutput(t *testing.T) {
+	builder := defaultMessageBuilder()
+	msg, err := builder(context.Background(), &Request{
+		Surface: &astructure.Surface{
+			SurfaceID: "node_1#tool.lookup",
+			NodeID:    "node_1",
+			Type:      astructure.SurfaceTypeTool,
+			Value: astructure.SurfaceValue{
+				Tools: []astructure.ToolRef{{ID: "lookup", Description: "Look up a record."}},
+			},
+		},
+		Gradient: &promptiter.AggregatedSurfaceGradient{
+			SurfaceID: "node_1#tool.lookup",
+			NodeID:    "node_1",
+			Type:      astructure.SurfaceTypeTool,
+			Gradients: []promptiter.SurfaceGradient{
+				{
+					Severity: promptiter.LossSeverityP1,
+					Gradient: "clarify the tool description",
+				},
+			},
+		},
+	})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, msg)
+	if msg == nil {
+		return
+	}
+	assert.Contains(t, msg.Content, "Return exactly one JSON object with Description and Reason fields.")
+	assert.Contains(t, msg.Content, "Return only Description and Reason fields.")
+	assert.Contains(t, msg.Content, "Description is the replacement description for the current tool.")
+	assert.Contains(t, msg.Content, "Only change the tool description.")
+	assert.NotContains(t, msg.Content, "OutputFields")
+	assert.NotContains(t, msg.Content, "PatchRules")
+}
+
 func extractRequestJSON(content string) (string, bool) {
 	const marker = "Request JSON:\n"
 	start := strings.Index(content, marker)

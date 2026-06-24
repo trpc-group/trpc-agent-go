@@ -86,6 +86,18 @@ func (m *metadataPolicyTool) CheckPermission(
 	return m.decision, nil
 }
 
+type declarationWrapperTool struct {
+	base tool.Tool
+}
+
+func (d *declarationWrapperTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "wrapped"}
+}
+
+func (d *declarationWrapperTool) originalTool() tool.Tool {
+	return d.base
+}
+
 // fakeToolSet implements tool.ToolSet.
 type fakeToolSet struct {
 	name   string
@@ -227,6 +239,19 @@ func TestNamedTool_MetadataAndPermissionDelegation(t *testing.T) {
 	decision, err = plain.CheckPermission(ctx, &tool.PermissionRequest{})
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+}
+
+func TestResolveDeclarationAndSemantic(t *testing.T) {
+	base := &simpleTool{name: "raw"}
+	named := NewNamedToolSet(&fakeToolSet{
+		name:  "set",
+		tools: []tool.Tool{base},
+	}).Tools(context.Background())[0]
+	wrapped := &declarationWrapperTool{base: named}
+	require.Same(t, named, ResolveDeclaration(wrapped))
+	require.Same(t, base, ResolveSemantic(wrapped))
+	require.Nil(t, ResolveDeclaration(nil))
+	require.Nil(t, ResolveSemantic(nil))
 }
 
 func TestGenerateJSONSchema_Primitives(t *testing.T) {

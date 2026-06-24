@@ -242,6 +242,12 @@ func (s *Server) validateTargetSurfaceIDs(ctx context.Context, targetSurfaceIDs 
 	}
 	supportedSurfaceIDs := make(map[string]struct{}, len(structure.Surfaces))
 	for _, surface := range structure.Surfaces {
+		if surface.Type == astructure.SurfaceTypeTool {
+			if isPromptIterToolTargetSurface(surface) {
+				supportedSurfaceIDs[surface.SurfaceID] = struct{}{}
+			}
+			continue
+		}
 		if !isSupportedTargetSurfaceType(surface.Type) {
 			continue
 		}
@@ -256,6 +262,21 @@ func (s *Server) validateTargetSurfaceIDs(ctx context.Context, targetSurfaceIDs 
 		}
 	}
 	return nil
+}
+
+func isPromptIterToolTargetSurface(surface astructure.Surface) bool {
+	if len(surface.Value.Tools) != 1 {
+		return false
+	}
+	toolID := surface.Value.Tools[0].ID
+	if toolID == "" {
+		return false
+	}
+	return surface.SurfaceID == astructure.SurfaceID(
+		surface.NodeID,
+		astructure.SurfaceTypeTool,
+		toolID,
+	)
 }
 
 func isSupportedTargetSurfaceType(surfaceType astructure.SurfaceType) bool {

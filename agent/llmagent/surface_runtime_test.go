@@ -16,9 +16,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/toolsnapshot"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -27,6 +30,30 @@ import (
 )
 
 var errAlwaysFails = errors.New("provider failure")
+
+func withSurfacePatchForNode(nodeID string, patch surfacepatch.Patch) agent.RunOption {
+	return func(opts *agent.RunOptions) {
+		if opts == nil || nodeID == "" || patch.IsEmpty() {
+			return
+		}
+		opts.CustomAgentConfigs = surfacepatch.WithPatch(
+			opts.CustomAgentConfigs,
+			nodeID,
+			patch,
+		)
+	}
+}
+
+func withToolSurfaceTracing() agent.RunOption {
+	return func(opts *agent.RunOptions) {
+		if opts == nil {
+			return
+		}
+		opts.CustomAgentConfigs = surfacepatch.WithToolSurfaceTracing(
+			opts.CustomAgentConfigs,
+		)
+	}
+}
 
 func TestLLMAgent_SurfacePatch_OverridesInstructionAndSystemPrompt(t *testing.T) {
 	agt := New(
@@ -124,7 +151,7 @@ func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs(t *testing.T) {
 	)
 }
 
-func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesFilteredToolSnapshot(t *testing.T) {
+func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesFilteredToolNames(t *testing.T) {
 	agt := New(
 		"test-agent",
 		WithModel(newDummyModel()),
@@ -136,13 +163,68 @@ func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesFilteredToolSnapshot(t *te
 		agent.WithInvocationTraceNodeID("test-agent"),
 		agent.WithInvocationRunOptions(agent.NewRunOptions(
 			agent.WithExecutionTraceEnabled(true),
+			withToolSurfaceTracing(),
+			agent.WithAdditionalTools([]tool.Tool{
+				itool.NewUnprefixedNamedTool(dummyTool{decl: &tool.Declaration{Name: "run_option_tool"}}),
+			}),
 		)),
 	)
 	agt.setupInvocation(inv)
-	inv.SetState("llmflow:has_filtered_user_tools", false)
-	require.NotContains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "test-agent#tool")
-	inv.SetState("llmflow:has_filtered_user_tools", true)
-	require.Contains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "test-agent#tool")
+	staticTool := dummyTool{decl: &tool.Declaration{Name: "user_tool"}}
+	toolsnapshot.Set(inv, []tool.Tool{staticTool}, false, []string{})
+	require.NotContains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "test-agent#tool.user_tool")
+	toolsnapshot.Set(inv, []tool.Tool{
+		agt.UserTools()[0],
+		itool.NewUnprefixedNamedTool(dummyTool{decl: &tool.Declaration{Name: "run_option_tool"}}),
+	}, true, []string{"user_tool"})
+	surfaceIDs := agt.ExecutionTraceAppliedSurfaceIDs(inv)
+	require.Contains(t, surfaceIDs, "test-agent#tool.user_tool")
+	require.NotContains(t, surfaceIDs, "test-agent#tool.run_option_tool")
+	toolsnapshot.Set(inv, []tool.Tool{
+		dummyTool{decl: &tool.Declaration{Name: "user_tool"}},
+	}, true, []string{})
+	require.NotContains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "test-agent#tool.user_tool")
+}
+
+type traceRefreshToolSet struct {
+	calls int
+}
+
+func (s *traceRefreshToolSet) Tools(context.Context) []tool.Tool {
+	s.calls++
+	name := "dynamic_first"
+	if s.calls > 1 {
+		name = "dynamic_second"
+	}
+	return []tool.Tool{dummyTool{decl: &tool.Declaration{Name: name}}}
+}
+
+func (s *traceRefreshToolSet) Close() error { return nil }
+
+func (s *traceRefreshToolSet) Name() string { return "dynamic" }
+
+func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_FiltersRuntimeOnlyToolSets(t *testing.T) {
+	toolSet := &traceRefreshToolSet{}
+	agt := New(
+		"dynamic-agent",
+		WithModel(newDummyModel()),
+		WithToolSets([]tool.ToolSet{toolSet}),
+		WithRefreshToolSetsOnRun(true),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("dynamic-agent"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+			withToolSurfaceTracing(),
+		)),
+	)
+	agt.setupInvocation(inv)
+	toolSet.calls = 0
+	toolsnapshot.Set(inv, []tool.Tool{
+		itool.NewUnprefixedNamedTool(dummyTool{decl: &tool.Declaration{Name: "dynamic_first"}}),
+	}, true, []string{"dynamic_first"})
+	require.Contains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "dynamic-agent#tool.dynamic_first")
+	require.Zero(t, toolSet.calls)
 }
 
 func TestLLMAgent_SurfaceRuntimeHelpers_CoverPatchAndFallbackBranches(t *testing.T) {
@@ -194,7 +276,7 @@ func TestLLMAgent_SurfaceRuntimeHelpers_CoverPatchAndFallbackBranches(t *testing
 		)),
 	)
 	agt.setupInvocation(patchedInv)
-	patchedInv.SetState("llmflow:has_filtered_user_tools", false)
+	patchedInv.SetState(toolsnapshot.HasFilteredUserToolsKey, false)
 	require.Len(t, agt.fewShotForInvocation(patchedInv), 1)
 	require.NotNil(t, agt.skillRepositoryForInvocation(context.Background(), patchedInv))
 	m, ok := agt.modelSurfaceForInvocation(patchedInv)
@@ -584,6 +666,103 @@ func TestLLMAgent_Run_AgentToolFilterStillAppliesWithInvocationToolSurface(
 	require.Contains(t, m.got.Tools, "allowed_user_tool")
 	require.NotContains(t, m.got.Tools, "blocked_user_tool")
 	require.Contains(t, m.got.Tools, testTransferToolName)
+}
+
+func TestLLMAgent_Run_SurfacePatch_OverridesToolDeclarations(t *testing.T) {
+	m := &captureModel{}
+	agt := New(
+		"test-agent",
+		WithModel(m),
+		WithTools([]tool.Tool{
+			dummyTool{decl: &tool.Declaration{
+				Name:        "allowed_user_tool",
+				Description: "old description",
+				InputSchema: &tool.Schema{
+					Type: "object",
+					Properties: map[string]*tool.Schema{
+						"query": {Type: "string", Description: "old query"},
+					},
+				},
+			}},
+			dummyTool{decl: &tool.Declaration{Name: "blocked_user_tool"}},
+		}),
+		WithToolFilter(func(_ context.Context, tl tool.Tool) bool {
+			return tl.Declaration().Name == "allowed_user_tool"
+		}),
+	)
+	var patch surfacepatch.Patch
+	patch.SetToolDeclarations([]tool.Declaration{{
+		Name:        "allowed_user_tool",
+		Description: "patched description",
+		InputSchema: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"query": {Type: "string", Description: "patched query"},
+			},
+		},
+	}})
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			withSurfacePatchForNode("test-agent", patch),
+		)),
+	)
+	ch, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.NotNil(t, m.got)
+	gotTool, ok := m.got.Tools["allowed_user_tool"]
+	require.True(t, ok)
+	require.Equal(t, "patched description", gotTool.Declaration().Description)
+	require.Equal(t, "patched query", gotTool.Declaration().InputSchema.Properties["query"].Description)
+	require.NotContains(t, m.got.Tools, "blocked_user_tool")
+}
+
+func TestLLMAgent_Run_SurfacePatchToolDeclarationTraceUsesStaticSurfaces(t *testing.T) {
+	m := &captureModel{}
+	agt := New(
+		"test-agent",
+		WithModel(m),
+		WithTools([]tool.Tool{
+			dummyTool{decl: &tool.Declaration{
+				Name:        "allowed_user_tool",
+				Description: "old description",
+				InputSchema: &tool.Schema{Type: "object"},
+			}},
+		}),
+	)
+	var patch surfacepatch.Patch
+	patch.SetToolDeclarations([]tool.Declaration{{
+		Name:        "allowed_user_tool",
+		Description: "patched description",
+		InputSchema: &tool.Schema{Type: "object"},
+	}})
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationTraceNodeID("test-agent"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+			withToolSurfaceTracing(),
+			agent.WithAdditionalTools([]tool.Tool{
+				dummyTool{decl: &tool.Declaration{Name: "run_option_tool"}},
+			}),
+			withSurfacePatchForNode("test-agent", patch),
+		)),
+	)
+	ch, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.NotNil(t, m.got)
+	require.Contains(t, m.got.Tools, "allowed_user_tool")
+	require.Contains(t, m.got.Tools, "run_option_tool")
+	require.Equal(t, "patched description", m.got.Tools["allowed_user_tool"].Declaration().Description)
+	trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, trace)
+	require.Len(t, trace.Steps, 1)
+	require.Contains(t, trace.Steps[0].AppliedSurfaceIDs, "test-agent#tool.allowed_user_tool")
+	require.NotContains(t, trace.Steps[0].AppliedSurfaceIDs, "test-agent#tool.run_option_tool")
 }
 
 func TestLLMAgent_Run_SurfacePatch_DisablesStaticSkills(t *testing.T) {

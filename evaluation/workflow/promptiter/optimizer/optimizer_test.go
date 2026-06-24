@@ -16,12 +16,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 type fakeRunner struct {
@@ -246,6 +248,44 @@ func TestOptimizeUsesDefaultUUIDSessionID(t *testing.T) {
 		r.lastRunOpts.StructuredOutputType,
 	)
 	assert.Equal(t, &updatedText, rsp.Patch.Value.Text)
+}
+
+func TestOptimizeToolSurfaceUsesDescriptionProposal(t *testing.T) {
+	r := &fakeRunner{
+		events: []*event.Event{
+			event.NewResponseEvent(
+				"invocation-id",
+				"optimizer",
+				&model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage("ignored")},
+					},
+				},
+				event.WithStructuredOutputPayload(&toolDescriptionProposal{
+					Description: "Look up flight status records.",
+					Reason:      "clarify the lookup domain",
+				}),
+			),
+		},
+	}
+	oz, err := New(context.Background(), r)
+	require.NoError(t, err)
+	rsp, err := oz.Optimize(context.Background(), newToolRequest())
+	require.NoError(t, err)
+	assert.NotNil(t, r.lastRunOpts.StructuredOutput)
+	assert.Equal(
+		t,
+		reflect.TypeOf((*toolDescriptionProposal)(nil)),
+		r.lastRunOpts.StructuredOutputType,
+	)
+	assert.Equal(t, "node_1#tool.lookup_record", rsp.Patch.SurfaceID)
+	assert.Equal(t, "clarify the lookup domain", rsp.Patch.Reason)
+	require.Len(t, rsp.Patch.Value.Tools, 1)
+	assert.Equal(t, "lookup_record", rsp.Patch.Value.Tools[0].ID)
+	assert.Equal(t, "Look up flight status records.", rsp.Patch.Value.Tools[0].Description)
+	assert.Equal(t, "Lookup request.", rsp.Patch.Value.Tools[0].InputSchema.Description)
+	assert.Equal(t, "Lookup key.", rsp.Patch.Value.Tools[0].InputSchema.Properties["query"].Description)
 }
 
 func TestOptimizeFallsBackToFinalContent(t *testing.T) {
@@ -762,6 +802,87 @@ func TestSanitizePatchProposalTrimsReason(t *testing.T) {
 	assert.Equal(t, "tighten the system instruction", patch.Reason)
 }
 
+func TestSanitizePatchProposalAcceptsToolDescriptionOnlyChanges(t *testing.T) {
+	patch, err := sanitizePatchProposal(newToolRequest(), &surfacePatchProposal{
+		Reason: "clarify lookup key",
+		Value: astructure.SurfaceValue{
+			Tools: []astructure.ToolRef{
+				{
+					ID:          "lookup_record",
+					Description: "Look up flight status records.",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "clarify lookup key", patch.Reason)
+	require.Len(t, patch.Value.Tools, 1)
+	assert.Equal(t, "lookup_record", patch.Value.Tools[0].ID)
+	assert.Equal(t, "Look up flight status records.", patch.Value.Tools[0].Description)
+	assert.Equal(t, "Lookup request.", patch.Value.Tools[0].InputSchema.Description)
+	assert.Equal(t, "Lookup key.", patch.Value.Tools[0].InputSchema.Properties["query"].Description)
+}
+
+func TestSanitizePatchProposalRejectsInvalidToolPatch(t *testing.T) {
+	tests := []struct {
+		name            string
+		value           astructure.SurfaceValue
+		wantErrContains string
+	}{
+		{
+			name: "extra branch",
+			value: astructure.SurfaceValue{
+				Text: textPtr("ignore me"),
+				Tools: []astructure.ToolRef{
+					{
+						ID:          "lookup_record",
+						Description: "Look up flight status records.",
+						InputSchema: toolLookupSchema("Flight lookup request.", "Use flight_status:<flight number>."),
+					},
+				},
+			},
+			wantErrContains: "text is not nil",
+		},
+		{
+			name: "schema shape change",
+			value: astructure.SurfaceValue{
+				Tools: []astructure.ToolRef{
+					{
+						ID:          "lookup_record",
+						Description: "Look up flight records.",
+						InputSchema: &tool.Schema{
+							Type:        "object",
+							Description: "Updated lookup request.",
+							Required:    []string{"query", "extra"},
+							Properties: map[string]*tool.Schema{
+								"query": {
+									Type:        "number",
+									Description: "Use a prefixed lookup key.",
+								},
+								"extra": {
+									Type:        "string",
+									Description: "Ignored extra property.",
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErrContains: `tool "lookup_record" input schema changed`,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			patch, err := sanitizePatchProposal(newToolRequest(), &surfacePatchProposal{
+				Reason: "clarify lookup key",
+				Value:  testCase.value,
+			})
+			assert.Nil(t, patch)
+			assert.ErrorContains(t, err, testCase.wantErrContains)
+		})
+	}
+}
+
 func newInstructionRequest(currentText string) *Request {
 	return &Request{
 		Surface: &astructure.Surface{
@@ -785,6 +906,54 @@ func newInstructionRequest(currentText string) *Request {
 					Severity:   promptiter.LossSeverityP1,
 					Gradient:   "clarify citation policy",
 				},
+			},
+		},
+	}
+}
+
+func newToolRequest() *Request {
+	return &Request{
+		Surface: &astructure.Surface{
+			SurfaceID: "node_1#tool.lookup_record",
+			NodeID:    "node_1",
+			Type:      astructure.SurfaceTypeTool,
+			Value: astructure.SurfaceValue{
+				Tools: []astructure.ToolRef{
+					{
+						ID:          "lookup_record",
+						Description: "Look up a record.",
+						InputSchema: toolLookupSchema("Lookup request.", "Lookup key."),
+					},
+				},
+			},
+		},
+		Gradient: &promptiter.AggregatedSurfaceGradient{
+			SurfaceID: "node_1#tool.lookup_record",
+			NodeID:    "node_1",
+			Type:      astructure.SurfaceTypeTool,
+			Gradients: []promptiter.SurfaceGradient{
+				{
+					EvalSetID:  "set_a",
+					EvalCaseID: "case_1",
+					StepID:     "s1",
+					SurfaceID:  "node_1#tool.lookup_record",
+					Severity:   promptiter.LossSeverityP1,
+					Gradient:   "query must use flight_status prefix",
+				},
+			},
+		},
+	}
+}
+
+func toolLookupSchema(description string, queryDescription string) *tool.Schema {
+	return &tool.Schema{
+		Type:        "object",
+		Description: description,
+		Required:    []string{"query"},
+		Properties: map[string]*tool.Schema{
+			"query": {
+				Type:        "string",
+				Description: queryDescription,
 			},
 		},
 	}

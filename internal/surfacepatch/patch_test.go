@@ -226,11 +226,18 @@ func TestPatch_ClonesMutableValues(t *testing.T) {
 		model.NewUserMessage("u1"),
 		model.NewAssistantMessage("a1"),
 	}}
+	declarations := []tool.Declaration{
+		{
+			Name:        "search",
+			Description: "original",
+		},
+	}
 
 	var patch Patch
 	patch.SetFewShot(examples)
 	patch.SetModel(modelValue)
 	patch.SetTools(tools)
+	patch.SetToolDeclarations(declarations)
 	patch.SetSkillRepository(repo)
 
 	examples[0][0].Content = "changed"
@@ -245,6 +252,11 @@ func TestPatch_ClonesMutableValues(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, gotTools, 1)
 	require.Equal(t, "first", gotTools[0].Declaration().Name)
+
+	gotDeclarations, ok := patch.ToolDeclarations()
+	require.True(t, ok)
+	require.Len(t, gotDeclarations, 1)
+	require.Equal(t, "search", gotDeclarations[0].Name)
 
 	gotModel, ok := patch.Model()
 	require.True(t, ok)

@@ -55,7 +55,7 @@ func normalizeProfile(
 		if !ok {
 			return nil, fmt.Errorf("profile override surface id %q is unknown", override.SurfaceID)
 		}
-		value, err := isurface.SanitizeValue(surface.Type, override.Value)
+		value, err := isurface.SanitizePatchValue(surface, override.Value)
 		if err != nil {
 			return nil, fmt.Errorf("sanitize profile override %q: %w", override.SurfaceID, err)
 		}
@@ -102,7 +102,7 @@ func applyPatchSet(
 		if !ok {
 			return nil, fmt.Errorf("patch surface id %q is unknown", patch.SurfaceID)
 		}
-		value, err := isurface.SanitizeValue(surface.Type, patch.Value)
+		value, err := isurface.SanitizePatchValue(surface, patch.Value)
 		if err != nil {
 			return nil, fmt.Errorf("sanitize patch %q: %w", patch.SurfaceID, err)
 		}
