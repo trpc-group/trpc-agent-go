@@ -285,7 +285,8 @@ func (s *Service) AddMemory(
 				"participants = EXCLUDED.participants, "+
 				"location = EXCLUDED.location, "+
 				"deleted_at = NULL, "+
-				"updated_at = EXCLUDED.updated_at",
+				"updated_at = EXCLUDED.updated_at "+
+				"RETURNING memory_id, (SELECT memory_id FROM evict)",
 			s.tableName,
 			deletedFilter,
 			s.tableName,
@@ -314,18 +315,40 @@ func (s *Service) AddMemory(
 		)
 	}
 
-	res, err := s.db.ExecContext(ctx, insertQuery, args...)
-	if err != nil {
-		return fmt.Errorf("store memory entry failed: %w", err)
-	}
+	var evictedMemoryID sql.NullString
 	if s.opts.memoryLimit > 0 {
-		affected, err := res.RowsAffected()
+		stored := false
+		err := s.db.Query(ctx, func(rows *sql.Rows) error {
+			if !rows.Next() {
+				return nil
+			}
+			var storedMemoryID string
+			if err := rows.Scan(&storedMemoryID, &evictedMemoryID); err != nil {
+				return err
+			}
+			stored = true
+			return nil
+		}, insertQuery, args...)
 		if err != nil {
-			return fmt.Errorf("store memory entry rows affected failed: %w", err)
+			return fmt.Errorf("store memory entry failed: %w", err)
 		}
-		if affected == 0 {
+		if !stored {
 			return fmt.Errorf("memory eviction failed for user %s, limit: %d",
 				userKey.UserID, s.opts.memoryLimit)
+		}
+	} else {
+		if _, err := s.db.ExecContext(ctx, insertQuery, args...); err != nil {
+			return fmt.Errorf("store memory entry failed: %w", err)
+		}
+	}
+
+	if evictedMemoryID.Valid {
+		if err := s.deleteDeepSearchMemory(ctx, memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: evictedMemoryID.String,
+		}); err != nil {
+			return fmt.Errorf("delete evicted deepsearch memory: %w", err)
 		}
 	}
 

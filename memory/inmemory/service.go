@@ -222,6 +222,11 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, 
 	}
 
 	app := s.getAppMemories(memoryKey.AppName)
+	userKey := memory.UserKey{AppName: memoryKey.AppName, UserID: memoryKey.UserID}
+	if !s.deepSearchIndexActive(userKey) {
+		return s.updateMemoryLocked(app, memoryKey, memoryStr, topics, opts...)
+	}
+
 	app.mu.Lock()
 
 	if app.memories[memoryKey.UserID] == nil {
@@ -255,14 +260,9 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, 
 	}
 	app.mu.Unlock()
 
-	userKey := memory.UserKey{AppName: memoryKey.AppName, UserID: memoryKey.UserID}
-	var deepSearchDocuments []deepsearch.Document
-	if s.deepSearchIndexActive(userKey) {
-		var err error
-		deepSearchDocuments, err = s.buildDeepSearchEntry(ctx, candidate)
-		if err != nil {
-			return err
-		}
+	deepSearchDocuments, err := s.buildDeepSearchEntry(ctx, candidate)
+	if err != nil {
+		return err
 	}
 
 	app.mu.Lock()
@@ -297,6 +297,47 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, 
 			}
 		}
 	}
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = newID
+	}
+	return nil
+}
+
+func (s *MemoryService) updateMemoryLocked(
+	app *appMemories,
+	memoryKey memory.Key,
+	memoryStr string,
+	topics []string,
+	opts ...memory.UpdateOption,
+) error {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	userMemories := app.memories[memoryKey.UserID]
+	if userMemories == nil {
+		return fmt.Errorf("user %s not found", memoryKey.UserID)
+	}
+	memoryEntry, exists := userMemories[memoryKey.MemoryID]
+	if !exists {
+		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+	}
+
+	newID := imemory.ApplyMemoryUpdate(
+		memoryEntry,
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryStr,
+		topics,
+		memory.ResolveUpdateOptions(opts),
+		time.Now(),
+	)
+	if newID != memoryKey.MemoryID {
+		if _, conflict := userMemories[newID]; conflict {
+			return fmt.Errorf("memory with id %s already exists", newID)
+		}
+		delete(userMemories, memoryKey.MemoryID)
+	}
+	userMemories[newID] = memoryEntry
 	if result := memory.ResolveUpdateResult(opts); result != nil {
 		result.MemoryID = newID
 	}

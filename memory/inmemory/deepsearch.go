@@ -167,27 +167,6 @@ func (s *MemoryService) IndexDocuments(
 	return nil
 }
 
-func (s *MemoryService) deepSearchUserLocked(userKey memory.UserKey) *deepSearchUser {
-	key := deepSearchUserKey(userKey)
-	user, ok := s.deepSearchStore.users[key]
-	if ok {
-		return user
-	}
-	user = newDeepSearchUser()
-	s.deepSearchStore.users[key] = user
-	return user
-}
-
-func (u *deepSearchUser) clear() {
-	u.cues = make(map[string]*deepsearch.Cue)
-	u.cueByText = make(map[string]string)
-	u.contents = make(map[string]*deepsearch.Content)
-	u.contentByRef = make(map[string]string)
-	u.tags = make(map[string]*deepsearch.Tag)
-	u.tagsByCue = make(map[string]map[string]struct{})
-	u.tagsByContent = make(map[string]map[string]struct{})
-}
-
 func indexDeepSearchDocument(
 	user *deepSearchUser,
 	userKey memory.UserKey,
