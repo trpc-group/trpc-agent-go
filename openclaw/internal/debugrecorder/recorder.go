@@ -67,6 +67,7 @@ const (
 	KindRuntimeProfile = "runtime.profile"
 	KindModelReq       = "model.chat.request"
 	KindRunnerEvent    = "runner.event"
+	KindPromptCache    = "prompt_cache.usage"
 
 	ProviderOpenAIChatCompletions = "openai.chat.completions"
 
