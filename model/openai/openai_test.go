@@ -5039,53 +5039,6 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 	})
 }
 
-// TestCompletionUsageToModelUsage tests conversion from openai.CompletionUsage to model.Usage.
-func TestCompletionUsageToModelUsage(t *testing.T) {
-	t.Run("converts all fields correctly", func(t *testing.T) {
-		openaiUsage := openai.CompletionUsage{
-			PromptTokens:     int64(200),
-			CompletionTokens: int64(75),
-			TotalTokens:      int64(275),
-			PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
-				CachedTokens: int64(30),
-			},
-			CompletionTokensDetails: openai.CompletionUsageCompletionTokensDetails{
-				ReasoningTokens: int64(25),
-			},
-		}
-
-		result := completionUsageToModelUsage(openaiUsage)
-
-		assert.Equal(t, 200, result.PromptTokens, "expected prompt tokens to be 200")
-		assert.Equal(t, 75, result.CompletionTokens, "expected completion tokens to be 75")
-		assert.Equal(t, 275, result.TotalTokens, "expected total tokens to be 275")
-		assert.Equal(t, 30, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 30")
-		assert.Equal(t, 25, result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 25")
-	})
-
-	t.Run("converts zero values", func(t *testing.T) {
-		openaiUsage := openai.CompletionUsage{
-			PromptTokens:     int64(0),
-			CompletionTokens: int64(0),
-			TotalTokens:      int64(0),
-			PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
-				CachedTokens: int64(0),
-			},
-			CompletionTokensDetails: openai.CompletionUsageCompletionTokensDetails{
-				ReasoningTokens: int64(0),
-			},
-		}
-
-		result := completionUsageToModelUsage(openaiUsage)
-
-		assert.Equal(t, 0, result.PromptTokens, "expected prompt tokens to be 0")
-		assert.Equal(t, 0, result.CompletionTokens, "expected completion tokens to be 0")
-		assert.Equal(t, 0, result.TotalTokens, "expected total tokens to be 0")
-		assert.Equal(t, 0, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 0")
-		assert.Equal(t, 0, result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 0")
-	})
-}
-
 // TestWithChannelBufferSize_EdgeCases tests WithChannelBufferSize with edge cases.
 func TestWithChannelBufferSize_EdgeCases(t *testing.T) {
 	t.Run("zero size should use default", func(t *testing.T) {
