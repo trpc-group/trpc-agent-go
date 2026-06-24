@@ -41,12 +41,12 @@ func TestService_GetEventWindow(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
 			AddRow(int64(3), mysqlWindowEventBytes(t, "u2", model.RoleUser, "three"), base.Add(2*time.Minute)))
 	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
-		WithArgs(key.AppName, key.UserID, key.SessionID, base, base.Add(2*time.Minute), base.Add(2*time.Minute), int64(3), eventWindowBatchSize).
+		WithArgs(key.AppName, key.UserID, key.SessionID, base, base.Add(2*time.Minute), eventWindowBatchSize).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
 			AddRow(int64(2), mysqlWindowEventBytes(t, "a1", model.RoleAssistant, "two"), base.Add(time.Minute)).
 			AddRow(int64(1), mysqlWindowEventBytes(t, "u1", model.RoleUser, "one"), base))
 	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
-		WithArgs(key.AppName, key.UserID, key.SessionID, base, base.Add(2*time.Minute), base.Add(2*time.Minute), int64(3), eventWindowBatchSize).
+		WithArgs(key.AppName, key.UserID, key.SessionID, base, base.Add(2*time.Minute), eventWindowBatchSize).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
 			AddRow(int64(4), mysqlWindowToolEventBytes(t, "t1", "calc", "four"), base.Add(3*time.Minute)).
 			AddRow(int64(5), mysqlWindowEventBytes(t, "u3", model.RoleUser, "five"), base.Add(4*time.Minute)))
@@ -225,7 +225,7 @@ func TestService_GetEventWindowNeighborQueryError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "event", "created_at"}).
 			AddRow(int64(1), mysqlWindowEventBytes(t, "anchor", model.RoleUser, "one"), base))
 	mock.ExpectQuery("SELECT id, event, created_at FROM session_events").
-		WithArgs(key.AppName, key.UserID, key.SessionID, base, base, base, int64(1), eventWindowBatchSize).
+		WithArgs(key.AppName, key.UserID, key.SessionID, base, base, eventWindowBatchSize).
 		WillReturnError(errors.New("neighbors failed"))
 
 	_, err = svc.GetEventWindow(context.Background(), session.EventWindowRequest{

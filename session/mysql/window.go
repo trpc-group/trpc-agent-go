@@ -166,7 +166,7 @@ WHERE app_name = ? AND user_id = ? AND session_id = ?
 AND created_at >= ?
 AND JSON_UNQUOTE(JSON_EXTRACT(event, '$.id')) = ?
 AND deleted_at IS NULL
-ORDER BY created_at ASC, id ASC
+ORDER BY created_at ASC
 LIMIT 1`,
 			s.tableSessionEvents,
 		),
@@ -195,7 +195,6 @@ func (s *Service) loadWindowNeighbors(
 		return nil, nil
 	}
 	cursorCreatedAt := anchor.entry.CreatedAt
-	cursorRowID := anchor.rowID
 	out := make([]session.EventWindowEntry, 0, limit)
 	for len(out) < limit {
 		rows, err := s.queryWindowNeighborBatch(
@@ -203,7 +202,6 @@ func (s *Service) loadWindowNeighbors(
 			key,
 			sessionCreatedAt,
 			cursorCreatedAt,
-			cursorRowID,
 			before,
 		)
 		if err != nil {
@@ -214,7 +212,6 @@ func (s *Service) loadWindowNeighbors(
 		}
 		for _, row := range rows {
 			cursorCreatedAt = row.entry.CreatedAt
-			cursorRowID = row.rowID
 			if !sessionwindow.EventAllowed(&row.entry.Event, roleFilter) {
 				continue
 			}
@@ -238,14 +235,13 @@ func (s *Service) queryWindowNeighborBatch(
 	key session.Key,
 	sessionCreatedAt time.Time,
 	cursorCreatedAt time.Time,
-	cursorRowID int64,
 	before bool,
 ) ([]*persistedWindowEntry, error) {
-	comparator := `((created_at > ?) OR (created_at = ? AND id > ?))`
-	orderBy := `ORDER BY created_at ASC, id ASC`
+	comparator := `(created_at > ?)`
+	orderBy := `ORDER BY created_at ASC`
 	if before {
-		comparator = `((created_at < ?) OR (created_at = ? AND id < ?))`
-		orderBy = `ORDER BY created_at DESC, id DESC`
+		comparator = `(created_at < ?)`
+		orderBy = `ORDER BY created_at DESC`
 	}
 
 	rows := make([]*persistedWindowEntry, 0, eventWindowBatchSize)
@@ -276,8 +272,6 @@ LIMIT ?`,
 		key.SessionID,
 		sessionCreatedAt,
 		cursorCreatedAt,
-		cursorCreatedAt,
-		cursorRowID,
 		eventWindowBatchSize,
 	)
 	if err != nil {

@@ -191,7 +191,7 @@ func expectPreviousEventRefs(
 ) *sqlmock.ExpectedQuery {
 	args := []driver.Value{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
 	if before != nil {
-		args = append(args, before.createdAt, before.createdAt, before.id)
+		args = append(args, before.createdAt)
 	}
 	args = append(args, userAnchorSearchBatchSize)
 	rows := sqlmock.NewRows([]string{"id", "created_at"})
