@@ -719,7 +719,10 @@ func usageFromModelUsage(usage *model.Usage) *gwproto.Usage {
 		return nil
 	}
 	return &gwproto.Usage{
-		PromptTokens:     usage.PromptTokens,
+		PromptTokens: usage.PromptTokens,
+		PromptDetails: promptTokensDetailsFromModel(
+			usage.PromptTokensDetails,
+		),
 		CompletionTokens: usage.CompletionTokens,
 		TotalTokens:      usage.TotalTokens,
 	}
@@ -759,21 +762,35 @@ func mergeGatewayUsage(
 		cloned := cloneGatewayUsage(usage)
 		if cloned != nil {
 			cloned.LastPromptTokens = usage.PromptTokens
+			cloned.LastDetails = clonePromptTokensDetails(
+				usage.PromptDetails,
+			)
 		}
 		return cloned
 	}
 	lastPrompt := accumulated.LastPromptTokens
+	lastPromptDetails := clonePromptTokensDetails(
+		accumulated.LastDetails,
+	)
 	if usage.PromptTokens > 0 {
 		lastPrompt = usage.PromptTokens
+		lastPromptDetails = clonePromptTokensDetails(
+			usage.PromptDetails,
+		)
 	}
 	return &gwproto.Usage{
 		PromptTokens: accumulated.PromptTokens +
 			usage.PromptTokens,
+		PromptDetails: mergePromptTokensDetails(
+			accumulated.PromptDetails,
+			usage.PromptDetails,
+		),
 		CompletionTokens: accumulated.CompletionTokens +
 			usage.CompletionTokens,
 		TotalTokens: accumulated.TotalTokens +
 			usage.TotalTokens,
 		LastPromptTokens: lastPrompt,
+		LastDetails:      lastPromptDetails,
 	}
 }
 
@@ -782,7 +799,67 @@ func cloneGatewayUsage(usage *gwproto.Usage) *gwproto.Usage {
 		return nil
 	}
 	cloned := *usage
+	cloned.PromptDetails = clonePromptTokensDetails(
+		usage.PromptDetails,
+	)
+	cloned.LastDetails = clonePromptTokensDetails(
+		usage.LastDetails,
+	)
 	return &cloned
+}
+
+func promptTokensDetailsFromModel(
+	details model.PromptTokensDetails,
+) *gwproto.PromptDetails {
+	return nonZeroPromptTokensDetails(&gwproto.PromptDetails{
+		CachedTokens:        details.CachedTokens,
+		CacheCreationTokens: details.CacheCreationTokens,
+		CacheReadTokens:     details.CacheReadTokens,
+	})
+}
+
+func clonePromptTokensDetails(
+	details *gwproto.PromptDetails,
+) *gwproto.PromptDetails {
+	if details == nil {
+		return nil
+	}
+	cloned := *details
+	return nonZeroPromptTokensDetails(&cloned)
+}
+
+func mergePromptTokensDetails(
+	accumulated *gwproto.PromptDetails,
+	details *gwproto.PromptDetails,
+) *gwproto.PromptDetails {
+	if accumulated == nil {
+		return clonePromptTokensDetails(details)
+	}
+	if details == nil {
+		return clonePromptTokensDetails(accumulated)
+	}
+	return nonZeroPromptTokensDetails(&gwproto.PromptDetails{
+		CachedTokens: accumulated.CachedTokens +
+			details.CachedTokens,
+		CacheCreationTokens: accumulated.CacheCreationTokens +
+			details.CacheCreationTokens,
+		CacheReadTokens: accumulated.CacheReadTokens +
+			details.CacheReadTokens,
+	})
+}
+
+func nonZeroPromptTokensDetails(
+	details *gwproto.PromptDetails,
+) *gwproto.PromptDetails {
+	if details == nil {
+		return nil
+	}
+	if details.CachedTokens == 0 &&
+		details.CacheCreationTokens == 0 &&
+		details.CacheReadTokens == 0 {
+		return nil
+	}
+	return details
 }
 
 type laneLocker struct {

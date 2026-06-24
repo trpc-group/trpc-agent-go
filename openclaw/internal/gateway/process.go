@@ -122,6 +122,12 @@ func (s *Server) ProcessMessage(
 			}
 			status = http.StatusOK
 			if trace != nil {
+				recordPromptCacheUsage(
+					trace,
+					prepared.sessionID,
+					resolvedRequestID,
+					usage,
+				)
 				_ = trace.Record(
 					debugrecorder.KindGatewayRsp,
 					map[string]any{
@@ -163,6 +169,12 @@ func (s *Server) ProcessMessage(
 	status = http.StatusOK
 
 	if trace != nil {
+		recordPromptCacheUsage(
+			trace,
+			prepared.sessionID,
+			resolvedRequestID,
+			usage,
+		)
 		_ = trace.Record(
 			debugrecorder.KindGatewayRsp,
 			map[string]any{
