@@ -86,6 +86,7 @@ nav:
       - "Quickly Build AG-UI-Based Agent Services": blog/agui.md
       - "A Go-Native Implementation of the Anthropic Agent Skills Specification": blog/skill.md
       - "A Complete Guide to AI Agent Automated Evaluation Paradigms and Engineering Practice": blog/evaluation.md
+      - "Improving AI Agent Quality and Stability with LLM Verifier": blog/llmverifier.md
       - "Building an Enterprise-Grade, Secure, and Controllable OpenClaw Runtime": blog/openclaw.md
       - "A Complete Guide to Automated Prompt Iteration and Engineering Practice for AI Agents": blog/promptiter.md
 
@@ -183,6 +184,7 @@ plugins:
                 - "快速构建基于 AG-UI 的 Agent 服务": blog/agui.md
                 - "Anthropic Agent Skills 规范的 Go 原生实现": blog/skill.md
                 - "AI Agent 自动化评估范式与工程实践全解析": blog/evaluation.md
+                - "AI Agent 高质量稳定性提升方法": blog/llmverifier.md
                 - "打造企业级安全可控的 OpenClaw Runtime": blog/openclaw.md
                 - "AI Agent 提示词自动迭代与工程实践全解析": blog/promptiter.md
   - git-revision-date-localized:
