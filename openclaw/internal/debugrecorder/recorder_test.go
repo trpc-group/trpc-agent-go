@@ -1113,7 +1113,7 @@ func TestSummarizeRequest_NilTraceDoesNotPanic(t *testing.T) {
 	require.Empty(t, summary.ContentParts[0].File.Data.Ref)
 }
 
-func TestSummarizeRequest_StoresRequestSystemPrompt(t *testing.T) {
+func TestSummarizeRequest_StoresRequestPrompts(t *testing.T) {
 	t.Parallel()
 
 	req := gwproto.MessageRequest{
