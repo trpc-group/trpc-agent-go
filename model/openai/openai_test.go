@@ -6118,9 +6118,9 @@ func TestCreateFinalResponseUsageConditional(t *testing.T) {
 	m := &Model{}
 
 	tests := []struct {
-		name       string
-		usage      openai.CompletionUsage
-		expectNil  bool
+		name      string
+		usage     openai.CompletionUsage
+		expectNil bool
 	}{
 		{
 			name: "all zero tokens - usage should be nil",
