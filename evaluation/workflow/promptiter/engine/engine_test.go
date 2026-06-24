@@ -2691,6 +2691,104 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 	assert.Contains(t, state.knownSurfaceIDs, "node_1#tool.lookup")
 }
 
+func TestPromptIterStructureSnapshotExpandsToolSurfaces(t *testing.T) {
+	text := "global"
+	snapshot := &astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "node_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
+			{NodeID: "tool_node", Kind: astructure.NodeKindTool},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "node_1#global_instruction",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeGlobalInstruction,
+				Value:     astructure.SurfaceValue{Text: &text},
+			},
+			{
+				SurfaceID: "node_1#tool",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{
+						{ID: "lookup", Description: "Lookup."},
+						{ID: "delay", Description: "Delay."},
+					},
+				},
+			},
+			{
+				SurfaceID: "tool_node#tool.lookup",
+				NodeID:    "tool_node",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{{ID: "lookup"}},
+				},
+			},
+		},
+	}
+	projected, err := promptIterStructureSnapshot(snapshot)
+	assert.NoError(t, err)
+	require.NotNil(t, projected)
+	assert.Len(t, projected.Surfaces, 4)
+	assert.Equal(t, "node_1#global_instruction", projected.Surfaces[0].SurfaceID)
+	assert.Equal(t, "node_1#tool.lookup", projected.Surfaces[1].SurfaceID)
+	assert.Equal(t, "node_1#tool.delay", projected.Surfaces[2].SurfaceID)
+	assert.Equal(t, "tool_node#tool.lookup", projected.Surfaces[3].SurfaceID)
+	projected, err = promptIterStructureSnapshot(nil)
+	assert.NoError(t, err)
+	assert.Nil(t, projected)
+}
+
+func TestExpandToolSurfaceValidation(t *testing.T) {
+	text := "instruction"
+	expanded, err := expandToolSurface(astructure.Surface{
+		SurfaceID: "node_1#tool.empty",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeTool,
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, expanded)
+	expanded, err = expandToolSurface(astructure.Surface{
+		SurfaceID: "node_1#tool.lookup",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeTool,
+		Value: astructure.SurfaceValue{
+			Tools: []astructure.ToolRef{{ID: "lookup"}},
+		},
+	})
+	assert.NoError(t, err)
+	require.Len(t, expanded, 1)
+	assert.Equal(t, "node_1#tool.lookup", expanded[0].SurfaceID)
+	_, err = expandToolSurface(astructure.Surface{
+		SurfaceID: "node_1#tool.bad",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeTool,
+		Value: astructure.SurfaceValue{
+			Text:  &text,
+			Tools: []astructure.ToolRef{{ID: "lookup"}},
+		},
+	})
+	assert.EqualError(t, err, "tool surface value contains non-tool fields")
+	_, err = expandToolSurface(astructure.Surface{
+		SurfaceID: "node_1#tool",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeTool,
+		Value: astructure.SurfaceValue{
+			Tools: []astructure.ToolRef{{ID: "lookup"}, {ID: "lookup"}},
+		},
+	})
+	assert.EqualError(t, err, `duplicate tool surface id "node_1#tool.lookup"`)
+	_, err = canonicalToolSurfaceID(astructure.Surface{
+		SurfaceID: "node_1#tool",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeTool,
+		Value:     astructure.SurfaceValue{Tools: []astructure.ToolRef{{}}},
+	})
+	assert.EqualError(t, err, "tool id is empty")
+}
+
 func TestBuildKnownSurfaceIDsValidation(t *testing.T) {
 	nodes := map[string]astructure.Node{
 		"node_1": {NodeID: "node_1"},

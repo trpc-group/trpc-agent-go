@@ -22,6 +22,7 @@ func TestIsSupportedType(t *testing.T) {
 	assert.True(t, IsSupportedType(astructure.SurfaceTypeGlobalInstruction))
 	assert.True(t, IsSupportedType(astructure.SurfaceTypeFewShot))
 	assert.True(t, IsSupportedType(astructure.SurfaceTypeModel))
+	assert.True(t, IsSupportedType(astructure.SurfaceTypeTool))
 	assert.False(t, IsSupportedType(astructure.SurfaceType("unknown")))
 }
 
@@ -47,6 +48,12 @@ func TestValidateValue(t *testing.T) {
 			Name:     "m",
 			Headers:  map[string]string{"X-Test": "1"},
 		}},
+	))
+	assert.NoError(t, ValidateValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			Tools: []astructure.ToolRef{{ID: "lookup"}},
+		},
 	))
 
 	assert.Error(t, ValidateValue(
@@ -219,6 +226,38 @@ func TestSanitizeValueRejectsInvalidInput(t *testing.T) {
 		},
 	)
 	assert.EqualError(t, err, "model is not nil")
+	_, err = SanitizeValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{},
+	)
+	assert.EqualError(t, err, "tools must contain exactly one tool, got 0")
+	_, err = SanitizeValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			Tools: []astructure.ToolRef{
+				{ID: "lookup"},
+				{ID: "delay"},
+			},
+		},
+	)
+	assert.EqualError(t, err, "tools must contain exactly one tool, got 2")
+	_, err = SanitizeValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			Tools: []astructure.ToolRef{{}},
+		},
+	)
+	assert.EqualError(t, err, "tool id is empty")
+	_, err = SanitizeValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			Tools: []astructure.ToolRef{
+				{ID: "lookup"},
+				{ID: "lookup"},
+			},
+		},
+	)
+	assert.EqualError(t, err, `duplicate tool id "lookup"`)
 }
 
 func TestSanitizePatchValueAllowsToolDescriptionOnlyChanges(t *testing.T) {
@@ -351,6 +390,29 @@ func TestSanitizePatchValueRejectsToolSchemaChanges(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+func TestSanitizePatchValueRejectsToolShapeChanges(t *testing.T) {
+	_, err := SanitizePatchValue(testToolSurface(), astructure.SurfaceValue{
+		Tools: []astructure.ToolRef{},
+	})
+	assert.EqualError(t, err, "tools must contain exactly one tool, got 0")
+	_, err = SanitizePatchValue(testToolSurface(), astructure.SurfaceValue{
+		Tools: []astructure.ToolRef{
+			{ID: "lookup", Description: "new"},
+			{ID: "delay", Description: "new"},
+		},
+	})
+	assert.EqualError(t, err, "tools must contain exactly one tool, got 2")
+	_, err = SanitizePatchValue(testToolSurface(), astructure.SurfaceValue{
+		Tools:        []astructure.ToolRef{{ID: "lookup", Description: "new"}},
+		PromptSyntax: promptSyntaxPtr(astructure.PromptSyntaxSingleBrace),
+	})
+	assert.EqualError(t, err, "prompt syntax is not nil")
+}
+
+func promptSyntaxPtr(value astructure.PromptSyntax) *astructure.PromptSyntax {
+	return &value
 }
 
 func toolPatchWithInputSchema(schema *tool.Schema) astructure.SurfaceValue {
