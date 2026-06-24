@@ -44,19 +44,25 @@ func captureStdout(fn func() error) error {
 		return err
 	}
 	os.Stdout = writer
+	defer func() { os.Stdout = originalStdout }()
+	copyDone := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(io.Discard, reader)
+		readCloseErr := reader.Close()
+		if copyErr != nil {
+			copyDone <- copyErr
+			return
+		}
+		copyDone <- readCloseErr
+	}()
 	runErr := fn()
 	closeErr := writer.Close()
-	os.Stdout = originalStdout
-	_, copyErr := io.Copy(io.Discard, reader)
-	readCloseErr := reader.Close()
+	readCloseErr := <-copyDone
 	if runErr != nil {
 		return runErr
 	}
 	if closeErr != nil {
 		return closeErr
-	}
-	if copyErr != nil {
-		return copyErr
 	}
 	return readCloseErr
 }
