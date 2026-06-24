@@ -501,8 +501,6 @@ func TestGetSession_SummaryAwareRestoreBoundsAnchorSearch(t *testing.T) {
 		key,
 		sessState.CreatedAt,
 		assistantCreatedAt,
-		assistantCreatedAt,
-		int64(2),
 	)
 
 	sess, err := s.GetSession(ctx, key)

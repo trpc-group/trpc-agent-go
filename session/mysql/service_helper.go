@@ -709,16 +709,7 @@ func (s *Service) getEventsList(
 		keyStr := fmt.Sprintf("%s:%s:%s", key.AppName, key.UserID, key.SessionID)
 		items := eventsMap[keyStr]
 		slices.SortFunc(items, func(a, b eventWithOrder) int {
-			if cmp := a.createdAt.Compare(b.createdAt); cmp != 0 {
-				return cmp
-			}
-			if a.id < b.id {
-				return -1
-			}
-			if a.id > b.id {
-				return 1
-			}
-			return 0
+			return a.createdAt.Compare(b.createdAt)
 		})
 		events := make([]event.Event, len(items))
 		for j, item := range items {
@@ -859,7 +850,7 @@ func (s *Service) getRecentEventRefs(
 		WHERE app_name = ? AND user_id = ? AND session_id = ?
 		AND created_at >= ?
 		AND deleted_at IS NULL
-		ORDER BY created_at DESC, id DESC
+		ORDER BY created_at DESC
 		LIMIT ?`,
 		s.tableSessionEvents)
 
@@ -957,16 +948,7 @@ func (s *Service) getEventsByRefs(
 	}
 
 	slices.SortFunc(refs, func(a, b eventRef) int {
-		if cmp := a.createdAt.Compare(b.createdAt); cmp != 0 {
-			return cmp
-		}
-		if a.id < b.id {
-			return -1
-		}
-		if a.id > b.id {
-			return 1
-		}
-		return 0
+		return a.createdAt.Compare(b.createdAt)
 	})
 	events := make([]event.Event, 0, len(refs))
 	for _, ref := range refs {
@@ -1044,10 +1026,10 @@ func (s *Service) getPreviousEventRefs(
 		s.tableSessionEvents)
 	args := []any{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
 	if before != nil {
-		query += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
-		args = append(args, before.createdAt, before.createdAt, before.id)
+		query += ` AND created_at < ?`
+		args = append(args, before.createdAt)
 	}
-	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
+	query += ` ORDER BY created_at DESC LIMIT ?`
 	args = append(args, userAnchorSearchBatchSize)
 
 	refs := make([]eventRef, 0, userAnchorSearchBatchSize)
@@ -1081,10 +1063,10 @@ func (s *Service) getEventRefsWithTimestamp(
 	)
 	args := []any{key.AppName, key.UserID, key.SessionID, afterTime}
 	if before != nil {
-		query += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
-		args = append(args, before.createdAt, before.createdAt, before.id)
+		query += ` AND created_at < ?`
+		args = append(args, before.createdAt)
 	}
-	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
+	query += ` ORDER BY created_at DESC LIMIT ?`
 	args = append(args, limit)
 
 	refs := make([]eventRef, 0, limit)
@@ -1129,8 +1111,7 @@ func filterRefsByEventTimestamp(refs []eventRef, afterTime time.Time) []eventRef
 func oldestEventRef(refs []eventRef) eventRef {
 	oldest := refs[0]
 	for _, ref := range refs[1:] {
-		if ref.createdAt.Before(oldest.createdAt) ||
-			(ref.createdAt.Equal(oldest.createdAt) && ref.id < oldest.id) {
+		if ref.createdAt.Before(oldest.createdAt) {
 			oldest = ref
 		}
 	}
@@ -1194,7 +1175,7 @@ func (s *Service) getPagedEvents(
 		WHERE app_name = ? AND user_id = ? AND session_id = ?
 		AND created_at >= ?
 		AND deleted_at IS NULL
-		ORDER BY created_at DESC, id DESC
+		ORDER BY created_at DESC
 		LIMIT ? OFFSET ?`,
 		s.tableSessionEvents)
 
