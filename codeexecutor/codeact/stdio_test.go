@@ -1,9 +1,18 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package codeact
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os/exec"
 	"strings"
@@ -44,9 +53,119 @@ func TestExecuteStdioReapsGuestAfterProtocolError(t *testing.T) {
 	require.Equal(t, 1, process.stdinCloses)
 }
 
-type fakeStdioRunner struct{ process *fakeStdioProcess }
+func TestExecuteStdioValidatesRequiredInputs(t *testing.T) {
+	process := &fakeStdioProcess{stdout: io.NopCloser(strings.NewReader(""))}
+	tests := []struct {
+		name    string
+		runner  stdioRunner
+		req     Request
+		handler ToolCallHandler
+		want    string
+	}{
+		{name: "runner", req: Request{Code: "return 1"}, handler: fakeToolCallHandler{}, want: "runner is required"},
+		{name: "handler", runner: fakeStdioRunner{process: process}, req: Request{Code: "return 1"}, want: "tool call handler is required"},
+		{name: "code", runner: fakeStdioRunner{process: process}, handler: fakeToolCallHandler{}, want: "code is required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := executeStdio(context.Background(), tt.runner, tt.req, tt.handler)
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+}
 
-func (r fakeStdioRunner) start(context.Context, string) (stdioProcess, error) { return r.process, nil }
+func TestExecuteStdioBridgesToolCalls(t *testing.T) {
+	process := &fakeStdioProcess{stdout: io.NopCloser(strings.NewReader(`{"type":"tool_call","id":"call-1","name":"add","args":{"a":1,"b":2}}
+{"type":"complete","args":{"answer":3},"code":"done\n"}
+`))}
+	var got ToolCall
+	result, err := executeStdio(
+		context.Background(),
+		fakeStdioRunner{process: process},
+		Request{Code: "return 3"},
+		toolCallHandlerFunc(func(_ context.Context, call ToolCall) (json.RawMessage, error) {
+			got = call
+			return json.RawMessage(`3`), nil
+		}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "call-1", got.ID)
+	require.Equal(t, "add", got.Name)
+	require.JSONEq(t, `{"a":1,"b":2}`, string(got.Args))
+	require.JSONEq(t, `{"answer":3}`, string(result.Value))
+	require.Equal(t, "done\n", result.Stdout)
+	require.Equal(t, 0, process.kills)
+	require.Equal(t, 1, process.waits)
+	require.Equal(t, 1, process.stdinCloses)
+	require.Contains(t, process.stdin.String(), `"type":"run"`)
+	require.Contains(t, process.stdin.String(), `"type":"tool_result"`)
+	require.Contains(t, process.stdin.String(), `"result":3`)
+}
+
+func TestExecuteStdioReturnsHandlerErrorToGuest(t *testing.T) {
+	process := &fakeStdioProcess{stdout: io.NopCloser(strings.NewReader(`{"type":"tool_call","id":"call-1","name":"add","args":{}}
+{"type":"complete","args":null}
+`))}
+	result, err := executeStdio(
+		context.Background(),
+		fakeStdioRunner{process: process},
+		Request{Code: "return None"},
+		toolCallHandlerFunc(func(context.Context, ToolCall) (json.RawMessage, error) {
+			return nil, errors.New("denied")
+		}),
+	)
+	require.NoError(t, err)
+	require.JSONEq(t, "null", string(result.Value))
+	require.Contains(t, process.stdin.String(), `"error":"denied"`)
+}
+
+func TestExecuteStdioReportsRunnerGuestAndContextErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		ctx    context.Context
+		runner stdioRunner
+		want   string
+	}{
+		{name: "start", ctx: context.Background(), runner: fakeStdioRunner{err: errors.New("start failed")}, want: "start guest: start failed"},
+		{name: "guest", ctx: context.Background(), runner: fakeStdioRunner{process: &fakeStdioProcess{stdout: io.NopCloser(strings.NewReader(`{"type":"complete","name":"RuntimeError: boom"}
+`))}}, want: "RuntimeError: boom"},
+		{name: "wait", ctx: context.Background(), runner: fakeStdioRunner{process: &fakeStdioProcess{stdout: io.NopCloser(strings.NewReader(`{"type":"complete","args":1}
+`)), waitErr: errors.New("wait failed")}}, want: "wait for guest: wait failed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := executeStdio(tt.ctx, tt.runner, Request{Code: "return 1"}, fakeToolCallHandler{})
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := executeStdio(
+		ctx,
+		fakeStdioRunner{process: &fakeStdioProcess{stdout: io.NopCloser(strings.NewReader(""))}},
+		Request{Code: "return 1"},
+		fakeToolCallHandler{},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestLocalRunnerReturnsStartError(t *testing.T) {
+	_, err := LocalRunner{Python: "definitely-not-a-python-executable"}.start(context.Background(), "return 1")
+	require.Error(t, err)
+}
+
+type fakeStdioRunner struct {
+	process *fakeStdioProcess
+	err     error
+}
+
+func (r fakeStdioRunner) start(context.Context, string) (stdioProcess, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.process, nil
+}
 
 type fakeStdioProcess struct {
 	stdin       bytes.Buffer
@@ -54,6 +173,7 @@ type fakeStdioProcess struct {
 	kills       int
 	waits       int
 	stdinCloses int
+	waitErr     error
 }
 
 func (p *fakeStdioProcess) Stdin() io.WriteCloser {
@@ -62,7 +182,7 @@ func (p *fakeStdioProcess) Stdin() io.WriteCloser {
 func (p *fakeStdioProcess) Stdout() io.ReadCloser { return p.stdout }
 func (p *fakeStdioProcess) Wait() error {
 	p.waits++
-	return nil
+	return p.waitErr
 }
 func (p *fakeStdioProcess) Kill() error {
 	p.kills++
@@ -83,4 +203,10 @@ type fakeToolCallHandler struct{}
 
 func (fakeToolCallHandler) HandleToolCall(context.Context, ToolCall) (json.RawMessage, error) {
 	return nil, nil
+}
+
+type toolCallHandlerFunc func(context.Context, ToolCall) (json.RawMessage, error)
+
+func (f toolCallHandlerFunc) HandleToolCall(ctx context.Context, call ToolCall) (json.RawMessage, error) {
+	return f(ctx, call)
 }

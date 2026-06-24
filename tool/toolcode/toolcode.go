@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 // Package toolcode exposes capability-limited tool orchestration through generated code.
 package toolcode
 
@@ -19,7 +27,10 @@ type config struct {
 	description string
 }
 
+// WithName overrides the default execute_tool_code tool name.
 func WithName(name string) Option { return func(c *config) { c.name = name } }
+
+// WithDescription replaces the default execute_tool_code tool description.
 func WithDescription(description string) Option {
 	return func(c *config) { c.description = description }
 }
@@ -48,7 +59,7 @@ func NewTool(runtime bridge.Runtime, managedTools []tool.CallableTool, opts ...O
 	}, nil
 }
 
-const defaultDescription = "Run Python glue code to orchestrate explicitly allowlisted host tools. Use it for loops, branching, JSON transformation, and aggregation across dependent tool calls. Prefer one execute_tool_code call when it can complete the workflow. Inside the code, call only documented tools with await call_tool(\"tool_name\", **json_arguments); use keyword arguments and JSON-compatible values. Do not use direct HTTP clients, shell commands, filesystem APIs, environment variables, or imports to reach services or credentials: those are outside this tool's capability contract. The application chooses this independent tool registry; it is not inferred from the agent's direct tools."
+const defaultDescription = "Run Python glue code to orchestrate explicitly allowlisted host tools. Use it for loops, branching, JSON transformation, and aggregation across dependent tool calls. Prefer one execute_tool_code call when it can complete the workflow. Inside the code, call only documented tools with await call_tool(\"tool_name\", **json_arguments); use keyword arguments and JSON-compatible values. Calls execute sequentially in the current runtime; do not assume asyncio.gather provides parallel host calls. Return only the compact JSON-compatible value needed to complete the task; do not print or return raw large tool results. A failed host call raises Python RuntimeError, which code may handle with try/except. Do not use direct HTTP clients, shell commands, filesystem APIs, environment variables, or imports to reach services or credentials: those are outside this tool's capability contract. The application chooses this independent tool registry; it is not inferred from the agent's direct tools."
 
 type executeCodeTool struct {
 	runtime  bridge.Runtime

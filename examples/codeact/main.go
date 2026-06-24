@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 // Command codeact demonstrates an LLMAgent using execute_tool_code for a
 // multi-step product-quote workflow. It does not use a GenerationConfig:
 // openai.New reads OPENAI_API_KEY and OPENAI_BASE_URL from the environment.

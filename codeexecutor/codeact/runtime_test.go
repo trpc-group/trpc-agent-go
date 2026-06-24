@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package codeact
 
 import (
@@ -35,6 +43,26 @@ func TestRuntimeAbstractionDoesNotRequireStdio(t *testing.T) {
 	result, err := Execute(context.Background(), fakeRemoteRuntime{}, gateway, "ignored by fake")
 	require.NoError(t, err)
 	require.JSONEq(t, `{"sum":3}`, string(result.Value))
+}
+
+func TestExecuteValidatesRequiredInputs(t *testing.T) {
+	tests := []struct {
+		name    string
+		runtime Runtime
+		handler ToolCallHandler
+		code    string
+		want    string
+	}{
+		{name: "runtime", handler: fakeToolCallHandler{}, code: "return 1", want: "runtime is required"},
+		{name: "handler", runtime: fakeRemoteRuntime{}, code: "return 1", want: "tool call handler is required"},
+		{name: "code", runtime: fakeRemoteRuntime{}, handler: fakeToolCallHandler{}, want: "code is required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Execute(context.Background(), tt.runtime, tt.handler, tt.code)
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
 }
 
 type fakeRemoteRuntime struct{}

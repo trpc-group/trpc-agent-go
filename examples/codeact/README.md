@@ -91,9 +91,13 @@ them as normal function calls; it can only invoke the outer
 call against this allowlist and the tool schemas.
 
 Managed calls are synchronous direct host-capability calls in this first
-version. They do not replay the agent callback, retry, or inner tracing
-lifecycle, and cannot pause for interactive approval. Keep tools that require
-an approval/resume flow out of this registry.
+version. Calls execute sequentially; `asyncio.gather(...)` does not provide
+parallel host calls. A host-call failure becomes a Python `RuntimeError`, which
+the generated code can handle with `try`/`except`. Managed calls do not replay
+the agent callback, retry, or inner tracing lifecycle, and cannot pause for
+interactive approval. Keep tools that require an approval/resume flow out of
+this registry. Return only the compact result needed by the model rather than
+printing or returning raw large tool results.
 
 ## Security
 

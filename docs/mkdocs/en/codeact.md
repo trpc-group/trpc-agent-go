@@ -54,16 +54,19 @@ the allowlist. The example deliberately does not set a `GenerationConfig`:
 
 For an agent-facing tool, create `tool/toolcode.NewTool(runtime, managedTools)`. Register that returned tool on the agent as `execute_tool_code`; only `managedTools` become callable by `await call_tool(...)` in guest code.
 
-Managed calls are direct, synchronous host-capability calls in this first version. They do not replay the agent's callback, retry, or inner tracing lifecycle, and they cannot pause an execution for interactive approval. Do not add tools that require an approval/resume flow to `managedTools`; enforce authorization in the business tool itself or use an application-defined adapter tool.
+Managed calls are direct, synchronous host-capability calls in this first version. The built-in Python guest permits only one outstanding call: `await` is required by the guest API, but `asyncio.gather(...)` does not create parallel host calls. A failed host call becomes a Python `RuntimeError`, which generated code may handle with `try`/`except`. Managed calls do not replay the agent's callback, retry, or inner tracing lifecycle, and they cannot pause an execution for interactive approval. Do not add tools that require an approval/resume flow to `managedTools`; enforce authorization in the business tool itself or use an application-defined adapter tool.
 
 ## Model-facing tool guidance
 
 The default `execute_tool_code` declaration tells the model to prefer a single
 call when it can finish the workflow, use only `await call_tool(name,
-**json_arguments)`, and return JSON-compatible values. It also includes the
-name, description, input JSON Schema, and output JSON Schema for every managed
-tool. The instruction is guidance, not a replacement for the runtime security
-boundary described above.
+**json_arguments)`, make sequential calls, and return only a compact
+JSON-compatible value. It also includes the name, description, input JSON
+Schema, and output JSON Schema for every managed tool. Intermediate managed-tool
+values remain in guest code; only the final `value` and captured `stdout` of
+`execute_tool_code` become its outer tool result. Do not print or return raw
+large tool values unless they are needed by the model. The instruction is
+guidance, not a replacement for the runtime security boundary described above.
 
 Write managed-tool descriptions as business contracts: explain the operation,
 preconditions, units, enum meanings, and result semantics. Avoid transport
@@ -109,6 +112,13 @@ business tools, data tools, and host-defined adapter tools. Normally exclude:
   `skill_kill_session`
 - `transfer_to_agent` / `await_user_reply`
 
+For each business operation, normally choose one model-facing path: expose it
+as a direct agent tool, or make it callable only through `execute_tool_code`.
+An application can deliberately register the same operation in both places,
+but that gives the model two execution paths for the same action and weakens
+the guidance about when code orchestration is useful. The allowlist remains the
+actual capability boundary for guest code regardless of that choice.
+
 These tools should normally stay out of the registry: execution tools create
 recursive or heterogeneous execution chains; `transfer_to_agent` and
 `await_user_reply` alter outer-invocation control flow; and `AgentTool` /
@@ -119,4 +129,11 @@ intend to orchestrate to `tool/toolcode.NewTool`.
 
 ## Data flow
 
-Small tool values use JSON. For large datasets, tools should return an artifact/workspace reference and code should process the mounted artifact instead of serializing the full payload through the model context. Semantic conversions between tool A and B are explicit code or a host-defined adapter tool; tool code orchestration never guesses domain mappings.
+Small tool values use JSON. Intermediate values stay in guest code; only the
+returned `value` and captured `stdout` are sent back as the outer tool result.
+Return a compact aggregate, identifier, or artifact/workspace reference rather
+than a raw large payload. For large datasets, tools should return an
+artifact/workspace reference and code should process the mounted artifact
+instead of serializing the full payload through the model context. Semantic
+conversions between tool A and B are explicit code or a host-defined adapter
+tool; tool code orchestration never guesses domain mappings.

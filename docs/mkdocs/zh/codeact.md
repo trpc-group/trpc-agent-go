@@ -26,7 +26,7 @@ LLM -> execute_tool_code -> Runtime -> guest call_tool(name, JSON args)
 | 受限的外部 HTTP 集成 | 宿主 adapter 或受约束 HTTP tool |
 | 不可信代码或无边界外部访问 | 隔离 runtime 加明确的应用策略 |
 
-工具 A/B 的小型结构化数据经 JSON 传递。大数据应返回 artifact/workspace 引用，由 guest 在挂载 workspace 中处理。业务语义不匹配必须用显式转换代码或宿主 adapter tool 处理，CodeAct 不会猜测字段或单位含义。
+工具 A/B 的小型结构化数据经 JSON 传递；中间结果留在 guest 代码中，只有最终 `value` 和捕获的 `stdout` 会作为外层工具结果返回。应返回紧凑的聚合结果、标识符或 artifact/workspace 引用，而不是把大块原始数据交回模型。大数据应返回 artifact/workspace 引用，由 guest 在挂载 workspace 中处理。业务语义不匹配必须用显式转换代码或宿主 adapter tool 处理，CodeAct 不会猜测字段或单位含义。
 
 要运行 Agent 的多工具编排示例（产品搜索 → 库存筛选 → 创建报价），设置
 `OPENAI_API_KEY`（以及可选的 `OPENAI_BASE_URL`）后执行：
@@ -41,11 +41,11 @@ cd examples && go run ./codeact -model gpt-5
 
 需要给 Agent 暴露工具时，调用 `tool/toolcode.NewTool(runtime, managedTools)`，将返回的 `execute_tool_code` 注册给 Agent。只有 `managedTools` 能被 guest 中的 `await call_tool(...)` 调用。
 
-第一版中，managed tool 是同步的直接宿主能力调用：它不会重放 Agent 的 callback、retry 或内层 tracing 生命周期，也不能在执行中暂停以等待交互式审批。不要把需要“审批后恢复”流程的工具加入 `managedTools`；授权应在业务工具自身或应用定义的 adapter tool 中实现。
+第一版中，managed tool 是同步的直接宿主能力调用：内置 Python guest 任一时刻只有一个调用在执行，`await` 是 guest API 的调用形式，但 `asyncio.gather(...)` 不会产生并行的宿主工具调用。宿主工具失败会在 Python 中表现为 `RuntimeError`，生成代码可用 `try`/`except` 处理。它不会重放 Agent 的 callback、retry 或内层 tracing 生命周期，也不能在执行中暂停以等待交互式审批。不要把需要“审批后恢复”流程的工具加入 `managedTools`；授权应在业务工具自身或应用定义的 adapter tool 中实现。
 
 ## 面向模型的工具说明
 
-默认的 `execute_tool_code` 声明会告诉模型：能在一次调用完成流程时优先一次完成；只能使用 `await call_tool(name, **json_arguments)`；并返回 JSON 兼容的值。它还会动态列出每个 managed tool 的名称、描述、输入 JSON Schema 和输出 JSON Schema。这里的说明只是模型引导，不能替代前述 runtime 安全边界。
+默认的 `execute_tool_code` 声明会告诉模型：能在一次调用完成流程时优先一次完成；只能使用 `await call_tool(name, **json_arguments)`；按顺序调用工具；并只返回完成任务所需的紧凑 JSON 兼容值。它还会动态列出每个 managed tool 的名称、描述、输入 JSON Schema 和输出 JSON Schema。中间的 managed tool 结果留在 guest 代码中，只有 `execute_tool_code` 最终的 `value` 和捕获的 `stdout` 会作为外层工具结果返回；不要打印或返回模型不需要的大型原始结果。这里的说明只是模型引导，不能替代前述 runtime 安全边界。
 
 managed tool 的描述应写成业务契约：说明操作含义、前置条件、单位、枚举含义和结果语义。除非模型必须依此选择操作，否则不要塞入 header、SDK 等传输细节。两个工具之间若需要领域特定的语义映射，应使用宿主 adapter tool，而不要让通用字段转换去猜测含义。
 
@@ -80,6 +80,8 @@ tools 自动推导。应优先放业务工具、数据工具和宿主侧 adapter
 - `skill_run` / `skill_exec` / `skill_write_stdin` / `skill_poll_session` /
   `skill_kill_session`
 - `transfer_to_agent` / `await_user_reply`
+
+对于同一个业务操作，通常应只选择一种模型侧入口：要么作为 Agent 的直接工具暴露，要么仅加入 `execute_tool_code` 的 managed registry。应用当然可以有意同时注册两者，但这会让模型对同一个操作看到两条执行路径，弱化何时应该使用代码编排的引导。无论如何，managed registry 仍是 guest 代码的实际能力边界。
 
 这些工具通常不应加入 registry：执行类工具会形成递归或异质执行链；
 `transfer_to_agent` 和 `await_user_reply` 会修改外层 Invocation 的控制状态；

@@ -1,8 +1,17 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package codeact
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -130,4 +139,49 @@ func TestGatewayValidatesOutputJSONSchema(t *testing.T) {
 	require.NoError(t, err)
 	_, err = g.Call(context.Background(), "bad-output", json.RawMessage(`{}`))
 	require.ErrorContains(t, err, "invalid output")
+}
+
+func TestNewGatewayRejectsInvalidTools(t *testing.T) {
+	valid := testTool{declaration: &tool.Declaration{Name: "valid"}}
+	tests := []struct {
+		name  string
+		tools []tool.CallableTool
+		want  string
+	}{
+		{name: "nil tool", tools: []tool.CallableTool{nil}, want: "declaration is required"},
+		{name: "nil declaration", tools: []tool.CallableTool{testTool{}}, want: "declaration is required"},
+		{name: "blank name", tools: []tool.CallableTool{testTool{declaration: &tool.Declaration{}}}, want: "tool name is required"},
+		{name: "duplicate name", tools: []tool.CallableTool{valid, valid}, want: "duplicate tool"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewGateway(tt.tools...)
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
+func TestGatewayNamesAndCallFailures(t *testing.T) {
+	toolError := errors.New("tool failed")
+	g, err := NewGateway(
+		testTool{declaration: &tool.Declaration{Name: "zeta", InputSchema: &tool.Schema{Type: "object"}}, call: func([]byte) (any, error) {
+			return nil, toolError
+		}},
+		testTool{declaration: &tool.Declaration{Name: "alpha"}, call: func([]byte) (any, error) {
+			return make(chan int), nil
+		}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha", "zeta"}, g.Names())
+
+	var nilGateway *Gateway
+	_, err = nilGateway.Call(context.Background(), "alpha", json.RawMessage(`{}`))
+	require.ErrorContains(t, err, "nil gateway")
+
+	_, err = g.Call(context.Background(), "zeta", json.RawMessage(`not-json`))
+	require.ErrorContains(t, err, "invalid input JSON")
+	_, err = g.Call(context.Background(), "zeta", json.RawMessage(`{}`))
+	require.ErrorIs(t, err, toolError)
+	_, err = g.Call(context.Background(), "alpha", json.RawMessage(`{}`))
+	require.ErrorContains(t, err, "encode result")
 }
