@@ -122,9 +122,17 @@ func (c *sqlDBClient) Transaction(ctx context.Context, fn TxFunc, opts ...TxOpti
 		return err
 	}
 
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		} else if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
 	// Execute user transaction function.
-	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
+	if err = fn(tx); err != nil {
 		return err
 	}
 
