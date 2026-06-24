@@ -290,6 +290,40 @@ func TestOptimizeToolSurfaceUsesDescriptionProposal(t *testing.T) {
 	assert.Equal(t, "Lookup key.", rsp.Patch.Value.Tools[0].InputSchema.Properties["query"].Description)
 }
 
+func TestOptimizeToolSurfaceFallsBackToFinalContent(t *testing.T) {
+	r := &fakeRunner{
+		events: []*event.Event{
+			event.NewResponseEvent(
+				"invocation-id",
+				"optimizer",
+				&model.Response{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage(`{"Description":"Look up travel records by confirmation code.","Reason":"clarify the lookup key"}`)},
+					},
+				},
+			),
+		},
+	}
+	oz, err := New(context.Background(), r)
+	require.NoError(t, err)
+	rsp, err := oz.Optimize(context.Background(), newToolRequest())
+	require.NoError(t, err)
+	assert.Equal(
+		t,
+		reflect.TypeOf((*toolDescriptionProposal)(nil)),
+		r.lastRunOpts.StructuredOutputType,
+	)
+	assert.Equal(t, "clarify the lookup key", rsp.Patch.Reason)
+	require.Len(t, rsp.Patch.Value.Tools, 1)
+	assert.Equal(t, "lookup_record", rsp.Patch.Value.Tools[0].ID)
+	assert.Equal(
+		t,
+		"Look up travel records by confirmation code.",
+		rsp.Patch.Value.Tools[0].Description,
+	)
+}
+
 func TestOptimizeRejectsMalformedToolSurfaceBeforeRunner(t *testing.T) {
 	r := &fakeRunner{}
 	oz, err := New(context.Background(), r)
@@ -300,6 +334,23 @@ func TestOptimizeRejectsMalformedToolSurfaceBeforeRunner(t *testing.T) {
 	assert.Nil(t, rsp)
 	assert.ErrorContains(t, err, "tools must contain exactly one tool, got 0")
 	assert.Zero(t, r.runs)
+}
+
+func TestSanitizeToolDescriptionProposalRejectsInvalidInput(t *testing.T) {
+	patch, err := sanitizeToolDescriptionProposal(nil, &toolDescriptionProposal{})
+	assert.Nil(t, patch)
+	assert.EqualError(t, err, "request is nil")
+	patch, err = sanitizeToolDescriptionProposal(&Request{}, &toolDescriptionProposal{})
+	assert.Nil(t, patch)
+	assert.EqualError(t, err, "surface is nil")
+	request := newToolRequest()
+	patch, err = sanitizeToolDescriptionProposal(request, nil)
+	assert.Nil(t, patch)
+	assert.EqualError(t, err, "tool description proposal is nil")
+	request.Surface.Value.Tools = nil
+	patch, err = sanitizeToolDescriptionProposal(request, &toolDescriptionProposal{})
+	assert.Nil(t, patch)
+	assert.EqualError(t, err, "tools must contain exactly one tool, got 0")
 }
 
 func TestOptimizeFallsBackToFinalContent(t *testing.T) {

@@ -148,6 +148,35 @@ func TestPatch_TracksExplicitZeroValues(t *testing.T) {
 	require.Nil(t, repo)
 }
 
+func TestPatch_TracksExplicitToolDeclarations(t *testing.T) {
+	var patch Patch
+	declarations, ok := patch.ToolDeclarations()
+	require.False(t, ok)
+	require.Nil(t, declarations)
+	patch.SetToolDeclarations(nil)
+	declarations, ok = patch.ToolDeclarations()
+	require.True(t, ok)
+	require.Nil(t, declarations)
+	require.False(t, patch.IsEmpty())
+	var first Patch
+	first.SetToolDeclarations([]tool.Declaration{
+		{Name: "lookup", Description: "old"},
+	})
+	var second Patch
+	second.SetToolDeclarations([]tool.Declaration{
+		{Name: "lookup", Description: "new"},
+	})
+	cfgs := WithPatch(nil, "root", first)
+	cfgs = WithPatch(cfgs, "root", second)
+	stored, ok := PatchForNode(cfgs, "root")
+	require.True(t, ok)
+	declarations, ok = stored.ToolDeclarations()
+	require.True(t, ok)
+	require.Equal(t, []tool.Declaration{
+		{Name: "lookup", Description: "new"},
+	}, declarations)
+}
+
 func TestPatch_SuppressSubAgentTransferMergesAndClones(t *testing.T) {
 	var base Patch
 	require.True(t, base.IsEmpty())
@@ -321,6 +350,19 @@ func TestRootNodeID_UsesStoredValueAndFallsBack(t *testing.T) {
 		"fallback",
 		RootNodeID(map[string]any{rootNodeIDConfigsKey: 123}, "fallback"),
 	)
+}
+
+func TestToolSurfaceTracingEnabled(t *testing.T) {
+	cfgs := map[string]any{"keep": "value"}
+	require.False(t, ToolSurfaceTracingEnabled(nil))
+	require.False(t, ToolSurfaceTracingEnabled(cfgs))
+	require.False(t, ToolSurfaceTracingEnabled(map[string]any{
+		toolSurfaceTraceConfigsKey: "true",
+	}))
+	got := WithToolSurfaceTracing(cfgs)
+	require.Equal(t, "value", got["keep"])
+	require.True(t, ToolSurfaceTracingEnabled(got))
+	require.False(t, ToolSurfaceTracingEnabled(cfgs))
 }
 
 func TestPatchForNode_ReadsMapStringPatchConfigs(t *testing.T) {

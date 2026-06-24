@@ -1396,6 +1396,80 @@ func TestBuildEvaluationCallOptionsUsesConfiguredRunnersAndFlags(t *testing.T) {
 	assert.Equal(t, []string{"case_1"}, evalCaseIDs)
 }
 
+func TestBuildEvaluationCallOptionsAppliesToolSurfacePatchAndTracing(t *testing.T) {
+	structure, err := newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		EntryNodeID: "entry",
+		Nodes: []astructure.Node{
+			{NodeID: "entry", Kind: astructure.NodeKindLLM, Name: "entry"},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "entry#global_instruction",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeGlobalInstruction,
+				Value:     astructure.SurfaceValue{Text: stringPtr("global instruction")},
+			},
+			{
+				SurfaceID: "entry#instruction",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeInstruction,
+				Value:     astructure.SurfaceValue{Text: stringPtr("base instruction")},
+			},
+			{
+				SurfaceID: "entry#tool.lookup",
+				NodeID:    "entry",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Tools: []astructure.ToolRef{
+						{ID: "lookup", Description: "base lookup"},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	options, buildErr := buildEvaluationCallOptions(structure, &EvaluationRequest{
+		Profile: &promptiter.Profile{
+			StructureID: "structure_1",
+			Overrides: []promptiter.SurfaceOverride{
+				{
+					SurfaceID: "entry#instruction",
+					Value:     astructure.SurfaceValue{Text: stringPtr("patched instruction")},
+				},
+				{
+					SurfaceID: "entry#tool.lookup",
+					Value: astructure.SurfaceValue{
+						Tools: []astructure.ToolRef{
+							{ID: "lookup", Description: "patched lookup"},
+						},
+					},
+				},
+			},
+		},
+	}, EvalSetInput{EvalSetID: "validation"})
+	require.NoError(t, buildErr)
+	agentEvaluator, newErr := evaluation.New("promptiter-test", &stubRunner{}, options...)
+	require.NoError(t, newErr)
+	t.Cleanup(func() {
+		require.NoError(t, agentEvaluator.Close())
+	})
+	runOptions := readPrivateField[[]agent.RunOption](t, agentEvaluator, "runOptions")
+	opts := agent.NewRunOptions(runOptions...)
+	assert.True(t, opts.ExecutionTraceEnabled)
+	assert.True(t, surfacepatch.ToolSurfaceTracingEnabled(opts.CustomAgentConfigs))
+	patch, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "entry")
+	require.True(t, ok)
+	instruction, ok := patch.Instruction()
+	require.True(t, ok)
+	assert.Equal(t, "patched instruction", instruction)
+	declarations, ok := patch.ToolDeclarations()
+	require.True(t, ok)
+	require.Len(t, declarations, 1)
+	assert.Equal(t, "lookup", declarations[0].Name)
+	assert.Equal(t, "patched lookup", declarations[0].Description)
+}
+
 func TestBuildEvaluationCallOptionsRejectsInvalidRequest(t *testing.T) {
 	options, err := buildEvaluationCallOptions(nil, nil, EvalSetInput{})
 	assert.Nil(t, options)

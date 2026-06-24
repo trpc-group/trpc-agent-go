@@ -558,6 +558,86 @@ func TestValidateValueRejectsExtraFields(t *testing.T) {
 	), "messages are not empty")
 }
 
+func TestValidateValueRejectsToolExtraFields(t *testing.T) {
+	text := "instruction"
+	assert.EqualError(t, ValidateValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			Text:  &text,
+			Tools: []astructure.ToolRef{{ID: "lookup"}},
+		},
+	), "text is not nil")
+	assert.EqualError(t, ValidateValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			PromptSyntax: promptSyntaxPtr(astructure.PromptSyntaxSingleBrace),
+			Tools:        []astructure.ToolRef{{ID: "lookup"}},
+		},
+	), "prompt syntax is not nil")
+	assert.EqualError(t, ValidateValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			FewShot: []astructure.FewShotExample{{}},
+			Tools:   []astructure.ToolRef{{ID: "lookup"}},
+		},
+	), "messages are not empty")
+	assert.EqualError(t, ValidateValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			Skills: []astructure.SkillRef{{ID: "skill"}},
+			Tools:  []astructure.ToolRef{{ID: "lookup"}},
+		},
+	), "skills are not empty")
+	assert.EqualError(t, ValidateValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			Tools: []astructure.ToolRef{{}},
+		},
+	), "tool id is empty")
+}
+
+func TestSanitizeValueRejectsToolExtraFields(t *testing.T) {
+	_, err := SanitizeValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			PromptSyntax: promptSyntaxPtr(astructure.PromptSyntaxSingleBrace),
+			Tools:        []astructure.ToolRef{{ID: "lookup"}},
+		},
+	)
+	assert.EqualError(t, err, "prompt syntax is not nil")
+	_, err = SanitizeValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			FewShot: []astructure.FewShotExample{{}},
+			Tools:   []astructure.ToolRef{{ID: "lookup"}},
+		},
+	)
+	assert.EqualError(t, err, "messages are not empty")
+	_, err = SanitizeValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			Skills: []astructure.SkillRef{{ID: "skill"}},
+			Tools:  []astructure.ToolRef{{ID: "lookup"}},
+		},
+	)
+	assert.EqualError(t, err, "skills are not empty")
+}
+
+func TestSanitizePatchValueReturnsNonToolValue(t *testing.T) {
+	text := "patched instruction"
+	sanitized, err := SanitizePatchValue(astructure.Surface{
+		SurfaceID: "node#instruction",
+		NodeID:    "node",
+		Type:      astructure.SurfaceTypeInstruction,
+	}, astructure.SurfaceValue{
+		Text:  &text,
+		Model: &astructure.ModelRef{},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, &text, sanitized.Text)
+	assert.Nil(t, sanitized.Model)
+}
+
 func TestCloneValueDeepCopiesAllFields(t *testing.T) {
 	text := "instruction"
 	value := astructure.SurfaceValue{
