@@ -31,6 +31,9 @@ type MessageRequest struct {
 	ContentParts []ContentPart `json:"content_parts,omitempty"`
 
 	RequestSystemPrompt string `json:"request_system_prompt,omitempty"`
+	// RequestLateContextPrompt is injected near the latest user turn and is
+	// not persisted into the session transcript.
+	RequestLateContextPrompt string `json:"request_late_context_prompt,omitempty"`
 
 	UserID    string `json:"user_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
