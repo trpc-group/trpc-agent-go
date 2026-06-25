@@ -372,7 +372,7 @@ func (s *Service) UpdateMemory(
 
 	now := time.Now()
 	vector := pgvector.NewVector(convertToFloat32(embedding))
-	newID := imemory.ApplyMemoryUpdate(
+	imemory.ApplyMemoryUpdate(
 		entry,
 		memoryKey.AppName,
 		memoryKey.UserID,
@@ -381,12 +381,14 @@ func (s *Service) UpdateMemory(
 		ep,
 		now,
 	)
+	// Keep the original memory_id to avoid primary key conflicts.
+	entry.ID = memoryKey.MemoryID
 	ef := resolveMetadata(entry.Memory)
 
 	updateQuery := fmt.Sprintf(
-		"UPDATE %s SET memory_id = $1, memory_content = $2, topics = $3, embedding = $4, "+
-			"memory_kind = $5, event_time = $6, participants = $7, location = $8, updated_at = $9 "+
-			"WHERE memory_id = $10 AND app_name = $11 AND user_id = $12",
+		"UPDATE %s SET memory_content = $1, topics = $2, embedding = $3, "+
+			"memory_kind = $4, event_time = $5, participants = $6, location = $7, updated_at = $8 "+
+			"WHERE memory_id = $9 AND app_name = $10 AND user_id = $11",
 		s.tableName,
 	)
 	if s.opts.softDelete {
@@ -395,7 +397,6 @@ func (s *Service) UpdateMemory(
 	res, err := s.db.ExecContext(
 		ctx,
 		updateQuery,
-		newID,
 		memoryStr,
 		pq.Array(topics),
 		vector,
@@ -419,7 +420,7 @@ func (s *Service) UpdateMemory(
 		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 	}
 	if result := memory.ResolveUpdateResult(opts); result != nil {
-		result.MemoryID = newID
+		result.MemoryID = memoryKey.MemoryID
 	}
 
 	return nil
