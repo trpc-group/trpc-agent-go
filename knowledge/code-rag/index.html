@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/knowledge/management/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/knowledge/code-rag/">
       
       
-        <link rel="prev" href="../extractor/">
+        <link rel="prev" href="../source/">
       
       
-        <link rel="next" href="../ocr/">
+        <link rel="next" href="../filter/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -22,7 +22,7 @@
     
     
       
-        <title>Management - tRPC-Agent-Go</title>
+        <title>Code RAG (Beta) - tRPC-Agent-Go</title>
       
     
     
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#knowledge-base-management" class="md-skip">
+        <a href="#code-rag-beta" class="md-skip">
           Skip to content
         </a>
       
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Management
+              Code RAG (Beta)
             
           </span>
         </div>
@@ -172,7 +172,7 @@
           </li>
         
           <li class="md-select__item">
-            <a href="../../zh/knowledge/management/" hreflang="zh" class="md-select__link">
+            <a href="../../zh/knowledge/code-rag/" hreflang="zh" class="md-select__link">
               中文
             </a>
           </li>
@@ -1497,10 +1497,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../code-rag/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Code RAG (Beta)
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1511,6 +1533,212 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#capabilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      Capabilities
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#repo-source" class="md-nav__link">
+    <span class="md-ellipsis">
+      Repo Source
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Repo Source">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Usage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#repository-struct" class="md-nav__link">
+    <span class="md-ellipsis">
+      Repository Struct
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#version-selection-priority" class="md-nav__link">
+    <span class="md-ellipsis">
+      Version Selection Priority
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scan-scope-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scan Scope Control
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metadata
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relation-to-ast-readers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Relation to AST Readers
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#parsed-output-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parsed Output Example
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-retrieval" class="md-nav__link">
+    <span class="md-ellipsis">
+      Code Retrieval
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Code Retrieval">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#code_search-ast-aware-semantic-code-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      code_search: AST-aware Semantic Code Search
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="code_search: AST-aware Semantic Code Search">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-usage_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Usage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#common-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Common Options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reuse-via-mcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reuse via MCP
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#code_graph_-code-graph-retrieval-graphrag-advanced" class="md-nav__link">
+    <span class="md-ellipsis">
+      code_graph_*: Code Graph Retrieval (GraphRAG, Advanced)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="code_graph_*: Code Graph Retrieval (GraphRAG, Advanced)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#edge-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      Edge Types
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agent-graph-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent Graph Tools
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1566,32 +1794,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Management
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../management/" class="md-nav__link">
         
   
   
@@ -1602,86 +1808,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#source-sync-mode-comparison" class="md-nav__link">
-    <span class="md-ellipsis">
-      Source Sync Mode Comparison
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Source Sync Mode Comparison">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#default-mode-sync-disabled" class="md-nav__link">
-    <span class="md-ellipsis">
-      Default Mode (Sync Disabled)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#sync-mode-withenablesourcesync-enabled" class="md-nav__link">
-    <span class="md-ellipsis">
-      Sync Mode (WithEnableSourceSync Enabled)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#mode-comparison" class="md-nav__link">
-    <span class="md-ellipsis">
-      Mode Comparison
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#dynamic-source-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      Dynamic Source Management
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#knowledge-base-status-monitoring" class="md-nav__link">
-    <span class="md-ellipsis">
-      Knowledge Base Status Monitoring
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -2729,37 +2855,82 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#source-sync-mode-comparison" class="md-nav__link">
+  <a href="#capabilities" class="md-nav__link">
     <span class="md-ellipsis">
-      Source Sync Mode Comparison
+      Capabilities
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Source Sync Mode Comparison">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#repo-source" class="md-nav__link">
+    <span class="md-ellipsis">
+      Repo Source
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Repo Source">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#default-mode-sync-disabled" class="md-nav__link">
+  <a href="#basic-usage" class="md-nav__link">
     <span class="md-ellipsis">
-      Default Mode (Sync Disabled)
+      Basic Usage
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#sync-mode-withenablesourcesync-enabled" class="md-nav__link">
+  <a href="#repository-struct" class="md-nav__link">
     <span class="md-ellipsis">
-      Sync Mode (WithEnableSourceSync Enabled)
+      Repository Struct
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#mode-comparison" class="md-nav__link">
+  <a href="#version-selection-priority" class="md-nav__link">
     <span class="md-ellipsis">
-      Mode Comparison
+      Version Selection Priority
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scan-scope-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scan Scope Control
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metadata
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#relation-to-ast-readers" class="md-nav__link">
+    <span class="md-ellipsis">
+      Relation to AST Readers
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#parsed-output-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parsed Output Example
     </span>
   </a>
   
@@ -2771,20 +2942,101 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#dynamic-source-management" class="md-nav__link">
+  <a href="#code-retrieval" class="md-nav__link">
     <span class="md-ellipsis">
-      Dynamic Source Management
+      Code Retrieval
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Code Retrieval">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#code_search-ast-aware-semantic-code-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      code_search: AST-aware Semantic Code Search
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="code_search: AST-aware Semantic Code Search">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-usage_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Usage
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#knowledge-base-status-monitoring" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#common-options" class="md-nav__link">
     <span class="md-ellipsis">
-      Knowledge Base Status Monitoring
+      Common Options
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reuse-via-mcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reuse via MCP
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#code_graph_-code-graph-retrieval-graphrag-advanced" class="md-nav__link">
+    <span class="md-ellipsis">
+      code_graph_*: Code Graph Retrieval (GraphRAG, Advanced)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="code_graph_*: Code Graph Retrieval (GraphRAG, Advanced)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#edge-types" class="md-nav__link">
+    <span class="md-ellipsis">
+      Edge Types
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agent-graph-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent Graph Tools
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2804,7 +3056,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/knowledge/management.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/knowledge/code-rag.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2813,65 +3065,43 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/knowledge/management.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/knowledge/code-rag.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="knowledge-base-management">Knowledge Base Management</h1>
+<h1 id="code-rag-beta">Code RAG (Beta)</h1>
 <blockquote>
-<p><strong>Example Code</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/management">examples/knowledge/features/management</a></p>
+<p><strong>Beta</strong>: Code RAG (repo source + AST parsing + the <code>code_search</code> / <code>code_graph_*</code> retrieval tools) is currently in Beta; its API and behavior may change.</p>
+<p><strong>Example Code</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/code_context_engine">code_context_engine</a> · <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/graphrag">graphrag</a> · <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/ast">ast</a></p>
 </blockquote>
-<p>The Knowledge system provides powerful knowledge base management functionality, supporting dynamic source management and intelligent sync mechanisms.</p>
-<h2 id="source-sync-mode-comparison">Source Sync Mode Comparison</h2>
-<p>Knowledge provides two loading modes: <strong>Default Mode (sync disabled)</strong> and <strong>Sync Mode (WithEnableSourceSync enabled)</strong>.</p>
-<h3 id="default-mode-sync-disabled">Default Mode (Sync Disabled)</h3>
-<p>By default, <code>WithEnableSourceSync</code> is <code>false</code>, and Knowledge uses <strong>append-only loading</strong>:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-0-10">10</a></span>
-<span class="normal"><a href="#__codelineno-0-11">11</a></span>
-<span class="normal"><a href="#__codelineno-0-12">12</a></span>
-<span class="normal"><a href="#__codelineno-0-13">13</a></span>
-<span class="normal"><a href="#__codelineno-0-14">14</a></span>
-<span class="normal"><a href="#__codelineno-0-15">15</a></span>
-<span class="normal"><a href="#__codelineno-0-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">&quot;log&quot;</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="p">)</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">vectorStore</span><span class="p">),</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSources</span><span class="p">(</span><span class="nx">sources</span><span class="p">),</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">    </span><span class="c1">// WithEnableSourceSync defaults to false</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="p">)</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Load</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to load: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="p">}</span>
+<p>trpc-agent-go provides a set of <strong>code knowledge base (Code RAG)</strong> capabilities: it parses a code repository into structured semantic units, stores them in a vector store (optionally a graph store), and lets an agent query code the way it queries docs — instead of grepping raw text.</p>
+<h2 id="capabilities">Capabilities</h2>
+<ol>
+<li><strong>AST semantic parsing</strong>: parse code into complete semantic entities (function / method / struct / class / interface / service / rpc, etc.), each carrying structured metadata (signature, comment, package path, file location) rather than fixed-length character slices. Currently open-sourced for Go / Python / Proto; C++ / JavaScript and others are being progressively opened.</li>
+<li><strong>Repo-source ingestion</strong>: ingest a remote Git repository or local directory directly, dispatch files to the matching reader by type, and process multi-language code + Markdown uniformly for a single repo.</li>
+<li><strong><code>code_search</code> vector retrieval</strong>: AST-aware hybrid search — semantic query + <code>trpc_ast_*</code> metadata filters + <code>content</code> literal matching, with built-in per-turn dedup and multi-angle query guidance.</li>
+<li><strong><code>code_graph_*</code> graph retrieval (GraphRAG)</strong>: use call / dependency edges extracted from the AST together with a graph database (Apache AGE) for structural navigation such as call chains and dependency paths.</li>
+<li><strong>MCP reuse</strong>: <code>code_search</code> can be wrapped into an MCP server so Cursor, another runner, or any external MCP client shares the same code search pipeline.</li>
+</ol>
+<p>These capabilities form one pipeline:</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>Repo source (clone + walk files)
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>  → AST reader (parse into semantic entities: function / method / struct / class / service …)
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>  → Vector store (+ optional graph store)
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a>  → code_search / code_graph_* (agent retrieval tools)
 </span></code></pre></div></td></tr></table></div>
-<p><strong>Default Mode Behavior</strong>:</p>
-<ul>
-<li><strong>Append Only</strong>: Each <code>Load()</code> only adds new documents to vector store</li>
-<li><strong>No Change Detection</strong>: Existing documents won't be updated even if source file content has changed</li>
-<li><strong>No Orphan Cleanup</strong>: Vector data for deleted source files won't be automatically cleaned up</li>
-<li><strong>Use Cases</strong>: One-time imports, scenarios where data only grows, business manages data sources independently</li>
-</ul>
-<h3 id="sync-mode-withenablesourcesync-enabled">Sync Mode (WithEnableSourceSync Enabled)</h3>
-<ul>
-<li>When <code>WithEnableSourceSync(true)</code> is enabled, Knowledge <strong>keeps vector store fully consistent with configured Sources</strong>:</li>
-</ul>
+<p>The sections below cover usage: "Repo Source" is the ingest side (how to configure the repo, control scanning, and what metadata is produced); "Code Retrieval" is the retrieval side (how an agent queries code with <code>code_search</code> / <code>code_graph_*</code>).</p>
+<h2 id="repo-source">Repo Source</h2>
+<p>The repo source is the data entry point of a code knowledge base: it owns the front "ingest + parse" stage — load a remote <strong>Git URL</strong> or a locally checked-out <strong>repository directory</strong>, walk the files, and dispatch them to the matching reader by type, processing Go / Python / Proto / Markdown and other content uniformly for a single repo. This section covers how to configure the repo, control scan scope, and what metadata is produced.</p>
+<blockquote>
+<p><strong>Current open-source status</strong>: AST-aware code parsing is currently open-sourced for <strong>Go</strong>, <strong>Python</strong>, and <strong>Proto / PB</strong>. Support for <code>C++</code>, <code>JavaScript</code>, and other languages is being progressively open-sourced. For languages not yet open-sourced, the repo source can still process text files via plain document readers, but without AST-level semantic entities.</p>
+</blockquote>
+<h3 id="basic-usage">Basic Usage</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
@@ -2888,95 +3118,98 @@
 <span class="normal"><a href="#__codelineno-1-14">14</a></span>
 <span class="normal"><a href="#__codelineno-1-15">15</a></span>
 <span class="normal"><a href="#__codelineno-1-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="s">&quot;log&quot;</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang&quot;</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python&quot;</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="nx">reposource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo&quot;</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="p">)</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">vectorStore</span><span class="p">),</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSources</span><span class="p">(</span><span class="nx">sources</span><span class="p">),</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEnableSourceSync</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// Enable sync mode</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="p">)</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Load</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to load: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16"></a><span class="p">}</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="nx">repoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="w">    </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">WithRepository</span><span class="p">(</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="w">        </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">Repository</span><span class="p">{</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="w">            </span><span class="nx">URL</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;https://github.com/trpc-group/trpc-go&quot;</span><span class="p">,</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">            </span><span class="nx">Branch</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;main&quot;</span><span class="p">,</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a><span class="w">    </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;Code Repository&quot;</span><span class="p">),</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15"></a><span class="w">    </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">WithFileExtensions</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.py&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.md&quot;</span><span class="p">}),</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>Operations That Trigger Sync</strong></p>
-<p>With sync mode enabled, the following operations trigger sync validation:</p>
+<p>The Go AST reader and Python AST reader are optional modules that require blank imports for registration:</p>
+<ul>
+<li>Scanning <code>.go</code> files → <code>knowledge/document/reader/golang</code></li>
+<li>Scanning <code>.py</code> files → <code>knowledge/document/reader/python</code></li>
+</ul>
+<p>The Proto reader is registered by default and needs no extra import.</p>
+<blockquote>
+<p><strong>Note</strong>: The Python reader uses an embedded Python script for AST parsing. It requires Python 3.9+ installed on the system (only uses the standard library <code>ast</code> module, no third-party dependencies).</p>
+</blockquote>
+<h3 id="repository-struct">Repository Struct</h3>
+<p><code>Repository</code> describes a single repository input with independent version and scope configuration:</p>
 <table>
 <thead>
 <tr>
-<th>Operation</th>
-<th>Sync Behavior</th>
+<th>Field</th>
+<th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>Load()</code></td>
-<td>Full sync: Detect changes in all Sources, clean up orphan documents</td>
+<td><code>URL</code></td>
+<td>Remote Git repository URL</td>
 </tr>
 <tr>
-<td><code>ReloadSource()</code></td>
-<td>Single source sync: Detect changes in specified Source, load changes, clean up orphan documents for that Source</td>
+<td><code>Dir</code></td>
+<td>Local repository directory</td>
 </tr>
 <tr>
-<td><code>RemoveSource()</code></td>
-<td>Delete sync: Precisely delete all documents for specified Source, update cache state</td>
+<td><code>Branch</code></td>
+<td>Target branch</td>
 </tr>
 <tr>
-<td><code>AddSource()</code></td>
-<td>Incremental sync: Detect and load document changes in new Source, update cache state (no orphan cleanup triggered)</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Sync Mode Behavior</strong>:</p>
-<ol>
-<li><strong>Pre-load Preparation</strong>: Refresh document info cache, establish sync state tracking</li>
-<li><strong>Intelligent Incremental Processing</strong>: Detect document changes, only process new or modified documents</li>
-<li><strong>Post-load Cleanup</strong>: Automatically delete orphan documents no longer belonging to any configured Source</li>
-</ol>
-<h3 id="mode-comparison">Mode Comparison</h3>
-<table>
-<thead>
-<tr>
-<th>Feature</th>
-<th>Default Mode</th>
-<th>Sync Mode</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>New Document Processing</td>
-<td>✅ Append</td>
-<td>✅ Append</td>
+<td><code>Tag</code></td>
+<td>Target tag</td>
 </tr>
 <tr>
-<td>Change Detection</td>
-<td>❌ Not detected</td>
-<td>✅ Auto-detect and update</td>
+<td><code>Commit</code></td>
+<td>Target commit</td>
 </tr>
 <tr>
-<td>Orphan Cleanup</td>
-<td>❌ Not cleaned</td>
-<td>✅ Auto cleanup</td>
+<td><code>Subdir</code></td>
+<td>Scan only a subdirectory within the repository</td>
 </tr>
 <tr>
-<td>Data Consistency</td>
-<td>❌ May be inconsistent</td>
-<td>✅ Consistent with Sources</td>
+<td><code>RepoName</code></td>
+<td>Custom repository name</td>
 </tr>
 <tr>
-<td>Performance Overhead</td>
-<td>Lower</td>
-<td>Slightly higher (state comparison needed)</td>
+<td><code>Description</code></td>
+<td>Repository description; read by the <code>code_search</code> tool and embedded into the tool description so the LLM knows what the repo is about</td>
+</tr>
+<tr>
+<td><code>RepoURL</code></td>
+<td>Custom repository URL (overrides auto-detection)</td>
 </tr>
 </tbody>
 </table>
 <blockquote>
-<p>⚠️ <strong>Important Warning</strong>: When sync mode is enabled, <strong>ensure all Sources that need to be retained are correctly configured</strong>. The sync mechanism compares configured Sources with data in vector store, <strong>any documents not belonging to configured Sources will be treated as orphans and deleted</strong>.</p>
+<p><code>URL</code> and <code>Dir</code> are mutually exclusive. A single <code>repo.Source</code> processes only one repository input.</p>
+</blockquote>
+<h3 id="version-selection-priority">Version Selection Priority</h3>
+<p>When multiple version fields are set, the priority is:</p>
+<ol>
+<li><code>Commit</code></li>
+<li><code>Tag</code></li>
+<li><code>Branch</code></li>
+</ol>
+<p>That is, if both <code>Commit</code> and <code>Branch</code> are provided, <code>Commit</code> is checked out.</p>
+<h3 id="scan-scope-control">Scan Scope Control</h3>
+<ul>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/knowledge/source/repo/options.go"><code>WithFileExtensions</code></a> — controls which file extensions are scanned</li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/knowledge/source/repo/options.go"><code>WithSkipDirs</code></a> — controls which directory names are skipped</li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/knowledge/source/repo/options.go"><code>WithSkipSuffixes</code></a> — controls which file suffixes are skipped</li>
+<li><code>Repository.Subdir</code> — restricts scanning to a subdirectory within the repository</li>
+</ul>
+<p>Example: scan only Go and Markdown files under <code>server/</code>:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
@@ -2987,44 +3220,77 @@
 <span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-2-10">10</a></span>
-<span class="normal"><a href="#__codelineno-2-11">11</a></span>
-<span class="normal"><a href="#__codelineno-2-12">12</a></span>
-<span class="normal"><a href="#__codelineno-2-13">13</a></span>
-<span class="normal"><a href="#__codelineno-2-14">14</a></span>
-<span class="normal"><a href="#__codelineno-2-15">15</a></span>
-<span class="normal"><a href="#__codelineno-2-16">16</a></span>
-<span class="normal"><a href="#__codelineno-2-17">17</a></span>
-<span class="normal"><a href="#__codelineno-2-18">18</a></span>
-<span class="normal"><a href="#__codelineno-2-19">19</a></span>
-<span class="normal"><a href="#__codelineno-2-20">20</a></span>
-<span class="normal"><a href="#__codelineno-2-21">21</a></span>
-<span class="normal"><a href="#__codelineno-2-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source&quot;</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="p">)</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="c1">// ❌ Dangerous: Empty Source configuration will delete all existing documents!</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">vectorStore</span><span class="p">),</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSources</span><span class="p">([]</span><span class="nx">source</span><span class="p">.</span><span class="nx">Source</span><span class="p">{}),</span><span class="w"> </span><span class="c1">// Empty configuration</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEnableSourceSync</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="p">)</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="nx">kb</span><span class="p">.</span><span class="nx">Load</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span><span class="w"> </span><span class="c1">// All documents will be cleaned up!</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a>
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="c1">// ✅ Correct: Ensure all needed Sources are configured</span>
-</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
-</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">vectorStore</span><span class="p">),</span>
-</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSources</span><span class="p">([]</span><span class="nx">source</span><span class="p">.</span><span class="nx">Source</span><span class="p">{</span><span class="nx">source1</span><span class="p">,</span><span class="w"> </span><span class="nx">source2</span><span class="p">,</span><span class="w"> </span><span class="nx">source3</span><span class="p">}),</span><span class="w"> </span><span class="c1">// Complete configuration</span>
-</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEnableSourceSync</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21"></a><span class="p">)</span>
-</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22"></a><span class="nx">kb</span><span class="p">.</span><span class="nx">Load</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span><span class="w"> </span><span class="c1">// Safe: Only clean up documents not belonging to these Sources</span>
+<span class="normal"><a href="#__codelineno-2-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">repoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">WithRepository</span><span class="p">(</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">        </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">Repository</span><span class="p">{</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">            </span><span class="nx">URL</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;https://github.com/trpc-group/trpc-go&quot;</span><span class="p">,</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">            </span><span class="nx">Branch</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;main&quot;</span><span class="p">,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="w">            </span><span class="nx">Subdir</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;server&quot;</span><span class="p">,</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">    </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">WithFileExtensions</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.md&quot;</span><span class="p">}),</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">WithSkipSuffixes</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;.pb.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.trpc.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;_mock.go&quot;</span><span class="p">}),</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-</blockquote>
-<h2 id="dynamic-source-management">Dynamic Source Management</h2>
-<p>Knowledge supports runtime dynamic management of knowledge sources, ensuring vector store data always stays consistent with user-configured sources:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
+<h3 id="metadata">Metadata</h3>
+<p>The repo source enriches documents produced by readers with repository-level metadata:</p>
+<table>
+<thead>
+<tr>
+<th>Metadata Key</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>trpc_agent_go_source=repo</code></td>
+<td>Document originates from a repo source</td>
+</tr>
+<tr>
+<td><code>trpc_agent_go_repo_path</code></td>
+<td>Local root directory of the cloned repository</td>
+</tr>
+<tr>
+<td><code>trpc_ast_repo_name</code></td>
+<td>Repository name</td>
+</tr>
+<tr>
+<td><code>trpc_ast_repo_url</code></td>
+<td>Repository URL</td>
+</tr>
+<tr>
+<td><code>trpc_ast_branch</code></td>
+<td>Version identifier being parsed (branch/tag/commit)</td>
+</tr>
+<tr>
+<td><code>trpc_ast_file_path</code></td>
+<td>Repo-relative file path</td>
+</tr>
+</tbody>
+</table>
+<p>Notes:</p>
+<ul>
+<li><code>trpc_ast_file_path</code> represents the <strong>logical path within the repository</strong>, not a remote Git URL.</li>
+<li>For Git URL inputs, the repo source first clones to a temporary directory, then writes the repo-relative path into <code>trpc_ast_file_path</code>.</li>
+</ul>
+<h3 id="relation-to-ast-readers">Relation to AST Readers</h3>
+<p>The repo source does not parse code itself; it dispatches to the appropriate reader based on file type:</p>
+<ul>
+<li><code>.go</code> → Go AST reader</li>
+<li><code>.py</code> → Python AST reader</li>
+<li><code>.proto</code> → Proto AST reader</li>
+<li><code>.md</code> → Markdown reader</li>
+<li>Other registered extensions → corresponding reader</li>
+</ul>
+<h3 id="parsed-output-example">Parsed Output Example</h3>
+<p>For AST-aware files (<code>.go</code> / <code>.py</code> / <code>.proto</code>), the repo source chunks code by semantic entity. Each chunk contains three layers:</p>
+<ul>
+<li><strong>content</strong>: A semantically complete code fragment (e.g., a full struct/class/function definition), not character-truncated text</li>
+<li><strong>embedding text</strong>: A structured summary (name / signature / comment, etc.) optimized for vector retrieval</li>
+<li><strong>metadata</strong>: <code>trpc_ast_*</code> fields (type / full_name / language / file_path, etc.) for precise filtering and locating</li>
+</ul>
+<p>Below is an example chunk for a Go struct:</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
@@ -3044,30 +3310,64 @@
 <span class="normal"><a href="#__codelineno-3-18">18</a></span>
 <span class="normal"><a href="#__codelineno-3-19">19</a></span>
 <span class="normal"><a href="#__codelineno-3-20">20</a></span>
-<span class="normal"><a href="#__codelineno-3-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">    </span><span class="s">&quot;log&quot;</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="nx">filesource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/file&quot;</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="p">)</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="c1">// Add new knowledge source - data will sync with configured sources</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="nx">newSource</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./new-docs/api.md&quot;</span><span class="p">})</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">AddSource</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">newSource</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to add source: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="p">}</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="c1">// Reload specified knowledge source - auto-detect changes and sync</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">ReloadSource</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">newSource</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to reload source: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="p">}</span>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a>
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="c1">// Remove specified knowledge source - precisely delete related documents</span>
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">RemoveSource</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;API Documentation&quot;</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to remove source: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-3-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a>content:
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>// Server is a tRPC server.
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>// One process, one server. A server may offer one or more services.
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a>type Server struct {
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a>    MaxCloseWaitTime time.Duration
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a>    services         map[string]Service
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a>    ...
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a>}
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a>embedding text:
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a>{&quot;name&quot;: &quot;Server&quot;, &quot;signature&quot;: &quot;type Server struct&quot;, &quot;type&quot;: &quot;Struct&quot;,
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a> &quot;full_name&quot;: &quot;trpc.group/trpc-go/trpc-go/server.Server&quot;,
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a> &quot;comment&quot;: &quot;Server is a tRPC server. ...&quot;}
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a>metadata:
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a>trpc_ast_type: Struct
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a>trpc_ast_full_name: trpc.group/trpc-go/trpc-go/server.Server
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a>trpc_ast_signature: type Server struct
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a>trpc_ast_language: go
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a>trpc_ast_file_path: server/server.go
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a>trpc_ast_repo_name: trpc-go
 </span></code></pre></div></td></tr></table></div>
-<h2 id="knowledge-base-status-monitoring">Knowledge Base Status Monitoring</h2>
-<p>Knowledge provides rich status monitoring functionality to help users understand the current sync status of configured sources:</p>
+<p>For Python files, chunking follows the same approach at Class / Function / Method granularity; for <code>.proto</code> files, it chunks by service / rpc / message / enum.</p>
+<h2 id="code-retrieval">Code Retrieval</h2>
+<blockquote>
+<p><strong>Example Code</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/code_context_engine">examples/knowledge/features/code_context_engine</a></p>
+</blockquote>
+<p>Once the repo source has ingested code into AST semantic entities, an agent retrieves those entities through knowledge tools. The framework ships two kinds of code retrieval tools:</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Retrieval mode</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>code_search</code></td>
+<td>Semantic vector search + metadata/literal filtering (hybrid)</td>
+<td><strong>Primary tool</strong>: find entities by functionality / name / literal code</td>
+</tr>
+<tr>
+<td><code>code_graph_search</code> / <code>code_graph_traverse</code> / <code>code_graph_find_paths</code></td>
+<td>Vector seeding + graph traversal</td>
+<td><strong>Advanced</strong>: when you need structural navigation along call / dependency edges</td>
+</tr>
+</tbody>
+</table>
+<p>For most "where is this code / who implements X / where does this error come from" questions, <code>code_search</code> is enough. Reach for the GraphRAG graph tools only when you need relationship navigation such as "who calls it, how the call chain flows, how two symbols connect".</p>
+<h3 id="code_search-ast-aware-semantic-code-search">code_search: AST-aware Semantic Code Search</h3>
+<p><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/knowledge/tool/codesearchtool.go"><code>NewCodeSearchTool</code></a> builds a code-oriented search tool on top of a plain vector store (no graph database required), with the default tool name <code>code_search</code>. On top of generic search it adds three code-specific behaviors:</p>
+<ul>
+<li><strong>Exposes AST metadata dimensions</strong>: the agent can filter precisely on fields such as <code>trpc_ast_repo_name</code> / <code>trpc_ast_scope</code> / <code>trpc_ast_type</code> / <code>trpc_ast_full_name</code> / <code>trpc_ast_package</code> / <code>trpc_ast_file_path</code>.</li>
+<li><strong>Supports literal search</strong>: embedding text is built only from structured semantic fields (name / signature / comment, etc.) and does NOT contain the concrete code body. For exact error strings, SQL, HTTP paths, or specific API calls, match against <code>content</code> with <code>like</code> instead of relying on the semantic query alone.</li>
+<li><strong>Per-turn dedup + multi-angle queries</strong>: the tool remembers the AST chunks already returned within the current turn and will not return them again, nudging the agent to change angle (definition → callers → interface implementation → adjacent package) rather than rephrasing the same query.</li>
+</ul>
+<h4 id="basic-usage_1">Basic Usage</h4>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
@@ -3104,63 +3404,269 @@
 <span class="normal"><a href="#__codelineno-4-34">34</a></span>
 <span class="normal"><a href="#__codelineno-4-35">35</a></span>
 <span class="normal"><a href="#__codelineno-4-36">36</a></span>
-<span class="normal"><a href="#__codelineno-4-37">37</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="s">&quot;log&quot;</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="p">)</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="c1">// Show all document information</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="nx">docInfos</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">ShowDocumentInfo</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to show document info: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="w">    </span><span class="k">return</span>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a><span class="p">}</span>
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a>
-</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a><span class="c1">// Filter by source name</span>
-</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a><span class="nx">docInfos</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">ShowDocumentInfo</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithShowDocumentInfoSourceName</span><span class="p">(</span><span class="s">&quot;APIDocumentation&quot;</span><span class="p">))</span>
-</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to show source documents: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a><span class="w">    </span><span class="k">return</span>
-</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-4-37">37</a></span>
+<span class="normal"><a href="#__codelineno-4-38">38</a></span>
+<span class="normal"><a href="#__codelineno-4-39">39</a></span>
+<span class="normal"><a href="#__codelineno-4-40">40</a></span>
+<span class="normal"><a href="#__codelineno-4-41">41</a></span>
+<span class="normal"><a href="#__codelineno-4-42">42</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang&quot;</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source&quot;</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo&quot;</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="w">    </span><span class="nx">knowledgetool</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/tool&quot;</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="p">)</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="c1">// 1. Repo source (set Description — code_search puts it into the tool description)</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="nx">repoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">repo</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a><span class="w">    </span><span class="nx">repo</span><span class="p">.</span><span class="nx">WithRepository</span><span class="p">(</span><span class="nx">repo</span><span class="p">.</span><span class="nx">Repository</span><span class="p">{</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a><span class="w">        </span><span class="nx">URL</span><span class="p">:</span><span class="w">         </span><span class="s">&quot;https://github.com/trpc-group/trpc-agent-go&quot;</span><span class="p">,</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a><span class="w">        </span><span class="nx">Branch</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;main&quot;</span><span class="p">,</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a><span class="w">        </span><span class="nx">RepoName</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;trpc-agent-go&quot;</span><span class="p">,</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a><span class="w">        </span><span class="nx">Description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;tRPC agent framework for Go.&quot;</span><span class="p">,</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="w">    </span><span class="nx">repo</span><span class="p">.</span><span class="nx">WithFileExtensions</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.md&quot;</span><span class="p">}),</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a><span class="w">    </span><span class="nx">repo</span><span class="p">.</span><span class="nx">WithSkipSuffixes</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;.pb.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.trpc.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;_mock.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;_test.go&quot;</span><span class="p">}),</span>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a><span class="p">)</span>
 </span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22"></a>
-</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23"></a><span class="c1">// Filter by document IDs</span>
-</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24"></a><span class="nx">docInfos</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">ShowDocumentInfo</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithShowDocumentInfoIDs</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;doc1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;doc2&quot;</span><span class="p">}))</span>
-</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to show specific documents: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28"></a><span class="w">    </span><span class="k">return</span>
-</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29"></a><span class="p">}</span>
-</span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30"></a>
-</span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31"></a><span class="c1">// Iterate and display document information</span>
-</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32"></a><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">docInfo</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">docInfos</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Document ID: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">docInfo</span><span class="p">.</span><span class="nx">DocumentID</span><span class="p">)</span>
-</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Source: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">docInfo</span><span class="p">.</span><span class="nx">SourceName</span><span class="p">)</span>
-</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;URI: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">docInfo</span><span class="p">.</span><span class="nx">URI</span><span class="p">)</span>
-</span><span id="__span-4-36"><a id="__codelineno-4-36" name="__codelineno-4-36"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Chunk Index: %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">docInfo</span><span class="p">.</span><span class="nx">ChunkIndex</span><span class="p">)</span>
-</span><span id="__span-4-37"><a id="__codelineno-4-37" name="__codelineno-4-37"></a><span class="p">}</span>
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23"></a><span class="c1">// 2. A plain Knowledge (vector store + embedder) is enough; no graph database</span>
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">vectorStore</span><span class="p">),</span>
+</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
+</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSources</span><span class="p">([]</span><span class="nx">source</span><span class="p">.</span><span class="nx">Source</span><span class="p">{</span><span class="nx">repoSrc</span><span class="p">}),</span>
+</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28"></a><span class="p">)</span>
+</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Load</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31"></a><span class="p">}</span>
+</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32"></a>
+</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33"></a><span class="c1">// 3. Create the code_search tool and inject it into the agent</span>
+</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34"></a><span class="nx">searchTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledgetool</span><span class="p">.</span><span class="nx">NewCodeSearchTool</span><span class="p">(</span>
+</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35"></a><span class="w">    </span><span class="nx">kb</span><span class="p">,</span>
+</span><span id="__span-4-36"><a id="__codelineno-4-36" name="__codelineno-4-36"></a><span class="w">    </span><span class="nx">knowledgetool</span><span class="p">.</span><span class="nx">WithCodeSearchMaxResults</span><span class="p">(</span><span class="mi">5</span><span class="p">),</span>
+</span><span id="__span-4-37"><a id="__codelineno-4-37" name="__codelineno-4-37"></a><span class="p">)</span>
+</span><span id="__span-4-38"><a id="__codelineno-4-38" name="__codelineno-4-38"></a><span class="nx">ag</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-4-39"><a id="__codelineno-4-39" name="__codelineno-4-39"></a><span class="w">    </span><span class="s">&quot;code-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-4-40"><a id="__codelineno-4-40" name="__codelineno-4-40"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-4-41"><a id="__codelineno-4-41" name="__codelineno-4-41"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">searchTool</span><span class="p">}),</span>
+</span><span id="__span-4-42"><a id="__codelineno-4-42" name="__codelineno-4-42"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>Status Monitoring Output Example</strong></p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
-<span class="normal"><a href="#__codelineno-5-2">2</a></span>
-<span class="normal"><a href="#__codelineno-5-3">3</a></span>
-<span class="normal"><a href="#__codelineno-5-4">4</a></span>
-<span class="normal"><a href="#__codelineno-5-5">5</a></span>
-<span class="normal"><a href="#__codelineno-5-6">6</a></span>
-<span class="normal"><a href="#__codelineno-5-7">7</a></span>
-<span class="normal"><a href="#__codelineno-5-8">8</a></span>
-<span class="normal"><a href="#__codelineno-5-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a>Document ID: a1b2c3d4e5f6...
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a>Source: Technical Documentation
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a>URI: /docs/api/authentication.md
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a>Chunk Index: 0
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a>Document ID: f6e5d4c3b2a1...
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a>Source: Technical Documentation
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a>URI: /docs/api/authentication.md
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a>Chunk Index: 1
+<h4 id="common-options">Common Options</h4>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithCodeSearchToolName(name)</code></td>
+<td>Custom tool name (default <code>code_search</code>)</td>
+</tr>
+<tr>
+<td><code>WithCodeSearchToolDescription(desc)</code></td>
+<td>Override the default tool description</td>
+</tr>
+<tr>
+<td><code>WithCodeSearchMaxResults(n)</code></td>
+<td>Max number of results per call (default <code>10</code>)</td>
+</tr>
+<tr>
+<td><code>WithCodeSearchMinScore(score)</code></td>
+<td>Similarity floor (default <code>0.1</code>)</td>
+</tr>
+<tr>
+<td><code>WithCodeSearchFilter(map)</code> / <code>WithCodeSearchConditionedFilter(cond)</code></td>
+<td>Static filter always applied (e.g. pin to one repo)</td>
+</tr>
+<tr>
+<td><code>WithCodeSearchRepoInfos([]CodeRepoInfo)</code></td>
+<td>Declare repo name / description manually, overriding auto-detection from sources</td>
+</tr>
+<tr>
+<td><code>WithCodeSearchDedup(enabled)</code></td>
+<td>Toggle per-turn dedup (on by default)</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>When repo info is not provided explicitly, <code>code_search</code> auto-detects the repository name and <code>Description</code> from the Knowledge repo source and embeds them into the tool description, helping the LLM pick the right <code>trpc_ast_repo_name</code> filter in multi-repo setups.</p>
+</blockquote>
+<h4 id="reuse-via-mcp">Reuse via MCP</h4>
+<p><code>code_search</code> is a standard <code>CallableTool</code>, so it can be wrapped into an MCP server to let Cursor, Augment, or another trpc-agent-go runner share the exact same AST code search pipeline. See the full example (local agent direct call + MCP server + Augment comparison) at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/code_context_engine">examples/knowledge/features/code_context_engine</a>.</p>
+<h3 id="code_graph_-code-graph-retrieval-graphrag-advanced">code_graph_*: Code Graph Retrieval (GraphRAG, Advanced)</h3>
+<blockquote>
+<p><strong>Example Code</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/graphrag">examples/knowledge/features/graphrag</a></p>
+</blockquote>
+<p>Beyond vector retrieval (embedding + vector store), the repo source also supports storing structural code relationships as a graph. AST readers extract edges between entities during parsing. Combined with a graph database (Apache AGE), this enables structural code navigation.</p>
+<p><img alt="AGE Graph Viewer - Code Graph Visualization" src="../../assets/img/knowledge/viewer.jpg" /></p>
+<h4 id="edge-types">Edge Types</h4>
+<table>
+<thead>
+<tr>
+<th>Edge Type</th>
+<th>Meaning</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CALLS</code></td>
+<td>Function/method call</td>
+<td><code>main</code> → <code>server.Start</code></td>
+</tr>
+<tr>
+<td><code>METHOD</code></td>
+<td>Method of a class/struct</td>
+<td><code>Server</code> → <code>Server.Start</code></td>
+</tr>
+<tr>
+<td><code>FIELD</code></td>
+<td>Struct field</td>
+<td><code>Server</code> → <code>services</code></td>
+</tr>
+<tr>
+<td><code>PARAM</code></td>
+<td>Function parameter</td>
+<td><code>NewServer</code> → <code>opts</code></td>
+</tr>
+<tr>
+<td><code>RETURNS</code></td>
+<td>Function return type</td>
+<td><code>NewServer</code> → <code>Server</code></td>
+</tr>
+<tr>
+<td><code>IMPLEMENTS</code></td>
+<td>A type implements an interface</td>
+<td><code>MyService</code> → <code>Handler</code></td>
+</tr>
+<tr>
+<td><code>ALIAS_OF</code></td>
+<td>A type alias points to its target type</td>
+<td><code>MyAlias</code> → <code>TargetType</code></td>
+</tr>
+<tr>
+<td><code>CONTAINS</code></td>
+<td>Containment</td>
+<td><code>package server</code> → <code>Server</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="usage">Usage</h4>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-5-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-5-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-5-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-5-10">10</a></span>
+<span class="normal"><a href="#__codelineno-5-11">11</a></span>
+<span class="normal"><a href="#__codelineno-5-12">12</a></span>
+<span class="normal"><a href="#__codelineno-5-13">13</a></span>
+<span class="normal"><a href="#__codelineno-5-14">14</a></span>
+<span class="normal"><a href="#__codelineno-5-15">15</a></span>
+<span class="normal"><a href="#__codelineno-5-16">16</a></span>
+<span class="normal"><a href="#__codelineno-5-17">17</a></span>
+<span class="normal"><a href="#__codelineno-5-18">18</a></span>
+<span class="normal"><a href="#__codelineno-5-19">19</a></span>
+<span class="normal"><a href="#__codelineno-5-20">20</a></span>
+<span class="normal"><a href="#__codelineno-5-21">21</a></span>
+<span class="normal"><a href="#__codelineno-5-22">22</a></span>
+<span class="normal"><a href="#__codelineno-5-23">23</a></span>
+<span class="normal"><a href="#__codelineno-5-24">24</a></span>
+<span class="normal"><a href="#__codelineno-5-25">25</a></span>
+<span class="normal"><a href="#__codelineno-5-26">26</a></span>
+<span class="normal"><a href="#__codelineno-5-27">27</a></span>
+<span class="normal"><a href="#__codelineno-5-28">28</a></span>
+<span class="normal"><a href="#__codelineno-5-29">29</a></span>
+<span class="normal"><a href="#__codelineno-5-30">30</a></span>
+<span class="normal"><a href="#__codelineno-5-31">31</a></span>
+<span class="normal"><a href="#__codelineno-5-32">32</a></span>
+<span class="normal"><a href="#__codelineno-5-33">33</a></span>
+<span class="normal"><a href="#__codelineno-5-34">34</a></span>
+<span class="normal"><a href="#__codelineno-5-35">35</a></span>
+<span class="normal"><a href="#__codelineno-5-36">36</a></span>
+<span class="normal"><a href="#__codelineno-5-37">37</a></span>
+<span class="normal"><a href="#__codelineno-5-38">38</a></span>
+<span class="normal"><a href="#__codelineno-5-39">39</a></span>
+<span class="normal"><a href="#__codelineno-5-40">40</a></span>
+<span class="normal"><a href="#__codelineno-5-41">41</a></span>
+<span class="normal"><a href="#__codelineno-5-42">42</a></span>
+<span class="normal"><a href="#__codelineno-5-43">43</a></span>
+<span class="normal"><a href="#__codelineno-5-44">44</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang&quot;</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python&quot;</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="w">    </span><span class="nx">agegraphstore</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age&quot;</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo&quot;</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector&quot;</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="w">    </span><span class="nx">knowledgetool</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/tool&quot;</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="p">)</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="c1">// 1. Configure repo source</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="nx">repoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">repo</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a><span class="w">    </span><span class="nx">repo</span><span class="p">.</span><span class="nx">WithRepository</span><span class="p">(</span><span class="nx">repo</span><span class="p">.</span><span class="nx">Repository</span><span class="p">{</span><span class="nx">URL</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://github.com/example/repo&quot;</span><span class="p">}),</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a><span class="w">    </span><span class="nx">repo</span><span class="p">.</span><span class="nx">WithFileExtensions</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.py&quot;</span><span class="p">}),</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15"></a><span class="p">)</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16"></a>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17"></a><span class="c1">// 2. Create GraphKnowledge (graph + vector hybrid retrieval)</span>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18"></a><span class="nx">ageStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agegraphstore</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19"></a><span class="w">    </span><span class="nx">agegraphstore</span><span class="p">.</span><span class="nx">WithClientDSN</span><span class="p">(</span><span class="nx">ageDSN</span><span class="p">),</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20"></a><span class="w">    </span><span class="nx">agegraphstore</span><span class="p">.</span><span class="nx">WithGraphName</span><span class="p">(</span><span class="s">&quot;my_graph&quot;</span><span class="p">),</span>
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21"></a><span class="p">)</span>
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24"></a><span class="p">}</span>
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25"></a><span class="nx">vectorStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">pgvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26"></a><span class="w">    </span><span class="nx">pgvector</span><span class="p">.</span><span class="nx">WithPGVectorClientDSN</span><span class="p">(</span><span class="nx">pgvectorDSN</span><span class="p">),</span>
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27"></a><span class="w">    </span><span class="nx">pgvector</span><span class="p">.</span><span class="nx">WithTable</span><span class="p">(</span><span class="s">&quot;graph_vectors&quot;</span><span class="p">),</span>
+</span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28"></a><span class="w">    </span><span class="nx">pgvector</span><span class="p">.</span><span class="nx">WithIndexDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span>
+</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29"></a><span class="p">)</span>
+</span><span id="__span-5-30"><a id="__codelineno-5-30" name="__codelineno-5-30"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-31"><a id="__codelineno-5-31" name="__codelineno-5-31"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-5-32"><a id="__codelineno-5-32" name="__codelineno-5-32"></a><span class="p">}</span>
+</span><span id="__span-5-33"><a id="__codelineno-5-33" name="__codelineno-5-33"></a><span class="nx">gk</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">NewGraphKnowledge</span><span class="p">(</span>
+</span><span id="__span-5-34"><a id="__codelineno-5-34" name="__codelineno-5-34"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithGraphStore</span><span class="p">(</span><span class="nx">ageStore</span><span class="p">),</span>
+</span><span id="__span-5-35"><a id="__codelineno-5-35" name="__codelineno-5-35"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithGraphVectorStore</span><span class="p">(</span><span class="nx">vectorStore</span><span class="p">),</span>
+</span><span id="__span-5-36"><a id="__codelineno-5-36" name="__codelineno-5-36"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithGraphEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
+</span><span id="__span-5-37"><a id="__codelineno-5-37" name="__codelineno-5-37"></a><span class="p">)</span>
+</span><span id="__span-5-38"><a id="__codelineno-5-38" name="__codelineno-5-38"></a>
+</span><span id="__span-5-39"><a id="__codelineno-5-39" name="__codelineno-5-39"></a><span class="c1">// 3. Load graph data</span>
+</span><span id="__span-5-40"><a id="__codelineno-5-40" name="__codelineno-5-40"></a><span class="nx">gk</span><span class="p">.</span><span class="nx">LoadGraphSource</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">repoSrc</span><span class="p">)</span>
+</span><span id="__span-5-41"><a id="__codelineno-5-41" name="__codelineno-5-41"></a>
+</span><span id="__span-5-42"><a id="__codelineno-5-42" name="__codelineno-5-42"></a><span class="c1">// 4. Inject graph tools into the Agent</span>
+</span><span id="__span-5-43"><a id="__codelineno-5-43" name="__codelineno-5-43"></a><span class="nx">toolSet</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledgetool</span><span class="p">.</span><span class="nx">NewCodeGraphSearchTool</span><span class="p">(</span><span class="nx">gk</span><span class="p">)</span>
+</span><span id="__span-5-44"><a id="__codelineno-5-44" name="__codelineno-5-44"></a><span class="c1">// Exposes code_graph_search / code_graph_traverse / code_graph_find_paths</span>
 </span></code></pre></div></td></tr></table></div>
+<h4 id="agent-graph-tools">Agent Graph Tools</h4>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Function</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>code_graph_search</code></td>
+<td>Vector search for AST nodes, returns matching code entities</td>
+</tr>
+<tr>
+<td><code>code_graph_traverse</code></td>
+<td>Traverse related nodes from a given start node along edges (e.g., find all callers of a function)</td>
+</tr>
+<tr>
+<td><code>code_graph_find_paths</code></td>
+<td>Find paths between two code entities (e.g., trace a call chain)</td>
+</tr>
+</tbody>
+</table>
+<p>By locating entry nodes through vector search and then exploring structural relationships via graph traversal, the Agent can understand code architecture without reading large amounts of source code.</p>
 
 
 
@@ -3183,7 +3689,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 25, 2026 09:03:41 UTC">2026-06-25 09:03:41</span>
   </span>
 
     
@@ -3193,7 +3699,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="January 8, 2026 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 25, 2026 09:03:41 UTC">2026-06-25 09:03:41</span>
   </span>
 
     
@@ -3274,7 +3780,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../extractor/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Extractor">
+          <a href="../source/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Source">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -3284,20 +3790,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Extractor
+                Source
               </div>
             </div>
           </a>
         
         
           
-          <a href="../ocr/" class="md-footer__link md-footer__link--next" aria-label="Next: OCR">
+          <a href="../filter/" class="md-footer__link md-footer__link--next" aria-label="Next: Filter">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                OCR
+                Filter
               </div>
             </div>
             <div class="md-footer__button md-icon">

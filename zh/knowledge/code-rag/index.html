@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/management/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/code-rag/">
       
       
-        <link rel="prev" href="../filter/">
+        <link rel="prev" href="../source/">
       
       
-        <link rel="next" href="../ocr/">
+        <link rel="next" href="../extractor/">
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
@@ -22,7 +22,7 @@
     
     
       
-        <title>知识库管理 - tRPC-Agent-Go</title>
+        <title>代码知识库（Code RAG, Beta） - tRPC-Agent-Go</title>
       
     
     
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#_1" class="md-skip">
+        <a href="#code-rag-beta" class="md-skip">
           跳转至
         </a>
       
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              知识库管理
+              代码知识库（Code RAG, Beta）
             
           </span>
         </div>
@@ -166,7 +166,7 @@
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="../../../knowledge/management/" hreflang="en" class="md-select__link">
+            <a href="../../../knowledge/code-rag/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
@@ -1497,10 +1497,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../code-rag/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    代码知识库（Code RAG, Beta）
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1511,6 +1533,212 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      能力概览
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#repo-source" class="md-nav__link">
+    <span class="md-ellipsis">
+      仓库源 (Repo Source)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="仓库源 (Repo Source)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      基本用法
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#repository" class="md-nav__link">
+    <span class="md-ellipsis">
+      Repository 结构说明
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      版本选择优先级
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      扫描范围控制
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metadata 行为
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ast-reader" class="md-nav__link">
+    <span class="md-ellipsis">
+      与 AST Reader 的关系
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      解析效果示例
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      代码检索
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="代码检索">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#code_searchast" class="md-nav__link">
+    <span class="md-ellipsis">
+      code_search：AST 语义代码检索
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="code_search：AST 语义代码检索">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      基本用法
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      常用配置项
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      通过 MCP 复用
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#code_graph_graphrag" class="md-nav__link">
+    <span class="md-ellipsis">
+      code_graph_*：代码图谱检索（GraphRAG，进阶）
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="code_graph_*：代码图谱检索（GraphRAG，进阶）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      边类型
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      用法
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent 可用的图工具
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1566,32 +1794,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    知识库管理
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../management/" class="md-nav__link">
         
   
   
@@ -1602,86 +1808,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="目录">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      目录
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#_2" class="md-nav__link">
-    <span class="md-ellipsis">
-      源同步模式对比
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="源同步模式对比">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#_3" class="md-nav__link">
-    <span class="md-ellipsis">
-      默认模式（不启用同步）
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#withenablesourcesync" class="md-nav__link">
-    <span class="md-ellipsis">
-      同步模式（启用 WithEnableSourceSync）
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#_4" class="md-nav__link">
-    <span class="md-ellipsis">
-      模式对比
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_5" class="md-nav__link">
-    <span class="md-ellipsis">
-      动态源管理
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_6" class="md-nav__link">
-    <span class="md-ellipsis">
-      知识库状态监控
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -2729,28 +2855,46 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#_2" class="md-nav__link">
+  <a href="#_1" class="md-nav__link">
     <span class="md-ellipsis">
-      源同步模式对比
+      能力概览
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="源同步模式对比">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#repo-source" class="md-nav__link">
+    <span class="md-ellipsis">
+      仓库源 (Repo Source)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="仓库源 (Repo Source)">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_3" class="md-nav__link">
+  <a href="#_2" class="md-nav__link">
     <span class="md-ellipsis">
-      默认模式（不启用同步）
+      基本用法
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#withenablesourcesync" class="md-nav__link">
+  <a href="#repository" class="md-nav__link">
     <span class="md-ellipsis">
-      同步模式（启用 WithEnableSourceSync）
+      Repository 结构说明
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      版本选择优先级
     </span>
   </a>
   
@@ -2759,7 +2903,34 @@
           <li class="md-nav__item">
   <a href="#_4" class="md-nav__link">
     <span class="md-ellipsis">
-      模式对比
+      扫描范围控制
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metadata" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metadata 行为
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ast-reader" class="md-nav__link">
+    <span class="md-ellipsis">
+      与 AST Reader 的关系
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      解析效果示例
     </span>
   </a>
   
@@ -2771,20 +2942,101 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_5" class="md-nav__link">
+  <a href="#_6" class="md-nav__link">
     <span class="md-ellipsis">
-      动态源管理
+      代码检索
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="代码检索">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#code_searchast" class="md-nav__link">
+    <span class="md-ellipsis">
+      code_search：AST 语义代码检索
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="code_search：AST 语义代码检索">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      基本用法
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#_6" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
     <span class="md-ellipsis">
-      知识库状态监控
+      常用配置项
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mcp" class="md-nav__link">
+    <span class="md-ellipsis">
+      通过 MCP 复用
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#code_graph_graphrag" class="md-nav__link">
+    <span class="md-ellipsis">
+      code_graph_*：代码图谱检索（GraphRAG，进阶）
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="code_graph_*：代码图谱检索（GraphRAG，进阶）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      边类型
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      用法
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      Agent 可用的图工具
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2804,7 +3056,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/knowledge/management.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/knowledge/code-rag.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2813,65 +3065,43 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/knowledge/management.md" title="查看本页的源代码" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/knowledge/code-rag.md" title="查看本页的源代码" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="_1">知识库管理</h1>
+<h1 id="code-rag-beta">代码知识库与检索（Code RAG, Beta）</h1>
 <blockquote>
-<p><strong>示例代码</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/management">examples/knowledge/features/management</a></p>
+<p><strong>Beta 阶段</strong>：Code RAG（仓库源 + AST 解析 + <code>code_search</code> / <code>code_graph_*</code> 检索工具）目前处于 Beta，API 与行为可能调整。</p>
+<p><strong>示例代码</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/code_context_engine">code_context_engine</a> · <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/graphrag">graphrag</a> · <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/ast">ast</a></p>
 </blockquote>
-<p>Knowledge 系统提供了强大的知识库管理功能，支持动态源管理和智能同步机制。</p>
-<h2 id="_2">源同步模式对比</h2>
-<p>Knowledge 提供两种加载模式：<strong>默认模式（不启用同步）</strong> 和 <strong>同步模式（启用 WithEnableSourceSync）</strong>。</p>
-<h3 id="_3">默认模式（不启用同步）</h3>
-<p>默认情况下，<code>WithEnableSourceSync</code> 为 <code>false</code>，Knowledge 采用<strong>追加式加载</strong>：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-0-10">10</a></span>
-<span class="normal"><a href="#__codelineno-0-11">11</a></span>
-<span class="normal"><a href="#__codelineno-0-12">12</a></span>
-<span class="normal"><a href="#__codelineno-0-13">13</a></span>
-<span class="normal"><a href="#__codelineno-0-14">14</a></span>
-<span class="normal"><a href="#__codelineno-0-15">15</a></span>
-<span class="normal"><a href="#__codelineno-0-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">&quot;log&quot;</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="p">)</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">vectorStore</span><span class="p">),</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSources</span><span class="p">(</span><span class="nx">sources</span><span class="p">),</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">    </span><span class="c1">// WithEnableSourceSync 默认为 false</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="p">)</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Load</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to load: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="p">}</span>
+<p>trpc-agent-go 提供了一部分<strong>代码知识库（Code RAG）</strong>能力：把代码仓库解析成带结构的语义单元，存进向量库（可选图库），让 Agent 像查文档一样检索代码，而不是在原始文本里 grep。</p>
+<h2 id="_1">能力概览</h2>
+<ol>
+<li><strong>AST 语义解析</strong>：按 AST 把代码切成完整的语义实体（函数 / 方法 / 结构体 / 类 / 接口 / service / rpc 等），每个实体带结构化 metadata（签名、注释、包路径、文件位置），而不是按字符长度硬切。目前已开源 Go / Python / Proto，C++ / JavaScript 等正在逐步开放。</li>
+<li><strong>仓库加载</strong>：直接 ingest 远程 Git 仓库或本地目录，按文件类型分发到对应 reader，对单个仓库统一处理多语言代码 + Markdown。</li>
+<li><strong><code>code_search</code> 向量检索</strong>：AST 感知的混合检索——语义 query + <code>trpc_ast_*</code> 元数据过滤 + <code>content</code> 字面匹配，并自带同轮去重与多角度查询引导。</li>
+<li><strong><code>code_graph_*</code> 图检索（GraphRAG）</strong>：基于 AST 提取的调用 / 依赖等边关系，结合图数据库（Apache AGE）做调用链、依赖路径等结构化导航。</li>
+<li><strong>MCP 复用</strong>：<code>code_search</code> 可直接包成 MCP server，供 Cursor、其他 runner 等外部 MCP 客户端共用同一套代码检索能力。</li>
+</ol>
+<p>这些能力串成一条链路：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>仓库源（拉取 + 遍历文件）
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>  → AST Reader（按语义实体解析：函数 / 方法 / 结构体 / 类 / service …）
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>  → 向量库（+ 可选图库）存储
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a>  → code_search / code_graph_*（Agent 检索工具）
 </span></code></pre></div></td></tr></table></div>
-<p><strong>默认模式的行为</strong>：</p>
-<ul>
-<li><strong>仅追加</strong>：每次 <code>Load()</code> 只会将新文档添加到向量存储</li>
-<li><strong>不检测变更</strong>：已存在的文档不会被更新，即使源文件内容已变更</li>
-<li><strong>不清理孤儿</strong>：已删除的源文件对应的向量数据不会被自动清理</li>
-<li><strong>适用场景</strong>：一次性导入、数据只增不减的场景、业务自己管理数据源的场景</li>
-</ul>
-<h3 id="withenablesourcesync">同步模式（启用 WithEnableSourceSync）</h3>
-<ul>
-<li>启用 <code>WithEnableSourceSync(true)</code> 后，Knowledge 会<strong>保持向量存储与配置的 Source 完全一致</strong>：</li>
-</ul>
+<p>下面进入用法：「仓库源」讲摄取侧（怎么配仓库、控制扫描、产出哪些 metadata），「代码检索」讲检索侧（Agent 怎么用 <code>code_search</code> / <code>code_graph_*</code> 查代码）。</p>
+<h2 id="repo-source">仓库源 (Repo Source)</h2>
+<p>仓库源是代码知识库的数据入口，负责整条链路最前面的「摄取 + 解析」：直接加载远程 <strong>Git URL</strong> 或本地 checkout 的<strong>仓库目录</strong>，遍历文件并按类型分发到对应 reader，对单个仓库统一处理 Go / Python / Proto / Markdown 等内容。本节关注怎么配置仓库、控制扫描范围、产出哪些 metadata。</p>
+<blockquote>
+<p><strong>当前开源状态说明</strong>：目前 AST-aware 代码解析能力已开源支持 <strong>Go</strong>、<strong>Python</strong> 和 <strong>Proto / PB</strong>。<code>C++</code>、<code>JavaScript</code> 等语言能力正在逐步开源中。对于这些尚未开源的语言，仓库源仍可通过普通文档 reader 处理对应文本类文件，但不会产出同等级别的 AST 语义实体。</p>
+</blockquote>
+<h3 id="_2">基本用法</h3>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
@@ -2888,95 +3118,99 @@
 <span class="normal"><a href="#__codelineno-1-14">14</a></span>
 <span class="normal"><a href="#__codelineno-1-15">15</a></span>
 <span class="normal"><a href="#__codelineno-1-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="s">&quot;log&quot;</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang&quot;</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python&quot;</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="w">    </span><span class="nx">reposource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo&quot;</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a><span class="p">)</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">vectorStore</span><span class="p">),</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSources</span><span class="p">(</span><span class="nx">sources</span><span class="p">),</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEnableSourceSync</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span><span class="w"> </span><span class="c1">// 启用同步模式</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="p">)</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Load</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to load: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16"></a><span class="p">}</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="nx">repoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="w">    </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">WithRepository</span><span class="p">(</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="w">        </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">Repository</span><span class="p">{</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="w">            </span><span class="nx">URL</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;https://github.com/trpc-group/trpc-go&quot;</span><span class="p">,</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">            </span><span class="nx">Branch</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;main&quot;</span><span class="p">,</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14"></a><span class="w">    </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;Code Repository&quot;</span><span class="p">),</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15"></a><span class="w">    </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">WithFileExtensions</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.py&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.md&quot;</span><span class="p">}),</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>触发同步的操作</strong></p>
-<p>启用同步模式后，以下操作都会触发同步校验：</p>
+<p>Go AST reader 和 Python AST reader 是可选模块，需要手动 blank import 完成注册：</p>
+<ul>
+<li>扫描 <code>.go</code> 文件 → <code>knowledge/document/reader/golang</code></li>
+<li>扫描 <code>.py</code> 文件 → <code>knowledge/document/reader/python</code></li>
+</ul>
+<p>Proto reader 默认注册，无需额外导入。</p>
+<blockquote>
+<p><strong>注意</strong>：Python reader 通过内嵌的 Python 脚本进行 AST 解析，运行时需要系统安装 Python 3.9+（仅使用标准库 <code>ast</code> 模块，无第三方依赖）。</p>
+</blockquote>
+<h3 id="repository">Repository 结构说明</h3>
+<p><code>Repository</code> 用于描述单个仓库输入，可分别配置版本与范围：</p>
 <table>
 <thead>
 <tr>
-<th>操作</th>
-<th>同步行为</th>
+<th>字段</th>
+<th>说明</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>Load()</code></td>
-<td>全量同步：检测所有 Source 的变更，清理孤儿文档</td>
+<td><code>URL</code></td>
+<td>远程 Git 仓库地址</td>
 </tr>
 <tr>
-<td><code>ReloadSource()</code></td>
-<td>单源同步：检测指定 Source 的变更，加载变更，清理 Source 的孤儿文档</td>
+<td><code>Dir</code></td>
+<td>本地仓库目录</td>
 </tr>
 <tr>
-<td><code>RemoveSource()</code></td>
-<td>删除同步：精确删除指定 Source 的所有文档，更新缓存状态</td>
+<td><code>Branch</code></td>
+<td>指定分支</td>
 </tr>
 <tr>
-<td><code>AddSource()</code></td>
-<td>增量同步：检测新 Source 中文档的变更并加载，更新缓存状态（不触发孤儿清理）</td>
-</tr>
-</tbody>
-</table>
-<p><strong>同步模式的行为</strong>：</p>
-<ol>
-<li><strong>加载前准备</strong>：刷新文档信息缓存，建立同步状态跟踪</li>
-<li><strong>智能增量处理</strong>：检测文档变更，只处理新增或修改的文档</li>
-<li><strong>加载后清理</strong>：自动删除不再属于任何配置 Source 的孤儿文档</li>
-</ol>
-<h3 id="_4">模式对比</h3>
-<table>
-<thead>
-<tr>
-<th>特性</th>
-<th>默认模式</th>
-<th>同步模式</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>新文档处理</td>
-<td>✅ 追加</td>
-<td>✅ 追加</td>
+<td><code>Tag</code></td>
+<td>指定 tag</td>
 </tr>
 <tr>
-<td>变更检测</td>
-<td>❌ 不检测</td>
-<td>✅ 自动检测并更新</td>
+<td><code>Commit</code></td>
+<td>指定 commit</td>
 </tr>
 <tr>
-<td>孤儿清理</td>
-<td>❌ 不清理</td>
-<td>✅ 自动清理</td>
+<td><code>Subdir</code></td>
+<td>仅扫描仓库中的某个子目录</td>
 </tr>
 <tr>
-<td>数据一致性</td>
-<td>❌ 可能不一致</td>
-<td>✅ 与 Source 保持一致</td>
+<td><code>RepoName</code></td>
+<td>自定义仓库名称</td>
 </tr>
 <tr>
-<td>性能开销</td>
-<td>较低</td>
-<td>略高（需要对比状态）</td>
+<td><code>Description</code></td>
+<td>仓库描述；<code>code_search</code> 工具会读取它并写入工具说明，帮助 LLM 知道该仓库是做什么的</td>
+</tr>
+<tr>
+<td><code>RepoURL</code></td>
+<td>自定义仓库 URL（覆盖默认推导）</td>
 </tr>
 </tbody>
 </table>
 <blockquote>
-<p>⚠️ <strong>重要警告</strong>：启用同步模式时，<strong>必须确保所有需要保留的 Source 都被正确配置</strong>。同步机制会对比配置的 Source 与向量存储中的数据，<strong>任何不属于配置 Source 的文档都会被视为孤儿并删除</strong>。</p>
+<p><code>URL</code> 与 <code>Dir</code> 通常二选一。当前一个 <code>repo.Source</code> 仅处理一个仓库输入。</p>
+</blockquote>
+<h3 id="_3">版本选择优先级</h3>
+<p>当同时配置多个版本字段时，优先级为：</p>
+<ol>
+<li><code>Commit</code></li>
+<li><code>Tag</code></li>
+<li><code>Branch</code></li>
+</ol>
+<p>也就是说，如果同时给出 <code>Commit</code> 和 <code>Branch</code>，最终会 checkout <code>Commit</code>。</p>
+<h3 id="_4">扫描范围控制</h3>
+<p>仓库源当前推荐暴露的是“仓库语义”相关配置：</p>
+<ul>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/knowledge/source/repo/options.go"><code>WithFileExtensions</code></a> 控制扫描哪些文件后缀</li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/knowledge/source/repo/options.go"><code>WithSkipDirs</code></a> 控制跳过哪些目录名</li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/knowledge/source/repo/options.go"><code>WithSkipSuffixes</code></a> 控制跳过哪些文件后缀</li>
+<li><code>Repository.Subdir</code> 控制某个仓库只扫描部分目录</li>
+</ul>
+<p>例如只扫描仓库内 <code>server/</code> 目录下的 Go 与 Markdown：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
@@ -2987,44 +3221,78 @@
 <span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
 <span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
 <span class="normal"><a href="#__codelineno-2-10">10</a></span>
-<span class="normal"><a href="#__codelineno-2-11">11</a></span>
-<span class="normal"><a href="#__codelineno-2-12">12</a></span>
-<span class="normal"><a href="#__codelineno-2-13">13</a></span>
-<span class="normal"><a href="#__codelineno-2-14">14</a></span>
-<span class="normal"><a href="#__codelineno-2-15">15</a></span>
-<span class="normal"><a href="#__codelineno-2-16">16</a></span>
-<span class="normal"><a href="#__codelineno-2-17">17</a></span>
-<span class="normal"><a href="#__codelineno-2-18">18</a></span>
-<span class="normal"><a href="#__codelineno-2-19">19</a></span>
-<span class="normal"><a href="#__codelineno-2-20">20</a></span>
-<span class="normal"><a href="#__codelineno-2-21">21</a></span>
-<span class="normal"><a href="#__codelineno-2-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source&quot;</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="p">)</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="c1">// ❌ 危险：空 Source 配置会导致所有现有文档被删除！</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">vectorStore</span><span class="p">),</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSources</span><span class="p">([]</span><span class="nx">source</span><span class="p">.</span><span class="nx">Source</span><span class="p">{}),</span><span class="w"> </span><span class="c1">// 空配置</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEnableSourceSync</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="p">)</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="nx">kb</span><span class="p">.</span><span class="nx">Load</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span><span class="w"> </span><span class="c1">// 所有文档将被清理！</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a>
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="c1">// ✅ 正确：确保所有需要的 Source 都已配置</span>
-</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
-</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">vectorStore</span><span class="p">),</span>
-</span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSources</span><span class="p">([]</span><span class="nx">source</span><span class="p">.</span><span class="nx">Source</span><span class="p">{</span><span class="nx">source1</span><span class="p">,</span><span class="w"> </span><span class="nx">source2</span><span class="p">,</span><span class="w"> </span><span class="nx">source3</span><span class="p">}),</span><span class="w"> </span><span class="c1">// 完整配置</span>
-</span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEnableSourceSync</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21"></a><span class="p">)</span>
-</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22"></a><span class="nx">kb</span><span class="p">.</span><span class="nx">Load</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span><span class="w"> </span><span class="c1">// 安全：只清理不属于这些 Source 的文档</span>
+<span class="normal"><a href="#__codelineno-2-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">repoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">WithRepository</span><span class="p">(</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">        </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">Repository</span><span class="p">{</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">            </span><span class="nx">URL</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;https://github.com/trpc-group/trpc-go&quot;</span><span class="p">,</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="w">            </span><span class="nx">Branch</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;main&quot;</span><span class="p">,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="w">            </span><span class="nx">Subdir</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;server&quot;</span><span class="p">,</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">    </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">WithFileExtensions</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.md&quot;</span><span class="p">}),</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="nx">reposource</span><span class="p">.</span><span class="nx">WithSkipSuffixes</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;.pb.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.trpc.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;_mock.go&quot;</span><span class="p">}),</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-</blockquote>
-<h2 id="_5">动态源管理</h2>
-<p>Knowledge 支持运行时动态管理知识源，确保向量存储中的数据始终与用户配置的 source 保持一致：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
+<h3 id="metadata">Metadata 行为</h3>
+<p>仓库源会在 reader 产出的文档基础上补充仓库级 metadata，例如：</p>
+<table>
+<thead>
+<tr>
+<th>Metadata</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>trpc_agent_go_source=repo</code></td>
+<td>文档来自仓库源</td>
+</tr>
+<tr>
+<td><code>trpc_agent_go_repo_path</code></td>
+<td>本地克隆后的仓库根目录</td>
+</tr>
+<tr>
+<td><code>trpc_ast_repo_name</code></td>
+<td>仓库名称</td>
+</tr>
+<tr>
+<td><code>trpc_ast_repo_url</code></td>
+<td>仓库 URL</td>
+</tr>
+<tr>
+<td><code>trpc_ast_branch</code></td>
+<td>当前解析的版本标识（branch/tag/commit）</td>
+</tr>
+<tr>
+<td><code>trpc_ast_file_path</code></td>
+<td>仓库内相对路径</td>
+</tr>
+</tbody>
+</table>
+<p>注意：</p>
+<ul>
+<li><code>trpc_ast_file_path</code> 语义上表示 <strong>仓库内逻辑路径</strong>，不是远程 Git URL</li>
+<li>如果输入来自 Git URL，仓库源会先 clone 到临时目录，再以相对路径形式写入 <code>trpc_ast_file_path</code></li>
+</ul>
+<h3 id="ast-reader">与 AST Reader 的关系</h3>
+<p>仓库源不会自己解析代码，而是根据文件类型分发到底层 reader：</p>
+<ul>
+<li><code>.go</code> → Go AST reader</li>
+<li><code>.py</code> → Python AST reader</li>
+<li><code>.proto</code> → Proto AST reader</li>
+<li><code>.md</code> → Markdown reader</li>
+<li>其他已注册扩展 → 对应 reader</li>
+</ul>
+<p>因此，仓库源非常适合演示和构建“<strong>同一个仓库内多语言 / 多类型内容统一 ingest</strong>”的知识库。</p>
+<h3 id="_5">解析效果示例</h3>
+<p>仓库源对 AST 感知文件（<code>.go</code> / <code>.py</code> / <code>.proto</code>）会按语义实体切块，每个切块包含三层信息：</p>
+<ul>
+<li><strong>content</strong>：语义完整的代码片段（如一个完整的结构体/类/函数定义），非随机字符截断</li>
+<li><strong>embedding text</strong>：结构化摘要（name / signature / comment 等），用于向量化检索</li>
+<li><strong>metadata</strong>：<code>trpc_ast_*</code> 系列字段（type / full_name / language / file_path 等），用于精确过滤和定位</li>
+</ul>
+<p>下面是对一个 Go 结构体的切块示意：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
 <span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
@@ -3044,30 +3312,70 @@
 <span class="normal"><a href="#__codelineno-3-18">18</a></span>
 <span class="normal"><a href="#__codelineno-3-19">19</a></span>
 <span class="normal"><a href="#__codelineno-3-20">20</a></span>
-<span class="normal"><a href="#__codelineno-3-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">    </span><span class="s">&quot;log&quot;</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="nx">filesource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/file&quot;</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="p">)</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="c1">// 添加新的知识源 - 数据将与配置的源保持同步</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="nx">newSource</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">filesource</span><span class="p">.</span><span class="nx">New</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;./new-docs/api.md&quot;</span><span class="p">})</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">AddSource</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">newSource</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to add source: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="p">}</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="c1">// 重新加载指定的知识源 - 自动检测变更并同步</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">ReloadSource</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">newSource</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to reload source: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="p">}</span>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a>
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="c1">// 移除指定的知识源 - 精确删除相关文档</span>
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">RemoveSource</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;API Documentation&quot;</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to remove source: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-3-21">21</a></span>
+<span class="normal"><a href="#__codelineno-3-22">22</a></span>
+<span class="normal"><a href="#__codelineno-3-23">23</a></span>
+<span class="normal"><a href="#__codelineno-3-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a>content:
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>// Server is a tRPC server.
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a>// One process, one server. A server may offer one or more services.
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a>type Server struct {
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a>    MaxCloseWaitTime time.Duration
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a>    services         map[string]Service
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a>    ...
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a>}
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a>embedding text:
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a>{&quot;name&quot;: &quot;Server&quot;, &quot;signature&quot;: &quot;type Server struct&quot;, &quot;type&quot;: &quot;Struct&quot;,
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a> &quot;full_name&quot;: &quot;trpc.group/trpc-go/trpc-go/server.Server&quot;,
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a> &quot;comment&quot;: &quot;Server is a tRPC server. ...&quot;}
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a>
+</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a>metadata:
+</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a>trpc_agent_go_source: repo
+</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a>trpc_agent_go_file_path: server/server.go
+</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a>trpc_ast_repo_name: trpc-go
+</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a>trpc_ast_repo_url: https://github.com/trpc-group/trpc-go
+</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a>trpc_ast_file_path: server/server.go
+</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a>trpc_ast_full_name: trpc.group/trpc-go/trpc-go/server.Server
+</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a>trpc_ast_type: Struct
+</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23"></a>trpc_ast_signature: type Server struct
+</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24"></a>trpc_ast_language: go
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_6">知识库状态监控</h2>
-<p>Knowledge 提供了丰富的状态监控功能，帮助用户了解当前配置源的同步状态：</p>
+<p>对于 Python 文件，同样按 Class / Function / Method 粒度切块；对于 <code>.proto</code> 文件，则按 service / rpc / message / enum 粒度切块。</p>
+<h2 id="_6">代码检索</h2>
+<blockquote>
+<p><strong>示例代码</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/code_context_engine">examples/knowledge/features/code_context_engine</a></p>
+</blockquote>
+<p>仓库源把代码 ingest 成 AST 语义实体后，Agent 通过 knowledge tool 来检索这些实体。框架提供两类代码检索工具：</p>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>检索方式</th>
+<th>定位</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>code_search</code></td>
+<td>向量语义检索 + 元数据/字面过滤（混合检索）</td>
+<td><strong>主力工具</strong>：按功能 / 名字 / 字面代码找实体</td>
+</tr>
+<tr>
+<td><code>code_graph_search</code> / <code>code_graph_traverse</code> / <code>code_graph_find_paths</code></td>
+<td>向量定位 + 图遍历</td>
+<td><strong>进阶</strong>：需要顺着调用 / 依赖关系做结构化导航时</td>
+</tr>
+</tbody>
+</table>
+<p>大多数「这段代码在哪 / 谁实现了 X / 某个报错出自哪」的问题，用 <code>code_search</code> 就够了；只有当你需要「谁调用了它、调用链怎么走、两个符号怎么连起来」这类关系型导航时，才需要 GraphRAG 图工具。</p>
+<h3 id="code_searchast">code_search：AST 语义代码检索</h3>
+<p><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/knowledge/tool/codesearchtool.go"><code>NewCodeSearchTool</code></a> 基于普通向量库（无需图数据库）创建一个面向代码的检索工具，默认工具名 <code>code_search</code>。它在通用搜索之上做了三件代码专用的事：</p>
+<ul>
+<li><strong>暴露 AST 元数据维度</strong>：Agent 可按 <code>trpc_ast_repo_name</code> / <code>trpc_ast_scope</code> / <code>trpc_ast_type</code> / <code>trpc_ast_full_name</code> / <code>trpc_ast_package</code> / <code>trpc_ast_file_path</code> 等字段精确过滤。</li>
+<li><strong>支持字面检索</strong>：embedding 文本只来自结构化语义字段（name / signature / comment 等），不含具体代码逻辑；查精确报错串、SQL、HTTP 路径、具体 API 调用时，用 <code>content</code> + <code>like</code> 在原文里匹配，而不是只靠语义 query。</li>
+<li><strong>同轮去重 + 多角度查询</strong>：工具会记住本轮已返回的 AST chunk 并不再重复返回，引导 Agent 换角度（定义 → 调用者 → 接口实现 → 相邻包）而不是反复换同义词。</li>
+</ul>
+<h4 id="_7">基本用法</h4>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
@@ -3104,63 +3412,269 @@
 <span class="normal"><a href="#__codelineno-4-34">34</a></span>
 <span class="normal"><a href="#__codelineno-4-35">35</a></span>
 <span class="normal"><a href="#__codelineno-4-36">36</a></span>
-<span class="normal"><a href="#__codelineno-4-37">37</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">    </span><span class="s">&quot;fmt&quot;</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="s">&quot;log&quot;</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="p">)</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="c1">// 显示所有文档信息</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="nx">docInfos</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">ShowDocumentInfo</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to show document info: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="w">    </span><span class="k">return</span>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a><span class="p">}</span>
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a>
-</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a><span class="c1">// 按源名称过滤显示</span>
-</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a><span class="nx">docInfos</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">ShowDocumentInfo</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithShowDocumentInfoSourceName</span><span class="p">(</span><span class="s">&quot;APIDocumentation&quot;</span><span class="p">))</span>
-</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to show source documents: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a><span class="w">    </span><span class="k">return</span>
-</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-4-37">37</a></span>
+<span class="normal"><a href="#__codelineno-4-38">38</a></span>
+<span class="normal"><a href="#__codelineno-4-39">39</a></span>
+<span class="normal"><a href="#__codelineno-4-40">40</a></span>
+<span class="normal"><a href="#__codelineno-4-41">41</a></span>
+<span class="normal"><a href="#__codelineno-4-42">42</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang&quot;</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source&quot;</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo&quot;</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="w">    </span><span class="nx">knowledgetool</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/tool&quot;</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="p">)</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="c1">// 1. 仓库源（写上 Description，code_search 会把它放进工具说明）</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="nx">repoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">repo</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a><span class="w">    </span><span class="nx">repo</span><span class="p">.</span><span class="nx">WithRepository</span><span class="p">(</span><span class="nx">repo</span><span class="p">.</span><span class="nx">Repository</span><span class="p">{</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a><span class="w">        </span><span class="nx">URL</span><span class="p">:</span><span class="w">         </span><span class="s">&quot;https://github.com/trpc-group/trpc-agent-go&quot;</span><span class="p">,</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a><span class="w">        </span><span class="nx">Branch</span><span class="p">:</span><span class="w">      </span><span class="s">&quot;main&quot;</span><span class="p">,</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a><span class="w">        </span><span class="nx">RepoName</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;trpc-agent-go&quot;</span><span class="p">,</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a><span class="w">        </span><span class="nx">Description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;tRPC agent framework for Go.&quot;</span><span class="p">,</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="w">    </span><span class="nx">repo</span><span class="p">.</span><span class="nx">WithFileExtensions</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.md&quot;</span><span class="p">}),</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a><span class="w">    </span><span class="nx">repo</span><span class="p">.</span><span class="nx">WithSkipSuffixes</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;.pb.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.trpc.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;_mock.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;_test.go&quot;</span><span class="p">}),</span>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a><span class="p">)</span>
 </span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22"></a>
-</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23"></a><span class="c1">// 按文档ID过滤显示</span>
-</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24"></a><span class="nx">docInfos</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">ShowDocumentInfo</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithShowDocumentInfoIDs</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;doc1&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;doc2&quot;</span><span class="p">}))</span>
-</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Failed to show specific documents: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28"></a><span class="w">    </span><span class="k">return</span>
-</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29"></a><span class="p">}</span>
-</span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30"></a>
-</span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31"></a><span class="c1">// 遍历显示文档信息</span>
-</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32"></a><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">docInfo</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">docInfos</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Document ID: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">docInfo</span><span class="p">.</span><span class="nx">DocumentID</span><span class="p">)</span>
-</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Source: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">docInfo</span><span class="p">.</span><span class="nx">SourceName</span><span class="p">)</span>
-</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;URI: %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">docInfo</span><span class="p">.</span><span class="nx">URI</span><span class="p">)</span>
-</span><span id="__span-4-36"><a id="__codelineno-4-36" name="__codelineno-4-36"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Chunk Index: %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">docInfo</span><span class="p">.</span><span class="nx">ChunkIndex</span><span class="p">)</span>
-</span><span id="__span-4-37"><a id="__codelineno-4-37" name="__codelineno-4-37"></a><span class="p">}</span>
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23"></a><span class="c1">// 2. 普通 Knowledge（向量库 + embedder）即可，无需图数据库</span>
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">vectorStore</span><span class="p">),</span>
+</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
+</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithSources</span><span class="p">([]</span><span class="nx">source</span><span class="p">.</span><span class="nx">Source</span><span class="p">{</span><span class="nx">repoSrc</span><span class="p">}),</span>
+</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28"></a><span class="p">)</span>
+</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">kb</span><span class="p">.</span><span class="nx">Load</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31"></a><span class="p">}</span>
+</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32"></a>
+</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33"></a><span class="c1">// 3. 创建 code_search 工具并注入 Agent</span>
+</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34"></a><span class="nx">searchTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledgetool</span><span class="p">.</span><span class="nx">NewCodeSearchTool</span><span class="p">(</span>
+</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35"></a><span class="w">    </span><span class="nx">kb</span><span class="p">,</span>
+</span><span id="__span-4-36"><a id="__codelineno-4-36" name="__codelineno-4-36"></a><span class="w">    </span><span class="nx">knowledgetool</span><span class="p">.</span><span class="nx">WithCodeSearchMaxResults</span><span class="p">(</span><span class="mi">5</span><span class="p">),</span>
+</span><span id="__span-4-37"><a id="__codelineno-4-37" name="__codelineno-4-37"></a><span class="p">)</span>
+</span><span id="__span-4-38"><a id="__codelineno-4-38" name="__codelineno-4-38"></a><span class="nx">ag</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-4-39"><a id="__codelineno-4-39" name="__codelineno-4-39"></a><span class="w">    </span><span class="s">&quot;code-assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-4-40"><a id="__codelineno-4-40" name="__codelineno-4-40"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-4-41"><a id="__codelineno-4-41" name="__codelineno-4-41"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">searchTool</span><span class="p">}),</span>
+</span><span id="__span-4-42"><a id="__codelineno-4-42" name="__codelineno-4-42"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p><strong>状态监控输出示例</strong></p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
-<span class="normal"><a href="#__codelineno-5-2">2</a></span>
-<span class="normal"><a href="#__codelineno-5-3">3</a></span>
-<span class="normal"><a href="#__codelineno-5-4">4</a></span>
-<span class="normal"><a href="#__codelineno-5-5">5</a></span>
-<span class="normal"><a href="#__codelineno-5-6">6</a></span>
-<span class="normal"><a href="#__codelineno-5-7">7</a></span>
-<span class="normal"><a href="#__codelineno-5-8">8</a></span>
-<span class="normal"><a href="#__codelineno-5-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a>Document ID: a1b2c3d4e5f6...
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a>Source: Technical Documentation
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a>URI: /docs/api/authentication.md
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a>Chunk Index: 0
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a>Document ID: f6e5d4c3b2a1...
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a>Source: Technical Documentation
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a>URI: /docs/api/authentication.md
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a>Chunk Index: 1
+<h4 id="_8">常用配置项</h4>
+<table>
+<thead>
+<tr>
+<th>选项</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WithCodeSearchToolName(name)</code></td>
+<td>自定义工具名（默认 <code>code_search</code>）</td>
+</tr>
+<tr>
+<td><code>WithCodeSearchToolDescription(desc)</code></td>
+<td>覆盖默认工具说明</td>
+</tr>
+<tr>
+<td><code>WithCodeSearchMaxResults(n)</code></td>
+<td>单次返回结果数上限（默认 <code>10</code>）</td>
+</tr>
+<tr>
+<td><code>WithCodeSearchMinScore(score)</code></td>
+<td>相似度下限（默认 <code>0.1</code>）</td>
+</tr>
+<tr>
+<td><code>WithCodeSearchFilter(map)</code> / <code>WithCodeSearchConditionedFilter(cond)</code></td>
+<td>始终叠加的静态过滤（如锁定某个 repo）</td>
+</tr>
+<tr>
+<td><code>WithCodeSearchRepoInfos([]CodeRepoInfo)</code></td>
+<td>手动声明仓库名 / 描述，覆盖从源自动推导的结果</td>
+</tr>
+<tr>
+<td><code>WithCodeSearchDedup(enabled)</code></td>
+<td>开关同轮去重（默认开启）</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>若未显式提供 repo 信息，<code>code_search</code> 会从 Knowledge 的仓库源自动推导仓库名与 <code>Description</code> 写进工具说明，方便 LLM 在多仓库场景里选对 <code>trpc_ast_repo_name</code> 过滤。</p>
+</blockquote>
+<h4 id="mcp">通过 MCP 复用</h4>
+<p><code>code_search</code> 是标准 <code>CallableTool</code>，可以直接包成一个 MCP server，让 Cursor、Augment 或另一个 trpc-agent-go runner 共用同一套 AST 代码检索能力。完整示例（本地 Agent 直连 + MCP server + 与 Augment 对比）见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/code_context_engine">examples/knowledge/features/code_context_engine</a>。</p>
+<h3 id="code_graph_graphrag">code_graph_*：代码图谱检索（GraphRAG，进阶）</h3>
+<blockquote>
+<p><strong>示例代码</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/graphrag">examples/knowledge/features/graphrag</a></p>
+</blockquote>
+<p>除了向量化检索（embedding + vector store），仓库源还支持以图谱的方式存储代码结构关系。AST reader 在解析时会提取实体之间的边关系，结合图数据库（Apache AGE）实现结构化的代码导航。</p>
+<p><img alt="AGE Graph Viewer - 代码图谱可视化" src="../../../assets/img/knowledge/viewer.jpg" /></p>
+<h4 id="_9">边类型</h4>
+<table>
+<thead>
+<tr>
+<th>边类型</th>
+<th>含义</th>
+<th>示例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CALLS</code></td>
+<td>函数/方法调用</td>
+<td><code>main</code> → <code>server.Start</code></td>
+</tr>
+<tr>
+<td><code>METHOD</code></td>
+<td>类/结构体的方法</td>
+<td><code>Server</code> → <code>Server.Start</code></td>
+</tr>
+<tr>
+<td><code>FIELD</code></td>
+<td>结构体字段</td>
+<td><code>Server</code> → <code>services</code></td>
+</tr>
+<tr>
+<td><code>PARAM</code></td>
+<td>函数参数</td>
+<td><code>NewServer</code> → <code>opts</code></td>
+</tr>
+<tr>
+<td><code>RETURNS</code></td>
+<td>函数返回类型</td>
+<td><code>NewServer</code> → <code>Server</code></td>
+</tr>
+<tr>
+<td><code>IMPLEMENTS</code></td>
+<td>类型实现接口</td>
+<td><code>MyService</code> → <code>Handler</code></td>
+</tr>
+<tr>
+<td><code>ALIAS_OF</code></td>
+<td>类型别名指向目标类型</td>
+<td><code>MyAlias</code> → <code>TargetType</code></td>
+</tr>
+<tr>
+<td><code>CONTAINS</code></td>
+<td>包含关系</td>
+<td><code>package server</code> → <code>Server</code></td>
+</tr>
+</tbody>
+</table>
+<h4 id="_10">用法</h4>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-5-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-5-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-5-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-5-10">10</a></span>
+<span class="normal"><a href="#__codelineno-5-11">11</a></span>
+<span class="normal"><a href="#__codelineno-5-12">12</a></span>
+<span class="normal"><a href="#__codelineno-5-13">13</a></span>
+<span class="normal"><a href="#__codelineno-5-14">14</a></span>
+<span class="normal"><a href="#__codelineno-5-15">15</a></span>
+<span class="normal"><a href="#__codelineno-5-16">16</a></span>
+<span class="normal"><a href="#__codelineno-5-17">17</a></span>
+<span class="normal"><a href="#__codelineno-5-18">18</a></span>
+<span class="normal"><a href="#__codelineno-5-19">19</a></span>
+<span class="normal"><a href="#__codelineno-5-20">20</a></span>
+<span class="normal"><a href="#__codelineno-5-21">21</a></span>
+<span class="normal"><a href="#__codelineno-5-22">22</a></span>
+<span class="normal"><a href="#__codelineno-5-23">23</a></span>
+<span class="normal"><a href="#__codelineno-5-24">24</a></span>
+<span class="normal"><a href="#__codelineno-5-25">25</a></span>
+<span class="normal"><a href="#__codelineno-5-26">26</a></span>
+<span class="normal"><a href="#__codelineno-5-27">27</a></span>
+<span class="normal"><a href="#__codelineno-5-28">28</a></span>
+<span class="normal"><a href="#__codelineno-5-29">29</a></span>
+<span class="normal"><a href="#__codelineno-5-30">30</a></span>
+<span class="normal"><a href="#__codelineno-5-31">31</a></span>
+<span class="normal"><a href="#__codelineno-5-32">32</a></span>
+<span class="normal"><a href="#__codelineno-5-33">33</a></span>
+<span class="normal"><a href="#__codelineno-5-34">34</a></span>
+<span class="normal"><a href="#__codelineno-5-35">35</a></span>
+<span class="normal"><a href="#__codelineno-5-36">36</a></span>
+<span class="normal"><a href="#__codelineno-5-37">37</a></span>
+<span class="normal"><a href="#__codelineno-5-38">38</a></span>
+<span class="normal"><a href="#__codelineno-5-39">39</a></span>
+<span class="normal"><a href="#__codelineno-5-40">40</a></span>
+<span class="normal"><a href="#__codelineno-5-41">41</a></span>
+<span class="normal"><a href="#__codelineno-5-42">42</a></span>
+<span class="normal"><a href="#__codelineno-5-43">43</a></span>
+<span class="normal"><a href="#__codelineno-5-44">44</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang&quot;</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python&quot;</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="w">    </span><span class="nx">agegraphstore</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/graphstore/age&quot;</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/repo&quot;</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector&quot;</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="w">    </span><span class="nx">knowledgetool</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/tool&quot;</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="p">)</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="c1">// 1. 配置仓库源</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="nx">repoSrc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">repo</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a><span class="w">    </span><span class="nx">repo</span><span class="p">.</span><span class="nx">WithRepository</span><span class="p">(</span><span class="nx">repo</span><span class="p">.</span><span class="nx">Repository</span><span class="p">{</span><span class="nx">URL</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://github.com/example/repo&quot;</span><span class="p">}),</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a><span class="w">    </span><span class="nx">repo</span><span class="p">.</span><span class="nx">WithFileExtensions</span><span class="p">([]</span><span class="kt">string</span><span class="p">{</span><span class="s">&quot;.go&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;.py&quot;</span><span class="p">}),</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15"></a><span class="p">)</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16"></a>
+</span><span id="__span-5-17"><a id="__codelineno-5-17" name="__codelineno-5-17"></a><span class="c1">// 2. 创建 GraphKnowledge（图 + 向量混合检索）</span>
+</span><span id="__span-5-18"><a id="__codelineno-5-18" name="__codelineno-5-18"></a><span class="nx">ageStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agegraphstore</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-19"><a id="__codelineno-5-19" name="__codelineno-5-19"></a><span class="w">    </span><span class="nx">agegraphstore</span><span class="p">.</span><span class="nx">WithClientDSN</span><span class="p">(</span><span class="nx">ageDSN</span><span class="p">),</span>
+</span><span id="__span-5-20"><a id="__codelineno-5-20" name="__codelineno-5-20"></a><span class="w">    </span><span class="nx">agegraphstore</span><span class="p">.</span><span class="nx">WithGraphName</span><span class="p">(</span><span class="s">&quot;my_graph&quot;</span><span class="p">),</span>
+</span><span id="__span-5-21"><a id="__codelineno-5-21" name="__codelineno-5-21"></a><span class="p">)</span>
+</span><span id="__span-5-22"><a id="__codelineno-5-22" name="__codelineno-5-22"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-23"><a id="__codelineno-5-23" name="__codelineno-5-23"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-5-24"><a id="__codelineno-5-24" name="__codelineno-5-24"></a><span class="p">}</span>
+</span><span id="__span-5-25"><a id="__codelineno-5-25" name="__codelineno-5-25"></a><span class="nx">vectorStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">pgvector</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-5-26"><a id="__codelineno-5-26" name="__codelineno-5-26"></a><span class="w">    </span><span class="nx">pgvector</span><span class="p">.</span><span class="nx">WithPGVectorClientDSN</span><span class="p">(</span><span class="nx">pgvectorDSN</span><span class="p">),</span>
+</span><span id="__span-5-27"><a id="__codelineno-5-27" name="__codelineno-5-27"></a><span class="w">    </span><span class="nx">pgvector</span><span class="p">.</span><span class="nx">WithTable</span><span class="p">(</span><span class="s">&quot;graph_vectors&quot;</span><span class="p">),</span>
+</span><span id="__span-5-28"><a id="__codelineno-5-28" name="__codelineno-5-28"></a><span class="w">    </span><span class="nx">pgvector</span><span class="p">.</span><span class="nx">WithIndexDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span>
+</span><span id="__span-5-29"><a id="__codelineno-5-29" name="__codelineno-5-29"></a><span class="p">)</span>
+</span><span id="__span-5-30"><a id="__codelineno-5-30" name="__codelineno-5-30"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-31"><a id="__codelineno-5-31" name="__codelineno-5-31"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-5-32"><a id="__codelineno-5-32" name="__codelineno-5-32"></a><span class="p">}</span>
+</span><span id="__span-5-33"><a id="__codelineno-5-33" name="__codelineno-5-33"></a><span class="nx">gk</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">NewGraphKnowledge</span><span class="p">(</span>
+</span><span id="__span-5-34"><a id="__codelineno-5-34" name="__codelineno-5-34"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithGraphStore</span><span class="p">(</span><span class="nx">ageStore</span><span class="p">),</span>
+</span><span id="__span-5-35"><a id="__codelineno-5-35" name="__codelineno-5-35"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithGraphVectorStore</span><span class="p">(</span><span class="nx">vectorStore</span><span class="p">),</span>
+</span><span id="__span-5-36"><a id="__codelineno-5-36" name="__codelineno-5-36"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithGraphEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
+</span><span id="__span-5-37"><a id="__codelineno-5-37" name="__codelineno-5-37"></a><span class="p">)</span>
+</span><span id="__span-5-38"><a id="__codelineno-5-38" name="__codelineno-5-38"></a>
+</span><span id="__span-5-39"><a id="__codelineno-5-39" name="__codelineno-5-39"></a><span class="c1">// 3. 加载图数据</span>
+</span><span id="__span-5-40"><a id="__codelineno-5-40" name="__codelineno-5-40"></a><span class="nx">gk</span><span class="p">.</span><span class="nx">LoadGraphSource</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">repoSrc</span><span class="p">)</span>
+</span><span id="__span-5-41"><a id="__codelineno-5-41" name="__codelineno-5-41"></a>
+</span><span id="__span-5-42"><a id="__codelineno-5-42" name="__codelineno-5-42"></a><span class="c1">// 4. 将图工具注入 Agent</span>
+</span><span id="__span-5-43"><a id="__codelineno-5-43" name="__codelineno-5-43"></a><span class="nx">toolSet</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledgetool</span><span class="p">.</span><span class="nx">NewCodeGraphSearchTool</span><span class="p">(</span><span class="nx">gk</span><span class="p">)</span>
+</span><span id="__span-5-44"><a id="__codelineno-5-44" name="__codelineno-5-44"></a><span class="c1">// 暴露 code_graph_search / code_graph_traverse / code_graph_find_paths 三个工具</span>
 </span></code></pre></div></td></tr></table></div>
+<h4 id="agent">Agent 可用的图工具</h4>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>功能</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>code_graph_search</code></td>
+<td>向量检索 AST 节点，返回匹配的代码实体</td>
+</tr>
+<tr>
+<td><code>code_graph_traverse</code></td>
+<td>从指定节点出发，沿边遍历关联节点（如查找某函数的所有调用者）</td>
+</tr>
+<tr>
+<td><code>code_graph_find_paths</code></td>
+<td>查找两个代码实体之间的路径（如追踪调用链）</td>
+</tr>
+</tbody>
+</table>
+<p>通过向量检索定位入口节点，再结合图遍历探索结构关系，Agent 可以在无需阅读大量源码的情况下理解代码架构。</p>
 
 
 
@@ -3183,7 +3697,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月8日 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月25日 09:03:41 UTC">2026-06-25 09:03:41</span>
   </span>
 
     
@@ -3193,7 +3707,7 @@
     <span class="md-icon" title="创建日期">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月8日 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月25日 09:03:41 UTC">2026-06-25 09:03:41</span>
   </span>
 
     
@@ -3274,7 +3788,7 @@
       <nav class="md-footer__inner md-grid" aria-label="页脚" >
         
           
-          <a href="../filter/" class="md-footer__link md-footer__link--prev" aria-label="上一页: 过滤器">
+          <a href="../source/" class="md-footer__link md-footer__link--prev" aria-label="上一页: 数据源">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -3284,20 +3798,20 @@
                 上一页
               </span>
               <div class="md-ellipsis">
-                过滤器
+                数据源
               </div>
             </div>
           </a>
         
         
           
-          <a href="../ocr/" class="md-footer__link md-footer__link--next" aria-label="下一页: OCR">
+          <a href="../extractor/" class="md-footer__link md-footer__link--next" aria-label="下一页: 内容提取器">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 下一页
               </span>
               <div class="md-ellipsis">
-                OCR
+                内容提取器
               </div>
             </div>
             <div class="md-footer__button md-icon">
