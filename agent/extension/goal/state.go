@@ -94,8 +94,9 @@ func GetGoalWithStateKey(sess *session.Session, stateKey string) (*Goal, bool, e
 	return &g, true, nil
 }
 
-// Start creates or replaces the goal in session state. Applications can use
-// this from their own command layer, for example after parsing "/goal ...".
+// Start creates or replaces the goal in session state for an existing session.
+// Applications can use this from their own command layer, for example after
+// parsing "/goal ...".
 func Start(
 	ctx context.Context,
 	service session.Service,
@@ -105,6 +106,9 @@ func Start(
 ) (*Goal, error) {
 	if service == nil {
 		return nil, errors.New("goal: session service is required")
+	}
+	if err := key.CheckSessionKey(); err != nil {
+		return nil, err
 	}
 	cfg := startOptions{stateKey: DefaultStateKey}
 	for _, opt := range options {

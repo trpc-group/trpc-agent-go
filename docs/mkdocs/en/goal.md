@@ -27,6 +27,9 @@ ag := llmagent.New(
     llmagent.WithExtensions(goal.New(
         goal.WithMaxRetries(3),
     )),
+    // Optional hard limits for one LLMAgent invocation.
+    llmagent.WithMaxLLMCalls(20),
+    llmagent.WithMaxToolIterations(10),
 )
 ```
 
@@ -53,6 +56,16 @@ either continue working or call `update_goal` with:
 If the model repeatedly emits premature final responses, the extension retries
 up to `WithMaxRetries`. After the retry budget is exhausted, the response passes
 through unchanged so the run cannot loop forever.
+
+`WithMaxRetries` only bounds the premature-final-response -> reminder ->
+continuation cycle. Applications can also configure `WithMaxLLMCalls` and
+`WithMaxToolIterations` on the same `LLMAgent` to impose hard limits on model
+calls and tool-call iterations in that agent's invocation. When Goal is installed
+on the Runner's primary `LLMAgent`, this usually bounds one `Runner.Run`.
+Reaching either limit stops the run, but does not automatically mark the session
+goal `complete` or `blocked`; a later invocation receives a new budget. These
+limits are therefore invocation-level circuit breakers, not goal terminal-state
+decisions.
 
 Goal does not change streaming configuration. Streaming remains controlled by
 the `LLMAgent` generation config or run options such as `agent.WithStream(...)`.

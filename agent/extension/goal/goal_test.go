@@ -110,7 +110,7 @@ func TestNew_DefaultsApplied(t *testing.T) {
 }
 
 func TestCreateGoalToolWritesStateAndDelta(t *testing.T) {
-	ctx, _, sess := newTestInvocation(t, "planner")
+	ctx, inv, sess := newTestInvocation(t, "planner")
 	tl := newGoalTool(toolKindCreate, DefaultCreateGoalToolName, DefaultStateKey)
 
 	result, err := tl.Call(ctx, []byte(`{"objective":"ship a migration plan"}`))
@@ -128,11 +128,21 @@ func TestCreateGoalToolWritesStateAndDelta(t *testing.T) {
 
 	raw, err := json.Marshal(out)
 	require.NoError(t, err)
-	delta := tl.StateDeltaForInvocation(nil, "call", nil, raw)
+	delta := tl.StateDeltaForInvocation(inv, "call", nil, raw)
 	require.Contains(t, delta, DefaultStateKey)
 	var persisted Goal
 	require.NoError(t, json.Unmarshal(delta[DefaultStateKey], &persisted))
 	assert.Equal(t, out.Goal.ID, persisted.ID)
+}
+
+func TestStart_RequiresSessionKey(t *testing.T) {
+	ctx := context.Background()
+	sessionService := inmemory.NewSessionService()
+	_, err := Start(ctx, sessionService, session.Key{
+		AppName: "goal-extension-test",
+		UserID:  "user",
+	}, "produce final plan")
+	require.ErrorIs(t, err, session.ErrSessionIDRequired)
 }
 
 func TestCreateGoalToolRejectsActiveGoal(t *testing.T) {

@@ -25,6 +25,9 @@ ag := llmagent.New(
     llmagent.WithExtensions(goal.New(
         goal.WithMaxRetries(3),
     )),
+    // 可选：为该 LLMAgent 的一次 invocation 设置硬上限。
+    llmagent.WithMaxLLMCalls(20),
+    llmagent.WithMaxToolIterations(10),
 )
 ```
 
@@ -49,6 +52,13 @@ _, err := goal.Start(ctx, sessionService, key, objective)
 
 如果模型反复过早结束，扩展会按 `WithMaxRetries` 的配置重试。重试耗尽后，
 response 会原样放行，避免一次运行陷入无限循环。
+
+`WithMaxRetries` 只限制“过早 final response -> 提醒 -> 继续”的续跑次数。业务还可以在
+同一个 `LLMAgent` 上配置 `WithMaxLLMCalls` 和 `WithMaxToolIterations`，为该 Agent 的
+一次 invocation 中的模型调用和工具调用轮次设置硬上限。直接将 Goal 安装在 Runner 的主
+`LLMAgent` 上时，这通常等同于限制一次 `Runner.Run`。达到上限会停止本次运行，但不会自动
+把 session goal 改为 `complete` 或 `blocked`；后续新的 invocation 会使用新的调用额度。
+因此它们适合作为运行级熔断，而不是 goal 的终态判断。
 
 Goal 不改变 streaming 配置。是否流式输出仍由 `LLMAgent` 的生成配置或
 `agent.WithStream(...)` 等运行参数决定。调用方可能先看到一段阶段性输出，随后 Agent

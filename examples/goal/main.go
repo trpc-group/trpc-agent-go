@@ -44,6 +44,7 @@ func main() {
 		fmt.Println(`  export OPENAI_BASE_URL="https://api.openai.com/v1"`)
 		fmt.Println(`  export OPENAI_API_KEY="<your-key>"`)
 		fmt.Println()
+		os.Exit(1)
 	}
 
 	if err := run(context.Background()); err != nil {

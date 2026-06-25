@@ -41,7 +41,7 @@ asking for a session goal.
 
 - `/goal <objective>` is parsed by this example, not by the framework core.
 - The extension contributes `get_goal`, `create_goal`, and `update_goal` to the LLMAgent.
-- Session goal state is persisted through tool `StateDeltaForInvocation`.
+- Session goal state is persisted in session state and restored by the extension on later turns.
 - Premature final answers are blocked by the extension's `AfterModel` callback, so the model keeps looping inside the same `Runner.Run`.
 - Streaming is controlled by the example's `-streaming` flag and is not changed by the Goal extension.
 - The outer caller still sees one `runner.completion`.
