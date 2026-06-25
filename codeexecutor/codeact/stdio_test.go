@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -72,6 +73,16 @@ func TestExecuteStdioValidatesRequiredInputs(t *testing.T) {
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
+}
+
+func TestExecuteStdioRejectsUnsupportedLanguage(t *testing.T) {
+	_, err := executeStdio(
+		context.Background(),
+		fakeStdioRunner{err: errors.New("runner should not start")},
+		Request{Code: "return 1", Language: "javascript"},
+		fakeToolCallHandler{},
+	)
+	require.ErrorContains(t, err, `unsupported language "javascript"`)
 }
 
 func TestExecuteStdioBridgesToolCalls(t *testing.T) {
@@ -148,6 +159,72 @@ func TestExecuteStdioReportsRunnerGuestAndContextErrors(t *testing.T) {
 		fakeToolCallHandler{},
 	)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestExecuteStdioBoundsCompletedGuestWait(t *testing.T) {
+	originalTimeout := completedGuestWaitTimeout
+	completedGuestWaitTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { completedGuestWaitTimeout = originalTimeout })
+
+	waitDone := make(chan struct{})
+	process := &fakeStdioProcess{
+		stdout: io.NopCloser(strings.NewReader(`{"type":"complete","args":{"answer":1},"code":"done\n"}
+`)),
+		waitFn: func() error {
+			<-waitDone
+			return nil
+		},
+		killFn: func() error {
+			close(waitDone)
+			return nil
+		},
+	}
+
+	start := time.Now()
+	result, err := executeStdio(
+		context.Background(),
+		fakeStdioRunner{process: process},
+		Request{Code: "return 1"},
+		fakeToolCallHandler{},
+	)
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 200*time.Millisecond)
+	require.JSONEq(t, `{"answer":1}`, string(result.Value))
+	require.Equal(t, "done\n", result.Stdout)
+	require.Equal(t, 1, process.kills)
+	require.Equal(t, 1, process.waits)
+}
+
+func TestExecuteStdioReturnsContextErrorWhileWaitingForCompletedGuest(t *testing.T) {
+	originalTimeout := completedGuestWaitTimeout
+	completedGuestWaitTimeout = time.Second
+	t.Cleanup(func() { completedGuestWaitTimeout = originalTimeout })
+
+	waitDone := make(chan struct{})
+	process := &fakeStdioProcess{
+		stdout: io.NopCloser(strings.NewReader(`{"type":"complete","args":{"answer":1}}
+`)),
+		waitFn: func() error {
+			<-waitDone
+			return nil
+		},
+		killFn: func() error {
+			close(waitDone)
+			return nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err := executeStdio(
+		ctx,
+		fakeStdioRunner{process: process},
+		Request{Code: "return 1"},
+		fakeToolCallHandler{},
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, 1, process.kills)
+	require.Equal(t, 1, process.waits)
 }
 
 func TestExecuteStdioReportsProtocolEdgeCases(t *testing.T) {
@@ -249,7 +326,9 @@ type fakeStdioProcess struct {
 	kills       int
 	waits       int
 	stdinCloses int
+	waitFn      func() error
 	waitErr     error
+	killFn      func() error
 }
 
 func (p *fakeStdioProcess) Stdin() io.WriteCloser {
@@ -261,10 +340,16 @@ func (p *fakeStdioProcess) Stdin() io.WriteCloser {
 func (p *fakeStdioProcess) Stdout() io.ReadCloser { return p.stdout }
 func (p *fakeStdioProcess) Wait() error {
 	p.waits++
+	if p.waitFn != nil {
+		return p.waitFn()
+	}
 	return p.waitErr
 }
 func (p *fakeStdioProcess) Kill() error {
 	p.kills++
+	if p.killFn != nil {
+		return p.killFn()
+	}
 	return nil
 }
 

@@ -19,11 +19,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 //go:embed guest.py
 var guestPython string
+
+var completedGuestWaitTimeout = 2 * time.Second
 
 // stdioRunner starts a guest process that speaks the local stdio protocol.
 // It is an implementation detail of LocalRunner; non-stdio backends implement
@@ -131,6 +134,9 @@ func executeStdio(ctx context.Context, runner stdioRunner, req Request, handler 
 	if req.Code == "" {
 		return Result{}, errRequired("code")
 	}
+	if err := validateLocalLanguage(req.Language); err != nil {
+		return Result{}, err
+	}
 	p, err := runner.start(ctx, guestPython)
 	if err != nil {
 		return Result{}, fmt.Errorf("codeact: start guest: %w", err)
@@ -178,8 +184,8 @@ func executeStdio(ctx context.Context, runner stdioRunner, req Request, handler 
 			}
 		case "complete":
 			closeStdin()
-			waitErr := p.Wait()
 			waited = true
+			waitErr := waitForCompletedGuest(ctx, p, completedGuestWaitTimeout)
 			if waitErr != nil {
 				return Result{}, fmt.Errorf("codeact: wait for guest: %w", waitErr)
 			}
@@ -200,6 +206,43 @@ func executeStdio(ctx context.Context, runner stdioRunner, req Request, handler 
 	case <-time.After(10 * time.Millisecond):
 	}
 	return Result{}, errors.New("codeact: guest exited without a completion message")
+}
+
+func validateLocalLanguage(language string) error {
+	normalized := strings.TrimSpace(language)
+	if normalized == "" || strings.EqualFold(normalized, "python") {
+		return nil
+	}
+	return fmt.Errorf("codeact: unsupported language %q", language)
+}
+
+func waitForCompletedGuest(ctx context.Context, p stdioProcess, timeout time.Duration) error {
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- p.Wait()
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case err := <-waitCh:
+		return err
+	case <-ctx.Done():
+		_ = p.Kill()
+		select {
+		case <-waitCh:
+		case <-time.After(100 * time.Millisecond):
+		}
+		return ctx.Err()
+	case <-timer.C:
+		_ = p.Kill()
+		select {
+		case <-waitCh:
+		case <-time.After(100 * time.Millisecond):
+		}
+		return nil
+	}
 }
 
 var _ Runtime = LocalRunner{}
