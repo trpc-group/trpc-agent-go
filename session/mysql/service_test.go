@@ -175,11 +175,11 @@ func expectFullSessionEventsList(
 	key session.Key,
 	rows ...limitedEventRow,
 ) *sqlmock.ExpectedQuery {
-	sqlRows := sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"})
+	sqlRows := sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"})
 	for _, row := range rows {
-		sqlRows.AddRow(row.id, key.AppName, key.UserID, key.SessionID, row.event, row.createdAt)
+		sqlRows.AddRow(key.AppName, key.UserID, key.SessionID, row.event, row.createdAt)
 	}
-	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM")).
 		WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
 		WillReturnRows(sqlRows)
 }
@@ -221,7 +221,7 @@ func expectPreviousEventRefs(
 ) *sqlmock.ExpectedQuery {
 	args := []driver.Value{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
 	if before != nil {
-		args = append(args, before.createdAt, before.createdAt, before.id)
+		args = append(args, before.createdAt)
 	}
 	args = append(args, userAnchorSearchBatchSize)
 	rows := sqlmock.NewRows([]string{"id", "created_at"})
@@ -2219,9 +2219,9 @@ func TestListSessions_WithEvents(t *testing.T) {
 	eventBytes, _ := json.Marshal(evt)
 
 	// Mock: Batch load events with data
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
-			AddRow(int64(1), userKey.AppName, userKey.UserID, "session-1", eventBytes, time.Now()))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
+			AddRow(userKey.AppName, userKey.UserID, "session-1", eventBytes, time.Now()))
 
 	// Prepare mock summary
 	summary := session.Summary{Summary: "test summary", Topics: []string{}}
