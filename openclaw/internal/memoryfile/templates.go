@@ -151,6 +151,10 @@ var templateRefreshReplacements = []struct {
 	new string
 }{
 	{
+		old: "This is a user-owned file for durable memory.",
+		new: "This is a visible file for durable memory in the current scope.",
+	},
+	{
 		old: "If the user explicitly says \"remember this\" or asks the agent to remember a durable preference, fact, or workflow rule, update this file with a short bullet.",
 		new: "If the user explicitly says \"remember this\" or asks the agent to remember a durable preference or fact, update this file with a short bullet.",
 	},

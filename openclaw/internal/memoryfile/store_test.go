@@ -779,6 +779,15 @@ func TestRefreshTemplateTextPreservesUserMemory(t *testing.T) {
 	require.NotContains(t, got, "recurring workflow rules")
 }
 
+func TestRefreshPristineLegacyTemplateStaysDefault(t *testing.T) {
+	t.Parallel()
+
+	got, changed := refreshTemplateText(legacyDefaultTemplate())
+	require.True(t, changed)
+	require.True(t, IsDefaultTemplate(got))
+	require.Equal(t, strings.TrimSpace(DefaultTemplate()), strings.TrimSpace(got))
+}
+
 func TestEnsureMemoryRefreshesExistingTemplate(t *testing.T) {
 	t.Parallel()
 
