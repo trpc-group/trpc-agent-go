@@ -21,6 +21,7 @@ import (
 	"sort"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -151,7 +152,7 @@ func ApplyToolFilter(
 		}
 
 		// User tool: apply the filter function.
-		if opts.ToolFilter(ctx, t) {
+		if opts.ToolFilter(ctx, itool.ResolveDeclaration(t)) {
 			filtered = append(filtered, t)
 		}
 	}

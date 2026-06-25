@@ -1170,10 +1170,6 @@ func (p *FunctionCallResponseProcessor) attachStateDelta(
 	if tl == nil || choice == nil || ev == nil {
 		return
 	}
-	original := tl
-	if nameTool, ok := tl.(*itool.NamedTool); ok {
-		original = nameTool.Original()
-	}
 	b := []byte(choice.Message.Content)
 	toolCallID := choice.Message.ToolID
 
@@ -1190,10 +1186,13 @@ func (p *FunctionCallResponseProcessor) attachStateDelta(
 	}
 
 	var delta map[string][]byte
-	if isdp, ok := original.(invocationStateDeltaProvider); ok {
+	providerTool := itool.ResolveSemantic(tl)
+	if isdp, ok := providerTool.(invocationStateDeltaProvider); ok {
 		delta = isdp.StateDeltaForInvocation(inv, toolCallID, args, b)
-	} else if sdp, ok := original.(stateDeltaProvider); ok {
+	} else if sdp, ok := providerTool.(stateDeltaProvider); ok {
 		delta = sdp.StateDelta(toolCallID, args, b)
+	} else {
+		return
 	}
 	if len(delta) == 0 {
 		return
@@ -1660,7 +1659,7 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 		return ctx, nil, modifiedArgs, true, skipSummarization, err
 	}
 	//  allow to return nil not provide function response.
-	if r, ok := tl.(function.LongRunner); ok && r.LongRunning() {
+	if r, ok := itool.ResolveDeclaration(tl).(function.LongRunner); ok && r.LongRunning() {
 		if result == nil {
 			return ctx, nil, modifiedArgs, true, skipSummarization, nil
 		}
@@ -2281,15 +2280,16 @@ func (p *FunctionCallResponseProcessor) checkToolPermission(
 	tl tool.Tool,
 	decl *tool.Declaration,
 ) (*tool.PermissionResult, error) {
+	semanticTool := itool.ResolveSemantic(tl)
 	req := &tool.PermissionRequest{
 		Tool:        tl,
 		ToolName:    toolCall.Function.Name,
 		ToolCallID:  toolCall.ID,
 		Declaration: decl,
 		Arguments:   toolCall.Function.Arguments,
-		Metadata:    tool.MetadataOf(tl),
+		Metadata:    tool.MetadataOf(semanticTool),
 	}
-	if checker, ok := tl.(tool.PermissionChecker); ok {
+	if checker, ok := semanticTool.(tool.PermissionChecker); ok {
 		decision, err := checker.CheckPermission(ctx, req)
 		result, err := normalizeToolPermissionResult(req, decision, err)
 		if result != nil || err != nil {
@@ -2352,12 +2352,24 @@ func afterCallbackReplacedResult(toolErr error, toolResult any) bool {
 // isStreamable returns true if the tool supports streaming and its stream
 // preference is enabled.
 func isStreamable(t tool.Tool) bool {
-	// Check if the tool has a stream preference and if it is enabled.
-	if pref, ok := t.(streamInnerPreference); ok && !pref.StreamInner() {
-		return false
-	}
-	_, ok := t.(tool.StreamableTool)
+	_, ok := streamableTool(t)
 	return ok
+}
+
+func streamableTool(t tool.Tool) (tool.StreamableTool, bool) {
+	streamable, ok := t.(tool.StreamableTool)
+	if !ok {
+		return nil, false
+	}
+	probe := itool.ResolveSemantic(t)
+	if _, ok := probe.(tool.StreamableTool); !ok {
+		return nil, false
+	}
+	// Check if the tool has a stream preference and if it is enabled.
+	if pref, ok := probe.(streamInnerPreference); ok && !pref.StreamInner() {
+		return nil, false
+	}
+	return streamable, true
 }
 
 // executeTool executes the tool based on its capabilities.
@@ -2368,18 +2380,10 @@ func (f *FunctionCallResponseProcessor) executeTool(
 	tl tool.Tool,
 	eventChan chan<- *event.Event,
 ) (context.Context, any, bool, error) {
-	// originalTool refers to the actual underlying tool used to determine
-	// whether streaming is supported. If tl is a NamedTool, use its
-	// inner original tool instead of the wrapper itself.
-	originalTool := tl
-	if nameTool, ok := tl.(*itool.NamedTool); ok {
-		originalTool = nameTool.Original()
-	}
 	// Prefer streaming execution if the tool supports it.
-	if isStreamable(originalTool) {
-		// Safe to cast since isStreamable checks for StreamableTool.
+	if streamable, ok := streamableTool(tl); ok {
 		return f.executeStreamableTool(
-			ctx, invocation, toolCall, tl.(tool.StreamableTool), eventChan,
+			ctx, invocation, toolCall, streamable, eventChan,
 		)
 	}
 	// Fallback to callable tool execution if supported.
@@ -2506,11 +2510,7 @@ func shouldRequestStructuredStreamErrors(tl tool.StreamableTool) bool {
 	if tl == nil {
 		return false
 	}
-	candidate := any(tl)
-	if namedTool, ok := tl.(*itool.NamedTool); ok {
-		candidate = namedTool.Original()
-	}
-	pref, ok := candidate.(structuredStreamErrorOptIn)
+	pref, ok := itool.ResolveSemantic(tl).(structuredStreamErrorOptIn)
 	return ok && pref.TRPCAgentGoStructuredStreamErrorsOptIn()
 }
 
@@ -2518,11 +2518,7 @@ func innerTextModeForTool(tl tool.StreamableTool) tool.InnerTextMode {
 	if tl == nil {
 		return tool.InnerTextModeInclude
 	}
-	candidate := any(tl)
-	if namedTool, ok := tl.(*itool.NamedTool); ok {
-		candidate = namedTool.Original()
-	}
-	pref, ok := candidate.(innerTextModePreference)
+	pref, ok := itool.ResolveSemantic(tl).(innerTextModePreference)
 	if !ok {
 		return tool.InnerTextModeInclude
 	}
@@ -3004,14 +3000,7 @@ func markSkipSummarization(ev *event.Event) {
 }
 
 func toolPrefersSkipSummarization(tl tool.Tool) bool {
-	if tl == nil {
-		return false
-	}
-	original := tl
-	if nameTool, ok := tl.(*itool.NamedTool); ok {
-		original = nameTool.Original()
-	}
-	if skipper, ok := original.(summarizationSkipper); ok {
+	if skipper, ok := itool.ResolveSemantic(tl).(summarizationSkipper); ok {
 		return skipper.SkipSummarization()
 	}
 	return false

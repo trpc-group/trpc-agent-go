@@ -226,8 +226,31 @@ func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []stri
 	if inv != nil && inv.Model != nil {
 		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeModel))
 	}
-	if hasUserTools, ok := llmflow.InvocationHasFilteredUserTools(inv); ok && hasUserTools {
-		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeTool))
+	if hasUserTools, ok := llmflow.InvocationHasFilteredUserTools(inv); ok {
+		if inv != nil && surfacepatch.ToolSurfaceTracingEnabled(inv.RunOptions.CustomAgentConfigs) {
+			traceableToolNames, _ := llmflow.InvocationFilteredTraceableUserToolNames(inv)
+			if len(traceableToolNames) == 0 && hasUserTools {
+				appliedSurfaceIDs = append(
+					appliedSurfaceIDs,
+					astructure.SurfaceID(nodeID, astructure.SurfaceTypeTool),
+				)
+			}
+			for _, toolName := range traceableToolNames {
+				appliedSurfaceIDs = append(
+					appliedSurfaceIDs,
+					astructure.SurfaceID(
+						nodeID,
+						astructure.SurfaceTypeTool,
+						toolName,
+					),
+				)
+			}
+		} else if hasUserTools {
+			appliedSurfaceIDs = append(
+				appliedSurfaceIDs,
+				astructure.SurfaceID(nodeID, astructure.SurfaceTypeTool),
+			)
+		}
 	}
 	if a.skillRepositoryForInvocation(context.Background(), inv) != nil {
 		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeSkill))
@@ -249,6 +272,7 @@ func (a *LLMAgent) InvocationToolSurface(
 	options := a.option
 	subAgents := append([]agent.Agent(nil), a.subAgents...)
 	a.mu.RUnlock()
+	userTools = applyToolDeclarationPatch(userTools, patch)
 	userTools, userToolNames = filterInvocationUserTools(
 		ctx,
 		userTools,
@@ -425,6 +449,17 @@ func applyUserToolPatch(
 		return userTools, userToolNames
 	}
 	return patchedTools, collectUserToolNames(patchedTools)
+}
+
+func applyToolDeclarationPatch(
+	tools []tool.Tool,
+	patch surfacepatch.Patch,
+) []tool.Tool {
+	declarations, ok := patch.ToolDeclarations()
+	if !ok {
+		return tools
+	}
+	return itool.ApplyDeclarations(tools, declarations)
 }
 
 func filterInvocationUserTools(
