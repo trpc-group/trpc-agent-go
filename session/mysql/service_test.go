@@ -3214,8 +3214,11 @@ func TestNewService_DBInitFailure(t *testing.T) {
 		return &mockMySQLClient{db: db}, nil
 	})
 
-	// Mock DB init failure
-	mock.ExpectExec("CREATE TABLE").WillReturnError(assert.AnError)
+	// Mock DB init failure: existence check passes (table absent), then the
+	// CREATE TABLE fails.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS")).WillReturnError(assert.AnError)
 
 	svc, err := NewService(
 		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
@@ -3485,17 +3488,30 @@ func mockDBInit(mock sqlmock.Sqlmock) {
 	mockDBInitWithPrefix(mock, "")
 }
 
+// mockCreateMissingTables mocks initDB's DDL path for the case where none of
+// the tables exist yet: per table, an existence check returning 0 followed by a
+// CREATE TABLE and one CREATE statement per index.
+func mockCreateMissingTables(mock sqlmock.Sqlmock, tablePrefix string) {
+	indexCount := make(map[string]int)
+	for _, idx := range indexDefs {
+		indexCount[idx.table]++
+	}
+	for _, tableDef := range tableDefs {
+		fullTableName := sqldb.BuildTableName(tablePrefix, tableDef.name)
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+			WithArgs(fullTableName).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS")).WillReturnResult(sqlmock.NewResult(0, 0))
+		for i := 0; i < indexCount[tableDef.name]; i++ {
+			mock.ExpectExec("CREATE (UNIQUE )?INDEX").WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+}
+
 // mockDBInitWithPrefix mocks the database initialization process with table prefix
 func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
-	// Mock: Create 6 tables
-	for i := 0; i < 6; i++ {
-		mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
-	}
-
-	// Mock: Create 12 indexes
-	for i := 0; i < 12; i++ {
-		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
-	}
+	// Mock: create each (missing) table together with its indexes.
+	mockCreateMissingTables(mock, tablePrefix)
 
 	// Mock: verifySchema queries for each table
 	tableNames := []string{
@@ -3529,15 +3545,19 @@ func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
 			WithArgs(fullTableName).
 			WillReturnRows(colRows)
 
-		// 3. verifyIndexes query
-		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME"})
+		// 3. verifyIndexes query (INDEX_NAME, COLUMN_NAME, NON_UNIQUE)
+		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE"})
 		for _, idx := range schema.indexes {
 			idxName := sqldb.BuildIndexName(tablePrefix, idx.table, idx.suffix)
+			nonUnique := 1
+			if idx.unique {
+				nonUnique = 0
+			}
 			for _, col := range idx.columns {
-				idxRows.AddRow(idxName, col)
+				idxRows.AddRow(idxName, col, nonUnique)
 			}
 		}
-		idxRows.AddRow("PRIMARY", "id")
+		idxRows.AddRow("PRIMARY", "id", 0)
 		mock.ExpectQuery("SELECT INDEX_NAME").
 			WithArgs(fullTableName).
 			WillReturnRows(idxRows)
