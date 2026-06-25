@@ -291,10 +291,10 @@ func TestGetEventsList(t *testing.T) {
 		}
 		createdAts := []time.Time{time.Now().Add(-time.Hour)}
 
-		rows := sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
-			AddRow(int64(1), "app1", "user1", "sess1", []byte("invalid-json"), time.Now())
+		rows := sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
+			AddRow("app1", "user1", "sess1", []byte("invalid-json"), time.Now())
 
-		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
+		mock.ExpectQuery("SELECT app_name, user_id, session_id, event, created_at FROM").
 			WithArgs("app1", "user1", "sess1", "user1").
 			WillReturnRows(rows)
 
@@ -352,12 +352,12 @@ func TestGetEventsList(t *testing.T) {
 		evt3Bytes, _ := json.Marshal(evt3)
 		now := time.Now()
 
-		rows := sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
-			AddRow(int64(1), keys[0].AppName, keys[0].UserID, keys[0].SessionID, evt1Bytes, now).
-			AddRow(int64(2), keys[0].AppName, keys[0].UserID, keys[0].SessionID, evt2Bytes, now).
-			AddRow(int64(3), keys[0].AppName, keys[0].UserID, keys[0].SessionID, evt3Bytes, now)
+		rows := sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
+			AddRow(keys[0].AppName, keys[0].UserID, keys[0].SessionID, evt1Bytes, now).
+			AddRow(keys[0].AppName, keys[0].UserID, keys[0].SessionID, evt2Bytes, now).
+			AddRow(keys[0].AppName, keys[0].UserID, keys[0].SessionID, evt3Bytes, now)
 
-		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
+		mock.ExpectQuery("SELECT app_name, user_id, session_id, event, created_at FROM").
 			WithArgs(keys[0].AppName, keys[0].UserID, keys[0].SessionID, keys[0].UserID).
 			WillReturnRows(rows)
 
@@ -396,12 +396,12 @@ func TestGetEventsList(t *testing.T) {
 		evt3Bytes, _ := json.Marshal(evt3)
 		now := time.Now()
 
-		rows := sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
-			AddRow(int64(1), "app1", "user1", "sess1", evt1Bytes, now).
-			AddRow(int64(2), "app1", "user1", "sess1", evt2Bytes, now).
-			AddRow(int64(3), "app1", "user1", "sess1", evt3Bytes, now)
+		rows := sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
+			AddRow("app1", "user1", "sess1", evt1Bytes, now).
+			AddRow("app1", "user1", "sess1", evt2Bytes, now).
+			AddRow("app1", "user1", "sess1", evt3Bytes, now)
 
-		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
+		mock.ExpectQuery("SELECT app_name, user_id, session_id, event, created_at FROM").
 			WithArgs("app1", "user1", "sess1", "user1").
 			WillReturnRows(rows)
 
@@ -415,7 +415,7 @@ func TestGetEventsList(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	t.Run("SortsUnorderedRowsByIDWhenCreatedAtMatches", func(t *testing.T) {
+	t.Run("SortsUnorderedRowsByCreatedAt", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		defer db.Close()
@@ -440,13 +440,13 @@ func TestGetEventsList(t *testing.T) {
 		evt2Bytes, _ := json.Marshal(evt2)
 		evt3Bytes, _ := json.Marshal(evt3)
 		now := time.Now()
+		// DB returns newest-first; in-memory sort must produce oldest-first.
+		rows := sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
+			AddRow("app1", "user1", "sess1", evt3Bytes, now).
+			AddRow("app1", "user1", "sess1", evt2Bytes, now.Add(-time.Minute)).
+			AddRow("app1", "user1", "sess1", evt1Bytes, now.Add(-2*time.Minute))
 
-		rows := sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
-			AddRow(int64(3), "app1", "user1", "sess1", evt3Bytes, now).
-			AddRow(int64(2), "app1", "user1", "sess1", evt2Bytes, now).
-			AddRow(int64(1), "app1", "user1", "sess1", evt1Bytes, now)
-
-		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
+		mock.ExpectQuery("SELECT app_name, user_id, session_id, event, created_at FROM").
 			WithArgs("app1", "user1", "sess1", "user1").
 			WillReturnRows(rows)
 
@@ -512,7 +512,7 @@ func TestGetEventsList(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	t.Run("WithEventPageSortsSameCreatedAtByID", func(t *testing.T) {
+	t.Run("WithEventPageSortsByCreatedAt", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		defer db.Close()
@@ -537,11 +537,11 @@ func TestGetEventsList(t *testing.T) {
 		evt2Bytes, _ := json.Marshal(evt2)
 		evt3Bytes, _ := json.Marshal(evt3)
 		now := time.Now()
-
+		// Phase-1 returns newest-first (DESC). Phase-2 sort must produce oldest-first (ASC).
 		idRows := sqlmock.NewRows([]string{"id", "created_at"}).
 			AddRow(int64(3), now).
-			AddRow(int64(2), now).
-			AddRow(int64(1), now)
+			AddRow(int64(2), now.Add(-time.Minute)).
+			AddRow(int64(1), now.Add(-2*time.Minute))
 		mock.ExpectQuery("SELECT id, created_at FROM").
 			WithArgs("app1", "user1", "sess1", createdAt, 3, 0).
 			WillReturnRows(idRows)
@@ -700,12 +700,12 @@ func TestGetEventsList(t *testing.T) {
 		evt3Bytes, _ := json.Marshal(evt3)
 		now := time.Now()
 
-		rows := sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
-			AddRow(int64(1), "app1", "user1", "sess1", evt1Bytes, now).
-			AddRow(int64(2), "app1", "user1", "sess1", evt2Bytes, now).
-			AddRow(int64(3), "app1", "user1", "sess1", evt3Bytes, now)
+		rows := sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
+			AddRow("app1", "user1", "sess1", evt1Bytes, now).
+			AddRow("app1", "user1", "sess1", evt2Bytes, now).
+			AddRow("app1", "user1", "sess1", evt3Bytes, now)
 
-		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
+		mock.ExpectQuery("SELECT app_name, user_id, session_id, event, created_at FROM").
 			WithArgs("app1", "user1", "sess1", "user1").
 			WillReturnRows(rows)
 
@@ -733,7 +733,7 @@ func TestGetEventsList(t *testing.T) {
 		rows := sqlmock.NewRows([]string{"app_name", "user_id"}).
 			AddRow("app1", "user1")
 
-		mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
+		mock.ExpectQuery("SELECT app_name, user_id, session_id, event, created_at FROM").
 			WithArgs("app1", "user1", "sess1", "user1").
 			WillReturnRows(rows)
 
@@ -808,10 +808,10 @@ func TestGetSessionEvents_DisabledLimitUsesLegacyList(t *testing.T) {
 	})
 	evtBytes, _ := json.Marshal(evt)
 
-	mock.ExpectQuery("SELECT id, app_name, user_id, session_id, event, created_at FROM").
+	mock.ExpectQuery("SELECT app_name, user_id, session_id, event, created_at FROM").
 		WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
-			AddRow(int64(1), key.AppName, key.UserID, key.SessionID, evtBytes, createdAt.Add(time.Minute)))
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
+			AddRow(key.AppName, key.UserID, key.SessionID, evtBytes, createdAt.Add(time.Minute)))
 
 	result, err := s.getSessionEvents(context.Background(), key, createdAt, 0, time.Time{}, nil, time.Time{})
 	require.NoError(t, err)
@@ -969,14 +969,14 @@ func TestLimitedEventHelpers_ErrorsAndBoundaries(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	t.Run("OldestRefPrefersEarlierTimeThenID", func(t *testing.T) {
+	t.Run("OldestRefPrefersEarlierTime", func(t *testing.T) {
 		now := time.Now()
 		oldest := oldestEventRef([]eventRef{
 			{id: 10, createdAt: now},
-			{id: 9, createdAt: now},
+			{id: 9, createdAt: now.Add(-time.Minute)},
 			{id: 11, createdAt: now.Add(time.Minute)},
 		})
-		assert.Equal(t, int64(9), oldest.id)
+		assert.Equal(t, now.Add(-time.Minute), oldest.createdAt)
 	})
 
 	t.Run("TimestampFilterAndLoadedAnchor", func(t *testing.T) {

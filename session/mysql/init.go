@@ -38,7 +38,7 @@ const (
 
 	sqlCreateSessionEventsTable = `
 		CREATE TABLE IF NOT EXISTS {{TABLE_NAME}} (
-			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			id BIGINT AUTO_INCREMENT PRIMARY KEY, -- row identity only; not used for ordering or cursor logic
 			app_name VARCHAR(255) NOT NULL,
 			user_id VARCHAR(255) NOT NULL,
 			session_id VARCHAR(255) NOT NULL,
