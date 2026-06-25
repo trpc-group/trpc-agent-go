@@ -27,6 +27,7 @@ import (
 var guestPython string
 
 var completedGuestWaitTimeout = 2 * time.Second
+var completedGuestKillWaitTimeout = 100 * time.Millisecond
 
 // stdioRunner starts a guest process that speaks the local stdio protocol.
 // It is an implementation detail of LocalRunner; non-stdio backends implement
@@ -236,12 +237,16 @@ func waitForCompletedGuest(ctx context.Context, p stdioProcess, timeout time.Dur
 		}
 		return ctx.Err()
 	case <-timer.C:
-		_ = p.Kill()
+		killErr := p.Kill()
 		select {
-		case <-waitCh:
-		case <-time.After(100 * time.Millisecond):
+		case err := <-waitCh:
+			return err
+		case <-time.After(completedGuestKillWaitTimeout):
+			if killErr != nil {
+				return fmt.Errorf("kill timed-out guest: %w", killErr)
+			}
+			return errors.New("timed-out guest did not exit after kill")
 		}
-		return nil
 	}
 }
 

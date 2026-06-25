@@ -164,7 +164,12 @@ func TestExecuteStdioReportsRunnerGuestAndContextErrors(t *testing.T) {
 func TestExecuteStdioBoundsCompletedGuestWait(t *testing.T) {
 	originalTimeout := completedGuestWaitTimeout
 	completedGuestWaitTimeout = 10 * time.Millisecond
-	t.Cleanup(func() { completedGuestWaitTimeout = originalTimeout })
+	originalKillTimeout := completedGuestKillWaitTimeout
+	completedGuestKillWaitTimeout = 20 * time.Millisecond
+	t.Cleanup(func() {
+		completedGuestWaitTimeout = originalTimeout
+		completedGuestKillWaitTimeout = originalKillTimeout
+	})
 
 	waitDone := make(chan struct{})
 	process := &fakeStdioProcess{
@@ -195,10 +200,47 @@ func TestExecuteStdioBoundsCompletedGuestWait(t *testing.T) {
 	require.Equal(t, 1, process.waits)
 }
 
+func TestExecuteStdioFailsWhenTimedOutGuestDoesNotExitAfterKill(t *testing.T) {
+	originalTimeout := completedGuestWaitTimeout
+	completedGuestWaitTimeout = 10 * time.Millisecond
+	originalKillTimeout := completedGuestKillWaitTimeout
+	completedGuestKillWaitTimeout = 20 * time.Millisecond
+	waitDone := make(chan struct{})
+	t.Cleanup(func() {
+		completedGuestWaitTimeout = originalTimeout
+		completedGuestKillWaitTimeout = originalKillTimeout
+		close(waitDone)
+	})
+
+	process := &fakeStdioProcess{
+		stdout: io.NopCloser(strings.NewReader(`{"type":"complete","args":{"answer":1},"code":"done\n"}
+`)),
+		waitFn: func() error {
+			<-waitDone
+			return nil
+		},
+	}
+
+	_, err := executeStdio(
+		context.Background(),
+		fakeStdioRunner{process: process},
+		Request{Code: "return 1"},
+		fakeToolCallHandler{},
+	)
+	require.ErrorContains(t, err, "timed-out guest did not exit after kill")
+	require.Equal(t, 1, process.kills)
+	require.Equal(t, 1, process.waits)
+}
+
 func TestExecuteStdioReturnsContextErrorWhileWaitingForCompletedGuest(t *testing.T) {
 	originalTimeout := completedGuestWaitTimeout
 	completedGuestWaitTimeout = time.Second
-	t.Cleanup(func() { completedGuestWaitTimeout = originalTimeout })
+	originalKillTimeout := completedGuestKillWaitTimeout
+	completedGuestKillWaitTimeout = 20 * time.Millisecond
+	t.Cleanup(func() {
+		completedGuestWaitTimeout = originalTimeout
+		completedGuestKillWaitTimeout = originalKillTimeout
+	})
 
 	waitDone := make(chan struct{})
 	process := &fakeStdioProcess{
