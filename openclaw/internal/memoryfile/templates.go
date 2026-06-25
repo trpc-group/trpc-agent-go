@@ -28,9 +28,8 @@ func DefaultTemplate() string {
 			"inspect this file, the agent may quote or summarize " +
 			"the relevant parts.",
 		"If the user explicitly says \"remember this\" or asks " +
-			"the agent to remember a durable preference, fact, " +
-			"or workflow rule, update this file with a short " +
-			"bullet.",
+			"the agent to remember a durable preference or fact, " +
+			"update this file with a short bullet.",
 		"",
 		"This file stores stable, low-volume memory about the user.",
 		"",
@@ -54,10 +53,12 @@ func DefaultTemplate() string {
 		"Use for durable tone, nickname, format, or persona " +
 			"preferences.",
 		"",
-		"## Repeated working style",
+		"## Saved user preferences",
 		"",
-		"Use for recurring workflow rules such as git, PR, or " +
-			"review habits.",
+		"Use only for durable preferences the user explicitly asks " +
+			"to save. Reusable task workflows, output formats, " +
+			"tool procedures, and post-task feedback belong to " +
+			"skill or evolution review, not this file.",
 		"",
 	}, "\n")
 }
@@ -114,4 +115,51 @@ func IsDefaultTemplate(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	return trimmed == defaultTemplateTrimmed ||
 		trimmed == legacyDefaultTemplateTrimmed
+}
+
+func refreshTemplateText(content string) (string, bool) {
+	if !looksLikeManagedMemoryTemplate(content) {
+		return content, false
+	}
+	next := content
+	for _, repl := range templateRefreshReplacements {
+		next = strings.ReplaceAll(next, repl.old, repl.new)
+	}
+	return next, next != content
+}
+
+func looksLikeManagedMemoryTemplate(content string) bool {
+	if !strings.Contains(content, "# Memory") {
+		return false
+	}
+	if !strings.Contains(content, "workflow rule") &&
+		!strings.Contains(content, "Repeated working style") &&
+		!strings.Contains(content, "recurring workflow rules") {
+		return false
+	}
+	return strings.Contains(
+		content,
+		"This is a visible file for durable memory",
+	) || strings.Contains(
+		content,
+		"This is a user-owned file for durable memory",
+	)
+}
+
+var templateRefreshReplacements = []struct {
+	old string
+	new string
+}{
+	{
+		old: "If the user explicitly says \"remember this\" or asks the agent to remember a durable preference, fact, or workflow rule, update this file with a short bullet.",
+		new: "If the user explicitly says \"remember this\" or asks the agent to remember a durable preference or fact, update this file with a short bullet.",
+	},
+	{
+		old: "## Repeated working style",
+		new: "## Saved user preferences",
+	},
+	{
+		old: "Use for recurring workflow rules such as git, PR, or review habits.",
+		new: "Use only for durable preferences the user explicitly asks to save. Reusable task workflows, output formats, tool procedures, and post-task feedback belong to skill or evolution review, not this file.",
+	},
 }

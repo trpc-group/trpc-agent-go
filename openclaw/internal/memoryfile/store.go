@@ -91,6 +91,11 @@ func (s *Store) EnsureMemory(
 		return "", err
 	}
 	if fileExists(path) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := refreshMemoryTemplateFile(path); err != nil {
+			return "", err
+		}
 		return path, nil
 	}
 
@@ -98,6 +103,9 @@ func (s *Store) EnsureMemory(
 	defer s.mu.Unlock()
 
 	if fileExists(path) {
+		if err := refreshMemoryTemplateFile(path); err != nil {
+			return "", err
+		}
 		return path, nil
 	}
 	if err := contextErr(ctx); err != nil {
@@ -144,7 +152,8 @@ func (s *Store) UpdateMemory(
 	if err != nil {
 		return "", err
 	}
-	next, err := update(string(raw))
+	current, _ := refreshTemplateText(string(raw))
+	next, err := update(current)
 	if err != nil {
 		return "", err
 	}
@@ -315,6 +324,18 @@ func writeFileAtomic(path string, data []byte) error {
 	}
 	removeTemp = false
 	return nil
+}
+
+func refreshMemoryTemplateFile(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	next, changed := refreshTemplateText(string(raw))
+	if !changed {
+		return nil
+	}
+	return writeFileAtomic(path, []byte(next))
 }
 
 func fileExists(path string) bool {

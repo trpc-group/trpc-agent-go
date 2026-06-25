@@ -696,6 +696,10 @@ func TestIsDefaultTemplate(t *testing.T) {
 
 	require.True(t, IsDefaultTemplate(DefaultTemplate()))
 	require.True(t, IsDefaultTemplate("\n"+DefaultTemplate()+"\n"))
+	require.NotContains(t, DefaultTemplate(), "workflow rule")
+	require.NotContains(t, DefaultTemplate(), "Repeated working style")
+	require.NotContains(t, DefaultTemplate(), "recurring workflow rules")
+	require.Contains(t, DefaultTemplate(), "skill or evolution review")
 	require.False(t, IsDefaultTemplate("# Memory\n\n- custom fact"))
 
 	// Legacy template text should also be recognised as default.
@@ -747,6 +751,57 @@ func TestIsDefaultTemplate(t *testing.T) {
 	editedLegacy := legacyTemplate + "\n- My name is Alice"
 	require.False(t, IsDefaultTemplate(editedLegacy))
 	require.False(t, IsDefaultTemplate("\n"+editedLegacy+"\n"))
+}
+
+func TestRefreshTemplateTextPreservesUserMemory(t *testing.T) {
+	t.Parallel()
+
+	legacy := strings.Join([]string{
+		"# Memory",
+		"",
+		"This is a visible file for durable memory in the current scope.",
+		"If the user explicitly says \"remember this\" or asks the agent to remember a durable preference, fact, or workflow rule, update this file with a short bullet.",
+		"",
+		"## Repeated working style",
+		"",
+		"Use for recurring workflow rules such as git, PR, or review habits.",
+		"",
+		"- User prefers concise replies.",
+	}, "\n")
+
+	got, changed := refreshTemplateText(legacy)
+	require.True(t, changed)
+	require.Contains(t, got, "- User prefers concise replies.")
+	require.Contains(t, got, "## Saved user preferences")
+	require.Contains(t, got, "skill or evolution review")
+	require.NotContains(t, got, "workflow rule, update this file")
+	require.NotContains(t, got, "Repeated working style")
+	require.NotContains(t, got, "recurring workflow rules")
+}
+
+func TestEnsureMemoryRefreshesExistingTemplate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	path, err := store.MemoryPath("app", "user")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	legacy := legacyDefaultTemplate() + "\n- User prefers concise replies.\n"
+	require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
+
+	gotPath, err := store.EnsureMemory(context.Background(), "app", "user")
+	require.NoError(t, err)
+	require.Equal(t, path, gotPath)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	got := string(raw)
+	require.Contains(t, got, "- User prefers concise replies.")
+	require.Contains(t, got, "## Saved user preferences")
+	require.NotContains(t, got, "workflow rule, update this file")
 }
 
 func TestContextErr_NilContextReturnsNil(t *testing.T) {
