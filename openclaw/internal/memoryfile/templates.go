@@ -55,10 +55,12 @@ func DefaultTemplate() string {
 		"",
 		"## Saved user preferences",
 		"",
-		"Use only for durable preferences the user explicitly asks " +
-			"to save. Reusable task workflows, output formats, " +
-			"tool procedures, and post-task feedback belong to " +
-			"skill or evolution review, not this file.",
+		"Use for durable preferences or explicit memory notes the " +
+			"user asks to save. By default, reusable task workflows, " +
+			"output formats, tool procedures, and post-task feedback " +
+			"belong to skill or evolution review. Store that content " +
+			"here only when the user explicitly asks to save it as " +
+			"memory.",
 		"",
 	}, "\n")
 }
@@ -164,6 +166,6 @@ var templateRefreshReplacements = []struct {
 	},
 	{
 		old: "Use for recurring workflow rules such as git, PR, or review habits.",
-		new: "Use only for durable preferences the user explicitly asks to save. Reusable task workflows, output formats, tool procedures, and post-task feedback belong to skill or evolution review, not this file.",
+		new: "Use for durable preferences or explicit memory notes the user asks to save. By default, reusable task workflows, output formats, tool procedures, and post-task feedback belong to skill or evolution review. Store that content here only when the user explicitly asks to save it as memory.",
 	},
 }

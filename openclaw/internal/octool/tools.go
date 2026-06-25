@@ -240,7 +240,8 @@ func execToolDescription(hasMemoryFile bool) string {
 				"the relevant file and quote or summarize the relevant "+
 				"lines.",
 			"If the user explicitly says 'remember this' or asks you to "+
-				"remember a durable fact or preference, "+
+				"remember a durable fact, preference, task list, "+
+				"checklist, or reminder list, "+
 				"update the narrowest relevant memory file with a short "+
 				"bullet.",
 			"Use memory files only for stable, cross-session facts, "+
