@@ -478,11 +478,11 @@ Training sets and validation sets must be used separately. A higher training-set
 
 ### Static Structure Snapshot
 
-The static structure snapshot is the exported structure of the target Agent. It contains nodes, edges, and iterable slots. Content that can be used as an iteration target in the structure snapshot is called a surface in code. Each surface has a stable `SurfaceID`. This document discusses only `instruction` prompt iteration. PromptIter uses the structure snapshot to confirm whether the specified `instruction` surface exists for the current run.
+The static structure snapshot is the exported structure of the target Agent. It contains nodes, edges, and iterable slots. Content that can be used as an iteration target in the structure snapshot is called a surface in code. Each surface has a stable `SurfaceID`. This section discusses only `instruction` prompt iteration. PromptIter uses the structure snapshot to confirm whether the specified `instruction` surface exists for the current run.
 
-This document discusses only `instruction`-type surfaces, that is, instruction prompts on nodes. Prompt iteration needs an explicit target scope, so integration code must write the selected `SurfaceID` into `TargetSurfaceIDs` in the iteration request.
+This section discusses only `instruction`-type surfaces, that is, instruction prompts on nodes. Prompt iteration needs an explicit target scope, so integration code must write the selected `SurfaceID` into `TargetSurfaceIDs` in the iteration request.
 
-`Describe` can be used to inspect the structure snapshot. After determining the `instruction` surface to iterate, write the corresponding ID into `TargetSurfaceIDs` in the iteration request.
+`Describe` can be used to inspect the structure snapshot. After determining the surface to iterate, write the corresponding ID into `TargetSurfaceIDs` in the iteration request.
 
 ```go
 // Describe returns the static structure snapshot of the target Agent.
@@ -1237,7 +1237,7 @@ type OptimizerOptions struct {
 
 `Teacher` and `Judge` are passed to Evaluation. `Teacher` is used to generate expected traces or reference answers when the evaluation needs them. If the EvalSet already contains these expected values, `Teacher` can be omitted. `Judge` supports LLM Judge metric scoring. If this type of metric is not used, `Judge` can be omitted.
 
-`TargetSurfaceIDs` sets the surfaces allowed to be iterated in this run. A single-Agent scenario usually points to `candidate#instruction`, while a multi-node Agent scenario can point to `instruction` surfaces of multiple nodes.
+`TargetSurfaceIDs` sets the surfaces allowed to be iterated in this run. A single-Agent scenario usually points to `candidate#instruction`, while a multi-node Agent scenario can point to `instruction` surfaces of multiple nodes. Tool-description iteration points to a single tool-description surface, such as `candidate#tool.lookup_record`.
 
 `EvaluationOptions` configures the training-set and validation-set evaluation stages. `Train` and `Validation` can each contain multiple EvalSets, and each EvalSet can contain multiple EvalCases, so one evaluation may need to run multiple evaluation cases. `EvalCaseParallelism` sets evaluation-case concurrency, `EvalCaseParallelInferenceEnabled` controls whether Agents in multiple evaluation cases run concurrently, and `EvalCaseParallelEvaluationEnabled` controls whether scoring for multiple evaluation cases runs concurrently.
 
@@ -2457,6 +2457,61 @@ if err != nil {
 ```
 
 Multi-node iteration follows the main PromptIter workflow. The difference is that one run can write multiple AgentNode `instruction surface` values into `TargetSurfaceIDs`. Training-set failure signals are attributed through backpropagation with the actual execution trace. Later text-gradient aggregation and optimization patch generation are limited to these target prompts.
+
+### Tool Description Iteration
+
+Tool descriptions are also part of the prompt. Tool-description iteration optimizes the `Description` in a tool declaration. When the target object has static tools, the structure snapshot exports one `tool surface` for each tool declaration. At run time, `RunRequest.TargetSurfaceIDs` selects the tool descriptions to iterate. See the complete `tooldesc` example code at [examples/evaluation/promptiter/tooldesc](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/promptiter/tooldesc).
+
+`tooldesc` constructs an LLMAgent with a local function tool, `lookup_record`. The code below shows the target Agent's tool declaration and Runner creation.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+travelLookupTool := function.NewFunctionTool(
+	getFlightStatus,
+	function.WithName("lookup_record"),
+	function.WithDescription("Look up a traveler loyalty-profile record."),
+)
+
+candidateAgent := llmagent.New(
+	candidateAgentName,
+	llmagent.WithModel(candidateModel),
+	llmagent.WithInstruction("Answer travel operations questions concisely. Use a tool only when its declaration clearly matches the request."),
+	llmagent.WithTools([]tool.Tool{travelLookupTool}),
+)
+candidateRunner := runner.NewRunner(candidateAppName, candidateAgent)
+```
+
+The example below omits repeated assembly code for `Engine`, `AgentEvaluator`, `Manager`, and the three PromptIter worker components. It focuses on `TargetSurfaceIDs` in the tool-description scenario. A single tool-description surface has a `SurfaceID` in the form `<node ID>#tool.<tool name>`. If a node contains multiple static tools, each tool description corresponds to an independent surface, so targets can be selected at tool granularity.
+
+```go
+import (
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
+)
+
+targetSurfaceID := astructure.SurfaceID(
+	candidateAgentName,
+	astructure.SurfaceTypeTool,
+	"lookup_record",
+)
+
+runRequest := &engine.RunRequest{
+	Train: []engine.EvalSetInput{
+		{EvalSetID: trainEvalSetID},
+	},
+	Validation: []engine.EvalSetInput{
+		{EvalSetID: validationEvalSetID},
+	},
+	MaxRounds:        maxRounds,
+	TargetSurfaceIDs: []string{targetSurfaceID},
+}
+```
 
 ## Practical Experience
 

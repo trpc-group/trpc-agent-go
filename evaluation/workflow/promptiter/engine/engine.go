@@ -366,7 +366,11 @@ func (e *engine) describeStructure(ctx context.Context) (*astructure.Snapshot, e
 	if err != nil {
 		return nil, fmt.Errorf("export target agent structure: %w", err)
 	}
-	return snapshot, nil
+	projected, err := promptIterStructureSnapshot(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return projected, nil
 }
 
 func (e *engine) executeRound(
