@@ -656,7 +656,7 @@ func (s *Service) getEventsList(
 
 	// TDSQL proxy cannot extract shardkey from tuple comparison;
 	// add explicit user_id for shard routing. Harmless on MySQL.
-	query := fmt.Sprintf(`SELECT id, app_name, user_id, session_id, event, created_at FROM %s
+	query := fmt.Sprintf(`SELECT app_name, user_id, session_id, event, created_at FROM %s
 		WHERE (app_name, user_id, session_id) IN (%s)
 		AND user_id = ?
 		AND deleted_at IS NULL`,
@@ -672,16 +672,14 @@ func (s *Service) getEventsList(
 	type eventWithOrder struct {
 		evt       event.Event
 		createdAt time.Time
-		id        int64
 	}
 	eventsMap := make(map[string][]eventWithOrder)
 
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
-		var rowID int64
 		var appName, userID, sessionID string
 		var eventBytes []byte
 		var eventCreatedAt time.Time
-		if err := rows.Scan(&rowID, &appName, &userID, &sessionID, &eventBytes, &eventCreatedAt); err != nil {
+		if err := rows.Scan(&appName, &userID, &sessionID, &eventBytes, &eventCreatedAt); err != nil {
 			return err
 		}
 		keyStr := fmt.Sprintf("%s:%s:%s", appName, userID, sessionID)
@@ -696,7 +694,7 @@ func (s *Service) getEventsList(
 		if err := json.Unmarshal(eventBytes, &evt); err != nil {
 			return fmt.Errorf("unmarshal event failed: %w", err)
 		}
-		eventsMap[keyStr] = append(eventsMap[keyStr], eventWithOrder{evt: evt, createdAt: eventCreatedAt, id: rowID})
+		eventsMap[keyStr] = append(eventsMap[keyStr], eventWithOrder{evt: evt, createdAt: eventCreatedAt})
 		return nil
 	}, query, args...)
 
