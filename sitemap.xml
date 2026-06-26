@@ -57,6 +57,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/claudecode/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/codeact/</loc>
+        <lastmod>2026-06-26</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/codeact/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/codeact/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/codeexecutor/</loc>
         <lastmod>2026-06-26</lastmod>
         <changefreq>daily</changefreq>
@@ -601,6 +608,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/claudecode/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/claudecode/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/codeact/</loc>
+        <lastmod>2026-06-26</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/codeact/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/codeact/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/codeexecutor/</loc>

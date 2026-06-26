@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/knowledge/vectorstore/milvus/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/codeact/">
       
       
-        <link rel="prev" href="../qdrant/">
+        <link rel="prev" href="../codeexecutor/">
       
       
-        <link rel="next" href="../../troubleshooting/">
+        <link rel="next" href="../error-handling/">
       
       
-      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
     
     
       
-        <title>Milvus - tRPC-Agent-Go</title>
+        <title>CodeAct - tRPC-Agent-Go</title>
       
     
     
-      <link rel="stylesheet" href="../../../../assets/stylesheets/main.7e37652d.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
       
         
-        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -48,9 +48,9 @@
       
     
     
-      <link rel="stylesheet" href="../../../../assets/stylesheets/extra.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
     
-    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
   
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#milvus" class="md-skip">
+        <a href="#_1" class="md-skip">
           跳转至
         </a>
       
@@ -100,9 +100,9 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="页眉">
-    <a href="../../../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href="../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../../../assets/img/logo.png" alt="logo">
+  <img src="../../assets/img/logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Milvus
+              CodeAct
             
           </span>
         </div>
@@ -166,7 +166,7 @@
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="../../../../knowledge/vectorstore/milvus/" hreflang="en" class="md-select__link">
+            <a href="../../codeact/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
@@ -263,7 +263,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../../" class="md-tabs__link">
+      <a href="../" class="md-tabs__link">
         
   
   
@@ -295,7 +295,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../../agent/" class="md-tabs__link">
+        <a href="../agent/" class="md-tabs__link">
           
   
   
@@ -318,7 +318,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../gateway/" class="md-tabs__link">
+        <a href="../gateway/" class="md-tabs__link">
           
   
   
@@ -338,7 +338,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../observability/" class="md-tabs__link">
+        <a href="../observability/" class="md-tabs__link">
           
   
   
@@ -356,7 +356,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../../ecosystem/" class="md-tabs__link">
+      <a href="../ecosystem/" class="md-tabs__link">
         
   
   
@@ -377,7 +377,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../blog/trpcagentgo/" class="md-tabs__link">
+        <a href="../blog/trpcagentgo/" class="md-tabs__link">
           
   
   
@@ -411,9 +411,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href="../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../../../assets/img/logo.png" alt="logo">
+  <img src="../../assets/img/logo.png" alt="logo">
 
     </a>
     tRPC-Agent-Go
@@ -440,7 +440,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -549,7 +549,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agent/" class="md-nav__link">
+      <a href="../agent/" class="md-nav__link">
         
   
   
@@ -572,7 +572,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../multiagent/" class="md-nav__link">
+      <a href="../multiagent/" class="md-nav__link">
         
   
   
@@ -595,7 +595,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../taskrun/" class="md-nav__link">
+      <a href="../taskrun/" class="md-nav__link">
         
   
   
@@ -618,7 +618,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../team/" class="md-nav__link">
+      <a href="../team/" class="md-nav__link">
         
   
   
@@ -641,7 +641,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../graph/" class="md-nav__link">
+      <a href="../graph/" class="md-nav__link">
         
   
   
@@ -664,7 +664,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../custom-agent/" class="md-nav__link">
+      <a href="../custom-agent/" class="md-nav__link">
         
   
   
@@ -687,7 +687,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../dify/" class="md-nav__link">
+      <a href="../dify/" class="md-nav__link">
         
   
   
@@ -710,7 +710,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../claudecode/" class="md-nav__link">
+      <a href="../claudecode/" class="md-nav__link">
         
   
   
@@ -733,7 +733,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../codex/" class="md-nav__link">
+      <a href="../codex/" class="md-nav__link">
         
   
   
@@ -764,7 +764,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../runner/" class="md-nav__link">
+      <a href="../runner/" class="md-nav__link">
         
   
   
@@ -787,7 +787,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../codeexecutor/" class="md-nav__link">
+      <a href="../codeexecutor/" class="md-nav__link">
         
   
   
@@ -807,10 +807,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../../codeact/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    CodeAct
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -821,6 +843,71 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      安全边界
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      为什么不让生成代码直接调用 HTTP API？
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      面向模型的工具说明
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      与其他执行工具的边界
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#managed-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      managed tools 选择
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -833,7 +920,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../error-handling/" class="md-nav__link">
+      <a href="../error-handling/" class="md-nav__link">
         
   
   
@@ -856,7 +943,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../model/" class="md-nav__link">
+      <a href="../model/" class="md-nav__link">
         
   
   
@@ -879,7 +966,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../prompt/" class="md-nav__link">
+      <a href="../prompt/" class="md-nav__link">
         
   
   
@@ -902,7 +989,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../callbacks/" class="md-nav__link">
+      <a href="../callbacks/" class="md-nav__link">
         
   
   
@@ -925,7 +1012,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../plugin/" class="md-nav__link">
+      <a href="../plugin/" class="md-nav__link">
         
   
   
@@ -948,7 +1035,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../memory/" class="md-nav__link">
+      <a href="../memory/" class="md-nav__link">
         
   
   
@@ -971,7 +1058,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../artifact/" class="md-nav__link">
+      <a href="../artifact/" class="md-nav__link">
         
   
   
@@ -994,7 +1081,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../skill/" class="md-nav__link">
+      <a href="../skill/" class="md-nav__link">
         
   
   
@@ -1017,7 +1104,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../evolution/" class="md-nav__link">
+      <a href="../evolution/" class="md-nav__link">
         
   
   
@@ -1040,7 +1127,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../tool/" class="md-nav__link">
+      <a href="../tool/" class="md-nav__link">
         
   
   
@@ -1104,7 +1191,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/" class="md-nav__link">
+      <a href="../session/" class="md-nav__link">
         
   
   
@@ -1127,7 +1214,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/summary/" class="md-nav__link">
+      <a href="../session/summary/" class="md-nav__link">
         
   
   
@@ -1150,7 +1237,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/inmemory/" class="md-nav__link">
+      <a href="../session/inmemory/" class="md-nav__link">
         
   
   
@@ -1173,7 +1260,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/sqlite/" class="md-nav__link">
+      <a href="../session/sqlite/" class="md-nav__link">
         
   
   
@@ -1196,7 +1283,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/redis/" class="md-nav__link">
+      <a href="../session/redis/" class="md-nav__link">
         
   
   
@@ -1219,7 +1306,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/mysql/" class="md-nav__link">
+      <a href="../session/mysql/" class="md-nav__link">
         
   
   
@@ -1242,7 +1329,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/tdsql/" class="md-nav__link">
+      <a href="../session/tdsql/" class="md-nav__link">
         
   
   
@@ -1265,7 +1352,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/postgres/" class="md-nav__link">
+      <a href="../session/postgres/" class="md-nav__link">
         
   
   
@@ -1288,7 +1375,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/pgvector/" class="md-nav__link">
+      <a href="../session/pgvector/" class="md-nav__link">
         
   
   
@@ -1311,7 +1398,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/clickhouse/" class="md-nav__link">
+      <a href="../session/clickhouse/" class="md-nav__link">
         
   
   
@@ -1334,7 +1421,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../session/mongodb/" class="md-nav__link">
+      <a href="../session/mongodb/" class="md-nav__link">
         
   
   
@@ -1362,8 +1449,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1374,11 +1459,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16" >
         
           
           <label class="md-nav__link" for="__nav_2_16" id="__nav_2_16_label" tabindex="0">
@@ -1394,7 +1479,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_16_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_16_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_16">
             <span class="md-nav__icon md-icon"></span>
             Knowledge
@@ -1408,7 +1493,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../" class="md-nav__link">
+      <a href="../knowledge/" class="md-nav__link">
         
   
   
@@ -1431,7 +1516,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../embedder/" class="md-nav__link">
+      <a href="../knowledge/embedder/" class="md-nav__link">
         
   
   
@@ -1454,7 +1539,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reranker/" class="md-nav__link">
+      <a href="../knowledge/reranker/" class="md-nav__link">
         
   
   
@@ -1477,7 +1562,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../query-enhancer/" class="md-nav__link">
+      <a href="../knowledge/query-enhancer/" class="md-nav__link">
         
   
   
@@ -1500,7 +1585,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../source/" class="md-nav__link">
+      <a href="../knowledge/source/" class="md-nav__link">
         
   
   
@@ -1523,7 +1608,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../code-rag/" class="md-nav__link">
+      <a href="../knowledge/code-rag/" class="md-nav__link">
         
   
   
@@ -1546,7 +1631,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../extractor/" class="md-nav__link">
+      <a href="../knowledge/extractor/" class="md-nav__link">
         
   
   
@@ -1569,7 +1654,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../filter/" class="md-nav__link">
+      <a href="../knowledge/filter/" class="md-nav__link">
         
   
   
@@ -1592,7 +1677,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../management/" class="md-nav__link">
+      <a href="../knowledge/management/" class="md-nav__link">
         
   
   
@@ -1615,7 +1700,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../ocr/" class="md-nav__link">
+      <a href="../knowledge/ocr/" class="md-nav__link">
         
   
   
@@ -1635,8 +1720,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1647,11 +1730,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16_11" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16_11" >
         
           
           <label class="md-nav__link" for="__nav_2_16_11" id="__nav_2_16_11_label" tabindex="0">
@@ -1667,7 +1750,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_16_11_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_16_11_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_16_11">
             <span class="md-nav__icon md-icon"></span>
             向量存储
@@ -1681,7 +1764,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../knowledge/vectorstore/" class="md-nav__link">
         
   
   
@@ -1704,7 +1787,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../inmemory/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/inmemory/" class="md-nav__link">
         
   
   
@@ -1727,7 +1810,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../pgvector/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/pgvector/" class="md-nav__link">
         
   
   
@@ -1750,7 +1833,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../tcvector/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/tcvector/" class="md-nav__link">
         
   
   
@@ -1773,7 +1856,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../elasticsearch/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
         
   
   
@@ -1796,7 +1879,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../qdrant/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/qdrant/" class="md-nav__link">
         
   
   
@@ -1816,32 +1899,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Milvus
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../knowledge/vectorstore/milvus/" class="md-nav__link">
         
   
   
@@ -1852,113 +1913,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="目录">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      目录
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      基础配置
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_2" class="md-nav__link">
-    <span class="md-ellipsis">
-      配置选项
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="配置选项">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#_3" class="md-nav__link">
-    <span class="md-ellipsis">
-      连接配置
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#_4" class="md-nav__link">
-    <span class="md-ellipsis">
-      集合配置
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#_5" class="md-nav__link">
-    <span class="md-ellipsis">
-      索引配置
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#_6" class="md-nav__link">
-    <span class="md-ellipsis">
-      搜索配置
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#_7" class="md-nav__link">
-    <span class="md-ellipsis">
-      字段映射（高级）
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_8" class="md-nav__link">
-    <span class="md-ellipsis">
-      相似度度量类型
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_9" class="md-nav__link">
-    <span class="md-ellipsis">
-      使用示例
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1979,7 +1933,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../troubleshooting/" class="md-nav__link">
+      <a href="../knowledge/troubleshooting/" class="md-nav__link">
         
   
   
@@ -2010,7 +1964,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../planner/" class="md-nav__link">
+      <a href="../planner/" class="md-nav__link">
         
   
   
@@ -2033,7 +1987,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../event/" class="md-nav__link">
+      <a href="../event/" class="md-nav__link">
         
   
   
@@ -2056,7 +2010,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../evaluation/" class="md-nav__link">
+      <a href="../evaluation/" class="md-nav__link">
         
   
   
@@ -2079,7 +2033,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../promptiter/" class="md-nav__link">
+      <a href="../promptiter/" class="md-nav__link">
         
   
   
@@ -2150,7 +2104,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../gateway/" class="md-nav__link">
+      <a href="../gateway/" class="md-nav__link">
         
   
   
@@ -2214,7 +2168,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agui/" class="md-nav__link">
+      <a href="../agui/" class="md-nav__link">
         
   
   
@@ -2237,7 +2191,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agui/chat/" class="md-nav__link">
+      <a href="../agui/chat/" class="md-nav__link">
         
   
   
@@ -2260,7 +2214,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agui/history/" class="md-nav__link">
+      <a href="../agui/history/" class="md-nav__link">
         
   
   
@@ -2283,7 +2237,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../agui/cancel/" class="md-nav__link">
+      <a href="../agui/cancel/" class="md-nav__link">
         
   
   
@@ -2314,7 +2268,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../a2a/" class="md-nav__link">
+      <a href="../a2a/" class="md-nav__link">
         
   
   
@@ -2337,7 +2291,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../a2ui/" class="md-nav__link">
+      <a href="../a2ui/" class="md-nav__link">
         
   
   
@@ -2360,7 +2314,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../openclaw-runtime/" class="md-nav__link">
+      <a href="../openclaw-runtime/" class="md-nav__link">
         
   
   
@@ -2431,7 +2385,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../observability/" class="md-nav__link">
+      <a href="../observability/" class="md-nav__link">
         
   
   
@@ -2454,7 +2408,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../telemetry-multimodal/" class="md-nav__link">
+      <a href="../telemetry-multimodal/" class="md-nav__link">
         
   
   
@@ -2484,7 +2438,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../ecosystem/" class="md-nav__link">
+      <a href="../ecosystem/" class="md-nav__link">
         
   
   
@@ -2547,7 +2501,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../blog/trpcagentgo/" class="md-nav__link">
+      <a href="../blog/trpcagentgo/" class="md-nav__link">
         
   
   
@@ -2570,7 +2524,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../blog/summary/" class="md-nav__link">
+      <a href="../blog/summary/" class="md-nav__link">
         
   
   
@@ -2593,7 +2547,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../blog/graphagent/" class="md-nav__link">
+      <a href="../blog/graphagent/" class="md-nav__link">
         
   
   
@@ -2616,7 +2570,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../blog/agui/" class="md-nav__link">
+      <a href="../blog/agui/" class="md-nav__link">
         
   
   
@@ -2639,7 +2593,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../blog/skill/" class="md-nav__link">
+      <a href="../blog/skill/" class="md-nav__link">
         
   
   
@@ -2662,7 +2616,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../blog/evaluation/" class="md-nav__link">
+      <a href="../blog/evaluation/" class="md-nav__link">
         
   
   
@@ -2685,7 +2639,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../blog/llmverifier/" class="md-nav__link">
+      <a href="../blog/llmverifier/" class="md-nav__link">
         
   
   
@@ -2708,7 +2662,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../blog/openclaw/" class="md-nav__link">
+      <a href="../blog/openclaw/" class="md-nav__link">
         
   
   
@@ -2731,7 +2685,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../blog/promptiter/" class="md-nav__link">
+      <a href="../blog/promptiter/" class="md-nav__link">
         
   
   
@@ -2781,87 +2735,45 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      基础配置
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#_2" class="md-nav__link">
     <span class="md-ellipsis">
-      配置选项
+      安全边界
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="配置选项">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#http-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      为什么不让生成代码直接调用 HTTP API？
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#_3" class="md-nav__link">
     <span class="md-ellipsis">
-      连接配置
+      面向模型的工具说明
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#_4" class="md-nav__link">
     <span class="md-ellipsis">
-      集合配置
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#_5" class="md-nav__link">
-    <span class="md-ellipsis">
-      索引配置
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#_6" class="md-nav__link">
-    <span class="md-ellipsis">
-      搜索配置
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#_7" class="md-nav__link">
-    <span class="md-ellipsis">
-      字段映射（高级）
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_8" class="md-nav__link">
-    <span class="md-ellipsis">
-      相似度度量类型
+      与其他执行工具的边界
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#_9" class="md-nav__link">
+  <a href="#managed-tools" class="md-nav__link">
     <span class="md-ellipsis">
-      使用示例
+      managed tools 选择
     </span>
   </a>
   
@@ -2883,7 +2795,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/knowledge/vectorstore/milvus.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/codeact.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2892,269 +2804,98 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/knowledge/vectorstore/milvus.md" title="查看本页的源代码" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/codeact.md" title="查看本页的源代码" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="milvus">Milvus</h1>
-<blockquote>
-<p><strong>示例代码</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/vectorstores/milvus">examples/knowledge/vectorstores/milvus</a></p>
-</blockquote>
-<p><a href="https://milvus.io/">Milvus</a> 是一个高性能向量数据库，专为十亿级向量搜索场景设计。</p>
-<h2 id="_1">基础配置</h2>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-0-10">10</a></span>
-<span class="normal"><a href="#__codelineno-0-11">11</a></span>
-<span class="normal"><a href="#__codelineno-0-12">12</a></span>
-<span class="normal"><a href="#__codelineno-0-13">13</a></span>
-<span class="normal"><a href="#__codelineno-0-14">14</a></span>
-<span class="normal"><a href="#__codelineno-0-15">15</a></span>
-<span class="normal"><a href="#__codelineno-0-16">16</a></span>
-<span class="normal"><a href="#__codelineno-0-17">17</a></span>
-<span class="normal"><a href="#__codelineno-0-18">18</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge&quot;</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus&quot;</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="p">)</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="nx">milvusVS</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithAddress</span><span class="p">(</span><span class="s">&quot;localhost:19530&quot;</span><span class="p">),</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithCollectionName</span><span class="p">(</span><span class="s">&quot;my_documents&quot;</span><span class="p">),</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="p">)</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="c1">// 处理 error</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="p">}</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="nx">kb</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithVectorStore</span><span class="p">(</span><span class="nx">milvusVS</span><span class="p">),</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="w">    </span><span class="nx">knowledge</span><span class="p">.</span><span class="nx">WithEmbedder</span><span class="p">(</span><span class="nx">embedder</span><span class="p">),</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="p">)</span>
+<h1 id="_1">工具代码编排</h1>
+<p><code>codeexecutor/codeact</code> 实现的是 CodeAct-style pattern：模型生成的代码只能经由受限工具网关编排 trpc tools。作为框架能力，对外更建议叫 <strong>工具代码编排</strong>。未知工具会被拒绝，工具输入与输出都在 Go 侧按声明的 JSON Schema 校验。它不替代稳定业务流程中的 Go 代码。</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>LLM -&gt; execute_tool_code -&gt; Runtime -&gt; guest call_tool(name, JSON args)
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>                                  -&gt; Go Gateway -&gt; trpc Tool
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_2">配置选项</h2>
-<h3 id="_3">连接配置</h3>
+<p><code>Gateway</code> 是能力边界，负责 allowlist、schema 校验和真实 Go tool 调用。<code>Runtime</code> 是传输/执行边界：内置 <code>LocalRunner</code> 用 Python stdio guest 实现；远端 sandbox、microVM、容器服务或平台原生 callback 后端应直接实现 <code>codeact.Runtime</code>，并把 sandbox 产生的 <code>ToolCall</code> 路由给传入的 <code>ToolCallHandler</code>。</p>
+<h2 id="_2">安全边界</h2>
+<p><code>LocalRunner</code> 仅用于开发或已经隔离的容器/VM；它不是安全 sandbox。生产应用应基于已有远端 sandbox、microVM 或容器服务实现 <code>codeact.Runtime</code>，并由应用侧配置隔离、资源和依赖策略。</p>
+<h2 id="http-api">为什么不让生成代码直接调用 HTTP API？</h2>
+<p>工具代码编排把动态控制流和系统能力访问分开：生成代码适合循环、分支和数据转换，业务 API 访问仍应是宿主侧工具。这样认证、授权、重试与幂等策略、API 版本适配、审计和限流仍由应用代码掌控，而不是落在模型生成的代码中。</p>
+<p>确实需要 HTTP 能力时，应把具体业务操作做成宿主 adapter tool；如果需要一组较宽但明确受限的 HTTP 能力，可暴露受约束的 <code>http_request</code> 类工具，由宿主控制允许的域名和方法、凭证以及响应大小限制。不能把 <code>LocalRunner</code> 的通用 Python 环境当作安全控制；生产 runtime 必须自行落实网络和进程策略。</p>
 <table>
 <thead>
 <tr>
-<th>选项</th>
-<th>说明</th>
-<th>默认值</th>
+<th>需求</th>
+<th>推荐实现</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>WithAddress(address)</code></td>
-<td>Milvus 服务器地址</td>
-<td>-</td>
+<td>稳定、确定性的业务流程</td>
+<td>Go 应用代码</td>
 </tr>
 <tr>
-<td><code>WithUsername(username)</code></td>
-<td>用户名</td>
-<td>-</td>
+<td>在已批准工具间做动态分支或循环</td>
+<td><code>execute_tool_code</code></td>
 </tr>
 <tr>
-<td><code>WithPassword(password)</code></td>
-<td>密码</td>
-<td>-</td>
+<td>受限的外部 HTTP 集成</td>
+<td>宿主 adapter 或受约束 HTTP tool</td>
 </tr>
 <tr>
-<td><code>WithDBName(dbName)</code></td>
-<td>数据库名称</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithAPIKey(apiKey)</code></td>
-<td>API Key 认证</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithDialOptions(opts...)</code></td>
-<td>gRPC 连接选项</td>
-<td><code>Timeout=5s</code></td>
+<td>不可信代码或无边界外部访问</td>
+<td>隔离 runtime 加明确的应用策略</td>
 </tr>
 </tbody>
 </table>
-<h3 id="_4">集合配置</h3>
-<table>
-<thead>
-<tr>
-<th>选项</th>
-<th>说明</th>
-<th>默认值</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithCollectionName(name)</code></td>
-<td>集合名称</td>
-<td><code>"trpc_agent_documents"</code></td>
-</tr>
-<tr>
-<td><code>WithDimension(dim)</code></td>
-<td>向量维度</td>
-<td><code>1536</code></td>
-</tr>
-<tr>
-<td><code>WithMetricType(type)</code></td>
-<td>相似度度量类型（IP/L2/COSINE）</td>
-<td><code>entity.IP</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="_5">索引配置</h3>
-<table>
-<thead>
-<tr>
-<th>选项</th>
-<th>说明</th>
-<th>默认值</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithHNSWParams(m, efConstruction)</code></td>
-<td>HNSW 索引参数</td>
-<td><code>M=16, EfConstruction=128</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="_6">搜索配置</h3>
-<table>
-<thead>
-<tr>
-<th>选项</th>
-<th>说明</th>
-<th>默认值</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithMaxResults(max)</code></td>
-<td>默认搜索结果数量</td>
-<td><code>10</code></td>
-</tr>
-<tr>
-<td><code>WithReranker(reranker)</code></td>
-<td>设置重排器</td>
-<td>-</td>
-</tr>
-<tr>
-<td><code>WithDocBuilder(builder)</code></td>
-<td>自定义文档构建方法</td>
-<td>默认构建器</td>
-</tr>
-</tbody>
-</table>
-<h3 id="_7">字段映射（高级）</h3>
-<table>
-<thead>
-<tr>
-<th>选项</th>
-<th>说明</th>
-<th>默认值</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithIDField(field)</code></td>
-<td>ID 字段名</td>
-<td><code>"id"</code></td>
-</tr>
-<tr>
-<td><code>WithNameField(field)</code></td>
-<td>名称字段名</td>
-<td><code>"name"</code></td>
-</tr>
-<tr>
-<td><code>WithContentField(field)</code></td>
-<td>内容字段名</td>
-<td><code>"content"</code></td>
-</tr>
-<tr>
-<td><code>WithVectorField(field)</code></td>
-<td>向量字段名</td>
-<td><code>"vector"</code></td>
-</tr>
-<tr>
-<td><code>WithMetadataField(field)</code></td>
-<td>元数据字段名</td>
-<td><code>"metadata"</code></td>
-</tr>
-<tr>
-<td><code>WithCreatedAtField(field)</code></td>
-<td>创建时间字段名</td>
-<td><code>"created_at"</code></td>
-</tr>
-<tr>
-<td><code>WithUpdatedAtField(field)</code></td>
-<td>更新时间字段名</td>
-<td><code>"updated_at"</code></td>
-</tr>
-</tbody>
-</table>
-<h2 id="_8">相似度度量类型</h2>
-<p>Milvus 支持多种相似度度量类型：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-1-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-1-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-1-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-1-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-1-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;github.com/milvus-io/milvus/client/v2/entity&quot;</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="c1">// 内积（Inner Product）- 默认，分数越高越相似</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMetricType</span><span class="p">(</span><span class="nx">entity</span><span class="p">.</span><span class="nx">IP</span><span class="p">)</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="c1">// 欧氏距离（L2）- 分数越低越相似</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMetricType</span><span class="p">(</span><span class="nx">entity</span><span class="p">.</span><span class="nx">L2</span><span class="p">)</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a><span class="c1">// 余弦相似度</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMetricType</span><span class="p">(</span><span class="nx">entity</span><span class="p">.</span><span class="nx">COSINE</span><span class="p">)</span>
+<p>工具 A/B 的小型结构化数据经 JSON 传递；中间结果留在 guest 代码中，只有最终 <code>value</code> 和捕获的 <code>stdout</code> 会作为外层工具结果返回。应返回紧凑的聚合结果、标识符或 artifact/workspace 引用，而不是把大块原始数据交回模型。大数据应返回 artifact/workspace 引用，由 guest 在挂载 workspace 中处理。业务语义不匹配必须用显式转换代码或宿主 adapter tool 处理，CodeAct 不会猜测字段或单位含义。</p>
+<p>要运行 Agent 的多工具编排示例（产品搜索 → 库存筛选 → 创建报价），设置
+<code>OPENAI_API_KEY</code>（以及可选的 <code>OPENAI_BASE_URL</code>）后执行：</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nb">cd</span><span class="w"> </span>examples<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>./codeact<span class="w"> </span>-model<span class="w"> </span>gpt-5
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_9">使用示例</h2>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-2-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-2-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-2-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-2-10">10</a></span>
-<span class="normal"><a href="#__codelineno-2-11">11</a></span>
-<span class="normal"><a href="#__codelineno-2-12">12</a></span>
-<span class="normal"><a href="#__codelineno-2-13">13</a></span>
-<span class="normal"><a href="#__codelineno-2-14">14</a></span>
-<span class="normal"><a href="#__codelineno-2-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/milvus&quot;</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="s">&quot;github.com/milvus-io/milvus/client/v2/entity&quot;</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="p">)</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="nx">milvusVS</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithAddress</span><span class="p">(</span><span class="s">&quot;localhost:19530&quot;</span><span class="p">),</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithUsername</span><span class="p">(</span><span class="s">&quot;root&quot;</span><span class="p">),</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithPassword</span><span class="p">(</span><span class="s">&quot;Milvus&quot;</span><span class="p">),</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithCollectionName</span><span class="p">(</span><span class="s">&quot;knowledge_base&quot;</span><span class="p">),</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithDimension</span><span class="p">(</span><span class="mi">1536</span><span class="p">),</span>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMetricType</span><span class="p">(</span><span class="nx">entity</span><span class="p">.</span><span class="nx">COSINE</span><span class="p">),</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithHNSWParams</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span><span class="w"> </span><span class="mi">256</span><span class="p">),</span><span class="w">  </span><span class="c1">// 更高的召回率</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="w">    </span><span class="nx">vectormilvus</span><span class="p">.</span><span class="nx">WithMaxResults</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="p">)</span>
-</span></code></pre></div></td></tr></table></div>
+<p>该示例只把 <code>execute_tool_code</code> 暴露给模型；<code>search_catalog</code>、<code>get_inventory</code> 和
+<code>create_quote</code> 仅能由 guest Python 经 allowlist 调用。它不设置 <code>GenerationConfig</code>，
+模型配置完全由 <code>openai.New</code> 和环境变量处理。</p>
+<p>需要给 Agent 暴露工具时，调用 <code>tool/toolcode.NewTool(runtime, managedTools)</code>，将返回的 <code>execute_tool_code</code> 注册给 Agent。只有 <code>managedTools</code> 能被 guest 中的 <code>await call_tool(...)</code> 调用。</p>
+<p>第一版中，managed tool 是同步的直接宿主能力调用：内置 Python guest 任一时刻只有一个调用在执行，<code>await</code> 是 guest API 的调用形式，但 <code>asyncio.gather(...)</code> 不会产生并行的宿主工具调用。宿主工具失败会在 Python 中表现为 <code>RuntimeError</code>，生成代码可用 <code>try</code>/<code>except</code> 处理。它不会重放 Agent 的 callback、retry 或内层 tracing 生命周期，也不能在执行中暂停以等待交互式审批。不要把需要“审批后恢复”流程的工具加入 <code>managedTools</code>；授权应在业务工具自身或应用定义的 adapter tool 中实现。</p>
+<h2 id="_3">面向模型的工具说明</h2>
+<p>默认的 <code>execute_tool_code</code> 声明会告诉模型：能在一次调用完成流程时优先一次完成；只能使用 <code>await call_tool(name, **json_arguments)</code>；按顺序调用工具；并只返回完成任务所需的紧凑 JSON 兼容值。它还会动态列出每个 managed tool 的名称、描述、输入 JSON Schema 和输出 JSON Schema。中间的 managed tool 结果留在 guest 代码中，只有 <code>execute_tool_code</code> 最终的 <code>value</code> 和捕获的 <code>stdout</code> 会作为外层工具结果返回；不要打印或返回模型不需要的大型原始结果。这里的说明只是模型引导，不能替代前述 runtime 安全边界。</p>
+<p>managed tool 的描述应写成业务契约：说明操作含义、前置条件、单位、枚举含义和结果语义。除非模型必须依此选择操作，否则不要塞入 header、SDK 等传输细节。两个工具之间若需要领域特定的语义映射，应使用宿主 adapter tool，而不要让通用字段转换去猜测含义。</p>
+<p><code>toolcode.WithDescription</code> 会替换默认描述。使用自定义描述时，应保留“只能经由 <code>call_tool</code> 访问能力”和 JSON 入参与结果约束。</p>
+<h2 id="_4">与其他执行工具的边界</h2>
+<p><code>execute_tool_code</code> 不是 <code>workspace_exec</code>、<code>workspace_write_stdin</code> 或
+<code>workspace_kill_session</code> 的替代品：</p>
+<ul>
+<li><code>workspace_exec</code> 系列用于在共享 workspace 里运行 shell command、脚本、
+  CLI 或长任务，输入输出主要是 terminal 文本、文件、artifact、exit code。</li>
+<li><code>execute_tool_code</code> 用于让生成的 Python 胶水代码通过 <code>call_tool(...)</code>
+  编排一组显式 allowlisted 的普通 Go tools，适合分支、循环、JSON 转换和
+  多工具结果聚合。</li>
+<li><code>tool/codeexec</code> 的 <code>execute_code</code> 用于普通代码执行、计算、数据分析或逻辑
+  验证；它不会把 Python 调用桥接回 Go tools。</li>
+</ul>
+<p>因此默认工具名刻意不叫 <code>execute_code</code>：<code>tool/codeexec</code> 已经把
+<code>execute_code</code> 用于普通代码执行。如果一个应用只暴露工具编排版本，可以用
+<code>toolcode.WithName("execute_code")</code> 覆盖；但不要在同一个 Agent 上注册两个
+同名工具。</p>
+<h2 id="managed-tools">managed tools 选择</h2>
+<p><code>managedTools</code> 是应用显式配置的独立 capability registry，不会从 Agent 已注册的
+tools 自动推导。应优先放业务工具、数据工具和宿主侧 adapter tool。通常应排除：</p>
+<ul>
+<li><code>workspace_exec</code> / <code>workspace_write_stdin</code> / <code>workspace_kill_session</code></li>
+<li><code>workspace_save_artifact</code></li>
+<li><code>execute_code</code> / <code>execute_tool_code</code></li>
+<li><code>skill_run</code> / <code>skill_exec</code> / <code>skill_write_stdin</code> / <code>skill_poll_session</code> /
+  <code>skill_kill_session</code></li>
+<li><code>transfer_to_agent</code> / <code>await_user_reply</code></li>
+</ul>
+<p>对于同一个业务操作，通常应只选择一种模型侧入口：要么作为 Agent 的直接工具暴露，要么仅加入 <code>execute_tool_code</code> 的 managed registry。应用当然可以有意同时注册两者，但这会让模型对同一个操作看到两条执行路径，弱化何时应该使用代码编排的引导。无论如何，managed registry 仍是 guest 代码的实际能力边界。</p>
+<p>这些工具通常不应加入 registry：执行类工具会形成递归或异质执行链；
+<code>transfer_to_agent</code> 和 <code>await_user_reply</code> 会修改外层 Invocation 的控制状态；
+<code>AgentTool</code> / <code>DynamicAgentTool</code> 会启动子 Agent 并带来独立的历史、流式事件和
+成本边界。框架不按名称或类型替应用判断；应用应只把明确需要编排的普通能力工具
+传给 <code>tool/toolcode.NewTool</code>。</p>
 
 
 
@@ -3177,7 +2918,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月8日 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月26日 01:55:26 UTC">2026-06-26 01:55:26</span>
   </span>
 
     
@@ -3187,7 +2928,7 @@
     <span class="md-icon" title="创建日期">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年1月8日 11:46:52 UTC">2026-01-08 11:46:52</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月26日 01:55:26 UTC">2026-06-26 01:55:26</span>
   </span>
 
     
@@ -3268,7 +3009,7 @@
       <nav class="md-footer__inner md-grid" aria-label="页脚" >
         
           
-          <a href="../qdrant/" class="md-footer__link md-footer__link--prev" aria-label="上一页: Qdrant">
+          <a href="../codeexecutor/" class="md-footer__link md-footer__link--prev" aria-label="上一页: Code Executor">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -3278,20 +3019,20 @@
                 上一页
               </span>
               <div class="md-ellipsis">
-                Qdrant
+                Code Executor
               </div>
             </div>
           </a>
         
         
           
-          <a href="../../troubleshooting/" class="md-footer__link md-footer__link--next" aria-label="下一页: 故障排除">
+          <a href="../error-handling/" class="md-footer__link md-footer__link--next" aria-label="下一页: 错误处理">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 下一页
               </span>
               <div class="md-ellipsis">
-                故障排除
+                错误处理
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -3327,12 +3068,12 @@
     
     
       
-      <script id="__config" type="application/json">{"base": "../../../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
     
     
-      <script src="../../../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
       
-        <script src="../../../../assets/javascripts/mathjax.js"></script>
+        <script src="../../assets/javascripts/mathjax.js"></script>
       
         <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
       
