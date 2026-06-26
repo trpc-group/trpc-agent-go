@@ -11,6 +11,7 @@ nav:
       - Agent:
           - Agent: agent.md
           - Multi Agent: multiagent.md
+          - Dynamic Workflow: dynamic-workflow.md
           - Task Run Runtime: taskrun.md
           - Team: team.md
           - Graph Agent: graph.md
@@ -111,6 +112,7 @@ plugins:
                 - Agent:
                     - Agent: agent.md
                     - Multi Agent: multiagent.md
+                    - 动态工作流: dynamic-workflow.md
                     - Task Run 运行时: taskrun.md
                     - Team: team.md
                     - Graph Agent: graph.md

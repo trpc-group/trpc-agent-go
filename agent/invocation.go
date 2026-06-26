@@ -64,6 +64,9 @@ const (
 	// session after the function-call processor clones the invocation
 	// session for state-delta isolation.
 	liveSessionStateKey = "__live_session__"
+	// forwardEventStateKey is the invocation state key used by internal
+	// eventstream attachment (see internal/state/eventstream).
+	forwardEventStateKey = "__forward_event__"
 
 	// streamHubStateKey is the invocation state key used by the graph to
 	// share ephemeral streams across node invocations within the same run.
@@ -102,6 +105,9 @@ const (
 	// TriggerTypeTransfer indicates the child invocation was created because
 	// the parent agent invoked the transfer_to_agent tool (handoff pattern).
 	TriggerTypeTransfer = event.TriggerTypeTransfer
+	// TriggerTypeDynamicWorkflow indicates the child invocation was created by
+	// a dynamic workflow script calling a registered child agent.
+	TriggerTypeDynamicWorkflow = event.TriggerTypeDynamicWorkflow
 )
 
 // ParentInvocationMetadata describes how a child invocation was triggered by
@@ -1699,6 +1705,7 @@ func isCloneStateKey(key string) bool {
 		barrierStateKey,
 		appenderStateKey,
 		liveSessionStateKey,
+		forwardEventStateKey,
 		streamHubStateKey,
 		surfaceRootNodeIDStateKey,
 		teamMemberTraceRootStateKey:

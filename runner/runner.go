@@ -35,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/eventstream"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
@@ -1200,6 +1201,8 @@ type eventLoopContext struct {
 	sess                               *session.Session
 	invocation                         *agent.Invocation
 	agentEventCh                       <-chan *event.Event
+	forwardedEventCh                   chan *forwardedEvent
+	forwardedEventDone                 chan struct{}
 	flushChan                          chan *flush.FlushRequest
 	processedEventCh                   chan *event.Event
 	runHandle                          *runHandle
@@ -1222,6 +1225,7 @@ type eventLoopContext struct {
 	streamFilter                       graph.StreamModeFilter
 	interruptedAssistants              map[string]*interruptedAssistantAccumulator
 	interruptedAssistantSequence       int64
+	processingForwardedEvent           bool
 	// emittedAssistantResponseIDs tracks response IDs that already produced a
 	// non-partial assistant message event during this run.
 	//
@@ -1235,6 +1239,14 @@ type eventLoopContext struct {
 	errorEventCount     int
 	emittedEventCount   int
 	detailSpanCount     int
+}
+
+// forwardedEvent is an event produced by nested work, such as a dynamic
+// workflow child agent. The sender waits for ack so child-agent session state
+// is visible before that agent proceeds to its next model turn.
+type forwardedEvent struct {
+	event *event.Event
+	ack   chan error
 }
 
 type interruptedAssistantAccumulator struct {
@@ -1263,10 +1275,35 @@ func (r *runner) processAgentEvents(
 	handle *runHandle,
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
+	forwardedEventCh := make(chan *forwardedEvent, 64)
+	forwardedEventDone := make(chan struct{})
+	eventstream.Attach(invocation, func(ctx context.Context, evt *event.Event) error {
+		request := &forwardedEvent{event: evt, ack: make(chan error, 1)}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-forwardedEventDone:
+			return context.Canceled
+		case forwardedEventCh <- request:
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-forwardedEventDone:
+			return context.Canceled
+		case err, ok := <-request.ack:
+			if !ok {
+				return nil
+			}
+			return err
+		}
+	})
 	loop := &eventLoopContext{
 		sess:                      sess,
 		invocation:                invocation,
 		agentEventCh:              agentEventCh,
+		forwardedEventCh:          forwardedEventCh,
+		forwardedEventDone:        forwardedEventDone,
 		flushChan:                 flushChan,
 		processedEventCh:          processedEventCh,
 		runHandle:                 handle,
@@ -1330,6 +1367,10 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
 		appender.Clear(loop.invocation)
+		if loop.forwardedEventDone != nil {
+			close(loop.forwardedEventDone)
+		}
+		eventstream.Clear(loop.invocation)
 		livesession.Clear(loop.invocation)
 		steer.Clear(loop.invocation)
 		r.unregisterRun(loop.invocation.RunOptions.RequestID)
@@ -1347,6 +1388,23 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 			}
 			if err := r.processSingleAgentEvent(ctx, loop, agentEvent); err != nil {
 				log.Errorf("process single agent event: %v", err)
+				return
+			}
+		case request, ok := <-loop.forwardedEventCh:
+			if !ok {
+				loop.forwardedEventCh = nil
+				continue
+			}
+			if request == nil {
+				continue
+			}
+			loop.processingForwardedEvent = true
+			err := r.processSingleAgentEvent(ctx, loop, request.event)
+			loop.processingForwardedEvent = false
+			request.ack <- err
+			close(request.ack)
+			if err != nil {
+				log.Errorf("process forwarded agent event: %v", err)
 				return
 			}
 		case req, ok := <-loop.flushChan:
@@ -1422,17 +1480,12 @@ func (r *runner) processSingleAgentEvent(
 		return nil
 	}
 	agentEvent = errorEventWithContent(agentEvent)
-	excludeRootCompletion := routedEvent && !sameSession(persistSession, loop.sess)
-	if excludeRootCompletion {
-		r.captureRoutedCompletionError(loop, agentEvent)
-	} else {
-		// Capture graph-level completion snapshot for final event.
-		if isGraphCompletionSnapshotEvent(agentEvent) {
-			loop.graphCompletionSeen = true
-			loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
-		}
-		r.captureCompletionFallback(loop, agentEvent)
-	}
+	excludeRootCompletion := shouldExcludeRootCompletion(
+		loop,
+		persistSession,
+		routedEvent,
+	)
+	r.captureRootCompletion(loop, agentEvent, excludeRootCompletion)
 	r.markCompletionSnapshotOnly(loop, agentEvent)
 	if shouldSuppressGraphCompletionEvent(loop, agentEvent) {
 		return nil
@@ -1484,7 +1537,50 @@ func (r *runner) processSingleAgentEvent(
 		r.recordVisibleCompletionEmission(loop, agentEvent)
 	}
 
-	// Emit event to output channel.
+	if err := r.emitProcessedEvent(ctx, loop, agentEvent, traceDetails); err != nil {
+		return err
+	}
+	loop.emittedEventCount++
+
+	return nil
+}
+
+func shouldExcludeRootCompletion(
+	loop *eventLoopContext,
+	persistSession *session.Session,
+	routedEvent bool,
+) bool {
+	// Nested work is forwarded so callers can observe it, but it must not become
+	// the root run's fallback/final assistant response. Dynamic workflows share
+	// the root session and therefore are not necessarily covered by the routed
+	// session check below.
+	return (routedEvent && !sameSession(persistSession, loop.sess)) ||
+		loop.processingForwardedEvent
+}
+
+func (r *runner) captureRootCompletion(
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+	excludeRootCompletion bool,
+) {
+	if excludeRootCompletion {
+		r.captureRoutedCompletionError(loop, agentEvent)
+		return
+	}
+	// Capture graph-level completion snapshot for final event.
+	if isGraphCompletionSnapshotEvent(agentEvent) {
+		loop.graphCompletionSeen = true
+		loop.finalStateDelta, loop.finalChoices = r.captureGraphCompletion(agentEvent)
+	}
+	r.captureCompletionFallback(loop, agentEvent)
+}
+
+func (r *runner) emitProcessedEvent(
+	ctx context.Context,
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+	traceDetails bool,
+) error {
 	emitCtx := ctx
 	var emitSpan oteltrace.Span
 	emitStarted := false
@@ -1508,9 +1604,7 @@ func (r *runner) processSingleAgentEvent(
 		finishRunnerLatencySpan(emitSpan, emitStarted, err)
 		return fmt.Errorf("emit event to output channel: %w", err)
 	}
-	loop.emittedEventCount++
 	finishRunnerLatencySpan(emitSpan, emitStarted, nil)
-
 	return nil
 }
 
@@ -1520,6 +1614,9 @@ func recordRunnerEventStats(loop *eventLoopContext, evt *event.Event) {
 	}
 	loop.processedEventCount++
 	if evt == nil {
+		return
+	}
+	if evt.Response == nil {
 		return
 	}
 	if evt.IsPartial {
