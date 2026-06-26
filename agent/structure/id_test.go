@@ -47,6 +47,11 @@ func TestExport_SurfaceID_IsStableAcrossRepeatedExports(t *testing.T) {
 	assert.Equal(t, first.Surfaces[0].SurfaceID, second.Surfaces[0].SurfaceID)
 }
 
+func TestSurfaceIDWithParts(t *testing.T) {
+	assert.Equal(t, "root#tool.lookup_record", SurfaceID("root", SurfaceTypeTool, "lookup_record"))
+	assert.Equal(t, "root#tool.lookup_record.input_schema", SurfaceID("root", SurfaceTypeTool, "lookup_record", "input_schema"))
+}
+
 func TestExport_StructureID_IsStableAcrossRepeatedExports(t *testing.T) {
 	ag := &testAgent{name: "root"}
 	first, err := Export(context.Background(), ag)
