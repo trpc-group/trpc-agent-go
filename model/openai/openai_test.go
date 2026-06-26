@@ -6110,6 +6110,189 @@ func TestCreateFinalResponseFinishReason(t *testing.T) {
 		*finalResponse.Choices[0].FinishReason)
 }
 
+// TestCreateFinalResponseUsageConditional verifies that Usage is only set on the
+// final response when at least one token count is non-zero. This prevents the
+// Langfuse exporter from seeing zero-valued usage attributes that get filtered
+// out by usageDetails.empty().
+func TestCreateFinalResponseUsageConditional(t *testing.T) {
+	m := &Model{}
+
+	tests := []struct {
+		name      string
+		usage     openai.CompletionUsage
+		expectNil bool
+	}{
+		{
+			name: "all zero tokens - usage should be nil",
+			usage: openai.CompletionUsage{
+				PromptTokens:     0,
+				CompletionTokens: 0,
+				TotalTokens:      0,
+			},
+			expectNil: true,
+		},
+		{
+			name: "only prompt tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     10,
+				CompletionTokens: 0,
+				TotalTokens:      0,
+			},
+			expectNil: false,
+		},
+		{
+			name: "only completion tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     0,
+				CompletionTokens: 20,
+				TotalTokens:      0,
+			},
+			expectNil: false,
+		},
+		{
+			name: "only total tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     0,
+				CompletionTokens: 0,
+				TotalTokens:      30,
+			},
+			expectNil: false,
+		},
+		{
+			name: "all tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     10,
+				CompletionTokens: 20,
+				TotalTokens:      30,
+			},
+			expectNil: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			acc := openai.ChatCompletionAccumulator{}
+			chunk := openai.ChatCompletionChunk{
+				ID:    "test-id",
+				Model: "test-model",
+				Usage: tt.usage,
+				Choices: []openai.ChatCompletionChunkChoice{
+					{
+						Index: 0,
+						Delta: openai.ChatCompletionChunkChoiceDelta{
+							Content: "Hello",
+						},
+					},
+				},
+			}
+			acc.AddChunk(chunk)
+
+			resp := m.createFinalResponse(acc, false, nil, "")
+			require.NotNil(t, resp)
+
+			if tt.expectNil {
+				assert.Nil(t, resp.Usage, "expected Usage to be nil when all tokens are zero")
+			} else {
+				require.NotNil(t, resp.Usage, "expected Usage to be set when token counts are non-zero")
+				assert.Equal(t, int(tt.usage.PromptTokens), resp.Usage.PromptTokens)
+				assert.Equal(t, int(tt.usage.CompletionTokens), resp.Usage.CompletionTokens)
+				assert.Equal(t, int(tt.usage.TotalTokens), resp.Usage.TotalTokens)
+			}
+		})
+	}
+}
+
+// TestCreateResponseFromCompletionUsageConditional verifies that Usage is only
+// set on the non-streaming response when at least one token count is non-zero.
+// This ensures consistency with the streaming createFinalResponse path and
+// prevents the Langfuse exporter from seeing zero-valued usage attributes.
+func TestCreateResponseFromCompletionUsageConditional(t *testing.T) {
+	m := &Model{}
+
+	tests := []struct {
+		name      string
+		usage     openai.CompletionUsage
+		expectNil bool
+	}{
+		{
+			name: "all zero tokens - usage should be nil",
+			usage: openai.CompletionUsage{
+				PromptTokens:     0,
+				CompletionTokens: 0,
+				TotalTokens:      0,
+			},
+			expectNil: true,
+		},
+		{
+			name: "only prompt tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     10,
+				CompletionTokens: 0,
+				TotalTokens:      0,
+			},
+			expectNil: false,
+		},
+		{
+			name: "only completion tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     0,
+				CompletionTokens: 20,
+				TotalTokens:      0,
+			},
+			expectNil: false,
+		},
+		{
+			name: "only total tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     0,
+				CompletionTokens: 0,
+				TotalTokens:      30,
+			},
+			expectNil: false,
+		},
+		{
+			name: "all tokens non-zero",
+			usage: openai.CompletionUsage{
+				PromptTokens:     10,
+				CompletionTokens: 20,
+				TotalTokens:      30,
+			},
+			expectNil: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chatCompletion := openai.ChatCompletion{
+				ID:    "test-id",
+				Model: "test-model",
+				Usage: tt.usage,
+				Choices: []openai.ChatCompletionChoice{
+					{
+						Index: 0,
+						Message: openai.ChatCompletionMessage{
+							Content: "Hello",
+						},
+						FinishReason: "stop",
+					},
+				},
+			}
+
+			resp := m.createResponseFromCompletion(&chatCompletion)
+			require.NotNil(t, resp)
+
+			if tt.expectNil {
+				assert.Nil(t, resp.Usage, "expected Usage to be nil when all tokens are zero")
+			} else {
+				require.NotNil(t, resp.Usage, "expected Usage to be set when token counts are non-zero")
+				assert.Equal(t, int(tt.usage.PromptTokens), resp.Usage.PromptTokens)
+				assert.Equal(t, int(tt.usage.CompletionTokens), resp.Usage.CompletionTokens)
+				assert.Equal(t, int(tt.usage.TotalTokens), resp.Usage.TotalTokens)
+			}
+		})
+	}
+}
+
 // TestToolCallIndexMapping tests the tool call index mapping functionality.
 func TestToolCallIndexMapping(t *testing.T) {
 	m := New("test-model")
