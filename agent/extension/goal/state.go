@@ -126,7 +126,10 @@ func Start(
 	}
 	state := session.StateMap{cfg.stateKey: raw}
 	sess, getErr := service.GetSession(ctx, key)
-	if getErr == nil && sess != nil {
+	if getErr != nil {
+		return nil, getErr
+	}
+	if sess != nil {
 		sess.SetState(cfg.stateKey, raw)
 		return g, service.UpdateSessionState(ctx, key, state)
 	}

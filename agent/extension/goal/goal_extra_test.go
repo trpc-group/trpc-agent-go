@@ -177,6 +177,40 @@ func TestStateHelpersAndStartPaths(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestStart_ReturnsGetSessionError(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "goal-extension-test", UserID: "user", SessionID: "sid-error"}
+	sessionService := &getSessionErrorService{err: assert.AnError}
+
+	_, err := Start(ctx, sessionService, key, "produce final plan")
+	require.ErrorIs(t, err, assert.AnError)
+	assert.False(t, sessionService.createCalled)
+}
+
+type getSessionErrorService struct {
+	session.Service
+	err          error
+	createCalled bool
+}
+
+func (s *getSessionErrorService) GetSession(
+	context.Context,
+	session.Key,
+	...session.Option,
+) (*session.Session, error) {
+	return nil, s.err
+}
+
+func (s *getSessionErrorService) CreateSession(
+	context.Context,
+	session.Key,
+	session.StateMap,
+	...session.Option,
+) (*session.Session, error) {
+	s.createCalled = true
+	return nil, nil
+}
+
 func TestFormattingAndInvocationHelpers(t *testing.T) {
 	msg := DefaultNudgeFormatter(NudgeContext{AttemptNumber: 2, MaxRetries: 4})
 	assert.Contains(t, msg, "(unknown objective)")
