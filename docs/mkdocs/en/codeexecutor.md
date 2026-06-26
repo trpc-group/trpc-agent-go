@@ -60,6 +60,7 @@ More complete examples:
 - [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go) (local backend)
 - [examples/codeexecution/container/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/container/README.md) (Docker container backend)
 - [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md) (Jupyter kernel backend)
+- [Tool Code Orchestration](codeact.md) (generated code orchestrating allowlisted tools through `call_tool`)
 
 ### `WithCodeExecutor` vs fenced-code auto-execution
 
