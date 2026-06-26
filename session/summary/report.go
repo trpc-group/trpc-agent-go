@@ -93,6 +93,16 @@ func ContextWithReport(ctx context.Context, report *Report) context.Context {
 	return context.WithValue(ctx, reportContextKey{}, report)
 }
 
+// ReportFromContext returns the report attached to ctx, if any.
+func ReportFromContext(ctx context.Context) (*Report, bool) {
+	return reportFromContext(ctx)
+}
+
+// Clone returns a copy of r that can be mutated independently.
+func (r Report) Clone() Report {
+	return cloneReport(r)
+}
+
 func reportFromContext(ctx context.Context) (*Report, bool) {
 	if ctx == nil {
 		return nil, false

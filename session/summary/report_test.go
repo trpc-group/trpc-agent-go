@@ -162,6 +162,25 @@ func TestSessionSummarizer_ReportHookCacheSafeForkCall(t *testing.T) {
 	require.Equal(t, "manual", got.Trigger.Name)
 }
 
+func TestSessionSummarizer_ReportHookSeedsManualTriggerForPreseededReport(t *testing.T) {
+	var got Report
+	report := &Report{}
+	s := NewSummarizer(
+		&reportModel{},
+		WithReportHook(func(_ context.Context, report Report) {
+			got = report
+		}),
+	)
+
+	text, err := s.Summarize(ContextWithReport(context.Background(), report), newReportSession())
+	require.NoError(t, err)
+	require.Equal(t, "summary", text)
+	require.True(t, report.Trigger.Fired)
+	require.Equal(t, "manual", report.Trigger.Name)
+	require.True(t, got.Trigger.Fired)
+	require.Equal(t, "manual", got.Trigger.Name)
+}
+
 func TestSessionSummarizer_ReportHookEstimatesAfterBeforeModelCallback(t *testing.T) {
 	defer SetTokenCounter(nil)
 	SetTokenCounter(testFixedTokenCounter{tokens: 5})

@@ -433,6 +433,24 @@ func TestSummarizeSession_ForceReportIncludesFilterKey(t *testing.T) {
 	require.Equal(t, "branch", got.Trigger.FilterKey)
 }
 
+func TestSummarizeSession_ReusesCallerReport(t *testing.T) {
+	summarizer := summary.NewSummarizer(&reportModel{})
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("new", time.Now(), "branch"),
+	}
+	report := &summary.Report{}
+	ctx := summary.ContextWithReport(context.Background(), report)
+
+	updated, err := SummarizeSession(ctx, summarizer, base, "branch", true)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.True(t, report.Trigger.Fired)
+	require.Equal(t, "force", report.Trigger.Name)
+	require.Equal(t, "branch", report.Trigger.FilterKey)
+	require.Equal(t, "standalone", report.Call.Mode)
+}
+
 func TestSummarizeSession_FullSession_SingleWrite(t *testing.T) {
 	now := time.Now()
 	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
@@ -1524,6 +1542,48 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	defer mockSvc.mu.Unlock()
 	require.Equal(t, "summary-user-messages", mockSvc.summaries["user-messages"])
 	require.Equal(t, "summary-", mockSvc.summaries[""])
+}
+
+func TestCreateSessionSummaryWithCascade_ForksReportForParallelTargets(t *testing.T) {
+	now := time.Now()
+	sess := &session.Session{
+		ID:      "test-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+		Events: []event.Event{
+			makeEvent("e1", now.Add(-2*time.Minute), "user-messages"),
+			makeEvent("e2", now.Add(-time.Minute), "tool-calls"),
+		},
+	}
+	rootReport := &summary.Report{}
+	ctx := summary.ContextWithReport(context.Background(), rootReport)
+
+	var (
+		reportsMu sync.Mutex
+		reports   []*summary.Report
+	)
+	err := CreateSessionSummaryWithCascade(
+		ctx,
+		sess,
+		"user-messages",
+		false,
+		NewSummaryDispatchPolicy(nil, true),
+		func(ctx context.Context, _ *session.Session, _ string, _ bool) error {
+			report, ok := summary.ReportFromContext(ctx)
+			if !ok {
+				return errors.New("missing report")
+			}
+			reportsMu.Lock()
+			reports = append(reports, report)
+			reportsMu.Unlock()
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, reports, 2)
+	require.NotSame(t, rootReport, reports[0])
+	require.NotSame(t, rootReport, reports[1])
+	require.NotSame(t, reports[0], reports[1])
 }
 
 func TestCreateSessionSummaryWithCascade_FullTargetUsesTriggerFilterKeyForChecks(t *testing.T) {

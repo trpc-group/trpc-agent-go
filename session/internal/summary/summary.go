@@ -320,8 +320,12 @@ func buildSummaryInput(
 	}
 	input := prependPrevSummary(prev.text, delta, time.Now())
 	tmp := buildFilterSession(base, filterKey, input)
-	report := &summary.Report{}
-	reportCtx := summary.ContextWithReport(ctx, report)
+	report, ok := summary.ReportFromContext(ctx)
+	reportCtx := ctx
+	if !ok {
+		report = &summary.Report{}
+		reportCtx = summary.ContextWithReport(ctx, report)
+	}
 	if !shouldGenerateSummary(reportCtx, m, base, tmp, input, filterKey, force, report) {
 		return summaryInput{}, false
 	}
@@ -583,6 +587,15 @@ func PickSummaryText(
 	return "", false
 }
 
+func contextWithForkedReport(ctx context.Context) context.Context {
+	report, ok := summary.ReportFromContext(ctx)
+	if !ok {
+		return ctx
+	}
+	cloned := report.Clone()
+	return summary.ContextWithReport(ctx, &cloned)
+}
+
 // GetSummaryTextFromSession attempts to retrieve summary text from the session's
 // in-memory summaries using the specified filter key. It parses the provided options
 // and applies the summary selection logic. Filters out summaries with UpdatedAt before sess.CreatedAt.
@@ -721,9 +734,9 @@ func CreateSessionSummaryWithCascade(
 	result := make([]error, len(targets))
 	summaryWg.Add(len(targets))
 	for i, fk := range targets {
-		go func(i int, fk string) {
+		callCtx := contextWithForkedReport(ctx)
+		go func(i int, fk string, callCtx context.Context) {
 			defer summaryWg.Done()
-			callCtx := ctx
 			if fk == session.SummaryFilterKeyAllContents &&
 				filterKey != session.SummaryFilterKeyAllContents {
 				callCtx = contextWithSummaryTriggerFilterKey(callCtx, filterKey)
@@ -732,7 +745,7 @@ func CreateSessionSummaryWithCascade(
 			if err != nil {
 				result[i] = fmt.Errorf("create session summary for filterKey %q failed: %w", fk, err)
 			}
-		}(i, fk)
+		}(i, fk, callCtx)
 	}
 	summaryWg.Wait()
 

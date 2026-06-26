@@ -464,16 +464,40 @@ func (s *sessionSummarizer) ensureReportContext(ctx context.Context) context.Con
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if _, ok := reportFromContext(ctx); ok || s.reportHook == nil {
+	if report, ok := reportFromContext(ctx); ok {
+		seedManualTrigger(report)
 		return ctx
 	}
-	return ContextWithReport(ctx, &Report{
-		Trigger: Trigger{
-			Fired:  true,
-			Name:   "manual",
-			Metric: metricCustom,
-		},
-	})
+	if s.reportHook == nil {
+		return ctx
+	}
+	report := &Report{}
+	seedManualTrigger(report)
+	return ContextWithReport(ctx, report)
+}
+
+func seedManualTrigger(report *Report) {
+	if report == nil || !triggerIsEmpty(report.Trigger) {
+		return
+	}
+	report.Trigger = Trigger{
+		Fired:  true,
+		Name:   "manual",
+		Metric: metricCustom,
+	}
+}
+
+func triggerIsEmpty(trigger Trigger) bool {
+	return !trigger.Fired &&
+		trigger.Name == "" &&
+		trigger.Metric == "" &&
+		trigger.Value == 0 &&
+		trigger.Threshold == 0 &&
+		trigger.Unit == "" &&
+		trigger.ContextWindow == 0 &&
+		trigger.ThresholdRatio == 0 &&
+		trigger.FilterKey == "" &&
+		len(trigger.Checks) == 0
 }
 
 // recordLastIncludedBoundary records the last included summary boundary in the session state.

@@ -408,6 +408,11 @@ summarizer := summary.NewSummarizer(
 开启 cache-safe forking 时，`report.Call.Mode` 为 `cache_safe_fork`，请求估算值来自 fork
 后的父请求加上追加的 summary 指令。普通独立 summary prompt 模式下，mode 为 `standalone`。
 
+高级集成如果要在高层 summary 流程前放入同一个 report，可以使用
+`summary.ContextWithReport(ctx, report)`，需要从 context 取出时使用
+`summary.ReportFromContext(ctx)`。单一路径会复用这个 report；cascade 并行生成多个
+summary 时，框架会给每个 worker 克隆一份 report，避免不同分支同时写同一个对象。
+
 对于私有部署、endpoint ID、微调模型、新模型或多租户自定义模型配置，优先使用模型实例或单次运行 option，
 避免不同用户覆盖同一个进程级注册表：
 

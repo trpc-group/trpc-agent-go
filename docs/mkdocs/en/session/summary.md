@@ -425,6 +425,12 @@ For cache-safe forking, `report.Call.Mode` is `cache_safe_fork` and the request
 estimate is computed from the forked parent request plus the appended summary
 instruction. For standalone summary prompts, the mode is `standalone`.
 
+Advanced integrations can attach a report before entering a higher-level
+summary flow with `summary.ContextWithReport(ctx, report)` and retrieve it with
+`summary.ReportFromContext(ctx)`. The framework reuses that report for a single
+summary path; when a cascade generates multiple summaries in parallel, each
+worker receives a cloned report so branch-specific writes do not race.
+
 For private deployments, endpoint IDs, fine-tuned models, newly released
 models, or multi-tenant custom model configuration, prefer the instance or
 per-run option so different users do not overwrite a process-wide registry
