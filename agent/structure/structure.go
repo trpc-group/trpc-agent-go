@@ -86,9 +86,13 @@ type Surface struct {
 	Value     SurfaceValue
 }
 
-// SurfaceID returns the stable surface id for one node and surface type.
-func SurfaceID(nodeID string, surfaceType SurfaceType) string {
-	return nodeID + "#" + string(surfaceType)
+// SurfaceID returns the stable surface id for one node, surface type, and optional parts.
+func SurfaceID(nodeID string, surfaceType SurfaceType, parts ...string) string {
+	id := nodeID + "#" + string(surfaceType)
+	for _, part := range parts {
+		id += "." + part
+	}
+	return id
 }
 
 // SurfaceValue is a discriminated union keyed by SurfaceType.
