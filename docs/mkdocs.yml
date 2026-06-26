@@ -20,6 +20,7 @@ nav:
           - Codex Agent: codex.md
       - Runner: runner.md
       - Code Executor: codeexecutor.md
+      - CodeAct: codeact.md
       - Error Handling: error-handling.md
       - Model: model.md
       - Prompt Template: prompt.md
@@ -119,6 +120,7 @@ plugins:
                     - Codex Agent: codex.md
                 - Runner: runner.md
                 - Code Executor: codeexecutor.md
+                - CodeAct: codeact.md
                 - 错误处理: error-handling.md
                 - Model: model.md
                 - Prompt Template: prompt.md

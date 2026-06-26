@@ -75,6 +75,7 @@ require (
 	github.com/ollama/ollama v0.16.3 // indirect
 	github.com/panjf2000/ants/v2 v2.11.3 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect

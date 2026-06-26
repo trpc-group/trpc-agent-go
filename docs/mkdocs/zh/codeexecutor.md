@@ -60,6 +60,7 @@ func main() {
 - [examples/codeexecution/main.go](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/main.go)（本地 backend）
 - [examples/codeexecution/container/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/container/README.md)（Docker container backend）
 - [examples/codeexecution/jupyter/README.md](https://github.com/trpc-group/trpc-agent-go/blob/main/examples/codeexecution/jupyter/README.md)（Jupyter kernel backend）
+- [工具代码编排](codeact.md)（生成代码通过 `call_tool` 编排受限工具）
 
 ### `WithCodeExecutor` 与围栏代码自动执行
 

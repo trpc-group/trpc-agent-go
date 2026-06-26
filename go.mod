@@ -15,6 +15,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/openai/openai-go v1.12.0
 	github.com/panjf2000/ants/v2 v2.10.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/stretchr/testify v1.10.0
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.69
 	github.com/yuin/goldmark v1.4.13
