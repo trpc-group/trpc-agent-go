@@ -118,14 +118,16 @@ func (e *Enforcer) Register(r *extension.Registry) {
 
 // beforeModel prepares a model request while enforcement is active.
 //
-// It disables streaming whenever open todo items exist. The
-// enforcer can only make a hard allow/block decision after seeing
-// a complete model response; streaming deltas would otherwise
-// reach clients before AfterModel has a chance to reject the final
-// answer.
-//
-// It also injects a nudge user message when the previous
+// It injects a nudge user message when the previous
 // AfterModel turn flagged a pending reminder.
+//
+// Streaming is deliberately left to the caller. AfterModel sees
+// the complete response after any partial deltas have been emitted;
+// when open items remain it turns that final response into a
+// non-final control response, so llmflow starts another model turn.
+// A client can therefore observe an interim answer before the agent
+// continues, but that answer is never accepted as the terminal
+// response or persisted as assistant history.
 //
 // Notes worth pinning down:
 //
@@ -178,7 +180,6 @@ func (e *Enforcer) beforeModel(
 	if len(inProgress) == 0 && len(pending) == 0 {
 		return nil, nil
 	}
-	args.Request.GenerationConfig.Stream = false
 
 	if !pendingReminder {
 		return nil, nil
