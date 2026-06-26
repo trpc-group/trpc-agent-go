@@ -777,7 +777,7 @@ summarizer := summary.NewSummarizer(
 
 Runner 在每次对话完成后自动检查触发条件，满足条件时在后台异步生成摘要。
 
-如果启用了 `WithSyncSummaryIntraRun(true)`，Flow 会在同一次 `Run` 的 LLM 迭代之间同步调用 `CreateSessionSummary(...)`，确保下一次 LLM 调用前可以使用最新摘要。中间 tool result 的冗余异步入队会被跳过；最终 assistant response 仍然可以异步入队，用于刷新本轮结束后的摘要而不阻塞用户输出。同步路径与异步 worker 共享同一套 boundary/delta 判断和 session/filterKey 级别的串行控制，因此通常不会对同一批事件重复发起昂贵的 LLM 摘要。
+如果启用了 `WithSyncSummaryIntraRun(true)`，Flow 会在同一次 `Run` 的 LLM 迭代之间同步调用 `CreateSessionSummary(...)`，确保下一次 LLM 调用前可以使用最新摘要。中间 tool result 的冗余异步入队会被跳过；最终 assistant response 仍然可以入队一个摘要任务，用于刷新本轮结束后的摘要。在 async worker 可用且队列有容量时，该任务会在后台执行；如果没有配置 async worker 或队列已满，`EnqueueSummaryJob` 可能 fallback 到同步摘要创建，因此这不是严格的非阻塞保证。同步路径与异步 worker 共享同一套 boundary/delta 判断和进程内 session/filterKey 级别的串行控制，在单进程内通常可以避免对同一批事件重复发起昂贵的 LLM 摘要，但它不是跨实例分布式锁。
 
 **触发时机**：
 

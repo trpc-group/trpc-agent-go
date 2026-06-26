@@ -791,7 +791,7 @@ summarizer := summary.NewSummarizer(
 
 The Runner automatically checks trigger conditions after each conversation completes, generating summaries asynchronously in the background when conditions are met.
 
-When `WithSyncSummaryIntraRun(true)` is enabled, the Flow synchronously calls `CreateSessionSummary(...)` between LLM iterations in the same `Run`, so the next LLM call can use the latest summary. Redundant async enqueueing for intermediate tool results is skipped; the final assistant response can still enqueue an async summary job to refresh the turn-ending state without blocking user output. The sync path and async workers share the same boundary/delta checks and session/filterKey serialization, so they normally do not issue duplicate expensive LLM summaries for the same events.
+When `WithSyncSummaryIntraRun(true)` is enabled, the Flow synchronously calls `CreateSessionSummary(...)` between LLM iterations in the same `Run`, so the next LLM call can use the latest summary. Redundant async enqueueing for intermediate tool results is skipped; the final assistant response can still enqueue a summary job to refresh the turn-ending state. With an available async worker and queue capacity, that job runs in the background. If no async worker is configured or the queue is full, `EnqueueSummaryJob` may fall back to synchronous summary creation, so this is not a hard non-blocking guarantee. The sync path and async workers share the same boundary/delta checks and process-local session/filterKey serialization, which normally avoids duplicate expensive LLM summaries for the same events in a single process, but it is not a cross-instance distributed lock.
 
 **Trigger timing**:
 
