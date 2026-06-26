@@ -20,7 +20,8 @@ const (
 	// ToolsSnapshotKey is the invocation state key used to cache the final tool list.
 	ToolsSnapshotKey = "llmflow:tools_snapshot"
 	// HasFilteredUserToolsKey caches whether the filtered snapshot has user tools.
-	HasFilteredUserToolsKey = "llmflow:has_filtered_user_tools"
+	HasFilteredUserToolsKey           = "llmflow:has_filtered_user_tools"
+	filteredTraceableUserToolNamesKey = "llmflow:filtered_traceable_user_tool_names"
 )
 
 // Get returns the cached tool snapshot for this invocation.
@@ -33,17 +34,35 @@ func Get(inv *agent.Invocation) ([]tool.Tool, bool) {
 }
 
 // Set stores the cached tool snapshot for this invocation.
-func Set(inv *agent.Invocation, tools []tool.Tool, hasFilteredUserTools bool) {
+func Set(
+	inv *agent.Invocation,
+	tools []tool.Tool,
+	hasFilteredUserTools bool,
+	filteredTraceableUserToolNames []string,
+) {
 	if inv == nil {
 		return
 	}
 	inv.SetState(ToolsSnapshotKey, copyTools(tools))
 	inv.SetState(HasFilteredUserToolsKey, hasFilteredUserTools)
+	inv.SetState(
+		filteredTraceableUserToolNamesKey,
+		copyStrings(filteredTraceableUserToolNames),
+	)
 }
 
 // HasFilteredUserTools reports whether the cached snapshot has user tools.
 func HasFilteredUserTools(inv *agent.Invocation) (bool, bool) {
 	return agent.GetStateValue[bool](inv, HasFilteredUserToolsKey)
+}
+
+// FilteredTraceableUserToolNames reports filtered user tool names that have structure surfaces.
+func FilteredTraceableUserToolNames(inv *agent.Invocation) ([]string, bool) {
+	names, ok := agent.GetStateValue[[]string](inv, filteredTraceableUserToolNamesKey)
+	if !ok {
+		return nil, false
+	}
+	return copyStrings(names), true
 }
 
 // Invalidate clears the cached tool snapshot for this invocation.
@@ -53,8 +72,13 @@ func Invalidate(inv *agent.Invocation) {
 	}
 	inv.DeleteState(ToolsSnapshotKey)
 	inv.DeleteState(HasFilteredUserToolsKey)
+	inv.DeleteState(filteredTraceableUserToolNamesKey)
 }
 
 func copyTools(tools []tool.Tool) []tool.Tool {
 	return append([]tool.Tool(nil), tools...)
+}
+
+func copyStrings(values []string) []string {
+	return append([]string(nil), values...)
 }

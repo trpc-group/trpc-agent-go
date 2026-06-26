@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -285,6 +286,23 @@ func (s *stubTool) Declaration() *tool.Declaration {
 	return s.decl
 }
 
+type stubToolSet struct {
+	name  string
+	tools []tool.Tool
+}
+
+func (s stubToolSet) Tools(context.Context) []tool.Tool {
+	return s.tools
+}
+
+func (s stubToolSet) Close() error {
+	return nil
+}
+
+func (s stubToolSet) Name() string {
+	return s.name
+}
+
 func TestWithAdditionalTools(t *testing.T) {
 	const toolName = "runtime_tool"
 
@@ -397,6 +415,39 @@ func TestWithToolExecutionFilter(t *testing.T) {
 
 	require.True(t, ro.ToolExecutionFilter(ctx, allowed))
 	require.False(t, ro.ToolExecutionFilter(ctx, denied))
+}
+
+func TestRunOptionsShouldExecuteToolPreservesNamedToolIdentity(t *testing.T) {
+	ctx := context.Background()
+	base := &stubTool{
+		decl: &tool.Declaration{Name: "browse"},
+	}
+	namedTools := itool.NewNamedToolSet(stubToolSet{
+		name:  "safe",
+		tools: []tool.Tool{base},
+	}).Tools(ctx)
+	require.Len(t, namedTools, 1)
+	ro := NewRunOptions(
+		WithToolExecutionFilter(tool.NewIncludeToolNamesFilter("safe_browse")),
+	)
+	require.True(t, ro.ShouldExecuteTool(ctx, namedTools[0]))
+	require.False(t, ro.ShouldExecuteTool(ctx, base))
+}
+
+func TestRunOptionsShouldExecuteToolUnwrapsDeclarationWrapper(t *testing.T) {
+	ctx := context.Background()
+	base := &stubTool{
+		decl: &tool.Declaration{Name: "lookup"},
+	}
+	patchedTools := itool.ApplyDeclarations([]tool.Tool{base}, []tool.Declaration{{
+		Name:        "lookup",
+		Description: "patched",
+	}})
+	require.Len(t, patchedTools, 1)
+	ro := NewRunOptions(WithToolExecutionFilter(func(_ context.Context, tl tool.Tool) bool {
+		return tl == base
+	}))
+	require.True(t, ro.ShouldExecuteTool(ctx, patchedTools[0]))
 }
 
 // TestWithToolCallArgumentsJSONRepairEnabled_SetsRunOptions verifies the option toggles the RunOptions flag.
