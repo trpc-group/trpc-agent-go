@@ -162,6 +162,39 @@ func TestSessionSummarizer_ReportHookCacheSafeForkCall(t *testing.T) {
 	require.Equal(t, "manual", got.Trigger.Name)
 }
 
+func TestSessionSummarizer_ReportHookEstimatesAfterBeforeModelCallback(t *testing.T) {
+	defer SetTokenCounter(nil)
+	SetTokenCounter(testFixedTokenCounter{tokens: 5})
+
+	var got Report
+	callbacks := model.NewCallbacks()
+	callbacks.RegisterBeforeModel(func(
+		_ context.Context,
+		args *model.BeforeModelArgs,
+	) (*model.BeforeModelResult, error) {
+		args.Request.Messages = append(
+			args.Request.Messages,
+			model.NewSystemMessage("callback-added"),
+		)
+		return nil, nil
+	})
+	m := &reportModel{}
+	s := NewSummarizer(
+		m,
+		WithModelCallbacks(callbacks),
+		WithReportHook(func(_ context.Context, report Report) {
+			got = report
+		}),
+	)
+
+	text, err := s.Summarize(context.Background(), newReportSession())
+	require.NoError(t, err)
+	require.Equal(t, "summary", text)
+	require.NotNil(t, m.request)
+	require.Len(t, m.request.Messages, 2)
+	require.Equal(t, 10, got.Call.EstimatedPromptTokens)
+}
+
 func TestSessionSummarizer_ReportHookKeepsUsageFromEarlierResponse(t *testing.T) {
 	defer SetTokenCounter(nil)
 	SetTokenCounter(testFixedTokenCounter{tokens: 1})

@@ -246,6 +246,27 @@ func (f *fakeSummarizer) SetPrompt(prompt string)  {}
 func (f *fakeSummarizer) SetModel(m model.Model)   {}
 func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
 
+type reportModel struct{}
+
+func (m *reportModel) Info() model.Info {
+	return model.Info{Name: "report"}
+}
+
+func (m *reportModel) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{Content: "sum"},
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
 type blockingSummarizer struct {
 	mu      sync.Mutex
 	calls   int
@@ -383,6 +404,33 @@ func TestSummarizeSession_FilteredKey_RespectsDeltaAndShould(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.Equal(t, "sum", base.Summaries["b1"].Summary)
+}
+
+func TestSummarizeSession_ForceReportIncludesFilterKey(t *testing.T) {
+	var got summary.Report
+	summarizer := summary.NewSummarizer(
+		&reportModel{},
+		summary.WithReportHook(func(_ context.Context, report summary.Report) {
+			got = report
+		}),
+	)
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("new", time.Now(), "branch"),
+	}
+
+	updated, err := SummarizeSession(
+		context.Background(),
+		summarizer,
+		base,
+		"branch",
+		true,
+	)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.True(t, got.Trigger.Fired)
+	require.Equal(t, "force", got.Trigger.Name)
+	require.Equal(t, "branch", got.Trigger.FilterKey)
 }
 
 func TestSummarizeSession_FullSession_SingleWrite(t *testing.T) {

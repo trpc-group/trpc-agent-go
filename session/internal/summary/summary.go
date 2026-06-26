@@ -347,9 +347,10 @@ func shouldGenerateSummary(
 	if force {
 		if report != nil {
 			report.Trigger = summary.Trigger{
-				Fired:  true,
-				Name:   "force",
-				Metric: "custom",
+				Fired:     true,
+				Name:      "force",
+				Metric:    "custom",
+				FilterKey: filterKey,
 			}
 		}
 		return true

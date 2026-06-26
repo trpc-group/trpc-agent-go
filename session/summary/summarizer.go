@@ -796,7 +796,6 @@ func (s *sessionSummarizer) generateSummary(
 		s.emitReport(ctx, err)
 		return ctx, "", err
 	}
-	s.recordReportCall(ctx, request, mode)
 
 	invocation, ok := agent.InvocationFromContext(ctx)
 	if !ok || invocation == nil {
@@ -866,6 +865,7 @@ func (s *sessionSummarizer) generateSummary(
 		err = cbErr
 		return ctx, "", cbErr
 	}
+	s.recordReportCall(ctx, request, mode)
 
 	if responseChan == nil {
 		responseChan, cbErr = s.model.GenerateContent(ctx, request)
