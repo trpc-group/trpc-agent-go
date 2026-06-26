@@ -1828,7 +1828,10 @@ func applyOpenAISDKTokenDetailsAccumulationFix(
 	acc.Usage.CompletionTokensDetails.ReasoningTokens += chunk.Usage.CompletionTokensDetails.ReasoningTokens
 	acc.Usage.CompletionTokensDetails.RejectedPredictionTokens += chunk.Usage.CompletionTokensDetails.RejectedPredictionTokens
 	acc.Usage.PromptTokensDetails.AudioTokens += chunk.Usage.PromptTokensDetails.AudioTokens
-	acc.Usage.PromptTokensDetails.CachedTokens += chunk.Usage.PromptTokensDetails.CachedTokens
+	acc.Usage.PromptTokensDetails.CachedTokens += int64(getCachedTokensWithDeepSeekFallback(
+		chunk.Usage.PromptTokensDetails.CachedTokens,
+		chunk.Usage.JSON.ExtraFields,
+	))
 }
 
 // accumulateChunk accumulates non-reasoning deltas into the SDK accumulator and

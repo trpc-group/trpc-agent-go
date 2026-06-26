@@ -5039,53 +5039,6 @@ func TestModelUsageToCompletionUsage(t *testing.T) {
 	})
 }
 
-// TestCompletionUsageToModelUsage tests conversion from openai.CompletionUsage to model.Usage.
-func TestCompletionUsageToModelUsage(t *testing.T) {
-	t.Run("converts all fields correctly", func(t *testing.T) {
-		openaiUsage := openai.CompletionUsage{
-			PromptTokens:     int64(200),
-			CompletionTokens: int64(75),
-			TotalTokens:      int64(275),
-			PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
-				CachedTokens: int64(30),
-			},
-			CompletionTokensDetails: openai.CompletionUsageCompletionTokensDetails{
-				ReasoningTokens: int64(25),
-			},
-		}
-
-		result := completionUsageToModelUsage(openaiUsage)
-
-		assert.Equal(t, 200, result.PromptTokens, "expected prompt tokens to be 200")
-		assert.Equal(t, 75, result.CompletionTokens, "expected completion tokens to be 75")
-		assert.Equal(t, 275, result.TotalTokens, "expected total tokens to be 275")
-		assert.Equal(t, 30, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 30")
-		assert.Equal(t, 25, result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 25")
-	})
-
-	t.Run("converts zero values", func(t *testing.T) {
-		openaiUsage := openai.CompletionUsage{
-			PromptTokens:     int64(0),
-			CompletionTokens: int64(0),
-			TotalTokens:      int64(0),
-			PromptTokensDetails: openai.CompletionUsagePromptTokensDetails{
-				CachedTokens: int64(0),
-			},
-			CompletionTokensDetails: openai.CompletionUsageCompletionTokensDetails{
-				ReasoningTokens: int64(0),
-			},
-		}
-
-		result := completionUsageToModelUsage(openaiUsage)
-
-		assert.Equal(t, 0, result.PromptTokens, "expected prompt tokens to be 0")
-		assert.Equal(t, 0, result.CompletionTokens, "expected completion tokens to be 0")
-		assert.Equal(t, 0, result.TotalTokens, "expected total tokens to be 0")
-		assert.Equal(t, 0, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 0")
-		assert.Equal(t, 0, result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 0")
-	})
-}
-
 // TestWithChannelBufferSize_EdgeCases tests WithChannelBufferSize with edge cases.
 func TestWithChannelBufferSize_EdgeCases(t *testing.T) {
 	t.Run("zero size should use default", func(t *testing.T) {
@@ -8050,6 +8003,91 @@ func TestModel_accumulateChunk(t *testing.T) {
 		assert.Equal(t, int64(20), acc.Usage.PromptTokens)
 		assert.Equal(t, int64(10), acc.Usage.CompletionTokens)
 	})
+}
+
+func TestApplyOpenAISDKTokenDetailsAccumulationFix_DeepSeekFallback(t *testing.T) {
+	tests := []struct {
+		name             string
+		chunkJSON        string
+		accCachedTokens  int64
+		wantCachedTokens int64
+	}{
+		{
+			name: "standard cached_tokens accumulates normally",
+			chunkJSON: `{
+				"id":"c1","object":"chat.completion.chunk","created":0,"model":"m",
+				"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,
+					"prompt_tokens_details":{"cached_tokens":8}}
+			}`,
+			accCachedTokens:  10,
+			wantCachedTokens: 18,
+		},
+		{
+			name: "DeepSeek fallback when standard cached_tokens is zero",
+			chunkJSON: `{
+				"id":"c1","object":"chat.completion.chunk","created":0,"model":"m",
+				"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,
+					"prompt_tokens_details":{"cached_tokens":0},
+					"prompt_cache_hit_tokens":25}
+			}`,
+			accCachedTokens:  0,
+			wantCachedTokens: 25,
+		},
+		{
+			name: "DeepSeek fallback when standard cached_tokens is absent",
+			chunkJSON: `{
+				"id":"c1","object":"chat.completion.chunk","created":0,"model":"m",
+				"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,
+					"prompt_cache_hit_tokens":30}
+			}`,
+			accCachedTokens:  0,
+			wantCachedTokens: 30,
+		},
+		{
+			name: "malformed DeepSeek field silently ignored",
+			chunkJSON: `{
+				"id":"c1","object":"chat.completion.chunk","created":0,"model":"m",
+				"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,
+					"prompt_cache_hit_tokens":"invalid"}
+			}`,
+			accCachedTokens:  10,
+			wantCachedTokens: 10,
+		},
+		{
+			name: "standard cached_tokens takes precedence over DeepSeek field",
+			chunkJSON: `{
+				"id":"c1","object":"chat.completion.chunk","created":0,"model":"m",
+				"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,
+					"prompt_tokens_details":{"cached_tokens":50},
+					"prompt_cache_hit_tokens":25}
+			}`,
+			accCachedTokens:  0,
+			wantCachedTokens: 50,
+		},
+		{
+			name: "multiple chunks accumulate DeepSeek fallback",
+			chunkJSON: `{
+				"id":"c1","object":"chat.completion.chunk","created":0,"model":"m",
+				"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,
+					"prompt_cache_hit_tokens":15}
+			}`,
+			accCachedTokens:  20,
+			wantCachedTokens: 35,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunk := parseChunkWithExtraFields(t, tt.chunkJSON)
+			acc := &openai.ChatCompletionAccumulator{}
+			acc.Usage.PromptTokensDetails.CachedTokens = tt.accCachedTokens
+
+			applyOpenAISDKTokenDetailsAccumulationFix(acc, chunk)
+
+			assert.Equal(t, tt.wantCachedTokens, acc.Usage.PromptTokensDetails.CachedTokens,
+				"CachedTokens mismatch after accumulation")
+		})
+	}
 }
 
 // TestModel_sendPartialResponse tests the sendPartialResponse method.

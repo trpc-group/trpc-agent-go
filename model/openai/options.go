@@ -12,9 +12,11 @@ package openai
 
 import (
 	"context"
+	"strconv"
 
 	openai "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/respjson"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 )
@@ -406,14 +408,32 @@ func inverseOpenAISDKAddChunkUsage(u model.Usage, delta model.Usage) model.Usage
 	}
 }
 
+// getCachedTokensWithDeepSeekFallback returns the cached token count, falling back to
+// DeepSeek's prompt_cache_hit_tokens field when the standard field is zero.
+func getCachedTokensWithDeepSeekFallback(standardCached int64, extraFields map[string]respjson.Field) int {
+	if standardCached > 0 {
+		return int(standardCached)
+	}
+	if f, ok := extraFields["prompt_cache_hit_tokens"]; ok {
+		if v, err := strconv.Atoi(f.Raw()); err == nil && v >= 0 {
+			return v
+		}
+	}
+	return 0
+}
+
 // completionUsageToModelUsage converts openai.CompletionUsage to model.Usage.
 func completionUsageToModelUsage(usage openai.CompletionUsage) model.Usage {
+	cached := getCachedTokensWithDeepSeekFallback(
+		usage.PromptTokensDetails.CachedTokens,
+		usage.JSON.ExtraFields,
+	)
 	return model.Usage{
 		PromptTokens:     int(usage.PromptTokens),
 		CompletionTokens: int(usage.CompletionTokens),
 		TotalTokens:      int(usage.TotalTokens),
 		PromptTokensDetails: model.PromptTokensDetails{
-			CachedTokens: int(usage.PromptTokensDetails.CachedTokens),
+			CachedTokens: cached,
 		},
 		CompletionTokensDetails: model.CompletionTokensDetails{
 			ReasoningTokens: int(usage.CompletionTokensDetails.ReasoningTokens),
