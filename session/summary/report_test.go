@@ -10,6 +10,7 @@ package summary
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -53,6 +54,29 @@ func (m *reportModel) GenerateContent(
 	}
 	close(ch)
 	return ch, nil
+}
+
+func TestReportContextAndClone(t *testing.T) {
+	report := &Report{
+		Trigger: Trigger{
+			Name:   checkNameTokenThreshold,
+			Checks: []Check{{Name: checkNameTokenThreshold}},
+		},
+	}
+
+	ctx := ContextWithReport(nil, report)
+	got, ok := ReportFromContext(ctx)
+	require.True(t, ok)
+	require.Same(t, report, got)
+
+	got, ok = ReportFromContext(ContextWithReport(context.Background(), nil))
+	require.False(t, ok)
+	require.Nil(t, got)
+
+	cloned := report.Clone()
+	require.Equal(t, *report, cloned)
+	cloned.Trigger.Checks[0].Name = checkNameContextThreshold
+	require.Equal(t, checkNameTokenThreshold, report.Trigger.Checks[0].Name)
 }
 
 func newReportSession() *session.Session {
@@ -179,6 +203,82 @@ func TestSessionSummarizer_ReportHookSeedsManualTriggerForPreseededReport(t *tes
 	require.Equal(t, "manual", report.Trigger.Name)
 	require.True(t, got.Trigger.Fired)
 	require.Equal(t, "manual", got.Trigger.Name)
+}
+
+type rangeErrorTokenCounter struct {
+	tokens int
+}
+
+func (c rangeErrorTokenCounter) CountTokens(_ context.Context, _ model.Message) (int, error) {
+	return c.tokens, nil
+}
+
+func (c rangeErrorTokenCounter) CountTokensRange(
+	_ context.Context,
+	_ []model.Message,
+	_,
+	_ int,
+) (int, error) {
+	return 0, errors.New("range count failed")
+}
+
+func TestReportAccountingHelpers(t *testing.T) {
+	defer SetTokenCounter(nil)
+	SetTokenCounter(rangeErrorTokenCounter{tokens: 4})
+
+	require.Zero(t, estimateRequestPromptTokens(context.Background(), nil))
+	require.Zero(t, estimateRequestPromptTokens(context.Background(), &model.Request{}))
+	require.Equal(
+		t,
+		8,
+		estimateRequestPromptTokens(
+			context.Background(),
+			&model.Request{Messages: []model.Message{
+				model.NewSystemMessage("system"),
+				model.NewUserMessage("user"),
+			}},
+		),
+	)
+
+	require.False(t, usageHasTokenCounts(nil))
+	require.False(t, usageHasTokenCounts(&model.Usage{}))
+	require.True(t, usageHasTokenCounts(&model.Usage{TotalTokens: 1}))
+	require.True(t, usageHasTokenCounts(&model.Usage{
+		PromptTokensDetails: model.PromptTokensDetails{CacheReadTokens: 1},
+	}))
+	require.True(t, usageHasTokenCounts(&model.Usage{
+		PromptTokensDetails: model.PromptTokensDetails{CacheCreationTokens: 1},
+	}))
+}
+
+type reportContextTestKey struct{}
+
+func TestInheritReportContext(t *testing.T) {
+	report := &Report{Trigger: Trigger{Name: checkNameTokenThreshold}}
+	current := ContextWithReport(context.Background(), report)
+	next := context.WithValue(context.Background(), reportContextTestKey{}, "next")
+
+	got := inheritReportContext(next, current)
+	inherited, ok := ReportFromContext(got)
+	require.True(t, ok)
+	require.Same(t, report, inherited)
+	require.Equal(t, "next", got.Value(reportContextTestKey{}))
+
+	existing := &Report{Trigger: Trigger{Name: checkNameContextThreshold}}
+	got = inheritReportContext(ContextWithReport(next, existing), current)
+	inherited, ok = ReportFromContext(got)
+	require.True(t, ok)
+	require.Same(t, existing, inherited)
+
+	got = inheritReportContext(nil, current)
+	inherited, ok = ReportFromContext(got)
+	require.True(t, ok)
+	require.Same(t, report, inherited)
+
+	got = inheritReportContext(next, context.Background())
+	_, ok = ReportFromContext(got)
+	require.False(t, ok)
+	require.Equal(t, "next", got.Value(reportContextTestKey{}))
 }
 
 func TestSessionSummarizer_ReportHookEstimatesAfterBeforeModelCallback(t *testing.T) {
