@@ -6945,6 +6945,18 @@ func TestIsStreamable_RespectsPreferenceFalse(t *testing.T) {
 	require.False(t, isStreamable(&noStreamPrefTool{}))
 }
 
+type originalOnlyStreamWrapper struct {
+	original tool.Tool
+}
+
+func (w *originalOnlyStreamWrapper) Declaration() *tool.Declaration {
+	return w.original.Declaration()
+}
+
+func (w *originalOnlyStreamWrapper) Original() tool.Tool {
+	return w.original
+}
+
 // onlyTool implements Tool but neither Callable nor Streamable.
 type onlyTool struct{}
 
@@ -6958,6 +6970,18 @@ func TestExecuteTool_UnsupportedToolType(t *testing.T) {
 	inv := &agent.Invocation{}
 	tc := model.ToolCall{Function: model.FunctionDefinitionParam{Name: "only"}}
 	_, _, _, err := p.executeTool(ctx, inv, tc, &onlyTool{}, nil)
+	require.Error(t, err)
+}
+
+func TestExecuteTool_OriginalOnlyStreamWrapperDoesNotPanic(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{}
+	tc := model.ToolCall{Function: model.FunctionDefinitionParam{Name: "stream"}}
+	wrapper := &originalOnlyStreamWrapper{
+		original: &mockStreamTool{name: "stream"},
+	}
+	_, _, _, err := p.executeTool(ctx, inv, tc, wrapper, nil)
 	require.Error(t, err)
 }
 
@@ -8672,6 +8696,14 @@ func TestShouldRequestStructuredStreamErrors_NilAndNamedTool(t *testing.T) {
 	namedStreamTool, ok := namedTools[0].(tool.StreamableTool)
 	require.True(t, ok)
 	require.True(t, shouldRequestStructuredStreamErrors(namedStreamTool))
+	patchedTools := itool.ApplyDeclarations([]tool.Tool{baseTool}, []tool.Declaration{{
+		Name:        "structured",
+		Description: "patched",
+	}})
+	require.Len(t, patchedTools, 1)
+	patchedStreamTool, ok := patchedTools[0].(tool.StreamableTool)
+	require.True(t, ok)
+	require.True(t, shouldRequestStructuredStreamErrors(patchedStreamTool))
 }
 
 func TestHasSyntheticStateOnlyToolChoice_NilContext(t *testing.T) {

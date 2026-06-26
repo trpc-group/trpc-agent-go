@@ -32,10 +32,22 @@ func TestSetGetCopiesToolSlice(t *testing.T) {
 	first := testTool{name: "first"}
 	second := testTool{name: "second"}
 	tools := []tool.Tool{first}
-	Set(inv, tools, true)
+	traceableUserToolNames := []string{"first"}
+	Set(inv, tools, true, traceableUserToolNames)
 	hasFiltered, ok := HasFilteredUserTools(inv)
 	require.True(t, ok)
 	require.True(t, hasFiltered)
+	traceableNames, ok := FilteredTraceableUserToolNames(inv)
+	require.True(t, ok)
+	require.Equal(t, []string{"first"}, traceableNames)
+	traceableUserToolNames[0] = "changed"
+	traceableAgain, ok := FilteredTraceableUserToolNames(inv)
+	require.True(t, ok)
+	require.Equal(t, []string{"first"}, traceableAgain)
+	traceableNames[0] = "returned"
+	traceableAfterReturnedMutation, ok := FilteredTraceableUserToolNames(inv)
+	require.True(t, ok)
+	require.Equal(t, []string{"first"}, traceableAfterReturnedMutation)
 	tools[0] = second
 	cached, ok := Get(inv)
 	require.True(t, ok)
@@ -49,15 +61,17 @@ func TestSetGetCopiesToolSlice(t *testing.T) {
 func TestSnapshotMissingAndInvalidate(t *testing.T) {
 	_, ok := Get(nil)
 	require.False(t, ok)
-	Set(nil, []tool.Tool{testTool{name: "ignored"}}, true)
+	Set(nil, []tool.Tool{testTool{name: "ignored"}}, true, []string{"ignored"})
 	Invalidate(nil)
 	inv := &agent.Invocation{}
 	_, ok = Get(inv)
 	require.False(t, ok)
-	Set(inv, []tool.Tool{testTool{name: "first"}}, true)
+	Set(inv, []tool.Tool{testTool{name: "first"}}, true, []string{"first"})
 	Invalidate(inv)
 	_, ok = Get(inv)
 	require.False(t, ok)
 	_, ok = HasFilteredUserTools(inv)
+	require.False(t, ok)
+	_, ok = FilteredTraceableUserToolNames(inv)
 	require.False(t, ok)
 }
