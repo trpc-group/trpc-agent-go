@@ -5596,7 +5596,7 @@ Invocation 一起改掉。</p>
 </span><span id="__span-18-10"><a id="__codelineno-18-10" name="__codelineno-18-10"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithExtensions</span><span class="p">(</span><span class="nx">todoenforcer</span><span class="p">.</span><span class="nx">New</span><span class="p">()),</span>
 </span><span id="__span-18-11"><a id="__codelineno-18-11" name="__codelineno-18-11"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>该 extension 会自动贡献 <code>todo_write</code> 和 <code>todo_declare_blocker</code>，不要再通过 <code>WithTools</code> 额外传入 <code>todo.New()</code>。如果需要复用 <code>tool/todo</code> 的选项（例如 <code>WithStateKeyPrefix</code>、<code>WithClearOnAllDone</code> 或 <code>WithNudgeHook</code>），先构造 <code>todo.New(...)</code>，再通过 <code>todoenforcer.WithTodoTool(...)</code> 传入。<code>todo_declare_blocker</code> 用于声明客观阻塞，例如缺少权限、凭据、基础设施或必须由用户决策的信息。</p>
+<p>该 extension 会自动贡献 <code>todo_write</code> 和 <code>todo_declare_blocker</code>，不要再通过 <code>WithTools</code> 额外传入 <code>todo.New()</code>。如果需要复用 <code>tool/todo</code> 的选项（例如 <code>WithStateKeyPrefix</code>、<code>WithClearOnAllDone</code> 或 <code>WithNudgeHook</code>），先构造 <code>todo.New(...)</code>，再通过 <code>todoenforcer.WithTodoTool(...)</code> 传入。<code>todo_declare_blocker</code> 用于声明客观阻塞，例如缺少权限、凭据、基础设施或必须由用户决策的信息。extension 不会改写调用方的流式设置：未完成时模型已经输出的文本仍可能到达客户端，但最终响应会被转为继续执行信号，不会作为本轮终态写入会话历史。</p>
 <h4 id="_21">工具返回结构</h4>
 <p><code>todo_write</code> 返回的是结构化结果而不是自由文本，因此终端、AG-UI、自研 HTTP 前端等任何调用方都可以直接消费：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1">1</a></span>
@@ -7864,7 +7864,7 @@ Model Context Protocol (MCP)）来执行工具。此时可以使用
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月16日 04:35:19 UTC">2026-06-16 04:35:19</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月26日 01:54:59 UTC">2026-06-26 01:54:59</span>
   </span>
 
     
