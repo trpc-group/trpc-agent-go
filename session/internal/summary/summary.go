@@ -592,6 +592,9 @@ func contextWithForkedReport(ctx context.Context) context.Context {
 	if !ok {
 		return ctx
 	}
+	// Parallel cascade paths keep per-target report writes isolated. The cloned
+	// report is emitted through that target's hook and is not merged back to the
+	// caller-attached root report.
 	cloned := report.Clone()
 	return summary.ContextWithReport(ctx, &cloned)
 }

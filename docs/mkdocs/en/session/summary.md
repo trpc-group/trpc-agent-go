@@ -429,7 +429,9 @@ Advanced integrations can attach a report before entering a higher-level
 summary flow with `summary.ContextWithReport(ctx, report)` and retrieve it with
 `summary.ReportFromContext(ctx)`. The framework reuses that report for a single
 summary path; when a cascade generates multiple summaries in parallel, each
-worker receives a cloned report so branch-specific writes do not race.
+worker receives a cloned report so branch-specific writes do not race. Those
+forked reports are emitted through their per-call hooks and are not merged back
+into the root report.
 
 For private deployments, endpoint IDs, fine-tuned models, newly released
 models, or multi-tenant custom model configuration, prefer the instance or

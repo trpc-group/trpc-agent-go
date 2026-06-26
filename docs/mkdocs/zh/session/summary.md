@@ -412,6 +412,7 @@ summarizer := summary.NewSummarizer(
 `summary.ContextWithReport(ctx, report)`，需要从 context 取出时使用
 `summary.ReportFromContext(ctx)`。单一路径会复用这个 report；cascade 并行生成多个
 summary 时，框架会给每个 worker 克隆一份 report，避免不同分支同时写同一个对象。
+这些 fork 出来的 report 会通过各自调用的 hook 发出，不会再合并回 root report。
 
 对于私有部署、endpoint ID、微调模型、新模型或多租户自定义模型配置，优先使用模型实例或单次运行 option，
 避免不同用户覆盖同一个进程级注册表：
