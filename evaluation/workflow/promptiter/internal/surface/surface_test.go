@@ -55,7 +55,6 @@ func TestValidateValue(t *testing.T) {
 			Tools: []astructure.ToolRef{{ID: "lookup"}},
 		},
 	))
-
 	assert.Error(t, ValidateValue(
 		astructure.SurfaceTypeInstruction,
 		astructure.SurfaceValue{},
@@ -68,6 +67,17 @@ func TestValidateValue(t *testing.T) {
 		astructure.SurfaceTypeModel,
 		astructure.SurfaceValue{Model: &astructure.ModelRef{}},
 	))
+	assert.EqualError(t, ValidateValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{
+			Model: &astructure.ModelRef{},
+			Tools: []astructure.ToolRef{{ID: "lookup"}},
+		},
+	), "model is not nil")
+	assert.EqualError(t, ValidateValue(
+		astructure.SurfaceTypeTool,
+		astructure.SurfaceValue{},
+	), "tools must contain exactly one tool, got 0")
 }
 
 func TestBuildIndex(t *testing.T) {
@@ -409,6 +419,24 @@ func TestSanitizePatchValueRejectsToolShapeChanges(t *testing.T) {
 		PromptSyntax: promptSyntaxPtr(astructure.PromptSyntaxSingleBrace),
 	})
 	assert.EqualError(t, err, "prompt syntax is not nil")
+}
+
+func TestSanitizeToolRefsDescriptionOnlyRejectsInvalidBaseline(t *testing.T) {
+	tools, err := sanitizeToolRefsDescriptionOnly(
+		[]astructure.ToolRef{{}},
+		[]astructure.ToolRef{{ID: "lookup"}},
+	)
+	assert.Nil(t, tools)
+	assert.EqualError(t, err, "validate baseline tools: tool id is empty")
+	tools, err = sanitizeToolRefsDescriptionOnly(
+		[]astructure.ToolRef{{ID: "lookup"}},
+		[]astructure.ToolRef{
+			{ID: "lookup"},
+			{ID: "delay"},
+		},
+	)
+	assert.Nil(t, tools)
+	assert.EqualError(t, err, "tool count changed from 1 to 2")
 }
 
 func promptSyntaxPtr(value astructure.PromptSyntax) *astructure.PromptSyntax {

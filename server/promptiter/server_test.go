@@ -884,6 +884,29 @@ func TestValidateTargetSurfaceIDs(t *testing.T) {
 	assert.EqualError(t, err, `target surface id "candidate#unsupported" is unknown`)
 }
 
+func TestIsPromptIterToolTargetSurfaceRejectsMalformedToolSurface(t *testing.T) {
+	nodes := map[string]struct{}{"candidate": {}}
+	assert.False(t, isPromptIterToolTargetSurface(astructure.Surface{
+		SurfaceID: "candidate#tool.lookup",
+		NodeID:    "candidate",
+		Type:      astructure.SurfaceTypeTool,
+		Value: astructure.SurfaceValue{
+			Tools: []astructure.ToolRef{
+				{ID: "lookup"},
+				{ID: "delay"},
+			},
+		},
+	}, nodes))
+	assert.False(t, isPromptIterToolTargetSurface(astructure.Surface{
+		SurfaceID: "candidate#tool.",
+		NodeID:    "candidate",
+		Type:      astructure.SurfaceTypeTool,
+		Value: astructure.SurfaceValue{
+			Tools: []astructure.ToolRef{{}},
+		},
+	}, nodes))
+}
+
 func TestStatusCodeFromError(t *testing.T) {
 	assert.Equal(t, http.StatusGatewayTimeout, statusCodeFromError(context.DeadlineExceeded))
 	assert.Equal(t, http.StatusRequestTimeout, statusCodeFromError(context.Canceled))

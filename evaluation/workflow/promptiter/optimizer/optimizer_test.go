@@ -324,6 +324,71 @@ func TestOptimizeToolSurfaceFallsBackToFinalContent(t *testing.T) {
 	)
 }
 
+func TestOptimizeToolSurfaceRejectsInvalidDescriptionProposalOutput(t *testing.T) {
+	tests := []struct {
+		name            string
+		events          []*event.Event
+		wantErrContains string
+	}{
+		{
+			name: "invalid json",
+			events: []*event.Event{
+				event.NewResponseEvent(
+					"invocation-id",
+					"optimizer",
+					&model.Response{
+						Done: true,
+						Choices: []model.Choice{
+							{Message: model.NewAssistantMessage("not json")},
+						},
+					},
+				),
+			},
+			wantErrContains: "decode tool description proposal",
+		},
+		{
+			name: "empty proposal",
+			events: []*event.Event{
+				event.NewResponseEvent(
+					"invocation-id",
+					"optimizer",
+					&model.Response{
+						Done: true,
+						Choices: []model.Choice{
+							{Message: model.NewAssistantMessage("")},
+						},
+					},
+				),
+			},
+			wantErrContains: "tool description proposal is empty",
+		},
+		{
+			name: "empty reason",
+			events: []*event.Event{
+				event.NewResponseEvent(
+					"invocation-id",
+					"optimizer",
+					&model.Response{Done: true},
+					event.WithStructuredOutputPayload(&toolDescriptionProposal{
+						Description: "Look up travel records.",
+					}),
+				),
+			},
+			wantErrContains: "sanitize tool description proposal",
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			r := &fakeRunner{events: testCase.events}
+			oz, err := New(context.Background(), r)
+			require.NoError(t, err)
+			rsp, err := oz.Optimize(context.Background(), newToolRequest())
+			assert.Nil(t, rsp)
+			assert.ErrorContains(t, err, testCase.wantErrContains)
+		})
+	}
+}
+
 func TestOptimizeRejectsMalformedToolSurfaceBeforeRunner(t *testing.T) {
 	r := &fakeRunner{}
 	oz, err := New(context.Background(), r)

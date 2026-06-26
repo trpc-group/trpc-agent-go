@@ -1485,6 +1485,21 @@ func TestBuildEvaluationCallOptionsRejectsInvalidRequest(t *testing.T) {
 	assert.ErrorContains(t, err, "profile structure id")
 }
 
+func TestSurfacePatchRunOptionsIgnoreEmptyInputs(t *testing.T) {
+	emptyPatchOpt := withSurfacePatchForNode("entry", surfacepatch.Patch{})
+	emptyPatchOpt(nil)
+	var opts agent.RunOptions
+	emptyPatchOpt(&opts)
+	assert.Empty(t, opts.CustomAgentConfigs)
+	emptyNodeOpt := withSurfacePatchForNode("", surfacepatch.Patch{})
+	emptyNodeOpt(&opts)
+	assert.Empty(t, opts.CustomAgentConfigs)
+	traceOpt := withToolSurfaceTracing()
+	traceOpt(nil)
+	traceOpt(&opts)
+	assert.True(t, surfacepatch.ToolSurfaceTracingEnabled(opts.CustomAgentConfigs))
+}
+
 func TestCompileProfileRunOptionsValidationErrors(t *testing.T) {
 	runOptions, err := compileProfileRunOptions(nil, nil)
 	assert.Nil(t, runOptions)
@@ -1507,6 +1522,18 @@ func TestCompileProfileRunOptionsValidationErrors(t *testing.T) {
 	})
 	assert.Nil(t, runOptions)
 	assert.ErrorContains(t, err, "unknown surface id")
+}
+
+func TestConvertToolRefsValidationErrors(t *testing.T) {
+	declarations, err := convertToolRefs([]astructure.ToolRef{{}})
+	assert.Nil(t, declarations)
+	assert.EqualError(t, err, "tool id is empty")
+	declarations, err = convertToolRefs([]astructure.ToolRef{
+		{ID: "lookup"},
+		{ID: "lookup"},
+	})
+	assert.Nil(t, declarations)
+	assert.EqualError(t, err, `duplicate tool id "lookup"`)
 }
 
 func TestApplySurfaceOverrideToPatchValidationErrors(t *testing.T) {
@@ -2627,6 +2654,31 @@ func TestNewStructureStateValidationErrors(t *testing.T) {
 		},
 		Surfaces: []astructure.Surface{
 			{
+				SurfaceID: "node_1#global_instruction",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeGlobalInstruction,
+				Value:     astructure.SurfaceValue{Text: stringPtr("global")},
+			},
+			{
+				SurfaceID: "node_1#tool.lookup",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeTool,
+				Value: astructure.SurfaceValue{
+					Text:  stringPtr("invalid"),
+					Tools: []astructure.ToolRef{{ID: "lookup"}},
+				},
+			},
+		},
+	})
+	assert.Nil(t, state)
+	assert.EqualError(t, err, `surface "node_1#tool.lookup" is invalid: tool surface value contains non-tool fields`)
+	state, err = newStructureState(&astructure.Snapshot{
+		StructureID: "structure_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
+		},
+		Surfaces: []astructure.Surface{
+			{
 				SurfaceID: "candidate#instruction",
 				NodeID:    "node_1",
 				Type:      astructure.SurfaceTypeInstruction,
@@ -2782,6 +2834,12 @@ func TestPromptIterStructureSnapshotExpandsToolSurfaces(t *testing.T) {
 				Value:     astructure.SurfaceValue{Text: &text},
 			},
 			{
+				SurfaceID: "tool_node#global_instruction",
+				NodeID:    "tool_node",
+				Type:      astructure.SurfaceTypeGlobalInstruction,
+				Value:     astructure.SurfaceValue{Text: &text},
+			},
+			{
 				SurfaceID: "node_1#tool",
 				NodeID:    "node_1",
 				Type:      astructure.SurfaceTypeTool,
@@ -2805,14 +2863,50 @@ func TestPromptIterStructureSnapshotExpandsToolSurfaces(t *testing.T) {
 	projected, err := promptIterStructureSnapshot(snapshot)
 	assert.NoError(t, err)
 	require.NotNil(t, projected)
-	assert.Len(t, projected.Surfaces, 4)
+	assert.Len(t, projected.Surfaces, 5)
 	assert.Equal(t, "node_1#global_instruction", projected.Surfaces[0].SurfaceID)
-	assert.Equal(t, "node_1#tool.lookup", projected.Surfaces[1].SurfaceID)
-	assert.Equal(t, "node_1#tool.delay", projected.Surfaces[2].SurfaceID)
-	assert.Equal(t, "tool_node#tool.lookup", projected.Surfaces[3].SurfaceID)
+	assert.Equal(t, "tool_node#global_instruction", projected.Surfaces[1].SurfaceID)
+	assert.Equal(t, "node_1#tool.lookup", projected.Surfaces[2].SurfaceID)
+	assert.Equal(t, "node_1#tool.delay", projected.Surfaces[3].SurfaceID)
+	assert.Equal(t, "tool_node#tool.lookup", projected.Surfaces[4].SurfaceID)
 	projected, err = promptIterStructureSnapshot(nil)
 	assert.NoError(t, err)
 	assert.Nil(t, projected)
+}
+
+func TestPromptIterStructureSnapshotKeepsEmptyAndRejectsInvalidToolSurfaces(t *testing.T) {
+	text := "global"
+	snapshot := &astructure.Snapshot{
+		StructureID: "structure_1",
+		Nodes: []astructure.Node{
+			{NodeID: "node_1", Kind: astructure.NodeKindLLM},
+		},
+		Surfaces: []astructure.Surface{
+			{
+				SurfaceID: "node_1#global_instruction",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeGlobalInstruction,
+				Value:     astructure.SurfaceValue{Text: &text},
+			},
+			{
+				SurfaceID: "node_1#tool.empty",
+				NodeID:    "node_1",
+				Type:      astructure.SurfaceTypeTool,
+			},
+		},
+	}
+	projected, err := promptIterStructureSnapshot(snapshot)
+	assert.NoError(t, err)
+	require.NotNil(t, projected)
+	require.Len(t, projected.Surfaces, 2)
+	assert.Equal(t, "node_1#tool.empty", projected.Surfaces[1].SurfaceID)
+	snapshot.Surfaces[1].Value = astructure.SurfaceValue{
+		Text:  stringPtr("invalid"),
+		Tools: []astructure.ToolRef{{ID: "lookup"}},
+	}
+	projected, err = promptIterStructureSnapshot(snapshot)
+	assert.Nil(t, projected)
+	assert.EqualError(t, err, `surface "node_1#tool.empty" is invalid: tool surface value contains non-tool fields`)
 }
 
 func TestExpandToolSurfaceValidation(t *testing.T) {
@@ -2839,6 +2933,13 @@ func TestExpandToolSurfaceValidation(t *testing.T) {
 		SurfaceID: "node_1#tool.bad",
 		NodeID:    "node_1",
 		Type:      astructure.SurfaceTypeTool,
+		Value:     astructure.SurfaceValue{Tools: []astructure.ToolRef{{}}},
+	})
+	assert.EqualError(t, err, "tool id is empty")
+	_, err = expandToolSurface(astructure.Surface{
+		SurfaceID: "node_1#tool.bad",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeTool,
 		Value: astructure.SurfaceValue{
 			Text:  &text,
 			Tools: []astructure.ToolRef{{ID: "lookup"}},
@@ -2854,6 +2955,18 @@ func TestExpandToolSurfaceValidation(t *testing.T) {
 		},
 	})
 	assert.EqualError(t, err, `duplicate tool surface id "node_1#tool.lookup"`)
+	_, err = expandToolSurface(astructure.Surface{
+		SurfaceID: "node_1#tool",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeTool,
+		Value: astructure.SurfaceValue{
+			Tools: []astructure.ToolRef{
+				{ID: "lookup"},
+				{},
+			},
+		},
+	})
+	assert.EqualError(t, err, "tool id is empty")
 	_, err = canonicalToolSurfaceID(astructure.Surface{
 		SurfaceID: "node_1#tool",
 		NodeID:    "node_1",
@@ -2861,6 +2974,12 @@ func TestExpandToolSurfaceValidation(t *testing.T) {
 		Value:     astructure.SurfaceValue{Tools: []astructure.ToolRef{{}}},
 	})
 	assert.EqualError(t, err, "tool id is empty")
+	_, err = canonicalToolSurfaceID(astructure.Surface{
+		SurfaceID: "node_1#tool",
+		NodeID:    "node_1",
+		Type:      astructure.SurfaceTypeTool,
+	})
+	assert.EqualError(t, err, "tool surface must contain exactly one tool, got 0")
 }
 
 func TestBuildKnownSurfaceIDsValidation(t *testing.T) {
@@ -3997,6 +4116,39 @@ func TestDescribeRejectsMissingTargetAgent(t *testing.T) {
 	snapshot, err := engineInstance.Describe(context.Background())
 	assert.Nil(t, snapshot)
 	assert.EqualError(t, err, "target agent is nil")
+}
+
+func TestDescribeRejectsInvalidProjectedStructure(t *testing.T) {
+	engineInstance := &engine{
+		targetAgent: &fakeStructureAgent{
+			snapshot: &astructure.Snapshot{
+				StructureID: "structure_1",
+				EntryNodeID: "node_1",
+				Nodes: []astructure.Node{
+					{NodeID: "node_1", Kind: astructure.NodeKindLLM},
+				},
+				Surfaces: []astructure.Surface{
+					{
+						SurfaceID: "node_1#global_instruction",
+						NodeID:    "node_1",
+						Type:      astructure.SurfaceTypeGlobalInstruction,
+						Value:     astructure.SurfaceValue{Text: stringPtr("global")},
+					},
+					{
+						SurfaceID: "node_1#tool",
+						NodeID:    "node_1",
+						Type:      astructure.SurfaceTypeTool,
+						Value: astructure.SurfaceValue{
+							Tools: []astructure.ToolRef{{}},
+						},
+					},
+				},
+			},
+		},
+	}
+	snapshot, err := engineInstance.Describe(context.Background())
+	assert.Nil(t, snapshot)
+	assert.EqualError(t, err, `surface "node_1#tool" is invalid: tool id is empty`)
 }
 
 func TestRunRejectsStructureExportFailure(t *testing.T) {
