@@ -381,6 +381,33 @@ checker 只有在估算 token 数**大于**阈值时才触发。如果把 ratio 
 例如 `0.001`，但希望 1000 token 左右就开始摘要，需要显式传入
 `summary.WithContextThresholdMinTokens(0)`，或设置成业务希望的最小值。
 
+### 触发和调用上报
+
+如果需要观察“为什么触发 summary”以及“summary 模型请求实际用了多少 token”，
+可以配置 `summary.WithReportHook`：
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithContextThreshold(),
+    summary.WithReportHook(func(ctx context.Context, report summary.Report) {
+        triggerTokens := report.Trigger.Value
+        summaryPromptTokens := report.Call.PromptTokens
+        _ = triggerTokens
+        _ = summaryPromptTokens
+    }),
+)
+```
+
+`Report` 会把两个 token 口径拆开：
+
+- `report.Trigger.Value`：触发 checker 使用的值，例如上次 summary 之后增量事件的估算 token 数
+- `report.Call.EstimatedPromptTokens`：框架在发起 summary 模型请求前，对完整请求做的本地估算
+- `report.Call.PromptTokens`：summary 模型返回的官方 `usage.prompt_tokens`
+
+开启 cache-safe forking 时，`report.Call.Mode` 为 `cache_safe_fork`，请求估算值来自 fork
+后的父请求加上追加的 summary 指令。普通独立 summary prompt 模式下，mode 为 `standalone`。
+
 对于私有部署、endpoint ID、微调模型、新模型或多租户自定义模型配置，优先使用模型实例或单次运行 option，
 避免不同用户覆盖同一个进程级注册表：
 

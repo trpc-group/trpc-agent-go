@@ -394,6 +394,37 @@ expect summarization around 1000 tokens, pass
 `summary.WithContextThresholdMinTokens(0)` explicitly, or set it to the
 application-specific minimum you want.
 
+### Trigger and Call Reporting
+
+Use `summary.WithReportHook` when you need to observe why summary generation
+was triggered and how large the summary model request was:
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithContextThreshold(),
+    summary.WithReportHook(func(ctx context.Context, report summary.Report) {
+        triggerTokens := report.Trigger.Value
+        summaryPromptTokens := report.Call.PromptTokens
+        _ = triggerTokens
+        _ = summaryPromptTokens
+    }),
+)
+```
+
+The report keeps two token counts separate:
+
+- `report.Trigger.Value`: the checker value that triggered summarization, such
+  as estimated delta tokens after the previous summary
+- `report.Call.EstimatedPromptTokens`: the framework's local estimate for the
+  complete summary model request
+- `report.Call.PromptTokens`: the provider-reported `usage.prompt_tokens` for
+  the summary model call
+
+For cache-safe forking, `report.Call.Mode` is `cache_safe_fork` and the request
+estimate is computed from the forked parent request plus the appended summary
+instruction. For standalone summary prompts, the mode is `standalone`.
+
 For private deployments, endpoint IDs, fine-tuned models, newly released
 models, or multi-tenant custom model configuration, prefer the instance or
 per-run option so different users do not overwrite a process-wide registry

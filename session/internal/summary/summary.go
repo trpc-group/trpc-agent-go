@@ -201,7 +201,7 @@ func SummarizeSession(
 	if !ok {
 		return false, nil
 	}
-	text, err := m.Summarize(ctx, input.session)
+	text, err := m.Summarize(input.ctx, input.session)
 	if err != nil {
 		return false, fmt.Errorf("summarize session %s failed: %w", base.ID, err)
 	}
@@ -235,6 +235,7 @@ type previousSummary struct {
 
 type summaryInput struct {
 	session        *session.Session
+	ctx            context.Context
 	latestBoundary *session.SummaryBoundary
 	hasDelta       bool
 }
@@ -319,11 +320,14 @@ func buildSummaryInput(
 	}
 	input := prependPrevSummary(prev.text, delta, time.Now())
 	tmp := buildFilterSession(base, filterKey, input)
-	if !shouldGenerateSummary(ctx, m, base, tmp, input, filterKey, force) {
+	report := &summary.Report{}
+	reportCtx := summary.ContextWithReport(ctx, report)
+	if !shouldGenerateSummary(reportCtx, m, base, tmp, input, filterKey, force, report) {
 		return summaryInput{}, false
 	}
 	return summaryInput{
 		session:        tmp,
+		ctx:            reportCtx,
 		latestBoundary: latestBoundary,
 		hasDelta:       len(delta) > 0,
 	}, true
@@ -338,8 +342,16 @@ func shouldGenerateSummary(
 	input []event.Event,
 	filterKey string,
 	force bool,
+	report *summary.Report,
 ) bool {
 	if force {
+		if report != nil {
+			report.Trigger = summary.Trigger{
+				Fired:  true,
+				Name:   "force",
+				Metric: "custom",
+			}
+		}
 		return true
 	}
 	checkTmp := tmp
