@@ -27,7 +27,10 @@
 //     branch's todo list still contains pending or in-progress
 //     items, the response's `Done` flag is flipped to false so
 //     llmflow keeps looping; a "reminder pending" marker is
-//     stored on the invocation.
+//     stored on the invocation. Streaming remains enabled when
+//     requested by the caller: partial text may already be visible
+//     to clients, but the response is not accepted as terminal or
+//     persisted as assistant history.
 //  2. BeforeModel drains that marker on the next turn and
 //     appends a nudge user message to the request, listing the
 //     items that remain and the model's two valid next actions

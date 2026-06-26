@@ -723,7 +723,7 @@ agent := llmagent.New("todo-assistant",
 )
 ```
 
-该 extension 会自动贡献 `todo_write` 和 `todo_declare_blocker`，不要再通过 `WithTools` 额外传入 `todo.New()`。如果需要复用 `tool/todo` 的选项（例如 `WithStateKeyPrefix`、`WithClearOnAllDone` 或 `WithNudgeHook`），先构造 `todo.New(...)`，再通过 `todoenforcer.WithTodoTool(...)` 传入。`todo_declare_blocker` 用于声明客观阻塞，例如缺少权限、凭据、基础设施或必须由用户决策的信息。
+该 extension 会自动贡献 `todo_write` 和 `todo_declare_blocker`，不要再通过 `WithTools` 额外传入 `todo.New()`。如果需要复用 `tool/todo` 的选项（例如 `WithStateKeyPrefix`、`WithClearOnAllDone` 或 `WithNudgeHook`），先构造 `todo.New(...)`，再通过 `todoenforcer.WithTodoTool(...)` 传入。`todo_declare_blocker` 用于声明客观阻塞，例如缺少权限、凭据、基础设施或必须由用户决策的信息。extension 不会改写调用方的流式设置：未完成时模型已经输出的文本仍可能到达客户端，但最终响应会被转为继续执行信号，不会作为本轮终态写入会话历史。
 
 #### 工具返回结构
 
