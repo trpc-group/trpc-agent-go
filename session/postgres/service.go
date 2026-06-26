@@ -164,7 +164,10 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 
 	// Initialize database schema unless skipped
 	if !opts.skipDBInit {
-		s.initDB(context.Background())
+		if err := s.initDB(context.Background()); err != nil {
+			_ = pgClient.Close()
+			return nil, fmt.Errorf("init database failed: %w", err)
+		}
 	}
 
 	if opts.enableAsyncPersist {
