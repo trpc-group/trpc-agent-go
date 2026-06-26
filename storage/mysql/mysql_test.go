@@ -705,11 +705,7 @@ func TestSQLDBClient_Transaction(t *testing.T) {
 		client := &sqlDBClient{db: mockDB}
 
 		mock.ExpectBegin()
-		// go-sqlmock does not reliably record Rollback during a panic unwind.
-		// We verify panic propagation here; the defer+rollback path is covered
-		// by the error-based rollback test above and by the code review of the
-		// defer block.
-
+		mock.ExpectRollback()
 		assert.PanicsWithValue(t, "test panic", func() {
 			_ = client.Transaction(context.Background(), func(tx *sql.Tx) error {
 				panic("test panic")
@@ -728,7 +724,7 @@ func TestSQLDBClient_Transaction(t *testing.T) {
 
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO users").WillReturnResult(sqlmock.NewResult(1, 1))
-		// Rollback expectation omitted — same reason as above.
+		mock.ExpectRollback()
 
 		assert.PanicsWithValue(t, "panic after exec", func() {
 			_ = client.Transaction(context.Background(), func(tx *sql.Tx) error {
@@ -738,6 +734,26 @@ func TestSQLDBClient_Transaction(t *testing.T) {
 			})
 		})
 
+		assert.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("transaction with rollback on err but not panic", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		defer mockDB.Close()
+
+		client := &sqlDBClient{db: mockDB}
+
+		mock.ExpectBegin()
+		mock.ExpectExec("INSERT INTO users").WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectRollback()
+		expectedErr := errors.New("expected error")
+		err = client.Transaction(context.Background(), func(tx *sql.Tx) error {
+			_, _ = tx.ExecContext(context.Background(),
+				"INSERT INTO users (name) VALUES (?)", "Alice")
+			return expectedErr
+		})
+		assert.ErrorIs(t, err, expectedErr)
 		assert.NoError(t, mock.ExpectationsWereMet())
 	})
 }
