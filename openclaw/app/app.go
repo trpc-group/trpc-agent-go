@@ -3458,9 +3458,13 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 	if baseURL == "" {
 		baseURL = strings.TrimSpace(os.Getenv(openAIBaseURLEnvName))
 	}
-	headers, err := resolveOpenAIHeaders(opts.OpenAIHeaders)
-	if err != nil {
-		return nil, err
+	var headers map[string]string
+	if mode == modeOpenAI {
+		resolved, err := resolveOpenAIHeaders(opts.OpenAIHeaders)
+		if err != nil {
+			return nil, err
+		}
+		headers = resolved
 	}
 
 	spec := registry.ModelSpec{

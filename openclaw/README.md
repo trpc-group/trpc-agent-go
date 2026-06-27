@@ -821,6 +821,9 @@ Some OpenAI-compatible gateways require additional HTTP headers. Set them with
 export OPENAI_HEADERS="X-Example-User=alice X-Example-Agent=openclaw"
 ```
 
+`OPENAI_HEADERS` is intended for simple values without spaces. Use
+`model.headers` for values containing spaces, such as a bearer token.
+
 You can also configure them in YAML:
 
 ```yaml
@@ -828,6 +831,7 @@ model:
   headers:
     X-Example-User: "alice"
     X-Example-Agent: "openclaw"
+    X-Example-Token: "Bearer token-with-space"
 ```
 
 ### DeepSeek (OpenAI-compatible)

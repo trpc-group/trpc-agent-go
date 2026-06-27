@@ -3755,6 +3755,7 @@ func TestNewModel_OpenAIHeadersFromConfigAndEnv(t *testing.T) {
 	var agentHeader string
 	var providerHeader string
 	var authHeader string
+	var tokenHeader string
 	server := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
 		r *http.Request,
@@ -3764,6 +3765,7 @@ func TestNewModel_OpenAIHeadersFromConfigAndEnv(t *testing.T) {
 		agentHeader = r.Header.Get("X-SMG-Agent-Name")
 		providerHeader = r.Header.Get("X-SMG-Provider")
 		authHeader = r.Header.Get("Authorization")
+		tokenHeader = r.Header.Get("X-Example-Token")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"id":"chatcmpl-test",
@@ -3792,6 +3794,7 @@ func TestNewModel_OpenAIHeadersFromConfigAndEnv(t *testing.T) {
 		OpenAIHeaders: map[string]string{
 			"X-SMG-Routing-Key": "wineguo",
 			"X-SMG-Agent-Name":  "config-agent",
+			"X-Example-Token":   "Bearer config-token",
 		},
 	})
 	require.NoError(t, err)
@@ -3811,6 +3814,7 @@ func TestNewModel_OpenAIHeadersFromConfigAndEnv(t *testing.T) {
 	require.Equal(t, "env-agent", agentHeader)
 	require.Equal(t, "venus", providerHeader)
 	require.Equal(t, "Bearer test-key", authHeader)
+	require.Equal(t, "Bearer config-token", tokenHeader)
 }
 
 func TestResolveOpenAIHeaders_EnvOnlyAndConfigOnly(t *testing.T) {
@@ -3849,6 +3853,9 @@ func TestParseHeaderPairs_RejectsEmptyKeyOrValue(t *testing.T) {
 
 	_, err = parseHeaderPairs("X-Empty=")
 	require.ErrorContains(t, err, "empty key or value")
+
+	_, err = parseHeaderPairs("X-Token=Bearer abc")
+	require.ErrorContains(t, err, "invalid OPENAI_HEADERS entry")
 }
 
 func TestNewModel_OpenAIHeadersRejectsInvalidEnv(t *testing.T) {
@@ -3859,6 +3866,14 @@ func TestNewModel_OpenAIHeadersRejectsInvalidEnv(t *testing.T) {
 		OpenAIBaseURL: "http://127.0.0.1:1",
 	})
 	require.ErrorContains(t, err, "invalid OPENAI_HEADERS entry")
+}
+
+func TestNewModel_MockIgnoresInvalidOpenAIHeadersEnv(t *testing.T) {
+	t.Setenv(openAIHeadersEnvName, "bad-header")
+	mdl, err := modelFromOptions(runOptions{ModelMode: modeMock})
+
+	require.NoError(t, err)
+	require.Equal(t, "mock-echo", mdl.Info().Name)
 }
 
 func TestNewModel_OpenAI_DebugRecorderWiresRequestCapture(
