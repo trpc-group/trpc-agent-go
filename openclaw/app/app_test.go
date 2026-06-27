@@ -3750,6 +3750,117 @@ func TestNewModel_OpenAI(t *testing.T) {
 	require.False(t, hasOpenAIRequestJSONCallback(t, mdl))
 }
 
+func TestNewModel_OpenAIHeadersFromConfigAndEnv(t *testing.T) {
+	var routingHeader string
+	var agentHeader string
+	var providerHeader string
+	var authHeader string
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.True(t, strings.HasSuffix(r.URL.Path, "/chat/completions"))
+		routingHeader = r.Header.Get("X-SMG-Routing-Key")
+		agentHeader = r.Header.Get("X-SMG-Agent-Name")
+		providerHeader = r.Header.Get("X-SMG-Provider")
+		authHeader = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"glm50",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":"ok"},
+				"finish_reason":"stop"
+			}]
+		}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv(
+		openAIHeadersEnvName,
+		"X-SMG-Agent-Name=env-agent X-SMG-Provider=venus",
+	)
+	mdl, err := modelFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIModel:   "glm50",
+		OpenAIVariant: openAIVariantAuto,
+		OpenAIBaseURL: server.URL,
+		OpenAIHeaders: map[string]string{
+			"X-SMG-Routing-Key": "wineguo",
+			"X-SMG-Agent-Name":  "config-agent",
+		},
+	})
+	require.NoError(t, err)
+
+	ch, err := mdl.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	})
+	require.NoError(t, err)
+	for rsp := range ch {
+		require.Nil(t, rsp.Error)
+	}
+
+	require.Equal(t, "wineguo", routingHeader)
+	require.Equal(t, "env-agent", agentHeader)
+	require.Equal(t, "venus", providerHeader)
+	require.Equal(t, "Bearer test-key", authHeader)
+}
+
+func TestResolveOpenAIHeaders_EnvOnlyAndConfigOnly(t *testing.T) {
+	t.Setenv(
+		openAIHeadersEnvName,
+		"X-One=1, X-Two:2\nX-Three=3",
+	)
+	got, err := resolveOpenAIHeaders(nil)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{
+		"X-One":   "1",
+		"X-Two":   "2",
+		"X-Three": "3",
+	}, got)
+
+	t.Setenv(openAIHeadersEnvName, "")
+	got, err = resolveOpenAIHeaders(map[string]string{
+		" X-Config ": " value ",
+		" ":          "drop",
+		"X-Empty":    "",
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"X-Config": "value"}, got)
+}
+
+func TestCleanHeaderMap_DropsBlankEntries(t *testing.T) {
+	require.Nil(t, cleanHeaderMap(map[string]string{
+		" ":       "drop",
+		"X-Empty": "",
+	}))
+}
+
+func TestParseHeaderPairs_RejectsEmptyKeyOrValue(t *testing.T) {
+	_, err := parseHeaderPairs("=value")
+	require.ErrorContains(t, err, "empty key or value")
+
+	_, err = parseHeaderPairs("X-Empty=")
+	require.ErrorContains(t, err, "empty key or value")
+}
+
+func TestNewModel_OpenAIHeadersRejectsInvalidEnv(t *testing.T) {
+	t.Setenv(openAIHeadersEnvName, "bad-header")
+	_, err := modelFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIModel:   "glm50",
+		OpenAIBaseURL: "http://127.0.0.1:1",
+	})
+	require.ErrorContains(t, err, "invalid OPENAI_HEADERS entry")
+}
+
 func TestNewModel_OpenAI_DebugRecorderWiresRequestCapture(
 	t *testing.T,
 ) {

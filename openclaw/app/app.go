@@ -421,7 +421,9 @@ const (
 	qwenAPIHost     = "dashscope.aliyuncs.com"
 	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
 
+	openAIAPIKeyEnvName  = "OPENAI_API_KEY"
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
+	openAIHeadersEnvName = "OPENAI_HEADERS"
 	openAIModelEnvName   = "OPENAI_MODEL"
 
 	errClaudeCodeAgentNoPrompts = "claude-code agent does not support " +
@@ -3432,6 +3434,12 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	if baseURL != "" {
 		opts = append(opts, openai.WithBaseURL(baseURL))
 	}
+	if apiKey := strings.TrimSpace(spec.APIKey); apiKey != "" {
+		opts = append(opts, openai.WithAPIKey(apiKey))
+	}
+	if len(spec.Headers) > 0 {
+		opts = append(opts, openai.WithHeaders(spec.Headers))
+	}
 	return openai.New(name, opts...), nil
 }
 
@@ -3450,16 +3458,102 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 	if baseURL == "" {
 		baseURL = strings.TrimSpace(os.Getenv(openAIBaseURLEnvName))
 	}
+	headers, err := resolveOpenAIHeaders(opts.OpenAIHeaders)
+	if err != nil {
+		return nil, err
+	}
 
 	spec := registry.ModelSpec{
 		Type:                 mode,
 		Name:                 opts.OpenAIModel,
 		BaseURL:              baseURL,
+		APIKey:               strings.TrimSpace(os.Getenv(openAIAPIKeyEnvName)),
 		OpenAIVariant:        opts.OpenAIVariant,
+		Headers:              headers,
 		DebugRecorderEnabled: opts.DebugRecorderEnabled,
 		Config:               opts.ModelConfig,
 	}
 	return f(spec)
+}
+
+func resolveOpenAIHeaders(
+	config map[string]string,
+) (map[string]string, error) {
+	headers := cleanHeaderMap(config)
+	envHeaders, err := parseHeaderPairs(os.Getenv(openAIHeadersEnvName))
+	if err != nil {
+		return nil, err
+	}
+	if len(envHeaders) == 0 {
+		return headers, nil
+	}
+	if headers == nil {
+		headers = map[string]string{}
+	}
+	for key, value := range envHeaders {
+		headers[key] = value
+	}
+	return headers, nil
+}
+
+func cleanHeaderMap(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	cleaned := make(map[string]string, len(headers))
+	for key, value := range headers {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		cleaned[key] = value
+	}
+	if len(cleaned) == 0 {
+		return nil
+	}
+	return cleaned
+}
+
+func parseHeaderPairs(raw string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	replacer := strings.NewReplacer(
+		",",
+		" ",
+		"\n",
+		" ",
+		"\r",
+		" ",
+	)
+	fields := strings.Fields(replacer.Replace(raw))
+	headers := make(map[string]string, len(fields))
+	for _, field := range fields {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			key, value, ok = strings.Cut(field, ":")
+		}
+		if !ok {
+			return nil, fmt.Errorf(
+				"invalid %s entry %q: want KEY=VALUE",
+				openAIHeadersEnvName,
+				field,
+			)
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			return nil, fmt.Errorf(
+				"invalid %s entry %q: empty key or value",
+				openAIHeadersEnvName,
+				field,
+			)
+		}
+		headers[key] = value
+	}
+	return headers, nil
 }
 
 func parseOpenAIVariant(
