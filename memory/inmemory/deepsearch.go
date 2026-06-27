@@ -27,7 +27,7 @@ const (
 
 var _ deepsearch.QueryService = (*MemoryService)(nil)
 
-// EnsureIndex 确保当前用户的 DeepSearch 索引与 memory entries 一致。
+// EnsureIndex ensures that the user's DeepSearch index matches current memory entries.
 func (s *MemoryService) EnsureIndex(
 	ctx context.Context,
 	userKey memory.UserKey,

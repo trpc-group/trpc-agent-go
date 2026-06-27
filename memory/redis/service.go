@@ -21,6 +21,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
@@ -33,12 +34,19 @@ const (
 )
 
 var _ memory.Service = (*Service)(nil)
+var _ deepsearch.QueryService = (*Service)(nil)
+
+type serviceDeepSearch struct {
+	*deepsearch.Runtime
+}
 
 // Service is the redis memory service.
 // Storage structure:
 //
 //	Memory: appName + userID -> hash [memoryID -> Entry(json)].
 type Service struct {
+	*serviceDeepSearch
+
 	opts        ServiceOpts
 	redisClient redis.UniversalClient
 
@@ -91,6 +99,11 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		redisClient: redisClient,
 		cachedTools: make(map[string]tool.Tool),
 	}
+	svc.serviceDeepSearch = &serviceDeepSearch{Runtime: deepsearch.NewRuntime(
+		opts.deepSearchModel,
+		svc.ReadMemories,
+		opts.deepSearchOptions...,
+	)}
 
 	// Pre-compute tools list to avoid lock contention in Tools() method.
 	svc.precomputedTools = imemory.BuildToolsList(

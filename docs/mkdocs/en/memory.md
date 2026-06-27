@@ -101,6 +101,11 @@ Activation does not leak into later invocations.
 
 DeepSearch organizes a secondary index around the following structures:
 
+The secondary index is rebuildable from authoritative memory entries. A
+memory service may materialize it in its own storage or keep it in a runtime
+index; callers must not treat cue, tag, or content nodes as an independent
+source of truth.
+
 | Structure | Purpose |
 | --------- | ------- |
 | `Document` | Index input derived from one `memory.Entry`, including text, metadata, generated cues, and generated tags. |

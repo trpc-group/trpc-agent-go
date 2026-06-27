@@ -7,7 +7,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package deepsearch 提供基于 cue/tag 的长期记忆深度检索能力。
+// Package deepsearch provides cue/tag-based deep retrieval for long-term memory.
 package deepsearch
 
 import (
@@ -17,38 +17,38 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
-// DeepSearch 工具名。
+// DeepSearch tool names.
 const (
-	CueSearchToolName   = "memory_deepsearch_cue_search"   // cue 检索工具。
-	TagExpandToolName   = "memory_deepsearch_tag_expand"   // tag 扩展工具。
-	ContentLoadToolName = "memory_deepsearch_content_load" // content 加载工具。
+	CueSearchToolName   = "memory_deepsearch_cue_search"   // Cue retrieval tool.
+	TagExpandToolName   = "memory_deepsearch_tag_expand"   // Tag expansion tool.
+	ContentLoadToolName = "memory_deepsearch_content_load" // Content loading tool.
 )
 
-// Service 定义可选的 DeepSearch 索引和查询能力。
+// Service defines the optional DeepSearch indexing and query capability.
 type Service interface {
-	// EnsureIndex 确保指定用户的索引与当前 memory entries 一致。
+	// EnsureIndex ensures that a user's index matches current memory entries.
 	EnsureIndex(ctx context.Context, userKey memory.UserKey) error
-	// IndexDocuments 写入 DeepSearch 文档。
+	// IndexDocuments writes DeepSearch documents.
 	IndexDocuments(ctx context.Context, req IndexRequest) error
-	// SearchCues 检索 cue 节点。
+	// SearchCues searches cue nodes.
 	SearchCues(ctx context.Context, req CueSearchRequest) (*CueSearchResult, error)
-	// ExpandTags 将 cue 扩展为 tag/content 路径。
+	// ExpandTags expands cues into tag and content paths.
 	ExpandTags(ctx context.Context, req TagExpandRequest) (*TagExpandResult, error)
-	// LoadContents 按 ID 或引用加载 content。
+	// LoadContents loads content by ID or source reference.
 	LoadContents(ctx context.Context, req ContentLoadRequest) (*ContentLoadResult, error)
-	// DeleteDocuments 删除 DeepSearch 索引。
+	// DeleteDocuments deletes DeepSearch index documents.
 	DeleteDocuments(ctx context.Context, req DeleteRequest) error
 }
 
-// ContentRefKind 标识 content 指向的源对象类型。
+// ContentRefKind identifies the source object referenced by content.
 type ContentRefKind string
 
 const (
-	// RefKindMemoryEntry 表示 content 指向 memory entry。
+	// RefKindMemoryEntry indicates that content references a memory entry.
 	RefKindMemoryEntry ContentRefKind = "memory_entry"
 )
 
-// ContentRef 标识 DeepSearch content 对应的 memory entry。
+// ContentRef identifies the memory entry represented by DeepSearch content.
 type ContentRef struct {
 	Kind     ContentRefKind `json:"kind"`
 	AppName  string         `json:"app_name,omitempty"`
@@ -56,7 +56,7 @@ type ContentRef struct {
 	SourceID string         `json:"source_id,omitempty"`
 }
 
-// Metadata 保存索引使用的 memory 元数据。
+// Metadata contains memory metadata used by the index.
 type Metadata struct {
 	SourceFingerprint string      `json:"source_fingerprint,omitempty"`
 	EventTime         time.Time   `json:"event_time,omitempty"`
@@ -66,7 +66,7 @@ type Metadata struct {
 	Kind              memory.Kind `json:"kind,omitempty"`
 }
 
-// Document 表示一条由 memory entry 生成的 DeepSearch 文档。
+// Document represents a DeepSearch document generated from a memory entry.
 type Document struct {
 	ID       string     `json:"id,omitempty"`
 	Text     string     `json:"text"`
@@ -77,14 +77,14 @@ type Document struct {
 	Created  time.Time  `json:"created,omitempty"`
 }
 
-// IndexRequest 描述一个用户的索引写入请求。
+// IndexRequest describes an index write for one user.
 type IndexRequest struct {
 	UserKey   memory.UserKey `json:"user_key"`
 	Documents []Document     `json:"documents"`
 	Replace   bool           `json:"replace,omitempty"`
 }
 
-// CueSearchRequest 描述 cue 检索请求。
+// CueSearchRequest describes a cue search.
 type CueSearchRequest struct {
 	UserKey    memory.UserKey `json:"user_key"`
 	Query      string         `json:"query"`
@@ -92,20 +92,20 @@ type CueSearchRequest struct {
 	MinScore   float64        `json:"min_score,omitempty"`
 }
 
-// CueSearchResult 保存 cue 检索结果。
+// CueSearchResult contains cue search results.
 type CueSearchResult struct {
 	Query string `json:"query"`
 	Cues  []Cue  `json:"cues"`
 }
 
-// Cue 表示一个检索线索节点。
+// Cue represents a retrieval clue node.
 type Cue struct {
 	ID    string  `json:"id"`
 	Text  string  `json:"text"`
 	Score float64 `json:"score,omitempty"`
 }
 
-// TagExpandRequest 描述 cue 到 tag/content 的扩展请求。
+// TagExpandRequest describes expansion from cues to tag and content paths.
 type TagExpandRequest struct {
 	UserKey        memory.UserKey `json:"user_key"`
 	CueIDs         []string       `json:"cue_ids,omitempty"`
@@ -116,13 +116,13 @@ type TagExpandRequest struct {
 	IncludeContent bool           `json:"include_content,omitempty"`
 }
 
-// TagExpandResult 保存 tag 和遍历路径。
+// TagExpandResult contains tags and traversal paths.
 type TagExpandResult struct {
 	Tags  []Tag  `json:"tags"`
 	Paths []Path `json:"paths"`
 }
 
-// Tag 表示 cue 与 content 之间的关系。
+// Tag represents a relation between a cue and content.
 type Tag struct {
 	ID        string  `json:"id"`
 	Text      string  `json:"text"`
@@ -131,7 +131,7 @@ type Tag struct {
 	Weight    float64 `json:"weight,omitempty"`
 }
 
-// Path 表示一条 cue-tag-content 路径。
+// Path represents a cue-tag-content path.
 type Path struct {
 	Cue     Cue      `json:"cue"`
 	Tag     Tag      `json:"tag"`
@@ -139,7 +139,7 @@ type Path struct {
 	Score   float64  `json:"score,omitempty"`
 }
 
-// ContentLoadRequest 描述 content 加载请求。
+// ContentLoadRequest describes a content load request.
 type ContentLoadRequest struct {
 	UserKey    memory.UserKey `json:"user_key"`
 	ContentIDs []string       `json:"content_ids,omitempty"`
@@ -147,12 +147,12 @@ type ContentLoadRequest struct {
 	MaxResults int            `json:"max_results,omitempty"`
 }
 
-// ContentLoadResult 保存加载出的 content。
+// ContentLoadResult contains loaded content.
 type ContentLoadResult struct {
 	Contents []Content `json:"contents"`
 }
 
-// Content 表示索引中的权威 memory entry 引用。
+// Content represents an indexed reference to an authoritative memory entry.
 type Content struct {
 	ID       string     `json:"id"`
 	Text     string     `json:"text"`
@@ -163,7 +163,7 @@ type Content struct {
 	Updated  time.Time  `json:"updated,omitempty"`
 }
 
-// DeleteRequest 描述索引删除请求。
+// DeleteRequest describes an index deletion.
 type DeleteRequest struct {
 	UserKey    memory.UserKey `json:"user_key"`
 	ContentIDs []string       `json:"content_ids,omitempty"`

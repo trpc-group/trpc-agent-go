@@ -16,7 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
-// DeepSearch 扩展查询工具名。
+// DeepSearch extended query tool names.
 const (
 	EdgesByTagToolName          = "memory_deepsearch_edges_by_tag"
 	ConversationTimeToolName    = "memory_deepsearch_conversation_time"
@@ -27,26 +27,26 @@ const (
 	TopicEventsToolName         = "memory_deepsearch_topic_events"
 )
 
-// QueryService 扩展 Service，提供完整的 DeepSearch 查询能力。
+// QueryService extends Service with the complete DeepSearch query surface.
 type QueryService interface {
 	Service
-	// EdgesByTag 按 tag 或文本查询遍历索引边。
+	// EdgesByTag traverses index edges by tag or text query.
 	EdgesByTag(ctx context.Context, req EdgesByTagRequest) (*EdgesByTagResult, error)
-	// QueryConversationTime 按时间范围查询记忆。
+	// QueryConversationTime queries memories within a time range.
 	QueryConversationTime(ctx context.Context, req QueryConversationTimeRequest) (*QueryResult, error)
-	// QueryEventKeywords 按关键词和时间范围查询事件。
+	// QueryEventKeywords queries events by keywords and time range.
 	QueryEventKeywords(ctx context.Context, req QueryEventKeywordsRequest) (*QueryResult, error)
-	// QueryEventContext 加载命中 content 附近的相关记忆。
+	// QueryEventContext loads memories related to matched content.
 	QueryEventContext(ctx context.Context, req QueryEventContextRequest) (*QueryResult, error)
-	// QueryPersonalInformation 查询稳定的个人信息。
+	// QueryPersonalInformation queries stable personal information.
 	QueryPersonalInformation(ctx context.Context, req QueryPersonalInformationRequest) (*QueryResult, error)
-	// QueryPersonalAspect 按个人信息方面查询记忆。
+	// QueryPersonalAspect queries memories for one personal aspect.
 	QueryPersonalAspect(ctx context.Context, req QueryPersonalAspectRequest) (*QueryResult, error)
-	// QueryTopicEvents 按主题和时间范围查询事件。
+	// QueryTopicEvents queries events by topic and time range.
 	QueryTopicEvents(ctx context.Context, req QueryTopicEventsRequest) (*QueryResult, error)
 }
 
-// EdgesByTagRequest 描述按 tag 遍历索引边的请求。
+// EdgesByTagRequest describes an index-edge traversal request.
 type EdgesByTagRequest struct {
 	UserKey        memory.UserKey `json:"user_key"`
 	Tags           []string       `json:"tags,omitempty"`
@@ -55,14 +55,14 @@ type EdgesByTagRequest struct {
 	IncludeContent bool           `json:"include_content,omitempty"`
 }
 
-// EdgesByTagResult 保存按 tag 遍历出的路径。
+// EdgesByTagResult contains paths returned by tag traversal.
 type EdgesByTagResult struct {
 	Query string `json:"query,omitempty"`
 	Tags  []Tag  `json:"tags"`
 	Paths []Path `json:"paths"`
 }
 
-// QueryConversationTimeRequest 描述时间范围查询。
+// QueryConversationTimeRequest describes a time-range query.
 type QueryConversationTimeRequest struct {
 	UserKey    memory.UserKey `json:"user_key"`
 	Query      string         `json:"query,omitempty"`
@@ -71,7 +71,7 @@ type QueryConversationTimeRequest struct {
 	MaxResults int            `json:"max_results,omitempty"`
 }
 
-// QueryEventKeywordsRequest 描述关键词事件查询。
+// QueryEventKeywordsRequest describes a keyword event query.
 type QueryEventKeywordsRequest struct {
 	UserKey    memory.UserKey `json:"user_key"`
 	Query      string         `json:"query,omitempty"`
@@ -81,7 +81,7 @@ type QueryEventKeywordsRequest struct {
 	MaxResults int            `json:"max_results,omitempty"`
 }
 
-// QueryEventContextRequest 描述相关记忆上下文查询。
+// QueryEventContextRequest describes a related-memory context query.
 type QueryEventContextRequest struct {
 	UserKey    memory.UserKey `json:"user_key"`
 	Query      string         `json:"query,omitempty"`
@@ -90,7 +90,7 @@ type QueryEventContextRequest struct {
 	MaxResults int            `json:"max_results,omitempty"`
 }
 
-// QueryPersonalInformationRequest 描述个人信息查询。
+// QueryPersonalInformationRequest describes a personal-information query.
 type QueryPersonalInformationRequest struct {
 	UserKey    memory.UserKey `json:"user_key"`
 	Query      string         `json:"query,omitempty"`
@@ -98,7 +98,7 @@ type QueryPersonalInformationRequest struct {
 	MaxResults int            `json:"max_results,omitempty"`
 }
 
-// QueryPersonalAspectRequest 描述个人信息方面查询。
+// QueryPersonalAspectRequest describes a personal-aspect query.
 type QueryPersonalAspectRequest struct {
 	UserKey    memory.UserKey `json:"user_key"`
 	Aspect     string         `json:"aspect"`
@@ -106,7 +106,7 @@ type QueryPersonalAspectRequest struct {
 	MaxResults int            `json:"max_results,omitempty"`
 }
 
-// QueryTopicEventsRequest 描述主题事件查询。
+// QueryTopicEventsRequest describes a topic event query.
 type QueryTopicEventsRequest struct {
 	UserKey    memory.UserKey `json:"user_key"`
 	Topic      string         `json:"topic"`
@@ -116,7 +116,7 @@ type QueryTopicEventsRequest struct {
 	MaxResults int            `json:"max_results,omitempty"`
 }
 
-// QueryResult 保存扩展查询返回的 content。
+// QueryResult contains content returned by an extended query.
 type QueryResult struct {
 	Query    string    `json:"query,omitempty"`
 	Contents []Content `json:"contents"`

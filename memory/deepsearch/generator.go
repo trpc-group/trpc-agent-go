@@ -31,7 +31,7 @@ const (
 
 var errOutputValidation = errors.New("deepsearch output validation failed")
 
-// Option 配置 DeepSearch 索引生成。
+// Option configures DeepSearch index generation.
 type Option func(*options)
 
 type options struct {
@@ -40,7 +40,7 @@ type options struct {
 	batchSize int
 }
 
-// WithLimits 限制每条记忆生成的 cue 和 tag 数量。
+// WithLimits limits the number of cues and tags generated per memory.
 func WithLimits(maxCues, maxTags int) Option {
 	return func(opts *options) {
 		if maxCues > 0 {
@@ -52,7 +52,7 @@ func WithLimits(maxCues, maxTags int) Option {
 	}
 }
 
-// WithBatchSize 设置单次 LLM 索引请求包含的记忆数量。
+// WithBatchSize sets the number of memories in one LLM index request.
 func WithBatchSize(size int) Option {
 	return func(opts *options) {
 		if size > 0 {
@@ -61,7 +61,7 @@ func WithBatchSize(size int) Option {
 	}
 }
 
-// BuildDocuments 使用 LLM 为记忆条目生成完整的 DeepSearch 文档。
+// BuildDocuments uses an LLM to generate DeepSearch documents from memory entries.
 func BuildDocuments(
 	ctx context.Context,
 	indexModel model.Model,
@@ -164,7 +164,7 @@ func documentsFromEntries(entries []*memory.Entry) ([]Document, error) {
 	return documents, nil
 }
 
-// SourceFingerprint 返回用于判断 DeepSearch 索引是否过期的摘要。
+// SourceFingerprint returns the digest used to detect a stale DeepSearch index.
 func SourceFingerprint(entry *memory.Entry) string {
 	if entry == nil || entry.Memory == nil {
 		return ""

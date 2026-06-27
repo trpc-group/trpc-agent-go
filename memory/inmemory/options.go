@@ -206,7 +206,7 @@ func WithExtractor(e extractor.MemoryExtractor) ServiceOpt {
 	}
 }
 
-// WithDeepSearch 启用基于 memory entries 的 DeepSearch 索引能力。
+// WithDeepSearch enables DeepSearch indexing derived from memory entries.
 func WithDeepSearch(m model.Model, deepSearchOptions ...deepsearch.Option) ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.deepSearchModel = m

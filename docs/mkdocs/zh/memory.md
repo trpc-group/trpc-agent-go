@@ -84,6 +84,10 @@ memory_search
 
 DeepSearch 使用以下结构组织二级索引：
 
+二级索引始终可以从权威 memory entries 重建。memory service 可以把它写入
+自身存储，也可以维护为运行时索引；调用方不能把 cue、tag 或 content 节点
+当作独立的事实来源。
+
 | 结构 | 作用 |
 | ---- | ---- |
 | `Document` | 从一条 `memory.Entry` 派生的索引输入，包含文本、元数据、生成的 cues 和 tags。 |
