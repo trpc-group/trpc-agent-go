@@ -572,6 +572,7 @@ func (s *Server) resolveRunOptions(
 		run.sessionID,
 		run.requestID,
 		run.requestSystemPrompt,
+		run.requestLateContextPrompt,
 	)
 	if len(extra) == 0 {
 		return ctx, runOpts, nil
@@ -604,6 +605,7 @@ func (s *Server) runOptions(
 	sessionID string,
 	requestID string,
 	requestSystemPrompt string,
+	requestLateContextPrompt string,
 ) []agent.RunOption {
 	runOpts := make([]agent.RunOption, 0, 1)
 	if requestID != "" {
@@ -618,6 +620,14 @@ func (s *Server) runOptions(
 		runOpts = append(
 			runOpts,
 			agent.WithInjectedContextMessages(messages),
+		)
+	}
+	if msg := requestLateContextPromptMessage(
+		requestLateContextPrompt,
+	); msg != nil {
+		runOpts = append(
+			runOpts,
+			agent.WithLateContextMessages([]model.Message{*msg}),
 		)
 	}
 	return runOpts

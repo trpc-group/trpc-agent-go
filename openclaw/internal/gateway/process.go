@@ -25,14 +25,15 @@ import (
 )
 
 type preparedMessageRun struct {
-	userID              string
-	sessionID           string
-	requestID           string
-	requestSystemPrompt string
-	inbound             InboundMessage
-	userMsg             model.Message
-	streamOptions       *gwproto.MessageStreamOptions
-	extensions          map[string]json.RawMessage
+	userID                   string
+	sessionID                string
+	requestID                string
+	requestSystemPrompt      string
+	requestLateContextPrompt string
+	inbound                  InboundMessage
+	userMsg                  model.Message
+	streamOptions            *gwproto.MessageStreamOptions
+	extensions               map[string]json.RawMessage
 }
 
 // ProcessMessage processes a gateway message request without an HTTP hop.
@@ -271,14 +272,15 @@ func (s *Server) prepareMessageRun(
 	}
 
 	return preparedMessageRun{
-		userID:              userID,
-		sessionID:           sessionID,
-		requestID:           strings.TrimSpace(req.RequestID),
-		requestSystemPrompt: strings.TrimSpace(req.RequestSystemPrompt),
-		inbound:             msg,
-		userMsg:             userMsg,
-		streamOptions:       cloneStreamOptions(opts),
-		extensions:          cloneExtensions(req.Extensions),
+		userID:                   userID,
+		sessionID:                sessionID,
+		requestID:                strings.TrimSpace(req.RequestID),
+		requestSystemPrompt:      strings.TrimSpace(req.RequestSystemPrompt),
+		requestLateContextPrompt: strings.TrimSpace(req.RequestLateContextPrompt),
+		inbound:                  msg,
+		userMsg:                  userMsg,
+		streamOptions:            cloneStreamOptions(opts),
+		extensions:               cloneExtensions(req.Extensions),
 	}, nil, http.StatusOK
 }
 
