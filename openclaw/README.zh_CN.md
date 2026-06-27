@@ -673,8 +673,11 @@ go run ./cmd/openclaw \
 export OPENAI_HEADERS="X-Example-User=alice X-Example-Agent=openclaw"
 ```
 
-`OPENAI_HEADERS` 适合不含空格的简单值。如果 header 值包含空格，
-例如 bearer token，请使用 `model.headers`。
+如果 header 值包含空格或逗号，请加引号：
+
+```bash
+export OPENAI_HEADERS='X-Example-User=alice Authorization="Bearer token"'
+```
 
 也可以写在 YAML 里：
 

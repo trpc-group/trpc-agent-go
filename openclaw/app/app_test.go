@@ -3820,14 +3820,17 @@ func TestNewModel_OpenAIHeadersFromConfigAndEnv(t *testing.T) {
 func TestResolveOpenAIHeaders_EnvOnlyAndConfigOnly(t *testing.T) {
 	t.Setenv(
 		openAIHeadersEnvName,
-		"X-One=1, X-Two:2\nX-Three=3",
+		`X-One=1, X-Two:2
+X-Three=3 X-Spaced="Bearer token value" X-Comma='a, b'`,
 	)
 	got, err := resolveOpenAIHeaders(nil)
 	require.NoError(t, err)
 	require.Equal(t, map[string]string{
-		"X-One":   "1",
-		"X-Two":   "2",
-		"X-Three": "3",
+		"X-Comma":  "a, b",
+		"X-One":    "1",
+		"X-Spaced": "Bearer token value",
+		"X-Three":  "3",
+		"X-Two":    "2",
 	}, got)
 
 	t.Setenv(openAIHeadersEnvName, "")
@@ -3856,6 +3859,24 @@ func TestParseHeaderPairs_RejectsEmptyKeyOrValue(t *testing.T) {
 
 	_, err = parseHeaderPairs("X-Token=Bearer abc")
 	require.ErrorContains(t, err, "invalid OPENAI_HEADERS entry")
+}
+
+func TestParseHeaderPairs_QuotedValues(t *testing.T) {
+	got, err := parseHeaderPairs(
+		`Authorization="Bearer abc" X-List='a, b' ` +
+			`X-Escaped="quote \"ok\""`,
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{
+		"Authorization": "Bearer abc",
+		"X-Escaped":     `quote "ok"`,
+		"X-List":        "a, b",
+	}, got)
+}
+
+func TestParseHeaderPairs_RejectsUnterminatedQuote(t *testing.T) {
+	_, err := parseHeaderPairs(`Authorization="Bearer abc`)
+	require.ErrorContains(t, err, "unterminated")
 }
 
 func TestNewModel_OpenAIHeadersRejectsInvalidEnv(t *testing.T) {

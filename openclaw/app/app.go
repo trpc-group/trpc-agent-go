@@ -33,6 +33,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
@@ -3524,15 +3525,10 @@ func parseHeaderPairs(raw string) (map[string]string, error) {
 	if raw == "" {
 		return nil, nil
 	}
-	replacer := strings.NewReplacer(
-		",",
-		" ",
-		"\n",
-		" ",
-		"\r",
-		" ",
-	)
-	fields := strings.Fields(replacer.Replace(raw))
+	fields, err := splitHeaderFields(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", openAIHeadersEnvName, err)
+	}
 	headers := make(map[string]string, len(fields))
 	for _, field := range fields {
 		key, value, ok := strings.Cut(field, "=")
@@ -3558,6 +3554,56 @@ func parseHeaderPairs(raw string) (map[string]string, error) {
 		headers[key] = value
 	}
 	return headers, nil
+}
+
+func splitHeaderFields(raw string) ([]string, error) {
+	var fields []string
+	var field strings.Builder
+	var quote rune
+	escaped := false
+	flush := func() {
+		if s := strings.TrimSpace(field.String()); s != "" {
+			fields = append(fields, s)
+		}
+		field.Reset()
+	}
+
+	for _, r := range raw {
+		if escaped {
+			field.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			if quote == '"' && r == '\\' {
+				escaped = true
+				continue
+			}
+			if r == quote {
+				quote = 0
+				continue
+			}
+			field.WriteRune(r)
+			continue
+		}
+
+		switch {
+		case r == '"' || r == '\'':
+			quote = r
+		case r == ',' || unicode.IsSpace(r):
+			flush()
+		default:
+			field.WriteRune(r)
+		}
+	}
+	if escaped {
+		return nil, errors.New("unterminated escape sequence")
+	}
+	if quote != 0 {
+		return nil, fmt.Errorf("unterminated %q quote", string(quote))
+	}
+	flush()
+	return fields, nil
 }
 
 func parseOpenAIVariant(
