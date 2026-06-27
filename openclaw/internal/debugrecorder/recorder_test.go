@@ -1113,13 +1113,14 @@ func TestSummarizeRequest_NilTraceDoesNotPanic(t *testing.T) {
 	require.Empty(t, summary.ContentParts[0].File.Data.Ref)
 }
 
-func TestSummarizeRequest_StoresRequestSystemPrompt(t *testing.T) {
+func TestSummarizeRequest_StoresRequestPrompts(t *testing.T) {
 	t.Parallel()
 
 	req := gwproto.MessageRequest{
-		Channel:             "gateway",
-		Text:                "hello",
-		RequestSystemPrompt: "Use the active persona for tone.",
+		Channel:                  "gateway",
+		Text:                     "hello",
+		RequestSystemPrompt:      "Use the active persona for tone.",
+		RequestLateContextPrompt: "Current request environment.",
 	}
 
 	summary, err := SummarizeRequest(nil, req)
@@ -1129,6 +1130,11 @@ func TestSummarizeRequest_StoresRequestSystemPrompt(t *testing.T) {
 		t,
 		"Use the active persona for tone.",
 		summary.RequestSystemPrompt,
+	)
+	require.Equal(
+		t,
+		"Current request environment.",
+		summary.RequestLateContextPrompt,
 	)
 }
 
