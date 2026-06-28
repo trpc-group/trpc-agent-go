@@ -387,6 +387,56 @@ func TestDDGTool_SERPHTTPFallbackForPlainHTTPOnHTTPS(t *testing.T) {
 	require.Contains(t, result.Summary, "http fallback from https")
 }
 
+func TestDDGTool_APIFallsBackToSERPOnPlainHTTPMismatch(t *testing.T) {
+	t.Parallel()
+
+	apiServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"RelatedTopics":[]}`))
+		},
+	))
+	defer apiServer.Close()
+
+	userAgent := make(chan string, 1)
+	serpServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA paper authors", r.URL.Query().Get("q"))
+			userAgent <- r.UserAgent()
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a"
+     href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpaper">Paper result</a>
+  <a class="result__snippet">Author information snippet.</a>
+</body></html>`))
+		},
+	))
+	defer serpServer.Close()
+
+	apiURL := "https://" + strings.TrimPrefix(apiServer.URL, "http://")
+	ddgTool := &ddgTool{
+		client: client.New(
+			apiURL,
+			defaultUserAgent,
+			apiServer.Client(),
+		),
+		httpClient: serpServer.Client(),
+		baseURL:    serpServer.URL,
+		backend:    backendAPI,
+		userAgent:  defaultUserAgent,
+	}
+
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA paper authors"},
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Contains(t, result.Results[0].Title, "Paper result")
+	require.Contains(t, result.Summary, "fallback from api")
+	require.Equal(t, defaultSERPUserAgent, <-userAgent)
+}
+
 func TestDDGTool_SERPFallbackFailureAddsContext(t *testing.T) {
 	t.Parallel()
 

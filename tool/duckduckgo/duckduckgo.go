@@ -242,7 +242,9 @@ func duckDuckGoDescription(backend string) string {
 			"NOT suitable for: real-time data (current weather, live " +
 			"stock prices, latest news), recent events, or " +
 			"time-sensitive information. Returns structured results " +
-			"with abstracts, definitions, and related topics."
+			"with abstracts, definitions, and related topics. Falls " +
+			"back to DuckDuckGo HTML/Lite result pages when the API " +
+			"transport is incompatible with the current network."
 	}
 }
 
@@ -283,7 +285,7 @@ func (t *ddgTool) search(ctx context.Context, req searchRequest) (searchResponse
 
 	switch t.backend {
 	case "", backendAPI:
-		return t.searchAPI(req)
+		return t.searchAPIWithSERPFallback(ctx, req)
 	case backendHTML, backendLite:
 		return t.searchSERPWithFallback(ctx, req)
 	default:
@@ -293,6 +295,43 @@ func (t *ddgTool) search(ctx context.Context, req searchRequest) (searchResponse
 			Summary: fmt.Sprintf("Error: unsupported backend %q", t.backend),
 		}, fmt.Errorf("unsupported backend %q", t.backend)
 	}
+}
+
+func (t *ddgTool) searchAPIWithSERPFallback(
+	ctx context.Context,
+	req searchRequest,
+) (searchResponse, error) {
+	result, err := t.searchAPI(req)
+	if err == nil || ctx.Err() != nil || !shouldRetrySERPWithHTTP(err) {
+		return result, err
+	}
+	serpTool := *t
+	if strings.TrimSpace(serpTool.userAgent) == "" ||
+		serpTool.userAgent == defaultUserAgent {
+		serpTool.userAgent = defaultSERPUserAgent
+	}
+	fallback, fallbackErr := serpTool.searchSERPWithFallbackForBackend(
+		ctx,
+		req,
+		backendHTML,
+		apiFallbackSERPBaseURL(t.baseURL),
+	)
+	if fallbackErr == nil {
+		if strings.TrimSpace(fallback.Summary) != "" {
+			fallback.Summary += " (fallback from api)"
+		}
+		return fallback, nil
+	}
+	result.Summary = fmt.Sprintf(
+		"%s; fallback html failed: %v",
+		result.Summary,
+		fallbackErr,
+	)
+	return result, fmt.Errorf(
+		"%w; fallback html failed: %w",
+		err,
+		fallbackErr,
+	)
 }
 
 func (t *ddgTool) searchAPI(req searchRequest) (searchResponse, error) {
