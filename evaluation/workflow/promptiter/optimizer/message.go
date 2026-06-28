@@ -26,20 +26,31 @@ type MessageBuilder func(ctx context.Context, request *Request) (*model.Message,
 const defaultMessageTemplateText = `Optimize one PromptIter surface from the provided current value and aggregated gradients.
 
 You will receive one optimization request for a single surface.
+{{ if isToolSurface .Surface.Type }}
+Return exactly one JSON object with Description and Reason fields.
+{{ else }}
 Return exactly one JSON object with Value and Reason fields.
+{{ end }}
 
 Requirements:
 - Keep the response as raw JSON only.
 - Do not wrap the response in markdown code fences.
+{{ if isToolSurface .Surface.Type }}
+- Return only Description and Reason fields. The caller will attach the target surface identity.
+- Description is the replacement description for the current tool.
+- Only change the tool description.
+- Produce one replacement description and one concise reason.
+{{ else }}
 - Return only Value and Reason fields. The caller will attach the target surface identity.
 - The patch value must match the request surface type.
+- Produce one replacement value and one concise reason.
+{{ end }}
 - Prefer the smallest high-confidence change that preserves working parts of the current value.
 - When the current value is mostly correct, prefer removing unsupported or speculative detail before adding new detail.
 - Resolve repeated or consistent gradients first.
 - Avoid broad rewrites unless the gradients indicate multiple independent failures.
 - Do not trade factual precision for stylistic vividness.
 - Add detail only when it is clearly supported by the request and directly required by the gradients.
-- Produce one replacement value and one concise reason.
 
 Request JSON:
 {{ toPrettyJSON . }}
@@ -47,7 +58,8 @@ Request JSON:
 
 func defaultMessageBuilder() MessageBuilder {
 	tmpl, err := template.New("optimizer_default_message").Funcs(template.FuncMap{
-		"toPrettyJSON": toPrettyJSON,
+		"isToolSurface": isToolSurface,
+		"toPrettyJSON":  toPrettyJSON,
 	}).Parse(defaultMessageTemplateText)
 	if err != nil {
 		return func(ctx context.Context, request *Request) (*model.Message, error) {
@@ -100,6 +112,10 @@ func newPromptData(request *Request) promptData {
 		}
 	}
 	return data
+}
+
+func isToolSurface(surfaceType astructure.SurfaceType) bool {
+	return surfaceType == astructure.SurfaceTypeTool
 }
 
 // toPrettyJSON renders one value as indented JSON for prompts.
