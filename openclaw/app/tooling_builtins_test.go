@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -391,6 +392,53 @@ func TestNewFileToolSet_EnableReadCanDisable(t *testing.T) {
 	require.NotContains(t, names, "read_file")
 }
 
+func TestNewFileToolSet_RuntimeReadDirsDefault(t *testing.T) {
+	dir := t.TempDir()
+	tmpFile := filepath.Join(t.TempDir(), "derived.txt")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("derived"), 0o644))
+
+	cfg := yamlNode(t, "base_dir: "+dir+"\n")
+	ts, err := newFileToolSet(
+		registry.ToolSetProviderDeps{StateDir: t.TempDir()},
+		registry.PluginSpec{Name: "fs", Config: cfg},
+	)
+	require.NoError(t, err)
+	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
+
+	raw, err := readFile.Call(
+		context.Background(),
+		[]byte(`{"file_name":`+strconv.Quote(tmpFile)+`}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"contents":"derived"`)
+}
+
+func TestNewFileToolSet_RuntimeReadDirsCanDisable(t *testing.T) {
+	dir := t.TempDir()
+	tmpFile := filepath.Join(t.TempDir(), "derived.txt")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("derived"), 0o644))
+
+	cfg := yamlNode(
+		t,
+		"base_dir: "+dir+"\nruntime_read_dirs: false\n",
+	)
+	ts, err := newFileToolSet(
+		registry.ToolSetProviderDeps{StateDir: t.TempDir()},
+		registry.PluginSpec{Name: "fs", Config: cfg},
+	)
+	require.NoError(t, err)
+	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
+
+	_, err = readFile.Call(
+		context.Background(),
+		[]byte(`{"file_name":`+strconv.Quote(tmpFile)+`}`),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "outside configured read-only roots")
+}
+
 func TestOverrideToolSetName_NoOpWhenEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -677,6 +725,24 @@ func toolNames(tools []tool.Tool) map[string]struct{} {
 		out[t.Declaration().Name] = struct{}{}
 	}
 	return out
+}
+
+func findCallableTool(
+	t *testing.T,
+	tools []tool.Tool,
+	name string,
+) tool.CallableTool {
+	t.Helper()
+	for _, tl := range tools {
+		if tl.Declaration().Name != name {
+			continue
+		}
+		callable, ok := tl.(tool.CallableTool)
+		require.True(t, ok)
+		return callable
+	}
+	t.Fatalf("tool %q not found", name)
+	return nil
 }
 
 func indentYAML(body string, spaces int) string {

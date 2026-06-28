@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -345,6 +346,45 @@ func TestDDGTool_SERPFallbackOnChallenge(t *testing.T) {
 	require.Equal(t, "https://example.org/gaia", result.Results[0].URL)
 	require.Contains(t, result.Summary, "lite")
 	require.Contains(t, result.Summary, "fallback from html")
+}
+
+func TestDDGTool_SERPHTTPFallbackForPlainHTTPOnHTTPS(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+			require.Equal(t, "/html/", r.URL.Path)
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a"
+     href="/l/?uddg=https%3A%2F%2Fexample.org%2Fplain-http">Plain HTTP fallback</a>
+  <a class="result__snippet">Recovered from an HTTPS transport mismatch.</a>
+</body></html>`))
+		},
+	))
+	defer server.Close()
+
+	ddgTool := &ddgTool{
+		httpClient: server.Client(),
+		baseURL: strings.Replace(
+			server.URL+"/html/",
+			"http://",
+			"https://",
+			1,
+		),
+		backend:   backendHTML,
+		userAgent: "test-agent/1.0",
+	}
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA benchmark"},
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Equal(t, "Plain HTTP fallback", result.Results[0].Title)
+	require.Equal(t, "https://example.org/plain-http", result.Results[0].URL)
+	require.Contains(t, result.Summary, "http fallback from https")
 }
 
 func TestDDGTool_SERPFallbackFailureAddsContext(t *testing.T) {

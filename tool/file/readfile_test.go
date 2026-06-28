@@ -49,6 +49,34 @@ func TestFileTool_ReadFile(t *testing.T) {
 	assert.Equal(t, testContent, rsp.Contents)
 }
 
+func TestFileTool_ReadFile_AbsolutePathUnderExtraReadRoot(t *testing.T) {
+	base := t.TempDir()
+	extra := t.TempDir()
+	fileName := filepath.Join(extra, "derived.json")
+	assert.NoError(t, os.WriteFile(fileName, []byte(`{"ok":true}`), 0o644))
+
+	toolSet, err := NewToolSet(
+		WithBaseDir(base),
+		WithReadOnlyDirs(extra),
+	)
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	rsp, err := fileToolSet.readFile(
+		context.Background(),
+		&readFileRequest{FileName: fileName},
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, `{"ok":true}`, rsp.Contents)
+
+	_, err = fileToolSet.readFile(
+		context.Background(),
+		&readFileRequest{FileName: filepath.Join(t.TempDir(), "x.txt")},
+	)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "outside configured read-only roots")
+}
+
 func TestFileTool_ReadFile_NilRequest(t *testing.T) {
 	tempDir := t.TempDir()
 	toolSet, err := NewToolSet(WithBaseDir(tempDir))

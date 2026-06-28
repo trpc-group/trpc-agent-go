@@ -27,7 +27,12 @@ func (t *ddgTool) searchSERPWithFallback(
 	ctx context.Context,
 	req searchRequest,
 ) (searchResponse, error) {
-	result, err := t.searchSERP(ctx, req, t.backend, t.baseURL)
+	result, err := t.searchSERPWithSchemeFallback(
+		ctx,
+		req,
+		t.backend,
+		t.baseURL,
+	)
 	if err == nil {
 		return result, nil
 	}
@@ -39,7 +44,7 @@ func (t *ddgTool) searchSERPWithFallback(
 	if fallbackBackend == "" || fallbackURL == "" {
 		return result, err
 	}
-	fallback, fallbackErr := t.searchSERP(
+	fallback, fallbackErr := t.searchSERPWithSchemeFallback(
 		ctx,
 		req,
 		fallbackBackend,
@@ -64,6 +69,39 @@ func (t *ddgTool) searchSERPWithFallback(
 		"%w; fallback %s failed: %w",
 		err,
 		fallbackBackend,
+		fallbackErr,
+	)
+}
+
+func (t *ddgTool) searchSERPWithSchemeFallback(
+	ctx context.Context,
+	req searchRequest,
+	backend string,
+	baseURL string,
+) (searchResponse, error) {
+	result, err := t.searchSERP(ctx, req, backend, baseURL)
+	if err == nil || ctx.Err() != nil || !shouldRetrySERPWithHTTP(err) {
+		return result, err
+	}
+	httpURL := httpFallbackSERPBaseURL(baseURL)
+	if httpURL == "" {
+		return result, err
+	}
+	fallback, fallbackErr := t.searchSERP(ctx, req, backend, httpURL)
+	if fallbackErr == nil {
+		if strings.TrimSpace(fallback.Summary) != "" {
+			fallback.Summary += " (http fallback from https)"
+		}
+		return fallback, nil
+	}
+	result.Summary = fmt.Sprintf(
+		"%s; http fallback failed: %v",
+		result.Summary,
+		fallbackErr,
+	)
+	return result, fmt.Errorf(
+		"%w; http fallback failed: %w",
+		err,
 		fallbackErr,
 	)
 }
@@ -190,6 +228,29 @@ func fallbackSERPBaseURL(backend string, baseURL string) string {
 		return u.String()
 	}
 	return ""
+}
+
+func httpFallbackSERPBaseURL(baseURL string) string {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || !strings.EqualFold(u.Scheme, "https") {
+		return ""
+	}
+	u.Scheme = "http"
+	return u.String()
+}
+
+func shouldRetrySERPWithHTTP(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(
+		msg,
+		"server gave http response to https client",
+	) || strings.Contains(
+		msg,
+		"first record does not look like a tls handshake",
+	) || strings.Contains(msg, "wrong version number")
 }
 
 func isDuckDuckGoChallenge(body []byte) bool {

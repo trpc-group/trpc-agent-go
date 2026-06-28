@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -336,10 +337,12 @@ func buildMCPToolFilter(cfg *mcpFilterConfig) (tool.FilterFunc, error) {
 }
 
 type fileToolSetConfig struct {
-	BaseDir       string `yaml:"base_dir,omitempty"`
-	ReadOnly      *bool  `yaml:"read_only,omitempty"`
-	EnableSave    *bool  `yaml:"enable_save,omitempty"`
-	EnableReplace *bool  `yaml:"enable_replace,omitempty"`
+	BaseDir         string   `yaml:"base_dir,omitempty"`
+	ReadOnlyDirs    []string `yaml:"read_only_dirs,omitempty"`
+	RuntimeReadDirs *bool    `yaml:"runtime_read_dirs,omitempty"`
+	ReadOnly        *bool    `yaml:"read_only,omitempty"`
+	EnableSave      *bool    `yaml:"enable_save,omitempty"`
+	EnableReplace   *bool    `yaml:"enable_replace,omitempty"`
 
 	EnableRead          *bool `yaml:"enable_read,omitempty"`
 	EnableReadMultiple  *bool `yaml:"enable_read_multiple,omitempty"`
@@ -351,7 +354,7 @@ type fileToolSetConfig struct {
 }
 
 func newFileToolSet(
-	_ registry.ToolSetProviderDeps,
+	deps registry.ToolSetProviderDeps,
 	spec registry.PluginSpec,
 ) (tool.ToolSet, error) {
 	var cfg fileToolSetConfig
@@ -376,6 +379,23 @@ func newFileToolSet(
 	opts := make([]file.Option, 0, 10)
 	if baseDir := strings.TrimSpace(cfg.BaseDir); baseDir != "" {
 		opts = append(opts, file.WithBaseDir(baseDir))
+	}
+	readOnlyDirs := append(
+		[]string{},
+		cfg.ReadOnlyDirs...,
+	)
+	runtimeReadDirs := true
+	if cfg.RuntimeReadDirs != nil {
+		runtimeReadDirs = *cfg.RuntimeReadDirs
+	}
+	if runtimeReadDirs {
+		readOnlyDirs = append(
+			readOnlyDirs,
+			defaultFileReadOnlyDirs(deps.StateDir)...,
+		)
+	}
+	if len(readOnlyDirs) > 0 {
+		opts = append(opts, file.WithReadOnlyDirs(readOnlyDirs...))
 	}
 	opts = append(opts, file.WithSaveFileEnabled(saveEnabled))
 	opts = append(opts, file.WithReplaceContentEnabled(replaceEnabled))
@@ -412,6 +432,18 @@ func newFileToolSet(
 	}
 
 	return file.NewToolSet(opts...)
+}
+
+func defaultFileReadOnlyDirs(stateDir string) []string {
+	roots := []string{os.TempDir()}
+	if stateDir := strings.TrimSpace(stateDir); stateDir != "" {
+		roots = append(
+			roots,
+			filepath.Join(stateDir, "runtime", "tmp"),
+			filepath.Join(stateDir, "workspaces", "scratch"),
+		)
+	}
+	return roots
 }
 
 type openAPISpecConfig struct {

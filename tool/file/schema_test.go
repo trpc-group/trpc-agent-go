@@ -36,7 +36,7 @@ func TestFileTool_InputSchemaDescriptions(t *testing.T) {
 			"overwrite": "Whether to replace the file if it already exists",
 		},
 		"read_file": {
-			"file_name":  "Relative file path under base_directory or workspace:// or artifact:// file ref to read; absolute paths are not allowed",
+			"file_name":  "Relative file path under base_directory or workspace:// or artifact:// file ref or an absolute path under a configured read-only root",
 			"start_line": "Optional 1-based start line to begin reading from",
 			"num_lines":  "Optional maximum number of lines to return",
 		},
