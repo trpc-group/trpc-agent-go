@@ -301,7 +301,7 @@ func TestConvertHTMLToMarkdownPrefersMainContent(t *testing.T) {
 		<html>
 		<body>
 			<nav>` + strings.Repeat("Main menu navigation. ", 200) + `</nav>
-			<div id="mw-content-text">
+			<div id="article-body">
 				<h1>Moon</h1>
 				<table class="infobox">
 					<tr><th>Periapsis</th><td>356,400-370,400 km</td></tr>

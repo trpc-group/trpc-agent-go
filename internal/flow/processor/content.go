@@ -531,6 +531,16 @@ func WithContextCompactionSkipRecentFunc(
 	}
 }
 
+// WithContextCompactionSessionLoadToolAvailable controls whether compacted
+// tool-result placeholders may tell the model to recover omitted payloads with
+// session_load. This should be enabled only when session_load is exposed in
+// the model's tool surface for the request.
+func WithContextCompactionSessionLoadToolAvailable(available bool) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.ContextCompactionConfig.SessionLoadToolAvailable = available
+	}
+}
+
 // WithContextCompactionForceCleanToolNames sets tool names whose results should
 // always be compacted to a placeholder while context compaction is enabled.
 func WithContextCompactionForceCleanToolNames(names ...string) ContentOption {
@@ -1289,12 +1299,13 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 	// policy (force-clean/keep) and historical passes must run for scoped modes
 	// such as request/invocation, not only when TimelineFilterAll is selected.
 	var stats ContextCompactionStats
+	compactionCfg := p.contextCompactionConfigForInvocation(inv)
 	resultEvents, stats = compactIncrementEvents(
 		context.Background(),
 		resultEvents,
 		inv.RunOptions.RequestID,
 		inv.InvocationID,
-		p.ContextCompactionConfig,
+		compactionCfg,
 	)
 	if stats.ToolResultsCompacted > 0 {
 		log.DebugfContext(
@@ -1499,7 +1510,9 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 		return event.Event{}, false
 	}
 
-	cfg := normalizeContextCompactionConfig(p.ContextCompactionConfig)
+	cfg := normalizeContextCompactionConfig(
+		p.contextCompactionConfigForInvocation(inv),
+	)
 	var compactedChoices []model.Choice
 	for _, choice := range evt.Choices {
 		msg, ok := compactedCurrentInvocationMessage(
@@ -1552,7 +1565,7 @@ func compactedCurrentInvocationMessage(
 		return model.Message{
 			Role: msg.Role,
 			Content: recoverableToolResultPlaceholder(
-				toolResultRecoveryRefForMessage(
+				cfg.recoveryRefForMessage(
 					evt,
 					msg,
 					"current_invocation_summary",
@@ -1564,6 +1577,24 @@ func compactedCurrentInvocationMessage(
 	default:
 		return model.Message{}, false
 	}
+}
+
+func (p *ContentRequestProcessor) contextCompactionConfigForInvocation(
+	inv *agent.Invocation,
+) ContextCompactionConfig {
+	cfg := p.ContextCompactionConfig
+	if cfg.SessionLoadToolAvailable && !sessionLoadToolSupported(inv) {
+		cfg.SessionLoadToolAvailable = false
+	}
+	return cfg
+}
+
+func sessionLoadToolSupported(inv *agent.Invocation) bool {
+	if inv == nil || inv.Session == nil || inv.SessionService == nil {
+		return false
+	}
+	_, ok := inv.SessionService.(session.WindowService)
+	return ok
 }
 
 func shouldCompactCurrentInvocationToolResult(

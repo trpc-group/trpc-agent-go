@@ -583,7 +583,8 @@ func TestSelectDynamicTools_ExcludesSelfAndTransfer(t *testing.T) {
 		transfer.TransferToolName, // transfer must be excluded
 	)
 	// No selection => all candidates minus excluded.
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, dynamicSpec{})
+	selected, warnings, err := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, dynamicSpec{})
+	require.NoError(t, err)
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"file_read", "file_write"}, selectedNames(selected))
 }
@@ -592,7 +593,8 @@ func TestSelectDynamicTools_OnlyUserTools(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("file_read", "framework_tool")
 	userTools := map[string]bool{"file_read": true} // framework_tool not a user tool
-	selected, warnings := at.selectDynamicTools(maxTools, userTools, nil, nil, dynamicSpec{})
+	selected, warnings, err := at.selectDynamicTools(maxTools, userTools, nil, nil, dynamicSpec{})
+	require.NoError(t, err)
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"file_read"}, selectedNames(selected))
 }
@@ -601,7 +603,8 @@ func TestSelectDynamicTools_SubsetSelection(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("a", "b", "c")
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"a", "c"}}
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	selected, warnings, err := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	require.NoError(t, err)
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"a", "c"}, selectedNames(selected))
 }
@@ -618,14 +621,16 @@ func TestSelectDynamicTools_ResolvesAliases(t *testing.T) {
 		toolsProvided: true,
 		tools:         []string{"browser-runtime", "browser", "web_fetch"},
 	}
-	selected, warnings := at.selectDynamicTools(
+	selected, warnings, err := at.selectDynamicTools(
 		maxTools, toolNameSet(maxTools), nil, nil, spec)
+	require.NoError(t, err)
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"browser", "web_fetch"}, selectedNames(selected))
 
 	spec = dynamicSpec{toolsProvided: true, tools: []string{"runtime"}}
-	selected, warnings = at.selectDynamicTools(
+	selected, warnings, err = at.selectDynamicTools(
 		maxTools, toolNameSet(maxTools), nil, nil, spec)
+	require.NoError(t, err)
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"browser"}, selectedNames(selected))
 }
@@ -634,7 +639,8 @@ func TestSelectDynamicTools_UnknownRequestedToolWarns(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("a", "b")
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"a", "nope"}}
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	selected, warnings, err := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	require.NoError(t, err)
 	require.Equal(t, []string{"a"}, selectedNames(selected))
 	require.Len(t, warnings, 1)
 	require.Contains(t, warnings[0], "nope")
@@ -652,16 +658,18 @@ func TestSelectDynamicTools_UnavailableRequestedToolWarnsWithReason(t *testing.T
 	}
 
 	// No selection: unavailable tools are simply not mounted and do not add noise.
-	selected, warnings := at.selectDynamicTools(
+	selected, warnings, err := at.selectDynamicTools(
 		maxTools, toolNameSet(maxTools), nil, unavailable, dynamicSpec{})
+	require.NoError(t, err)
 	require.Equal(t, []string{"available"}, selectedNames(selected))
 	require.Empty(t, warnings)
 
 	// Explicit selection: the parent gets an actionable reason instead of a
 	// generic "not available" warning.
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"available", "secret"}}
-	selected, warnings = at.selectDynamicTools(
+	selected, warnings, err = at.selectDynamicTools(
 		maxTools, toolNameSet(maxTools), nil, unavailable, spec)
+	require.NoError(t, err)
 	require.Equal(t, []string{"available"}, selectedNames(selected))
 	require.Len(t, warnings, 1)
 	require.Contains(t, warnings[0], "secret")
@@ -691,10 +699,12 @@ func TestSelectDynamicTools_AllUnknownWarnsNoUserTools(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("a", "b")
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"x", "y"}}
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	selected, warnings, err := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
 	require.Empty(t, selected)
 	require.NotEmpty(t, warnings)
-	require.Contains(t, warnings[len(warnings)-1], "no user tools")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "none of the requested tools")
+	require.Contains(t, err.Error(), "a, b")
 }
 
 // TestSelectDynamicTools_ExcludesExternalTools verifies that caller-executed
@@ -707,17 +717,19 @@ func TestSelectDynamicTools_ExcludesExternalTools(t *testing.T) {
 	externalNames := map[string]bool{"ext_tool": true}
 
 	// No selection: external tool must not appear among the candidates.
-	selected, warnings := at.selectDynamicTools(
+	selected, warnings, err := at.selectDynamicTools(
 		maxTools, toolNameSet(maxTools), externalNames, nil, dynamicSpec{})
+	require.NoError(t, err)
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"tool_a"}, selectedNames(selected))
 
 	// Explicit selection of an external tool is rejected as unavailable.
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"ext_tool"}}
-	selected, warnings = at.selectDynamicTools(
+	selected, warnings, err = at.selectDynamicTools(
 		maxTools, toolNameSet(maxTools), externalNames, nil, spec)
 	require.Empty(t, selected)
 	require.NotEmpty(t, warnings)
+	require.Error(t, err)
 }
 
 // TestSelectDynamicTools_EmptyArrayAllowsNoneWithoutWarning verifies that an
@@ -727,7 +739,8 @@ func TestSelectDynamicTools_EmptyArrayAllowsNoneWithoutWarning(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("a", "b")
 	spec := dynamicSpec{toolsProvided: true, tools: nil} // provided, but empty
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	selected, warnings, err := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	require.NoError(t, err)
 	require.Empty(t, selected)
 	require.Empty(t, warnings, "an explicit empty selection must not warn")
 }
@@ -1017,6 +1030,31 @@ func TestNewDynamicTool_Integration_UnavailableReasonReturnedToParent(t *testing
 	require.Len(t, seen, 1, "child should have run exactly once")
 	require.Equal(t, []string{"available"}, seen[0],
 		"child must not see known-but-unavailable tools")
+}
+
+func TestNewDynamicTool_Integration_AllRequestedToolsUnavailableErrors(t *testing.T) {
+	recModel := &dynRecordingModel{name: "rec", response: "child-done"}
+	main := llmagent.New(
+		"main",
+		llmagent.WithModel(recModel),
+		llmagent.WithTools([]tool.Tool{newDynTestTool("tool_a")}),
+	)
+	at := NewDynamicTool()
+
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(main),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("main"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	_, err := at.Call(ctx, []byte(
+		`{"request":"use unavailable tool","tools":["web_search"]}`,
+	))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "none of the requested tools")
+	require.Empty(t, recModel.snapshot(), "child must not run without requested tools")
 }
 
 // TestNewDynamicTool_Integration_WithTemplateAgent verifies that a distinctly

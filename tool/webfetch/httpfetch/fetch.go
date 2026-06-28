@@ -404,27 +404,70 @@ func markdownSourceHTML(raw []byte) string {
 }
 
 func preferredContentNode(root *html.Node) *html.Node {
-	for _, id := range []string{
-		"mw-content-text",
-		"bodyContent",
-		"main-content",
-		"content",
-	} {
-		if node := findHTMLNode(root, func(n *html.Node) bool {
-			return htmlAttr(n, "id") == id
-		}); node != nil {
-			return node
-		}
-	}
 	if node := findHTMLNode(root, func(n *html.Node) bool {
 		return n.Type == html.ElementNode && htmlAttr(n, "role") == "main"
 	}); node != nil {
 		return node
 	}
-	return findHTMLNode(root, func(n *html.Node) bool {
+	if node := findHTMLNode(root, func(n *html.Node) bool {
 		return n.Type == html.ElementNode &&
 			(n.Data == "main" || n.Data == "article")
+	}); node != nil {
+		return node
+	}
+	return bestContentNode(root)
+}
+
+func bestContentNode(root *html.Node) *html.Node {
+	var best *html.Node
+	bestScore := 0
+	walkHTML(root, func(n *html.Node) {
+		if !isContentCandidateNode(n) {
+			return
+		}
+		score := visibleTextLen(n)
+		if score > bestScore {
+			best = n
+			bestScore = score
+		}
 	})
+	return best
+}
+
+func isContentCandidateNode(n *html.Node) bool {
+	if n == nil || n.Type != html.ElementNode || isNoisyHTMLNode(n) {
+		return false
+	}
+	switch strings.ToLower(n.Data) {
+	case "main", "article", "section", "div":
+		return true
+	default:
+		return false
+	}
+}
+
+func visibleTextLen(n *html.Node) int {
+	if n == nil || isNoisyHTMLNode(n) {
+		return 0
+	}
+	if n.Type == html.TextNode {
+		return len(strings.TrimSpace(n.Data))
+	}
+	total := 0
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		total += visibleTextLen(child)
+	}
+	return total
+}
+
+func walkHTML(root *html.Node, visit func(*html.Node)) {
+	if root == nil {
+		return
+	}
+	visit(root)
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		walkHTML(child, visit)
+	}
 }
 
 func findHTMLNode(

@@ -354,7 +354,11 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 	actionKey := strings.ToLower(action)
 	if actionKey == actionEvaluate {
-		in = normalizeEvaluateActionInput(in)
+		var err error
+		in, err = normalizeEvaluateActionInput(in)
+		if err != nil {
+			return nil, err
+		}
 		actionKey = strings.ToLower(actionAct)
 	}
 	if err := validateTargetSelection(in); err != nil {
@@ -1937,18 +1941,35 @@ func defaultActKind(kind string, fn string) string {
 	return kind
 }
 
-func normalizeEvaluateActionInput(in input) input {
+func normalizeEvaluateActionInput(in input) (input, error) {
 	if in.Request != nil {
 		req := *in.Request
+		if err := validateEvaluateActionKind(req.Kind); err != nil {
+			return input{}, err
+		}
 		if strings.TrimSpace(req.Fn) == "" {
 			req.Fn = in.Fn
 		}
-		req.Kind = defaultActKind(req.Kind, req.Fn)
+		req.Kind = actEvaluate
 		in.Request = &req
-		return in
+		return in, nil
 	}
-	in.Kind = defaultActKind(in.Kind, in.Fn)
-	return in
+	if err := validateEvaluateActionKind(in.Kind); err != nil {
+		return input{}, err
+	}
+	in.Kind = actEvaluate
+	return in, nil
+}
+
+func validateEvaluateActionKind(kind string) error {
+	if strings.TrimSpace(kind) == "" ||
+		strings.EqualFold(strings.TrimSpace(kind), actEvaluate) {
+		return nil
+	}
+	return fmt.Errorf(
+		"browser evaluate action does not accept act kind %q",
+		kind,
+	)
 }
 
 func (t *Tool) executeAct(

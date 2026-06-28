@@ -1715,6 +1715,62 @@ func TestToolCall_EvaluateActionAlias(t *testing.T) {
 	require.Equal(t, "() => document.title", drv.calls[0].Args["function"])
 }
 
+func TestToolCall_EvaluateActionRejectsConflictingKind(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   map[string]any
+	}{
+		{
+			name: "top-level kind",
+			in: map[string]any{
+				"action": actionEvaluate,
+				"kind":   actClose,
+				"fn":     "() => document.title",
+			},
+		},
+		{
+			name: "nested request kind",
+			in: map[string]any{
+				"action": actionEvaluate,
+				"fn":     "() => document.title",
+				"request": map[string]any{
+					"kind": actClose,
+				},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			drv := &fakeDriver{}
+			tool := newToolWithDrivers(
+				defaultProfileName,
+				true,
+				navigationPolicy{},
+				nil,
+				nil,
+				nil,
+				map[string]ProfileConfig{
+					defaultProfileName: {Name: defaultProfileName},
+				},
+				map[string]driver{
+					defaultProfileName: drv,
+				},
+			)
+
+			_, err := tool.Call(context.Background(), mustJSON(t, tc.in))
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "does not accept act kind")
+			require.Empty(t, drv.calls)
+		})
+	}
+}
+
 func TestToolCall_ScreenshotPassesOptions(t *testing.T) {
 	t.Parallel()
 

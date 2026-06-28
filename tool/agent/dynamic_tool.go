@@ -639,7 +639,10 @@ func (at *Tool) buildDynamicSubInvocation(
 	}
 	parentInv = parentInvocationWithLiveSession(parentInv)
 
-	patch, warnings := at.buildDynamicPatch(ctx, parentInv, spec)
+	patch, warnings, err := at.buildDynamicPatch(ctx, parentInv, spec)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 
 	message := model.NewUserMessage(spec.request)
 	childKey := at.buildDynamicChildFilterKey(parentInv, baseAgent)
@@ -657,7 +660,7 @@ func (at *Tool) buildDynamicPatch(
 	ctx context.Context,
 	parentInv *agent.Invocation,
 	spec dynamicSpec,
-) (agent.SurfacePatch, []string) {
+) (agent.SurfacePatch, []string, error) {
 	var patch agent.SurfacePatch
 	var warnings []string
 
@@ -668,8 +671,11 @@ func (at *Tool) buildDynamicPatch(
 	// Tools: always set so the dynamic tool itself (and transfer_to_agent) are
 	// excluded from the child, preventing runaway recursion.
 	maxTools, userToolNames, externalNames, unavailableTools := at.dynamicMaxToolSurface(ctx, parentInv)
-	selectedTools, toolWarnings := at.selectDynamicTools(
+	selectedTools, toolWarnings, err := at.selectDynamicTools(
 		maxTools, userToolNames, externalNames, unavailableTools, spec)
+	if err != nil {
+		return agent.SurfacePatch{}, nil, err
+	}
 	patch.SetTools(selectedTools)
 	// SetTools only replaces the user tools. The framework re-derives
 	// transfer_to_agent from the base/template agent's own sub-agents, so
@@ -687,7 +693,7 @@ func (at *Tool) buildDynamicPatch(
 	}
 	warnings = append(warnings, skillWarnings...)
 
-	return patch, warnings
+	return patch, warnings, nil
 }
 
 // dynamicMaxToolSurface resolves the maximum tool surface the model may select
@@ -752,7 +758,7 @@ func (at *Tool) selectDynamicTools(
 	externalNames map[string]bool,
 	unavailableTools map[string]UnavailableCapability,
 	spec dynamicSpec,
-) ([]tool.Tool, []string) {
+) ([]tool.Tool, []string, error) {
 	excluded := map[string]bool{at.name: true, transfer.TransferToolName: true}
 	for name := range externalNames {
 		excluded[name] = true
@@ -784,13 +790,13 @@ func (at *Tool) selectDynamicTools(
 	}
 
 	if !at.dynamicCfg.exposeToolSelection || !spec.toolsProvided {
-		return candidates, nil
+		return candidates, nil, nil
 	}
 	// An explicit empty array ("tools": []) is a valid "allow none" selection:
 	// the model deliberately ran a tool-free sub-agent. That is not an error,
 	// so return an empty surface without a warning.
 	if len(spec.tools) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	selected := make([]tool.Tool, 0, len(spec.tools))
@@ -816,10 +822,24 @@ func (at *Tool) selectDynamicTools(
 		selected = append(selected, t)
 	}
 	if len(selected) == 0 {
-		warnings = append(warnings,
-			"none of the requested tools were available; the sub-agent has no user tools")
+		return nil, warnings, fmt.Errorf(
+			"agenttool: none of the requested tools are available for the dynamic sub-agent; "+
+				"omit tools to allow all permitted tools or choose from: %s",
+			strings.Join(availableDynamicToolNames(candidates), ", "),
+		)
 	}
-	return selected, warnings
+	return selected, warnings, nil
+}
+
+func availableDynamicToolNames(tools []tool.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if name := declarationName(t); name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (at *Tool) resolveDynamicToolName(name string) string {
