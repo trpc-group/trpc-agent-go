@@ -166,6 +166,31 @@ func TestWebFetch_UnsupportedType(t *testing.T) {
 	assert.Contains(t, resp.Results[0].Error, "unsupported content type: application/octet-stream")
 }
 
+func TestWebFetch_UnsupportedPDFSuggestsDocumentReader(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		fmt.Fprint(w, `%PDF-1.7`)
+	}))
+	defer ts.Close()
+
+	tool := NewTool()
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp, ok := res.(fetchResponse)
+	require.True(t, ok, "Response should be of type fetchResponse")
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "application/pdf", resp.Results[0].ContentType)
+	assert.Empty(t, resp.Results[0].Content)
+	assert.Contains(
+		t,
+		resp.Results[0].Error,
+		"Download the PDF and use a document-reading tool",
+	)
+}
+
 func TestWebFetch_PerUrlLimit(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")

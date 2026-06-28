@@ -175,7 +175,8 @@ func NewTool(opts ...Option) tool.CallableTool {
 		t.fetch,
 		function.WithName("web_fetch"),
 		function.WithDescription("Fetches and extracts text content from a list of URLs. "+
-			"Supports up to 20 URLs. Useful for summarizing, comparing, or extracting information from web pages."),
+			"Supports up to 20 URLs. Useful for summarizing, comparing, or extracting information from web pages. "+
+			"For PDFs or binary documents, download the file and use a document-reading tool instead."),
 	)
 }
 
@@ -291,7 +292,7 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 	} else if isSupportedTextType(item.ContentType) {
 		content, processErr = readBodyAsString(resp.Body)
 	} else {
-		item.Error = fmt.Sprintf("unsupported content type: %s", item.ContentType)
+		item.Error = unsupportedContentTypeError(item.ContentType)
 		return item
 	}
 
@@ -307,6 +308,23 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 
 	item.Content = content
 	return item
+}
+
+func unsupportedContentTypeError(contentType string) string {
+	contentType = strings.TrimSpace(contentType)
+	if contentType == "" {
+		contentType = "unknown"
+	}
+	msg := fmt.Sprintf("unsupported content type: %s", contentType)
+	switch contentType {
+	case "application/pdf":
+		return msg + "; web_fetch extracts text and HTML pages only. " +
+			"Download the PDF and use a document-reading tool instead."
+	default:
+		return msg + "; web_fetch extracts text and HTML pages only. " +
+			"For binary documents, download the file and use an " +
+			"appropriate document-reading tool instead."
+	}
 }
 
 // truncateString truncates a string to n bytes, ensuring valid UTF-8.
