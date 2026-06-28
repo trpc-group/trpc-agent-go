@@ -24,9 +24,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
+	isurface "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/surface"
+	isurfacepatch "trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/provider"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // EvaluationOptions configures evaluation concurrency behavior.
@@ -162,6 +165,7 @@ func buildEvaluationCallOptions(
 	}
 	options := make([]evaluation.Option, 0, 8)
 	options = append(options, evaluation.WithRunDetailsEnabled(true))
+	runOptions = append(runOptions, withToolSurfaceTracing())
 	options = append(options, evaluation.WithRunOptions(runOptions...))
 	if request.Teacher != nil {
 		options = append(options, evaluation.WithExpectedRunner(request.Teacher))
@@ -214,12 +218,24 @@ func compileProfileRunOptions(
 		surfaceIDs = append(surfaceIDs, surfaceID)
 	}
 	slices.Sort(surfaceIDs)
-	nodePatches := make(map[string]agent.SurfacePatch)
+	nodePatches := make(map[string]isurfacepatch.Patch)
+	nodeToolDeclarations := make(map[string][]tool.Declaration)
 	for _, surfaceID := range surfaceIDs {
 		override := overrideIndex[surfaceID]
 		surface, ok := structure.surfaceIndex[surfaceID]
 		if !ok {
 			return nil, fmt.Errorf("profile override references unknown surface id %q", override.SurfaceID)
+		}
+		if surface.Type == astructure.SurfaceTypeTool {
+			declarations, err := toolDeclarationsForSurfaceOverride(surface, override.Value)
+			if err != nil {
+				return nil, err
+			}
+			nodeToolDeclarations[surface.NodeID] = append(
+				nodeToolDeclarations[surface.NodeID],
+				declarations...,
+			)
+			continue
 		}
 		patch := nodePatches[surface.NodeID]
 		if err := applySurfaceOverrideToPatch(&patch, surface, override.Value); err != nil {
@@ -227,19 +243,24 @@ func compileProfileRunOptions(
 		}
 		nodePatches[surface.NodeID] = patch
 	}
+	for nodeID, declarations := range nodeToolDeclarations {
+		patch := nodePatches[nodeID]
+		patch.SetToolDeclarations(declarations)
+		nodePatches[nodeID] = patch
+	}
 	nodeIDs := make([]string, 0, len(nodePatches))
 	for nodeID := range nodePatches {
 		nodeIDs = append(nodeIDs, nodeID)
 	}
 	slices.Sort(nodeIDs)
 	for _, nodeID := range nodeIDs {
-		runOptions = append(runOptions, agent.WithSurfacePatchForNode(nodeID, nodePatches[nodeID]))
+		runOptions = append(runOptions, withSurfacePatchForNode(nodeID, nodePatches[nodeID]))
 	}
 	return runOptions, nil
 }
 
 func applySurfaceOverrideToPatch(
-	patch *agent.SurfacePatch,
+	patch *isurfacepatch.Patch,
 	surface astructure.Surface,
 	value astructure.SurfaceValue,
 ) error {
@@ -280,6 +301,45 @@ func applySurfaceOverrideToPatch(
 			surface.Type,
 		)
 	}
+}
+
+func withSurfacePatchForNode(nodeID string, patch isurfacepatch.Patch) agent.RunOption {
+	return func(opts *agent.RunOptions) {
+		if opts == nil || nodeID == "" || patch.IsEmpty() {
+			return
+		}
+		opts.CustomAgentConfigs = isurfacepatch.WithPatch(
+			opts.CustomAgentConfigs,
+			nodeID,
+			patch,
+		)
+	}
+}
+
+func withToolSurfaceTracing() agent.RunOption {
+	return func(opts *agent.RunOptions) {
+		if opts == nil {
+			return
+		}
+		opts.CustomAgentConfigs = isurfacepatch.WithToolSurfaceTracing(
+			opts.CustomAgentConfigs,
+		)
+	}
+}
+
+func toolDeclarationsForSurfaceOverride(
+	surface astructure.Surface,
+	value astructure.SurfaceValue,
+) ([]tool.Declaration, error) {
+	value, err := isurface.SanitizePatchValue(surface, value)
+	if err != nil {
+		return nil, fmt.Errorf("surface %q tool value is invalid: %w", surface.SurfaceID, err)
+	}
+	declarations, err := convertToolRefs(value.Tools)
+	if err != nil {
+		return nil, fmt.Errorf("surface %q tool value is invalid: %w", surface.SurfaceID, err)
+	}
+	return declarations, nil
 }
 
 func buildModelInstance(ref *astructure.ModelRef) (model.Model, error) {
@@ -340,6 +400,28 @@ func convertFewShotExamples(
 		converted = append(converted, messages)
 	}
 	return converted, nil
+}
+
+func convertToolRefs(refs []astructure.ToolRef) ([]tool.Declaration, error) {
+	declarations := make([]tool.Declaration, 0, len(refs))
+	seen := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		name := ref.ID
+		if name == "" {
+			return nil, errors.New("tool id is empty")
+		}
+		if _, ok := seen[name]; ok {
+			return nil, fmt.Errorf("duplicate tool id %q", name)
+		}
+		seen[name] = struct{}{}
+		declarations = append(declarations, tool.Declaration{
+			Name:         name,
+			Description:  ref.Description,
+			InputSchema:  ref.InputSchema,
+			OutputSchema: ref.OutputSchema,
+		})
+	}
+	return declarations, nil
 }
 
 func adaptEvaluationSetResult(

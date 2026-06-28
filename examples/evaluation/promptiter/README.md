@@ -1,8 +1,9 @@
 # PromptIter Examples
 
-This directory contains four PromptIter examples:
+This directory contains five PromptIter examples:
 
 - [syncrun](./syncrun): runs the full PromptIter optimization loop directly through `engine.Run` against a single-agent sports recap candidate. Its initial instruction intentionally stays simple so that PromptIter, rather than a strong hand-written seed, drives the gain.
+- [tooldesc](./tooldesc): runs the same synchronous engine flow against a single-agent travel candidate while optimizing only the candidate tool-description surface.
 - [asyncrun](./asyncrun): runs the single-agent sports recap workflow through `manager.Start/Get`.
 - [server](./server): exposes the single-agent sports recap workflow through the HTTP control-plane service in `server/promptiter`.
 - [multinode](./multinode): runs PromptIter against a multinode sports recap agent with regular function nodes, AgentNode fan-out/fan-in, and multiple optimized instruction surfaces.
@@ -17,4 +18,4 @@ The optimization examples keep their own command entrypoint and data layout:
 - `data/`
 - `output/`
 
-Choose `syncrun` when you want the simplest synchronous single-agent engine example. Choose `asyncrun` when you want asynchronous run lifecycle management without HTTP. Choose `server` when you want to serve PromptIter over HTTP and trigger runs remotely. Choose `multinode` when you want to see PromptIter optimize several AgentNode instruction surfaces inside a richer candidate graph.
+Choose `syncrun` when you want the simplest synchronous single-agent instruction example. Choose `tooldesc` when you want the simplest synchronous tool-description example. Choose `asyncrun` when you want asynchronous run lifecycle management without HTTP. Choose `server` when you want to serve PromptIter over HTTP and trigger runs remotely. Choose `multinode` when you want to see PromptIter optimize several AgentNode instruction surfaces inside a richer candidate graph.
