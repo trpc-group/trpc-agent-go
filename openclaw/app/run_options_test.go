@@ -471,6 +471,7 @@ agent:
   enable_context_compaction: false
   context_compaction_oversized_tool_result_max_tokens: 2048
   max_history_runs: 123
+  max_llm_calls: 22
   max_tool_iterations: 123
   preload_memory: 2
 `)
@@ -495,6 +496,7 @@ agent:
 		"-enable-context-compaction",
 		"-context-compaction-oversized-tool-result-max-tokens", "256",
 		"-max-history-runs", "9",
+		"-max-llm-calls", "4",
 		"-max-tool-iterations", "6",
 		"-preload-memory", "-1",
 	})
@@ -517,6 +519,7 @@ agent:
 	require.True(t, opts.EnableContextCompaction)
 	require.Equal(t, 256, opts.ContextCompactionOversizedToolResultMaxTokens)
 	require.Equal(t, 9, opts.MaxHistoryRuns)
+	require.Equal(t, 4, opts.MaxLLMCalls)
 	require.Equal(t, 6, opts.MaxToolIterations)
 	require.Equal(t, -1, opts.PreloadMemory)
 }
@@ -527,6 +530,14 @@ func TestParseRunOptions_MaxToolIterationsNegativeFails(t *testing.T) {
 	_, err := parseRunOptions([]string{"-max-tool-iterations", "-1"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid max tool iterations")
+}
+
+func TestParseRunOptions_MaxLLMCallsNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{"-max-llm-calls", "-1"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid max LLM calls")
 }
 
 func TestParseRunOptions_ModelGenerationConfig_DefaultsStreamTrue(
@@ -767,6 +778,7 @@ agent:
   enable_context_compaction: true
   context_compaction_oversized_tool_result_max_tokens: 4096
   max_history_runs: 50
+  max_llm_calls: 13
   max_tool_iterations: 11
   preload_memory: 10
   instruction: "instruction"
@@ -935,6 +947,7 @@ memory:
 	require.True(t, opts.EnableContextCompaction)
 	require.Equal(t, 4096, opts.ContextCompactionOversizedToolResultMaxTokens)
 	require.Equal(t, 50, opts.MaxHistoryRuns)
+	require.Equal(t, 13, opts.MaxLLMCalls)
 	require.Equal(t, 11, opts.MaxToolIterations)
 	require.Equal(t, 10, opts.PreloadMemory)
 	require.Equal(t, "instruction", opts.AgentInstruction)

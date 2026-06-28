@@ -92,6 +92,7 @@ const (
 	flagEnableContextCompaction                       = "enable-context-compaction"
 	flagContextCompactionOversizedToolResultMaxTokens = "context-compaction-oversized-tool-result-max-tokens"
 	flagMaxHistoryRuns                                = "max-history-runs"
+	flagMaxLLMCalls                                   = "max-llm-calls"
 	flagMaxToolIterations                             = "max-tool-iterations"
 	flagPreloadMemory                                 = "preload-memory"
 
@@ -181,6 +182,7 @@ type runOptions struct {
 	EnableContextCompaction                       bool
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
+	MaxLLMCalls                                   int
 	MaxToolIterations                             int
 	PreloadMemory                                 int
 
@@ -443,6 +445,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagMaxHistoryRuns,
 		0,
 		"Max history messages when add-session-summary=false (0=unlimited)",
+	)
+	fs.IntVar(
+		&opts.MaxLLMCalls,
+		flagMaxLLMCalls,
+		0,
+		"Max LLM calls per invocation (0=unlimited)",
 	)
 	fs.IntVar(
 		&opts.MaxToolIterations,
@@ -1123,6 +1131,7 @@ type agentRunConfig struct {
 	EnableContextCompaction                       *bool `yaml:"enable_context_compaction,omitempty"`
 	ContextCompactionOversizedToolResultMaxTokens *int  `yaml:"context_compaction_oversized_tool_result_max_tokens,omitempty"`
 	MaxHistoryRuns                                *int  `yaml:"max_history_runs,omitempty"`
+	MaxLLMCalls                                   *int  `yaml:"max_llm_calls,omitempty"`
 	MaxToolIterations                             *int  `yaml:"max_tool_iterations,omitempty"`
 	PreloadMemory                                 *int  `yaml:"preload_memory,omitempty"`
 
@@ -1618,6 +1627,10 @@ func (cfg *fileConfig) apply(
 		if cfg.Agent.MaxHistoryRuns != nil &&
 			!flagWasSet(set, flagMaxHistoryRuns) {
 			opts.MaxHistoryRuns = *cfg.Agent.MaxHistoryRuns
+		}
+		if cfg.Agent.MaxLLMCalls != nil &&
+			!flagWasSet(set, flagMaxLLMCalls) {
+			opts.MaxLLMCalls = *cfg.Agent.MaxLLMCalls
 		}
 		if cfg.Agent.MaxToolIterations != nil &&
 			!flagWasSet(set, flagMaxToolIterations) {
@@ -2653,6 +2666,12 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid max tool iterations: %d",
 			opts.MaxToolIterations,
+		)
+	}
+	if opts.MaxLLMCalls < 0 {
+		return fmt.Errorf(
+			"invalid max LLM calls: %d",
+			opts.MaxLLMCalls,
 		)
 	}
 	opts.EvolutionSkillScopeMode = skill.NormalizeSkillScopeMode(

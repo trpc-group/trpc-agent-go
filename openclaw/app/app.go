@@ -1080,6 +1080,7 @@ func NewRuntimeWithOptions(
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
 			MaxHistoryRuns:    opts.MaxHistoryRuns,
+			MaxLLMCalls:       opts.MaxLLMCalls,
 			MaxToolIterations: opts.MaxToolIterations,
 			PreloadMemory:     opts.PreloadMemory,
 			GenerationConfig:  opts.GenerationConfig,
@@ -1661,6 +1662,7 @@ func run(
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
 			MaxHistoryRuns:    opts.MaxHistoryRuns,
+			MaxLLMCalls:       opts.MaxLLMCalls,
 			MaxToolIterations: opts.MaxToolIterations,
 			PreloadMemory:     opts.PreloadMemory,
 			GenerationConfig:  opts.GenerationConfig,
@@ -2369,6 +2371,11 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support max-tool-iterations",
 		)
 	}
+	if opts.MaxLLMCalls != 0 {
+		return errors.New(
+			"claude-code agent does not support max-llm-calls",
+		)
+	}
 	if opts.PreloadMemory != 0 {
 		return errors.New(
 			"claude-code agent does not support preload-memory",
@@ -3073,6 +3080,7 @@ type agentConfig struct {
 	EnableContextCompaction                       bool
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
+	MaxLLMCalls                                   int
 	MaxToolIterations                             int
 	PreloadMemory                                 int
 	GenerationConfig                              *model.GenerationConfig

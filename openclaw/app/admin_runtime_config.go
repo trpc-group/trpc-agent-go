@@ -370,6 +370,18 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 			Summary: "Agent runtime limits and safety budgets.",
 			Fields: []adminRuntimeConfigFieldSpec{
 				adminRuntimeNumberField(
+					"agent.max_llm_calls",
+					"Max LLM Calls",
+					"Limit LLM calls per invocation; 0 is unlimited.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("agent"),
+						adminRuntimeKey("max_llm_calls"),
+					},
+					func(opts runOptions) string {
+						return strconv.Itoa(opts.MaxLLMCalls)
+					},
+				),
+				adminRuntimeNumberField(
 					"agent.max_tool_iterations",
 					"Max Tool Iterations",
 					"Limit tool-call iterations per invocation; 0 is unlimited.",

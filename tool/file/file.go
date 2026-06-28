@@ -52,7 +52,9 @@ const (
 	missingFileBaseDirPrefix    = "Base directory: "
 	relativePathGuidance        = "Use a relative path under " +
 		"base_directory, or have exec_command print the data " +
-		"directly instead of writing an absolute temp path."
+		"directly instead of writing an absolute temp path. If " +
+		"exec_command already wrote the file, read it with " +
+		"exec_command cat/head/sed rather than fs_read_file."
 	missingFileRecoveryGuidance = "Use " +
 		missingFileListToolName + " or " +
 		missingFileSearchToolName +

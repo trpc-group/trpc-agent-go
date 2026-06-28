@@ -191,6 +191,7 @@ func TestResolvePath_AbsolutePath(t *testing.T) {
 	_, err = fts.resolvePath("/tmp/a.txt")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), relativePathGuidance)
+	assert.Contains(t, err.Error(), "exec_command cat/head/sed")
 }
 
 func TestResolvePath_Empty(t *testing.T) {
