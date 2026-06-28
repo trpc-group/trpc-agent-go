@@ -66,7 +66,8 @@ func TestRecoveryRefLinesKeepToolCallIDWithoutEventID(t *testing.T) {
 	require.Contains(t, placeholder, "tool_name: worker")
 	require.NotContains(t, placeholder, "recoverable: false")
 	require.NotContains(t, placeholder, "Use session_load")
-	require.Contains(t, placeholder, "do not re-invoke")
+	require.Contains(t, placeholder, "read-only or idempotent")
+	require.Contains(t, placeholder, "do not repeat side-effecting")
 
 	withLoad := recoverableToolResultPlaceholder(
 		toolResultRecoveryRef{
@@ -630,7 +631,8 @@ func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
 	)
 	require.True(t, baselineOK)
 	require.Contains(t, baseline.Content, compactedToolResultPlaceholder)
-	require.Contains(t, baseline.Content, "Do not re-invoke")
+	require.Contains(t, baseline.Content, "read-only, idempotent")
+	require.Contains(t, baseline.Content, "do not repeat side-effecting")
 	require.NotContains(t, baseline.Content, "session summary above")
 
 	compacted, ok := compactedCurrentInvocationMessage(

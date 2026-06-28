@@ -69,6 +69,7 @@ func baseLLMAgentOptions(
 		llmagent.WithMaxLLMCalls(cfg.MaxLLMCalls),
 		llmagent.WithMaxToolIterations(cfg.MaxToolIterations),
 		llmagent.WithPreloadMemory(cfg.PreloadMemory),
+		llmagent.WithEnableOnDemandSession(true),
 		llmagent.WithEventMessageProjector(
 			conversation.ProjectEventMessage,
 		),

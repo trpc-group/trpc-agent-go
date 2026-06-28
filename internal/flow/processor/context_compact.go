@@ -43,11 +43,16 @@ const (
 	// after context compaction. The message MUST make it clear that the call
 	// succeeded and returned data that was already consumed, otherwise the
 	// model may interpret the elided payload as a failed/missing call and
-	// re-invoke the same tool with identical arguments, producing infinite
-	// retry loops at the top of the context window.
-	historicalToolResultPlaceholder = "[elided] Previous tool call succeeded and its result was already consumed by the assistant; payload has been dropped to save context. Do NOT re-invoke the same tool with the same arguments to re-fetch this data."
-	sessionLoadToolName             = "session_load"
-	policyToolResultPlaceholder     = "Tool result omitted by context compaction policy."
+	// retry side-effecting tools at the top of the context window.
+	historicalToolResultPlaceholder = "[elided] Previous tool call " +
+		"succeeded and its result was already consumed by the assistant; " +
+		"payload has been dropped to save context. Use the available " +
+		"summary or recovery hints first. Re-run only read-only or " +
+		"idempotent tools when exact data is essential; do not repeat " +
+		"side-effecting operations just to recover this payload."
+	sessionLoadToolName         = "session_load"
+	policyToolResultPlaceholder = "Tool result omitted by context " +
+		"compaction policy."
 )
 
 type toolResultRecoveryRef struct {
@@ -121,7 +126,7 @@ func recoverableTruncationMarker(
 	if ref.SessionLoadAvailable {
 		b.WriteString("; use session_load ...")
 	} else {
-		b.WriteString("; do not re-run the same tool call to recover it")
+		b.WriteString("; re-run only safe read-only/idempotent tools")
 	}
 	b.WriteString("]\n\n")
 	return b.String()
@@ -164,7 +169,11 @@ func toolResultRecoveryInstruction(ref toolResultRecoveryRef) string {
 	if ref.SessionLoadAvailable {
 		return "\nUse session_load with event_id and content_offset/content_limit if the full result is needed."
 	}
-	return "\nThe full result is not available through the current tool surface; do not re-invoke the same tool with the same arguments just to recover this data."
+	return "\nThe full result is not available through the current tool surface. " +
+		"Use the available summary if it is enough. If exact data is " +
+		"essential, re-run only tools that are read-only, idempotent, or safe " +
+		"to repeat; do not repeat side-effecting operations just to recover " +
+		"this payload."
 }
 
 func writeRecoveryRefLines(b *strings.Builder, ref toolResultRecoveryRef) {

@@ -596,10 +596,10 @@ const (
 	// must not set this flag, because downstream processors use it as a
 	// same-turn signal.
 	contentHasCompactedToolResultsStateKey = "processor:content:has_compacted_tool_results"
-	compactedToolResultPlaceholder         = "Tool result omitted from raw history; the previous tool call " +
+	compactedToolResultPlaceholder         = "Tool result omitted from raw history; " +
+		"the previous tool call " +
 		"succeeded, but its payload was compacted to preserve context. " +
-		"Do not re-invoke the same tool with the same arguments just to " +
-		"recover this data."
+		"Use the available summary or recovery hints before repeating work."
 )
 
 const (

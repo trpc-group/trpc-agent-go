@@ -1704,6 +1704,52 @@ func TestNewAgent_EmptyInstructionUsesDefault(t *testing.T) {
 	require.NotNil(t, agt)
 }
 
+func TestNewAgent_EnablesOnDemandSessionTools(t *testing.T) {
+	t.Parallel()
+
+	agt, _, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: t.TempDir(),
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	surface, ok := agt.(interface {
+		InvocationToolSurface(
+			context.Context,
+			*agent.Invocation,
+		) ([]tool.Tool, map[string]bool)
+	})
+	require.True(t, ok)
+
+	unsupportedInv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			session.NewSession("demo", "user", "sess"),
+		),
+	)
+	tools, userToolNames := surface.InvocationToolSurface(
+		context.Background(),
+		unsupportedInv,
+	)
+	require.Nil(t, findTool(tools, "session_load"))
+	require.False(t, userToolNames["session_load"])
+
+	loadInv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			session.NewSession("demo", "user", "sess"),
+		),
+		agent.WithInvocationSessionService(
+			sessioninmemory.NewSessionService(),
+		),
+	)
+	tools, userToolNames = surface.InvocationToolSurface(
+		context.Background(),
+		loadInv,
+	)
+	require.NotNil(t, findTool(tools, "session_load"))
+	require.False(t, userToolNames["session_load"])
+}
+
 func TestNewAgent_UsesConfiguredSkillRepositoryProvider(t *testing.T) {
 	t.Parallel()
 
