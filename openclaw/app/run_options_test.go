@@ -779,6 +779,9 @@ model:
   mode: "mock"
   name: "gpt-5"
   openai_variant: "openai"
+  headers:
+    X-SMG-Routing-Key: "wineguo"
+    X-SMG-Agent-Name: "trpc-claw-benchmark"
 
 gateway:
   allow_users: ["u1","u2"]
@@ -940,6 +943,10 @@ memory:
 	require.Equal(t, modeMock, opts.ModelMode)
 	require.Equal(t, "gpt-5", opts.OpenAIModel)
 	require.Equal(t, "openai", opts.OpenAIVariant)
+	require.Equal(t, map[string]string{
+		"X-SMG-Routing-Key": "wineguo",
+		"X-SMG-Agent-Name":  "trpc-claw-benchmark",
+	}, opts.OpenAIHeaders)
 
 	require.Equal(t, "u1,u2", opts.AllowUsers)
 	require.True(t, opts.RequireMention)
