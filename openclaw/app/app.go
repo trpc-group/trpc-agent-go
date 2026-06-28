@@ -1079,9 +1079,10 @@ func NewRuntimeWithOptions(
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:   opts.MaxHistoryRuns,
-			PreloadMemory:    opts.PreloadMemory,
-			GenerationConfig: opts.GenerationConfig,
+			MaxHistoryRuns:    opts.MaxHistoryRuns,
+			MaxToolIterations: opts.MaxToolIterations,
+			PreloadMemory:     opts.PreloadMemory,
+			GenerationConfig:  opts.GenerationConfig,
 			PostToolPromptEnabled: runtimeOpts.
 				postToolPromptEnabled,
 			Instruction:  prompts.Instruction,
@@ -1659,9 +1660,10 @@ func run(
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:   opts.MaxHistoryRuns,
-			PreloadMemory:    opts.PreloadMemory,
-			GenerationConfig: opts.GenerationConfig,
+			MaxHistoryRuns:    opts.MaxHistoryRuns,
+			MaxToolIterations: opts.MaxToolIterations,
+			PreloadMemory:     opts.PreloadMemory,
+			GenerationConfig:  opts.GenerationConfig,
 			PostToolPromptEnabled: runtimeOpts.
 				postToolPromptEnabled,
 			Instruction:  prompts.Instruction,
@@ -2360,6 +2362,11 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 	if opts.MaxHistoryRuns != 0 {
 		return errors.New(
 			"claude-code agent does not support max-history-runs",
+		)
+	}
+	if opts.MaxToolIterations != 0 {
+		return errors.New(
+			"claude-code agent does not support max-tool-iterations",
 		)
 	}
 	if opts.PreloadMemory != 0 {
@@ -3066,6 +3073,7 @@ type agentConfig struct {
 	EnableContextCompaction                       bool
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
+	MaxToolIterations                             int
 	PreloadMemory                                 int
 	GenerationConfig                              *model.GenerationConfig
 	PostToolPromptEnabled                         *bool

@@ -892,3 +892,29 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 	)
 	require.Equal(t, "exec_command", direct.RuntimeValue)
 }
+
+func TestBuildAdminOptions_ExposesAgentBudgetFields(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(
+		t,
+		"agent:\n  max_tool_iterations: 12\n",
+	)
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	opts.MaxToolIterations = 12
+
+	provider, ok := buildAdminRuntimeConfigProvider(
+		opts,
+	).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	field := findAdminRuntimeConfigField(
+		t,
+		status,
+		"agent.max_tool_iterations",
+	)
+	require.Equal(t, "12", field.RuntimeValue)
+	require.Equal(t, "12", field.ConfiguredValue)
+}

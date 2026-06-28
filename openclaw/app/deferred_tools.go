@@ -66,6 +66,7 @@ func baseLLMAgentOptions(
 			cfg.ContextCompactionOversizedToolResultMaxTokens,
 		),
 		llmagent.WithMaxHistoryRuns(cfg.MaxHistoryRuns),
+		llmagent.WithMaxToolIterations(cfg.MaxToolIterations),
 		llmagent.WithPreloadMemory(cfg.PreloadMemory),
 		llmagent.WithEventMessageProjector(
 			conversation.ProjectEventMessage,

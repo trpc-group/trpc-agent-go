@@ -92,6 +92,7 @@ const (
 	flagEnableContextCompaction                       = "enable-context-compaction"
 	flagContextCompactionOversizedToolResultMaxTokens = "context-compaction-oversized-tool-result-max-tokens"
 	flagMaxHistoryRuns                                = "max-history-runs"
+	flagMaxToolIterations                             = "max-tool-iterations"
 	flagPreloadMemory                                 = "preload-memory"
 
 	flagAgentInstruction       = "agent-instruction"
@@ -180,6 +181,7 @@ type runOptions struct {
 	EnableContextCompaction                       bool
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
+	MaxToolIterations                             int
 	PreloadMemory                                 int
 
 	AgentInstruction       string
@@ -441,6 +443,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagMaxHistoryRuns,
 		0,
 		"Max history messages when add-session-summary=false (0=unlimited)",
+	)
+	fs.IntVar(
+		&opts.MaxToolIterations,
+		flagMaxToolIterations,
+		0,
+		"Max tool-call iterations per invocation (0=unlimited)",
 	)
 	fs.IntVar(
 		&opts.PreloadMemory,
@@ -1115,6 +1123,7 @@ type agentRunConfig struct {
 	EnableContextCompaction                       *bool `yaml:"enable_context_compaction,omitempty"`
 	ContextCompactionOversizedToolResultMaxTokens *int  `yaml:"context_compaction_oversized_tool_result_max_tokens,omitempty"`
 	MaxHistoryRuns                                *int  `yaml:"max_history_runs,omitempty"`
+	MaxToolIterations                             *int  `yaml:"max_tool_iterations,omitempty"`
 	PreloadMemory                                 *int  `yaml:"preload_memory,omitempty"`
 
 	Instruction      *string  `yaml:"instruction,omitempty"`
@@ -1609,6 +1618,10 @@ func (cfg *fileConfig) apply(
 		if cfg.Agent.MaxHistoryRuns != nil &&
 			!flagWasSet(set, flagMaxHistoryRuns) {
 			opts.MaxHistoryRuns = *cfg.Agent.MaxHistoryRuns
+		}
+		if cfg.Agent.MaxToolIterations != nil &&
+			!flagWasSet(set, flagMaxToolIterations) {
+			opts.MaxToolIterations = *cfg.Agent.MaxToolIterations
 		}
 		if cfg.Agent.PreloadMemory != nil &&
 			!flagWasSet(set, flagPreloadMemory) {
@@ -2634,6 +2647,12 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid skills overview limit: %d",
 			opts.SkillsOverviewLimit,
+		)
+	}
+	if opts.MaxToolIterations < 0 {
+		return fmt.Errorf(
+			"invalid max tool iterations: %d",
+			opts.MaxToolIterations,
 		)
 	}
 	opts.EvolutionSkillScopeMode = skill.NormalizeSkillScopeMode(

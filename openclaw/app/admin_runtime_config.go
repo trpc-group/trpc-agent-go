@@ -365,6 +365,25 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 			},
 		},
 		{
+			Key:     "agent",
+			Title:   "Agent",
+			Summary: "Agent runtime limits and safety budgets.",
+			Fields: []adminRuntimeConfigFieldSpec{
+				adminRuntimeNumberField(
+					"agent.max_tool_iterations",
+					"Max Tool Iterations",
+					"Limit tool-call iterations per invocation; 0 is unlimited.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("agent"),
+						adminRuntimeKey("max_tool_iterations"),
+					},
+					func(opts runOptions) string {
+						return strconv.Itoa(opts.MaxToolIterations)
+					},
+				),
+			},
+		},
+		{
 			Key:     "skills",
 			Title:   "Skills",
 			Summary: "Skill watch mode, load policy, and retention settings.",
