@@ -296,6 +296,32 @@ func TestConvertHTMLToMarkdown(t *testing.T) {
 	assert.NotContains(t, result, "color: red")
 }
 
+func TestConvertHTMLToMarkdownPrefersMainContent(t *testing.T) {
+	htmlContent := `
+		<html>
+		<body>
+			<nav>` + strings.Repeat("Main menu navigation. ", 200) + `</nav>
+			<div id="mw-content-text">
+				<h1>Moon</h1>
+				<table class="infobox">
+					<tr><th>Periapsis</th><td>356,400-370,400 km</td></tr>
+				</table>
+				<p>The Moon is Earth's only natural satellite.</p>
+			</div>
+			<footer>Footer links</footer>
+		</body>
+		</html>`
+
+	result, err := convertHTMLToMarkdown(strings.NewReader(htmlContent))
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "Moon")
+	assert.Contains(t, result, "Periapsis")
+	assert.Contains(t, result, "356,400-370,400 km")
+	assert.NotContains(t, result, "Main menu navigation")
+	assert.NotContains(t, result, "Footer links")
+}
+
 func TestWebFetch_WithHTTPClient(t *testing.T) {
 	client := &http.Client{Timeout: defaultTimeout}
 	tool := NewTool(WithHTTPClient(client))

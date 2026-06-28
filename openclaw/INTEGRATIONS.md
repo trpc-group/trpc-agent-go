@@ -925,14 +925,20 @@ tools:
   providers:
     - type: "duckduckgo"
       config:
+        backend: "api"
         timeout: "30s"
 ```
 
 Optional config fields:
 
-- `base_url` (default uses the official API endpoint)
+- `backend`: `api` (default), `html`, or `lite`
+- `base_url` (default depends on `backend`)
 - `user_agent`
 - `timeout`
+
+`api` uses the DuckDuckGo Instant Answer API and works best for
+encyclopedic answers. `html` and `lite` parse DuckDuckGo search result pages
+and return web result titles, URLs, and snippets for discovery workflows.
 
 ### Provider: webfetch_http (safe by default)
 

@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -59,11 +60,26 @@ max_total_content_length: 456
 func TestNewDuckDuckGoTools_Succeeds(t *testing.T) {
 	t.Parallel()
 
-	cfg := yamlNode(t, `
-base_url: "https://example.invalid"
-user_agent: "ua"
-timeout: 100ms
-`)
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+			require.Equal(t, "ua", r.Header.Get("User-Agent"))
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fgaia">GAIA benchmark</a>
+  <a class="result__snippet">HTML backend result.</a>
+</body></html>`))
+		},
+	))
+	defer server.Close()
+
+	cfg := yamlNode(t, strings.Join([]string{
+		`base_url: "` + server.URL + `"`,
+		`backend: "html"`,
+		`user_agent: "ua"`,
+		`timeout: 100ms`,
+		"",
+	}, "\n"))
 	tools, err := newDuckDuckGoTools(
 		registry.ToolProviderDeps{},
 		registry.PluginSpec{Config: cfg},
@@ -71,6 +87,31 @@ timeout: 100ms
 	require.NoError(t, err)
 	require.Len(t, tools, 1)
 	require.NotEmpty(t, tools[0].Declaration().Name)
+	require.Contains(t, tools[0].Declaration().Description, "html search")
+
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+	raw, err := callable.Call(
+		context.Background(),
+		[]byte(`{"query":"GAIA benchmark"}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"summary":"Found 1 html results`)
+	require.Contains(t, string(data), `"url":"https://example.com/gaia"`)
+}
+
+func TestNewDuckDuckGoTools_InvalidBackend(t *testing.T) {
+	t.Parallel()
+
+	cfg := yamlNode(t, "backend: unknown\n")
+	_, err := newDuckDuckGoTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "backend must be api, html, or lite")
 }
 
 func TestNewBrowserTools_Succeeds(t *testing.T) {

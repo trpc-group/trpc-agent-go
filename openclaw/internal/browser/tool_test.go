@@ -1495,6 +1495,89 @@ func TestToolCall_ActEvaluateEnabled(t *testing.T) {
 	require.Equal(t, "element e1", drv.calls[0].Args["element"])
 }
 
+func TestToolCall_ActInfersEvaluateKindFromFunction(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolEvaluate: textPayload("evaluated"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		true,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"fn":  "() => 1",
+				"ref": "e1",
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Contains(t, got.Text, "evaluated")
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolEvaluate, drv.calls[0].Tool)
+}
+
+func TestToolCall_EvaluateActionAlias(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolEvaluate: textPayload("evaluated"),
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		true,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionEvaluate,
+			"fn":     "() => document.title",
+			"ref":    "e1",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Contains(t, got.Text, "evaluated")
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolEvaluate, drv.calls[0].Tool)
+	require.Equal(t, "() => document.title", drv.calls[0].Args["function"])
+}
+
 func TestToolCall_ScreenshotPassesOptions(t *testing.T) {
 	t.Parallel()
 
@@ -1644,18 +1727,36 @@ func TestToolCall_SnapshotPassesAdvancedBrowserServerOptions(t *testing.T) {
 	require.Equal(t, true, drv.calls[0].Args["labels"])
 }
 
-func TestToolCall_SnapshotRejectsAdvancedOptionsForMCPDriver(t *testing.T) {
+func TestToolCall_SnapshotIgnoresAdvancedOptionsForMCPDriver(t *testing.T) {
 	t.Parallel()
 
-	_, err := newTestTool(&fakeDriver{}).Call(
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolSnapshot: textPayload("snapshot"),
+		},
+	}
+	raw, err := newTestTool(drv).Call(
 		context.Background(),
 		mustJSON(t, map[string]any{
-			"action": actionSnapshot,
-			"labels": true,
+			"action":      actionSnapshot,
+			"labels":      true,
+			"compact":     true,
+			"selector":    "#main",
+			"depth":       2,
+			"maxChars":    20,
+			"targetId":    "tab-1",
+			"snapshotRef": "ignored",
 		}),
 	)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "browser-server")
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionSnapshot, got.Action)
+	require.Contains(t, got.Warning, "snapshot options were ignored")
+	require.Len(t, drv.calls, 2)
+	require.Equal(t, mcpToolTabs, drv.calls[0].Tool)
+	require.Equal(t, mcpToolSnapshot, drv.calls[1].Tool)
+	require.Empty(t, drv.calls[1].Args)
 }
 
 func TestToolCall_DownloadPassesBrowserServerArgs(t *testing.T) {
@@ -2793,7 +2894,7 @@ func TestToolResolveDriver_ErrorPaths(t *testing.T) {
 
 	_, _, err := tool.resolveDriver(input{Target: targetSandbox})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "not configured")
+	require.Contains(t, err.Error(), "sandbox target is not configured")
 
 	_, _, err = tool.resolveDriver(input{Target: targetNode})
 	require.Error(t, err)

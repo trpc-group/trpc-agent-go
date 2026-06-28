@@ -103,6 +103,7 @@ func init() {
 
 type httpToolConfig struct {
 	BaseURL   string        `yaml:"base_url,omitempty"`
+	Backend   string        `yaml:"backend,omitempty"`
 	UserAgent string        `yaml:"user_agent,omitempty"`
 	Timeout   time.Duration `yaml:"timeout,omitempty"`
 }
@@ -132,21 +133,36 @@ func newDuckDuckGoTools(
 		return nil, err
 	}
 
-	client := &http.Client{Timeout: defaultHTTPTimeout}
-	if cfg.Timeout > 0 {
-		client.Timeout = cfg.Timeout
+	opts := make([]duckduckgo.Option, 0, 4)
+	if backend := strings.TrimSpace(cfg.Backend); backend != "" {
+		if !isSupportedDuckDuckGoBackend(backend) {
+			return nil, fmt.Errorf(
+				"duckduckgo backend must be api, html, or lite: %q",
+				backend,
+			)
+		}
+		opts = append(opts, duckduckgo.WithBackend(backend))
 	}
-
-	opts := make([]duckduckgo.Option, 0, 3)
 	if baseURL := strings.TrimSpace(cfg.BaseURL); baseURL != "" {
 		opts = append(opts, duckduckgo.WithBaseURL(baseURL))
 	}
 	if ua := strings.TrimSpace(cfg.UserAgent); ua != "" {
 		opts = append(opts, duckduckgo.WithUserAgent(ua))
 	}
-	opts = append(opts, duckduckgo.WithHTTPClient(client))
+	if cfg.Timeout > 0 {
+		opts = append(opts, duckduckgo.WithTimeout(cfg.Timeout))
+	}
 
 	return []tool.Tool{duckduckgo.NewTool(opts...)}, nil
+}
+
+func isSupportedDuckDuckGoBackend(backend string) bool {
+	switch strings.ToLower(strings.TrimSpace(backend)) {
+	case "api", "html", "lite":
+		return true
+	default:
+		return false
+	}
 }
 
 type httpWebFetchConfig struct {

@@ -11,6 +11,7 @@
 package httpfetch
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	"golang.org/x/net/html"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 	"trpc.group/trpc-go/trpc-agent-go/tool/webfetch/internal/urlfilter"
@@ -360,22 +362,143 @@ func readBodyAsString(r io.Reader) (string, error) {
 }
 
 func convertHTMLToMarkdown(r io.Reader) (string, error) {
+	bodyBytes, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+
 	conv := converter.NewConverter(
 		converter.WithPlugins(
 			base.NewBasePlugin(),
 			commonmark.NewCommonmarkPlugin(),
 		),
 	)
-
-	bodyBytes, err := io.ReadAll(r)
-	if err != nil {
-		return "", err
-	}
-
-	markdown, err := conv.ConvertString(string(bodyBytes))
+	markdown, err := conv.ConvertString(markdownSourceHTML(bodyBytes))
 	if err != nil {
 		return "", err
 	}
 
 	return markdown, nil
+}
+
+func markdownSourceHTML(raw []byte) string {
+	doc, err := html.Parse(bytes.NewReader(raw))
+	if err != nil {
+		return string(raw)
+	}
+
+	node := preferredContentNode(doc)
+	if node == nil {
+		node = doc
+	}
+	removeNoisyHTMLNodes(node)
+
+	var out strings.Builder
+	if err := html.Render(&out, node); err != nil {
+		return string(raw)
+	}
+	if strings.TrimSpace(out.String()) == "" {
+		return string(raw)
+	}
+	return out.String()
+}
+
+func preferredContentNode(root *html.Node) *html.Node {
+	for _, id := range []string{
+		"mw-content-text",
+		"bodyContent",
+		"main-content",
+		"content",
+	} {
+		if node := findHTMLNode(root, func(n *html.Node) bool {
+			return htmlAttr(n, "id") == id
+		}); node != nil {
+			return node
+		}
+	}
+	if node := findHTMLNode(root, func(n *html.Node) bool {
+		return n.Type == html.ElementNode && htmlAttr(n, "role") == "main"
+	}); node != nil {
+		return node
+	}
+	return findHTMLNode(root, func(n *html.Node) bool {
+		return n.Type == html.ElementNode &&
+			(n.Data == "main" || n.Data == "article")
+	})
+}
+
+func findHTMLNode(
+	root *html.Node,
+	matches func(*html.Node) bool,
+) *html.Node {
+	if root == nil {
+		return nil
+	}
+	if matches(root) {
+		return root
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if found := findHTMLNode(child, matches); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func removeNoisyHTMLNodes(root *html.Node) {
+	for child := root.FirstChild; child != nil; {
+		next := child.NextSibling
+		if isNoisyHTMLNode(child) {
+			root.RemoveChild(child)
+		} else {
+			removeNoisyHTMLNodes(child)
+		}
+		child = next
+	}
+}
+
+func isNoisyHTMLNode(n *html.Node) bool {
+	if n.Type != html.ElementNode {
+		return false
+	}
+	switch strings.ToLower(n.Data) {
+	case "script", "style", "noscript", "template", "svg",
+		"nav", "header", "footer", "form":
+		return true
+	}
+	if hasHTMLAttr(n, "hidden") {
+		return true
+	}
+	if strings.EqualFold(htmlAttr(n, "aria-hidden"), "true") {
+		return true
+	}
+	style := strings.ToLower(htmlAttr(n, "style"))
+	return strings.Contains(style, "display:none") ||
+		strings.Contains(style, "display: none") ||
+		strings.Contains(style, "visibility:hidden") ||
+		strings.Contains(style, "visibility: hidden")
+}
+
+func htmlAttr(n *html.Node, key string) string {
+	if n == nil {
+		return ""
+	}
+	for i := range n.Attr {
+		if strings.EqualFold(n.Attr[i].Key, key) {
+			return strings.TrimSpace(n.Attr[i].Val)
+		}
+	}
+	return ""
+}
+
+func hasHTMLAttr(n *html.Node, key string) bool {
+	if n == nil {
+		return false
+	}
+	for i := range n.Attr {
+		if strings.EqualFold(n.Attr[i].Key, key) {
+			return true
+		}
+	}
+	return false
 }

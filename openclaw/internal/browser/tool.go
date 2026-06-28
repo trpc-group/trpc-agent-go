@@ -50,6 +50,7 @@ const (
 	actionLocale     = "locale"
 	actionDevice     = "device"
 	actionAct        = "act"
+	actionEvaluate   = "evaluate"
 )
 
 const (
@@ -115,6 +116,7 @@ var supportedActions = []string{
 	actionLocale,
 	actionDevice,
 	actionAct,
+	actionEvaluate,
 }
 
 type actRequest struct {
@@ -320,6 +322,10 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 		return nil, errors.New("browser action is required")
 	}
 	actionKey := strings.ToLower(action)
+	if actionKey == actionEvaluate {
+		in = normalizeEvaluateActionInput(in)
+		actionKey = strings.ToLower(actionAct)
+	}
 	if err := validateTargetSelection(in); err != nil {
 		return nil, err
 	}
@@ -825,7 +831,12 @@ func (t *Tool) driverTypeForInput(
 ) string {
 	target := strings.ToLower(strings.TrimSpace(in.Target))
 	switch target {
-	case targetSandbox, targetNode:
+	case targetSandbox:
+		if t.sandboxServer != nil {
+			return driverTypeBrowserServer
+		}
+		return t.driverTypeForProfile(profile)
+	case targetNode:
 		return driverTypeBrowserServer
 	case "", targetHost:
 		if t.hostServer != nil {
@@ -1020,12 +1031,10 @@ func (t *Tool) handleSnapshot(
 	if filename := strings.TrimSpace(in.Filename); filename != "" {
 		args["filename"] = filename
 	}
-	if driverType != driverTypeBrowserServer &&
-		hasServerSnapshotArgs(in) {
-		return Result{}, errors.New(
-			"advanced snapshot options are only supported by " +
-				"the browser-server driver",
-		)
+	ignoredServerSnapshotArgs := driverType != driverTypeBrowserServer &&
+		hasServerSnapshotArgs(in)
+	if ignoredServerSnapshotArgs {
+		in = clearServerSnapshotArgs(in)
 	}
 	if driverType == driverTypeBrowserServer {
 		addServerSnapshotArgs(args, in)
@@ -1041,6 +1050,11 @@ func (t *Tool) handleSnapshot(
 		in.MaxChars,
 		raw,
 	)
+	if ignoredServerSnapshotArgs {
+		result.Warning = result.Warning + " Browser-server snapshot " +
+			"options were ignored because the selected driver is " +
+			driverType + "."
+	}
 	result.Content = raw
 	return result, nil
 }
@@ -1839,11 +1853,12 @@ func normalizeActRequest(in input) actRequest {
 		if strings.TrimSpace(req.Ref) == "" {
 			req.Ref = in.Ref
 		}
+		req.Kind = defaultActKind(req.Kind, req.Fn)
 		return req
 	}
 
 	return actRequest{
-		Kind:        in.Kind,
+		Kind:        defaultActKind(in.Kind, in.Fn),
 		TargetID:    in.TargetID,
 		Ref:         in.Ref,
 		DoubleClick: in.DoubleClick,
@@ -1868,6 +1883,30 @@ func normalizeActRequest(in input) actRequest {
 		TimeoutMs:   in.TimeoutMs,
 		Fn:          in.Fn,
 	}
+}
+
+func defaultActKind(kind string, fn string) string {
+	if strings.TrimSpace(kind) != "" {
+		return kind
+	}
+	if strings.TrimSpace(fn) != "" {
+		return actEvaluate
+	}
+	return kind
+}
+
+func normalizeEvaluateActionInput(in input) input {
+	if in.Request != nil {
+		req := *in.Request
+		if strings.TrimSpace(req.Fn) == "" {
+			req.Fn = in.Fn
+		}
+		req.Kind = defaultActKind(req.Kind, req.Fn)
+		in.Request = &req
+		return in
+	}
+	in.Kind = defaultActKind(in.Kind, in.Fn)
+	return in
 }
 
 func (t *Tool) executeAct(
@@ -2165,6 +2204,20 @@ func hasServerSnapshotArgs(in input) bool {
 		strings.TrimSpace(in.Selector) != "" ||
 		strings.TrimSpace(in.Frame) != "" ||
 		in.Labels != nil
+}
+
+func clearServerSnapshotArgs(in input) input {
+	in.Limit = nil
+	in.Mode = ""
+	in.SnapshotFormat = ""
+	in.Refs = ""
+	in.Interactive = nil
+	in.Compact = nil
+	in.Depth = nil
+	in.Selector = ""
+	in.Frame = ""
+	in.Labels = nil
+	return in
 }
 
 func addServerSnapshotArgs(args map[string]any, in input) {

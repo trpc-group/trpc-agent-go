@@ -617,6 +617,8 @@ func TestCompactedCurrentInvocationMessage_KeepToolName(t *testing.T) {
 	)
 	require.True(t, baselineOK)
 	require.Contains(t, baseline.Content, compactedToolResultPlaceholder)
+	require.Contains(t, baseline.Content, "Do not re-invoke")
+	require.NotContains(t, baseline.Content, "session summary above")
 
 	compacted, ok := compactedCurrentInvocationMessage(
 		msg,
