@@ -935,6 +935,33 @@ func TestToolCall_NavigateSelectsTarget(t *testing.T) {
 	require.Equal(t, mcpToolNavigate, drv.calls[1].Tool)
 }
 
+func TestToolCall_NavigateAcceptsTargetURL(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: textPayload("navigated"),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":    actionNavigate,
+			"targetUrl": "https://example.com",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionNavigate, got.Action)
+	require.Contains(t, got.Text, "navigated")
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolNavigate, drv.calls[0].Tool)
+	require.Equal(t, "https://example.com", drv.calls[0].Args["url"])
+}
+
 func TestToolCall_NavigateRequiresURL(t *testing.T) {
 	t.Parallel()
 
@@ -1163,6 +1190,64 @@ func TestToolCall_UploadRejectsElementForMCPDriver(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "browser-server")
+}
+
+func TestToolCall_ActNavigateRoutesToBrowserNavigate(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		input   map[string]any
+		wantURL string
+	}{
+		{
+			name: "nested url",
+			input: map[string]any{
+				"action": actionAct,
+				"request": map[string]any{
+					"kind": actionNavigate,
+					"url":  "https://example.com/nested",
+				},
+			},
+			wantURL: "https://example.com/nested",
+		},
+		{
+			name: "top-level target url",
+			input: map[string]any{
+				"action":    actionAct,
+				"kind":      actionNavigate,
+				"targetUrl": "https://example.com/top-level",
+			},
+			wantURL: "https://example.com/top-level",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			drv := &fakeDriver{
+				callResult: map[string]any{
+					mcpToolNavigate: textPayload("navigated"),
+				},
+			}
+			tool := newTestTool(drv)
+
+			raw, err := tool.Call(
+				context.Background(),
+				mustJSON(t, tc.input),
+			)
+			require.NoError(t, err)
+
+			got := raw.(Result)
+			require.Equal(t, actionAct, got.Action)
+			require.Contains(t, got.Text, "navigated")
+			require.Len(t, drv.calls, 1)
+			require.Equal(t, mcpToolNavigate, drv.calls[0].Tool)
+			require.Equal(t, tc.wantURL, drv.calls[0].Args["url"])
+		})
+	}
 }
 
 func TestToolCall_ActRoutesLegacyFields(t *testing.T) {

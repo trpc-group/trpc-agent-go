@@ -170,6 +170,7 @@ type actRequest struct {
 	TimeMs      *int             `json:"timeMs,omitempty"`
 	Selector    string           `json:"selector,omitempty"`
 	URL         string           `json:"url,omitempty"`
+	TargetURL   string           `json:"targetUrl,omitempty"`
 	LoadState   string           `json:"loadState,omitempty"`
 	TextGone    string           `json:"textGone,omitempty"`
 	TimeoutMs   *int             `json:"timeoutMs,omitempty"`
@@ -548,7 +549,8 @@ func browserSchema() *tool.Schema {
 		"height":    numberSchema("Viewport height."),
 		"timeMs":    numberSchema("Wait duration in milliseconds."),
 		"selector":  stringSchema("Selector for wait."),
-		"url":       stringSchema("URL for wait."),
+		"url":       stringSchema("URL for navigate or wait."),
+		"targetUrl": stringSchema("Alias for browser URL."),
 		"loadState": stringSchema("Load state for wait."),
 		"textGone":  stringSchema("Text that must disappear."),
 		"timeoutMs": numberSchema("Timeout in milliseconds."),
@@ -560,7 +562,7 @@ func browserSchema() *tool.Schema {
 		"target":         stringSchema("Browser target: host, sandbox, or node."),
 		"node":           stringSchema("Node browser target."),
 		"profile":        stringSchema("Browser profile name."),
-		"targetUrl":      stringSchema("Alias for open URL."),
+		"targetUrl":      stringSchema("Alias for browser URL."),
 		"url":            stringSchema("Browser URL."),
 		"targetId":       stringSchema("Tab target id."),
 		"operation":      stringSchema("State operation."),
@@ -705,7 +707,8 @@ func (t *Tool) resolveDriver(
 			return profile, drv, nil
 		}
 		return "", nil, errors.New(
-			"browser sandbox target is not configured",
+			"browser sandbox target is not configured; omit target to " +
+				"use the default host browser",
 		)
 	case targetNode:
 		nodeID := strings.TrimSpace(in.Node)
@@ -1150,7 +1153,7 @@ func (t *Tool) handleNavigate(
 		return Result{}, err
 	}
 
-	rawURL := strings.TrimSpace(in.URL)
+	rawURL := browserURL(in.URL, in.TargetURL)
 	if rawURL == "" {
 		return Result{}, errors.New("browser navigate requires url")
 	}
@@ -1889,6 +1892,9 @@ func normalizeActRequest(in input) actRequest {
 		if strings.TrimSpace(req.Ref) == "" {
 			req.Ref = in.Ref
 		}
+		if strings.TrimSpace(req.URL) == "" {
+			req.URL = browserURL(in.URL, in.TargetURL)
+		}
 		req.Kind = defaultActKind(req.Kind, req.Fn)
 		return req
 	}
@@ -1913,7 +1919,7 @@ func normalizeActRequest(in input) actRequest {
 		Height:      in.Height,
 		TimeMs:      in.TimeMs,
 		Selector:    in.Selector,
-		URL:         in.URL,
+		URL:         browserURL(in.URL, in.TargetURL),
 		LoadState:   in.LoadState,
 		TextGone:    in.TextGone,
 		TimeoutMs:   in.TimeoutMs,
@@ -2021,6 +2027,17 @@ func (t *Tool) executeAct(
 		})
 	case actWait:
 		return t.executeWait(ctx, drv, req, driverType)
+	case actionNavigate:
+		rawURL := browserURL(req.URL, req.TargetURL)
+		if rawURL == "" {
+			return nil, errors.New("browser act navigate requires url")
+		}
+		if err := t.navigation.Validate(rawURL); err != nil {
+			return nil, err
+		}
+		return drv.Call(ctx, mcpToolNavigate, map[string]any{
+			"url": rawURL,
+		})
 	case actEvaluate:
 		if !t.evaluateEnabled {
 			return nil, errors.New(
@@ -2439,6 +2456,10 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func browserURL(values ...string) string {
+	return firstNonEmpty(values...)
 }
 
 func normalizeMouseButton(button string) string {
