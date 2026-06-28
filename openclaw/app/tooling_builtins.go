@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -436,6 +437,9 @@ func newFileToolSet(
 
 func defaultFileReadOnlyDirs(stateDir string) []string {
 	roots := []string{os.TempDir()}
+	if runtime.GOOS != "windows" {
+		roots = append(roots, "/tmp")
+	}
 	if stateDir := strings.TrimSpace(stateDir); stateDir != "" {
 		roots = append(
 			roots,

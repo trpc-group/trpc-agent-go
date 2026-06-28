@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -437,6 +438,18 @@ func TestNewFileToolSet_RuntimeReadDirsCanDisable(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "outside configured read-only roots")
+}
+
+func TestDefaultFileReadOnlyDirsIncludesPlatformTmp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hardcoded /tmp root is Unix-only")
+	}
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	roots := defaultFileReadOnlyDirs("")
+	require.Contains(t, roots, tmp)
+	require.Contains(t, roots, "/tmp")
 }
 
 func TestOverrideToolSetName_NoOpWhenEmpty(t *testing.T) {
