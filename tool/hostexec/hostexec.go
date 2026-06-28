@@ -177,7 +177,10 @@ func (t *execCommandTool) Declaration() *tool.Declaration {
 			"general local shell work in the configured base " +
 			"directory. Long-running or interactive commands can " +
 			"continue with write_stdin. Relative workdir values " +
-			"resolve from the tool set base directory.",
+			"resolve from the tool set base directory. If a file " +
+			"tool must read command output later, write that output " +
+			"to a relative path under the workdir/base directory " +
+			"instead of an absolute temp path.",
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"command"},

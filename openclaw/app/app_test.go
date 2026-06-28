@@ -2785,6 +2785,75 @@ func TestNewAgent_DeferToolSurfaceUsesDynamicAgent(t *testing.T) {
 	)
 }
 
+func TestNewAgent_ContextCompactionKeepsDynamicAgentResults(t *testing.T) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:                 "demo",
+		StateDir:                t.TempDir(),
+		EnableContextCompaction: true,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	dynamicContent := strings.Repeat("dynamic-final ", 1400)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				RequestID:    "req-dynamic",
+				InvocationID: "inv-dynamic",
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role: model.RoleAssistant,
+							ToolCalls: []model.ToolCall{{
+								ID: "call-dynamic",
+								Function: model.FunctionDefinitionParam{
+									Name: agenttool.
+										DefaultDynamicToolName,
+									Arguments: []byte(`{}`),
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				RequestID:    "req-dynamic",
+				InvocationID: "inv-dynamic",
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewToolMessage(
+							"call-dynamic",
+							agenttool.DefaultDynamicToolName,
+							dynamicContent,
+						),
+					}},
+				},
+			},
+			{
+				RequestID:    "req-recent",
+				InvocationID: "inv-recent",
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage(
+							"recent turn",
+						),
+					}},
+				},
+			},
+		},
+	}
+
+	req := runAgentAndCapture(t, agt, mdl, sess)
+	all := joinAllMessageContent(req)
+	require.Contains(t, all, dynamicContent)
+	require.NotContains(t, all, "tool_name: dynamic_agent")
+}
+
 func TestNewAgent_DeferToolSurfaceAutoKeepsSmallToolSurface(t *testing.T) {
 	t.Parallel()
 

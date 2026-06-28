@@ -190,6 +190,7 @@ func TestResolvePath_AbsolutePath(t *testing.T) {
 	fts := set.(*fileToolSet)
 	_, err = fts.resolvePath("/tmp/a.txt")
 	assert.Error(t, err)
+	assert.Contains(t, err.Error(), relativePathGuidance)
 }
 
 func TestResolvePath_Empty(t *testing.T) {

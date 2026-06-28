@@ -36,6 +36,12 @@ const (
 	defaultLiteBaseURL = "https://lite.duckduckgo.com/lite/"
 	// defaultUserAgent is the default user agent for HTTP requests.
 	defaultUserAgent = "trpc-agent-go-duckduckgo/1.0"
+	// defaultSERPUserAgent is used for HTML/Lite SERP backends. A
+	// browser-compatible UA avoids being served simplified or challenge-prone
+	// variants more often than the API-oriented default UA.
+	defaultSERPUserAgent = "Mozilla/5.0 (X11; Linux x86_64) " +
+		"AppleWebKit/537.36 (KHTML, like Gecko) " +
+		"Chrome/126.0.0.0 Safari/537.36"
 	// defaultTimeout is the default timeout for HTTP requests.
 	defaultTimeout = 30 * time.Second
 	// defaultKeepAlive is the default TCP keep-alive interval.
@@ -151,6 +157,10 @@ func NewTool(opts ...Option) tool.CallableTool {
 	if strings.TrimSpace(cfg.baseURL) == "" {
 		cfg.baseURL = defaultBaseURLForBackend(cfg.backend)
 	}
+	if isSERPBackend(cfg.backend) &&
+		strings.TrimSpace(cfg.userAgent) == defaultUserAgent {
+		cfg.userAgent = defaultSERPUserAgent
+	}
 	cfg.httpClient = configuredHTTPClient(cfg)
 
 	// Create the client with the configured values.
@@ -198,6 +208,10 @@ func normalizeBackend(backend string) string {
 	default:
 		return strings.ToLower(strings.TrimSpace(backend))
 	}
+}
+
+func isSERPBackend(backend string) bool {
+	return backend == backendHTML || backend == backendLite
 }
 
 func defaultBaseURLForBackend(backend string) string {

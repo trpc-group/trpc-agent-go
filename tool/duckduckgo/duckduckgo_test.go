@@ -404,7 +404,8 @@ func TestDDGTool_SERPHTTPFailures(t *testing.T) {
 		httpClient: &http.Client{Transport: roundTripFunc(
 			func(r *http.Request) (*http.Response, error) {
 				require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
-				require.Equal(t, "text/html", r.Header.Get("Accept"))
+				require.Contains(t, r.Header.Get("Accept"), "text/html")
+				require.Equal(t, "en-US,en;q=0.9", r.Header.Get("Accept-Language"))
 				return nil, dialErr
 			},
 		)},
@@ -689,6 +690,38 @@ func TestNewTool_WithBackendUsesSERPBackend(t *testing.T) {
 	require.Len(t, result.Results, 1)
 	require.Equal(t, "https://example.org/lite", result.Results[0].URL)
 	require.Contains(t, result.Summary, "lite")
+}
+
+func TestNewTool_SERPBackendUsesBrowserDefaultUserAgent(t *testing.T) {
+	t.Parallel()
+
+	var gotUserAgent string
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotUserAgent = r.Header.Get("User-Agent")
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a" href="https://example.com/">Example</a>
+</body></html>`))
+		},
+	))
+	defer server.Close()
+
+	searchTool := NewTool(
+		WithBaseURL(server.URL),
+		WithBackend(backendHTML),
+		WithHTTPClient(server.Client()),
+	)
+	raw, err := searchTool.Call(
+		context.Background(),
+		[]byte(`{"query":"browser ua"}`),
+	)
+	require.NoError(t, err)
+	result, ok := raw.(searchResponse)
+	require.True(t, ok)
+	require.Len(t, result.Results, 1)
+	require.Contains(t, gotUserAgent, "Mozilla/5.0")
+	require.Contains(t, gotUserAgent, "Chrome/")
 }
 
 func TestNormalizeBackend(t *testing.T) {

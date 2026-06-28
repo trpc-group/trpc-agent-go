@@ -70,11 +70,22 @@ func baseLLMAgentOptions(
 		llmagent.WithEventMessageProjector(
 			conversation.ProjectEventMessage,
 		),
+		llmagent.WithToolResultCompactionConfig(
+			openClawToolResultCompactionConfig(),
+		),
 		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
 		llmagent.WithPostToolPrompt(openClawPostToolPrompt),
 		llmagent.WithSkillFilter(
 			runtimeprofile.SkillVisibilityFilterForRepository(repo),
 		),
+	}
+}
+
+func openClawToolResultCompactionConfig() *llmagent.ToolResultCompactionConfig {
+	return &llmagent.ToolResultCompactionConfig{
+		KeepToolNames: []string{
+			agenttool.DefaultDynamicToolName,
+		},
 	}
 }
 

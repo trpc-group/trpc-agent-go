@@ -94,7 +94,11 @@ func (t *ddgTool) searchSERP(
 	if strings.TrimSpace(t.userAgent) != "" {
 		httpReq.Header.Set("User-Agent", t.userAgent)
 	}
-	httpReq.Header.Set("Accept", "text/html")
+	httpReq.Header.Set(
+		"Accept",
+		"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+	)
+	httpReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
 	resp, err := t.httpClient.Do(httpReq)
 	if err != nil {

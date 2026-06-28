@@ -50,6 +50,9 @@ const (
 	missingFileSearchToolName   = "search_file"
 	missingFileTopLevelPrefix   = "Top-level entries: "
 	missingFileBaseDirPrefix    = "Base directory: "
+	relativePathGuidance        = "Use a relative path under " +
+		"base_directory, or have exec_command print the data " +
+		"directly instead of writing an absolute temp path."
 	missingFileRecoveryGuidance = "Use " +
 		missingFileListToolName + " or " +
 		missingFileSearchToolName +
@@ -266,8 +269,9 @@ func (f *fileToolSet) resolvePath(relativePath string) (string, error) {
 	if filepath.IsAbs(reqPath) || strings.Contains(reqPath, "..") {
 		return "", fmt.Errorf(
 			"invalid path - absolute paths and '..' "+
-				"are not allowed: %s",
+				"are not allowed: %s. %s",
 			relativePath,
+			relativePathGuidance,
 		)
 	}
 	return filepath.Join(f.baseDir, reqPath), nil
