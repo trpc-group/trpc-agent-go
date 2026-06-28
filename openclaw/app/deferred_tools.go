@@ -18,6 +18,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/conversation"
+	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -37,6 +38,13 @@ type deferredToolSurfaceConfig struct {
 	ToolSets      []tool.ToolSet
 	CodeExecutor  codeexecutor.CodeExecutor
 	ToolCallbacks *tool.Callbacks
+}
+
+var openClawDeferredToolAliases = map[string]string{
+	"browser-runtime":           ocbrowser.ToolName,
+	"browser_runtime":           ocbrowser.ToolName,
+	"trpc-claw-browser-runtime": ocbrowser.ToolName,
+	"trpc_claw_browser_runtime": ocbrowser.ToolName,
 }
 
 func baseLLMAgentOptions(
@@ -191,6 +199,7 @@ func newDeferredToolSurfaceTool(
 		agenttool.WithCapabilityProvider(
 			deferredCapabilityProvider(cfg.Tools, cfg.ToolSets),
 		),
+		agenttool.WithCapabilityToolAliases(openClawDeferredToolAliases),
 		agenttool.WithCapabilitySkillsProvider(
 			deferredCapabilitySkillsProvider(
 				cfg.Repository,
@@ -222,6 +231,9 @@ func newDeferredCapabilitySearchTool(
 	return agenttool.NewCapabilitySearchTool(
 		agenttool.WithCapabilitySearchProvider(
 			deferredCapabilityProvider(cfg.Tools, cfg.ToolSets),
+		),
+		agenttool.WithCapabilitySearchToolAliases(
+			openClawDeferredToolAliases,
 		),
 		agenttool.WithCapabilitySearchSkillsProvider(
 			deferredCapabilitySkillsProvider(

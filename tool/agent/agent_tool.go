@@ -99,6 +99,7 @@ type dynamicOptions struct {
 	instructionDescription    *string
 	toolsDescription          *string
 	skillsDescription         *string
+	toolAliases               map[string]string
 }
 
 func defaultDynamicOptions() *dynamicOptions {

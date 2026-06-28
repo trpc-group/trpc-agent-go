@@ -202,6 +202,19 @@ func WithCapabilityTools(tools []tool.Tool) Option {
 	}
 }
 
+// WithCapabilityToolAliases maps model-facing aliases to canonical tool names
+// when a dynamic sub-agent selects tools. Use this for stable runtime names,
+// legacy names, or product names that users and models naturally mention but
+// that differ from the actual tool declaration name. Aliases never create new
+// capabilities; they only resolve to tools already present in the dynamic
+// capability surface.
+func WithCapabilityToolAliases(aliases map[string]string) Option {
+	return func(opts *agentToolOptions) {
+		opts.ensureDynamicOptions().toolAliases =
+			normalizeToolAliases(aliases)
+	}
+}
+
 // WithCapabilitySkills sets a fixed maximum skill repository for a dynamic
 // sub-agent. The model may only select a subset of these skills. This takes
 // precedence over the default parent-derived skill repository.
@@ -781,18 +794,25 @@ func (at *Tool) selectDynamicTools(
 	}
 
 	selected := make([]tool.Tool, 0, len(spec.tools))
+	selectedNames := make(map[string]bool, len(spec.tools))
 	var warnings []string
 	for _, name := range spec.tools {
-		t, ok := candidateByName[name]
+		canonicalName := at.resolveDynamicToolName(name)
+		t, ok := candidateByName[canonicalName]
 		if !ok {
-			if unavailable, exists := unavailableTools[name]; exists {
-				warnings = append(warnings, formatUnavailableToolWarning(name, unavailable))
+			if unavailable, exists := unavailableTools[canonicalName]; exists {
+				warnings = append(warnings,
+					formatUnavailableToolWarning(name, unavailable))
 				continue
 			}
 			warnings = append(warnings, fmt.Sprintf(
 				"requested tool %q is not available and was ignored", name))
 			continue
 		}
+		if selectedNames[canonicalName] {
+			continue
+		}
+		selectedNames[canonicalName] = true
 		selected = append(selected, t)
 	}
 	if len(selected) == 0 {
@@ -800,6 +820,17 @@ func (at *Tool) selectDynamicTools(
 			"none of the requested tools were available; the sub-agent has no user tools")
 	}
 	return selected, warnings
+}
+
+func (at *Tool) resolveDynamicToolName(name string) string {
+	name = strings.TrimSpace(name)
+	if at == nil || at.dynamicCfg == nil || len(at.dynamicCfg.toolAliases) == 0 {
+		return name
+	}
+	if canonical, ok := at.dynamicCfg.toolAliases[name]; ok {
+		return canonical
+	}
+	return name
 }
 
 // dynamicMaxSkillRepo resolves the maximum skill repository the model may
@@ -1122,6 +1153,25 @@ func toolNameSet(tools []tool.Tool) map[string]bool {
 		}
 	}
 	return names
+}
+
+func normalizeToolAliases(aliases map[string]string) map[string]string {
+	if len(aliases) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(aliases))
+	for alias, canonical := range aliases {
+		alias = strings.TrimSpace(alias)
+		canonical = strings.TrimSpace(canonical)
+		if alias == "" || canonical == "" || alias == canonical {
+			continue
+		}
+		out[alias] = canonical
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func declarationName(t tool.Tool) string {

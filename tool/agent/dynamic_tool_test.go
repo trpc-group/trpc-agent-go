@@ -364,6 +364,60 @@ func TestCapabilitySearchTool_SelectsExactNames(t *testing.T) {
 	require.False(t, got.Truncated)
 }
 
+func TestCapabilitySearchTool_ResolvesToolAliases(t *testing.T) {
+	search := NewCapabilitySearchTool(
+		WithCapabilitySearchProvider(
+			func(
+				context.Context,
+				*agent.Invocation,
+			) ([]tool.Tool, map[string]bool) {
+				return []tool.Tool{dynStubTool{
+					name:        "browser",
+					description: "Control a real browser.",
+				}}, nil
+			},
+		),
+		WithCapabilitySearchToolAliases(map[string]string{
+			"trpc-claw-browser-runtime": "browser",
+			"browser-runtime":           "browser",
+		}),
+	)
+	callable := search.(tool.CallableTool)
+
+	out, err := callable.Call(
+		context.Background(),
+		[]byte(`{"query":"trpc-claw-browser-runtime","limit":5}`),
+	)
+	require.NoError(t, err)
+	got := out.(CapabilitySearchResult)
+	require.Equal(t, "bm25", got.SearchMode)
+	require.Equal(t, []CapabilityToolSummary{{
+		Name:        "browser",
+		Description: "Control a real browser.",
+		Aliases: []string{
+			"browser-runtime",
+			"trpc-claw-browser-runtime",
+		},
+	}}, got.Tools)
+
+	out, err = callable.Call(
+		context.Background(),
+		[]byte(`{"query":"select:trpc-claw-browser-runtime,browser-runtime"}`),
+	)
+	require.NoError(t, err)
+	got = out.(CapabilitySearchResult)
+	require.Equal(t, "select", got.SearchMode)
+	require.Equal(t, []CapabilityToolSummary{{
+		Name:        "browser",
+		Description: "Control a real browser.",
+		Aliases: []string{
+			"browser-runtime",
+			"trpc-claw-browser-runtime",
+		},
+	}}, got.Tools)
+	require.Empty(t, got.Missing)
+}
+
 func TestCapabilitySearchTool_SearchesSchemaMetadataWithBM25(
 	t *testing.T,
 ) {
@@ -558,6 +612,30 @@ func TestSelectDynamicTools_SubsetSelection(t *testing.T) {
 	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"a", "c"}, selectedNames(selected))
+}
+
+func TestSelectDynamicTools_ResolvesAliases(t *testing.T) {
+	at := NewDynamicTool(WithCapabilityToolAliases(map[string]string{
+		"browser-runtime": "browser",
+		"runtime":         "browser",
+		"blank":           "",
+		"same":            "same",
+	}))
+	maxTools := stubTools("browser", "web_fetch")
+	spec := dynamicSpec{
+		toolsProvided: true,
+		tools:         []string{"browser-runtime", "browser", "web_fetch"},
+	}
+	selected, warnings := at.selectDynamicTools(
+		maxTools, toolNameSet(maxTools), nil, nil, spec)
+	require.Empty(t, warnings)
+	require.Equal(t, []string{"browser", "web_fetch"}, selectedNames(selected))
+
+	spec = dynamicSpec{toolsProvided: true, tools: []string{"runtime"}}
+	selected, warnings = at.selectDynamicTools(
+		maxTools, toolNameSet(maxTools), nil, nil, spec)
+	require.Empty(t, warnings)
+	require.Equal(t, []string{"browser"}, selectedNames(selected))
 }
 
 func TestSelectDynamicTools_UnknownRequestedToolWarns(t *testing.T) {
