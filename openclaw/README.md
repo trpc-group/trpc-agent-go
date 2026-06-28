@@ -814,6 +814,29 @@ You can override the OpenAI-compatible base URL with:
 - `-openai-base-url` (CLI flag), or
 - `model.base_url` (YAML config).
 
+Some OpenAI-compatible gateways require additional HTTP headers. Set them with
+`OPENAI_HEADERS` as space-, comma-, or newline-separated `KEY=VALUE` pairs:
+
+```bash
+export OPENAI_HEADERS="X-Example-User=alice X-Example-Agent=openclaw"
+```
+
+Quote values that contain spaces or commas:
+
+```bash
+export OPENAI_HEADERS='X-Example-User=alice Authorization="Bearer token"'
+```
+
+You can also configure them in YAML:
+
+```yaml
+model:
+  headers:
+    X-Example-User: "alice"
+    X-Example-Agent: "openclaw"
+    X-Example-Token: "Bearer token-with-space"
+```
+
 ### DeepSeek (OpenAI-compatible)
 
 If you use DeepSeek directly, set `DEEPSEEK_API_KEY` together with the official
