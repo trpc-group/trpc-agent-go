@@ -128,10 +128,15 @@ func (t *ddgTool) searchSERP(
 	}
 	if isDuckDuckGoChallenge(body) {
 		return searchResponse{
-			Query:   req.Query,
-			Results: []resultItem{},
-			Summary: "DuckDuckGo returned an anti-bot challenge page",
-		}, fmt.Errorf("duckduckgo returned an anti-bot challenge page")
+				Query:   req.Query,
+				Results: []resultItem{},
+				Summary: "DuckDuckGo returned an anti-bot challenge page; " +
+					"use direct URLs with web_fetch/browser or another " +
+					"configured search provider instead of immediately " +
+					"retrying the same query",
+			}, fmt.Errorf(
+				"duckduckgo returned an anti-bot challenge page",
+			)
 	}
 
 	results := parseSERPResults(body)
@@ -233,7 +238,7 @@ func parseSERPResults(body []byte) []resultItem {
 	seen := make(map[string]struct{}, len(results))
 	for _, item := range results {
 		normalizedURL := normalizeSERPURL(item.URL)
-		if normalizedURL == "" {
+		if normalizedURL == "" || isSERPAdURL(normalizedURL) {
 			continue
 		}
 		if _, ok := seen[normalizedURL]; ok {
@@ -268,6 +273,26 @@ func normalizeSERPURL(rawURL string) string {
 		return "https:" + trimmed
 	}
 	return trimmed
+}
+
+func isSERPAdURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	host := strings.TrimPrefix(strings.ToLower(parsed.Hostname()), "www.")
+	path := strings.ToLower(parsed.EscapedPath())
+	query := strings.ToLower(parsed.RawQuery)
+	if host == "duckduckgo.com" &&
+		(path == "/y.js" ||
+			strings.Contains(query, "ad_domain=") ||
+			strings.Contains(query, "ad_provider=")) {
+		return true
+	}
+	if host == "bing.com" && strings.HasPrefix(path, "/aclick") {
+		return true
+	}
+	return false
 }
 
 func htmlAttr(node *html.Node, key string) string {

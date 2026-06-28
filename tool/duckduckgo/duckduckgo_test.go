@@ -298,6 +298,7 @@ func TestDDGTool_SERPChallenge(t *testing.T) {
 	require.Error(t, err)
 	require.Empty(t, result.Results)
 	require.Contains(t, result.Summary, "anti-bot challenge")
+	require.Contains(t, result.Summary, "another configured search provider")
 }
 
 func TestDDGTool_SERPFallbackOnChallenge(t *testing.T) {
@@ -490,6 +491,24 @@ func TestParseSERPResultsDedupesBeforeLimit(t *testing.T) {
 	require.Equal(t, "https://example.com/5", results[len(results)-1].URL)
 }
 
+func TestParseSERPResultsSkipsAds(t *testing.T) {
+	t.Parallel()
+
+	results := parseSERPResults([]byte(`
+<html><body>
+  <a class="result__a" href="https://duckduckgo.com/y.js?ad_domain=example.com&ad_provider=bing">Ad result</a>
+  <div class="result__snippet">Sponsored snippet.</div>
+  <a class="result__a" href="https://www.bing.com/aclick?ld=abc">Bing ad</a>
+  <div class="result__snippet">Another ad.</div>
+  <a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Freal">Real result</a>
+  <div class="result__snippet">Organic snippet.</div>
+</body></html>`))
+
+	require.Len(t, results, 1)
+	require.Equal(t, "Real result", results[0].Title)
+	require.Equal(t, "https://example.com/real", results[0].URL)
+}
+
 func TestNormalizeSERPURL(t *testing.T) {
 	t.Parallel()
 
@@ -501,6 +520,19 @@ func TestNormalizeSERPURL(t *testing.T) {
 		normalizeSERPURL(
 			"https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fgaia",
 		))
+}
+
+func TestIsSERPAdURL(t *testing.T) {
+	t.Parallel()
+
+	require.True(
+		t,
+		isSERPAdURL(
+			"https://duckduckgo.com/y.js?ad_domain=x&ad_provider=bing",
+		),
+	)
+	require.True(t, isSERPAdURL("https://www.bing.com/aclick?ld=abc"))
+	require.False(t, isSERPAdURL("https://example.com/organic"))
 }
 
 func TestFallbackSERPBaseURL(t *testing.T) {
