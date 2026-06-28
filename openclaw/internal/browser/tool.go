@@ -119,6 +119,33 @@ var supportedActions = []string{
 	actionEvaluate,
 }
 
+var supportedPlaywrightMCPActions = []string{
+	actionStatus,
+	actionStart,
+	actionStop,
+	actionProfiles,
+	actionTabs,
+	actionOpen,
+	actionFocus,
+	actionClose,
+	actionSnapshot,
+	actionScreenshot,
+	actionNavigate,
+	actionConsole,
+	actionPDF,
+	actionUpload,
+	actionDialog,
+	actionAct,
+	actionEvaluate,
+}
+
+func supportedActionsForDriver(driverType string) []string {
+	if driverType == driverTypeBrowserServer {
+		return append([]string(nil), supportedActions...)
+	}
+	return append([]string(nil), supportedPlaywrightMCPActions...)
+}
+
 type actRequest struct {
 	Kind        string           `json:"kind,omitempty"`
 	TargetID    string           `json:"targetId,omitempty"`
@@ -767,18 +794,21 @@ func (t *Tool) handleProfiles(
 		DefaultProfile:  t.defaultProfile,
 		Driver:          ToolName,
 		EvaluateEnabled: t.evaluateEnabled,
-		Supported:       append([]string(nil), supportedActions...),
-		Profiles:        make([]ProfileInfo, 0, len(t.profiles)),
+		Supported: supportedActionsForDriver(
+			t.driverTypeForProfile(t.defaultProfile),
+		),
+		Profiles: make([]ProfileInfo, 0, len(t.profiles)),
 	}
 
 	for _, name := range names {
 		cfg := t.profiles[name]
+		driverType := t.driverTypeForProfile(name)
 		info := ProfileInfo{
 			Name:        name,
 			Description: cfg.Description,
 			Default:     name == t.defaultProfile,
-			Driver:      t.driverTypeForProfile(name),
-			Supported:   append([]string(nil), supportedActions...),
+			Driver:      driverType,
+			Supported:   supportedActionsForDriver(driverType),
 		}
 		drv := t.statusDriver(name, cfg)
 		if drv != nil {
