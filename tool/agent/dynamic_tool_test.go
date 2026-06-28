@@ -394,10 +394,6 @@ func TestCapabilitySearchTool_ResolvesToolAliases(t *testing.T) {
 	require.Equal(t, []CapabilityToolSummary{{
 		Name:        "browser",
 		Description: "Control a real browser.",
-		Aliases: []string{
-			"browser-runtime",
-			"trpc-claw-browser-runtime",
-		},
 	}}, got.Tools)
 
 	out, err = callable.Call(
@@ -410,10 +406,6 @@ func TestCapabilitySearchTool_ResolvesToolAliases(t *testing.T) {
 	require.Equal(t, []CapabilityToolSummary{{
 		Name:        "browser",
 		Description: "Control a real browser.",
-		Aliases: []string{
-			"browser-runtime",
-			"trpc-claw-browser-runtime",
-		},
 	}}, got.Tools)
 	require.Empty(t, got.Missing)
 }

@@ -370,7 +370,6 @@ func capabilitySummaries(
 			tools = append(tools, CapabilityToolSummary{
 				Name:        item.Name,
 				Description: item.Description,
-				Aliases:     append([]string(nil), item.Aliases...),
 			})
 		}
 	}

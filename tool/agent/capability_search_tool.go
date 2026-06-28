@@ -119,9 +119,8 @@ type CapabilitySearchResult struct {
 
 // CapabilityToolSummary describes one available tool capability.
 type CapabilityToolSummary struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description,omitempty"`
-	Aliases     []string `json:"aliases,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 // CapabilitySkillSummary describes one available skill capability.
