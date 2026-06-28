@@ -666,6 +666,29 @@ go run ./cmd/openclaw \
 - `-openai-base-url`（CLI 参数），或
 - `model.base_url`（YAML 配置）。
 
+某些 OpenAI 兼容网关还要求额外 HTTP header。可以用
+`OPENAI_HEADERS` 设置，格式为空格、逗号或换行分隔的 `KEY=VALUE`：
+
+```bash
+export OPENAI_HEADERS="X-Example-User=alice X-Example-Agent=openclaw"
+```
+
+如果 header 值包含空格或逗号，请加引号：
+
+```bash
+export OPENAI_HEADERS='X-Example-User=alice Authorization="Bearer token"'
+```
+
+也可以写在 YAML 里：
+
+```yaml
+model:
+  headers:
+    X-Example-User: "alice"
+    X-Example-Agent: "openclaw"
+    X-Example-Token: "Bearer token-with-space"
+```
+
 ### DeepSeek（OpenAI 兼容）
 
 如果你直连 DeepSeek，请同时设置 `DEEPSEEK_API_KEY` 和官方
