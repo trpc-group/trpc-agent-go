@@ -33,6 +33,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
@@ -421,7 +422,9 @@ const (
 	qwenAPIHost     = "dashscope.aliyuncs.com"
 	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
 
+	openAIAPIKeyEnvName  = "OPENAI_API_KEY"
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
+	openAIHeadersEnvName = "OPENAI_HEADERS"
 	openAIModelEnvName   = "OPENAI_MODEL"
 
 	errClaudeCodeAgentNoPrompts = "claude-code agent does not support " +
@@ -3432,6 +3435,12 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 	if baseURL != "" {
 		opts = append(opts, openai.WithBaseURL(baseURL))
 	}
+	if apiKey := strings.TrimSpace(spec.APIKey); apiKey != "" {
+		opts = append(opts, openai.WithAPIKey(apiKey))
+	}
+	if len(spec.Headers) > 0 {
+		opts = append(opts, openai.WithHeaders(spec.Headers))
+	}
 	return openai.New(name, opts...), nil
 }
 
@@ -3450,16 +3459,151 @@ func modelFromOptions(opts runOptions) (model.Model, error) {
 	if baseURL == "" {
 		baseURL = strings.TrimSpace(os.Getenv(openAIBaseURLEnvName))
 	}
+	var headers map[string]string
+	if mode == modeOpenAI {
+		resolved, err := resolveOpenAIHeaders(opts.OpenAIHeaders)
+		if err != nil {
+			return nil, err
+		}
+		headers = resolved
+	}
 
 	spec := registry.ModelSpec{
 		Type:                 mode,
 		Name:                 opts.OpenAIModel,
 		BaseURL:              baseURL,
+		APIKey:               strings.TrimSpace(os.Getenv(openAIAPIKeyEnvName)),
 		OpenAIVariant:        opts.OpenAIVariant,
+		Headers:              headers,
 		DebugRecorderEnabled: opts.DebugRecorderEnabled,
 		Config:               opts.ModelConfig,
 	}
 	return f(spec)
+}
+
+func resolveOpenAIHeaders(
+	config map[string]string,
+) (map[string]string, error) {
+	headers := cleanHeaderMap(config)
+	envHeaders, err := parseHeaderPairs(os.Getenv(openAIHeadersEnvName))
+	if err != nil {
+		return nil, err
+	}
+	if len(envHeaders) == 0 {
+		return headers, nil
+	}
+	if headers == nil {
+		headers = map[string]string{}
+	}
+	for key, value := range envHeaders {
+		headers[key] = value
+	}
+	return headers, nil
+}
+
+func cleanHeaderMap(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	cleaned := make(map[string]string, len(headers))
+	for key, value := range headers {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		cleaned[key] = value
+	}
+	if len(cleaned) == 0 {
+		return nil
+	}
+	return cleaned
+}
+
+func parseHeaderPairs(raw string) (map[string]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	fields, err := splitHeaderFields(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", openAIHeadersEnvName, err)
+	}
+	headers := make(map[string]string, len(fields))
+	for _, field := range fields {
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			key, value, ok = strings.Cut(field, ":")
+		}
+		if !ok {
+			return nil, fmt.Errorf(
+				"invalid %s entry %q: want KEY=VALUE",
+				openAIHeadersEnvName,
+				field,
+			)
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			return nil, fmt.Errorf(
+				"invalid %s entry %q: empty key or value",
+				openAIHeadersEnvName,
+				field,
+			)
+		}
+		headers[key] = value
+	}
+	return headers, nil
+}
+
+func splitHeaderFields(raw string) ([]string, error) {
+	var fields []string
+	var field strings.Builder
+	var quote rune
+	escaped := false
+	flush := func() {
+		if s := strings.TrimSpace(field.String()); s != "" {
+			fields = append(fields, s)
+		}
+		field.Reset()
+	}
+
+	for _, r := range raw {
+		if escaped {
+			field.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if quote != 0 {
+			if quote == '"' && r == '\\' {
+				escaped = true
+				continue
+			}
+			if r == quote {
+				quote = 0
+				continue
+			}
+			field.WriteRune(r)
+			continue
+		}
+
+		switch {
+		case r == '"' || r == '\'':
+			quote = r
+		case r == ',' || unicode.IsSpace(r):
+			flush()
+		default:
+			field.WriteRune(r)
+		}
+	}
+	if escaped {
+		return nil, errors.New("unterminated escape sequence")
+	}
+	if quote != 0 {
+		return nil, fmt.Errorf("unterminated %q quote", string(quote))
+	}
+	flush()
+	return fields, nil
 }
 
 func parseOpenAIVariant(
