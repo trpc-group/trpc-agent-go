@@ -2380,13 +2380,22 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      工具描述迭代
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#_19" class="md-nav__link">
+  <a href="#_20" class="md-nav__link">
     <span class="md-ellipsis">
       实践经验
     </span>
@@ -2396,7 +2405,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_20" class="md-nav__link">
+  <a href="#_21" class="md-nav__link">
     <span class="md-ellipsis">
       评估指标对齐
     </span>
@@ -2405,7 +2414,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_21" class="md-nav__link">
+  <a href="#_22" class="md-nav__link">
     <span class="md-ellipsis">
       预期输出来源
     </span>
@@ -2414,7 +2423,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_22" class="md-nav__link">
+  <a href="#_23" class="md-nav__link">
     <span class="md-ellipsis">
       裁判上下文
     </span>
@@ -2432,7 +2441,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_23" class="md-nav__link">
+  <a href="#_24" class="md-nav__link">
     <span class="md-ellipsis">
       迭代目标选择
     </span>
@@ -3524,13 +3533,22 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#_19" class="md-nav__link">
+    <span class="md-ellipsis">
+      工具描述迭代
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#_19" class="md-nav__link">
+  <a href="#_20" class="md-nav__link">
     <span class="md-ellipsis">
       实践经验
     </span>
@@ -3540,7 +3558,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_20" class="md-nav__link">
+  <a href="#_21" class="md-nav__link">
     <span class="md-ellipsis">
       评估指标对齐
     </span>
@@ -3549,7 +3567,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_21" class="md-nav__link">
+  <a href="#_22" class="md-nav__link">
     <span class="md-ellipsis">
       预期输出来源
     </span>
@@ -3558,7 +3576,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_22" class="md-nav__link">
+  <a href="#_23" class="md-nav__link">
     <span class="md-ellipsis">
       裁判上下文
     </span>
@@ -3576,7 +3594,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_23" class="md-nav__link">
+  <a href="#_24" class="md-nav__link">
     <span class="md-ellipsis">
       迭代目标选择
     </span>
@@ -4326,9 +4344,9 @@
 <p>当业务侧已经知道某个训练集评估用例的具体问题时，可以用 <code>LossHint</code> 补充问题原因。PromptIter 会把 <code>Reason</code> 并入对应失败指标的优化信号，使反向传播归因同时参考评估器给出的原因和业务侧补充原因。使用 <code>LossHint</code> 时，<code>EvalCaseID</code> 和 <code>MetricName</code> 必须能匹配本次训练评估结果中的失败指标，<code>Severity</code> 取值为 <code>P0</code>、<code>P1</code>、<code>P2</code> 或 <code>P3</code>。<code>LossHint</code> 不改变评估分数，也不参与验证集接受判定。</p>
 <p>训练集和验证集需要分离使用。训练集分数提升只能说明候选补丁在参与优化的样本上更接近指标要求，不能证明未参与优化的样本也满足指标。验证集用于暴露过拟合风险，并参与接受判定。</p>
 <h3 id="_12">静态结构快照</h3>
-<p>静态结构快照是待测 Agent 的结构导出结果，包含节点、边和可迭代槽位。结构快照中可作为迭代目标的内容在代码中称为 surface，每个 surface 都有稳定的 <code>SurfaceID</code>。本文只讨论 <code>instruction</code> 提示词迭代，PromptIter 通过结构快照确认本次指定的 <code>instruction</code> surface 是否存在。</p>
-<p>本文只讨论 <code>instruction</code> 类型 surface，即节点上的 instruction 提示词。提示词迭代需要明确目标范围，接入代码需要把选中的 <code>SurfaceID</code> 写入迭代请求的 <code>TargetSurfaceIDs</code>。</p>
-<p><code>Describe</code> 可用于查看结构快照。确定需要迭代的 <code>instruction</code> surface 后，将对应 ID 写入迭代请求的 <code>TargetSurfaceIDs</code>。</p>
+<p>静态结构快照是待测 Agent 的结构导出结果，包含节点、边和可迭代槽位。结构快照中可作为迭代目标的内容在代码中称为 surface，每个 surface 都有稳定的 <code>SurfaceID</code>。本节只讨论 <code>instruction</code> 提示词迭代，PromptIter 通过结构快照确认本次指定的 <code>instruction</code> surface 是否存在。</p>
+<p>本节只讨论 <code>instruction</code> 类型 surface，即节点上的 instruction 提示词。提示词迭代需要明确目标范围，接入代码需要把选中的 <code>SurfaceID</code> 写入迭代请求的 <code>TargetSurfaceIDs</code>。</p>
+<p><code>Describe</code> 可用于查看结构快照。确定需要迭代的 surface 后，将对应 ID 写入迭代请求的 <code>TargetSurfaceIDs</code>。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1">1</a></span>
 <span class="normal"><a href="#__codelineno-10-2">2</a></span>
 <span class="normal"><a href="#__codelineno-10-3">3</a></span>
@@ -5513,7 +5531,7 @@
 <p><code>RunRequest</code> 首先指定训练集和验证集。<code>Train</code> 用于产生优化信号，<code>Validation</code> 用于接受判定，二者均不能为空。每个 <code>EvalSetInput</code> 可以指向完整评估集，也可以通过 <code>EvalCaseIDs</code> 只运行其中部分评估用例。<code>LossHints</code> 只服务于训练集，用于补充业务侧已知的问题原因。</p>
 <p><code>InitialProfile</code> 用于指定本次迭代的起始 Profile。未传入时，PromptIter 使用结构快照中的原始 surface 值作为起始基线。传入 <code>InitialProfile</code> 时，如果 <code>StructureID</code> 非空，需要与当前结构快照 ID 一致。</p>
 <p><code>Teacher</code> 和 <code>Judge</code> 会传给 Evaluation。<code>Teacher</code> 用于在评估需要时生成预期轨迹或参考答案。如果 EvalSet 已包含这些预期信息，<code>Teacher</code> 可以不传入。<code>Judge</code> 用于支撑 LLM Judge 类指标打分。未使用这类指标时，<code>Judge</code> 可以不传入。</p>
-<p><code>TargetSurfaceIDs</code> 用于设置本次允许迭代的 surface。单 Agent 场景通常指向 <code>candidate#instruction</code>，多节点 Agent 场景可指向多个节点的 <code>instruction</code> surface。</p>
+<p><code>TargetSurfaceIDs</code> 用于设置本次允许迭代的 surface。单 Agent 场景通常指向 <code>candidate#instruction</code>，多节点 Agent 场景可指向多个节点的 <code>instruction</code> surface。工具描述迭代指向单工具描述 surface，例如 <code>candidate#tool.lookup_record</code>。</p>
 <p><code>EvaluationOptions</code> 配置训练集和验证集评估阶段。<code>Train</code> 和 <code>Validation</code> 都可以包含多个 EvalSet，每个 EvalSet 又包含多个 EvalCase，因此一次评估可能需要运行多个评估用例。<code>EvalCaseParallelism</code> 设置并发评估用例数，<code>EvalCaseParallelInferenceEnabled</code> 控制是否并发运行多个评估用例中的 Agent，<code>EvalCaseParallelEvaluationEnabled</code> 控制是否并发对多个评估用例打分。</p>
 <p><code>BackwardOptions</code> 配置反向传播归因阶段。<code>Train</code> 可以包含多个 EvalSet，每个 EvalSet 又包含多个 EvalCase。训练集评估完成后，PromptIter 会按失败信号所在的评估用例执行归因。<code>CaseParallelismEnabled</code> 控制是否并发处理多个训练集评估用例，<code>CaseParallelism</code> 限制并发评估用例数。</p>
 <p><code>AggregationOptions</code> 配置文本梯度聚合阶段。一次运行可以通过 <code>TargetSurfaceIDs</code> 指定多个迭代目标，训练集失败信号也可能归因到多个 surface。<code>SurfaceParallelismEnabled</code> 控制是否并发聚合多个 surface，<code>SurfaceParallelism</code> 限制并发 surface 数。</p>
@@ -7675,23 +7693,109 @@
 </span><span id="__span-60-62"><a id="__codelineno-60-62" name="__codelineno-60-62"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>多节点迭代沿用 PromptIter 主流程，差异在于一次运行可以把多个 AgentNode 的 <code>instruction surface</code> 写入 <code>TargetSurfaceIDs</code>。训练集失败信号会结合实际执行轨迹做反向传播归因，后续文本梯度聚合和优化补丁生成都限定在这些目标提示词上。</p>
-<h2 id="_19">实践经验</h2>
+<h3 id="_19">工具描述迭代</h3>
+<p>工具描述也是提示词的一部分，工具描述迭代优化的是工具声明中的 <code>Description</code>。待测对象带有静态工具时，结构快照会为每个工具声明导出一个 <code>tool surface</code>，运行时通过 <code>RunRequest.TargetSurfaceIDs</code> 选择要迭代的工具描述。<code>tooldesc</code> 的完整示例代码见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/promptiter/tooldesc">examples/evaluation/promptiter/tooldesc</a>。</p>
+<p><code>tooldesc</code> 构造了一个带本地函数工具 <code>lookup_record</code> 的 LLMAgent。下面代码展示待测 Agent 的工具声明和 Runner 创建过程。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-61-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-61-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-61-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-61-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-61-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-61-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-61-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-61-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-61-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-61-10">10</a></span>
+<span class="normal"><a href="#__codelineno-61-11">11</a></span>
+<span class="normal"><a href="#__codelineno-61-12">12</a></span>
+<span class="normal"><a href="#__codelineno-61-13">13</a></span>
+<span class="normal"><a href="#__codelineno-61-14">14</a></span>
+<span class="normal"><a href="#__codelineno-61-15">15</a></span>
+<span class="normal"><a href="#__codelineno-61-16">16</a></span>
+<span class="normal"><a href="#__codelineno-61-17">17</a></span>
+<span class="normal"><a href="#__codelineno-61-18">18</a></span>
+<span class="normal"><a href="#__codelineno-61-19">19</a></span>
+<span class="normal"><a href="#__codelineno-61-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
+</span><span id="__span-61-5"><a id="__codelineno-61-5" name="__codelineno-61-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/function&quot;</span>
+</span><span id="__span-61-6"><a id="__codelineno-61-6" name="__codelineno-61-6"></a><span class="p">)</span>
+</span><span id="__span-61-7"><a id="__codelineno-61-7" name="__codelineno-61-7"></a>
+</span><span id="__span-61-8"><a id="__codelineno-61-8" name="__codelineno-61-8"></a><span class="nx">travelLookupTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
+</span><span id="__span-61-9"><a id="__codelineno-61-9" name="__codelineno-61-9"></a><span class="w">    </span><span class="nx">getFlightStatus</span><span class="p">,</span>
+</span><span id="__span-61-10"><a id="__codelineno-61-10" name="__codelineno-61-10"></a><span class="w">    </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;lookup_record&quot;</span><span class="p">),</span>
+</span><span id="__span-61-11"><a id="__codelineno-61-11" name="__codelineno-61-11"></a><span class="w">    </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;Look up a traveler loyalty-profile record.&quot;</span><span class="p">),</span>
+</span><span id="__span-61-12"><a id="__codelineno-61-12" name="__codelineno-61-12"></a><span class="p">)</span>
+</span><span id="__span-61-13"><a id="__codelineno-61-13" name="__codelineno-61-13"></a>
+</span><span id="__span-61-14"><a id="__codelineno-61-14" name="__codelineno-61-14"></a><span class="nx">candidateAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-61-15"><a id="__codelineno-61-15" name="__codelineno-61-15"></a><span class="w">    </span><span class="nx">candidateAgentName</span><span class="p">,</span>
+</span><span id="__span-61-16"><a id="__codelineno-61-16" name="__codelineno-61-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">candidateModel</span><span class="p">),</span>
+</span><span id="__span-61-17"><a id="__codelineno-61-17" name="__codelineno-61-17"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;Answer travel operations questions concisely. Use a tool only when its declaration clearly matches the request.&quot;</span><span class="p">),</span>
+</span><span id="__span-61-18"><a id="__codelineno-61-18" name="__codelineno-61-18"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">travelLookupTool</span><span class="p">}),</span>
+</span><span id="__span-61-19"><a id="__codelineno-61-19" name="__codelineno-61-19"></a><span class="p">)</span>
+</span><span id="__span-61-20"><a id="__codelineno-61-20" name="__codelineno-61-20"></a><span class="nx">candidateRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">candidateAppName</span><span class="p">,</span><span class="w"> </span><span class="nx">candidateAgent</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>下例省略 <code>Engine</code>、<code>AgentEvaluator</code>、<code>Manager</code> 和三个 PromptIter 工作组件的重复组装代码，重点展示工具描述场景的 <code>TargetSurfaceIDs</code>。单个工具描述 surface 的 <code>SurfaceID</code> 形如 <code>&lt;节点 ID&gt;#tool.&lt;工具名&gt;</code>。如果一个节点包含多个静态工具，每个工具描述对应一个独立 surface，因此可以按工具粒度选择迭代目标。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-62-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-62-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-62-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-62-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-62-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-62-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-62-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-62-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-62-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-62-10">10</a></span>
+<span class="normal"><a href="#__codelineno-62-11">11</a></span>
+<span class="normal"><a href="#__codelineno-62-12">12</a></span>
+<span class="normal"><a href="#__codelineno-62-13">13</a></span>
+<span class="normal"><a href="#__codelineno-62-14">14</a></span>
+<span class="normal"><a href="#__codelineno-62-15">15</a></span>
+<span class="normal"><a href="#__codelineno-62-16">16</a></span>
+<span class="normal"><a href="#__codelineno-62-17">17</a></span>
+<span class="normal"><a href="#__codelineno-62-18">18</a></span>
+<span class="normal"><a href="#__codelineno-62-19">19</a></span>
+<span class="normal"><a href="#__codelineno-62-20">20</a></span>
+<span class="normal"><a href="#__codelineno-62-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2"></a><span class="w">    </span><span class="nx">astructure</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/structure&quot;</span>
+</span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine&quot;</span>
+</span><span id="__span-62-4"><a id="__codelineno-62-4" name="__codelineno-62-4"></a><span class="p">)</span>
+</span><span id="__span-62-5"><a id="__codelineno-62-5" name="__codelineno-62-5"></a>
+</span><span id="__span-62-6"><a id="__codelineno-62-6" name="__codelineno-62-6"></a><span class="nx">targetSurfaceID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">astructure</span><span class="p">.</span><span class="nx">SurfaceID</span><span class="p">(</span>
+</span><span id="__span-62-7"><a id="__codelineno-62-7" name="__codelineno-62-7"></a><span class="w">    </span><span class="nx">candidateAgentName</span><span class="p">,</span>
+</span><span id="__span-62-8"><a id="__codelineno-62-8" name="__codelineno-62-8"></a><span class="w">    </span><span class="nx">astructure</span><span class="p">.</span><span class="nx">SurfaceTypeTool</span><span class="p">,</span>
+</span><span id="__span-62-9"><a id="__codelineno-62-9" name="__codelineno-62-9"></a><span class="w">    </span><span class="s">&quot;lookup_record&quot;</span><span class="p">,</span>
+</span><span id="__span-62-10"><a id="__codelineno-62-10" name="__codelineno-62-10"></a><span class="p">)</span>
+</span><span id="__span-62-11"><a id="__codelineno-62-11" name="__codelineno-62-11"></a>
+</span><span id="__span-62-12"><a id="__codelineno-62-12" name="__codelineno-62-12"></a><span class="nx">runRequest</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">engine</span><span class="p">.</span><span class="nx">RunRequest</span><span class="p">{</span>
+</span><span id="__span-62-13"><a id="__codelineno-62-13" name="__codelineno-62-13"></a><span class="w">    </span><span class="nx">Train</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">engine</span><span class="p">.</span><span class="nx">EvalSetInput</span><span class="p">{</span>
+</span><span id="__span-62-14"><a id="__codelineno-62-14" name="__codelineno-62-14"></a><span class="w">        </span><span class="p">{</span><span class="nx">EvalSetID</span><span class="p">:</span><span class="w"> </span><span class="nx">trainEvalSetID</span><span class="p">},</span>
+</span><span id="__span-62-15"><a id="__codelineno-62-15" name="__codelineno-62-15"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-62-16"><a id="__codelineno-62-16" name="__codelineno-62-16"></a><span class="w">    </span><span class="nx">Validation</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">engine</span><span class="p">.</span><span class="nx">EvalSetInput</span><span class="p">{</span>
+</span><span id="__span-62-17"><a id="__codelineno-62-17" name="__codelineno-62-17"></a><span class="w">        </span><span class="p">{</span><span class="nx">EvalSetID</span><span class="p">:</span><span class="w"> </span><span class="nx">validationEvalSetID</span><span class="p">},</span>
+</span><span id="__span-62-18"><a id="__codelineno-62-18" name="__codelineno-62-18"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-62-19"><a id="__codelineno-62-19" name="__codelineno-62-19"></a><span class="w">    </span><span class="nx">MaxRounds</span><span class="p">:</span><span class="w">        </span><span class="nx">maxRounds</span><span class="p">,</span>
+</span><span id="__span-62-20"><a id="__codelineno-62-20" name="__codelineno-62-20"></a><span class="w">    </span><span class="nx">TargetSurfaceIDs</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="nx">targetSurfaceID</span><span class="p">},</span>
+</span><span id="__span-62-21"><a id="__codelineno-62-21" name="__codelineno-62-21"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h2 id="_20">实践经验</h2>
 <p>实践经验按 PromptIter 的接入顺序展开。先稳定评估口径和预期输出，再补足裁判上下文与失败原因，最后收敛迭代目标。</p>
-<h4 id="_20">评估指标对齐</h4>
+<h4 id="_21">评估指标对齐</h4>
 <p>训练集用于暴露问题并产生优化信号，验证集用于判断候选提示词是否可接受。两者可以包含不同评估用例，但评估指标应面向训练集和验证集都需要满足的质量要求。专门围绕训练样本编写的指标，会把优化信号收窄到训练集，使训练分数可能提升，但候选提示词无法通过验证集接受判定。</p>
 <p>评估细则应拆成可观察、可独立验证的要求，例如事实有依据、关键过程不遗漏、标题准确。少数训练样本中的表达偏好，不应上升为训练集和验证集共用的评估指标要求。</p>
-<h4 id="_21">预期输出来源</h4>
+<h4 id="_22">预期输出来源</h4>
 <p>使用需要预期输出的指标时，Evaluation 会将待测 Agent 的实际响应或轨迹与预期侧内容对照，并生成评分和判定结果。在这类指标中，训练集预期输出通过失败原因影响 loss、文本梯度和候选补丁；验证集预期输出通过验证分数和接受策略影响候选提示词是否被接受，不参与本轮补丁生成。预期输出的常见来源是人工金标和 Teacher 蒸馏。</p>
 <p>人工金标指经过标注或审核的预期输出，适合输入分布稳定、评估口径明确、需要长期回归的任务。金标用于训练集时，事实错误或口径不一致可能产生错误失败原因；用于验证集时，可能导致候选提示词被误接收或误拒绝。因此，金标进入训练集或验证集前，应完成事实、格式与口径复核。</p>
 <p>Teacher 蒸馏指在评估阶段用更强模型，或用包含更多规则、示例和上下文的提示词生成动态预期输出。Teacher 可以比待测 Agent 更重，因为它只用于生成评估对照，不直接进入待测 Agent 的生产调用路径。它适合样本规模较大、人工标注成本较高，或预期输出依赖实时上下文且可复现生成的场景。</p>
 <p>Teacher 输出仍需抽样复核。若 Teacher 存在事实错误、格式漂移或口径不一致，训练集评估会把偏差转成错误优化信号，验证集评估会把偏差转成失真的接受判定。复杂提示词可以用于 Teacher，但不应直接迁移到待测 Agent。Teacher 提示词中的规则、示例和上下文不一定对待测 Agent 有效。提示词过长还会增加上下文占用、约束冲突和维护成本。Teacher 蒸馏的目标不是复刻 Teacher 的完整提示词，而是把高质量预期输出转成评估信号，再由 PromptIter 生成待测 Agent 可长期维护的提示词补丁。</p>
-<h4 id="_22">裁判上下文</h4>
+<h4 id="_23">裁判上下文</h4>
 <p>裁判上下文用于构造 LLM Judge 的裁判输入，应围绕评估细则组织。评估细则只检查表达质量、结构完整性或与参考答案的一致性时，用户输入、实际最终回答和参考答案通常足够。评估细则涉及事实依据、检索结果、工具结果或业务规则时，相关证据也需要进入裁判输入。证据可以来自业务数据、关键检索结果、工具结果或评估样本；没有进入裁判输入的内容，不会参与 LLM Judge 判定。</p>
 <p>补充裁判上下文时，只纳入与评估细则直接相关、可核验的材料，例如业务数据、关键检索结果、工具结果和规则说明。证据不足时，失败原因容易变得笼统。材料过多时，无关信息会稀释评估重点，增加判定波动。训练集和验证集应使用一致的上下文构造规则，避免训练阶段的失败原因和验证阶段的分数来自不同评估口径。</p>
 <h4 id="losshint">LossHint 补充原因</h4>
 <p>PromptIter 会从训练集失败指标中提取 loss。<code>LossHint</code> 用于在已有 loss 上补充业务侧已知的问题原因。它的作用位置是训练集优化信号，训练分数仍由评估指标产生，验证集接受判定仍由验证集评估结果和接受策略产生。<code>LossHint</code> 匹配本轮训练评估中已经失败的评估用例和指标后，会并入对应 loss，供 <code>Backward</code> 生成文本梯度。</p>
 <p><code>LossHint</code> 的收益来自增量问题信息。评估结果中的失败原因已经覆盖业务侧问题时，同义 <code>LossHint</code> 主要起记录作用，优化收益有限。它更适合用于裁判生成的失败原因不准、不全的训练样本。此时，<code>LossHint</code> 把人工确认的问题补进训练集 loss，作为后续反向传播归因和提示词补丁生成的优化方向。</p>
-<h4 id="_23">迭代目标选择</h4>
+<h4 id="_24">迭代目标选择</h4>
 <p>选择迭代目标时，需要先将失败信号与节点职责对齐。结构快照用于确认待测 Agent 中可迭代的节点提示词，执行轨迹用于还原本次运行经过的节点和步骤。结合失败原因和节点输出后，可以判断问题主要归因于哪些节点提示词。</p>
 <p>失败原因集中于单个节点输出时，迭代目标可限定为该节点提示词。失败原因涉及多个协作节点时，可将职责相邻、共同影响同一类质量问题的节点提示词纳入同一轮。已有执行轨迹和评估结果显示质量稳定、优化空间有限的提示词，宜保持当前版本。目标数量过多会扩大补丁影响范围，降低验证结果的可解释性。</p>
 <p>目标范围较集中时，候选补丁与验证结果的对应关系更清晰。扩大目标范围时，新增目标应承载本轮失败信号，并与同轮目标共同指向同一类质量问题。候选提示词通过接受判定后，需要在测试环境审查各目标的补丁内容、修改原因和验证结果，再进入业务发布流程。</p>
@@ -7717,7 +7821,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月2日 03:56:24 UTC">2026-06-02 03:56:24</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月28日 09:15:33 UTC">2026-06-28 09:15:33</span>
   </span>
 
     

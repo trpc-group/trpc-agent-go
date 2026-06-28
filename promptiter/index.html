@@ -2380,6 +2380,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#tool-description-iteration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tool Description Iteration
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3524,6 +3533,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#tool-description-iteration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tool Description Iteration
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4326,9 +4344,9 @@
 <p>When the business side already knows the specific problem in a training-set evaluation case, <code>LossHint</code> can supplement the problem reason. PromptIter merges <code>Reason</code> into the optimization signal of the corresponding failed metric, so backpropagation attribution can consider both the reason from the evaluator and the reason supplemented by the business side. When <code>LossHint</code> is used, <code>EvalCaseID</code> and <code>MetricName</code> must match a failed metric in the current training evaluation result, and <code>Severity</code> must be <code>P0</code>, <code>P1</code>, <code>P2</code>, or <code>P3</code>. <code>LossHint</code> does not change the evaluation score and does not participate in validation-set acceptance decisions.</p>
 <p>Training sets and validation sets must be used separately. A higher training-set score only means the candidate patch is closer to metric requirements on samples used for optimization. It cannot prove that samples not used for optimization also satisfy the metrics. The validation set exposes overfitting risk and participates in acceptance decisions.</p>
 <h3 id="static-structure-snapshot">Static Structure Snapshot</h3>
-<p>The static structure snapshot is the exported structure of the target Agent. It contains nodes, edges, and iterable slots. Content that can be used as an iteration target in the structure snapshot is called a surface in code. Each surface has a stable <code>SurfaceID</code>. This document discusses only <code>instruction</code> prompt iteration. PromptIter uses the structure snapshot to confirm whether the specified <code>instruction</code> surface exists for the current run.</p>
-<p>This document discusses only <code>instruction</code>-type surfaces, that is, instruction prompts on nodes. Prompt iteration needs an explicit target scope, so integration code must write the selected <code>SurfaceID</code> into <code>TargetSurfaceIDs</code> in the iteration request.</p>
-<p><code>Describe</code> can be used to inspect the structure snapshot. After determining the <code>instruction</code> surface to iterate, write the corresponding ID into <code>TargetSurfaceIDs</code> in the iteration request.</p>
+<p>The static structure snapshot is the exported structure of the target Agent. It contains nodes, edges, and iterable slots. Content that can be used as an iteration target in the structure snapshot is called a surface in code. Each surface has a stable <code>SurfaceID</code>. This section discusses only <code>instruction</code> prompt iteration. PromptIter uses the structure snapshot to confirm whether the specified <code>instruction</code> surface exists for the current run.</p>
+<p>This section discusses only <code>instruction</code>-type surfaces, that is, instruction prompts on nodes. Prompt iteration needs an explicit target scope, so integration code must write the selected <code>SurfaceID</code> into <code>TargetSurfaceIDs</code> in the iteration request.</p>
+<p><code>Describe</code> can be used to inspect the structure snapshot. After determining the surface to iterate, write the corresponding ID into <code>TargetSurfaceIDs</code> in the iteration request.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1">1</a></span>
 <span class="normal"><a href="#__codelineno-10-2">2</a></span>
 <span class="normal"><a href="#__codelineno-10-3">3</a></span>
@@ -5499,7 +5517,7 @@
 <p><code>RunRequest</code> first specifies training sets and validation sets. <code>Train</code> is used to produce optimization signals, and <code>Validation</code> is used for acceptance decisions. Both must be non-empty. Each <code>EvalSetInput</code> can point to a complete evaluation set or use <code>EvalCaseIDs</code> to run only part of its evaluation cases. <code>LossHints</code> only serves the training set and is used to supplement known business-side problem reasons.</p>
 <p><code>InitialProfile</code> specifies the starting Profile of this iteration. If it is not passed, PromptIter uses the original surface values in the structure snapshot as the initial baseline. If <code>InitialProfile</code> is passed and <code>StructureID</code> is non-empty, it must match the current structure snapshot ID.</p>
 <p><code>Teacher</code> and <code>Judge</code> are passed to Evaluation. <code>Teacher</code> is used to generate expected traces or reference answers when the evaluation needs them. If the EvalSet already contains these expected values, <code>Teacher</code> can be omitted. <code>Judge</code> supports LLM Judge metric scoring. If this type of metric is not used, <code>Judge</code> can be omitted.</p>
-<p><code>TargetSurfaceIDs</code> sets the surfaces allowed to be iterated in this run. A single-Agent scenario usually points to <code>candidate#instruction</code>, while a multi-node Agent scenario can point to <code>instruction</code> surfaces of multiple nodes.</p>
+<p><code>TargetSurfaceIDs</code> sets the surfaces allowed to be iterated in this run. A single-Agent scenario usually points to <code>candidate#instruction</code>, while a multi-node Agent scenario can point to <code>instruction</code> surfaces of multiple nodes. Tool-description iteration points to a single tool-description surface, such as <code>candidate#tool.lookup_record</code>.</p>
 <p><code>EvaluationOptions</code> configures the training-set and validation-set evaluation stages. <code>Train</code> and <code>Validation</code> can each contain multiple EvalSets, and each EvalSet can contain multiple EvalCases, so one evaluation may need to run multiple evaluation cases. <code>EvalCaseParallelism</code> sets evaluation-case concurrency, <code>EvalCaseParallelInferenceEnabled</code> controls whether Agents in multiple evaluation cases run concurrently, and <code>EvalCaseParallelEvaluationEnabled</code> controls whether scoring for multiple evaluation cases runs concurrently.</p>
 <p><code>BackwardOptions</code> configures the backpropagation-attribution stage. <code>Train</code> can contain multiple EvalSets, and each EvalSet can contain multiple EvalCases. After training-set evaluation completes, PromptIter performs attribution by the evaluation cases that contain failure signals. <code>CaseParallelismEnabled</code> controls whether multiple training-set evaluation cases are processed concurrently, and <code>CaseParallelism</code> limits evaluation-case concurrency.</p>
 <p><code>AggregationOptions</code> configures the text-gradient aggregation stage. One run can specify multiple iteration targets through <code>TargetSurfaceIDs</code>, and training-set failure signals may also be attributed to multiple surfaces. <code>SurfaceParallelismEnabled</code> controls whether multiple surfaces are aggregated concurrently, and <code>SurfaceParallelism</code> limits surface concurrency.</p>
@@ -7643,6 +7661,92 @@
 </span><span id="__span-60-62"><a id="__codelineno-60-62" name="__codelineno-60-62"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Multi-node iteration follows the main PromptIter workflow. The difference is that one run can write multiple AgentNode <code>instruction surface</code> values into <code>TargetSurfaceIDs</code>. Training-set failure signals are attributed through backpropagation with the actual execution trace. Later text-gradient aggregation and optimization patch generation are limited to these target prompts.</p>
+<h3 id="tool-description-iteration">Tool Description Iteration</h3>
+<p>Tool descriptions are also part of the prompt. Tool-description iteration optimizes the <code>Description</code> in a tool declaration. When the target object has static tools, the structure snapshot exports one <code>tool surface</code> for each tool declaration. At run time, <code>RunRequest.TargetSurfaceIDs</code> selects the tool descriptions to iterate. See the complete <code>tooldesc</code> example code at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/promptiter/tooldesc">examples/evaluation/promptiter/tooldesc</a>.</p>
+<p><code>tooldesc</code> constructs an LLMAgent with a local function tool, <code>lookup_record</code>. The code below shows the target Agent's tool declaration and Runner creation.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-61-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-61-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-61-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-61-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-61-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-61-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-61-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-61-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-61-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-61-10">10</a></span>
+<span class="normal"><a href="#__codelineno-61-11">11</a></span>
+<span class="normal"><a href="#__codelineno-61-12">12</a></span>
+<span class="normal"><a href="#__codelineno-61-13">13</a></span>
+<span class="normal"><a href="#__codelineno-61-14">14</a></span>
+<span class="normal"><a href="#__codelineno-61-15">15</a></span>
+<span class="normal"><a href="#__codelineno-61-16">16</a></span>
+<span class="normal"><a href="#__codelineno-61-17">17</a></span>
+<span class="normal"><a href="#__codelineno-61-18">18</a></span>
+<span class="normal"><a href="#__codelineno-61-19">19</a></span>
+<span class="normal"><a href="#__codelineno-61-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
+</span><span id="__span-61-5"><a id="__codelineno-61-5" name="__codelineno-61-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/function&quot;</span>
+</span><span id="__span-61-6"><a id="__codelineno-61-6" name="__codelineno-61-6"></a><span class="p">)</span>
+</span><span id="__span-61-7"><a id="__codelineno-61-7" name="__codelineno-61-7"></a>
+</span><span id="__span-61-8"><a id="__codelineno-61-8" name="__codelineno-61-8"></a><span class="nx">travelLookupTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
+</span><span id="__span-61-9"><a id="__codelineno-61-9" name="__codelineno-61-9"></a><span class="w">    </span><span class="nx">getFlightStatus</span><span class="p">,</span>
+</span><span id="__span-61-10"><a id="__codelineno-61-10" name="__codelineno-61-10"></a><span class="w">    </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;lookup_record&quot;</span><span class="p">),</span>
+</span><span id="__span-61-11"><a id="__codelineno-61-11" name="__codelineno-61-11"></a><span class="w">    </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;Look up a traveler loyalty-profile record.&quot;</span><span class="p">),</span>
+</span><span id="__span-61-12"><a id="__codelineno-61-12" name="__codelineno-61-12"></a><span class="p">)</span>
+</span><span id="__span-61-13"><a id="__codelineno-61-13" name="__codelineno-61-13"></a>
+</span><span id="__span-61-14"><a id="__codelineno-61-14" name="__codelineno-61-14"></a><span class="nx">candidateAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-61-15"><a id="__codelineno-61-15" name="__codelineno-61-15"></a><span class="w">    </span><span class="nx">candidateAgentName</span><span class="p">,</span>
+</span><span id="__span-61-16"><a id="__codelineno-61-16" name="__codelineno-61-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">candidateModel</span><span class="p">),</span>
+</span><span id="__span-61-17"><a id="__codelineno-61-17" name="__codelineno-61-17"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;Answer travel operations questions concisely. Use a tool only when its declaration clearly matches the request.&quot;</span><span class="p">),</span>
+</span><span id="__span-61-18"><a id="__codelineno-61-18" name="__codelineno-61-18"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">travelLookupTool</span><span class="p">}),</span>
+</span><span id="__span-61-19"><a id="__codelineno-61-19" name="__codelineno-61-19"></a><span class="p">)</span>
+</span><span id="__span-61-20"><a id="__codelineno-61-20" name="__codelineno-61-20"></a><span class="nx">candidateRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">candidateAppName</span><span class="p">,</span><span class="w"> </span><span class="nx">candidateAgent</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The example below omits repeated assembly code for <code>Engine</code>, <code>AgentEvaluator</code>, <code>Manager</code>, and the three PromptIter worker components. It focuses on <code>TargetSurfaceIDs</code> in the tool-description scenario. A single tool-description surface has a <code>SurfaceID</code> in the form <code>&lt;node ID&gt;#tool.&lt;tool name&gt;</code>. If a node contains multiple static tools, each tool description corresponds to an independent surface, so targets can be selected at tool granularity.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-62-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-62-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-62-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-62-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-62-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-62-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-62-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-62-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-62-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-62-10">10</a></span>
+<span class="normal"><a href="#__codelineno-62-11">11</a></span>
+<span class="normal"><a href="#__codelineno-62-12">12</a></span>
+<span class="normal"><a href="#__codelineno-62-13">13</a></span>
+<span class="normal"><a href="#__codelineno-62-14">14</a></span>
+<span class="normal"><a href="#__codelineno-62-15">15</a></span>
+<span class="normal"><a href="#__codelineno-62-16">16</a></span>
+<span class="normal"><a href="#__codelineno-62-17">17</a></span>
+<span class="normal"><a href="#__codelineno-62-18">18</a></span>
+<span class="normal"><a href="#__codelineno-62-19">19</a></span>
+<span class="normal"><a href="#__codelineno-62-20">20</a></span>
+<span class="normal"><a href="#__codelineno-62-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2"></a><span class="w">    </span><span class="nx">astructure</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/structure&quot;</span>
+</span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine&quot;</span>
+</span><span id="__span-62-4"><a id="__codelineno-62-4" name="__codelineno-62-4"></a><span class="p">)</span>
+</span><span id="__span-62-5"><a id="__codelineno-62-5" name="__codelineno-62-5"></a>
+</span><span id="__span-62-6"><a id="__codelineno-62-6" name="__codelineno-62-6"></a><span class="nx">targetSurfaceID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">astructure</span><span class="p">.</span><span class="nx">SurfaceID</span><span class="p">(</span>
+</span><span id="__span-62-7"><a id="__codelineno-62-7" name="__codelineno-62-7"></a><span class="w">    </span><span class="nx">candidateAgentName</span><span class="p">,</span>
+</span><span id="__span-62-8"><a id="__codelineno-62-8" name="__codelineno-62-8"></a><span class="w">    </span><span class="nx">astructure</span><span class="p">.</span><span class="nx">SurfaceTypeTool</span><span class="p">,</span>
+</span><span id="__span-62-9"><a id="__codelineno-62-9" name="__codelineno-62-9"></a><span class="w">    </span><span class="s">&quot;lookup_record&quot;</span><span class="p">,</span>
+</span><span id="__span-62-10"><a id="__codelineno-62-10" name="__codelineno-62-10"></a><span class="p">)</span>
+</span><span id="__span-62-11"><a id="__codelineno-62-11" name="__codelineno-62-11"></a>
+</span><span id="__span-62-12"><a id="__codelineno-62-12" name="__codelineno-62-12"></a><span class="nx">runRequest</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">engine</span><span class="p">.</span><span class="nx">RunRequest</span><span class="p">{</span>
+</span><span id="__span-62-13"><a id="__codelineno-62-13" name="__codelineno-62-13"></a><span class="w">    </span><span class="nx">Train</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">engine</span><span class="p">.</span><span class="nx">EvalSetInput</span><span class="p">{</span>
+</span><span id="__span-62-14"><a id="__codelineno-62-14" name="__codelineno-62-14"></a><span class="w">        </span><span class="p">{</span><span class="nx">EvalSetID</span><span class="p">:</span><span class="w"> </span><span class="nx">trainEvalSetID</span><span class="p">},</span>
+</span><span id="__span-62-15"><a id="__codelineno-62-15" name="__codelineno-62-15"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-62-16"><a id="__codelineno-62-16" name="__codelineno-62-16"></a><span class="w">    </span><span class="nx">Validation</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">engine</span><span class="p">.</span><span class="nx">EvalSetInput</span><span class="p">{</span>
+</span><span id="__span-62-17"><a id="__codelineno-62-17" name="__codelineno-62-17"></a><span class="w">        </span><span class="p">{</span><span class="nx">EvalSetID</span><span class="p">:</span><span class="w"> </span><span class="nx">validationEvalSetID</span><span class="p">},</span>
+</span><span id="__span-62-18"><a id="__codelineno-62-18" name="__codelineno-62-18"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-62-19"><a id="__codelineno-62-19" name="__codelineno-62-19"></a><span class="w">    </span><span class="nx">MaxRounds</span><span class="p">:</span><span class="w">        </span><span class="nx">maxRounds</span><span class="p">,</span>
+</span><span id="__span-62-20"><a id="__codelineno-62-20" name="__codelineno-62-20"></a><span class="w">    </span><span class="nx">TargetSurfaceIDs</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="nx">targetSurfaceID</span><span class="p">},</span>
+</span><span id="__span-62-21"><a id="__codelineno-62-21" name="__codelineno-62-21"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
 <h2 id="practical-experience">Practical Experience</h2>
 <p>The practical experience below follows PromptIter's integration order: first stabilize evaluation criteria and expected outputs, then complete judge context and failure reasons, and finally narrow iteration targets.</p>
 <h4 id="align-evaluation-metrics">Align Evaluation Metrics</h4>
@@ -7685,7 +7789,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 2, 2026 03:56:24 UTC">2026-06-02 03:56:24</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 28, 2026 09:15:33 UTC">2026-06-28 09:15:33</span>
   </span>
 
     
