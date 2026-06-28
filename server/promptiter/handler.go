@@ -240,8 +240,29 @@ func (s *Server) validateTargetSurfaceIDs(ctx context.Context, targetSurfaceIDs 
 	if structure == nil {
 		return errors.New("structure is nil")
 	}
+	nodeIndex := make(map[string]astructure.Node, len(structure.Nodes))
+	for _, node := range structure.Nodes {
+		nodeIndex[node.NodeID] = node
+	}
+	toolDeclarationNodeIDs := make(map[string]struct{})
+	for _, surface := range structure.Surfaces {
+		if surface.Type != astructure.SurfaceTypeGlobalInstruction {
+			continue
+		}
+		node, ok := nodeIndex[surface.NodeID]
+		if !ok || node.Kind != astructure.NodeKindLLM {
+			continue
+		}
+		toolDeclarationNodeIDs[surface.NodeID] = struct{}{}
+	}
 	supportedSurfaceIDs := make(map[string]struct{}, len(structure.Surfaces))
 	for _, surface := range structure.Surfaces {
+		if surface.Type == astructure.SurfaceTypeTool {
+			if isPromptIterToolTargetSurface(surface, toolDeclarationNodeIDs) {
+				supportedSurfaceIDs[surface.SurfaceID] = struct{}{}
+			}
+			continue
+		}
 		if !isSupportedTargetSurfaceType(surface.Type) {
 			continue
 		}
@@ -256,6 +277,27 @@ func (s *Server) validateTargetSurfaceIDs(ctx context.Context, targetSurfaceIDs 
 		}
 	}
 	return nil
+}
+
+func isPromptIterToolTargetSurface(
+	surface astructure.Surface,
+	toolDeclarationNodeIDs map[string]struct{},
+) bool {
+	if _, ok := toolDeclarationNodeIDs[surface.NodeID]; !ok {
+		return false
+	}
+	if len(surface.Value.Tools) != 1 {
+		return false
+	}
+	toolID := surface.Value.Tools[0].ID
+	if toolID == "" {
+		return false
+	}
+	return surface.SurfaceID == astructure.SurfaceID(
+		surface.NodeID,
+		astructure.SurfaceTypeTool,
+		toolID,
+	)
 }
 
 func isSupportedTargetSurfaceType(surfaceType astructure.SurfaceType) bool {

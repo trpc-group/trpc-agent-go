@@ -478,11 +478,11 @@ type LossHint struct {
 
 ### 静态结构快照
 
-静态结构快照是待测 Agent 的结构导出结果，包含节点、边和可迭代槽位。结构快照中可作为迭代目标的内容在代码中称为 surface，每个 surface 都有稳定的 `SurfaceID`。本文只讨论 `instruction` 提示词迭代，PromptIter 通过结构快照确认本次指定的 `instruction` surface 是否存在。
+静态结构快照是待测 Agent 的结构导出结果，包含节点、边和可迭代槽位。结构快照中可作为迭代目标的内容在代码中称为 surface，每个 surface 都有稳定的 `SurfaceID`。本节只讨论 `instruction` 提示词迭代，PromptIter 通过结构快照确认本次指定的 `instruction` surface 是否存在。
 
-本文只讨论 `instruction` 类型 surface，即节点上的 instruction 提示词。提示词迭代需要明确目标范围，接入代码需要把选中的 `SurfaceID` 写入迭代请求的 `TargetSurfaceIDs`。
+本节只讨论 `instruction` 类型 surface，即节点上的 instruction 提示词。提示词迭代需要明确目标范围，接入代码需要把选中的 `SurfaceID` 写入迭代请求的 `TargetSurfaceIDs`。
 
-`Describe` 可用于查看结构快照。确定需要迭代的 `instruction` surface 后，将对应 ID 写入迭代请求的 `TargetSurfaceIDs`。
+`Describe` 可用于查看结构快照。确定需要迭代的 surface 后，将对应 ID 写入迭代请求的 `TargetSurfaceIDs`。
 
 ```go
 // Describe 返回待测 Agent 的静态结构快照。
@@ -1244,7 +1244,7 @@ type OptimizerOptions struct {
 
 `Teacher` 和 `Judge` 会传给 Evaluation。`Teacher` 用于在评估需要时生成预期轨迹或参考答案。如果 EvalSet 已包含这些预期信息，`Teacher` 可以不传入。`Judge` 用于支撑 LLM Judge 类指标打分。未使用这类指标时，`Judge` 可以不传入。
 
-`TargetSurfaceIDs` 用于设置本次允许迭代的 surface。单 Agent 场景通常指向 `candidate#instruction`，多节点 Agent 场景可指向多个节点的 `instruction` surface。
+`TargetSurfaceIDs` 用于设置本次允许迭代的 surface。单 Agent 场景通常指向 `candidate#instruction`，多节点 Agent 场景可指向多个节点的 `instruction` surface。工具描述迭代指向单工具描述 surface，例如 `candidate#tool.lookup_record`。
 
 `EvaluationOptions` 配置训练集和验证集评估阶段。`Train` 和 `Validation` 都可以包含多个 EvalSet，每个 EvalSet 又包含多个 EvalCase，因此一次评估可能需要运行多个评估用例。`EvalCaseParallelism` 设置并发评估用例数，`EvalCaseParallelInferenceEnabled` 控制是否并发运行多个评估用例中的 Agent，`EvalCaseParallelEvaluationEnabled` 控制是否并发对多个评估用例打分。
 
@@ -2473,6 +2473,61 @@ if err != nil {
 ```
 
 多节点迭代沿用 PromptIter 主流程，差异在于一次运行可以把多个 AgentNode 的 `instruction surface` 写入 `TargetSurfaceIDs`。训练集失败信号会结合实际执行轨迹做反向传播归因，后续文本梯度聚合和优化补丁生成都限定在这些目标提示词上。
+
+### 工具描述迭代
+
+工具描述也是提示词的一部分，工具描述迭代优化的是工具声明中的 `Description`。待测对象带有静态工具时，结构快照会为每个工具声明导出一个 `tool surface`，运行时通过 `RunRequest.TargetSurfaceIDs` 选择要迭代的工具描述。`tooldesc` 的完整示例代码见 [examples/evaluation/promptiter/tooldesc](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/promptiter/tooldesc)。
+
+`tooldesc` 构造了一个带本地函数工具 `lookup_record` 的 LLMAgent。下面代码展示待测 Agent 的工具声明和 Runner 创建过程。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
+)
+
+travelLookupTool := function.NewFunctionTool(
+	getFlightStatus,
+	function.WithName("lookup_record"),
+	function.WithDescription("Look up a traveler loyalty-profile record."),
+)
+
+candidateAgent := llmagent.New(
+	candidateAgentName,
+	llmagent.WithModel(candidateModel),
+	llmagent.WithInstruction("Answer travel operations questions concisely. Use a tool only when its declaration clearly matches the request."),
+	llmagent.WithTools([]tool.Tool{travelLookupTool}),
+)
+candidateRunner := runner.NewRunner(candidateAppName, candidateAgent)
+```
+
+下例省略 `Engine`、`AgentEvaluator`、`Manager` 和三个 PromptIter 工作组件的重复组装代码，重点展示工具描述场景的 `TargetSurfaceIDs`。单个工具描述 surface 的 `SurfaceID` 形如 `<节点 ID>#tool.<工具名>`。如果一个节点包含多个静态工具，每个工具描述对应一个独立 surface，因此可以按工具粒度选择迭代目标。
+
+```go
+import (
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
+)
+
+targetSurfaceID := astructure.SurfaceID(
+	candidateAgentName,
+	astructure.SurfaceTypeTool,
+	"lookup_record",
+)
+
+runRequest := &engine.RunRequest{
+	Train: []engine.EvalSetInput{
+		{EvalSetID: trainEvalSetID},
+	},
+	Validation: []engine.EvalSetInput{
+		{EvalSetID: validationEvalSetID},
+	},
+	MaxRounds:        maxRounds,
+	TargetSurfaceIDs: []string{targetSurfaceID},
+}
+```
 
 ## 实践经验
 
