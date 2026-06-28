@@ -122,6 +122,7 @@ var supportedActions = []string{
 type actRequest struct {
 	Kind        string           `json:"kind,omitempty"`
 	TargetID    string           `json:"targetId,omitempty"`
+	Target      string           `json:"target,omitempty"`
 	Ref         string           `json:"ref,omitempty"`
 	DoubleClick *bool            `json:"doubleClick,omitempty"`
 	Button      string           `json:"button,omitempty"`
@@ -131,7 +132,9 @@ type actRequest struct {
 	Slowly      *bool            `json:"slowly,omitempty"`
 	Key         string           `json:"key,omitempty"`
 	DelayMs     *int             `json:"delayMs,omitempty"`
+	StartTarget string           `json:"startTarget,omitempty"`
 	StartRef    string           `json:"startRef,omitempty"`
+	EndTarget   string           `json:"endTarget,omitempty"`
 	EndRef      string           `json:"endRef,omitempty"`
 	Values      []string         `json:"values,omitempty"`
 	Fields      []map[string]any `json:"fields,omitempty"`
@@ -492,6 +495,7 @@ func browserSchema() *tool.Schema {
 	requestProps := map[string]*tool.Schema{
 		"kind":        stringSchema("Browser act kind."),
 		"targetId":    stringSchema("Tab target id from tabs output."),
+		"target":      stringSchema("Element target for browser actions."),
 		"ref":         stringSchema("Snapshot ref id."),
 		"doubleClick": boolSchema("Double click."),
 		"button":      stringSchema("Mouse button for click."),
@@ -501,7 +505,9 @@ func browserSchema() *tool.Schema {
 		"slowly":      boolSchema("Type slowly."),
 		"key":         stringSchema("Keyboard key."),
 		"delayMs":     numberSchema("Key delay."),
+		"startTarget": stringSchema("Drag start element target."),
 		"startRef":    stringSchema("Drag start ref."),
+		"endTarget":   stringSchema("Drag end element target."),
 		"endRef":      stringSchema("Drag end ref."),
 		"values":      stringArraySchema("Selected option values."),
 		"fields": {
@@ -1918,23 +1924,20 @@ func (t *Tool) executeAct(
 	kind := strings.ToLower(strings.TrimSpace(req.Kind))
 	switch kind {
 	case actClick:
-		args := map[string]any{
-			"ref":         strings.TrimSpace(req.Ref),
-			"element":     describeElement(req.Ref, ""),
-			"button":      strings.TrimSpace(req.Button),
-			"doubleClick": boolValue(req.DoubleClick),
-			"modifiers":   req.Modifiers,
+		args, err := clickArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolClick, args)
 	case actType:
-		args := map[string]any{
-			"ref":     strings.TrimSpace(req.Ref),
-			"element": describeElement(req.Ref, ""),
-			"text":    req.Text,
-			"submit":  boolValue(req.Submit),
-			"slowly":  boolValue(req.Slowly),
+		args, err := elementActionArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
+		args["text"] = req.Text
+		args["submit"] = boolValue(req.Submit)
+		args["slowly"] = boolValue(req.Slowly)
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolType, args)
 	case actPress:
@@ -1946,9 +1949,9 @@ func (t *Tool) executeAct(
 		}
 		return drv.Call(ctx, mcpToolPressKey, args)
 	case actHover:
-		args := map[string]any{
-			"ref":     strings.TrimSpace(req.Ref),
-			"element": describeElement(req.Ref, ""),
+		args, err := elementActionArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolHover, args)
@@ -1965,20 +1968,18 @@ func (t *Tool) executeAct(
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolScroll, args)
 	case actDrag:
-		args := map[string]any{
-			"startRef":     strings.TrimSpace(req.StartRef),
-			"startElement": describeElement(req.StartRef, "start"),
-			"endRef":       strings.TrimSpace(req.EndRef),
-			"endElement":   describeElement(req.EndRef, "end"),
+		args, err := dragArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolDrag, args)
 	case actSelect:
-		args := map[string]any{
-			"ref":     strings.TrimSpace(req.Ref),
-			"element": describeElement(req.Ref, ""),
-			"values":  req.Values,
+		args, err := elementActionArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
+		args["values"] = req.Values
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolSelect, args)
 	case actFill:
@@ -1996,11 +1997,11 @@ func (t *Tool) executeAct(
 				"browser evaluate is disabled by config",
 			)
 		}
-		return drv.Call(ctx, mcpToolEvaluate, map[string]any{
+		args := map[string]any{
 			"function": strings.TrimSpace(req.Fn),
-			"ref":      strings.TrimSpace(req.Ref),
-			"element":  describeElement(req.Ref, ""),
-		})
+		}
+		addOptionalElementArgs(args, req.Ref, req.Target, driverType)
+		return drv.Call(ctx, mcpToolEvaluate, args)
 	case actClose:
 		return drv.Call(ctx, mcpToolTabs, map[string]any{
 			"action": tabActionClose,
@@ -2013,6 +2014,98 @@ func (t *Tool) executeAct(
 	}
 }
 
+func clickArgs(req actRequest, driverType string) (map[string]any, error) {
+	args, err := elementActionArgs(req, driverType)
+	if err != nil {
+		return nil, err
+	}
+	args["button"] = normalizeMouseButton(req.Button)
+	if driverType == driverTypePlaywrightMCP {
+		args["modifiers"] = append([]string{}, req.Modifiers...)
+		if boolValue(req.DoubleClick) {
+			args["doubleClick"] = true
+		}
+		return args, nil
+	}
+	args["doubleClick"] = boolValue(req.DoubleClick)
+	args["modifiers"] = req.Modifiers
+	return args, nil
+}
+
+func elementActionArgs(
+	req actRequest,
+	driverType string,
+) (map[string]any, error) {
+	args := map[string]any{}
+	if driverType == driverTypePlaywrightMCP {
+		target := firstNonEmpty(req.Target, req.Ref)
+		if target == "" {
+			return nil, errors.New(
+				"browser act requires ref or target",
+			)
+		}
+		args["target"] = target
+		args["element"] = describeElement(
+			firstNonEmpty(req.Ref, req.Target),
+			"",
+		)
+		return args, nil
+	}
+	args["ref"] = strings.TrimSpace(req.Ref)
+	args["element"] = describeElement(req.Ref, "")
+	return args, nil
+}
+
+func addOptionalElementArgs(
+	args map[string]any,
+	ref string,
+	target string,
+	driverType string,
+) {
+	if driverType == driverTypePlaywrightMCP {
+		if target := firstNonEmpty(target, ref); target != "" {
+			args["target"] = target
+			args["element"] = describeElement(
+				firstNonEmpty(ref, target),
+				"",
+			)
+		}
+		return
+	}
+	args["ref"] = strings.TrimSpace(ref)
+	args["element"] = describeElement(ref, "")
+}
+
+func dragArgs(req actRequest, driverType string) (map[string]any, error) {
+	if driverType == driverTypePlaywrightMCP {
+		startTarget := firstNonEmpty(req.StartTarget, req.StartRef)
+		endTarget := firstNonEmpty(req.EndTarget, req.EndRef)
+		if startTarget == "" || endTarget == "" {
+			return nil, errors.New(
+				"browser drag requires start and end refs or targets",
+			)
+		}
+		return map[string]any{
+			"startTarget": startTarget,
+			"startElement": describeElement(
+				firstNonEmpty(req.StartRef, req.StartTarget),
+				"start",
+			),
+			"endTarget": endTarget,
+			"endElement": describeElement(
+				firstNonEmpty(req.EndRef, req.EndTarget),
+				"end",
+			),
+		}, nil
+	}
+	return map[string]any{
+		"startRef":     strings.TrimSpace(req.StartRef),
+		"startElement": describeElement(req.StartRef, "start"),
+		"endRef":       strings.TrimSpace(req.EndRef),
+		"endElement":   describeElement(req.EndRef, "end"),
+	}, nil
+}
+
 func (t *Tool) executeFill(
 	ctx context.Context,
 	drv driver,
@@ -2022,11 +2115,60 @@ func (t *Tool) executeFill(
 	if len(req.Fields) == 0 {
 		return nil, errors.New("browser fill requires fields")
 	}
+	fields := req.Fields
+	if driverType == driverTypePlaywrightMCP {
+		fields = normalizeMCPFillFields(req.Fields)
+	}
 	args := map[string]any{
-		"fields": req.Fields,
+		"fields": fields,
 	}
 	addServerTimeoutArg(args, driverType, req.TimeoutMs)
 	return drv.Call(ctx, mcpToolFillForm, args)
+}
+
+func normalizeMCPFillFields(fields []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(fields))
+	for _, field := range fields {
+		normalized := make(map[string]any, len(field)+4)
+		for key, value := range field {
+			normalized[key] = value
+		}
+		target := firstNonEmpty(
+			stringField(field, "target"),
+			stringField(field, "ref"),
+		)
+		if target != "" {
+			normalized["target"] = target
+		}
+		if stringField(normalized, "element") == "" {
+			source := firstNonEmpty(
+				stringField(field, "ref"),
+				target,
+			)
+			normalized["element"] = describeElement(
+				source,
+				stringField(field, "name"),
+			)
+		}
+		if stringField(normalized, "name") == "" {
+			normalized["name"] = firstNonEmpty(
+				stringField(field, "element"),
+				target,
+			)
+		}
+		if stringField(normalized, "type") == "" {
+			normalized["type"] = "textbox"
+		}
+		if _, ok := normalized["value"]; !ok {
+			normalized["value"] = stringField(field, "text")
+		} else {
+			normalized["value"] = fmt.Sprint(normalized["value"])
+		}
+		delete(normalized, "ref")
+		delete(normalized, "text")
+		out = append(out, normalized)
+	}
+	return out
 }
 
 func (t *Tool) executeWait(
@@ -2258,6 +2400,36 @@ func downloadOutputPath(in input) string {
 		return outputPath
 	}
 	return strings.TrimSpace(in.Filename)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func normalizeMouseButton(button string) string {
+	switch strings.ToLower(strings.TrimSpace(button)) {
+	case "", "left":
+		return "left"
+	case "right":
+		return "right"
+	case "middle":
+		return "middle"
+	default:
+		return strings.TrimSpace(button)
+	}
+}
+
+func stringField(fields map[string]any, key string) string {
+	value, ok := fields[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func describeElement(ref string, fallback string) string {

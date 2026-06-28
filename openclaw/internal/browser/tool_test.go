@@ -174,8 +174,10 @@ func TestToolCall_ActClickSelectsRequestedTab(t *testing.T) {
 	require.Equal(t, tabActionSelect, drv.calls[0].Args["action"])
 	require.Equal(t, 2, drv.calls[0].Args["index"])
 	require.Equal(t, mcpToolClick, drv.calls[1].Tool)
-	require.Equal(t, "e12", drv.calls[1].Args["ref"])
+	require.Equal(t, "e12", drv.calls[1].Args["target"])
 	require.Equal(t, "element e12", drv.calls[1].Args["element"])
+	require.Equal(t, "left", drv.calls[1].Args["button"])
+	require.Equal(t, []string{}, drv.calls[1].Args["modifiers"])
 }
 
 func TestToolCall_ActEvaluateDisabled(t *testing.T) {
@@ -371,6 +373,15 @@ func TestToolCall_FillUsesFillForm(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, drv.calls, 1)
 	require.Equal(t, mcpToolFillForm, drv.calls[0].Tool)
+	fields, ok := drv.calls[0].Args["fields"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, fields, 1)
+	require.Equal(t, "e1", fields[0]["target"])
+	require.Equal(t, "email", fields[0]["name"])
+	require.Equal(t, "textbox", fields[0]["type"])
+	require.Equal(t, "a@example.com", fields[0]["value"])
+	require.NotContains(t, fields[0], "ref")
+	require.NotContains(t, fields[0], "text")
 }
 
 func TestToolCall_WaitConvertsMilliseconds(t *testing.T) {
@@ -1175,6 +1186,7 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 			wantTool: mcpToolType,
 			assertArg: func(t *testing.T, call fakeCall) {
 				t.Helper()
+				require.Equal(t, "e1", call.Args["target"])
 				require.Equal(t, "element e1", call.Args["element"])
 				require.Equal(t, "hello", call.Args["text"])
 				require.Equal(t, true, call.Args["submit"])
@@ -1203,6 +1215,7 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 			wantTool: mcpToolHover,
 			assertArg: func(t *testing.T, call fakeCall) {
 				t.Helper()
+				require.Equal(t, "e2", call.Args["target"])
 				require.Equal(t, "element e2", call.Args["element"])
 			},
 		},
@@ -1217,7 +1230,9 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 			wantTool: mcpToolDrag,
 			assertArg: func(t *testing.T, call fakeCall) {
 				t.Helper()
+				require.Equal(t, "e1", call.Args["startTarget"])
 				require.Equal(t, "element e1", call.Args["startElement"])
+				require.Equal(t, "e2", call.Args["endTarget"])
 				require.Equal(t, "element e2", call.Args["endElement"])
 			},
 		},
@@ -1232,6 +1247,7 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 			wantTool: mcpToolSelect,
 			assertArg: func(t *testing.T, call fakeCall) {
 				t.Helper()
+				require.Equal(t, "e3", call.Args["target"])
 				require.Equal(t, []string{"a"}, call.Args["values"])
 			},
 		},
@@ -1278,6 +1294,41 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 			tc.assertArg(t, drv.calls[0])
 		})
 	}
+}
+
+func TestToolCall_ActClickAcceptsElementTarget(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":      actClick,
+				"target":    ".ytp-large-play-button",
+				"button":    "Left",
+				"modifiers": []string{"Shift"},
+			},
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolClick, drv.calls[0].Tool)
+	require.Equal(
+		t,
+		".ytp-large-play-button",
+		drv.calls[0].Args["target"],
+	)
+	require.Equal(
+		t,
+		"element .ytp-large-play-button",
+		drv.calls[0].Args["element"],
+	)
+	require.Equal(t, "left", drv.calls[0].Args["button"])
+	require.Equal(t, []string{"Shift"}, drv.calls[0].Args["modifiers"])
 }
 
 func TestToolCall_ActPassesTimeoutToBrowserServer(t *testing.T) {
@@ -1492,6 +1543,7 @@ func TestToolCall_ActEvaluateEnabled(t *testing.T) {
 	require.Contains(t, got.Text, "evaluated")
 	require.Len(t, drv.calls, 1)
 	require.Equal(t, mcpToolEvaluate, drv.calls[0].Tool)
+	require.Equal(t, "e1", drv.calls[0].Args["target"])
 	require.Equal(t, "element e1", drv.calls[0].Args["element"])
 }
 
