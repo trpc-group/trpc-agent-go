@@ -1713,14 +1713,18 @@ func TestToolCall_EvaluateActionAlias(t *testing.T) {
 	require.Len(t, drv.calls, 1)
 	require.Equal(t, mcpToolEvaluate, drv.calls[0].Tool)
 	require.Equal(t, "() => document.title", drv.calls[0].Args["function"])
+	require.Equal(t, "e1", drv.calls[0].Args["target"])
+	require.Equal(t, "element e1", drv.calls[0].Args["element"])
 }
 
-func TestToolCall_EvaluateActionRejectsConflictingKind(t *testing.T) {
+func TestToolCall_EvaluateActionForcesEvaluateKind(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name string
-		in   map[string]any
+		name    string
+		in      map[string]any
+		wantFn  string
+		wantRef string
 	}{
 		{
 			name: "top-level kind",
@@ -1728,7 +1732,10 @@ func TestToolCall_EvaluateActionRejectsConflictingKind(t *testing.T) {
 				"action": actionEvaluate,
 				"kind":   actClose,
 				"fn":     "() => document.title",
+				"ref":    "e1",
 			},
+			wantFn:  "() => document.title",
+			wantRef: "e1",
 		},
 		{
 			name: "nested request kind",
@@ -1737,8 +1744,11 @@ func TestToolCall_EvaluateActionRejectsConflictingKind(t *testing.T) {
 				"fn":     "() => document.title",
 				"request": map[string]any{
 					"kind": actClose,
+					"ref":  "e2",
 				},
 			},
+			wantFn:  "() => document.title",
+			wantRef: "e2",
 		},
 	}
 
@@ -1747,7 +1757,11 @@ func TestToolCall_EvaluateActionRejectsConflictingKind(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			drv := &fakeDriver{}
+			drv := &fakeDriver{
+				callResult: map[string]any{
+					mcpToolEvaluate: textPayload("evaluated"),
+				},
+			}
 			tool := newToolWithDrivers(
 				defaultProfileName,
 				true,
@@ -1763,10 +1777,24 @@ func TestToolCall_EvaluateActionRejectsConflictingKind(t *testing.T) {
 				},
 			)
 
-			_, err := tool.Call(context.Background(), mustJSON(t, tc.in))
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "does not accept act kind")
-			require.Empty(t, drv.calls)
+			raw, err := tool.Call(
+				context.Background(),
+				mustJSON(t, tc.in),
+			)
+			require.NoError(t, err)
+
+			got := raw.(Result)
+			require.Equal(t, actionAct, got.Action)
+			require.Contains(t, got.Text, "evaluated")
+			require.Len(t, drv.calls, 1)
+			require.Equal(t, mcpToolEvaluate, drv.calls[0].Tool)
+			require.Equal(t, tc.wantFn, drv.calls[0].Args["function"])
+			require.Equal(t, tc.wantRef, drv.calls[0].Args["target"])
+			require.Equal(
+				t,
+				"element "+tc.wantRef,
+				drv.calls[0].Args["element"],
+			)
 		})
 	}
 }

@@ -1944,9 +1944,6 @@ func defaultActKind(kind string, fn string) string {
 func normalizeEvaluateActionInput(in input) (input, error) {
 	if in.Request != nil {
 		req := *in.Request
-		if err := validateEvaluateActionKind(req.Kind); err != nil {
-			return input{}, err
-		}
 		if strings.TrimSpace(req.Fn) == "" {
 			req.Fn = in.Fn
 		}
@@ -1954,22 +1951,8 @@ func normalizeEvaluateActionInput(in input) (input, error) {
 		in.Request = &req
 		return in, nil
 	}
-	if err := validateEvaluateActionKind(in.Kind); err != nil {
-		return input{}, err
-	}
 	in.Kind = actEvaluate
 	return in, nil
-}
-
-func validateEvaluateActionKind(kind string) error {
-	if strings.TrimSpace(kind) == "" ||
-		strings.EqualFold(strings.TrimSpace(kind), actEvaluate) {
-		return nil
-	}
-	return fmt.Errorf(
-		"browser evaluate action does not accept act kind %q",
-		kind,
-	)
 }
 
 func (t *Tool) executeAct(
