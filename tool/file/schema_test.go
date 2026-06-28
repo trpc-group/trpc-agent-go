@@ -29,6 +29,13 @@ func TestFileTool_InputSchemaDescriptions(t *testing.T) {
 		declarations[decl.Name] = decl
 	}
 
+	require.Contains(t, declarations, "read_file")
+	assert.Contains(
+		t,
+		declarations["read_file"].Description,
+		"absolute paths under configured read-only roots",
+	)
+
 	expected := map[string]map[string]string{
 		"save_file": {
 			"file_name": "Relative file path under base_directory to write",

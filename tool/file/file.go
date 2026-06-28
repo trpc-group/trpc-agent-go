@@ -51,10 +51,10 @@ const (
 	missingFileTopLevelPrefix   = "Top-level entries: "
 	missingFileBaseDirPrefix    = "Base directory: "
 	relativePathGuidance        = "Use a relative path under " +
-		"base_directory, or have exec_command print the data " +
-		"directly instead of writing an absolute temp path. If " +
-		"exec_command already wrote the file, read it with " +
-		"exec_command cat/head/sed rather than fs_read_file."
+		"base_directory. If exec_command wrote an absolute temp " +
+		"path, fs_read_file can read it only when that path is " +
+		"under a configured read-only root; otherwise have " +
+		"exec_command print the needed data directly."
 	extraReadRootGuidance = "Absolute paths are readable only when " +
 		"they are under a configured read-only root."
 	missingFileRecoveryGuidance = "Use " +
