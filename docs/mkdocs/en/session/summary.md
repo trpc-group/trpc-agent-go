@@ -97,6 +97,8 @@ sessionService, err := clickhouse.NewService(
 )
 ```
 
+`WithAsyncSummaryNum` only controls the concurrency of background async summary workers. It is not a sync/async mode switch, and it does not disable summary generation. To disable summaries, do not configure `WithSummarizer`. To make a long ReAct loop refresh the summary before the next LLM call within the same `Run`, configure `llmagent.WithSyncSummaryIntraRun(true)` on the Agent.
+
 ### Step 3: Configure Agent and Runner
 
 Create an Agent and configure summary injection behavior:
@@ -121,6 +123,18 @@ r := runner.NewRunner(
 )
 
 eventChan, err := r.Run(ctx, userID, sessionID, userMessage)
+```
+
+Keep the main setup on the default async summary path. For long ReAct loops that must refresh the summary before the next LLM call in the same `Run`, add the sync intra-run option explicitly:
+
+```go
+llmAgent := llmagent.New(
+    "my-agent",
+    llmagent.WithModel(summaryModel),
+    llmagent.WithAddSessionSummary(true),
+    llmagent.WithSyncSummaryIntraRun(true),
+    llmagent.WithMaxHistoryRuns(10),
+)
 ```
 
 After completing the above configuration, the summary feature runs automatically.
@@ -812,6 +826,8 @@ summarizer := summary.NewSummarizer(
 ### Automatic Trigger (Recommended)
 
 The Runner automatically checks trigger conditions after each conversation completes, generating summaries asynchronously in the background when conditions are met.
+
+When `WithSyncSummaryIntraRun(true)` is enabled, the Flow synchronously calls `CreateSessionSummary(...)` between LLM iterations in the same `Run`, so the next LLM call can use the latest summary. Redundant async enqueueing for intermediate tool results is skipped; the final assistant response can still enqueue a summary job to refresh the turn-ending state. With an available async worker and queue capacity, that job runs in the background. If no async worker is configured or the queue is full, `EnqueueSummaryJob` may fall back to synchronous summary creation, so this is not a hard non-blocking guarantee. The sync path and async workers share the same boundary/delta checks and process-local session/filterKey serialization, which normally avoids duplicate expensive LLM summaries for the same events in a single process, but it is not a cross-instance distributed lock.
 
 **Trigger timing**:
 
