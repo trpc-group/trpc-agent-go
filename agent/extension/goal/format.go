@@ -19,6 +19,8 @@ const defaultGuidanceTemplate = `## Goal extension
 
 You have access to session goal tools. A goal is a durable objective for this conversation, not a todo list and not a generic memory entry.
 
+Goal tools require serial semantics. In one model response, call at most one goal tool. Do not call %s and %s in the same response; create the goal first, then continue in a later model turn before marking it complete or blocked.
+
 Use %s only when the user explicitly asks you to keep working toward a multi-step objective across model-loop boundaries, or when their request clearly requires a persistent session objective. Do not create goals for ordinary one-turn questions.
 
 Use %s when you need to inspect the current session goal.
@@ -37,7 +39,15 @@ func renderGuidance(getToolName, createToolName, updateToolName string) string {
 	if updateToolName == "" {
 		updateToolName = DefaultUpdateGoalToolName
 	}
-	return fmt.Sprintf(defaultGuidanceTemplate, createToolName, getToolName, updateToolName, updateToolName)
+	return fmt.Sprintf(
+		defaultGuidanceTemplate,
+		createToolName,
+		updateToolName,
+		createToolName,
+		getToolName,
+		updateToolName,
+		updateToolName,
+	)
 }
 
 // NudgeContext captures everything a NudgeFormatter needs to render the

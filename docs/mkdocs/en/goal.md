@@ -73,6 +73,13 @@ Callers may see intermediate assistant output before the agent continues; that
 output does not mean the goal has completed. The run is still terminal only when
 `runner.completion` is emitted.
 
+Goal tools need serial semantics. Do not enable `llmagent.WithEnableParallelTools(true)`
+on the same `LLMAgent` that owns the Goal extension. A model response should not
+call `create_goal` and `update_goal` in the same parallel tool batch, because
+parallel execution uses isolated invocation/session views for each tool call.
+If an application needs parallel business tools, keep Goal on a serial owner
+agent or use a separate agent for the parallel work.
+
 ## Boundaries
 
 - The extension is installed on one `LLMAgent`; sub-agents do not inherit it.

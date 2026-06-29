@@ -221,6 +221,9 @@ func TestBeforeModel_InjectsConfiguredToolNames(t *testing.T) {
 	assert.Nil(t, before)
 	require.Len(t, req.Messages, 2)
 	guidance := req.Messages[0].Content
+	assert.Contains(t, guidance, "Goal tools require serial semantics")
+	assert.Contains(t, guidance, "call at most one goal tool")
+	assert.Contains(t, guidance, "Do not call goal_create and goal_update in the same response")
 	assert.Contains(t, guidance, "Use goal_create")
 	assert.Contains(t, guidance, "Use goal_read")
 	assert.Contains(t, guidance, "Use goal_update")
