@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	sessionmultimodal "trpc.group/trpc-go/trpc-agent-go/internal/session/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
@@ -115,6 +116,25 @@ func WithSessionIngestor(ingestor session.Ingestor) Option {
 func WithArtifactService(service artifact.Service) Option {
 	return func(opts *Options) {
 		opts.artifactService = service
+	}
+}
+
+// SessionMultimodalExternalizationConfig configures session multimodal
+// externalization.
+type SessionMultimodalExternalizationConfig struct {
+	// Enabled enables session multimodal externalization and default hydrate.
+	Enabled bool
+}
+
+// WithSessionMultimodalExternalization configures session multimodal
+// externalization.
+//
+// Default: disabled.
+func WithSessionMultimodalExternalization(
+	cfg SessionMultimodalExternalizationConfig,
+) Option {
+	return func(opts *Options) {
+		opts.sessionMultimodalExternalization = cfg
 	}
 }
 
@@ -343,6 +363,7 @@ type Options struct {
 	ralphLoop                          *RalphLoopConfig
 	candidateSelector                  CandidateSelector
 	candidateSelectOptions             candidateSelectOptions
+	sessionMultimodalExternalization   SessionMultimodalExternalizationConfig
 	awaitUserReplyRouting              bool
 	persistInterruptedAssistantDefault bool
 }
@@ -362,6 +383,18 @@ func newOptions(opt ...Option) Options {
 	return opts
 }
 
+func wrapSessionMultimodalExternalization(options Options) session.Service {
+	cfg := options.sessionMultimodalExternalization
+	if !cfg.Enabled {
+		return options.sessionService
+	}
+	return sessionmultimodal.Wrap(
+		options.sessionService,
+		options.artifactService,
+		sessionmultimodal.Config{Enabled: cfg.Enabled},
+	)
+}
+
 // NewRunner creates a new Runner.
 func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 	options := newOptions(opts...)
@@ -371,6 +404,7 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		options.sessionService = inmemory.NewSessionService()
 		ownedSessionService = true
 	}
+	options.sessionService = wrapSessionMultimodalExternalization(options)
 	agents := options.agents
 	agents[ag.Info().Name] = ag
 	if options.ralphLoop != nil {
@@ -425,6 +459,7 @@ func NewRunnerWithAgentFactory(
 		options.sessionService = inmemory.NewSessionService()
 		ownedSessionService = true
 	}
+	options.sessionService = wrapSessionMultimodalExternalization(options)
 
 	options.agentFactories[defaultAgentName] = factory
 
