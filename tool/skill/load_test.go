@@ -45,6 +45,52 @@ func (m *mockRepo) Get(name string) (*skill.Skill, error) {
 }
 func (m *mockRepo) Path(name string) (string, error) { return "", nil }
 
+type contextPathRepo struct {
+	name        string
+	defaultDir  string
+	contextDir  string
+	contextBody string
+}
+
+func (r *contextPathRepo) Summaries() []skill.Summary {
+	return []skill.Summary{{Name: r.name}}
+}
+
+func (r *contextPathRepo) Get(name string) (*skill.Skill, error) {
+	if name != r.name {
+		return nil, errors.New("not found")
+	}
+	return &skill.Skill{Summary: skill.Summary{Name: name}}, nil
+}
+
+func (r *contextPathRepo) Path(name string) (string, error) {
+	if name != r.name {
+		return "", errors.New("not found")
+	}
+	return r.defaultDir, nil
+}
+
+func (r *contextPathRepo) SummariesForContext(context.Context) []skill.Summary {
+	return r.Summaries()
+}
+
+func (r *contextPathRepo) GetForContext(_ context.Context, name string) (*skill.Skill, error) {
+	if name != r.name {
+		return nil, errors.New("not found")
+	}
+	return &skill.Skill{
+		Summary: skill.Summary{Name: name},
+		Body:    r.contextBody,
+	}, nil
+}
+
+func (r *contextPathRepo) PathForContext(_ context.Context, name string) (string, error) {
+	if name != r.name {
+		return "", errors.New("not found")
+	}
+	return r.contextDir, nil
+}
+
 func TestLoadTool_Call_ValidatesAndDelta(t *testing.T) {
 	repo := &mockRepo{ok: map[string]bool{"calc": true}}
 	lt := NewLoadTool(repo)
@@ -94,6 +140,26 @@ func TestLoadTool_Call_ValidatesAndDelta(t *testing.T) {
 		`["calc"]`,
 		string(delta[skill.LoadedOrderKey("tester")]),
 	)
+}
+
+func TestLoadTool_StateDelta_TrimsSkillName(t *testing.T) {
+	repo := &mockRepo{ok: map[string]bool{"calc": true}}
+	lt := NewLoadTool(repo)
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session:   &session.Session{State: session.StateMap{}},
+	}
+
+	delta := lt.StateDeltaForInvocation(
+		inv,
+		"call-1",
+		[]byte(`{"skill":" calc ","docs":["A.md"]}`),
+		nil,
+	)
+
+	require.Equal(t, []byte("1"), delta[skill.LoadedKey("tester", "calc")])
+	require.Equal(t, []byte(`["A.md"]`), delta[skill.DocsKey("tester", "calc")])
+	require.Equal(t, `["calc"]`, string(delta[skill.LoadedOrderKey("tester")]))
 }
 
 func TestLoadTool_Call_Errors(t *testing.T) {
@@ -310,6 +376,68 @@ Use careful code review practices.`
 	responseDetail := spanStringAttr(t, invokeSpan.Attributes(), semconvtrace.KeyGenAIInvokeSkillResponse)
 	require.Contains(t, responseDetail, `"content_sha256"`)
 	require.Contains(t, responseDetail, "Use careful code review practices.")
+}
+
+func TestLoadTool_Call_InvokeSkillUsesContextAwarePath(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	originalProvider := telemetrytrace.TracerProvider
+	originalTracer := telemetrytrace.Tracer
+	telemetrytrace.TracerProvider = provider
+	telemetrytrace.Tracer = provider.Tracer("skill-load-test")
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		telemetrytrace.TracerProvider = originalProvider
+		telemetrytrace.Tracer = originalTracer
+	})
+
+	root := t.TempDir()
+	defaultDir := filepath.Join(root, "default", "context_skill")
+	contextDir := filepath.Join(root, "context", "context_skill")
+	require.NoError(t, os.MkdirAll(defaultDir, 0o755))
+	require.NoError(t, os.MkdirAll(contextDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(defaultDir, skill.SkillFile),
+		[]byte("default skill body"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(contextDir, skill.SkillFile),
+		[]byte("context skill body"),
+		0o644,
+	))
+	repo := &contextPathRepo{
+		name:        "context_skill",
+		defaultDir:  defaultDir,
+		contextDir:  contextDir,
+		contextBody: "context skill body",
+	}
+	lt := NewLoadTool(repo)
+	var ctx context.Context = agent.NewInvocationContext(
+		context.Background(),
+		&agent.Invocation{AgentName: "context-agent"},
+	)
+	ctx, parent := telemetrytrace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName("skill_load"))
+	out, err := lt.Call(ctx, []byte(`{"skill":"context_skill"}`))
+	parent.End()
+	require.NoError(t, err)
+	require.Equal(t, "loaded: context_skill", out)
+
+	var invokeSpan sdktrace.ReadOnlySpan
+	for _, sp := range recorder.Ended() {
+		if sp.Name() == itelemetry.NewInvokeSkillSpanName("context_skill") {
+			invokeSpan = sp
+			break
+		}
+	}
+	require.NotNil(t, invokeSpan)
+	requestDetail := spanStringAttr(t, invokeSpan.Attributes(), semconvtrace.KeyGenAIInvokeSkillRequest)
+	responseDetail := spanStringAttr(t, invokeSpan.Attributes(), semconvtrace.KeyGenAIInvokeSkillResponse)
+	require.Contains(t, requestDetail, `"safe_path":"context_skill/SKILL.md"`)
+	require.Contains(t, requestDetail, sha256Hex(filepath.Join(contextDir, skill.SkillFile)))
+	require.NotContains(t, requestDetail, sha256Hex(filepath.Join(defaultDir, skill.SkillFile)))
+	require.Contains(t, responseDetail, sha256Hex("context skill body"))
+	require.NotContains(t, responseDetail, sha256Hex("default skill body"))
 }
 
 func requireSpanAttr(t *testing.T, attrs []attribute.KeyValue, key, value string) {

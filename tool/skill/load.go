@@ -292,7 +292,7 @@ func (t *LoadTool) skillMaterial(
 	if t.repo == nil {
 		return "", content
 	}
-	dir, err := t.repo.Path(skillName)
+	dir, err := skill.PathForContext(ctx, t.repo, skillName)
 	if err != nil || dir == "" {
 		return "", content
 	}
@@ -436,6 +436,7 @@ func (t *LoadTool) stateDelta(
 		log.Warnf("skill_load state parse failed: %v", err)
 		return nil, ""
 	}
+	in.Skill = strings.TrimSpace(in.Skill)
 	if in.Skill == "" {
 		return nil, ""
 	}

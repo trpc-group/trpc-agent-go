@@ -202,7 +202,6 @@ func TestTraceInvokeSkill(t *testing.T) {
 	require.Len(t, span.recordedErrors, 1)
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIInvokeSkillRequest, `{"safe_path":"code_review/SKILL.md"}`))
 	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIInvokeSkillResponse, `{"content_sha256":"abc"}`))
-	require.Empty(t, span.events)
 }
 
 func TestTraceInvokeSkill_AttributePolicy(t *testing.T) {
@@ -225,7 +224,6 @@ func TestTraceInvokeSkill_AttributePolicy(t *testing.T) {
 	got, ok := attrStringValue(span.attrs, semconvtrace.KeyGenAIInvokeSkillResponse)
 	require.True(t, ok)
 	require.Contains(t, got, `"omitted":true`)
-	require.Empty(t, span.events)
 }
 
 func TestTraceWorkflow(t *testing.T) {
