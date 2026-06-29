@@ -1550,6 +1550,46 @@ func TestServer_ProcessMessage_KeepsUserTextSeparateFromRequestSystemPrompt(
 	)
 }
 
+func TestServer_ProcessMessage_IncludesRequestLateContextPrompt(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	runner := &resolvingRunner{}
+	srv, err := New(runner)
+	require.NoError(t, err)
+
+	req := gwproto.MessageRequest{
+		Channel:                  "telegram",
+		From:                     "u1",
+		SessionID:                "telegram:dm:u1",
+		Text:                     "hello",
+		RequestSystemPrompt:      "Stable channel guidance.",
+		RequestLateContextPrompt: "Current request environment.",
+	}
+
+	rsp, status := srv.ProcessMessage(context.Background(), req)
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, "ok", rsp.Reply)
+	require.Len(t, runner.opts.InjectedContextMessages, 1)
+	require.Equal(
+		t,
+		"Stable channel guidance.",
+		runner.opts.InjectedContextMessages[0].Content,
+	)
+	require.Len(t, runner.opts.LateContextMessages, 1)
+	require.Equal(
+		t,
+		model.RoleUser,
+		runner.opts.LateContextMessages[0].Role,
+	)
+	require.Equal(
+		t,
+		"Current request environment.",
+		runner.opts.LateContextMessages[0].Content,
+	)
+}
+
 func TestServer_ProcessMessage_RunOptionResolver(t *testing.T) {
 	t.Parallel()
 

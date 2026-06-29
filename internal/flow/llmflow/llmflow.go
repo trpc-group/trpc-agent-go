@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,6 +35,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolsurface"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
@@ -67,6 +69,11 @@ const (
 // snapshot for this invocation still contains any user tool.
 func InvocationHasFilteredUserTools(invocation *agent.Invocation) (bool, bool) {
 	return toolsnapshot.HasFilteredUserTools(invocation)
+}
+
+// InvocationFilteredTraceableUserToolNames reports filtered user tool names that have structure surfaces.
+func InvocationFilteredTraceableUserToolNames(invocation *agent.Invocation) ([]string, bool) {
+	return toolsnapshot.FilteredTraceableUserToolNames(invocation)
 }
 
 // Options contains configuration options for creating a Flow.
@@ -1259,7 +1266,7 @@ func collectLongRunningToolIDs(ToolCalls []model.ToolCall, tools map[string]tool
 		if !ok {
 			continue
 		}
-		caller, ok := t.(function.LongRunner)
+		caller, ok := itool.ResolveDeclaration(t).(function.LongRunner)
 		if !ok {
 			continue
 		}
@@ -1969,6 +1976,11 @@ func (f *Flow) getFilteredTools(
 		ctx,
 		invocation,
 	)
+	traceableUserToolNames := trackedUserToolNames(
+		allTools,
+		hasUserToolTracking,
+		userToolNames,
+	)
 	allTools, userToolNames, hasUserToolTracking, externalToolNames :=
 		toolsurface.AppendRunOptionTools(
 			allTools,
@@ -2002,7 +2014,8 @@ func (f *Flow) getFilteredTools(
 		toolsnapshot.Set(
 			invocation,
 			allTools,
-			hasTrackedUserTool(allTools, hasUserToolTracking, userToolNames),
+			len(trackedUserToolNames(allTools, hasUserToolTracking, userToolNames)) > 0,
+			filteredTraceableToolNames(allTools, traceableUserToolNames),
 		)
 		return allTools
 	}
@@ -2022,7 +2035,8 @@ func (f *Flow) getFilteredTools(
 	toolsnapshot.Set(
 		invocation,
 		filtered,
-		hasTrackedUserTool(filtered, hasUserToolTracking, userToolNames),
+		len(trackedUserToolNames(filtered, hasUserToolTracking, userToolNames)) > 0,
+		filteredTraceableToolNames(filtered, traceableUserToolNames),
 	)
 
 	return filtered
@@ -2078,26 +2092,66 @@ func toolName(tl tool.Tool) string {
 	return decl.Name
 }
 
-func hasTrackedUserTool(
+func trackedUserToolNames(
 	tools []tool.Tool,
 	hasUserToolTracking bool,
 	userToolNames map[string]bool,
-) bool {
+) []string {
 	if len(tools) == 0 {
-		return false
+		return nil
 	}
+	seen := make(map[string]struct{}, len(tools))
 	if !hasUserToolTracking {
-		return true
+		for _, tl := range tools {
+			if name := toolName(tl); name != "" {
+				seen[name] = struct{}{}
+			}
+		}
+		return sortedToolNames(seen)
 	}
 	for _, tl := range tools {
-		if tl == nil || tl.Declaration() == nil {
-			continue
-		}
-		if userToolNames[tl.Declaration().Name] {
-			return true
+		name := toolName(tl)
+		if name != "" && userToolNames[name] {
+			seen[name] = struct{}{}
 		}
 	}
-	return false
+	return sortedToolNames(seen)
+}
+
+func sortedToolNames(names map[string]struct{}) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func filteredTraceableToolNames(
+	tools []tool.Tool,
+	traceableToolNames []string,
+) []string {
+	if len(tools) == 0 || len(traceableToolNames) == 0 {
+		return nil
+	}
+	traceable := make(map[string]struct{}, len(traceableToolNames))
+	for _, name := range traceableToolNames {
+		traceable[name] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(tools))
+	for _, tl := range tools {
+		name := toolName(tl)
+		if name == "" {
+			continue
+		}
+		if _, ok := traceable[name]; ok {
+			seen[name] = struct{}{}
+		}
+	}
+	return sortedToolNames(seen)
 }
 
 // callLLM performs the actual LLM call using core/model.

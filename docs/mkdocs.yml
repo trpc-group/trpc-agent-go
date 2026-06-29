@@ -20,6 +20,7 @@ nav:
           - Codex Agent: codex.md
       - Runner: runner.md
       - Code Executor: codeexecutor.md
+      - CodeAct: codeact.md
       - Error Handling: error-handling.md
       - Model: model.md
       - Prompt Template: prompt.md
@@ -48,6 +49,7 @@ nav:
           - Reranker: knowledge/reranker.md
           - Query Enhancer: knowledge/query-enhancer.md
           - Source: knowledge/source.md
+          - Code RAG (Beta): knowledge/code-rag.md
           - Filter: knowledge/filter.md
           - Extractor: knowledge/extractor.md
           - Management: knowledge/management.md
@@ -118,6 +120,7 @@ plugins:
                     - Codex Agent: codex.md
                 - Runner: runner.md
                 - Code Executor: codeexecutor.md
+                - CodeAct: codeact.md
                 - 错误处理: error-handling.md
                 - Model: model.md
                 - Prompt Template: prompt.md
@@ -146,6 +149,7 @@ plugins:
                     - Reranker: knowledge/reranker.md
                     - Query Enhancer: knowledge/query-enhancer.md
                     - 数据源: knowledge/source.md
+                    - 代码知识库（Code RAG, Beta）: knowledge/code-rag.md
                     - 内容提取器: knowledge/extractor.md
                     - 过滤器: knowledge/filter.md
                     - 知识库管理: knowledge/management.md

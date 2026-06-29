@@ -335,6 +335,9 @@ func TestGetFilteredTools_NoFilter(t *testing.T) {
 	if !hasUserTools {
 		t.Fatal("expected cached state to report user tools when the snapshot still includes them")
 	}
+	traceableNames, ok := InvocationFilteredTraceableUserToolNames(inv)
+	require.True(t, ok)
+	require.Equal(t, []string{"user_tool_1"}, traceableNames)
 }
 
 func TestGetFilteredTools_NoFilterSkipsInvalidTools(t *testing.T) {
@@ -389,6 +392,9 @@ func TestGetFilteredTools_CachesFilteredUserToolPresence(t *testing.T) {
 	if hasUserTools {
 		t.Fatal("expected no filtered user tools after invocation filter")
 	}
+	traceableNames, ok := InvocationFilteredTraceableUserToolNames(inv)
+	require.True(t, ok)
+	require.Empty(t, traceableNames)
 }
 
 func TestInvocationHasFilteredUserTools_NilInvocation(t *testing.T) {
@@ -399,26 +405,31 @@ func TestInvocationHasFilteredUserTools_NilInvocation(t *testing.T) {
 	if hasUserTools {
 		t.Fatal("expected nil invocation to report no cached user tools")
 	}
+	traceableNames, ok := InvocationFilteredTraceableUserToolNames(nil)
+	require.False(t, ok)
+	require.Empty(t, traceableNames)
 }
 
-func TestHasTrackedUserTool_CoversTrackingBranches(t *testing.T) {
-	require.False(t, hasTrackedUserTool(nil, false, nil))
-	require.True(
+func TestTrackedUserToolNames_CoversTrackingBranches(t *testing.T) {
+	require.Empty(t, trackedUserToolNames(nil, false, nil))
+	require.Equal(
 		t,
-		hasTrackedUserTool([]tool.Tool{&mockTool{name: "user_tool"}}, false, nil),
+		[]string{"user_tool"},
+		trackedUserToolNames([]tool.Tool{&mockTool{name: "user_tool"}}, false, nil),
 	)
-	require.False(
+	require.Empty(
 		t,
-		hasTrackedUserTool(
+		trackedUserToolNames(
 			[]tool.Tool{&mockTool{name: "framework_tool"}},
 			true,
 			map[string]bool{"user_tool": true},
 		),
 	)
-	require.True(
+	require.Equal(
 		t,
-		hasTrackedUserTool(
-			[]tool.Tool{&mockTool{name: "user_tool"}},
+		[]string{"user_tool"},
+		trackedUserToolNames(
+			[]tool.Tool{&mockTool{name: "user_tool"}, &mockTool{name: "user_tool"}},
 			true,
 			map[string]bool{"user_tool": true},
 		),
@@ -443,6 +454,9 @@ func TestGetFilteredTools_UsesInvocationToolSurfaceProvider(t *testing.T) {
 	hasUserTools, ok := InvocationHasFilteredUserTools(inv)
 	require.True(t, ok)
 	require.True(t, hasUserTools)
+	traceableNames, ok := InvocationFilteredTraceableUserToolNames(inv)
+	require.True(t, ok)
+	require.Equal(t, []string{"user_tool"}, traceableNames)
 }
 
 // TestGetFilteredTools_WithToolFilter tests tool filtering using FilterFunc.
@@ -528,6 +542,12 @@ func TestGetFilteredTools_AppendsRunOptionTools(t *testing.T) {
 	require.True(t, hasToolName(filtered, "framework_tool"))
 	require.True(t, hasToolName(filtered, "runtime_allowed"))
 	require.False(t, hasToolName(filtered, "runtime_denied"))
+	hasUserTools, ok := InvocationHasFilteredUserTools(inv)
+	require.True(t, ok)
+	require.True(t, hasUserTools)
+	traceableNames, ok := InvocationFilteredTraceableUserToolNames(inv)
+	require.True(t, ok)
+	require.Empty(t, traceableNames)
 }
 
 func TestGetFilteredTools_FiltersRunOptionToolsWithFilterProvider(
@@ -577,6 +597,12 @@ func TestGetFilteredTools_FiltersRunOptionToolsWithFilterProvider(
 	require.True(t, hasToolName(filtered, registeredToolName))
 	require.True(t, hasToolName(filtered, runtimeAllowedName))
 	require.False(t, hasToolName(filtered, runtimeDeniedName))
+	hasUserTools, ok := InvocationHasFilteredUserTools(inv)
+	require.True(t, ok)
+	require.True(t, hasUserTools)
+	traceableNames, ok := InvocationFilteredTraceableUserToolNames(inv)
+	require.True(t, ok)
+	require.Equal(t, []string{registeredToolName}, traceableNames)
 }
 
 func TestGetFilteredTools_ExternalToolCannotShadowExistingTool(t *testing.T) {
