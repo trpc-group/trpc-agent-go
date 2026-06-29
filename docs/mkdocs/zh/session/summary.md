@@ -192,6 +192,11 @@ Prompt 规则：
 这段文本不会再被塞进摘要请求，因为对话内容已经在克隆的父请求里。此时 hook
 仍可用于更新 context、做副作用处理，以及服务 fallback 到独立摘要请求的场景。
 
+在 fork 模式下，`WithPreSummaryHook(...)` 对 text 或 events 的修改不会对克隆
+出来的父请求做脱敏、redaction 或 filtering。如果这个 hook 用于在摘要前做脱敏
+或过滤，请让这类流程使用独立摘要模式，或确保父 `model.Request` 在被克隆前已经
+完成脱敏。
+
 Cache-safe forking 控制的是“生成摘要那次请求”的构造方式。摘要已经生成以后，
 下一次普通对话请求如果也希望更利于 prompt cache，建议把摘要注入为 user
 message，而不是合并进 system prompt：

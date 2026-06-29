@@ -198,6 +198,11 @@ request because the conversation is already present in the cloned parent
 request; the hook remains useful for context updates, side effects, and
 fallback standalone calls.
 
+In fork mode, `WithPreSummaryHook(...)` text or event edits do not sanitize,
+redact, or filter the cloned parent request. If the hook is used for redaction
+or filtering before summarization, use standalone mode for that flow or ensure
+the parent `model.Request` has already been sanitized before it is cloned.
+
 Cache-safe forking controls the request used to generate the summary. To make
 the next normal conversation request more cache friendly after a summary exists,
 prefer injecting the summary as a user message instead of merging it into the
