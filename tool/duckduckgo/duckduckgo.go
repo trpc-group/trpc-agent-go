@@ -302,7 +302,7 @@ func (t *ddgTool) searchAPIWithSERPFallback(
 	req searchRequest,
 ) (searchResponse, error) {
 	result, err := t.searchAPI(req)
-	if err == nil || ctx.Err() != nil || !shouldRetrySERPWithHTTP(err) {
+	if err == nil || ctx.Err() != nil || !shouldFallbackFromAPIError(err) {
 		return result, err
 	}
 	serpTool := *t

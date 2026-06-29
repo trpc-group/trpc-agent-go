@@ -275,6 +275,20 @@ func shouldRetrySERPWithHTTP(err error) bool {
 	) || strings.Contains(msg, "wrong version number")
 }
 
+func shouldFallbackFromAPIError(err error) bool {
+	return shouldRetrySERPWithHTTP(err) || isRetryableAPIStatus(err)
+}
+
+func isRetryableAPIStatus(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(
+		strings.ToLower(err.Error()),
+		"api returned status 202",
+	)
+}
+
 func isDuckDuckGoChallenge(body []byte) bool {
 	text := string(body)
 	return strings.Contains(text, "anomaly-modal") ||
