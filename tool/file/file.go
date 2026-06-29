@@ -317,21 +317,41 @@ func (f *fileToolSet) matchExtraReadRoot(absPath string) (string, bool) {
 		return "", false
 	}
 	candidate := filepath.Clean(absPath)
-	evaluatedCandidate := candidate
-	resolvedPath := false
-	if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
-		evaluatedCandidate = filepath.Clean(resolved)
-		resolvedPath = true
-	}
+	evaluatedCandidate, resolvedPath := evalPathWithExistingParent(candidate)
 	for _, root := range f.extraReadRoots {
-		if !isPathWithinRoot(candidate, root) {
-			continue
+		candidateInRoot := isPathWithinRoot(candidate, root)
+		evaluatedInRoot := resolvedPath &&
+			isPathWithinRoot(evaluatedCandidate, root)
+		if candidateInRoot && (!resolvedPath || evaluatedInRoot) {
+			return root, true
 		}
-		if !resolvedPath || isPathWithinRoot(evaluatedCandidate, root) {
+		if !candidateInRoot && evaluatedInRoot {
 			return root, true
 		}
 	}
 	return "", false
+}
+
+func evalPathWithExistingParent(path string) (string, bool) {
+	clean := filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		return filepath.Clean(resolved), true
+	}
+
+	current := clean
+	var suffix []string
+	for {
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", false
+		}
+		suffix = append([]string{filepath.Base(current)}, suffix...)
+		if resolved, err := filepath.EvalSymlinks(parent); err == nil {
+			parts := append([]string{resolved}, suffix...)
+			return filepath.Clean(filepath.Join(parts...)), true
+		}
+		current = parent
+	}
 }
 
 func normalizeExtraReadRoots(roots []string) []string {

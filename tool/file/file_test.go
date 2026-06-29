@@ -210,7 +210,11 @@ func TestResolveReadPath_ExtraReadRoot(t *testing.T) {
 	)
 	assert.NoError(t, err)
 	fts := set.(*fileToolSet)
-	assert.Equal(t, []string{extra}, fts.extraReadRoots)
+	normalizedExtra := filepath.Clean(extra)
+	if resolved, err := filepath.EvalSymlinks(normalizedExtra); err == nil {
+		normalizedExtra = filepath.Clean(resolved)
+	}
+	assert.Equal(t, []string{normalizedExtra}, fts.extraReadRoots)
 
 	allowed := filepath.Join(extra, "a.txt")
 	p, err := fts.resolveReadPath(allowed)
