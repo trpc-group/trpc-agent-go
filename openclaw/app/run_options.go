@@ -186,6 +186,7 @@ type runOptions struct {
 	MaxLLMCalls                                   int
 	MaxToolIterations                             int
 	PreloadMemory                                 int
+	PostToolPromptEnabled                         *bool
 
 	AgentInstruction       string
 	AgentInstructionFiles  string
@@ -1142,6 +1143,8 @@ type agentRunConfig struct {
 	MaxLLMCalls                                   *int  `yaml:"max_llm_calls,omitempty"`
 	MaxToolIterations                             *int  `yaml:"max_tool_iterations,omitempty"`
 	PreloadMemory                                 *int  `yaml:"preload_memory,omitempty"`
+	DisablePostToolPrompt                         *bool `yaml:"disable_post_tool_prompt,omitempty"`
+	DisablePostToolPromptCamel                    *bool `yaml:"disablePostToolPrompt,omitempty"`
 
 	Instruction      *string  `yaml:"instruction,omitempty"`
 	InstructionFiles []string `yaml:"instruction_files,omitempty"`
@@ -1649,6 +1652,14 @@ func (cfg *fileConfig) apply(
 		if cfg.Agent.PreloadMemory != nil &&
 			!flagWasSet(set, flagPreloadMemory) {
 			opts.PreloadMemory = *cfg.Agent.PreloadMemory
+		}
+		disablePostToolPrompt := firstBoolPtr(
+			cfg.Agent.DisablePostToolPrompt,
+			cfg.Agent.DisablePostToolPromptCamel,
+		)
+		if disablePostToolPrompt != nil {
+			enabled := !*disablePostToolPrompt
+			opts.PostToolPromptEnabled = &enabled
 		}
 		if cfg.Agent.Instruction != nil &&
 			!flagWasSet(set, flagAgentInstruction) {

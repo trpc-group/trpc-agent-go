@@ -1076,21 +1076,24 @@ func NewRuntimeWithOptions(
 				Err:  fmt.Errorf("create toolsets failed: %w", err),
 			}
 		}
+		postToolPromptEnabled := resolvePostToolPromptEnabled(
+			opts,
+			runtimeOpts,
+		)
 		agentCfg := agentConfig{
 			AppName:                 opts.AppName,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:    opts.MaxHistoryRuns,
-			MaxLLMCalls:       opts.MaxLLMCalls,
-			MaxToolIterations: opts.MaxToolIterations,
-			PreloadMemory:     opts.PreloadMemory,
-			GenerationConfig:  opts.GenerationConfig,
-			PostToolPromptEnabled: runtimeOpts.
-				postToolPromptEnabled,
-			Instruction:  prompts.Instruction,
-			SystemPrompt: prompts.SystemPrompt,
+			MaxHistoryRuns:        opts.MaxHistoryRuns,
+			MaxLLMCalls:           opts.MaxLLMCalls,
+			MaxToolIterations:     opts.MaxToolIterations,
+			PreloadMemory:         opts.PreloadMemory,
+			GenerationConfig:      opts.GenerationConfig,
+			PostToolPromptEnabled: postToolPromptEnabled,
+			Instruction:           prompts.Instruction,
+			SystemPrompt:          prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -1659,21 +1662,24 @@ func run(
 				Err:  fmt.Errorf("create toolsets failed: %w", err),
 			}
 		}
+		postToolPromptEnabled := resolvePostToolPromptEnabled(
+			opts,
+			runtimeOpts,
+		)
 		agentCfg := agentConfig{
 			AppName:                 opts.AppName,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:    opts.MaxHistoryRuns,
-			MaxLLMCalls:       opts.MaxLLMCalls,
-			MaxToolIterations: opts.MaxToolIterations,
-			PreloadMemory:     opts.PreloadMemory,
-			GenerationConfig:  opts.GenerationConfig,
-			PostToolPromptEnabled: runtimeOpts.
-				postToolPromptEnabled,
-			Instruction:  prompts.Instruction,
-			SystemPrompt: prompts.SystemPrompt,
+			MaxHistoryRuns:        opts.MaxHistoryRuns,
+			MaxLLMCalls:           opts.MaxLLMCalls,
+			MaxToolIterations:     opts.MaxToolIterations,
+			PreloadMemory:         opts.PreloadMemory,
+			GenerationConfig:      opts.GenerationConfig,
+			PostToolPromptEnabled: postToolPromptEnabled,
+			Instruction:           prompts.Instruction,
+			SystemPrompt:          prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -3136,6 +3142,16 @@ type agentConfig struct {
 	DeferToolSurfaceThresholdChars int
 	DeferToolSurfaceDirectTools    []string
 	DynamicAgentTimeout            time.Duration
+}
+
+func resolvePostToolPromptEnabled(
+	opts runOptions,
+	runtimeOpts runtimeOptions,
+) *bool {
+	if runtimeOpts.postToolPromptEnabled != nil {
+		return runtimeOpts.postToolPromptEnabled
+	}
+	return opts.PostToolPromptEnabled
 }
 
 type openClawToolsBundle struct {

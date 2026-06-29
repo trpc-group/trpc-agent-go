@@ -1757,6 +1757,36 @@ debug_recorder:
 	require.Equal(t, "safe", opts.DebugRecorderMode)
 }
 
+func TestParseRunOptions_AgentDisablePostToolPromptConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  disable_post_tool_prompt: true
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.NotNil(t, opts.PostToolPromptEnabled)
+	require.False(t, *opts.PostToolPromptEnabled)
+}
+
+func TestParseRunOptions_AgentDisablePostToolPromptCamelConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  disablePostToolPrompt: false
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.NotNil(t, opts.PostToolPromptEnabled)
+	require.True(t, *opts.PostToolPromptEnabled)
+}
+
 func TestParseRunOptions_SkillsDefaults(t *testing.T) {
 	t.Parallel()
 

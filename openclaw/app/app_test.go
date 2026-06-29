@@ -1498,6 +1498,19 @@ func TestRuntimePostToolPromptOption(t *testing.T) {
 	require.True(t, *runtimeOpts.postToolPromptEnabled)
 }
 
+func TestResolvePostToolPromptEnabledPrefersRuntimeOption(t *testing.T) {
+	t.Parallel()
+
+	configEnabled := false
+	optionEnabled := true
+	got := resolvePostToolPromptEnabled(
+		runOptions{PostToolPromptEnabled: &configEnabled},
+		runtimeOptions{postToolPromptEnabled: &optionEnabled},
+	)
+	require.NotNil(t, got)
+	require.True(t, *got)
+}
+
 func TestMain_HelpSkipsErrorLog(t *testing.T) {
 	t.Parallel()
 
