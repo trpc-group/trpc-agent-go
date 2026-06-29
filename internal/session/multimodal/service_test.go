@@ -217,6 +217,45 @@ func TestAppendEventSkipsPartialEventExternalization(t *testing.T) {
 	}
 }
 
+func TestAppendEventHookSkipNextDoesNotUpdateLiveSession(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessionmem.NewSessionService(
+		sessionmem.WithAppendEventHook(
+			func(ctx *session.AppendEventContext, next func() error) error {
+				return nil
+			},
+		),
+	)
+	artifacts := artifactmem.NewService()
+	svc := Wrap(inner, artifacts, Config{Enabled: true})
+	sess, err := svc.CreateSession(ctx, key, nil)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	if err := svc.AppendEvent(ctx, sess, imageEvent([]byte("image-bytes"))); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+	if len(sess.Events) != 0 {
+		t.Fatalf("live session events = %d, want 0 when hook skips next", len(sess.Events))
+	}
+	persisted, err := inner.GetSession(ctx, key)
+	if err != nil {
+		t.Fatalf("inner.GetSession() error = %v", err)
+	}
+	if len(persisted.Events) != 0 {
+		t.Fatalf("persisted events = %d, want 0 when hook skips next", len(persisted.Events))
+	}
+	keys, listErr := artifacts.ListArtifactKeys(ctx, artifactSessionInfo(key))
+	if listErr != nil {
+		t.Fatalf("ListArtifactKeys() error = %v", listErr)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("artifact keys = %v, want empty after hook skips next", keys)
+	}
+}
+
 func TestAppendEventFailureDeletesSavedArtifacts(t *testing.T) {
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}

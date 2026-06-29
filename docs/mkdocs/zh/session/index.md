@@ -21,6 +21,7 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 - **并发安全**：内置读写锁保证并发访问安全
 - **自动管理**：集成 Runner 后自动处理会话创建、加载和更新
 - **软删除支持**：SQLite/PostgreSQL/PGVector/MySQL/ClickHouse 支持软删除，数据可恢复
+- **多模态外存**：可选地将 session event 中的 inline image/audio/file payload 外存到 Artifact 存储
 
 ## 快速开始
 
@@ -170,6 +171,51 @@ func main() {
 3. **自动会话更新**：对话结束后自动保存新的事件
 4. **上下文连续性**：自动将历史对话注入到 LLM 输入，实现多轮对话
 5. **自动摘要生成**（可选）：满足触发条件时后台异步生成摘要，无需手动干预
+
+### 多模态内容外存
+
+Session event 可以包含多模态 `model.ContentParts`，其中 image、audio、file 都可能携带 inline bytes。对于大 payload，直接写入 session backend 会增加存储体积、序列化成本和读取放大。
+
+Session 多模态外存默认关闭。需要在 Runner 上显式开启，并同时配置 Artifact service：
+
+```go
+import artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
+
+artifactService := artifactinmemory.NewService()
+
+r := runner.NewRunner(
+    "my-agent",
+    agent,
+    runner.WithSessionService(sessionService),
+    runner.WithArtifactService(artifactService),
+    runner.WithSessionMultimodalExternalization(
+        runner.SessionMultimodalExternalizationConfig{
+            Enabled: true,
+        },
+    ),
+)
+```
+
+开启后：
+
+- 标准 `ContentParts` 中的 inline payload 会在写入 `session.Events` 前外存：
+    - `Image.Data`
+    - `Audio.Data`
+    - `File.Data`
+    - 标准 image/file URL 字段中的 data URL
+- 持久化 event 保存轻量 `ContentRef`，指向固定版本的 `artifact://<name>@<version>` 引用。
+- 当前 runtime event 和活跃 session view 保留原始 bytes，因此当前轮模型请求不会被持久化减重影响。
+- `GetSession`、完整 `ListSessions`、`SearchEvents`、`GetEventWindow` 默认返回 hydrate 后的内容。
+- 使用 `WithListSessionOnlyMeta` 的 `ListSessions` 不做 hydrate，因为该模式本身会省略 event payload。
+
+以下内容不会被该能力默认重托管：
+
+- 普通 HTTP/HTTPS URL
+- provider file ID
+- 已存在的 internal ref 或业务自有引用
+- 自定义 JSON、metadata、tool result payload 内部的任意 blob
+
+失败语义采用 fail-closed：如果开启能力但 Artifact storage 不可用，或 artifact save/load 失败，操作会返回错误，不会静默丢内容。如果 event append 在 artifact 保存成功后失败，框架会对本次 append 保存的 artifacts 提交 best-effort 删除请求。
 
 ## 核心概念
 

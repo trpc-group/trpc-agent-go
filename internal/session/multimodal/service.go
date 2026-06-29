@@ -15,7 +15,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
@@ -63,6 +62,10 @@ type Service struct {
 	cfg             Config
 }
 
+// The following wrapper types intentionally enumerate optional session service
+// interface combinations. Go type assertions depend on the concrete wrapper's
+// method set, so adding a new optional session interface requires extending
+// this factory to preserve the wrapped backend's ok semantics.
 type searchableService struct {
 	*Service
 	session.SearchableService
@@ -255,9 +258,14 @@ func (s *Service) AppendEvent(
 		return s.Service.AppendEvent(ctx, sess, evt, options...)
 	}
 	persistedSess := sess.Clone()
+	beforeEvents := len(persistedSess.Events)
 	if err := s.Service.AppendEvent(ctx, persistedSess, persisted, options...); err != nil {
 		bestEffortDelete(ctx, s.artifactService, info, saved)
 		return err
+	}
+	if !appendObserved(persistedSess, persisted.ID, beforeEvents) {
+		bestEffortDelete(ctx, s.artifactService, info, saved)
+		return nil
 	}
 	sess.UpdateUserSession(evt, options...)
 	return nil
@@ -374,6 +382,11 @@ type externalizeTarget struct {
 	apply        func(*model.ContentPart, *model.ContentRef)
 }
 
+var choiceMessageTargets = []func(*model.Choice) *model.Message{
+	func(choice *model.Choice) *model.Message { return &choice.Message },
+	func(choice *model.Choice) *model.Message { return &choice.Delta },
+}
+
 func externalizeEvent(
 	ctx context.Context,
 	evt *event.Event,
@@ -392,54 +405,21 @@ func externalizeEvent(
 		changed bool
 	)
 	for choiceIndex := range evt.Response.Choices {
-		msg := evt.Response.Choices[choiceIndex].Message
-		if hasExternalizableContent(msg) {
-			if svc == nil {
-				return nil, saved, false, errors.New(
-					"session multimodal externalization: artifact service is nil",
-				)
-			}
-			if cloned == nil {
-				cloned = cloneEventForMutation(evt)
-			}
-			targetMsg := &cloned.Response.Choices[choiceIndex].Message
-			artifacts, err := externalizeMessage(
+		for _, target := range choiceMessageTargets {
+			artifacts, externalized, err := externalizeChoiceMessage(
 				ctx,
-				targetMsg,
+				evt,
+				&cloned,
+				choiceIndex,
+				target,
 				info,
 				svc,
-				evt.ID,
-				evt.RequestID,
-				choiceIndex,
 			)
 			if err != nil {
 				return nil, append(saved, artifacts...), true, err
 			}
-			saved = append(saved, artifacts...)
-			changed = true
-		}
-		delta := evt.Response.Choices[choiceIndex].Delta
-		if hasExternalizableContent(delta) {
-			if svc == nil {
-				return nil, saved, false, errors.New(
-					"session multimodal externalization: artifact service is nil",
-				)
-			}
-			if cloned == nil {
-				cloned = cloneEventForMutation(evt)
-			}
-			targetMsg := &cloned.Response.Choices[choiceIndex].Delta
-			artifacts, err := externalizeMessage(
-				ctx,
-				targetMsg,
-				info,
-				svc,
-				evt.ID,
-				evt.RequestID,
-				choiceIndex,
-			)
-			if err != nil {
-				return nil, append(saved, artifacts...), true, err
+			if !externalized {
+				continue
 			}
 			saved = append(saved, artifacts...)
 			changed = true
@@ -449,6 +429,40 @@ func externalizeEvent(
 		return evt, nil, false, nil
 	}
 	return cloned, saved, true, nil
+}
+
+func externalizeChoiceMessage(
+	ctx context.Context,
+	evt *event.Event,
+	cloned **event.Event,
+	choiceIndex int,
+	target func(*model.Choice) *model.Message,
+	info artifact.SessionInfo,
+	svc artifact.Service,
+) ([]savedArtifact, bool, error) {
+	msg := target(&evt.Response.Choices[choiceIndex])
+	if !hasExternalizableContent(*msg) {
+		return nil, false, nil
+	}
+	if svc == nil {
+		return nil, false, errors.New(
+			"session multimodal externalization: artifact service is nil",
+		)
+	}
+	if *cloned == nil {
+		*cloned = cloneEventForMutation(evt)
+	}
+	targetMsg := target(&(*cloned).Response.Choices[choiceIndex])
+	artifacts, err := externalizeMessage(
+		ctx,
+		targetMsg,
+		info,
+		svc,
+		evt.ID,
+		evt.RequestID,
+		choiceIndex,
+	)
+	return artifacts, true, err
 }
 
 func externalizeMessage(
@@ -719,6 +733,23 @@ func shouldPersistEvent(evt *event.Event) bool {
 		evt.Response.IsValidContent()
 }
 
+func appendObserved(sess *session.Session, eventID string, beforeEvents int) bool {
+	if sess == nil {
+		return false
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	if eventID == "" {
+		return len(sess.Events) > beforeEvents
+	}
+	for _, evt := range sess.Events {
+		if evt.ID == eventID {
+			return true
+		}
+	}
+	return false
+}
+
 func listSessionOnlyMeta(options []session.Option) bool {
 	opt := &session.Options{}
 	for _, option := range options {
@@ -769,20 +800,14 @@ func messageNeedsHydrate(msg model.Message) bool {
 }
 
 func cloneEventForMutation(evt *event.Event) *event.Event {
-	// Do not use event.Clone here: it intentionally generates a new event ID
-	// and updates version fields. Governance clones must preserve event identity
-	// because persisted and runtime views describe the same logical event.
-	clone := *evt
+	clone := evt.Clone()
+	// event.Clone prepares a new logical event. Governance needs a mutable view
+	// of the same logical event, so restore identity fields after cloning.
+	clone.ID = evt.ID
+	clone.Version = evt.Version
+	clone.FilterKey = evt.FilterKey
 	clone.Response = cloneResponseForMutation(evt.Response)
-	clone.LongRunningToolIDs = cloneStringSet(evt.LongRunningToolIDs)
-	clone.StateDelta = cloneStateDelta(evt.StateDelta)
-	clone.Extensions = cloneExtensions(evt.Extensions)
-	if evt.Actions != nil {
-		clone.Actions = &event.EventActions{
-			SkipSummarization: evt.Actions.SkipSummarization,
-		}
-	}
-	return &clone
+	return clone
 }
 
 func cloneResponseForMutation(rsp *model.Response) *model.Response {
@@ -790,11 +815,9 @@ func cloneResponseForMutation(rsp *model.Response) *model.Response {
 		return nil
 	}
 	clone := rsp.Clone()
-	clone.Choices = make([]model.Choice, len(rsp.Choices))
-	for i, choice := range rsp.Choices {
-		clone.Choices[i] = choice
-		clone.Choices[i].Message = cloneMessage(choice.Message)
-		clone.Choices[i].Delta = cloneMessage(choice.Delta)
+	for i := range clone.Choices {
+		clone.Choices[i].Message = cloneMessage(rsp.Choices[i].Message)
+		clone.Choices[i].Delta = cloneMessage(rsp.Choices[i].Delta)
 	}
 	return clone
 }
@@ -839,39 +862,6 @@ func cloneContentPart(part model.ContentPart) model.ContentPart {
 		clone.ContentRef = &ref
 	}
 	return clone
-}
-
-func cloneStringSet(in map[string]struct{}) map[string]struct{} {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]struct{}, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func cloneStateDelta(in map[string][]byte) map[string][]byte {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string][]byte, len(in))
-	for k, v := range in {
-		out[k] = cloneBytes(v)
-	}
-	return out
-}
-
-func cloneExtensions(in map[string]json.RawMessage) map[string]json.RawMessage {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]json.RawMessage, len(in))
-	for k, v := range in {
-		out[k] = json.RawMessage(cloneBytes(v))
-	}
-	return out
 }
 
 func parseDataURL(raw string) ([]byte, string, bool, error) {
