@@ -14,13 +14,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
+	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
+	telemetrytrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
 type mockRepo struct {
@@ -235,6 +243,95 @@ func TestLoadTool_Call_ContextAwareRepoHonorsFilter(t *testing.T) {
 
 	_, err = lt.Call(ctx, []byte(`{"skill":"beta"}`))
 	require.ErrorContains(t, err, "unknown skill: beta")
+}
+
+func TestLoadTool_Call_EmitsInvokeSkillChildSpan(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	originalProvider := telemetrytrace.TracerProvider
+	originalTracer := telemetrytrace.Tracer
+	telemetrytrace.TracerProvider = provider
+	telemetrytrace.Tracer = provider.Tracer("skill-load-test")
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		telemetrytrace.TracerProvider = originalProvider
+		telemetrytrace.Tracer = originalTracer
+	})
+
+	root := t.TempDir()
+	skillDir := filepath.Join(root, "code_review")
+	require.NoError(t, os.MkdirAll(skillDir, 0o755))
+	skillContent := `---
+name: code_review
+description: Review code changes.
+---
+Use careful code review practices.`
+	require.NoError(t, os.WriteFile(filepath.Join(skillDir, skill.SkillFile), []byte(skillContent), 0o644))
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	lt := NewLoadTool(repo)
+	inv := &agent.Invocation{
+		AgentName: "review-agent",
+		Session: &session.Session{
+			ID:      "sess-1",
+			AppName: "app-1",
+			UserID:  "user-1",
+		},
+	}
+	var ctx context.Context = agent.NewInvocationContext(context.Background(), inv)
+	ctx, parent := telemetrytrace.Tracer.Start(ctx, itelemetry.NewExecuteToolSpanName("skill_load"))
+	out, err := lt.Call(ctx, []byte(`{"skill":"code_review"}`))
+	parent.End()
+	require.NoError(t, err)
+	require.Equal(t, "loaded: code_review", out)
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 2)
+	var invokeSpan, parentSpan sdktrace.ReadOnlySpan
+	for _, sp := range spans {
+		switch sp.Name() {
+		case itelemetry.NewInvokeSkillSpanName("code_review"):
+			invokeSpan = sp
+		case itelemetry.NewExecuteToolSpanName("skill_load"):
+			parentSpan = sp
+		}
+	}
+	require.NotNil(t, parentSpan)
+	require.NotNil(t, invokeSpan)
+	require.Equal(t, parentSpan.SpanContext().SpanID(), invokeSpan.Parent().SpanID())
+	requireSpanAttr(t, invokeSpan.Attributes(), semconvtrace.KeyGenAIOperationName, itelemetry.OperationInvokeSkill)
+	requireSpanAttr(t, invokeSpan.Attributes(), semconvtrace.KeyGenAISkillName, "code_review")
+	requireSpanAttr(t, invokeSpan.Attributes(), semconvtrace.KeyGenAIAgentID, "review-agent")
+	requireSpanAttr(t, invokeSpan.Attributes(), semconvtrace.KeyGenAIUserID, "user-1")
+	require.Empty(t, invokeSpan.Events())
+	requestDetail := spanStringAttr(t, invokeSpan.Attributes(), semconvtrace.KeyGenAIInvokeSkillRequest)
+	require.Contains(t, requestDetail, `"safe_path":"code_review/SKILL.md"`)
+	require.NotContains(t, requestDetail, root)
+	responseDetail := spanStringAttr(t, invokeSpan.Attributes(), semconvtrace.KeyGenAIInvokeSkillResponse)
+	require.Contains(t, responseDetail, `"content_sha256"`)
+	require.Contains(t, responseDetail, "Use careful code review practices.")
+}
+
+func requireSpanAttr(t *testing.T, attrs []attribute.KeyValue, key, value string) {
+	t.Helper()
+	for _, attr := range attrs {
+		if string(attr.Key) == key {
+			require.Equal(t, value, attr.Value.AsString())
+			return
+		}
+	}
+	t.Fatalf("missing attribute %s", key)
+}
+
+func spanStringAttr(t *testing.T, attrs []attribute.KeyValue, key string) string {
+	t.Helper()
+	for _, attr := range attrs {
+		if string(attr.Key) == key {
+			return attr.Value.AsString()
+		}
+	}
+	t.Fatalf("missing span attribute %s", key)
+	return ""
 }
 
 func TestSkillNameEnum_ContextAwareRepoReturnsNil(t *testing.T) {

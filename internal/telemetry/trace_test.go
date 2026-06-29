@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -75,9 +76,15 @@ func newStubSpan() *stubSpan {
 type recordingSpan struct {
 	trace.Span
 	attrs          []attribute.KeyValue
+	events         []recordedEvent
 	status         codes.Code
 	statusDesc     string
 	recordedErrors []error
+}
+
+type recordedEvent struct {
+	name  string
+	attrs []attribute.KeyValue
 }
 
 func (s *recordingSpan) IsRecording() bool {
@@ -96,6 +103,11 @@ func (s *recordingSpan) SetStatus(c codes.Code, msg string) {
 func (s *recordingSpan) RecordError(err error, opts ...trace.EventOption) {
 	s.recordedErrors = append(s.recordedErrors, err)
 	s.Span.RecordError(err, opts...)
+}
+func (s *recordingSpan) AddEvent(name string, opts ...trace.EventOption) {
+	cfg := trace.NewEventConfig(opts...)
+	s.events = append(s.events, recordedEvent{name: name, attrs: cfg.Attributes()})
+	s.Span.AddEvent(name, opts...)
 }
 func newRecordingSpan() *recordingSpan {
 	_, sp := trace.NewNoopTracerProvider().Tracer("test").Start(context.Background(), "op")
@@ -146,6 +158,74 @@ func attrStringValue(attrs []attribute.KeyValue, key string) (string, bool) {
 
 func TestNewWorkflowSpanName(t *testing.T) {
 	require.Equal(t, "workflow myflow", NewWorkflowSpanName("myflow"))
+}
+
+func TestNewInvokeSkillSpanName(t *testing.T) {
+	require.Equal(t, "invoke_skill code_review", NewInvokeSkillSpanName("code_review"))
+	require.Equal(t, "invoke_skill", NewInvokeSkillSpanName(""))
+}
+
+func TestTraceInvokeSkill(t *testing.T) {
+	err := errors.New("boom")
+	span := newRecordingSpan()
+	TraceInvokeSkill(span, &InvokeSkillAttributes{
+		Invocation: &agent.Invocation{
+			AgentName: "agent-a",
+			Session: &session.Session{
+				ID:      "sess-1",
+				AppName: "app-a",
+				UserID:  "user-a",
+			},
+		},
+		SkillName:        "code_review",
+		SkillID:          "skill_123",
+		SkillDescription: "review code",
+		Phase:            "materialize",
+		Request:          `{"safe_path":"code_review/SKILL.md"}`,
+		Response:         `{"content_sha256":"abc"}`,
+		Error:            err,
+	})
+
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIOperationName, OperationInvokeSkill))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAISkillName, "code_review"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAISkillID, "skill_123"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAISkillDescription, "review code"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAISkillPhase, "materialize"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentName, "agent-a"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAgentID, "agent-a"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIConversationID, "sess-1"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIAppName, "app-a"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIUserID, "user-a"))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyErrorType, semconvtrace.ValueDefaultErrorType))
+	require.Equal(t, codes.Error, span.status)
+	require.Equal(t, "boom", span.statusDesc)
+	require.Len(t, span.recordedErrors, 1)
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIInvokeSkillRequest, `{"safe_path":"code_review/SKILL.md"}`))
+	require.True(t, hasAttr(span.attrs, semconvtrace.KeyGenAIInvokeSkillResponse, `{"content_sha256":"abc"}`))
+	require.Empty(t, span.events)
+}
+
+func TestTraceInvokeSkill_AttributePolicy(t *testing.T) {
+	t.Cleanup(func() { SetSpanAttributePolicy(SpanAttributePolicy{}) })
+	SetSpanAttributePolicy(AppendAttributeRule(SpanAttributePolicy{}, AttributeRule{
+		Operation: OperationInvokeSkill,
+		Key:       semconvtrace.KeyGenAIInvokeSkillResponse,
+		Action:    AttributeOmit,
+		MaxBytes:  8,
+	}))
+
+	span := newRecordingSpan()
+	TraceInvokeSkill(span, &InvokeSkillAttributes{
+		SkillName: "review",
+		SkillID:   "skill_1",
+		Request:   `{"safe_path":"review/SKILL.md"}`,
+		Response:  strings.Repeat("x", 32),
+	})
+
+	got, ok := attrStringValue(span.attrs, semconvtrace.KeyGenAIInvokeSkillResponse)
+	require.True(t, ok)
+	require.Contains(t, got, `"omitted":true`)
+	require.Empty(t, span.events)
 }
 
 func TestTraceWorkflow(t *testing.T) {

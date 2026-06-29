@@ -122,6 +122,41 @@ func TestTransform(t *testing.T) {
 	}
 }
 
+func TestTransform_DropsInvokeSkillSpans(t *testing.T) {
+	input := []*tracepb.ResourceSpans{{
+		ScopeSpans: []*tracepb.ScopeSpans{{
+			Spans: []*tracepb.Span{
+				{
+					Name:   "invoke_skill code_review",
+					SpanId: []byte("invoke-skill"),
+					Attributes: []*commonpb.KeyValue{{
+						Key: semconvtrace.KeyGenAIOperationName,
+						Value: &commonpb.AnyValue{
+							Value: &commonpb.AnyValue_StringValue{StringValue: itelemetry.OperationInvokeSkill},
+						},
+					}},
+				},
+				{
+					Name:   "plain-span",
+					SpanId: []byte("plain-span"),
+					Attributes: []*commonpb.KeyValue{{
+						Key: semconvtrace.KeyGenAIOperationName,
+						Value: &commonpb.AnyValue{
+							Value: &commonpb.AnyValue_StringValue{StringValue: "plain"},
+						},
+					}},
+				},
+			},
+		}},
+	}}
+
+	got := transform(input)
+	require.Len(t, got, 1)
+	require.Len(t, got[0].ScopeSpans, 1)
+	require.Len(t, got[0].ScopeSpans[0].Spans, 1)
+	require.Equal(t, "plain-span", got[0].ScopeSpans[0].Spans[0].Name)
+}
+
 func TestTransformSpan(t *testing.T) {
 	tests := []struct {
 		name           string
