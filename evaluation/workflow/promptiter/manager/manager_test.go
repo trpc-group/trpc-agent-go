@@ -445,6 +445,39 @@ func TestManagerCancelWinsOverConcurrentRunningUpdate(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestManagerRunPersistsCanceledBeforeRunning(t *testing.T) {
+	runCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	store := &scriptedStore{
+		runs: map[string]*promptiterengine.RunResult{
+			"run-1": {
+				AppName: "demo-app",
+				ID:      "run-1",
+				Status:  promptiterengine.RunStatusQueued,
+			},
+		},
+	}
+	engineInst := &fakePromptIterEngine{
+		run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
+			t.Fatal("engine should not run when context is already canceled")
+			return nil, nil
+		},
+	}
+	managerInst, err := New("demo-app", engineInst, WithStore(store))
+	require.NoError(t, err)
+	concreteManager := managerInst.(*manager)
+	concreteManager.cancelFuncs["run-1"] = func() {}
+
+	concreteManager.run(runCtx, "run-1", &promptiterengine.RunRequest{})
+
+	current := store.runs["run-1"]
+	require.NotNil(t, current)
+	assert.Equal(t, promptiterengine.RunStatusCanceled, current.Status)
+	assert.Equal(t, "run canceled", current.ErrorMessage)
+	_, ok := concreteManager.cancelFuncs["run-1"]
+	assert.False(t, ok)
+}
+
 func TestManagerCancelWinsOverTerminalUpdates(t *testing.T) {
 	tests := []struct {
 		name   string
