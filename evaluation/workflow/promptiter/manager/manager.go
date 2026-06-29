@@ -183,27 +183,26 @@ func (m *manager) run(ctx context.Context, runID string, request *engine.RunRequ
 	}
 	result, err := m.engine.Run(ctx, request, engine.WithObserver(observer.append))
 	if err != nil {
-		if errors.Is(err, context.Canceled) || m.isCanceled(runID) {
+		canceled := m.finishRun(runID)
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil || canceled {
 			markRunCanceled(observer.run)
 		} else {
 			observer.run.Status = engine.RunStatusFailed
 			observer.run.ErrorMessage = err.Error()
 		}
 		_ = m.store.Update(context.Background(), m.appName, m.slimStoredRun(observer.run))
-		m.clearRun(runID)
 		return
 	}
-	if ctx.Err() != nil || m.isCanceled(runID) {
+	canceled := m.finishRun(runID)
+	if ctx.Err() != nil || canceled {
 		markRunCanceled(observer.run)
 		_ = m.store.Update(context.Background(), m.appName, m.slimStoredRun(observer.run))
-		m.clearRun(runID)
 		return
 	}
 	if result == nil {
 		observer.run.Status = engine.RunStatusFailed
 		observer.run.ErrorMessage = "engine returned nil run"
 		_ = m.store.Update(context.Background(), m.appName, m.slimStoredRun(observer.run))
-		m.clearRun(runID)
 		return
 	}
 	result.ID = runID
@@ -214,7 +213,6 @@ func (m *manager) run(ctx context.Context, runID string, request *engine.RunRequ
 		observer.run.ErrorMessage = err.Error()
 		_ = m.store.Update(context.Background(), m.appName, m.slimStoredRun(observer.run))
 	}
-	m.clearRun(runID)
 }
 
 func (m *manager) slimStoredRun(run *engine.RunResult) *engine.RunResult {
@@ -236,6 +234,15 @@ func (m *manager) clearRun(runID string) {
 	delete(m.cancelFuncs, runID)
 	delete(m.canceledRuns, runID)
 	m.mu.Unlock()
+}
+
+func (m *manager) finishRun(runID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, canceled := m.canceledRuns[runID]
+	delete(m.cancelFuncs, runID)
+	delete(m.canceledRuns, runID)
+	return canceled
 }
 
 func markRunCanceled(run *engine.RunResult) {

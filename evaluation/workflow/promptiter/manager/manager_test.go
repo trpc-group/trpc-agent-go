@@ -445,6 +445,104 @@ func TestManagerCancelWinsOverConcurrentRunningUpdate(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestManagerCancelWinsOverTerminalUpdates(t *testing.T) {
+	tests := []struct {
+		name   string
+		result *promptiterengine.RunResult
+		err    error
+	}{
+		{
+			name:   "success",
+			result: &promptiterengine.RunResult{},
+		},
+		{
+			name: "error",
+			err:  errors.New("engine failed"),
+		},
+		{
+			name: "nil result",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runCtx, cancel := context.WithCancel(context.Background())
+			store := &scriptedStore{
+				runs: map[string]*promptiterengine.RunResult{
+					"run-1": {
+						AppName: "demo-app",
+						ID:      "run-1",
+						Status:  promptiterengine.RunStatusQueued,
+					},
+				},
+			}
+			var (
+				cancelErr   error
+				managerInst Manager
+			)
+			engineInst := &fakePromptIterEngine{
+				run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
+					_ = ctx
+					_ = request
+					_ = opts
+					cancelErr = managerInst.Cancel(context.Background(), "run-1")
+					return tt.result, tt.err
+				},
+			}
+			var err error
+			managerInst, err = New("demo-app", engineInst, WithStore(store))
+			require.NoError(t, err)
+			concreteManager := managerInst.(*manager)
+			concreteManager.cancelFuncs["run-1"] = cancel
+
+			concreteManager.run(runCtx, "run-1", &promptiterengine.RunRequest{})
+
+			require.NoError(t, cancelErr)
+			current := store.runs["run-1"]
+			require.NotNil(t, current)
+			assert.Equal(t, promptiterengine.RunStatusCanceled, current.Status)
+			assert.Equal(t, "run canceled", current.ErrorMessage)
+			_, ok := concreteManager.cancelFuncs["run-1"]
+			assert.False(t, ok)
+			_, ok = concreteManager.canceledRuns["run-1"]
+			assert.False(t, ok)
+		})
+	}
+}
+
+func TestManagerCancelRejectsCompletedRun(t *testing.T) {
+	store := &scriptedStore{
+		runs: map[string]*promptiterengine.RunResult{
+			"run-1": {
+				AppName: "demo-app",
+				ID:      "run-1",
+				Status:  promptiterengine.RunStatusQueued,
+			},
+		},
+	}
+	engineInst := &fakePromptIterEngine{
+		run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
+			_ = ctx
+			_ = request
+			_ = opts
+			return &promptiterengine.RunResult{}, nil
+		},
+	}
+	managerInst, err := New("demo-app", engineInst, WithStore(store))
+	require.NoError(t, err)
+	concreteManager := managerInst.(*manager)
+	_, cancel := context.WithCancel(context.Background())
+	concreteManager.cancelFuncs["run-1"] = cancel
+
+	concreteManager.run(context.Background(), "run-1", &promptiterengine.RunRequest{})
+
+	current := store.runs["run-1"]
+	require.NotNil(t, current)
+	assert.Equal(t, promptiterengine.RunStatusSucceeded, current.Status)
+	err = managerInst.Cancel(context.Background(), "run-1")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestRunObserverBuildsIncrementalRun(t *testing.T) {
 	managerInstance, err := New("demo-app", &fakePromptIterEngine{})
 	require.NoError(t, err)
