@@ -692,6 +692,14 @@ func TestBuildOpenClawTools_UsesSandboxExecCommand(t *testing.T) {
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "inside the configured sandbox")
+	execTool := findTool(bundle.tools, "exec_command")
+	callable, ok := execTool.(tool.CallableTool)
+	require.True(t, ok)
+	_, err := callable.Call(
+		context.Background(),
+		[]byte(`{"command":"echo ok","background":true}`),
+	)
+	require.ErrorContains(t, err, "foreground non-interactive")
 	require.Nil(t, findToolDeclaration(bundle.tools, "write_stdin"))
 	require.Nil(t, findToolDeclaration(bundle.tools, "kill_session"))
 	require.Nil(t, bundle.execMgr)
@@ -1619,27 +1627,13 @@ func TestRun_CreateAgentFailsExitCode(t *testing.T) {
 
 func TestNewRuntimeWithOptions_SandboxExecutorRequiresProgramRunner(t *testing.T) {
 	cfgPath := writeSandboxCodeExecutorConfig(t)
-	orig := loadCodeExecutorFromConfig
-	loadCodeExecutorFromConfig = func(
-		stateDir string,
-		enableLocal bool,
-		cfg codeExecutorOptions,
-	) (codeexecutor.CodeExecutor, error) {
-		if isSandboxCodeExecutor(cfg) {
-			return &testCodeExecutor{}, nil
-		}
-		return orig(stateDir, enableLocal, cfg)
-	}
-	t.Cleanup(func() {
-		loadCodeExecutorFromConfig = orig
-	})
 
 	rt, err := NewRuntimeWithOptions(context.Background(), []string{
 		"-config", cfgPath,
 		"-mode", modeMock,
 		"-state-dir", t.TempDir(),
 		"-skills-root", t.TempDir(),
-	})
+	}, withCodeExecutorLoader(testCodeExecutorLoader))
 	require.Nil(t, rt)
 	require.Error(t, err)
 
@@ -1655,27 +1649,13 @@ func TestNewRuntimeWithOptions_SandboxExecutorRequiresProgramRunner(t *testing.T
 
 func TestRun_SandboxExecutorRequiresProgramRunner(t *testing.T) {
 	cfgPath := writeSandboxCodeExecutorConfig(t)
-	orig := loadCodeExecutorFromConfig
-	loadCodeExecutorFromConfig = func(
-		stateDir string,
-		enableLocal bool,
-		cfg codeExecutorOptions,
-	) (codeexecutor.CodeExecutor, error) {
-		if isSandboxCodeExecutor(cfg) {
-			return &testCodeExecutor{}, nil
-		}
-		return orig(stateDir, enableLocal, cfg)
-	}
-	t.Cleanup(func() {
-		loadCodeExecutorFromConfig = orig
-	})
 
 	err := run(context.Background(), []string{
 		"-config", cfgPath,
 		"-mode", modeMock,
 		"-state-dir", t.TempDir(),
 		"-skills-root", t.TempDir(),
-	})
+	}, withCodeExecutorLoader(testCodeExecutorLoader))
 	require.Error(t, err)
 
 	var exitErr *exitError
@@ -7174,6 +7154,23 @@ type testEngineProviderExecutor struct {
 
 func (e *testEngineProviderExecutor) Engine() codeexecutor.Engine {
 	return e.eng
+}
+
+func withCodeExecutorLoader(loader codeExecutorConfigLoader) RuntimeOption {
+	return func(opts *runtimeOptions) {
+		opts.codeExecutorLoader = loader
+	}
+}
+
+func testCodeExecutorLoader(
+	stateDir string,
+	enableLocal bool,
+	cfg codeExecutorOptions,
+) (codeexecutor.CodeExecutor, error) {
+	if isSandboxCodeExecutor(cfg) {
+		return &testCodeExecutor{}, nil
+	}
+	return codeExecutorFromConfig(stateDir, enableLocal, cfg)
 }
 
 func writeSandboxCodeExecutorConfig(t *testing.T) string {

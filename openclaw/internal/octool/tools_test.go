@@ -153,6 +153,55 @@ func TestSandboxExecTool_Foreground(t *testing.T) {
 	require.Len(t, engine.manager.workspaces, 1)
 }
 
+func TestSandboxExecTool_AppliesCommandPolicy(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := NewSandboxExecCommandToolWithPolicy(
+		engine,
+		nil,
+		nil,
+		NewChatCommandSafetyPolicy(),
+		nil,
+	).(tool.CallableTool)
+
+	_, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "cat ~/.ssh/id_rsa",
+	}))
+	require.ErrorContains(t, err, reasonSensitivePath)
+	require.Empty(t, engine.runner.specs)
+	require.Empty(t, engine.manager.workspaces)
+}
+
+func TestSandboxExecTool_RedactsSensitiveEnvValueOutput(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{
+		runResult: codeexecutor.RunResult{
+			Stdout:   "token=sk-test-secret\n",
+			ExitCode: 0,
+		},
+	}
+	tl := NewSandboxExecCommandToolWithPolicy(
+		engine,
+		nil,
+		nil,
+		nil,
+		NewChatCommandOutputRedactor(),
+	).(tool.CallableTool)
+
+	out, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "echo \"$OPENAI_API_KEY\"",
+		"env": map[string]string{
+			"OPENAI_API_KEY": "sk-test-secret",
+		},
+	}))
+	require.NoError(t, err)
+	res := out.(execResult)
+	require.Contains(t, res.Output, redactedValue)
+	require.NotContains(t, res.Output, "sk-test-secret")
+}
+
 func TestSandboxExecTool_ReusesWorkspacePerSession(t *testing.T) {
 	t.Parallel()
 

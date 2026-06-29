@@ -1042,7 +1042,7 @@ func NewRuntimeWithOptions(
 		opts.MemoryBackend,
 		stores.memoryFiles,
 	)
-	codeExec, err := loadCodeExecutorFromConfig(
+	codeExec, err := codeExecutorLoader(runtimeOpts)(
 		resolvedStateDir,
 		opts.EnableLocalExec,
 		opts.CodeExecutor,
@@ -1636,7 +1636,7 @@ func run(
 		opts.MemoryBackend,
 		stores.memoryFiles,
 	)
-	codeExec, err := loadCodeExecutorFromConfig(
+	codeExec, err := codeExecutorLoader(runtimeOpts)(
 		resolvedStateDir,
 		opts.EnableLocalExec,
 		opts.CodeExecutor,
@@ -2734,7 +2734,7 @@ func newAgent(
 	exec := cfg.codeExecutor
 	if exec == nil {
 		var err error
-		exec, err = loadCodeExecutorFromConfig(
+		exec, err = codeExecutorFromConfig(
 			cfg.StateDir,
 			cfg.EnableLocalExec,
 			cfg.CodeExecutor,
@@ -2841,7 +2841,14 @@ func codeExecutorEngine(exec codeexecutor.CodeExecutor) codeexecutor.Engine {
 	return provider.Engine()
 }
 
-var loadCodeExecutorFromConfig = codeExecutorFromConfig
+func codeExecutorLoader(
+	runtimeOpts runtimeOptions,
+) codeExecutorConfigLoader {
+	if runtimeOpts.codeExecutorLoader != nil {
+		return runtimeOpts.codeExecutorLoader
+	}
+	return codeExecutorFromConfig
+}
 
 func sandboxCodeExecutorFromConfig(
 	stateDir string,
@@ -3301,28 +3308,21 @@ func buildOpenClawTools(
 
 	var mgr *octool.Manager
 	var execTool tool.Tool
+	commandPolicy := octool.NewChatCommandSafetyPolicy()
+	outputRedactor := octool.NewChatCommandOutputRedactor()
 	if sandboxExecEngine != nil {
-		execTool = octool.NewSandboxExecCommandTool(
+		execTool = octool.NewSandboxExecCommandToolWithPolicy(
 			sandboxExecEngine,
 			uploadStore,
+			memoryFileStore,
+			commandPolicy,
+			outputRedactor,
 		)
-		if memoryFileStore != nil {
-			execTool = octool.
-				NewSandboxExecCommandToolWithMemoryFileStore(
-					sandboxExecEngine,
-					uploadStore,
-					memoryFileStore,
-				)
-		}
 	} else {
 		mgr = octool.NewManager(
 			octool.WithBaseEnv(deps.ToolEnv(stateDir)),
-			octool.WithCommandPolicy(
-				octool.NewChatCommandSafetyPolicy(),
-			),
-			octool.WithOutputRedactor(
-				octool.NewChatCommandOutputRedactor(),
-			),
+			octool.WithCommandPolicy(commandPolicy),
+			octool.WithOutputRedactor(outputRedactor),
 		)
 		execTool = octool.NewExecCommandTool(mgr, uploadStore)
 		if memoryFileStore != nil {

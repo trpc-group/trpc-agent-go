@@ -992,7 +992,7 @@ func adminRuntimeConfigFieldHidden(
 	}
 	want := strings.TrimSpace(field.VisibleWhen.Value)
 	got := strings.TrimSpace(values[field.VisibleWhen.Key])
-	return got != want
+	return !strings.EqualFold(got, want)
 }
 
 func adminRuntimeConfiguredEditorValue(
@@ -1035,7 +1035,10 @@ func adminRuntimeOptionalBoolValueOrDefault(value *bool, fallback bool) string {
 }
 
 func adminRuntimeSandboxCodeExecutorEnabled(opts runOptions) bool {
-	return strings.TrimSpace(opts.CodeExecutor.Type) == codeExecutorTypeSandbox
+	return strings.EqualFold(
+		strings.TrimSpace(opts.CodeExecutor.Type),
+		codeExecutorTypeSandbox,
+	)
 }
 
 func (p *adminRuntimeConfigProvider) normalizeCodeExecutorConfig(
@@ -1273,6 +1276,9 @@ func adminRuntimeSetFieldValue(
 		!adminRuntimeOptionValueAllowed(raw, spec.Options) {
 		return fmt.Errorf("invalid config value")
 	}
+	if spec.InputType == adminRuntimeConfigInputSelect {
+		raw = adminRuntimeCanonicalOptionValue(spec.Options, raw)
+	}
 	switch spec.ValueType {
 	case adminRuntimeConfigValueBool:
 		value, err := strconv.ParseBool(raw)
@@ -1302,7 +1308,7 @@ func adminRuntimeOptionValueAllowed(
 		return true
 	}
 	for _, option := range options {
-		if strings.TrimSpace(option.Value) == value {
+		if strings.EqualFold(strings.TrimSpace(option.Value), value) {
 			return true
 		}
 	}

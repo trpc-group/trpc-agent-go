@@ -389,6 +389,15 @@ func TestAdminRuntimeConfigProvider_CanonicalizesCodeExecutorTypeSelect(
 		"tools.code_executor.sandbox.profile",
 	)
 	require.False(t, profileField.Hidden)
+
+	require.NoError(t, provider.SaveRuntimeConfigValue(
+		"tools.code_executor.type",
+		"Sandbox",
+	))
+	data, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "type: sandbox")
+	require.NotContains(t, string(data), "type: Sandbox")
 }
 
 func TestAdminRuntimeConfigProvider_SaveCodeExecutorSandboxCreatesConfig(

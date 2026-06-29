@@ -110,6 +110,8 @@ type sandboxExecTool struct {
 	uploads     *uploads.Store
 	memoryStore *memoryfile.Store
 	registry    *codeexecutor.WorkspaceRegistry
+	policy      CommandPolicy
+	redactor    OutputRedactor
 }
 
 // NewExecCommandTool creates the canonical host command tool.
@@ -153,11 +155,32 @@ func NewSandboxExecCommandToolWithMemoryFileStore(
 	uploadStore *uploads.Store,
 	memoryStore *memoryfile.Store,
 ) tool.Tool {
+	return NewSandboxExecCommandToolWithPolicy(
+		engine,
+		uploadStore,
+		memoryStore,
+		nil,
+		nil,
+	)
+}
+
+// NewSandboxExecCommandToolWithPolicy creates a sandbox-backed exec_command
+// tool with the same command policy and output redaction hooks as the host
+// manager path.
+func NewSandboxExecCommandToolWithPolicy(
+	engine codeexecutor.Engine,
+	uploadStore *uploads.Store,
+	memoryStore *memoryfile.Store,
+	policy CommandPolicy,
+	redactor OutputRedactor,
+) tool.Tool {
 	return &sandboxExecTool{
 		engine:      engine,
 		uploads:     uploadStore,
 		memoryStore: memoryStore,
 		registry:    codeexecutor.NewWorkspaceRegistry(),
+		policy:      policy,
+		redactor:    redactor,
 	}
 }
 
@@ -423,10 +446,6 @@ func (t *sandboxExecTool) Call(ctx context.Context, args []byte) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	ws, err := t.workspace(ctx)
-	if err != nil {
-		return nil, err
-	}
 	env := mergeExecEnv(
 		in.Env,
 		mergeExecEnv(
@@ -437,6 +456,23 @@ func (t *sandboxExecTool) Call(ctx context.Context, args []byte) (any, error) {
 			),
 		),
 	)
+	req := newCommandRequest(execParams{
+		Command:  in.Command,
+		Workdir:  cwd,
+		Env:      env,
+		YieldMs:  yield,
+		TimeoutS: timeout,
+	})
+	if t.policy != nil {
+		if err := t.policy(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+	redact := t.outputRedactor(req)
+	ws, err := t.workspace(ctx)
+	if err != nil {
+		return nil, err
+	}
 	spec := codeexecutor.RunProgramSpec{
 		Cmd:  shellProgram,
 		Args: []string{shellLoginFlag, in.Command},
@@ -447,7 +483,7 @@ func (t *sandboxExecTool) Call(ctx context.Context, args []byte) (any, error) {
 		spec.Timeout = time.Duration(*timeout) * time.Second
 	}
 	run, err := t.engine.Runner().RunProgram(ctx, ws, spec)
-	output := run.Stdout + run.Stderr
+	output := applyOutputRedactor(redact, run.Stdout+run.Stderr)
 	res := execResult{
 		Status:   "exited",
 		Output:   output,
@@ -461,6 +497,18 @@ func (t *sandboxExecTool) Call(ctx context.Context, args []byte) (any, error) {
 		return res, err
 	}
 	return res, nil
+}
+
+func (t *sandboxExecTool) outputRedactor(
+	req CommandRequest,
+) func(string) string {
+	if t == nil || t.redactor == nil {
+		return nil
+	}
+	copied := copyCommandRequest(req)
+	return func(output string) string {
+		return t.redactor(copied, output)
+	}
 }
 
 func (t *sandboxExecTool) workspace(
