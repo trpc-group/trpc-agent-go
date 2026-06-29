@@ -209,6 +209,26 @@ func TestAfterModel_ActiveGoalBlocksAndBeforeModelInjectsNudge(t *testing.T) {
 	assert.Contains(t, req.Messages[2].Content, "finish a migration plan")
 }
 
+func TestBeforeModel_InjectsConfiguredToolNames(t *testing.T) {
+	ctx, _, _ := newTestInvocation(t, "planner")
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("continue")},
+	}
+	e := New(WithToolNames("goal_read", "goal_create", "goal_update"))
+
+	before, err := e.beforeModel(ctx, &model.BeforeModelArgs{Request: req})
+	require.NoError(t, err)
+	assert.Nil(t, before)
+	require.Len(t, req.Messages, 2)
+	guidance := req.Messages[0].Content
+	assert.Contains(t, guidance, "Use goal_create")
+	assert.Contains(t, guidance, "Use goal_read")
+	assert.Contains(t, guidance, "Use goal_update")
+	assert.NotContains(t, guidance, "create_goal")
+	assert.NotContains(t, guidance, "get_goal")
+	assert.NotContains(t, guidance, "update_goal")
+}
+
 func TestBeforeModel_ActiveGoalLeavesStreamingUntouched(t *testing.T) {
 	ctx, _, sess := newTestInvocation(t, "planner")
 	g, err := NewActiveGoal("finish a migration plan")

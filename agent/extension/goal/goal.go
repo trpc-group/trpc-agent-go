@@ -102,7 +102,7 @@ func (e *Extension) beforeModel(
 	}
 	inv, _ := agent.InvocationFromContext(ctx)
 	if e.opts.InjectGuidance {
-		insertGuidance(args.Request, defaultGuidance)
+		insertGuidance(args.Request, e.guidance())
 	}
 
 	pendingReminder := reminderPending(inv)
@@ -209,6 +209,43 @@ func (e *Extension) shouldConsiderResponse(rsp *model.Response) bool {
 		return false
 	}
 	return rsp.IsFinalResponse()
+}
+
+func (e *Extension) guidance() string {
+	if e == nil {
+		return renderGuidance("", "", "")
+	}
+	return renderGuidance(
+		e.getGoalToolName(),
+		e.createGoalToolName(),
+		e.updateGoalToolName(),
+	)
+}
+
+func (e *Extension) getGoalToolName() string {
+	if e == nil {
+		return DefaultGetGoalToolName
+	}
+	if e.getGoalTool != nil && e.getGoalTool.name != "" {
+		return e.getGoalTool.name
+	}
+	if e.opts.GetGoalToolName != "" {
+		return e.opts.GetGoalToolName
+	}
+	return DefaultGetGoalToolName
+}
+
+func (e *Extension) createGoalToolName() string {
+	if e == nil {
+		return DefaultCreateGoalToolName
+	}
+	if e.createGoalTool != nil && e.createGoalTool.name != "" {
+		return e.createGoalTool.name
+	}
+	if e.opts.CreateGoalToolName != "" {
+		return e.opts.CreateGoalToolName
+	}
+	return DefaultCreateGoalToolName
 }
 
 func (e *Extension) updateGoalToolName() string {

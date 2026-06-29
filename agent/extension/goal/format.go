@@ -15,17 +15,30 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-const defaultGuidance = `## Goal extension
+const defaultGuidanceTemplate = `## Goal extension
 
 You have access to session goal tools. A goal is a durable objective for this conversation, not a todo list and not a generic memory entry.
 
-Use create_goal only when the user explicitly asks you to keep working toward a multi-step objective across model-loop boundaries, or when their request clearly requires a persistent session objective. Do not create goals for ordinary one-turn questions.
+Use %s only when the user explicitly asks you to keep working toward a multi-step objective across model-loop boundaries, or when their request clearly requires a persistent session objective. Do not create goals for ordinary one-turn questions.
 
-Use get_goal when you need to inspect the current session goal.
+Use %s when you need to inspect the current session goal.
 
-Use update_goal to mark the active goal complete only after the objective has actually been achieved. Mark it blocked only when the same blocking condition has repeated across goal attempts and you cannot make meaningful progress without user input or an external-state change. Do not mark a goal blocked merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.
+Use %s to mark the active goal complete only after the objective has actually been achieved. Mark it blocked only when the same blocking condition has repeated across goal attempts and you cannot make meaningful progress without user input or an external-state change. Do not mark a goal blocked merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.
 
-While a goal is active, a final answer is not enough. Either continue working, or call update_goal with complete or blocked.`
+While a goal is active, a final answer is not enough. Either continue working, or call %s with complete or blocked.`
+
+func renderGuidance(getToolName, createToolName, updateToolName string) string {
+	if getToolName == "" {
+		getToolName = DefaultGetGoalToolName
+	}
+	if createToolName == "" {
+		createToolName = DefaultCreateGoalToolName
+	}
+	if updateToolName == "" {
+		updateToolName = DefaultUpdateGoalToolName
+	}
+	return fmt.Sprintf(defaultGuidanceTemplate, createToolName, getToolName, updateToolName, updateToolName)
+}
 
 // NudgeContext captures everything a NudgeFormatter needs to render the
 // continuation reminder.

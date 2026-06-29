@@ -233,23 +233,19 @@ func (t *goalTool) callUpdate(ctx context.Context, jsonArgs []byte) (any, error)
 }
 
 func (t *goalTool) StateDeltaForInvocation(
-	_ *agent.Invocation,
+	inv *agent.Invocation,
 	_ string,
 	_ []byte,
-	result []byte,
+	_ []byte,
 ) map[string][]byte {
 	if t.kind == toolKindGet {
 		return nil
 	}
-	result = bytes.TrimSpace(result)
-	if len(result) == 0 {
+	g, ok, err := GetGoalWithStateKey(invocationSession(inv), t.stateKey)
+	if err != nil || !ok {
 		return nil
 	}
-	var out goalToolOutput
-	if err := json.Unmarshal(result, &out); err != nil || out.Goal == nil {
-		return nil
-	}
-	raw, err := encodeGoal(out.Goal)
+	raw, err := encodeGoal(g)
 	if err != nil {
 		return nil
 	}

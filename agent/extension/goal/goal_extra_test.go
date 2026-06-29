@@ -10,6 +10,7 @@ package goal
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -212,6 +213,11 @@ func (s *getSessionErrorService) CreateSession(
 }
 
 func TestFormattingAndInvocationHelpers(t *testing.T) {
+	guidance := renderGuidance("", "", "")
+	assert.Contains(t, guidance, DefaultCreateGoalToolName)
+	assert.Contains(t, guidance, DefaultGetGoalToolName)
+	assert.Contains(t, guidance, DefaultUpdateGoalToolName)
+
 	msg := DefaultNudgeFormatter(NudgeContext{AttemptNumber: 2, MaxRetries: 4})
 	assert.Contains(t, msg, "(unknown objective)")
 	assert.Contains(t, msg, DefaultUpdateGoalToolName)
@@ -236,8 +242,15 @@ func TestFormattingAndInvocationHelpers(t *testing.T) {
 
 	assert.Nil(t, invocationSession(nil))
 	assert.Equal(t, "", invocationAgentName(nil))
+	assert.Contains(t, (*Extension)(nil).guidance(), DefaultCreateGoalToolName)
+	assert.Equal(t, DefaultGetGoalToolName, (*Extension)(nil).getGoalToolName())
+	assert.Equal(t, DefaultCreateGoalToolName, (*Extension)(nil).createGoalToolName())
 	assert.Equal(t, DefaultUpdateGoalToolName, (*Extension)(nil).updateGoalToolName())
+	assert.Equal(t, "configured-get", (&Extension{opts: Options{GetGoalToolName: "configured-get"}}).getGoalToolName())
+	assert.Equal(t, "configured-create", (&Extension{opts: Options{CreateGoalToolName: "configured-create"}}).createGoalToolName())
 	assert.Equal(t, "configured", (&Extension{opts: Options{UpdateGoalToolName: "configured"}}).updateGoalToolName())
+	assert.Equal(t, "get-tool", (&Extension{getGoalTool: &goalTool{name: "get-tool"}}).getGoalToolName())
+	assert.Equal(t, "create-tool", (&Extension{createGoalTool: &goalTool{name: "create-tool"}}).createGoalToolName())
 	assert.Equal(t, "tool-name", (&Extension{updateGoalTool: &goalTool{name: "tool-name"}}).updateGoalToolName())
 
 	rsp := blockedControlResponse(nil)
@@ -301,6 +314,15 @@ func TestGoalToolEdgeCases(t *testing.T) {
 	assert.Nil(t, createTool.StateDeltaForInvocation(nil, "call", nil, nil))
 	assert.Nil(t, createTool.StateDeltaForInvocation(nil, "call", nil, []byte("{")))
 	assert.Nil(t, createTool.StateDeltaForInvocation(nil, "call", nil, []byte(`{"message":"x"}`)))
+
+	deltaCtx, deltaInv, _ := newTestInvocation(t, "planner")
+	_, err = createTool.Call(deltaCtx, []byte(`{"objective":"persist through rewritten result"}`))
+	require.NoError(t, err)
+	delta := createTool.StateDeltaForInvocation(deltaInv, "call", nil, []byte("rewritten result"))
+	require.Contains(t, delta, DefaultStateKey)
+	var persisted Goal
+	require.NoError(t, json.Unmarshal(delta[DefaultStateKey], &persisted))
+	assert.Equal(t, "persist through rewritten result", persisted.Objective)
 
 	unknownTool := newGoalTool(99, "mystery", "")
 	assert.Equal(t, "mystery", unknownTool.Declaration().Name)
