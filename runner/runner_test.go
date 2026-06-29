@@ -2683,6 +2683,45 @@ func TestWrapSessionMultimodalExternalization(t *testing.T) {
 	})
 }
 
+func TestNewRunnerWithAgentFactorySessionMultimodalExternalization(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessioninmemory.NewSessionService()
+	r := NewRunnerWithAgentFactory(
+		key.AppName,
+		"factory-agent",
+		func(_ context.Context, _ agent.RunOptions) (agent.Agent, error) {
+			return &mockAgent{name: "factory-agent"}, nil
+		},
+		WithSessionService(inner),
+		WithArtifactService(artifactinmemory.NewService()),
+		WithSessionMultimodalExternalization(
+			SessionMultimodalExternalizationConfig{Enabled: true},
+		),
+	)
+	defer func() { require.NoError(t, r.Close()) }()
+	rr, ok := r.(*runner)
+	require.True(t, ok)
+	_, ok = rr.sessionService.(session.WindowService)
+	assert.True(t, ok, "wrapped service should preserve optional WindowService")
+
+	sess, err := rr.sessionService.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	msg := model.NewUserMessage("image")
+	msg.AddImageData([]byte("image-bytes"), "high", "png")
+	evt := event.NewResponseEvent("invocation", "user", &model.Response{
+		Choices: []model.Choice{{Message: msg}},
+	})
+
+	require.NoError(t, rr.sessionService.AppendEvent(ctx, sess, evt))
+	persisted, err := inner.GetSession(ctx, key)
+	require.NoError(t, err)
+	part := persisted.Events[0].Response.Choices[0].Message.ContentParts[0]
+	assert.Empty(t, part.Image.Data)
+	require.NotNil(t, part.ContentRef)
+	assert.NotEmpty(t, part.ContentRef.ArtifactName)
+}
+
 // TestRunner_GraphCompletionPropagation tests that graph completion events
 // are properly captured and propagated to the runner completion event.
 func TestRunner_GraphCompletionPropagation(t *testing.T) {

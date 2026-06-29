@@ -88,6 +88,9 @@ func TestAppendEventExternalizesAndGetSessionHydrates(t *testing.T) {
 	if string(hydratedPart.Image.Data) != string(originalData) {
 		t.Fatalf("hydrated data = %q, want %q", hydratedPart.Image.Data, originalData)
 	}
+	if hydratedPart.ContentRef != nil {
+		t.Fatalf("hydrated ContentRef = %#v, want nil", hydratedPart.ContentRef)
+	}
 
 	// Hydration should not write bytes back into the persisted view.
 	persistedAgain, err := inner.GetSession(ctx, key)
@@ -359,6 +362,73 @@ func TestHydrateFailsClosedWithoutArtifactService(t *testing.T) {
 	}
 }
 
+func TestHydrateEventFailsClosedWithoutArtifactService(t *testing.T) {
+	evt := imageEvent(nil)
+	evt.Response.Choices[0].Message.ContentParts[0].ContentRef = &model.ContentRef{
+		ArtifactName:    "sessionpart_ref.png",
+		ArtifactVersion: 0,
+	}
+
+	_, _, err := hydrateEvent(context.Background(), evt, artifact.SessionInfo{}, nil)
+	if !errors.Is(err, ErrArtifactServiceNil) {
+		t.Fatalf("hydrateEvent() error = %v, want ErrArtifactServiceNil", err)
+	}
+}
+
+func TestHydrateValidatesArtifactIntegrity(t *testing.T) {
+	ctx := context.Background()
+	info := artifact.SessionInfo{AppName: "app", UserID: "user", SessionID: "sess"}
+	tests := []struct {
+		name      string
+		ref       *model.ContentRef
+		wantError string
+	}{
+		{
+			name: "size mismatch",
+			ref: &model.ContentRef{
+				ArtifactName:    "sessionpart_ref.png",
+				ArtifactVersion: 0,
+				SizeBytes:       99,
+				SHA256:          sha256Hex([]byte("image-bytes")),
+			},
+			wantError: "artifact size mismatch",
+		},
+		{
+			name: "sha mismatch",
+			ref: &model.ContentRef{
+				ArtifactName:    "sessionpart_ref.png",
+				ArtifactVersion: 0,
+				SizeBytes:       int64(len("image-bytes")),
+				SHA256:          sha256Hex([]byte("other-bytes")),
+			},
+			wantError: "artifact sha256 mismatch",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			artifacts := artifactmem.NewService()
+			_, err := artifacts.SaveArtifact(ctx, info, tt.ref.ArtifactName, &artifact.Artifact{
+				Data:     []byte("image-bytes"),
+				MimeType: "image/png",
+			})
+			if err != nil {
+				t.Fatalf("SaveArtifact() error = %v", err)
+			}
+			sess := &session.Session{
+				Events: []event.Event{
+					*imageEvent(nil),
+				},
+			}
+			sess.Events[0].Response.Choices[0].Message.ContentParts[0].ContentRef = tt.ref
+
+			_, err = hydrateSession(ctx, sess, info, artifacts)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("hydrateSession() error = %v, want %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestAppendEventSkipsPartialEventExternalization(t *testing.T) {
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
@@ -467,13 +537,55 @@ func TestWrapPreservesOptionalInterfaces(t *testing.T) {
 		t.Fatal("wrapped inmemory service unexpectedly implements SearchableService")
 	}
 
-	searchInner := &searchOnlyService{Service: inner}
-	searchWrapped := Wrap(searchInner, artifactmem.NewService(), Config{Enabled: true})
-	if _, ok := searchWrapped.(session.SearchableService); !ok {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	artifacts := artifactmem.NewService()
+	const artifactName = "sessionpart_search.png"
+	_, err := artifacts.SaveArtifact(ctx, artifactSessionInfo(key), artifactName, &artifact.Artifact{
+		Data:     []byte("search-image"),
+		MimeType: "image/png",
+	})
+	if err != nil {
+		t.Fatalf("SaveArtifact() error = %v", err)
+	}
+	searchEvent := imageEvent(nil)
+	searchEvent.Response.Choices[0].Message.ContentParts[0].ContentRef = &model.ContentRef{
+		ArtifactName:    artifactName,
+		ArtifactVersion: 0,
+		MimeType:        "image/png",
+		SizeBytes:       int64(len("search-image")),
+		SHA256:          sha256Hex([]byte("search-image")),
+	}
+	searchInner := &searchOnlyService{
+		Service: inner,
+		results: []session.EventSearchResult{
+			{
+				SessionKey: key,
+				Event:      *searchEvent,
+			},
+		},
+	}
+	searchWrapped := Wrap(searchInner, artifacts, Config{Enabled: true})
+	searchable, ok := searchWrapped.(session.SearchableService)
+	if !ok {
 		t.Fatal("wrapped searchable service does not implement SearchableService")
 	}
 	if _, ok := searchWrapped.(session.TrackService); ok {
 		t.Fatal("wrapped search-only service unexpectedly implements TrackService")
+	}
+	results, err := searchable.SearchEvents(ctx, session.EventSearchRequest{
+		UserKey: session.UserKey{AppName: key.AppName, UserID: key.UserID},
+		Query:   "image",
+	})
+	if err != nil {
+		t.Fatalf("SearchEvents() error = %v", err)
+	}
+	part := results[0].Event.Response.Choices[0].Message.ContentParts[0]
+	if string(part.Image.Data) != "search-image" {
+		t.Fatalf("search hydrated image data = %q, want search-image", part.Image.Data)
+	}
+	if part.ContentRef != nil {
+		t.Fatalf("search hydrated ContentRef = %#v, want nil", part.ContentRef)
 	}
 }
 
@@ -508,13 +620,14 @@ func (s *appendFailService) AppendEvent(
 
 type searchOnlyService struct {
 	session.Service
+	results []session.EventSearchResult
 }
 
 func (s *searchOnlyService) SearchEvents(
 	ctx context.Context,
 	req session.EventSearchRequest,
 ) ([]session.EventSearchResult, error) {
-	return nil, nil
+	return s.results, nil
 }
 
 func imageEvent(data []byte) *event.Event {

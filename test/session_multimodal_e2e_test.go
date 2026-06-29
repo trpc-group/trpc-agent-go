@@ -164,7 +164,8 @@ func TestSessionMultimodalProviderBoundaryRejectsUnresolvedRefs(t *testing.T) {
 	require.NoError(t, inner.AppendEvent(ctx, sess, unresolvedRefEvent()))
 
 	err = drainRun(ctx, r, userID, sessionID, model.NewUserMessage("continue"))
-	require.Error(t, err)
+	require.ErrorContains(t, err, "artifact not found")
+	require.ErrorContains(t, err, "missing.png@0")
 	require.Empty(t, rec.requests())
 }
 
@@ -193,7 +194,8 @@ func TestSessionMultimodalArtifactFailuresAreVisible(t *testing.T) {
 		msg.AddImageData([]byte("image"), "auto", "png")
 
 		err := drainRun(ctx, r, userID, sessionID, msg)
-		require.Error(t, err)
+		require.ErrorContains(t, err, "save artifact")
+		require.ErrorContains(t, err, "save failed")
 		persisted := getSession(t, ctx, inner, session.Key{
 			AppName:   multimodalE2EApp,
 			UserID:    userID,
@@ -239,7 +241,8 @@ func TestSessionMultimodalArtifactFailuresAreVisible(t *testing.T) {
 		defer func() { require.NoError(t, r2.Close()) }()
 
 		err := drainRun(ctx, r2, userID, sessionID, model.NewUserMessage("continue"))
-		require.Error(t, err)
+		require.ErrorContains(t, err, "load artifact")
+		require.ErrorContains(t, err, "load failed")
 		require.Empty(t, rec.requests())
 	})
 }

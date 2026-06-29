@@ -625,6 +625,9 @@ func hydrateEvent(
 	if evt == nil || evt.Response == nil || !eventNeedsHydrate(evt) {
 		return evt, false, nil
 	}
+	if svc == nil {
+		return nil, false, fmt.Errorf("session multimodal hydrate: %w", ErrArtifactServiceNil)
+	}
 	cloned := cloneEventForMutation(evt)
 	for choiceIndex := range cloned.Response.Choices {
 		if err := hydrateMessage(ctx, &cloned.Response.Choices[choiceIndex].Message, info, svc); err != nil {
@@ -661,6 +664,10 @@ func hydrateMessage(
 			return fmt.Errorf("session multimodal hydrate: artifact not found: %s@%d", name, version)
 		}
 		data := cloneBytes(art.Data)
+		if err := validateHydratedArtifact(ref, data, name, version); err != nil {
+			return err
+		}
+		hydrated := false
 		switch part.Type {
 		case model.ContentTypeImage:
 			if part.Image == nil {
@@ -668,12 +675,14 @@ func hydrateMessage(
 			}
 			part.Image.Data = data
 			part.Image.Format = chooseNonEmpty(part.Image.Format, imageFormat(ref.MimeType, art.MimeType))
+			hydrated = true
 		case model.ContentTypeAudio:
 			if part.Audio == nil {
 				part.Audio = &model.Audio{}
 			}
 			part.Audio.Data = data
 			part.Audio.Format = chooseNonEmpty(part.Audio.Format, audioFormat(ref.MimeType, art.MimeType))
+			hydrated = true
 		case model.ContentTypeFile:
 			if part.File == nil {
 				part.File = &model.File{}
@@ -681,7 +690,34 @@ func hydrateMessage(
 			part.File.Data = data
 			part.File.Name = chooseNonEmpty(part.File.Name, ref.OriginalName, art.Name)
 			part.File.MimeType = chooseNonEmpty(part.File.MimeType, ref.MimeType, art.MimeType)
+			hydrated = true
 		}
+		if hydrated {
+			part.ContentRef = nil
+		}
+	}
+	return nil
+}
+
+func validateHydratedArtifact(
+	ref *model.ContentRef,
+	data []byte,
+	name string,
+	version int,
+) error {
+	if ref.SizeBytes > 0 && int64(len(data)) != ref.SizeBytes {
+		return fmt.Errorf(
+			"session multimodal hydrate: artifact size mismatch: %s@%d",
+			name,
+			version,
+		)
+	}
+	if ref.SHA256 != "" && !strings.EqualFold(sha256Hex(data), ref.SHA256) {
+		return fmt.Errorf(
+			"session multimodal hydrate: artifact sha256 mismatch: %s@%d",
+			name,
+			version,
+		)
 	}
 	return nil
 }
