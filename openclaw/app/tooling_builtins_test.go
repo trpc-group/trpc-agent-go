@@ -47,6 +47,7 @@ func TestNewHTTPWebFetchTools_AllowAllSucceeds(t *testing.T) {
 	cfg := yamlNode(t, `
 allow_all_domains: true
 timeout: 200ms
+main_content_only: true
 max_content_length: 123
 max_total_content_length: 456
 `)

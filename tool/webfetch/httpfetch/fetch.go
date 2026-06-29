@@ -45,6 +45,7 @@ type config struct {
 	maxTotalContentLength int
 	allowedDomains        []string
 	blockedDomains        []string
+	mainContentOnly       bool
 }
 
 // WithHTTPClient sets the HTTP client.
@@ -84,6 +85,14 @@ func WithAllowedDomains(domains []string) Option {
 func WithBlockedDomains(domains []string) Option {
 	return func(cfg *config) {
 		cfg.blockedDomains = domains
+	}
+}
+
+// WithMainContentExtraction enables heuristic main-content extraction for
+// HTML pages. It is off by default to preserve full-page conversion.
+func WithMainContentExtraction(enabled bool) Option {
+	return func(cfg *config) {
+		cfg.mainContentOnly = enabled
 	}
 }
 
@@ -152,6 +161,7 @@ func NewTool(opts ...Option) tool.CallableTool {
 		client:                client,
 		maxContentLength:      cfg.maxContentLength,
 		maxTotalContentLength: cfg.maxTotalContentLength,
+		mainContentOnly:       cfg.mainContentOnly,
 	}
 
 	// Register urlValidators
@@ -184,6 +194,7 @@ type webFetchTool struct {
 	client                *http.Client
 	maxContentLength      int
 	maxTotalContentLength int
+	mainContentOnly       bool
 	urlValidators         []urlfilter.URLValidator
 }
 
@@ -288,7 +299,10 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 	var processErr error
 
 	if item.ContentType == "text/html" {
-		content, processErr = convertHTMLToMarkdown(resp.Body)
+		content, processErr = convertHTMLToMarkdownWithOptions(
+			resp.Body,
+			t.mainContentOnly,
+		)
 	} else if isSupportedTextType(item.ContentType) {
 		content, processErr = readBodyAsString(resp.Body)
 	} else {
@@ -380,6 +394,13 @@ func readBodyAsString(r io.Reader) (string, error) {
 }
 
 func convertHTMLToMarkdown(r io.Reader) (string, error) {
+	return convertHTMLToMarkdownWithOptions(r, false)
+}
+
+func convertHTMLToMarkdownWithOptions(
+	r io.Reader,
+	mainContentOnly bool,
+) (string, error) {
 	bodyBytes, err := io.ReadAll(r)
 	if err != nil {
 		return "", err
@@ -391,7 +412,9 @@ func convertHTMLToMarkdown(r io.Reader) (string, error) {
 			commonmark.NewCommonmarkPlugin(),
 		),
 	)
-	markdown, err := conv.ConvertString(markdownSourceHTML(bodyBytes))
+	markdown, err := conv.ConvertString(
+		markdownSourceHTML(bodyBytes, mainContentOnly),
+	)
 	if err != nil {
 		return "", err
 	}
@@ -399,7 +422,11 @@ func convertHTMLToMarkdown(r io.Reader) (string, error) {
 	return markdown, nil
 }
 
-func markdownSourceHTML(raw []byte) string {
+func markdownSourceHTML(raw []byte, mainContentOnly bool) string {
+	if !mainContentOnly {
+		return string(raw)
+	}
+
 	doc, err := html.Parse(bytes.NewReader(raw))
 	if err != nil {
 		return string(raw)

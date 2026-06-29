@@ -735,8 +735,9 @@ func TestNewTool(t *testing.T) {
 	customClient := &http.Client{Timeout: 10 * time.Second}
 
 	testCases := []struct {
-		name string
-		opts []Option
+		name          string
+		opts          []Option
+		wantDescMatch string
 	}{
 		{
 			name: "default options",
@@ -755,8 +756,9 @@ func TestNewTool(t *testing.T) {
 			opts: []Option{WithHTTPClient(customClient)},
 		},
 		{
-			name: "custom backend",
-			opts: []Option{WithBackend(backendHTML)},
+			name:          "custom backend",
+			opts:          []Option{WithBackend(backendHTML)},
+			wantDescMatch: "html search",
 		},
 		{
 			name: "all options combined",
@@ -766,6 +768,7 @@ func TestNewTool(t *testing.T) {
 				WithUserAgent(customAgent),
 				WithHTTPClient(customClient),
 			},
+			wantDescMatch: "lite search",
 		},
 	}
 
@@ -774,6 +777,13 @@ func TestNewTool(t *testing.T) {
 			tool := NewTool(tc.opts...)
 			if tool == nil {
 				t.Fatalf("NewTool() returned nil for %s", tc.name)
+			}
+			if tc.wantDescMatch != "" {
+				require.Contains(
+					t,
+					tool.Declaration().Description,
+					tc.wantDescMatch,
+				)
 			}
 		})
 	}

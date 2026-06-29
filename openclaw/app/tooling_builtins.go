@@ -168,10 +168,11 @@ func isSupportedDuckDuckGoBackend(backend string) bool {
 }
 
 type httpWebFetchConfig struct {
-	AllowedDomains []string      `yaml:"allowed_domains,omitempty"`
-	BlockedDomains []string      `yaml:"blocked_domains,omitempty"`
-	AllowAll       bool          `yaml:"allow_all_domains,omitempty"`
-	Timeout        time.Duration `yaml:"timeout,omitempty"`
+	AllowedDomains  []string      `yaml:"allowed_domains,omitempty"`
+	BlockedDomains  []string      `yaml:"blocked_domains,omitempty"`
+	AllowAll        bool          `yaml:"allow_all_domains,omitempty"`
+	Timeout         time.Duration `yaml:"timeout,omitempty"`
+	MainContentOnly bool          `yaml:"main_content_only,omitempty"`
 
 	MaxContentLength      int `yaml:"max_content_length,omitempty"`
 	MaxTotalContentLength int `yaml:"max_total_content_length,omitempty"`
@@ -212,6 +213,9 @@ func newHTTPWebFetchTools(
 				cfg.MaxTotalContentLength,
 			),
 		)
+	}
+	if cfg.MainContentOnly {
+		opts = append(opts, httpfetch.WithMainContentExtraction(true))
 	}
 	if len(cfg.AllowedDomains) > 0 {
 		opts = append(opts, httpfetch.WithAllowedDomains(cfg.AllowedDomains))

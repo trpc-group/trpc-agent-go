@@ -3327,6 +3327,49 @@ func TestToolDriverTypeHelpers(t *testing.T) {
 		}),
 	)
 
+	emptyTargets := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		&serverTargetConfig{ID: targetHost},
+		&serverTargetConfig{ID: targetSandbox},
+		map[string]serverTargetConfig{
+			"edge": {ID: "edge"},
+		},
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+			"mcp": {
+				Name:      "mcp",
+				Transport: transportStdio,
+			},
+		},
+		nil,
+	)
+	require.Equal(
+		t,
+		driverTypePlaywrightMCP,
+		emptyTargets.driverTypeForProfile(defaultProfileName),
+	)
+	require.Equal(
+		t,
+		driverTypePlaywrightMCP,
+		emptyTargets.driverTypeForInput(defaultProfileName, input{}),
+	)
+	require.Equal(
+		t,
+		driverTypePlaywrightMCP,
+		emptyTargets.driverTypeForInput("mcp", input{
+			Target: targetSandbox,
+		}),
+	)
+	require.Equal(
+		t,
+		driverTypePlaywrightMCP,
+		emptyTargets.driverTypeForInput("mcp", input{
+			Target: targetNode,
+		}),
+	)
+
 	plain := newTestTool(&fakeDriver{})
 	require.Equal(
 		t,

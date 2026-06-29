@@ -850,7 +850,7 @@ func (t *Tool) driverTypeForProfile(
 ) string {
 	cfg, ok := t.profiles[profile]
 	if !ok {
-		if t.hostServer != nil {
+		if hasServerTarget(t.hostServer) {
 			return driverTypeBrowserServer
 		}
 		return driverTypePlaywrightMCP
@@ -861,8 +861,9 @@ func (t *Tool) driverTypeForProfile(
 	if strings.TrimSpace(cfg.Transport) != "" {
 		return driverTypePlaywrightMCP
 	}
-	if t.hostServer != nil || t.sandboxServer != nil ||
-		len(t.nodeTargets) > 0 {
+	if hasServerTarget(t.hostServer) ||
+		hasServerTarget(t.sandboxServer) ||
+		hasNodeServerTarget(t.nodeTargets) {
 		return driverTypeBrowserServer
 	}
 	return driverTypePlaywrightMCP
@@ -875,18 +876,35 @@ func (t *Tool) driverTypeForInput(
 	target := strings.ToLower(strings.TrimSpace(in.Target))
 	switch target {
 	case targetSandbox:
-		if t.sandboxServer != nil {
+		if hasServerTarget(t.sandboxServer) {
 			return driverTypeBrowserServer
 		}
 		return t.driverTypeForProfile(profile)
 	case targetNode:
-		return driverTypeBrowserServer
+		if hasNodeServerTarget(t.nodeTargets) {
+			return driverTypeBrowserServer
+		}
+		return t.driverTypeForProfile(profile)
 	case "", targetHost:
-		if t.hostServer != nil {
+		if hasServerTarget(t.hostServer) {
 			return driverTypeBrowserServer
 		}
 	}
 	return t.driverTypeForProfile(profile)
+}
+
+func hasServerTarget(target *serverTargetConfig) bool {
+	return target != nil && strings.TrimSpace(target.ServerURL) != ""
+}
+
+func hasNodeServerTarget(targets map[string]serverTargetConfig) bool {
+	for id := range targets {
+		target := targets[id]
+		if strings.TrimSpace(target.ServerURL) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *Tool) handleStatus(
