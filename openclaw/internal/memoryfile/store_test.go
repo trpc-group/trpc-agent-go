@@ -15,6 +15,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -815,6 +816,62 @@ func TestEnsureMemoryRefreshesExistingTemplate(t *testing.T) {
 	require.NotContains(t, got, "workflow rule, update this file")
 }
 
+func TestEnsureMemoryExistingTemplateRefreshIsBestEffort(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("chmod-based write failure is not reliable on this platform")
+	}
+
+	root := t.TempDir()
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	path, err := store.MemoryPath("app", "user")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	legacy := previousDefaultTemplate()
+	require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
+
+	dir := filepath.Dir(path)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	gotPath, err := store.EnsureMemory(context.Background(), "app", "user")
+	require.NoError(t, err)
+	require.Equal(t, path, gotPath)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, strings.TrimSpace(legacy), strings.TrimSpace(string(raw)))
+}
+
+func TestEnsureMemoryExistingTemplateChecksContextAfterLock(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	path, err := store.MemoryPath("app", "user")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(previousDefaultTemplate()), 0o600))
+
+	ctx := &errAfterFirstContext{
+		Context: context.Background(),
+		err:     context.Canceled,
+	}
+
+	gotPath, err := store.EnsureMemory(ctx, "app", "user")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, gotPath)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "## Repeated working style")
+}
+
 func TestReadFileRefreshesExistingTemplate(t *testing.T) {
 	t.Parallel()
 
@@ -837,8 +894,53 @@ func TestReadFileRefreshesExistingTemplate(t *testing.T) {
 	require.Equal(t, strings.TrimSpace(DefaultTemplate()), strings.TrimSpace(string(raw)))
 }
 
+func TestReadFileReturnsRefreshedTemplateWhenPersistFails(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("chmod-based write failure is not reliable on this platform")
+	}
+
+	root := t.TempDir()
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	path, err := store.MemoryPath("app", "user")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	legacy := previousDefaultTemplate()
+	require.NoError(t, os.WriteFile(path, []byte(legacy), 0o600))
+
+	dir := filepath.Dir(path)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	got, err := store.ReadFile(path, 0)
+	require.NoError(t, err)
+	require.True(t, IsDefaultTemplate(got))
+	require.Equal(t, strings.TrimSpace(DefaultTemplate()), got)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, strings.TrimSpace(legacy), strings.TrimSpace(string(raw)))
+}
+
 func TestContextErr_NilContextReturnsNil(t *testing.T) {
 	t.Parallel()
 
 	require.NoError(t, contextErr(nil))
+}
+
+type errAfterFirstContext struct {
+	context.Context
+	calls int
+	err   error
+}
+
+func (c *errAfterFirstContext) Err() error {
+	c.calls++
+	if c.calls > 1 {
+		return c.err
+	}
+	return nil
 }
