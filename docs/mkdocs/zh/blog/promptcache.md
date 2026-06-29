@@ -224,7 +224,7 @@ summarizer := summary.NewSummarizer(
 
 对比 Codex 和 Claude Code 的做法，可以看到它们都没有把“当前时分秒”当成稳定 prompt 的一部分：它们更偏向把运行环境信息控制在日期、时区这类粗粒度信息上，让高频变化的 clock time 不进入稳定前缀。
 
-**框架处理**：tRPC-Agent-Go 沿用已有的 `WithAddCurrentTime` 入口，但调整默认语义：默认只注入日期级 system context，把它当成“今天是哪一天”这种相对稳定的环境信息；如果模型需要精确到时分秒的当前时间，则通过内置的 `environment_context_current_time` 工具按需获取。
+**框架处理**：tRPC-Agent-Go 沿用已有的 `WithAddCurrentTime` 入口，但调整默认语义：默认只注入日期级 system context，把它当成“今天是哪一天”这种相对稳定的环境信息。在工具可用时，如果模型需要精确到时分秒的当前时间，可以通过内置的 `environment_context_current_time` 工具按需获取。遗留的 `WithOutputSchema` 会禁用所有工具，包括这个精确时间工具；如果同时需要结构化输出和精确时间工具，应使用 `WithStructuredOutputJSONSchema` 或 `WithStructuredOutputJSON`。
 
 ```go
 agent := llmagent.New(
@@ -326,7 +326,7 @@ agent := llmagent.New(
 | `llmagent.WithSkillsLoadedContentInToolResults(true)` | system message / tool result | 把已加载 Skill 内容从 system message 移到匹配 tool result，减少 request prefix 污染 |
 | `summary.WithCacheSafeForking(true)` | summary 生成请求 | 克隆父请求并追加 compaction user message，让 summary 生成也复用父会话前缀 |
 | `llmagent.WithSessionSummaryInjectionMode(SessionSummaryInjectionUser)` | history 附近 | Summary 频繁变化时可减少对 request prefix 的改写，但需要接受可能被 token tailoring 裁剪的取舍 |
-| `llmagent.WithAddCurrentTime(true)` 默认 date-only | system message / time tool | 日期级上下文同一天内稳定；精确时间通过 `environment_context_current_time` 按需获取 |
+| `llmagent.WithAddCurrentTime(true)` 默认 date-only | system message / time tool | 日期级上下文同一天内稳定；工具启用时可通过 `environment_context_current_time` 获取精确时间。遗留的 `WithOutputSchema` 会禁用这个工具 |
 | `agent.WithModelRequestExtraFields` 中的 `prompt_cache_key` | request body | 对支持该参数的服务方，稳定 key 可能帮助同类长前缀请求聚合；不要使用 request id / trace id |
 | `llmagent.WithReasoningContentMode` 默认模式 | assistant history | 默认丢弃历史 reasoning content，可减少历史体积，避免无谓增加输入 tokens |
 
@@ -479,7 +479,7 @@ turn  prompt_tokens  cached_tokens  hit_rate  note
 
 - [ ] 当前用户输入、tool result、临时 RAG 片段、精确当前时间等动态内容放到请求后部。
 - [ ] Skills 动态加载要控制驻留，优先使用 `WithSkillsLoadedContentInToolResults(true)` 减少 request prefix 变化。
-- [ ] 当前时间默认使用日期级上下文；需要精确时间时优先用 `environment_context_current_time` 工具。
+- [ ] 当前时间默认使用日期级上下文；需要精确时间且工具可用时，优先用 `environment_context_current_time` 工具；如果结构化输出也需要工具，使用 `WithStructuredOutputJSONSchema` 或 `WithStructuredOutputJSON`，不要使用遗留的 `WithOutputSchema`。
 
 ### 长会话
 

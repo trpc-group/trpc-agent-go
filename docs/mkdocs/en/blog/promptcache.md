@@ -211,7 +211,7 @@ When customizing the fork prompt with `summary.WithCacheSafeForkPrompt(...)`, do
 
 **Risk**: Current time is a common Prompt Cache trap. If every request writes a full timestamp into the system message, the prefix changes every second.
 
-**Framework behavior**: tRPC-Agent-Go keeps the existing `WithAddCurrentTime` entry point but changes the default semantics to date-level context. If the model needs precise time, it can call the built-in `environment_context_current_time` tool.
+**Framework behavior**: tRPC-Agent-Go keeps the existing `WithAddCurrentTime` entry point but changes the default semantics to date-level context. When tools are available, the model can call the built-in `environment_context_current_time` tool for precise time. Legacy `WithOutputSchema` disables all tools, including this one; if you need both structured output and the exact-time tool, use `WithStructuredOutputJSONSchema` or `WithStructuredOutputJSON`.
 
 ```go
 agent := llmagent.New(
@@ -307,7 +307,7 @@ Recommended capabilities:
 | `llmagent.WithSkillsLoadedContentInToolResults(true)` | system message / tool result | Moves loaded Skill content from system message into matching tool results |
 | `summary.WithCacheSafeForking(true)` | summary generation request | Clones the parent request and appends a compaction message, reusing the parent prefix |
 | `llmagent.WithSessionSummaryInjectionMode(SessionSummaryInjectionUser)` | near history | Reduces prefix rewrite when summary changes frequently, with trimming tradeoff |
-| `llmagent.WithAddCurrentTime(true)` default date-only | system message / time tool | Date-level context is stable; precise time is available through `environment_context_current_time` |
+| `llmagent.WithAddCurrentTime(true)` default date-only | system message / time tool | Date-level context is stable; precise time is available through `environment_context_current_time` when tools are enabled. Legacy `WithOutputSchema` disables this tool |
 | `agent.WithModelRequestExtraFields` with `prompt_cache_key` | request body | A stable key may help providers route similar long-prefix requests |
 | default `llmagent.WithReasoningContentMode` | assistant history | Drops historical reasoning content by default, reducing unnecessary input tokens |
 
@@ -456,7 +456,7 @@ This is still only an example run, not an SLA. Model output length and history m
 
 - [ ] Put current user input, tool results, temporary RAG snippets, and exact current time later in the request.
 - [ ] Control loaded Skills residency and prefer `WithSkillsLoadedContentInToolResults(true)`.
-- [ ] Use date-level current-time context by default. Use `environment_context_current_time` when precise time is needed.
+- [ ] Use date-level current-time context by default. Use `environment_context_current_time` when precise time is needed and tools are enabled; use `WithStructuredOutputJSONSchema` or `WithStructuredOutputJSON` instead of legacy `WithOutputSchema` if structured output also needs tools.
 
 ### Long Sessions
 
