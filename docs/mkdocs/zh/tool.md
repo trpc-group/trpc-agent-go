@@ -1660,6 +1660,8 @@ Agent、模型或 executor；它只能在开发者配置好的边界内，为这
   解析，不会在此枚举）。
 - `WithCapabilitySkills(repo)`：设置模型可选择的最大 skill 仓库。未设置时默认从父
   Agent 本轮有效 skill 仓库派生。
+- `WithDynamicTimeout(timeout)`：限制一次动态子 Agent 调用的最长时间。非正值表示不额外
+  设置 deadline，继续使用父请求的 context。
 - `WithExposeToolSelection(false)`：不向模型暴露 `tools` 字段。子 Agent 仍使用代码边界内
   的工具面，但模型不能进一步收窄。
 - `WithExposeSkillSelection(true)`：向模型暴露 `skills` 字段。默认关闭，因为 skill 是否

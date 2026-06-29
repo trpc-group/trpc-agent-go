@@ -138,6 +138,7 @@ const (
 	flagDeferToolSurfaceMode     = "defer-tools-to-dynamic-agent-mode"
 	flagDeferToolSurfaceChars    = "defer-tools-to-dynamic-agent-threshold-chars"
 	flagDeferToolSurfaceDirect   = "defer-tools-to-dynamic-agent-direct-tools"
+	flagDynamicAgentTimeout      = "dynamic-agent-timeout"
 
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
@@ -289,6 +290,7 @@ type runOptions struct {
 	DeferToolSurfaceMode   string
 	DeferToolSurfaceChars  int
 	DeferToolSurfaceDirect string
+	DynamicAgentTimeout    time.Duration
 
 	enableOpenClawToolsExplicit  bool
 	deferToolSurfaceModeExplicit bool
@@ -937,6 +939,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Comma-separated additional tool names to keep directly on "+
 			"the parent agent when deferred mode is active",
 	)
+	fs.DurationVar(
+		&opts.DynamicAgentTimeout,
+		flagDynamicAgentTimeout,
+		0,
+		"Maximum duration for one dynamic_agent child call (0 disables)",
+	)
 
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, &exitError{Code: 2, Err: err}
@@ -1256,6 +1264,8 @@ type toolsConfig struct {
 	DeferToDynamicAgentCharsCamel *int                `yaml:"deferToDynamicAgentThresholdChars,omitempty"`
 	DeferDirectTools              yamlStringList      `yaml:"defer_direct_tools,omitempty"`
 	DeferDirectToolsCamel         yamlStringList      `yaml:"deferDirectTools,omitempty"`
+	DynamicAgentTimeout           *string             `yaml:"dynamic_agent_timeout,omitempty"`
+	DynamicAgentTimeoutCamel      *string             `yaml:"dynamicAgentTimeout,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
@@ -2002,6 +2012,18 @@ func (cfg *fileConfig) apply(
 				)
 			}
 		}
+		dynamicTimeout := firstStringPtr(
+			cfg.Tools.DynamicAgentTimeout,
+			cfg.Tools.DynamicAgentTimeoutCamel,
+		)
+		if dynamicTimeout != nil &&
+			!flagWasSet(set, flagDynamicAgentTimeout) {
+			dur, err := parseDuration(*dynamicTimeout)
+			if err != nil {
+				return fmt.Errorf("tools.dynamic_agent_timeout: %w", err)
+			}
+			opts.DynamicAgentTimeout = dur
+		}
 		if len(cfg.Tools.Providers) > 0 {
 			opts.ToolProviders = convertPluginSpecs(cfg.Tools.Providers)
 		}
@@ -2710,6 +2732,12 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid defer tool surface threshold chars: %d",
 			opts.DeferToolSurfaceChars,
+		)
+	}
+	if opts.DynamicAgentTimeout < 0 {
+		return fmt.Errorf(
+			"invalid dynamic agent timeout: %s",
+			opts.DynamicAgentTimeout,
 		)
 	}
 	opts.DeferToolSurfaceDirect = strings.Join(

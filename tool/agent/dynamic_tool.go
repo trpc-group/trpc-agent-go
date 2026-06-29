@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -212,6 +213,14 @@ func WithCapabilityToolAliases(aliases map[string]string) Option {
 	return func(opts *agentToolOptions) {
 		opts.ensureDynamicOptions().toolAliases =
 			normalizeToolAliases(aliases)
+	}
+}
+
+// WithDynamicTimeout limits one dynamic sub-agent invocation. A non-positive
+// timeout keeps the parent's context unchanged.
+func WithDynamicTimeout(timeout time.Duration) Option {
+	return func(opts *agentToolOptions) {
+		opts.ensureDynamicOptions().timeout = timeout
 	}
 }
 
@@ -552,6 +561,8 @@ func (at *Tool) callDynamic(ctx context.Context, jsonArgs []byte) (any, error) {
 	if err != nil {
 		return "", err
 	}
+	subCtx, cancel := at.dynamicRunContext(subCtx)
+	defer cancel()
 	evCh, err := agent.RunWithPlugins(subCtx, subInv, subInv.Agent)
 	if err != nil {
 		return "", fmt.Errorf("failed to run sub-agent: %w", err)
@@ -562,6 +573,11 @@ func (at *Tool) callDynamic(ctx context.Context, jsonArgs []byte) (any, error) {
 	)
 	if err != nil {
 		return "", err
+	}
+	if response == "" {
+		if err := subCtx.Err(); err != nil {
+			return "", fmt.Errorf("dynamic sub-agent stopped: %w", err)
+		}
 	}
 	return at.formatResponseWithWarnings(response, warnings), nil
 }
@@ -577,6 +593,8 @@ func (at *Tool) streamDynamic(
 		sendStreamableCallError(ctx, writer, "dynamic sub-agent error: %w", err)
 		return
 	}
+	subCtx, cancel := at.dynamicRunContext(subCtx)
+	defer cancel()
 	for _, w := range warnings {
 		log.Warnf("AgentTool[%s]: %s", at.name, w)
 	}
@@ -594,6 +612,17 @@ func (at *Tool) streamDynamic(
 		writer,
 		at.warningsNote(warnings),
 	)
+}
+
+func (at *Tool) dynamicRunContext(ctx context.Context) (
+	context.Context,
+	context.CancelFunc,
+) {
+	timeout := at.dynamicCfg.timeout
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 // buildDynamicSubInvocation resolves the base agent, capability surface and

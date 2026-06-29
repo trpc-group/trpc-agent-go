@@ -628,6 +628,26 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					},
 				),
 				adminRuntimeTextField(
+					"tools.dynamic_agent_timeout",
+					"Dynamic Agent Timeout",
+					"Maximum duration for one dynamic_agent child "+
+						"call, for example 180s. Empty or 0 disables it.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"dynamic_agent_timeout",
+							"dynamicAgentTimeout",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.DynamicAgentTimeout <= 0 {
+							return ""
+						}
+						return opts.DynamicAgentTimeout.String()
+					},
+				),
+				adminRuntimeTextField(
 					"tools.defer_direct_tools",
 					"Deferred Direct Tools",
 					"Comma-separated additional tool names to keep "+

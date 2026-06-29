@@ -207,7 +207,7 @@ func newDeferredToolSurfaceTool(
 	}
 
 	template := llmagent.New(defaultAgentName+"-tool-worker", templateOpts...)
-	return agenttool.NewDynamicTool(
+	dynamicOpts := []agenttool.Option{
 		agenttool.WithDescription(openClawDeferredToolDescription),
 		agenttool.WithTemplateAgent(template),
 		agenttool.WithCapabilityProvider(
@@ -222,6 +222,16 @@ func newDeferredToolSurfaceTool(
 			),
 		),
 		agenttool.WithExposeSkillSelection(true),
+	}
+	if cfg.Config.DynamicAgentTimeout > 0 {
+		dynamicOpts = append(
+			dynamicOpts,
+			agenttool.WithDynamicTimeout(cfg.Config.DynamicAgentTimeout),
+		)
+	}
+
+	dynamicOpts = append(
+		dynamicOpts,
 		agenttool.WithRequestDescription(
 			"Self-contained tool-backed task for the OpenClaw worker.",
 		),
@@ -241,6 +251,7 @@ func newDeferredToolSurfaceTool(
 				"skills.",
 		),
 	)
+	return agenttool.NewDynamicTool(dynamicOpts...)
 }
 
 func newDeferredCapabilitySearchTool(

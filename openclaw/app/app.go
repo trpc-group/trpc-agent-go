@@ -1134,6 +1134,7 @@ func NewRuntimeWithOptions(
 			DeferToolSurfaceDirectTools: splitCSV(
 				opts.DeferToolSurfaceDirect,
 			),
+			DynamicAgentTimeout: opts.DynamicAgentTimeout,
 		}
 		cwd, _ := os.Getwd()
 		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
@@ -1715,6 +1716,7 @@ func run(
 			DeferToolSurfaceDirectTools: splitCSV(
 				opts.DeferToolSurfaceDirect,
 			),
+			DynamicAgentTimeout: opts.DynamicAgentTimeout,
 		}
 		cwd, _ := os.Getwd()
 		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
@@ -3133,6 +3135,7 @@ type agentConfig struct {
 	DeferToolSurfaceMode           string
 	DeferToolSurfaceThresholdChars int
 	DeferToolSurfaceDirectTools    []string
+	DynamicAgentTimeout            time.Duration
 }
 
 type openClawToolsBundle struct {

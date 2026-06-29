@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -874,6 +875,27 @@ func TestCallDynamic_RequiresRequest(t *testing.T) {
 	require.Contains(t, err.Error(), "request")
 }
 
+func TestCallDynamic_TimeoutBoundsSubAgent(t *testing.T) {
+	t.Parallel()
+
+	main := llmagent.New("main", llmagent.WithModel(&dynBlockingModel{}))
+	at := NewDynamicTool(WithDynamicTimeout(10 * time.Millisecond))
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(main),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("main"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	start := time.Now()
+	_, err := at.Call(ctx, []byte(`{"request":"wait"}`))
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), context.DeadlineExceeded.Error())
+	require.Less(t, time.Since(start), time.Second)
+}
+
 // dynRecordingModel records the set of tool names visible in each request.
 type dynRecordingModel struct {
 	name     string
@@ -914,6 +936,20 @@ func (m *dynRecordingModel) snapshot() [][]string {
 	out := make([][]string, len(m.seen))
 	copy(out, m.seen)
 	return out
+}
+
+type dynBlockingModel struct{}
+
+func (m *dynBlockingModel) GenerateContent(
+	ctx context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (m *dynBlockingModel) Info() model.Info {
+	return model.Info{Name: "blocking"}
 }
 
 func newDynTestTool(name string) tool.Tool {
