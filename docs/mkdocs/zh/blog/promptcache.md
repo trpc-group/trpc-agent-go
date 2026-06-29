@@ -1,7 +1,5 @@
 # 降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践
 
-> [tRPC-Agent-Go](https://github.com/trpc-group/trpc-agent-go) 是面向 Go 语言的自主式多 Agent 框架，具有工具调用、会话与记忆管理、制品管理、多 Agent 协同、图编排、知识库与可观测等能力。
->
 > 本文聚焦 Prompt Cache：它不是框架在本地保存模型 KV，而是模型服务侧对稳定 prompt prefix 的复用能力。tRPC-Agent-Go 的工程实践，是把 Agent 请求尽量组织成“稳定前缀 + 动态后缀”，从而提升缓存命中概率，降低可复用输入 tokens 的成本。
 
 大模型应用进入 Agent 阶段后，一个很直观的变化是：每次请求变长了。

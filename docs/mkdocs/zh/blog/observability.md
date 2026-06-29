@@ -1,7 +1,5 @@
 # 看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍
 
-> [tRPC-Agent-Go](https://github.com/trpc-group/trpc-agent-go) 是面向 Go 语言的自主式多 Agent 框架，具有工具调用、会话与记忆管理、制品管理、多 Agent 协同、图编排、知识库与可观测等能力。
->
 > 本文聚焦 tRPC-Agent-Go 的可观测设计：框架不自建观测平台，而是把 Agent 运行时中的关键语义映射到 OpenTelemetry，让 Trace、Metric 和 GenAI 语义属性可以被不同后端消费。
 
 大模型应用从 Chat 走向 Agent 后，可观测性问题变得明显不一样了。

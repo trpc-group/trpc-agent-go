@@ -1,7 +1,5 @@
 # Seeing the Agent Runtime: Observability Design in tRPC-Agent-Go
 
-> [tRPC-Agent-Go](https://github.com/trpc-group/trpc-agent-go) is a Go framework for autonomous multi-Agent systems. It provides tool calling, session and memory management, artifact management, multi-Agent collaboration, graph orchestration, knowledge integration, and observability.
->
 > This article focuses on observability in tRPC-Agent-Go. The framework does not try to build another observability platform. Instead, it maps important Agent runtime semantics to OpenTelemetry, so traces, metrics, and GenAI semantic attributes can be consumed by different backends.
 
 When LLM applications move from Chat to Agent, observability changes in a fundamental way.

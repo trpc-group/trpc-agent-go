@@ -1,7 +1,5 @@
 # Reducing Agent Token Cost: Prompt Cache Engineering in tRPC-Agent-Go
 
-> [tRPC-Agent-Go](https://github.com/trpc-group/trpc-agent-go) is a Go framework for autonomous multi-Agent systems. It provides tool calling, session and memory management, artifact management, multi-Agent collaboration, graph orchestration, knowledge integration, and observability.
->
 > This article focuses on Prompt Cache. Prompt Cache is not a local KV store inside the framework. It is a model-service capability that reuses stable prompt prefixes. The engineering work in tRPC-Agent-Go is to shape Agent requests as "stable prefix + dynamic suffix" whenever possible, improving cache-hit probability and reducing the cost of reusable input tokens.
 
 When LLM applications enter the Agent stage, each request becomes longer.
