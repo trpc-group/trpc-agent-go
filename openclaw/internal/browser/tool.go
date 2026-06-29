@@ -336,9 +336,10 @@ func (t *Tool) Declaration() *tool.Declaration {
 			"automation. Keep using the same targetId after tabs or " +
 			"snapshot calls. Use profile=\"chrome\" when the user " +
 			"mentions a browser extension, relay, attach tab, or " +
-			"their current browser tab. Use target=\"sandbox\" or " +
-			"target=\"node\" when the runtime exposes those browser " +
-			"servers. Avoid evaluate unless the " +
+			"their current browser tab. Omit target for the default " +
+			"host browser. Only set target=\"sandbox\" or " +
+			"target=\"node\" when the runtime configuration exposes " +
+			"those browser servers. Avoid evaluate unless the " +
 			"task truly requires custom page JavaScript.",
 		InputSchema: browserSchema(),
 	}
@@ -568,8 +569,11 @@ func browserSchema() *tool.Schema {
 	}
 
 	properties := map[string]*tool.Schema{
-		"action":         stringSchema("Browser action."),
-		"target":         stringSchema("Browser target: host, sandbox, or node."),
+		"action": stringSchema("Browser action."),
+		"target": stringSchema(
+			"Browser target. Omit for default host; only use " +
+				"sandbox or node when configured.",
+		),
 		"node":           stringSchema("Node browser target."),
 		"profile":        stringSchema("Browser profile name."),
 		"targetUrl":      stringSchema("Alias for browser URL."),

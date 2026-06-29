@@ -2778,6 +2778,7 @@ func TestNewAgent_DeferToolSurfaceUsesDynamicAgent(t *testing.T) {
 	require.Contains(t, system, "dynamic_agent")
 	require.Contains(t, system, "tool_search")
 	require.Contains(t, system, "Tool-backed work is available")
+	require.Contains(t, system, "pass exact tool names")
 	require.NotContains(t, system, "OPENCLAW_LAST_UPLOAD_PATH")
 
 	searchTool := findTool(
@@ -3053,6 +3054,16 @@ func TestNewDeferredToolSurfaceToolOptionalBranches(t *testing.T) {
 	decl := dynamicTool.Declaration()
 	require.Equal(t, agenttool.DefaultDynamicToolName, decl.Name)
 	require.Contains(t, decl.Description, "worker")
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["tools"].Description,
+		"Do not put tool names in skills",
+	)
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["skills"].Description,
+		"put tool names in tools",
+	)
 }
 
 func TestDeferredCapabilitySkillsProviderUsesInvocationScope(t *testing.T) {

@@ -229,12 +229,16 @@ func newDeferredToolSurfaceTool(
 			"Optional role or constraints for this worker call.",
 		),
 		agenttool.WithToolsDescription(
-			"Optional exact tool names if already known. Omit to let "+
-				"the worker choose from all permitted tools.",
+			"Optional exact tool names, for example web_fetch, "+
+				"browser, or exec_command. Omit to let the "+
+				"worker choose from all permitted tools. Do not "+
+				"put tool names in skills.",
 		),
 		agenttool.WithSkillsDescription(
-			"Optional exact skill names if already known. Omit to let "+
-				"the worker choose from all permitted skills.",
+			"Optional exact skill names if already known. Use only "+
+				"real skill names here; put tool names in tools. "+
+				"Omit to let the worker choose from all permitted "+
+				"skills.",
 		),
 	)
 }

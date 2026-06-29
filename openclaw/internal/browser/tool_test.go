@@ -764,10 +764,16 @@ func TestNewTool_DeclarationExposesSchema(t *testing.T) {
 	decl := tool.Declaration()
 	require.Equal(t, ToolName, decl.Name)
 	require.Contains(t, decl.Description, "current browser tab")
+	require.Contains(t, decl.Description, "Omit target")
 	require.NotNil(t, decl.InputSchema)
 	require.Equal(t, "object", decl.InputSchema.Type)
 	require.Contains(t, decl.InputSchema.Properties, "action")
 	require.Contains(t, decl.InputSchema.Properties, "request")
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["target"].Description,
+		"only use sandbox or node when configured",
+	)
 }
 
 func TestNewTool_InitializesServerAndMCPDrivers(t *testing.T) {

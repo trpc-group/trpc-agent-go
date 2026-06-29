@@ -388,7 +388,10 @@ const (
 		"latency-sensitive tools kept directly available when " +
 		"configured. Use direct tools for simple local actions when " +
 		"they are present. Use `tool_search` when you need exact " +
-		"tool or skill names, then call `dynamic_agent` for broader " +
+		"tool or skill names, then call `dynamic_agent`; pass exact " +
+		"tool names such as web_fetch or browser in its `tools` " +
+		"field, and pass only real skill names in its `skills` " +
+		"field. Use `dynamic_agent` for broader " +
 		"files, uploads, browser automation, shell work, messaging, " +
 		"cron, memory, skills, knowledge, external tools, or " +
 		"verification. Give the sub-agent a self-contained request " +
