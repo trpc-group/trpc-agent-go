@@ -48,11 +48,12 @@ func Wrap(inner session.Service, artifactService artifact.Service, cfg Config) s
 	if inner == nil || !cfg.Enabled {
 		return inner
 	}
-	return &Service{
+	base := &Service{
 		Service:         inner,
 		artifactService: artifactService,
 		cfg:             cfg,
 	}
+	return wrapOptionalInterfaces(base, inner)
 }
 
 // Service decorates a session service with multimodal governance.
@@ -60,6 +61,166 @@ type Service struct {
 	session.Service
 	artifactService artifact.Service
 	cfg             Config
+}
+
+type searchableService struct {
+	*Service
+	session.SearchableService
+}
+
+func (s *searchableService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.Service.searchEvents(ctx, s.SearchableService, req)
+}
+
+type windowService struct {
+	*Service
+	session.WindowService
+}
+
+func (s *windowService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.Service.getEventWindow(ctx, s.WindowService, req)
+}
+
+type trackService struct {
+	*Service
+	session.TrackService
+}
+
+type searchableWindowService struct {
+	*Service
+	session.SearchableService
+	session.WindowService
+}
+
+func (s *searchableWindowService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.Service.searchEvents(ctx, s.SearchableService, req)
+}
+
+func (s *searchableWindowService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.Service.getEventWindow(ctx, s.WindowService, req)
+}
+
+type searchableTrackService struct {
+	*Service
+	session.SearchableService
+	session.TrackService
+}
+
+func (s *searchableTrackService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.Service.searchEvents(ctx, s.SearchableService, req)
+}
+
+type windowTrackService struct {
+	*Service
+	session.WindowService
+	session.TrackService
+}
+
+func (s *windowTrackService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.Service.getEventWindow(ctx, s.WindowService, req)
+}
+
+type searchableWindowTrackService struct {
+	*Service
+	session.SearchableService
+	session.WindowService
+	session.TrackService
+}
+
+func (s *searchableWindowTrackService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.Service.searchEvents(ctx, s.SearchableService, req)
+}
+
+func (s *searchableWindowTrackService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.Service.getEventWindow(ctx, s.WindowService, req)
+}
+
+func wrapOptionalInterfaces(base *Service, inner session.Service) session.Service {
+	searchable, hasSearch := inner.(session.SearchableService)
+	window, hasWindow := inner.(session.WindowService)
+	track, hasTrack := inner.(session.TrackService)
+	switch {
+	case hasSearch && hasWindow && hasTrack:
+		return &searchableWindowTrackService{
+			Service:           base,
+			SearchableService: searchable,
+			WindowService:     window,
+			TrackService:      track,
+		}
+	case hasSearch && hasWindow:
+		return &searchableWindowService{
+			Service:           base,
+			SearchableService: searchable,
+			WindowService:     window,
+		}
+	case hasSearch && hasTrack:
+		return &searchableTrackService{
+			Service:           base,
+			SearchableService: searchable,
+			TrackService:      track,
+		}
+	case hasWindow && hasTrack:
+		return &windowTrackService{
+			Service:       base,
+			WindowService: window,
+			TrackService:  track,
+		}
+	case hasSearch:
+		return &searchableService{
+			Service:           base,
+			SearchableService: searchable,
+		}
+	case hasWindow:
+		return &windowService{
+			Service:       base,
+			WindowService: window,
+		}
+	case hasTrack:
+		return &trackService{
+			Service:      base,
+			TrackService: track,
+		}
+	default:
+		return base
+	}
+}
+
+// CreateSession returns a caller-owned runtime session view.
+func (s *Service) CreateSession(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	options ...session.Option,
+) (*session.Session, error) {
+	sess, err := s.Service.CreateSession(ctx, key, state, options...)
+	if err != nil || sess == nil {
+		return sess, err
+	}
+	return sess.Clone(), nil
 }
 
 // AppendEvent externalizes standard multimodal content before persistence.
@@ -93,10 +254,12 @@ func (s *Service) AppendEvent(
 	if !changed {
 		return s.Service.AppendEvent(ctx, sess, evt, options...)
 	}
-	if err := s.Service.AppendEvent(ctx, sess, persisted, options...); err != nil {
+	persistedSess := sess.Clone()
+	if err := s.Service.AppendEvent(ctx, persistedSess, persisted, options...); err != nil {
 		bestEffortDelete(ctx, s.artifactService, info, saved)
 		return err
 	}
+	sess.UpdateUserSession(evt, options...)
 	return nil
 }
 
@@ -116,6 +279,87 @@ func (s *Service) GetSession(
 		SessionID: key.SessionID,
 	}
 	return hydrateSession(ctx, sess, info, s.artifactService)
+}
+
+// ListSessions hydrates full session results. Metadata-only list calls skip
+// hydration because they intentionally omit event payloads.
+func (s *Service) ListSessions(
+	ctx context.Context,
+	userKey session.UserKey,
+	options ...session.Option,
+) ([]*session.Session, error) {
+	sessions, err := s.Service.ListSessions(ctx, userKey, options...)
+	if err != nil || !s.cfg.Enabled || listSessionOnlyMeta(options) {
+		return sessions, err
+	}
+	for i, sess := range sessions {
+		if sess == nil {
+			continue
+		}
+		info := artifact.SessionInfo{
+			AppName:   sess.AppName,
+			UserID:    sess.UserID,
+			SessionID: sess.ID,
+		}
+		hydrated, err := hydrateSession(ctx, sess, info, s.artifactService)
+		if err != nil {
+			return nil, err
+		}
+		sessions[i] = hydrated
+	}
+	return sessions, nil
+}
+
+func (s *Service) searchEvents(
+	ctx context.Context,
+	searchable session.SearchableService,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	results, err := searchable.SearchEvents(ctx, req)
+	if err != nil || !s.cfg.Enabled {
+		return results, err
+	}
+	for i := range results {
+		info := artifact.SessionInfo{
+			AppName:   results[i].SessionKey.AppName,
+			UserID:    results[i].SessionKey.UserID,
+			SessionID: results[i].SessionKey.SessionID,
+		}
+		evt, changed, err := hydrateEvent(ctx, &results[i].Event, info, s.artifactService)
+		if err != nil {
+			return nil, err
+		}
+		if changed {
+			results[i].Event = *evt
+		}
+	}
+	return results, nil
+}
+
+func (s *Service) getEventWindow(
+	ctx context.Context,
+	window session.WindowService,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	result, err := window.GetEventWindow(ctx, req)
+	if err != nil || result == nil || !s.cfg.Enabled {
+		return result, err
+	}
+	for i := range result.Entries {
+		info := artifact.SessionInfo{
+			AppName:   result.SessionKey.AppName,
+			UserID:    result.SessionKey.UserID,
+			SessionID: result.SessionKey.SessionID,
+		}
+		evt, changed, err := hydrateEvent(ctx, &result.Entries[i].Event, info, s.artifactService)
+		if err != nil {
+			return nil, err
+		}
+		if changed {
+			result.Entries[i].Event = *evt
+		}
+	}
+	return result, nil
 }
 
 type savedArtifact struct {
@@ -139,6 +383,9 @@ func externalizeEvent(
 	if evt == nil || evt.Response == nil {
 		return evt, nil, false, nil
 	}
+	if !shouldPersistEvent(evt) {
+		return evt, nil, false, nil
+	}
 	var (
 		cloned  *event.Event
 		saved   []savedArtifact
@@ -146,11 +393,7 @@ func externalizeEvent(
 	)
 	for choiceIndex := range evt.Response.Choices {
 		msg := evt.Response.Choices[choiceIndex].Message
-		needsExternalize, err := hasExternalizableContent(msg)
-		if err != nil {
-			return nil, saved, false, err
-		}
-		if needsExternalize {
+		if hasExternalizableContent(msg) {
 			if svc == nil {
 				return nil, saved, false, errors.New(
 					"session multimodal externalization: artifact service is nil",
@@ -176,11 +419,7 @@ func externalizeEvent(
 			changed = true
 		}
 		delta := evt.Response.Choices[choiceIndex].Delta
-		needsExternalize, err = hasExternalizableContent(delta)
-		if err != nil {
-			return nil, saved, false, err
-		}
-		if needsExternalize {
+		if hasExternalizableContent(delta) {
 			if svc == nil {
 				return nil, saved, false, errors.New(
 					"session multimodal externalization: artifact service is nil",
@@ -448,16 +687,50 @@ func hydrateMessage(
 	return nil
 }
 
-func hasExternalizableContent(msg model.Message) (bool, error) {
-	for i := range msg.ContentParts {
-		if _, ok, err := externalizeTargetForPart(&msg.ContentParts[i]); ok || err != nil {
-			if err != nil {
-				return false, err
+func hasExternalizableContent(msg model.Message) bool {
+	for _, part := range msg.ContentParts {
+		if part.ContentRef != nil {
+			continue
+		}
+		switch part.Type {
+		case model.ContentTypeImage:
+			if part.Image != nil &&
+				(len(part.Image.Data) > 0 || isDataURL(part.Image.URL)) {
+				return true
 			}
-			return true, nil
+		case model.ContentTypeAudio:
+			if part.Audio != nil && len(part.Audio.Data) > 0 {
+				return true
+			}
+		case model.ContentTypeFile:
+			if part.File != nil &&
+				(len(part.File.Data) > 0 || isDataURL(part.File.URL)) {
+				return true
+			}
 		}
 	}
-	return false, nil
+	return false
+}
+
+func shouldPersistEvent(evt *event.Event) bool {
+	return evt != nil &&
+		evt.Response != nil &&
+		!evt.IsPartial &&
+		evt.Response.IsValidContent()
+}
+
+func listSessionOnlyMeta(options []session.Option) bool {
+	opt := &session.Options{}
+	for _, option := range options {
+		if option != nil {
+			option(opt)
+		}
+	}
+	return opt.ListSessionOnlyMeta
+}
+
+func isDataURL(raw string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), "data:")
 }
 
 func eventNeedsHydrate(evt *event.Event) bool {
@@ -496,6 +769,9 @@ func messageNeedsHydrate(msg model.Message) bool {
 }
 
 func cloneEventForMutation(evt *event.Event) *event.Event {
+	// Do not use event.Clone here: it intentionally generates a new event ID
+	// and updates version fields. Governance clones must preserve event identity
+	// because persisted and runtime views describe the same logical event.
 	clone := *evt
 	clone.Response = cloneResponseForMutation(evt.Response)
 	clone.LongRunningToolIDs = cloneStringSet(evt.LongRunningToolIDs)
@@ -599,7 +875,7 @@ func cloneExtensions(in map[string]json.RawMessage) map[string]json.RawMessage {
 }
 
 func parseDataURL(raw string) ([]byte, string, bool, error) {
-	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), "data:") {
+	if !isDataURL(raw) {
 		return nil, "", false, nil
 	}
 	payload := strings.TrimSpace(raw)[len("data:"):]
