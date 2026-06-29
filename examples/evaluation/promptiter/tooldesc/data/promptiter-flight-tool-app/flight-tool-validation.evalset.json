@@ -1,0 +1,138 @@
+{
+  "evalSetId": "flight-tool-validation",
+  "name": "flight-tool-validation",
+  "evalCases": [
+    {
+      "evalId": "flight_tr789_status",
+      "conversation": [
+        {
+          "invocationId": "flight_tr789_status-1",
+          "userContent": {
+            "role": "user",
+            "content": "Please check whether flight TR789 is still operating tonight."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR789 is currently cancelled, so it is not operating tonight."
+          },
+          "tools": [
+            {
+              "id": "tool_use_flight_tr789",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR789"
+              },
+              "result": {
+                "recordId": "TR789",
+                "state": "cancelled",
+                "minutes": 0,
+                "location": "",
+                "scheduled": "18:00",
+                "updated": ""
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-flight-tool-app",
+        "userId": "traveler"
+      }
+    },
+    {
+      "evalId": "flight_tr321_delay",
+      "conversation": [
+        {
+          "invocationId": "flight_tr321_delay-1",
+          "userContent": {
+            "role": "user",
+            "content": "How delayed is flight TR321 right now?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR321 is delayed by 20 minutes and is estimated to depart at 14:40 from gate C03."
+          },
+          "tools": [
+            {
+              "id": "tool_use_flight_tr321",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR321"
+              },
+              "result": {
+                "recordId": "TR321",
+                "state": "delayed",
+                "minutes": 20,
+                "location": "C03",
+                "scheduled": "14:20",
+                "updated": "14:40"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-flight-tool-app",
+        "userId": "traveler"
+      }
+    },
+    {
+      "evalId": "flight_tr654_gate",
+      "conversation": [
+        {
+          "invocationId": "flight_tr654_gate-1",
+          "userContent": {
+            "role": "user",
+            "content": "Which gate should I go to for TR654?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR654 is boarding at gate D18."
+          },
+          "tools": [
+            {
+              "id": "tool_use_flight_tr654",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR654"
+              },
+              "result": {
+                "recordId": "TR654",
+                "state": "boarding",
+                "minutes": 0,
+                "location": "D18",
+                "scheduled": "16:05",
+                "updated": "16:05"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-flight-tool-app",
+        "userId": "traveler"
+      }
+    },
+    {
+      "evalId": "flight_direct_gate_no_tool",
+      "conversation": [
+        {
+          "invocationId": "flight_direct_gate_no_tool-1",
+          "userContent": {
+            "role": "user",
+            "content": "The dispatch record is already in front of me: flight TR888 is delayed by 10 minutes, now departing at 17:40 from gate F09. Write the traveler update without looking anything up."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Flight TR888 is delayed by 10 minutes and is now estimated to depart at 17:40 from gate F09."
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-flight-tool-app",
+        "userId": "traveler"
+      }
+    }
+  ]
+}

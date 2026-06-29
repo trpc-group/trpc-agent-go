@@ -18,6 +18,12 @@ model:
   mode: "openai"
   name: "gpt-5"
   openai_variant: "auto"
+  # Optional static headers for OpenAI-compatible gateways. OPENAI_HEADERS
+  # can also provide space-, comma-, or newline-separated KEY=VALUE pairs
+  # and supports quoted values such as Authorization="Bearer token".
+  # headers:
+  #   X-Example-User: "alice"
+  #   X-Example-Token: "Bearer token-with-space"
 
 # skills:
 #   extra_dirs:

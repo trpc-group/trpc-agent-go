@@ -209,6 +209,7 @@ type runOptions struct {
 	OpenAIModel           string
 	OpenAIVariant         string
 	OpenAIBaseURL         string
+	OpenAIHeaders         map[string]string
 	GenerationConfig      *model.GenerationConfig
 	ModelConfig           *yaml.Node
 	KnowledgesConfig      []knowledgeEntry
@@ -1153,6 +1154,7 @@ type modelConfig struct {
 	Name             *string               `yaml:"name,omitempty"`
 	BaseURL          *string               `yaml:"base_url,omitempty"`
 	OpenAIVariant    *string               `yaml:"openai_variant,omitempty"`
+	Headers          map[string]string     `yaml:"headers,omitempty"`
 	GenerationConfig *generationConfigYAML `yaml:"generation_config,omitempty"`
 	Config           *rawYAMLNode          `yaml:"config,omitempty"`
 }
@@ -1705,6 +1707,9 @@ func (cfg *fileConfig) apply(
 			opts.OpenAIVariant = strings.TrimSpace(
 				*cfg.Model.OpenAIVariant,
 			)
+		}
+		if len(cfg.Model.Headers) > 0 {
+			opts.OpenAIHeaders = cleanHeaderMap(cfg.Model.Headers)
 		}
 		if cfg.Model.Config != nil {
 			opts.ModelConfig = cfg.Model.Config.Node
