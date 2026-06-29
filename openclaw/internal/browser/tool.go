@@ -51,6 +51,7 @@ const (
 	actionDevice     = "device"
 	actionAct        = "act"
 	actionEvaluate   = "evaluate"
+	actionWait       = "wait"
 )
 
 const (
@@ -117,6 +118,7 @@ var supportedActions = []string{
 	actionDevice,
 	actionAct,
 	actionEvaluate,
+	actionWait,
 }
 
 var supportedPlaywrightMCPActions = []string{
@@ -359,6 +361,10 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		actionKey = strings.ToLower(actionAct)
+	}
+	if actionKey == actionWait {
+		in = normalizeWaitActionInput(in)
 		actionKey = strings.ToLower(actionAct)
 	}
 	if err := validateTargetSelection(in); err != nil {
@@ -1917,12 +1923,20 @@ func normalizeActRequest(in input) actRequest {
 		if strings.TrimSpace(req.URL) == "" {
 			req.URL = browserURL(in.URL, in.TargetURL)
 		}
-		req.Kind = defaultActKind(req.Kind, req.Fn)
+		req.Kind = defaultActKind(req)
 		return req
 	}
 
 	return actRequest{
-		Kind:        defaultActKind(in.Kind, in.Fn),
+		Kind: defaultActKind(actRequest{
+			Kind:      in.Kind,
+			Fn:        in.Fn,
+			URL:       browserURL(in.URL, in.TargetURL),
+			TimeMs:    in.TimeMs,
+			Text:      in.Text,
+			TextGone:  in.TextGone,
+			LoadState: in.LoadState,
+		}),
 		TargetID:    in.TargetID,
 		Ref:         in.Ref,
 		DoubleClick: in.DoubleClick,
@@ -1949,14 +1963,23 @@ func normalizeActRequest(in input) actRequest {
 	}
 }
 
-func defaultActKind(kind string, fn string) string {
-	if strings.TrimSpace(kind) != "" {
-		return kind
+func defaultActKind(req actRequest) string {
+	if strings.TrimSpace(req.Kind) != "" {
+		return req.Kind
 	}
-	if strings.TrimSpace(fn) != "" {
+	if strings.TrimSpace(req.Fn) != "" {
 		return actEvaluate
 	}
-	return kind
+	if browserURL(req.URL, req.TargetURL) != "" {
+		return actionNavigate
+	}
+	if req.TimeMs != nil ||
+		strings.TrimSpace(req.Text) != "" ||
+		strings.TrimSpace(req.TextGone) != "" ||
+		strings.TrimSpace(req.LoadState) != "" {
+		return actWait
+	}
+	return req.Kind
 }
 
 func normalizeEvaluateActionInput(in input) (input, error) {
@@ -1971,6 +1994,17 @@ func normalizeEvaluateActionInput(in input) (input, error) {
 	}
 	in.Kind = actEvaluate
 	return in, nil
+}
+
+func normalizeWaitActionInput(in input) input {
+	if in.Request != nil {
+		req := *in.Request
+		req.Kind = actWait
+		in.Request = &req
+		return in
+	}
+	in.Kind = actWait
+	return in
 }
 
 func (t *Tool) executeAct(

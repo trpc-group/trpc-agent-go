@@ -962,6 +962,33 @@ func TestToolCall_NavigateAcceptsTargetURL(t *testing.T) {
 	require.Equal(t, "https://example.com", drv.calls[0].Args["url"])
 }
 
+func TestToolCall_ActWithURLDefaultsToNavigate(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: textPayload("navigated"),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"url":    "https://example.com",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Contains(t, got.Text, "navigated")
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolNavigate, drv.calls[0].Tool)
+	require.Equal(t, "https://example.com", drv.calls[0].Args["url"])
+}
+
 func TestToolCall_NavigateRequiresURL(t *testing.T) {
 	t.Parallel()
 
@@ -2768,6 +2795,64 @@ func TestToolCall_ActWaitPassesSupportedArgs(t *testing.T) {
 	require.Equal(t, "Ready", drv.calls[0].Args["text"])
 	require.Equal(t, "Busy", drv.calls[0].Args["textGone"])
 	require.Equal(t, 2000, drv.calls[0].Args["timeoutMs"])
+}
+
+func TestToolCall_WaitActionAlias(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolWait: textPayload("waited"),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionWait,
+			"timeMs": 5000,
+			"text":   "Ready",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Contains(t, got.Text, "waited")
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolWait, drv.calls[0].Tool)
+	require.Equal(t, 5.0, drv.calls[0].Args["time"])
+	require.Equal(t, "Ready", drv.calls[0].Args["text"])
+}
+
+func TestToolCall_ActWithWaitFieldsDefaultsToWait(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolWait: textPayload("waited"),
+		},
+	}
+	tool := newBrowserServerTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":    actionAct,
+			"timeMs":    5000,
+			"loadState": "domcontentloaded",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Contains(t, got.Text, "waited")
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolWait, drv.calls[0].Tool)
+	require.Equal(t, 5.0, drv.calls[0].Args["time"])
+	require.Equal(t, "domcontentloaded", drv.calls[0].Args["loadState"])
 }
 
 func TestToolCall_ActWaitAllowsBrowserServerSelectors(t *testing.T) {

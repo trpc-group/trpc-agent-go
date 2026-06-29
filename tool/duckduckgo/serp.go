@@ -276,7 +276,9 @@ func shouldRetrySERPWithHTTP(err error) bool {
 }
 
 func shouldFallbackFromAPIError(err error) bool {
-	return shouldRetrySERPWithHTTP(err) || isRetryableAPIStatus(err)
+	return shouldRetrySERPWithHTTP(err) ||
+		isRetryableAPIStatus(err) ||
+		isRetryableAPIParseError(err)
 }
 
 func isRetryableAPIStatus(err error) bool {
@@ -286,6 +288,16 @@ func isRetryableAPIStatus(err error) bool {
 	return strings.Contains(
 		strings.ToLower(err.Error()),
 		"api returned status 202",
+	)
+}
+
+func isRetryableAPIParseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(
+		strings.ToLower(err.Error()),
+		"failed to parse response",
 	)
 }
 

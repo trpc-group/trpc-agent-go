@@ -318,12 +318,16 @@ func (f *fileToolSet) matchExtraReadRoot(absPath string) (string, bool) {
 	}
 	candidate := filepath.Clean(absPath)
 	evaluatedCandidate := candidate
+	resolvedPath := false
 	if resolved, err := filepath.EvalSymlinks(candidate); err == nil {
 		evaluatedCandidate = filepath.Clean(resolved)
+		resolvedPath = true
 	}
 	for _, root := range f.extraReadRoots {
-		if isPathWithinRoot(candidate, root) ||
-			isPathWithinRoot(evaluatedCandidate, root) {
+		if !isPathWithinRoot(candidate, root) {
+			continue
+		}
+		if !resolvedPath || isPathWithinRoot(evaluatedCandidate, root) {
 			return root, true
 		}
 	}

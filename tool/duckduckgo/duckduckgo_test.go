@@ -484,6 +484,54 @@ func TestDDGTool_APIFallsBackToSERPOnAcceptedStatus(t *testing.T) {
 	require.Contains(t, result.Summary, "fallback from api")
 }
 
+func TestDDGTool_APIFallsBackToSERPOnMalformedJSON(t *testing.T) {
+	t.Parallel()
+
+	apiServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(``))
+		},
+	))
+	defer apiServer.Close()
+
+	serpServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA paper authors", r.URL.Query().Get("q"))
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a"
+     href="/l/?uddg=https%3A%2F%2Fexample.com%2Fpaper">Paper result</a>
+  <a class="result__snippet">Author information snippet.</a>
+</body></html>`))
+		},
+	))
+	defer serpServer.Close()
+
+	ddgTool := &ddgTool{
+		client: client.New(
+			apiServer.URL,
+			defaultUserAgent,
+			apiServer.Client(),
+		),
+		httpClient: serpServer.Client(),
+		baseURL:    serpServer.URL,
+		backend:    backendAPI,
+		userAgent:  defaultUserAgent,
+	}
+
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA paper authors"},
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Contains(t, result.Results[0].Title, "Paper result")
+	require.Equal(t, "https://example.com/paper", result.Results[0].URL)
+	require.Contains(t, result.Summary, "fallback from api")
+}
+
 func TestDDGTool_SERPFallbackFailureAddsContext(t *testing.T) {
 	t.Parallel()
 

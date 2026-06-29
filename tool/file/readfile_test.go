@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -74,6 +75,34 @@ func TestFileTool_ReadFile_AbsolutePathUnderExtraReadRoot(t *testing.T) {
 		&readFileRequest{FileName: filepath.Join(t.TempDir(), "x.txt")},
 	)
 	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "outside configured read-only roots")
+}
+
+func TestFileTool_ReadFile_BlocksSymlinkEscapeFromExtraReadRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink permissions vary on windows")
+	}
+	base := t.TempDir()
+	extra := t.TempDir()
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	assert.NoError(t, os.WriteFile(secret, []byte("secret"), 0o644))
+	link := filepath.Join(extra, "link.txt")
+	assert.NoError(t, os.Symlink(secret, link))
+
+	toolSet, err := NewToolSet(
+		WithBaseDir(base),
+		WithReadOnlyDirs(extra),
+	)
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	rsp, err := fileToolSet.readFile(
+		context.Background(),
+		&readFileRequest{FileName: link},
+	)
+	assert.Error(t, err)
+	assert.Empty(t, rsp.Contents)
 	assert.Contains(t, err.Error(), "outside configured read-only roots")
 }
 
