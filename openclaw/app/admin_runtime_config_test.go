@@ -858,12 +858,14 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 			"  defer_to_dynamic_agent_mode: auto\n"+
 			"  defer_to_dynamic_agent_threshold_chars: 1234\n"+
 			"  dynamic_agent_timeout: 3m\n"+
-			"  defer_direct_tools: [exec_command]\n",
+			"  defer_direct_tools: [exec_command]\n"+
+			"  defer_default_direct_tools: false\n",
 	)
 	opts := adminRuntimeConfigTestOptions(cfgPath)
 	opts.DeferToolSurfaceMode = deferToolSurfaceModeAuto
 	opts.DeferToolSurfaceChars = 1234
 	opts.DeferToolSurfaceDirect = "exec_command"
+	opts.DeferToolSurfaceDefaultDirectTools = false
 	opts.DynamicAgentTimeout = 3 * time.Minute
 
 	provider, ok := buildAdminRuntimeConfigProvider(
@@ -900,6 +902,13 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 		"tools.defer_direct_tools",
 	)
 	require.Equal(t, "exec_command", direct.RuntimeValue)
+	defaultDirect := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.defer_default_direct_tools",
+	)
+	require.Equal(t, "false", defaultDirect.RuntimeValue)
+	require.Equal(t, "false", defaultDirect.ConfiguredValue)
 }
 
 func TestBuildAdminOptions_ExposesAgentBudgetFields(t *testing.T) {

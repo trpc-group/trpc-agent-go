@@ -132,13 +132,14 @@ const (
 	flagDebugRecorderDir  = "debug-recorder-dir"
 	flagDebugRecorderMode = "debug-recorder-mode"
 
-	flagLatencyDiagnostics       = "latency-diagnostics"
-	flagLatencyDiagnosticsEvents = "latency-diagnostics-events"
-	flagDeferToolSurface         = "defer-tools-to-dynamic-agent"
-	flagDeferToolSurfaceMode     = "defer-tools-to-dynamic-agent-mode"
-	flagDeferToolSurfaceChars    = "defer-tools-to-dynamic-agent-threshold-chars"
-	flagDeferToolSurfaceDirect   = "defer-tools-to-dynamic-agent-direct-tools"
-	flagDynamicAgentTimeout      = "dynamic-agent-timeout"
+	flagLatencyDiagnostics                 = "latency-diagnostics"
+	flagLatencyDiagnosticsEvents           = "latency-diagnostics-events"
+	flagDeferToolSurface                   = "defer-tools-to-dynamic-agent"
+	flagDeferToolSurfaceMode               = "defer-tools-to-dynamic-agent-mode"
+	flagDeferToolSurfaceChars              = "defer-tools-to-dynamic-agent-threshold-chars"
+	flagDeferToolSurfaceDefaultDirectTools = "defer-tools-to-dynamic-agent-default-direct-tools"
+	flagDeferToolSurfaceDirect             = "defer-tools-to-dynamic-agent-direct-tools"
+	flagDynamicAgentTimeout                = "dynamic-agent-timeout"
 
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
@@ -282,16 +283,17 @@ type runOptions struct {
 	SessionSummaryMaxWords            int
 	SessionSummaryApproxRunesPerToken float64
 
-	EnableLocalExec        bool
-	CodeExecutor           codeExecutorOptions
-	EnableOpenClawTools    bool
-	OpenClawToolingGuide   *string
-	EnableParallelTools    bool
-	DeferToolSurface       bool
-	DeferToolSurfaceMode   string
-	DeferToolSurfaceChars  int
-	DeferToolSurfaceDirect string
-	DynamicAgentTimeout    time.Duration
+	EnableLocalExec                    bool
+	CodeExecutor                       codeExecutorOptions
+	EnableOpenClawTools                bool
+	OpenClawToolingGuide               *string
+	EnableParallelTools                bool
+	DeferToolSurface                   bool
+	DeferToolSurfaceMode               string
+	DeferToolSurfaceChars              int
+	DeferToolSurfaceDefaultDirectTools bool
+	DeferToolSurfaceDirect             string
+	DynamicAgentTimeout                time.Duration
 
 	enableOpenClawToolsExplicit  bool
 	deferToolSurfaceModeExplicit bool
@@ -336,7 +338,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 		MemoryAutoPolicy: summaryPolicyAny,
 
-		DeferToolSurfaceMode: deferToolSurfaceModeAuto,
+		DeferToolSurfaceMode:               deferToolSurfaceModeAuto,
+		DeferToolSurfaceDefaultDirectTools: true,
 	}
 
 	fs.StringVar(
@@ -933,6 +936,13 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Auto-defer when direct tool declarations exceed this "+
 			"many characters (0 uses default)",
 	)
+	fs.BoolVar(
+		&opts.DeferToolSurfaceDefaultDirectTools,
+		flagDeferToolSurfaceDefaultDirectTools,
+		true,
+		"Keep default direct tools on the parent agent when "+
+			"deferred tool surface mode is active",
+	)
 	fs.StringVar(
 		&opts.DeferToolSurfaceDirect,
 		flagDeferToolSurfaceDirect,
@@ -1265,6 +1275,8 @@ type toolsConfig struct {
 	DeferToDynamicAgentModeCamel  *string             `yaml:"deferToDynamicAgentMode,omitempty"`
 	DeferToDynamicAgentChars      *int                `yaml:"defer_to_dynamic_agent_threshold_chars,omitempty"`
 	DeferToDynamicAgentCharsCamel *int                `yaml:"deferToDynamicAgentThresholdChars,omitempty"`
+	DeferDefaultDirectTools       *bool               `yaml:"defer_default_direct_tools,omitempty"`
+	DeferDefaultDirectToolsCamel  *bool               `yaml:"deferDefaultDirectTools,omitempty"`
 	DeferDirectTools              yamlStringList      `yaml:"defer_direct_tools,omitempty"`
 	DeferDirectToolsCamel         yamlStringList      `yaml:"deferDirectTools,omitempty"`
 	DynamicAgentTimeout           *string             `yaml:"dynamic_agent_timeout,omitempty"`
@@ -2008,6 +2020,14 @@ func (cfg *fileConfig) apply(
 		if deferChars != nil &&
 			!flagWasSet(set, flagDeferToolSurfaceChars) {
 			opts.DeferToolSurfaceChars = *deferChars
+		}
+		deferDefaults := firstBoolPtr(
+			cfg.Tools.DeferDefaultDirectTools,
+			cfg.Tools.DeferDefaultDirectToolsCamel,
+		)
+		if deferDefaults != nil &&
+			!flagWasSet(set, flagDeferToolSurfaceDefaultDirectTools) {
+			opts.DeferToolSurfaceDefaultDirectTools = *deferDefaults
 		}
 		if !flagWasSet(set, flagDeferToolSurfaceDirect) {
 			if len(cfg.Tools.DeferDirectTools) > 0 {
@@ -2815,6 +2835,10 @@ func firstBoolPtr(primary, fallback *bool) *bool {
 		return primary
 	}
 	return fallback
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func firstIntPtr(primary, fallback *int) *int {

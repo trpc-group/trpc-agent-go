@@ -1296,6 +1296,35 @@ tools:
 	require.Equal(t, "exec_command,message", opts.DeferToolSurfaceDirect)
 }
 
+func TestParseRunOptions_DeferDefaultDirectToolsConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_default_direct_tools: false
+`)
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.False(t, opts.DeferToolSurfaceDefaultDirectTools)
+}
+
+func TestParseRunOptions_DeferDefaultDirectToolsFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_default_direct_tools: false
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-defer-tools-to-dynamic-agent-default-direct-tools=true",
+	})
+	require.NoError(t, err)
+	require.True(t, opts.DeferToolSurfaceDefaultDirectTools)
+}
+
 func TestParseRunOptions_DeferToolSurfaceInvalidModeFails(
 	t *testing.T,
 ) {

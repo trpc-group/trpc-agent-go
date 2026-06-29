@@ -873,6 +873,7 @@ YAML:
 tools:
   defer_to_dynamic_agent_mode: auto # off|on|auto
   defer_to_dynamic_agent_threshold_chars: 4000 # optional
+  defer_default_direct_tools: true # optional
   defer_direct_tools: ["exec_command"] # optional keep-list
 ```
 

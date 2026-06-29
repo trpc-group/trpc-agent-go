@@ -667,6 +667,25 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 						)
 					},
 				),
+				adminRuntimeBoolField(
+					"tools.defer_default_direct_tools",
+					"Deferred Default Direct Tools",
+					"Keep default direct tools on the parent agent "+
+						"when deferred mode is active.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"defer_default_direct_tools",
+							"deferDefaultDirectTools",
+						),
+					},
+					func(opts runOptions) string {
+						return strconv.FormatBool(
+							opts.
+								DeferToolSurfaceDefaultDirectTools,
+						)
+					},
+				),
 			},
 		},
 		{

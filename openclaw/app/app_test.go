@@ -3024,6 +3024,52 @@ func TestNewAgent_DeferToolSurfaceKeepsDefaultAndConfiguredDirectTools(
 	require.NotNil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
 }
 
+func TestNewAgent_DeferToolSurfaceCanOmitDefaultDirectTools(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:                            "demo",
+		StateDir:                           t.TempDir(),
+		DeferToolSurface:                   true,
+		DeferToolSurfaceDefaultDirectTools: boolPtr(false),
+		DeferToolSurfaceDirectTools:        []string{"message"},
+	}, []tool.Tool{
+		stubTool{name: "exec_command"},
+		stubTool{name: "write_stdin"},
+		stubTool{name: "kill_session"},
+		stubTool{name: "message"},
+	}, nil)
+	require.NoError(t, err)
+
+	parentTools := agt.Tools()
+	require.Nil(t, findToolDeclaration(parentTools, "exec_command"))
+	require.Nil(t, findToolDeclaration(parentTools, "write_stdin"))
+	require.Nil(t, findToolDeclaration(parentTools, "kill_session"))
+	require.NotNil(t, findToolDeclaration(parentTools, "message"))
+	require.NotNil(
+		t,
+		findToolDeclaration(parentTools, agenttool.DefaultDynamicToolName),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(
+			parentTools,
+			agenttool.DefaultCapabilitySearchToolName,
+		),
+	)
+
+	req := runAgentAndCapture(t, agt, mdl, &session.Session{})
+	require.Nil(t, req.Tools["exec_command"])
+	require.Nil(t, req.Tools["write_stdin"])
+	require.Nil(t, req.Tools["kill_session"])
+	require.NotNil(t, req.Tools["message"])
+	require.NotNil(t, req.Tools[agenttool.DefaultDynamicToolName])
+	require.NotNil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
+}
+
 func TestNewDeferredToolSurfaceToolOptionalBranches(t *testing.T) {
 	t.Parallel()
 

@@ -1134,6 +1134,9 @@ func NewRuntimeWithOptions(
 			DeferToolSurfaceMode: opts.DeferToolSurfaceMode,
 			DeferToolSurfaceThresholdChars: opts.
 				DeferToolSurfaceChars,
+			DeferToolSurfaceDefaultDirectTools: boolPtr(
+				opts.DeferToolSurfaceDefaultDirectTools,
+			),
 			DeferToolSurfaceDirectTools: splitCSV(
 				opts.DeferToolSurfaceDirect,
 			),
@@ -1719,6 +1722,9 @@ func run(
 			DeferToolSurfaceMode: opts.DeferToolSurfaceMode,
 			DeferToolSurfaceThresholdChars: opts.
 				DeferToolSurfaceChars,
+			DeferToolSurfaceDefaultDirectTools: boolPtr(
+				opts.DeferToolSurfaceDefaultDirectTools,
+			),
 			DeferToolSurfaceDirectTools: splitCSV(
 				opts.DeferToolSurfaceDirect,
 			),
@@ -3136,12 +3142,13 @@ type agentConfig struct {
 
 	ToolSets []pluginSpec
 
-	RefreshToolSetsOnRun           bool
-	DeferToolSurface               bool
-	DeferToolSurfaceMode           string
-	DeferToolSurfaceThresholdChars int
-	DeferToolSurfaceDirectTools    []string
-	DynamicAgentTimeout            time.Duration
+	RefreshToolSetsOnRun               bool
+	DeferToolSurface                   bool
+	DeferToolSurfaceMode               string
+	DeferToolSurfaceThresholdChars     int
+	DeferToolSurfaceDefaultDirectTools *bool
+	DeferToolSurfaceDirectTools        []string
+	DynamicAgentTimeout                time.Duration
 }
 
 func resolvePostToolPromptEnabled(
