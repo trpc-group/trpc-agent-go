@@ -121,6 +121,155 @@ func TestAppendEventExternalizesAndGetSessionHydrates(t *testing.T) {
 	}
 }
 
+func TestAppendEventExternalizesAndHydratesAudioAndFile(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessionmem.NewSessionService()
+	artifacts := artifactmem.NewService()
+	svc := Wrap(inner, artifacts, Config{Enabled: true})
+	sess, err := svc.CreateSession(ctx, key, nil)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	audioData := []byte("audio-bytes")
+	fileData := []byte("file-bytes")
+	msg := model.NewUserMessage("multimodal")
+	msg.AddAudioData(audioData, "mp3")
+	msg.AddFileData("report.pdf", fileData, "application/pdf")
+	evt := responseEvent(msg)
+	if err := svc.AppendEvent(ctx, sess, evt); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	persisted, err := inner.GetSession(ctx, key)
+	if err != nil {
+		t.Fatalf("inner.GetSession() error = %v", err)
+	}
+	audioPart := persisted.Events[0].Response.Choices[0].Message.ContentParts[0]
+	if len(audioPart.Audio.Data) != 0 {
+		t.Fatalf("persisted audio data length = %d, want 0", len(audioPart.Audio.Data))
+	}
+	if audioPart.ContentRef == nil || audioPart.ContentRef.MimeType != "audio/mp3" {
+		t.Fatalf("audio ContentRef = %#v, want audio/mp3", audioPart.ContentRef)
+	}
+	filePart := persisted.Events[0].Response.Choices[0].Message.ContentParts[1]
+	if len(filePart.File.Data) != 0 {
+		t.Fatalf("persisted file data length = %d, want 0", len(filePart.File.Data))
+	}
+	if filePart.ContentRef == nil || filePart.ContentRef.OriginalName != "report.pdf" {
+		t.Fatalf("file ContentRef = %#v, want original name report.pdf", filePart.ContentRef)
+	}
+	if filePart.ContentRef.MimeType != "application/pdf" {
+		t.Fatalf("file ContentRef MIME = %q, want application/pdf", filePart.ContentRef.MimeType)
+	}
+
+	hydrated, err := svc.GetSession(ctx, key)
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	hydratedParts := hydrated.Events[0].Response.Choices[0].Message.ContentParts
+	if string(hydratedParts[0].Audio.Data) != string(audioData) {
+		t.Fatalf("hydrated audio data = %q, want %q", hydratedParts[0].Audio.Data, audioData)
+	}
+	if hydratedParts[0].Audio.Format != "mp3" {
+		t.Fatalf("hydrated audio format = %q, want mp3", hydratedParts[0].Audio.Format)
+	}
+	if string(hydratedParts[1].File.Data) != string(fileData) {
+		t.Fatalf("hydrated file data = %q, want %q", hydratedParts[1].File.Data, fileData)
+	}
+	if hydratedParts[1].File.Name != "report.pdf" {
+		t.Fatalf("hydrated file name = %q, want report.pdf", hydratedParts[1].File.Name)
+	}
+}
+
+func TestAppendEventExternalizesDataURLs(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessionmem.NewSessionService()
+	artifacts := artifactmem.NewService()
+	svc := Wrap(inner, artifacts, Config{Enabled: true})
+	sess, err := svc.CreateSession(ctx, key, nil)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	msg := model.NewUserMessage("data URLs")
+	msg.AddImageURL("data:image/png;base64,aW1hZ2UtZGF0YQ==", "high")
+	msg.AddFileURL("note.txt", "data:text/plain,note%20data", "")
+	if err := svc.AppendEvent(ctx, sess, responseEvent(msg)); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	persisted, err := inner.GetSession(ctx, key)
+	if err != nil {
+		t.Fatalf("inner.GetSession() error = %v", err)
+	}
+	parts := persisted.Events[0].Response.Choices[0].Message.ContentParts
+	if parts[0].Image.URL != "" {
+		t.Fatalf("persisted image URL = %q, want empty", parts[0].Image.URL)
+	}
+	if parts[0].ContentRef == nil || !parts[0].ContentRef.FromDataURL {
+		t.Fatalf("image ContentRef = %#v, want FromDataURL", parts[0].ContentRef)
+	}
+	if parts[1].File.URL != "" {
+		t.Fatalf("persisted file URL = %q, want empty", parts[1].File.URL)
+	}
+	if parts[1].ContentRef == nil || !parts[1].ContentRef.FromDataURL {
+		t.Fatalf("file ContentRef = %#v, want FromDataURL", parts[1].ContentRef)
+	}
+
+	hydrated, err := svc.GetSession(ctx, key)
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	hydratedParts := hydrated.Events[0].Response.Choices[0].Message.ContentParts
+	if string(hydratedParts[0].Image.Data) != "image-data" {
+		t.Fatalf("hydrated image data = %q, want image-data", hydratedParts[0].Image.Data)
+	}
+	if string(hydratedParts[1].File.Data) != "note data" {
+		t.Fatalf("hydrated file data = %q, want note data", hydratedParts[1].File.Data)
+	}
+}
+
+func TestGetSessionHydratesMixedHistoricalSession(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessionmem.NewSessionService()
+	artifacts := artifactmem.NewService()
+	svc := Wrap(inner, artifacts, Config{Enabled: true})
+	sess, err := svc.CreateSession(ctx, key, nil)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+	if err := svc.AppendEvent(ctx, sess, imageEvent([]byte("image-bytes"))); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+	inline := imageEvent([]byte("inline-image"))
+	if err := inner.AppendEvent(ctx, sess.Clone(), inline); err != nil {
+		t.Fatalf("inner.AppendEvent() error = %v", err)
+	}
+
+	hydrated, err := svc.GetSession(ctx, key)
+	if err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if len(hydrated.Events) != 2 {
+		t.Fatalf("hydrated events = %d, want 2", len(hydrated.Events))
+	}
+	first := hydrated.Events[0].Response.Choices[0].Message.ContentParts[0]
+	if string(first.Image.Data) != "image-bytes" {
+		t.Fatalf("first event image data = %q, want image-bytes", first.Image.Data)
+	}
+	second := hydrated.Events[1].Response.Choices[0].Message.ContentParts[0]
+	if string(second.Image.Data) != "inline-image" {
+		t.Fatalf("second event image data = %q, want inline-image", second.Image.Data)
+	}
+	if second.ContentRef != nil {
+		t.Fatalf("second event ContentRef = %#v, want nil", second.ContentRef)
+	}
+}
+
 func TestListSessionsHydratesFullSessionResults(t *testing.T) {
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
@@ -180,12 +329,33 @@ func TestAppendEventFailsClosedWithoutArtifactService(t *testing.T) {
 	if err == nil {
 		t.Fatal("AppendEvent() error = nil, want error")
 	}
+	if !errors.Is(err, ErrArtifactServiceNil) {
+		t.Fatalf("AppendEvent() error = %v, want ErrArtifactServiceNil", err)
+	}
 	persisted, getErr := inner.GetSession(ctx, key)
 	if getErr != nil {
 		t.Fatalf("inner.GetSession() error = %v", getErr)
 	}
 	if len(persisted.Events) != 0 {
 		t.Fatalf("persisted events = %d, want 0", len(persisted.Events))
+	}
+}
+
+func TestHydrateFailsClosedWithoutArtifactService(t *testing.T) {
+	ctx := context.Background()
+	sess := &session.Session{
+		Events: []event.Event{
+			*imageEvent(nil),
+		},
+	}
+	sess.Events[0].Response.Choices[0].Message.ContentParts[0].ContentRef = &model.ContentRef{
+		ArtifactName:    "sessionpart_ref.png",
+		ArtifactVersion: 0,
+	}
+
+	_, err := hydrateSession(ctx, sess, artifact.SessionInfo{}, nil)
+	if !errors.Is(err, ErrArtifactServiceNil) {
+		t.Fatalf("hydrateSession() error = %v, want ErrArtifactServiceNil", err)
 	}
 }
 
@@ -307,6 +477,21 @@ func TestWrapPreservesOptionalInterfaces(t *testing.T) {
 	}
 }
 
+func TestArtifactNameVersionInvalidRefIsSentinel(t *testing.T) {
+	tests := []*model.ContentRef{
+		nil,
+		{ArtifactRef: "bad-ref"},
+		{ArtifactRef: "artifact://name"},
+		{ArtifactRef: "artifact://name@bad"},
+	}
+	for _, ref := range tests {
+		_, _, err := artifactNameVersion(ref)
+		if !errors.Is(err, ErrInvalidArtifactRef) {
+			t.Fatalf("artifactNameVersion(%#v) error = %v, want ErrInvalidArtifactRef", ref, err)
+		}
+	}
+}
+
 type appendFailService struct {
 	session.Service
 	err error
@@ -335,6 +520,10 @@ func (s *searchOnlyService) SearchEvents(
 func imageEvent(data []byte) *event.Event {
 	msg := model.NewUserMessage("image")
 	msg.AddImageData(data, "high", "png")
+	return responseEvent(msg)
+}
+
+func responseEvent(msg model.Message) *event.Event {
 	return event.NewResponseEvent("invocation", "user", &model.Response{
 		Choices: []model.Choice{
 			{

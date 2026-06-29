@@ -4,16 +4,40 @@ go 1.24.4
 
 require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260305114736-115a967b66a9
+	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/r3labs/sse/v2 v2.10.0
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-agent-go v0.0.0-20260108131845-87b14951638b
+	trpc.group/trpc-go/trpc-agent-go v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/server/agui v0.0.0-20260108131845-87b14951638b
+	trpc.group/trpc-go/trpc-agent-go/session/mongodb v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0
+)
+
+require (
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+	github.com/golang/snappy v0.0.4 // indirect
+	github.com/klauspost/compress v1.16.7 // indirect
+	github.com/montanaflynn/stats v0.7.1 // indirect
+	github.com/redis/go-redis/v9 v9.11.0 // indirect
+	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
+	github.com/xdg-go/scram v1.1.2 // indirect
+	github.com/xdg-go/stringprep v1.0.4 // indirect
+	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
+	go.mongodb.org/mongo-driver v1.17.7 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric v0.42.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v0.42.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v0.42.0 // indirect
+	go.opentelemetry.io/otel/sdk/metric v1.40.0 // indirect
+	golang.org/x/crypto v0.46.0 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/mongodb v1.10.0 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.0.3 // indirect
 )
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
-	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -52,3 +76,11 @@ replace trpc.group/trpc-go/trpc-agent-go => ../
 replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/Flash-LHR/ag-ui/sdks/community/go v0.0.0-20260226100332-50dd0f7a7764
 
 replace trpc.group/trpc-go/trpc-agent-go/server/agui => ../server/agui
+
+replace trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis
+
+replace trpc.group/trpc-go/trpc-agent-go/session/mongodb => ../session/mongodb
+
+replace trpc.group/trpc-go/trpc-agent-go/storage/redis => ../storage/redis
+
+replace trpc.group/trpc-go/trpc-agent-go/storage/mongodb => ../storage/mongodb

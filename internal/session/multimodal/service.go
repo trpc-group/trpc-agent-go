@@ -37,6 +37,15 @@ const (
 	defaultMime    = "application/octet-stream"
 )
 
+var (
+	// ErrArtifactServiceNil indicates multimodal governance needed an artifact
+	// service but none was configured.
+	ErrArtifactServiceNil = errors.New("session multimodal: artifact service is nil")
+	// ErrInvalidArtifactRef indicates an internal content reference cannot be
+	// resolved into a pinned artifact name and version.
+	ErrInvalidArtifactRef = errors.New("session multimodal hydrate: invalid artifact ref")
+)
+
 // Config controls internal session multimodal governance.
 type Config struct {
 	Enabled bool
@@ -223,6 +232,8 @@ func (s *Service) CreateSession(
 	if err != nil || sess == nil {
 		return sess, err
 	}
+	// Keep the wrapper's runtime session view decoupled from the backend-owned
+	// session value; AppendEvent maintains distinct runtime and persisted views.
 	return sess.Clone(), nil
 }
 
@@ -239,11 +250,7 @@ func (s *Service) AppendEvent(
 	if sess == nil {
 		return session.ErrNilSession
 	}
-	info := artifact.SessionInfo{
-		AppName:   sess.AppName,
-		UserID:    sess.UserID,
-		SessionID: sess.ID,
-	}
+	info := sessionInfoFromSession(sess)
 	persisted, saved, changed, err := externalizeEvent(
 		ctx,
 		evt,
@@ -281,11 +288,7 @@ func (s *Service) GetSession(
 	if err != nil || sess == nil || !s.cfg.Enabled {
 		return sess, err
 	}
-	info := artifact.SessionInfo{
-		AppName:   key.AppName,
-		UserID:    key.UserID,
-		SessionID: key.SessionID,
-	}
+	info := sessionInfoFromKey(key)
 	return hydrateSession(ctx, sess, info, s.artifactService)
 }
 
@@ -304,11 +307,7 @@ func (s *Service) ListSessions(
 		if sess == nil {
 			continue
 		}
-		info := artifact.SessionInfo{
-			AppName:   sess.AppName,
-			UserID:    sess.UserID,
-			SessionID: sess.ID,
-		}
+		info := sessionInfoFromSession(sess)
 		hydrated, err := hydrateSession(ctx, sess, info, s.artifactService)
 		if err != nil {
 			return nil, err
@@ -328,11 +327,7 @@ func (s *Service) searchEvents(
 		return results, err
 	}
 	for i := range results {
-		info := artifact.SessionInfo{
-			AppName:   results[i].SessionKey.AppName,
-			UserID:    results[i].SessionKey.UserID,
-			SessionID: results[i].SessionKey.SessionID,
-		}
+		info := sessionInfoFromKey(results[i].SessionKey)
 		evt, changed, err := hydrateEvent(ctx, &results[i].Event, info, s.artifactService)
 		if err != nil {
 			return nil, err
@@ -353,12 +348,8 @@ func (s *Service) getEventWindow(
 	if err != nil || result == nil || !s.cfg.Enabled {
 		return result, err
 	}
+	info := sessionInfoFromKey(result.SessionKey)
 	for i := range result.Entries {
-		info := artifact.SessionInfo{
-			AppName:   result.SessionKey.AppName,
-			UserID:    result.SessionKey.UserID,
-			SessionID: result.SessionKey.SessionID,
-		}
 		evt, changed, err := hydrateEvent(ctx, &result.Entries[i].Event, info, s.artifactService)
 		if err != nil {
 			return nil, err
@@ -368,10 +359,6 @@ func (s *Service) getEventWindow(
 		}
 	}
 	return result, nil
-}
-
-type savedArtifact struct {
-	name string
 }
 
 type externalizeTarget struct {
@@ -392,7 +379,7 @@ func externalizeEvent(
 	evt *event.Event,
 	info artifact.SessionInfo,
 	svc artifact.Service,
-) (*event.Event, []savedArtifact, bool, error) {
+) (*event.Event, []string, bool, error) {
 	if evt == nil || evt.Response == nil {
 		return evt, nil, false, nil
 	}
@@ -401,7 +388,7 @@ func externalizeEvent(
 	}
 	var (
 		cloned  *event.Event
-		saved   []savedArtifact
+		saved   []string
 		changed bool
 	)
 	for choiceIndex := range evt.Response.Choices {
@@ -439,15 +426,13 @@ func externalizeChoiceMessage(
 	target func(*model.Choice) *model.Message,
 	info artifact.SessionInfo,
 	svc artifact.Service,
-) ([]savedArtifact, bool, error) {
+) ([]string, bool, error) {
 	msg := target(&evt.Response.Choices[choiceIndex])
 	if !hasExternalizableContent(*msg) {
 		return nil, false, nil
 	}
 	if svc == nil {
-		return nil, false, errors.New(
-			"session multimodal externalization: artifact service is nil",
-		)
+		return nil, false, fmt.Errorf("session multimodal externalization: %w", ErrArtifactServiceNil)
 	}
 	if *cloned == nil {
 		*cloned = cloneEventForMutation(evt)
@@ -473,8 +458,8 @@ func externalizeMessage(
 	eventKey string,
 	requestID string,
 	messageIndex int,
-) ([]savedArtifact, error) {
-	saved := make([]savedArtifact, 0)
+) ([]string, error) {
+	saved := make([]string, 0)
 	for partIndex := range msg.ContentParts {
 		target, ok, err := externalizeTargetForPart(&msg.ContentParts[partIndex])
 		if err != nil {
@@ -492,7 +477,7 @@ func externalizeMessage(
 		if err != nil {
 			return saved, fmt.Errorf("session multimodal externalization: save artifact %s: %w", filename, err)
 		}
-		saved = append(saved, savedArtifact{name: filename})
+		saved = append(saved, filename)
 		ref := &model.ContentRef{
 			ArtifactRef:     fmt.Sprintf("%s%s@%d", artifactScheme, filename, version),
 			ArtifactName:    filename,
@@ -616,7 +601,7 @@ func hydrateSession(
 		return sess, nil
 	}
 	if svc == nil {
-		return nil, errors.New("session multimodal hydrate: artifact service is nil")
+		return nil, fmt.Errorf("session multimodal hydrate: %w", ErrArtifactServiceNil)
 	}
 	hydrated := sess.Clone()
 	for i := range hydrated.Events {
@@ -734,6 +719,10 @@ func shouldPersistEvent(evt *event.Event) bool {
 }
 
 func appendObserved(sess *session.Session, eventID string, beforeEvents int) bool {
+	// This detects hooks that return nil without calling next. It relies on the
+	// session backend contract that a successful append updates the passed
+	// session's Events slice; new backends must preserve that contract or update
+	// this wrapper's persisted-vs-runtime session handoff.
 	if sess == nil {
 		return false
 	}
@@ -758,6 +747,25 @@ func listSessionOnlyMeta(options []session.Option) bool {
 		}
 	}
 	return opt.ListSessionOnlyMeta
+}
+
+func sessionInfoFromSession(sess *session.Session) artifact.SessionInfo {
+	if sess == nil {
+		return artifact.SessionInfo{}
+	}
+	return artifact.SessionInfo{
+		AppName:   sess.AppName,
+		UserID:    sess.UserID,
+		SessionID: sess.ID,
+	}
+}
+
+func sessionInfoFromKey(key session.Key) artifact.SessionInfo {
+	return artifact.SessionInfo{
+		AppName:   key.AppName,
+		UserID:    key.UserID,
+		SessionID: key.SessionID,
+	}
 }
 
 func isDataURL(raw string) bool {
@@ -940,23 +948,23 @@ func artifactExt(mimeType, originalName string) string {
 
 func artifactNameVersion(ref *model.ContentRef) (string, int, error) {
 	if ref == nil {
-		return "", 0, errors.New("session multimodal hydrate: content ref is nil")
+		return "", 0, fmt.Errorf("%w: content ref is nil", ErrInvalidArtifactRef)
 	}
 	if ref.ArtifactName != "" {
 		return ref.ArtifactName, ref.ArtifactVersion, nil
 	}
 	raw := strings.TrimSpace(ref.ArtifactRef)
 	if !strings.HasPrefix(raw, artifactScheme) {
-		return "", 0, fmt.Errorf("session multimodal hydrate: invalid artifact ref: %s", raw)
+		return "", 0, fmt.Errorf("%w: %s", ErrInvalidArtifactRef, raw)
 	}
 	rest := strings.TrimPrefix(raw, artifactScheme)
 	idx := strings.LastIndex(rest, "@")
 	if idx <= 0 || idx == len(rest)-1 {
-		return "", 0, fmt.Errorf("session multimodal hydrate: artifact ref must pin version: %s", raw)
+		return "", 0, fmt.Errorf("%w: artifact ref must pin version: %s", ErrInvalidArtifactRef, raw)
 	}
 	version, err := strconv.Atoi(rest[idx+1:])
 	if err != nil {
-		return "", 0, fmt.Errorf("session multimodal hydrate: invalid artifact version: %s", raw)
+		return "", 0, fmt.Errorf("%w: invalid artifact version: %s", ErrInvalidArtifactRef, raw)
 	}
 	return rest[:idx], version, nil
 }
@@ -965,21 +973,21 @@ func bestEffortDelete(
 	ctx context.Context,
 	svc artifact.Service,
 	info artifact.SessionInfo,
-	saved []savedArtifact,
+	saved []string,
 ) {
 	if svc == nil {
 		return
 	}
 	seen := make(map[string]struct{}, len(saved))
-	for _, item := range saved {
-		if item.name == "" {
+	for _, name := range saved {
+		if name == "" {
 			continue
 		}
-		if _, ok := seen[item.name]; ok {
+		if _, ok := seen[name]; ok {
 			continue
 		}
-		seen[item.name] = struct{}{}
-		_ = svc.DeleteArtifact(ctx, info, item.name)
+		seen[name] = struct{}{}
+		_ = svc.DeleteArtifact(ctx, info, name)
 	}
 }
 
