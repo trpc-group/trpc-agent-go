@@ -701,6 +701,8 @@ func TestIsDefaultTemplate(t *testing.T) {
 	require.NotContains(t, DefaultTemplate(), "recurring workflow rules")
 	require.Contains(t, DefaultTemplate(), "skill or evolution review")
 	require.False(t, IsDefaultTemplate("# Memory\n\n- custom fact"))
+	require.True(t, IsDefaultTemplate(previousDefaultTemplate()))
+	require.True(t, IsDefaultTemplate("\n"+previousDefaultTemplate()+"\n"))
 
 	// Legacy template text should also be recognised as default.
 	legacyTemplate := strings.Join([]string{
@@ -811,6 +813,28 @@ func TestEnsureMemoryRefreshesExistingTemplate(t *testing.T) {
 	require.Contains(t, got, "- User prefers concise replies.")
 	require.Contains(t, got, "## Saved user preferences")
 	require.NotContains(t, got, "workflow rule, update this file")
+}
+
+func TestReadFileRefreshesExistingTemplate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := NewStore(root)
+	require.NoError(t, err)
+
+	path, err := store.MemoryPath("app", "user")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(previousDefaultTemplate()), 0o600))
+
+	got, err := store.ReadFile(path, 0)
+	require.NoError(t, err)
+	require.True(t, IsDefaultTemplate(got))
+	require.Equal(t, strings.TrimSpace(DefaultTemplate()), got)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, strings.TrimSpace(DefaultTemplate()), strings.TrimSpace(string(raw)))
 }
 
 func TestContextErr_NilContextReturnsNil(t *testing.T) {

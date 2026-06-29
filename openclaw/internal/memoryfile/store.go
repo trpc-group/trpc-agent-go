@@ -204,9 +204,19 @@ func (s *Store) ReadFile(path string, maxBytes int) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
+	}
+	if next, changed := refreshTemplateText(string(raw)); changed {
+		raw = []byte(next)
+		if err := writeFileAtomic(path, raw); err != nil {
+			return "", err
+		}
 	}
 	if maxBytes > 0 && len(raw) > maxBytes {
 		raw = raw[:maxBytes]

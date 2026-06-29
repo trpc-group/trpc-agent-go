@@ -12,7 +12,10 @@ package memoryfile
 import "strings"
 
 var (
-	defaultTemplateTrimmed       = strings.TrimSpace(DefaultTemplate())
+	defaultTemplateTrimmed         = strings.TrimSpace(DefaultTemplate())
+	previousDefaultTemplateTrimmed = strings.TrimSpace(
+		previousDefaultTemplate(),
+	)
 	legacyDefaultTemplateTrimmed = strings.TrimSpace(
 		legacyDefaultTemplate(),
 	)
@@ -61,6 +64,52 @@ func DefaultTemplate() string {
 			"belong to skill or evolution review. Store that content " +
 			"here only when the user explicitly asks to save it as " +
 			"memory.",
+		"",
+	}, "\n")
+}
+
+// previousDefaultTemplate returns the default template used immediately before
+// workflow-like guidance was moved out of memory by default.
+func previousDefaultTemplate() string {
+	return strings.Join([]string{
+		"# Memory",
+		"",
+		"This is a visible file for durable memory in the current scope.",
+		"It is user-visible, not hidden internal state.",
+		"If the user asks what is remembered here or asks to " +
+			"inspect this file, the agent may quote or summarize " +
+			"the relevant parts.",
+		"If the user explicitly says \"remember this\" or asks " +
+			"the agent to remember a durable preference, fact, " +
+			"or workflow rule, update this file with a short " +
+			"bullet.",
+		"",
+		"This file stores stable, low-volume memory about the user.",
+		"",
+		"The agent may update this file only when all conditions hold:",
+		"- The information is likely to matter in future sessions.",
+		"- The information is stable, not task-local noise.",
+		"- The information can be written as a short bullet.",
+		"- The information does not contain secrets.",
+		"",
+		"Do not store:",
+		"- Secrets, credentials, or private tokens.",
+		"- Large conversation summaries.",
+		"- One-off debugging details.",
+		"",
+		"## Long-term facts",
+		"",
+		"Use for stable facts such as the user's name or role.",
+		"",
+		"## Preferences",
+		"",
+		"Use for durable tone, nickname, format, or persona " +
+			"preferences.",
+		"",
+		"## Repeated working style",
+		"",
+		"Use for recurring workflow rules such as git, PR, or " +
+			"review habits.",
 		"",
 	}, "\n")
 }
@@ -116,6 +165,7 @@ func legacyDefaultTemplate() string {
 func IsDefaultTemplate(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	return trimmed == defaultTemplateTrimmed ||
+		trimmed == previousDefaultTemplateTrimmed ||
 		trimmed == legacyDefaultTemplateTrimmed
 }
 

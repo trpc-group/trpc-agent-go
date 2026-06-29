@@ -368,9 +368,10 @@ const (
 		"remember a durable fact, preference, task list, " +
 		"checklist, or reminder list, update the narrowest relevant " +
 		"memory file with a short bullet in the same turn. Do not " +
+		"store secrets or large transcripts in memory files. Do not " +
 		"store reusable task workflows, output formats, tool " +
-		"procedures, post-task feedback, secrets, or large " +
-		"transcripts in memory files unless the user explicitly " +
+		"procedures, or post-task feedback in memory files unless " +
+		"the user explicitly " +
 		"asks to save that content as memory. " +
 		"If a memory file does not exist yet, you may create it " +
 		"at that exact path. Prefer already installed local tools " +
