@@ -101,8 +101,8 @@ func (m *manager) Get(ctx context.Context, runID string) (*engine.RunResult, err
 // Cancel cancels one running PromptIter run.
 func (m *manager) Cancel(ctx context.Context, runID string) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	cancel, ok := m.cancelFuncs[runID]
-	m.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("run %q is not running: %w", runID, os.ErrNotExist)
 	}
@@ -142,16 +142,32 @@ func (m *manager) Close() error {
 }
 
 func (m *manager) run(ctx context.Context, runID string, request *engine.RunRequest) {
+	m.mu.Lock()
 	run, err := m.store.Get(context.Background(), m.appName, runID)
 	if err != nil {
-		m.clearCancel(runID)
+		delete(m.cancelFuncs, runID)
+		m.mu.Unlock()
+		return
+	}
+	if ctx.Err() != nil {
+		if run.Status == engine.RunStatusQueued || run.Status == engine.RunStatusRunning {
+			run.Status = engine.RunStatusCanceled
+			if run.ErrorMessage == "" {
+				run.ErrorMessage = "run canceled"
+			}
+			_ = m.store.Update(context.Background(), m.appName, m.slimStoredRun(run))
+		}
+		delete(m.cancelFuncs, runID)
+		m.mu.Unlock()
 		return
 	}
 	run.Status = engine.RunStatusRunning
 	if err := m.store.Update(context.Background(), m.appName, m.slimStoredRun(run)); err != nil {
-		m.clearCancel(runID)
+		delete(m.cancelFuncs, runID)
+		m.mu.Unlock()
 		return
 	}
+	m.mu.Unlock()
 	observer := &observer{
 		manager: m,
 		run:     run,
