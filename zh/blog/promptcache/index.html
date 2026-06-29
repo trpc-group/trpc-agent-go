@@ -1,0 +1,4133 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/blog/promptcache/">
+      
+      
+        <link rel="prev" href="../observability/">
+      
+      
+        <link rel="next" href="../graphagent/">
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
+    
+    
+      
+        <title>降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践 - tRPC-Agent-Go</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.7e37652d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+  
+
+
+  
+  
+
+<script id="__analytics">function __md_analytics(){function e(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],e("js",new Date),e("config",""),document.addEventListener("DOMContentLoaded",(function(){document.forms.search&&document.forms.search.query.addEventListener("blur",(function(){this.value&&e("event","search",{search_term:this.value})}));document$.subscribe((function(){var t=document.forms.feedback;if(void 0!==t)for(var a of t.querySelectorAll("[type=submit]"))a.addEventListener("click",(function(a){a.preventDefault();var n=document.location.pathname,d=this.getAttribute("data-md-value");e("event","feedback",{page:n,data:d}),t.firstElementChild.disabled=!0;var r=t.querySelector(".md-feedback__note [data-md-value='"+d+"']");r&&(r.hidden=!1)})),t.hidden=!1})),location$.subscribe((function(t){e("config","",{page_path:t.pathname})}))}));var t=document.createElement("script");t.async=!0,t.src="https://www.googletagmanager.com/gtag/js?id=",document.getElementById("__analytics").insertAdjacentElement("afterEnd",t)}</script>
+  
+    <script>"undefined"!=typeof __md_analytics&&__md_analytics()</script>
+  
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#agent-token-trpc-agent-go-prompt-cache" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../../assets/img/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            tRPC-Agent-Go
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../blog/promptcache/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  概览
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agent/" class="md-tabs__link">
+          
+  
+  
+  组件
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../gateway/" class="md-tabs__link">
+          
+  
+  
+  服务
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../observability/" class="md-tabs__link">
+          
+  
+  
+  可观测
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../ecosystem/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  生态
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../trpcagentgo/" class="md-tabs__link">
+          
+  
+  
+  博客
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../../assets/img/logo.png" alt="logo">
+
+    </a>
+    tRPC-Agent-Go
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    组件
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            组件
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_1">
+            <span class="md-nav__icon md-icon"></span>
+            Agent
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../multiagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multi Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../taskrun/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Task Run 运行时
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Team
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    自定义 Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dify/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Dify Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../claudecode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Claude Code Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codex/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Codex Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Runner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeexecutor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Code Executor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    CodeAct
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    错误处理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Model
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../prompt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Prompt Template
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../callbacks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Callbacks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plugin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Plugins
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../artifact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Artifact
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Skill
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evolution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evolution
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tool
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_15" id="__nav_2_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Session
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_15">
+            <span class="md-nav__icon md-icon"></span>
+            Session
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Session Summary
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/sqlite/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLite Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/redis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Redis Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mysql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/tdsql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TDSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/postgres/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ClickHouse Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mongodb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MongoDB Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_16" id="__nav_2_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Knowledge
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16">
+            <span class="md-nav__icon md-icon"></span>
+            Knowledge
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/embedder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embedder
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/reranker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reranker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/query-enhancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query Enhancer
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    数据源
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/code-rag/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    代码知识库（Code RAG, Beta）
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/extractor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    内容提取器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    过滤器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    知识库管理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/ocr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OCR
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_16_11" id="__nav_2_16_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    向量存储
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_16_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16_11">
+            <span class="md-nav__icon md-icon"></span>
+            向量存储
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/tcvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TcVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Elasticsearch
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/qdrant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Qdrant
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/milvus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Milvus
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    故障排除
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../planner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Planner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../event/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Event
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PromptIter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    服务
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            服务
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Gateway
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    AG-UI
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            AG-UI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    总览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/chat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    实时对话路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    消息快照路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/cancel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    取消路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2a/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2UI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../openclaw-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    可观测
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            可观测
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telemetry-multimodal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    多模态遥测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ecosystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    生态
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    博客
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            博客
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trpcagentgo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    构建智能 AI 应用的 Go 语言 Agent 框架
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    长任务 Agent 上下文管理的设计与评测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#prompt-cache-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      一、Prompt Cache 对 Agent 的价值：更快响应、更低成本
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prompt-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      二、Prompt Cache 是模型服务侧的前缀复用能力
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-prompt-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      三、Agent 为什么特别需要 Prompt Cache
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trpc-agent-go" class="md-nav__link">
+    <span class="md-ellipsis">
+      四、tRPC-Agent-Go 如何组织缓存友好的请求
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="四、tRPC-Agent-Go 如何组织缓存友好的请求">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#request-processors" class="md-nav__link">
+    <span class="md-ellipsis">
+      Request processors：稳定内容先组装
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#request-prefix" class="md-nav__link">
+    <span class="md-ellipsis">
+      Request prefix：系统规则形成可复用前缀
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#message-orderingsystem-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      Message ordering：system messages 前置
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tools：工具集合与顺序稳定
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-tool-guidance" class="md-nav__link">
+    <span class="md-ellipsis">
+      Post-tool guidance：提前稳定注入
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#skills-tool-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      Skills：动态内容进入 tool result
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#summary-generationcache-safe-forking" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary generation：cache-safe forking
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#summary-injection-request-prefix" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary injection：避免改写 request prefix
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#current-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      Current time：日期级上下文 + 精确时间工具
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      五、用户能配置和观测什么
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="五、用户能配置和观测什么">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      配置缓存友好的请求形状
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prompt-cache_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prompt Cache 影响面速查
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prompt_cache_key" class="md-nav__link">
+    <span class="md-ellipsis">
+      透传 prompt_cache_key
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-hit-rate" class="md-nav__link">
+    <span class="md-ellipsis">
+      观测 cache hit rate
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      六、实验结果与复现方式
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      七、实践清单
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="七、实践清单">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      稳定前缀
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      动态后置
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      长会话
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      路由与观测
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      扩展点
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#anthropic-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      附录：Anthropic API 的显式缓存断点
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      参考资料
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graphagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    GraphAgent 让 AI 工作流与 Agent 无缝融合
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    快速构建基于 AG-UI 的 Agent 服务
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Anthropic Agent Skills 规范的 Go 原生实现
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 自动化评估范式与工程实践全解析
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../llmverifier/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 高质量稳定性提升方法
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openclaw/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    打造企业级安全可控的 OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 提示词自动迭代与工程实践全解析
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#prompt-cache-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      一、Prompt Cache 对 Agent 的价值：更快响应、更低成本
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prompt-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      二、Prompt Cache 是模型服务侧的前缀复用能力
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-prompt-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      三、Agent 为什么特别需要 Prompt Cache
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trpc-agent-go" class="md-nav__link">
+    <span class="md-ellipsis">
+      四、tRPC-Agent-Go 如何组织缓存友好的请求
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="四、tRPC-Agent-Go 如何组织缓存友好的请求">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#request-processors" class="md-nav__link">
+    <span class="md-ellipsis">
+      Request processors：稳定内容先组装
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#request-prefix" class="md-nav__link">
+    <span class="md-ellipsis">
+      Request prefix：系统规则形成可复用前缀
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#message-orderingsystem-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      Message ordering：system messages 前置
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tools：工具集合与顺序稳定
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-tool-guidance" class="md-nav__link">
+    <span class="md-ellipsis">
+      Post-tool guidance：提前稳定注入
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#skills-tool-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      Skills：动态内容进入 tool result
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#summary-generationcache-safe-forking" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary generation：cache-safe forking
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#summary-injection-request-prefix" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary injection：避免改写 request prefix
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#current-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      Current time：日期级上下文 + 精确时间工具
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      五、用户能配置和观测什么
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="五、用户能配置和观测什么">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      配置缓存友好的请求形状
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prompt-cache_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prompt Cache 影响面速查
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prompt_cache_key" class="md-nav__link">
+    <span class="md-ellipsis">
+      透传 prompt_cache_key
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-hit-rate" class="md-nav__link">
+    <span class="md-ellipsis">
+      观测 cache hit rate
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      六、实验结果与复现方式
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      七、实践清单
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="七、实践清单">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      稳定前缀
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      动态后置
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      长会话
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      路由与观测
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      扩展点
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#anthropic-api" class="md-nav__link">
+    <span class="md-ellipsis">
+      附录：Anthropic API 的显式缓存断点
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      参考资料
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/blog/promptcache.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/blog/promptcache.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="agent-token-trpc-agent-go-prompt-cache">降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践</h1>
+<blockquote>
+<p>本文聚焦 Prompt Cache：它不是框架在本地保存模型 KV，而是模型服务侧对稳定 prompt prefix 的复用能力。tRPC-Agent-Go 的工程实践，是把 Agent 请求尽量组织成“稳定前缀 + 动态后缀”，从而提升缓存命中概率，降低可复用输入 tokens 的成本。</p>
+</blockquote>
+<p>大模型应用进入 Agent 阶段后，一个很直观的变化是：每次请求变长了。</p>
+<p>普通 Chat 应用里，模型看到的可能只是 system prompt 加几轮对话。Agent 应用里，请求前缀往往还会包含工具 schema、结构化输出 schema、Skills/RAG 上下文、历史 tool call 和 tool result。一次用户请求如果触发多次工具调用，还会在同一轮里多次请求模型。这些请求之间有大量重复内容，也正是 Prompt Cache 能发挥作用的地方。</p>
+<p>读完本文，你会看到四件事：</p>
+<ul>
+<li>Prompt Cache 对 Agent 为什么有响应速度和 token 成本价值。</li>
+<li>OpenAI-compatible API 里的 <code>cached_tokens</code>、<code>prompt_cache_key</code> 应该如何理解。</li>
+<li>tRPC-Agent-Go 如何在 system、tools、Skills、summary、time、post-tool prompt 等位置减少缓存破坏。</li>
+<li>哪些 option 推荐使用，哪些动态能力需要谨慎配置。</li>
+</ul>
+<p>文中的配置和实验主要使用 OpenAI-compatible API 作为示例口径；Anthropic 的显式 <code>cache_control</code> 机制放在附录中作为对照。OpenAI-compatible API 指的是兼容 OpenAI Chat Completions 等请求/响应协议形态的模型服务接口。它可以是 OpenAI 官方接口，也可以是其他模型厂商提供的兼容接口；但“兼容 OpenAI 协议”不等于“所有服务方都支持完全相同的 Prompt Cache 能力”。<code>cached_tokens</code>、<code>prompt_cache_key</code>、缓存门槛、TTL 和计费规则，都应以具体服务方文档为准。</p>
+<h2 id="prompt-cache-agent">一、Prompt Cache 对 Agent 的价值：更快响应、更低成本</h2>
+<p>Prompt Cache 对 Agent 的直接价值有两层：</p>
+<ol>
+<li>重复前缀被服务端复用后，Agent 调用通常能感受到首 token 或整体响应延迟下降。</li>
+<li>不少模型服务会把缓存命中的输入 tokens 按更低价格计费。</li>
+</ol>
+<p>以 <a href="https://api-docs.deepseek.com/zh-cn/quick_start/pricing">DeepSeek 模型价格页</a> 在 2026-06-09 查询到的价格为例，官方价格表按“百万 tokens”为单位区分了输入缓存命中、输入缓存未命中和输出价格：</p>
+<table>
+<thead>
+<tr>
+<th>模型</th>
+<th>输入缓存命中</th>
+<th>输入缓存未命中</th>
+<th>输出</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>deepseek-v4-flash</code></td>
+<td>0.02 元 / 百万 tokens</td>
+<td>1 元 / 百万 tokens</td>
+<td>2 元 / 百万 tokens</td>
+</tr>
+<tr>
+<td><code>deepseek-v4-pro</code></td>
+<td>0.025 元 / 百万 tokens</td>
+<td>3 元 / 百万 tokens</td>
+<td>6 元 / 百万 tokens</td>
+</tr>
+</tbody>
+</table>
+<p>按这个价格表，<code>deepseek-v4-flash</code> 的缓存命中输入价格是未命中输入价格的 1/50；<code>deepseek-v4-pro</code> 的缓存命中输入价格是未命中输入价格的 1/120。也就是说，在长 system prompt、稳定 tools、多轮 history 这类重复前缀较多的 Agent 场景中，只要这些输入 tokens 能被服务端判定为 cached tokens，它们对应的输入成本就会显著下降。</p>
+<p>这里需要强调两点。第一，这只是 DeepSeek 当前价格页上的示例，用来说明“缓存命中 tokens 通常更便宜”这个成本结构；其他 OpenAI-compatible 服务的价格、折扣和规则需要看各自文档。第二，Prompt Cache 主要降低的是可复用输入 tokens 的成本，不会减少所有输入，也不会影响输出 tokens 的计费方式。</p>
+<h2 id="prompt-cache">二、Prompt Cache 是模型服务侧的前缀复用能力</h2>
+<p>理解 Prompt Cache，可以先从 Transformer 推理说起。<a href="https://huggingface.co/docs/transformers/en/kv_cache">Hugging Face Transformers 的 KV cache 文档</a>解释了一个基础事实：自回归生成会逐 token 推进，模型可以缓存 attention 中已经计算过的 key/value 状态，后续 token 不必反复计算前面 token 的 key/value。</p>
+<p>这说明“复用已处理前缀的中间状态”在模型推理中有明确技术背景。不过，在 API 层不应把 Prompt Cache 简单等同为某一种具体 KV cache 实现。更准确的说法是：</p>
+<blockquote>
+<p>Prompt Cache 是模型服务侧对已处理 prompt prefix 的复用能力。它可以理解为复用前缀的中间状态或服务端缓存结果；具体缓存介质、匹配粒度、保留时间和计费规则由服务方实现决定。</p>
+</blockquote>
+<p>对支持 Prompt Cache 的 OpenAI-compatible API，服务端会检查当前 prompt 的 prefix 是否已经被处理过。如果命中，响应中的 <code>usage.prompt_tokens_details.cached_tokens</code> 会返回本次从缓存复用的 prompt tokens 数量。<a href="https://developers.openai.com/api/docs/guides/prompt-caching">OpenAI Prompt Caching 文档</a>也强调了一个关键实践：把静态内容放在 prompt 开头，把每轮变化的内容放在后面。</p>
+<p>这也是 <code>prompt_cache_key</code> 的语义边界。它不是缓存内容本身，也不是启用 Prompt Cache 的必要条件；不带 <code>prompt_cache_key</code> 时，服务端仍然可以按 prompt prefix 自动缓存和命中。<code>prompt_cache_key</code> 更像 OpenAI-compatible API 中用于辅助缓存路由的请求参数：当很多请求共享同一类长前缀时，一个稳定的 cache key 可能帮助这些请求落到更容易命中缓存的位置。反过来，如果把它设置成 request id、trace id、时间戳这类每次都不同的值，就会削弱前缀复用的机会。</p>
+<p><a href="https://api-docs.deepseek.com/guides/kv_cache/">DeepSeek Context Caching 文档</a>从另一个 OpenAI-compatible 服务形态给出了相同思路：后续请求如果与之前请求有重叠前缀，重叠部分就有机会从缓存读取；它的多轮对话和长文档问答示例，本质上都是 prefix reuse。</p>
+<h2 id="agent-prompt-cache">三、Agent 为什么特别需要 Prompt Cache</h2>
+<p>Agent 请求天然包含大量稳定前缀。一个典型 LLM Agent 请求里，前部通常包括：</p>
+<ul>
+<li>system prompt、global instruction、agent identity。</li>
+<li>tool schema、function declaration、structured output schema。</li>
+<li>Skills overview、能力说明、固定工作流说明。</li>
+<li>已发生的 session history、tool call、tool result。</li>
+<li>RAG、memory 或 workspace context。</li>
+</ul>
+<p>多轮对话天然符合“旧上下文 + 新消息”的形态：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>第 1 轮: system + tools + user_1
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>第 2 轮: system + tools + user_1 + assistant_1 + user_2
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>第 3 轮: system + tools + user_1 + assistant_1 + user_2 + assistant_2 + user_3
+</span></code></pre></div></td></tr></table></div>
+<p>从第二轮开始，新请求会带上上一轮的大部分内容。只要前面的 system、tools、历史消息没有被改写，模型服务侧就有机会复用这些前缀。</p>
+<p>Tool call / ReAct 场景会进一步放大这一点。一条用户请求可能触发多次 LLM 调用：第一次让模型决定调用什么工具，第二次把 tool result 追加回来继续推理，后续还可能再次调用工具。每一次模型请求都会重复 system、tools 和已经发生的上下文。稳定前缀越长，Prompt Cache 的收益空间越大；前缀被动态内容频繁打断，命中率就会下降。</p>
+<p>因此，Agent 框架的职责不是实现模型侧缓存，而是把请求组织成更适合缓存命中的结构：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span>
+<span class="normal"><a href="#__codelineno-1-3">3</a></span>
+<span class="normal"><a href="#__codelineno-1-4">4</a></span>
+<span class="normal"><a href="#__codelineno-1-5">5</a></span>
+<span class="normal"><a href="#__codelineno-1-6">6</a></span>
+<span class="normal"><a href="#__codelineno-1-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a>推荐形态:
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a>[稳定前缀] system / instruction / tools / schema / stable skills overview
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a>         + session history / previous tool call / previous tool result
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a>[动态后缀] current user message / current tool result / current time / temporary context
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a>需要避免:
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a>system / instruction 被 summary、精确时间、RAG 片段、临时用户状态频繁改写
+</span></code></pre></div></td></tr></table></div>
+<p>tRPC-Agent-Go 的 Prompt Cache 相关优化，正是围绕这个结构展开。</p>
+<h2 id="trpc-agent-go">四、tRPC-Agent-Go 如何组织缓存友好的请求</h2>
+<p>tRPC-Agent-Go 不在本地保存模型 KV，也不替代服务方的 Prompt Cache。它做的是请求组织：尽量让稳定内容更早、更稳定地进入请求，让动态内容靠后，并减少工具和上下文顺序的随机变化。</p>
+<p>进入框架实现前，先约定三个容易混用的概念：</p>
+<ul>
+<li><code>system prompt</code> 指系统规则文本，例如 Agent 身份、回答风格、工具后回复要求等。</li>
+<li><code>system message</code> 指请求中 <code>role=system</code> 的消息对象，它是承载 system prompt 的消息结构。</li>
+<li><code>model request prefix</code> 指模型服务最终看到的请求前缀，也就是 provider 文档中常说的 prompt prefix。它不是 HTTP 请求字段前缀，而是模型输入从开头开始连续的一段内容，可能包含 system message、instruction、tools、schema、稳定 history 等。后文简称 <code>request prefix</code>。</li>
+</ul>
+<p>三者的关系是：system prompt 通常会被写入 system message；system message 又和 tools、schema、稳定上下文一起构成 model request prefix。Prompt Cache 关注的是完整 request prefix 是否稳定，所以既要关心 system prompt 文本有没有变化，也要关心 system message 在请求里的位置和数量是否稳定。</p>
+<p>先用一张表概览这一节要讲的处理点：</p>
+<table>
+<thead>
+<tr>
+<th>处理点</th>
+<th>框架做了什么</th>
+<th>减少哪类缓存破坏</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Request processors</td>
+<td>先组装 instruction / system / Skills overview，再追加 history、tool result、time 等动态内容</td>
+<td>避免动态内容过早进入 request prefix</td>
+</tr>
+<tr>
+<td>Request prefix</td>
+<td>合并 global instruction / instruction，形成靠前的 request prefix</td>
+<td>避免规则、身份说明在每轮请求中位置漂移</td>
+</tr>
+<tr>
+<td>Message ordering</td>
+<td>OpenAI-compatible adapter 可将 system messages 前置</td>
+<td>让最稳定的 system messages 更靠前，更利于自动 prefix cache</td>
+</tr>
+<tr>
+<td>Tools</td>
+<td>Invocation 内缓存 tools snapshot，工具转换时按名称排序</td>
+<td>避免工具列表顺序或 map 迭代顺序破坏 prefix</td>
+</tr>
+<tr>
+<td>Post-tool guidance</td>
+<td>有工具面的 Agent 从第一次模型请求起稳定注入工具后提示</td>
+<td>避免首次 tool result 后才改写 request prefix</td>
+</tr>
+<tr>
+<td>Skills</td>
+<td>已加载 Skill 内容优先物化到 tool result</td>
+<td>减少动态 Skill 内容污染 request prefix</td>
+</tr>
+<tr>
+<td>Summary generation</td>
+<td>cache-safe forking 复用父请求前缀，只追加 compaction user message</td>
+<td>避免 summary 请求重新组织上下文导致缓存无法复用</td>
+</tr>
+<tr>
+<td>Summary injection</td>
+<td>可将 summary 注入 user/history 附近</td>
+<td>避免频繁更新 summary 时改写 request prefix</td>
+</tr>
+<tr>
+<td>Current time</td>
+<td>默认只注入日期级上下文，精确时间走工具</td>
+<td>避免完整时间戳每轮改变 request prefix</td>
+</tr>
+</tbody>
+</table>
+<h3 id="request-processors">Request processors：稳定内容先组装</h3>
+<p><strong>缓存风险</strong>：Agent 请求不是一次性拼出来的，而是由 instruction、Skills、history、tool result、time 等多类上下文共同组成。如果动态内容过早进入 request prefix，即使后面的 system、tools、history 很稳定，也会因为前缀被打断而降低命中概率。</p>
+<p><strong>框架处理</strong>：<code>LLMAgent</code> 会通过一组 request processors 逐步构造模型请求。整体处理顺序是：</p>
+<ul>
+<li>Instruction processor 较早运行，把 global instruction / instruction 合并到 system message。</li>
+<li>Skills processor 注入 Skills overview 和加载状态。</li>
+<li>Content processor 再追加 conversation / context history。</li>
+<li>Post-tool processor 对有工具面的 Agent 预先注入稳定的工具后指导，避免第一次出现 tool result 后再改写 request prefix。</li>
+<li>Skills tool result processor 在 content 之后，把已加载 Skill 内容物化到相关 tool result。</li>
+<li>Time processor 放在更靠后的位置；默认只注入日期级上下文，精确当前时间通过工具按需获取，避免把每秒变化的时间戳写进 system message。</li>
+</ul>
+<p><strong>使用建议</strong>：应用侧也应延续这个顺序：规则、身份、工具、能力说明等相对稳定的内容尽量放前面；当前用户输入、工具结果、临时检索片段、精确时间等更动态的内容尽量放后面。</p>
+<h3 id="request-prefix">Request prefix：系统规则形成可复用前缀</h3>
+<p><strong>缓存风险</strong>：system prompt 通常会进入请求前部的 system message，也是最有价值的缓存前缀。如果每轮把用户状态、检索结果、精确时间等动态内容写进 system message，后续再长的稳定上下文也很难复用。</p>
+<p><strong>框架处理</strong>：<code>InstructionRequestProcessor</code> 会查找已有 system message。如果不存在，它会创建新的 system message 并插入到 <code>req.Messages</code> 头部；如果已经存在，则把 system prompt 和 instruction 合并到这条 system message 中。这让 Agent 的全局规则进入 request prefix 中较靠前且稳定的位置。</p>
+<p><strong>使用建议</strong>：把 instruction 当成“长期规则”而不是“每轮上下文”。每轮变化的用户信息、检索片段、任务临时状态，更适合放到靠后的 user/history/tool result 中。</p>
+<h3 id="message-orderingsystem-messages">Message ordering：system messages 前置</h3>
+<p><strong>缓存风险</strong>：如果 system messages 在请求中位置不稳定，或被历史消息夹在中间，服务端自动 prefix cache 更难把最稳定的 system messages 作为可复用前缀。</p>
+<p><strong>框架处理</strong>：<code>model/openai</code> 包提供了 <code>openai.WithOptimizeForCache</code>。在默认 <code>VariantOpenAI</code> 下，这项优化默认开启；如果显式使用其他 provider variant，或者应用严格依赖原始 message 顺序，需要按实际配置确认是否开启。开启后，请求发送前会调用 <code>optimizeMessagesForCache</code>，把 system messages 移到 messages 前部。</p>
+<p><strong>使用建议</strong>：这不是显式创建缓存，而是适配 OpenAI-compatible API 的自动前缀缓存。如果走默认 OpenAI variant，通常可以保留这项优化；只有在应用严格依赖原始 message 顺序时，才需要关闭：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
+<span class="normal"><a href="#__codelineno-2-2">2</a></span>
+<span class="normal"><a href="#__codelineno-2-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;your-model&quot;</span><span class="p">,</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithOptimizeForCache</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="tools">Tools：工具集合与顺序稳定</h3>
+<p><strong>缓存风险</strong>：Tool schema 是 Agent 请求里常见的大块静态内容，也常常是可缓存前缀的重要组成部分。工具列表顺序不稳定、动态工具过滤结果频繁变化、底层 map 迭代顺序随机，都会让 tools prefix 难以复用。</p>
+<p><strong>框架处理</strong>：tRPC-Agent-Go 做了两层稳定化。第一层在 flow 层，框架会缓存一次 Invocation 内最终可见的工具列表；即使底层 ToolSet 是动态的，一次 Invocation 生命周期内发给模型的工具集合也尽量保持稳定。对于经过过滤的工具，框架会按工具名排序，避免 Go map 迭代顺序带来的随机变化破坏前缀。第二层在 OpenAI-compatible adapter，工具转换时会先抽取 tool names 并排序，再按稳定顺序转换成 OpenAI-compatible <code>tools</code> 参数。</p>
+<p><strong>使用建议</strong>：工具顺序框架会尽量稳定，但工具集合本身仍由应用决定。动态工具过滤、<code>WithRefreshToolSetsOnRun(true)</code>、动态 MCP tool list 都应谨慎使用；如果确实需要动态工具面，建议按场景分桶，并让同一类请求看到稳定工具集合。</p>
+<h3 id="post-tool-guidance">Post-tool guidance：提前稳定注入</h3>
+<p><strong>缓存风险</strong>：Tool call 之后，模型会看到 <code>role=tool</code> 的工具结果。为了让工具调用后的回复更自然，框架通常会补一段 post-tool guidance，提醒模型基于工具结果直接回答，不暴露“我调用了某某工具”这类过程描述。如果等请求已经出现 tool result 之后，才把 post-tool prompt append 到 system message，那么第一轮工具结果后的模型请求会在很靠前的位置新增一段 system prompt 内容，导致后面的稳定 history、tool result 等内容失去前缀复用机会。</p>
+<p><strong>框架处理</strong>：tRPC-Agent-Go 把这段逻辑改成稳定注入：只要 Agent 有潜在 tool surface，默认 post-tool guidance 会从第一次模型请求起进入 system message；后续 ReAct / tool-loop 轮次不会再因为第一次出现 tool result 才改写 request prefix。纯文本 Agent 没有工具面时，框架不会为了这个能力额外创建 system message，避免无工具场景增加不必要前缀。</p>
+<p><strong>使用建议</strong>：用户仍然可以通过 <code>llmagent.WithPostToolPrompt("...")</code> 自定义这段稳定指导，或通过 <code>llmagent.WithEnablePostToolPrompt(false)</code> 关闭。自定义 prompt 应按 Agent 或版本保持稳定，不要按请求动态生成；如果确实需要把“本次工具结果后的临时要求”传给模型，更适合放到 tool result 或靠后的 user/history 消息里。</p>
+<h3 id="skills-tool-result">Skills：动态内容进入 tool result</h3>
+<p><strong>缓存风险</strong>：Skills 是 Agent 能力扩展的重要来源，但已加载的 Skill body 或 selected docs 往往随任务变化。如果这些内容每轮都追加到 system message，request prefix 就会频繁变化。</p>
+<p><strong>框架处理</strong>：tRPC-Agent-Go 提供了 <code>llmagent.WithSkillsLoadedContentInToolResults(true)</code>。开启后，已加载 Skill 内容会尽量追加到对应的 <code>skill_load</code> / <code>skill_select_docs</code> tool result，而不是追加到 system message。Skills tool result processor 会按稳定顺序处理已加载 Skills，优先把内容物化到匹配的 tool result；只有找不到匹配 tool result 时，才回退到 system message。</p>
+<p><strong>使用建议</strong>：这不是减少上下文，而是把动态上下文放到更合适的位置，减少对 request prefix 的污染。Skill 内容随任务变化时，建议开启该选项，并配合 <code>WithSkillLoadMode(...)</code>、<code>WithMaxLoadedSkills(...)</code> 控制驻留时长和数量：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
+<span class="normal"><a href="#__codelineno-3-2">2</a></span>
+<span class="normal"><a href="#__codelineno-3-3">3</a></span>
+<span class="normal"><a href="#__codelineno-3-4">4</a></span>
+<span class="normal"><a href="#__codelineno-3-5">5</a></span>
+<span class="normal"><a href="#__codelineno-3-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkillsLoadedContentInToolResults</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkillLoadMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">SkillLoadModeTurn</span><span class="p">),</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMaxLoadedSkills</span><span class="p">(</span><span class="mi">8</span><span class="p">),</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="summary-generationcache-safe-forking">Summary generation：cache-safe forking</h3>
+<p><strong>缓存风险</strong>：长会话 Agent 通常需要 summary 或 compaction。这里容易混在一起的有两件事：一是“生成 summary 那次请求”如何组织，二是“summary 已经生成后”如何注入后续普通对话请求。生成 summary 时，如果完全换一套独立 prompt 重新发送会话内容，就很难复用父会话已经建立起来的缓存前缀。</p>
+<p><strong>框架处理</strong>：tRPC-Agent-Go 提供了可选的 cache-safe summary forking 模式。生成 summary 的请求可以克隆父会话的模型请求，并只在尾部追加一条 compaction user message。</p>
+<p>可以把它理解成：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
+<span class="normal"><a href="#__codelineno-4-2">2</a></span>
+<span class="normal"><a href="#__codelineno-4-3">3</a></span>
+<span class="normal"><a href="#__codelineno-4-4">4</a></span>
+<span class="normal"><a href="#__codelineno-4-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a>父会话请求:
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a>system + tools + stable context + history_1...history_N + new_user_message
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a>cache-safe compaction fork:
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>system + tools + stable context + history_1...history_N + compact_user_message
+</span></code></pre></div></td></tr></table></div>
+<p>这样，compaction 本身也变成“父会话前缀 + 新动态后缀”的请求形态，更容易复用父会话已经建立起来的缓存。</p>
+<p><strong>使用建议</strong>：这个能力是 opt-in 的，默认仍保留独立 summary 请求，以兼容已有使用方式以及 summary model 与主 Agent model 不同的场景。长会话、同模型 summary、对 Prompt Cache 敏感的场景，可以优先评估开启：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span>
+<span class="normal"><a href="#__codelineno-5-3">3</a></span>
+<span class="normal"><a href="#__codelineno-5-4">4</a></span>
+<span class="normal"><a href="#__codelineno-5-5">5</a></span>
+<span class="normal"><a href="#__codelineno-5-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithContextThreshold</span><span class="p">(),</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">200</span><span class="p">),</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithCacheSafeForking</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>如果需要自定义 fork 模式下追加的压缩指令，可以使用 <code>summary.WithCacheSafeForkPrompt(...)</code>。这条 prompt 可以包含 <code>{max_summary_words}</code>，但不应再包含 <code>{conversation_text}</code>，因为父请求本身已经包含完整的对话前缀。</p>
+<h3 id="summary-injection-request-prefix">Summary injection：避免改写 request prefix</h3>
+<p><strong>缓存风险</strong>：Summary 生成完成后，后续普通对话请求还需要决定把它放在哪里。默认的 <code>SessionSummaryInjectionSystem</code> 会把 summary 注入 system message，兼容“summary 必须留在 preserved head、不参与 sliding-window trimming”的场景；但如果 summary 经常更新，就会改写靠前 request prefix。</p>
+<p><strong>框架处理</strong>：对 Prompt Cache 更敏感的场景，可以显式使用 <code>WithSessionSummaryInjectionMode(SessionSummaryInjectionUser)</code>，把 summary 放到第一个 user history/current message 附近，让 request prefix 尽量不变；代价是 summary 会参与 token-budget trimming，长上下文下可能被裁掉。</p>
+<p><strong>使用建议</strong>：如果应用更重视 summary 永远留在 preserved head，可以保留 system 注入；如果更重视 request prefix 稳定，可以评估 user/history 注入。因此，cache-safe forking 优化的是“生成 summary 的请求”，<code>WithSessionSummaryInjectionMode(...)</code> 优化的是“普通对话请求如何注入 summary”。两者可以配合使用。</p>
+<h3 id="current-time">Current time：日期级上下文 + 精确时间工具</h3>
+<p><strong>缓存风险</strong>：Current time 是一个很典型的 Prompt Cache 陷阱。它看起来只是很短的一行上下文，但如果每次都把完整时间戳写进 system message，那么 request prefix 每秒都可能变化，后面的稳定 instruction、tools、history 也更难被服务侧复用。</p>
+<p>对比 Codex 和 Claude Code 的做法，可以看到它们都没有把“当前时分秒”当成稳定 prompt 的一部分：它们更偏向把运行环境信息控制在日期、时区这类粗粒度信息上，让高频变化的 clock time 不进入稳定前缀。</p>
+<p><strong>框架处理</strong>：tRPC-Agent-Go 沿用已有的 <code>WithAddCurrentTime</code> 入口，但调整默认语义：默认只注入日期级 system context，把它当成“今天是哪一天”这种相对稳定的环境信息。在工具可用时，如果模型需要精确到时分秒的当前时间，可以通过内置的 <code>environment_context_current_time</code> 工具按需获取。遗留的 <code>WithOutputSchema</code> 会禁用所有工具，包括这个精确时间工具；如果同时需要结构化输出和精确时间工具，应使用 <code>WithStructuredOutputJSONSchema</code> 或 <code>WithStructuredOutputJSON</code>。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span>
+<span class="normal"><a href="#__codelineno-6-2">2</a></span>
+<span class="normal"><a href="#__codelineno-6-3">3</a></span>
+<span class="normal"><a href="#__codelineno-6-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAddCurrentTime</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p><strong>使用建议</strong>：默认 date-only 路径更 cache-friendly；如果显式配置完整时间格式，例如 <code>WithTimeFormat("2006-01-02 15:04:05 MST")</code>，仍然可以得到旧式完整时间戳，但需要接受 request prefix 随时间变化带来的缓存影响。</p>
+<h2 id="_1">五、用户能配置和观测什么</h2>
+<p>Prompt Cache 的命中发生在模型服务侧，但用户仍然可以通过 tRPC-Agent-Go 控制请求形状、透传服务方参数，并观测命中效果。</p>
+<h3 id="_2">配置缓存友好的请求形状</h3>
+<p>在默认 <code>VariantOpenAI</code> 配置下，OpenAI-compatible adapter 会进行 message cache optimization：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;your-model&quot;</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>如果显式选择了其他 provider variant，可以按服务方行为确认是否需要显式配置 <code>openai.WithOptimizeForCache(true)</code>。如果应用严格依赖原始 message 顺序，可以关闭：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">1</a></span>
+<span class="normal"><a href="#__codelineno-8-2">2</a></span>
+<span class="normal"><a href="#__codelineno-8-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="nx">llm</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">openai</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">&quot;your-model&quot;</span><span class="p">,</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="w">    </span><span class="nx">openai</span><span class="p">.</span><span class="nx">WithOptimizeForCache</span><span class="p">(</span><span class="kc">false</span><span class="p">),</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Skills 动态内容建议进入 tool result：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1">1</a></span>
+<span class="normal"><a href="#__codelineno-9-2">2</a></span>
+<span class="normal"><a href="#__codelineno-9-3">3</a></span>
+<span class="normal"><a href="#__codelineno-9-4">4</a></span>
+<span class="normal"><a href="#__codelineno-9-5">5</a></span>
+<span class="normal"><a href="#__codelineno-9-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkillsLoadedContentInToolResults</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSkillLoadMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">SkillLoadModeTurn</span><span class="p">),</span>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMaxLoadedSkills</span><span class="p">(</span><span class="mi">8</span><span class="p">),</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>长会话 summary 如果关注 Prompt Cache，可以同时关注 summary 生成和 summary 注入两件事。生成 summary 时可以启用 cache-safe forking：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1">1</a></span>
+<span class="normal"><a href="#__codelineno-10-2">2</a></span>
+<span class="normal"><a href="#__codelineno-10-3">3</a></span>
+<span class="normal"><a href="#__codelineno-10-4">4</a></span>
+<span class="normal"><a href="#__codelineno-10-5">5</a></span>
+<span class="normal"><a href="#__codelineno-10-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="nx">summarizer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">summary</span><span class="p">.</span><span class="nx">NewSummarizer</span><span class="p">(</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="w">    </span><span class="nx">summaryModel</span><span class="p">,</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithContextThreshold</span><span class="p">(),</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithMaxSummaryWords</span><span class="p">(</span><span class="mi">200</span><span class="p">),</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithCacheSafeForking</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>自定义 fork prompt 时使用 <code>summary.WithCacheSafeForkPrompt(...)</code>，不要再把 <code>{conversation_text}</code> 放进去。</p>
+<p>普通对话请求注入 summary 时，可以使用 user/history 模式避免改写首条 system：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1">1</a></span>
+<span class="normal"><a href="#__codelineno-11-2">2</a></span>
+<span class="normal"><a href="#__codelineno-11-3">3</a></span>
+<span class="normal"><a href="#__codelineno-11-4">4</a></span>
+<span class="normal"><a href="#__codelineno-11-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithAddSessionSummary</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithSessionSummaryInjectionMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">SessionSummaryInjectionUser</span><span class="p">),</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Memory preload 和 session recall preload 默认仍走 system context，以兼容既有行为。Cache-sensitive 场景可以显式切到 user/history 模式：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1">1</a></span>
+<span class="normal"><a href="#__codelineno-12-2">2</a></span>
+<span class="normal"><a href="#__codelineno-12-3">3</a></span>
+<span class="normal"><a href="#__codelineno-12-4">4</a></span>
+<span class="normal"><a href="#__codelineno-12-5">5</a></span>
+<span class="normal"><a href="#__codelineno-12-6">6</a></span>
+<span class="normal"><a href="#__codelineno-12-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadMemory</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadMemoryInjectionMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">PreloadMemoryInjectionUser</span><span class="p">),</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadSessionRecall</span><span class="p">(</span><span class="mi">5</span><span class="p">),</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPreloadSessionRecallInjectionMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">PreloadSessionRecallInjectionUser</span><span class="p">),</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>这类 user 模式更利于保持 request prefix 稳定，但对应上下文会参与 token tailoring，极长上下文下可能被裁剪。</p>
+<p>Post-tool guidance 默认在有工具面的 Agent 上稳定注入。需要自定义时，可以显式配置一段按 Agent 或版本固定的 prompt；如果应用已经有自己的稳定工具后指导，也可以关闭框架默认注入：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1">1</a></span>
+<span class="normal"><a href="#__codelineno-13-2">2</a></span>
+<span class="normal"><a href="#__codelineno-13-3">3</a></span>
+<span class="normal"><a href="#__codelineno-13-4">4</a></span>
+<span class="normal"><a href="#__codelineno-13-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithPostToolPrompt</span><span class="p">(</span><span class="s">&quot;Answer naturally based on tool results.&quot;</span><span class="p">),</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="w">    </span><span class="c1">// llmagent.WithEnablePostToolPrompt(false),</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<h3 id="prompt-cache_1">Prompt Cache 影响面速查</h3>
+<p>从 Prompt Cache 视角看，option 影响的位置比 option 名字更重要。下面先列“推荐优先使用或保留的能力”，再列“需要谨慎使用的动态能力”。</p>
+<p>推荐优先使用或保留：</p>
+<table>
+<thead>
+<tr>
+<th>功能 / option</th>
+<th>主要影响位置</th>
+<th>推荐理由</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>openai.WithOptimizeForCache</code></td>
+<td>messages 顺序</td>
+<td>默认 <code>VariantOpenAI</code> 开启后会把 system messages 前置，更利于自动 prefix cache；严格依赖原始顺序时再关闭</td>
+</tr>
+<tr>
+<td>默认 post-tool guidance / <code>llmagent.WithPostToolPrompt</code></td>
+<td>system message</td>
+<td>有工具面的 Agent 会从第一次模型请求起稳定注入，避免首次 tool result 后再改写 request prefix；自定义 prompt 应按 Agent/版本固定</td>
+</tr>
+<tr>
+<td><code>llmagent.WithSkillsLoadedContentInToolResults(true)</code></td>
+<td>system message / tool result</td>
+<td>把已加载 Skill 内容从 system message 移到匹配 tool result，减少 request prefix 污染</td>
+</tr>
+<tr>
+<td><code>summary.WithCacheSafeForking(true)</code></td>
+<td>summary 生成请求</td>
+<td>克隆父请求并追加 compaction user message，让 summary 生成也复用父会话前缀</td>
+</tr>
+<tr>
+<td><code>llmagent.WithSessionSummaryInjectionMode(SessionSummaryInjectionUser)</code></td>
+<td>history 附近</td>
+<td>Summary 频繁变化时可减少对 request prefix 的改写，但需要接受可能被 token tailoring 裁剪的取舍</td>
+</tr>
+<tr>
+<td><code>llmagent.WithAddCurrentTime(true)</code> 默认 date-only</td>
+<td>system message / time tool</td>
+<td>日期级上下文同一天内稳定；工具启用时可通过 <code>environment_context_current_time</code> 获取精确时间。遗留的 <code>WithOutputSchema</code> 会禁用这个工具</td>
+</tr>
+<tr>
+<td><code>agent.WithModelRequestExtraFields</code> 中的 <code>prompt_cache_key</code></td>
+<td>request body</td>
+<td>对支持该参数的服务方，稳定 key 可能帮助同类长前缀请求聚合；不要使用 request id / trace id</td>
+</tr>
+<tr>
+<td><code>llmagent.WithReasoningContentMode</code> 默认模式</td>
+<td>assistant history</td>
+<td>默认丢弃历史 reasoning content，可减少历史体积，避免无谓增加输入 tokens</td>
+</tr>
+</tbody>
+</table>
+<p>需要谨慎使用的动态能力：</p>
+<table>
+<thead>
+<tr>
+<th>功能 / option</th>
+<th>主要影响位置</th>
+<th>对 Prompt Cache 的影响</th>
+<th>建议</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>llmagent.WithToolFilter</code> / <code>agent.WithToolFilter</code></td>
+<td>tools schema</td>
+<td>每次过滤结果不同会改变工具列表和 tools prefix</td>
+<td>过滤逻辑保持确定性；同类工具集合配同类 <code>prompt_cache_key</code></td>
+</tr>
+<tr>
+<td><code>llmagent.WithRefreshToolSetsOnRun(true)</code></td>
+<td>tools schema</td>
+<td>每次 Run 重新拉取 ToolSet，适合动态 MCP，但工具面变化会降低缓存复用</td>
+<td>cache-sensitive 场景尽量固定工具面；动态工具按场景分桶</td>
+</tr>
+<tr>
+<td><code>llmagent.WithSkillLoadMode</code> / <code>WithMaxLoadedSkills</code></td>
+<td>loaded Skills context</td>
+<td>影响动态 Skill 内容驻留轮次和体积</td>
+<td>控制驻留时长和数量，避免无关 Skill 长期污染前缀</td>
+</tr>
+<tr>
+<td><code>llmagent.WithPreloadMemory</code> / <code>WithPreloadSessionRecall</code></td>
+<td>system message 或 history</td>
+<td>召回内容随 query 变化，放 system message 会更容易改写 request prefix</td>
+<td>cache-sensitive 场景优先评估 user/history injection mode</td>
+</tr>
+<tr>
+<td><code>llmagent.WithTimeFormat("2006-01-02 15:04:05 MST")</code></td>
+<td>system message</td>
+<td>完整时间戳会按秒变化，容易破坏 request prefix</td>
+<td>只有明确需要每轮 system message 内含精确时间时才使用</td>
+</tr>
+<tr>
+<td>动态 <code>WithPostToolPrompt</code></td>
+<td>system message</td>
+<td>如果按请求生成，会把本来稳定的 post-tool guidance 变成动态前缀</td>
+<td>按 Agent/版本固定；请求级临时要求放到 tool result 或后置 user/history</td>
+</tr>
+<tr>
+<td><code>agent.WithInjectedContextMessages</code> / <code>WithLateContextMessages</code></td>
+<td>history 附近的临时消息</td>
+<td>前者在 session history 之前，位置更靠前；后者贴近最新用户回合</td>
+<td>临时上下文优先 late 注入，避免改写稳定前缀</td>
+</tr>
+<tr>
+<td><code>BeforeModel</code> callback / <code>EventMessageProjector</code></td>
+<td>任意 request message</td>
+<td>这是强扩展点，可能重写 system、tools 或 history</td>
+<td>遵守 append-only 思路；尽量只在靠后位置追加动态上下文</td>
+</tr>
+<tr>
+<td>Structured output schema 动态变化</td>
+<td>schema</td>
+<td>schema 名称、字段顺序和描述变化都会影响前缀</td>
+<td>schema 尽量版本化和稳定化，避免同一类请求频繁变更</td>
+</tr>
+</tbody>
+</table>
+<h3 id="prompt_cache_key">透传 prompt_cache_key</h3>
+<p>如果 OpenAI-compatible 服务方支持 <code>prompt_cache_key</code>，可以通过 request-level extra fields 透传：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span>
+<span class="normal"><a href="#__codelineno-14-2">2</a></span>
+<span class="normal"><a href="#__codelineno-14-3">3</a></span>
+<span class="normal"><a href="#__codelineno-14-4">4</a></span>
+<span class="normal"><a href="#__codelineno-14-5">5</a></span>
+<span class="normal"><a href="#__codelineno-14-6">6</a></span>
+<span class="normal"><a href="#__codelineno-14-7">7</a></span>
+<span class="normal"><a href="#__codelineno-14-8">8</a></span>
+<span class="normal"><a href="#__codelineno-14-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a><span class="nx">events</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">r</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a><span class="w">    </span><span class="s">&quot;user-001&quot;</span><span class="p">,</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a><span class="w">    </span><span class="s">&quot;session-001&quot;</span><span class="p">,</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5"></a><span class="w">    </span><span class="nx">model</span><span class="p">.</span><span class="nx">NewUserMessage</span><span class="p">(</span><span class="s">&quot;Hello&quot;</span><span class="p">),</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6"></a><span class="w">    </span><span class="nx">agent</span><span class="p">.</span><span class="nx">WithModelRequestExtraFields</span><span class="p">(</span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kt">any</span><span class="p">{</span>
+</span><span id="__span-14-7"><a id="__codelineno-14-7" name="__codelineno-14-7"></a><span class="w">        </span><span class="s">&quot;prompt_cache_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="nx">cacheKey</span><span class="p">,</span>
+</span><span id="__span-14-8"><a id="__codelineno-14-8" name="__codelineno-14-8"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-14-9"><a id="__codelineno-14-9" name="__codelineno-14-9"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p><code>agent</code> 包中的 <code>WithModelRequestExtraFields</code> 说明了优先级：request-level extra fields 会优先于 model-level extra fields。OpenAI-compatible adapter 在 <code>model/openai</code> 包的请求构建阶段会先合并 model-level <code>extraFields</code>，再合并 <code>request.ExtraFields</code>，因此同名 key 下请求级值会覆盖模型级值。</p>
+<p>需要注意，<code>prompt_cache_key</code> 不是 Prompt Cache 的开关。固定 system prompt、稳定 tools，并保持 request prefix 不变，本身就可能触发自动 prefix cache；<code>prompt_cache_key</code> 的价值是给服务端一个额外的路由提示，帮助相同类别的长前缀请求更稳定地聚合到同一缓存路径上。</p>
+<p><code>prompt_cache_key</code> 应表达“可复用前缀类别”，例如：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1">1</a></span>
+<span class="normal"><a href="#__codelineno-15-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a>app:customer-support:v3:tenant-basic-tools
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a>app:code-review:v5:go-tools
+</span></code></pre></div></td></tr></table></div>
+<p>不要把它设置成请求唯一 ID、trace ID 或时间戳。</p>
+<h3 id="cache-hit-rate">观测 cache hit rate</h3>
+<p>OpenAI-compatible API 的主观测字段是 <code>cached_tokens</code>：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1">1</a></span>
+<span class="normal"><a href="#__codelineno-16-2">2</a></span>
+<span class="normal"><a href="#__codelineno-16-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a><span class="nx">cached</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">usage</span><span class="p">.</span><span class="nx">PromptTokensDetails</span><span class="p">.</span><span class="nx">CachedTokens</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a><span class="nx">prompt</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">usage</span><span class="p">.</span><span class="nx">PromptTokens</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a><span class="nx">hitRate</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">float64</span><span class="p">(</span><span class="nx">cached</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nb">float64</span><span class="p">(</span><span class="nx">prompt</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>tRPC-Agent-Go 的 provider-agnostic usage 结构定义在 <code>model</code> 包中，其中包括：</p>
+<ul>
+<li><code>model.Usage.PromptTokens</code></li>
+<li><code>model.Usage.PromptTokensDetails.CachedTokens</code></li>
+<li><code>model.Usage.PromptTokensDetails.CacheReadTokens</code></li>
+<li><code>model.Usage.PromptTokensDetails.CacheCreationTokens</code></li>
+</ul>
+<p>对 OpenAI-compatible API，<code>CachedTokens</code> 是主要字段；<code>CacheReadTokens</code> / <code>CacheCreationTokens</code> 主要服务于 Anthropic 等显式缓存形态。</p>
+<p>Telemetry 层也会拆分 token 类型。<code>internal/telemetry</code> 包会记录：</p>
+<ul>
+<li><code>input</code></li>
+<li><code>input_cached</code></li>
+<li><code>input_cache_read</code></li>
+<li><code>input_cache_creation</code></li>
+<li><code>output</code></li>
+</ul>
+<p>一个简单的统计口径是：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
+<span class="normal"><a href="#__codelineno-17-2">2</a></span>
+<span class="normal"><a href="#__codelineno-17-3">3</a></span>
+<span class="normal"><a href="#__codelineno-17-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a>total_prompt_tokens = sum(usage.prompt_tokens)
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a>total_cached_tokens = sum(usage.prompt_tokens_details.cached_tokens)
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a>requests_with_cache = count(cached_tokens &gt; 0)
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a>overall_hit_rate = total_cached_tokens / total_prompt_tokens
+</span></code></pre></div></td></tr></table></div>
+<p>如果要估算成本节省，应使用服务方当前价格表和计费规则。不要把某个 provider 的缓存门槛、TTL 或折扣写成所有 OpenAI-compatible 服务的统一行为。</p>
+<h2 id="_3">六、实验结果与复现方式</h2>
+<p>tRPC-Agent-Go 主仓库中的 benchmark 说明已经把 benchmark suites 迁移到独立的 <a href="https://github.com/trpc-group/trpc-agent-go-benchmark">trpc-agent-go-benchmark</a> 仓库，其中 <code>anthropic_skills</code>、<code>summary</code> 等 suite 覆盖了 token usage、prompt cache、summary 等评测方向。对本文这类机制说明，主仓库的 <code>examples/promptcache/openai</code> 示例更适合作为轻量复现实验；如果要单独观察当前时间上下文对 Prompt Cache 的影响，可以参考 <code>examples/promptcache/timeprocessor</code>，它对比了 baseline、date-only、full-datetime 和 precise-tool 四种模式。</p>
+<p>下面是一组 provider-neutral 的示例运行结果，用来说明是否传入 <code>prompt_cache_key</code> 的观测方式：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
+<span class="normal"><a href="#__codelineno-18-2">2</a></span>
+<span class="normal"><a href="#__codelineno-18-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a>case                 requests  requests_with_cache  prompt_tokens  cached_tokens  overall_cache_rate
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a>without cache key    6         4                    13012          8000           61.48%
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a>with cache key       6         5                    13918          10112          72.65%
+</span></code></pre></div></td></tr></table></div>
+<p>这组结果最重要的不是“带 key 一定提升多少”，而是三点：</p>
+<p>第一，不传 <code>prompt_cache_key</code> 也可以命中 Prompt Cache。OpenAI-compatible API 的核心仍然是 prefix cache routing：只要前缀足够稳定，服务端就有机会按 prefix 自动复用。</p>
+<p>第二，传入稳定的 <code>prompt_cache_key</code> 可能提高命中概率。本次运行中，带 key 的请求从 4 次命中提升到 5 次命中，overall cache rate 从 61.48% 提升到 72.65%。这符合 <code>prompt_cache_key</code> 作为缓存路由提示的定位。</p>
+<p>第三，tool call 没有阻止缓存命中。无论是否传入 <code>prompt_cache_key</code>，计算工具和时间工具调用轮次都出现过 cached tokens，说明 system、tools 和历史上下文中的稳定前缀仍然可以被复用。</p>
+<p>实验复现思路：</p>
+<ul>
+<li>准备一个超过服务方缓存门槛的长 system prompt。</li>
+<li>使用同一个 session 连续运行 6 轮对话。</li>
+<li>混合普通问答、calculator tool call、time tool call。</li>
+<li>每轮记录 prompt tokens、cached tokens、cache hit rate、是否发生 tool call。</li>
+<li>最后汇总总 prompt tokens、总 cached tokens、命中请求数、overall hit rate。</li>
+</ul>
+<p>下面的 per-turn 表格主要用于诊断每轮请求的变化。</p>
+<p>不传 <code>prompt_cache_key</code> 的单次运行结果：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1">1</a></span>
+<span class="normal"><a href="#__codelineno-19-2">2</a></span>
+<span class="normal"><a href="#__codelineno-19-3">3</a></span>
+<span class="normal"><a href="#__codelineno-19-4">4</a></span>
+<span class="normal"><a href="#__codelineno-19-5">5</a></span>
+<span class="normal"><a href="#__codelineno-19-6">6</a></span>
+<span class="normal"><a href="#__codelineno-19-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1"></a>turn  prompt_tokens  cached_tokens  hit_rate  note
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2"></a>1     1592           0              0.00%     cache warmup
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3"></a>2     2077           0              0.00%     calculator tool
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4"></a>3     2167           1984           91.56%    time tool
+</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5"></a>4     2105           1792           85.13%    normal QA
+</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6"></a>5     2574           2048           79.56%    calculator tool
+</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7"></a>6     2497           2176           87.14%    normal QA
+</span></code></pre></div></td></tr></table></div>
+<p>传入固定 <code>prompt_cache_key</code> 的单次运行结果：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-20-1">1</a></span>
+<span class="normal"><a href="#__codelineno-20-2">2</a></span>
+<span class="normal"><a href="#__codelineno-20-3">3</a></span>
+<span class="normal"><a href="#__codelineno-20-4">4</a></span>
+<span class="normal"><a href="#__codelineno-20-5">5</a></span>
+<span class="normal"><a href="#__codelineno-20-6">6</a></span>
+<span class="normal"><a href="#__codelineno-20-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a>turn  prompt_tokens  cached_tokens  hit_rate  note
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a>1     1592           0              0.00%     cache warmup
+</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a>2     2239           1152           51.45%    calculator tool
+</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a>3     2329           2112           90.68%    time tool
+</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5"></a>4     2267           2048           90.34%    normal QA
+</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6"></a>5     2784           2240           80.46%    calculator tool
+</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7"></a>6     2707           2560           94.57%    normal QA
+</span></code></pre></div></td></tr></table></div>
+<p>这仍然只是示例运行结果，不是 SLA。两组运行的模型输出长度和历史上下文会略有差异，因此 prompt tokens 不完全相同；Prompt Cache 本身也是 best-effort 能力，命中率会受服务端路由、缓存保留时间、请求频率、prompt 是否超过门槛、前缀是否完全一致等因素影响。示例程序会打印估算节省，但实际计费应以服务方当前价格和缓存计费规则为准。</p>
+<h2 id="_4">七、实践清单</h2>
+<h3 id="_5">稳定前缀</h3>
+<ul>
+<li>[ ] System prompt 作为长期规则保持稳定，不把每轮变化的用户信息、精确时间、检索片段塞进 system message 前部。</li>
+<li>[ ] Tool schema、工具列表、structured output schema 尽量稳定；动态工具过滤要保证同类请求过滤结果一致。</li>
+<li>[ ] Post-tool guidance 按 Agent 或版本固定，自定义 <code>WithPostToolPrompt</code> 时不要按请求生成。</li>
+</ul>
+<h3 id="_6">动态后置</h3>
+<ul>
+<li>[ ] 当前用户输入、tool result、临时 RAG 片段、精确当前时间等动态内容放到请求后部。</li>
+<li>[ ] Skills 动态加载要控制驻留，优先使用 <code>WithSkillsLoadedContentInToolResults(true)</code> 减少 request prefix 变化。</li>
+<li>[ ] 当前时间默认使用日期级上下文；需要精确时间且工具可用时，优先用 <code>environment_context_current_time</code> 工具；如果结构化输出也需要工具，使用 <code>WithStructuredOutputJSONSchema</code> 或 <code>WithStructuredOutputJSON</code>，不要使用遗留的 <code>WithOutputSchema</code>。</li>
+</ul>
+<h3 id="_7">长会话</h3>
+<ul>
+<li>[ ] Summary 注入区分 preserved-head 和 cache-friendly；需要保持 request prefix 稳定时，优先评估 <code>WithSessionSummaryInjectionMode(SessionSummaryInjectionUser)</code>。</li>
+<li>[ ] Summary / compaction 也要 cache-safe，长会话可以启用 <code>summary.WithCacheSafeForking(true)</code>，复用父会话稳定前缀，把压缩指令追加到后面。</li>
+<li>[ ] Memory / session recall preload 开启后，如果召回内容随 query 变化，cache-sensitive 场景优先评估 user/history injection mode。</li>
+</ul>
+<h3 id="_8">路由与观测</h3>
+<ul>
+<li>[ ] <code>prompt_cache_key</code> 表达可复用前缀类别，不表达请求唯一性。</li>
+<li>[ ] 观测 <code>cached_tokens</code>、requests with cache、overall hit rate，并按服务方价格估算节省；短会话、低频请求、频繁变化上下文不应夸大收益。</li>
+</ul>
+<h3 id="_9">扩展点</h3>
+<ul>
+<li>[ ] <code>BeforeModel</code>、<code>EventMessageProjector</code>、<code>WithInjectedContextMessages</code> 这类扩展点要谨慎使用，尽量 append-only，并把动态内容放到靠后位置。</li>
+</ul>
+<h2 id="anthropic-api">附录：Anthropic API 的显式缓存断点</h2>
+<p>Anthropic API 与 OpenAI-compatible API 的核心思想相同：稳定 prefix 才能复用。不同点在 API 形态。</p>
+<p>OpenAI-compatible API 的典型形态是自动 prefix cache：服务端根据请求 prefix 自动查找和写入缓存，用户通过 <code>cached_tokens</code> 观测，通过 <code>prompt_cache_key</code> 辅助路由。</p>
+<p>Anthropic API 则提供显式 <code>cache_control</code> breakpoint。<a href="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching">Anthropic Prompt Caching 文档</a>说明，缓存会引用从 <code>tools</code>、<code>system</code> 到 <code>messages</code> 中被 <code>cache_control</code> 标记块为止的完整 prompt；静态内容应放在前面，并在可复用内容末尾设置 breakpoint。</p>
+<p>tRPC-Agent-Go 的 Anthropic adapter 提供了三个对应选项：</p>
+<ul>
+<li><code>anthropic.WithCacheSystemPrompt(true)</code></li>
+<li><code>anthropic.WithCacheTools(true)</code></li>
+<li><code>anthropic.WithCacheMessages(true)</code></li>
+</ul>
+<p><code>examples/promptcache/anthropic</code> 可以作为附录实验：</p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>配置</th>
+<th>观察重点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Phase 1</td>
+<td><code>WithCacheSystemPrompt(true)</code></td>
+<td>system prompt 是否被读取自缓存</td>
+</tr>
+<tr>
+<td>Phase 2</td>
+<td><code>WithCacheSystemPrompt(true)</code> + <code>WithCacheTools(true)</code></td>
+<td>tool definitions 是否进入缓存范围</td>
+</tr>
+<tr>
+<td>Phase 3</td>
+<td>system + tools + <code>WithCacheMessages(true)</code></td>
+<td>多轮消息断点是否随对话推进，<code>cache_read</code> 是否增长</td>
+</tr>
+</tbody>
+</table>
+<p>附录用于理解 API 形态差异。正文实践仍以 OpenAI-compatible API 和 <code>cached_tokens</code> 作为主要示例口径。</p>
+<h2 id="_10">参考资料</h2>
+<ul>
+<li><a href="https://huggingface.co/docs/transformers/en/kv_cache">Hugging Face Transformers: Cache strategies / KV cache</a></li>
+<li><a href="https://developers.openai.com/api/docs/guides/prompt-caching">OpenAI Prompt Caching</a></li>
+<li><a href="https://api-docs.deepseek.com/guides/kv_cache/">DeepSeek Context Caching</a></li>
+<li><a href="https://api-docs.deepseek.com/zh-cn/quick_start/pricing">DeepSeek 模型 &amp; 价格</a></li>
+<li><a href="https://claude.com/blog/lessons-from-building-claude-code-prompt-caching-is-everything">Lessons from building Claude Code: Prompt caching is everything</a></li>
+<li><a href="https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching">Anthropic Prompt Caching</a></li>
+<li><a href="https://github.com/anthropics/claude-cookbooks/blob/main/misc/prompt_caching.ipynb">Anthropic Prompt Caching Cookbook</a></li>
+<li><a href="https://api-docs.deepseek.com/news/news0802">DeepSeek API introduces Context Caching on Disk</a></li>
+<li>tRPC-Agent-Go benchmark 说明：<a href="https://github.com/trpc-group/trpc-agent-go-benchmark">trpc-agent-go-benchmark</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go">tRPC-Agent-Go 源码</a> 包引用：<ul>
+<li><code>agent/llmagent</code>：LLM Agent 选项、request processors 组装、Skills 相关配置。</li>
+<li><code>agent</code>：Run options 与 request-level extra fields。</li>
+<li><code>internal/flow/processor</code>：instruction、content、post-tool、time、Skills tool result 等 request processors。</li>
+<li><code>internal/flow/llmflow</code>：Invocation 内工具快照与工具列表稳定化。</li>
+<li><code>model/openai</code>：OpenAI-compatible adapter、message cache optimization、tool conversion、extra fields 合并。</li>
+<li><code>session/summary</code>：session summary、cache-safe summary forking 相关配置。</li>
+<li><code>internal/tool/currenttime</code>：内置精确当前时间工具。</li>
+<li><code>model</code>：provider-agnostic usage 结构。</li>
+<li><code>internal/telemetry</code>：token usage metrics。</li>
+<li><code>examples/promptcache/openai</code>：OpenAI-compatible Prompt Cache 示例。</li>
+<li><code>examples/promptcache/summaryinjection</code>：summary / preload 注入模式对 Prompt Cache 的影响示例。</li>
+<li><code>examples/promptcache/timeprocessor</code>：当前时间上下文的 Prompt Cache 示例。</li>
+<li><code>examples/promptcache/anthropic</code>：Anthropic Prompt Cache 附录示例。</li>
+</ul>
+</li>
+</ul>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="最后更新">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月29日 07:35:06 UTC">2026-06-29 07:35:06</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="创建日期">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月29日 07:35:06 UTC">2026-06-29 07:35:06</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+  
+
+
+
+  <form class="md-feedback" name="feedback" hidden>
+    <fieldset>
+      <legend class="md-feedback__title">
+        Was this page helpful?
+      </legend>
+      <div class="md-feedback__inner">
+        <div class="md-feedback__list">
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page was helpful" data-md-value="1">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m7 0c0 .8-.7 1.5-1.5 1.5S14 10.3 14 9.5 14.7 8 15.5 8s1.5.7 1.5 1.5m-5 7.73c-1.75 0-3.29-.73-4.19-1.81L9.23 14c.45.72 1.52 1.23 2.77 1.23s2.32-.51 2.77-1.23l1.42 1.42c-.9 1.08-2.44 1.81-4.19 1.81"/></svg>
+            </button>
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page could be improved" data-md-value="0">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10m-6.5-4c.8 0 1.5.7 1.5 1.5s-.7 1.5-1.5 1.5-1.5-.7-1.5-1.5.7-1.5 1.5-1.5M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m2 4.5c1.75 0 3.29.72 4.19 1.81l-1.42 1.42C14.32 16.5 13.25 16 12 16s-2.32.5-2.77 1.23l-1.42-1.42C8.71 14.72 10.25 14 12 14"/></svg>
+            </button>
+          
+        </div>
+        <div class="md-feedback__note">
+          
+            <div data-md-value="1" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!
+            </div>
+          
+            <div data-md-value="0" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!<br>Please help us improve by opening an <a href="https://github.com/trpc-group/trpc-agent-go/issues/new" target="_blank" rel="noopener">issue</a>.
+            </div>
+          
+        </div>
+      </div>
+    </fieldset>
+  </form>
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+        
+          
+          <a href="../observability/" class="md-footer__link md-footer__link--prev" aria-label="上一页: 看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                上一页
+              </span>
+              <div class="md-ellipsis">
+                看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../graphagent/" class="md-footer__link md-footer__link--next" aria-label="下一页: GraphAgent 让 AI 工作流与 Agent 无缝融合">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                下一页
+              </span>
+              <div class="md-ellipsis">
+                GraphAgent 让 AI 工作流与 Agent 无缝融合
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+        <script src="../../../assets/javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

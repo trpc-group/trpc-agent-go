@@ -1,0 +1,3521 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/blog/observability/">
+      
+      
+        <link rel="prev" href="../summary/">
+      
+      
+        <link rel="next" href="../promptcache/">
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
+    
+    
+      
+        <title>看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍 - tRPC-Agent-Go</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.7e37652d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+  
+
+
+  
+  
+
+<script id="__analytics">function __md_analytics(){function e(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],e("js",new Date),e("config",""),document.addEventListener("DOMContentLoaded",(function(){document.forms.search&&document.forms.search.query.addEventListener("blur",(function(){this.value&&e("event","search",{search_term:this.value})}));document$.subscribe((function(){var t=document.forms.feedback;if(void 0!==t)for(var a of t.querySelectorAll("[type=submit]"))a.addEventListener("click",(function(a){a.preventDefault();var n=document.location.pathname,d=this.getAttribute("data-md-value");e("event","feedback",{page:n,data:d}),t.firstElementChild.disabled=!0;var r=t.querySelector(".md-feedback__note [data-md-value='"+d+"']");r&&(r.hidden=!1)})),t.hidden=!1})),location$.subscribe((function(t){e("config","",{page_path:t.pathname})}))}));var t=document.createElement("script");t.async=!0,t.src="https://www.googletagmanager.com/gtag/js?id=",document.getElementById("__analytics").insertAdjacentElement("afterEnd",t)}</script>
+  
+    <script>"undefined"!=typeof __md_analytics&&__md_analytics()</script>
+  
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#agent-trpc-agent-go" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../../assets/img/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            tRPC-Agent-Go
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+      <div class="md-header__option">
+  <div class="md-select">
+    
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
+    </button>
+    <div class="md-select__inner">
+      <ul class="md-select__list">
+        
+          <li class="md-select__item">
+            <a href="../../../blog/observability/" hreflang="en" class="md-select__link">
+              English
+            </a>
+          </li>
+        
+          <li class="md-select__item">
+            <a href="./" hreflang="zh" class="md-select__link">
+              中文
+            </a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</div>
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../" class="md-tabs__link">
+        
+  
+  
+    
+  
+  概览
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../agent/" class="md-tabs__link">
+          
+  
+  
+  组件
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../gateway/" class="md-tabs__link">
+          
+  
+  
+  服务
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../observability/" class="md-tabs__link">
+          
+  
+  
+  可观测
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../ecosystem/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  生态
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../trpcagentgo/" class="md-tabs__link">
+          
+  
+  
+  博客
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+      
+  <img src="../../../assets/img/logo.png" alt="logo">
+
+    </a>
+    tRPC-Agent-Go
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    trpc-group/trpc-agent-go
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    组件
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            组件
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_1">
+            <span class="md-nav__icon md-icon"></span>
+            Agent
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../multiagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Multi Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../taskrun/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Task Run 运行时
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../team/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Team
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Graph Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../custom-agent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    自定义 Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../dify/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Dify Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../claudecode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Claude Code Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codex/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Codex Agent
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../runner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Runner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeexecutor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Code Executor
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../codeact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    CodeAct
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    错误处理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Model
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../prompt/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Prompt Template
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../callbacks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Callbacks
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../plugin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Plugins
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../artifact/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Artifact
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Skill
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evolution/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evolution
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tool/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Tool
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_15" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_15" id="__nav_2_15_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Session
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_15">
+            <span class="md-nav__icon md-icon"></span>
+            Session
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Overview
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Session Summary
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/sqlite/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    SQLite Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/redis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Redis Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mysql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MySQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/tdsql/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TDSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/postgres/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PostgreSQL Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/clickhouse/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    ClickHouse Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session/mongodb/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    MongoDB Session
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_16" id="__nav_2_16_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Knowledge
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16">
+            <span class="md-nav__icon md-icon"></span>
+            Knowledge
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/embedder/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Embedder
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/reranker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Reranker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/query-enhancer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Query Enhancer
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/source/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    数据源
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/code-rag/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    代码知识库（Code RAG, Beta）
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/extractor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    内容提取器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    过滤器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    知识库管理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/ocr/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OCR
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_2_16_11" id="__nav_2_16_11_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    向量存储
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_16_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16_11">
+            <span class="md-nav__icon md-icon"></span>
+            向量存储
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概述
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/inmemory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/pgvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PGVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/tcvector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    TcVector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Elasticsearch
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/qdrant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Qdrant
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/vectorstore/milvus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Milvus
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    故障排除
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../planner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Planner
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../event/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Event
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Evaluation
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    PromptIter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    服务
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            服务
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Gateway
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    AG-UI
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            AG-UI
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    总览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/chat/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    实时对话路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/history/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    消息快照路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../agui/cancel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    取消路由
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2a/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2A
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../a2ui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    A2UI
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../openclaw-runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    可观测
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            可观测
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    概览
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../telemetry-multimodal/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    多模态遥测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ecosystem/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    生态
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    博客
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            博客
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../trpcagentgo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    构建智能 AI 应用的 Go 语言 Agent 框架
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../summary/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    长任务 Agent 上下文管理的设计与评测
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      一、为什么传统服务观测不够看清 Agent
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trpc-agent-go-agent-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      二、tRPC-Agent-Go Agent Runtime 观测的设计思路
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tracemetric" class="md-nav__link">
+    <span class="md-ellipsis">
+      三、核心数据模型：Trace、Metric 与语义属性
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="三、核心数据模型：Trace、Metric 与语义属性">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#trace" class="md-nav__link">
+    <span class="md-ellipsis">
+      Trace：把运行过程变成执行树
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metric：把运行过程变成可治理指标
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      语义属性：让不同后端读懂同一套数据
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#token" class="md-nav__link">
+    <span class="md-ellipsis">
+      四、一个定位例子：首 token 慢
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      五、数据链路：运行时如何变成观测数据
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      六、工程实践：把 Agent telemetry 做稳
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      七、对比、取舍与演进
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      结语
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      参考资料
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptcache/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../graphagent/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    GraphAgent 让 AI 工作流与 Agent 无缝融合
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    快速构建基于 AG-UI 的 Agent 服务
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../skill/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Anthropic Agent Skills 规范的 Go 原生实现
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 自动化评估范式与工程实践全解析
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../llmverifier/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 高质量稳定性提升方法
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../openclaw/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    打造企业级安全可控的 OpenClaw Runtime
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../promptiter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AI Agent 提示词自动迭代与工程实践全解析
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      一、为什么传统服务观测不够看清 Agent
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trpc-agent-go-agent-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      二、tRPC-Agent-Go Agent Runtime 观测的设计思路
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tracemetric" class="md-nav__link">
+    <span class="md-ellipsis">
+      三、核心数据模型：Trace、Metric 与语义属性
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="三、核心数据模型：Trace、Metric 与语义属性">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#trace" class="md-nav__link">
+    <span class="md-ellipsis">
+      Trace：把运行过程变成执行树
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      Metric：把运行过程变成可治理指标
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      语义属性：让不同后端读懂同一套数据
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#token" class="md-nav__link">
+    <span class="md-ellipsis">
+      四、一个定位例子：首 token 慢
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      五、数据链路：运行时如何变成观测数据
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#agent-telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      六、工程实践：把 Agent telemetry 做稳
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      七、对比、取舍与演进
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      结语
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      参考资料
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/blog/observability.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/blog/observability.md" title="查看本页的源代码" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="agent-trpc-agent-go">看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍</h1>
+<blockquote>
+<p>本文聚焦 tRPC-Agent-Go 的可观测设计：框架不自建观测平台，而是把 Agent 运行时中的关键语义映射到 OpenTelemetry，让 Trace、Metric 和 GenAI 语义属性可以被不同后端消费。</p>
+</blockquote>
+<p>大模型应用从 Chat 走向 Agent 后，可观测性问题变得明显不一样了。</p>
+<p>在 Chat 阶段，一次用户请求通常可以粗略理解为“一次入口请求 + 一次模型调用 + 一次模型响应”。这时沿用传统服务观测方法，先看 QPS、延迟、错误率，再沿着 RPC/HTTP 调用链定位问题，很多时候还能回答“接口慢不慢、模型调用有没有失败”。</p>
+<p>但 Agent 不一样。Agent 的一次请求内部可能包含多次模型调用、多次工具调用、多 Agent 协作、Graph/Workflow 编排、流式输出、token 消耗、prompt cache 命中情况，以及工具返回后再次推理的循环。也就是说，用户看到的是“一次回答”，运行时实际发生的是“一棵执行树”。如果只看入口接口和外部 RPC/HTTP 调用链，就很难看清这棵树内部发生了什么。</p>
+<p>因此，Agent 框架的可观测性不能只回答“接口慢不慢、失败没失败”，还要回答：</p>
+<ul>
+<li>这次请求经过了哪些 Agent、LLM、Tool、Workflow？</li>
+<li>模型为什么触发了某个工具？工具参数和结果是什么？</li>
+<li>token 消耗主要发生在哪一次模型调用？</li>
+<li>流式响应的首 token 慢，是模型慢、工具慢，还是编排慢？</li>
+<li>错误发生在模型、工具、工作流节点，还是 Agent 调用边界？</li>
+<li>如果要接入不同观测平台，框架核心是否需要改？</li>
+</ul>
+<p>tRPC-Agent-Go 的 telemetry 设计，就是围绕这些问题展开的。它的核心选择不是做一个新的观测平台，而是把 Agent 运行时中的关键语义稳定映射到 OpenTelemetry，让不同后端可以消费同一套数据。</p>
+<p>一个典型 Agent 请求的 trace 形态可以先粗略理解为：</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span>
+<span class="normal"><a href="#__codelineno-0-3">3</a></span>
+<span class="normal"><a href="#__codelineno-0-4">4</a></span>
+<span class="normal"><a href="#__codelineno-0-5">5</a></span>
+<span class="normal"><a href="#__codelineno-0-6">6</a></span>
+<span class="normal"><a href="#__codelineno-0-7">7</a></span>
+<span class="normal"><a href="#__codelineno-0-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>invoke_agent customer_assistant
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>├── chat gpt-4o-mini
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>│   └── response with tool call
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a>├── execute_tool search_order
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a>│   └── tool result
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a>├── chat gpt-4o-mini
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a>│   └── final answer
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a>└── workflow after_reply_summary
+</span></code></pre></div></td></tr></table></div>
+<p>这棵树把“用户的一次请求”拆成了多个可以观察、可以归因、可以统计的运行时事件。</p>
+<h2 id="agent">一、为什么传统服务观测不够看清 Agent</h2>
+<p>传统服务可观测性的默认对象通常是进程、接口、RPC 方法、数据库访问、消息队列消费。它们大多有明确的输入输出和比较稳定的调用拓扑。Agent 运行时则多了一层“不确定的智能决策”。</p>
+<p>Agent 的执行路径经常不是静态写死的。模型可能根据用户输入决定是否调用工具，工具结果又可能影响下一次模型请求，多 Agent 系统里还可能把任务交给其他 Agent 或子图。Graph/Workflow 虽然能让路径更可控，但节点内部仍然可能包含模型调用、工具调用和流式输出。</p>
+<p>这会带来三个典型的观测难点。</p>
+<p>第一，调用链更长，而且形态更动态。一个入口请求里可能有多个 LLM round trip，也可能有工具调用和工作流节点嵌套。如果只看入口接口耗时，很难知道慢在什么地方。</p>
+<p>第二，成本和质量都发生在内部步骤。token usage、prompt cache、completion tokens、模型 finish reason、工具参数、工具返回内容，这些信息不在普通 RPC 指标里，却直接影响成本、质量和稳定性。</p>
+<p>第三，排障需要“语义化归因”。同样是失败，可能是模型供应商错误、工具执行失败、工具参数生成错误、工作流节点异常，也可能是框架层取消或超时。没有 Agent 语义的 trace，最终只能看到一串普通 span，很难回答“Agent 到底做了什么”。</p>
+<p>所以，Agent 框架的 telemetry 不能停在“只观测入口接口和 HTTP/RPC 调用”。它需要把 Agent 自身的运行时对象变成一等观测对象。</p>
+<h2 id="trpc-agent-go-agent-runtime">二、tRPC-Agent-Go Agent Runtime 观测的设计思路</h2>
+<p>tRPC-Agent-Go 的 telemetry 设计不是另起一套观测平台，而是在框架层把上一节提到的观测难点，转化为 Agent Runtime 可以稳定产生、持续演进的 telemetry 数据。</p>
+<p>第一，针对“调用链更长、更动态”的问题，框架在 Agent runtime 的关键边界自动埋点。应用不需要在每个 Agent、Tool、Model 调用处手写 span；tRPC-Agent-Go 会在 Agent 调用、模型请求、工具执行、Graph/Workflow 节点运行等生命周期里生成 <code>invoke_agent</code>、<code>chat</code>、<code>execute_tool</code>、<code>workflow</code> 等 span。这样，一次入口请求内部的动态执行路径可以被还原成可阅读的执行树。</p>
+<p>第二，针对“成本和质量发生在内部步骤”的问题，框架同时记录 Trace 和 Metric。Trace 里可以看到模型名、是否流式、输入输出消息、finish reason、工具参数和工具结果；Metric 里可以聚合 token usage、TTFT、operation duration、输出 token 速率等指标。这样既能定位单次请求发生了什么，也能长期治理成本、性能和质量。</p>
+<p>第三，针对“排障需要语义化归因”的问题，观测对象围绕 Agent 语义，而不是只围绕 HTTP/RPC 语义。tRPC-Agent-Go 关注的是 Agent、LLM、Tool、Workflow 这些运行时概念，并用 <code>gen_ai.operation.name</code>、<code>gen_ai.agent.name</code>、<code>gen_ai.tool.name</code>、<code>gen_ai.workflow.name</code> 等属性描述上下文。读 trace 时，看到的不再只是一串基础设施 span，而是能直接判断问题发生在模型、工具、工作流节点还是 Agent 调用边界。</p>
+<p>第四，针对“不同应用会接入不同观测后端”的问题，框架基于 OpenTelemetry，不自造观测协议。Trace、Metric、Resource、Exporter、Collector 这些能力尽量复用 OTel 标准生态；框架核心负责生成标准化 telemetry 数据，数据去往哪里由 OTel provider、exporter、collector 或外部插件决定。这样应用可以把数据导入 Jaeger、Prometheus、Langfuse 或其他 OTel 兼容后端，而平台适配不会反向污染 Agent runtime 的核心抽象。</p>
+<p>换句话说，tRPC-Agent-Go telemetry 的定位是“Agent 运行时语义层”，不是“观测平台本身”。</p>
+<h2 id="tracemetric">三、核心数据模型：Trace、Metric 与语义属性</h2>
+<p>本文重点讨论两类 telemetry 数据：Trace 和 Metric。</p>
+<p>Trace 负责描述一次请求内部发生了什么，Metric 负责把大量请求聚合成可统计、可告警、可看趋势的数据。</p>
+<h3 id="trace">Trace：把运行过程变成执行树</h3>
+<p>tRPC-Agent-Go 中几个核心 span 名称非常重要：</p>
+<table>
+<thead>
+<tr>
+<th>Span</th>
+<th>含义</th>
+<th>典型问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>invoke_agent &lt;agent&gt;</code></td>
+<td>一次 Agent 调用生命周期</td>
+<td>哪个 Agent 慢了、失败了、消耗了多少 token</td>
+</tr>
+<tr>
+<td><code>chat &lt;model&gt;</code></td>
+<td>一次 LLM 调用</td>
+<td>哪个模型慢、首 token 慢不慢、输入输出 token 多少</td>
+</tr>
+<tr>
+<td><code>execute_tool &lt;tool&gt;</code></td>
+<td>一次工具执行</td>
+<td>哪个工具被调用、参数是什么、结果是什么、是否失败</td>
+</tr>
+<tr>
+<td><code>workflow &lt;name&gt;</code></td>
+<td>一次 Graph 节点或 Workflow 观测对象执行</td>
+<td>工作流卡在哪个节点、节点耗时和错误如何</td>
+</tr>
+</tbody>
+</table>
+<p>这组 span 的价值在于：它不是从基础设施角度抽象出来的，而是从 Agent 运行时抽象出来的。读 trace 时，看到的不再只是“某个 HTTP 请求调用了某个外部服务”，而是可以直接看到“Agent 调用了模型，模型要求执行工具，工具返回后模型继续生成答案”。</p>
+<p>以工具调用为例，<code>execute_tool</code> span 会围绕工具名、工具描述、工具参数、工具结果、错误类型等信息记录上下文。以模型调用为例，<code>chat</code> span 会记录模型名、是否流式、输入输出消息、finish reason、token usage、TTFT 等信息。以 Workflow 为例，Graph node 会被适配为 <code>workflow</code> 观测对象，span 记录 workflow name、workflow id、workflow type、request、response 和错误状态。</p>
+<h3 id="metric">Metric：把运行过程变成可治理指标</h3>
+<p>Trace 更适合单次排障，但生产治理离不开聚合指标。tRPC-Agent-Go 内置指标覆盖了几个关键维度：</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>关注点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>trpc_agent_go.client.request_cnt</code></td>
+<td>请求次数</td>
+</tr>
+<tr>
+<td><code>gen_ai.client.operation.duration</code></td>
+<td>LLM、Tool、Agent、Workflow 等操作耗时</td>
+</tr>
+<tr>
+<td><code>gen_ai.client.token.usage</code></td>
+<td>输入、输出、缓存相关 token 统计</td>
+</tr>
+<tr>
+<td><code>gen_ai.server.time_to_first_token</code></td>
+<td>标准 GenAI 首 token 时间</td>
+</tr>
+<tr>
+<td><code>trpc_agent_go.client.time_to_first_token</code></td>
+<td>框架兼容首 token 时间，当前与标准 TTFT 同值上报</td>
+</tr>
+<tr>
+<td><code>trpc_agent_go.client.time_per_output_token</code></td>
+<td>平均每个输出 token 的生成耗时</td>
+</tr>
+<tr>
+<td><code>trpc_agent_go.client.output_token_per_time</code></td>
+<td>输出 token 速率</td>
+</tr>
+<tr>
+<td><code>gen_ai.workflow.elapsed_time</code></td>
+<td>从 <code>root_workflow.start</code> 到 <code>current_workflow.end</code> 的相对累计耗时</td>
+</tr>
+</tbody>
+</table>
+<p>这里有三个细节值得注意。</p>
+<p>第一，tRPC-Agent-Go 同时关心总耗时和流式体验。对于流式 Agent，用户感知不只取决于最终完成时间，还取决于首 token 时间是否足够快、后续 token 生成是否稳定。因此 TTFT、time per output token、output token per time 都是很重要的信号。</p>
+<p>第二，token usage 不只是成本指标，也是质量和性能指标。输入 token 过长可能说明上下文管理有问题；输出 token 异常变长可能说明 prompt 或工具结果失控；缓存相关 token 则可以帮助分析 prompt cache 是否真正生效。</p>
+<p>第三，Workflow 指标要区分“节点自身耗时”和“相对累计耗时”。<code>gen_ai.client.operation.duration</code> 描述当前 workflow/node 自身执行了多久；<code>gen_ai.workflow.elapsed_time</code> 描述当前观测对象从 root workflow 开始到当前对象结束的到达时间，它不表示各节点耗时求和。</p>
+<h3 id="_1">语义属性：让不同后端读懂同一套数据</h3>
+<p>除了 span 和 metric 名称，属性设计同样关键。tRPC-Agent-Go 会使用 OpenTelemetry GenAI 语义约定和框架扩展字段来描述上下文，例如：</p>
+<table>
+<thead>
+<tr>
+<th>属性</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>gen_ai.operation.name</code></td>
+<td>操作类型，例如 <code>chat</code>、<code>execute_tool</code>、<code>invoke_agent</code>、<code>workflow</code></td>
+</tr>
+<tr>
+<td><code>gen_ai.agent.name</code> / <code>gen_ai.agent.id</code></td>
+<td>Agent 名称和标识</td>
+</tr>
+<tr>
+<td><code>gen_ai.conversation.id</code></td>
+<td>会话或对话标识</td>
+</tr>
+<tr>
+<td><code>gen_ai.request.model</code> / <code>gen_ai.response.model</code></td>
+<td>请求和响应模型</td>
+</tr>
+<tr>
+<td><code>gen_ai.input.messages.otel</code> / <code>gen_ai.output.messages.otel</code></td>
+<td>OTel 对齐的输入输出消息</td>
+</tr>
+<tr>
+<td><code>gen_ai.usage.input_tokens</code> / <code>gen_ai.usage.output_tokens</code></td>
+<td>输入输出 token</td>
+</tr>
+<tr>
+<td><code>gen_ai.tool.name</code></td>
+<td>工具名称</td>
+</tr>
+<tr>
+<td><code>gen_ai.tool.call.arguments</code> / <code>gen_ai.tool.call.result</code></td>
+<td>工具参数和结果</td>
+</tr>
+<tr>
+<td><code>gen_ai.workflow.name</code> / <code>gen_ai.workflow.type</code></td>
+<td>Workflow 名称和类型</td>
+</tr>
+<tr>
+<td><code>error.type</code> / <code>error.message</code></td>
+<td>错误类型和错误消息</td>
+</tr>
+<tr>
+<td><code>trpc.go.agent.invocation_id</code></td>
+<td>框架内一次调用的 invocation id</td>
+</tr>
+<tr>
+<td><code>trpc.go.agent.llm_request</code> / <code>trpc.go.agent.llm_response</code></td>
+<td>框架保留的 LLM 请求/响应 payload</td>
+</tr>
+</tbody>
+</table>
+<p>这些属性让数据具备可迁移性。不同后端可能展示方式不同，但只要它们理解 OTel/GenAI 语义，或者能基于这些属性做映射，就可以围绕同一套运行时事实构建视图。</p>
+<p>这张表也意味着一个生产接入前必须回答的问题：哪些 payload 可以上报，哪些必须脱敏、截断或关闭。prompt、response、工具参数、工具结果、用户标识和 <code>llm_request</code> / <code>llm_response</code> 都可能包含敏感信息；同时，过长属性会增加存储成本，高基数字段也会影响指标聚合。因此接入 telemetry 时，应同步确定 payload 开关、字段脱敏、attribute size limit、采样策略和高基数字段治理。</p>
+<h2 id="token">四、一个定位例子：首 token 慢</h2>
+<p>假设用户反馈“流式回答一直不出字”，入口接口只能告诉我们这次请求慢了，但 Agent telemetry 可以继续拆开看。</p>
+<p>第一步看 <code>invoke_agent</code> 的总耗时和 TTFT。如果 <code>invoke_agent</code> 很慢，但第一个 <code>chat</code> span 很晚才开始，问题通常在 Agent 编排、前置 Workflow 或工具准备阶段。</p>
+<p>第二步展开 trace。如果 <code>execute_tool</code> 或某个 <code>workflow</code> span 占用大量时间，就可以继续看工具参数、工具结果、workflow type 和错误状态；如果慢点集中在 <code>chat &lt;model&gt;</code>，则进一步看模型名、输入 token、是否流式、TTFT 和 finish reason。</p>
+<p>第三步结合指标做聚合判断。如果只有单次请求慢，trace 更有用；如果一段时间内某个模型的 <code>gen_ai.server.time_to_first_token</code> 普遍升高，或者 <code>gen_ai.client.token.usage</code> 显示输入 token 明显膨胀，就可以把问题从“某次请求异常”提升为“模型供应商、上下文管理或 prompt 设计需要治理”。</p>
+<h2 id="_2">五、数据链路：运行时如何变成观测数据</h2>
+<p>tRPC-Agent-Go 的 telemetry 链路可以抽象成四层：</p>
+<pre class="mermaid"><code>flowchart LR
+    AgentRuntime["Agent Runtime: Agent / LLM / Tool / Workflow"] --&gt; OpenTelemetryAPI["OpenTelemetry API: Tracer / Meter"]
+    OpenTelemetryAPI --&gt; Provider["Provider and Processor: Resource / SpanProcessor / MetricReader"]
+    Provider --&gt; Exporter["Exporter or Collector: OTLP HTTP / OTLP gRPC"]
+    Exporter --&gt; Backend["Backend: Langfuse / Jaeger / Prometheus / OTel-compatible systems"]</code></pre>
+<p>从应用视角看，接入的第一步通常是初始化 tracer provider 和 meter provider。比如 trace 可以通过 <code>telemetry/trace.Start</code> 配置 endpoint、protocol、service name、resource attributes、headers 等；指标可以通过 <code>telemetry/metric.NewMeterProvider</code> 和 <code>metric.InitMeterProvider</code> 初始化。默认情况下，如果没有初始化 provider，OpenTelemetry 的 noop 行为会让框架埋点不产生实际导出开销。</p>
+<p>从框架视角看，Agent runtime 在关键生命周期里自动创建 span、记录属性、上报指标。例如 Agent 调用开始时建立 <code>invoke_agent</code>，模型请求时建立 <code>chat</code>，工具执行时建立 <code>execute_tool</code>，Graph/Workflow 节点运行时建立 <code>workflow</code>。这些位置是框架天然知道的边界，应用代码不需要重复感知。</p>
+<p>从平台视角看，数据最终去哪里不是由 Agent 核心决定的。它可以通过 OTLP HTTP/gRPC 到 OpenTelemetry Collector，再由 Collector fan-out 到多个后端；也可以通过特定 exporter 或插件直接进入某个观测系统。这个分层让 tRPC-Agent-Go 的核心保持稳定，也让平台接入可以按环境演进。</p>
+<p>这也是为什么本文不把“后端适配”单独作为可观测模块的核心设计来讲。平台适配是整体工程架构的一部分：开源环境可以选择 Langfuse、Jaeger、Prometheus 等后端，企业内部环境也可能选择自己的 OTel-compatible observability backend。可观测模块真正沉淀的核心，是前面这层 Agent telemetry 语义。</p>
+<h2 id="agent-telemetry">六、工程实践：把 Agent telemetry 做稳</h2>
+<p>从 telemetry 模块演进看，很多问题并不发生在“能不能上报 span”这一层，而是发生在大 payload、上下文传播、指标口径、后端限制和平台适配的边界处。尤其是 LLM request、response、tool arguments、workflow request/response 这类 attribute，既可能造成生产侧 marshal 内存压力，也可能在导出或后端侧被 span limits 截断。</p>
+<table>
+<thead>
+<tr>
+<th>工程问题</th>
+<th>解决思路</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Trace 上下文在 context clone、并发 tool call 中容易断链</td>
+<td>保证 clone 后保留 OpenTelemetry span context，并用测试覆盖 TraceID、SpanID 和父子 span 关系</td>
+</tr>
+<tr>
+<td>span 创建阶段采集大 payload 会带来重复 <code>json.Marshal</code> 和堆内存峰值</td>
+<td>使用 opt-in 的 <code>SpanAttributePolicy</code>，按 operation/key 控制采集；降内存优先 <code>Drop()</code> 冗余 attribute 或无条件 <code>Omit()</code></td>
+</tr>
+<tr>
+<td>OTel / 后端属性长度限制会截断大 attribute，导致结构化解析失败</td>
+<td>exporter 记录截断诊断日志，根据 value length、limit、<code>unexpected EOF</code> 等信号判断是否被 <code>AttributeValueLengthLimit</code> 截断</td>
+</tr>
+<tr>
+<td>OTel GenAI 语义仍在演进，多模态、tool call schema 容易变</td>
+<td>核心层保留稳定语义，兼容 OTel message role/parts 等新格式，后端差异放到 adapter 映射</td>
+</tr>
+<tr>
+<td>TTFT、workflow elapsed、token usage 等指标口径容易不一致</td>
+<td>明确定义 metric 的 from/to、成功/失败/cache/retry 口径，并让 <code>chat</code>、<code>invoke_agent</code>、<code>workflow</code> 使用一致口径</td>
+</tr>
+<tr>
+<td>Graph / Agent 嵌套过深会让 trace 难读</td>
+<td>有意识地调整 span 拓扑，让链路更贴近排障视角</td>
+</tr>
+<tr>
+<td>tool、error、应用维度如果不稳定，会影响聚合分析</td>
+<td>稳定 tool 排序和 tool_call_id，统一 error.type / error label，通过受控维度承载场景信息</td>
+</tr>
+</tbody>
+</table>
+<p>这里有一个容易混淆的点：“限长”和“降内存”不是一回事。<code>Drop()</code> 和无条件 <code>Omit()</code> 可以在 <code>json.Marshal</code> 前短路，能降低 marshal 堆峰值；<code>MaxBytes</code> + <code>Omit()</code>、<code>Truncate()</code> 更多是控制最终写入 span 的 attribute 体积。对 <code>chat</code>、<code>workflow</code>、<code>invoke_agent</code> 这类 JSON 序列化路径，通常仍要先完整 marshal 才能判断大小。</p>
+<p>这也带来一个实践原则：不要把“调大后端 attribute limit”当成唯一手段。生产侧先决定哪些 attribute 值得采集，导出侧再处理平台限长、截断诊断和字段映射；前者解决内存与冗余，后者解决展示与排障。</p>
+<h2 id="_3">七、对比、取舍与演进</h2>
+<p>有了工程实践作为背景，再看其他框架的可观测设计，可以帮助我们理解 tRPC-Agent-Go 的选择。这里不是做优劣排名，而是看不同产品形态如何回答“运行时事实由谁记录、数据最终由谁消费”。</p>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>代表</th>
+<th>可观测设计重点</th>
+<th>对 tRPC-Agent-Go 的参照意义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>平台闭环型 Agent 框架</td>
+<td>LangChain / LangGraph</td>
+<td>以 LangSmith 承载 trace、debug、评测、监控和反馈闭环</td>
+<td>平台体验强，但框架语义和平台绑定更紧</td>
+</tr>
+<tr>
+<td>标准语义型 Agent 框架</td>
+<td>Google ADK</td>
+<td>内置日志、指标和 trace，并强调 OpenTelemetry GenAI 语义</td>
+<td>说明 Agent span 标准化已经成为重要方向</td>
+</tr>
+<tr>
+<td>数据主权型 Agent 框架</td>
+<td>Agno</td>
+<td>run history、audit logs 和 tracing 可写入用户自己的数据库，也支持 OTel 外送</td>
+<td>本地存储和外部后端之间可以做不同取舍</td>
+</tr>
+<tr>
+<td>Go 生态组件框架</td>
+<td>CloudWeGo / Eino</td>
+<td>通过 Callback/Handler/RunInfo 暴露组件和 Graph 生命周期</td>
+<td>callback 扩展灵活，但需要用户或平台侧沉淀统一语义</td>
+</tr>
+<tr>
+<td>Code Agent 产品</td>
+<td>OpenAI Codex / Claude Code</td>
+<td>更关注工具审批、命令执行、组织成本、安全审计和人机协作事件</td>
+<td>观测对象偏产品事件流，不等同于业务 Agent 服务运行时</td>
+</tr>
+</tbody>
+</table>
+<p>对比下来，tRPC-Agent-Go 的选择更像是“标准语义 + 服务端框架内建埋点”。它不追求自己提供观测平台，也不只提供 callback 扩展点，而是在 Agent runtime 中直接沉淀稳定的 span、指标和属性。</p>
+<p>这个取舍让框架保持轻量和后端解耦，但也要求应用在生产接入时明确敏感字段治理策略。prompt、response、工具参数、工具结果、用户标识都可能包含敏感信息，是否上报、如何脱敏、如何控制属性大小和指标基数，需要在具体环境中治理。</p>
+<p>未来演进可以继续围绕几个方向推进：</p>
+<ul>
+<li>跟进 OpenTelemetry GenAI semantic conventions 的变化，减少自定义字段和标准字段之间的偏差。</li>
+<li>扩展更多 Agent 维度指标，例如工具成功率、Agent step 数、Graph 节点重试和恢复指标。</li>
+<li>细化流式链路统计，例如 reasoning 阶段、首 token、有效内容 token 和最终完成时间的关系。</li>
+<li>加强敏感数据治理，例如 payload 开关、字段脱敏、attribute size limit、高基数字段控制。</li>
+<li>更好支持多后端路由，例如通过 Collector 或插件把同一套数据同时送往 LLMOps 平台和通用 APM 平台。</li>
+</ul>
+<h2 id="_4">结语</h2>
+<p>Agent 框架的可观测性，关键不是“多打一批日志”，也不是“把模型请求包一层 span”。</p>
+<p>真正重要的是把 Agent 运行时看见：一次请求如何进入 Agent，如何调用模型，如何触发工具，如何走过 Graph/Workflow，在哪里消耗 token，在哪里等待首 token，在哪里失败，最终又如何被不同观测平台消费。</p>
+<p>tRPC-Agent-Go 的选择是先沉淀这套运行时语义，再通过 OpenTelemetry 连接不同后端。这种设计没有把观测平台塞进框架核心，也没有把 Agent 内部执行过程留给应用自己补埋点。它站在框架层，把最稳定、最关键的运行时事实记录下来。</p>
+<p>这也是“看见 Agent 运行时”的意义：不是为了多一个漂亮的 trace 页面，而是让 Agent 服务在生产环境里真正可解释、可定位、可度量、可治理。</p>
+<h2 id="_5">参考资料</h2>
+<ul>
+<li><a href="https://github.com/trpc-group/trpc-agent-go">tRPC-Agent-Go GitHub</a></li>
+<li><a href="https://trpc-group.github.io/trpc-agent-go/">tRPC-Agent-Go documentation site</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/zh/observability.md">tRPC-Agent-Go Observability 文档</a></li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/telemetry/langfuse">tRPC-Agent-Go Langfuse 示例</a></li>
+<li><a href="https://opentelemetry.io/docs/">OpenTelemetry Documentation</a></li>
+<li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">OpenTelemetry GenAI Semantic Conventions</a></li>
+<li><a href="https://docs.langchain.com/langsmith/observability">LangSmith Observability</a></li>
+<li><a href="https://docs.langchain.com/oss/python/langgraph/observability">LangGraph Observability</a></li>
+<li><a href="https://docs.langchain.com/langsmith/trace-with-opentelemetry">LangSmith Trace with OpenTelemetry</a></li>
+<li><a href="https://adk.dev/observability/">Google ADK Observability</a></li>
+<li><a href="https://adk.dev/observability/traces/">Google ADK Traces</a></li>
+<li><a href="https://adk.dev/observability/metrics/">Google ADK Metrics</a></li>
+<li><a href="https://docs.cloud.google.com/stackdriver/docs/instrumentation/ai-agent-adk">Google Cloud: Instrument ADK applications with OpenTelemetry</a></li>
+<li><a href="https://docs.agno.com/tracing/overview">Agno Tracing</a></li>
+<li><a href="https://docs.agno.com/features/observability">Agno Agent Observability</a></li>
+<li><a href="https://docs.agno.com/observability/overview">Agno OpenTelemetry Observability</a></li>
+<li><a href="https://www.cloudwego.io/docs/eino/core_modules/chain_and_graph_orchestration/callback_manual/">CloudWeGo Eino Callback Manual</a></li>
+<li><a href="https://www.cloudwego.io/docs/eino/quick_start/chapter_06_callback_and_trace/">CloudWeGo Eino Callback and Trace</a></li>
+<li><a href="https://www.cloudwego.io/docs/eino/overview/eino_open_source/">CloudWeGo Eino Open Source Overview</a></li>
+<li><a href="https://developers.openai.com/codex/config-advanced">OpenAI Codex Advanced Configuration: Observability and Telemetry</a></li>
+<li><a href="https://code.claude.com/docs/en/monitoring-usage">Claude Code Monitoring</a></li>
+<li><a href="https://code.claude.com/docs/en/agent-sdk/observability">Claude Code Agent SDK Observability</a></li>
+<li><a href="https://langfuse.com/integrations/native/opentelemetry">Langfuse OpenTelemetry Integration</a></li>
+<li><a href="https://langfuse.com/self-hosting">Langfuse Self Hosting</a></li>
+</ul>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="最后更新">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月29日 07:35:06 UTC">2026-06-29 07:35:06</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="创建日期">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月29日 07:35:06 UTC">2026-06-29 07:35:06</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+  
+
+
+
+  <form class="md-feedback" name="feedback" hidden>
+    <fieldset>
+      <legend class="md-feedback__title">
+        Was this page helpful?
+      </legend>
+      <div class="md-feedback__inner">
+        <div class="md-feedback__list">
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page was helpful" data-md-value="1">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m7 0c0 .8-.7 1.5-1.5 1.5S14 10.3 14 9.5 14.7 8 15.5 8s1.5.7 1.5 1.5m-5 7.73c-1.75 0-3.29-.73-4.19-1.81L9.23 14c.45.72 1.52 1.23 2.77 1.23s2.32-.51 2.77-1.23l1.42 1.42c-.9 1.08-2.44 1.81-4.19 1.81"/></svg>
+            </button>
+          
+            <button class="md-feedback__icon md-icon" type="submit" title="This page could be improved" data-md-value="0">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 0-8-8 8 8 0 0 0-8 8 8 8 0 0 0 8 8 8 8 0 0 0 8-8m2 0a10 10 0 0 1-10 10A10 10 0 0 1 2 12 10 10 0 0 1 12 2a10 10 0 0 1 10 10m-6.5-4c.8 0 1.5.7 1.5 1.5s-.7 1.5-1.5 1.5-1.5-.7-1.5-1.5.7-1.5 1.5-1.5M10 9.5c0 .8-.7 1.5-1.5 1.5S7 10.3 7 9.5 7.7 8 8.5 8s1.5.7 1.5 1.5m2 4.5c1.75 0 3.29.72 4.19 1.81l-1.42 1.42C14.32 16.5 13.25 16 12 16s-2.32.5-2.77 1.23l-1.42-1.42C8.71 14.72 10.25 14 12 14"/></svg>
+            </button>
+          
+        </div>
+        <div class="md-feedback__note">
+          
+            <div data-md-value="1" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!
+            </div>
+          
+            <div data-md-value="0" hidden>
+              
+              
+                
+              
+              
+              
+                
+                
+              
+              Thanks for your feedback!<br>Please help us improve by opening an <a href="https://github.com/trpc-group/trpc-agent-go/issues/new" target="_blank" rel="noopener">issue</a>.
+            </div>
+          
+        </div>
+      </div>
+    </fieldset>
+  </form>
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+        
+          
+          <a href="../summary/" class="md-footer__link md-footer__link--prev" aria-label="上一页: 长任务 Agent 上下文管理的设计与评测">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                上一页
+              </span>
+              <div class="md-ellipsis">
+                长任务 Agent 上下文管理的设计与评测
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../promptcache/" class="md-footer__link md-footer__link--next" aria-label="下一页: 降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                下一页
+              </span>
+              <div class="md-ellipsis">
+                降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "../../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      
+        <script src="../../../assets/javascripts/mathjax.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
