@@ -604,6 +604,411 @@ func TestArtifactNameVersionInvalidRefIsSentinel(t *testing.T) {
 	}
 }
 
+func TestWrapOptionalInterfaceCombinationMethods(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	searchResults := []session.EventSearchResult{{SessionKey: key, Event: *imageEvent([]byte("inline"))}}
+	windowResult := &session.EventWindow{
+		SessionKey: key,
+		Entries: []session.EventWindowEntry{
+			{Event: *imageEvent([]byte("inline"))},
+		},
+	}
+	tests := []struct {
+		name       string
+		inner      session.Service
+		wantSearch bool
+		wantWindow bool
+		wantTrack  bool
+	}{
+		{
+			name:       "search window",
+			wantSearch: true,
+			wantWindow: true,
+			inner: &searchWindowOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{results: searchResults, window: windowResult},
+			},
+		},
+		{
+			name:       "search track",
+			wantSearch: true,
+			wantTrack:  true,
+			inner: &searchTrackOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{results: searchResults},
+			},
+		},
+		{
+			name:       "window track",
+			wantWindow: true,
+			wantTrack:  true,
+			inner: &windowTrackOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{window: windowResult},
+			},
+		},
+		{
+			name:       "search window track",
+			wantSearch: true,
+			wantWindow: true,
+			wantTrack:  true,
+			inner: &searchWindowTrackService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{results: searchResults, window: windowResult},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapped := Wrap(tt.inner, artifactmem.NewService(), Config{Enabled: true})
+			if searchable, ok := wrapped.(session.SearchableService); ok != tt.wantSearch {
+				t.Fatalf("SearchableService ok = %v, want %v", ok, tt.wantSearch)
+			} else if ok {
+				results, err := searchable.SearchEvents(ctx, session.EventSearchRequest{
+					UserKey: session.UserKey{AppName: key.AppName, UserID: key.UserID},
+					Query:   "image",
+				})
+				if err != nil {
+					t.Fatalf("SearchEvents() error = %v", err)
+				}
+				if len(results) != 1 {
+					t.Fatalf("SearchEvents() len = %d, want 1", len(results))
+				}
+			}
+			if window, ok := wrapped.(session.WindowService); ok != tt.wantWindow {
+				t.Fatalf("WindowService ok = %v, want %v", ok, tt.wantWindow)
+			} else if ok {
+				result, err := window.GetEventWindow(ctx, session.EventWindowRequest{Key: key})
+				if err != nil {
+					t.Fatalf("GetEventWindow() error = %v", err)
+				}
+				if result == nil || len(result.Entries) != 1 {
+					t.Fatalf("GetEventWindow() = %#v, want one entry", result)
+				}
+			}
+			if track, ok := wrapped.(session.TrackService); ok != tt.wantTrack {
+				t.Fatalf("TrackService ok = %v, want %v", ok, tt.wantTrack)
+			} else if ok {
+				if err := track.AppendTrackEvent(ctx, &session.Session{}, &session.TrackEvent{Track: "trace"}); err != nil {
+					t.Fatalf("AppendTrackEvent() error = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestExternalizeTargetForPartEdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		part    *model.ContentPart
+		wantOK  bool
+		wantErr string
+		check   func(*testing.T, externalizeTarget, *model.ContentPart)
+	}{
+		{name: "nil part"},
+		{
+			name: "existing ref",
+			part: &model.ContentPart{
+				Type:       model.ContentTypeImage,
+				Image:      &model.Image{Data: []byte("image")},
+				ContentRef: &model.ContentRef{ArtifactName: "already"},
+			},
+		},
+		{name: "nil image", part: &model.ContentPart{Type: model.ContentTypeImage}},
+		{
+			name: "ordinary image url",
+			part: &model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.com/a.png"}},
+		},
+		{
+			name:    "invalid image data url",
+			part:    &model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{URL: "data:image/png;base64,%%"}},
+			wantErr: "decode data URL",
+		},
+		{name: "nil audio", part: &model.ContentPart{Type: model.ContentTypeAudio}},
+		{name: "nil file", part: &model.ContentPart{Type: model.ContentTypeFile}},
+		{
+			name:   "file data default mime",
+			part:   &model.ContentPart{Type: model.ContentTypeFile, File: &model.File{Name: "blob", Data: []byte("file")}},
+			wantOK: true,
+			check: func(t *testing.T, target externalizeTarget, part *model.ContentPart) {
+				if target.mimeType != defaultMime {
+					t.Fatalf("target MIME = %q, want %q", target.mimeType, defaultMime)
+				}
+				target.apply(part, &model.ContentRef{ArtifactName: "ref"})
+				if len(part.File.Data) != 0 || part.ContentRef == nil {
+					t.Fatalf("file data/ref after apply = %q/%#v, want cleared/ref", part.File.Data, part.ContentRef)
+				}
+			},
+		},
+		{
+			name:   "file data url default mime",
+			part:   &model.ContentPart{Type: model.ContentTypeFile, File: &model.File{Name: "blob", URL: "data:,hello%20file"}},
+			wantOK: true,
+			check: func(t *testing.T, target externalizeTarget, part *model.ContentPart) {
+				if string(target.data) != "hello file" || target.mimeType != defaultMime || !target.fromDataURL {
+					t.Fatalf("target = data %q MIME %q fromDataURL %v, want decoded default data URL", target.data, target.mimeType, target.fromDataURL)
+				}
+				target.apply(part, &model.ContentRef{ArtifactName: "ref"})
+				if part.File.URL != "" || part.ContentRef == nil {
+					t.Fatalf("file URL/ref after apply = %q/%#v, want cleared/ref", part.File.URL, part.ContentRef)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target, ok, err := externalizeTargetForPart(tt.part)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("externalizeTargetForPart() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("externalizeTargetForPart() error = %v", err)
+			}
+			if ok != tt.wantOK {
+				t.Fatalf("externalizeTargetForPart() ok = %v, want %v", ok, tt.wantOK)
+			}
+			if tt.check != nil {
+				tt.check(t, target, tt.part)
+			}
+		})
+	}
+}
+
+func TestHydrateMessageEdgeCases(t *testing.T) {
+	ctx := context.Background()
+	info := artifact.SessionInfo{AppName: "app", UserID: "user", SessionID: "sess"}
+	refFor := func(name, mimeType string, data []byte) *model.ContentRef {
+		return &model.ContentRef{
+			ArtifactName:    name,
+			ArtifactVersion: 0,
+			MimeType:        mimeType,
+			SizeBytes:       int64(len(data)),
+			SHA256:          sha256Hex(data),
+			OriginalName:    name,
+		}
+	}
+	t.Run("load error", func(t *testing.T) {
+		msg := model.Message{ContentParts: []model.ContentPart{{
+			Type:       model.ContentTypeImage,
+			ContentRef: refFor("missing.png", "image/png", []byte("image")),
+		}}}
+		err := hydrateMessage(ctx, &msg, info, &loadArtifactService{
+			Service: artifactmem.NewService(),
+			err:     errors.New("load failed"),
+		})
+		if err == nil || !strings.Contains(err.Error(), "load failed") {
+			t.Fatalf("hydrateMessage() error = %v, want load failed", err)
+		}
+	})
+	t.Run("not found", func(t *testing.T) {
+		msg := model.Message{ContentParts: []model.ContentPart{{
+			Type:       model.ContentTypeImage,
+			ContentRef: refFor("missing.png", "image/png", []byte("image")),
+		}}}
+		err := hydrateMessage(ctx, &msg, info, &loadArtifactService{Service: artifactmem.NewService()})
+		if err == nil || !strings.Contains(err.Error(), "artifact not found") {
+			t.Fatalf("hydrateMessage() error = %v, want artifact not found", err)
+		}
+	})
+	t.Run("fills nil multimodal parts", func(t *testing.T) {
+		artifacts := artifactmem.NewService()
+		entries := []struct {
+			name     string
+			data     []byte
+			mimeType string
+		}{
+			{name: "image.jpg", data: []byte("image"), mimeType: "image/jpeg"},
+			{name: "audio.wav", data: []byte("audio"), mimeType: "audio/wav"},
+			{name: "file.txt", data: []byte("file"), mimeType: "text/plain"},
+		}
+		for _, entry := range entries {
+			if _, err := artifacts.SaveArtifact(ctx, info, entry.name, &artifact.Artifact{
+				Data:     entry.data,
+				MimeType: entry.mimeType,
+				Name:     entry.name,
+			}); err != nil {
+				t.Fatalf("SaveArtifact(%q) error = %v", entry.name, err)
+			}
+		}
+		if _, err := artifacts.SaveArtifact(ctx, info, "text.bin", &artifact.Artifact{
+			Data:     []byte("ignored"),
+			MimeType: defaultMime,
+			Name:     "text.bin",
+		}); err != nil {
+			t.Fatalf("SaveArtifact(text.bin) error = %v", err)
+		}
+		msg := model.Message{ContentParts: []model.ContentPart{
+			{Type: model.ContentTypeImage, ContentRef: refFor("image.jpg", "image/jpeg", []byte("image"))},
+			{Type: model.ContentTypeAudio, ContentRef: refFor("audio.wav", "audio/wav", []byte("audio"))},
+			{Type: model.ContentTypeFile, ContentRef: refFor("file.txt", "text/plain", []byte("file"))},
+			{Type: model.ContentTypeText, ContentRef: refFor("text.bin", defaultMime, []byte("ignored"))},
+		}}
+		if err := hydrateMessage(ctx, &msg, info, artifacts); err != nil {
+			t.Fatalf("hydrateMessage() error = %v", err)
+		}
+		if string(msg.ContentParts[0].Image.Data) != "image" || msg.ContentParts[0].Image.Format != "jpg" {
+			t.Fatalf("hydrated image = %#v, want data and jpg format", msg.ContentParts[0].Image)
+		}
+		if string(msg.ContentParts[1].Audio.Data) != "audio" || msg.ContentParts[1].Audio.Format != "wav" {
+			t.Fatalf("hydrated audio = %#v, want data and wav format", msg.ContentParts[1].Audio)
+		}
+		if string(msg.ContentParts[2].File.Data) != "file" || msg.ContentParts[2].File.Name != "file.txt" ||
+			msg.ContentParts[2].File.MimeType != "text/plain" {
+			t.Fatalf("hydrated file = %#v, want data/name/MIME", msg.ContentParts[2].File)
+		}
+		for i := 0; i < 3; i++ {
+			if msg.ContentParts[i].ContentRef != nil {
+				t.Fatalf("part %d ContentRef = %#v, want nil", i, msg.ContentParts[i].ContentRef)
+			}
+		}
+		if msg.ContentParts[3].ContentRef == nil {
+			t.Fatal("unsupported content type ContentRef = nil, want preserved")
+		}
+	})
+}
+
+func TestMultimodalHelperEdgeCases(t *testing.T) {
+	if _, _, ok, err := parseDataURL("https://example.com/file"); ok || err != nil {
+		t.Fatalf("parseDataURL(non-data) = ok %v err %v, want false nil", ok, err)
+	}
+	if _, _, _, err := parseDataURL("data:text/plain"); err == nil || !strings.Contains(err.Error(), "invalid data URL") {
+		t.Fatalf("parseDataURL(missing comma) error = %v, want invalid data URL", err)
+	}
+	if _, _, _, err := parseDataURL("data:text/plain;base64,%%"); err == nil || !strings.Contains(err.Error(), "decode data URL") {
+		t.Fatalf("parseDataURL(bad base64) error = %v, want decode data URL", err)
+	}
+	if _, _, _, err := parseDataURL("data:text/plain,%zz"); err == nil || !strings.Contains(err.Error(), "decode data URL") {
+		t.Fatalf("parseDataURL(bad escape) error = %v, want decode data URL", err)
+	}
+	data, mimeType, ok, err := parseDataURL("data:,plain")
+	if err != nil || !ok || string(data) != "plain" || mimeType != defaultMime {
+		t.Fatalf("parseDataURL(default MIME) = %q %q %v %v, want plain default true nil", data, mimeType, ok, err)
+	}
+
+	if ext := artifactExt("", "archive.tar.gz"); ext != ".gz" {
+		t.Fatalf("artifactExt(original name) = %q, want .gz", ext)
+	}
+	if ext := artifactExt("", "bad.\\evil"); ext != ".bin" {
+		t.Fatalf("artifactExt(unsafe) = %q, want .bin", ext)
+	}
+	if ext := artifactExt("", "blob"); ext != ".bin" {
+		t.Fatalf("artifactExt(default) = %q, want .bin", ext)
+	}
+	if name, version, err := artifactNameVersion(&model.ContentRef{ArtifactName: "name", ArtifactVersion: 7}); err != nil ||
+		name != "name" || version != 7 {
+		t.Fatalf("artifactNameVersion(name) = %q %d %v, want name 7 nil", name, version, err)
+	}
+
+	if appendObserved(nil, "event", 0) {
+		t.Fatal("appendObserved(nil) = true, want false")
+	}
+	sess := &session.Session{Events: []event.Event{{ID: "event-1"}}}
+	if !appendObserved(sess, "", 0) {
+		t.Fatal("appendObserved(empty eventID) = false, want true")
+	}
+	if appendObserved(sess, "missing", 0) {
+		t.Fatal("appendObserved(missing) = true, want false")
+	}
+	if info := sessionInfoFromSession(nil); info != (artifact.SessionInfo{}) {
+		t.Fatalf("sessionInfoFromSession(nil) = %#v, want zero", info)
+	}
+
+	if got := chooseNonEmpty(" ", "\t"); got != "" {
+		t.Fatalf("chooseNonEmpty(blank) = %q, want empty", got)
+	}
+	if got := normalizeMime(" "); got != defaultMime {
+		t.Fatalf("normalizeMime(blank) = %q, want %q", got, defaultMime)
+	}
+	if got := imageMimeType(""); got != defaultMime {
+		t.Fatalf("imageMimeType(empty) = %q, want %q", got, defaultMime)
+	}
+	if got := imageMimeType("jpg"); got != "image/jpeg" {
+		t.Fatalf("imageMimeType(jpg) = %q, want image/jpeg", got)
+	}
+	if got := imageMimeType("image/webp"); got != "image/webp" {
+		t.Fatalf("imageMimeType(full) = %q, want image/webp", got)
+	}
+	if got := audioMimeType(""); got != defaultMime {
+		t.Fatalf("audioMimeType(empty) = %q, want %q", got, defaultMime)
+	}
+	if got := audioMimeType("audio/wav"); got != "audio/wav" {
+		t.Fatalf("audioMimeType(full) = %q, want audio/wav", got)
+	}
+	if got := imageFormat("image/jpeg"); got != "jpg" {
+		t.Fatalf("imageFormat(jpeg) = %q, want jpg", got)
+	}
+	if got := imageFormat("application/octet-stream"); got != "" {
+		t.Fatalf("imageFormat(non-image) = %q, want empty", got)
+	}
+	if got := audioFormat("application/octet-stream"); got != "" {
+		t.Fatalf("audioFormat(non-audio) = %q, want empty", got)
+	}
+	if got := mimeFromName("blob"); got != "" {
+		t.Fatalf("mimeFromName(no ext) = %q, want empty", got)
+	}
+}
+
+func TestServiceEntryPointEdgeCases(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessionmem.NewSessionService()
+	if got := Wrap(nil, artifactmem.NewService(), Config{Enabled: true}); got != nil {
+		t.Fatalf("Wrap(nil) = %#v, want nil", got)
+	}
+	if got := Wrap(inner, artifactmem.NewService(), Config{}); got != inner {
+		t.Fatalf("Wrap(disabled) = %#v, want inner", got)
+	}
+
+	createErr := errors.New("create failed")
+	createSvc := &edgeService{Service: inner, createErr: createErr}
+	if _, err := (&Service{Service: createSvc, cfg: Config{Enabled: true}}).CreateSession(ctx, key, nil); !errors.Is(err, createErr) {
+		t.Fatalf("CreateSession(error) = %v, want %v", err, createErr)
+	}
+	createSvc.createErr = nil
+	createSvc.createSess = nil
+	if sess, err := (&Service{Service: createSvc, cfg: Config{Enabled: true}}).CreateSession(ctx, key, nil); err != nil || sess != nil {
+		t.Fatalf("CreateSession(nil) = %#v %v, want nil nil", sess, err)
+	}
+
+	svc := &Service{Service: inner, artifactService: artifactmem.NewService(), cfg: Config{Enabled: true}}
+	if err := svc.AppendEvent(ctx, nil, imageEvent([]byte("image"))); !errors.Is(err, session.ErrNilSession) {
+		t.Fatalf("AppendEvent(nil session) = %v, want ErrNilSession", err)
+	}
+	getErr := errors.New("get failed")
+	getSvc := &edgeService{Service: inner, getErr: getErr}
+	if _, err := (&Service{Service: getSvc, cfg: Config{Enabled: true}}).GetSession(ctx, key); !errors.Is(err, getErr) {
+		t.Fatalf("GetSession(error) = %v, want %v", err, getErr)
+	}
+	getSvc.getErr = nil
+	if sess, err := (&Service{Service: getSvc, cfg: Config{Enabled: true}}).GetSession(ctx, key); err != nil || sess != nil {
+		t.Fatalf("GetSession(nil) = %#v %v, want nil nil", sess, err)
+	}
+
+	listErr := errors.New("list failed")
+	listSvc := &edgeService{Service: inner, listErr: listErr}
+	if _, err := (&Service{Service: listSvc, cfg: Config{Enabled: true}}).ListSessions(ctx, session.UserKey{}); !errors.Is(err, listErr) {
+		t.Fatalf("ListSessions(error) = %v, want %v", err, listErr)
+	}
+	searchErr := errors.New("search failed")
+	searchSvc := &searchOnlyService{Service: inner, err: searchErr}
+	if _, err := (&Service{cfg: Config{Enabled: true}}).searchEvents(ctx, searchSvc, session.EventSearchRequest{}); !errors.Is(err, searchErr) {
+		t.Fatalf("searchEvents(error) = %v, want %v", err, searchErr)
+	}
+	windowErr := errors.New("window failed")
+	windowSvc := &windowOnlyService{Service: inner, err: windowErr}
+	if _, err := (&Service{cfg: Config{Enabled: true}}).getEventWindow(ctx, windowSvc, session.EventWindowRequest{}); !errors.Is(err, windowErr) {
+		t.Fatalf("getEventWindow(error) = %v, want %v", err, windowErr)
+	}
+	windowSvc.err = nil
+	if result, err := (&Service{cfg: Config{Enabled: true}}).getEventWindow(ctx, windowSvc, session.EventWindowRequest{}); err != nil || result != nil {
+		t.Fatalf("getEventWindow(nil) = %#v %v, want nil nil", result, err)
+	}
+}
+
 type appendFailService struct {
 	session.Service
 	err error
@@ -621,13 +1026,181 @@ func (s *appendFailService) AppendEvent(
 type searchOnlyService struct {
 	session.Service
 	results []session.EventSearchResult
+	err     error
 }
 
 func (s *searchOnlyService) SearchEvents(
 	ctx context.Context,
 	req session.EventSearchRequest,
 ) ([]session.EventSearchResult, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	return s.results, nil
+}
+
+type windowOnlyService struct {
+	session.Service
+	window *session.EventWindow
+	err    error
+}
+
+func (s *windowOnlyService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.window, nil
+}
+
+type edgeService struct {
+	session.Service
+	createSess *session.Session
+	createErr  error
+	getSess    *session.Session
+	getErr     error
+	list       []*session.Session
+	listErr    error
+}
+
+func (s *edgeService) CreateSession(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	options ...session.Option,
+) (*session.Session, error) {
+	return s.createSess, s.createErr
+}
+
+func (s *edgeService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) (*session.Session, error) {
+	return s.getSess, s.getErr
+}
+
+func (s *edgeService) ListSessions(
+	ctx context.Context,
+	userKey session.UserKey,
+	options ...session.Option,
+) ([]*session.Session, error) {
+	return s.list, s.listErr
+}
+
+type optionalBehavior struct {
+	results     []session.EventSearchResult
+	window      *session.EventWindow
+	trackCalled bool
+}
+
+type searchWindowOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *searchWindowOnlyService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.behavior.results, nil
+}
+
+func (s *searchWindowOnlyService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.behavior.window, nil
+}
+
+type searchTrackOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *searchTrackOnlyService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.behavior.results, nil
+}
+
+func (s *searchTrackOnlyService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	event *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	s.behavior.trackCalled = true
+	return nil
+}
+
+type windowTrackOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *windowTrackOnlyService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.behavior.window, nil
+}
+
+func (s *windowTrackOnlyService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	event *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	s.behavior.trackCalled = true
+	return nil
+}
+
+type searchWindowTrackService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *searchWindowTrackService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.behavior.results, nil
+}
+
+func (s *searchWindowTrackService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.behavior.window, nil
+}
+
+func (s *searchWindowTrackService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	event *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	s.behavior.trackCalled = true
+	return nil
+}
+
+type loadArtifactService struct {
+	artifact.Service
+	artifact *artifact.Artifact
+	err      error
+}
+
+func (s *loadArtifactService) LoadArtifact(
+	ctx context.Context,
+	sessionInfo artifact.SessionInfo,
+	filename string,
+	version *int,
+) (*artifact.Artifact, error) {
+	return s.artifact, s.err
 }
 
 func imageEvent(data []byte) *event.Event {
