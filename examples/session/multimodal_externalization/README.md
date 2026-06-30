@@ -6,7 +6,7 @@ It uses an in-memory session backend, an in-memory artifact service, and a recor
 
 ## What It Shows
 
-- How to enable `runner.WithSessionMultimodalExternalization`.
+- How to enable session multimodal externalization with `session/multimodal.Wrap`.
 - Why an `artifact.Service` is required when the feature is enabled.
 - How the model request still sees normal inline multimodal content during the current turn.
 - How the persisted session event stores `ContentRef` instead of inline image/file payloads.
@@ -39,4 +39,5 @@ After second turn:
 
 - `artifact/inmemory` is used only for the demo. Production code should use an artifact backend that matches the application's persistence and lifecycle needs.
 - The feature is disabled by default. Existing applications keep inline session payloads unless they opt in.
+- Pass the wrapped session service to `runner.WithSessionService`, and reuse the wrapped service for any direct session writes that should be governed.
 - Standard `ContentParts` image/audio/file inline bytes and data URLs are governed. Ordinary remote URLs and provider file IDs are not re-hosted by this feature.

@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	sessionmultimodal "trpc.group/trpc-go/trpc-agent-go/session/multimodal"
 )
 
 const (
@@ -42,16 +43,18 @@ func main() {
 	ctx := context.Background()
 	sessionService := sessioninmemory.NewSessionService()
 	artifactService := artifactinmemory.NewService()
+	governedSessionService := sessionmultimodal.Wrap(
+		sessionService,
+		artifactService,
+		sessionmultimodal.Config{Enabled: true},
+	)
 	rec := &recordingModel{name: "recording-model"}
 	agent := llmagent.New("multimodal-demo-agent", llmagent.WithModel(rec))
 	r := runner.NewRunner(
 		appName,
 		agent,
-		runner.WithSessionService(sessionService),
+		runner.WithSessionService(governedSessionService),
 		runner.WithArtifactService(artifactService),
-		runner.WithSessionMultimodalExternalization(
-			runner.SessionMultimodalExternalizationConfig{Enabled: true},
-		),
 	)
 	defer func() {
 		if err := r.Close(); err != nil {

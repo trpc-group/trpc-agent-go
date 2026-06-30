@@ -25,12 +25,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
-	sessionmultimodal "trpc.group/trpc-go/trpc-agent-go/internal/session/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	sessionmongodb "trpc.group/trpc-go/trpc-agent-go/session/mongodb"
+	sessionmultimodal "trpc.group/trpc-go/trpc-agent-go/session/multimodal"
 	sessionredis "trpc.group/trpc-go/trpc-agent-go/session/redis"
 )
 
@@ -43,16 +43,14 @@ func TestSessionMultimodalExternalizationE2E(t *testing.T) {
 			inner := backend.newService(t)
 			closeSessionService(t, inner)
 			artifacts := artifactinmemory.NewService()
+			wrapped := rSessionService(t, inner, artifacts)
 			rec := &recordingModel{name: "capture", responseText: "ok"}
 			ag := llmagent.New("agent", llmagent.WithModel(rec))
 			r := runner.NewRunner(
 				multimodalE2EApp,
 				ag,
-				runner.WithSessionService(inner),
+				runner.WithSessionService(wrapped),
 				runner.WithArtifactService(artifacts),
-				runner.WithSessionMultimodalExternalization(
-					runner.SessionMultimodalExternalizationConfig{Enabled: true},
-				),
 			)
 			defer func() { require.NoError(t, r.Close()) }()
 
@@ -90,7 +88,7 @@ func TestSessionMultimodalExternalizationE2E(t *testing.T) {
 			require.NotNil(t, filePart.ContentRef)
 			require.NotContains(t, filePart.File.URL, "artifact://")
 
-			hydrated := getSession(t, ctx, rSessionService(t, inner, artifacts), key)
+			hydrated := getSession(t, ctx, wrapped, key)
 			hydratedUserEvent := firstUserEvent(t, hydrated)
 			require.Equal(t, imageData, findPart(t, hydratedUserEvent, model.ContentTypeImage).Image.Data)
 			require.Equal(t, []byte("hello"), findPart(t, hydratedUserEvent, model.ContentTypeFile).File.Data)
@@ -140,15 +138,14 @@ func TestSessionMultimodalExternalizationDisabledKeepsInline(t *testing.T) {
 func TestSessionMultimodalProviderBoundaryRejectsUnresolvedRefs(t *testing.T) {
 	ctx := context.Background()
 	inner := sessioninmemory.NewSessionService()
+	artifacts := artifactinmemory.NewService()
+	wrapped := rSessionService(t, inner, artifacts)
 	rec := &recordingModel{name: "capture", responseText: "ok"}
 	r := runner.NewRunner(
 		multimodalE2EApp,
 		llmagent.New("agent", llmagent.WithModel(rec)),
-		runner.WithSessionService(inner),
-		runner.WithArtifactService(artifactinmemory.NewService()),
-		runner.WithSessionMultimodalExternalization(
-			runner.SessionMultimodalExternalizationConfig{Enabled: true},
-		),
+		runner.WithSessionService(wrapped),
+		runner.WithArtifactService(artifacts),
 	)
 	defer func() { require.NoError(t, r.Close()) }()
 
@@ -177,14 +174,12 @@ func TestSessionMultimodalArtifactFailuresAreVisible(t *testing.T) {
 			Service: artifactinmemory.NewService(),
 			saveErr: errors.New("save failed"),
 		}
+		wrapped := rSessionService(t, inner, artifacts)
 		r := runner.NewRunner(
 			multimodalE2EApp,
 			llmagent.New("agent", llmagent.WithModel(&recordingModel{name: "capture", responseText: "ok"})),
-			runner.WithSessionService(inner),
+			runner.WithSessionService(wrapped),
 			runner.WithArtifactService(artifacts),
-			runner.WithSessionMultimodalExternalization(
-				runner.SessionMultimodalExternalizationConfig{Enabled: true},
-			),
 		)
 		defer func() { require.NoError(t, r.Close()) }()
 
@@ -208,14 +203,12 @@ func TestSessionMultimodalArtifactFailuresAreVisible(t *testing.T) {
 		ctx := context.Background()
 		inner := sessioninmemory.NewSessionService()
 		baseArtifacts := artifactinmemory.NewService()
+		wrapped := rSessionService(t, inner, baseArtifacts)
 		r1 := runner.NewRunner(
 			multimodalE2EApp,
 			llmagent.New("agent", llmagent.WithModel(&recordingModel{name: "capture", responseText: "ok"})),
-			runner.WithSessionService(inner),
+			runner.WithSessionService(wrapped),
 			runner.WithArtifactService(baseArtifacts),
-			runner.WithSessionMultimodalExternalization(
-				runner.SessionMultimodalExternalizationConfig{Enabled: true},
-			),
 		)
 
 		userID := uniqueID("user")
@@ -226,17 +219,16 @@ func TestSessionMultimodalArtifactFailuresAreVisible(t *testing.T) {
 		require.NoError(t, r1.Close())
 
 		rec := &recordingModel{name: "capture", responseText: "ok"}
+		failingArtifacts := &failingArtifactService{
+			Service: baseArtifacts,
+			loadErr: errors.New("load failed"),
+		}
+		failingWrapped := rSessionService(t, inner, failingArtifacts)
 		r2 := runner.NewRunner(
 			multimodalE2EApp,
 			llmagent.New("agent", llmagent.WithModel(rec)),
-			runner.WithSessionService(inner),
-			runner.WithArtifactService(&failingArtifactService{
-				Service: baseArtifacts,
-				loadErr: errors.New("load failed"),
-			}),
-			runner.WithSessionMultimodalExternalization(
-				runner.SessionMultimodalExternalizationConfig{Enabled: true},
-			),
+			runner.WithSessionService(failingWrapped),
+			runner.WithArtifactService(failingArtifacts),
 		)
 		defer func() { require.NoError(t, r2.Close()) }()
 
