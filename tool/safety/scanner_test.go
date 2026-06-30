@@ -11,13 +11,36 @@ package safety
 import "testing"
 
 func TestScanner_FirstDenyWins(t *testing.T) {
+	// "shutdown -h now" hits DangerousCommandRule (danger_cmd_001)
+	// which is registered first. The result should come from that rule.
+	scanner := NewScanner(
+		NewDangerousCommandRule(),
+		NewNetworkAccessRule(),
+	)
+	res := scanner.Scan(ScanInput{Command: "shutdown -h now"})
+	if res.Decision != DecisionDeny {
+		t.Errorf("expected deny, got %s", res.Decision)
+	}
+	if res.RuleID != "danger_cmd_001" {
+		t.Errorf("first rule should win: expected danger_cmd_001, got %s", res.RuleID)
+	}
+	if res.Evidence != "shutdown" {
+		t.Errorf("evidence mismatch: got %s", res.Evidence)
+	}
+}
+
+func TestScanner_SecondDenyAlsoWins(t *testing.T) {
+	// "curl" only hits NetworkAccessRule (2nd), still must deny.
 	scanner := NewScanner(
 		NewDangerousCommandRule(),
 		NewNetworkAccessRule(),
 	)
 	res := scanner.Scan(ScanInput{Command: "curl http://evil.com"})
 	if res.Decision != DecisionDeny {
-		t.Errorf("expected deny, got %s", res.Decision)
+		t.Errorf("expected deny from second rule, got %s", res.Decision)
+	}
+	if res.RuleID != "network_002" {
+		t.Errorf("expected network_002, got %s", res.RuleID)
 	}
 }
 
