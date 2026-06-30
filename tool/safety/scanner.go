@@ -22,21 +22,31 @@ import (
 // RiskLevel describes how dangerous a scanned input is.
 type RiskLevel string
 
+// Risk severity levels.
 const (
-	RiskNone     RiskLevel = "none"     // 无风险
-	RiskLow      RiskLevel = "low"      // 低风险
-	RiskMedium   RiskLevel = "medium"   // 中风险
-	RiskHigh     RiskLevel = "high"     // 高风险
-	RiskCritical RiskLevel = "critical" // 严重风险
+	// RiskNone indicates no risk.
+	RiskNone RiskLevel = "none"
+	// RiskLow indicates low risk.
+	RiskLow RiskLevel = "low"
+	// RiskMedium indicates medium risk.
+	RiskMedium RiskLevel = "medium"
+	// RiskHigh indicates high risk.
+	RiskHigh RiskLevel = "high"
+	// RiskCritical indicates critical risk.
+	RiskCritical RiskLevel = "critical"
 )
 
 // Decision is the final safety judgement.
 type Decision string
 
+// Safety decision values.
 const (
-	DecisionAllow Decision = "allow" // 放行
-	DecisionDeny  Decision = "deny"  // 拒绝
-	DecisionAsk   Decision = "ask"   // 需要人工确认
+	// DecisionAllow permits the tool call to execute.
+	DecisionAllow Decision = "allow"
+	// DecisionDeny blocks the tool call from executing.
+	DecisionDeny Decision = "deny"
+	// DecisionAsk requires human approval before execution.
+	DecisionAsk Decision = "ask"
 )
 
 // ScanResult is the structured output of a single rule check.
