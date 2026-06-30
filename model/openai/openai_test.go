@@ -5084,6 +5084,38 @@ func TestCompletionUsageToModelUsage(t *testing.T) {
 		assert.Equal(t, 0, result.PromptTokensDetails.CachedTokens, "expected cached tokens to be 0")
 		assert.Equal(t, 0, result.CompletionTokensDetails.ReasoningTokens, "expected reasoning tokens to be 0")
 	})
+
+	t.Run("uses DeepSeek prompt cache hit tokens fallback", func(t *testing.T) {
+		var openaiUsage openai.CompletionUsage
+		err := json.Unmarshal([]byte(`{
+			"prompt_tokens": 200,
+			"completion_tokens": 75,
+			"total_tokens": 275,
+			"prompt_cache_hit_tokens": 42,
+			"prompt_cache_miss_tokens": 158
+		}`), &openaiUsage)
+		require.NoError(t, err)
+
+		result := completionUsageToModelUsage(openaiUsage)
+
+		assert.Equal(t, 42, result.PromptTokensDetails.CachedTokens, "expected DeepSeek cache hit tokens")
+	})
+
+	t.Run("standard cached tokens take precedence over DeepSeek fallback", func(t *testing.T) {
+		var openaiUsage openai.CompletionUsage
+		err := json.Unmarshal([]byte(`{
+			"prompt_tokens": 200,
+			"completion_tokens": 75,
+			"total_tokens": 275,
+			"prompt_tokens_details": {"cached_tokens": 30},
+			"prompt_cache_hit_tokens": 42
+		}`), &openaiUsage)
+		require.NoError(t, err)
+
+		result := completionUsageToModelUsage(openaiUsage)
+
+		assert.Equal(t, 30, result.PromptTokensDetails.CachedTokens, "expected standard cached tokens")
+	})
 }
 
 // TestWithChannelBufferSize_EdgeCases tests WithChannelBufferSize with edge cases.

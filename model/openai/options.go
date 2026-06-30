@@ -12,6 +12,7 @@ package openai
 
 import (
 	"context"
+	"strconv"
 
 	openai "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
@@ -408,17 +409,33 @@ func inverseOpenAISDKAddChunkUsage(u model.Usage, delta model.Usage) model.Usage
 
 // completionUsageToModelUsage converts openai.CompletionUsage to model.Usage.
 func completionUsageToModelUsage(usage openai.CompletionUsage) model.Usage {
+	cachedTokens := completionUsageCachedTokens(usage)
 	return model.Usage{
 		PromptTokens:     int(usage.PromptTokens),
 		CompletionTokens: int(usage.CompletionTokens),
 		TotalTokens:      int(usage.TotalTokens),
 		PromptTokensDetails: model.PromptTokensDetails{
-			CachedTokens: int(usage.PromptTokensDetails.CachedTokens),
+			CachedTokens: cachedTokens,
 		},
 		CompletionTokensDetails: model.CompletionTokensDetails{
 			ReasoningTokens: int(usage.CompletionTokensDetails.ReasoningTokens),
 		},
 	}
+}
+
+func completionUsageCachedTokens(usage openai.CompletionUsage) int {
+	if usage.PromptTokensDetails.CachedTokens != 0 {
+		return int(usage.PromptTokensDetails.CachedTokens)
+	}
+	field, ok := usage.JSON.ExtraFields["prompt_cache_hit_tokens"]
+	if !ok {
+		return 0
+	}
+	hitTokens, err := strconv.ParseInt(field.Raw(), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return int(hitTokens)
 }
 
 // modelUsageToCompletionUsage converts model.Usage to openai.CompletionUsage.
