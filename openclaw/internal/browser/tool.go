@@ -50,6 +50,8 @@ const (
 	actionLocale     = "locale"
 	actionDevice     = "device"
 	actionAct        = "act"
+	actionEvaluate   = "evaluate"
+	actionWait       = "wait"
 )
 
 const (
@@ -115,11 +117,41 @@ var supportedActions = []string{
 	actionLocale,
 	actionDevice,
 	actionAct,
+	actionEvaluate,
+	actionWait,
+}
+
+var supportedPlaywrightMCPActions = []string{
+	actionStatus,
+	actionStart,
+	actionStop,
+	actionProfiles,
+	actionTabs,
+	actionOpen,
+	actionFocus,
+	actionClose,
+	actionSnapshot,
+	actionScreenshot,
+	actionNavigate,
+	actionConsole,
+	actionPDF,
+	actionUpload,
+	actionDialog,
+	actionAct,
+	actionEvaluate,
+}
+
+func supportedActionsForDriver(driverType string) []string {
+	if driverType == driverTypeBrowserServer {
+		return append([]string(nil), supportedActions...)
+	}
+	return append([]string(nil), supportedPlaywrightMCPActions...)
 }
 
 type actRequest struct {
 	Kind        string           `json:"kind,omitempty"`
 	TargetID    string           `json:"targetId,omitempty"`
+	Target      string           `json:"target,omitempty"`
 	Ref         string           `json:"ref,omitempty"`
 	DoubleClick *bool            `json:"doubleClick,omitempty"`
 	Button      string           `json:"button,omitempty"`
@@ -129,7 +161,9 @@ type actRequest struct {
 	Slowly      *bool            `json:"slowly,omitempty"`
 	Key         string           `json:"key,omitempty"`
 	DelayMs     *int             `json:"delayMs,omitempty"`
+	StartTarget string           `json:"startTarget,omitempty"`
 	StartRef    string           `json:"startRef,omitempty"`
+	EndTarget   string           `json:"endTarget,omitempty"`
 	EndRef      string           `json:"endRef,omitempty"`
 	Values      []string         `json:"values,omitempty"`
 	Fields      []map[string]any `json:"fields,omitempty"`
@@ -138,6 +172,7 @@ type actRequest struct {
 	TimeMs      *int             `json:"timeMs,omitempty"`
 	Selector    string           `json:"selector,omitempty"`
 	URL         string           `json:"url,omitempty"`
+	TargetURL   string           `json:"targetUrl,omitempty"`
 	LoadState   string           `json:"loadState,omitempty"`
 	TextGone    string           `json:"textGone,omitempty"`
 	TimeoutMs   *int             `json:"timeoutMs,omitempty"`
@@ -301,9 +336,10 @@ func (t *Tool) Declaration() *tool.Declaration {
 			"automation. Keep using the same targetId after tabs or " +
 			"snapshot calls. Use profile=\"chrome\" when the user " +
 			"mentions a browser extension, relay, attach tab, or " +
-			"their current browser tab. Use target=\"sandbox\" or " +
-			"target=\"node\" when the runtime exposes those browser " +
-			"servers. Avoid evaluate unless the " +
+			"their current browser tab. Omit target for the default " +
+			"host browser. Only set target=\"sandbox\" or " +
+			"target=\"node\" when the runtime configuration exposes " +
+			"those browser servers. Avoid evaluate unless the " +
 			"task truly requires custom page JavaScript.",
 		InputSchema: browserSchema(),
 	}
@@ -320,6 +356,18 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 		return nil, errors.New("browser action is required")
 	}
 	actionKey := strings.ToLower(action)
+	if actionKey == actionEvaluate {
+		var err error
+		in, err = normalizeEvaluateActionInput(in)
+		if err != nil {
+			return nil, err
+		}
+		actionKey = strings.ToLower(actionAct)
+	}
+	if actionKey == actionWait {
+		in = normalizeWaitActionInput(in)
+		actionKey = strings.ToLower(actionAct)
+	}
 	if err := validateTargetSelection(in); err != nil {
 		return nil, err
 	}
@@ -486,6 +534,7 @@ func browserSchema() *tool.Schema {
 	requestProps := map[string]*tool.Schema{
 		"kind":        stringSchema("Browser act kind."),
 		"targetId":    stringSchema("Tab target id from tabs output."),
+		"target":      stringSchema("Element target for browser actions."),
 		"ref":         stringSchema("Snapshot ref id."),
 		"doubleClick": boolSchema("Double click."),
 		"button":      stringSchema("Mouse button for click."),
@@ -495,7 +544,9 @@ func browserSchema() *tool.Schema {
 		"slowly":      boolSchema("Type slowly."),
 		"key":         stringSchema("Keyboard key."),
 		"delayMs":     numberSchema("Key delay."),
+		"startTarget": stringSchema("Drag start element target."),
 		"startRef":    stringSchema("Drag start ref."),
+		"endTarget":   stringSchema("Drag end element target."),
 		"endRef":      stringSchema("Drag end ref."),
 		"values":      stringArraySchema("Selected option values."),
 		"fields": {
@@ -509,7 +560,8 @@ func browserSchema() *tool.Schema {
 		"height":    numberSchema("Viewport height."),
 		"timeMs":    numberSchema("Wait duration in milliseconds."),
 		"selector":  stringSchema("Selector for wait."),
-		"url":       stringSchema("URL for wait."),
+		"url":       stringSchema("URL for navigate or wait."),
+		"targetUrl": stringSchema("Alias for browser URL."),
 		"loadState": stringSchema("Load state for wait."),
 		"textGone":  stringSchema("Text that must disappear."),
 		"timeoutMs": numberSchema("Timeout in milliseconds."),
@@ -517,11 +569,14 @@ func browserSchema() *tool.Schema {
 	}
 
 	properties := map[string]*tool.Schema{
-		"action":         stringSchema("Browser action."),
-		"target":         stringSchema("Browser target: host, sandbox, or node."),
+		"action": stringSchema("Browser action."),
+		"target": stringSchema(
+			"Browser target. Omit for default host; only use " +
+				"sandbox or node when configured.",
+		),
 		"node":           stringSchema("Node browser target."),
 		"profile":        stringSchema("Browser profile name."),
-		"targetUrl":      stringSchema("Alias for open URL."),
+		"targetUrl":      stringSchema("Alias for browser URL."),
 		"url":            stringSchema("Browser URL."),
 		"targetId":       stringSchema("Tab target id."),
 		"operation":      stringSchema("State operation."),
@@ -666,7 +721,8 @@ func (t *Tool) resolveDriver(
 			return profile, drv, nil
 		}
 		return "", nil, errors.New(
-			"browser sandbox target is not configured",
+			"browser sandbox target is not configured; omit target to " +
+				"use the default host browser",
 		)
 	case targetNode:
 		nodeID := strings.TrimSpace(in.Node)
@@ -755,18 +811,21 @@ func (t *Tool) handleProfiles(
 		DefaultProfile:  t.defaultProfile,
 		Driver:          ToolName,
 		EvaluateEnabled: t.evaluateEnabled,
-		Supported:       append([]string(nil), supportedActions...),
-		Profiles:        make([]ProfileInfo, 0, len(t.profiles)),
+		Supported: supportedActionsForDriver(
+			t.driverTypeForProfile(t.defaultProfile),
+		),
+		Profiles: make([]ProfileInfo, 0, len(t.profiles)),
 	}
 
 	for _, name := range names {
 		cfg := t.profiles[name]
+		driverType := t.driverTypeForProfile(name)
 		info := ProfileInfo{
 			Name:        name,
 			Description: cfg.Description,
 			Default:     name == t.defaultProfile,
-			Driver:      t.driverTypeForProfile(name),
-			Supported:   append([]string(nil), supportedActions...),
+			Driver:      driverType,
+			Supported:   supportedActionsForDriver(driverType),
 		}
 		drv := t.statusDriver(name, cfg)
 		if drv != nil {
@@ -801,7 +860,7 @@ func (t *Tool) driverTypeForProfile(
 ) string {
 	cfg, ok := t.profiles[profile]
 	if !ok {
-		if t.hostServer != nil {
+		if hasServerTarget(t.hostServer) {
 			return driverTypeBrowserServer
 		}
 		return driverTypePlaywrightMCP
@@ -812,8 +871,9 @@ func (t *Tool) driverTypeForProfile(
 	if strings.TrimSpace(cfg.Transport) != "" {
 		return driverTypePlaywrightMCP
 	}
-	if t.hostServer != nil || t.sandboxServer != nil ||
-		len(t.nodeTargets) > 0 {
+	if hasServerTarget(t.hostServer) ||
+		hasServerTarget(t.sandboxServer) ||
+		hasNodeServerTarget(t.nodeTargets) {
 		return driverTypeBrowserServer
 	}
 	return driverTypePlaywrightMCP
@@ -825,14 +885,36 @@ func (t *Tool) driverTypeForInput(
 ) string {
 	target := strings.ToLower(strings.TrimSpace(in.Target))
 	switch target {
-	case targetSandbox, targetNode:
-		return driverTypeBrowserServer
+	case targetSandbox:
+		if hasServerTarget(t.sandboxServer) {
+			return driverTypeBrowserServer
+		}
+		return t.driverTypeForProfile(profile)
+	case targetNode:
+		if hasNodeServerTarget(t.nodeTargets) {
+			return driverTypeBrowserServer
+		}
+		return t.driverTypeForProfile(profile)
 	case "", targetHost:
-		if t.hostServer != nil {
+		if hasServerTarget(t.hostServer) {
 			return driverTypeBrowserServer
 		}
 	}
 	return t.driverTypeForProfile(profile)
+}
+
+func hasServerTarget(target *serverTargetConfig) bool {
+	return target != nil && strings.TrimSpace(target.ServerURL) != ""
+}
+
+func hasNodeServerTarget(targets map[string]serverTargetConfig) bool {
+	for id := range targets {
+		target := targets[id]
+		if strings.TrimSpace(target.ServerURL) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *Tool) handleStatus(
@@ -1020,12 +1102,10 @@ func (t *Tool) handleSnapshot(
 	if filename := strings.TrimSpace(in.Filename); filename != "" {
 		args["filename"] = filename
 	}
-	if driverType != driverTypeBrowserServer &&
-		hasServerSnapshotArgs(in) {
-		return Result{}, errors.New(
-			"advanced snapshot options are only supported by " +
-				"the browser-server driver",
-		)
+	ignoredServerSnapshotArgs := driverType != driverTypeBrowserServer &&
+		hasServerSnapshotArgs(in)
+	if ignoredServerSnapshotArgs {
+		in = clearServerSnapshotArgs(in)
 	}
 	if driverType == driverTypeBrowserServer {
 		addServerSnapshotArgs(args, in)
@@ -1041,6 +1121,11 @@ func (t *Tool) handleSnapshot(
 		in.MaxChars,
 		raw,
 	)
+	if ignoredServerSnapshotArgs {
+		result.Warning = result.Warning + " Browser-server snapshot " +
+			"options were ignored because the selected driver is " +
+			driverType + "."
+	}
 	result.Content = raw
 	return result, nil
 }
@@ -1100,7 +1185,7 @@ func (t *Tool) handleNavigate(
 		return Result{}, err
 	}
 
-	rawURL := strings.TrimSpace(in.URL)
+	rawURL := browserURL(in.URL, in.TargetURL)
 	if rawURL == "" {
 		return Result{}, errors.New("browser navigate requires url")
 	}
@@ -1839,11 +1924,23 @@ func normalizeActRequest(in input) actRequest {
 		if strings.TrimSpace(req.Ref) == "" {
 			req.Ref = in.Ref
 		}
+		if strings.TrimSpace(req.URL) == "" {
+			req.URL = browserURL(in.URL, in.TargetURL)
+		}
+		req.Kind = defaultActKind(req)
 		return req
 	}
 
 	return actRequest{
-		Kind:        in.Kind,
+		Kind: defaultActKind(actRequest{
+			Kind:      in.Kind,
+			Fn:        in.Fn,
+			URL:       browserURL(in.URL, in.TargetURL),
+			TimeMs:    in.TimeMs,
+			Text:      in.Text,
+			TextGone:  in.TextGone,
+			LoadState: in.LoadState,
+		}),
 		TargetID:    in.TargetID,
 		Ref:         in.Ref,
 		DoubleClick: in.DoubleClick,
@@ -1862,12 +1959,56 @@ func normalizeActRequest(in input) actRequest {
 		Height:      in.Height,
 		TimeMs:      in.TimeMs,
 		Selector:    in.Selector,
-		URL:         in.URL,
+		URL:         browserURL(in.URL, in.TargetURL),
 		LoadState:   in.LoadState,
 		TextGone:    in.TextGone,
 		TimeoutMs:   in.TimeoutMs,
 		Fn:          in.Fn,
 	}
+}
+
+func defaultActKind(req actRequest) string {
+	if strings.TrimSpace(req.Kind) != "" {
+		return req.Kind
+	}
+	if strings.TrimSpace(req.Fn) != "" {
+		return actEvaluate
+	}
+	if browserURL(req.URL, req.TargetURL) != "" {
+		return actionNavigate
+	}
+	if req.TimeMs != nil ||
+		strings.TrimSpace(req.Text) != "" ||
+		strings.TrimSpace(req.TextGone) != "" ||
+		strings.TrimSpace(req.LoadState) != "" {
+		return actWait
+	}
+	return req.Kind
+}
+
+func normalizeEvaluateActionInput(in input) (input, error) {
+	if in.Request != nil {
+		req := *in.Request
+		if strings.TrimSpace(req.Fn) == "" {
+			req.Fn = in.Fn
+		}
+		req.Kind = actEvaluate
+		in.Request = &req
+		return in, nil
+	}
+	in.Kind = actEvaluate
+	return in, nil
+}
+
+func normalizeWaitActionInput(in input) input {
+	if in.Request != nil {
+		req := *in.Request
+		req.Kind = actWait
+		in.Request = &req
+		return in
+	}
+	in.Kind = actWait
+	return in
 }
 
 func (t *Tool) executeAct(
@@ -1879,23 +2020,20 @@ func (t *Tool) executeAct(
 	kind := strings.ToLower(strings.TrimSpace(req.Kind))
 	switch kind {
 	case actClick:
-		args := map[string]any{
-			"ref":         strings.TrimSpace(req.Ref),
-			"element":     describeElement(req.Ref, ""),
-			"button":      strings.TrimSpace(req.Button),
-			"doubleClick": boolValue(req.DoubleClick),
-			"modifiers":   req.Modifiers,
+		args, err := clickArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolClick, args)
 	case actType:
-		args := map[string]any{
-			"ref":     strings.TrimSpace(req.Ref),
-			"element": describeElement(req.Ref, ""),
-			"text":    req.Text,
-			"submit":  boolValue(req.Submit),
-			"slowly":  boolValue(req.Slowly),
+		args, err := elementActionArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
+		args["text"] = req.Text
+		args["submit"] = boolValue(req.Submit)
+		args["slowly"] = boolValue(req.Slowly)
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolType, args)
 	case actPress:
@@ -1907,9 +2045,9 @@ func (t *Tool) executeAct(
 		}
 		return drv.Call(ctx, mcpToolPressKey, args)
 	case actHover:
-		args := map[string]any{
-			"ref":     strings.TrimSpace(req.Ref),
-			"element": describeElement(req.Ref, ""),
+		args, err := elementActionArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolHover, args)
@@ -1926,20 +2064,18 @@ func (t *Tool) executeAct(
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolScroll, args)
 	case actDrag:
-		args := map[string]any{
-			"startRef":     strings.TrimSpace(req.StartRef),
-			"startElement": describeElement(req.StartRef, "start"),
-			"endRef":       strings.TrimSpace(req.EndRef),
-			"endElement":   describeElement(req.EndRef, "end"),
+		args, err := dragArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolDrag, args)
 	case actSelect:
-		args := map[string]any{
-			"ref":     strings.TrimSpace(req.Ref),
-			"element": describeElement(req.Ref, ""),
-			"values":  req.Values,
+		args, err := elementActionArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
+		args["values"] = req.Values
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolSelect, args)
 	case actFill:
@@ -1951,17 +2087,28 @@ func (t *Tool) executeAct(
 		})
 	case actWait:
 		return t.executeWait(ctx, drv, req, driverType)
+	case actionNavigate:
+		rawURL := browserURL(req.URL, req.TargetURL)
+		if rawURL == "" {
+			return nil, errors.New("browser act navigate requires url")
+		}
+		if err := t.navigation.Validate(rawURL); err != nil {
+			return nil, err
+		}
+		return drv.Call(ctx, mcpToolNavigate, map[string]any{
+			"url": rawURL,
+		})
 	case actEvaluate:
 		if !t.evaluateEnabled {
 			return nil, errors.New(
 				"browser evaluate is disabled by config",
 			)
 		}
-		return drv.Call(ctx, mcpToolEvaluate, map[string]any{
+		args := map[string]any{
 			"function": strings.TrimSpace(req.Fn),
-			"ref":      strings.TrimSpace(req.Ref),
-			"element":  describeElement(req.Ref, ""),
-		})
+		}
+		addOptionalElementArgs(args, req.Ref, req.Target, driverType)
+		return drv.Call(ctx, mcpToolEvaluate, args)
 	case actClose:
 		return drv.Call(ctx, mcpToolTabs, map[string]any{
 			"action": tabActionClose,
@@ -1974,6 +2121,98 @@ func (t *Tool) executeAct(
 	}
 }
 
+func clickArgs(req actRequest, driverType string) (map[string]any, error) {
+	args, err := elementActionArgs(req, driverType)
+	if err != nil {
+		return nil, err
+	}
+	args["button"] = normalizeMouseButton(req.Button)
+	if driverType == driverTypePlaywrightMCP {
+		args["modifiers"] = append([]string{}, req.Modifiers...)
+		if boolValue(req.DoubleClick) {
+			args["doubleClick"] = true
+		}
+		return args, nil
+	}
+	args["doubleClick"] = boolValue(req.DoubleClick)
+	args["modifiers"] = req.Modifiers
+	return args, nil
+}
+
+func elementActionArgs(
+	req actRequest,
+	driverType string,
+) (map[string]any, error) {
+	args := map[string]any{}
+	if driverType == driverTypePlaywrightMCP {
+		target := firstNonEmpty(req.Target, req.Ref)
+		if target == "" {
+			return nil, errors.New(
+				"browser act requires ref or target",
+			)
+		}
+		args["target"] = target
+		args["element"] = describeElement(
+			firstNonEmpty(req.Ref, req.Target),
+			"",
+		)
+		return args, nil
+	}
+	args["ref"] = strings.TrimSpace(req.Ref)
+	args["element"] = describeElement(req.Ref, "")
+	return args, nil
+}
+
+func addOptionalElementArgs(
+	args map[string]any,
+	ref string,
+	target string,
+	driverType string,
+) {
+	if driverType == driverTypePlaywrightMCP {
+		if target := firstNonEmpty(target, ref); target != "" {
+			args["target"] = target
+			args["element"] = describeElement(
+				firstNonEmpty(ref, target),
+				"",
+			)
+		}
+		return
+	}
+	args["ref"] = strings.TrimSpace(ref)
+	args["element"] = describeElement(ref, "")
+}
+
+func dragArgs(req actRequest, driverType string) (map[string]any, error) {
+	if driverType == driverTypePlaywrightMCP {
+		startTarget := firstNonEmpty(req.StartTarget, req.StartRef)
+		endTarget := firstNonEmpty(req.EndTarget, req.EndRef)
+		if startTarget == "" || endTarget == "" {
+			return nil, errors.New(
+				"browser drag requires start and end refs or targets",
+			)
+		}
+		return map[string]any{
+			"startTarget": startTarget,
+			"startElement": describeElement(
+				firstNonEmpty(req.StartRef, req.StartTarget),
+				"start",
+			),
+			"endTarget": endTarget,
+			"endElement": describeElement(
+				firstNonEmpty(req.EndRef, req.EndTarget),
+				"end",
+			),
+		}, nil
+	}
+	return map[string]any{
+		"startRef":     strings.TrimSpace(req.StartRef),
+		"startElement": describeElement(req.StartRef, "start"),
+		"endRef":       strings.TrimSpace(req.EndRef),
+		"endElement":   describeElement(req.EndRef, "end"),
+	}, nil
+}
+
 func (t *Tool) executeFill(
 	ctx context.Context,
 	drv driver,
@@ -1983,11 +2222,60 @@ func (t *Tool) executeFill(
 	if len(req.Fields) == 0 {
 		return nil, errors.New("browser fill requires fields")
 	}
+	fields := req.Fields
+	if driverType == driverTypePlaywrightMCP {
+		fields = normalizeMCPFillFields(req.Fields)
+	}
 	args := map[string]any{
-		"fields": req.Fields,
+		"fields": fields,
 	}
 	addServerTimeoutArg(args, driverType, req.TimeoutMs)
 	return drv.Call(ctx, mcpToolFillForm, args)
+}
+
+func normalizeMCPFillFields(fields []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(fields))
+	for _, field := range fields {
+		normalized := make(map[string]any, len(field)+4)
+		for key, value := range field {
+			normalized[key] = value
+		}
+		target := firstNonEmpty(
+			stringField(field, "target"),
+			stringField(field, "ref"),
+		)
+		if target != "" {
+			normalized["target"] = target
+		}
+		if stringField(normalized, "element") == "" {
+			source := firstNonEmpty(
+				stringField(field, "ref"),
+				target,
+			)
+			normalized["element"] = describeElement(
+				source,
+				stringField(field, "name"),
+			)
+		}
+		if stringField(normalized, "name") == "" {
+			normalized["name"] = firstNonEmpty(
+				stringField(field, "element"),
+				target,
+			)
+		}
+		if stringField(normalized, "type") == "" {
+			normalized["type"] = "textbox"
+		}
+		if _, ok := normalized["value"]; !ok {
+			normalized["value"] = stringField(field, "text")
+		} else {
+			normalized["value"] = fmt.Sprint(normalized["value"])
+		}
+		delete(normalized, "ref")
+		delete(normalized, "text")
+		out = append(out, normalized)
+	}
+	return out
 }
 
 func (t *Tool) executeWait(
@@ -2167,6 +2455,20 @@ func hasServerSnapshotArgs(in input) bool {
 		in.Labels != nil
 }
 
+func clearServerSnapshotArgs(in input) input {
+	in.Limit = nil
+	in.Mode = ""
+	in.SnapshotFormat = ""
+	in.Refs = ""
+	in.Interactive = nil
+	in.Compact = nil
+	in.Depth = nil
+	in.Selector = ""
+	in.Frame = ""
+	in.Labels = nil
+	return in
+}
+
 func addServerSnapshotArgs(args map[string]any, in input) {
 	if limit := intValue(in.Limit); limit > 0 {
 		args["limit"] = limit
@@ -2205,6 +2507,40 @@ func downloadOutputPath(in input) string {
 		return outputPath
 	}
 	return strings.TrimSpace(in.Filename)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func browserURL(values ...string) string {
+	return firstNonEmpty(values...)
+}
+
+func normalizeMouseButton(button string) string {
+	switch strings.ToLower(strings.TrimSpace(button)) {
+	case "", "left":
+		return "left"
+	case "right":
+		return "right"
+	case "middle":
+		return "middle"
+	default:
+		return strings.TrimSpace(button)
+	}
+}
+
+func stringField(fields map[string]any, key string) string {
+	value, ok := fields[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func describeElement(ref string, fallback string) string {

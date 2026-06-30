@@ -90,6 +90,8 @@ const (
 	flagEnableContextCompaction                       = "enable-context-compaction"
 	flagContextCompactionOversizedToolResultMaxTokens = "context-compaction-oversized-tool-result-max-tokens"
 	flagMaxHistoryRuns                                = "max-history-runs"
+	flagMaxLLMCalls                                   = "max-llm-calls"
+	flagMaxToolIterations                             = "max-tool-iterations"
 	flagPreloadMemory                                 = "preload-memory"
 
 	flagAgentInstruction       = "agent-instruction"
@@ -128,12 +130,14 @@ const (
 	flagDebugRecorderDir  = "debug-recorder-dir"
 	flagDebugRecorderMode = "debug-recorder-mode"
 
-	flagLatencyDiagnostics       = "latency-diagnostics"
-	flagLatencyDiagnosticsEvents = "latency-diagnostics-events"
-	flagDeferToolSurface         = "defer-tools-to-dynamic-agent"
-	flagDeferToolSurfaceMode     = "defer-tools-to-dynamic-agent-mode"
-	flagDeferToolSurfaceChars    = "defer-tools-to-dynamic-agent-threshold-chars"
-	flagDeferToolSurfaceDirect   = "defer-tools-to-dynamic-agent-direct-tools"
+	flagLatencyDiagnostics                 = "latency-diagnostics"
+	flagLatencyDiagnosticsEvents           = "latency-diagnostics-events"
+	flagDeferToolSurface                   = "defer-tools-to-dynamic-agent"
+	flagDeferToolSurfaceMode               = "defer-tools-to-dynamic-agent-mode"
+	flagDeferToolSurfaceChars              = "defer-tools-to-dynamic-agent-threshold-chars"
+	flagDeferToolSurfaceDefaultDirectTools = "defer-tools-to-dynamic-agent-default-direct-tools"
+	flagDeferToolSurfaceDirect             = "defer-tools-to-dynamic-agent-direct-tools"
+	flagDynamicAgentTimeout                = "dynamic-agent-timeout"
 
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
@@ -178,7 +182,10 @@ type runOptions struct {
 	EnableContextCompaction                       bool
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
+	MaxLLMCalls                                   int
+	MaxToolIterations                             int
 	PreloadMemory                                 int
+	PostToolPromptEnabled                         *bool
 
 	AgentInstruction       string
 	AgentInstructionFiles  string
@@ -274,15 +281,17 @@ type runOptions struct {
 	SessionSummaryMaxWords            int
 	SessionSummaryApproxRunesPerToken float64
 
-	EnableLocalExec        bool
-	CodeExecutor           codeExecutorOptions
-	EnableOpenClawTools    bool
-	OpenClawToolingGuide   *string
-	EnableParallelTools    bool
-	DeferToolSurface       bool
-	DeferToolSurfaceMode   string
-	DeferToolSurfaceChars  int
-	DeferToolSurfaceDirect string
+	EnableLocalExec                    bool
+	CodeExecutor                       codeExecutorOptions
+	EnableOpenClawTools                bool
+	OpenClawToolingGuide               *string
+	EnableParallelTools                bool
+	DeferToolSurface                   bool
+	DeferToolSurfaceMode               string
+	DeferToolSurfaceChars              int
+	DeferToolSurfaceDefaultDirectTools bool
+	DeferToolSurfaceDirect             string
+	DynamicAgentTimeout                time.Duration
 
 	enableOpenClawToolsExplicit  bool
 	deferToolSurfaceModeExplicit bool
@@ -327,7 +336,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 		MemoryAutoPolicy: summaryPolicyAny,
 
-		DeferToolSurfaceMode: deferToolSurfaceModeAuto,
+		DeferToolSurfaceMode:               deferToolSurfaceModeAuto,
+		DeferToolSurfaceDefaultDirectTools: true,
 	}
 
 	fs.StringVar(
@@ -439,6 +449,18 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagMaxHistoryRuns,
 		0,
 		"Max history messages when add-session-summary=false (0=unlimited)",
+	)
+	fs.IntVar(
+		&opts.MaxLLMCalls,
+		flagMaxLLMCalls,
+		0,
+		"Max LLM calls per invocation (0=unlimited)",
+	)
+	fs.IntVar(
+		&opts.MaxToolIterations,
+		flagMaxToolIterations,
+		0,
+		"Max tool-call iterations per invocation (0=unlimited)",
 	)
 	fs.IntVar(
 		&opts.PreloadMemory,
@@ -912,12 +934,25 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Auto-defer when direct tool declarations exceed this "+
 			"many characters (0 uses default)",
 	)
+	fs.BoolVar(
+		&opts.DeferToolSurfaceDefaultDirectTools,
+		flagDeferToolSurfaceDefaultDirectTools,
+		true,
+		"Keep default direct tools on the parent agent when "+
+			"deferred tool surface mode is active",
+	)
 	fs.StringVar(
 		&opts.DeferToolSurfaceDirect,
 		flagDeferToolSurfaceDirect,
 		"",
 		"Comma-separated additional tool names to keep directly on "+
 			"the parent agent when deferred mode is active",
+	)
+	fs.DurationVar(
+		&opts.DynamicAgentTimeout,
+		flagDynamicAgentTimeout,
+		0,
+		"Maximum duration for one dynamic_agent child call (0 disables)",
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -1113,7 +1148,11 @@ type agentRunConfig struct {
 	EnableContextCompaction                       *bool `yaml:"enable_context_compaction,omitempty"`
 	ContextCompactionOversizedToolResultMaxTokens *int  `yaml:"context_compaction_oversized_tool_result_max_tokens,omitempty"`
 	MaxHistoryRuns                                *int  `yaml:"max_history_runs,omitempty"`
+	MaxLLMCalls                                   *int  `yaml:"max_llm_calls,omitempty"`
+	MaxToolIterations                             *int  `yaml:"max_tool_iterations,omitempty"`
 	PreloadMemory                                 *int  `yaml:"preload_memory,omitempty"`
+	DisablePostToolPrompt                         *bool `yaml:"disable_post_tool_prompt,omitempty"`
+	DisablePostToolPromptCamel                    *bool `yaml:"disablePostToolPrompt,omitempty"`
 
 	Instruction      *string  `yaml:"instruction,omitempty"`
 	InstructionFiles []string `yaml:"instruction_files,omitempty"`
@@ -1234,8 +1273,12 @@ type toolsConfig struct {
 	DeferToDynamicAgentModeCamel  *string             `yaml:"deferToDynamicAgentMode,omitempty"`
 	DeferToDynamicAgentChars      *int                `yaml:"defer_to_dynamic_agent_threshold_chars,omitempty"`
 	DeferToDynamicAgentCharsCamel *int                `yaml:"deferToDynamicAgentThresholdChars,omitempty"`
+	DeferDefaultDirectTools       *bool               `yaml:"defer_default_direct_tools,omitempty"`
+	DeferDefaultDirectToolsCamel  *bool               `yaml:"deferDefaultDirectTools,omitempty"`
 	DeferDirectTools              yamlStringList      `yaml:"defer_direct_tools,omitempty"`
 	DeferDirectToolsCamel         yamlStringList      `yaml:"deferDirectTools,omitempty"`
+	DynamicAgentTimeout           *string             `yaml:"dynamic_agent_timeout,omitempty"`
+	DynamicAgentTimeoutCamel      *string             `yaml:"dynamicAgentTimeout,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
@@ -1608,9 +1651,25 @@ func (cfg *fileConfig) apply(
 			!flagWasSet(set, flagMaxHistoryRuns) {
 			opts.MaxHistoryRuns = *cfg.Agent.MaxHistoryRuns
 		}
+		if cfg.Agent.MaxLLMCalls != nil &&
+			!flagWasSet(set, flagMaxLLMCalls) {
+			opts.MaxLLMCalls = *cfg.Agent.MaxLLMCalls
+		}
+		if cfg.Agent.MaxToolIterations != nil &&
+			!flagWasSet(set, flagMaxToolIterations) {
+			opts.MaxToolIterations = *cfg.Agent.MaxToolIterations
+		}
 		if cfg.Agent.PreloadMemory != nil &&
 			!flagWasSet(set, flagPreloadMemory) {
 			opts.PreloadMemory = *cfg.Agent.PreloadMemory
+		}
+		disablePostToolPrompt := firstBoolPtr(
+			cfg.Agent.DisablePostToolPrompt,
+			cfg.Agent.DisablePostToolPromptCamel,
+		)
+		if disablePostToolPrompt != nil {
+			enabled := !*disablePostToolPrompt
+			opts.PostToolPromptEnabled = &enabled
 		}
 		if cfg.Agent.Instruction != nil &&
 			!flagWasSet(set, flagAgentInstruction) {
@@ -1960,6 +2019,14 @@ func (cfg *fileConfig) apply(
 			!flagWasSet(set, flagDeferToolSurfaceChars) {
 			opts.DeferToolSurfaceChars = *deferChars
 		}
+		deferDefaults := firstBoolPtr(
+			cfg.Tools.DeferDefaultDirectTools,
+			cfg.Tools.DeferDefaultDirectToolsCamel,
+		)
+		if deferDefaults != nil &&
+			!flagWasSet(set, flagDeferToolSurfaceDefaultDirectTools) {
+			opts.DeferToolSurfaceDefaultDirectTools = *deferDefaults
+		}
 		if !flagWasSet(set, flagDeferToolSurfaceDirect) {
 			if len(cfg.Tools.DeferDirectTools) > 0 {
 				opts.DeferToolSurfaceDirect = strings.Join(
@@ -1973,6 +2040,18 @@ func (cfg *fileConfig) apply(
 					",",
 				)
 			}
+		}
+		dynamicTimeout := firstStringPtr(
+			cfg.Tools.DynamicAgentTimeout,
+			cfg.Tools.DynamicAgentTimeoutCamel,
+		)
+		if dynamicTimeout != nil &&
+			!flagWasSet(set, flagDynamicAgentTimeout) {
+			dur, err := parseDuration(*dynamicTimeout)
+			if err != nil {
+				return fmt.Errorf("tools.dynamic_agent_timeout: %w", err)
+			}
+			opts.DynamicAgentTimeout = dur
 		}
 		if len(cfg.Tools.Providers) > 0 {
 			opts.ToolProviders = convertPluginSpecs(cfg.Tools.Providers)
@@ -2631,6 +2710,18 @@ func finalizeRunOptions(opts *runOptions) error {
 			opts.SkillsOverviewLimit,
 		)
 	}
+	if opts.MaxToolIterations < 0 {
+		return fmt.Errorf(
+			"invalid max tool iterations: %d",
+			opts.MaxToolIterations,
+		)
+	}
+	if opts.MaxLLMCalls < 0 {
+		return fmt.Errorf(
+			"invalid max LLM calls: %d",
+			opts.MaxLLMCalls,
+		)
+	}
 	opts.EvolutionSkillScopeMode = skill.NormalizeSkillScopeMode(
 		opts.EvolutionSkillScopeMode,
 	)
@@ -2667,6 +2758,12 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid defer tool surface threshold chars: %d",
 			opts.DeferToolSurfaceChars,
+		)
+	}
+	if opts.DynamicAgentTimeout < 0 {
+		return fmt.Errorf(
+			"invalid dynamic agent timeout: %s",
+			opts.DynamicAgentTimeout,
 		)
 	}
 	opts.DeferToolSurfaceDirect = strings.Join(
@@ -2733,6 +2830,10 @@ func firstBoolPtr(primary, fallback *bool) *bool {
 		return primary
 	}
 	return fallback
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func firstIntPtr(primary, fallback *int) *int {

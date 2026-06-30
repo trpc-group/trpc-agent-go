@@ -1267,12 +1267,16 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 		"tools:\n"+
 			"  defer_to_dynamic_agent_mode: auto\n"+
 			"  defer_to_dynamic_agent_threshold_chars: 1234\n"+
-			"  defer_direct_tools: [exec_command]\n",
+			"  dynamic_agent_timeout: 3m\n"+
+			"  defer_direct_tools: [exec_command]\n"+
+			"  defer_default_direct_tools: false\n",
 	)
 	opts := adminRuntimeConfigTestOptions(cfgPath)
 	opts.DeferToolSurfaceMode = deferToolSurfaceModeAuto
 	opts.DeferToolSurfaceChars = 1234
 	opts.DeferToolSurfaceDirect = "exec_command"
+	opts.DeferToolSurfaceDefaultDirectTools = false
+	opts.DynamicAgentTimeout = 3 * time.Minute
 
 	provider, ok := buildAdminRuntimeConfigProvider(
 		opts,
@@ -1295,10 +1299,58 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 	)
 	require.Equal(t, "1234", threshold.RuntimeValue)
 	require.Equal(t, "1234", threshold.ConfiguredValue)
+	timeout := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.dynamic_agent_timeout",
+	)
+	require.Equal(t, "3m0s", timeout.RuntimeValue)
+	require.Equal(t, "3m", timeout.ConfiguredValue)
 	direct := findAdminRuntimeConfigField(
 		t,
 		status,
 		"tools.defer_direct_tools",
 	)
 	require.Equal(t, "exec_command", direct.RuntimeValue)
+	defaultDirect := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.defer_default_direct_tools",
+	)
+	require.Equal(t, "false", defaultDirect.RuntimeValue)
+	require.Equal(t, "false", defaultDirect.ConfiguredValue)
+}
+
+func TestBuildAdminOptions_ExposesAgentBudgetFields(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeAdminRuntimeConfigTestFile(
+		t,
+		"agent:\n  max_llm_calls: 7\n  max_tool_iterations: 12\n",
+	)
+	opts := adminRuntimeConfigTestOptions(cfgPath)
+	opts.MaxLLMCalls = 7
+	opts.MaxToolIterations = 12
+
+	provider, ok := buildAdminRuntimeConfigProvider(
+		opts,
+	).(*adminRuntimeConfigProvider)
+	require.True(t, ok)
+
+	status, err := provider.RuntimeConfigStatus()
+	require.NoError(t, err)
+	llmCalls := findAdminRuntimeConfigField(
+		t,
+		status,
+		"agent.max_llm_calls",
+	)
+	require.Equal(t, "7", llmCalls.RuntimeValue)
+	require.Equal(t, "7", llmCalls.ConfiguredValue)
+	field := findAdminRuntimeConfigField(
+		t,
+		status,
+		"agent.max_tool_iterations",
+	)
+	require.Equal(t, "12", field.RuntimeValue)
+	require.Equal(t, "12", field.ConfiguredValue)
 }
