@@ -279,6 +279,42 @@ func TestBrowserServerProcessDoneError(t *testing.T) {
 	require.False(t, isBrowserServerProcessDone(fmt.Errorf("still running")))
 }
 
+func TestBrowserServerSupervisorCloseExitedProcess(t *testing.T) {
+	t.Parallel()
+
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	require.NoError(t, cmd.Start())
+	require.NoError(t, cmd.Wait())
+
+	doneCh := make(chan browserServerProcessExit)
+	close(doneCh)
+	sup := &browserServerSup{
+		cmd:    cmd,
+		doneCh: doneCh,
+		state:  browserServerStateRunning,
+	}
+
+	require.NoError(t, sup.Close())
+}
+
+func TestBrowserServerSupervisorCloseUnexpectedSignalError(t *testing.T) {
+	t.Parallel()
+
+	process, err := os.FindProcess(-1)
+	require.NoError(t, err)
+	sup := &browserServerSup{
+		cmd: &exec.Cmd{
+			Process: process,
+		},
+		doneCh: make(chan browserServerProcessExit),
+		state:  browserServerStateRunning,
+	}
+
+	err = sup.Close()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stop browser server")
+}
+
 func TestBrowserServerWorkDirHelpers(t *testing.T) {
 	root := t.TempDir()
 	direct := filepath.Join(root, browserServerDirName)
