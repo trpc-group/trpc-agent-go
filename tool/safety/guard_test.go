@@ -122,7 +122,7 @@ func TestGuardReportSink(t *testing.T) {
 }
 
 func TestGuardDefaultPolicy(t *testing.T) {
-	// No policy file: DefaultPolicy still fails closed on unparseable commands.
+	// No policy file: DefaultPolicy still fails closed on unparsable commands.
 	g, err := NewGuard()
 	if err != nil {
 		t.Fatalf("NewGuard: %v", err)
@@ -133,6 +133,6 @@ func TestGuardDefaultPolicy(t *testing.T) {
 		t.Fatalf("CheckToolPermission: %v", err)
 	}
 	if dec.Action != tool.PermissionActionDeny {
-		t.Errorf("default policy unparseable action = %q, want deny", dec.Action)
+		t.Errorf("default policy unparsable action = %q, want deny", dec.Action)
 	}
 }

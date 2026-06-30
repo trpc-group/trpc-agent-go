@@ -4,8 +4,8 @@
 version: 1
 
 # How to treat a command that internal/shellsafe cannot safely parse, and the
-# fallback when no rule fires. unparseable defaults to deny (fail closed).
-unparseable_action: deny
+# fallback when no rule fires. unparsable defaults to deny (fail closed).
+unparsable_action: deny
 default_action: allow
 
 # Tool name -> backend identifier. Defaults already cover the real tool names;

@@ -125,9 +125,9 @@ var builtinRules = []ruleFn{
 
 // scan parses the command once, runs every rule, applies overrides and
 // aggregates the verdict. A command shellsafe cannot parse yields a shell-
-// bypass finding whose action is the policy's unparseable_action (fail
+// bypass finding whose action is the policy's unparsable_action (fail
 // closed); the secret and resource rules still run on the raw command so an
-// unparseable command is not a blind spot.
+// unparsable command is not a blind spot.
 func (p *Policy) scan(er ExecRequest, backend string) ([]Finding, Decision, RiskLevel) {
 	var findings []Finding
 	var pipe *shellsafe.Pipeline
@@ -135,7 +135,7 @@ func (p *Policy) scan(er ExecRequest, backend string) ([]Finding, Decision, Risk
 		parsed, err := shellsafe.Parse(er.Command)
 		if err != nil {
 			f := shellBypassFinding(err)
-			f.action = p.UnparseableAction
+			f.action = p.UnparsableAction
 			findings = append(findings, f)
 		} else {
 			pipe = parsed
@@ -196,7 +196,7 @@ func shellBypassFinding(err error) Finding {
 		RuleID:         ruleShellID,
 		Category:       catShellBypass,
 		RiskLevel:      RiskHigh,
-		Evidence:       "unparseable command: " + err.Error(),
+		Evidence:       "unparsable command: " + err.Error(),
 		Recommendation: recShellBypass,
 	}
 }

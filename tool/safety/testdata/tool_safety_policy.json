@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "unparseable_action": "deny",
+  "unparsable_action": "deny",
   "default_action": "allow",
   "backends": {
     "workspace_exec": ["workspace_exec"],

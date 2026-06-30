@@ -16,8 +16,8 @@ import (
 
 // The whole shell layer trusts shellsafe.Parse. shellsafe is fail-closed: it
 // rejects anything it cannot tokenize, which becomes a deny/ask via
-// unparseable_action. The dangerous failure mode is therefore not "rejects a
-// weird command" but "accepts a command yet mis-tokenizes argv[0]", hiding a
+// unparsable_action. The dangerous failure mode is therefore not "rejects a
+// weird command" but "accepts a command yet incorrectly tokenizes argv[0]", hiding a
 // dangerous executable behind a benign one. These tests pin both directions.
 
 // TestAnchorRejectsBypassConstructs asserts shellsafe rejects the shell

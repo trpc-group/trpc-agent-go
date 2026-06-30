@@ -24,7 +24,7 @@ agent.WithToolPermissionPolicy(guard)          ← only integration point, pre-e
 Guard.CheckToolPermission
       ├─ 1. backendOf(toolName)  → "" ⇒ allow (non-exec tools short-circuit)
       ├─ 2. extract Arguments → ExecRequest{Command, Cwd, Env, Background, PTY, TimeoutSec}
-      ├─ 3. shellsafe.Parse (unparseable ⇒ fail closed via unparseable_action)
+      ├─ 3. shellsafe.Parse (unparsable ⇒ fail closed via unparsable_action)
       ├─ 4. rule engine → []Finding
       ├─ 5. aggregate highest risk → Decision
       ├─ 6. redact secrets → write report + audit.jsonl
@@ -44,7 +44,7 @@ second gate.
 | 1 | dangerous_command | `R-DEL-001` | denied destructive commands; `rm -rf` (all flag spellings), escalated on root/system paths | high → critical |
 | 2 | credential_access | `R-CRED-001` | argv/cwd hitting `~/.ssh`, `**/.env`, `**/id_rsa`, credentials | critical |
 | 3 | network | `R-NET-001` | download commands targeting a non-whitelisted host | high |
-| 4 | shell_bypass | `R-SHELL-001` | unparseable commands (`$()`, backticks, `$VAR`, redirection, subshell) and shell wrappers / re-executing builtins (`bash -c`, `eval`, `xargs`, `env CMD`) that can bypass the allow/deny list | high |
+| 4 | shell_bypass | `R-SHELL-001` | unparsable commands (`$()`, backticks, `$VAR`, redirection, subshell) and shell wrappers / re-executing builtins (`bash -c`, `eval`, `xargs`, `env CMD`) that can bypass the allow/deny list | high |
 | 4b | command_policy | `R-CMD-001` | a plain, parseable command that is simply **not in `commands.allowed`** (an allow-list miss, not a bypass) | high |
 | 5 | host_risk | `R-HOST-001` | host backend background / PTY sessions, `sudo`/`su`/`nohup` | high → critical |
 | 6 | dependency | `R-DEP-001` | configured installer subcommands (`pip install`, `go install`, ...) | medium |
@@ -64,7 +64,7 @@ tool→backend mapping **without recompiling**. See
 [`testdata/tool_safety_policy.yaml`](testdata/tool_safety_policy.yaml) for the
 full annotated example. Key fields:
 
-- `unparseable_action` (default `deny`) — verdict when shellsafe cannot parse a
+- `unparsable_action` (default `deny`) — verdict when shellsafe cannot parse a
   command. **Fail closed.**
 - `default_action` (default `allow`) — fallback when no rule fires.
 - `backends` — tool name → backend identifier. Defaults cover the real tool
@@ -150,7 +150,7 @@ Explicit limitations:
 
 - **shellsafe is the trust anchor for shell parsing.** It is *fail-closed*:
   anything it cannot tokenize is rejected (→ deny/ask). The residual risk is a
-  command it *accepts* but mis-tokenizes; that direction is pinned by the
+  command it *accepts* but incorrectly tokenizes; that direction is pinned by the
   differential anchor tests in `shellsafe_anchor_test.go`.
 - **`code` backend (`execute_code`) protection is significantly weaker.** Only
   the secret and resource rules run; malicious Python/JS largely bypasses this

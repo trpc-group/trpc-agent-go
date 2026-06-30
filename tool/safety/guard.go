@@ -91,7 +91,7 @@ func WithReportSink(fn func(Report)) Option {
 }
 
 // NewGuard builds a Guard. With no WithPolicy/WithPolicyFile option it uses the
-// compiled DefaultPolicy (fail-closed on unparseable commands, otherwise
+// compiled DefaultPolicy (fail-closed on unparsable commands, otherwise
 // permissive); supply a policy file for real protection.
 func NewGuard(opts ...Option) (*Guard, error) {
 	g := &Guard{}
@@ -113,7 +113,7 @@ func NewGuard(opts ...Option) (*Guard, error) {
 // CheckToolPermission implements tool.PermissionPolicy. Non-exec tools (those
 // not mapped to a backend) are allowed without scanning. Exec tools are
 // extracted, scanned, redacted, audited and traced before a decision is
-// returned. A malformed argument payload fails closed via unparseable_action.
+// returned. A malformed argument payload fails closed via unparsable_action.
 func (g *Guard) CheckToolPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
@@ -125,9 +125,9 @@ func (g *Guard) CheckToolPermission(
 	}
 	er, err := extract(req.Arguments, backend)
 	if err != nil {
-		findings := []Finding{argParseFinding(err, g.policy.UnparseableAction)}
+		findings := []Finding{argParseFinding(err, g.policy.UnparsableAction)}
 		return g.finalize(ctx, req.ToolName, backend, ExecRequest{},
-			findings, actionToDecision(g.policy.UnparseableAction), RiskHigh, start)
+			findings, actionToDecision(g.policy.UnparsableAction), RiskHigh, start)
 	}
 	findings, decision, risk := g.policy.scan(er, backend)
 	return g.finalize(ctx, req.ToolName, backend, er, findings, decision, risk, start)
@@ -179,7 +179,7 @@ func argParseFinding(err error, action Action) Finding {
 		RuleID:         ruleShellID,
 		Category:       catShellBypass,
 		RiskLevel:      RiskHigh,
-		Evidence:       "unparseable arguments: " + err.Error(),
+		Evidence:       "unparsable arguments: " + err.Error(),
 		Recommendation: recShellBypass,
 		action:         action,
 	}

@@ -142,7 +142,7 @@ func TestRuleSecretInCommand(t *testing.T) {
 	}
 }
 
-func TestRuleSecretInUnparseableCommand(t *testing.T) {
+func TestRuleSecretInUnparsableCommand(t *testing.T) {
 	// $VAR makes shellsafe reject the command; the secret rule must still run
 	// on the raw command string so a secret is not a blind spot.
 	p := loadExamplePolicy(t)
@@ -152,7 +152,7 @@ func TestRuleSecretInUnparseableCommand(t *testing.T) {
 		t.Errorf("expected shell-bypass finding for $VAR: %+v", findings)
 	}
 	if !hasRule(findings, ruleSecretID) {
-		t.Errorf("secret rule must still fire on unparseable command: %+v", findings)
+		t.Errorf("secret rule must still fire on unparsable command: %+v", findings)
 	}
 }
 
@@ -211,8 +211,8 @@ func TestRuleDependencyWithLeadingFlags(t *testing.T) {
 	}
 }
 
-func TestUnparseableFailsClosed(t *testing.T) {
-	p := loadExamplePolicy(t) // unparseable_action: deny
+func TestUnparsableFailsClosed(t *testing.T) {
+	p := loadExamplePolicy(t) // unparsable_action: deny
 	findings, decision := scanCmd(t, p, BackendWorkspace, "echo $(whoami)")
 	if decision != DecisionDeny {
 		t.Errorf("decision = %q, want deny for command substitution", decision)
@@ -222,9 +222,9 @@ func TestUnparseableFailsClosed(t *testing.T) {
 	}
 }
 
-func TestUnparseableAskWhenConfigured(t *testing.T) {
+func TestUnparsableAskWhenConfigured(t *testing.T) {
 	p := loadExamplePolicy(t)
-	p.UnparseableAction = ActionAsk // simulate a more permissive policy
+	p.UnparsableAction = ActionAsk // simulate a more permissive policy
 	_, decision := scanCmd(t, p, BackendWorkspace, "echo `whoami`")
 	if decision != DecisionReview {
 		t.Errorf("decision = %q, want needs_human_review", decision)

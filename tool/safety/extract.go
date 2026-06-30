@@ -62,7 +62,7 @@ func backendOf(toolName string, p *Policy) string {
 
 // extract turns the raw tool arguments into an ExecRequest for the given
 // backend. A JSON error is returned to the caller, which fails closed via the
-// policy's unparseable_action.
+// policy's unparsable_action.
 func extract(args []byte, backend string) (ExecRequest, error) {
 	if backend == BackendCode {
 		return extractCode(args)

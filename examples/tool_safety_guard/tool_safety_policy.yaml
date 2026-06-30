@@ -3,7 +3,7 @@
 # whitelist and limits without any code change.
 version: 1
 
-unparseable_action: deny
+unparsable_action: deny
 default_action: allow
 
 backends:

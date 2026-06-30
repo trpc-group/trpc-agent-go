@@ -123,7 +123,7 @@ type Override struct {
 // without code changes.
 type Policy struct {
 	Version           int                 `yaml:"version" json:"version"`
-	UnparseableAction Action              `yaml:"unparseable_action" json:"unparseable_action"`
+	UnparsableAction  Action              `yaml:"unparsable_action" json:"unparsable_action"`
 	DefaultAction     Action              `yaml:"default_action" json:"default_action"`
 	Backends          map[string][]string `yaml:"backends" json:"backends"`
 	Commands          CommandPolicy       `yaml:"commands" json:"commands"`
@@ -159,15 +159,15 @@ type domainMatcher struct {
 	wildcard bool
 }
 
-// DefaultPolicy returns the built-in safe defaults: unparseable commands are
+// DefaultPolicy returns the built-in safe defaults: unparsable commands are
 // denied, anything not matched by a rule is allowed, non-whitelisted network
 // access is denied, and the backend map points at the real tool names.
 func DefaultPolicy() Policy {
 	return Policy{
-		Version:           1,
-		UnparseableAction: ActionDeny,
-		DefaultAction:     ActionAllow,
-		Network:           NetworkPolicy{OnNonWhitelisted: ActionDeny},
+		Version:          1,
+		UnparsableAction: ActionDeny,
+		DefaultAction:    ActionAllow,
+		Network:          NetworkPolicy{OnNonWhitelisted: ActionDeny},
 		Backends: map[string][]string{
 			BackendWorkspace: {"workspace_exec"},
 			BackendHost:      {"exec_command"},
@@ -210,8 +210,8 @@ func LoadPolicy(path string) (*Policy, error) {
 func (p *Policy) compile() error {
 	var c compiledPolicy
 	var err error
-	if p.UnparseableAction, err = resolveAction(p.UnparseableAction, ActionDeny); err != nil {
-		return fmt.Errorf("unparseable_action: %w", err)
+	if p.UnparsableAction, err = resolveAction(p.UnparsableAction, ActionDeny); err != nil {
+		return fmt.Errorf("unparsable_action: %w", err)
 	}
 	if p.DefaultAction, err = resolveAction(p.DefaultAction, ActionAllow); err != nil {
 		return fmt.Errorf("default_action: %w", err)

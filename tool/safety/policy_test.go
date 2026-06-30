@@ -16,8 +16,8 @@ import (
 
 func TestDefaultPolicy(t *testing.T) {
 	p := DefaultPolicy()
-	if p.UnparseableAction != ActionDeny {
-		t.Fatalf("unparseable_action = %q, want deny", p.UnparseableAction)
+	if p.UnparsableAction != ActionDeny {
+		t.Fatalf("unparsable_action = %q, want deny", p.UnparsableAction)
 	}
 	if p.DefaultAction != ActionAllow {
 		t.Fatalf("default_action = %q, want allow", p.DefaultAction)
@@ -50,8 +50,8 @@ func TestLoadPolicyYAML(t *testing.T) {
 	if p.Version != 1 {
 		t.Errorf("version = %d, want 1", p.Version)
 	}
-	if p.UnparseableAction != ActionDeny {
-		t.Errorf("unparseable_action = %q, want deny", p.UnparseableAction)
+	if p.UnparsableAction != ActionDeny {
+		t.Errorf("unparsable_action = %q, want deny", p.UnparsableAction)
 	}
 	if got := len(p.DeniedSubcommands); got != 6 {
 		t.Errorf("denied_subcommands = %d, want 6", got)
@@ -73,8 +73,8 @@ func TestLoadPolicyJSON(t *testing.T) {
 	if p.Version != 1 {
 		t.Errorf("version = %d, want 1", p.Version)
 	}
-	if p.UnparseableAction != ActionDeny {
-		t.Errorf("unparseable_action = %q, want deny", p.UnparseableAction)
+	if p.UnparsableAction != ActionDeny {
+		t.Errorf("unparsable_action = %q, want deny", p.UnparsableAction)
 	}
 	if got := len(p.DeniedSubcommands); got != 6 {
 		t.Errorf("denied_subcommands = %d, want 6", got)
