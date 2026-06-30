@@ -442,9 +442,6 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithContextCompactionTokenCounter(
 			options.ContextCompactionTokenCounter,
 		),
-		processor.WithContextCompactionSessionLoadToolAvailable(
-			options.EnableOnDemandSession && options.OutputSchema == nil,
-		),
 		processor.WithPreserveSameBranch(options.PreserveSameBranch),
 		processor.WithPreserveForeignMessages(options.PreserveForeignMessages),
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),

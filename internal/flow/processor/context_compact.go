@@ -82,7 +82,7 @@ func (cfg ContextCompactionConfig) recoveryRefForMessage(
 	reason string,
 ) toolResultRecoveryRef {
 	ref := toolResultRecoveryRefForMessage(evt, msg, reason)
-	ref.SessionLoadAvailable = cfg.SessionLoadToolAvailable
+	ref.SessionLoadAvailable = cfg.SessionLoadRecoveryEnabled
 	return ref
 }
 
@@ -223,11 +223,10 @@ type ContextCompactionConfig struct {
 	// SkipRecentFunc returns how many tail events should be treated as recent
 	// and protected from historical tool-result compaction.
 	SkipRecentFunc ContextCompactionSkipRecentFunc
-	// SessionLoadToolAvailable controls whether compacted tool-result
+	// SessionLoadRecoveryEnabled controls whether compacted tool-result
 	// placeholders may instruct the model to recover payload slices with
-	// session_load. Set this only when session_load is actually exposed for
-	// the current request.
-	SessionLoadToolAvailable bool
+	// session_load. It is derived from the actual request tool surface.
+	SessionLoadRecoveryEnabled bool
 
 	toolResultCompactionRules toolResultCompactionRules
 }
@@ -399,7 +398,7 @@ func applyForceCleanToolResultPass(
 			ctx,
 			events[i],
 			0,
-			cfg.SessionLoadToolAvailable,
+			cfg.SessionLoadRecoveryEnabled,
 			func(ctx context.Context, msg model.Message, _ int, _ toolResultRecoveryRef) (model.Message, bool, int) {
 				if !cfg.forceCleanToolResult(msg) {
 					return msg, false, 0
@@ -473,7 +472,7 @@ func compactHistoricalToolResultEvent(
 		ctx,
 		evt,
 		maxTokens,
-		cfg.SessionLoadToolAvailable,
+		cfg.SessionLoadRecoveryEnabled,
 		func(ctx context.Context, msg model.Message, maxTokens int, ref toolResultRecoveryRef) (model.Message, bool, int) {
 			if cfg.keepToolResult(msg) {
 				return msg, false, 0
@@ -498,7 +497,7 @@ func applyOversizedToolResultPass(
 			ctx,
 			events[i],
 			maxTokens,
-			cfg.SessionLoadToolAvailable,
+			cfg.SessionLoadRecoveryEnabled,
 			func(ctx context.Context, msg model.Message, maxTokens int, ref toolResultRecoveryRef) (model.Message, bool, int) {
 				if cfg.keepToolResult(msg) {
 					return msg, false, 0

@@ -19,7 +19,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+type contextCompactionTestTool struct {
+	name string
+}
+
+func (t contextCompactionTestTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
 
 type sequenceTokenCounter struct {
 	counts []int
@@ -695,17 +705,62 @@ func TestContextCompactionToolResultOptions(t *testing.T) {
 		WithContextCompactionSkipRecentFunc(skipFunc),
 		WithContextCompactionForceCleanToolNames("", "shell", "shell"),
 		WithContextCompactionKeepToolNames("session_load", ""),
-		WithContextCompactionSessionLoadToolAvailable(true),
 	)
 
 	cfg := normalizeContextCompactionConfig(p.ContextCompactionConfig)
 	require.True(t, cfg.Enabled)
-	require.True(t, cfg.SessionLoadToolAvailable)
 	require.Equal(t, 2, cfg.SkipRecentFunc(nil))
 	require.Contains(t, cfg.toolResultCompactionRules.forceCleanToolNames, "shell")
 	require.NotContains(t, cfg.toolResultCompactionRules.forceCleanToolNames, "")
 	require.Contains(t, cfg.toolResultCompactionRules.keepToolNames, "session_load")
 	require.NotContains(t, cfg.toolResultCompactionRules.keepToolNames, "")
+}
+
+func TestContextCompactionSessionLoadRecoveryDerivedFromRequestTools(t *testing.T) {
+	svc := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(svc),
+	)
+	p := NewContentRequestProcessor(WithEnableContextCompaction(true))
+
+	cfg := p.contextCompactionConfigForInvocation(inv, &model.Request{
+		Tools: map[string]tool.Tool{
+			sessionLoadToolName: contextCompactionTestTool{
+				name: sessionLoadToolName,
+			},
+		},
+	})
+	require.True(t, cfg.SessionLoadRecoveryEnabled)
+
+	cfg = p.contextCompactionConfigForInvocation(inv, &model.Request{
+		Tools: map[string]tool.Tool{
+			"alias": contextCompactionTestTool{name: sessionLoadToolName},
+		},
+	})
+	require.True(t, cfg.SessionLoadRecoveryEnabled)
+
+	cfg = p.contextCompactionConfigForInvocation(inv, &model.Request{
+		Tools: map[string]tool.Tool{
+			"worker": contextCompactionTestTool{name: "worker"},
+		},
+	})
+	require.False(t, cfg.SessionLoadRecoveryEnabled)
+
+	cfg = p.contextCompactionConfigForInvocation(
+		agent.NewInvocation(agent.WithInvocationSession(&session.Session{})),
+		&model.Request{
+			Tools: map[string]tool.Tool{
+				sessionLoadToolName: contextCompactionTestTool{
+					name: sessionLoadToolName,
+				},
+			},
+		},
+	)
+	require.False(t, cfg.SessionLoadRecoveryEnabled)
 }
 
 func TestTruncateOversizedToolResultMessages_SkipsForceCleanForCurrentMessages(t *testing.T) {
