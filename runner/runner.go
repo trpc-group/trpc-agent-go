@@ -615,7 +615,7 @@ func (r *runner) Run(
 		ro,
 		runnerLatencySpanResolveMessages,
 	)
-	invocationMessage, persistedCurrentTurnMessages, err := r.resolveCurrentTurnMessages(
+	invocationMessage, persistedCurrentTurnMessages, useResolvedCurrentTurnMessages, err := r.resolveCurrentTurnMessages(
 		resolveCtx,
 		effectiveAppName,
 		userID,
@@ -698,6 +698,7 @@ func (r *runner) Run(
 		ag,
 		message,
 		persistedCurrentTurnMessages,
+		useResolvedCurrentTurnMessages,
 		ro,
 	); err != nil {
 		finishRunnerLatencySpan(persistSpan, persistStarted, err)
@@ -3640,12 +3641,49 @@ func (r *runner) rewriteUserMessage(
 	if len(rewritten) == 0 {
 		return nil, fmt.Errorf("runner: user message rewriter returned no messages")
 	}
-	for i := range rewritten {
-		if rewritten[i].Role == "" && model.HasPayload(rewritten[i]) {
-			rewritten[i].Role = model.RoleUser
+	normalizeEmptyRolePayloadMessages(rewritten)
+	return rewritten, nil
+}
+
+func (r *runner) resolveSessionContextMessages(
+	ctx context.Context,
+	appName string,
+	userID string,
+	sessionID string,
+	message model.Message,
+	ro agent.RunOptions,
+) ([]model.Message, error) {
+	if len(ro.SessionContextMessages) == 0 &&
+		len(ro.SessionContextMessageFuncs) == 0 {
+		return nil, nil
+	}
+	messages := append([]model.Message(nil), ro.SessionContextMessages...)
+	for _, fn := range ro.SessionContextMessageFuncs {
+		if fn == nil {
+			continue
+		}
+		built, err := fn(ctx, &agent.SessionContextMessagesArgs{
+			AppName:         appName,
+			UserID:          userID,
+			SessionID:       sessionID,
+			RequestID:       ro.RequestID,
+			OriginalMessage: message,
+		})
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, built...)
+	}
+	normalizeEmptyRolePayloadMessages(messages)
+	return filterPayloadMessages(messages), nil
+}
+
+func normalizeEmptyRolePayloadMessages(messages []model.Message) {
+	for i := range messages {
+		if messages[i].Role == "" && model.HasPayload(messages[i]) {
+			messages[i].Role = model.RoleUser
 		}
 	}
-	return rewritten, nil
 }
 
 func (r *runner) resolveCurrentTurnMessages(
@@ -3655,9 +3693,27 @@ func (r *runner) resolveCurrentTurnMessages(
 	sessionID string,
 	message model.Message,
 	ro agent.RunOptions,
-) (model.Message, []model.Message, error) {
+) (model.Message, []model.Message, bool, error) {
+	sessionContextMessages, err := r.resolveSessionContextMessages(
+		ctx,
+		appName,
+		userID,
+		sessionID,
+		message,
+		ro,
+	)
+	if err != nil {
+		return model.Message{}, nil, false, err
+	}
 	if ro.UserMessageRewriter == nil {
-		return message, nil, nil
+		if len(sessionContextMessages) == 0 {
+			return message, nil, false, nil
+		}
+		currentTurnMessages := append(
+			append([]model.Message(nil), sessionContextMessages...),
+			message,
+		)
+		return message, filterPayloadMessages(currentTurnMessages), true, nil
 	}
 	currentTurnMessages, err := r.rewriteUserMessage(
 		ctx,
@@ -3668,9 +3724,16 @@ func (r *runner) resolveCurrentTurnMessages(
 		ro,
 	)
 	if err != nil {
-		return model.Message{}, nil, err
+		return model.Message{}, nil, false, err
 	}
-	return currentTurnMessages[len(currentTurnMessages)-1], filterPayloadMessages(currentTurnMessages), nil
+	persistedCurrentTurnMessages := append(
+		append([]model.Message(nil), sessionContextMessages...),
+		currentTurnMessages...,
+	)
+	return currentTurnMessages[len(currentTurnMessages)-1],
+		filterPayloadMessages(persistedCurrentTurnMessages),
+		true,
+		nil
 }
 
 func (r *runner) persistCurrentTurnMessages(
@@ -3680,9 +3743,10 @@ func (r *runner) persistCurrentTurnMessages(
 	ag agent.Agent,
 	message model.Message,
 	persistedCurrentTurnMessages []model.Message,
+	useResolvedCurrentTurnMessages bool,
 	ro agent.RunOptions,
 ) error {
-	if ro.UserMessageRewriter == nil {
+	if !useResolvedCurrentTurnMessages {
 		historySeeded, err := r.seedSessionHistory(ctx, sess, invocation, ag, ro)
 		if err != nil {
 			return err

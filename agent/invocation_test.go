@@ -1478,6 +1478,45 @@ func TestWithLateContextMessages(t *testing.T) {
 	}, opts.LateContextMessages)
 }
 
+func TestWithSessionContextMessages(t *testing.T) {
+	opts := &RunOptions{}
+	WithSessionContextMessages([]model.Message{
+		{Role: model.RoleUser, Content: "Context A"},
+	})(opts)
+	WithSessionContextMessages([]model.Message{
+		{Role: model.RoleUser, Content: "Context B"},
+	})(opts)
+
+	require.Equal(t, []model.Message{
+		{Role: model.RoleUser, Content: "Context A"},
+		{Role: model.RoleUser, Content: "Context B"},
+	}, opts.SessionContextMessages)
+}
+
+func TestWithSessionContextMessagesFunc(t *testing.T) {
+	opts := &RunOptions{}
+	fn := func(
+		ctx context.Context,
+		args *SessionContextMessagesArgs,
+	) ([]model.Message, error) {
+		require.Equal(t, "raw", args.OriginalMessage.Content)
+		return []model.Message{model.NewUserMessage("ctx")}, nil
+	}
+	WithSessionContextMessagesFunc(fn)(opts)
+	WithSessionContextMessagesFunc(nil)(opts)
+	require.Len(t, opts.SessionContextMessageFuncs, 1)
+	msgs, err := opts.SessionContextMessageFuncs[0](
+		context.Background(),
+		&SessionContextMessagesArgs{
+			OriginalMessage: model.NewUserMessage("raw"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []model.Message{
+		model.NewUserMessage("ctx"),
+	}, msgs)
+}
+
 func TestWithUserMessageRewriter(t *testing.T) {
 	opts := &RunOptions{}
 	rewriter := func(

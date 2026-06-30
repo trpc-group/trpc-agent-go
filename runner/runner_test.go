@@ -6279,6 +6279,109 @@ func TestRunner_Run_SeedAppendError(t *testing.T) {
 	require.Nil(t, ch)
 }
 
+func TestRunner_Run_SessionContextMessages_PersistBeforeCurrentUser(t *testing.T) {
+	svc := sessioninmemory.NewSessionService()
+	ag := &capturingInvocationMessagesAgent{name: "a"}
+	r := NewRunner("app", ag, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hello"),
+		agent.WithSessionContextMessages([]model.Message{
+			model.NewUserMessage("ctx A"),
+			model.NewUserMessage("ctx B"),
+		}),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.Equal(t, model.NewUserMessage("hello"), ag.invocationMessage)
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+	)
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 3)
+	require.Equal(t, "ctx A", sess.Events[0].Choices[0].Message.Content)
+	require.Equal(t, "ctx B", sess.Events[1].Choices[0].Message.Content)
+	require.Equal(t, "hello", sess.Events[2].Choices[0].Message.Content)
+}
+
+func TestRunner_Run_SessionContextMessagesFunc_BuildsPersistentContext(t *testing.T) {
+	svc := sessioninmemory.NewSessionService()
+	ag := &capturingInvocationMessagesAgent{name: "a"}
+	r := NewRunner("app", ag, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hello"),
+		agent.WithRequestID("req-1"),
+		agent.WithSessionContextMessagesFunc(func(
+			ctx context.Context,
+			args *agent.SessionContextMessagesArgs,
+		) ([]model.Message, error) {
+			require.Equal(t, "app", args.AppName)
+			require.Equal(t, "u", args.UserID)
+			require.Equal(t, "s", args.SessionID)
+			require.Equal(t, "req-1", args.RequestID)
+			require.Equal(t, "hello", args.OriginalMessage.Content)
+			return []model.Message{{Content: "ctx"}}, nil
+		}),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.Equal(t, model.NewUserMessage("hello"), ag.invocationMessage)
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+	)
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 2)
+	require.Equal(t, model.RoleUser, sess.Events[0].Choices[0].Message.Role)
+	require.Equal(t, "ctx", sess.Events[0].Choices[0].Message.Content)
+	require.Equal(t, "hello", sess.Events[1].Choices[0].Message.Content)
+}
+
+func TestRunner_Run_SessionContextMessages_ComposesWithUserMessageRewriter(t *testing.T) {
+	svc := sessioninmemory.NewSessionService()
+	ag := &capturingInvocationMessagesAgent{name: "a"}
+	r := NewRunner("app", ag, WithSessionService(svc))
+	ch, err := r.Run(
+		context.Background(),
+		"u",
+		"s",
+		model.NewUserMessage("hello"),
+		agent.WithSessionContextMessages([]model.Message{
+			model.NewUserMessage("session ctx"),
+		}),
+		agent.WithUserMessageRewriter(func(
+			ctx context.Context,
+			args *agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return []model.Message{
+				model.NewUserMessage("rewrite ctx"),
+				model.NewUserMessage("rewritten"),
+			}, nil
+		}),
+	)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.Equal(t, model.NewUserMessage("rewritten"), ag.invocationMessage)
+	sess, err := svc.GetSession(
+		context.Background(),
+		session.Key{AppName: "app", UserID: "u", SessionID: "s"},
+	)
+	require.NoError(t, err)
+	require.Len(t, sess.Events, 3)
+	require.Equal(t, "session ctx", sess.Events[0].Choices[0].Message.Content)
+	require.Equal(t, "rewrite ctx", sess.Events[1].Choices[0].Message.Content)
+	require.Equal(t, "rewritten", sess.Events[2].Choices[0].Message.Content)
+}
+
 func TestRunner_Run_UserMessageRewriter_RewritesCurrentTurnMessages(t *testing.T) {
 	svc := sessioninmemory.NewSessionService()
 	ag := &capturingInvocationMessagesAgent{name: "a"}

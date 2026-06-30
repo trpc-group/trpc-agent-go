@@ -457,6 +457,43 @@ func WithLateContextMessages(messages []model.Message) RunOption {
 	}
 }
 
+// SessionContextMessagesArgs contains stable metadata for one session context
+// message build.
+type SessionContextMessagesArgs struct {
+	AppName         string
+	UserID          string
+	SessionID       string
+	RequestID       string
+	OriginalMessage model.Message
+}
+
+// SessionContextMessagesFunc builds messages that are persisted immediately
+// before the current-turn user input in the session transcript.
+type SessionContextMessagesFunc func(
+	ctx context.Context,
+	args *SessionContextMessagesArgs,
+) ([]model.Message, error)
+
+// WithSessionContextMessages appends per-run messages that are persisted into
+// the session transcript immediately before the current-turn user input.
+func WithSessionContextMessages(messages []model.Message) RunOption {
+	return func(opts *RunOptions) {
+		opts.SessionContextMessages = append(opts.SessionContextMessages, messages...)
+	}
+}
+
+// WithSessionContextMessagesFunc appends a per-run function that builds
+// messages to persist into the session transcript immediately before the
+// current-turn user input.
+func WithSessionContextMessagesFunc(fn SessionContextMessagesFunc) RunOption {
+	return func(opts *RunOptions) {
+		if fn == nil {
+			return
+		}
+		opts.SessionContextMessageFuncs = append(opts.SessionContextMessageFuncs, fn)
+	}
+}
+
 // UserMessageRewriteArgs contains stable metadata for one user message rewrite.
 type UserMessageRewriteArgs struct {
 	AppName         string
@@ -1140,6 +1177,14 @@ type RunOptions struct {
 	// near the latest user turn for this run. These messages are not persisted
 	// into session events and therefore must be provided on every run if needed.
 	LateContextMessages []model.Message
+
+	// SessionContextMessages allows callers to persist additional context
+	// messages immediately before the current-turn user input.
+	SessionContextMessages []model.Message
+
+	// SessionContextMessageFuncs build additional context messages that are
+	// persisted immediately before the current-turn user input.
+	SessionContextMessageFuncs []SessionContextMessagesFunc
 
 	// UserMessageRewriter rewrites the current-turn input into an ordered
 	// message sequence before runner persists it into the session transcript.

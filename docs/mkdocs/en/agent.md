@@ -1121,6 +1121,9 @@ tRPC‑Agent‑Go intentionally keeps this generic and provides **prompt / conte
   - `agent.WithInjectedContextMessages([]model.Message{...})`
 - Per‑run, non‑persistent context injected **near the latest user turn** (useful for per‑turn “rules” / dynamic constraints):
   - `agent.WithLateContextMessages([]model.Message{...})`
+- Persistent context written into the session transcript **before the current user message** (useful for business context, retrieval results, or state snapshots that should remain in history):
+  - `agent.WithSessionContextMessages([]model.Message{...})`
+  - `agent.WithSessionContextMessagesFunc(...)`
 - Full control over the final request messages:
   - Use a structured `BeforeModel` callback to rewrite `request.Messages` (see `docs/mkdocs/en/callbacks.md`).
 
@@ -1131,7 +1134,7 @@ The content request processor assembles the final model request roughly like thi
 1. System prompt / instructions (stable prefix)
 2. Few-shot examples (if configured, inserted after the leading system block)
 3. Injected context messages (`WithInjectedContextMessages`) — **before history**
-4. Session history (canonical transcript)
+4. Session history (canonical transcript; if this run uses `WithSessionContextMessages`, those messages are first persisted into the transcript immediately before the current user message)
 5. Late context messages (`WithLateContextMessages`) — **inserted before the latest user message** (if there is no user message, they are inserted immediately after the leading system block)
 6. (If already present) tool / assistant tail belonging to the current turn
 
@@ -1141,9 +1144,14 @@ This “late” placement is useful when your injected content is dynamic and yo
 
 - Prefer `role=user` for late context messages. Injecting `role=system` in the middle of the message list is not universally supported across providers and may interact poorly with validators.
 - `WithInjectedContextMessages` and `WithLateContextMessages` are **not persisted** into the session transcript (they affect only the current model request).
+- `WithSessionContextMessages` **is persisted** into the session transcript; later turns continue to see it through history until summary/trimming or other history construction policies exclude that part of the transcript.
+- If you only need to persist context before the current user message, prefer `WithSessionContextMessages`; use `WithUserMessageRewriter` when you need to rewrite or expand the current user input itself.
 - In multi‑agent runs, these options live on `RunOptions` and are propagated via invocation cloning. If you need per‑agent scoping, use callbacks and filter by `invocation.AgentName`.
 
-Runnable example: `examples/prompt/late_context_messages`.
+Runnable examples:
+
+- `examples/prompt/late_context_messages`: non-persistent late context.
+- `examples/prompt/session_context_messages`: persistent session context with final model request messages.
 
 ## Runtime Instruction Updates
 

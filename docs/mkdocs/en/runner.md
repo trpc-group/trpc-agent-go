@@ -743,9 +743,11 @@ that inspect it continue to work.
 `agent.WithUserMessageRewriter(...)` rewrites the current-turn user message
 before the run starts. The rewritten result is written into the session as the
 effective input for the current turn and continues to participate in subsequent
-turns. This is useful for adding business context, normalizing user wording, or
-splitting one input into multiple messages that are easier for the model to
-process.
+turns. This is useful for normalizing user wording, synthesizing tool
+transcripts, or splitting one input into multiple messages that are easier for
+the model to process. If you only need to persist context before the current
+user message without changing the user input, prefer
+`agent.WithSessionContextMessages(...)`.
 
 The signature of `UserMessageRewriter` is:
 
@@ -831,6 +833,64 @@ eventChan, err := r.Run(
 ```
 
 A complete example is available at [examples/usermessagerewriter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/usermessagerewriter).
+
+#### Persist Context Messages Before the Current User
+
+If you want to prepend context before the **current user message** and persist
+that context into the session transcript, use:
+
+- `agent.WithSessionContextMessages(...)`: pass a static message list.
+- `agent.WithSessionContextMessagesFunc(...)`: build messages dynamically at the start of the run.
+
+Runner persists these messages before it persists the current user input. They
+do not change `invocation.Message`; the current user input remains intact. If
+the same run also uses `WithUserMessageRewriter(...)`, the persistence order is:
+
+```text
+session context messages...
+user message rewriter returned messages...
+```
+
+Static context example:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithSessionContextMessages([]model.Message{
+        model.NewUserMessage("Business context: ticket priority=P0; policy=mitigate first, root-cause second."),
+    }),
+)
+```
+
+Dynamic context example:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithSessionContextMessagesFunc(func(
+        ctx context.Context,
+        args *agent.SessionContextMessagesArgs,
+    ) ([]model.Message, error) {
+        ctxText := loadBusinessContext(args.UserID, args.SessionID, args.OriginalMessage.Content)
+        if strings.TrimSpace(ctxText) == "" {
+            return nil, nil
+        }
+        return []model.Message{
+            model.NewUserMessage("Business context:\n" + ctxText),
+        }, nil
+    }),
+)
+```
+
+Runnable example: `examples/prompt/session_context_messages`. It prints the
+final model request messages so you can verify that the context entered the
+model input.
 
 #### Inject Per-run Context Messages (non-persistent)
 
