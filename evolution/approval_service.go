@@ -214,8 +214,8 @@ func humanDecisionReason(decision ApprovalDecision) string {
 // reverted a skill and why.
 type RollbackOpts struct {
 	// TargetRevisionID, when non-empty, rolls back to the specific
-	// archived revision id. When empty, the most recently archived
-	// revision is selected automatically.
+	// archived revision id. When empty, the latest archived revision in
+	// the store's revision order is selected automatically.
 	TargetRevisionID string
 	Reviewer         string
 	Comment          string
@@ -256,9 +256,9 @@ func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts Rol
 	if err != nil {
 		return nil, err
 	}
-	currentRevID, err := s.pointer.Get(ctx, skillID)
+	currentRevID, err := s.currentActiveRevisionID(ctx, skillID)
 	if err != nil {
-		return nil, fmt.Errorf("get active pointer: %w", err)
+		return nil, err
 	}
 	if currentRevID == target.RevisionID {
 		return nil, fmt.Errorf("rollback: target %q is already active", target.RevisionID)
@@ -321,6 +321,45 @@ func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts Rol
 	}, nil
 }
 
+// currentActiveRevisionID resolves the revision that should be archived
+// before a rollback target is promoted. Normally ActivePointer carries
+// that identity; delete revisions are the exception because they are
+// active tombstones while the pointer is cleared.
+func (s *ApprovalService) currentActiveRevisionID(ctx context.Context, skillID string) (string, error) {
+	currentRevID, err := s.pointer.Get(ctx, skillID)
+	if err != nil {
+		return "", fmt.Errorf("get active pointer: %w", err)
+	}
+	if strings.TrimSpace(currentRevID) != "" {
+		return currentRevID, nil
+	}
+	activeRevID, err := s.findLatestActiveRevisionID(ctx, skillID)
+	if err != nil {
+		return "", err
+	}
+	return activeRevID, nil
+}
+
+func (s *ApprovalService) findLatestActiveRevisionID(ctx context.Context, skillID string) (string, error) {
+	revIDs, err := s.store.ListRevisions(ctx, skillID)
+	if err != nil {
+		return "", fmt.Errorf("list revisions: %w", err)
+	}
+	for i := len(revIDs) - 1; i >= 0; i-- {
+		rev, err := s.store.ReadRevision(ctx, skillID, revIDs[i])
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return "", fmt.Errorf("read revision %q: %w", revIDs[i], err)
+		}
+		if rev.Status == RevisionActive {
+			return rev.RevisionID, nil
+		}
+	}
+	return "", nil
+}
+
 // applyRollbackPublish materializes the rollback target through the
 // publisher: UpsertSkill for create/update revisions, DeleteSkill for
 // delete revisions. A delete revision rollback removes the live skill
@@ -347,7 +386,7 @@ func (s *ApprovalService) applyRollbackPublish(ctx context.Context, target *Revi
 
 // selectRollbackTarget picks the revision that Rollback should promote
 // back to active. When targetID is set it must point to an archived
-// revision; otherwise the most recently archived revision wins.
+// revision; otherwise the latest archived revision in store order wins.
 //
 // Missing or wrong-status explicit targets are wrapped in
 // ErrNoArchivedRevision so callers can use errors.Is uniformly.
@@ -374,7 +413,7 @@ func (s *ApprovalService) selectRollbackTarget(
 	if err != nil {
 		return nil, fmt.Errorf("list revisions: %w", err)
 	}
-	// Walk in reverse so the most-recent archived wins.
+	// Walk in reverse so the latest archived revision in store order wins.
 	for i := len(revIDs) - 1; i >= 0; i-- {
 		rev, err := s.store.ReadRevision(ctx, skillID, revIDs[i])
 		if err != nil {

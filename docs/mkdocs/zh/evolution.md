@@ -309,7 +309,7 @@ res, err := approvalSvc.Rollback(ctx, "weather-monitor", evolution.RollbackOpts{
 fmt.Printf("rolled back %s → %s\n", res.PreviousActiveID, res.RestoredID)
 ```
 
-`TargetRevisionID` 为空时自动选择最近一次 archived。若没有可回退的 archived revision，返回 `ErrNoArchivedRevision`。
+`TargetRevisionID` 为空时，自动选择 revision store 排序中最新的 archived revision。若没有可回退的 archived revision，返回 `ErrNoArchivedRevision`。
 
 `openclaw` CLI 提供同名命令：
 

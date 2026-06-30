@@ -468,7 +468,7 @@ func TestEvolution_Rollback_ExplicitRevision(t *testing.T) {
 		"newer archived revision must not be promoted when --revision picks an older one")
 
 	// Active pointer must now reference the explicitly requested
-	// revision, not the most-recently archived one.
+	// revision, not the latest archived one in store order.
 	pointer := evolution.NewFileActivePointer(revDir)
 	active, err := pointer.Get(ctx, skillID)
 	require.NoError(t, err)

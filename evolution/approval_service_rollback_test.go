@@ -278,6 +278,64 @@ func TestApprovalService_Rollback_ToDeleteRevisionClearsPointer(t *testing.T) {
 	assert.Empty(t, active)
 }
 
+func TestApprovalService_Rollback_FromDeleteTombstoneArchivesDelete(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	pointer := NewFileActivePointer(dir)
+	pub := &mockPublisher{}
+	ctx := context.Background()
+	skillID := "deleted-skill"
+
+	archivedCreate := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-create",
+		Action:     RevisionActionCreate,
+		Status:     RevisionArchived,
+		Spec: &SkillSpec{
+			Name: "Deleted Skill", Description: "old body", WhenToUse: "w", Steps: []string{"s"},
+		},
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	activeDelete := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-delete",
+		Action:     RevisionActionDelete,
+		Status:     RevisionActive,
+		TargetName: "Deleted Skill",
+		CreatedAt:  time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC),
+	}
+	require.NoError(t, store.WriteRevision(ctx, archivedCreate))
+	require.NoError(t, store.WriteRevision(ctx, activeDelete))
+	setRevisionMtime(t, dir, skillID, archivedCreate.RevisionID, archivedCreate.CreatedAt)
+	setRevisionMtime(t, dir, skillID, activeDelete.RevisionID, activeDelete.CreatedAt)
+	require.NoError(t, pointer.Clear(ctx, skillID))
+
+	svc := NewApprovalService(store, pointer, pub)
+	res, err := svc.Rollback(ctx, skillID, RollbackOpts{Reviewer: "alice"})
+	require.NoError(t, err)
+	assert.Equal(t, activeDelete.RevisionID, res.PreviousActiveID)
+	assert.Equal(t, archivedCreate.RevisionID, res.RestoredID)
+
+	restored, err := store.ReadRevision(ctx, skillID, archivedCreate.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionActive, restored.Status)
+
+	tombstone, err := store.ReadRevision(ctx, skillID, activeDelete.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionArchived, tombstone.Status)
+
+	active, err := pointer.Get(ctx, skillID)
+	require.NoError(t, err)
+	assert.Equal(t, archivedCreate.RevisionID, active)
+
+	pub.mu.Lock()
+	publishedSkills := append([]*SkillSpec(nil), pub.skills...)
+	pub.mu.Unlock()
+	require.Len(t, publishedSkills, 1)
+	assert.Equal(t, "Deleted Skill", publishedSkills[0].Name)
+	assert.Contains(t, publishedSkills[0].Description, "old body")
+}
+
 func TestApprovalService_Rollback_RequiresStoreAndPointer(t *testing.T) {
 	ctx := context.Background()
 	// No store configured.

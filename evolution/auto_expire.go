@@ -158,24 +158,15 @@ type sweepRoute struct {
 // used as-is so custom implementations are not silently bypassed.
 func (w *worker) collectStoresForSweep() []sweepRoute {
 	if w.skillScopeMode == skill.SkillScopeNone {
-		return []sweepRoute{{
-			store:     w.candidateStore,
-			pointer:   w.activePointer,
-			publisher: w.publisher,
-			root:      w.candidateStoreRoot,
-		}}
+		return w.configuredSweepRoute()
 	}
-	if w.candidateStoreRoot == "" {
+	if !w.hasScopedSweepRoots() {
 		// File-store roots unknown — typically because the caller
-		// plugged in non-file backends. Fall back to the configured
-		// triple so custom WithActivePointer/WithPublisher
-		// implementations stay in the path.
-		return []sweepRoute{{
-			store:     w.candidateStore,
-			pointer:   w.activePointer,
-			publisher: w.publisher,
-			root:      "",
-		}}
+		// plugged in one or more non-file backends. Fall back to the
+		// configured triple so custom CandidateStore/ActivePointer/
+		// Publisher implementations stay in the path instead of being
+		// partially replaced by file backends rooted at "".
+		return w.configuredSweepRoute()
 	}
 	// Walk the on-disk scope directory to find candidate stores per
 	// scope. Each store gets its own publisher/pointer rooted at the
@@ -197,6 +188,19 @@ func (w *worker) collectStoresForSweep() []sweepRoute {
 		})
 	}
 	return routes
+}
+
+func (w *worker) configuredSweepRoute() []sweepRoute {
+	return []sweepRoute{{
+		store:     w.candidateStore,
+		pointer:   w.activePointer,
+		publisher: w.publisher,
+		root:      w.candidateStoreRoot,
+	}}
+}
+
+func (w *worker) hasScopedSweepRoots() bool {
+	return w.candidateStoreRoot != "" && w.activePointerRoot != "" && w.publisherBaseDir != ""
 }
 
 // scopeDir holds the per-scope filesystem roots used to construct a

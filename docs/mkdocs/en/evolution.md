@@ -290,7 +290,8 @@ res, err := approvalSvc.Rollback(ctx, "weather-monitor", evolution.RollbackOpts{
 fmt.Printf("rolled back %s → %s\n", res.PreviousActiveID, res.RestoredID)
 ```
 
-When `TargetRevisionID` is empty the most recently archived revision wins.
+When `TargetRevisionID` is empty, the latest archived revision in the
+revision store's ordering wins.
 `ErrNoArchivedRevision` is returned when no archived revision is available.
 
 The `openclaw` CLI exposes the same workflow:

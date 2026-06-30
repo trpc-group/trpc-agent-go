@@ -192,6 +192,26 @@ func TestApprovalSweep_DisabledWhenPublisherMissing(t *testing.T) {
 	assert.Nil(t, w.sweepCancel, "sweeper must not start without a publisher")
 }
 
+func TestApprovalSweep_UsesConfiguredRouteWhenScopedRootsIncomplete(t *testing.T) {
+	dir := t.TempDir()
+	store := newFileCandidateStore(filepath.Join(dir, "revisions"))
+	pointer := &stubActivePointer{}
+	publisher := &mockPublisher{}
+	w := newWorker(workerConfig{
+		Reviewer:       &mockReviewer{},
+		Publisher:      publisher,
+		CandidateStore: store,
+		ActivePointer:  pointer,
+		SkillScopeMode: skill.SkillScopeUser,
+	})
+
+	routes := w.collectStoresForSweep()
+	require.Len(t, routes, 1)
+	assert.Same(t, store, routes[0].store)
+	assert.Same(t, pointer, routes[0].pointer)
+	assert.Same(t, publisher, routes[0].publisher)
+}
+
 // TestApprovalSweep_PicksSingleRevisionPerSkill asserts the sweeper
 // only auto-promotes one stale revision per skill per sweep — even
 // when several revisions in the same skill exceed the timeout.
@@ -305,4 +325,30 @@ func TestApprovalSweep_DiscoverScopeDirs_User(t *testing.T) {
 		assert.NotEmpty(t, s.pointerRoot)
 		assert.NotEmpty(t, s.publisherRoot)
 	}
+}
+
+type stubActivePointer struct {
+	active map[string]string
+}
+
+func (p *stubActivePointer) Get(_ context.Context, skillID string) (string, error) {
+	if p.active == nil {
+		return "", nil
+	}
+	return p.active[skillID], nil
+}
+
+func (p *stubActivePointer) Set(_ context.Context, skillID, revisionID string) error {
+	if p.active == nil {
+		p.active = make(map[string]string)
+	}
+	p.active[skillID] = revisionID
+	return nil
+}
+
+func (p *stubActivePointer) Clear(_ context.Context, skillID string) error {
+	if p.active != nil {
+		delete(p.active, skillID)
+	}
+	return nil
 }

@@ -434,7 +434,7 @@ func (e *evoEnv) audit(args []string) int {
 
 func (e *evoEnv) rollback(args []string) int {
 	fl := newEvoFlags(evoCmdRollback)
-	revision := fl.fs.String("revision", "", "specific archived revision id (default: most recent archived)")
+	revision := fl.fs.String("revision", "", "specific archived revision id (default: latest archived in store order)")
 	reviewer := fl.fs.String("reviewer", "", "reviewer identity (default: $USER)")
 	comment := fl.fs.String("comment", "", "optional rollback comment")
 
