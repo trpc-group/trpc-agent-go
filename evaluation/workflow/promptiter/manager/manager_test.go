@@ -66,6 +66,21 @@ type scriptedStore struct {
 	runs            map[string]*promptiterengine.RunResult
 }
 
+type errSequenceContext struct {
+	context.Context
+	errs  []error
+	calls int
+}
+
+func (c *errSequenceContext) Err() error {
+	if c.calls >= len(c.errs) {
+		return c.errs[len(c.errs)-1]
+	}
+	err := c.errs[c.calls]
+	c.calls++
+	return err
+}
+
 func (s *scriptedStore) Create(ctx context.Context, appName string, run *promptiterengine.RunResult) error {
 	_ = ctx
 	if s.createErr != nil {
@@ -470,6 +485,39 @@ func TestManagerRunPersistsCanceledBeforeRunning(t *testing.T) {
 
 	concreteManager.run(runCtx, "run-1", &promptiterengine.RunRequest{})
 
+	current := store.runs["run-1"]
+	require.NotNil(t, current)
+	assert.Equal(t, promptiterengine.RunStatusCanceled, current.Status)
+	assert.Equal(t, "run canceled", current.ErrorMessage)
+	_, ok := concreteManager.cancelFuncs["run-1"]
+	assert.False(t, ok)
+}
+
+func TestManagerRunPersistsCanceledAfterMarkingRunning(t *testing.T) {
+	runCtx := &errSequenceContext{
+		Context: context.Background(),
+		errs:    []error{nil, context.Canceled},
+	}
+	store := &scriptedStore{
+		runs: map[string]*promptiterengine.RunResult{
+			"run-1": {
+				AppName: "demo-app",
+				ID:      "run-1",
+				Status:  promptiterengine.RunStatusQueued,
+			},
+		},
+	}
+	engineInst := &fakePromptIterEngine{
+		run: func(ctx context.Context, request *promptiterengine.RunRequest, opts ...promptiterengine.Option) (*promptiterengine.RunResult, error) {
+			t.Fatal("engine should not run after context is canceled")
+			return nil, nil
+		},
+	}
+	managerInst, err := New("demo-app", engineInst, WithStore(store))
+	require.NoError(t, err)
+	concreteManager := managerInst.(*manager)
+	concreteManager.cancelFuncs["run-1"] = func() {}
+	concreteManager.run(runCtx, "run-1", &promptiterengine.RunRequest{})
 	current := store.runs["run-1"]
 	require.NotNil(t, current)
 	assert.Equal(t, promptiterengine.RunStatusCanceled, current.Status)

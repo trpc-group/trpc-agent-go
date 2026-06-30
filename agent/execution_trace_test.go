@@ -210,6 +210,7 @@ func TestExecutionTraceHelpers_HandleNilAndDisabledInvocation(t *testing.T) {
 	assert.Empty(t, StartExecutionTraceStep(nilInv, "assistant", nil, nil))
 	FinishExecutionTraceStep(nilInv, "step-1", nil, nil)
 	SetExecutionTraceStepAppliedSurfaceIDs(nilInv, "step-1")
+	SetExecutionTraceStepUsage(nilInv, "step-1", &model.Usage{TotalTokens: 1})
 	assert.Nil(t, NextExecutionTracePredecessors(nilInv))
 	assert.Nil(t, BuildExecutionTrace(nilInv, atrace.TraceStatusCompleted))
 	nilInv.ensureTraceCaptureMetadata()
@@ -223,6 +224,9 @@ func TestExecutionTraceHelpers_HandleNilAndDisabledInvocation(t *testing.T) {
 	FinishExecutionTraceStep(disabled, "step-1", nil, nil)
 	FinishExecutionTraceStep(disabled, "", nil, nil)
 	SetExecutionTraceStepAppliedSurfaceIDs(disabled, "step-1")
+	SetExecutionTraceStepUsage(disabled, "step-1", &model.Usage{TotalTokens: 1})
+	SetExecutionTraceStepUsage(disabled, "", &model.Usage{TotalTokens: 1})
+	SetExecutionTraceStepUsage(disabled, "step-1", nil)
 	assert.Nil(t, NextExecutionTracePredecessors(disabled))
 	assert.Nil(t, BuildExecutionTrace(disabled, atrace.TraceStatusCompleted))
 }
@@ -268,6 +272,30 @@ func TestExecutionTraceHelpers_RecordAppliedSurfaceIDs(t *testing.T) {
 	require.NotNil(t, executionTrace)
 	require.Len(t, executionTrace.Steps, 1)
 	assert.Equal(t, []string{"assistant#instruction", "assistant#model"}, executionTrace.Steps[0].AppliedSurfaceIDs)
+}
+
+func TestExecutionTraceHelpers_RecordStepUsage(t *testing.T) {
+	inv := NewInvocation(
+		WithInvocationAgent(&mockAgent{name: "assistant"}),
+		WithInvocationRunOptions(RunOptions{ExecutionTraceEnabled: true}),
+		WithInvocationMessage(model.NewUserMessage("hello")),
+	)
+	stepID := StartExecutionTraceStep(
+		inv,
+		InvocationTraceNodeID(inv),
+		&atrace.Snapshot{Text: "input"},
+		nil,
+	)
+	require.NotEmpty(t, stepID)
+	SetExecutionTraceStepUsage(inv, stepID, &model.Usage{PromptTokens: 2, CompletionTokens: 3, TotalTokens: 5})
+	FinishExecutionTraceStep(inv, stepID, &atrace.Snapshot{Text: "output"}, nil)
+	executionTrace := BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, executionTrace)
+	require.Len(t, executionTrace.Steps, 1)
+	require.NotNil(t, executionTrace.Steps[0].Usage)
+	assert.Equal(t, 5, executionTrace.Steps[0].Usage.TotalTokens)
+	require.NotNil(t, executionTrace.Usage)
+	assert.Equal(t, 5, executionTrace.Usage.TotalTokens)
 }
 
 func TestExecutionTraceHelpers_SetAppliedSurfaceIDs_IgnoresNilAgent(t *testing.T) {
