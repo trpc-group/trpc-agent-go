@@ -718,6 +718,9 @@ func (f *Flow) runOneStep(
 		startedSpan,
 	)
 	agent.FinishExecutionTraceStep(invocation, stepID, traceSnapshotFromEvent(lastEvent), err)
+	if lastEvent != nil && lastEvent.Response != nil {
+		agent.SetExecutionTraceStepUsage(invocation, stepID, lastEvent.Response.Usage)
+	}
 	return lastEvent, err
 }
 

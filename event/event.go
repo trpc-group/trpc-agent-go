@@ -248,6 +248,7 @@ func cloneExecutionTrace(executionTrace *trace.Trace) *trace.Trace {
 		StartedAt:        executionTrace.StartedAt,
 		EndedAt:          executionTrace.EndedAt,
 		Status:           executionTrace.Status,
+		Usage:            cloneUsage(executionTrace.Usage),
 		Steps:            make([]trace.Step, 0, len(executionTrace.Steps)),
 	}
 	for _, step := range executionTrace.Steps {
@@ -276,6 +277,7 @@ func cloneExecutionTraceStep(step trace.Step) trace.Step {
 		AppliedSurfaceIDs: append([]string(nil), step.AppliedSurfaceIDs...),
 		Input:             cloneExecutionTraceSnapshot(step.Input),
 		Output:            cloneExecutionTraceSnapshot(step.Output),
+		Usage:             cloneUsage(step.Usage),
 		Error:             step.Error,
 	}
 }
@@ -285,6 +287,18 @@ func cloneExecutionTraceSnapshot(snapshot *trace.Snapshot) *trace.Snapshot {
 		return nil
 	}
 	return &trace.Snapshot{Text: snapshot.Text}
+}
+
+func cloneUsage(usage *model.Usage) *model.Usage {
+	if usage == nil {
+		return nil
+	}
+	cloned := *usage
+	if usage.TimingInfo != nil {
+		timingInfo := *usage.TimingInfo
+		cloned.TimingInfo = &timingInfo
+	}
+	return &cloned
 }
 
 // Filter checks if the event matches the specified filter key.
