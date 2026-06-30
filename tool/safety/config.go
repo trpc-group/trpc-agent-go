@@ -58,16 +58,17 @@ func DefaultPolicy() PolicyFile {
 }
 
 // LoadPolicyFile reads and parses a YAML policy file.
+// It starts from DefaultPolicy and overlays file values so an
+// incomplete YAML does not silently disable security checks.
 func LoadPolicyFile(path string) (*PolicyFile, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read policy file %s: %w", path, err)
 	}
-	var p PolicyFile
+	p := DefaultPolicy() // Start from defaults, not zero.
 	if err := yaml.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("parse policy file %s: %w", path, err)
 	}
-	// Fill zero-value fields with defaults when no file is loaded.
 	if p.MaxTimeoutSeconds == 0 {
 		p.MaxTimeoutSeconds = 300
 	}

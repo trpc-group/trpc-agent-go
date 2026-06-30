@@ -12,6 +12,22 @@ import (
 	"strings"
 )
 
+// combineInput merges Command and CodeBlocks content into a single
+// lower-cased string for unified scanning, preventing CodeBlocks-only
+// payloads from bypassing the scanner.
+func combineInput(input ScanInput) string {
+	var parts []string
+	if input.Command != "" {
+		parts = append(parts, input.Command)
+	}
+	for _, cb := range input.CodeBlocks {
+		if cb.Code != "" {
+			parts = append(parts, cb.Code)
+		}
+	}
+	return strings.ToLower(strings.Join(parts, " "))
+}
+
 // ---------- Rule 1: 危险命令检测 ----------
 
 // DangerousCommandRule checks for explicitly dangerous commands.
@@ -81,7 +97,8 @@ func (r *DangerousCommandRule) ID() string {
 }
 
 func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
-	cmd := strings.ToLower(input.Command)
+	// Combine command + code blocks for unified scanning.
+	cmd := combineInput(input)
 	if cmd == "" {
 		return nil
 	}
@@ -176,7 +193,7 @@ func (r *NetworkAccessRule) ID() string {
 }
 
 func (r *NetworkAccessRule) Check(input ScanInput) *ScanResult {
-	cmd := strings.ToLower(input.Command)
+	cmd := combineInput(input)
 	if cmd == "" {
 		return nil
 	}
