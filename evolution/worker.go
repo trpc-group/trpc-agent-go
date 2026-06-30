@@ -77,10 +77,14 @@ type worker struct {
 	// pending_approval auto-expiration sweeper. When approvalTimeout
 	// > 0, Start launches a background goroutine that scans the
 	// candidate store and auto-promotes revisions whose
-	// pending_approval age exceeds approvalTimeout.
+	// pending_approval age exceeds approvalTimeout. sweepCancel is the
+	// cancel func for the sweeper's root context; closing it both
+	// stops the ticker loop and cancels any in-flight sweep so Stop
+	// does not block on slow stores.
 	approvalTimeout       time.Duration
 	approvalSweepInterval time.Duration
-	sweepStop             chan struct{}
+	sweepCtx              context.Context
+	sweepCancel           context.CancelFunc
 	sweepDone             chan struct{}
 
 	scopedMu       sync.Mutex

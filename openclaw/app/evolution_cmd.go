@@ -119,9 +119,36 @@ func newEvoFlags(name string) *evoFlags {
 	return &evoFlags{fs: fs, dir: dir, app: app, user: user}
 }
 
+// parse runs the underlying FlagSet against args while accepting flags
+// in any position. The standard flag package stops at the first
+// non-flag token, which trips up CLI invocations like
+// `evolution approve <rev-id> --comment foo` — flags after the
+// positional argument would be silently treated as positionals.
+//
+// We work around this by repeatedly parsing the remaining args,
+// appending leading non-flag tokens to `positional`, then continuing
+// to parse from the next flag token. This stays compatible with the
+// stock flag.FlagSet semantics (long/short flags, `=` syntax, `--`
+// terminator) without re-implementing flag parsing.
 func (f *evoFlags) parse(args []string) (dir string, positional []string, err error) {
-	if err = f.fs.Parse(args); err != nil {
-		return "", nil, err
+	rem := args
+	for {
+		if err = f.fs.Parse(rem); err != nil {
+			return "", nil, err
+		}
+		rem = f.fs.Args()
+		if len(rem) == 0 {
+			break
+		}
+		// `--` is the explicit "no more flags" terminator handled by
+		// the FlagSet — anything left after a stop on `--` is purely
+		// positional.
+		if !strings.HasPrefix(rem[0], "-") || rem[0] == "-" {
+			positional = append(positional, rem[0])
+			rem = rem[1:]
+			continue
+		}
+		break
 	}
 	if *f.dir == "" {
 		*f.dir = os.Getenv("EVOLUTION_REVISIONS_DIR")
@@ -133,7 +160,7 @@ func (f *evoFlags) parse(args []string) (dir string, positional []string, err er
 	if err != nil {
 		return "", nil, err
 	}
-	return dir, f.fs.Args(), nil
+	return dir, positional, nil
 }
 
 func scopedEvolutionCLIPath(root, appName, userID string) (string, error) {

@@ -433,7 +433,30 @@ func TestEvolution_Rollback_NoArchivedRevision(t *testing.T) {
 func TestEvolution_Rollback_ExplicitRevision(t *testing.T) {
 	stateDir := t.TempDir()
 	revDir := filepath.Join(stateDir, "evolution", "revisions")
+	managedDir := filepath.Join(stateDir, defaultSkillsDir, "evolution")
 	writeRollbackTestRevisions(t, revDir)
+
+	// Seed a second archived revision newer than rev-old so the
+	// auto-select path would pick rev-older-archived if --revision
+	// were ignored. The test then asserts that the explicitly named
+	// revision is the one restored.
+	store := evolution.NewFileCandidateStore(revDir)
+	ctx := context.Background()
+	skillID := "weather-monitor"
+	newerArchived := &evolution.Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-newer-archived",
+		Action:     evolution.RevisionActionUpdate,
+		Status:     evolution.RevisionArchived,
+		Spec: &evolution.SkillSpec{
+			Name:        "Weather Monitor",
+			Description: "newer archived",
+			WhenToUse:   "w",
+			Steps:       []string{"a", "b"},
+		},
+		CreatedAt: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, store.WriteRevision(ctx, newerArchived))
 
 	stdout, _, code := runEvo(t, []string{
 		evoCmdRollback, "--dir", revDir, "weather-monitor",
@@ -441,5 +464,20 @@ func TestEvolution_Rollback_ExplicitRevision(t *testing.T) {
 	})
 	require.Equal(t, 0, code, "stdout=%s", stdout)
 	assert.Contains(t, stdout, "rev-old")
+	assert.NotContains(t, stdout, "rev-newer-archived",
+		"newer archived revision must not be promoted when --revision picks an older one")
+
+	// Active pointer must now reference the explicitly requested
+	// revision, not the most-recently archived one.
+	pointer := evolution.NewFileActivePointer(revDir)
+	active, err := pointer.Get(ctx, skillID)
+	require.NoError(t, err)
+	assert.Equal(t, "rev-old", active)
+
+	// Republished SKILL.md must reflect the explicit revision body.
+	body, err := os.ReadFile(filepath.Join(managedDir, skillID, "SKILL.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "old version")
+	assert.NotContains(t, string(body), "newer archived")
 }
 

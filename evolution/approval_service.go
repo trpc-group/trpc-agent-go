@@ -239,7 +239,8 @@ type RollbackResult struct {
 // — agents pick up the new SKILL.md on the next read).
 //
 // Returns ErrNoArchivedRevision when no archived revision is available
-// (or when TargetRevisionID is set but does not exist / is not archived).
+// or when TargetRevisionID is set but does not exist / is not
+// archived. Use errors.Is to distinguish this case.
 func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts RollbackOpts) (*RollbackResult, error) {
 	if s.store == nil {
 		return nil, fmt.Errorf("no candidate store configured")
@@ -268,18 +269,23 @@ func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts Rol
 		decidedAt = time.Now().UTC()
 	}
 
-	// Archive the current active revision (if any) before promoting the
-	// rollback target, so listings reflect the new state immediately.
-	if currentRevID != "" {
-		if err := s.archiveActive(ctx, skillID, currentRevID, target.RevisionID); err != nil {
-			return nil, err
-		}
+	// Apply the publisher mutation first so any failure happens before
+	// we touch on-disk revision state. This keeps rollback "all or
+	// nothing" from the agent's perspective: if publishing fails, the
+	// previous active revision stays active and the pointer stays put.
+	if err := s.applyRollbackPublish(ctx, target); err != nil {
+		return nil, err
 	}
 
-	// Republish so agents see the restored SKILL.md right away.
-	if s.publisher != nil && target.Action != RevisionActionDelete && target.Spec != nil {
-		if err := s.publisher.UpsertSkill(ctx, target.Spec); err != nil {
-			return nil, fmt.Errorf("publish restored skill: %w", err)
+	// Now that the publisher reflects the restored skill, demote the
+	// previous active revision and update the candidate store / pointer
+	// to match. These steps are local writes against the candidate
+	// store; if any of them fails we surface the error but the
+	// publisher already shows the restored content, which matches the
+	// rollback intent.
+	if currentRevID != "" {
+		if err := s.archiveActive(ctx, skillID, currentRevID, target.RevisionID, decidedAt, opts); err != nil {
+			return nil, err
 		}
 	}
 
@@ -288,8 +294,14 @@ func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts Rol
 	if err := s.store.WriteRevision(ctx, target); err != nil {
 		return nil, fmt.Errorf("write restored revision: %w", err)
 	}
-	if err := s.pointer.Set(ctx, skillID, target.RevisionID); err != nil {
-		return nil, fmt.Errorf("set active pointer: %w", err)
+	if target.Action == RevisionActionDelete {
+		if err := s.pointer.Clear(ctx, skillID); err != nil {
+			return nil, fmt.Errorf("clear active pointer: %w", err)
+		}
+	} else {
+		if err := s.pointer.Set(ctx, skillID, target.RevisionID); err != nil {
+			return nil, fmt.Errorf("set active pointer: %w", err)
+		}
 	}
 
 	_ = s.store.AppendAudit(ctx, AuditEvent{
@@ -309,20 +321,52 @@ func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts Rol
 	}, nil
 }
 
+// applyRollbackPublish materializes the rollback target through the
+// publisher: UpsertSkill for create/update revisions, DeleteSkill for
+// delete revisions. A delete revision rollback removes the live skill
+// body — the inverse of the original delete revision being archived.
+func (s *ApprovalService) applyRollbackPublish(ctx context.Context, target *Revision) error {
+	if s.publisher == nil {
+		return nil
+	}
+	if target.Action == RevisionActionDelete {
+		name := revisionTargetName(target)
+		if err := s.publisher.DeleteSkill(ctx, name); err != nil {
+			return fmt.Errorf("delete restored skill: %w", err)
+		}
+		return nil
+	}
+	if target.Spec == nil {
+		return nil
+	}
+	if err := s.publisher.UpsertSkill(ctx, target.Spec); err != nil {
+		return fmt.Errorf("publish restored skill: %w", err)
+	}
+	return nil
+}
+
 // selectRollbackTarget picks the revision that Rollback should promote
 // back to active. When targetID is set it must point to an archived
 // revision; otherwise the most recently archived revision wins.
+//
+// Missing or wrong-status explicit targets are wrapped in
+// ErrNoArchivedRevision so callers can use errors.Is uniformly.
+// Other store errors bubble up so corruption / permissions / context
+// cancellation cannot be silently masked as "no rollback available".
 func (s *ApprovalService) selectRollbackTarget(
 	ctx context.Context, skillID, targetID string,
 ) (*Revision, error) {
 	if strings.TrimSpace(targetID) != "" {
 		rev, err := s.store.ReadRevision(ctx, skillID, targetID)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, fmt.Errorf("%w: target revision %q", ErrNoArchivedRevision, targetID)
+			}
 			return nil, fmt.Errorf("read target revision: %w", err)
 		}
 		if rev.Status != RevisionArchived {
-			return nil, fmt.Errorf("rollback: revision %q has status %q, expected archived",
-				targetID, rev.Status)
+			return nil, fmt.Errorf("%w: revision %q has status %q",
+				ErrNoArchivedRevision, targetID, rev.Status)
 		}
 		return rev, nil
 	}
@@ -334,7 +378,10 @@ func (s *ApprovalService) selectRollbackTarget(
 	for i := len(revIDs) - 1; i >= 0; i-- {
 		rev, err := s.store.ReadRevision(ctx, skillID, revIDs[i])
 		if err != nil {
-			continue
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("read revision %q: %w", revIDs[i], err)
 		}
 		if rev.Status == RevisionArchived {
 			return rev, nil
@@ -344,9 +391,13 @@ func (s *ApprovalService) selectRollbackTarget(
 }
 
 // archiveActive demotes the current active revision to archived and
-// records one audit entry. Used by Rollback before promoting the
-// previous archived revision back to active.
-func (s *ApprovalService) archiveActive(ctx context.Context, skillID, activeID, replacingID string) error {
+// records one audit entry that mirrors the rollback metadata
+// (timestamp, reviewer, comment) so operators can correlate the
+// archive with the corresponding promote.
+func (s *ApprovalService) archiveActive(
+	ctx context.Context, skillID, activeID, replacingID string,
+	at time.Time, opts RollbackOpts,
+) error {
 	current, err := s.store.ReadRevision(ctx, skillID, activeID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -362,11 +413,14 @@ func (s *ApprovalService) archiveActive(ctx context.Context, skillID, activeID, 
 		return fmt.Errorf("archive active revision: %w", err)
 	}
 	_ = s.store.AppendAudit(ctx, AuditEvent{
+		At:         at,
 		Action:     AuditActionArchive,
 		SkillID:    skillID,
 		RevisionID: activeID,
 		Status:     string(RevisionArchived),
 		Reason:     "rolled back to " + replacingID,
+		Actor:      opts.Reviewer,
+		Comment:    opts.Comment,
 	})
 	return nil
 }

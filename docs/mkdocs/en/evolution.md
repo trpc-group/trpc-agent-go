@@ -295,7 +295,7 @@ When `TargetRevisionID` is empty the most recently archived revision wins.
 
 The `openclaw` CLI exposes the same workflow:
 
-```
+```bash
 openclaw evolution rollback <skill-id> --dir <revisions-dir> [--revision <rev-id>] [--reviewer <id>] [--comment <text>]
 ```
 

@@ -31,34 +31,48 @@ const (
 	// timeout still wakes up at least hourly. This keeps the
 	// auto-expire latency bounded without burning CPU on tight loops.
 	maxApprovalSweepInterval = 1 * time.Hour
+
+	// sweepStoreTimeout bounds a single per-route scan. Stop can
+	// cancel earlier via sweepCancel, but we still cap absolute
+	// runtime so a hung store never silently wedges the sweeper.
+	sweepStoreTimeout = 30 * time.Second
 )
 
 // startApprovalSweeperLocked launches the auto-expiration sweeper if a
 // timeout is configured. Caller holds w.mu.
+//
+// Auto-expire is opt-in and requires the full revision pipeline:
+// CandidateStore + ActivePointer + Publisher must all be configured.
+// Without a Publisher the auto-promote path can read pending revisions
+// but never republish the skill body, so the sweeper would otherwise
+// loop forever on the same set of stale revisions.
 func (w *worker) startApprovalSweeperLocked() {
 	if w.approvalTimeout <= 0 {
 		return
 	}
-	if w.candidateStore == nil || w.activePointer == nil {
+	if w.candidateStore == nil || w.activePointer == nil || w.publisher == nil {
 		log.WarnfContext(context.Background(),
-			"evolution: ApprovalTimeout set but CandidateStore/ActivePointer missing — sweeper disabled")
+			"evolution: ApprovalTimeout set but CandidateStore/ActivePointer/Publisher missing — sweeper disabled")
 		return
 	}
-	w.sweepStop = make(chan struct{})
+	w.sweepCtx, w.sweepCancel = context.WithCancel(context.Background())
 	w.sweepDone = make(chan struct{})
 	interval := w.effectiveSweepInterval()
 	go w.runApprovalSweeper(interval)
 }
 
 // stopApprovalSweeperLocked signals the sweeper goroutine to exit and
-// waits for it. Caller holds w.mu.
+// waits for it. The cancel propagates into any in-flight per-store
+// scan so Stop returns promptly even when the underlying store is
+// slow. Caller holds w.mu.
 func (w *worker) stopApprovalSweeperLocked() {
-	if w.sweepStop == nil {
+	if w.sweepCancel == nil {
 		return
 	}
-	close(w.sweepStop)
+	w.sweepCancel()
 	<-w.sweepDone
-	w.sweepStop = nil
+	w.sweepCtx = nil
+	w.sweepCancel = nil
 	w.sweepDone = nil
 }
 
@@ -77,20 +91,20 @@ func (w *worker) effectiveSweepInterval() time.Duration {
 // runApprovalSweeper is the sweeper goroutine. It wakes up on a ticker
 // and walks every scope (or the unscoped store when scope mode is
 // SkillScopeNone) auto-promoting pending_approval revisions older than
-// approvalTimeout.
+// approvalTimeout. Exits when sweepCtx is cancelled by Stop.
 func (w *worker) runApprovalSweeper(interval time.Duration) {
 	defer close(w.sweepDone)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	// Run one sweep right after Start so ad-hoc tests don't have to
 	// wait a full interval to observe auto-expiration.
-	w.runOneSweep()
+	w.runOneSweep(w.sweepCtx)
 	for {
 		select {
-		case <-w.sweepStop:
+		case <-w.sweepCtx.Done():
 			return
 		case <-ticker.C:
-			w.runOneSweep()
+			w.runOneSweep(w.sweepCtx)
 		}
 	}
 }
@@ -98,18 +112,28 @@ func (w *worker) runApprovalSweeper(interval time.Duration) {
 // runOneSweep scans the candidate store(s) once and auto-promotes any
 // pending_approval revision whose age exceeds approvalTimeout. No-op
 // when approvalTimeout is non-positive so the sweeper stays passive
-// even if it is invoked manually (e.g. in tests).
-func (w *worker) runOneSweep() {
+// even if it is invoked manually (e.g. in tests). The parent context
+// is honored so a Stop mid-scan exits promptly.
+func (w *worker) runOneSweep(parent context.Context) {
 	if w.approvalTimeout <= 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	if parent == nil {
+		parent = context.Background()
+	}
+	if parent.Err() != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, sweepStoreTimeout)
 	defer cancel()
 
 	cutoff := time.Now().UTC().Add(-w.approvalTimeout)
 
 	stores := w.collectStoresForSweep()
 	for _, st := range stores {
+		if ctx.Err() != nil {
+			return
+		}
 		w.sweepStore(ctx, st, cutoff)
 	}
 }
@@ -128,7 +152,10 @@ type sweepRoute struct {
 // collectStoresForSweep returns every (store, pointer, publisher)
 // triple the worker needs to scan. In unscoped mode this is a single
 // triple; in scoped mode it is one triple per discovered scope
-// directory under candidateStoreRoot.
+// directory under candidateStoreRoot. When scope-routing roots are
+// absent (custom backends provided via WithCandidateStore /
+// WithActivePointer / WithPublisher), the configured backends are
+// used as-is so custom implementations are not silently bypassed.
 func (w *worker) collectStoresForSweep() []sweepRoute {
 	if w.skillScopeMode == skill.SkillScopeNone {
 		return []sweepRoute{{
@@ -139,8 +166,10 @@ func (w *worker) collectStoresForSweep() []sweepRoute {
 		}}
 	}
 	if w.candidateStoreRoot == "" {
-		// File-store without a known root: fall back to the unscoped
-		// triple — at least the in-memory case still works for tests.
+		// File-store roots unknown — typically because the caller
+		// plugged in non-file backends. Fall back to the configured
+		// triple so custom WithActivePointer/WithPublisher
+		// implementations stay in the path.
 		return []sweepRoute{{
 			store:     w.candidateStore,
 			pointer:   w.activePointer,
@@ -247,8 +276,8 @@ func walkScopeLeaves(base string, depth int) []string {
 	return out
 }
 
-// sweepStore scans one CandidateStore and auto-promotes every
-// pending_approval revision older than cutoff.
+// sweepStore scans one CandidateStore and auto-promotes the chosen
+// stale pending_approval revision per skill (see pickSweepTarget).
 func (w *worker) sweepStore(ctx context.Context, route sweepRoute, cutoff time.Time) {
 	if route.store == nil {
 		return
@@ -267,26 +296,51 @@ func (w *worker) sweepStore(ctx context.Context, route sweepRoute, cutoff time.T
 	}
 }
 
-// sweepSkill auto-promotes every stale pending_approval revision for a
-// single skill. Other revisions are left untouched. Errors are logged
-// but never bubble up — the next tick will retry, and one bad revision
-// must not block the whole sweep.
+// sweepSkill auto-promotes at most one pending_approval revision per
+// skill per sweep. Promoting more than one is unsafe: only one
+// revision can be active at a time, so promoting N stale revisions
+// would cause N sequential "archive prior + write SKILL.md" cycles
+// whose final state depends on store iteration order. Picking the
+// oldest-eligible revision (FIFO) gives a deterministic, monotonic
+// progression — operators can trust that "skill X was auto-promoted"
+// always refers to the longest-waiting pending revision.
 func (w *worker) sweepSkill(
 	ctx context.Context, svc *ApprovalService, store CandidateStore,
 	skillID string, cutoff time.Time,
 ) {
-	revIDs, err := store.ListRevisions(ctx, skillID)
+	target, err := w.pickSweepTarget(ctx, store, skillID, cutoff)
 	if err != nil {
-		log.WarnfContext(ctx, "evolution: sweep list revisions for %q failed: %v", skillID, err)
+		log.WarnfContext(ctx, "evolution: sweep pick target for %q failed: %v", skillID, err)
 		return
 	}
+	if target == nil {
+		return
+	}
+	w.autoPromote(ctx, svc, target)
+}
+
+// pickSweepTarget scans a single skill's revisions and returns the
+// oldest pending_approval revision whose reference time predates
+// cutoff. Returns (nil, nil) when no revision qualifies. ListRevisions
+// is documented as oldest-first so the first match wins.
+func (w *worker) pickSweepTarget(
+	ctx context.Context, store CandidateStore, skillID string, cutoff time.Time,
+) (*Revision, error) {
+	revIDs, err := store.ListRevisions(ctx, skillID)
+	if err != nil {
+		return nil, err
+	}
 	for _, revID := range revIDs {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		rev, err := store.ReadRevision(ctx, skillID, revID)
 		if err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				log.WarnfContext(ctx,
-					"evolution: sweep read revision %q/%q failed: %v", skillID, revID, err)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
 			}
+			log.WarnfContext(ctx,
+				"evolution: sweep read revision %q/%q failed: %v", skillID, revID, err)
 			continue
 		}
 		if rev.Status != RevisionPendingApproval {
@@ -296,8 +350,9 @@ func (w *worker) sweepSkill(
 		if ageRef.IsZero() || !ageRef.Before(cutoff) {
 			continue
 		}
-		w.autoPromote(ctx, svc, rev)
+		return rev, nil
 	}
+	return nil, nil
 }
 
 // pendingApprovalReferenceTime returns the timestamp the sweeper should

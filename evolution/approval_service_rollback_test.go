@@ -25,6 +25,10 @@ import (
 // with `count` create-revisions for the same skillID, all but the last in
 // archived state. The last revision is left active and pointed to. The
 // returned slice is ordered oldest-first.
+//
+// To keep ListRevisions ordering deterministic on coarse-modtime
+// filesystems, the helper bumps each revision's mtime by one second
+// after writing rather than relying on real-time sleeps.
 func rollbackHarness(t *testing.T, count int) (
 	dir, skillID string,
 	store CandidateStore,
@@ -60,12 +64,24 @@ func rollbackHarness(t *testing.T, count int) (
 			},
 		}
 		require.NoError(t, store.WriteRevision(ctx, rev))
+		// Stamp deterministic mtime — ListRevisions orders by ModTime,
+		// so we space each revision by one second instead of using
+		// time.Sleep, which can flake on coarse-clock CI runners.
+		setRevisionMtime(t, dir, skillID, rev.RevisionID,
+			time.Date(2026, 1, 1, 0, 0, i, 0, time.UTC))
 		revs = append(revs, rev)
-		// ListRevisions sorts by ModTime so we space out writes.
-		time.Sleep(2 * time.Millisecond)
 	}
 	require.NoError(t, pointer.Set(ctx, skillID, revs[count-1].RevisionID))
 	return dir, skillID, store, pointer, publisher, revs
+}
+
+// setRevisionMtime adjusts the on-disk modification time of the
+// revision directory so ListRevisions, which relies on ModTime, sees a
+// stable order across platforms.
+func setRevisionMtime(t *testing.T, root, skillID, revisionID string, when time.Time) {
+	t.Helper()
+	p := filepath.Join(root, skillID, "revisions", revisionID)
+	require.NoError(t, os.Chtimes(p, when, when))
 }
 
 func revisionIDForIndex(i int) string {
@@ -100,12 +116,15 @@ func TestApprovalService_Rollback_AutoSelectsMostRecentArchived(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, RevisionArchived, prev.Status)
 
-	// Publisher saw the restored skill.
+	// Publisher saw the restored skill. Read under the lock and
+	// release before asserting so a failed assertion does not strand
+	// the mutex held.
 	pub.mu.Lock()
-	require.Len(t, pub.skills, 1)
-	assert.Equal(t, "Rollback Skill", pub.skills[0].Name)
-	assert.Contains(t, pub.skills[0].Description, revs[1].RevisionID)
+	publishedSkills := append([]*SkillSpec(nil), pub.skills...)
 	pub.mu.Unlock()
+	require.Len(t, publishedSkills, 1)
+	assert.Equal(t, "Rollback Skill", publishedSkills[0].Name)
+	assert.Contains(t, publishedSkills[0].Description, revs[1].RevisionID)
 
 	// Audit log captured both the archive and the promote.
 	raw, err := os.ReadFile(filepath.Join(dir, skillID, "audit.log"))
@@ -157,13 +176,106 @@ func TestApprovalService_Rollback_ExplicitTargetMustBeArchived(t *testing.T) {
 	ctx := context.Background()
 
 	// Targeting the currently-active revision is an error — the user
-	// must pick an archived one.
+	// must pick an archived one. The error wraps ErrNoArchivedRevision
+	// so callers can match with errors.Is.
 	svc := NewApprovalService(store, pointer, &mockPublisher{})
 	_, err := svc.Rollback(ctx, skillID, RollbackOpts{
 		TargetRevisionID: revs[1].RevisionID,
 	})
+	require.ErrorIs(t, err, ErrNoArchivedRevision)
+}
+
+func TestApprovalService_Rollback_ExplicitTargetMissing(t *testing.T) {
+	_, skillID, store, pointer, _, _ := rollbackHarness(t, 2)
+	ctx := context.Background()
+
+	svc := NewApprovalService(store, pointer, &mockPublisher{})
+	_, err := svc.Rollback(ctx, skillID, RollbackOpts{
+		TargetRevisionID: "nonexistent",
+	})
+	require.ErrorIs(t, err, ErrNoArchivedRevision)
+}
+
+func TestApprovalService_Rollback_PublisherFailureLeavesActiveIntact(t *testing.T) {
+	_, skillID, store, pointer, pub, revs := rollbackHarness(t, 2)
+	pub.err = fmt.Errorf("publish blew up")
+	ctx := context.Background()
+
+	svc := NewApprovalService(store, pointer, pub)
+	_, err := svc.Rollback(ctx, skillID, RollbackOpts{Reviewer: "alice"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "expected archived")
+
+	// The previous active revision must remain active because the
+	// publisher mutation failed before any state change. This
+	// guarantees agents never see an archived revision wired up to
+	// the live pointer.
+	prev, err := store.ReadRevision(ctx, skillID, revs[1].RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionActive, prev.Status)
+
+	target, err := store.ReadRevision(ctx, skillID, revs[0].RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionArchived, target.Status)
+
+	active, err := pointer.Get(ctx, skillID)
+	require.NoError(t, err)
+	assert.Equal(t, revs[1].RevisionID, active)
+}
+
+func TestApprovalService_Rollback_ToDeleteRevisionClearsPointer(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	pointer := NewFileActivePointer(dir)
+	pub := &mockPublisher{}
+	ctx := context.Background()
+	skillID := "delete-rollback"
+
+	// Archived delete revision (the rollback target) and a current
+	// active create revision.
+	deleteRev := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-delete",
+		Action:     RevisionActionDelete,
+		Status:     RevisionArchived,
+		TargetName: "Delete Skill",
+		CreatedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	createRev := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-create",
+		Action:     RevisionActionCreate,
+		Status:     RevisionActive,
+		Spec: &SkillSpec{
+			Name: "Delete Skill", Description: "d", WhenToUse: "w", Steps: []string{"s"},
+		},
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC),
+	}
+	require.NoError(t, store.WriteRevision(ctx, deleteRev))
+	require.NoError(t, store.WriteRevision(ctx, createRev))
+	setRevisionMtime(t, dir, skillID, deleteRev.RevisionID, deleteRev.CreatedAt)
+	setRevisionMtime(t, dir, skillID, createRev.RevisionID, createRev.CreatedAt)
+	require.NoError(t, pointer.Set(ctx, skillID, createRev.RevisionID))
+
+	svc := NewApprovalService(store, pointer, pub)
+	res, err := svc.Rollback(ctx, skillID, RollbackOpts{
+		TargetRevisionID: deleteRev.RevisionID,
+		Reviewer:         "alice",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, deleteRev.RevisionID, res.RestoredID)
+
+	// Publisher saw a delete, not an upsert.
+	pub.mu.Lock()
+	deletions := append([]string(nil), pub.deletions...)
+	skills := append([]*SkillSpec(nil), pub.skills...)
+	pub.mu.Unlock()
+	assert.Equal(t, []string{"Delete Skill"}, deletions)
+	assert.Empty(t, skills)
+
+	// Active pointer cleared so the live skill view stays empty.
+	active, err := pointer.Get(ctx, skillID)
+	require.NoError(t, err)
+	assert.Empty(t, active)
 }
 
 func TestApprovalService_Rollback_RequiresStoreAndPointer(t *testing.T) {

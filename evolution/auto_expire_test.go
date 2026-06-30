@@ -79,7 +79,7 @@ func TestApprovalSweep_PromotesStaleRevisions(t *testing.T) {
 	stale := writePendingApprovalRev(t, store, "stale-skill", "rev-stale", 1*time.Hour)
 	fresh := writePendingApprovalRev(t, store, "fresh-skill", "rev-fresh", 0)
 
-	w.runOneSweep()
+	w.runOneSweep(context.Background())
 
 	// Stale revision is now active.
 	got, err := store.ReadRevision(context.Background(), stale.SkillID, stale.RevisionID)
@@ -122,7 +122,7 @@ func TestApprovalSweep_DisabledWhenTimeoutZero(t *testing.T) {
 	// sweeper is disabled — runOneSweep uses approvalTimeout of zero,
 	// so cutoff is "now" and every pending revision is "newer than
 	// cutoff" → skipped.
-	w.runOneSweep()
+	w.runOneSweep(context.Background())
 
 	got, err := store.ReadRevision(context.Background(), stale.SkillID, stale.RevisionID)
 	require.NoError(t, err)
@@ -146,7 +146,7 @@ func TestApprovalSweep_FallsBackToCreatedAt(t *testing.T) {
 	}
 	require.NoError(t, store.WriteRevision(context.Background(), rev))
 
-	w.runOneSweep()
+	w.runOneSweep(context.Background())
 
 	got, err := store.ReadRevision(context.Background(), rev.SkillID, rev.RevisionID)
 	require.NoError(t, err)
@@ -171,6 +171,58 @@ func TestApprovalSweep_StartStopCycle(t *testing.T) {
 	// Stop must be clean and idempotent.
 	w.Stop()
 	w.Stop()
+}
+
+// TestApprovalSweep_DisabledWhenPublisherMissing exercises the
+// readiness check: WithApprovalTimeout is documented as requiring the
+// full revision pipeline, so a Service with no Publisher must not
+// start the sweeper goroutine. Otherwise stale revisions would be
+// retried forever because the auto-promote path cannot republish the
+// skill body.
+func TestApprovalSweep_DisabledWhenPublisherMissing(t *testing.T) {
+	dir := t.TempDir()
+	w := newWorker(workerConfig{
+		Reviewer:        &mockReviewer{},
+		CandidateStore:  newFileCandidateStore(filepath.Join(dir, "revisions")),
+		ActivePointer:   newFileActivePointer(filepath.Join(dir, "revisions")),
+		ApprovalTimeout: 100 * time.Millisecond,
+	})
+	w.startApprovalSweeperLocked()
+	defer w.stopApprovalSweeperLocked()
+	assert.Nil(t, w.sweepCancel, "sweeper must not start without a publisher")
+}
+
+// TestApprovalSweep_PicksSingleRevisionPerSkill asserts the sweeper
+// only auto-promotes one stale revision per skill per sweep — even
+// when several revisions in the same skill exceed the timeout.
+// Promoting more than one would leave the final published state
+// dependent on store iteration order.
+func TestApprovalSweep_PicksSingleRevisionPerSkill(t *testing.T) {
+	w, dir := newSweeperWorker(t, 100*time.Millisecond, 0)
+	defer w.Stop()
+	store := w.candidateStore
+
+	older := writePendingApprovalRev(t, store, "skill", "rev-older", 2*time.Hour)
+	newer := writePendingApprovalRev(t, store, "skill", "rev-newer", 1*time.Hour)
+	// Pin filesystem mtimes so ListRevisions iterates oldest-first
+	// regardless of how quickly the test wrote each revision.
+	revRoot := filepath.Join(dir, "revisions")
+	setRevisionMtime(t, revRoot, "skill", older.RevisionID,
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	setRevisionMtime(t, revRoot, "skill", newer.RevisionID,
+		time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC))
+
+	w.runOneSweep(context.Background())
+
+	// pickSweepTarget walks ListRevisions oldest-first, so the older
+	// revision wins. The newer one stays pending until the next sweep.
+	gotOlder, err := store.ReadRevision(context.Background(), older.SkillID, older.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionActive, gotOlder.Status)
+
+	gotNewer, err := store.ReadRevision(context.Background(), newer.SkillID, newer.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionPendingApproval, gotNewer.Status)
 }
 
 func TestEffectiveSweepInterval(t *testing.T) {

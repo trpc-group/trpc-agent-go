@@ -313,7 +313,7 @@ fmt.Printf("rolled back %s → %s\n", res.PreviousActiveID, res.RestoredID)
 
 `openclaw` CLI 提供同名命令：
 
-```
+```bash
 openclaw evolution rollback <skill-id> --dir <revisions-dir> [--revision <rev-id>] [--reviewer <id>] [--comment <text>]
 ```
 
