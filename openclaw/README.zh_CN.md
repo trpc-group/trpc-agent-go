@@ -277,6 +277,9 @@ tools:
   # defer_to_dynamic_agent_mode: on 可强制开启，设置 off 可关闭。
   defer_to_dynamic_agent_mode: auto # off|on|auto
   defer_to_dynamic_agent_threshold_chars: 4000
+  # 可选：是否保留默认的父 agent 直连工具。对 token 敏感的 profile 可
+  # 设为 false，仅暴露 tool_search/dynamic_agent 和 defer_direct_tools。
+  # defer_default_direct_tools: true
   # 可选：保留少量父 agent 可直接调用的工具。
   # defer_direct_tools: ["exec_command"]
   # 可选：配置 fenced-code 执行，但不暴露 workspace_exec。

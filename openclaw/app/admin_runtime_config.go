@@ -384,6 +384,37 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 			},
 		},
 		{
+			Key:     "agent",
+			Title:   "Agent",
+			Summary: "Agent runtime limits and safety budgets.",
+			Fields: []adminRuntimeConfigFieldSpec{
+				adminRuntimeNumberField(
+					"agent.max_llm_calls",
+					"Max LLM Calls",
+					"Limit LLM calls per invocation; 0 is unlimited.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("agent"),
+						adminRuntimeKey("max_llm_calls"),
+					},
+					func(opts runOptions) string {
+						return strconv.Itoa(opts.MaxLLMCalls)
+					},
+				),
+				adminRuntimeNumberField(
+					"agent.max_tool_iterations",
+					"Max Tool Iterations",
+					"Limit tool-call iterations per invocation; 0 is unlimited.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("agent"),
+						adminRuntimeKey("max_tool_iterations"),
+					},
+					func(opts runOptions) string {
+						return strconv.Itoa(opts.MaxToolIterations)
+					},
+				),
+			},
+		},
+		{
 			Key:     "skills",
 			Title:   "Skills",
 			Summary: "Skill watch mode, load policy, and retention settings.",
@@ -616,6 +647,26 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					},
 				),
 				adminRuntimeTextField(
+					"tools.dynamic_agent_timeout",
+					"Dynamic Agent Timeout",
+					"Maximum duration for one dynamic_agent child "+
+						"call, for example 180s. Empty or 0 disables it.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"dynamic_agent_timeout",
+							"dynamicAgentTimeout",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.DynamicAgentTimeout <= 0 {
+							return ""
+						}
+						return opts.DynamicAgentTimeout.String()
+					},
+				),
+				adminRuntimeTextField(
 					"tools.defer_direct_tools",
 					"Deferred Direct Tools",
 					"Comma-separated additional tool names to keep "+
@@ -632,6 +683,25 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					func(opts runOptions) string {
 						return strings.TrimSpace(
 							opts.DeferToolSurfaceDirect,
+						)
+					},
+				),
+				adminRuntimeBoolField(
+					"tools.defer_default_direct_tools",
+					"Deferred Default Direct Tools",
+					"Keep default direct tools on the parent agent "+
+						"when deferred mode is active.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"defer_default_direct_tools",
+							"deferDefaultDirectTools",
+						),
+					},
+					func(opts runOptions) string {
+						return strconv.FormatBool(
+							opts.
+								DeferToolSurfaceDefaultDirectTools,
 						)
 					},
 				),

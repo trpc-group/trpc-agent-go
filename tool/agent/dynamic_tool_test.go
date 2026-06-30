@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -364,6 +365,52 @@ func TestCapabilitySearchTool_SelectsExactNames(t *testing.T) {
 	require.False(t, got.Truncated)
 }
 
+func TestCapabilitySearchTool_ResolvesToolAliases(t *testing.T) {
+	search := NewCapabilitySearchTool(
+		WithCapabilitySearchProvider(
+			func(
+				context.Context,
+				*agent.Invocation,
+			) ([]tool.Tool, map[string]bool) {
+				return []tool.Tool{dynStubTool{
+					name:        "browser",
+					description: "Control a real browser.",
+				}}, nil
+			},
+		),
+		WithCapabilitySearchToolAliases(map[string]string{
+			"trpc-claw-browser-runtime": "browser",
+			"browser-runtime":           "browser",
+		}),
+	)
+	callable := search.(tool.CallableTool)
+
+	out, err := callable.Call(
+		context.Background(),
+		[]byte(`{"query":"trpc-claw-browser-runtime","limit":5}`),
+	)
+	require.NoError(t, err)
+	got := out.(CapabilitySearchResult)
+	require.Equal(t, "bm25", got.SearchMode)
+	require.Equal(t, []CapabilityToolSummary{{
+		Name:        "browser",
+		Description: "Control a real browser.",
+	}}, got.Tools)
+
+	out, err = callable.Call(
+		context.Background(),
+		[]byte(`{"query":"select:trpc-claw-browser-runtime,browser-runtime"}`),
+	)
+	require.NoError(t, err)
+	got = out.(CapabilitySearchResult)
+	require.Equal(t, "select", got.SearchMode)
+	require.Equal(t, []CapabilityToolSummary{{
+		Name:        "browser",
+		Description: "Control a real browser.",
+	}}, got.Tools)
+	require.Empty(t, got.Missing)
+}
+
 func TestCapabilitySearchTool_SearchesSchemaMetadataWithBM25(
 	t *testing.T,
 ) {
@@ -537,7 +584,8 @@ func TestSelectDynamicTools_ExcludesSelfAndTransfer(t *testing.T) {
 		transfer.TransferToolName, // transfer must be excluded
 	)
 	// No selection => all candidates minus excluded.
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, dynamicSpec{})
+	selected, warnings, err := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, dynamicSpec{})
+	require.NoError(t, err)
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"file_read", "file_write"}, selectedNames(selected))
 }
@@ -546,7 +594,8 @@ func TestSelectDynamicTools_OnlyUserTools(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("file_read", "framework_tool")
 	userTools := map[string]bool{"file_read": true} // framework_tool not a user tool
-	selected, warnings := at.selectDynamicTools(maxTools, userTools, nil, nil, dynamicSpec{})
+	selected, warnings, err := at.selectDynamicTools(maxTools, userTools, nil, nil, dynamicSpec{})
+	require.NoError(t, err)
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"file_read"}, selectedNames(selected))
 }
@@ -555,16 +604,44 @@ func TestSelectDynamicTools_SubsetSelection(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("a", "b", "c")
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"a", "c"}}
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	selected, warnings, err := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	require.NoError(t, err)
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"a", "c"}, selectedNames(selected))
+}
+
+func TestSelectDynamicTools_ResolvesAliases(t *testing.T) {
+	at := NewDynamicTool(WithCapabilityToolAliases(map[string]string{
+		"browser-runtime": "browser",
+		"runtime":         "browser",
+		"blank":           "",
+		"same":            "same",
+	}))
+	maxTools := stubTools("browser", "web_fetch")
+	spec := dynamicSpec{
+		toolsProvided: true,
+		tools:         []string{"browser-runtime", "browser", "web_fetch"},
+	}
+	selected, warnings, err := at.selectDynamicTools(
+		maxTools, toolNameSet(maxTools), nil, nil, spec)
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+	require.Equal(t, []string{"browser", "web_fetch"}, selectedNames(selected))
+
+	spec = dynamicSpec{toolsProvided: true, tools: []string{"runtime"}}
+	selected, warnings, err = at.selectDynamicTools(
+		maxTools, toolNameSet(maxTools), nil, nil, spec)
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+	require.Equal(t, []string{"browser"}, selectedNames(selected))
 }
 
 func TestSelectDynamicTools_UnknownRequestedToolWarns(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("a", "b")
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"a", "nope"}}
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	selected, warnings, err := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	require.NoError(t, err)
 	require.Equal(t, []string{"a"}, selectedNames(selected))
 	require.Len(t, warnings, 1)
 	require.Contains(t, warnings[0], "nope")
@@ -582,16 +659,18 @@ func TestSelectDynamicTools_UnavailableRequestedToolWarnsWithReason(t *testing.T
 	}
 
 	// No selection: unavailable tools are simply not mounted and do not add noise.
-	selected, warnings := at.selectDynamicTools(
+	selected, warnings, err := at.selectDynamicTools(
 		maxTools, toolNameSet(maxTools), nil, unavailable, dynamicSpec{})
+	require.NoError(t, err)
 	require.Equal(t, []string{"available"}, selectedNames(selected))
 	require.Empty(t, warnings)
 
 	// Explicit selection: the parent gets an actionable reason instead of a
 	// generic "not available" warning.
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"available", "secret"}}
-	selected, warnings = at.selectDynamicTools(
+	selected, warnings, err = at.selectDynamicTools(
 		maxTools, toolNameSet(maxTools), nil, unavailable, spec)
+	require.NoError(t, err)
 	require.Equal(t, []string{"available"}, selectedNames(selected))
 	require.Len(t, warnings, 1)
 	require.Contains(t, warnings[0], "secret")
@@ -621,10 +700,12 @@ func TestSelectDynamicTools_AllUnknownWarnsNoUserTools(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("a", "b")
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"x", "y"}}
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	selected, warnings, err := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
 	require.Empty(t, selected)
 	require.NotEmpty(t, warnings)
-	require.Contains(t, warnings[len(warnings)-1], "no user tools")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "none of the requested tools")
+	require.Contains(t, err.Error(), "a, b")
 }
 
 // TestSelectDynamicTools_ExcludesExternalTools verifies that caller-executed
@@ -637,17 +718,19 @@ func TestSelectDynamicTools_ExcludesExternalTools(t *testing.T) {
 	externalNames := map[string]bool{"ext_tool": true}
 
 	// No selection: external tool must not appear among the candidates.
-	selected, warnings := at.selectDynamicTools(
+	selected, warnings, err := at.selectDynamicTools(
 		maxTools, toolNameSet(maxTools), externalNames, nil, dynamicSpec{})
+	require.NoError(t, err)
 	require.Empty(t, warnings)
 	require.Equal(t, []string{"tool_a"}, selectedNames(selected))
 
 	// Explicit selection of an external tool is rejected as unavailable.
 	spec := dynamicSpec{toolsProvided: true, tools: []string{"ext_tool"}}
-	selected, warnings = at.selectDynamicTools(
+	selected, warnings, err = at.selectDynamicTools(
 		maxTools, toolNameSet(maxTools), externalNames, nil, spec)
 	require.Empty(t, selected)
 	require.NotEmpty(t, warnings)
+	require.Error(t, err)
 }
 
 // TestSelectDynamicTools_EmptyArrayAllowsNoneWithoutWarning verifies that an
@@ -657,7 +740,8 @@ func TestSelectDynamicTools_EmptyArrayAllowsNoneWithoutWarning(t *testing.T) {
 	at := NewDynamicTool()
 	maxTools := stubTools("a", "b")
 	spec := dynamicSpec{toolsProvided: true, tools: nil} // provided, but empty
-	selected, warnings := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	selected, warnings, err := at.selectDynamicTools(maxTools, toolNameSet(maxTools), nil, nil, spec)
+	require.NoError(t, err)
 	require.Empty(t, selected)
 	require.Empty(t, warnings, "an explicit empty selection must not warn")
 }
@@ -791,6 +875,27 @@ func TestCallDynamic_RequiresRequest(t *testing.T) {
 	require.Contains(t, err.Error(), "request")
 }
 
+func TestCallDynamic_TimeoutBoundsSubAgent(t *testing.T) {
+	t.Parallel()
+
+	main := llmagent.New("main", llmagent.WithModel(&dynBlockingModel{}))
+	at := NewDynamicTool(WithDynamicTimeout(10 * time.Millisecond))
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(main),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("main"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	start := time.Now()
+	_, err := at.Call(ctx, []byte(`{"request":"wait"}`))
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), context.DeadlineExceeded.Error())
+	require.Less(t, time.Since(start), time.Second)
+}
+
 // dynRecordingModel records the set of tool names visible in each request.
 type dynRecordingModel struct {
 	name     string
@@ -831,6 +936,20 @@ func (m *dynRecordingModel) snapshot() [][]string {
 	out := make([][]string, len(m.seen))
 	copy(out, m.seen)
 	return out
+}
+
+type dynBlockingModel struct{}
+
+func (m *dynBlockingModel) GenerateContent(
+	ctx context.Context,
+	_ *model.Request,
+) (<-chan *model.Response, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (m *dynBlockingModel) Info() model.Info {
+	return model.Info{Name: "blocking"}
 }
 
 func newDynTestTool(name string) tool.Tool {
@@ -947,6 +1066,31 @@ func TestNewDynamicTool_Integration_UnavailableReasonReturnedToParent(t *testing
 	require.Len(t, seen, 1, "child should have run exactly once")
 	require.Equal(t, []string{"available"}, seen[0],
 		"child must not see known-but-unavailable tools")
+}
+
+func TestNewDynamicTool_Integration_AllRequestedToolsUnavailableErrors(t *testing.T) {
+	recModel := &dynRecordingModel{name: "rec", response: "child-done"}
+	main := llmagent.New(
+		"main",
+		llmagent.WithModel(recModel),
+		llmagent.WithTools([]tool.Tool{newDynTestTool("tool_a")}),
+	)
+	at := NewDynamicTool()
+
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(main),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("main"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	_, err := at.Call(ctx, []byte(
+		`{"request":"use unavailable tool","tools":["web_search"]}`,
+	))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "none of the requested tools")
+	require.Empty(t, recModel.snapshot(), "child must not run without requested tools")
 }
 
 // TestNewDynamicTool_Integration_WithTemplateAgent verifies that a distinctly

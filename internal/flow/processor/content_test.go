@@ -3996,6 +3996,7 @@ func TestContentRequestProcessor_getIncrementMessages_SummaryPreservesToolState(
 	)
 	messages := p.getIncrementMessagesAfterCutoff(
 		inv,
+		nil,
 		summaryHistoryCutoff{
 			at:          baseTime.Add(2 * time.Second),
 			lastEventID: "tool-result-1",
@@ -4054,6 +4055,7 @@ func TestContentRequestProcessor_getIncrementMessages_ExactBoundaryKeepsSameTime
 
 	messages := p.getIncrementMessagesAfterCutoff(
 		inv,
+		nil,
 		summaryHistoryCutoff{
 			at:          baseTime,
 			lastEventID: "covered",

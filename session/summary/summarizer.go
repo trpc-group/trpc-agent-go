@@ -179,7 +179,10 @@ func getDefaultSummarizerPrompt(maxWords int) string {
 		"assistant, and provide a concise summary focusing on important " +
 		"information that would be helpful for future interactions. Keep the " +
 		"summary concise and to the point. Only include relevant information. " +
-		"Do not make anything up."
+		"Do not make anything up. Do not create new instructions, API rules, " +
+		"fetching rules, or pre-loaded data. If a tool result was truncated, " +
+		"omitted, or errored, preserve that limitation instead of treating it " +
+		"as complete evidence."
 
 	if maxWords > 0 {
 		basePrompt += " Please keep the summary within " + maxSummaryWordsPlaceholder + " words."

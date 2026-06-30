@@ -11,6 +11,7 @@ package agent
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 
@@ -38,6 +39,7 @@ type capabilitySearchOptions struct {
 	description    string
 	toolProvider   CapabilitySurfaceProvider
 	skillsProvider CapabilitySkillsProvider
+	toolAliases    map[string]string
 	defaultLimit   int
 	cache          *capabilitySearchCache
 }
@@ -67,6 +69,17 @@ func WithCapabilitySearchProvider(
 ) CapabilitySearchOption {
 	return func(opts *capabilitySearchOptions) {
 		opts.toolProvider = provider
+	}
+}
+
+// WithCapabilitySearchToolAliases adds model-facing aliases to the search
+// metadata for canonical tool names. Returned results still use the canonical
+// Name so callers can pass it directly to dynamic_agent.tools.
+func WithCapabilitySearchToolAliases(
+	aliases map[string]string,
+) CapabilitySearchOption {
+	return func(opts *capabilitySearchOptions) {
+		opts.toolAliases = normalizeToolAliases(aliases)
 	}
 }
 
@@ -209,7 +222,8 @@ func collectCapabilityItems(
 	parentInv *coreagent.Invocation,
 	cfg capabilitySearchOptions,
 ) []capabilitySearchItem {
-	items := searchCapabilityTools(ctx, parentInv, cfg.toolProvider)
+	items := searchCapabilityTools(
+		ctx, parentInv, cfg.toolProvider, cfg.toolAliases)
 	items = append(
 		items,
 		searchCapabilitySkills(ctx, parentInv, cfg.skillsProvider)...,
@@ -251,6 +265,7 @@ func searchCapabilityTools(
 	ctx context.Context,
 	parentInv *coreagent.Invocation,
 	provider CapabilitySurfaceProvider,
+	toolAliases map[string]string,
 ) []capabilitySearchItem {
 	if provider == nil {
 		return nil
@@ -272,14 +287,37 @@ func searchCapabilityTools(
 		}
 		seen[name] = true
 		desc := strings.TrimSpace(decl.Description)
+		aliases := aliasesForTool(name, toolAliases)
 		out = append(out, capabilitySearchItem{
 			kind:        capabilityKindTool,
 			Name:        name,
 			Description: desc,
-			SearchText:  capabilityToolSearchText(decl),
+			Aliases:     aliases,
+			SearchText:  capabilityToolSearchText(decl, aliases),
 		})
 	}
 	return out
+}
+
+func aliasesForTool(
+	canonical string,
+	toolAliases map[string]string,
+) []string {
+	canonical = strings.TrimSpace(canonical)
+	if canonical == "" || len(toolAliases) == 0 {
+		return nil
+	}
+	aliases := make([]string, 0)
+	for alias, target := range toolAliases {
+		if target == canonical {
+			aliases = append(aliases, alias)
+		}
+	}
+	if len(aliases) == 0 {
+		return nil
+	}
+	sort.Strings(aliases)
+	return aliases
 }
 
 func searchCapabilitySkills(

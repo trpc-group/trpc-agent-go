@@ -76,6 +76,13 @@ func TestWithCreateFileMode(t *testing.T) {
 	assert.Equal(t, os.FileMode(0600), f.createFileMode)
 }
 
+func TestWithReadOnlyDirs(t *testing.T) {
+	f := &fileToolSet{}
+	opt := WithReadOnlyDirs("/tmp/a", " /tmp/b ")
+	opt(f)
+	assert.Equal(t, []string{"/tmp/a", " /tmp/b "}, f.extraReadRoots)
+}
+
 func TestNewToolSet_Default(t *testing.T) {
 	set, err := NewToolSet()
 	assert.NoError(t, err)
@@ -190,6 +197,37 @@ func TestResolvePath_AbsolutePath(t *testing.T) {
 	fts := set.(*fileToolSet)
 	_, err = fts.resolvePath("/tmp/a.txt")
 	assert.Error(t, err)
+	assert.Contains(t, err.Error(), relativePathGuidance)
+	assert.Contains(t, err.Error(), "configured read-only root")
+}
+
+func TestResolveReadPath_ExtraReadRoot(t *testing.T) {
+	dir := t.TempDir()
+	extra := t.TempDir()
+	set, err := NewToolSet(
+		WithBaseDir(dir),
+		WithReadOnlyDirs(extra, extra, filepath.Join(extra, "missing")),
+	)
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+	normalizedExtra := filepath.Clean(extra)
+	if resolved, err := filepath.EvalSymlinks(normalizedExtra); err == nil {
+		normalizedExtra = filepath.Clean(resolved)
+	}
+	assert.Equal(t, []string{normalizedExtra}, fts.extraReadRoots)
+
+	allowed := filepath.Join(extra, "a.txt")
+	p, err := fts.resolveReadPath(allowed)
+	assert.NoError(t, err)
+	assert.Equal(t, allowed, p)
+
+	_, err = fts.resolveReadPath(filepath.Join(t.TempDir(), "a.txt"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), extraReadRootGuidance)
+
+	_, err = fts.resolvePath(allowed)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), relativePathGuidance)
 }
 
 func TestResolvePath_Empty(t *testing.T) {

@@ -1524,7 +1524,7 @@ func TestContentRequestProcessor_UsesSummaryBoundaryCutoff(t *testing.T) {
 	require.Equal(t, "summary text", summaryText)
 	require.True(t, summaryCutoff.CutoffTime().Equal(cutoff))
 
-	messages := p.getIncrementMessagesAfterCutoff(inv, summaryCutoff)
+	messages := p.getIncrementMessagesAfterCutoff(inv, nil, summaryCutoff)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "after boundary", messages[0].Content)
 }

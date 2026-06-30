@@ -1545,6 +1545,19 @@ func TestRuntimePostToolPromptOption(t *testing.T) {
 	require.True(t, *runtimeOpts.postToolPromptEnabled)
 }
 
+func TestResolvePostToolPromptEnabledPrefersRuntimeOption(t *testing.T) {
+	t.Parallel()
+
+	configEnabled := false
+	optionEnabled := true
+	got := resolvePostToolPromptEnabled(
+		runOptions{PostToolPromptEnabled: &configEnabled},
+		runtimeOptions{postToolPromptEnabled: &optionEnabled},
+	)
+	require.NotNil(t, got)
+	require.True(t, *got)
+}
+
 func TestMain_HelpSkipsErrorLog(t *testing.T) {
 	t.Parallel()
 
@@ -1792,6 +1805,52 @@ func TestNewAgent_EmptyInstructionUsesDefault(t *testing.T) {
 	}, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, agt)
+}
+
+func TestNewAgent_EnablesOnDemandSessionTools(t *testing.T) {
+	t.Parallel()
+
+	agt, _, err := newAgent(&captureRequestModel{}, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: t.TempDir(),
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	surface, ok := agt.(interface {
+		InvocationToolSurface(
+			context.Context,
+			*agent.Invocation,
+		) ([]tool.Tool, map[string]bool)
+	})
+	require.True(t, ok)
+
+	unsupportedInv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			session.NewSession("demo", "user", "sess"),
+		),
+	)
+	tools, userToolNames := surface.InvocationToolSurface(
+		context.Background(),
+		unsupportedInv,
+	)
+	require.Nil(t, findTool(tools, "session_load"))
+	require.False(t, userToolNames["session_load"])
+
+	loadInv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			session.NewSession("demo", "user", "sess"),
+		),
+		agent.WithInvocationSessionService(
+			sessioninmemory.NewSessionService(),
+		),
+	)
+	tools, userToolNames = surface.InvocationToolSurface(
+		context.Background(),
+		loadInv,
+	)
+	require.NotNil(t, findTool(tools, "session_load"))
+	require.False(t, userToolNames["session_load"])
 }
 
 func TestNewAgent_UsesConfiguredSkillRepositoryProvider(t *testing.T) {
@@ -2901,6 +2960,7 @@ func TestNewAgent_DeferToolSurfaceUsesDynamicAgent(t *testing.T) {
 	require.Contains(t, system, "dynamic_agent")
 	require.Contains(t, system, "tool_search")
 	require.Contains(t, system, "Tool-backed work is available")
+	require.Contains(t, system, "pass exact tool names")
 	require.NotContains(t, system, "OPENCLAW_LAST_UPLOAD_PATH")
 
 	searchTool := findTool(
@@ -2952,6 +3012,75 @@ func TestNewAgent_DeferToolSurfaceUsesDynamicAgent(t *testing.T) {
 		joinSystemMessages(mdl.got),
 		"OPENCLAW_LAST_UPLOAD_PATH",
 	)
+}
+
+func TestNewAgent_ContextCompactionKeepsDynamicAgentResults(t *testing.T) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:                 "demo",
+		StateDir:                t.TempDir(),
+		EnableContextCompaction: true,
+	}, nil, nil)
+	require.NoError(t, err)
+
+	dynamicContent := strings.Repeat("dynamic-final ", 1400)
+	sess := &session.Session{
+		Events: []event.Event{
+			{
+				RequestID:    "req-dynamic",
+				InvocationID: "inv-dynamic",
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.Message{
+							Role: model.RoleAssistant,
+							ToolCalls: []model.ToolCall{{
+								ID: "call-dynamic",
+								Function: model.FunctionDefinitionParam{
+									Name: agenttool.
+										DefaultDynamicToolName,
+									Arguments: []byte(`{}`),
+								},
+							}},
+						},
+					}},
+				},
+			},
+			{
+				RequestID:    "req-dynamic",
+				InvocationID: "inv-dynamic",
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewToolMessage(
+							"call-dynamic",
+							agenttool.DefaultDynamicToolName,
+							dynamicContent,
+						),
+					}},
+				},
+			},
+			{
+				RequestID:    "req-recent",
+				InvocationID: "inv-recent",
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewAssistantMessage(
+							"recent turn",
+						),
+					}},
+				},
+			},
+		},
+	}
+
+	req := runAgentAndCapture(t, agt, mdl, sess)
+	all := joinAllMessageContent(req)
+	require.Contains(t, all, dynamicContent)
+	require.NotContains(t, all, "tool_name: dynamic_agent")
 }
 
 func TestNewAgent_DeferToolSurfaceAutoKeepsSmallToolSurface(t *testing.T) {
@@ -3064,6 +3193,52 @@ func TestNewAgent_DeferToolSurfaceKeepsDefaultAndConfiguredDirectTools(
 	require.NotNil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
 }
 
+func TestNewAgent_DeferToolSurfaceCanOmitDefaultDirectTools(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:                            "demo",
+		StateDir:                           t.TempDir(),
+		DeferToolSurface:                   true,
+		DeferToolSurfaceDefaultDirectTools: boolPtr(false),
+		DeferToolSurfaceDirectTools:        []string{"message"},
+	}, []tool.Tool{
+		stubTool{name: "exec_command"},
+		stubTool{name: "write_stdin"},
+		stubTool{name: "kill_session"},
+		stubTool{name: "message"},
+	}, nil)
+	require.NoError(t, err)
+
+	parentTools := agt.Tools()
+	require.Nil(t, findToolDeclaration(parentTools, "exec_command"))
+	require.Nil(t, findToolDeclaration(parentTools, "write_stdin"))
+	require.Nil(t, findToolDeclaration(parentTools, "kill_session"))
+	require.NotNil(t, findToolDeclaration(parentTools, "message"))
+	require.NotNil(
+		t,
+		findToolDeclaration(parentTools, agenttool.DefaultDynamicToolName),
+	)
+	require.NotNil(
+		t,
+		findToolDeclaration(
+			parentTools,
+			agenttool.DefaultCapabilitySearchToolName,
+		),
+	)
+
+	req := runAgentAndCapture(t, agt, mdl, &session.Session{})
+	require.Nil(t, req.Tools["exec_command"])
+	require.Nil(t, req.Tools["write_stdin"])
+	require.Nil(t, req.Tools["kill_session"])
+	require.NotNil(t, req.Tools["message"])
+	require.NotNil(t, req.Tools[agenttool.DefaultDynamicToolName])
+	require.NotNil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
+}
+
 func TestNewDeferredToolSurfaceToolOptionalBranches(t *testing.T) {
 	t.Parallel()
 
@@ -3107,6 +3282,16 @@ func TestNewDeferredToolSurfaceToolOptionalBranches(t *testing.T) {
 	decl := dynamicTool.Declaration()
 	require.Equal(t, agenttool.DefaultDynamicToolName, decl.Name)
 	require.Contains(t, decl.Description, "worker")
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["tools"].Description,
+		"Do not put tool names in skills",
+	)
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["skills"].Description,
+		"put tool names in tools",
+	)
 }
 
 func TestDeferredCapabilitySkillsProviderUsesInvocationScope(t *testing.T) {

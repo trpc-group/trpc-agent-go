@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -199,6 +200,27 @@ func WithCapabilityTools(tools []tool.Tool) Option {
 		cfg := opts.ensureDynamicOptions()
 		cfg.capabilityTools = append([]tool.Tool(nil), tools...)
 		cfg.capabilityToolsSet = true
+	}
+}
+
+// WithCapabilityToolAliases maps model-facing aliases to canonical tool names
+// when a dynamic sub-agent selects tools. Use this for stable runtime names,
+// legacy names, or product names that users and models naturally mention but
+// that differ from the actual tool declaration name. Aliases never create new
+// capabilities; they only resolve to tools already present in the dynamic
+// capability surface.
+func WithCapabilityToolAliases(aliases map[string]string) Option {
+	return func(opts *agentToolOptions) {
+		opts.ensureDynamicOptions().toolAliases =
+			normalizeToolAliases(aliases)
+	}
+}
+
+// WithDynamicTimeout limits one dynamic sub-agent invocation. A non-positive
+// timeout keeps the parent's context unchanged.
+func WithDynamicTimeout(timeout time.Duration) Option {
+	return func(opts *agentToolOptions) {
+		opts.ensureDynamicOptions().timeout = timeout
 	}
 }
 
@@ -539,6 +561,8 @@ func (at *Tool) callDynamic(ctx context.Context, jsonArgs []byte) (any, error) {
 	if err != nil {
 		return "", err
 	}
+	subCtx, cancel := at.dynamicRunContext(subCtx)
+	defer cancel()
 	evCh, err := agent.RunWithPlugins(subCtx, subInv, subInv.Agent)
 	if err != nil {
 		return "", fmt.Errorf("failed to run sub-agent: %w", err)
@@ -549,6 +573,11 @@ func (at *Tool) callDynamic(ctx context.Context, jsonArgs []byte) (any, error) {
 	)
 	if err != nil {
 		return "", err
+	}
+	if response == "" {
+		if err := subCtx.Err(); err != nil {
+			return "", fmt.Errorf("dynamic sub-agent stopped: %w", err)
+		}
 	}
 	return at.formatResponseWithWarnings(response, warnings), nil
 }
@@ -564,6 +593,8 @@ func (at *Tool) streamDynamic(
 		sendStreamableCallError(ctx, writer, "dynamic sub-agent error: %w", err)
 		return
 	}
+	subCtx, cancel := at.dynamicRunContext(subCtx)
+	defer cancel()
 	for _, w := range warnings {
 		log.Warnf("AgentTool[%s]: %s", at.name, w)
 	}
@@ -581,6 +612,17 @@ func (at *Tool) streamDynamic(
 		writer,
 		at.warningsNote(warnings),
 	)
+}
+
+func (at *Tool) dynamicRunContext(ctx context.Context) (
+	context.Context,
+	context.CancelFunc,
+) {
+	timeout := at.dynamicCfg.timeout
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 // buildDynamicSubInvocation resolves the base agent, capability surface and
@@ -626,7 +668,10 @@ func (at *Tool) buildDynamicSubInvocation(
 	}
 	parentInv = parentInvocationWithLiveSession(parentInv)
 
-	patch, warnings := at.buildDynamicPatch(ctx, parentInv, spec)
+	patch, warnings, err := at.buildDynamicPatch(ctx, parentInv, spec)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 
 	message := model.NewUserMessage(spec.request)
 	childKey := at.buildDynamicChildFilterKey(parentInv, baseAgent)
@@ -644,7 +689,7 @@ func (at *Tool) buildDynamicPatch(
 	ctx context.Context,
 	parentInv *agent.Invocation,
 	spec dynamicSpec,
-) (agent.SurfacePatch, []string) {
+) (agent.SurfacePatch, []string, error) {
 	var patch agent.SurfacePatch
 	var warnings []string
 
@@ -655,8 +700,11 @@ func (at *Tool) buildDynamicPatch(
 	// Tools: always set so the dynamic tool itself (and transfer_to_agent) are
 	// excluded from the child, preventing runaway recursion.
 	maxTools, userToolNames, externalNames, unavailableTools := at.dynamicMaxToolSurface(ctx, parentInv)
-	selectedTools, toolWarnings := at.selectDynamicTools(
+	selectedTools, toolWarnings, err := at.selectDynamicTools(
 		maxTools, userToolNames, externalNames, unavailableTools, spec)
+	if err != nil {
+		return agent.SurfacePatch{}, nil, err
+	}
 	patch.SetTools(selectedTools)
 	// SetTools only replaces the user tools. The framework re-derives
 	// transfer_to_agent from the base/template agent's own sub-agents, so
@@ -674,7 +722,7 @@ func (at *Tool) buildDynamicPatch(
 	}
 	warnings = append(warnings, skillWarnings...)
 
-	return patch, warnings
+	return patch, warnings, nil
 }
 
 // dynamicMaxToolSurface resolves the maximum tool surface the model may select
@@ -739,7 +787,7 @@ func (at *Tool) selectDynamicTools(
 	externalNames map[string]bool,
 	unavailableTools map[string]UnavailableCapability,
 	spec dynamicSpec,
-) ([]tool.Tool, []string) {
+) ([]tool.Tool, []string, error) {
 	excluded := map[string]bool{at.name: true, transfer.TransferToolName: true}
 	for name := range externalNames {
 		excluded[name] = true
@@ -771,35 +819,67 @@ func (at *Tool) selectDynamicTools(
 	}
 
 	if !at.dynamicCfg.exposeToolSelection || !spec.toolsProvided {
-		return candidates, nil
+		return candidates, nil, nil
 	}
 	// An explicit empty array ("tools": []) is a valid "allow none" selection:
 	// the model deliberately ran a tool-free sub-agent. That is not an error,
 	// so return an empty surface without a warning.
 	if len(spec.tools) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	selected := make([]tool.Tool, 0, len(spec.tools))
+	selectedNames := make(map[string]bool, len(spec.tools))
 	var warnings []string
 	for _, name := range spec.tools {
-		t, ok := candidateByName[name]
+		canonicalName := at.resolveDynamicToolName(name)
+		t, ok := candidateByName[canonicalName]
 		if !ok {
-			if unavailable, exists := unavailableTools[name]; exists {
-				warnings = append(warnings, formatUnavailableToolWarning(name, unavailable))
+			if unavailable, exists := unavailableTools[canonicalName]; exists {
+				warnings = append(warnings,
+					formatUnavailableToolWarning(name, unavailable))
 				continue
 			}
 			warnings = append(warnings, fmt.Sprintf(
 				"requested tool %q is not available and was ignored", name))
 			continue
 		}
+		if selectedNames[canonicalName] {
+			continue
+		}
+		selectedNames[canonicalName] = true
 		selected = append(selected, t)
 	}
 	if len(selected) == 0 {
-		warnings = append(warnings,
-			"none of the requested tools were available; the sub-agent has no user tools")
+		return nil, warnings, fmt.Errorf(
+			"agenttool: none of the requested tools are available for the dynamic sub-agent; "+
+				"omit tools to allow all permitted tools or choose from: %s",
+			strings.Join(availableDynamicToolNames(candidates), ", "),
+		)
 	}
-	return selected, warnings
+	return selected, warnings, nil
+}
+
+func availableDynamicToolNames(tools []tool.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if name := declarationName(t); name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (at *Tool) resolveDynamicToolName(name string) string {
+	name = strings.TrimSpace(name)
+	if at == nil || at.dynamicCfg == nil || len(at.dynamicCfg.toolAliases) == 0 {
+		return name
+	}
+	if canonical, ok := at.dynamicCfg.toolAliases[name]; ok {
+		return canonical
+	}
+	return name
 }
 
 // dynamicMaxSkillRepo resolves the maximum skill repository the model may
@@ -1122,6 +1202,25 @@ func toolNameSet(tools []tool.Tool) map[string]bool {
 		}
 	}
 	return names
+}
+
+func normalizeToolAliases(aliases map[string]string) map[string]string {
+	if len(aliases) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(aliases))
+	for alias, canonical := range aliases {
+		alias = strings.TrimSpace(alias)
+		canonical = strings.TrimSpace(canonical)
+		if alias == "" || canonical == "" || alias == canonical {
+			continue
+		}
+		out[alias] = canonical
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func declarationName(t tool.Tool) string {

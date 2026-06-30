@@ -318,6 +318,70 @@ func (p *toolsCheckingTailRequestProcessor) RebuildRequestForContextCompaction(
 		req.StructuredOutput.JSONSchema != nil
 }
 
+type sessionLoadDeletingRequestProcessor struct{}
+
+func (p *sessionLoadDeletingRequestProcessor) ProcessRequest(
+	_ context.Context,
+	_ *agent.Invocation,
+	req *model.Request,
+	_ chan<- *event.Event,
+) {
+	if req == nil || req.Tools == nil {
+		return
+	}
+	delete(req.Tools, "session_load")
+}
+
+func toolResultRecoverySession(toolPayload string) *session.Session {
+	return &session.Session{
+		Events: []event.Event{
+			{
+				ID:           "tool-call-event",
+				RequestID:    "req-old",
+				InvocationID: "inv-old",
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{{
+							Type: "function",
+							ID:   "call_1",
+							Function: model.FunctionDefinitionParam{
+								Name:      "worker",
+								Arguments: []byte(`{}`),
+							},
+						}},
+					}}},
+				},
+			},
+			{
+				ID:           "tool-result-event",
+				RequestID:    "req-old",
+				InvocationID: "inv-old",
+				Response: &model.Response{
+					Done: true,
+					Choices: []model.Choice{{
+						Message: model.NewToolMessage(
+							"call_1",
+							"worker",
+							toolPayload,
+						),
+					}},
+				},
+			},
+		},
+	}
+}
+
+func toolResultContent(messages []model.Message, toolID string) string {
+	for _, msg := range messages {
+		if msg.Role == model.RoleTool && msg.ToolID == toolID {
+			return msg.Content
+		}
+	}
+	return ""
+}
+
 type testSkillRepo struct {
 	skills map[string]*skill.Skill
 }
@@ -1199,7 +1263,17 @@ func TestMaybeCompactContextBeforeLLM_InitialGuards(t *testing.T) {
 }
 
 func TestRebuildRequestForContextCompaction_PopulatesFilteredTools(t *testing.T) {
-	f := New(nil, nil, Options{EnableContextCompaction: true})
+	tailProcessor := &toolsCheckingTailRequestProcessor{}
+	f := New(
+		[]flow.RequestProcessor{
+			processor.NewContentRequestProcessor(
+				processor.WithAddSessionSummary(true),
+			),
+			tailProcessor,
+		},
+		nil,
+		Options{EnableContextCompaction: true},
+	)
 	inv := agent.NewInvocation(
 		agent.WithInvocationAgent(&minimalAgent{
 			tools: []tool.Tool{
@@ -1208,22 +1282,17 @@ func TestRebuildRequestForContextCompaction_PopulatesFilteredTools(t *testing.T)
 		}),
 		agent.WithInvocationSession(&session.Session{}),
 	)
-	tailProcessor := &toolsCheckingTailRequestProcessor{}
-	rebuildPlan := &contextCompactionRebuildPlan{
-		beforeContent: &model.Request{},
-		contentProcessor: processor.NewContentRequestProcessor(
-			processor.WithAddSessionSummary(true),
-		),
-		tailProcessors: []contextCompactionTailProcessor{
-			tailProcessor,
-		},
-	}
 
 	require.Nil(t, f.rebuildRequestForContextCompaction(
 		context.Background(),
 		inv,
 		nil,
 	))
+
+	req := &model.Request{}
+	rebuildPlan := f.preprocess(context.Background(), inv, req, nil)
+	require.NotNil(t, rebuildPlan)
+	require.Contains(t, rebuildPlan.beforeContent.Tools, "search")
 
 	rebuilt := f.rebuildRequestForContextCompaction(
 		context.Background(),
@@ -1234,6 +1303,111 @@ func TestRebuildRequestForContextCompaction_PopulatesFilteredTools(t *testing.T)
 	require.NotNil(t, rebuilt)
 	require.False(t, tailProcessor.sawNilTools)
 	require.Contains(t, rebuilt.Tools, "search")
+}
+
+func TestRebuildRequestForContextCompaction_ContentSeesSessionLoadTool(
+	t *testing.T,
+) {
+	svc := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+	toolPayload := strings.Repeat("payload ", 128)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{
+			tools: []tool.Tool{
+				&mockLongRunnerTool{name: "worker"},
+				&mockLongRunnerTool{name: "session_load"},
+			},
+		}),
+		agent.WithInvocationSession(toolResultRecoverySession(toolPayload)),
+		agent.WithInvocationSessionService(svc),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-current"}),
+	)
+	contentProcessor := processor.NewContentRequestProcessor(
+		processor.WithAddSessionSummary(true),
+		processor.WithEnableContextCompaction(true),
+		processor.WithContextCompactionKeepRecentRequests(0),
+		processor.WithContextCompactionToolResultMaxTokens(1),
+	)
+	f := New(
+		[]flow.RequestProcessor{
+			contentProcessor,
+		},
+		nil,
+		Options{EnableContextCompaction: true},
+	)
+	req := &model.Request{}
+	rebuildPlan := f.preprocess(context.Background(), inv, req, nil)
+	require.NotNil(t, rebuildPlan)
+	require.Contains(t, rebuildPlan.beforeContent.Tools, "session_load")
+
+	rebuilt := f.rebuildRequestForContextCompaction(
+		context.Background(),
+		inv,
+		rebuildPlan,
+	)
+
+	require.NotNil(t, rebuilt)
+	require.Contains(t, rebuilt.Tools, "session_load")
+	compactedToolResult := toolResultContent(rebuilt.Messages, "call_1")
+	require.Contains(t, compactedToolResult, "Use session_load")
+	require.Contains(t, compactedToolResult, "event_id: tool-result-event")
+	require.NotContains(t, compactedToolResult, toolPayload)
+}
+
+func TestRebuildRequestForContextCompaction_PreservesPreContentToolMutation(
+	t *testing.T,
+) {
+	svc := inmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, svc.Close())
+	})
+	toolPayload := strings.Repeat("payload ", 128)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{
+			tools: []tool.Tool{
+				&mockLongRunnerTool{name: "worker"},
+				&mockLongRunnerTool{name: "session_load"},
+			},
+		}),
+		agent.WithInvocationSession(toolResultRecoverySession(toolPayload)),
+		agent.WithInvocationSessionService(svc),
+		agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req-current"}),
+	)
+	contentProcessor := processor.NewContentRequestProcessor(
+		processor.WithAddSessionSummary(true),
+		processor.WithEnableContextCompaction(true),
+		processor.WithContextCompactionKeepRecentRequests(0),
+		processor.WithContextCompactionToolResultMaxTokens(1),
+	)
+	f := New(
+		[]flow.RequestProcessor{
+			&sessionLoadDeletingRequestProcessor{},
+			contentProcessor,
+		},
+		nil,
+		Options{EnableContextCompaction: true},
+	)
+	req := &model.Request{}
+	rebuildPlan := f.preprocess(context.Background(), inv, req, nil)
+	require.NotNil(t, rebuildPlan)
+	require.NotContains(t, req.Tools, "session_load")
+	require.NotContains(t, rebuildPlan.beforeContent.Tools, "session_load")
+
+	rebuilt := f.rebuildRequestForContextCompaction(
+		context.Background(),
+		inv,
+		rebuildPlan,
+	)
+
+	require.NotNil(t, rebuilt)
+	require.NotContains(t, rebuilt.Tools, "session_load")
+	compactedToolResult := toolResultContent(rebuilt.Messages, "call_1")
+	require.NotContains(t, compactedToolResult, "Use session_load")
+	require.Contains(t, compactedToolResult, "read-only or idempotent")
+	require.Contains(t, compactedToolResult, "event_id: tool-result-event")
+	require.NotContains(t, compactedToolResult, toolPayload)
 }
 
 func TestSupportsSyncSummaryRetry(t *testing.T) {

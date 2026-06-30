@@ -34,6 +34,7 @@ type capabilitySearchItem struct {
 	kind        string
 	Name        string
 	Description string
+	Aliases     []string
 	SearchText  string
 }
 
@@ -155,13 +156,17 @@ func (i *capabilitySearchIndex) scoreDoc(
 	return score
 }
 
-func capabilityToolSearchText(decl *tool.Declaration) string {
+func capabilityToolSearchText(decl *tool.Declaration, aliases []string) string {
 	if decl == nil {
 		return ""
 	}
 	var parts []string
 	appendSearchPart(&parts, decl.Name)
 	appendSearchPart(&parts, splitIdentifier(decl.Name))
+	for _, alias := range aliases {
+		appendSearchPart(&parts, alias)
+		appendSearchPart(&parts, splitIdentifier(alias))
+	}
 	appendSearchPart(&parts, decl.Description)
 	appendSchemaSearchText(&parts, decl.InputSchema, map[*tool.Schema]bool{})
 	return strings.Join(parts, " ")
@@ -323,15 +328,27 @@ func selectCapabilityItems(
 			continue
 		}
 		byName[item.Name] = item
+		for _, alias := range item.Aliases {
+			if existing, ok := byName[alias]; ok &&
+				kindRank(existing.kind) <= kindRank(item.kind) {
+				continue
+			}
+			byName[alias] = item
+		}
 	}
 	selected := make([]capabilitySearchItem, 0, len(names))
 	missing := make([]string, 0)
+	selectedNames := make(map[string]bool, len(names))
 	for _, name := range names {
 		item, ok := byName[name]
 		if !ok {
 			missing = append(missing, name)
 			continue
 		}
+		if selectedNames[item.kind+"\x00"+item.Name] {
+			continue
+		}
+		selectedNames[item.kind+"\x00"+item.Name] = true
 		selected = append(selected, item)
 	}
 	return selected, missing
@@ -426,10 +443,11 @@ func capabilityItemsFingerprint(items []capabilitySearchItem) string {
 	for _, item := range items {
 		fmt.Fprintf(
 			hash,
-			"%s\x00%s\x00%s\x00%s\x00",
+			"%s\x00%s\x00%s\x00%s\x00%s\x00",
 			item.kind,
 			item.Name,
 			item.Description,
+			strings.Join(item.Aliases, "\x00"),
 			item.SearchText,
 		)
 	}

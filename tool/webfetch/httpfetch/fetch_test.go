@@ -166,6 +166,31 @@ func TestWebFetch_UnsupportedType(t *testing.T) {
 	assert.Contains(t, resp.Results[0].Error, "unsupported content type: application/octet-stream")
 }
 
+func TestWebFetch_UnsupportedPDFSuggestsDocumentReader(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		fmt.Fprint(w, `%PDF-1.7`)
+	}))
+	defer ts.Close()
+
+	tool := NewTool()
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp, ok := res.(fetchResponse)
+	require.True(t, ok, "Response should be of type fetchResponse")
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "application/pdf", resp.Results[0].ContentType)
+	assert.Empty(t, resp.Results[0].Content)
+	assert.Contains(
+		t,
+		resp.Results[0].Error,
+		"Download the PDF and use a document-reading tool",
+	)
+}
+
 func TestWebFetch_PerUrlLimit(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
@@ -294,6 +319,83 @@ func TestConvertHTMLToMarkdown(t *testing.T) {
 
 	assert.NotContains(t, result, "console.log")
 	assert.NotContains(t, result, "color: red")
+}
+
+func TestConvertHTMLToMarkdownKeepsFullPageByDefault(t *testing.T) {
+	htmlContent := `
+		<html>
+		<body>
+			<header>Useful header notice</header>
+			<main><p>Main article text.</p></main>
+			<form><label>Useful form label</label></form>
+			<footer>Useful footer citation</footer>
+		</body>
+		</html>`
+
+	result, err := convertHTMLToMarkdown(strings.NewReader(htmlContent))
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "Useful header notice")
+	assert.Contains(t, result, "Main article text")
+	assert.Contains(t, result, "Useful form label")
+	assert.Contains(t, result, "Useful footer citation")
+}
+
+func TestConvertHTMLToMarkdownCanPreferMainContent(t *testing.T) {
+	htmlContent := `
+		<html>
+		<body>
+			<nav>` + strings.Repeat("Main menu navigation. ", 200) + `</nav>
+			<div id="article-body">
+				<h1>Moon</h1>
+				<table class="infobox">
+					<tr><th>Periapsis</th><td>356,400-370,400 km</td></tr>
+				</table>
+				<p>The Moon is Earth's only natural satellite.</p>
+			</div>
+			<footer>Footer links</footer>
+		</body>
+		</html>`
+
+	result, err := convertHTMLToMarkdownWithOptions(
+		strings.NewReader(htmlContent),
+		true,
+	)
+	require.NoError(t, err)
+
+	assert.Contains(t, result, "Moon")
+	assert.Contains(t, result, "Periapsis")
+	assert.Contains(t, result, "356,400-370,400 km")
+	assert.NotContains(t, result, "Main menu navigation")
+	assert.NotContains(t, result, "Footer links")
+}
+
+func TestWebFetch_MainContentExtractionOption(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `
+<html><body>
+  <nav>Navigation text</nav>
+  <main><h1>Main Heading</h1><p>Main body.</p></main>
+  <footer>Footer citation</footer>
+</body></html>`)
+		},
+	))
+	defer ts.Close()
+
+	tool := NewTool(WithMainContentExtraction(true))
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+	resp := res.(fetchResponse)
+
+	require.Len(t, resp.Results, 1)
+	assert.Contains(t, resp.Results[0].Content, "Main Heading")
+	assert.Contains(t, resp.Results[0].Content, "Main body")
+	assert.NotContains(t, resp.Results[0].Content, "Navigation text")
+	assert.NotContains(t, resp.Results[0].Content, "Footer citation")
 }
 
 func TestWebFetch_WithHTTPClient(t *testing.T) {
