@@ -778,8 +778,63 @@ func TestService_UpdateMemory_SoftDelete_RotateMemory_ReviveDeletedRow(t *testin
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	err := svc.UpdateMemory(context.Background(), key, "content B", []string{"topic"})
+	var updateResult memory.UpdateResult
+	err := svc.UpdateMemory(context.Background(), key, "content B", []string{"topic"}, memory.WithUpdateResult(&updateResult))
+	require.NotEqual(t, updateResult.MemoryID, key.MemoryID)
 	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestService_UpdateMemory_SoftDelete_RotateMemory_ActiveRowNotOverwritten verifies
+// that when rotating A → B and B is already an active (non-soft-deleted) row,
+// the ON DUPLICATE KEY UPDATE is a no-op — B is NOT overwritten.
+// This is the complement to ReviveDeletedRow: the IF(deleted_at IS NOT NULL) guard
+// ensures only soft-deleted rows can be revived.
+func TestService_UpdateMemory_SoftDelete_RotateMemory_ActiveRowNotOverwritten(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true), WithSoftDelete(true))
+	defer svc.Close()
+
+	key := memory.Key{AppName: "app", UserID: "u1", MemoryID: "mem-A"}
+	now := time.Now()
+	// Load returns original entry with ID "mem-A".
+	mock.ExpectQuery("SELECT memory_id").
+		WithArgs(key.MemoryID, key.AppName, key.UserID).
+		WillReturnRows(sqlmock.NewRows(memCols).AddRow(
+			key.MemoryID, key.AppName, key.UserID, "content A", `["topic"]`,
+			"fact", nil, nil, nil, now, now,
+		))
+	// Content changes → new ID "mem-B" → rotateMemory:
+	// BEGIN + soft-delete A + INSERT B + COMMIT.
+	// B is already an active row → ON DUPLICATE KEY UPDATE fires but IF guard
+	// makes it a no-op (0 rows affected). A is still soft-deleted.
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE").
+		WithArgs(sqlmock.AnyArg(), key.MemoryID, key.AppName, key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO.*ON DUPLICATE KEY UPDATE.*IF\(deleted_at IS NOT NULL`).
+		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows = no-op, active row preserved
+	mock.ExpectCommit()
+
+	var updateResult memory.UpdateResult
+	err := svc.UpdateMemory(context.Background(), key, "content B", []string{"topic"}, memory.WithUpdateResult(&updateResult))
+	require.NotEqual(t, updateResult.MemoryID, key.MemoryID)
+	require.NoError(t, err)
+
+	// Verify B's content is unchanged by reading it back.
+	// The IF guard should have prevented the overwrite.
+	bKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	mock.ExpectQuery("SELECT memory_id.*FROM").
+		WithArgs(bKey.AppName, bKey.UserID).
+		WillReturnRows(sqlmock.NewRows(memCols).AddRow(
+			"mem-B", "app", "u1", "content B_active", `["b_topic"]`,
+			"fact", nil, nil, nil, now, now,
+		))
+	entries, err := svc.ReadMemories(context.Background(), bKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "content B_active", entries[0].Memory.Memory, "active row should not be overwritten")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
