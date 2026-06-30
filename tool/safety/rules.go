@@ -37,7 +37,7 @@ const (
 // Rule identifiers, stable across reports and audit events.
 const (
 	ruleDangerousID = "R-DEL-001"
-	ruleCredID      = "R-CRED-001"
+	ruleCredID      = "R-CRED-001" //nolint:gosec // G101 false positive: a rule identifier, not a credential.
 	ruleNetworkID   = "R-NET-001"
 	ruleShellID     = "R-SHELL-001"
 	ruleCmdID       = "R-CMD-001"
@@ -51,7 +51,7 @@ const (
 // Finding categories.
 const (
 	catDangerous   = "dangerous_command"
-	catCredential  = "credential_access"
+	catCredential  = "credential_access" //nolint:gosec // G101 false positive: a finding category, not a credential.
 	catNetwork     = "network"
 	catShellBypass = "shell_bypass"
 	catCommandPol  = "command_policy"
@@ -65,7 +65,7 @@ const (
 // Recommendation strings attached to each finding.
 const (
 	recDangerous   = "Avoid destructive commands; scope deletions to the workspace and never target system paths."
-	recCredential  = "This path holds credentials/keys; remove the access or use a dedicated secrets mechanism."
+	recCredential  = "This path holds credentials/keys; remove the access or use a dedicated secrets mechanism." //nolint:gosec // G101 false positive: a recommendation string, not a credential.
 	recNetwork     = "Target host is not in network.allowed_domains; add it to the whitelist or use a vetted download script."
 	recShellBypass = "Wrap complex shell usage in an auditable workspace script and add it to allowed_commands."
 	recCommandPol  = "Command is not in commands.allowed; add it to the allow list if it is expected, or keep it blocked."
