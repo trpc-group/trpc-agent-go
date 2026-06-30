@@ -480,4 +480,3 @@ func TestEvolution_Rollback_ExplicitRevision(t *testing.T) {
 	assert.Contains(t, string(body), "old version")
 	assert.NotContains(t, string(body), "newer archived")
 }
-
