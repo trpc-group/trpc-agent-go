@@ -414,8 +414,8 @@ func (r *ResourceAbuseRule) Check(input ScanInput) *ScanResult {
 
 	// fork bomb 模式
 	fbPatterns := []string{
-		":(){ :|:& };:",  // 经典 fork bomb
-		"() {",           // 函数定义（可能用于 fork bomb）
+		":(){ :|:& };:", // 经典 fork bomb
+		"() {",          // 函数定义（可能用于 fork bomb）
 	}
 	for _, fp := range fbPatterns {
 		if strings.Contains(cmd, fp) {
