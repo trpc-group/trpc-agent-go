@@ -29,11 +29,12 @@ import (
 const subcmdEvolution = "evolution"
 
 const (
-	evoCmdPending = "pending"
-	evoCmdApprove = "approve"
-	evoCmdReject  = "reject"
-	evoCmdDiff    = "diff"
-	evoCmdAudit   = "audit"
+	evoCmdPending  = "pending"
+	evoCmdApprove  = "approve"
+	evoCmdReject   = "reject"
+	evoCmdDiff     = "diff"
+	evoCmdAudit    = "audit"
+	evoCmdRollback = "rollback"
 )
 
 // evoEnv holds the I/O context for evolution subcommands, making them
@@ -64,6 +65,8 @@ func (e *evoEnv) dispatch(args []string) int {
 		return e.diff(args[1:])
 	case evoCmdAudit:
 		return e.audit(args[1:])
+	case evoCmdRollback:
+		return e.rollback(args[1:])
 	case "help", "-h", "--help":
 		e.usageTo(e.stdout)
 		return 0
@@ -86,6 +89,7 @@ Commands:
   reject  <rev-id>     Reject a pending revision
   diff    <rev-id>     Show the skill content of a revision
   audit                Show recent audit log entries
+  rollback <skill-id>  Restore the previous active revision of a skill
 
 Global options:
   --dir <path>         Path to evolution revisions directory
@@ -400,6 +404,55 @@ func (e *evoEnv) audit(args []string) int {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+func (e *evoEnv) rollback(args []string) int {
+	fl := newEvoFlags(evoCmdRollback)
+	revision := fl.fs.String("revision", "", "specific archived revision id (default: most recent archived)")
+	reviewer := fl.fs.String("reviewer", "", "reviewer identity (default: $USER)")
+	comment := fl.fs.String("comment", "", "optional rollback comment")
+
+	dir, positional, err := fl.parse(args)
+	if err != nil {
+		e.errorf("%v", err)
+		return 2
+	}
+	if len(positional) == 0 {
+		e.errorf("skill ID required\nUsage: openclaw evolution rollback <skill-id> --dir <path> [--revision <rev-id>]")
+		return 2
+	}
+	skillID := positional[0]
+
+	if *reviewer == "" {
+		if u := os.Getenv("USER"); u != "" {
+			*reviewer = u
+		} else {
+			*reviewer = "cli-user"
+		}
+	}
+
+	store := evolution.NewFileCandidateStore(dir)
+	pointer := evolution.NewFileActivePointer(dir)
+	publisher := evolution.NewFilePublisher(managedSkillsDirForRevisionsDir(dir))
+	svc := evolution.NewApprovalService(store, pointer, publisher)
+
+	res, err := svc.Rollback(context.Background(), skillID, evolution.RollbackOpts{
+		TargetRevisionID: *revision,
+		Reviewer:         *reviewer,
+		Comment:          *comment,
+		DecidedAt:        time.Now().UTC(),
+	})
+	if err != nil {
+		e.errorf("%v", err)
+		return 1
+	}
+	if res.PreviousActiveID == "" {
+		fmt.Fprintf(e.stdout, "Skill %q restored to revision %s.\n", skillID, res.RestoredID)
+	} else {
+		fmt.Fprintf(e.stdout, "Skill %q rolled back: %s → %s.\n",
+			skillID, res.PreviousActiveID, res.RestoredID)
+	}
+	return 0
+}
 
 func readAuditLog(rootDir, skillID string) ([]evolution.AuditEvent, error) {
 	data, err := os.ReadFile(filepath.Join(rootDir, skillID, "audit.log"))

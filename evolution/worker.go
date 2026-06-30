@@ -73,6 +73,16 @@ type worker struct {
 	candidateStoreRoot string
 	activePointerRoot  string
 
+	// approvalTimeout, approvalSweepInterval drive the optional
+	// pending_approval auto-expiration sweeper. When approvalTimeout
+	// > 0, Start launches a background goroutine that scans the
+	// candidate store and auto-promotes revisions whose
+	// pending_approval age exceeds approvalTimeout.
+	approvalTimeout       time.Duration
+	approvalSweepInterval time.Duration
+	sweepStop             chan struct{}
+	sweepDone             chan struct{}
+
 	scopedMu       sync.Mutex
 	scopedPubs     map[string]Publisher
 	scopedStores   map[string]CandidateStore
@@ -156,6 +166,15 @@ type workerConfig struct {
 	// targeting skills whose on-disk path is outside this directory are
 	// skipped to protect bundled and user-authored skills.
 	ManagedSkillsDir string
+
+	// ApprovalTimeout enables the pending_approval auto-expiration
+	// sweeper. Revisions that have been in pending_approval state for
+	// longer than ApprovalTimeout are auto-promoted to active. Zero
+	// disables the sweeper (default).
+	ApprovalTimeout time.Duration
+	// ApprovalSweepInterval overrides the sweep period; zero falls
+	// back to min(ApprovalTimeout/4, 1h).
+	ApprovalSweepInterval time.Duration
 }
 
 // newWorker creates a new worker.
@@ -196,6 +215,8 @@ func newWorker(cfg workerConfig) *worker {
 		humanGate:                 cfg.HumanGate,
 		approvalGateShadow:        cfg.ApprovalGateShadow,
 		managedSkillsDir:          cfg.ManagedSkillsDir,
+		approvalTimeout:           cfg.ApprovalTimeout,
+		approvalSweepInterval:     cfg.ApprovalSweepInterval,
 	}
 	if store, ok := cfg.CandidateStore.(*fileCandidateStore); ok && store != nil {
 		w.candidateStoreRoot = store.root
@@ -226,6 +247,7 @@ func (w *worker) Start() {
 			}
 		}(ch)
 	}
+	w.startApprovalSweeperLocked()
 	w.started = true
 }
 
@@ -236,6 +258,7 @@ func (w *worker) Stop() {
 	if !w.started || len(w.jobChans) == 0 {
 		return
 	}
+	w.stopApprovalSweeperLocked()
 	for _, ch := range w.jobChans {
 		close(ch)
 	}

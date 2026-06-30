@@ -13,12 +13,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 )
 
 // ErrAlreadyDecided is returned when Decide is called on a revision
 // that is no longer in pending_approval state.
 var ErrAlreadyDecided = errors.New("revision already decided")
+
+// ErrNoArchivedRevision is returned when Rollback is called on a skill
+// that has no archived revision to fall back to.
+var ErrNoArchivedRevision = errors.New("no archived revision available for rollback")
 
 // ApprovalDecision is the external reviewer's decision on a pending revision.
 type ApprovalDecision struct {
@@ -201,4 +207,176 @@ func humanDecisionReason(decision ApprovalDecision) string {
 		return "human decision by " + decision.Reviewer
 	}
 	return "human decision"
+}
+
+// RollbackOpts configures Rollback. Reviewer / Comment / DecidedAt are
+// recorded on the audit log entry so operators can reconstruct who
+// reverted a skill and why.
+type RollbackOpts struct {
+	// TargetRevisionID, when non-empty, rolls back to the specific
+	// archived revision id. When empty, the most recently archived
+	// revision is selected automatically.
+	TargetRevisionID string
+	Reviewer         string
+	Comment          string
+	DecidedAt        time.Time
+}
+
+// RollbackResult describes the outcome of a Rollback operation.
+type RollbackResult struct {
+	// PreviousActiveID is the revision that was active before rollback
+	// (now archived). Empty when the skill had no active revision.
+	PreviousActiveID string
+	// RestoredID is the revision that is now active.
+	RestoredID string
+}
+
+// Rollback reverts the active revision of a skill to a previously
+// archived one. The current active revision is demoted to archived and
+// the chosen archived revision is promoted back to active. The
+// publisher is updated to reflect the restored skill body so the
+// rollback is immediately visible to running agents (no Refresh needed
+// — agents pick up the new SKILL.md on the next read).
+//
+// Returns ErrNoArchivedRevision when no archived revision is available
+// (or when TargetRevisionID is set but does not exist / is not archived).
+func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts RollbackOpts) (*RollbackResult, error) {
+	if s.store == nil {
+		return nil, fmt.Errorf("no candidate store configured")
+	}
+	if s.pointer == nil {
+		return nil, fmt.Errorf("no active pointer configured")
+	}
+	if strings.TrimSpace(skillID) == "" {
+		return nil, fmt.Errorf("rollback: empty skill id")
+	}
+
+	target, err := s.selectRollbackTarget(ctx, skillID, opts.TargetRevisionID)
+	if err != nil {
+		return nil, err
+	}
+	currentRevID, err := s.pointer.Get(ctx, skillID)
+	if err != nil {
+		return nil, fmt.Errorf("get active pointer: %w", err)
+	}
+	if currentRevID == target.RevisionID {
+		return nil, fmt.Errorf("rollback: target %q is already active", target.RevisionID)
+	}
+
+	decidedAt := opts.DecidedAt
+	if decidedAt.IsZero() {
+		decidedAt = time.Now().UTC()
+	}
+
+	// Archive the current active revision (if any) before promoting the
+	// rollback target, so listings reflect the new state immediately.
+	if currentRevID != "" {
+		if err := s.archiveActive(ctx, skillID, currentRevID, target.RevisionID); err != nil {
+			return nil, err
+		}
+	}
+
+	// Republish so agents see the restored SKILL.md right away.
+	if s.publisher != nil && target.Action != RevisionActionDelete && target.Spec != nil {
+		if err := s.publisher.UpsertSkill(ctx, target.Spec); err != nil {
+			return nil, fmt.Errorf("publish restored skill: %w", err)
+		}
+	}
+
+	target.Status = RevisionActive
+	target.PromotedAt = &decidedAt
+	if err := s.store.WriteRevision(ctx, target); err != nil {
+		return nil, fmt.Errorf("write restored revision: %w", err)
+	}
+	if err := s.pointer.Set(ctx, skillID, target.RevisionID); err != nil {
+		return nil, fmt.Errorf("set active pointer: %w", err)
+	}
+
+	_ = s.store.AppendAudit(ctx, AuditEvent{
+		At:         decidedAt,
+		Action:     AuditActionPromote,
+		SkillID:    skillID,
+		RevisionID: target.RevisionID,
+		Status:     string(RevisionActive),
+		Reason:     rollbackReason(currentRevID, opts),
+		Actor:      opts.Reviewer,
+		Comment:    opts.Comment,
+	})
+
+	return &RollbackResult{
+		PreviousActiveID: currentRevID,
+		RestoredID:       target.RevisionID,
+	}, nil
+}
+
+// selectRollbackTarget picks the revision that Rollback should promote
+// back to active. When targetID is set it must point to an archived
+// revision; otherwise the most recently archived revision wins.
+func (s *ApprovalService) selectRollbackTarget(
+	ctx context.Context, skillID, targetID string,
+) (*Revision, error) {
+	if strings.TrimSpace(targetID) != "" {
+		rev, err := s.store.ReadRevision(ctx, skillID, targetID)
+		if err != nil {
+			return nil, fmt.Errorf("read target revision: %w", err)
+		}
+		if rev.Status != RevisionArchived {
+			return nil, fmt.Errorf("rollback: revision %q has status %q, expected archived",
+				targetID, rev.Status)
+		}
+		return rev, nil
+	}
+	revIDs, err := s.store.ListRevisions(ctx, skillID)
+	if err != nil {
+		return nil, fmt.Errorf("list revisions: %w", err)
+	}
+	// Walk in reverse so the most-recent archived wins.
+	for i := len(revIDs) - 1; i >= 0; i-- {
+		rev, err := s.store.ReadRevision(ctx, skillID, revIDs[i])
+		if err != nil {
+			continue
+		}
+		if rev.Status == RevisionArchived {
+			return rev, nil
+		}
+	}
+	return nil, ErrNoArchivedRevision
+}
+
+// archiveActive demotes the current active revision to archived and
+// records one audit entry. Used by Rollback before promoting the
+// previous archived revision back to active.
+func (s *ApprovalService) archiveActive(ctx context.Context, skillID, activeID, replacingID string) error {
+	current, err := s.store.ReadRevision(ctx, skillID, activeID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read active revision: %w", err)
+	}
+	if current.Status == RevisionArchived {
+		return nil
+	}
+	current.Status = RevisionArchived
+	if err := s.store.WriteRevision(ctx, current); err != nil {
+		return fmt.Errorf("archive active revision: %w", err)
+	}
+	_ = s.store.AppendAudit(ctx, AuditEvent{
+		Action:     AuditActionArchive,
+		SkillID:    skillID,
+		RevisionID: activeID,
+		Status:     string(RevisionArchived),
+		Reason:     "rolled back to " + replacingID,
+	})
+	return nil
+}
+
+func rollbackReason(previousActiveID string, opts RollbackOpts) string {
+	if opts.Comment != "" {
+		return opts.Comment
+	}
+	if previousActiveID != "" {
+		return "rollback from " + previousActiveID
+	}
+	return "rollback"
 }
