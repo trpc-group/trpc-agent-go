@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
@@ -30,6 +31,7 @@ import (
 	filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
 	urlsource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/url"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 const (
@@ -94,8 +96,22 @@ func (s *Source) initializeReaders() {
 
 	// Override with specific reader if fileReaderType is set
 	if s.fileReaderType != "" {
-		if r, exists := reader.GetAllReaders(opts...)[string(s.fileReaderType)]; exists {
+		readers := reader.GetAllReaders(opts...)
+		if r, exists := readers[string(s.fileReaderType)]; exists {
 			s.textReader = r
+		} else {
+			// The requested reader is not registered (its package was likely not
+			// imported), so we silently kept the default text reader. Warn instead of
+			// degrading quietly, since text chunking is not format-aware.
+			available := make([]string, 0, len(readers))
+			for t := range readers {
+				available = append(available, t)
+			}
+			sort.Strings(available)
+			log.Warnf("auto source: no reader registered for file_reader_type %q; "+
+				"falling back to the text reader (chunking will not be format-aware). "+
+				"Import the corresponding reader package to register it. registered types: %v",
+				s.fileReaderType, available)
 		}
 	}
 }
