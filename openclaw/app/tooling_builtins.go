@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -103,6 +105,7 @@ func init() {
 
 type httpToolConfig struct {
 	BaseURL   string        `yaml:"base_url,omitempty"`
+	Backend   string        `yaml:"backend,omitempty"`
 	UserAgent string        `yaml:"user_agent,omitempty"`
 	Timeout   time.Duration `yaml:"timeout,omitempty"`
 }
@@ -132,28 +135,44 @@ func newDuckDuckGoTools(
 		return nil, err
 	}
 
-	client := &http.Client{Timeout: defaultHTTPTimeout}
-	if cfg.Timeout > 0 {
-		client.Timeout = cfg.Timeout
+	opts := make([]duckduckgo.Option, 0, 4)
+	if backend := strings.TrimSpace(cfg.Backend); backend != "" {
+		if !isSupportedDuckDuckGoBackend(backend) {
+			return nil, fmt.Errorf(
+				"duckduckgo backend must be api, html, or lite: %q",
+				backend,
+			)
+		}
+		opts = append(opts, duckduckgo.WithBackend(backend))
 	}
-
-	opts := make([]duckduckgo.Option, 0, 3)
 	if baseURL := strings.TrimSpace(cfg.BaseURL); baseURL != "" {
 		opts = append(opts, duckduckgo.WithBaseURL(baseURL))
 	}
 	if ua := strings.TrimSpace(cfg.UserAgent); ua != "" {
 		opts = append(opts, duckduckgo.WithUserAgent(ua))
 	}
-	opts = append(opts, duckduckgo.WithHTTPClient(client))
+	if cfg.Timeout > 0 {
+		opts = append(opts, duckduckgo.WithTimeout(cfg.Timeout))
+	}
 
 	return []tool.Tool{duckduckgo.NewTool(opts...)}, nil
 }
 
+func isSupportedDuckDuckGoBackend(backend string) bool {
+	switch strings.ToLower(strings.TrimSpace(backend)) {
+	case "api", "html", "lite":
+		return true
+	default:
+		return false
+	}
+}
+
 type httpWebFetchConfig struct {
-	AllowedDomains []string      `yaml:"allowed_domains,omitempty"`
-	BlockedDomains []string      `yaml:"blocked_domains,omitempty"`
-	AllowAll       bool          `yaml:"allow_all_domains,omitempty"`
-	Timeout        time.Duration `yaml:"timeout,omitempty"`
+	AllowedDomains  []string      `yaml:"allowed_domains,omitempty"`
+	BlockedDomains  []string      `yaml:"blocked_domains,omitempty"`
+	AllowAll        bool          `yaml:"allow_all_domains,omitempty"`
+	Timeout         time.Duration `yaml:"timeout,omitempty"`
+	MainContentOnly bool          `yaml:"main_content_only,omitempty"`
 
 	MaxContentLength      int `yaml:"max_content_length,omitempty"`
 	MaxTotalContentLength int `yaml:"max_total_content_length,omitempty"`
@@ -194,6 +213,9 @@ func newHTTPWebFetchTools(
 				cfg.MaxTotalContentLength,
 			),
 		)
+	}
+	if cfg.MainContentOnly {
+		opts = append(opts, httpfetch.WithMainContentExtraction(true))
 	}
 	if len(cfg.AllowedDomains) > 0 {
 		opts = append(opts, httpfetch.WithAllowedDomains(cfg.AllowedDomains))
@@ -320,10 +342,12 @@ func buildMCPToolFilter(cfg *mcpFilterConfig) (tool.FilterFunc, error) {
 }
 
 type fileToolSetConfig struct {
-	BaseDir       string `yaml:"base_dir,omitempty"`
-	ReadOnly      *bool  `yaml:"read_only,omitempty"`
-	EnableSave    *bool  `yaml:"enable_save,omitempty"`
-	EnableReplace *bool  `yaml:"enable_replace,omitempty"`
+	BaseDir         string   `yaml:"base_dir,omitempty"`
+	ReadOnlyDirs    []string `yaml:"read_only_dirs,omitempty"`
+	RuntimeReadDirs *bool    `yaml:"runtime_read_dirs,omitempty"`
+	ReadOnly        *bool    `yaml:"read_only,omitempty"`
+	EnableSave      *bool    `yaml:"enable_save,omitempty"`
+	EnableReplace   *bool    `yaml:"enable_replace,omitempty"`
 
 	EnableRead          *bool `yaml:"enable_read,omitempty"`
 	EnableReadMultiple  *bool `yaml:"enable_read_multiple,omitempty"`
@@ -335,7 +359,7 @@ type fileToolSetConfig struct {
 }
 
 func newFileToolSet(
-	_ registry.ToolSetProviderDeps,
+	deps registry.ToolSetProviderDeps,
 	spec registry.PluginSpec,
 ) (tool.ToolSet, error) {
 	var cfg fileToolSetConfig
@@ -360,6 +384,23 @@ func newFileToolSet(
 	opts := make([]file.Option, 0, 10)
 	if baseDir := strings.TrimSpace(cfg.BaseDir); baseDir != "" {
 		opts = append(opts, file.WithBaseDir(baseDir))
+	}
+	readOnlyDirs := append(
+		[]string{},
+		cfg.ReadOnlyDirs...,
+	)
+	runtimeReadDirs := true
+	if cfg.RuntimeReadDirs != nil {
+		runtimeReadDirs = *cfg.RuntimeReadDirs
+	}
+	if runtimeReadDirs {
+		readOnlyDirs = append(
+			readOnlyDirs,
+			defaultFileReadOnlyDirs(deps.StateDir)...,
+		)
+	}
+	if len(readOnlyDirs) > 0 {
+		opts = append(opts, file.WithReadOnlyDirs(readOnlyDirs...))
 	}
 	opts = append(opts, file.WithSaveFileEnabled(saveEnabled))
 	opts = append(opts, file.WithReplaceContentEnabled(replaceEnabled))
@@ -396,6 +437,21 @@ func newFileToolSet(
 	}
 
 	return file.NewToolSet(opts...)
+}
+
+func defaultFileReadOnlyDirs(stateDir string) []string {
+	roots := []string{os.TempDir()}
+	if runtime.GOOS != "windows" {
+		roots = append(roots, "/tmp")
+	}
+	if stateDir := strings.TrimSpace(stateDir); stateDir != "" {
+		roots = append(
+			roots,
+			filepath.Join(stateDir, "runtime", "tmp"),
+			filepath.Join(stateDir, "workspaces", "scratch"),
+		)
+	}
+	return roots
 }
 
 type openAPISpecConfig struct {

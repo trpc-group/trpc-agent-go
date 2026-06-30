@@ -82,7 +82,10 @@ func resolveDeferredToolSurface(
 	}
 	return true, directToolSurfaceTools(
 		context.Background(),
-		defaultedDirectToolSurfaceNames(
+		directToolSurfaceNames(
+			deferToolSurfaceDefaultDirectToolsEnabled(
+				cfg.DeferToolSurfaceDefaultDirectTools,
+			),
 			cfg.DeferToolSurfaceDirectTools,
 		),
 		baseTools,
@@ -97,13 +100,22 @@ func deferToolSurfaceThresholdChars(value int) int {
 	return defaultDeferToolSurfaceThresholdChars
 }
 
-func defaultedDirectToolSurfaceNames(names []string) []string {
+func deferToolSurfaceDefaultDirectToolsEnabled(value *bool) bool {
+	if value == nil {
+		return true
+	}
+	return *value
+}
+
+func directToolSurfaceNames(includeDefaults bool, names []string) []string {
 	all := make(
 		[]string,
 		0,
 		len(defaultDeferToolSurfaceDirectTools)+len(names),
 	)
-	all = append(all, defaultDeferToolSurfaceDirectTools...)
+	if includeDefaults {
+		all = append(all, defaultDeferToolSurfaceDirectTools...)
+	}
 	all = append(all, names...)
 	return normalizeStringList(all)
 }

@@ -654,6 +654,12 @@ func TestToolDeclarations_UseIntegerDurations(t *testing.T) {
 	defer set.Close()
 
 	execTool, writeTool, _, _ := toolSetTools(t, set)
+	require.Contains(
+		t,
+		execTool.Declaration().Description,
+		"relative path under the workdir/base directory",
+	)
+
 	execDecl := execTool.Declaration().InputSchema.Properties
 	require.Equal(t, "integer", execDecl["yield_time_ms"].Type)
 	require.Equal(t, "integer", execDecl["yieldMs"].Type)

@@ -114,6 +114,22 @@ func TestNewBaseResult_DefaultsDriverType(t *testing.T) {
 	require.Equal(t, actionSnapshot, got.Action)
 }
 
+func TestSupportedActionsForDriver_HidesServerOnlyActions(t *testing.T) {
+	t.Parallel()
+
+	mcpActions := supportedActionsForDriver(driverTypePlaywrightMCP)
+	require.Contains(t, mcpActions, actionNavigate)
+	require.Contains(t, mcpActions, actionAct)
+	require.NotContains(t, mcpActions, actionCookies)
+	require.NotContains(t, mcpActions, actionStorage)
+	require.NotContains(t, mcpActions, actionDownload)
+
+	serverActions := supportedActionsForDriver(driverTypeBrowserServer)
+	require.Contains(t, serverActions, actionCookies)
+	require.Contains(t, serverActions, actionStorage)
+	require.Contains(t, serverActions, actionDownload)
+}
+
 func TestSplitTitleURL_SupportsBareURLAndText(t *testing.T) {
 	t.Parallel()
 

@@ -471,6 +471,8 @@ agent:
   enable_context_compaction: false
   context_compaction_oversized_tool_result_max_tokens: 2048
   max_history_runs: 123
+  max_llm_calls: 22
+  max_tool_iterations: 123
   preload_memory: 2
 `)
 
@@ -494,6 +496,8 @@ agent:
 		"-enable-context-compaction",
 		"-context-compaction-oversized-tool-result-max-tokens", "256",
 		"-max-history-runs", "9",
+		"-max-llm-calls", "4",
+		"-max-tool-iterations", "6",
 		"-preload-memory", "-1",
 	})
 	require.NoError(t, err)
@@ -515,7 +519,25 @@ agent:
 	require.True(t, opts.EnableContextCompaction)
 	require.Equal(t, 256, opts.ContextCompactionOversizedToolResultMaxTokens)
 	require.Equal(t, 9, opts.MaxHistoryRuns)
+	require.Equal(t, 4, opts.MaxLLMCalls)
+	require.Equal(t, 6, opts.MaxToolIterations)
 	require.Equal(t, -1, opts.PreloadMemory)
+}
+
+func TestParseRunOptions_MaxToolIterationsNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{"-max-tool-iterations", "-1"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid max tool iterations")
+}
+
+func TestParseRunOptions_MaxLLMCallsNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{"-max-llm-calls", "-1"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid max LLM calls")
 }
 
 func TestParseRunOptions_ModelGenerationConfig_DefaultsStreamTrue(
@@ -756,6 +778,8 @@ agent:
   enable_context_compaction: true
   context_compaction_oversized_tool_result_max_tokens: 4096
   max_history_runs: 50
+  max_llm_calls: 13
+  max_tool_iterations: 11
   preload_memory: 10
   instruction: "instruction"
   instruction_files: ["i1.md","i2.md"]
@@ -923,6 +947,8 @@ memory:
 	require.True(t, opts.EnableContextCompaction)
 	require.Equal(t, 4096, opts.ContextCompactionOversizedToolResultMaxTokens)
 	require.Equal(t, 50, opts.MaxHistoryRuns)
+	require.Equal(t, 13, opts.MaxLLMCalls)
+	require.Equal(t, 11, opts.MaxToolIterations)
 	require.Equal(t, 10, opts.PreloadMemory)
 	require.Equal(t, "instruction", opts.AgentInstruction)
 	require.Equal(t, "i1.md,i2.md", opts.AgentInstructionFiles)
@@ -1173,6 +1199,7 @@ tools:
   defer_to_dynamic_agent_mode: auto
   defer_to_dynamic_agent_threshold_chars: 1234
   defer_direct_tools: ["exec_command", "message", "exec_command"]
+  dynamic_agent_timeout: "3m"
 `)
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
 	require.NoError(t, err)
@@ -1181,6 +1208,30 @@ tools:
 	require.True(t, opts.deferToolSurfaceModeExplicit)
 	require.Equal(t, 1234, opts.DeferToolSurfaceChars)
 	require.Equal(t, "exec_command,message", opts.DeferToolSurfaceDirect)
+	require.Equal(t, 3*time.Minute, opts.DynamicAgentTimeout)
+}
+
+func TestParseRunOptions_DynamicAgentTimeoutFlagOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  dynamic_agent_timeout: "3m"
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-dynamic-agent-timeout", "45s",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Second, opts.DynamicAgentTimeout)
+}
+
+func TestParseRunOptions_DynamicAgentTimeoutNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{"-dynamic-agent-timeout", "-1s"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "dynamic agent timeout")
 }
 
 func TestParseRunOptions_DeferToolSurfaceDefaultsToAuto(t *testing.T) {
@@ -1243,6 +1294,35 @@ tools:
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
 	require.NoError(t, err)
 	require.Equal(t, "exec_command,message", opts.DeferToolSurfaceDirect)
+}
+
+func TestParseRunOptions_DeferDefaultDirectToolsConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_default_direct_tools: false
+`)
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.False(t, opts.DeferToolSurfaceDefaultDirectTools)
+}
+
+func TestParseRunOptions_DeferDefaultDirectToolsFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_default_direct_tools: false
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-defer-tools-to-dynamic-agent-default-direct-tools=true",
+	})
+	require.NoError(t, err)
+	require.True(t, opts.DeferToolSurfaceDefaultDirectTools)
 }
 
 func TestParseRunOptions_DeferToolSurfaceInvalidModeFails(
@@ -1715,6 +1795,36 @@ debug_recorder:
 	require.True(t, opts.DebugRecorderEnabled)
 	require.Equal(t, outDir, opts.DebugRecorderDir)
 	require.Equal(t, "safe", opts.DebugRecorderMode)
+}
+
+func TestParseRunOptions_AgentDisablePostToolPromptConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  disable_post_tool_prompt: true
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.NotNil(t, opts.PostToolPromptEnabled)
+	require.False(t, *opts.PostToolPromptEnabled)
+}
+
+func TestParseRunOptions_AgentDisablePostToolPromptCamelConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  disablePostToolPrompt: false
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.NotNil(t, opts.PostToolPromptEnabled)
+	require.True(t, *opts.PostToolPromptEnabled)
 }
 
 func TestParseRunOptions_SkillsDefaults(t *testing.T) {

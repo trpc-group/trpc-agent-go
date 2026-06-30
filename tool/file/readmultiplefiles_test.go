@@ -14,6 +14,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -196,6 +197,56 @@ func TestReadMultipleFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReadMultipleFiles_AbsolutePathUnderExtraReadRoot(t *testing.T) {
+	base := t.TempDir()
+	extra := t.TempDir()
+	fileName := filepath.Join(extra, "derived.txt")
+	assert.NoError(t, os.WriteFile(fileName, []byte("derived"), 0o644))
+
+	set, err := NewToolSet(WithBaseDir(base), WithReadOnlyDirs(extra))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	rsp, err := fts.readMultipleFiles(
+		context.Background(),
+		&readMultipleFilesRequest{Patterns: []string{fileName}},
+	)
+	assert.NoError(t, err)
+	assert.Len(t, rsp.Files, 1)
+	assert.Equal(t, fileName, rsp.Files[0].FileName)
+	assert.Equal(t, "derived", rsp.Files[0].Contents)
+}
+
+func TestReadMultipleFiles_BlocksSymlinkEscapeFromExtraReadRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink permissions vary on windows")
+	}
+	base := t.TempDir()
+	extra := t.TempDir()
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	assert.NoError(t, os.WriteFile(secret, []byte("secret"), 0o644))
+	link := filepath.Join(extra, "link.txt")
+	assert.NoError(t, os.Symlink(secret, link))
+
+	set, err := NewToolSet(WithBaseDir(base), WithReadOnlyDirs(extra))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	rsp, err := fts.readMultipleFiles(
+		context.Background(),
+		&readMultipleFilesRequest{Patterns: []string{link}},
+	)
+	assert.NoError(t, err)
+	assert.Len(t, rsp.Files, 1)
+	assert.Empty(t, rsp.Files[0].Contents)
+	assert.Contains(
+		t,
+		rsp.Files[0].Message,
+		"outside configured read-only roots",
+	)
 }
 
 func TestReadMultipleFiles_WorkspaceRef(t *testing.T) {

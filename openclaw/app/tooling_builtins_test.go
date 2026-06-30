@@ -11,11 +11,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -44,6 +47,7 @@ func TestNewHTTPWebFetchTools_AllowAllSucceeds(t *testing.T) {
 	cfg := yamlNode(t, `
 allow_all_domains: true
 timeout: 200ms
+main_content_only: true
 max_content_length: 123
 max_total_content_length: 456
 `)
@@ -59,11 +63,26 @@ max_total_content_length: 456
 func TestNewDuckDuckGoTools_Succeeds(t *testing.T) {
 	t.Parallel()
 
-	cfg := yamlNode(t, `
-base_url: "https://example.invalid"
-user_agent: "ua"
-timeout: 100ms
-`)
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+			require.Equal(t, "ua", r.Header.Get("User-Agent"))
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fgaia">GAIA benchmark</a>
+  <a class="result__snippet">HTML backend result.</a>
+</body></html>`))
+		},
+	))
+	defer server.Close()
+
+	cfg := yamlNode(t, strings.Join([]string{
+		`base_url: "` + server.URL + `"`,
+		`backend: "html"`,
+		`user_agent: "ua"`,
+		`timeout: 100ms`,
+		"",
+	}, "\n"))
 	tools, err := newDuckDuckGoTools(
 		registry.ToolProviderDeps{},
 		registry.PluginSpec{Config: cfg},
@@ -71,6 +90,31 @@ timeout: 100ms
 	require.NoError(t, err)
 	require.Len(t, tools, 1)
 	require.NotEmpty(t, tools[0].Declaration().Name)
+	require.Contains(t, tools[0].Declaration().Description, "html search")
+
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+	raw, err := callable.Call(
+		context.Background(),
+		[]byte(`{"query":"GAIA benchmark"}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"summary":"Found 1 html results`)
+	require.Contains(t, string(data), `"url":"https://example.com/gaia"`)
+}
+
+func TestNewDuckDuckGoTools_InvalidBackend(t *testing.T) {
+	t.Parallel()
+
+	cfg := yamlNode(t, "backend: unknown\n")
+	_, err := newDuckDuckGoTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "backend must be api, html, or lite")
 }
 
 func TestNewBrowserTools_Succeeds(t *testing.T) {
@@ -348,6 +392,65 @@ func TestNewFileToolSet_EnableReadCanDisable(t *testing.T) {
 
 	names := toolNames(ts.Tools(context.Background()))
 	require.NotContains(t, names, "read_file")
+}
+
+func TestNewFileToolSet_RuntimeReadDirsDefault(t *testing.T) {
+	dir := t.TempDir()
+	tmpFile := filepath.Join(t.TempDir(), "derived.txt")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("derived"), 0o644))
+
+	cfg := yamlNode(t, "base_dir: "+dir+"\n")
+	ts, err := newFileToolSet(
+		registry.ToolSetProviderDeps{StateDir: t.TempDir()},
+		registry.PluginSpec{Name: "fs", Config: cfg},
+	)
+	require.NoError(t, err)
+	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
+
+	raw, err := readFile.Call(
+		context.Background(),
+		[]byte(`{"file_name":`+strconv.Quote(tmpFile)+`}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"contents":"derived"`)
+}
+
+func TestNewFileToolSet_RuntimeReadDirsCanDisable(t *testing.T) {
+	dir := t.TempDir()
+	tmpFile := filepath.Join(t.TempDir(), "derived.txt")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("derived"), 0o644))
+
+	cfg := yamlNode(
+		t,
+		"base_dir: "+dir+"\nruntime_read_dirs: false\n",
+	)
+	ts, err := newFileToolSet(
+		registry.ToolSetProviderDeps{StateDir: t.TempDir()},
+		registry.PluginSpec{Name: "fs", Config: cfg},
+	)
+	require.NoError(t, err)
+	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
+
+	_, err = readFile.Call(
+		context.Background(),
+		[]byte(`{"file_name":`+strconv.Quote(tmpFile)+`}`),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "outside configured read-only roots")
+}
+
+func TestDefaultFileReadOnlyDirsIncludesPlatformTmp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hardcoded /tmp root is Unix-only")
+	}
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	roots := defaultFileReadOnlyDirs("")
+	require.Contains(t, roots, tmp)
+	require.Contains(t, roots, "/tmp")
 }
 
 func TestOverrideToolSetName_NoOpWhenEmpty(t *testing.T) {
@@ -636,6 +739,24 @@ func toolNames(tools []tool.Tool) map[string]struct{} {
 		out[t.Declaration().Name] = struct{}{}
 	}
 	return out
+}
+
+func findCallableTool(
+	t *testing.T,
+	tools []tool.Tool,
+	name string,
+) tool.CallableTool {
+	t.Helper()
+	for _, tl := range tools {
+		if tl.Declaration().Name != name {
+			continue
+		}
+		callable, ok := tl.(tool.CallableTool)
+		require.True(t, ok)
+		return callable
+	}
+	t.Fatalf("tool %q not found", name)
+	return nil
 }
 
 func indentYAML(body string, spaces int) string {

@@ -873,6 +873,7 @@ YAML:
 tools:
   defer_to_dynamic_agent_mode: auto # off|on|auto
   defer_to_dynamic_agent_threshold_chars: 4000 # optional
+  defer_default_direct_tools: true # optional
   defer_direct_tools: ["exec_command"] # optional keep-list
 ```
 
@@ -925,14 +926,20 @@ tools:
   providers:
     - type: "duckduckgo"
       config:
+        backend: "api"
         timeout: "30s"
 ```
 
 Optional config fields:
 
-- `base_url` (default uses the official API endpoint)
+- `backend`: `api` (default), `html`, or `lite`
+- `base_url` (default depends on `backend`)
 - `user_agent`
 - `timeout`
+
+`api` uses the DuckDuckGo Instant Answer API and works best for
+encyclopedic answers. `html` and `lite` parse DuckDuckGo search result pages
+and return web result titles, URLs, and snippets for discovery workflows.
 
 ### Provider: webfetch_http (safe by default)
 

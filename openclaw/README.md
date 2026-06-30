@@ -289,6 +289,12 @@ tools:
   # defer_to_dynamic_agent_mode: on to force it on, or off to disable it.
   defer_to_dynamic_agent_mode: auto # off|on|auto
   defer_to_dynamic_agent_threshold_chars: 4000
+  # Optional: cap one dynamic_agent child call; 0 or unset disables it.
+  dynamic_agent_timeout: "180s"
+  # Optional: keep default direct tools on the parent agent.
+  # Set false for token-sensitive profiles that should expose only
+  # tool_search/dynamic_agent plus defer_direct_tools.
+  # defer_default_direct_tools: true
   # Optional: keep a small set of tools directly callable by the parent agent.
   # defer_direct_tools: ["exec_command"]
   # Optional: configure fenced-code execution without exposing workspace_exec.

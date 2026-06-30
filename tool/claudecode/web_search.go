@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -43,6 +44,14 @@ type googleSearchBackend struct {
 	client  *http.Client
 	options *WebSearchOptions
 }
+
+const (
+	duckDuckGoHTTPKeepAlive       = 30 * time.Second
+	duckDuckGoHTTPMaxIdleConns    = 100
+	duckDuckGoHTTPIdleConnTimeout = 90 * time.Second
+	duckDuckGoHTTPTLSHandshake    = 10 * time.Second
+	duckDuckGoHTTPExpectContinue  = 1 * time.Second
+)
 
 func newWebSearchTool(options *WebSearchOptions) (tool.Tool, error) {
 	target, err := newSearchBackend(options)
@@ -82,9 +91,9 @@ func newSearchBackend(options *WebSearchOptions) (codeSearchBackend, error) {
 	if options != nil && strings.TrimSpace(options.Provider) != "" {
 		provider = strings.ToLower(strings.TrimSpace(options.Provider))
 	}
-	client := &http.Client{Timeout: defaultHTTPTimeout}
+	timeout := defaultHTTPTimeout
 	if options != nil && options.Timeout > 0 {
-		client.Timeout = options.Timeout
+		timeout = options.Timeout
 	}
 	switch provider {
 	case "duckduckgo":
@@ -97,16 +106,42 @@ func newSearchBackend(options *WebSearchOptions) (codeSearchBackend, error) {
 			userAgent = strings.TrimSpace(options.UserAgent)
 		}
 		return &duckDuckGoSearchBackend{
-			client:    client,
+			client:    newDuckDuckGoWebSearchHTTPClient(timeout),
 			baseURL:   baseURL,
 			userAgent: userAgent,
 			size:      max(0, webSearchSize(options)),
 			offset:    max(0, webSearchOffset(options)),
 		}, nil
 	case "google":
+		client := &http.Client{Timeout: timeout}
 		return &googleSearchBackend{client: client, options: options}, nil
 	default:
 		return nil, fmt.Errorf("unsupported web search provider: %s", provider)
+	}
+}
+
+func newDuckDuckGoWebSearchHTTPClient(timeout time.Duration) *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   timeout,
+		KeepAlive: duckDuckGoHTTPKeepAlive,
+	}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: func(
+				ctx context.Context,
+				network string,
+				address string,
+			) (net.Conn, error) {
+				return dialer.DialContext(ctx, network, address)
+			},
+			ForceAttemptHTTP2:     false,
+			MaxIdleConns:          duckDuckGoHTTPMaxIdleConns,
+			IdleConnTimeout:       duckDuckGoHTTPIdleConnTimeout,
+			TLSHandshakeTimeout:   duckDuckGoHTTPTLSHandshake,
+			ExpectContinueTimeout: duckDuckGoHTTPExpectContinue,
+		},
 	}
 }
 

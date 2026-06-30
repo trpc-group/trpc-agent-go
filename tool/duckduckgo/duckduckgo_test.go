@@ -12,8 +12,12 @@ package duckduckgo
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +25,24 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/tool/duckduckgo/internal/client"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+var errReadFailed = errors.New("read failed")
+
+type errReadCloser struct{}
+
+func (errReadCloser) Read([]byte) (int, error) {
+	return 0, errReadFailed
+}
+
+func (errReadCloser) Close() error {
+	return nil
+}
 
 func TestDuckDuckGoTool_Search_Results(t *testing.T) {
 	// Mock API response with related topics
@@ -190,6 +212,527 @@ func TestDDGTool_NoResults(t *testing.T) {
 	}
 }
 
+func TestDDGTool_SERPBackends(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		backend string
+		body    string
+	}{
+		{
+			name:    "html",
+			backend: backendHTML,
+			body: `
+<html><body>
+  <a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fgaia">GAIA benchmark</a>
+  <a class="result__snippet">A benchmark for general AI assistants.</a>
+</body></html>`,
+		},
+		{
+			name:    "lite",
+			backend: backendLite,
+			body: `
+<html><body>
+  <a class="result-link" href="/l/?uddg=https%3A%2F%2Fexample.org%2Flite">Lite GAIA</a>
+  <div class="result-snippet">Lite result snippet.</div>
+</body></html>`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+					w.Header().Set("Content-Type", "text/html")
+					_, _ = w.Write([]byte(tc.body))
+				},
+			))
+			defer server.Close()
+
+			ddgTool := &ddgTool{
+				httpClient: server.Client(),
+				baseURL:    server.URL,
+				backend:    tc.backend,
+				userAgent:  "test-agent/1.0",
+			}
+			result, err := ddgTool.search(
+				context.Background(),
+				searchRequest{Query: "GAIA benchmark"},
+			)
+			require.NoError(t, err)
+			require.Len(t, result.Results, 1)
+			require.Contains(t, result.Results[0].Title, "GAIA")
+			require.Contains(t, result.Results[0].URL, "example.")
+			require.NotEmpty(t, result.Results[0].Description)
+			require.Contains(t, result.Summary, tc.backend)
+		})
+	}
+}
+
+func TestDDGTool_SERPChallenge(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`
+<html><body>
+  <div class="anomaly-modal__title">
+    Unfortunately, bots use DuckDuckGo too.
+  </div>
+</body></html>`))
+		},
+	))
+	defer server.Close()
+
+	ddgTool := &ddgTool{
+		httpClient: server.Client(),
+		baseURL:    server.URL,
+		backend:    backendHTML,
+		userAgent:  "test-agent/1.0",
+	}
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA benchmark"},
+	)
+	require.Error(t, err)
+	require.Empty(t, result.Results)
+	require.Contains(t, result.Summary, "anti-bot challenge")
+	require.Contains(t, result.Summary, "another configured search provider")
+}
+
+func TestDDGTool_SERPFallbackOnChallenge(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+			switch r.URL.Path {
+			case "/html/":
+				_, _ = w.Write([]byte(`
+<html><body>
+  <div class="anomaly-modal__title">
+    Unfortunately, bots use DuckDuckGo too.
+  </div>
+</body></html>`))
+			case "/lite/":
+				_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result-link"
+     href="/l/?uddg=https%3A%2F%2Fexample.org%2Fgaia">GAIA fallback</a>
+  <div class="result-snippet">Lite fallback snippet.</div>
+</body></html>`))
+			default:
+				t.Fatalf("unexpected path %s", r.URL.Path)
+			}
+		},
+	))
+	defer server.Close()
+
+	ddgTool := &ddgTool{
+		httpClient: server.Client(),
+		baseURL:    server.URL + "/html/",
+		backend:    backendHTML,
+		userAgent:  "test-agent/1.0",
+	}
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA benchmark"},
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Equal(t, "GAIA fallback", result.Results[0].Title)
+	require.Equal(t, "https://example.org/gaia", result.Results[0].URL)
+	require.Contains(t, result.Summary, "lite")
+	require.Contains(t, result.Summary, "fallback from html")
+}
+
+func TestDDGTool_SERPHTTPFallbackForPlainHTTPOnHTTPS(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+			require.Equal(t, "/html/", r.URL.Path)
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a"
+     href="/l/?uddg=https%3A%2F%2Fexample.org%2Fplain-http">Plain HTTP fallback</a>
+  <a class="result__snippet">Recovered from an HTTPS transport mismatch.</a>
+</body></html>`))
+		},
+	))
+	defer server.Close()
+
+	ddgTool := &ddgTool{
+		httpClient: server.Client(),
+		baseURL: strings.Replace(
+			server.URL+"/html/",
+			"http://",
+			"https://",
+			1,
+		),
+		backend:   backendHTML,
+		userAgent: "test-agent/1.0",
+	}
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA benchmark"},
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Equal(t, "Plain HTTP fallback", result.Results[0].Title)
+	require.Equal(t, "https://example.org/plain-http", result.Results[0].URL)
+	require.Contains(t, result.Summary, "http fallback from https")
+}
+
+func TestDDGTool_APIFallsBackToSERPOnPlainHTTPMismatch(t *testing.T) {
+	t.Parallel()
+
+	apiServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"RelatedTopics":[]}`))
+		},
+	))
+	defer apiServer.Close()
+
+	userAgent := make(chan string, 1)
+	serpServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA paper authors", r.URL.Query().Get("q"))
+			userAgent <- r.UserAgent()
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a"
+     href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpaper">Paper result</a>
+  <a class="result__snippet">Author information snippet.</a>
+</body></html>`))
+		},
+	))
+	defer serpServer.Close()
+
+	apiURL := "https://" + strings.TrimPrefix(apiServer.URL, "http://")
+	ddgTool := &ddgTool{
+		client: client.New(
+			apiURL,
+			defaultUserAgent,
+			apiServer.Client(),
+		),
+		httpClient: serpServer.Client(),
+		baseURL:    serpServer.URL,
+		backend:    backendAPI,
+		userAgent:  defaultUserAgent,
+	}
+
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA paper authors"},
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Contains(t, result.Results[0].Title, "Paper result")
+	require.Contains(t, result.Summary, "fallback from api")
+	require.Equal(t, defaultSERPUserAgent, <-userAgent)
+}
+
+func TestDDGTool_APIFallsBackToSERPOnAcceptedStatus(t *testing.T) {
+	t.Parallel()
+
+	apiServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+		},
+	))
+	defer apiServer.Close()
+
+	serpServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA paper authors", r.URL.Query().Get("q"))
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a"
+     href="/l/?uddg=https%3A%2F%2Fexample.com%2Fpaper">Paper result</a>
+  <a class="result__snippet">Author information snippet.</a>
+</body></html>`))
+		},
+	))
+	defer serpServer.Close()
+
+	ddgTool := &ddgTool{
+		client: client.New(
+			apiServer.URL,
+			defaultUserAgent,
+			apiServer.Client(),
+		),
+		httpClient: serpServer.Client(),
+		baseURL:    serpServer.URL,
+		backend:    backendAPI,
+		userAgent:  defaultUserAgent,
+	}
+
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA paper authors"},
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Contains(t, result.Results[0].Title, "Paper result")
+	require.Equal(t, "https://example.com/paper", result.Results[0].URL)
+	require.Contains(t, result.Summary, "fallback from api")
+}
+
+func TestDDGTool_APIFallsBackToSERPOnMalformedJSON(t *testing.T) {
+	t.Parallel()
+
+	apiServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(``))
+		},
+	))
+	defer apiServer.Close()
+
+	serpServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA paper authors", r.URL.Query().Get("q"))
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a"
+     href="/l/?uddg=https%3A%2F%2Fexample.com%2Fpaper">Paper result</a>
+  <a class="result__snippet">Author information snippet.</a>
+</body></html>`))
+		},
+	))
+	defer serpServer.Close()
+
+	ddgTool := &ddgTool{
+		client: client.New(
+			apiServer.URL,
+			defaultUserAgent,
+			apiServer.Client(),
+		),
+		httpClient: serpServer.Client(),
+		baseURL:    serpServer.URL,
+		backend:    backendAPI,
+		userAgent:  defaultUserAgent,
+	}
+
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA paper authors"},
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Contains(t, result.Results[0].Title, "Paper result")
+	require.Equal(t, "https://example.com/paper", result.Results[0].URL)
+	require.Contains(t, result.Summary, "fallback from api")
+}
+
+func TestDDGTool_SERPFallbackFailureAddsContext(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+			switch r.URL.Path {
+			case "/html/":
+				_, _ = w.Write([]byte(`
+<html><body>
+  <div class="anomaly-modal__title">
+    Unfortunately, bots use DuckDuckGo too.
+  </div>
+</body></html>`))
+			case "/lite/":
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte("temporarily unavailable"))
+			default:
+				t.Fatalf("unexpected path %s", r.URL.Path)
+			}
+		},
+	))
+	defer server.Close()
+
+	ddgTool := &ddgTool{
+		httpClient: server.Client(),
+		baseURL:    server.URL + "/html/",
+		backend:    backendHTML,
+		userAgent:  "test-agent/1.0",
+	}
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA benchmark"},
+	)
+	require.Error(t, err)
+	require.Empty(t, result.Results)
+	require.Contains(t, result.Summary, "fallback lite failed")
+	require.Contains(t, err.Error(), "fallback lite failed")
+}
+
+func TestDDGTool_SERPHTTPFailures(t *testing.T) {
+	t.Parallel()
+
+	req := searchRequest{Query: "GAIA benchmark"}
+	searchTool := &ddgTool{httpClient: http.DefaultClient}
+	_, err := searchTool.searchSERP(
+		context.Background(),
+		req,
+		backendHTML,
+		"http://%",
+	)
+	require.Error(t, err)
+
+	dialErr := errors.New("dial failed")
+	searchTool = &ddgTool{
+		httpClient: &http.Client{Transport: roundTripFunc(
+			func(r *http.Request) (*http.Response, error) {
+				require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+				require.Contains(t, r.Header.Get("Accept"), "text/html")
+				require.Equal(t, "en-US,en;q=0.9", r.Header.Get("Accept-Language"))
+				return nil, dialErr
+			},
+		)},
+		userAgent: "test-agent/1.0",
+	}
+	result, err := searchTool.searchSERP(
+		context.Background(),
+		req,
+		backendHTML,
+		"http://example.com/html/",
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, dialErr)
+	require.Empty(t, result.Results)
+	require.Contains(t, result.Summary, "dial failed")
+
+	searchTool.httpClient = &http.Client{Transport: roundTripFunc(
+		func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       errReadCloser{},
+				Header:     make(http.Header),
+			}, nil
+		},
+	)}
+	result, err = searchTool.searchSERP(
+		context.Background(),
+		req,
+		backendHTML,
+		"http://example.com/html/",
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errReadFailed)
+	require.Empty(t, result.Results)
+	require.Contains(t, result.Summary, "read failed")
+}
+
+func TestDDGTool_SERPDoesNotFallbackAfterContextCancel(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	searchTool := &ddgTool{
+		httpClient: &http.Client{Transport: roundTripFunc(
+			func(*http.Request) (*http.Response, error) {
+				calls++
+				cancel()
+				return nil, context.Canceled
+			},
+		)},
+		baseURL: "http://example.com/html/",
+		backend: backendHTML,
+	}
+	result, err := searchTool.searchSERPWithFallback(
+		ctx,
+		searchRequest{Query: "GAIA benchmark"},
+	)
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, result.Results)
+	require.Equal(t, 1, calls)
+}
+
+func TestParseSERPResultsDedupesBeforeLimit(t *testing.T) {
+	t.Parallel()
+
+	results := parseSERPResults([]byte(`
+<html><body>
+  <a class="result__a" href="">empty result</a>
+  <a class="result__a">missing href</a>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2F1">One</a>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2F1">One duplicate</a>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2F2">Two</a>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2F3">Three</a>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2F4">Four</a>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2F5">Five</a>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2F6">Six</a>
+</body></html>`))
+
+	require.Len(t, results, maxResults)
+	require.Equal(t, "https://example.com/1", results[0].URL)
+	require.Equal(t, "https://example.com/5", results[len(results)-1].URL)
+}
+
+func TestParseSERPResultsSkipsAds(t *testing.T) {
+	t.Parallel()
+
+	results := parseSERPResults([]byte(`
+<html><body>
+  <a class="result__a" href="https://duckduckgo.com/y.js?ad_domain=example.com&ad_provider=bing">Ad result</a>
+  <div class="result__snippet">Sponsored snippet.</div>
+  <a class="result__a" href="https://www.bing.com/aclick?ld=abc">Bing ad</a>
+  <div class="result__snippet">Another ad.</div>
+  <a class="result__a" href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Freal">Real result</a>
+  <div class="result__snippet">Organic snippet.</div>
+</body></html>`))
+
+	require.Len(t, results, 1)
+	require.Equal(t, "Real result", results[0].Title)
+	require.Equal(t, "https://example.com/real", results[0].URL)
+}
+
+func TestNormalizeSERPURL(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, normalizeSERPURL(" "))
+	require.Equal(t, "http://%zz", normalizeSERPURL("http://%zz"))
+	require.Equal(t, "https://example.com/path",
+		normalizeSERPURL("//example.com/path"))
+	require.Equal(t, "https://example.com/gaia",
+		normalizeSERPURL(
+			"https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fgaia",
+		))
+}
+
+func TestIsSERPAdURL(t *testing.T) {
+	t.Parallel()
+
+	require.True(
+		t,
+		isSERPAdURL(
+			"https://duckduckgo.com/y.js?ad_domain=x&ad_provider=bing",
+		),
+	)
+	require.True(t, isSERPAdURL("https://www.bing.com/aclick?ld=abc"))
+	require.False(t, isSERPAdURL("https://example.com/organic"))
+}
+
+func TestFallbackSERPBaseURL(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, defaultLiteBaseURL,
+		fallbackSERPBaseURL(backendHTML, defaultHTMLBaseURL))
+	require.Equal(t, defaultHTMLBaseURL,
+		fallbackSERPBaseURL(backendLite, defaultLiteBaseURL))
+	require.Equal(t, "http://example.com/lite/",
+		fallbackSERPBaseURL(backendHTML, "http://example.com/html/"))
+	require.Empty(t,
+		fallbackSERPBaseURL(backendHTML, "http://example.com/search"))
+}
+
 func TestExtractTitleFromTopic(t *testing.T) {
 	testCases := []struct {
 		input    string
@@ -287,8 +830,9 @@ func TestNewTool(t *testing.T) {
 	customClient := &http.Client{Timeout: 10 * time.Second}
 
 	testCases := []struct {
-		name string
-		opts []Option
+		name          string
+		opts          []Option
+		wantDescMatch string
 	}{
 		{
 			name: "default options",
@@ -307,12 +851,19 @@ func TestNewTool(t *testing.T) {
 			opts: []Option{WithHTTPClient(customClient)},
 		},
 		{
+			name:          "custom backend",
+			opts:          []Option{WithBackend(backendHTML)},
+			wantDescMatch: "html search",
+		},
+		{
 			name: "all options combined",
 			opts: []Option{
 				WithBaseURL(customURL),
+				WithBackend(backendLite),
 				WithUserAgent(customAgent),
 				WithHTTPClient(customClient),
 			},
+			wantDescMatch: "lite search",
 		},
 	}
 
@@ -322,7 +873,187 @@ func TestNewTool(t *testing.T) {
 			if tool == nil {
 				t.Fatalf("NewTool() returned nil for %s", tc.name)
 			}
+			if tc.wantDescMatch != "" {
+				require.Contains(
+					t,
+					tool.Declaration().Description,
+					tc.wantDescMatch,
+				)
+			}
 		})
+	}
+}
+
+func TestNewTool_WithBackendUsesSERPBackend(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+			require.Equal(t, "custom-agent/2.0", r.Header.Get("User-Agent"))
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result-link" href="/l/?uddg=https%3A%2F%2Fexample.org%2Flite">Lite GAIA</a>
+  <div class="result-snippet">Lite result snippet.</div>
+</body></html>`))
+		},
+	))
+	defer server.Close()
+
+	searchTool := NewTool(
+		WithBaseURL(server.URL),
+		WithBackend(backendLite),
+		WithUserAgent("custom-agent/2.0"),
+		WithHTTPClient(server.Client()),
+	)
+	require.Contains(t, searchTool.Declaration().Description, "lite search")
+	raw, err := searchTool.Call(
+		context.Background(),
+		[]byte(`{"query":"GAIA benchmark"}`),
+	)
+	require.NoError(t, err)
+	result, ok := raw.(searchResponse)
+	require.True(t, ok)
+	require.Len(t, result.Results, 1)
+	require.Equal(t, "https://example.org/lite", result.Results[0].URL)
+	require.Contains(t, result.Summary, "lite")
+}
+
+func TestNewTool_SERPBackendUsesBrowserDefaultUserAgent(t *testing.T) {
+	t.Parallel()
+
+	var gotUserAgent string
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotUserAgent = r.Header.Get("User-Agent")
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a" href="https://example.com/">Example</a>
+</body></html>`))
+		},
+	))
+	defer server.Close()
+
+	searchTool := NewTool(
+		WithBaseURL(server.URL),
+		WithBackend(backendHTML),
+		WithHTTPClient(server.Client()),
+	)
+	raw, err := searchTool.Call(
+		context.Background(),
+		[]byte(`{"query":"browser ua"}`),
+	)
+	require.NoError(t, err)
+	result, ok := raw.(searchResponse)
+	require.True(t, ok)
+	require.Len(t, result.Results, 1)
+	require.Contains(t, gotUserAgent, "Mozilla/5.0")
+	require.Contains(t, gotUserAgent, "Chrome/")
+}
+
+func TestNormalizeBackend(t *testing.T) {
+	require.Equal(t, backendAPI, normalizeBackend(""))
+	require.Equal(t, backendAPI, normalizeBackend("instant-answer"))
+	require.Equal(t, backendHTML, normalizeBackend(" HTML "))
+	require.Equal(t, backendLite, normalizeBackend("lite"))
+	require.Equal(t, "unknown", normalizeBackend("unknown"))
+}
+
+func TestNewDefaultHTTPClient_DisablesHTTP2(t *testing.T) {
+	t.Parallel()
+
+	httpClient := newDefaultHTTPClient(10 * time.Second)
+	transport, ok := httpClient.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.NotNil(t, transport.DialContext)
+	require.False(t, transport.ForceAttemptHTTP2)
+	require.True(t,
+		transport.TLSClientConfig == nil ||
+			!transport.TLSClientConfig.InsecureSkipVerify,
+	)
+	require.Equal(t, 10*time.Second, httpClient.Timeout)
+	require.Equal(t, defaultTLSHandshakeTimeout,
+		transport.TLSHandshakeTimeout)
+	require.Equal(t, defaultExpectContinueTimeout,
+		transport.ExpectContinueTimeout)
+}
+
+func TestNewDefaultHTTPClient_UsesTransportNetwork(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("unix sockets are not available on windows")
+	}
+
+	socketPath := t.TempDir() + "/duckduckgo-test.sock"
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+		close(accepted)
+	}()
+
+	httpClient := newDefaultHTTPClient(10 * time.Second)
+	transport, ok := httpClient.Transport.(*http.Transport)
+	require.True(t, ok)
+
+	conn, err := transport.DialContext(context.Background(), "unix", socketPath)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	serverConn := <-accepted
+	require.NotNil(t, serverConn)
+	serverConn.Close()
+}
+
+func TestWithTimeout_UsesDefaultTransport(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config{}
+	WithTimeout(10 * time.Second)(cfg)
+	httpClient := configuredHTTPClient(cfg)
+
+	require.Equal(t, 10*time.Second, httpClient.Timeout)
+	transport, ok := httpClient.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.NotNil(t, transport.DialContext)
+	require.False(t, transport.ForceAttemptHTTP2)
+}
+
+func TestWithTimeout_PreservesCustomHTTPClientTransport(t *testing.T) {
+	t.Parallel()
+
+	for _, opts := range [][]Option{
+		{
+			WithHTTPClient(&http.Client{
+				Timeout:   time.Second,
+				Transport: http.DefaultTransport,
+			}),
+			WithTimeout(10 * time.Second),
+		},
+		{
+			WithTimeout(10 * time.Second),
+			WithHTTPClient(&http.Client{
+				Timeout:   time.Second,
+				Transport: http.DefaultTransport,
+			}),
+		},
+	} {
+		cfg := &config{}
+		for _, opt := range opts {
+			opt(cfg)
+		}
+		original := cfg.httpClient
+		httpClient := configuredHTTPClient(cfg)
+		require.NotSame(t, original, httpClient)
+		require.Equal(t, time.Second, original.Timeout)
+		require.Equal(t, 10*time.Second, httpClient.Timeout)
+		require.Equal(t, http.DefaultTransport, httpClient.Transport)
 	}
 }
 

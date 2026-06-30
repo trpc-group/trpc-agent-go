@@ -392,7 +392,10 @@ const (
 		"latency-sensitive tools kept directly available when " +
 		"configured. Use direct tools for simple local actions when " +
 		"they are present. Use `tool_search` when you need exact " +
-		"tool or skill names, then call `dynamic_agent` for broader " +
+		"tool or skill names, then call `dynamic_agent`; pass exact " +
+		"tool names such as web_fetch or browser in its `tools` " +
+		"field, and pass only real skill names in its `skills` " +
+		"field. Use `dynamic_agent` for broader " +
 		"files, uploads, browser automation, shell work, messaging, " +
 		"cron, memory, skills, knowledge, external tools, or " +
 		"verification. Give the sub-agent a self-contained request " +
@@ -1101,19 +1104,24 @@ func NewRuntimeWithOptions(
 				Err:  fmt.Errorf("create toolsets failed: %w", err),
 			}
 		}
+		postToolPromptEnabled := resolvePostToolPromptEnabled(
+			opts,
+			runtimeOpts,
+		)
 		agentCfg := agentConfig{
 			AppName:                 opts.AppName,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:   opts.MaxHistoryRuns,
-			PreloadMemory:    opts.PreloadMemory,
-			GenerationConfig: opts.GenerationConfig,
-			PostToolPromptEnabled: runtimeOpts.
-				postToolPromptEnabled,
-			Instruction:  prompts.Instruction,
-			SystemPrompt: prompts.SystemPrompt,
+			MaxHistoryRuns:        opts.MaxHistoryRuns,
+			MaxLLMCalls:           opts.MaxLLMCalls,
+			MaxToolIterations:     opts.MaxToolIterations,
+			PreloadMemory:         opts.PreloadMemory,
+			GenerationConfig:      opts.GenerationConfig,
+			PostToolPromptEnabled: postToolPromptEnabled,
+			Instruction:           prompts.Instruction,
+			SystemPrompt:          prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -1155,9 +1163,13 @@ func NewRuntimeWithOptions(
 			DeferToolSurfaceMode: opts.DeferToolSurfaceMode,
 			DeferToolSurfaceThresholdChars: opts.
 				DeferToolSurfaceChars,
+			DeferToolSurfaceDefaultDirectTools: boolPtr(
+				opts.DeferToolSurfaceDefaultDirectTools,
+			),
 			DeferToolSurfaceDirectTools: splitCSV(
 				opts.DeferToolSurfaceDirect,
 			),
+			DynamicAgentTimeout: opts.DynamicAgentTimeout,
 		}
 		cwd, _ := os.Getwd()
 		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
@@ -1706,19 +1718,24 @@ func run(
 				Err:  fmt.Errorf("create toolsets failed: %w", err),
 			}
 		}
+		postToolPromptEnabled := resolvePostToolPromptEnabled(
+			opts,
+			runtimeOpts,
+		)
 		agentCfg := agentConfig{
 			AppName:                 opts.AppName,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:   opts.MaxHistoryRuns,
-			PreloadMemory:    opts.PreloadMemory,
-			GenerationConfig: opts.GenerationConfig,
-			PostToolPromptEnabled: runtimeOpts.
-				postToolPromptEnabled,
-			Instruction:  prompts.Instruction,
-			SystemPrompt: prompts.SystemPrompt,
+			MaxHistoryRuns:        opts.MaxHistoryRuns,
+			MaxLLMCalls:           opts.MaxLLMCalls,
+			MaxToolIterations:     opts.MaxToolIterations,
+			PreloadMemory:         opts.PreloadMemory,
+			GenerationConfig:      opts.GenerationConfig,
+			PostToolPromptEnabled: postToolPromptEnabled,
+			Instruction:           prompts.Instruction,
+			SystemPrompt:          prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -1759,9 +1776,13 @@ func run(
 			DeferToolSurfaceMode: opts.DeferToolSurfaceMode,
 			DeferToolSurfaceThresholdChars: opts.
 				DeferToolSurfaceChars,
+			DeferToolSurfaceDefaultDirectTools: boolPtr(
+				opts.DeferToolSurfaceDefaultDirectTools,
+			),
 			DeferToolSurfaceDirectTools: splitCSV(
 				opts.DeferToolSurfaceDirect,
 			),
+			DynamicAgentTimeout: opts.DynamicAgentTimeout,
 		}
 		cwd, _ := os.Getwd()
 		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
@@ -2414,6 +2435,16 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 	if opts.MaxHistoryRuns != 0 {
 		return errors.New(
 			"claude-code agent does not support max-history-runs",
+		)
+	}
+	if opts.MaxToolIterations != 0 {
+		return errors.New(
+			"claude-code agent does not support max-tool-iterations",
+		)
+	}
+	if opts.MaxLLMCalls != 0 {
+		return errors.New(
+			"claude-code agent does not support max-llm-calls",
 		)
 	}
 	if opts.PreloadMemory != 0 {
@@ -3181,6 +3212,8 @@ type agentConfig struct {
 	EnableContextCompaction                       bool
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
+	MaxLLMCalls                                   int
+	MaxToolIterations                             int
 	PreloadMemory                                 int
 	GenerationConfig                              *model.GenerationConfig
 	PostToolPromptEnabled                         *bool
@@ -3225,11 +3258,23 @@ type agentConfig struct {
 
 	ToolSets []pluginSpec
 
-	RefreshToolSetsOnRun           bool
-	DeferToolSurface               bool
-	DeferToolSurfaceMode           string
-	DeferToolSurfaceThresholdChars int
-	DeferToolSurfaceDirectTools    []string
+	RefreshToolSetsOnRun               bool
+	DeferToolSurface                   bool
+	DeferToolSurfaceMode               string
+	DeferToolSurfaceThresholdChars     int
+	DeferToolSurfaceDefaultDirectTools *bool
+	DeferToolSurfaceDirectTools        []string
+	DynamicAgentTimeout                time.Duration
+}
+
+func resolvePostToolPromptEnabled(
+	opts runOptions,
+	runtimeOpts runtimeOptions,
+) *bool {
+	if runtimeOpts.postToolPromptEnabled != nil {
+		return runtimeOpts.postToolPromptEnabled
+	}
+	return opts.PostToolPromptEnabled
 }
 
 type openClawToolsBundle struct {
