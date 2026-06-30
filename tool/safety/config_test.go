@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package safety
 
 import (
@@ -5,40 +13,42 @@ import (
 	"time"
 )
 
-// 测 LoadPolicyFile
 func TestLoadPolicyFile_Valid(t *testing.T) {
 	policy, err := LoadPolicyFile("tool_safety_policy.yaml")
 	if err != nil {
-		t.Fatalf("加载失败: %v", err)
+		t.Fatalf("load failed: %v", err)
 	}
 	if policy == nil {
-		t.Fatal("policy 为 nil")
+		t.Fatal("policy is nil")
 	}
 	if policy.MaxTimeoutSeconds == 0 {
-		t.Error("MaxTimeoutSeconds 应有默认值")
+		t.Error("MaxTimeoutSeconds should have default")
+	}
+	if len(policy.DeniedCommands) == 0 {
+		t.Error("DeniedCommands should have entries")
 	}
 }
 
-// 测 LoadPolicyFile 失败场景
 func TestLoadPolicyFile_NotFound(t *testing.T) {
-	_, err := LoadPolicyFile("不存在的文件.yaml")
+	_, err := LoadPolicyFile("nonexistent.yaml")
 	if err == nil {
-		t.Error("不存在的文件应返回错误")
+		t.Error("nonexistent file should return error")
 	}
 }
 
-// 测 NewReport 输入为 nil（无规则触发）
 func TestNewReport_Allow(t *testing.T) {
-	report := NewReport(nil, ScanInput{Command: "ls"}, "test", time.Millisecond)
+	report := NewReport(nil, ScanInput{Command: "ls"}, "test_tool", time.Millisecond)
 	if report.Decision != DecisionAllow {
-		t.Errorf("期望 allow，得到 %s", report.Decision)
+		t.Errorf("expected allow, got %s", report.Decision)
 	}
 	if report.Blocked {
-		t.Error("allow 不应被拦截")
+		t.Error("allow should not be blocked")
+	}
+	if report.ToolName != "test_tool" {
+		t.Error("ToolName mismatch")
 	}
 }
 
-// 测 NewReport 输入为 deny
 func TestNewReport_Deny(t *testing.T) {
 	res := &ScanResult{
 		Decision:  DecisionDeny,
@@ -47,27 +57,28 @@ func TestNewReport_Deny(t *testing.T) {
 		Evidence:  "rm -rf /",
 		Reason:    "test",
 	}
-	report := NewReport(res, ScanInput{Command: "rm -rf /"}, "test", time.Millisecond)
+	report := NewReport(res, ScanInput{Command: "rm -rf /"}, "exec", time.Millisecond)
 	if !report.Blocked {
-		t.Error("deny 应被标记为 blocked")
+		t.Error("deny should be blocked")
+	}
+	if report.Decision != DecisionDeny {
+		t.Error("decision should be deny")
 	}
 }
 
-// 测 NewReport 输入为 ask
 func TestNewReport_Ask(t *testing.T) {
 	res := &ScanResult{
 		Decision:  DecisionAsk,
 		RiskLevel: RiskMedium,
 		RuleID:    "ask_review_008",
-		Reason:    "test",
+		Reason:    "needs review",
 	}
 	report := NewReport(res, ScanInput{Command: "rm -r"}, "test", time.Millisecond)
 	if report.Decision != DecisionAsk {
-		t.Error("ask 决策应保留")
+		t.Error("ask decision should be preserved")
 	}
 }
 
-// 测 NewAuditEvent
 func TestNewAuditEvent(t *testing.T) {
 	r := ScanReport{
 		ToolName:  "exec",
@@ -79,14 +90,13 @@ func TestNewAuditEvent(t *testing.T) {
 	}
 	event := NewAuditEvent(r)
 	if event.ToolName != "exec" {
-		t.Errorf("事件 ToolName 错误")
+		t.Errorf("event ToolName = %s, want exec", event.ToolName)
 	}
 	if event.Decision != "allow" {
-		t.Errorf("事件 Decision 错误")
+		t.Errorf("event Decision = %s, want allow", event.Decision)
 	}
 }
 
-// 测 SetSpanAttributes
 func TestSetSpanAttributes(t *testing.T) {
 	r := ScanReport{
 		Decision:  DecisionDeny,
@@ -97,20 +107,32 @@ func TestSetSpanAttributes(t *testing.T) {
 	}
 	attrs := SetSpanAttributes(r)
 	if attrs[SpanAttrDecision] != "deny" {
-		t.Error("decision 属性错误")
+		t.Error("decision attr mismatch")
 	}
 	if attrs[SpanAttrBackend] != "local" {
-		t.Error("backend 属性错误")
+		t.Error("backend attr mismatch")
+	}
+	if attrs[SpanAttrRuleID] != "network_002" {
+		t.Error("rule_id attr mismatch")
 	}
 }
 
-// 测 DefaultPolicy
 func TestDefaultPolicy(t *testing.T) {
 	p := DefaultPolicy()
 	if len(p.DeniedCommands) == 0 {
-		t.Error("默认策略应有命令黑名单")
+		t.Error("default policy should have denied_commands")
 	}
 	if p.MaxTimeoutSeconds == 0 {
-		t.Error("默认应有超时时间")
+		t.Error("default policy should have timeout")
+	}
+	if p.MaxOutputBytes == 0 {
+		t.Error("default policy should have max output bytes")
+	}
+}
+
+func TestNewReport_BackendDefault(t *testing.T) {
+	report := NewReport(nil, ScanInput{Command: "ls", ExecutorType: ""}, "t", time.Second)
+	if report.Backend != "local" {
+		t.Errorf("empty backend should default to local, got %s", report.Backend)
 	}
 }
