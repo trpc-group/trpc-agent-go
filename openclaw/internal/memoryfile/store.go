@@ -91,6 +91,12 @@ func (s *Store) EnsureMemory(
 		return "", err
 	}
 	if fileExists(path) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := contextErr(ctx); err != nil {
+			return "", err
+		}
+		_ = refreshMemoryTemplateFile(path)
 		return path, nil
 	}
 
@@ -98,6 +104,10 @@ func (s *Store) EnsureMemory(
 	defer s.mu.Unlock()
 
 	if fileExists(path) {
+		if err := contextErr(ctx); err != nil {
+			return "", err
+		}
+		_ = refreshMemoryTemplateFile(path)
 		return path, nil
 	}
 	if err := contextErr(ctx); err != nil {
@@ -144,7 +154,8 @@ func (s *Store) UpdateMemory(
 	if err != nil {
 		return "", err
 	}
-	next, err := update(string(raw))
+	current, _ := refreshTemplateText(string(raw))
+	next, err := update(current)
 	if err != nil {
 		return "", err
 	}
@@ -195,9 +206,17 @@ func (s *Store) ReadFile(path string, maxBytes int) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
+	}
+	if next, changed := refreshTemplateText(string(raw)); changed {
+		raw = []byte(next)
+		_ = writeFileAtomic(path, raw)
 	}
 	if maxBytes > 0 && len(raw) > maxBytes {
 		raw = raw[:maxBytes]
@@ -315,6 +334,18 @@ func writeFileAtomic(path string, data []byte) error {
 	}
 	removeTemp = false
 	return nil
+}
+
+func refreshMemoryTemplateFile(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	next, changed := refreshTemplateText(string(raw))
+	if !changed {
+		return nil
+	}
+	return writeFileAtomic(path, []byte(next))
 }
 
 func fileExists(path string) bool {

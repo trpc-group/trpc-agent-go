@@ -366,10 +366,14 @@ const (
 		"remember or asks to inspect memory, read the relevant " +
 		"file and quote or summarize the relevant lines. If the " +
 		"user explicitly says 'remember this' or asks you to " +
-		"remember a durable fact, preference, workflow rule, task " +
-		"list, or reminder list, update the narrowest relevant " +
+		"remember a durable fact, preference, task list, " +
+		"checklist, or reminder list, update the narrowest relevant " +
 		"memory file with a short bullet in the same turn. Do not " +
-		"store secrets or large transcripts in memory files. " +
+		"store secrets or large transcripts in memory files. Do not " +
+		"store reusable task workflows, output formats, tool " +
+		"procedures, or post-task feedback in memory files unless " +
+		"the user explicitly " +
+		"asks to save that content as memory. " +
 		"If a memory file does not exist yet, you may create it " +
 		"at that exact path. Prefer already installed local tools " +
 		"for OCR, PDF, audio, image, and video work before " +
