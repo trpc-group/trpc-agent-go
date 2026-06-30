@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/admin"
@@ -650,12 +652,15 @@ func (s *browserServerSup) Close() error {
 	s.mu.Unlock()
 
 	if err := cmd.Process.Signal(os.Interrupt); err != nil {
-		if killErr := cmd.Process.Kill(); killErr != nil {
-			return fmt.Errorf(
-				"stop browser server: signal=%v kill=%v",
-				err,
-				killErr,
-			)
+		if !isBrowserServerProcessDone(err) {
+			if killErr := cmd.Process.Kill(); killErr != nil &&
+				!isBrowserServerProcessDone(killErr) {
+				return fmt.Errorf(
+					"stop browser server: signal=%v kill=%v",
+					err,
+					killErr,
+				)
+			}
 		}
 	}
 
@@ -663,8 +668,12 @@ func (s *browserServerSup) Close() error {
 	case <-doneCh:
 		return nil
 	case <-time.After(browserServerStopTimeout):
-		if err := cmd.Process.Kill(); err != nil {
-			return fmt.Errorf("kill browser server: %w", err)
+		if err := cmd.Process.Kill(); err != nil &&
+			!isBrowserServerProcessDone(err) {
+			return fmt.Errorf(
+				"kill browser server: %w",
+				err,
+			)
 		}
 		select {
 		case <-doneCh:
@@ -673,6 +682,11 @@ func (s *browserServerSup) Close() error {
 			return fmt.Errorf("wait for browser server stop timed out")
 		}
 	}
+}
+
+func isBrowserServerProcessDone(err error) bool {
+	return errors.Is(err, os.ErrProcessDone) ||
+		errors.Is(err, syscall.ESRCH)
 }
 
 func (s *browserServerSup) startupLines() []startupLogLine {

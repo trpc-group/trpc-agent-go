@@ -271,6 +271,14 @@ func TestManagedBrowserServerHelpers(t *testing.T) {
 	require.False(t, isManagedBrowserServerHost("example.com"))
 }
 
+func TestBrowserServerProcessDoneError(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, isBrowserServerProcessDone(os.ErrProcessDone))
+	require.True(t, isBrowserServerProcessDone(syscall.ESRCH))
+	require.False(t, isBrowserServerProcessDone(fmt.Errorf("still running")))
+}
+
 func TestBrowserServerWorkDirHelpers(t *testing.T) {
 	root := t.TempDir()
 	direct := filepath.Join(root, browserServerDirName)

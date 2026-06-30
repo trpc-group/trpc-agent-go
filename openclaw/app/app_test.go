@@ -681,10 +681,10 @@ func TestBuildOpenClawTools_HostExecDefaultTimeout(t *testing.T) {
 	started := time.Now()
 	out, err := callable.Call(
 		context.Background(),
-		[]byte(`{"command":"sleep 1; printf done","yield_time_ms":0}`),
+		[]byte(`{"command":"sleep 5; printf done","yield_time_ms":0}`),
 	)
 	require.NoError(t, err)
-	require.Less(t, time.Since(started), 900*time.Millisecond)
+	require.Less(t, time.Since(started), 3*time.Second)
 
 	data, err := json.Marshal(out)
 	require.NoError(t, err)
