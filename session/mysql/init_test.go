@@ -55,15 +55,19 @@ func mockVerifySchemaQueries(mock sqlmock.Sqlmock, tablePrefix string) {
 			WithArgs(fullTableName).
 			WillReturnRows(colRows)
 
-		// 3. verifyIndexes query
-		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME"})
+		// 3. verifyIndexes query (INDEX_NAME, COLUMN_NAME, NON_UNIQUE)
+		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE"})
 		for _, idx := range schema.indexes {
 			idxName := sqldb.BuildIndexName(tablePrefix, idx.table, idx.suffix)
+			nonUnique := 1
+			if idx.unique {
+				nonUnique = 0
+			}
 			for _, col := range idx.columns {
-				idxRows.AddRow(idxName, col)
+				idxRows.AddRow(idxName, col, nonUnique)
 			}
 		}
-		idxRows.AddRow("PRIMARY", "id")
+		idxRows.AddRow("PRIMARY", "id", 0)
 		mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
 			WithArgs(fullTableName).
 			WillReturnRows(idxRows)
@@ -78,31 +82,83 @@ func TestInitDB_Success(t *testing.T) {
 	s := createTestService(t, db)
 	ctx := context.Background()
 
-	// Mock: Create tables
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS session_states")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS session_events")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS session_track_events")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS session_summaries")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS app_states")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS user_states")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	// Mock: Create indexes (12 indexes total: 3 unique + 3 lookup + 6 TTL)
-	for i := 0; i < 12; i++ {
-		mock.ExpectExec(regexp.QuoteMeta("CREATE")).
-			WillReturnResult(sqlmock.NewResult(0, 0))
-	}
-
-	// Mock: verifySchema queries
+	// initDB creates each (missing) table together with its indexes, then
+	// verifies the schema.
+	mockCreateMissingTables(mock, s.opts.tablePrefix)
 	mockVerifySchemaQueries(mock, s.opts.tablePrefix)
 
 	err = s.initDB(ctx)
 	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestInitDB_ExistingTablesSkipDDL(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	// All tables already exist: initDB must NOT issue any CREATE TABLE or
+	// CREATE INDEX, only existence checks, then schema verification.
+	for _, tableDef := range tableDefs {
+		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableDef.name)
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+			WithArgs(fullTableName).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	}
+	mockVerifySchemaQueries(mock, s.opts.tablePrefix)
+
+	err = s.initDB(ctx)
+	assert.NoError(t, err)
+	// No CREATE expectations were registered: if initDB had issued any DDL,
+	// sqlmock would have failed on an unexpected Exec.
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestInitDB_TableExistsCheckError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	// The first existence check itself fails (e.g. information_schema unreadable).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WithArgs(sqldb.BuildTableName(s.opts.tablePrefix, sqldb.TableNameSessionStates)).
+		WillReturnError(assert.AnError)
+
+	err = s.initDB(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "check table")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestInitDB_VerifySchemaError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	// All tables already exist → initDB skips DDL and proceeds to verifySchema.
+	for _, tableDef := range tableDefs {
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+			WithArgs(sqldb.BuildTableName(s.opts.tablePrefix, tableDef.name)).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	}
+	// verifySchema re-checks existence; report the first table as missing so
+	// verification fails and initDB wraps the error.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WithArgs(sqldb.BuildTableName(s.opts.tablePrefix, sqldb.TableNameSessionStates)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+	err = s.initDB(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "schema verification failed")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -114,7 +170,10 @@ func TestInitDB_TableCreationError(t *testing.T) {
 	s := createTestService(t, db)
 	ctx := context.Background()
 
-	// Mock: First table creation fails
+	// session_states does not exist; its CREATE TABLE then fails.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WithArgs(sqldb.BuildTableName(s.opts.tablePrefix, sqldb.TableNameSessionStates)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS session_states")).
 		WillReturnError(assert.AnError)
 
@@ -132,14 +191,14 @@ func TestInitDB_IndexCreationError(t *testing.T) {
 	s := createTestService(t, db)
 	ctx := context.Background()
 
-	// Mock: Create all tables successfully
-	for i := 0; i < 6; i++ {
-		mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS")).
-			WillReturnResult(sqlmock.NewResult(0, 0))
-	}
-
-	// Mock: First index creation fails with non-duplicate error
-	mock.ExpectExec(regexp.QuoteMeta("CREATE")).
+	// session_states does not exist: create it, then its first index fails with
+	// a non-duplicate error.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WithArgs(sqldb.BuildTableName(s.opts.tablePrefix, sqldb.TableNameSessionStates)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS session_states")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE (UNIQUE )?INDEX").
 		WillReturnError(assert.AnError)
 
 	err = s.initDB(ctx)
@@ -181,27 +240,9 @@ func TestInitDB_WithTablePrefix(t *testing.T) {
 	assert.Equal(t, "trpc_app_states", s.tableAppStates)
 	assert.Equal(t, "trpc_user_states", s.tableUserStates)
 
-	// Mock: Create tables with prefix
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS trpc_session_states")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS trpc_session_events")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS trpc_session_track_events")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS trpc_session_summaries")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS trpc_app_states")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS trpc_user_states")).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	// Mock: Create indexes with prefix
-	for i := 0; i < 12; i++ {
-		mock.ExpectExec(regexp.QuoteMeta("CREATE")).
-			WillReturnResult(sqlmock.NewResult(0, 0))
-	}
-
-	// Mock: verifySchema queries
+	// Mock: create each (missing) prefixed table together with its indexes,
+	// then verify the schema.
+	mockCreateMissingTables(mock, s.opts.tablePrefix)
 	mockVerifySchemaQueries(mock, s.opts.tablePrefix)
 
 	err = s.initDB(ctx)
@@ -217,29 +258,32 @@ func TestInitDB_DuplicateIndexIgnored(t *testing.T) {
 	s := createTestService(t, db)
 	ctx := context.Background()
 
-	// Mock: Create all tables successfully
-	for i := 0; i < 6; i++ {
-		mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS")).
-			WillReturnResult(sqlmock.NewResult(0, 0))
+	// Every table is new; each CREATE INDEX reports "duplicate index name"
+	// (1061), which initDB must tolerate so initialization still succeeds.
+	dupErr := &mysql.MySQLError{Number: sqldb.MySQLErrDuplicateKeyName, Message: "Duplicate key name"}
+	indexCount := make(map[string]int)
+	for _, idx := range indexDefs {
+		indexCount[idx.table]++
 	}
-
-	// Mock: Some indexes already exist (simulate duplicate key error)
-	for i := 0; i < 12; i++ {
-		if i%3 == 0 {
-			// Simulate duplicate index error
-			mock.ExpectExec(regexp.QuoteMeta("CREATE")).
-				WillReturnError(assert.AnError)
-		} else {
-			mock.ExpectExec(regexp.QuoteMeta("CREATE")).
-				WillReturnResult(sqlmock.NewResult(0, 0))
+	for _, tableDef := range tableDefs {
+		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableDef.name)
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+			WithArgs(fullTableName).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE")).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+		for i := 0; i < indexCount[tableDef.name]; i++ {
+			mock.ExpectExec("CREATE (UNIQUE )?INDEX").
+				WillReturnError(dupErr)
 		}
 	}
 
-	// Should succeed despite duplicate index errors
+	mockVerifySchemaQueries(mock, s.opts.tablePrefix)
+
+	// Duplicate index errors are ignored, so init succeeds.
 	err = s.initDB(ctx)
-	// This will fail because our mock doesn't actually return "Duplicate key name" error
-	// In real scenario, MySQL would return specific error for duplicate index
-	assert.Error(t, err) // Expected to fail with our simple mock
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestIsDuplicateIndexNameError(t *testing.T) {
@@ -333,15 +377,19 @@ func TestVerifySchema_Success(t *testing.T) {
 		WillReturnRows(rows)
 
 	// 3. verifyIndexes
-	idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME"})
+	idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE"})
 	for _, idx := range expectedSchema[testTable].indexes {
 		idxName := sqldb.BuildIndexName(s.opts.tablePrefix, idx.table, idx.suffix)
+		nonUnique := 1
+		if idx.unique {
+			nonUnique = 0
+		}
 		for _, col := range idx.columns {
-			idxRows.AddRow(idxName, col)
+			idxRows.AddRow(idxName, col, nonUnique)
 		}
 	}
 	// Add PRIMARY key (should be ignored by unexpected check)
-	idxRows.AddRow("PRIMARY", "id")
+	idxRows.AddRow("PRIMARY", "id", 0)
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
 		WithArgs(fullTableName).
@@ -352,11 +400,67 @@ func TestVerifySchema_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestVerifySchema_MissingUniqueIndexFatal(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	originalExpectedSchema := expectedSchema
+	defer func() { expectedSchema = originalExpectedSchema }()
+
+	testTable := sqldb.TableNameSessionStates
+	expectedSchema = map[string]tableSchema{
+		testTable: originalExpectedSchema[testTable],
+	}
+	fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, testTable)
+
+	// Table exists.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WithArgs(fullTableName).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	// Columns match.
+	colRows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE"})
+	for _, col := range expectedSchema[testTable].columns {
+		isNullable := "NO"
+		if col.nullable {
+			isNullable = "YES"
+		}
+		colRows.AddRow(col.name, col.dataType, isNullable)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COLUMN_NAME")).
+		WithArgs(fullTableName).
+		WillReturnRows(colRows)
+	// Indexes: omit the unique_active index so verification fails fatally.
+	idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE"})
+	for _, idx := range expectedSchema[testTable].indexes {
+		if idx.suffix == sqldb.IndexSuffixUniqueActive {
+			continue
+		}
+		idxName := sqldb.BuildIndexName(s.opts.tablePrefix, idx.table, idx.suffix)
+		for _, col := range idx.columns {
+			idxRows.AddRow(idxName, col, 1)
+		}
+	}
+	idxRows.AddRow("PRIMARY", "id", 0)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT INDEX_NAME")).
+		WithArgs(fullTableName).
+		WillReturnRows(idxRows)
+
+	err = s.verifySchema(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "verify indexes")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestVerifyIndexes_Scenarios(t *testing.T) {
 	tests := []struct {
 		name            string
 		expectedIndexes []tableIndex
 		actualIndexes   map[string][]string // indexName -> columns
+		actualNonUnique map[string]bool     // indexName -> is non-unique (NON_UNIQUE=1)
 		wantError       bool
 	}{
 		{
@@ -423,14 +527,51 @@ func TestVerifyIndexes_Scenarios(t *testing.T) {
 			wantError: false,
 		},
 		{
-			name: "missing unique index - should warn with CREATE UNIQUE INDEX",
+			name: "missing unique index - fatal (uniqueness not enforced)",
 			expectedIndexes: []tableIndex{
 				{"session_states", "unique_active", []string{"app_name", "user_id"}, true},
 			},
 			actualIndexes: map[string][]string{
 				"PRIMARY": {"id"},
 			},
+			wantError: true,
+		},
+		{
+			name: "unique index with wrong columns - fatal",
+			expectedIndexes: []tableIndex{
+				{"session_states", "unique_active", []string{"app_name", "user_id", "session_id", "deleted_at"}, true},
+			},
+			actualIndexes: map[string][]string{
+				// Present but on the wrong columns: the unique-index check fails.
+				"idx_session_states_unique_active": {"app_name", "user_id"},
+				"PRIMARY":                          {"id"},
+			},
+			wantError: true,
+		},
+		{
+			name: "missing non-unique index - warns, non-fatal",
+			expectedIndexes: []tableIndex{
+				{"session_states", "expires", []string{"expires_at"}, false},
+			},
+			actualIndexes: map[string][]string{
+				"PRIMARY": {"id"},
+			},
 			wantError: false,
+		},
+		{
+			name: "unique index present with right columns but NOT unique - fatal",
+			expectedIndexes: []tableIndex{
+				{"session_states", "unique_active", []string{"app_name", "user_id", "session_id", "deleted_at"}, true},
+			},
+			actualIndexes: map[string][]string{
+				"idx_session_states_unique_active": {"app_name", "user_id", "session_id", "deleted_at"},
+				"PRIMARY":                          {"id"},
+			},
+			actualNonUnique: map[string]bool{
+				// Exists with the right columns, but is not a UNIQUE index.
+				"idx_session_states_unique_active": true,
+			},
+			wantError: true,
 		},
 	}
 
@@ -446,10 +587,14 @@ func TestVerifyIndexes_Scenarios(t *testing.T) {
 			fullTableName := "session_states"
 
 			// Build mock rows from actualIndexes
-			idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME"})
+			idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE"})
 			for idxName, cols := range tt.actualIndexes {
+				nonUnique := 0
+				if tt.actualNonUnique[idxName] {
+					nonUnique = 1
+				}
 				for _, col := range cols {
-					idxRows.AddRow(idxName, col)
+					idxRows.AddRow(idxName, col, nonUnique)
 				}
 			}
 

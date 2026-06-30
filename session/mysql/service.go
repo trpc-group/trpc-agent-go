@@ -127,6 +127,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := s.initDB(ctx); err != nil {
+			_ = mysqlClient.Close()
 			return nil, fmt.Errorf("init database failed: %w", err)
 		}
 	}
