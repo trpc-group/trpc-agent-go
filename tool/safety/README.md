@@ -14,7 +14,7 @@ report, a JSONL audit event and OpenTelemetry span attributes.
 
 ## Architecture & data flow
 
-```
+```text
 model tool call (Arguments JSON + ToolName)
       │
       ▼
@@ -200,7 +200,7 @@ Measured on the shipped policy and the 12-sample matrix
 | 09 | long sleep `sleep 600` | workspace_exec | high_risk | needs_human_review | R-RES-001 |
 | 10 | unbounded output `yes` | workspace_exec | high_risk | deny | R-RES-001 |
 | 11 | host background + PTY `sleep 5` (bg, tty) | exec_command | high_risk | deny | R-HOST-001 |
-| 12 | secret in command (`Bearer ghp_…`) | workspace_exec | high_risk | needs_human_review | R-SECRET-001 |
+| 12 | secret in command (`Bearer <token>`) | workspace_exec | high_risk | needs_human_review | R-SECRET-001 |
 
 ### Example structured report (`tool_safety_report.json`)
 
@@ -256,7 +256,7 @@ Each event carries tool name, decision, risk level, rule ids, backend, latency
 
 ## Tests
 
-```
+```bash
 go test ./tool/safety/...                       # full suite
 go test ./tool/safety/ -run TestSampleMatrix -v # 12-sample detection metrics
 go test ./tool/safety/ -bench BenchmarkScan     # per-scan latency (~µs)

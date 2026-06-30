@@ -10,6 +10,7 @@ package safety
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"path"
 	"path/filepath"
@@ -72,7 +73,7 @@ const (
 	recHost        = "Host-shell background/PTY/privilege use is high risk; prefer the sandboxed workspace_exec backend."
 	recDependency  = "Dependency installs mutate the environment; vendor dependencies or run installs in a sandbox."
 	recResource    = "Command may exhaust resources; lower the timeout/output or rely on sandbox runtime limits."
-	recSecret      = "Command/env contains a secret-like value; pass secrets via a secret store, not inline."
+	recSecret      = "Command/env contains a secret-like value; pass secrets via a secret store, not inline." //nolint:gosec // G101 false positive: a recommendation string, not a credential.
 	recEnv         = "Environment key is not in env.allowed_keys; add it to the whitelist or drop the override."
 )
 
@@ -530,7 +531,7 @@ func ruleEnvKeys(c ruleCtx) []Finding {
 
 var (
 	urlRe      = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s'"]+`)
-	userHostRe = regexp.MustCompile(`^[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+)$`)
+	userHostRe = regexp.MustCompile(`^[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+)(?::.*)?$`)
 	domainRe   = regexp.MustCompile(`(?i)^[a-z0-9.-]+$`)
 )
 
@@ -552,21 +553,26 @@ func extractHosts(cmd string, args []string) []string {
 				continue
 			}
 		}
+		// user@host or scp/ssh user@host:/path.
 		if mm := userHostRe.FindStringSubmatch(a); mm != nil {
 			hosts = append(hosts, mm[1])
 			continue
 		}
-		if !bareHostCommands[cmd] {
+		if !bareHostCommands[cmd] || strings.HasPrefix(a, "-") {
 			continue
 		}
-		if strings.HasPrefix(a, "-") || strings.Contains(a, "/") {
-			continue
-		}
+		// Bare host, host:port, or scp host:/path. Strip everything from the
+		// first colon so a trailing port or path cannot hide the host.
 		host := a
-		if i := strings.LastIndex(host, ":"); i > 0 {
+		if i := strings.IndexByte(host, ':'); i > 0 {
 			host = host[:i]
 		}
-		if domainLike(host) {
+		// A surviving slash or @ means this was a local path, not a host.
+		if host == "" || strings.ContainsAny(host, "/@") {
+			continue
+		}
+		// Accept domains and raw IPs (ssh 1.2.3.4 must not bypass the whitelist).
+		if domainLike(host) || net.ParseIP(host) != nil {
 			hosts = append(hosts, host)
 		}
 	}

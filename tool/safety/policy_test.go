@@ -9,8 +9,10 @@
 package safety
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -112,8 +114,37 @@ func TestCompileOverrideNormalization(t *testing.T) {
 }
 
 func TestLoadPolicyBadExtension(t *testing.T) {
-	if _, err := LoadPolicy(filepath.Join("testdata", "tool_safety_policy.txt")); err == nil {
+	// A real file with an unsupported extension, so the failure is the extension
+	// check and not a missing file (LoadPolicy reads before checking the ext).
+	path := filepath.Join(t.TempDir(), "policy.txt")
+	if err := os.WriteFile(path, []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatalf("write temp policy: %v", err)
+	}
+	_, err := LoadPolicy(path)
+	if err == nil {
 		t.Fatalf("expected error for unsupported extension")
+	}
+	if !strings.Contains(err.Error(), "unsupported policy extension") {
+		t.Errorf("error = %v, want unsupported-extension error", err)
+	}
+}
+
+func TestCompileRejectsUnknownBackend(t *testing.T) {
+	p := DefaultPolicy()
+	p.Backends["hostexec"] = []string{"exec_command"} // typo: should be "host"
+	if err := p.compile(); err == nil {
+		t.Errorf("compile should reject an unknown backend name")
+	}
+}
+
+func TestCompileRejectsDuplicateToolMapping(t *testing.T) {
+	p := DefaultPolicy()
+	p.Backends = map[string][]string{
+		BackendWorkspace: {"shared_tool"},
+		BackendHost:      {"shared_tool"},
+	}
+	if err := p.compile(); err == nil {
+		t.Errorf("compile should reject a tool mapped to two backends")
 	}
 }
 

@@ -245,7 +245,9 @@ func (p *Policy) compile() error {
 	}
 	c.allowedDomains = compileDomains(p.Network.AllowedDomains)
 	c.shellPolicy = shellsafe.PolicyFromLists(p.Commands.Allowed, p.Commands.Denied)
-	c.backendIndex = buildBackendIndex(p.Backends)
+	if c.backendIndex, err = buildBackendIndex(p.Backends); err != nil {
+		return err
+	}
 	p.compiled = c
 	return nil
 }
@@ -385,18 +387,32 @@ func compileDomains(domains []string) []domainMatcher {
 }
 
 // buildBackendIndex inverts the backend->tools map into a tool->backend index.
-func buildBackendIndex(backends map[string][]string) map[string]string {
+// It rejects unknown backend names (a typo like "hostexec" would otherwise
+// silently disable backend-specific checks) and duplicate tool mappings (the
+// same tool under two backends would otherwise be resolved by map iteration
+// order). Both surface at compile time, not at request time.
+func buildBackendIndex(backends map[string][]string) (map[string]string, error) {
 	idx := make(map[string]string)
 	for backend, tools := range backends {
+		switch backend {
+		case BackendWorkspace, BackendHost, BackendCode:
+		default:
+			return nil, fmt.Errorf("backends: unknown backend %q (want %q, %q or %q)",
+				backend, BackendWorkspace, BackendHost, BackendCode)
+		}
 		for _, t := range tools {
 			t = strings.TrimSpace(t)
 			if t == "" {
 				continue
 			}
+			if prev, ok := idx[t]; ok && prev != backend {
+				return nil, fmt.Errorf(
+					"backends: tool %q is mapped to both %q and %q", t, prev, backend)
+			}
 			idx[t] = backend
 		}
 	}
-	return idx
+	return idx, nil
 }
 
 // globHit reports whether candidate matches pattern. A pattern without glob

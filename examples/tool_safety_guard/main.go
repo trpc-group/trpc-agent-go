@@ -31,14 +31,28 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"runtime"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
+// exampleDir is the directory holding this source file, so the default policy
+// and audit paths resolve correctly regardless of the working directory (e.g.
+// `go run ./examples/tool_safety_guard` from the repo root).
+func exampleDir() string {
+	if _, file, _, ok := runtime.Caller(0); ok {
+		return filepath.Dir(file)
+	}
+	return "."
+}
+
 var (
-	policyPath = flag.String("policy", "tool_safety_policy.yaml", "path to the safety policy file")
-	auditPath  = flag.String("audit", "tool_safety_audit.jsonl", "path to the audit JSONL output")
+	policyPath = flag.String("policy", filepath.Join(exampleDir(), "tool_safety_policy.yaml"),
+		"path to the safety policy file")
+	auditPath = flag.String("audit", filepath.Join(exampleDir(), "tool_safety_audit.jsonl"),
+		"path to the audit JSONL output")
 )
 
 // sample is one representative tool call to run through the guard.
@@ -59,7 +73,7 @@ func samples() []sample {
 		{"dependency install", "workspace_exec", `{"command":"pip install requests"}`},
 		{"host background + PTY", "exec_command", `{"command":"sleep 5","background":true,"tty":true}`},
 		{"secret in command", "workspace_exec",
-			`{"command":"curl -H \"Authorization: Bearer ghp_0123456789abcdefABCDEF0123456789abcd\" https://github.com/x"}`},
+			`{"command":"curl -H \"Authorization: Bearer demo-token-not-a-real-secret\" https://github.com/x"}`},
 	}
 }
 
@@ -71,6 +85,10 @@ func main() {
 }
 
 func run() error {
+	// Start each demo run with a fresh audit log so the committed sample stays a
+	// single, reproducible run rather than accumulating appended duplicates.
+	_ = os.Remove(*auditPath)
+
 	guard, err := safety.NewGuard(
 		safety.WithPolicyFile(*policyPath),
 		safety.WithAuditFile(*auditPath),

@@ -22,6 +22,7 @@ package safety
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
@@ -51,11 +52,20 @@ func WithPolicyFile(path string) Option {
 	}
 }
 
-// WithPolicy uses an already-loaded policy. The policy must have been produced
-// by LoadPolicy (or compiled) so its matchers are ready.
+// WithPolicy uses a caller-supplied policy. It is validated and compiled into a
+// private copy, so a Policy built programmatically (not via LoadPolicy) gets its
+// secret/domain/path matchers compiled instead of silently running empty. A nil
+// policy is rejected.
 func WithPolicy(p *Policy) Option {
 	return func(g *Guard) error {
-		g.policy = p
+		if p == nil {
+			return errors.New("safety: WithPolicy received a nil policy")
+		}
+		cp := *p
+		if err := cp.compile(); err != nil {
+			return err
+		}
+		g.policy = &cp
 		return nil
 	}
 }

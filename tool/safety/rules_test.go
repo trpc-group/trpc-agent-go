@@ -10,8 +10,16 @@ package safety
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// Synthetic secrets are assembled at runtime so no PAT-shaped or auth-header
+// literal sits in source for repository secret scanners to flag, while still
+// matching the shipped secret patterns.
+func fakeGitHubPAT() string   { return "ghp_" + strings.Repeat("a", 36) }             // ghp_[0-9A-Za-z]{36}
+func fakeAWSKey() string      { return "AKIA" + strings.Repeat("A", 16) }             // AKIA[0-9A-Z]{16}
+func fakeBearerToken() string { return "Bearer " + "tkn-" + strings.Repeat("x", 16) } // bearer\s+...
 
 // loadExamplePolicy loads the shipped example policy for rule tests.
 func loadExamplePolicy(t *testing.T) *Policy {
@@ -132,7 +140,7 @@ func TestRuleHostSudo(t *testing.T) {
 
 func TestRuleSecretInCommand(t *testing.T) {
 	p := loadExamplePolicy(t)
-	cmd := `curl -H "Authorization: Bearer ghp_0123456789abcdefABCDEF0123456789abcd" https://github.com/x`
+	cmd := `curl -H "Authorization: ` + fakeBearerToken() + `" https://github.com/x`
 	findings, decision, _ := p.scan(ExecRequest{Command: cmd}, BackendWorkspace)
 	if !hasRule(findings, ruleSecretID) {
 		t.Errorf("missing R-SECRET-001: %+v", findings)
@@ -146,7 +154,7 @@ func TestRuleSecretInUnparsableCommand(t *testing.T) {
 	// $VAR makes shellsafe reject the command; the secret rule must still run
 	// on the raw command string so a secret is not a blind spot.
 	p := loadExamplePolicy(t)
-	cmd := `echo $TOKEN AKIAABCDEFGHIJKLMNOP`
+	cmd := "echo $TOKEN " + fakeAWSKey()
 	findings, _, _ := p.scan(ExecRequest{Command: cmd}, BackendWorkspace)
 	if !hasRule(findings, ruleShellID) {
 		t.Errorf("expected shell-bypass finding for $VAR: %+v", findings)
@@ -195,7 +203,7 @@ func TestRuleSecretInEnv(t *testing.T) {
 	p := loadExamplePolicy(t)
 	req := ExecRequest{
 		Command: "go test ./...",
-		Env:     map[string]string{"API_TOKEN": "ghp_0123456789abcdefABCDEF0123456789abcd"},
+		Env:     map[string]string{"API_TOKEN": fakeGitHubPAT()},
 	}
 	findings, _, _ := p.scan(req, BackendWorkspace)
 	if !hasRule(findings, ruleSecretID) {
@@ -278,5 +286,20 @@ func TestExtractHosts(t *testing.T) {
 	hosts = extractHosts("nc", []string{"target.io", "443"})
 	if len(hosts) != 1 || hosts[0] != "target.io" {
 		t.Errorf("hosts = %v, want [target.io]", hosts)
+	}
+	// Raw IP must not bypass the whitelist (domainLike rejects it; ParseIP accepts).
+	hosts = extractHosts("ssh", []string{"1.2.3.4"})
+	if len(hosts) != 1 || hosts[0] != "1.2.3.4" {
+		t.Errorf("hosts = %v, want [1.2.3.4]", hosts)
+	}
+	// scp user@host:/path — the path must not hide the host.
+	hosts = extractHosts("scp", []string{"user@evil.io:/tmp/a", "."})
+	if len(hosts) != 1 || hosts[0] != "evil.io" {
+		t.Errorf("hosts = %v, want [evil.io]", hosts)
+	}
+	// scp host:/path without a user.
+	hosts = extractHosts("scp", []string{"evil.io:/tmp/a"})
+	if len(hosts) != 1 || hosts[0] != "evil.io" {
+		t.Errorf("hosts = %v, want [evil.io]", hosts)
 	}
 }

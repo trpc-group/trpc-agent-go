@@ -39,10 +39,10 @@ func makeReport(t *testing.T, p *Policy, toolName, backend string, er ExecReques
 func TestRedactPatterns(t *testing.T) {
 	p := loadExamplePolicy(t)
 	secrets := []string{
-		"AKIAABCDEFGHIJKLMNOP",
-		"ghp_0123456789abcdefABCDEF0123456789abcd",
+		fakeAWSKey(),
+		fakeGitHubPAT(),
 		"-----BEGIN RSA PRIVATE KEY-----",
-		"Bearer abc.def-123",
+		fakeBearerToken(),
 	}
 	for _, s := range secrets {
 		out, hit := p.redact("prefix " + s + " suffix")
@@ -63,7 +63,7 @@ func TestRedactPatterns(t *testing.T) {
 
 func TestRedactReportSetsFlag(t *testing.T) {
 	p := loadExamplePolicy(t)
-	cmd := `curl -H "Authorization: Bearer ghp_0123456789abcdefABCDEF0123456789abcd" https://github.com/x`
+	cmd := `curl -H "Authorization: Bearer ` + fakeGitHubPAT() + `" https://github.com/x`
 	r := makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{Command: cmd})
 	if !r.Redacted {
 		t.Errorf("expected Redacted=true")
@@ -185,7 +185,7 @@ func TestGenerateExamples(t *testing.T) {
 		makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{Command: "pip install requests"}),
 		makeReport(t, p, "exec_command", BackendHost, ExecRequest{Command: "sleep 5", Background: true, PTY: true}),
 		makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{
-			Command: `curl -H "Authorization: Bearer ghp_0123456789abcdefABCDEF0123456789abcd" https://github.com/x`,
+			Command: `curl -H "Authorization: Bearer ` + fakeGitHubPAT() + `" https://github.com/x`,
 		}),
 	}
 
@@ -223,5 +223,26 @@ func TestGenerateExamples(t *testing.T) {
 	}
 	if parsed.Decision == "" {
 		t.Errorf("example report missing decision")
+	}
+
+	// The committed audit JSONL must also be present and every line must parse
+	// into an AuditEvent with a decision.
+	raudit, err := os.ReadFile(auditPath)
+	if err != nil {
+		t.Fatalf("read example audit (run with -update to generate): %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(raudit), "\n"), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		t.Fatalf("example audit log is empty")
+	}
+	for i, line := range lines {
+		var ev AuditEvent
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Errorf("audit line %d is not valid JSON: %v", i+1, err)
+			continue
+		}
+		if ev.Decision == "" {
+			t.Errorf("audit line %d missing decision", i+1)
+		}
 	}
 }

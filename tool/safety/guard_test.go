@@ -59,8 +59,13 @@ func TestGuardDecisions(t *testing.T) {
 			if dec.Action != tool.PermissionActionAllow && dec.Reason == "" {
 				t.Errorf("non-allow decision must have a reason")
 			}
-			// Exactly one audit line per scanned exec call.
-			if got := strings.Count(strings.TrimRight(buf.String(), "\n"), "\n") + 1; got != 1 {
+			// Exactly one audit line per scanned exec call. Require non-empty
+			// output first so a broken audit path cannot pass as "1 line".
+			out := strings.TrimRight(buf.String(), "\n")
+			if out == "" {
+				t.Fatalf("no audit line written")
+			}
+			if got := strings.Count(out, "\n") + 1; got != 1 {
 				t.Errorf("audit lines = %d, want 1", got)
 			}
 		})
@@ -134,5 +139,35 @@ func TestGuardDefaultPolicy(t *testing.T) {
 	}
 	if dec.Action != tool.PermissionActionDeny {
 		t.Errorf("default policy unparsable action = %q, want deny", dec.Action)
+	}
+}
+
+func TestWithPolicyNilRejected(t *testing.T) {
+	if _, err := NewGuard(WithPolicy(nil)); err == nil {
+		t.Fatal("WithPolicy(nil) should error")
+	}
+}
+
+func TestWithPolicyCompilesUncompiledPolicy(t *testing.T) {
+	// A programmatically built policy (never run through LoadPolicy) must still
+	// get its matchers compiled by WithPolicy; otherwise the secret pattern is
+	// empty and the value goes un-redacted.
+	p := DefaultPolicy()
+	p.Secrets.Patterns = []string{`(?i)bearer\s+[a-z0-9._-]+`}
+
+	var last Report
+	g, err := NewGuard(WithPolicy(&p), WithReportSink(func(r Report) { last = r }))
+	if err != nil {
+		t.Fatalf("NewGuard: %v", err)
+	}
+	req := &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"curl -H \"Authorization: Bearer demo-token-not-a-real-secret\" https://github.com/x"}`),
+	}
+	if _, err := g.CheckToolPermission(context.Background(), req); err != nil {
+		t.Fatalf("CheckToolPermission: %v", err)
+	}
+	if !last.Redacted {
+		t.Error("expected redaction; WithPolicy must compile the policy copy")
 	}
 }
