@@ -3981,11 +3981,20 @@
 </span></code></pre></div></td></tr></table></div>
 <p>After completing the above configuration, the summary feature runs automatically.</p>
 <h2 id="cache-safe-summary-forking">Cache-Safe Summary Forking</h2>
-<p>By default, the summarizer sends a standalone summary request: an optional
-summary system prompt plus a user prompt containing the extracted conversation
-text. This is simple and remains the default behavior.</p>
+<p>The summarizer has two request-construction modes.</p>
+<p><strong>Standalone request</strong> is the default. The framework selects the events that
+should be summarized, converts them to conversation text, runs the
+<code>WithPreSummaryHook(...)</code> hook if configured, and sends a summary-model request
+with:</p>
+<ul>
+<li>An optional system message rendered from <code>WithSystemPrompt(...)</code>.</li>
+<li>One user message rendered from <code>WithPrompt(...)</code>, with
+  <code>{conversation_text}</code> replaced by the extracted conversation text.</li>
+</ul>
+<p>This request is independent from the main agent request, so it is simple and
+works for synchronous, asynchronous, and manual summary calls.</p>
 <p>For long sessions where prompt-cache reuse matters, you can opt in to
-cache-safe forking:</p>
+<strong>cache-safe forking</strong>:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span>
 <span class="normal"><a href="#__codelineno-4-2">2</a></span>
 <span class="normal"><a href="#__codelineno-4-3">3</a></span>
@@ -3998,16 +4007,52 @@ cache-safe forking:</p>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="w">    </span><span class="nx">summary</span><span class="p">.</span><span class="nx">WithCacheSafeForking</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
 </span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>When enabled and the framework has the parent model request available, the
-summarizer clones that parent request and appends one compacting user message
-at the end. This preserves the parent request prefix, including system context,
-history, and tools, so providers with prompt caching can reuse more cached
-input. If no parent request is available, for example in asynchronous or manual
-summary calls, the summarizer falls back to the default standalone request.</p>
-<p>The appended compacting prompt is separate from <code>WithPrompt(...)</code> because it
-does not embed <code>{conversation_text}</code>; the parent request already contains the
-conversation. Use <code>WithCacheSafeForkPrompt(...)</code> only when you need to customize
-that appended user message.</p>
+<p>When context compaction runs in the normal LLM flow, the framework has already
+built the parent <code>model.Request</code> for the current main-agent call. If
+<code>WithCacheSafeForking(true)</code> is enabled, the summarizer builds the summary
+request by:</p>
+<ul>
+<li>Cloning that parent request, including its model-visible prefix such as
+  system context, injected summary, session history, user input, tool
+  definitions, headers, extra fields, and generation settings.</li>
+<li>Appending one user message rendered from <code>WithCacheSafeForkPrompt(...)</code>.</li>
+<li>Forcing the summary call to be non-streaming and clearing structured output,
+  because the summary call returns plain summary text.</li>
+</ul>
+<p>The request prefix remains the same as the parent request prefix, so providers
+with prompt caching can reuse more cached input. If no parent request is
+available, for example in asynchronous or manual summary calls, the summarizer
+falls back to the standalone request path.</p>
+<p>Prompt rules:</p>
+<ul>
+<li><code>WithPrompt(...)</code> configures the standalone user prompt. It must include
+  <code>{conversation_text}</code>. If <code>WithMaxSummaryWords(...)</code> is configured,
+  <code>{max_summary_words}</code> must appear in either <code>WithPrompt(...)</code> or
+  <code>WithSystemPrompt(...)</code>.</li>
+<li><code>WithSystemPrompt(...)</code> configures the optional standalone system message. It
+  must not include <code>{conversation_text}</code>. It may include
+  <code>{max_summary_words}</code>.</li>
+<li><code>WithCacheSafeForkPrompt(...)</code> configures only the user message appended in
+  fork mode. It must not include <code>{conversation_text}</code> because the cloned parent
+  request already contains the conversation. It may include
+  <code>{max_summary_words}</code>.</li>
+</ul>
+<p>Keep the standalone prompt valid even when cache-safe forking is enabled,
+because fallback paths still use it. When writing a custom fork prompt, ask the
+model to summarize the conversation above for future continuation. It should
+preserve user goals, decisions, constraints, open tasks, tool results, and
+important facts. It should not call tools, answer the latest user request, or
+treat system and tool-use instructions as facts to summarize.</p>
+<p><code>WithPreSummaryHook(...)</code> still runs before the summary model call. In
+standalone mode its modified text is rendered into <code>{conversation_text}</code>. In
+fork mode with a parent request available, that text is not embedded into the
+request because the conversation is already present in the cloned parent
+request; the hook remains useful for context updates, side effects, and
+fallback standalone calls.</p>
+<p>In fork mode, <code>WithPreSummaryHook(...)</code> text or event edits do not sanitize,
+redact, or filter the cloned parent request. If the hook is used for redaction
+or filtering before summarization, use standalone mode for that flow or ensure
+the parent <code>model.Request</code> has already been sanitized before it is cloned.</p>
 <p>Cache-safe forking controls the request used to generate the summary. To make
 the next normal conversation request more cache friendly after a summary exists,
 prefer injecting the summary as a user message instead of merging it into the
@@ -5971,7 +6016,7 @@ cascade:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 28, 2026 09:02:54 UTC">2026-06-28 09:02:54</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 30, 2026 03:46:09 UTC">2026-06-30 03:46:09</span>
   </span>
 
     
