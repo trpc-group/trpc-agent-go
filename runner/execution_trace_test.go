@@ -130,6 +130,65 @@ func TestRunnerCompletion_LLMRunProducesOneRealExecutionStep(t *testing.T) {
 	assert.Empty(t, step.Error)
 }
 
+func TestRunnerCompletion_ExecutionTraceCarriesUsage(t *testing.T) {
+	usage := &model.Usage{
+		PromptTokens:     11,
+		CompletionTokens: 7,
+		TotalTokens:      18,
+		PromptTokensDetails: model.PromptTokensDetails{
+			CachedTokens: 3,
+		},
+		CompletionTokensDetails: model.CompletionTokensDetails{
+			ReasoningTokens: 2,
+		},
+	}
+	ag := llmagent.New("assistant", llmagent.WithModel(&staticModel{
+		name:    "trace-model",
+		content: "done",
+		usage:   usage,
+	}))
+	r := NewRunner("app", ag, WithSessionService(sessioninmemory.NewSessionService()))
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("hello trace"),
+		agent.WithExecutionTraceEnabled(true),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.ExecutionTrace)
+	require.NotNil(t, completion.ExecutionTrace.Usage)
+	assert.Equal(t, 18, completion.ExecutionTrace.Usage.TotalTokens)
+	assert.Equal(t, 3, completion.ExecutionTrace.Usage.PromptTokensDetails.CachedTokens)
+	require.Len(t, completion.ExecutionTrace.Steps, 1)
+	require.NotNil(t, completion.ExecutionTrace.Steps[0].Usage)
+	assert.Equal(t, 18, completion.ExecutionTrace.Steps[0].Usage.TotalTokens)
+	assert.Equal(t, 2, completion.ExecutionTrace.Steps[0].Usage.CompletionTokensDetails.ReasoningTokens)
+}
+
+func TestRunnerCompletion_ExecutionTraceOmitsTimingOnlyUsage(t *testing.T) {
+	ag := llmagent.New("assistant", llmagent.WithModel(&staticModel{
+		name:    "trace-model",
+		content: "done",
+		usage:   &model.Usage{TimingInfo: &model.TimingInfo{}},
+	}))
+	r := NewRunner("app", ag, WithSessionService(sessioninmemory.NewSessionService()))
+	eventCh, err := r.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("hello trace"),
+		agent.WithExecutionTraceEnabled(true),
+	)
+	require.NoError(t, err)
+	completion := collectRunnerCompletionEvent(t, eventCh)
+	require.NotNil(t, completion.ExecutionTrace)
+	assert.Nil(t, completion.ExecutionTrace.Usage)
+	require.Len(t, completion.ExecutionTrace.Steps, 1)
+	assert.Nil(t, completion.ExecutionTrace.Steps[0].Usage)
+}
+
 func TestRunnerCompletion_ChainAndParallelPropagatePredecessorsToRealChildSteps(t *testing.T) {
 	fanout := parallelagent.New("fanout", parallelagent.WithSubAgents([]agent.Agent{
 		llmagent.New("worker-a", llmagent.WithModel(&staticModel{name: "worker-a-model", content: "worker-a"})),
