@@ -222,7 +222,7 @@ func TestNetworkAccessRule_Allow(t *testing.T) {
 		"ls -la",
 		"echo hello",
 		"cat README.md",
-		"git status",  // git status 不含 "git clone"，放行
+		"git status", // git status 不含 "git clone"，放行
 		"go build ./...",
 	}
 

@@ -91,14 +91,14 @@ type ScanReport struct {
 	Timestamp string `json:"timestamp"`
 
 	// 最终决策
-	Decision   Decision  `json:"decision"`
-	RiskLevel  RiskLevel `json:"risk_level"`
-	Blocked    bool      `json:"blocked"` // = DecisionDeny
+	Decision  Decision  `json:"decision"`
+	RiskLevel RiskLevel `json:"risk_level"`
+	Blocked   bool      `json:"blocked"` // = DecisionDeny
 
 	// 触发的规则详情
-	RuleID     string `json:"rule_id"`
-	Evidence   string `json:"evidence"`
-	Reason     string `json:"reason"`
+	RuleID         string `json:"rule_id"`
+	Evidence       string `json:"evidence"`
+	Reason         string `json:"reason"`
 	Recommendation string `json:"recommendation"`
 
 	// 耗时（微秒）
@@ -150,17 +150,17 @@ func NewReport(result *ScanResult, input ScanInput, toolName string, dur time.Du
 
 // AuditEvent is one line in the audit log.
 type AuditEvent struct {
-	ToolName    string `json:"tool_name"`
-	Command     string `json:"command"`
-	Decision    string `json:"decision"`
-	RiskLevel   string `json:"risk_level"`
-	RuleID      string `json:"rule_id"`
-	Evidence    string `json:"evidence"`
-	Backend     string `json:"backend"`
-	Blocked     bool   `json:"blocked"`
-	Sanitized   bool   `json:"sanitized"`
-	DurationUs  int64  `json:"duration_us"`
-	Timestamp   string `json:"timestamp"`
+	ToolName   string `json:"tool_name"`
+	Command    string `json:"command"`
+	Decision   string `json:"decision"`
+	RiskLevel  string `json:"risk_level"`
+	RuleID     string `json:"rule_id"`
+	Evidence   string `json:"evidence"`
+	Backend    string `json:"backend"`
+	Blocked    bool   `json:"blocked"`
+	Sanitized  bool   `json:"sanitized"`
+	DurationUs int64  `json:"duration_us"`
+	Timestamp  string `json:"timestamp"`
 }
 
 // NewAuditEvent creates an AuditEvent from a ScanReport.
