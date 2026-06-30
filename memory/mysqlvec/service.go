@@ -209,36 +209,21 @@ func (s *Service) AddMemory(
 		embeddingArg = embeddingBlob
 	}
 
-	// When soft-delete is enabled, only revive soft-deleted rows (deleted_at IS NOT NULL).
-	// For active rows (deleted_at IS NULL), the ON DUPLICATE KEY UPDATE becomes a no-op
-	// so the existing active row is preserved and not overwritten.
-	onDupCols := []string{
-		"memory_content = VALUES(memory_content)",
-		"topics = VALUES(topics)",
-		"embedding = VALUES(embedding)",
-		"memory_kind = VALUES(memory_kind)",
-		"event_time = VALUES(event_time)",
-		"participants = VALUES(participants)",
-		"location = VALUES(location)",
-		"deleted_at = NULL",
-		"updated_at = VALUES(updated_at)",
-	}
-	if s.opts.softDelete {
-		for i, col := range onDupCols {
-			colName := strings.SplitN(col, " = ", 2)[0]
-			valExpr := strings.SplitN(col, " = ", 2)[1]
-			onDupCols[i] = fmt.Sprintf(
-				"%s = IF(deleted_at IS NOT NULL, %s, %s)",
-				colName, valExpr, colName,
-			)
-		}
-	}
 	insertQuery := fmt.Sprintf(
 		"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
 			"embedding, memory_kind, event_time, participants, location, "+
 			"created_at, updated_at) "+
 			"VALUES (?, ?, ?, ?, ?, "+embeddingExpr+", ?, ?, ?, ?, ?, ?) "+
-			"ON DUPLICATE KEY UPDATE "+strings.Join(onDupCols, ", "),
+			"ON DUPLICATE KEY UPDATE "+
+			"memory_content = VALUES(memory_content), "+
+			"topics = VALUES(topics), "+
+			"embedding = VALUES(embedding), "+
+			"memory_kind = VALUES(memory_kind), "+
+			"event_time = VALUES(event_time), "+
+			"participants = VALUES(participants), "+
+			"location = VALUES(location), "+
+			"deleted_at = NULL, "+
+			"updated_at = VALUES(updated_at)",
 		s.tableName,
 	)
 
@@ -454,6 +439,7 @@ func (s *Service) rotateMemory(
 			"deleted_at = NULL",
 			"updated_at = VALUES(updated_at)",
 		}
+		var insertQuery string
 		if s.opts.softDelete {
 			for i, col := range onDupCols {
 				colName := strings.SplitN(col, " = ", 2)[0]
@@ -463,16 +449,24 @@ func (s *Service) rotateMemory(
 					colName, valExpr, colName,
 				)
 			}
+			insertQuery = fmt.Sprintf(
+				"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
+					"embedding, memory_kind, event_time, participants, location, "+
+					"created_at, updated_at) "+
+					"VALUES (?, ?, ?, ?, ?, "+embeddingExpr+", ?, ?, ?, ?, ?, ?) "+
+					"ON DUPLICATE KEY UPDATE "+strings.Join(onDupCols, ", "),
+				s.tableName,
+			)
+		} else {
+			insertQuery = fmt.Sprintf(
+				"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
+					"embedding, memory_kind, event_time, participants, location, "+
+					"created_at, updated_at) "+
+					"VALUES (?, ?, ?, ?, ?, "+embeddingExpr+", ?, ?, ?, ?, ?, ?) ",
+				s.tableName,
+			)
 		}
-		insertQuery := fmt.Sprintf(
-			"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
-				"embedding, memory_kind, event_time, participants, location, "+
-				"created_at, updated_at) "+
-				"VALUES (?, ?, ?, ?, ?, "+embeddingExpr+", ?, ?, ?, ?, ?, ?) "+
-				"ON DUPLICATE KEY UPDATE "+strings.Join(onDupCols, ", "),
-			s.tableName,
-		)
-		_, err = tx.ExecContext(ctx, insertQuery,
+		insertRes, err := tx.ExecContext(ctx, insertQuery,
 			newID, memoryKey.AppName, memoryKey.UserID,
 			memoryStr, string(topicsJSON), embeddingArg,
 			ef.kind, ef.eventTime, ef.participants, ef.location,
@@ -480,6 +474,14 @@ func (s *Service) rotateMemory(
 		if err != nil {
 			return fmt.Errorf("insert rotated memory: %w", err)
 		}
+		inserted, err := insertRes.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("insert rotated memory rows affected: %w", err)
+		}
+		if inserted == 0 {
+			return fmt.Errorf("cannot rotate memory: target id %s is already active", newID)
+		}
+
 		return nil
 	})
 }

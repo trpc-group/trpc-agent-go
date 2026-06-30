@@ -550,26 +550,6 @@ func TestService_AddMemory_MemoryLimit_SoftDelete(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestService_AddMemory_SoftDelete_UpsertOnlyRevivesSoftDeleted verifies that
-// when soft-delete is enabled, the ON DUPLICATE KEY UPDATE clause uses
-// IF(deleted_at IS NOT NULL, ...) so that only soft-deleted rows are revived.
-// Active rows with the same key are not overwritten.
-func TestService_AddMemory_SoftDelete_UpsertOnlyRevivesSoftDeleted(t *testing.T) {
-	db, mock := setupMockDB(t)
-	defer db.Close()
-	svc := setupMockService(t, db, mock, WithSkipDBInit(true), WithMemoryLimit(0), WithSoftDelete(true))
-	defer svc.Close()
-
-	// When soft-delete is enabled, the INSERT should use IF(deleted_at IS NOT NULL, ...)
-	// to guard the ON DUPLICATE KEY UPDATE, so active rows are never overwritten.
-	mock.ExpectExec(`IF\(deleted_at IS NOT NULL`).
-		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected = no-op on active row
-
-	err := svc.AddMemory(context.Background(), memory.UserKey{AppName: "a", UserID: "u"}, "m", nil)
-	require.NoError(t, err)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestService_AddMemory_SQLError(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
@@ -785,12 +765,12 @@ func TestService_UpdateMemory_SoftDelete_RotateMemory_ReviveDeletedRow(t *testin
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestService_UpdateMemory_SoftDelete_RotateMemory_ActiveRowNotOverwritten verifies
+// TestService_UpdateMemory_SoftDelete_RotateMemory_ActiveRowConflict verifies
 // that when rotating A → B and B is already an active (non-soft-deleted) row,
-// the ON DUPLICATE KEY UPDATE is a no-op — B is NOT overwritten.
-// This is the complement to ReviveDeletedRow: the IF(deleted_at IS NOT NULL) guard
-// ensures only soft-deleted rows can be revived.
-func TestService_UpdateMemory_SoftDelete_RotateMemory_ActiveRowNotOverwritten(t *testing.T) {
+// the IF guard makes the INSERT a no-op, RowsAffected is 0, and the function
+// returns an error and rolls back — preventing data loss where A is soft-deleted
+// but B is left unchanged.
+func TestService_UpdateMemory_SoftDelete_RotateMemory_ActiveRowConflict(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
 	svc := setupMockService(t, db, mock, WithSkipDBInit(true), WithSoftDelete(true))
@@ -806,35 +786,18 @@ func TestService_UpdateMemory_SoftDelete_RotateMemory_ActiveRowNotOverwritten(t 
 			"fact", nil, nil, nil, now, now,
 		))
 	// Content changes → new ID "mem-B" → rotateMemory:
-	// BEGIN + soft-delete A + INSERT B + COMMIT.
-	// B is already an active row → ON DUPLICATE KEY UPDATE fires but IF guard
-	// makes it a no-op (0 rows affected). A is still soft-deleted.
+	// BEGIN + soft-delete A + INSERT B (guarded) → RowsAffected=0 → error → ROLLBACK.
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE").
 		WithArgs(sqlmock.AnyArg(), key.MemoryID, key.AppName, key.UserID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO.*ON DUPLICATE KEY UPDATE.*IF\(deleted_at IS NOT NULL`).
-		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows = no-op, active row preserved
-	mock.ExpectCommit()
+		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows = active row conflict
+	mock.ExpectRollback()
 
-	var updateResult memory.UpdateResult
-	err := svc.UpdateMemory(context.Background(), key, "content B", []string{"topic"}, memory.WithUpdateResult(&updateResult))
-	require.NotEqual(t, updateResult.MemoryID, key.MemoryID)
-	require.NoError(t, err)
-
-	// Verify B's content is unchanged by reading it back.
-	// The IF guard should have prevented the overwrite.
-	bKey := memory.UserKey{AppName: "app", UserID: "u1"}
-	mock.ExpectQuery("SELECT memory_id.*FROM").
-		WithArgs(bKey.AppName, bKey.UserID).
-		WillReturnRows(sqlmock.NewRows(memCols).AddRow(
-			"mem-B", "app", "u1", "content B_active", `["b_topic"]`,
-			"fact", nil, nil, nil, now, now,
-		))
-	entries, err := svc.ReadMemories(context.Background(), bKey, 10)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	require.Equal(t, "content B_active", entries[0].Memory.Memory, "active row should not be overwritten")
+	err := svc.UpdateMemory(context.Background(), key, "content B", []string{"topic"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already active")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
