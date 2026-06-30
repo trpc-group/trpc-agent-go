@@ -841,9 +841,8 @@ func TestService_UpdateMemory_WithoutMetadataDoesNotOverwriteMetadataColumns(t *
 		"Kyoto",
 	)
 
-	mock.ExpectExec(`UPDATE .* SET memory_id = \$1, memory_content = \$2, topics = \$3, embedding = \$4, memory_kind = \$5, event_time = \$6, participants = \$7, location = \$8, updated_at = \$9 WHERE memory_id = \$10 AND app_name = \$11 AND user_id = \$12`).
+	mock.ExpectExec(`UPDATE .* SET memory_content = \$1, topics = \$2, embedding = \$3, memory_kind = \$4, event_time = \$5, participants = \$6, location = \$7, updated_at = \$8 WHERE memory_id = \$9 AND app_name = \$10 AND user_id = \$11`).
 		WithArgs(
-			sqlmock.AnyArg(),
 			"updated memory",
 			pq.Array([]string{"new-topic"}),
 			sqlmock.AnyArg(),
@@ -887,9 +886,8 @@ func TestService_UpdateMemory_PartialMetadataPatchOnlyUpdatesProvidedColumns(t *
 		"Kyoto",
 	)
 
-	mock.ExpectExec(`UPDATE .* SET memory_id = \$1, memory_content = \$2, topics = \$3, embedding = \$4, memory_kind = \$5, event_time = \$6, participants = \$7, location = \$8, updated_at = \$9 WHERE memory_id = \$10 AND app_name = \$11 AND user_id = \$12`).
+	mock.ExpectExec(`UPDATE .* SET memory_content = \$1, topics = \$2, embedding = \$3, memory_kind = \$4, event_time = \$5, participants = \$6, location = \$7, updated_at = \$8 WHERE memory_id = \$9 AND app_name = \$10 AND user_id = \$11`).
 		WithArgs(
-			sqlmock.AnyArg(),
 			"updated memory",
 			pq.Array([]string{"new-topic"}),
 			sqlmock.AnyArg(),

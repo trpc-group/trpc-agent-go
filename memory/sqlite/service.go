@@ -260,7 +260,7 @@ func (s *Service) UpdateMemory(
 	}
 
 	now := time.Now()
-	newID := imemory.ApplyMemoryUpdate(
+	imemory.ApplyMemoryUpdate(
 		entry,
 		memoryKey.AppName,
 		memoryKey.UserID,
@@ -269,6 +269,7 @@ func (s *Service) UpdateMemory(
 		ep,
 		now,
 	)
+	entry.ID = memoryKey.MemoryID
 
 	updated, err := json.Marshal(entry)
 	if err != nil {
@@ -276,11 +277,11 @@ func (s *Service) UpdateMemory(
 	}
 
 	const updateSQL = `UPDATE %s
-SET memory_id = ?, memory_data = ?, updated_at = ?
+SET memory_data = ?, updated_at = ?
 WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 	query := fmt.Sprintf(updateSQL, s.tableName)
 	args := []any{
-		newID, updated, now.UTC().UnixNano(),
+		updated, now.UTC().UnixNano(),
 		memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID,
 	}
 	if s.opts.softDelete {
@@ -292,7 +293,7 @@ WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 		return fmt.Errorf("update memory entry: %w", err)
 	}
 	if result := memory.ResolveUpdateResult(opts); result != nil {
-		result.MemoryID = newID
+		result.MemoryID = memoryKey.MemoryID
 	}
 	return nil
 }

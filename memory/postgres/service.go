@@ -280,7 +280,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 
 	now := time.Now()
 	ep := memory.ResolveUpdateOptions(opts)
-	newID := imemory.ApplyMemoryUpdate(
+	imemory.ApplyMemoryUpdate(
 		entry,
 		memoryKey.AppName,
 		memoryKey.UserID,
@@ -289,6 +289,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		ep,
 		now,
 	)
+	entry.ID = memoryKey.MemoryID
 
 	updated, err := json.Marshal(entry)
 	if err != nil {
@@ -297,22 +298,22 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	}
 
 	updateQuery := fmt.Sprintf(
-		"UPDATE %s SET memory_id = $1, memory_data = $2, updated_at = $3 "+
-			"WHERE memory_id = $4 AND app_name = $5 "+
-			"AND user_id = $6",
+		"UPDATE %s SET memory_data = $1, updated_at = $2 "+
+			"WHERE memory_id = $3 AND app_name = $4 "+
+			"AND user_id = $5",
 		s.tableName,
 	)
 	if s.opts.softDelete {
 		updateQuery += " AND deleted_at IS NULL"
 	}
-	_, err = s.db.ExecContext(ctx, updateQuery, newID, updated, now,
+	_, err = s.db.ExecContext(ctx, updateQuery, updated, now,
 		memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
 	if err != nil {
 		return fmt.Errorf(
 			"update memory entry failed: %w", err)
 	}
 	if result := memory.ResolveUpdateResult(opts); result != nil {
-		result.MemoryID = newID
+		result.MemoryID = memoryKey.MemoryID
 	}
 	return nil
 }

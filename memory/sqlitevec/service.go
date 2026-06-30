@@ -413,7 +413,7 @@ FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 
 	now := time.Now()
 	updatedAtNs := now.UTC().UnixNano()
-	newID := imemory.ApplyMemoryUpdate(
+	imemory.ApplyMemoryUpdate(
 		entry,
 		memoryKey.AppName,
 		memoryKey.UserID,
@@ -450,80 +450,19 @@ WHERE app_name = ? AND user_id = ? AND memory_id = ?`,
 	if s.opts.softDelete {
 		query += fmt.Sprintf(" AND deleted_at = %d", notDeletedAtNs)
 	}
-	if newID == memoryKey.MemoryID {
-		res, err := s.db.ExecContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("update memory: %w", err)
-		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("update memory rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
-		}
-	} else {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin transaction: %w", err)
-		}
-		defer func() { _ = tx.Rollback() }()
-
-		deleteQuery := fmt.Sprintf(
-			"DELETE FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
-			s.tableName,
-		)
-		deleteArgs := []any{memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID}
-		if s.opts.softDelete {
-			deleteQuery += fmt.Sprintf(" AND deleted_at = %d", notDeletedAtNs)
-		}
-		res, err := tx.ExecContext(ctx, deleteQuery, deleteArgs...)
-		if err != nil {
-			return fmt.Errorf("delete rotated memory: %w", err)
-		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("delete rotated memory rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
-		}
-
-		insertQuery := fmt.Sprintf(
-			`INSERT INTO %s (
-memory_id, embedding, app_name, user_id,
-created_at, updated_at, deleted_at,
-memory_content, topics, memory_kind, event_time,
-participants, location
-) VALUES (?, `+sqlVectorFromBlob+`, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			s.tableName,
-		)
-		_, err = tx.ExecContext(
-			ctx,
-			insertQuery,
-			newID,
-			blob,
-			memoryKey.AppName,
-			memoryKey.UserID,
-			entry.CreatedAt.UTC().UnixNano(),
-			updatedAtNs,
-			notDeletedAtNs,
-			memoryStr,
-			string(topicsJSON),
-			string(entry.Memory.Kind),
-			metadataEventTimeNS(entry.Memory.EventTime),
-			participantsJSON,
-			metadataLocationValue(entry.Memory.Location),
-		)
-		if err != nil {
-			return fmt.Errorf("insert rotated memory: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit rotated memory: %w", err)
-		}
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("update memory: %w", err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update memory rows affected: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 	}
 	if result := memory.ResolveUpdateResult(opts); result != nil {
-		result.MemoryID = newID
+		result.MemoryID = memoryKey.MemoryID
 	}
 
 	return nil
