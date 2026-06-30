@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
@@ -21,6 +22,12 @@ import (
 
 // RuntimeOption customizes an embedded OpenClaw runtime.
 type RuntimeOption func(*runtimeOptions)
+
+type codeExecutorConfigLoader func(
+	stateDir string,
+	enableLocal bool,
+	cfg codeExecutorOptions,
+) (codeexecutor.CodeExecutor, error)
 
 // GatewayInboundMessage describes the inbound gateway message for one run.
 type GatewayInboundMessage struct {
@@ -55,6 +62,7 @@ type runtimeOptions struct {
 	runtimeProfileRequired bool
 	gatewayResolvers       []GatewayRunOptionResolver
 	postToolPromptEnabled  *bool
+	codeExecutorLoader     codeExecutorConfigLoader
 }
 
 // WithRuntimeProfileResolver injects per-request runtime profile resolution.

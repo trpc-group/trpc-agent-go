@@ -56,8 +56,6 @@ const (
 	memoryBackendPostgres  = "postgres"
 	memoryBackendPGVector  = "pgvector"
 
-	codeExecutorTypeNone    = "none"
-	codeExecutorTypeLocal   = "local"
 	codeExecutorTypeSandbox = "sandbox"
 
 	sandboxBackendAuto            = "auto"
@@ -2315,15 +2313,12 @@ func convertCodeExecutorConfig(
 		return codeExecutorOptions{}, nil
 	}
 	typeName := strings.ToLower(strings.TrimSpace(cfg.Type))
-	if typeName == "" {
-		typeName = codeExecutorTypeNone
-	}
 	out := codeExecutorOptions{
 		Type:                  typeName,
 		AutoExecuteCodeBlocks: cfg.AutoExecuteCodeBlocks,
 	}
 	switch typeName {
-	case codeExecutorTypeNone, codeExecutorTypeLocal:
+	case "":
 		if cfg.Sandbox != nil {
 			return codeExecutorOptions{}, fmt.Errorf(
 				"sandbox config requires type %q",
@@ -2340,7 +2335,7 @@ func convertCodeExecutorConfig(
 		return out, nil
 	default:
 		return codeExecutorOptions{}, fmt.Errorf(
-			"invalid type %q: want none|local|sandbox",
+			"invalid type %q: want sandbox or empty",
 			cfg.Type,
 		)
 	}
