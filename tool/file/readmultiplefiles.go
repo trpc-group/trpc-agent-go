@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -92,6 +93,10 @@ func (f *fileToolSet) readMultipleFiles(
 				)
 				continue
 			}
+			files = append(files, pattern)
+			continue
+		}
+		if filepath.IsAbs(strings.TrimSpace(pattern)) && !hasGlob(pattern) {
 			files = append(files, pattern)
 			continue
 		}
@@ -182,7 +187,7 @@ func (f *fileToolSet) readFiles(
 				return
 			}
 
-			fullPath, err := f.resolvePath(rp)
+			fullPath, err := f.resolveReadPath(rp)
 			if err != nil {
 				results[idx].Message = fmt.Sprintf(
 					"Error: cannot resolve path %s: %v",
@@ -250,7 +255,8 @@ func (f *fileToolSet) readMultipleFilesTool() tool.CallableTool {
 		function.WithName("read_multiple_files"),
 		function.WithDescription(
 			"Read multiple text files under base_directory. "+
-				"Supports glob patterns and workspace:// refs.",
+				"Supports glob patterns, workspace:// refs, and "+
+				"explicit absolute paths under configured read-only roots.",
 		),
 	)
 }

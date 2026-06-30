@@ -28,7 +28,7 @@ import (
 
 // readFileRequest represents the input for the read file operation.
 type readFileRequest struct {
-	FileName  string `json:"file_name" jsonschema:"description=Relative file path under base_directory or workspace:// or artifact:// file ref to read"`
+	FileName  string `json:"file_name" jsonschema:"description=Relative file path under base_directory or workspace:// or artifact:// file ref or an absolute path under a configured read-only root"`
 	StartLine *int   `json:"start_line,omitempty" jsonschema:"description=Optional 1-based start line to begin reading from"`
 	NumLines  *int   `json:"num_lines,omitempty" jsonschema:"description=Optional maximum number of lines to return"`
 }
@@ -190,7 +190,7 @@ func (f *fileToolSet) readFileFromDiskOrCache(
 	req *readFileRequest,
 	rsp *readFileResponse,
 ) error {
-	filePath, err := f.resolvePath(req.FileName)
+	filePath, err := f.resolveReadPath(req.FileName)
 	if err != nil {
 		rsp.Message = fmt.Sprintf("Error: %v", err)
 		return err
@@ -387,8 +387,10 @@ func (f *fileToolSet) readFileTool() tool.CallableTool {
 		function.WithName("read_file"),
 		function.WithDescription(
 			"Read a text file under base_directory. Supports "+
-				"workspace:// and artifact:// refs. Optional "+
-				"start_line and num_lines select line ranges.",
+				"workspace:// refs, artifact:// refs, and "+
+				"absolute paths under configured read-only roots. "+
+				"Optional start_line and num_lines select line "+
+				"ranges.",
 		),
 	)
 }

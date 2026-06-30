@@ -22,13 +22,51 @@ type sessionService struct {
 	next session.Service
 }
 
+type windowSessionService struct {
+	*sessionService
+	window session.WindowService
+}
+
+type searchableSessionService struct {
+	*sessionService
+	searchable session.SearchableService
+}
+
+type searchWindowSessionService struct {
+	*sessionService
+	window     session.WindowService
+	searchable session.SearchableService
+}
+
 // WrapSessionService rewrites persisted session keys using any explicit
 // per-request storage user scope carried on the context.
 func WrapSessionService(next session.Service) session.Service {
 	if next == nil {
 		return nil
 	}
-	return &sessionService{next: next}
+	base := &sessionService{next: next}
+	window, hasWindow := next.(session.WindowService)
+	searchable, hasSearch := next.(session.SearchableService)
+	switch {
+	case hasWindow && hasSearch:
+		return &searchWindowSessionService{
+			sessionService: base,
+			window:         window,
+			searchable:     searchable,
+		}
+	case hasWindow:
+		return &windowSessionService{
+			sessionService: base,
+			window:         window,
+		}
+	case hasSearch:
+		return &searchableSessionService{
+			sessionService: base,
+			searchable:     searchable,
+		}
+	default:
+		return base
+	}
 }
 
 func (s *sessionService) CreateSession(
@@ -263,6 +301,69 @@ func (s *sessionService) GetSessionSummaryText(
 
 func (s *sessionService) Close() error {
 	return s.next.Close()
+}
+
+func (s *windowSessionService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.getEventWindow(ctx, s.window, req)
+}
+
+func (s *searchWindowSessionService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.getEventWindow(ctx, s.window, req)
+}
+
+func (s *searchableSessionService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.searchEvents(ctx, s.searchable, req)
+}
+
+func (s *searchWindowSessionService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.searchEvents(ctx, s.searchable, req)
+}
+
+func (s *sessionService) getEventWindow(
+	ctx context.Context,
+	window session.WindowService,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	requestUserID := req.Key.UserID
+	req.Key = rewriteKeyForStorage(ctx, req.Key)
+	got, err := window.GetEventWindow(ctx, req)
+	if err != nil || got == nil {
+		return got, err
+	}
+	rewritten := *got
+	rewritten.SessionKey.UserID = requestUserID
+	return &rewritten, nil
+}
+
+func (s *sessionService) searchEvents(
+	ctx context.Context,
+	searchable session.SearchableService,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	requestUserID := req.UserKey.UserID
+	req.UserKey.UserID = StorageUserIDFromContext(ctx, req.UserKey.UserID)
+	results, err := searchable.SearchEvents(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	rewritten := make([]session.EventSearchResult, len(results))
+	copy(rewritten, results)
+	for i := range rewritten {
+		rewritten[i].SessionKey.UserID = requestUserID
+	}
+	return rewritten, nil
 }
 
 func rewriteKeyForStorage(
