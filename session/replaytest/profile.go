@@ -47,8 +47,8 @@ func InMemoryProfile() BackendProfile {
 		SupportsSoftDelete:   false,
 		SupportsAsyncSummary: true,
 		RetrievalProfile: RetrievalProfile{
-			Algorithm: "keyword",
-			Tokenizer: "simple",
+			Algorithm: "bm25",
+			Tokenizer: "gse_cjk",
 		},
 	}
 }
@@ -66,8 +66,8 @@ func SQLiteProfile() BackendProfile {
 		SupportsSoftDelete:   true,
 		SupportsAsyncSummary: true,
 		RetrievalProfile: RetrievalProfile{
-			Algorithm: "keyword",
-			Tokenizer: "simple",
+			Algorithm: "bm25",
+			Tokenizer: "gse_cjk",
 		},
 	}
 }

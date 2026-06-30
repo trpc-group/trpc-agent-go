@@ -43,6 +43,18 @@ type ReplayStep interface {
 	LogicalKey() string
 }
 
+// StateScope identifies the state scope used by an UpdateStateStep.
+type StateScope string
+
+const (
+	// ScopeApp selects application-scoped state.
+	ScopeApp StateScope = "app"
+	// ScopeUser selects user-scoped state.
+	ScopeUser StateScope = "user"
+	// ScopeSession selects session-scoped state.
+	ScopeSession StateScope = "session"
+)
+
 // AppendEventStep appends one event to a session.
 type AppendEventStep struct {
 	Key   string
@@ -58,7 +70,7 @@ func (s AppendEventStep) LogicalKey() string { return s.Key }
 // UpdateStateStep updates state in app, user, or session scope.
 type UpdateStateStep struct {
 	Key        string
-	Scope      string
+	Scope      StateScope
 	SessionKey session.Key
 	UserKey    session.UserKey
 	AppName    string
@@ -179,62 +191,62 @@ type SessionSnapshot struct {
 
 // DiffResult describes one field-level comparison difference.
 type DiffResult struct {
-	CaseName    string
-	BackendA    string
-	BackendB    string
-	Path        string
-	ValueA      any
-	ValueB      any
-	Severity    string
-	AllowedDiff string
-	Explanation string
+	CaseName    string `json:"case"`
+	BackendA    string `json:"backend_a"`
+	BackendB    string `json:"backend_b"`
+	Path        string `json:"path"`
+	ValueA      any    `json:"value_a"`
+	ValueB      any    `json:"value_b"`
+	Severity    string `json:"severity"`
+	AllowedDiff string `json:"allowed_diff,omitempty"`
+	Explanation string `json:"explanation,omitempty"`
 }
 
 // AllowedDiff declares a pre-approved difference rule.
 type AllowedDiff struct {
-	Path      string
-	Reason    string
-	MatchRule string
-	Delta     float64
+	Path      string  `json:"path"`
+	Reason    string  `json:"reason"`
+	MatchRule string  `json:"match_rule"`
+	Delta     float64 `json:"delta,omitempty"`
 }
 
 // ComparisonResult stores one backend comparison result.
 type ComparisonResult struct {
-	BackendA    string
-	BackendB    string
-	Reference   string
-	Status      string
-	SkipReason  string
-	Unsupported []UnsupportedFeature
-	Diffs       []DiffResult
+	BackendA    string               `json:"backend_a"`
+	BackendB    string               `json:"backend_b"`
+	Reference   string               `json:"reference,omitempty"`
+	Status      string               `json:"status"`
+	SkipReason  string               `json:"skip_reason,omitempty"`
+	Unsupported []UnsupportedFeature `json:"unsupported,omitempty"`
+	Diffs       []DiffResult         `json:"diffs,omitempty"`
 }
 
 // Report summarizes a replay consistency run.
 type Report struct {
-	GeneratedAt  time.Time
-	Reference    string
-	Backends     []string
-	TotalCases   int
-	PassedCases  int
-	FailedCases  int
-	SkippedCases int
-	TotalDiffs   int
-	ErrorDiffs   int
-	AllowedDiffs int
-	Results      []CaseResult
-	Unsupported  []UnsupportedFeature
+	GeneratedAt  time.Time            `json:"generated_at"`
+	Reference    string               `json:"reference"`
+	Backends     []string             `json:"backends"`
+	TotalCases   int                  `json:"total_cases"`
+	PassedCases  int                  `json:"passed_cases"`
+	FailedCases  int                  `json:"failed_cases"`
+	SkippedCases int                  `json:"skipped_cases"`
+	TotalDiffs   int                  `json:"total_diffs"`
+	ErrorDiffs   int                  `json:"error_diffs"`
+	AllowedDiffs int                  `json:"allowed_diffs"`
+	Results      []CaseResult         `json:"results"`
+	Unsupported  []UnsupportedFeature `json:"unsupported,omitempty"`
 }
 
 // CaseResult summarizes comparisons for one replay case.
 type CaseResult struct {
-	CaseName      string
-	Comparisons   []ComparisonResult
-	OverallStatus string
+	CaseName      string             `json:"case"`
+	Comparisons   []ComparisonResult `json:"comparisons"`
+	OverallStatus string             `json:"overall_status"`
 }
 
 // UnsupportedFeature identifies a missing backend feature.
 type UnsupportedFeature struct {
-	Backend string
-	Feature string
-	Impact  string
+	Backend string `json:"backend"`
+	Feature string `json:"feature"`
+	Impact  string `json:"impact"`
 }
