@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // StartStepInput contains the metadata needed to start a new step.
@@ -182,6 +183,33 @@ func (c *Capture) SetStepAppliedSurfaceIDs(stepID string, surfaceIDs []string) {
 	c.steps[idx].AppliedSurfaceIDs = slices.Clone(surfaceIDs)
 }
 
+// SetStepUsage updates token usage for one recorded step.
+func (c *Capture) SetStepUsage(stepID string, usage *model.Usage) {
+	usage = traceStepUsage(usage)
+	if c == nil || stepID == "" || usage == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	idx, ok := c.stepIndexByID[stepID]
+	if !ok {
+		return
+	}
+	c.steps[idx].Usage = usage
+}
+
+func traceStepUsage(usage *model.Usage) *model.Usage {
+	if usage == nil {
+		return nil
+	}
+	out := *usage
+	out.TimingInfo = nil
+	if out == (model.Usage{}) {
+		return nil
+	}
+	return &out
+}
+
 // PredecessorsForInvocation returns the current invocation predecessors for the next real step.
 func (c *Capture) PredecessorsForInvocation(invocationID string, entryPredecessors []string) []string {
 	if c == nil {
@@ -230,7 +258,9 @@ func (c *Capture) Build(status trace.TraceStatus, endedAt time.Time) *trace.Trac
 		Steps:            make([]trace.Step, 0, len(c.steps)),
 	}
 	for _, step := range c.steps {
-		out.Steps = append(out.Steps, cloneStep(step))
+		clonedStep := cloneStep(step)
+		out.Steps = append(out.Steps, clonedStep)
+		out.Usage = addUsage(out.Usage, clonedStep.Usage)
 	}
 	return out
 }
@@ -300,6 +330,7 @@ func cloneStep(step trace.Step) trace.Step {
 		AppliedSurfaceIDs:  slices.Clone(step.AppliedSurfaceIDs),
 		Input:              cloneSnapshot(step.Input),
 		Output:             cloneSnapshot(step.Output),
+		Usage:              cloneUsage(step.Usage),
 		Error:              step.Error,
 	}
 }
@@ -309,4 +340,29 @@ func cloneSnapshot(snapshot *trace.Snapshot) *trace.Snapshot {
 		return nil
 	}
 	return &trace.Snapshot{Text: snapshot.Text}
+}
+
+func cloneUsage(usage *model.Usage) *model.Usage {
+	if usage == nil {
+		return nil
+	}
+	cloned := *usage
+	return &cloned
+}
+
+func addUsage(total *model.Usage, next *model.Usage) *model.Usage {
+	if next == nil {
+		return total
+	}
+	if total == nil {
+		total = &model.Usage{}
+	}
+	total.PromptTokens += next.PromptTokens
+	total.CompletionTokens += next.CompletionTokens
+	total.TotalTokens += next.TotalTokens
+	total.PromptTokensDetails.CachedTokens += next.PromptTokensDetails.CachedTokens
+	total.PromptTokensDetails.CacheCreationTokens += next.PromptTokensDetails.CacheCreationTokens
+	total.PromptTokensDetails.CacheReadTokens += next.PromptTokensDetails.CacheReadTokens
+	total.CompletionTokensDetails.ReasoningTokens += next.CompletionTokensDetails.ReasoningTokens
+	return total
 }

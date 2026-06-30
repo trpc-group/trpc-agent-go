@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestCapture_TracksFanOutJoinAndNestedInvocationPredecessors(t *testing.T) {
@@ -100,14 +101,17 @@ func TestCapture_BuildReturnsDetachedCopies(t *testing.T) {
 		Input:        &atrace.Snapshot{Text: "input"},
 	})
 	capture.FinishStep(stepID, &atrace.Snapshot{Text: "output"}, "", startedAt.Add(time.Second))
+	capture.SetStepUsage(stepID, &model.Usage{TotalTokens: 3})
 	trace := capture.Build(atrace.TraceStatusCompleted, startedAt.Add(2*time.Second))
 	require.Len(t, trace.Steps, 1)
 	trace.Steps[0].Input.Text = "mutated input"
 	trace.Steps[0].Output.Text = "mutated output"
+	trace.Steps[0].Usage.TotalTokens = 99
 	second := capture.Build(atrace.TraceStatusCompleted, startedAt.Add(3*time.Second))
 	require.Len(t, second.Steps, 1)
 	assert.Equal(t, "input", second.Steps[0].Input.Text)
 	assert.Equal(t, "output", second.Steps[0].Output.Text)
+	assert.Equal(t, 3, second.Steps[0].Usage.TotalTokens)
 }
 
 func TestCapture_AppliedSurfaceIDsAreCopiedAndUpdated(t *testing.T) {
@@ -134,6 +138,96 @@ func TestCapture_AppliedSurfaceIDsAreCopiedAndUpdated(t *testing.T) {
 	second := capture.Build(atrace.TraceStatusCompleted, startedAt.Add(2*time.Second))
 	require.Len(t, second.Steps, 1)
 	assert.Equal(t, []string{"assistant#model", "assistant#tool"}, second.Steps[0].AppliedSurfaceIDs)
+}
+
+func TestCapture_SetStepUsageIgnoresTimingOnlyUsage(t *testing.T) {
+	startedAt := time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
+	capture := New("assistant", "root-inv", "session-1", startedAt)
+	stepID := capture.StartStep(StartStepInput{
+		InvocationID: "root-inv",
+		AgentName:    "assistant",
+		NodeID:       "assistant",
+		StartedAt:    startedAt,
+	})
+	capture.SetStepUsage(stepID, &model.Usage{
+		TimingInfo: &model.TimingInfo{FirstTokenDuration: time.Second},
+	})
+	trace := capture.Build(atrace.TraceStatusCompleted, startedAt.Add(time.Second))
+	require.Len(t, trace.Steps, 1)
+	assert.Nil(t, trace.Steps[0].Usage)
+	assert.Nil(t, trace.Usage)
+}
+
+func TestCapture_SetStepUsageDropsTimingInfo(t *testing.T) {
+	startedAt := time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
+	capture := New("assistant", "root-inv", "session-1", startedAt)
+	stepID := capture.StartStep(StartStepInput{
+		InvocationID: "root-inv",
+		AgentName:    "assistant",
+		NodeID:       "assistant",
+		StartedAt:    startedAt,
+	})
+	capture.SetStepUsage(stepID, &model.Usage{
+		TotalTokens: 1,
+		TimingInfo:  &model.TimingInfo{FirstTokenDuration: time.Second},
+	})
+	trace := capture.Build(atrace.TraceStatusCompleted, startedAt.Add(time.Second))
+	require.Len(t, trace.Steps, 1)
+	require.NotNil(t, trace.Steps[0].Usage)
+	assert.Equal(t, 1, trace.Steps[0].Usage.TotalTokens)
+	assert.Nil(t, trace.Steps[0].Usage.TimingInfo)
+}
+
+func TestCapture_BuildAggregatesStepUsage(t *testing.T) {
+	startedAt := time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
+	capture := New("assistant", "root-inv", "session-1", startedAt)
+	firstStepID := capture.StartStep(StartStepInput{
+		InvocationID: "root-inv",
+		AgentName:    "assistant",
+		NodeID:       "assistant/first",
+		StartedAt:    startedAt,
+	})
+	secondStepID := capture.StartStep(StartStepInput{
+		InvocationID: "root-inv",
+		AgentName:    "assistant",
+		NodeID:       "assistant/second",
+		StartedAt:    startedAt.Add(time.Second),
+	})
+	capture.SetStepUsage(firstStepID, &model.Usage{
+		PromptTokens:     2,
+		CompletionTokens: 3,
+		TotalTokens:      5,
+		PromptTokensDetails: model.PromptTokensDetails{
+			CachedTokens:        1,
+			CacheCreationTokens: 2,
+			CacheReadTokens:     3,
+		},
+		CompletionTokensDetails: model.CompletionTokensDetails{
+			ReasoningTokens: 4,
+		},
+	})
+	capture.SetStepUsage(secondStepID, &model.Usage{
+		PromptTokens:     5,
+		CompletionTokens: 7,
+		TotalTokens:      12,
+		PromptTokensDetails: model.PromptTokensDetails{
+			CachedTokens:        2,
+			CacheCreationTokens: 3,
+			CacheReadTokens:     4,
+		},
+		CompletionTokensDetails: model.CompletionTokensDetails{
+			ReasoningTokens: 5,
+		},
+	})
+	trace := capture.Build(atrace.TraceStatusCompleted, startedAt.Add(2*time.Second))
+	require.NotNil(t, trace.Usage)
+	assert.Equal(t, 7, trace.Usage.PromptTokens)
+	assert.Equal(t, 10, trace.Usage.CompletionTokens)
+	assert.Equal(t, 17, trace.Usage.TotalTokens)
+	assert.Equal(t, 3, trace.Usage.PromptTokensDetails.CachedTokens)
+	assert.Equal(t, 5, trace.Usage.PromptTokensDetails.CacheCreationTokens)
+	assert.Equal(t, 7, trace.Usage.PromptTokensDetails.CacheReadTokens)
+	assert.Equal(t, 9, trace.Usage.CompletionTokensDetails.ReasoningTokens)
 }
 
 func TestCapture_PredecessorsForInvocation_UsesNestedChildTerminals(t *testing.T) {
@@ -174,6 +268,7 @@ func TestCapture_CoversNilGuardsAndMetadataFallbacks(t *testing.T) {
 	assert.Empty(t, nilCapture.StartStep(StartStepInput{InvocationID: "inv"}))
 	nilCapture.FinishStep("step-1", nil, "", time.Time{})
 	nilCapture.SetStepAppliedSurfaceIDs("step-1", []string{"assistant#instruction"})
+	nilCapture.SetStepUsage("step-1", &model.Usage{TotalTokens: 1})
 	nilCapture.SetRootAgentName("assistant")
 	nilCapture.SetSessionID("session-1")
 	nilCapture.RegisterInvocation("parent", "child")
@@ -196,6 +291,9 @@ func TestCapture_CoversNilGuardsAndMetadataFallbacks(t *testing.T) {
 	})
 	require.NotEmpty(t, stepID)
 	capture.SetStepAppliedSurfaceIDs("", []string{"assistant#instruction"})
+	capture.SetStepUsage("", &model.Usage{TotalTokens: 1})
+	capture.SetStepUsage("missing", &model.Usage{TotalTokens: 1})
+	capture.SetStepUsage(stepID, nil)
 	capture.FinishStep("missing", nil, "", time.Time{})
 	capture.FinishStep(stepID, nil, "boom", time.Time{})
 	trace := capture.Build(atrace.TraceStatusFailed, time.Time{})
