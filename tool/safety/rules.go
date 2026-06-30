@@ -37,73 +37,40 @@ func combineInput(input ScanInput) string {
 //   - Reading sensitive files (~/.ssh, /etc/passwd, .env)
 //   - Commands that leak credentials (cat ~/.aws/credentials)
 type DangerousCommandRule struct {
-	// 危险命令关键词列表
 	dangerousCommands []string
-	// 敏感路径关键词列表
-	sensitivePaths []string
+	sensitivePaths    []string
 }
 
 // NewDangerousCommandRule creates a rule with the default deny list.
 func NewDangerousCommandRule() *DangerousCommandRule {
 	return &DangerousCommandRule{
 		dangerousCommands: []string{
-			// === 文件系统破坏 ===
-			"rm -rf /",  // 删除根目录
-			"rm -rf ~",  // 删除用户目录
-			"rm -rf .",  // 删除当前目录
-			"rm -rf /*", // 删除根下所有文件
-			"dd if=",    // 磁盘写入（可能覆盖分区）
-			"mkfs.",     // 格式化文件系统
-			"fdisk",     // 磁盘分区操作
-			"shutdown",  // 关机
-			"reboot",    // 重启
-			"halt",      // 停机
-			"poweroff",  // 断电
-			"init 0",    // 切换运行级别到关机
-			"init 6",    // 切换运行级别到重启
-			// === 权限提升 / 提权 ===
-			"chmod 777 /", // 开放根目录权限
-			"chown -R",    // 递归修改所有者（可能破坏系统）
-			"setfacl -R",  // 递归修改 ACL
+			"rm -rf /", "rm -rf ~", "rm -rf .", "rm -rf /*",
+			"dd if=", "mkfs.", "fdisk",
+			"shutdown", "reboot", "halt", "poweroff", "init 0", "init 6",
+			"chmod 777 /", "chown -R", "setfacl -R",
 		},
 		sensitivePaths: []string{
-			// === 凭据文件 ===
-			".ssh/id_rsa",      // SSH 私钥
-			".ssh/authorized",  // SSH 授权密钥
-			".aws/credentials", // AWS 凭据
-			".gcloud/",         // GCP 凭据
-			"credentials.json", // 通用凭据文件
-			// === 密码和配置 ===
-			".env",        // 环境变量（通常含密钥）
-			".env.",       // .env.production 等变体
-			"/etc/shadow", // Linux 密码哈希
-			"/etc/passwd", // 用户账户信息
-			// === 证书和密钥 ===
-			".pem",       // 证书私钥
-			".key",       // 私钥文件
-			".p12",       // PKCS#12 密钥库
-			".pfx",       // PKCS#12 密钥库
-			"id_ed25519", // Ed25519 SSH 密钥
-			// === 数据库和日志（可能含敏感信息）===
-			".sql",   // 数据库导出
-			".dump",  // 数据库转储
-			"backup", // 备份文件
+			".ssh/id_rsa", ".ssh/authorized", ".aws/credentials", ".gcloud/",
+			"credentials.json",
+			".env", ".env.", "/etc/shadow", "/etc/passwd",
+			".pem", ".key", ".p12", ".pfx", "id_ed25519",
+			".sql", ".dump", "backup",
 		},
 	}
 }
 
+// ID returns the unique identifier of this rule.
 func (r *DangerousCommandRule) ID() string {
 	return "danger_cmd_001"
 }
 
+// Check inspects the input for dangerous command keywords and sensitive path access.
 func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
-	// Combine command + code blocks for unified scanning.
 	cmd := combineInput(input)
 	if cmd == "" {
 		return nil
 	}
-
-	// 1. 检查危险命令关键词
 	for _, keyword := range r.dangerousCommands {
 		if strings.Contains(cmd, keyword) {
 			return &ScanResult{
@@ -115,11 +82,8 @@ func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
 			}
 		}
 	}
-
-	// 2. 检查敏感路径读取
 	for _, path := range r.sensitivePaths {
 		if strings.Contains(cmd, path) {
-			// 区分"读取"和"写入"
 			if strings.Contains(cmd, "cat ") || strings.Contains(cmd, "less ") ||
 				strings.Contains(cmd, "head ") || strings.Contains(cmd, "tail ") ||
 				strings.Contains(cmd, "grep ") || strings.Contains(cmd, "cp ") {
@@ -131,7 +95,6 @@ func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
 					Reason:    "尝试读取敏感文件：" + path + "。该文件可能包含凭据或隐私信息。",
 				}
 			}
-			// 写入/删除敏感路径
 			if strings.Contains(cmd, "rm ") || strings.Contains(cmd, "mv ") ||
 				strings.Contains(cmd, ">") {
 				return &ScanResult{
@@ -142,7 +105,6 @@ func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
 					Reason:    "尝试修改/删除敏感文件：" + path + "。",
 				}
 			}
-			// 其他访问（列出目录等）
 			return &ScanResult{
 				Decision:  DecisionDeny,
 				RiskLevel: RiskHigh,
@@ -152,8 +114,7 @@ func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
 			}
 		}
 	}
-
-	return nil // 未触发规则
+	return nil
 }
 
 // ---------- Rule 2: 网络外连检测 ----------
@@ -167,37 +128,25 @@ type NetworkAccessRule struct {
 func NewNetworkAccessRule() *NetworkAccessRule {
 	return &NetworkAccessRule{
 		dangerousCmds: []string{
-			"curl",        // HTTP 客户端
-			"wget",        // 文件下载
-			"nc ",         // netcat（注意空格避免误匹配 ncdu 等）
-			"ncat",        // nmap netcat
-			"telnet",      // 远程登录
-			"ssh ",        // SSH 远程连接
-			"scp ",        // 远程文件复制
-			"sftp",        // SSH 文件传输
-			"rsync",       // 远程同步
-			"nslookup",    // DNS 查询
-			"dig ",        // DNS 查询
-			"host ",       // DNS 查询
-			"nmap",        // 端口扫描
-			"socat",       // 网络中继
-			"git clone",   // Git 克隆外部仓库
-			"pip install", // Python 安装外部包
-			"npm install", // Node.js 安装外部包
+			"curl", "wget", "nc ", "ncat", "telnet",
+			"ssh ", "scp ", "sftp", "rsync",
+			"nslookup", "dig ", "host ", "nmap", "socat",
+			"git clone", "pip install", "npm install",
 		},
 	}
 }
 
+// ID returns the unique identifier of this rule.
 func (r *NetworkAccessRule) ID() string {
 	return "network_002"
 }
 
+// Check inspects the input for network access keywords.
 func (r *NetworkAccessRule) Check(input ScanInput) *ScanResult {
 	cmd := combineInput(input)
 	if cmd == "" {
 		return nil
 	}
-
 	for _, keyword := range r.dangerousCmds {
 		if strings.Contains(cmd, keyword) {
 			return &ScanResult{
@@ -216,9 +165,6 @@ func (r *NetworkAccessRule) Check(input ScanInput) *ScanResult {
 
 // ShellBypassRule detects attempts to bypass shell safety restrictions
 // by using -c flags, eval, or other indirect execution methods.
-//
-// Note: shellsafe already rejects $(), backticks, and redirections at
-// the structural level. This rule catches semantic-level bypasses.
 type ShellBypassRule struct {
 	bypassPatterns []string
 }
@@ -227,39 +173,28 @@ type ShellBypassRule struct {
 func NewShellBypassRule() *ShellBypassRule {
 	return &ShellBypassRule{
 		bypassPatterns: []string{
-			"sh -c",      // sh 执行任意命令
-			"bash -c",    // bash 执行任意命令
-			"zsh -c",     // zsh 执行任意命令
-			"python -c",  // Python 执行任意代码
-			"python3 -c", // Python3 执行任意代码
-			"perl -e",    // Perl 执行任意代码
-			"ruby -e",    // Ruby 执行任意代码
-			"node -e",    // Node.js 执行任意代码
-			"eval ",      // Shell eval
-			"exec ",      // Shell exec
-			"source ",    // Shell source
-			"xargs ",     // xargs 执行命令
-			"env ",       // env 命令包装
-			"sudo ",      // 提权执行
-			"su ",        // 切换用户
-			"base64 -d",  // 解码后执行
-			"xxd -r",     // 十六进制解码
-			"/dev/tcp/",  // Bash TCP 重定向
-			"/dev/udp/",  // Bash UDP 重定向
+			"sh -c", "bash -c", "zsh -c",
+			"python -c", "python3 -c",
+			"perl -e", "ruby -e", "node -e",
+			"eval ", "exec ", "source ", "xargs ",
+			"env ", "sudo ", "su ",
+			"base64 -d", "xxd -r",
+			"/dev/tcp/", "/dev/udp/",
 		},
 	}
 }
 
+// ID returns the unique identifier of this rule.
 func (r *ShellBypassRule) ID() string {
 	return "shell_bypass_003"
 }
 
+// Check inspects the input for shell bypass patterns.
 func (r *ShellBypassRule) Check(input ScanInput) *ScanResult {
-	cmd := strings.ToLower(input.Command)
+	cmd := combineInput(input)
 	if cmd == "" {
 		return nil
 	}
-
 	for _, pattern := range r.bypassPatterns {
 		if strings.Contains(cmd, pattern) {
 			return &ScanResult{
@@ -276,6 +211,7 @@ func (r *ShellBypassRule) Check(input ScanInput) *ScanResult {
 
 // ---------- Rule 4: 依赖安装与系统变更检测 ----------
 
+// InstallAndMutateRule detects package manager installs and system config changes.
 type InstallAndMutateRule struct {
 	patterns []string
 }
@@ -284,7 +220,6 @@ type InstallAndMutateRule struct {
 func NewInstallAndMutateRule() *InstallAndMutateRule {
 	return &InstallAndMutateRule{
 		patterns: []string{
-			// 包管理器安装
 			"apt install", "apt-get install", "apt-get update",
 			"yum install", "dnf install",
 			"pacman -S", "brew install",
@@ -293,7 +228,6 @@ func NewInstallAndMutateRule() *InstallAndMutateRule {
 			"go install", "go get ",
 			"gem install", "cargo install",
 			"snap install", "flatpak install",
-			// 系统配置变更
 			"systemctl enable", "systemctl start",
 			"service start", "service enable",
 			"update-rc.d",
@@ -303,10 +237,12 @@ func NewInstallAndMutateRule() *InstallAndMutateRule {
 	}
 }
 
+// ID returns the unique identifier of this rule.
 func (r *InstallAndMutateRule) ID() string { return "install_004" }
 
+// Check inspects the input for install or system mutation patterns.
 func (r *InstallAndMutateRule) Check(input ScanInput) *ScanResult {
-	cmd := strings.ToLower(input.Command)
+	cmd := combineInput(input)
 	if cmd == "" {
 		return nil
 	}
@@ -326,6 +262,7 @@ func (r *InstallAndMutateRule) Check(input ScanInput) *ScanResult {
 
 // ---------- Rule 5: 宿主机执行风险检测 ----------
 
+// HostExecRiskRule detects host-level operations that only apply to the local executor.
 type HostExecRiskRule struct {
 	risks []string
 }
@@ -334,33 +271,28 @@ type HostExecRiskRule struct {
 func NewHostExecRiskRule() *HostExecRiskRule {
 	return &HostExecRiskRule{
 		risks: []string{
-			// PTY / 长会话风险
 			"tty", "pty",
-			// 后台进程
 			"nohup ", "disown", "bg ", "fg ",
-			// 进程残留 / 守护进程
 			"daemon", "fork",
-			// 提权 / 用户切换
 			"sudo ", "su -", "su root",
 			"chmod 777", "chmod -R 777",
 			"chown root", "chown :root",
 			"setuid", "setgid",
-			// 内核模块 / 设备
 			"insmod ", "modprobe ", "rmmod ",
-			// 特殊文件系统
 			"mount ", "umount ",
 		},
 	}
 }
 
+// ID returns the unique identifier of this rule.
 func (r *HostExecRiskRule) ID() string { return "hostexec_005" }
 
+// Check inspects the input for host execution risk keywords. Skipped for container executors.
 func (r *HostExecRiskRule) Check(input ScanInput) *ScanResult {
-	// 只对 local executor 触发，container 中可以放宽
 	if input.ExecutorType != "local" && input.ExecutorType != "" {
 		return nil
 	}
-	cmd := strings.ToLower(input.Command)
+	cmd := combineInput(input)
 	if cmd == "" {
 		return nil
 	}
@@ -380,6 +312,8 @@ func (r *HostExecRiskRule) Check(input ScanInput) *ScanResult {
 
 // ---------- Rule 6: 资源滥用检测 ----------
 
+// ResourceAbuseRule detects resource exhaustion patterns such as infinite loops
+// and fork bombs.
 type ResourceAbuseRule struct{}
 
 // NewResourceAbuseRule creates a resource abuse detection rule.
@@ -387,15 +321,15 @@ func NewResourceAbuseRule() *ResourceAbuseRule {
 	return &ResourceAbuseRule{}
 }
 
+// ID returns the unique identifier of this rule.
 func (r *ResourceAbuseRule) ID() string { return "resource_006" }
 
+// Check inspects the input for resource abuse patterns.
 func (r *ResourceAbuseRule) Check(input ScanInput) *ScanResult {
-	cmd := strings.ToLower(input.Command)
+	cmd := combineInput(input)
 	if cmd == "" {
 		return nil
 	}
-
-	// 无限循环 / 长时间执行
 	loopPatterns := []string{
 		"while true", "while :", "for (( ; ; ))",
 		"while [ 1 ]", "while [[ 1 ]]",
@@ -411,11 +345,9 @@ func (r *ResourceAbuseRule) Check(input ScanInput) *ScanResult {
 			}
 		}
 	}
-
-	// fork bomb 模式
 	fbPatterns := []string{
-		":(){ :|:& };:", // 经典 fork bomb
-		"() {",          // 函数定义（可能用于 fork bomb）
+		":(){ :|:& };:",
+		"() {",
 	}
 	for _, fp := range fbPatterns {
 		if strings.Contains(cmd, fp) {
@@ -428,8 +360,6 @@ func (r *ResourceAbuseRule) Check(input ScanInput) *ScanResult {
 			}
 		}
 	}
-
-	// 资源消耗命令
 	resourceCmds := []string{
 		"stress ", "stress-ng",
 		"yes ", "dd if=/dev/zero of=",
@@ -452,6 +382,8 @@ func (r *ResourceAbuseRule) Check(input ScanInput) *ScanResult {
 
 // ---------- Rule 7: 敏感信息泄漏检测 ----------
 
+// SensitiveInfoLeakRule detects patterns that may leak credentials
+// or sensitive data to files.
 type SensitiveInfoLeakRule struct {
 	patterns []string
 }
@@ -460,42 +392,31 @@ type SensitiveInfoLeakRule struct {
 func NewSensitiveInfoLeakRule() *SensitiveInfoLeakRule {
 	return &SensitiveInfoLeakRule{
 		patterns: []string{
-			// API Key / Token 模式
 			"api_key", "apikey", "api_secret", "apisecret",
 			"access_key", "secret_key",
 			"private_key", "privatekey",
-			// 密码字段
 			"password", "passwd", "passphrase",
 			"db_password", "db_pass",
-			// Token
 			"token", "bearer", "jwt",
 			"auth_token", "refresh_token",
-			// 输出重定向（可能把敏感数据写入文件）
 			" > ", ">>",
 		},
 	}
 }
 
+// ID returns the unique identifier of this rule.
 func (r *SensitiveInfoLeakRule) ID() string { return "leak_007" }
 
+// Check inspects the input for sensitive information leakage patterns.
 func (r *SensitiveInfoLeakRule) Check(input ScanInput) *ScanResult {
-	// 检查命令中是否在读取/打印敏感信息
-	cmd := strings.ToLower(input.Command)
-	if cmd == "" {
+	allText := combineInput(input)
+	if allText == "" {
 		return nil
 	}
-
-	// 检查 code blocks 中是否包含敏感信息关键词
-	allText := cmd
-	for _, cb := range input.CodeBlocks {
-		allText += " " + strings.ToLower(cb.Code)
-	}
-
 	for _, p := range r.patterns {
 		if !strings.Contains(allText, p) {
 			continue
 		}
-		// 严重：echo/cat 输出 + 敏感词 + 重定向 = 泄漏
 		if (strings.Contains(allText, "echo ") || strings.Contains(allText, "cat ") ||
 			strings.Contains(allText, "printf ")) && strings.Contains(allText, ">") {
 			return &ScanResult{
@@ -529,10 +450,12 @@ func NewAskForReviewRule() *AskForReviewRule {
 	}
 }
 
+// ID returns the unique identifier of this rule.
 func (r *AskForReviewRule) ID() string { return "ask_review_008" }
 
+// Check inspects the input for risky-but-legitimate commands requiring human review.
 func (r *AskForReviewRule) Check(input ScanInput) *ScanResult {
-	cmd := strings.ToLower(input.Command)
+	cmd := combineInput(input)
 	if cmd == "" {
 		return nil
 	}
