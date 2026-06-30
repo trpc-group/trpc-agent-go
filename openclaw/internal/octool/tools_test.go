@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -919,6 +920,31 @@ func TestExecTool_YieldBackgroundAndPoll(t *testing.T) {
 		time.Sleep(pollInterval)
 	}
 	t.Fatalf("process did not exit; output: %s", all)
+}
+
+func TestExecTool_DefaultTimeoutKillsProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group signaling is unix-specific")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	marker := filepath.Join(t.TempDir(), "orphan-marker")
+	mgr := NewManager(WithDefaultTimeout(100 * time.Millisecond))
+	yieldZero := 0
+
+	res, err := mgr.Exec(context.Background(), execParams{
+		Command: "(sleep 0.6; echo orphan > " +
+			strconv.Quote(marker) + ") & wait",
+		YieldMs: &yieldZero,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, 0, res.ExitCode)
+
+	time.Sleep(900 * time.Millisecond)
+	_, err = os.Stat(marker)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestProcessTool_Submit(t *testing.T) {

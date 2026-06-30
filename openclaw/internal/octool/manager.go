@@ -257,6 +257,7 @@ func runForeground(
 	defer cancel()
 
 	cmd := shellCmd(ctx, params.Command)
+	prepareCommandProcess(cmd)
 	cmd.Dir = params.Workdir
 	cmd.Env = mergedEnv(baseEnv, params.Env)
 
@@ -266,12 +267,16 @@ func runForeground(
 }
 
 func shellCmd(ctx context.Context, command string) *exec.Cmd {
-	return exec.CommandContext(
+	cmd := exec.CommandContext(
 		ctx,
 		shellProgram,
 		shellLoginFlag,
 		command,
 	)
+	cmd.Cancel = func() error {
+		return forceKillCommandProcess(cmd)
+	}
+	return cmd
 }
 
 func mergedEnv(
@@ -344,6 +349,7 @@ func (m *Manager) startBackground(
 			sess.readFrom(master)
 		}()
 	} else {
+		prepareCommandProcess(cmd)
 		stdin, stdout, stderr, err := startPipes(cmd)
 		if err != nil {
 			cancel()
