@@ -1,6 +1,6 @@
 
 <!doctype html>
-<html lang="zh" class="no-js">
+<html lang="en" class="no-js">
   <head>
     
       <meta charset="utf-8">
@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/agui/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/goal/">
       
       
-        <link rel="prev" href="../gateway/">
+        <link rel="prev" href="../agent/">
       
       
-        <link rel="next" href="chat/">
+        <link rel="next" href="../multiagent/">
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
     
     
       
-        <title>总览 - tRPC-Agent-Go</title>
+        <title>Goal Extension - tRPC-Agent-Go</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.7e37652d.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -48,9 +48,9 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+      <link rel="stylesheet" href="../assets/stylesheets/extra.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
   
@@ -86,8 +86,8 @@
     <div data-md-component="skip">
       
         
-        <a href="#ag-ui" class="md-skip">
-          跳转至
+        <a href="#goal-extension" class="md-skip">
+          Skip to content
         </a>
       
     </div>
@@ -99,10 +99,10 @@
       
 
 <header class="md-header" data-md-component="header">
-  <nav class="md-header__inner md-grid" aria-label="页眉">
-    <a href="../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../assets/img/logo.png" alt="logo">
+  <img src="../assets/img/logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              总览
+              Goal Extension
             
           </span>
         </div>
@@ -159,20 +159,20 @@
       <div class="md-header__option">
   <div class="md-select">
     
-    <button class="md-header__button md-icon" aria-label="选择当前语言">
+    <button class="md-header__button md-icon" aria-label="Select language">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
     </button>
     <div class="md-select__inner">
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="../../agui/" hreflang="en" class="md-select__link">
+            <a href="./" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
         
           <li class="md-select__item">
-            <a href="./" hreflang="zh" class="md-select__link">
+            <a href="../zh/goal/" hreflang="zh" class="md-select__link">
               中文
             </a>
           </li>
@@ -193,21 +193,21 @@
   <label class="md-search__overlay" for="__search"></label>
   <div class="md-search__inner" role="search">
     <form class="md-search__form" name="search">
-      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
       <label class="md-search__icon md-icon" for="__search">
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
       </label>
-      <nav class="md-search__options" aria-label="查找">
+      <nav class="md-search__options" aria-label="Search">
         
-          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
             
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
           </a>
         
-        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
@@ -220,7 +220,7 @@
       <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
         <div class="md-search-result" data-md-component="search-result">
           <div class="md-search-result__meta">
-            正在初始化搜索引擎
+            Initializing search
           </div>
           <ol class="md-search-result__list" role="presentation"></ol>
         </div>
@@ -232,7 +232,7 @@
     
     
       <div class="md-header__source">
-        <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+        <a href="https://github.com/trpc-group/trpc-agent-go" title="Go to repository" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -253,7 +253,7 @@
         
           
             
-<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
   <div class="md-grid">
     <ul class="md-tabs__list">
       
@@ -263,13 +263,13 @@
   
   
     <li class="md-tabs__item">
-      <a href="../" class="md-tabs__link">
+      <a href=".." class="md-tabs__link">
         
   
   
     
   
-  概览
+  Overview
 
       </a>
     </li>
@@ -280,6 +280,8 @@
   
   
   
+    
+  
   
     
     
@@ -287,15 +289,17 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
+      <li class="md-tabs__item md-tabs__item--active">
         <a href="../agent/" class="md-tabs__link">
           
   
   
-  组件
+  Components
 
         </a>
       </li>
@@ -310,17 +314,15 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
+      <li class="md-tabs__item">
         <a href="../gateway/" class="md-tabs__link">
           
   
   
-  服务
+  Server
 
         </a>
       </li>
@@ -340,7 +342,7 @@
           
   
   
-  可观测
+  Observability
 
         </a>
       </li>
@@ -360,7 +362,7 @@
   
     
   
-  生态
+  Ecosystem
 
       </a>
     </li>
@@ -379,7 +381,7 @@
           
   
   
-  博客
+  Blog
 
         </a>
       </li>
@@ -407,18 +409,18 @@
   
 
 
-<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href=".." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../assets/img/logo.png" alt="logo">
+  <img src="../assets/img/logo.png" alt="logo">
 
     </a>
     tRPC-Agent-Go
   </label>
   
     <div class="md-nav__source">
-      <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
+      <a href="https://github.com/trpc-group/trpc-agent-go" title="Go to repository" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -438,12 +440,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href=".." class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    概览
+    Overview
     
   </span>
   
@@ -457,29 +459,34 @@
       
   
   
+    
   
   
+  
     
     
     
     
-      
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
             
   
   
   <span class="md-ellipsis">
-    组件
+    Components
     
   </span>
   
@@ -487,10 +494,10 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
-            组件
+            Components
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -498,6 +505,8 @@
                 
   
   
+    
+  
   
   
     
@@ -508,11 +517,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_1" checked>
         
           
           <label class="md-nav__link" for="__nav_2_1" id="__nav_2_1_label" tabindex="0">
@@ -528,7 +537,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_1_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2_1">
             <span class="md-nav__icon md-icon"></span>
             Agent
@@ -562,20 +571,89 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../goal/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Goal Extension
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
   <span class="md-ellipsis">
-    Goal 扩展
+    Goal Extension
     
   </span>
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Semantics
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#boundaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      Boundaries
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -616,7 +694,7 @@
   
   
   <span class="md-ellipsis">
-    Task Run 运行时
+    Task Run Runtime
     
   </span>
   
@@ -685,7 +763,7 @@
   
   
   <span class="md-ellipsis">
-    自定义 Agent
+    Custom Agent
     
   </span>
   
@@ -854,7 +932,7 @@
   
   
   <span class="md-ellipsis">
-    错误处理
+    Error Handling
     
   </span>
   
@@ -1427,7 +1505,7 @@
   
   
   <span class="md-ellipsis">
-    概述
+    Overview
     
   </span>
   
@@ -1519,7 +1597,7 @@
   
   
   <span class="md-ellipsis">
-    数据源
+    Source
     
   </span>
   
@@ -1542,30 +1620,7 @@
   
   
   <span class="md-ellipsis">
-    代码知识库（Code RAG, Beta）
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../knowledge/extractor/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    内容提取器
+    Code RAG (Beta)
     
   </span>
   
@@ -1588,7 +1643,30 @@
   
   
   <span class="md-ellipsis">
-    过滤器
+    Filter
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../knowledge/extractor/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Extractor
     
   </span>
   
@@ -1611,7 +1689,7 @@
   
   
   <span class="md-ellipsis">
-    知识库管理
+    Management
     
   </span>
   
@@ -1671,7 +1749,7 @@
   
   
   <span class="md-ellipsis">
-    向量存储
+    VectorStore
     
   </span>
   
@@ -1682,7 +1760,7 @@
         <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_16_11_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_16_11">
             <span class="md-nav__icon md-icon"></span>
-            向量存储
+            VectorStore
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -1698,7 +1776,7 @@
   
   
   <span class="md-ellipsis">
-    概述
+    Overview
     
   </span>
   
@@ -1867,7 +1945,7 @@
   
   
   <span class="md-ellipsis">
-    故障排除
+    Troubleshooting
     
   </span>
   
@@ -1989,34 +2067,29 @@
       
   
   
-    
   
   
-  
     
     
     
     
       
-        
-        
-      
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
   <span class="md-ellipsis">
-    服务
+    Server
     
   </span>
   
@@ -2024,10 +2097,10 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
-            服务
+            Server
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -2058,8 +2131,6 @@
                 
   
   
-    
-  
   
   
     
@@ -2070,11 +2141,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
         
           
           <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
@@ -2090,7 +2161,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_2">
             <span class="md-nav__icon md-icon"></span>
             AG-UI
@@ -2101,149 +2172,15 @@
                 
   
   
-    
-  
-  
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    总览
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
-        
-  
-  
-  <span class="md-ellipsis">
-    总览
-    
-  </span>
-  
-
-      </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="目录">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      目录
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      快速上手
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_2" class="md-nav__link">
-    <span class="md-ellipsis">
-      核心概念
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="核心概念">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#server" class="md-nav__link">
-    <span class="md-ellipsis">
-      Server
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#service" class="md-nav__link">
-    <span class="md-ellipsis">
-      Service
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#ag-ui-runner" class="md-nav__link">
-    <span class="md-ellipsis">
-      AG-UI Runner
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#translator" class="md-nav__link">
-    <span class="md-ellipsis">
-      Translator
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#_3" class="md-nav__link">
-    <span class="md-ellipsis">
-      路由前缀
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
   
   
     <li class="md-nav__item">
-      <a href="chat/" class="md-nav__link">
+      <a href="../agui/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    实时对话路由
+    Overview
     
   </span>
   
@@ -2261,12 +2198,12 @@
   
   
     <li class="md-nav__item">
-      <a href="history/" class="md-nav__link">
+      <a href="../agui/chat/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    消息快照路由
+    Real-Time Conversation Route
     
   </span>
   
@@ -2284,12 +2221,35 @@
   
   
     <li class="md-nav__item">
-      <a href="cancel/" class="md-nav__link">
+      <a href="../agui/history/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    取消路由
+    Messages Snapshot Route
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../agui/cancel/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Cancel Route
     
   </span>
   
@@ -2410,7 +2370,7 @@
   
   
   <span class="md-ellipsis">
-    可观测
+    Observability
     
   </span>
   
@@ -2421,7 +2381,7 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
-            可观测
+            Observability
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -2437,7 +2397,7 @@
   
   
   <span class="md-ellipsis">
-    概览
+    Overview
     
   </span>
   
@@ -2460,7 +2420,7 @@
   
   
   <span class="md-ellipsis">
-    多模态遥测
+    Multimodal Telemetry
     
   </span>
   
@@ -2490,7 +2450,7 @@
   
   
   <span class="md-ellipsis">
-    生态
+    Ecosystem
     
   </span>
   
@@ -2526,7 +2486,7 @@
   
   
   <span class="md-ellipsis">
-    博客
+    Blog
     
   </span>
   
@@ -2537,7 +2497,7 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
-            博客
+            Blog
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -2553,7 +2513,7 @@
   
   
   <span class="md-ellipsis">
-    构建智能 AI 应用的 Go 语言 Agent 框架
+    A Go Agent Framework for Building Intelligent AI Applications
     
   </span>
   
@@ -2576,7 +2536,7 @@
   
   
   <span class="md-ellipsis">
-    长任务 Agent 上下文管理的设计与评测
+    Context Management Design and Evaluation for Long-Running Agents
     
   </span>
   
@@ -2599,7 +2559,7 @@
   
   
   <span class="md-ellipsis">
-    看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍
+    Seeing the Agent Runtime: Observability Design in tRPC-Agent-Go
     
   </span>
   
@@ -2622,7 +2582,7 @@
   
   
   <span class="md-ellipsis">
-    降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践
+    Reducing Agent Token Cost: Prompt Cache Engineering in tRPC-Agent-Go
     
   </span>
   
@@ -2645,7 +2605,7 @@
   
   
   <span class="md-ellipsis">
-    GraphAgent 让 AI 工作流与 Agent 无缝融合
+    GraphAgent Seamlessly Combines AI Workflows and Agents
     
   </span>
   
@@ -2668,7 +2628,7 @@
   
   
   <span class="md-ellipsis">
-    快速构建基于 AG-UI 的 Agent 服务
+    Quickly Build AG-UI-Based Agent Services
     
   </span>
   
@@ -2691,7 +2651,7 @@
   
   
   <span class="md-ellipsis">
-    Anthropic Agent Skills 规范的 Go 原生实现
+    A Go-Native Implementation of the Anthropic Agent Skills Specification
     
   </span>
   
@@ -2714,7 +2674,7 @@
   
   
   <span class="md-ellipsis">
-    AI Agent 自动化评估范式与工程实践全解析
+    A Complete Guide to AI Agent Automated Evaluation Paradigms and Engineering Practice
     
   </span>
   
@@ -2737,7 +2697,7 @@
   
   
   <span class="md-ellipsis">
-    AI Agent 高质量稳定性提升方法
+    Improving AI Agent Quality and Stability with LLM Verifier
     
   </span>
   
@@ -2760,7 +2720,7 @@
   
   
   <span class="md-ellipsis">
-    打造企业级安全可控的 OpenClaw Runtime
+    Building an Enterprise-Grade, Secure, and Controllable OpenClaw Runtime
     
   </span>
   
@@ -2783,7 +2743,7 @@
   
   
   <span class="md-ellipsis">
-    AI Agent 提示词自动迭代与工程实践全解析
+    A Complete Guide to Automated Prompt Iteration and Engineering Practice for AI Agents
     
   </span>
   
@@ -2814,7 +2774,7 @@
                   <div class="md-sidebar__inner">
                     
 
-<nav class="md-nav md-nav--secondary" aria-label="目录">
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
   
   
   
@@ -2823,74 +2783,32 @@
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
-      目录
+      Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#_1" class="md-nav__link">
+  <a href="#usage" class="md-nav__link">
     <span class="md-ellipsis">
-      快速上手
+      Usage
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#_2" class="md-nav__link">
+  <a href="#semantics" class="md-nav__link">
     <span class="md-ellipsis">
-      核心概念
+      Semantics
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="核心概念">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#server" class="md-nav__link">
-    <span class="md-ellipsis">
-      Server
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#service" class="md-nav__link">
-    <span class="md-ellipsis">
-      Service
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#ag-ui-runner" class="md-nav__link">
-    <span class="md-ellipsis">
-      AG-UI Runner
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#translator" class="md-nav__link">
-    <span class="md-ellipsis">
-      Translator
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#_3" class="md-nav__link">
+  <a href="#boundaries" class="md-nav__link">
     <span class="md-ellipsis">
-      路由前缀
+      Boundaries
     </span>
   </a>
   
@@ -2912,7 +2830,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/agui/index.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/goal.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2921,18 +2839,27 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/agui/index.md" title="查看本页的源代码" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/goal.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="ag-ui">AG-UI 使用指南</h1>
-<p>AG-UI（Agent-User Interaction）由 <a href="https://github.com/ag-ui-protocol/ag-ui">AG-UI Protocol</a> 开源项目维护，是一套开放、轻量、基于事件的 Agent 与用户交互协议。它用于标准化 AI Agent 与面向用户应用之间的连接，约定 Agent 后端接收符合协议的输入，并在执行过程中发出符合标准事件类型的运行事件。</p>
-<p><code>tRPC-Agent-Go</code> 提供 AG-UI 服务端集成，用于在已有 Agent 之上提供符合 AG-UI 协议的对话服务。前端以 AG-UI 请求发起对话，服务端执行 Agent，并以 AG-UI 事件流持续返回运行过程中的事件。</p>
-<h2 id="_1">快速上手</h2>
-<p>假设你已实现一个 Agent，可以按如下方式接入 AG-UI 协议并启动服务：</p>
+<h1 id="goal-extension">Goal Extension</h1>
+<p>The Goal extension adds a session-scoped objective contract to an <code>LLMAgent</code>.
+It is useful when a user wants the agent to keep working until a larger
+objective is either complete or blocked.</p>
+<p>This is an Agent extension, not a Runner mode:</p>
+<ul>
+<li>install it with <code>llmagent.WithExtensions(goal.New())</code>;</li>
+<li>the model gets <code>get_goal</code>, <code>create_goal</code>, and <code>update_goal</code>;</li>
+<li>goal state is stored in session state;</li>
+<li>streaming progress output can still be emitted, while premature final model
+  responses are blocked inside the same model loop;</li>
+<li>the outer <code>Runner.Run</code> still ends with one <code>runner.completion</code>.</li>
+</ul>
+<h2 id="usage">Usage</h2>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
@@ -2947,175 +2874,74 @@
 <span class="normal"><a href="#__codelineno-0-12">12</a></span>
 <span class="normal"><a href="#__codelineno-0-13">13</a></span>
 <span class="normal"><a href="#__codelineno-0-14">14</a></span>
-<span class="normal"><a href="#__codelineno-0-15">15</a></span>
-<span class="normal"><a href="#__codelineno-0-16">16</a></span>
-<span class="normal"><a href="#__codelineno-0-17">17</a></span>
-<span class="normal"><a href="#__codelineno-0-18">18</a></span>
-<span class="normal"><a href="#__codelineno-0-19">19</a></span>
-<span class="normal"><a href="#__codelineno-0-20">20</a></span>
-<span class="normal"><a href="#__codelineno-0-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">&quot;net/http&quot;</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="p">)</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="c1">// 创建 Agent</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">newAgent</span><span class="p">()</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="c1">// 创建 Runner</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="nx">runner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Info</span><span class="p">().</span><span class="nx">Name</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="k">defer</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="c1">// 创建 AG-UI 服务，指定 HTTP 路由</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">runner</span><span class="p">,</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithPath</span><span class="p">(</span><span class="s">&quot;/agui&quot;</span><span class="p">))</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;create agui server failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="p">}</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="c1">// 启动 HTTP 服务</span>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">&quot;127.0.0.1:8080&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">Handler</span><span class="p">());</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;server stopped with error: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-0-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/extension/goal&quot;</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="p">)</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="nx">ag</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="w">    </span><span class="s">&quot;planner&quot;</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithExtensions</span><span class="p">(</span><span class="nx">goal</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="w">        </span><span class="nx">goal</span><span class="p">.</span><span class="nx">WithMaxRetries</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="w">    </span><span class="p">)),</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a><span class="w">    </span><span class="c1">// Optional hard limits for one LLMAgent invocation.</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMaxLLMCalls</span><span class="p">(</span><span class="mi">20</span><span class="p">),</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMaxToolIterations</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p><code>agui.WithPath</code> 用于设置实时对话路由，默认路由为 <code>/</code>。</p>
-<p>完整代码示例参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/default">examples/agui/server/default</a>。</p>
-<p>Runner 全面的使用方法参见 <a href="../runner/">runner</a>。</p>
-<p>前端侧可以使用支持 AG-UI 协议的客户端框架接入该服务，例如 <a href="https://github.com/CopilotKit/CopilotKit">CopilotKit</a> 或 <a href="https://tdesign.tencent.com/react-chat/overview">TDesign Chat</a>。仓库内提供两个可运行的 Web UI 示例：</p>
-<ul>
-<li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/tdesign-chat">examples/agui/client/tdesign-chat</a>：基于 Vite + React + TDesign 的客户端，演示自定义事件、Graph interrupt 审批、消息快照加载以及报告侧边栏等能力。</li>
-<li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/client/copilotkit">examples/agui/client/copilotkit</a>：基于 CopilotKit 搭建的 Next.js 客户端。</li>
-</ul>
-<p><img alt="agui" src="../../assets/img/agui/agui.png" /></p>
-<h2 id="_2">核心概念</h2>
-<p>AG-UI 集成让前端可以按 AG-UI 协议调用 <code>tRPC-Agent-Go</code> 中已有的 Agent。服务端接收 AG-UI 请求后，会将其转换为 <code>runner.Runner</code> 可执行的输入；<code>runner.Runner</code> 执行过程中产生的框架内部事件，再被转换为 AG-UI 事件返回给前端。</p>
-<p>一次实时对话请求的主链路如下：</p>
-<pre class="mermaid"><code>sequenceDiagram
-    participant Client as 前端
-    participant Service as Service
-    participant AGUIRunner as AG-UI Runner
-    participant Translator as Translator
-    participant Runner as runner.Runner
-    participant Agent as Agent
-
-    Client-&gt;&gt;Service: 发起对话请求
-    Service-&gt;&gt;AGUIRunner: 处理对话请求
-    AGUIRunner-&gt;&gt;Translator: 创建 Translator
-    AGUIRunner-&gt;&gt;Runner: 调用 runner.Run
-    Runner-&gt;&gt;Agent: 执行 Agent
-
-    loop 处理内部事件流
-        Agent--&gt;&gt;Runner: 产生内部事件
-        Runner--&gt;&gt;AGUIRunner: 返回内部事件
-        AGUIRunner-&gt;&gt;Translator: 翻译内部事件
-        Translator--&gt;&gt;AGUIRunner: 返回 AG-UI 事件
-        AGUIRunner--&gt;&gt;Service: 返回 AG-UI 事件
-        Service--&gt;&gt;Client: 通过 SSE 推送事件
-    end</code></pre>
-<p>这条链路从前端发起对话请求开始。<code>Service</code> 接收请求后交给 AG-UI Runner；AG-UI Runner 创建本次运行使用的 Translator，并调用 <code>runner.Runner</code> 启动 Agent 执行。执行过程中，<code>runner.Runner</code> 持续产生框架内部事件，AG-UI Runner 将这些事件交给 Translator 转换为 AG-UI 事件，再返回给 <code>Service</code>，由 <code>Service</code> 通过 SSE 推送给前端。</p>
-<p>在这条链路中，<code>Server</code> 提供 HTTP 入口，<code>Service</code> 负责事件流通信，AG-UI Runner 将协议请求转换为 <code>runner.Runner</code> 所需的输入和运行选项，<code>Translator</code> 将框架内部事件转换为 AG-UI 事件。</p>
-<h3 id="server">Server</h3>
-<p><code>agui.Server</code> 将已有的 <code>runner.Runner</code> 暴露为 AG-UI HTTP 服务，并对外提供可挂载到应用 HTTP 服务中的 <code>http.Handler</code>。</p>
-<p>创建方法如下：</p>
+<p>Applications may provide their own command layer. For example, a CLI can parse
+<code>/goal &lt;objective&gt;</code> and create the session goal before calling <code>Runner.Run</code>:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
-<span class="normal"><a href="#__codelineno-1-2">2</a></span>
-<span class="normal"><a href="#__codelineno-1-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">runner</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">Runner</span><span class="p">,</span><span class="w"> </span><span class="nx">opt</span><span class="w"> </span><span class="o">...</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">Server</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nx">key</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">session</span><span class="p">.</span><span class="nx">Key</span><span class="p">{</span><span class="nx">AppName</span><span class="p">:</span><span class="w"> </span><span class="nx">appName</span><span class="p">,</span><span class="w"> </span><span class="nx">UserID</span><span class="p">:</span><span class="w"> </span><span class="nx">userID</span><span class="p">,</span><span class="w"> </span><span class="nx">SessionID</span><span class="p">:</span><span class="w"> </span><span class="nx">sessionID</span><span class="p">}</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">goal</span><span class="p">.</span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="nx">objective</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<p>创建 <code>Server</code> 时，框架会确定实时对话、消息快照和取消路由，并把这些路由连接到对应的 <code>Service</code> 和 AG-UI Runner。三类路由分别对应不同的交互阶段：</p>
+<p>The framework does not parse slash commands.</p>
+<h2 id="semantics">Semantics</h2>
+<p>When a goal is active, a final model response is not enough. The model must
+either continue working or call <code>update_goal</code> with:</p>
 <ul>
-<li>实时对话路由：接收前端对话请求，并返回 Agent 执行过程中的 AG-UI 事件流。</li>
-<li>消息快照路由：从已保存的 AG-UI 事件中恢复历史消息，用于页面初始化、刷新或重连后的状态恢复。</li>
-<li>取消路由：根据会话信息找到正在运行的对话请求，并取消该运行。</li>
+<li><code>complete</code>: the objective has actually been achieved;</li>
+<li><code>blocked</code>: the same blocking condition has repeated across goal attempts, and
+  the agent cannot make meaningful progress without user input or an external
+  state change.</li>
 </ul>
-<p><code>Server</code> 负责建立 HTTP 入口；Agent 运行仍由传入的 <code>runner.Runner</code> 完成。</p>
-<h3 id="service">Service</h3>
-<p><code>service.Service</code> 定义 AG-UI 事件流的通信方式。默认实现是 SSE，因此前端发起实时对话请求后，会通过同一条 SSE 连接持续接收 AG-UI 事件。</p>
-<p>接口定义如下：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
-<span class="normal"><a href="#__codelineno-2-2">2</a></span>
-<span class="normal"><a href="#__codelineno-2-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Service</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">Handler</span><span class="p">()</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Handler</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p>如果需要使用 WebSocket 等其他通信协议，可以自定义 <code>Service</code> 实现。</p>
-<h3 id="ag-ui-runner">AG-UI Runner</h3>
-<p>AG-UI Runner 连接 AG-UI 请求和 <code>runner.Runner</code>。前端提交的是 AG-UI 定义的请求体 <a href="https://docs.ag-ui.com/sdk/js/core/types#runagentinput"><code>RunAgentInput</code></a>，而 <code>runner.Runner</code> 需要的是一次可执行的运行输入；AG-UI Runner 负责完成这两者之间的适配。</p>
-<p>接口定义如下：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
-<span class="normal"><a href="#__codelineno-3-2">2</a></span>
-<span class="normal"><a href="#__codelineno-3-3">3</a></span>
-<span class="normal"><a href="#__codelineno-3-4">4</a></span>
-<span class="normal"><a href="#__codelineno-3-5">5</a></span>
-<span class="normal"><a href="#__codelineno-3-6">6</a></span>
-<span class="normal"><a href="#__codelineno-3-7">7</a></span>
-<span class="normal"><a href="#__codelineno-3-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">    </span><span class="nx">aguievents</span><span class="w"> </span><span class="s">&quot;github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events&quot;</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui/adapter&quot;</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="p">)</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Runner</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">runAgentInput</span><span class="w"> </span><span class="o">*</span><span class="nx">adapter</span><span class="p">.</span><span class="nx">RunAgentInput</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">&lt;-</span><span class="kd">chan</span><span class="w"> </span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p>在这个过程中，AG-UI Runner 会从请求中解析会话、消息、状态和透传参数，并将它们整理为 <code>runner.Runner</code> 所需的输入和运行选项。这样，前端可以继续使用 AG-UI 协议，后端也可以继续沿用 <code>tRPC-Agent-Go</code> 的 Runner。</p>
-<p>运行开始后，AG-UI Runner 还会接收 <code>runner.Runner</code> 产生的框架内部事件，并交给 Translator 转换为 AG-UI 事件，再返回给 Service。</p>
-<h3 id="translator">Translator</h3>
-<p><code>Translator</code> 负责把 <code>tRPC-Agent-Go</code> 内部事件转换为 AG-UI 事件。AG-UI Runner 从 <code>runner.Runner</code> 接收到内部事件后，会逐条交给 Translator 处理；Translator 返回的 AG-UI 事件随后由 Service 推送给前端。</p>
-<p>接口定义如下：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-4-10">10</a></span>
-<span class="normal"><a href="#__codelineno-4-11">11</a></span>
-<span class="normal"><a href="#__codelineno-4-12">12</a></span>
-<span class="normal"><a href="#__codelineno-4-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">    </span><span class="nx">aguievents</span><span class="w"> </span><span class="s">&quot;github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events&quot;</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="nx">agentevent</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/event&quot;</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="p">)</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Translator</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="w">    </span><span class="nx">Translate</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">event</span><span class="w"> </span><span class="o">*</span><span class="nx">agentevent</span><span class="p">.</span><span class="nx">Event</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="p">}</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="kd">type</span><span class="w"> </span><span class="nx">PostRunFinalizingTranslator</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="w">    </span><span class="nx">Translator</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="w">    </span><span class="nx">PostRunFinalizationEvents</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">aguievents</span><span class="p">.</span><span class="nx">Event</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p>框架内置的 Translator 实现会处理文本输出、工具调用、工具结果、思考内容、实时进度和运行生命周期事件。由于 AG-UI 中存在成组的流式事件，Translator 需要在单次运行内维护必要状态；运行结束时，<code>PostRunFinalizationEvents</code> 用于补齐尚未关闭的协议事件，避免前端收到不完整的事件序列。</p>
-<p>需要追加自定义事件、改写事件内容，或适配特定前端组件时，可以自定义 Translator，或通过翻译回调调整事件。</p>
-<h2 id="_3">路由前缀</h2>
-<p><code>agui.WithBasePath</code> 设置 AG-UI 服务的基础路由前缀，默认值为 <code>/</code>。它用于在统一前缀下挂载实时对话、消息快照和取消路由，避免与现有服务路由冲突。</p>
-<p><code>agui.WithPath</code>、<code>agui.WithMessagesSnapshotPath</code> 与 <code>agui.WithCancelPath</code> 只定义各自的子路由，框架会自动将它们与 <code>BasePath</code> 拼接成最终可访问的路由。</p>
-<p>使用示例如下：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-5-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-5-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-5-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-5-10">10</a></span>
-<span class="normal"><a href="#__codelineno-5-11">11</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/agui&quot;</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">agui</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">    </span><span class="nx">runner</span><span class="p">,</span>
-</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithBasePath</span><span class="p">(</span><span class="s">&quot;/agui/&quot;</span><span class="p">),</span>
-</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithPath</span><span class="p">(</span><span class="s">&quot;/chat&quot;</span><span class="p">),</span>
-</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithMessagesSnapshotPath</span><span class="p">(</span><span class="s">&quot;/history&quot;</span><span class="p">),</span>
-</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithCancelEnabled</span><span class="p">(</span><span class="kc">true</span><span class="p">),</span>
-</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="w">    </span><span class="nx">agui</span><span class="p">.</span><span class="nx">WithCancelPath</span><span class="p">(</span><span class="s">&quot;/cancel&quot;</span><span class="p">),</span>
-</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="p">)</span>
-</span></code></pre></div></td></tr></table></div>
-<p>此时实时对话路由为 <code>/agui/chat</code>，消息快照路由为 <code>/agui/history</code>，取消路由为 <code>/agui/cancel</code>。</p>
+<p>If the model repeatedly emits premature final responses, the extension retries
+up to <code>WithMaxRetries</code>. After the retry budget is exhausted, the response passes
+through unchanged so the run cannot loop forever.</p>
+<p><code>WithMaxRetries</code> only bounds the premature-final-response -&gt; reminder -&gt;
+continuation cycle. Applications can also configure <code>WithMaxLLMCalls</code> and
+<code>WithMaxToolIterations</code> on the same <code>LLMAgent</code> to impose hard limits on model
+calls and tool-call iterations in that agent's invocation. When Goal is installed
+on the Runner's primary <code>LLMAgent</code>, this usually bounds one <code>Runner.Run</code>.
+Reaching either limit stops the run, but does not automatically mark the session
+goal <code>complete</code> or <code>blocked</code>; a later invocation receives a new budget. These
+limits are therefore invocation-level circuit breakers, not goal terminal-state
+decisions.</p>
+<p>Goal does not change streaming configuration. Streaming remains controlled by
+the <code>LLMAgent</code> generation config or run options such as <code>agent.WithStream(...)</code>.
+Callers may see intermediate assistant output before the agent continues; that
+output does not mean the goal has completed. The run is still terminal only when
+<code>runner.completion</code> is emitted.</p>
+<p>Goal tools need serial semantics. Do not enable <code>llmagent.WithEnableParallelTools(true)</code>
+on the same <code>LLMAgent</code> that owns the Goal extension. A model response should not
+call <code>create_goal</code> and <code>update_goal</code> in the same parallel tool batch, because
+parallel execution uses isolated invocation/session views for each tool call.
+If an application needs parallel business tools, keep Goal on a serial owner
+agent or use a separate agent for the parallel work.</p>
+<h2 id="boundaries">Boundaries</h2>
+<ul>
+<li>The extension is installed on one <code>LLMAgent</code>; sub-agents do not inherit it.</li>
+<li>Multiple agents can share the same session goal by using the same state key,
+  but the usual recommendation is to install it on the agent that owns the
+  completion decision.</li>
+<li><code>token_budget</code> is not part of this extension. Budgeting is a separate runtime
+  policy.</li>
+<li>Concurrency control is still the caller's responsibility. If the same session
+  is run concurrently, session state writes follow the behavior of the selected
+  <code>session.Service</code>.</li>
+</ul>
+<p>See <code>examples/goal</code> for a runnable example.</p>
 
 
 
@@ -3135,20 +2961,20 @@
     
       
   <span class="md-source-file__fact">
-    <span class="md-icon" title="最后更新">
+    <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月7日 09:51:41 UTC">2026-05-07 09:51:41</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 30, 2026 03:41:53 UTC">2026-06-30 03:41:53</span>
   </span>
 
     
     
       
   <span class="md-source-file__fact">
-    <span class="md-icon" title="创建日期">
+    <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年5月7日 09:51:41 UTC">2026-05-07 09:51:41</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 30, 2026 03:41:53 UTC">2026-06-30 03:41:53</span>
   </span>
 
     
@@ -3226,33 +3052,33 @@
   
     
       
-      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../gateway/" class="md-footer__link md-footer__link--prev" aria-label="上一页: Gateway">
+          <a href="../agent/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Agent">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
             </div>
             <div class="md-footer__title">
               <span class="md-footer__direction">
-                上一页
+                Previous
               </span>
               <div class="md-ellipsis">
-                Gateway
+                Agent
               </div>
             </div>
           </a>
         
         
           
-          <a href="chat/" class="md-footer__link md-footer__link--next" aria-label="下一页: 实时对话路由">
+          <a href="../multiagent/" class="md-footer__link md-footer__link--next" aria-label="Next: Multi Agent">
             <div class="md-footer__title">
               <span class="md-footer__direction">
-                下一页
+                Next
               </span>
               <div class="md-ellipsis">
-                实时对话路由
+                Multi Agent
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -3288,12 +3114,12 @@
     
     
       
-      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      <script src="../assets/javascripts/bundle.92b07e13.min.js"></script>
       
-        <script src="../../assets/javascripts/mathjax.js"></script>
+        <script src="../assets/javascripts/mathjax.js"></script>
       
         <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
       
