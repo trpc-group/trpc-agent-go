@@ -513,6 +513,22 @@ var tdsqlIndexDefs = []indexDefinition{
 }
 
 // initDB initializes the database schema.
+//
+// DDL is only executed for tables that do NOT already exist: a missing table is
+// created together with all of its indexes (a safe first-time bootstrap). For a
+// table that already exists, initDB never runs DDL against it — altering a live
+// table (e.g. adding an index, which can lock or rebuild it, and may require
+// privileges the runtime account intentionally lacks) is risky and is left to
+// the operator. Index drift on existing tables is surfaced by verifySchema: a
+// missing or incorrect UNIQUE index is fatal (the service refuses to start
+// without the uniqueness constraint), while other index drift is logged as a
+// warning.
+//
+// First-time creation still requires the account to hold CREATE and INDEX
+// privileges. If a freshly created table's index creation fails, the table is
+// left in place and treated as existing on the next start — but its missing
+// UNIQUE index is then caught by verifySchema and fails startup, so a partial
+// bootstrap cannot silently run without uniqueness enforcement.
 func (s *Service) initDB(ctx context.Context) error {
 	log.InfoContext(ctx, "initializing mysql session database schema...")
 
@@ -525,30 +541,69 @@ func (s *Service) initDB(ctx context.Context) error {
 		log.InfoContext(ctx, "TDSQL sharding mode enabled, using TDSQL schema")
 	}
 
-	// Create tables
-	for _, tableDef := range tables {
-		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableDef.name)
-		sql := strings.ReplaceAll(tableDef.template, "{{TABLE_NAME}}", fullTableName)
-
-		if _, err := s.mysqlClient.Exec(ctx, sql); err != nil {
-			return fmt.Errorf("create table %s failed: %w", fullTableName, err)
-		}
-		log.InfofContext(ctx, "created table: %s", fullTableName)
+	// Group index definitions by their table so a freshly created table can be
+	// populated with its indexes in the same bootstrap step.
+	indexesByTable := make(map[string][]indexDefinition, len(tables))
+	for _, indexDef := range indexes {
+		indexesByTable[indexDef.table] = append(indexesByTable[indexDef.table], indexDef)
 	}
 
-	// Create indexes
-	for _, indexDef := range indexes {
-		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, indexDef.table)
-		indexName := sqldb.BuildIndexName(s.opts.tablePrefix, indexDef.table, indexDef.suffix)
-		sql := indexDef.template
-		sql = strings.ReplaceAll(sql, "{{TABLE_NAME}}", fullTableName)
-		sql = strings.ReplaceAll(sql, "{{INDEX_NAME}}", indexName)
+	// Create each missing table together with its indexes. Pre-existing tables
+	// are left untouched; any schema drift is reported by verifySchema below.
+	for _, tableDef := range tables {
+		fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableDef.name)
 
-		// MySQL doesn't have "IF NOT EXISTS" for indexes in older versions
-		// We'll use a different approach: try to create and ignore duplicate key errors
-		if _, err := s.mysqlClient.Exec(ctx, sql); err != nil {
-			// Check if it's a duplicate index name error (error code 1061).
-			// This means the index already exists, which is safe to skip.
+		exists, err := s.tableExists(ctx, fullTableName)
+		if err != nil {
+			return fmt.Errorf("check table %s existence failed: %w", fullTableName, err)
+		}
+		if exists {
+			log.InfofContext(ctx, "table %s already exists, skipping schema DDL; "+
+				"missing indexes (if any) are reported by schema verification and must "+
+				"be applied manually", fullTableName)
+			continue
+		}
+
+		if err := s.createTableWithIndexes(ctx, tableDef, indexesByTable[tableDef.name]); err != nil {
+			return err
+		}
+	}
+
+	// Verify schema (column drift is fatal; index drift is logged as warnings).
+	if err := s.verifySchema(ctx); err != nil {
+		return fmt.Errorf("schema verification failed: %w", err)
+	}
+
+	log.InfoContext(ctx, "mysql session database schema initialized successfully")
+	return nil
+}
+
+// createTableWithIndexes creates a single table and all of its indexes. It is
+// only called for tables that do not yet exist, so executing DDL here is safe.
+func (s *Service) createTableWithIndexes(
+	ctx context.Context,
+	tableDef tableDefinition,
+	indexes []indexDefinition,
+) error {
+	fullTableName := sqldb.BuildTableName(s.opts.tablePrefix, tableDef.name)
+
+	// Create the table. IF NOT EXISTS guards against a concurrent creator.
+	tableSQL := strings.ReplaceAll(tableDef.template, "{{TABLE_NAME}}", fullTableName)
+	if _, err := s.mysqlClient.Exec(ctx, tableSQL); err != nil {
+		return fmt.Errorf("create table %s failed: %w", fullTableName, err)
+	}
+	log.InfofContext(ctx, "created table: %s", fullTableName)
+
+	// Create the table's indexes as part of the same first-time bootstrap.
+	for _, indexDef := range indexes {
+		indexName := sqldb.BuildIndexName(s.opts.tablePrefix, indexDef.table, indexDef.suffix)
+		indexSQL := strings.ReplaceAll(indexDef.template, "{{TABLE_NAME}}", fullTableName)
+		indexSQL = strings.ReplaceAll(indexSQL, "{{INDEX_NAME}}", indexName)
+
+		// MySQL doesn't have "IF NOT EXISTS" for indexes in older versions, so we
+		// try to create and tolerate the "duplicate index name" error (1061) in
+		// case the index already exists (e.g. a concurrent creator won the race).
+		if _, err := s.mysqlClient.Exec(ctx, indexSQL); err != nil {
 			if !isDuplicateIndexNameError(err) {
 				return fmt.Errorf(
 					"create index %s on table %s failed: %w",
@@ -557,19 +612,11 @@ func (s *Service) initDB(ctx context.Context) error {
 					err,
 				)
 			}
-			// Index already exists, log and continue.
 			log.InfofContext(ctx, "index %s already exists on table %s, skipping", indexName, fullTableName)
-		} else {
-			log.InfofContext(ctx, "created index: %s on table %s", indexName, fullTableName)
+			continue
 		}
+		log.InfofContext(ctx, "created index: %s on table %s", indexName, fullTableName)
 	}
-
-	// Verify schema
-	if err := s.verifySchema(ctx); err != nil {
-		return fmt.Errorf("schema verification failed: %w", err)
-	}
-
-	log.InfoContext(ctx, "mysql session database schema initialized successfully")
 	return nil
 }
 
@@ -603,9 +650,11 @@ func (s *Service) verifySchema(ctx context.Context) error {
 			return fmt.Errorf("verify columns for table %s failed: %w", fullTableName, err)
 		}
 
-		// Verify indexes (non-fatal, just log warnings)
+		// Verify indexes. A missing/incorrect UNIQUE index is fatal (uniqueness is
+		// no longer enforced); non-unique index drift is logged as a warning
+		// inside verifyIndexes and does not return an error.
 		if err := s.verifyIndexes(ctx, fullTableName, schema.indexes); err != nil {
-			log.WarnfContext(ctx, "verify indexes for table %s failed (non-fatal): %v", fullTableName, err)
+			return fmt.Errorf("verify indexes for table %s failed: %w", fullTableName, err)
 		}
 	}
 
@@ -682,16 +731,20 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		expectedIndexNames[expectedIndexName] = true
 	}
 
-	// Get actual indexes from database
+	// Get actual indexes from database, including whether each is non-unique
+	// (NON_UNIQUE: 0 = unique, 1 = non-unique; same value on every column row).
 	actualIndexes := make(map[string][]string)
+	actualNonUnique := make(map[string]bool)
 	err := s.mysqlClient.Query(ctx, func(rows *sql.Rows) error {
 		var indexName, columnName string
-		if err := rows.Scan(&indexName, &columnName); err != nil {
+		var nonUnique int
+		if err := rows.Scan(&indexName, &columnName, &nonUnique); err != nil {
 			return err
 		}
 		actualIndexes[indexName] = append(actualIndexes[indexName], columnName)
+		actualNonUnique[indexName] = nonUnique != 0
 		return nil
-	}, `SELECT INDEX_NAME, COLUMN_NAME
+	}, `SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE
 		FROM information_schema.statistics
 		WHERE table_schema = DATABASE()
 		AND table_name = ?
@@ -701,7 +754,10 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		return fmt.Errorf("query indexes failed: %w", err)
 	}
 
-	// Check each expected index
+	// Check each expected index. A missing/incorrect UNIQUE index is collected
+	// and returned as an error (fatal) because uniqueness is correctness-critical;
+	// non-unique index drift is only logged as a warning.
+	var invalidUnique []string
 	for _, expected := range expectedIndexes {
 		expectedIndexName := sqldb.BuildIndexName(s.opts.tablePrefix, expected.table, expected.suffix)
 		actualColumns, exists := actualIndexes[expectedIndexName]
@@ -709,8 +765,17 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 			// Build CREATE INDEX statement for user reference.
 			columnsStr := buildIndexColumnsStr(expected.table, expected.suffix, expected.columns, s.opts.tdsqlSharding)
 			createSQL := buildCreateIndexSQL(expectedIndexName, fullTableName, columnsStr, expected.unique)
-			log.WarnfContext(ctx, "index %s on table %s is missing, please run: %s",
-				expectedIndexName, fullTableName, createSQL)
+			if expected.unique {
+				// A missing UNIQUE index is correctness-critical: uniqueness is no
+				// longer enforced. Log at ERROR and mark it fatal.
+				log.ErrorfContext(ctx, "UNIQUE index %s on table %s is missing; uniqueness is NOT "+
+					"enforced (duplicate active rows possible). Please run: %s",
+					expectedIndexName, fullTableName, createSQL)
+				invalidUnique = append(invalidUnique, expectedIndexName)
+			} else {
+				log.WarnfContext(ctx, "index %s on table %s is missing, please run: %s",
+					expectedIndexName, fullTableName, createSQL)
+			}
 			continue
 		}
 
@@ -719,9 +784,32 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 			columnsStr := buildIndexColumnsStr(expected.table, expected.suffix, expected.columns, s.opts.tdsqlSharding)
 			dropSQL := fmt.Sprintf("DROP INDEX %s ON %s;", expectedIndexName, fullTableName)
 			createSQL := buildCreateIndexSQL(expectedIndexName, fullTableName, columnsStr, expected.unique)
-			log.WarnfContext(ctx, "index %s on table %s has wrong columns: got %v, want %v. "+
-				"Please drop and recreate: %s %s",
-				expectedIndexName, fullTableName, actualColumns, expected.columns, dropSQL, createSQL)
+			if expected.unique {
+				// A UNIQUE index on the wrong columns means uniqueness is not
+				// enforced as intended: log at ERROR and mark it fatal.
+				log.ErrorfContext(ctx, "UNIQUE index %s on table %s has wrong columns: got %v, want %v; "+
+					"uniqueness may not be enforced as expected. Please drop and recreate: %s %s",
+					expectedIndexName, fullTableName, actualColumns, expected.columns, dropSQL, createSQL)
+				invalidUnique = append(invalidUnique, expectedIndexName)
+			} else {
+				log.WarnfContext(ctx, "index %s on table %s has wrong columns: got %v, want %v. "+
+					"Please drop and recreate: %s %s",
+					expectedIndexName, fullTableName, actualColumns, expected.columns, dropSQL, createSQL)
+			}
+			continue
+		}
+
+		// Columns match. For a UNIQUE index, verify it is actually unique — a
+		// same-name index with the right columns could still be non-unique, which
+		// would leave the uniqueness constraint unenforced.
+		if expected.unique && actualNonUnique[expectedIndexName] {
+			columnsStr := buildIndexColumnsStr(expected.table, expected.suffix, expected.columns, s.opts.tdsqlSharding)
+			dropSQL := fmt.Sprintf("DROP INDEX %s ON %s;", expectedIndexName, fullTableName)
+			createSQL := buildCreateIndexSQL(expectedIndexName, fullTableName, columnsStr, expected.unique)
+			log.ErrorfContext(ctx, "index %s on table %s exists with the expected columns but is NOT unique; "+
+				"uniqueness is NOT enforced. Please drop and recreate: %s %s",
+				expectedIndexName, fullTableName, dropSQL, createSQL)
+			invalidUnique = append(invalidUnique, expectedIndexName)
 		}
 	}
 
@@ -737,6 +825,10 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 		}
 	}
 
+	if len(invalidUnique) > 0 {
+		return fmt.Errorf("required unique index(es) missing or invalid on table %s: %v",
+			fullTableName, invalidUnique)
+	}
 	return nil
 }
 
