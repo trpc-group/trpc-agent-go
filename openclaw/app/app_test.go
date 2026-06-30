@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/claudecode"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	sandboxexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
@@ -651,7 +652,7 @@ func TestFileMemoryStoreForBackend_FileOnly(t *testing.T) {
 func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -670,7 +671,7 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	store, err := memoryfile.NewStore(root)
 	require.NoError(t, err)
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, store)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, nil)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
@@ -683,12 +684,58 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	)
 }
 
+func TestBuildOpenClawTools_UsesSandboxExecCommand(t *testing.T) {
+	t.Parallel()
+
+	engine := codeexecutor.NewEngine(nil, nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, engine)
+	decl := findToolDeclaration(bundle.tools, "exec_command")
+	require.NotNil(t, decl)
+	require.Contains(t, decl.Description, "inside the configured sandbox")
+	execTool := findTool(bundle.tools, "exec_command")
+	callable, ok := execTool.(tool.CallableTool)
+	require.True(t, ok)
+	_, err := callable.Call(
+		context.Background(),
+		[]byte(`{"command":"echo ok","background":true}`),
+	)
+	require.ErrorContains(t, err, "foreground non-interactive")
+	require.Nil(t, findToolDeclaration(bundle.tools, "write_stdin"))
+	require.Nil(t, findToolDeclaration(bundle.tools, "kill_session"))
+	require.Nil(t, bundle.execMgr)
+}
+
+func TestBuildOpenClawTools_UsesSandboxExecCommandWithMemoryFileStore(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	engine := codeexecutor.NewEngine(nil, nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, engine)
+	decl := findToolDeclaration(bundle.tools, "exec_command")
+	require.NotNil(t, decl)
+	require.Contains(t, decl.Description, "inside the configured sandbox")
+	require.Contains(
+		t,
+		decl.Description,
+		"Memory-file environment metadata may be present",
+	)
+	require.Nil(t, findToolDeclaration(bundle.tools, "write_stdin"))
+	require.Nil(t, findToolDeclaration(bundle.tools, "kill_session"))
+	require.Nil(t, bundle.execMgr)
+}
+
 func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 	t *testing.T,
 ) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil)
 	decl := findToolDeclaration(bundle.tools, "conversation_history")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -701,7 +748,7 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil)
 	require.NotNil(
 		t,
 		findToolDeclaration(bundle.tools, "subagents_spawn"),
@@ -1578,6 +1625,49 @@ func TestRun_CreateAgentFailsExitCode(t *testing.T) {
 	require.Equal(t, 1, exitErr.Code)
 }
 
+func TestNewRuntimeWithOptions_SandboxExecutorRequiresProgramRunner(t *testing.T) {
+	cfgPath := writeSandboxCodeExecutorConfig(t)
+
+	rt, err := NewRuntimeWithOptions(context.Background(), []string{
+		"-config", cfgPath,
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+	}, withCodeExecutorLoader(testCodeExecutorLoader))
+	require.Nil(t, rt)
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.EqualError(
+		t,
+		exitErr.Err,
+		"sandbox code executor does not expose a program runner",
+	)
+}
+
+func TestRun_SandboxExecutorRequiresProgramRunner(t *testing.T) {
+	cfgPath := writeSandboxCodeExecutorConfig(t)
+
+	err := run(context.Background(), []string{
+		"-config", cfgPath,
+		"-mode", modeMock,
+		"-state-dir", t.TempDir(),
+		"-skills-root", t.TempDir(),
+	}, withCodeExecutorLoader(testCodeExecutorLoader))
+	require.Error(t, err)
+
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.EqualError(
+		t,
+		exitErr.Err,
+		"sandbox code executor does not expose a program runner",
+	)
+}
+
 func TestRun_ClaudeCode_Smoke(t *testing.T) {
 	dir := t.TempDir()
 
@@ -2327,6 +2417,62 @@ func TestNewAgent_SandboxExecOmitsWorkspaceExec(t *testing.T) {
 	require.False(t, names["workspace_exec"])
 	require.False(t, names["workspace_write_stdin"])
 	require.False(t, names["workspace_kill_session"])
+}
+
+func TestNewAgent_SandboxOpenClawToolingGuidanceMatchesTools(t *testing.T) {
+	t.Parallel()
+
+	root := createAppTestSkill(t)
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:             "demo",
+		SkillsRoot:          root,
+		StateDir:            t.TempDir(),
+		EnableOpenClawTools: true,
+		CodeExecutor: codeExecutorOptions{
+			Type: codeExecutorTypeSandbox,
+			Sandbox: sandboxCodeExecutorOptions{
+				Backend:        sandboxBackendAuto,
+				Profile:        sandboxProfileWorkspaceWrite,
+				Network:        sandboxNetworkRestricted,
+				DefaultTimeout: time.Second,
+				OutputMaxBytes: 1024,
+				ShellEnv: sandboxShellEnvOptions{
+					Inherit:              sandboxShellEnvInheritCore,
+					ApplyDefaultExcludes: true,
+				},
+			},
+		},
+	}, nil, nil)
+	require.NoError(t, err)
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	content := joinAllMessageContent(req)
+	require.Contains(
+		t,
+		content,
+		"exec_command only supports foreground non-interactive commands",
+	)
+	require.Contains(
+		t,
+		content,
+		"does not automatically mount host paths",
+	)
+	require.NotContains(
+		t,
+		content,
+		"write_stdin and kill_session when needed",
+	)
+	require.NotContains(
+		t,
+		content,
+		"When exec_command or write_stdin generates images",
+	)
 }
 
 func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
@@ -6912,18 +7058,6 @@ func TestCodeExecutorFromConfigBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, exec)
 
-	exec, err = codeExecutorFromConfig("/state", false, codeExecutorOptions{
-		Type: " NONE ",
-	})
-	require.NoError(t, err)
-	require.Nil(t, exec)
-
-	exec, err = codeExecutorFromConfig("/state", false, codeExecutorOptions{
-		Type: codeExecutorTypeLocal,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, exec)
-
 	exec, err = codeExecutorFromConfig(t.TempDir(), false, codeExecutorOptions{
 		Type: codeExecutorTypeSandbox,
 		Sandbox: sandboxCodeExecutorOptions{
@@ -6933,11 +7067,36 @@ func TestCodeExecutorFromConfigBranches(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, exec)
 
-	_, err = codeExecutorFromConfig("/state", false, codeExecutorOptions{
-		Type: "remote",
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unsupported code executor type")
+	for _, typ := range []string{"none", "local", "remote"} {
+		_, err = codeExecutorFromConfig("/state", false, codeExecutorOptions{
+			Type: typ,
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unsupported code executor type")
+	}
+}
+
+func TestIsSandboxCodeExecutor(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, isSandboxCodeExecutor(codeExecutorOptions{
+		Type: " SandBox ",
+	}))
+	require.False(t, isSandboxCodeExecutor(codeExecutorOptions{}))
+	require.False(t, isSandboxCodeExecutor(codeExecutorOptions{Type: "local"}))
+}
+
+func TestCodeExecutorEngine(t *testing.T) {
+	t.Parallel()
+
+	eng := codeexecutor.NewEngine(nil, nil, nil)
+	require.Same(
+		t,
+		eng,
+		codeExecutorEngine(&testEngineProviderExecutor{eng: eng}),
+	)
+	require.Nil(t, codeExecutorEngine(&testCodeExecutor{}))
+	require.Nil(t, codeExecutorEngine(nil))
 }
 
 func TestSandboxProfileAndBackendConfigBranches(t *testing.T) {
@@ -6996,4 +7155,60 @@ func TestSandboxShellEnvAndCopyStringMapBranches(t *testing.T) {
 	require.Equal(t, original, copied)
 	copied["A"] = "2"
 	require.Equal(t, "1", original["A"])
+}
+
+type testCodeExecutor struct{}
+
+func (testCodeExecutor) ExecuteCode(
+	context.Context,
+	codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (testCodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{}
+}
+
+type testEngineProviderExecutor struct {
+	testCodeExecutor
+	eng codeexecutor.Engine
+}
+
+func (e *testEngineProviderExecutor) Engine() codeexecutor.Engine {
+	return e.eng
+}
+
+func withCodeExecutorLoader(loader codeExecutorConfigLoader) RuntimeOption {
+	return func(opts *runtimeOptions) {
+		opts.codeExecutorLoader = loader
+	}
+}
+
+func testCodeExecutorLoader(
+	stateDir string,
+	enableLocal bool,
+	cfg codeExecutorOptions,
+) (codeexecutor.CodeExecutor, error) {
+	if isSandboxCodeExecutor(cfg) {
+		return &testCodeExecutor{}, nil
+	}
+	return codeExecutorFromConfig(stateDir, enableLocal, cfg)
+}
+
+func writeSandboxCodeExecutorConfig(t *testing.T) string {
+	t.Helper()
+
+	cfgData, err := yaml.Marshal(map[string]any{
+		"tools": map[string]any{
+			"code_executor": map[string]any{
+				"type": "sandbox",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o600))
+	return cfgPath
 }

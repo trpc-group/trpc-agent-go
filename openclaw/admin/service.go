@@ -4441,7 +4441,13 @@ const adminPageHTML = `<!doctype html>
           {{end}}
           <div class="config-field-list">
             {{range .Fields}}
-            <details class="config-field" id="config-field-{{.Key}}">
+            <details
+              class="config-field"
+              id="config-field-{{.Key}}"
+              data-config-field-key="{{.Key}}"
+              {{if .VisibleWhen.Key}}data-visible-when-key="{{.VisibleWhen.Key}}" data-visible-when-value="{{.VisibleWhen.Value}}"{{end}}
+              {{if .Hidden}}hidden{{end}}
+            >
               {{$field := .}}
               <summary class="config-field-summary">
                 <div class="config-field-top">
@@ -6052,6 +6058,44 @@ const adminPageHTML = `<!doctype html>
       };
 
       window.setInterval(poll, intervalValue * 1000);
+    })();
+
+    (function () {
+      const fields = Array.from(document.querySelectorAll("[data-config-field-key]"));
+      if (!fields.length) return;
+
+      const fieldByKey = new Map();
+      fields.forEach((field) => {
+        const key = field.getAttribute("data-config-field-key") || "";
+        if (key) {
+          fieldByKey.set(key, field);
+        }
+      });
+
+      const fieldValue = (key) => {
+        const field = fieldByKey.get(key);
+        if (!field) return "";
+        const input = field.querySelector('select[name="value"], input[name="value"]');
+        return input && typeof input.value === "string" ? input.value.trim() : "";
+      };
+
+      const updateDependentFields = () => {
+        fields.forEach((field) => {
+          const dependencyKey = field.getAttribute("data-visible-when-key") || "";
+          if (!dependencyKey) return;
+          const expectedValue = (field.getAttribute("data-visible-when-value") || "").trim();
+          field.hidden = fieldValue(dependencyKey) !== expectedValue;
+        });
+      };
+
+      fields.forEach((field) => {
+        const input = field.querySelector('select[name="value"], input[name="value"]');
+        if (input) {
+          input.addEventListener("change", updateDependentFields);
+          input.addEventListener("input", updateDependentFields);
+        }
+      });
+      updateDependentFields();
     })();
 
     (function () {
