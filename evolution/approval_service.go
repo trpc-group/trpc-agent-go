@@ -256,6 +256,9 @@ func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts Rol
 	if err != nil {
 		return nil, err
 	}
+	if err := validateRollbackTarget(target); err != nil {
+		return nil, err
+	}
 	currentRevID, err := s.currentActiveRevisionID(ctx, skillID)
 	if err != nil {
 		return nil, err
@@ -358,6 +361,16 @@ func (s *ApprovalService) findLatestActiveRevisionID(ctx context.Context, skillI
 		}
 	}
 	return "", nil
+}
+
+func validateRollbackTarget(target *Revision) error {
+	if target == nil {
+		return fmt.Errorf("rollback: nil target revision")
+	}
+	if target.Action != RevisionActionDelete && target.Spec == nil {
+		return fmt.Errorf("rollback: target revision %q has no skill spec", target.RevisionID)
+	}
+	return nil
 }
 
 // applyRollbackPublish materializes the rollback target through the

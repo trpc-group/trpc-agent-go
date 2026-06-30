@@ -395,6 +395,58 @@ func TestApprovalService_Rollback_TargetAlreadyActiveFromPointer(t *testing.T) {
 	assert.Empty(t, publishedSkills)
 }
 
+func TestApprovalService_Rollback_NonDeleteTargetRequiresSpec(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	pointer := NewFileActivePointer(dir)
+	pub := &mockPublisher{}
+	ctx := context.Background()
+	skillID := "missing-spec"
+
+	target := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-target",
+		Action:     RevisionActionCreate,
+		Status:     RevisionArchived,
+		CreatedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	current := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-current",
+		Action:     RevisionActionCreate,
+		Status:     RevisionActive,
+		Spec: &SkillSpec{
+			Name: "Missing Spec Current", Description: "current", WhenToUse: "w", Steps: []string{"s"},
+		},
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC),
+	}
+	require.NoError(t, store.WriteRevision(ctx, target))
+	require.NoError(t, store.WriteRevision(ctx, current))
+	require.NoError(t, pointer.Set(ctx, skillID, current.RevisionID))
+
+	svc := NewApprovalService(store, pointer, pub)
+	_, err := svc.Rollback(ctx, skillID, RollbackOpts{TargetRevisionID: target.RevisionID})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no skill spec")
+
+	storedTarget, err := store.ReadRevision(ctx, skillID, target.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionArchived, storedTarget.Status)
+
+	storedCurrent, err := store.ReadRevision(ctx, skillID, current.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionActive, storedCurrent.Status)
+
+	active, err := pointer.Get(ctx, skillID)
+	require.NoError(t, err)
+	assert.Equal(t, current.RevisionID, active)
+
+	pub.mu.Lock()
+	publishedSkills := append([]*SkillSpec(nil), pub.skills...)
+	pub.mu.Unlock()
+	assert.Empty(t, publishedSkills)
+}
+
 func TestApprovalService_CurrentActiveRevisionID_ReturnsPointerError(t *testing.T) {
 	svc := NewApprovalService(NewFileCandidateStore(t.TempDir()), errActivePointer{
 		err: fmt.Errorf("pointer unavailable"),
