@@ -40,8 +40,7 @@
     "deny_pty_on_host": true
   },
   "env": {
-    "allowed_keys": ["PATH", "HOME", "LANG", "GOFLAGS", "GOPROXY"],
-    "redact_value_patterns": ["(?i)(api[_-]?key|token|password|secret)"]
+    "allowed_keys": ["PATH", "HOME", "LANG", "GOFLAGS", "GOPROXY"]
   },
   "secrets": {
     "patterns": [

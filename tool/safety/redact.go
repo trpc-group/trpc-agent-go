@@ -19,14 +19,6 @@ func (p *Policy) redact(s string) (string, bool) {
 	return redactWith(p.compiled.secretRes, s)
 }
 
-// redactEnvValue redacts using both the secret patterns and the env-specific
-// redaction patterns.
-func (p *Policy) redactEnvValue(s string) (string, bool) {
-	out, hit := redactWith(p.compiled.secretRes, s)
-	out2, hit2 := redactWith(p.compiled.envRedactRes, out)
-	return out2, hit || hit2
-}
-
 func redactWith(res []*regexp.Regexp, s string) (string, bool) {
 	if s == "" || len(res) == 0 {
 		return s, false

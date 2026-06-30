@@ -94,8 +94,7 @@ type ResourcePolicy struct {
 
 // EnvPolicy configures environment-variable handling.
 type EnvPolicy struct {
-	AllowedKeys         []string `yaml:"allowed_keys" json:"allowed_keys"`
-	RedactValuePatterns []string `yaml:"redact_value_patterns" json:"redact_value_patterns"`
+	AllowedKeys []string `yaml:"allowed_keys" json:"allowed_keys"`
 }
 
 // SecretPolicy lists regular expressions whose matches are redacted from
@@ -145,7 +144,6 @@ type Policy struct {
 type compiledPolicy struct {
 	forbiddenGlobs []string
 	secretRes      []*regexp.Regexp
-	envRedactRes   []*regexp.Regexp
 	allowedDomains []domainMatcher
 	shellPolicy    shellsafe.Policy
 	backendIndex   map[string]string // tool name -> backend identifier
@@ -231,10 +229,6 @@ func (p *Policy) compile() error {
 		}
 	}
 	if c.secretRes, err = compileRegexps(p.Secrets.Patterns, "secrets.patterns"); err != nil {
-		return err
-	}
-	if c.envRedactRes, err = compileRegexps(
-		p.Env.RedactValuePatterns, "env.redact_value_patterns"); err != nil {
 		return err
 	}
 	c.forbiddenGlobs = expandForbiddenPaths(p.ForbiddenPaths)
