@@ -12,6 +12,7 @@ package recall
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -403,6 +404,65 @@ func TestLoadToolEventIDSelectsMatchingToolCallID(t *testing.T) {
 	require.Len(t, resp.Messages, 1)
 	assert.Equal(t, "234", resp.Messages[0].Content)
 	assert.Equal(t, 2, resp.Messages[0].ContentOffset)
+}
+
+func TestLoadToolFallsBackToToolCallIDWhenEventIDIsStale(t *testing.T) {
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{
+		{
+			ID: "evt-tool-result",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:     model.RoleTool,
+						ToolID:   "call-1",
+						ToolName: "lookup",
+						Content:  "fresh result",
+					},
+				}},
+			},
+		},
+	}
+
+	var anchors []string
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		windowFunc: func(
+			req session.EventWindowRequest,
+		) (*session.EventWindow, error) {
+			anchors = append(anchors, req.AnchorEventID)
+			if req.AnchorEventID == "stale-event" {
+				return nil, errors.New("anchor event not found: stale-event")
+			}
+			return &session.EventWindow{
+				AnchorEventID: req.AnchorEventID,
+				Entries: []session.EventWindowEntry{{
+					Event:     sess.Events[0],
+					CreatedAt: time.Date(2025, 4, 7, 11, 0, 0, 0, time.UTC),
+				}},
+			}, nil
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		EventID:    "stale-event",
+		ToolCallID: "call-1",
+	})
+	require.NoError(t, err)
+	result, err := NewLoadTool().Call(ctx, args)
+	require.NoError(t, err)
+
+	resp, ok := result.(*LoadSessionResponse)
+	require.True(t, ok)
+	assert.Equal(t, "evt-tool-result", resp.EventID)
+	assert.Equal(t, []string{"stale-event", "evt-tool-result"}, anchors)
+	require.Len(t, resp.Messages, 1)
+	assert.Equal(t, "lookup: fresh result", resp.Messages[0].Content)
 }
 
 func TestLoadToolReturnsSessionServiceFallbackError(t *testing.T) {

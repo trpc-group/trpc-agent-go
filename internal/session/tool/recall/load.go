@@ -65,19 +65,15 @@ func NewLoadTool() tool.CallableTool {
 		}
 
 		before, after := normalizeWindowSize(req.Before, req.After)
-		window, err := windowSvc.GetEventWindow(
+		window, anchorEventID, err := getLoadEventWindow(
 			ctx,
-			session.EventWindowRequest{
-				Key:           key,
-				AnchorEventID: anchorEventID,
-				Before:        before,
-				After:         after,
-				Roles: []model.Role{
-					model.RoleUser,
-					model.RoleAssistant,
-					model.RoleTool,
-				},
-			},
+			windowSvc,
+			inv,
+			key,
+			req,
+			anchorEventID,
+			before,
+			after,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -115,6 +111,74 @@ func NewLoadTool() tool.CallableTool {
 	)
 }
 
+func getLoadEventWindow(
+	ctx context.Context,
+	windowSvc session.WindowService,
+	inv *agent.Invocation,
+	key session.Key,
+	req *LoadSessionRequest,
+	anchorEventID string,
+	before, after int,
+) (*session.EventWindow, string, error) {
+	window, err := windowSvc.GetEventWindow(
+		ctx,
+		loadEventWindowRequest(key, anchorEventID, before, after),
+	)
+	if err == nil {
+		return window, anchorEventID, nil
+	}
+	if !shouldRetryLoadByToolCallID(err, req) {
+		return nil, anchorEventID, err
+	}
+
+	fallbackEventID, fallbackErr := resolveLoadAnchorEventIDByToolCallID(
+		ctx,
+		inv,
+		key,
+		req.ToolCallID,
+	)
+	if fallbackErr != nil || fallbackEventID == "" ||
+		fallbackEventID == anchorEventID {
+		return nil, anchorEventID, err
+	}
+
+	window, err = windowSvc.GetEventWindow(
+		ctx,
+		loadEventWindowRequest(key, fallbackEventID, before, after),
+	)
+	if err != nil {
+		return nil, fallbackEventID, err
+	}
+	return window, fallbackEventID, nil
+}
+
+func loadEventWindowRequest(
+	key session.Key,
+	anchorEventID string,
+	before, after int,
+) session.EventWindowRequest {
+	return session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: anchorEventID,
+		Before:        before,
+		After:         after,
+		Roles: []model.Role{
+			model.RoleUser,
+			model.RoleAssistant,
+			model.RoleTool,
+		},
+	}
+}
+
+func shouldRetryLoadByToolCallID(err error, req *LoadSessionRequest) bool {
+	if req == nil || err == nil {
+		return false
+	}
+	return strings.TrimSpace(req.EventID) != "" &&
+		strings.TrimSpace(req.ToolCallID) != "" &&
+		strings.Contains(err.Error(), "anchor event not found")
+}
+
 func resolveLoadAnchorEventID(
 	ctx context.Context,
 	inv *agent.Invocation,
@@ -128,6 +192,19 @@ func resolveLoadAnchorEventID(
 		return eventID, nil
 	}
 	toolCallID := strings.TrimSpace(req.ToolCallID)
+	if toolCallID == "" {
+		return "", nil
+	}
+	return resolveLoadAnchorEventIDByToolCallID(ctx, inv, key, toolCallID)
+}
+
+func resolveLoadAnchorEventIDByToolCallID(
+	ctx context.Context,
+	inv *agent.Invocation,
+	key session.Key,
+	toolCallID string,
+) (string, error) {
+	toolCallID = strings.TrimSpace(toolCallID)
 	if toolCallID == "" {
 		return "", nil
 	}
