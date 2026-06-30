@@ -59,6 +59,14 @@ func NewLoadTool() tool.CallableTool {
 			return nil, fmt.Errorf("session load tool: %w", err)
 		}
 		if anchorEventID == "" {
+			toolCallID := strings.TrimSpace(req.ToolCallID)
+			if toolCallID != "" {
+				return nil, fmt.Errorf(
+					"session load tool: tool_call_id %q not found in session %q",
+					toolCallID,
+					key.SessionID,
+				)
+			}
 			return nil, fmt.Errorf(
 				"session load tool: event_id is required unless tool_call_id is provided",
 			)

@@ -1480,4 +1480,11 @@ func TestLoadTool_ErrorPaths(t *testing.T) {
 	_, err = NewLoadTool().Call(ctx, args)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "session load tool")
+
+	args, err = json.Marshal(&LoadSessionRequest{ToolCallID: "missing-call"})
+	require.NoError(t, err)
+	_, err = NewLoadTool().Call(ctx, args)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tool_call_id")
+	assert.Contains(t, err.Error(), "not found")
 }
