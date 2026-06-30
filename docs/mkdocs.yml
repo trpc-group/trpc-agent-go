@@ -10,6 +10,7 @@ nav:
   - Components:
       - Agent:
           - Agent: agent.md
+          - Goal Extension: goal.md
           - Multi Agent: multiagent.md
           - Task Run Runtime: taskrun.md
           - Team: team.md
@@ -112,6 +113,7 @@ plugins:
             - 组件:
                 - Agent:
                     - Agent: agent.md
+                    - Goal 扩展: goal.md
                     - Multi Agent: multiagent.md
                     - Task Run 运行时: taskrun.md
                     - Team: team.md
