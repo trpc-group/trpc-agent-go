@@ -84,24 +84,32 @@ func LoadPolicyFile(path string) (*PolicyFile, error) {
 
 // ScanReport is the complete structured output for one scan.
 type ScanReport struct {
-	// Tool 标识
-	ToolName  string `json:"tool_name"`
-	Command   string `json:"command"`
-	Backend   string `json:"backend"` // "local" / "container"
+	// ToolName is the name of the tool that produced this report.
+	ToolName string `json:"tool_name"`
+	// Command is the original command string.
+	Command string `json:"command"`
+	// Backend is the executor backend type.
+	Backend string `json:"backend"`
+	// Timestamp is the RFC3339 UTC time of the scan.
 	Timestamp string `json:"timestamp"`
 
-	// 最终决策
-	Decision  Decision  `json:"decision"`
+	// Decision is the final safety decision.
+	Decision Decision `json:"decision"`
+	// RiskLevel is the assigned risk severity.
 	RiskLevel RiskLevel `json:"risk_level"`
-	Blocked   bool      `json:"blocked"` // = DecisionDeny
+	// Blocked indicates whether execution was intercepted.
+	Blocked bool `json:"blocked"`
 
-	// 触发的规则详情
-	RuleID         string `json:"rule_id"`
-	Evidence       string `json:"evidence"`
-	Reason         string `json:"reason"`
+	// RuleID is the identifier of the rule that fired.
+	RuleID string `json:"rule_id"`
+	// Evidence is the matched keyword/pattern.
+	Evidence string `json:"evidence"`
+	// Reason is a human-readable explanation.
+	Reason string `json:"reason"`
+	// Recommendation is a suggested follow-up action.
 	Recommendation string `json:"recommendation"`
 
-	// 耗时（微秒）
+	// DurationUs is the scan duration in microseconds.
 	DurationUs int64 `json:"duration_us"`
 }
 
@@ -150,17 +158,28 @@ func NewReport(result *ScanResult, input ScanInput, toolName string, dur time.Du
 
 // AuditEvent is one line in the audit log.
 type AuditEvent struct {
-	ToolName   string `json:"tool_name"`
-	Command    string `json:"command"`
-	Decision   string `json:"decision"`
-	RiskLevel  string `json:"risk_level"`
-	RuleID     string `json:"rule_id"`
-	Evidence   string `json:"evidence"`
-	Backend    string `json:"backend"`
-	Blocked    bool   `json:"blocked"`
-	Sanitized  bool   `json:"sanitized"`
-	DurationUs int64  `json:"duration_us"`
-	Timestamp  string `json:"timestamp"`
+	// ToolName is the name of the tool that triggered the event.
+	ToolName string `json:"tool_name"`
+	// Command is the original command string.
+	Command string `json:"command"`
+	// Decision is the safety decision as a string.
+	Decision string `json:"decision"`
+	// RiskLevel is the risk level as a string.
+	RiskLevel string `json:"risk_level"`
+	// RuleID is the identifier of the rule that fired.
+	RuleID string `json:"rule_id"`
+	// Evidence is the matched keyword/pattern.
+	Evidence string `json:"evidence"`
+	// Backend is the executor backend type.
+	Backend string `json:"backend"`
+	// Blocked indicates whether execution was intercepted.
+	Blocked bool `json:"blocked"`
+	// Sanitized indicates whether sensitive data was redacted.
+	Sanitized bool `json:"sanitized"`
+	// DurationUs is the scan duration in microseconds.
+	DurationUs int64 `json:"duration_us"`
+	// Timestamp is the RFC3339 UTC time of the scan.
+	Timestamp string `json:"timestamp"`
 }
 
 // NewAuditEvent creates an AuditEvent from a ScanReport.
