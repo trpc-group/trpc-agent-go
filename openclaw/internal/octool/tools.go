@@ -240,12 +240,16 @@ func execToolDescription(hasMemoryFile bool) string {
 				"the relevant file and quote or summarize the relevant "+
 				"lines.",
 			"If the user explicitly says 'remember this' or asks you to "+
-				"remember a durable fact, preference, or workflow rule, "+
+				"remember a durable fact, preference, task list, "+
+				"checklist, or reminder list, "+
 				"update the narrowest relevant memory file with a short "+
 				"bullet.",
 			"Use memory files only for stable, cross-session facts, "+
-				"preferences, durable user tasks, reminder lists, and "+
-				"working style.",
+				"preferences, durable user tasks, checklists, and "+
+				"reminder lists. Do not update memory files for "+
+				"reusable task workflows, output formats, tool "+
+				"procedures, or post-task feedback unless the user "+
+				"explicitly asks to save that content as memory.",
 		)
 	}
 	parts = append(

@@ -2470,6 +2470,29 @@ func TestNewAgent_OpenClawToolingGuidance_EmptyDisables(
 	)
 }
 
+func TestOpenClawToolingGuidanceKeepsSecretBanAbsolute(t *testing.T) {
+	t.Parallel()
+
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"Do not store secrets or large transcripts in memory files.",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"Do not store reusable task workflows, output formats, "+
+			"tool procedures, or post-task feedback in memory files "+
+			"unless the user explicitly asks to save that content as "+
+			"memory.",
+	)
+	require.NotContains(
+		t,
+		openClawToolingGuidance,
+		"secrets, or large transcripts in memory files unless",
+	)
+}
+
 func TestNewAgent_DefaultGenerationConfigStreams(t *testing.T) {
 	t.Parallel()
 
