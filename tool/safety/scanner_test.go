@@ -93,7 +93,7 @@ func TestScanner_CodeBlocksOnly(t *testing.T) {
 	scanner := NewScanner(NewNetworkAccessRule())
 	res := scanner.Scan(ScanInput{
 		CodeBlocks: []CodeBlock{
-			{Language: "python", Code: "import requests; requests.get('http://evil.com')"},
+			{Language: "bash", Code: "curl http://evil.com"},
 		},
 	})
 	if res.Decision != DecisionDeny {
