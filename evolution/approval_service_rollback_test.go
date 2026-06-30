@@ -336,6 +336,117 @@ func TestApprovalService_Rollback_FromDeleteTombstoneArchivesDelete(t *testing.T
 	assert.Contains(t, publishedSkills[0].Description, "old body")
 }
 
+func TestApprovalService_Rollback_NoCurrentActivePromotesArchived(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	pointer := NewFileActivePointer(dir)
+	pub := &mockPublisher{}
+	ctx := context.Background()
+	skillID := "archived-only"
+
+	archived := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-archived",
+		Action:     RevisionActionCreate,
+		Status:     RevisionArchived,
+		Spec: &SkillSpec{
+			Name: "Archived Only", Description: "restore me", WhenToUse: "w", Steps: []string{"s"},
+		},
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, store.WriteRevision(ctx, archived))
+	require.NoError(t, pointer.Clear(ctx, skillID))
+
+	svc := NewApprovalService(store, pointer, pub)
+	res, err := svc.Rollback(ctx, skillID, RollbackOpts{})
+	require.NoError(t, err)
+	assert.Empty(t, res.PreviousActiveID)
+	assert.Equal(t, archived.RevisionID, res.RestoredID)
+
+	restored, err := store.ReadRevision(ctx, skillID, archived.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionActive, restored.Status)
+
+	active, err := pointer.Get(ctx, skillID)
+	require.NoError(t, err)
+	assert.Equal(t, archived.RevisionID, active)
+
+	raw, err := os.ReadFile(filepath.Join(dir, skillID, "audit.log"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"reason":"rollback"`)
+}
+
+func TestApprovalService_Rollback_TargetAlreadyActiveFromPointer(t *testing.T) {
+	_, skillID, store, pointer, pub, revs := rollbackHarness(t, 2)
+	ctx := context.Background()
+
+	// The target is archived in the store, but the pointer still names it.
+	// Rollback must detect that inconsistent state before publishing.
+	require.NoError(t, pointer.Set(ctx, skillID, revs[0].RevisionID))
+
+	svc := NewApprovalService(store, pointer, pub)
+	_, err := svc.Rollback(ctx, skillID, RollbackOpts{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already active")
+
+	pub.mu.Lock()
+	publishedSkills := append([]*SkillSpec(nil), pub.skills...)
+	pub.mu.Unlock()
+	assert.Empty(t, publishedSkills)
+}
+
+func TestApprovalService_CurrentActiveRevisionID_ReturnsPointerError(t *testing.T) {
+	svc := NewApprovalService(NewFileCandidateStore(t.TempDir()), errActivePointer{
+		err: fmt.Errorf("pointer unavailable"),
+	}, nil)
+
+	_, err := svc.currentActiveRevisionID(context.Background(), "skill")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "get active pointer")
+}
+
+func TestApprovalService_FindLatestActiveRevisionID_PropagatesListError(t *testing.T) {
+	svc := NewApprovalService(listErrorStore{
+		err: fmt.Errorf("list unavailable"),
+	}, &stubActivePointer{}, nil)
+
+	_, err := svc.findLatestActiveRevisionID(context.Background(), "skill")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list revisions")
+}
+
+func TestApprovalService_FindLatestActiveRevisionID_ReadBranches(t *testing.T) {
+	ctx := context.Background()
+	skillID := "scan-skill"
+	archived := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-archived",
+		Status:     RevisionArchived,
+	}
+
+	svc := NewApprovalService(scanCandidateStore{
+		ids: []string{"rev-archived", "rev-missing"},
+		revs: map[string]*Revision{
+			"rev-archived": archived,
+		},
+	}, &stubActivePointer{}, nil)
+
+	active, err := svc.findLatestActiveRevisionID(ctx, skillID)
+	require.NoError(t, err)
+	assert.Empty(t, active)
+
+	svc = NewApprovalService(scanCandidateStore{
+		ids: []string{"rev-bad"},
+		errs: map[string]error{
+			"rev-bad": fmt.Errorf("read unavailable"),
+		},
+	}, &stubActivePointer{}, nil)
+
+	_, err = svc.findLatestActiveRevisionID(ctx, skillID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read revision")
+}
+
 func TestApprovalService_Rollback_RequiresStoreAndPointer(t *testing.T) {
 	ctx := context.Background()
 	// No store configured.
@@ -351,4 +462,51 @@ func TestApprovalService_Rollback_RequiresStoreAndPointer(t *testing.T) {
 	svc = NewApprovalService(NewFileCandidateStore(dir), NewFileActivePointer(dir), nil)
 	_, err = svc.Rollback(ctx, "  ", RollbackOpts{})
 	require.Error(t, err)
+}
+
+type errActivePointer struct {
+	err error
+}
+
+func (p errActivePointer) Get(_ context.Context, _ string) (string, error) {
+	return "", p.err
+}
+
+func (p errActivePointer) Set(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (p errActivePointer) Clear(_ context.Context, _ string) error {
+	return nil
+}
+
+type listErrorStore struct {
+	CandidateStore
+	err error
+}
+
+func (s listErrorStore) ListRevisions(_ context.Context, _ string) ([]string, error) {
+	return nil, s.err
+}
+
+type scanCandidateStore struct {
+	CandidateStore
+	ids  []string
+	revs map[string]*Revision
+	errs map[string]error
+}
+
+func (s scanCandidateStore) ListRevisions(_ context.Context, _ string) ([]string, error) {
+	return append([]string(nil), s.ids...), nil
+}
+
+func (s scanCandidateStore) ReadRevision(_ context.Context, _, revisionID string) (*Revision, error) {
+	if err := s.errs[revisionID]; err != nil {
+		return nil, err
+	}
+	rev := s.revs[revisionID]
+	if rev == nil {
+		return nil, os.ErrNotExist
+	}
+	return rev, nil
 }

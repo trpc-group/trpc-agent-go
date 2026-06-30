@@ -212,6 +212,68 @@ func TestApprovalSweep_UsesConfiguredRouteWhenScopedRootsIncomplete(t *testing.T
 	assert.Same(t, publisher, routes[0].publisher)
 }
 
+func TestApprovalSweep_UsesScopedRoutesWhenRootsComplete(t *testing.T) {
+	cases := []struct {
+		name      string
+		mode      skill.SkillScopeMode
+		scopeDirs []string
+	}{
+		{
+			name:      "app",
+			mode:      skill.SkillScopeApp,
+			scopeDirs: []string{"apps/app1", "apps/app2"},
+		},
+		{
+			name:      "user",
+			mode:      skill.SkillScopeUser,
+			scopeDirs: []string{"users/app1/alice", "users/app1/bob"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w, dir := newSweeperWorker(t, 100*time.Millisecond, 0)
+			defer w.Stop()
+			w.skillScopeMode = tc.mode
+
+			revRoot := filepath.Join(dir, "revisions")
+			pubRoot := filepath.Join(dir, "skills")
+			for _, rel := range tc.scopeDirs {
+				require.NoError(t, os.MkdirAll(filepath.Join(revRoot, rel), 0o755))
+			}
+
+			routes := w.collectStoresForSweep()
+			require.Len(t, routes, len(tc.scopeDirs))
+
+			gotRoots := make([]string, 0, len(routes))
+			for _, route := range routes {
+				gotRoots = append(gotRoots, route.root)
+
+				store, ok := route.store.(*fileCandidateStore)
+				require.True(t, ok)
+				assert.Equal(t, route.root, store.root)
+
+				rel, err := filepath.Rel(revRoot, route.root)
+				require.NoError(t, err)
+
+				pointer, ok := route.pointer.(*fileActivePointer)
+				require.True(t, ok)
+				assert.Equal(t, filepath.Join(revRoot, rel), pointer.root)
+
+				publisher, ok := route.publisher.(*filePublisher)
+				require.True(t, ok)
+				assert.Equal(t, filepath.Join(pubRoot, rel), publisher.root)
+			}
+
+			wantRoots := make([]string, 0, len(tc.scopeDirs))
+			for _, rel := range tc.scopeDirs {
+				wantRoots = append(wantRoots, filepath.Join(revRoot, rel))
+			}
+			assert.ElementsMatch(t, wantRoots, gotRoots)
+		})
+	}
+}
+
 // TestApprovalSweep_PicksSingleRevisionPerSkill asserts the sweeper
 // only auto-promotes one stale revision per skill per sweep — even
 // when several revisions in the same skill exceed the timeout.
