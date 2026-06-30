@@ -146,6 +146,7 @@ type NetworkAccessRule struct {
 	dangerousCmds []string
 }
 
+// NewNetworkAccessRule creates a network access detection rule.
 func NewNetworkAccessRule() *NetworkAccessRule {
 	return &NetworkAccessRule{
 		dangerousCmds: []string{
@@ -205,6 +206,7 @@ type ShellBypassRule struct {
 	bypassPatterns []string
 }
 
+// NewShellBypassRule creates a shell bypass detection rule.
 func NewShellBypassRule() *ShellBypassRule {
 	return &ShellBypassRule{
 		bypassPatterns: []string{
@@ -261,6 +263,7 @@ type InstallAndMutateRule struct {
 	patterns []string
 }
 
+// NewInstallAndMutateRule creates an install/mutation detection rule.
 func NewInstallAndMutateRule() *InstallAndMutateRule {
 	return &InstallAndMutateRule{
 		patterns: []string{
@@ -310,6 +313,7 @@ type HostExecRiskRule struct {
 	risks []string
 }
 
+// NewHostExecRiskRule creates a host execution risk detection rule.
 func NewHostExecRiskRule() *HostExecRiskRule {
 	return &HostExecRiskRule{
 		risks: []string{
@@ -361,6 +365,7 @@ func (r *HostExecRiskRule) Check(input ScanInput) *ScanResult {
 
 type ResourceAbuseRule struct{}
 
+// NewResourceAbuseRule creates a resource abuse detection rule.
 func NewResourceAbuseRule() *ResourceAbuseRule {
 	return &ResourceAbuseRule{}
 }
@@ -434,6 +439,7 @@ type SensitiveInfoLeakRule struct {
 	patterns []string
 }
 
+// NewSensitiveInfoLeakRule creates a sensitive info leak detection rule.
 func NewSensitiveInfoLeakRule() *SensitiveInfoLeakRule {
 	return &SensitiveInfoLeakRule{
 		patterns: []string{
@@ -495,6 +501,7 @@ type AskForReviewRule struct {
 	patterns []string
 }
 
+// NewAskForReviewRule creates a rule that returns ask for risky-but-legitimate commands.
 func NewAskForReviewRule() *AskForReviewRule {
 	return &AskForReviewRule{
 		patterns: []string{
