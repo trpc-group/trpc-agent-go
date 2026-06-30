@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "unparseable_action": "deny",
+  "default_action": "allow",
+  "backends": {
+    "workspace_exec": ["workspace_exec"],
+    "host": ["exec_command"],
+    "code": ["execute_code"]
+  },
+  "commands": {
+    "allowed": ["go", "git", "ls", "cat", "echo", "grep", "sed", "awk", "jq",
+                "python3", "curl", "wget", "pip", "pip3", "sleep", "yes"],
+    "denied": ["dd", "mkfs", "shutdown", "reboot", "chmod", "chown"]
+  },
+  "denied_subcommands": [
+    {"cmd": "go", "args_prefix": ["install"]},
+    {"cmd": "npm", "args_prefix": ["install"]},
+    {"cmd": "pip", "args_prefix": ["install"]},
+    {"cmd": "pip3", "args_prefix": ["install"]},
+    {"cmd": "apt", "args_prefix": ["install"]},
+    {"cmd": "apt-get", "args_prefix": ["install"]}
+  ],
+  "forbidden_paths": [
+    "~/.ssh",
+    "**/.env",
+    "/etc/shadow",
+    "**/id_rsa",
+    "**/credentials"
+  ],
+  "network": {
+    "download_commands": ["curl", "wget", "nc", "ssh", "scp", "ftp"],
+    "allowed_domains": ["github.com", "*.googleapis.com", "pypi.org", "registry.npmjs.org"],
+    "on_non_whitelisted": "deny"
+  },
+  "resources": {
+    "max_timeout_sec": 300,
+    "max_output_bytes": 1048576,
+    "max_sleep_sec": 60,
+    "deny_background_on_host": true,
+    "deny_pty_on_host": true
+  },
+  "env": {
+    "allowed_keys": ["PATH", "HOME", "LANG", "GOFLAGS", "GOPROXY"],
+    "redact_value_patterns": ["(?i)(api[_-]?key|token|password|secret)"]
+  },
+  "secrets": {
+    "patterns": [
+      "AKIA[0-9A-Z]{16}",
+      "ghp_[0-9A-Za-z]{36}",
+      "-----BEGIN [A-Z ]*PRIVATE KEY-----",
+      "(?i)bearer\\s+[a-z0-9._-]+"
+    ]
+  },
+  "rule_overrides": {}
+}

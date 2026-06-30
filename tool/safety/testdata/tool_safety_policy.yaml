@@ -1,0 +1,71 @@
+# Tool Execution Safety Guard — example policy.
+# Editing this file changes the allow/deny lists, forbidden paths, network
+# whitelist and limits without any code change.
+version: 1
+
+# How to treat a command that internal/shellsafe cannot safely parse, and the
+# fallback when no rule fires. unparseable defaults to deny (fail closed).
+unparseable_action: deny
+default_action: allow
+
+# Tool name -> backend identifier. Defaults already cover the real tool names;
+# override here if a host/code tool was renamed via WithName.
+backends:
+  workspace_exec: [workspace_exec]
+  host: [exec_command]
+  code: [execute_code]
+
+# Allowed binaries. Note download tools (curl/wget) and installers (pip) are
+# allowed here so the network/dependency rules can govern *what* they do; their
+# destinations and subcommands are still policed below.
+commands:
+  allowed: [go, git, ls, cat, echo, grep, sed, awk, jq, python3,
+            curl, wget, pip, pip3, sleep, yes]
+  denied: [dd, mkfs, shutdown, reboot, chmod, chown]
+
+denied_subcommands:
+  - {cmd: go, args_prefix: [install]}
+  - {cmd: npm, args_prefix: [install]}
+  - {cmd: pip, args_prefix: [install]}
+  - {cmd: pip3, args_prefix: [install]}
+  - {cmd: apt, args_prefix: [install]}
+  - {cmd: apt-get, args_prefix: [install]}
+
+forbidden_paths:
+  - "~/.ssh"
+  - "**/.env"
+  - "/etc/shadow"
+  - "**/id_rsa"
+  - "**/credentials"
+
+network:
+  download_commands: [curl, wget, nc, ssh, scp, ftp]
+  allowed_domains: [github.com, "*.googleapis.com", pypi.org, registry.npmjs.org]
+  on_non_whitelisted: deny
+
+resources:
+  max_timeout_sec: 300
+  max_output_bytes: 1048576
+  max_sleep_sec: 60
+  deny_background_on_host: true
+  deny_pty_on_host: true
+
+env:
+  allowed_keys: [PATH, HOME, LANG, GOFLAGS, GOPROXY]
+  redact_value_patterns:
+    - "(?i)(api[_-]?key|token|password|secret)"
+
+secrets:
+  patterns:
+    - "AKIA[0-9A-Z]{16}"
+    - "ghp_[0-9A-Za-z]{36}"
+    - "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    - "(?i)bearer\\s+[a-z0-9._-]+"
+
+# Per-rule overrides let you relax or tighten a single rule without code
+# changes, e.g. route dependency installs to human review instead of blocking.
+# Example (left empty so the shipped policy matches the documented sample
+# matrix; uncomment to demonstrate):
+#   rule_overrides:
+#     R-DEP-001: {action: needs_human_review}
+rule_overrides: {}

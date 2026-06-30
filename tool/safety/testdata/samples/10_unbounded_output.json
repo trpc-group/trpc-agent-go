@@ -1,0 +1,7 @@
+{
+  "name": "unbounded output",
+  "tool": "workspace_exec",
+  "args": {"command": "yes"},
+  "expect": {"decision": "deny", "rule": "R-RES-001"},
+  "class": "high_risk"
+}
