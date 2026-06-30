@@ -45,6 +45,7 @@ type Manager struct {
 
 	maxLines int
 	jobTTL   time.Duration
+	timeout  time.Duration
 	baseEnv  map[string]string
 	policy   CommandPolicy
 	redactor OutputRedactor
@@ -68,6 +69,14 @@ func WithJobTTL(d time.Duration) Option {
 	return func(m *Manager) {
 		if d > 0 {
 			m.jobTTL = d
+		}
+	}
+}
+
+func WithDefaultTimeout(d time.Duration) Option {
+	return func(m *Manager) {
+		if d > 0 {
+			m.timeout = d
 		}
 	}
 }
@@ -98,6 +107,7 @@ func NewManager(opts ...Option) *Manager {
 		sessions:         map[string]*session{},
 		maxLines:         defaultMaxLines,
 		jobTTL:           defaultJobTTL,
+		timeout:          time.Duration(defaultTimeoutS) * time.Second,
 		clock:            time.Now,
 		shellEnvSnapshot: snapshotLoginShellEnv,
 	}
@@ -157,12 +167,13 @@ func (m *Manager) Exec(
 		yieldMs = *params.YieldMs
 	}
 
-	timeoutS := defaultTimeoutS
+	timeout := m.timeout
 	if params.TimeoutS != nil && *params.TimeoutS > 0 {
-		timeoutS = *params.TimeoutS
+		timeout = time.Duration(*params.TimeoutS) * time.Second
 	}
-
-	timeout := time.Duration(timeoutS) * time.Second
+	if timeout <= 0 {
+		timeout = time.Duration(defaultTimeoutS) * time.Second
+	}
 
 	if !params.Background && yieldMs == 0 && !params.Pty {
 		out, code, err := runForeground(

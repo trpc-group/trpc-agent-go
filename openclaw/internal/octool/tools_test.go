@@ -323,6 +323,28 @@ func TestExecTool_Foreground(t *testing.T) {
 	require.Equal(t, 0, res.ExitCode)
 }
 
+func TestExecTool_UsesManagerDefaultTimeout(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithDefaultTimeout(50 * time.Millisecond))
+	tool := newExecCommandTool(mgr)
+
+	started := time.Now()
+	out, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "sleep 1; printf done",
+		"yieldMs": 0,
+	}))
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 900*time.Millisecond)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.NotEqual(t, 0, res.ExitCode)
+	require.NotContains(t, res.Output, "done")
+}
+
 func TestExecTool_RuntimeProfileWorkspacePolicy(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
