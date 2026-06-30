@@ -146,8 +146,17 @@ llmAgent := llmagent.New(
 
 ## Cache-Safe 摘要 Forking
 
-默认情况下，摘要器会发送独立的摘要请求：可选的摘要 system prompt 加上一个
-包含已提取对话文本的 user prompt。这条路径简单直接，并且仍然是默认行为。
+摘要器有两种请求构造模式。
+
+**独立摘要请求** 是默认模式。框架会先选出需要摘要的 events，把它们转换成
+conversation text；如果配置了 `WithPreSummaryHook(...)`，还会先执行这个
+hook。随后摘要模型收到的请求由下面两部分组成：
+
+- 可选的 system message，来自 `WithSystemPrompt(...)`。
+- 一条 user message，来自 `WithPrompt(...)`；其中 `{conversation_text}` 会被替换为提取出的对话文本。
+
+这条请求和主 agent 的请求相互独立，因此同步摘要、异步摘要、手动调用摘要接口
+都能使用。
 
 如果长会话场景对 prompt cache 命中率比较敏感，可以显式开启 cache-safe forking：
 
@@ -160,15 +169,47 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-开启后，如果框架当前能拿到父会话的模型请求，摘要器会克隆这个父请求，并只在
-末尾追加一条用于压缩的 user message。这样可以保留父请求的 prefix，包括
-system context、历史消息和工具定义，让支持 prompt cache 的模型服务复用更多
-已缓存输入。如果当前没有父请求，例如异步摘要或手动调用摘要接口，摘要器会自动
-回退到默认的独立摘要请求。
+在普通 LLM flow 里触发 context compaction 时，框架已经构造好了当前主 agent
+调用的父 `model.Request`。开启 `WithCacheSafeForking(true)` 后，摘要请求会按
+下面的方式构造：
 
-追加的压缩提示词和 `WithPrompt(...)` 是分开的，因为它不再嵌入
-`{conversation_text}`；父请求本身已经包含对话前缀。只有需要自定义这条追加的
-user message 时，才需要使用 `WithCacheSafeForkPrompt(...)`。
+- 克隆这个父请求，保留它对模型可见的 prefix，包括 system context、已注入的
+  summary、session history、用户输入、工具定义、headers、extra fields 和
+  generation settings。
+- 在末尾追加一条 user message，内容来自 `WithCacheSafeForkPrompt(...)`。
+- 强制摘要调用使用非流式输出，并清掉 structured output，因为摘要调用只需要返回普通摘要文本。
+
+这样摘要请求和父请求拥有相同的前缀，支持 prompt cache 的模型服务就能复用更多
+已缓存输入。如果当前没有父请求，例如异步摘要或手动调用摘要接口，摘要器会自动
+回退到独立摘要请求。
+
+Prompt 规则：
+
+- `WithPrompt(...)` 配置独立摘要请求的 user prompt，必须包含
+  `{conversation_text}`。如果配置了 `WithMaxSummaryWords(...)`，
+  `{max_summary_words}` 必须出现在 `WithPrompt(...)` 或
+  `WithSystemPrompt(...)` 其中之一。
+- `WithSystemPrompt(...)` 配置独立摘要请求里可选的 system message，不能包含
+  `{conversation_text}`，可以包含 `{max_summary_words}`。
+- `WithCacheSafeForkPrompt(...)` 只配置 fork 模式下追加的 user message，不能
+  包含 `{conversation_text}`，因为克隆出来的父请求里已经有对话内容；它可以包含
+  `{max_summary_words}`。
+
+即使开启了 cache-safe forking，也要保持独立摘要 prompt 有效，因为 fallback
+路径仍然会使用它。自定义 fork prompt 时，建议明确要求模型“总结上面的对话，
+供后续继续对话使用”，并保留用户目标、决策、约束、未完成事项、工具结果和重要
+事实；同时要求模型不要调用工具、不要直接回答最新用户请求，也不要把 system
+和 tool-use 指令当作事实写进摘要。
+
+`WithPreSummaryHook(...)` 仍然会在摘要模型调用前执行。独立摘要模式下，hook
+修改后的文本会渲染进 `{conversation_text}`；如果 fork 模式拿到了父请求，则
+这段文本不会再被塞进摘要请求，因为对话内容已经在克隆的父请求里。此时 hook
+仍可用于更新 context、做副作用处理，以及服务 fallback 到独立摘要请求的场景。
+
+在 fork 模式下，`WithPreSummaryHook(...)` 对 text 或 events 的修改不会对克隆
+出来的父请求做脱敏、redaction 或 filtering。如果这个 hook 用于在摘要前做脱敏
+或过滤，请让这类流程使用独立摘要模式，或确保父 `model.Request` 在被克隆前已经
+完成脱敏。
 
 Cache-safe forking 控制的是“生成摘要那次请求”的构造方式。摘要已经生成以后，
 下一次普通对话请求如果也希望更利于 prompt cache，建议把摘要注入为 user
