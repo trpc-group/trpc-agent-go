@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
@@ -46,6 +47,259 @@ func newWriteStdinTool(mgr *Manager) tool.CallableTool {
 
 func newKillSessionTool(mgr *Manager) tool.CallableTool {
 	return NewKillSessionTool(mgr).(tool.CallableTool)
+}
+
+func newSandboxExecCommandTool(engine codeexecutor.Engine) tool.CallableTool {
+	return NewSandboxExecCommandTool(engine).(tool.CallableTool)
+}
+
+func TestSandboxExecToolDescription(t *testing.T) {
+	t.Parallel()
+
+	withoutMemory := sandboxExecToolDescription(false)
+	require.Contains(t, withoutMemory, "inside the configured sandbox")
+	require.Contains(
+		t,
+		withoutMemory,
+		"Only foreground non-interactive commands are supported",
+	)
+	require.NotContains(
+		t,
+		withoutMemory,
+		"host paths are not automatically mounted into the sandbox",
+	)
+
+	withMemory := sandboxExecToolDescription(true)
+	require.Contains(
+		t,
+		withMemory,
+		"host paths are not automatically mounted into the sandbox",
+	)
+}
+
+func TestNewSandboxExecCommandToolWithMemoryFileStore_WiresRegistry(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	tool := NewSandboxExecCommandToolWithMemoryFileStore(
+		&fakeSandboxExecEngine{},
+		nil,
+		store,
+	)
+	sandboxTool, ok := tool.(*sandboxExecTool)
+	require.True(t, ok)
+	require.Same(t, store, sandboxTool.memoryStore)
+	require.NotNil(t, sandboxTool.registry)
+}
+
+func TestSandboxExecTool_WorkspaceFallsBackWithoutRegistry(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := &sandboxExecTool{engine: engine}
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				sessionpkg.NewSession("app", "u1", "s1"),
+			),
+		),
+	)
+
+	ws, err := tl.workspace(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "app/u1/s1", ws.ID)
+	require.Equal(t, "app/u1/s1", ws.Path)
+	require.Len(t, engine.manager.workspaces, 1)
+	require.Equal(t, ws, engine.manager.workspaces[0])
+}
+
+func TestSandboxExecTool_Foreground(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{
+		runResult: codeexecutor.RunResult{
+			Stdout:   "hello\n",
+			Stderr:   "warn\n",
+			ExitCode: 7,
+		},
+	}
+	tl := newSandboxExecCommandTool(engine)
+
+	out, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command":     "echo hello",
+		"workdir":     "subdir",
+		"timeout_sec": 3,
+		"env": map[string]string{
+			"OPENCLAW_TEST_ENV": "ok",
+		},
+	}))
+	require.NoError(t, err)
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.Equal(t, "hello\nwarn\n", res.Output)
+	require.Equal(t, 7, res.ExitCode)
+
+	require.Len(t, engine.runner.specs, 1)
+	spec := engine.runner.specs[0]
+	require.Equal(t, shellProgram, spec.Cmd)
+	require.Equal(t, []string{shellLoginFlag, "echo hello"}, spec.Args)
+	require.Equal(t, "subdir", spec.Cwd)
+	require.Equal(t, 3*time.Second, spec.Timeout)
+	require.Equal(t, "ok", spec.Env["OPENCLAW_TEST_ENV"])
+	require.Len(t, engine.manager.workspaces, 1)
+}
+
+func TestSandboxExecTool_AppliesCommandPolicy(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := NewSandboxExecCommandToolWithPolicy(
+		engine,
+		nil,
+		nil,
+		NewChatCommandSafetyPolicy(),
+		nil,
+	).(tool.CallableTool)
+
+	_, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "cat ~/.ssh/id_rsa",
+	}))
+	require.ErrorContains(t, err, reasonSensitivePath)
+	require.Empty(t, engine.runner.specs)
+	require.Empty(t, engine.manager.workspaces)
+}
+
+func TestSandboxExecTool_RedactsSensitiveEnvValueOutput(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{
+		runResult: codeexecutor.RunResult{
+			Stdout:   "token=sk-test-secret\n",
+			ExitCode: 0,
+		},
+	}
+	tl := NewSandboxExecCommandToolWithPolicy(
+		engine,
+		nil,
+		nil,
+		nil,
+		NewChatCommandOutputRedactor(),
+	).(tool.CallableTool)
+
+	out, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "echo \"$OPENAI_API_KEY\"",
+		"env": map[string]string{
+			"OPENAI_API_KEY": "sk-test-secret",
+		},
+	}))
+	require.NoError(t, err)
+	res := out.(execResult)
+	require.Contains(t, res.Output, redactedValue)
+	require.NotContains(t, res.Output, "sk-test-secret")
+}
+
+func TestSandboxExecTool_ReusesWorkspacePerSession(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := newSandboxExecCommandTool(engine)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				sessionpkg.NewSession("app", "u1", "s1"),
+			),
+		),
+	)
+
+	for i := 0; i < 2; i++ {
+		_, err := tl.Call(ctx, mustJSON(t, map[string]any{
+			"command": "pwd",
+		}))
+		require.NoError(t, err)
+	}
+
+	require.Len(t, engine.manager.workspaces, 1)
+	require.Equal(t, "app/u1/s1", engine.manager.workspaces[0].ID)
+}
+
+func TestSandboxExecTool_IsolatesWorkspacesAcrossSessions(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := newSandboxExecCommandTool(engine)
+	ctx1 := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				sessionpkg.NewSession("app", "u1", "s1"),
+			),
+		),
+	)
+	ctx2 := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				sessionpkg.NewSession("app", "u1", "s2"),
+			),
+		),
+	)
+
+	_, err := tl.Call(ctx1, mustJSON(t, map[string]any{
+		"command": "pwd",
+	}))
+	require.NoError(t, err)
+	_, err = tl.Call(ctx2, mustJSON(t, map[string]any{
+		"command": "pwd",
+	}))
+	require.NoError(t, err)
+
+	require.Len(t, engine.manager.workspaces, 2)
+	require.Equal(t, "app/u1/s1", engine.manager.workspaces[0].ID)
+	require.Equal(t, "app/u1/s2", engine.manager.workspaces[1].ID)
+}
+
+func TestSandboxExecTool_RejectsUnsupportedSessionModes(t *testing.T) {
+	t.Parallel()
+
+	tl := newSandboxExecCommandTool(&fakeSandboxExecEngine{})
+	cases := []map[string]any{
+		{"command": "sleep 1", "background": true},
+		{"command": "vim", "tty": true},
+		{"command": "vim", "pty": true},
+		{"command": "sleep 1", "yield_time_ms": 10},
+		{"command": "pwd", "workdir": "/tmp"},
+	}
+	for _, args := range cases {
+		_, err := tl.Call(context.Background(), mustJSON(t, args))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), errSandboxExecUnsupported)
+	}
+}
+
+func TestSandboxExecTool_TimeoutResult(t *testing.T) {
+	t.Parallel()
+
+	tl := newSandboxExecCommandTool(&fakeSandboxExecEngine{
+		runResult: codeexecutor.RunResult{
+			Stderr:   "timed out\n",
+			ExitCode: 124,
+			TimedOut: true,
+		},
+	})
+	out, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command":     "sleep 10",
+		"timeout_sec": 1,
+	}))
+	require.NoError(t, err)
+	res := out.(execResult)
+	require.Equal(t, "timeout", res.Status)
+	require.Equal(t, 124, res.ExitCode)
+	require.Contains(t, res.Output, "timed out")
 }
 
 func TestExecTool_Foreground(t *testing.T) {
@@ -1691,6 +1945,65 @@ func mustJSON(t *testing.T, v any) []byte {
 	b, err := json.Marshal(v)
 	require.NoError(t, err)
 	return b
+}
+
+type fakeSandboxExecEngine struct {
+	manager   fakeSandboxExecManager
+	runner    fakeSandboxExecRunner
+	runResult codeexecutor.RunResult
+}
+
+func (e *fakeSandboxExecEngine) Manager() codeexecutor.WorkspaceManager {
+	return &e.manager
+}
+
+func (e *fakeSandboxExecEngine) FS() codeexecutor.WorkspaceFS { return nil }
+
+func (e *fakeSandboxExecEngine) Runner() codeexecutor.ProgramRunner {
+	e.runner.result = e.runResult
+	return &e.runner
+}
+
+func (e *fakeSandboxExecEngine) Describe() codeexecutor.Capabilities {
+	return codeexecutor.Capabilities{}
+}
+
+type fakeSandboxExecManager struct {
+	workspaces []codeexecutor.Workspace
+}
+
+func (m *fakeSandboxExecManager) CreateWorkspace(
+	ctx context.Context,
+	execID string,
+	pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	_ = ctx
+	ws := codeexecutor.Workspace{ID: execID, Path: execID}
+	m.workspaces = append(m.workspaces, ws)
+	return ws, nil
+}
+
+func (m *fakeSandboxExecManager) Cleanup(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+) error {
+	_, _ = ctx, ws
+	return nil
+}
+
+type fakeSandboxExecRunner struct {
+	specs  []codeexecutor.RunProgramSpec
+	result codeexecutor.RunResult
+}
+
+func (r *fakeSandboxExecRunner) RunProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	_, _ = ctx, ws
+	r.specs = append(r.specs, spec)
+	return r.result, nil
 }
 
 func outputField(result map[string]any) string {

@@ -64,25 +64,32 @@ type RuntimeConfigSection struct {
 }
 
 type RuntimeConfigField struct {
-	Key                   string                `json:"key,omitempty"`
-	Title                 string                `json:"title,omitempty"`
-	Summary               string                `json:"summary,omitempty"`
-	InputType             string                `json:"input_type,omitempty"`
-	Placeholder           string                `json:"placeholder,omitempty"`
-	ApplyMode             string                `json:"apply_mode,omitempty"`
-	EditorValue           string                `json:"editor_value,omitempty"`
-	ConfiguredValue       string                `json:"configured_value,omitempty"`
-	ConfiguredSourceLabel string                `json:"configured_source_label,omitempty"`
-	ConfiguredSource      string                `json:"configured_source,omitempty"`
-	RuntimeValue          string                `json:"runtime_value,omitempty"`
-	RuntimeSourceLabel    string                `json:"runtime_source_label,omitempty"`
-	PendingRestart        bool                  `json:"pending_restart"`
-	Resettable            bool                  `json:"resettable"`
-	Options               []RuntimeConfigOption `json:"options,omitempty"`
+	Key                   string                   `json:"key,omitempty"`
+	Title                 string                   `json:"title,omitempty"`
+	Summary               string                   `json:"summary,omitempty"`
+	InputType             string                   `json:"input_type,omitempty"`
+	Placeholder           string                   `json:"placeholder,omitempty"`
+	ApplyMode             string                   `json:"apply_mode,omitempty"`
+	VisibleWhen           RuntimeConfigVisibleWhen `json:"visible_when,omitempty"`
+	Hidden                bool                     `json:"hidden,omitempty"`
+	EditorValue           string                   `json:"editor_value,omitempty"`
+	ConfiguredValue       string                   `json:"configured_value,omitempty"`
+	ConfiguredSourceLabel string                   `json:"configured_source_label,omitempty"`
+	ConfiguredSource      string                   `json:"configured_source,omitempty"`
+	RuntimeValue          string                   `json:"runtime_value,omitempty"`
+	RuntimeSourceLabel    string                   `json:"runtime_source_label,omitempty"`
+	PendingRestart        bool                     `json:"pending_restart"`
+	Resettable            bool                     `json:"resettable"`
+	Options               []RuntimeConfigOption    `json:"options,omitempty"`
+}
+
+type RuntimeConfigVisibleWhen struct {
+	Key   string `json:"key,omitempty"`
+	Value string `json:"value,omitempty"`
 }
 
 type RuntimeConfigOption struct {
-	Value string `json:"value,omitempty"`
+	Value string `json:"value"`
 	Label string `json:"label,omitempty"`
 }
 
