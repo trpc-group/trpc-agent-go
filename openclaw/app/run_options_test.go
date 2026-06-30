@@ -1307,7 +1307,7 @@ func TestConvertSandboxCodeExecutorConfigValidationBranches(t *testing.T) {
 	maxBytes := 512
 	got, err := convertSandboxCodeExecutorConfig(&sandboxCodeExecutorConfig{
 		WorkspaceRoot:  " /tmp/sandbox ",
-		Backend:        " LINUX-BUBBLEWRAP ",
+		Backend:        " MACOS-SANDBOX-EXEC ",
 		Profile:        " READ_ONLY ",
 		Network:        " ENABLED ",
 		DefaultTimeout: "2s",
@@ -1315,11 +1315,17 @@ func TestConvertSandboxCodeExecutorConfigValidationBranches(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "/tmp/sandbox", got.WorkspaceRoot)
-	require.Equal(t, sandboxBackendLinuxBubblewrap, got.Backend)
+	require.Equal(t, sandboxBackendMacOSSandbox, got.Backend)
 	require.Equal(t, sandboxProfileReadOnly, got.Profile)
 	require.Equal(t, sandboxNetworkEnabled, got.Network)
 	require.Equal(t, 2*time.Second, got.DefaultTimeout)
 	require.Equal(t, maxBytes, got.OutputMaxBytes)
+
+	linuxBackend, err := convertSandboxCodeExecutorConfig(&sandboxCodeExecutorConfig{
+		Backend: " LINUX-BUBBLEWRAP ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, sandboxBackendLinuxBubblewrap, linuxBackend.Backend)
 
 	cases := []struct {
 		name string
