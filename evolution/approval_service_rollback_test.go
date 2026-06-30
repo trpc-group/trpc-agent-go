@@ -499,6 +499,102 @@ func TestApprovalService_FindLatestActiveRevisionID_ReadBranches(t *testing.T) {
 	assert.Contains(t, err.Error(), "read revision")
 }
 
+func TestApprovalService_SelectRollbackTarget_ErrorBranches(t *testing.T) {
+	ctx := context.Background()
+	skillID := "select-skill"
+
+	svc := NewApprovalService(scanCandidateStore{
+		errs: map[string]error{
+			"rev-target": fmt.Errorf("read unavailable"),
+		},
+	}, &stubActivePointer{}, nil)
+	_, err := svc.selectRollbackTarget(ctx, skillID, "rev-target")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read target revision")
+
+	svc = NewApprovalService(listErrorStore{
+		err: fmt.Errorf("list unavailable"),
+	}, &stubActivePointer{}, nil)
+	_, err = svc.selectRollbackTarget(ctx, skillID, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list revisions")
+
+	svc = NewApprovalService(scanCandidateStore{
+		ids: []string{"rev-missing"},
+	}, &stubActivePointer{}, nil)
+	_, err = svc.selectRollbackTarget(ctx, skillID, "")
+	require.ErrorIs(t, err, ErrNoArchivedRevision)
+
+	svc = NewApprovalService(scanCandidateStore{
+		ids: []string{"rev-bad"},
+		errs: map[string]error{
+			"rev-bad": fmt.Errorf("read unavailable"),
+		},
+	}, &stubActivePointer{}, nil)
+	_, err = svc.selectRollbackTarget(ctx, skillID, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read revision")
+}
+
+func TestApprovalService_ArchiveActiveBranches(t *testing.T) {
+	ctx := context.Background()
+	skillID := "archive-skill"
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	opts := RollbackOpts{Reviewer: "alice", Comment: "rollback"}
+
+	svc := NewApprovalService(scanCandidateStore{}, &stubActivePointer{}, nil)
+	require.NoError(t, svc.archiveActive(ctx, skillID, "rev-missing", "rev-target", at, opts))
+
+	svc = NewApprovalService(scanCandidateStore{
+		revs: map[string]*Revision{
+			"rev-archived": {SkillID: skillID, RevisionID: "rev-archived", Status: RevisionArchived},
+		},
+	}, &stubActivePointer{}, nil)
+	require.NoError(t, svc.archiveActive(ctx, skillID, "rev-archived", "rev-target", at, opts))
+
+	svc = NewApprovalService(scanCandidateStore{
+		errs: map[string]error{
+			"rev-bad": fmt.Errorf("read unavailable"),
+		},
+	}, &stubActivePointer{}, nil)
+	err := svc.archiveActive(ctx, skillID, "rev-bad", "rev-target", at, opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read active revision")
+
+	svc = NewApprovalService(writeErrorStore{
+		scanCandidateStore: scanCandidateStore{
+			revs: map[string]*Revision{
+				"rev-active": {SkillID: skillID, RevisionID: "rev-active", Status: RevisionActive},
+			},
+		},
+		err: fmt.Errorf("write unavailable"),
+	}, &stubActivePointer{}, nil)
+	err = svc.archiveActive(ctx, skillID, "rev-active", "rev-target", at, opts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "archive active revision")
+}
+
+func TestApprovalService_ApplyRollbackPublishBranches(t *testing.T) {
+	ctx := context.Background()
+
+	svc := NewApprovalService(nil, nil, nil)
+	require.NoError(t, svc.applyRollbackPublish(ctx, &Revision{Action: RevisionActionCreate}))
+
+	pub := &mockPublisher{deleteErr: fmt.Errorf("delete unavailable")}
+	svc = NewApprovalService(nil, nil, pub)
+	err := svc.applyRollbackPublish(ctx, &Revision{
+		Action:     RevisionActionDelete,
+		TargetName: "Gone",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delete restored skill")
+
+	require.NoError(t, validateRollbackTarget(&Revision{Action: RevisionActionDelete}))
+	err = validateRollbackTarget(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil target")
+}
+
 func TestApprovalService_Rollback_RequiresStoreAndPointer(t *testing.T) {
 	ctx := context.Background()
 	// No store configured.
@@ -561,4 +657,13 @@ func (s scanCandidateStore) ReadRevision(_ context.Context, _, revisionID string
 		return nil, os.ErrNotExist
 	}
 	return rev, nil
+}
+
+type writeErrorStore struct {
+	scanCandidateStore
+	err error
+}
+
+func (s writeErrorStore) WriteRevision(_ context.Context, _ *Revision) error {
+	return s.err
 }

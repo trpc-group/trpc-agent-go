@@ -11,6 +11,7 @@ package evolution
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -274,6 +275,131 @@ func TestApprovalSweep_UsesScopedRoutesWhenRootsComplete(t *testing.T) {
 	}
 }
 
+func TestApprovalSweep_RunOneSweep_ContextAndNilStoreBranches(t *testing.T) {
+	w := &worker{approvalTimeout: time.Millisecond}
+
+	// Nil parent is normalized to context.Background, and the nil
+	// configured store is skipped by sweepStore.
+	w.runOneSweep(nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w.runOneSweep(ctx)
+}
+
+func TestApprovalSweep_SweepStoreGuards(t *testing.T) {
+	w := &worker{}
+	cutoff := time.Now().UTC()
+
+	w.sweepStore(context.Background(), sweepRoute{}, cutoff)
+	w.sweepStore(context.Background(), sweepRoute{
+		store: sweepStoreStub{listSkillsErr: fmt.Errorf("list unavailable")},
+		root:  "bad-root",
+	}, cutoff)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	w.sweepStore(ctx, sweepRoute{
+		store: sweepStoreStub{skills: []string{"skill"}},
+	}, cutoff)
+}
+
+func TestApprovalSweep_PickSweepTargetBranches(t *testing.T) {
+	w := &worker{}
+	ctx := context.Background()
+	skillID := "pick-skill"
+	cutoff := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	staleAt := cutoff.Add(-time.Hour)
+	freshAt := cutoff.Add(time.Hour)
+
+	store := sweepStoreStub{
+		revIDs: []string{
+			"rev-missing",
+			"rev-bad",
+			"rev-active",
+			"rev-zero",
+			"rev-fresh",
+			"rev-stale",
+		},
+		readErrs: map[string]error{
+			"rev-bad": fmt.Errorf("read unavailable"),
+		},
+		revs: map[string]*Revision{
+			"rev-active": {
+				SkillID:    skillID,
+				RevisionID: "rev-active",
+				Status:     RevisionActive,
+				CreatedAt:  staleAt,
+			},
+			"rev-zero": {
+				SkillID:    skillID,
+				RevisionID: "rev-zero",
+				Status:     RevisionPendingApproval,
+			},
+			"rev-fresh": {
+				SkillID:    skillID,
+				RevisionID: "rev-fresh",
+				Status:     RevisionPendingApproval,
+				CreatedAt:  freshAt,
+			},
+			"rev-stale": {
+				SkillID:    skillID,
+				RevisionID: "rev-stale",
+				Status:     RevisionPendingApproval,
+				CreatedAt:  staleAt,
+			},
+		},
+	}
+
+	target, err := w.pickSweepTarget(ctx, store, skillID, cutoff)
+	require.NoError(t, err)
+	require.NotNil(t, target)
+	assert.Equal(t, "rev-stale", target.RevisionID)
+
+	_, err = w.pickSweepTarget(ctx, sweepStoreStub{
+		listRevisionsErr: fmt.Errorf("list unavailable"),
+	}, skillID, cutoff)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list unavailable")
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = w.pickSweepTarget(cancelled, sweepStoreStub{
+		revIDs: []string{"rev-stale"},
+		revs: map[string]*Revision{
+			"rev-stale": store.revs["rev-stale"],
+		},
+	}, skillID, cutoff)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestApprovalSweep_AutoPromoteErrorBranches(t *testing.T) {
+	w := &worker{approvalTimeout: time.Second}
+	ctx := context.Background()
+
+	w.autoPromote(ctx, NewApprovalService(nil, nil, nil), &Revision{
+		SkillID:    "missing-store",
+		RevisionID: "rev",
+	})
+	assert.Equal(t, 0, w.approvalGateMetrics().RevisionsPromoted)
+
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	active := &Revision{
+		SkillID:    "already-active",
+		RevisionID: "rev-active",
+		Action:     RevisionActionCreate,
+		Status:     RevisionActive,
+		CreatedAt:  time.Now().UTC(),
+		Spec:       &SkillSpec{Name: "Already Active", Description: "d", WhenToUse: "w", Steps: []string{"s"}},
+	}
+	require.NoError(t, store.WriteRevision(ctx, active))
+
+	svc := NewApprovalService(store, NewFileActivePointer(dir), &mockPublisher{})
+	w.autoPromote(ctx, svc, active)
+	assert.Equal(t, 0, w.approvalGateMetrics().RevisionsPromoted)
+}
+
 // TestApprovalSweep_PicksSingleRevisionPerSkill asserts the sweeper
 // only auto-promotes one stale revision per skill per sweep — even
 // when several revisions in the same skill exceed the timeout.
@@ -413,4 +539,39 @@ func (p *stubActivePointer) Clear(_ context.Context, skillID string) error {
 		delete(p.active, skillID)
 	}
 	return nil
+}
+
+type sweepStoreStub struct {
+	CandidateStore
+	skills           []string
+	listSkillsErr    error
+	revIDs           []string
+	listRevisionsErr error
+	revs             map[string]*Revision
+	readErrs         map[string]error
+}
+
+func (s sweepStoreStub) ListSkills(_ context.Context) ([]string, error) {
+	if s.listSkillsErr != nil {
+		return nil, s.listSkillsErr
+	}
+	return append([]string(nil), s.skills...), nil
+}
+
+func (s sweepStoreStub) ListRevisions(_ context.Context, _ string) ([]string, error) {
+	if s.listRevisionsErr != nil {
+		return nil, s.listRevisionsErr
+	}
+	return append([]string(nil), s.revIDs...), nil
+}
+
+func (s sweepStoreStub) ReadRevision(_ context.Context, _, revisionID string) (*Revision, error) {
+	if err := s.readErrs[revisionID]; err != nil {
+		return nil, err
+	}
+	rev := s.revs[revisionID]
+	if rev == nil {
+		return nil, os.ErrNotExist
+	}
+	return rev, nil
 }
