@@ -231,6 +231,23 @@ func TestUnparsableAskWhenConfigured(t *testing.T) {
 	}
 }
 
+// TestExplicitAllowOverrideBeatsDenyDefault pins the fix for a finding that is
+// relaxed to allow under a deny-by-default policy. "pip install requests" fires
+// only R-DEP-001; overriding that rule to allow must win, not silently fall back
+// to default_action: deny.
+func TestExplicitAllowOverrideBeatsDenyDefault(t *testing.T) {
+	p := loadExamplePolicy(t)
+	p.DefaultAction = ActionDeny // deny-by-default posture
+	p.RuleOverrides = map[string]Override{ruleDepID: {Action: ActionAllow}}
+	findings, decision := scanCmd(t, p, BackendWorkspace, "pip install requests")
+	if !hasRule(findings, ruleDepID) {
+		t.Fatalf("expected R-DEP-001 to fire: %+v", findings)
+	}
+	if decision != DecisionAllow {
+		t.Errorf("decision = %q, want allow (explicit allow override lost to deny default)", decision)
+	}
+}
+
 func TestHasRecursiveForce(t *testing.T) {
 	yes := [][]string{
 		{"-rf", "/"}, {"-fr", "x"}, {"-Rf", "x"}, {"-r", "-f", "x"},

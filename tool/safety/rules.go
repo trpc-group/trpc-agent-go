@@ -151,19 +151,29 @@ func (p *Policy) scan(er ExecRequest, backend string) ([]Finding, Decision, Risk
 }
 
 // decide aggregates findings into a single decision and the highest risk seen.
-// With no actionable finding it falls back to the policy default action.
+// Only when no finding carries an explicit action does it fall back to the
+// policy default action. A finding overridden to allow (actionRank 0) ranks the
+// same as the empty sentinel, so "an action was set" is tracked separately from
+// the ranked action; otherwise an explicit allow would be lost to a deny
+// default_action.
 func (p *Policy) decide(findings []Finding) (Decision, RiskLevel) {
 	top := RiskNone
 	strongest := Action("")
+	actionSet := false
 	for _, f := range findings {
 		if riskRank(f.RiskLevel) > riskRank(top) {
 			top = f.RiskLevel
 		}
-		if a := f.effectiveAction(); actionRank(a) > actionRank(strongest) {
+		a := f.effectiveAction()
+		if a == "" {
+			continue
+		}
+		if !actionSet || actionRank(a) > actionRank(strongest) {
 			strongest = a
+			actionSet = true
 		}
 	}
-	if strongest == "" {
+	if !actionSet {
 		strongest = p.DefaultAction
 	}
 	return actionToDecision(strongest), top
