@@ -158,6 +158,19 @@ var CaseSummaryAsyncPipeline = ReplayCase{
 	},
 }
 
+// CaseMemoryMulti covers multiple memory writes and a sentinel search.
+var CaseMemoryMulti = ReplayCase{
+	Name:         "memory_multi",
+	Description:  "multiple memory add and search",
+	RequiredCaps: RequiredCapabilities{NeedsMemory: true},
+	Steps: []ReplayStep{
+		AddMemoryStep{Key: "c12.add.1", UserKey: memoryUserKey(), Memory: "User prefers dark mode", Topics: []string{"ui"}},
+		AddMemoryStep{Key: "c12.add.2", UserKey: memoryUserKey(), Memory: "User writes Go daily", Topics: []string{"coding", "go"}},
+		AddMemoryStep{Key: "c12.add.3", UserKey: memoryUserKey(), Memory: "User lives in Shenzhen", Topics: []string{"location"}},
+		SearchMemoryStep{Key: "c12.search.coding", UserKey: memoryUserKey(), Query: "Go programming", Limit: 5},
+	},
+}
+
 // AllCases returns all built-in replay cases.
 func AllCases() []ReplayCase {
 	return []ReplayCase{
@@ -172,6 +185,7 @@ func AllCases() []ReplayCase {
 		CaseTrackEvents,
 		CaseConcurrentInterleaved,
 		CaseSummaryAsyncPipeline,
+		CaseMemoryMulti,
 	}
 }
 
