@@ -1,0 +1,36 @@
+{
+  "name": "17_memory_retrieval_kinds.faulty",
+  "description": "Fact and episodic memory kinds are both stored.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u17",
+    "sessionID": "s17"
+  },
+  "operations": [
+    {
+      "type": "add_memory",
+      "value": "fact memory",
+      "topics": [
+        "fact"
+      ],
+      "kind": "fact"
+    },
+    {
+      "type": "add_memory",
+      "value": "episode memory",
+      "topics": [
+        "episode"
+      ],
+      "kind": "episode"
+    }
+  ],
+  "faultInjection": "drop_memory",
+  "expectedDefect": {
+    "category": "memory",
+    "fieldPath": "memories",
+    "locator": {
+      "sessionID": "s17",
+      "memoryID": "mem#0"
+    }
+  }
+}

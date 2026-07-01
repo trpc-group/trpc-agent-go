@@ -1,0 +1,36 @@
+{
+  "name": "12_hierarchical_filter_key_prefix",
+  "description": "Hierarchical filter key prefix aggregation.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u12",
+    "sessionID": "s12"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "db tool",
+        "branch": "agent-a/tool",
+        "filterKey": "agent-a/tool"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "http tool",
+        "branch": "agent-a/tool",
+        "filterKey": "agent-a/tool"
+      }
+    },
+    {
+      "type": "create_summary",
+      "force": true,
+      "filterKey": "agent-a/tool"
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "mode": "light",
+  "generatedAt": "2026-07-01T17:28:50Z",
+  "baselineBackend": "inmemory",
+  "backends": [
+    "inmemory",
+    "sqlite"
+  ],
+  "summary": {
+    "cases": 18,
+    "compared": 1,
+    "unsupported": 0,
+    "realDiffs": 0,
+    "allowedDiffs": 1
+  },
+  "cases": [
+    {
+      "case": "01_single_turn_plain_conversation",
+      "sessionID": "s01",
+      "results": null
+    },
+    {
+      "case": "02_multi_turn_ordering",
+      "sessionID": "s02",
+      "results": null
+    },
+    {
+      "case": "03_tool_call_conversation",
+      "sessionID": "s03",
+      "results": null
+    },
+    {
+      "case": "04_state_updates",
+      "sessionID": "s04",
+      "results": null
+    },
+    {
+      "case": "05_memory_write_read",
+      "sessionID": "s05",
+      "results": null
+    },
+    {
+      "case": "06_summary_generate_update",
+      "sessionID": "s06",
+      "results": null
+    },
+    {
+      "case": "07_summary_event_truncation",
+      "sessionID": "s07",
+      "results": null
+    },
+    {
+      "case": "08_track_events",
+      "sessionID": "s08",
+      "results": null
+    },
+    {
+      "case": "09_concurrent_out_of_order_writes",
+      "sessionID": "s09",
+      "results": null
+    },
+    {
+      "case": "10_failure_recovery_retry",
+      "sessionID": "s10",
+      "results": null
+    },
+    {
+      "case": "11_multiple_filter_key_summaries",
+      "sessionID": "s11",
+      "results": null
+    },
+    {
+      "case": "12_hierarchical_filter_key_prefix",
+      "sessionID": "s12",
+      "results": [
+        {
+          "backend": "sqlite",
+          "category": "summary",
+          "locator": {
+            "sessionID": "s12",
+            "summaryFilterKey": "agent-a/tool"
+          },
+          "fieldPath": "summaries[\"agent-a/tool\"]",
+          "baselineValue": "summary:",
+          "compareValue": "\u003cmissing\u003e",
+          "verdict": "allowed_diff",
+          "explanation": "sqlite skips persisting empty scoped summaries"
+        }
+      ]
+    },
+    {
+      "case": "13_branch_multi_agent_trajectory",
+      "sessionID": "s13",
+      "results": null
+    },
+    {
+      "case": "15_state_scope_boundaries",
+      "sessionID": "s15",
+      "results": null
+    },
+    {
+      "case": "16_binary_unicode_nil_state",
+      "sessionID": "s16",
+      "results": null
+    },
+    {
+      "case": "17_memory_retrieval_kinds",
+      "sessionID": "s17",
+      "results": null
+    },
+    {
+      "case": "18_memory_update_id_rotation",
+      "sessionID": "s18",
+      "results": null
+    },
+    {
+      "case": "19_partial_empty_content_event_filtering",
+      "sessionID": "s19",
+      "results": null
+    }
+  ]
+}

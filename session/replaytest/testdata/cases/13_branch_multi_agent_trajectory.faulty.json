@@ -1,0 +1,47 @@
+{
+  "name": "13_branch_multi_agent_trajectory.faulty",
+  "description": "Branch and tag metadata are preserved.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u13",
+    "sessionID": "s13"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "delegate"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "planner",
+        "branch": "planner",
+        "tag": "plan"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "worker",
+        "branch": "worker",
+        "tag": "execute"
+      }
+    }
+  ],
+  "faultInjection": "drop_summary",
+  "expectedDefect": {
+    "category": "summary",
+    "fieldPath": "summaries",
+    "locator": {
+      "sessionID": "s13"
+    }
+  }
+}

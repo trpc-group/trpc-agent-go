@@ -1,0 +1,51 @@
+{
+  "name": "02_multi_turn_ordering.faulty",
+  "description": "Multi-turn conversation preserves read-back ordering.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u02",
+    "sessionID": "s02"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "first"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "first reply"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "second"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "second reply"
+      }
+    }
+  ],
+  "faultInjection": "tamper_state",
+  "expectedDefect": {
+    "category": "state",
+    "fieldPath": "state",
+    "locator": {
+      "sessionID": "s02"
+    }
+  }
+}
