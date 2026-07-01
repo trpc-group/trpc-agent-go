@@ -465,6 +465,71 @@ func TestLoadToolFallsBackToToolCallIDWhenEventIDIsStale(t *testing.T) {
 	assert.Equal(t, "lookup: fresh result", resp.Messages[0].Content)
 }
 
+func TestLoadToolKeepsStaleEventErrorWhenToolCallIDMissing(t *testing.T) {
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		windowFunc: func(
+			session.EventWindowRequest,
+		) (*session.EventWindow, error) {
+			return nil, errors.New("anchor event not found: stale-event")
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		EventID:    "stale-event",
+		ToolCallID: "missing-call",
+	})
+	require.NoError(t, err)
+	_, err = NewLoadTool().Call(ctx, args)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "anchor event not found")
+}
+
+func TestLoadToolReturnsFallbackWindowError(t *testing.T) {
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{{
+		ID: "evt-tool-result",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:   model.RoleTool,
+					ToolID: "call-1",
+				},
+			}},
+		},
+	}}
+
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		windowFunc: func(
+			req session.EventWindowRequest,
+		) (*session.EventWindow, error) {
+			if req.AnchorEventID == "stale-event" {
+				return nil, errors.New("anchor event not found: stale-event")
+			}
+			return nil, assert.AnError
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		EventID:    "stale-event",
+		ToolCallID: "call-1",
+	})
+	require.NoError(t, err)
+	_, err = NewLoadTool().Call(ctx, args)
+	require.ErrorIs(t, err, assert.AnError)
+}
+
 func TestLoadToolReturnsSessionServiceFallbackError(t *testing.T) {
 	svc := &mockSessionService{
 		Service: sessioninmemory.NewSessionService(),

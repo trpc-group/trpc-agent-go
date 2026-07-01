@@ -12,6 +12,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -25,6 +26,21 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	mcp "trpc.group/trpc-go/trpc-mcp-go"
 )
+
+func TestIsBenignMCPClientCloseError(t *testing.T) {
+	require.False(t, isBenignMCPClientCloseError(nil))
+	require.True(t, isBenignMCPClientCloseError(os.ErrProcessDone))
+	require.True(
+		t,
+		isBenignMCPClientCloseError(
+			fmt.Errorf("close: %s", processAlreadyFinishedText),
+		),
+	)
+	require.False(
+		t,
+		isBenignMCPClientCloseError(errors.New("close failed")),
+	)
+}
 
 // TestToolSet_Close tests the Close method
 func TestToolSet_Close(t *testing.T) {
