@@ -56,6 +56,8 @@ func ClickHouseFactory() BackendFactory {
 	return optionalBackendFactory("clickhouse", "CLICKHOUSE_DSN")
 }
 
+// optionalBackendFactory returns ErrBackendNotConfigured until a real adapter
+// module is wired for the named backend.
 func optionalBackendFactory(name, envKey string) BackendFactory {
 	return func() (session.Service, memory.Service, BackendProfile, error) {
 		if os.Getenv(envKey) == "" {

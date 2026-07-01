@@ -55,23 +55,11 @@
 //		MemoryService:  sqliteMemory,
 //	})
 //
-// External backend factories are environment-gated placeholders:
-// REDIS_ADDR, POSTGRES_DSN, MYSQL_DSN, and CLICKHOUSE_DSN declare that the
-// corresponding integration backend should be configured by the caller. A
-// factory that lacks configuration returns ErrBackendNotConfigured instead of
-// silently participating in a run.
+// External backend factories are not yet implemented. RedisFactory,
+// PostgresFactory, MySQLFactory, and ClickHouseFactory are stub placeholders
+// that currently return ErrBackendNotConfigured even when REDIS_ADDR,
+// POSTGRES_DSN, MYSQL_DSN, or CLICKHOUSE_DSN is set. Real integration modules
+// should create concrete services first, then pass them through NamedBackend.
 //
-// Design note: replaytest drives every backend with the same typed ReplayCase
-// sequence, then normalizes raw snapshots before comparison. Normalization
-// replaces generated event IDs with stable replay keys, converts timestamps to
-// UTC, canonicalizes JSON payloads, removes private state keys, and sorts memory
-// topics and participants. Summary replay uses a deterministic fake summarizer
-// so tests check persistence, filter-key ownership, overwrite behavior, and the
-// asynchronous enqueue pipeline without calling an external model. Track replay
-// compares normalized track names, payload JSON, timestamps, and event counts.
-// Memory comparison is strict for identical retrieval profiles and sentinel
-// based for different retrieval algorithms. AllowedDiff rules are explicit and
-// path-scoped, supporting ignore, same-type, not-empty, and numeric delta
-// matches. Harness reports keep passed, failed, skipped, and allowed
-// differences separate, with a named reference backend by default.
+// Design rationale: see DESIGN.md in this directory.
 package replaytest
