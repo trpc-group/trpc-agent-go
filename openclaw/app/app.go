@@ -204,8 +204,12 @@ const (
 		"pattern, or to remember an executable workflow or " +
 		"integration, prefer creating or updating a local " +
 		"skill over treating it as a one-off answer. For " +
-		"lightweight facts, preferences, or simple standing " +
-		"rules, use memory instead. " +
+		"lightweight facts, stable persona or tone preferences, " +
+		"and simple non-procedural standing facts, use memory " +
+		"instead. Do not use memory for reusable task workflows, " +
+		"output formats, tool procedures, or post-task feedback " +
+		"unless the user explicitly asks to save that content as " +
+		"memory. " +
 		"Use platform code and tools for stable safety " +
 		"boundaries, secrets, permissions, file paths, " +
 		"validation, and execution guarantees; use skill " +

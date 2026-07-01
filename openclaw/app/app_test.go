@@ -2136,8 +2136,17 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
-		"For lightweight facts, preferences, or simple "+
-			"standing rules, use memory instead.",
+		"For lightweight facts, stable persona or tone preferences, "+
+			"and simple non-procedural standing facts, use memory "+
+			"instead.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Do not use memory for reusable task workflows, output "+
+			"formats, tool procedures, or post-task feedback "+
+			"unless the user explicitly asks to save that content "+
+			"as memory.",
 	)
 	require.Contains(
 		t,
