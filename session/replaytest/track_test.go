@@ -11,7 +11,6 @@
 package replaytest
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -89,42 +88,6 @@ func TestTrackFaultDetection(t *testing.T) {
 			require.NotEmpty(t, result.Diffs)
 		})
 	}
-}
-
-func runReplayCaseReport(t *testing.T, tc ReplayCase) *Report {
-	t.Helper()
-	sessionSvc, memorySvc, profile, err := InMemoryFactory()()
-	require.NoError(t, err)
-	defer sessionSvc.Close()
-	defer memorySvc.Close()
-
-	h := NewHarness(DefaultHarnessOpts())
-	h.AddBackend(NamedBackend{
-		Name:           "inmemory",
-		Profile:        profile,
-		SessionService: sessionSvc,
-		MemoryService:  memorySvc,
-	})
-	report, err := h.Run([]ReplayCase{tc})
-	require.NoError(t, err)
-	return report
-}
-
-func runReplayCaseSnapshot(t *testing.T, tc ReplayCase) *SessionSnapshot {
-	t.Helper()
-	sessionSvc, memorySvc, profile, err := InMemoryFactory()()
-	require.NoError(t, err)
-	defer sessionSvc.Close()
-	defer memorySvc.Close()
-
-	snapshot, err := executeCase(context.Background(), tc, NamedBackend{
-		Name:           "inmemory",
-		Profile:        profile,
-		SessionService: sessionSvc,
-		MemoryService:  memorySvc,
-	})
-	require.NoError(t, err)
-	return snapshot
 }
 
 func trackSnapshot(backend string, track session.Track, events []session.TrackEvent) *SessionSnapshot {

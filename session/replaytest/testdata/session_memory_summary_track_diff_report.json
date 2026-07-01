@@ -1,0 +1,146 @@
+{
+  "generated_at": "2100-01-01T00:00:00Z",
+  "reference": "inmemory",
+  "backends": [
+    "inmemory"
+  ],
+  "total_cases": 13,
+  "passed_cases": 13,
+  "failed_cases": 0,
+  "skipped_cases": 0,
+  "total_diffs": 0,
+  "error_diffs": 0,
+  "allowed_diffs": 0,
+  "results": [
+    {
+      "case": "single_turn_text",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "multi_turn_conversation",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "tool_call_conversation",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "state_crud",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "state_scopes",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "memory_write_and_read",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "summary_generation",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "summary_with_truncation",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "track_events",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "concurrent_interleaved_writes",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "summary_async_pipeline",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "memory_multi",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "recovery_duplicate_event",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    }
+  ]
+}

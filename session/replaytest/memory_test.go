@@ -11,7 +11,6 @@
 package replaytest
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -20,10 +19,10 @@ import (
 )
 
 func TestMemoryCaseE2E(t *testing.T) {
-	report := runMemoryCaseReport(t, CaseMemoryWriteAndRead)
+	report := runReplayCaseReport(t, CaseMemoryWriteAndRead)
 	require.Equal(t, 1, report.PassedCases)
 
-	snapshot := runMemoryCaseSnapshot(t, CaseMemoryWriteAndRead)
+	snapshot := runReplayCaseSnapshot(t, CaseMemoryWriteAndRead)
 	require.NotEmpty(t, snapshot.Memories)
 	require.NotEmpty(t, snapshot.MemSearchResults)
 
@@ -34,10 +33,10 @@ func TestMemoryCaseE2E(t *testing.T) {
 }
 
 func TestMemoryCaseMultiE2E(t *testing.T) {
-	report := runMemoryCaseReport(t, CaseMemoryMulti)
+	report := runReplayCaseReport(t, CaseMemoryMulti)
 	require.Equal(t, 1, report.PassedCases)
 
-	snapshot := runMemoryCaseSnapshot(t, CaseMemoryMulti)
+	snapshot := runReplayCaseSnapshot(t, CaseMemoryMulti)
 	require.Len(t, snapshot.Memories, 3)
 	require.NotEmpty(t, snapshot.MemSearchResults)
 	require.True(t, containsMemoryText(snapshot.MemSearchResults, "User writes Go daily"))
@@ -135,42 +134,6 @@ func TestMemoryCrossProfileSentinel(t *testing.T) {
 
 	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), vector)
 	require.Equal(t, StatusPassed, result.Status)
-}
-
-func runMemoryCaseReport(t *testing.T, tc ReplayCase) *Report {
-	t.Helper()
-	sessionSvc, memorySvc, profile, err := InMemoryFactory()()
-	require.NoError(t, err)
-	defer sessionSvc.Close()
-	defer memorySvc.Close()
-
-	h := NewHarness(DefaultHarnessOpts())
-	h.AddBackend(NamedBackend{
-		Name:           "inmemory",
-		Profile:        profile,
-		SessionService: sessionSvc,
-		MemoryService:  memorySvc,
-	})
-	report, err := h.Run([]ReplayCase{tc})
-	require.NoError(t, err)
-	return report
-}
-
-func runMemoryCaseSnapshot(t *testing.T, tc ReplayCase) *SessionSnapshot {
-	t.Helper()
-	sessionSvc, memorySvc, profile, err := InMemoryFactory()()
-	require.NoError(t, err)
-	defer sessionSvc.Close()
-	defer memorySvc.Close()
-
-	snapshot, err := executeCase(context.Background(), tc, NamedBackend{
-		Name:           "inmemory",
-		Profile:        profile,
-		SessionService: sessionSvc,
-		MemoryService:  memorySvc,
-	})
-	require.NoError(t, err)
-	return snapshot
 }
 
 func containsMemoryText(entries []*memory.Entry, text string) bool {
