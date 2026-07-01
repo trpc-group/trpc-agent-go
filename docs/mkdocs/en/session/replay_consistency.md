@@ -1,0 +1,147 @@
+# Replay Consistency
+
+Replay consistency tests verify that the same session, memory, summary, and track operations produce equivalent persisted results across backends. The current lightweight matrix only covers `InMemory` and `SQLite`, so it does not require external services and is suitable for local development and PR checks.
+
+## Running
+
+Run the targeted tests from the `test` module:
+
+```powershell
+cd D:\project\OpensourceTencent\trpc-agent-go\test
+$env:CGO_ENABLED="1"
+$env:CC="D:\tools\mingw\mingw64\bin\gcc.exe"
+$env:GOPATH="D:\project\OpensourceTencent\.gopath"
+$env:GOCACHE="D:\project\OpensourceTencent\.gocache"
+& "D:\go\go1.26.4.windows-amd64\go\bin\go.exe" test ./... -run ReplayConsistency -count=1
+```
+
+You can also run the whole e2e module:
+
+```powershell
+& "D:\go\go1.26.4.windows-amd64\go\bin\go.exe" test ./... -count=1
+```
+
+The SQLite backend uses `github.com/mattn/go-sqlite3`, so CGO and a C compiler are required.
+
+## Report
+
+The default report path is the repository root:
+
+```text
+session_memory_summary_track_diff_report.json
+```
+
+Override it with:
+
+```powershell
+$env:TRPC_AGENT_REPLAY_REPORT_PATH="D:\tmp\replay-report.json"
+```
+
+A healthy matrix should write:
+
+```json
+[]
+```
+
+Each diff report entry contains:
+
+```json
+{
+  "case": "case_name",
+  "session_id": "session-case_name",
+  "backend_a": "in_memory",
+  "backend_b": "sqlite",
+  "section": "summary",
+  "path": "$.summary[\"root/tools/weather\"].summary",
+  "left": "left value",
+  "right": "right value",
+  "allowed": false,
+  "reason": "",
+  "context": {
+    "summary_filter_key": "root/tools/weather"
+  }
+}
+```
+
+The `context` object carries section-specific location data such as `event_index`, `summary_filter_key`, `memory_key`, `left_memory_id`, `right_memory_id`, `track_name`, and `track_event_index`.
+
+## Compared Data
+
+Snapshots include these sections:
+
+- `session`: session ID, app, and user ID
+- `events`: messages, tool calls, tool responses, branch, filter key, tag, state delta, extensions, and actions
+- `state`: visible merged session/app/user/temp state
+- `memory`: content, topics, and metadata; raw memory IDs are only used for report context
+- `summary`: `Session.Summaries[filterKey]`, summary text, topics, boundary metadata, and `GetSessionSummaryText`
+- `tracks`: track name, event order, payload, and timestamp
+
+Generated fields such as event IDs, response IDs, timestamps, and backend-generated memory IDs are normalized. Business-field differences are not allowed by default.
+
+## Summary And Track Strategy
+
+The Go version uses native session summary semantics. It does not create Python-style summary events and does not compare historical summary events.
+
+Summary comparison covers:
+
+- full summary: `session.SummaryFilterKeyAllContents`
+- filter-key summaries such as `root/tools/weather`
+- summary overwrite/update
+- `SummaryBoundary` version, filter key, cutoff, and last event ID
+- `GetSessionSummaryText` results
+
+Track comparison covers:
+
+- track name
+- event order within each track
+- canonical JSON payload
+- fixed timestamp
+
+Note that `AppendTrackEvent` maintains `state["tracks"]`. When debugging track diffs, also check the track index in the state section.
+
+## Anomaly Detection
+
+The test harness includes two kinds of anomaly injection:
+
+- snapshot mutation: partial event loss, summary loss, wrong session attribution, wrong summary filter key, track payload drift, and track order drift
+- SQLite/public API injection: duplicate event, state pollution, memory pollution, and summary overwrite
+
+Injected anomalies must produce unallowed diffs by default. The normal replay matrix must have zero false positives.
+
+## allowed_diff
+
+`allowed_diff` is only for explicitly recorded known acceptable differences. Business-field differences are not allowed by default.
+
+Example:
+
+```json
+{
+  "section": "memory",
+  "path": "$.memory[*].content",
+  "backend_a": "in_memory",
+  "backend_b": "sqlite",
+  "reason": "known backend-specific normalization gap"
+}
+```
+
+Rules:
+
+- `section` is required and cannot be empty or `*`
+- `path` is required and cannot be empty or a single `*`
+- `backend_a` and `backend_b` are required and cannot be empty or `*`
+- `reason` is required and cannot be blank
+- backend pairs match in either order
+- `path` supports partial globs such as `$.memory[*].content`
+
+ID and timestamp differences should be fixed through normalization or runner changes, not allowed with `allowed_diff`.
+
+## Extending Backends
+
+The current runnable matrix only includes `InMemory` and `SQLite`. External backends such as Redis, PostgreSQL, MySQL, and ClickHouse are deferred and unsupported in the lightweight matrix. Future integrations should use an env-gated backend factory so default tests do not depend on external services.
+
+When adding a backend:
+
+- keep default local tests free of external-service dependencies
+- normalize generated ID and timestamp fields
+- preserve summary and track semantics across backends
+- prove new backend differences are precisely locatable through anomaly tests before considering `allowed_diff`
