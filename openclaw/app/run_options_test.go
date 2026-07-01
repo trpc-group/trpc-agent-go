@@ -1778,6 +1778,61 @@ evolution:
 	require.True(t, opts.EvolutionEnabled)
 }
 
+func TestParseRunOptions_EvolutionApprovalAutoExpireConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+evolution:
+  approval_timeout: "72h"
+  approval_sweep_interval: "30m"
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, 72*time.Hour, opts.EvolutionApprovalTimeout)
+	require.Equal(t, 30*time.Minute, opts.EvolutionApprovalSweepInterval)
+}
+
+func TestParseRunOptions_EvolutionApprovalAutoExpireInvalidFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "timeout",
+			body: `
+evolution:
+  approval_timeout: "bad"
+`,
+			want: "evolution.approval_timeout",
+		},
+		{
+			name: "sweep interval",
+			body: `
+evolution:
+  approval_sweep_interval: "-1s"
+`,
+			want: "evolution.approval_sweep_interval must be >= 0",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfgPath := writeTempConfig(t, tt.body)
+			_, err := parseRunOptions([]string{"-config", cfgPath})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
 func TestParseRunOptions_EvolutionSkillScopeModeConfigInvalidFails(
 	t *testing.T,
 ) {

@@ -296,6 +296,17 @@ evoSvc := evolution.NewService(reviewerModel,
 
 扫描器以后台 goroutine 形式运行，`Service.Close()` 时退出。`ApprovalTimeout` 设为 0（默认）即关闭该机制。
 
+在 `openclaw` YAML 中使用 duration 字符串配置：
+
+```yaml
+evolution:
+  enabled: true
+  human_gate: "create"
+  approval_timeout: "72h"
+  # 可选：默认 min(approval_timeout/4, 1h)
+  approval_sweep_interval: "15m"
+```
+
 #### Rollback（版本回退）
 
 当新版本质量回退时，可将当前 active revision 回退到此前的 archived 版本：当前 active 被降级为 `archived`，目标 archived 被重新 promote 为 `active`，并立即更新 publisher，agent 下次读取时即生效。

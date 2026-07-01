@@ -274,6 +274,17 @@ evoSvc := evolution.NewService(reviewerModel,
 The sweeper runs as a background goroutine inside the worker; it stops on
 `Service.Close()`. Setting the timeout to `0` (default) disables the sweeper.
 
+In `openclaw` YAML, use duration strings:
+
+```yaml
+evolution:
+  enabled: true
+  human_gate: "create"
+  approval_timeout: "72h"
+  # Optional: defaults to min(approval_timeout/4, 1h)
+  approval_sweep_interval: "15m"
+```
+
 #### Rollback
 
 Restore the previous active revision when a new one regresses quality. The

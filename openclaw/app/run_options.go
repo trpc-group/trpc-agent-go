@@ -234,9 +234,11 @@ type runOptions struct {
 	SkillsToolingGuide    *string
 	StateDir              string
 
-	EvolutionEnabled        bool
-	EvolutionHumanGate      string
-	EvolutionSkillScopeMode skill.SkillScopeMode
+	EvolutionEnabled               bool
+	EvolutionHumanGate             string
+	EvolutionSkillScopeMode        skill.SkillScopeMode
+	EvolutionApprovalTimeout       time.Duration
+	EvolutionApprovalSweepInterval time.Duration
 
 	DebugRecorderEnabled bool
 	DebugRecorderDir     string
@@ -1312,8 +1314,14 @@ type evolutionConfig struct {
 
 	// HumanGate controls the human approval gate for skill revisions.
 	// Values: "always" (hold all), "create" (hold new skills only), "" (disabled).
-	HumanGate  *string                    `yaml:"human_gate,omitempty"`
-	SkillScope *evolutionSkillScopeConfig `yaml:"skill_scope,omitempty"`
+	HumanGate *string `yaml:"human_gate,omitempty"`
+	// ApprovalTimeout auto-promotes pending_approval revisions older than
+	// the duration. Empty or "0" disables auto-expiration.
+	ApprovalTimeout *string `yaml:"approval_timeout,omitempty"`
+	// ApprovalSweepInterval overrides the auto-expiration scan interval.
+	// Empty or "0" keeps the service default.
+	ApprovalSweepInterval *string                    `yaml:"approval_sweep_interval,omitempty"`
+	SkillScope            *evolutionSkillScopeConfig `yaml:"skill_scope,omitempty"`
 }
 
 type evolutionSkillScopeConfig struct {
@@ -2073,6 +2081,26 @@ func (cfg *fileConfig) apply(
 		}
 		if cfg.Evolution.HumanGate != nil {
 			opts.EvolutionHumanGate = strings.TrimSpace(*cfg.Evolution.HumanGate)
+		}
+		if cfg.Evolution.ApprovalTimeout != nil {
+			dur, err := parseDuration(*cfg.Evolution.ApprovalTimeout)
+			if err != nil {
+				return fmt.Errorf("evolution.approval_timeout: %w", err)
+			}
+			if dur < 0 {
+				return fmt.Errorf("evolution.approval_timeout must be >= 0")
+			}
+			opts.EvolutionApprovalTimeout = dur
+		}
+		if cfg.Evolution.ApprovalSweepInterval != nil {
+			dur, err := parseDuration(*cfg.Evolution.ApprovalSweepInterval)
+			if err != nil {
+				return fmt.Errorf("evolution.approval_sweep_interval: %w", err)
+			}
+			if dur < 0 {
+				return fmt.Errorf("evolution.approval_sweep_interval must be >= 0")
+			}
+			opts.EvolutionApprovalSweepInterval = dur
 		}
 		if cfg.Evolution.SkillScope != nil &&
 			cfg.Evolution.SkillScope.Mode != nil {

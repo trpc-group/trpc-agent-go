@@ -96,6 +96,20 @@ func maybeCreateEvolutionService(
 		evoOpts = append(evoOpts, evolution.WithHumanGate(gate))
 		log.Infof("evolution: human gate enabled (mode=%s)", opts.EvolutionHumanGate)
 	}
+	if opts.EvolutionApprovalTimeout > 0 {
+		evoOpts = append(evoOpts, evolution.WithApprovalTimeout(opts.EvolutionApprovalTimeout))
+		if opts.EvolutionApprovalSweepInterval > 0 {
+			evoOpts = append(
+				evoOpts,
+				evolution.WithApprovalSweepInterval(opts.EvolutionApprovalSweepInterval),
+			)
+		}
+		log.Infof(
+			"evolution: approval auto-expire enabled (timeout=%s, sweep_interval=%s)",
+			opts.EvolutionApprovalTimeout,
+			opts.EvolutionApprovalSweepInterval,
+		)
+	}
 
 	// Use the same top-level model configuration as the agent, session
 	// summary, and automatic memory extraction.
