@@ -40,10 +40,17 @@ const (
 )
 
 func main() {
-	ctx := context.Background()
+	if err := run(context.Background()); err != nil {
+		log.Printf("session externalization example failed: %v", err)
+	}
+}
+
+func run(ctx context.Context) (err error) {
 	rawSessionService := sessioninmemory.NewSessionService()
 	artifactService := artifactinmemory.NewService()
-	wrappedSessionService := externalization.Wrap(
+
+	fmt.Println("Step 1: enable session content externalization")
+	sessionService := externalization.Wrap(
 		rawSessionService,
 		artifactService,
 		externalization.Config{Enabled: true},
@@ -53,53 +60,58 @@ func main() {
 	r := runner.NewRunner(
 		appName,
 		agent,
-		runner.WithSessionService(wrappedSessionService),
+		runner.WithSessionService(sessionService),
 		runner.WithArtifactService(artifactService),
 	)
 	defer func() {
-		if err := r.Close(); err != nil {
-			log.Printf("close runner: %v", err)
+		if closeErr := r.Close(); closeErr != nil {
+			if err != nil {
+				log.Printf("close runner: %v", closeErr)
+				return
+			}
+			err = fmt.Errorf("close runner: %w", closeErr)
 		}
 	}()
 
+	fmt.Println("Step 2: first user turn stores compact session content")
 	imageData := []byte("tiny-demo-image")
 	msg := model.NewUserMessage("Please inspect this image and note.")
 	msg.AddImageData(imageData, "auto", "png")
 	msg.AddFileURL("note.txt", "data:text/plain;base64,aGVsbG8=", "text/plain")
 
-	if err := drainRun(ctx, r, msg); err != nil {
-		log.Fatalf("first run failed: %v", err)
+	if err := runUserTurn(ctx, r, msg); err != nil {
+		return fmt.Errorf("first user turn: %w", err)
 	}
 
 	key := session.Key{AppName: appName, UserID: userID, SessionID: sessionID}
 	persisted, err := rawSessionService.GetSession(ctx, key)
 	if err != nil {
-		log.Fatalf("read persisted session: %v", err)
+		return fmt.Errorf("read persisted session: %w", err)
 	}
-	persistedEvent := firstUserEvent(persisted)
-	persistedImage := firstPart(persistedEvent, model.ContentTypeImage)
-	persistedFile := firstPart(persistedEvent, model.ContentTypeFile)
-	firstRequest := rec.requests()[0]
-
-	fmt.Println("After first turn:")
-	fmt.Println("Runtime request sent to model:")
-	fmt.Printf("- image bytes len: %d\n", len(firstImageData(firstRequest)))
-	fmt.Printf("- file data URL present: %t\n", requestFileURL(firstRequest) != "")
-	fmt.Printf("- contains ContentRef: %t\n", requestHasContentRef(firstRequest))
-	fmt.Println("Persisted session event:")
-	fmt.Printf("- image bytes len: %d\n", len(persistedImage.Image.Data))
-	fmt.Printf("- image artifact ref: %s\n", artifactRef(persistedImage.ContentRef))
-	fmt.Printf("- file URL len: %d\n", len(persistedFile.File.URL))
-	fmt.Printf("- file artifact ref: %s\n", artifactRef(persistedFile.ContentRef))
-
-	if err := drainRun(ctx, r, model.NewUserMessage("Continue with the previous image.")); err != nil {
-		log.Fatalf("second run failed: %v", err)
+	persistedEvent, err := firstUserEvent(persisted)
+	if err != nil {
+		return err
 	}
-	secondRequest := rec.requests()[1]
-	fmt.Println("After second turn:")
-	fmt.Println("Runtime request sent to model:")
-	fmt.Printf("- hydrated historical image bytes len: %d\n", len(firstImageData(secondRequest)))
-	fmt.Printf("- contains ContentRef: %t\n", requestHasContentRef(secondRequest))
+	firstRequest, err := recordedRequest(rec, 0)
+	if err != nil {
+		return err
+	}
+
+	printModelRequestView("First model request", firstRequest)
+	if err := printPersistedSessionView("Persisted session event", persistedEvent); err != nil {
+		return err
+	}
+
+	fmt.Println("Step 3: second user turn hydrates history for model request")
+	if err := runUserTurn(ctx, r, model.NewUserMessage("Continue with the previous image.")); err != nil {
+		return fmt.Errorf("second user turn: %w", err)
+	}
+	secondRequest, err := recordedRequest(rec, 1)
+	if err != nil {
+		return err
+	}
+	printModelRequestView("Second model request after hydrate", secondRequest)
+	return nil
 }
 
 type recordingModel struct {
@@ -148,7 +160,9 @@ func (m *recordingModel) requests() []*model.Request {
 	return m.requestsSnapshot()
 }
 
-func drainRun(ctx context.Context, r runner.Runner, msg model.Message) error {
+// runUserTurn runs one user turn and consumes the returned event stream.
+// Each runner.Run call represents one user turn in the same session.
+func runUserTurn(ctx context.Context, r runner.Runner, msg model.Message) error {
 	ch, err := r.Run(ctx, userID, sessionID, msg)
 	if err != nil {
 		return err
@@ -162,26 +176,56 @@ func drainRun(ctx context.Context, r runner.Runner, msg model.Message) error {
 	return nil
 }
 
-func firstUserEvent(sess *session.Session) event.Event {
-	for _, evt := range sess.Events {
-		if evt.Author == "user" {
-			return evt
-		}
+func recordedRequest(rec *recordingModel, index int) (*model.Request, error) {
+	requests := rec.requests()
+	if index < 0 || index >= len(requests) {
+		return nil, fmt.Errorf("recorded request %d not found", index)
 	}
-	log.Fatal("session has no user event")
-	return event.Event{}
+	return requests[index], nil
 }
 
-func firstPart(evt event.Event, typ model.ContentType) model.ContentPart {
+func printModelRequestView(title string, req *model.Request) {
+	fmt.Println(title + ":")
+	fmt.Printf("- image bytes len: %d\n", len(firstImageData(req)))
+	fmt.Printf("- file data URL present: %t\n", requestFileURL(req) != "")
+	fmt.Printf("- contains ContentRef: %t\n", requestHasContentRef(req))
+}
+
+func printPersistedSessionView(title string, evt event.Event) error {
+	persistedImage, err := firstPart(evt, model.ContentTypeImage)
+	if err != nil {
+		return err
+	}
+	persistedFile, err := firstPart(evt, model.ContentTypeFile)
+	if err != nil {
+		return err
+	}
+	fmt.Println(title + ":")
+	fmt.Printf("- image bytes len: %d\n", len(persistedImage.Image.Data))
+	fmt.Printf("- image artifact ref: %s\n", artifactRef(persistedImage.ContentRef))
+	fmt.Printf("- file URL len: %d\n", len(persistedFile.File.URL))
+	fmt.Printf("- file artifact ref: %s\n", artifactRef(persistedFile.ContentRef))
+	return nil
+}
+
+func firstUserEvent(sess *session.Session) (event.Event, error) {
+	for _, evt := range sess.Events {
+		if evt.Author == "user" {
+			return evt, nil
+		}
+	}
+	return event.Event{}, errors.New("session has no user event")
+}
+
+func firstPart(evt event.Event, typ model.ContentType) (model.ContentPart, error) {
 	for _, choice := range evt.Response.Choices {
 		for _, part := range choice.Message.ContentParts {
 			if part.Type == typ {
-				return part
+				return part, nil
 			}
 		}
 	}
-	log.Fatalf("event has no %s part", typ)
-	return model.ContentPart{}
+	return model.ContentPart{}, fmt.Errorf("event has no %s part", typ)
 }
 
 func firstImageData(req *model.Request) []byte {
