@@ -4,21 +4,18 @@
 
 ## 运行方式
 
-在 `test` module 下运行：
+在仓库根目录下运行 targeted 测试：
 
-```powershell
-cd D:\project\OpensourceTencent\trpc-agent-go\test
-$env:CGO_ENABLED="1"
-$env:CC="D:\tools\mingw\mingw64\bin\gcc.exe"
-$env:GOPATH="D:\project\OpensourceTencent\.gopath"
-$env:GOCACHE="D:\project\OpensourceTencent\.gocache"
-& "D:\go\go1.26.4.windows-amd64\go\bin\go.exe" test ./... -run ReplayConsistency -count=1
+```bash
+cd test
+CGO_ENABLED=1 go test ./... -run ReplayConsistency -count=1
 ```
 
 也可以运行整个 e2e module：
 
-```powershell
-& "D:\go\go1.26.4.windows-amd64\go\bin\go.exe" test ./... -count=1
+```bash
+cd test
+CGO_ENABLED=1 go test ./... -count=1
 ```
 
 SQLite 后端使用 `github.com/mattn/go-sqlite3`，因此需要启用 CGO 并提供 C 编译器。
@@ -33,8 +30,8 @@ session_memory_summary_track_diff_report.json
 
 可以通过环境变量覆盖：
 
-```powershell
-$env:TRPC_AGENT_REPLAY_REPORT_PATH="D:\tmp\replay-report.json"
+```bash
+TRPC_AGENT_REPLAY_REPORT_PATH=../replay-report.json go test ./... -run ReplayConsistency -count=1
 ```
 
 正常矩阵期望报告内容为：

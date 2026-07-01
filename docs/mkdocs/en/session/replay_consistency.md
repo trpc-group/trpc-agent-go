@@ -4,21 +4,18 @@ Replay consistency tests verify that the same session, memory, summary, and trac
 
 ## Running
 
-Run the targeted tests from the `test` module:
+Run the targeted tests from the repository root:
 
-```powershell
-cd D:\project\OpensourceTencent\trpc-agent-go\test
-$env:CGO_ENABLED="1"
-$env:CC="D:\tools\mingw\mingw64\bin\gcc.exe"
-$env:GOPATH="D:\project\OpensourceTencent\.gopath"
-$env:GOCACHE="D:\project\OpensourceTencent\.gocache"
-& "D:\go\go1.26.4.windows-amd64\go\bin\go.exe" test ./... -run ReplayConsistency -count=1
+```bash
+cd test
+CGO_ENABLED=1 go test ./... -run ReplayConsistency -count=1
 ```
 
 You can also run the whole e2e module:
 
-```powershell
-& "D:\go\go1.26.4.windows-amd64\go\bin\go.exe" test ./... -count=1
+```bash
+cd test
+CGO_ENABLED=1 go test ./... -count=1
 ```
 
 The SQLite backend uses `github.com/mattn/go-sqlite3`, so CGO and a C compiler are required.
@@ -33,8 +30,8 @@ session_memory_summary_track_diff_report.json
 
 Override it with:
 
-```powershell
-$env:TRPC_AGENT_REPLAY_REPORT_PATH="D:\tmp\replay-report.json"
+```bash
+TRPC_AGENT_REPLAY_REPORT_PATH=../replay-report.json go test ./... -run ReplayConsistency -count=1
 ```
 
 A healthy matrix should write:
