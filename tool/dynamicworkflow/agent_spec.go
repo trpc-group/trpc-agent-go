@@ -382,7 +382,7 @@ func (g *workflowGateway) dynamicAgentInvocationOption(
 		agent.SetInvocationSurfaceRootNodeID(inv, nodeID)
 		runOpts := inv.RunOptions
 		agent.WithSurfacePatchForNode(nodeID, patch)(&runOpts)
-		sanitizeDynamicAgentRunOptions(&runOpts)
+		sanitizeWorkflowChildRunOptions(&runOpts)
 		if structuredOutput != nil {
 			agent.WithStructuredOutputJSONSchema(
 				structuredOutput.name,
@@ -557,8 +557,7 @@ func (g *workflowGateway) selectableAgentTools(
 	if !ok || provider == nil {
 		return copyToolMap(tmpl.tools)
 	}
-	parent := parentWithLiveSession(g.parent)
-	probe := parent.View(agent.WithInvocationAgent(tmpl.agent))
+	probe := g.workflowChildProbe(tmpl)
 	tools, userToolNames := provider.InvocationToolSurface(ctx, probe)
 	return selectableToolMap(tools, userToolNames, tmpl.name, g.toolName)
 }
@@ -578,8 +577,7 @@ func (g *workflowGateway) selectAgentSkills(
 			tmpl.name,
 		)
 	}
-	parent := parentWithLiveSession(g.parent)
-	probe := parent.View(agent.WithInvocationAgent(tmpl.agent))
+	probe := g.workflowChildProbe(tmpl)
 	repo := provider.InvocationSkillRepository(ctx, probe)
 	if repo == nil {
 		if len(requested) == 0 {
@@ -627,7 +625,18 @@ func (g *workflowGateway) selectAgentSkills(
 	), nil
 }
 
-func sanitizeDynamicAgentRunOptions(runOpts *agent.RunOptions) {
+func (g *workflowGateway) workflowChildProbe(tmpl agentTemplate) *agent.Invocation {
+	parent := parentWithLiveSession(g.parent)
+	if parent == nil {
+		parent = agent.NewInvocation()
+	}
+	return parent.View(
+		agent.WithInvocationAgent(tmpl.agent),
+		clearInheritedWorkflowRunOptions(),
+	)
+}
+
+func sanitizeWorkflowChildRunOptions(runOpts *agent.RunOptions) {
 	if runOpts == nil {
 		return
 	}

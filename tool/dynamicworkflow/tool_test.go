@@ -84,6 +84,87 @@ func TestWorkflowAgentDefaultsToSoleTemplate(t *testing.T) {
 	require.Equal(t, "review it", reviewer.lastMessage())
 }
 
+func TestWorkflowAgentDoesNotInheritRootRunScopedOverrides(t *testing.T) {
+	reviewer := &testAgent{name: "reviewer", response: "approved"}
+	workflow, err := NewTool(scriptedRuntime{run: func(ctx context.Context, handler CallHandler) (Result, error) {
+		reviewRaw, err := handler.HandleWorkflowCall(ctx, Call{
+			ID: "agent-1", Kind: CallKindAgent,
+			Args: json.RawMessage(`{"input":"review it"}`),
+		})
+		return Result{Value: reviewRaw}, err
+	}}, []agent.Agent{reviewer})
+	require.NoError(t, err)
+
+	rootExtra := &testTool{name: "root_extra"}
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+	)
+	parent.RunOptions.ModelName = "root-model"
+	parent.RunOptions.Instruction = "root instruction"
+	parent.RunOptions.GlobalInstruction = "root global instruction"
+	parent.RunOptions.AdditionalTools = []tool.Tool{rootExtra}
+	parent.RunOptions.ExternalToolNames = map[string]bool{"external": true}
+	parent.RunOptions.ToolFilter = func(context.Context, tool.Tool) bool { return false }
+	parent.RunOptions.ToolExecutionFilter = func(context.Context, tool.Tool) bool { return false }
+	parent.RunOptions.StructuredOutput = &model.StructuredOutput{
+		Type: model.StructuredOutputJSONSchema,
+	}
+	parent.StructuredOutput = parent.RunOptions.StructuredOutput
+	appender.Attach(parent, func(context.Context, *event.Event) error { return nil })
+
+	_, err = workflow.Call(agent.NewInvocationContext(context.Background(), parent), []byte(`{"code":"return None"}`))
+	require.NoError(t, err)
+
+	child := reviewer.lastInvocation()
+	require.NotNil(t, child)
+	require.Empty(t, child.RunOptions.ModelName)
+	require.Empty(t, child.RunOptions.Instruction)
+	require.Empty(t, child.RunOptions.GlobalInstruction)
+	require.Nil(t, child.RunOptions.AdditionalTools)
+	require.Nil(t, child.RunOptions.ExternalToolNames)
+	require.Nil(t, child.RunOptions.ToolFilter)
+	require.Nil(t, child.RunOptions.ToolExecutionFilter)
+	require.Nil(t, child.RunOptions.StructuredOutput)
+	require.Nil(t, child.StructuredOutput)
+}
+
+func TestWorkflowDynamicAgentToolSelectionUsesSanitizedChildProbe(t *testing.T) {
+	templateTool := &testTool{name: "template_lookup"}
+	rootExtra := &testTool{name: "root_extra"}
+	reviewer := &runOptionsToolSurfaceAgent{testAgent: &testAgent{
+		name:          "reviewer",
+		response:      "approved",
+		tools:         []tool.Tool{templateTool},
+		userToolNames: map[string]bool{"template_lookup": true},
+	}}
+	workflow, err := NewTool(scriptedRuntime{run: func(ctx context.Context, handler CallHandler) (Result, error) {
+		_, err := handler.HandleWorkflowCall(ctx, Call{
+			ID:   "agent-1",
+			Kind: CallKindAgent,
+			Args: json.RawMessage(`{
+				"agent":{
+					"template":"reviewer",
+					"tools":["root_extra"]
+				},
+				"input":"review it"
+			}`),
+		})
+		return Result{}, err
+	}}, []agent.Agent{reviewer})
+	require.NoError(t, err)
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+	)
+	parent.RunOptions.AdditionalTools = []tool.Tool{rootExtra}
+	appender.Attach(parent, func(context.Context, *event.Event) error { return nil })
+
+	_, err = workflow.Call(agent.NewInvocationContext(context.Background(), parent), []byte(`{"code":"return None"}`))
+	require.ErrorContains(t, err, `does not allow tool(s): root_extra`)
+}
+
 func TestWorkflowAgentRequiresTemplateWhenMultipleAreRegistered(t *testing.T) {
 	workflow, err := NewTool(scriptedRuntime{run: func(ctx context.Context, handler CallHandler) (Result, error) {
 		_, err := handler.HandleWorkflowCall(ctx, Call{
@@ -1076,6 +1157,36 @@ func TestWorkflowCollectChildResultErrorBranches(t *testing.T) {
 	require.ErrorContains(t, err, "forward failed")
 }
 
+func TestWorkflowCollectChildResultNotifiesForwardedEventCompletion(t *testing.T) {
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+	)
+	evt := event.NewResponseEvent(inv.InvocationID, "reviewer", &model.Response{
+		Done: true,
+		Choices: []model.Choice{{Index: 0, Message: model.Message{
+			Role: model.RoleAssistant, Content: "done",
+		}}},
+	})
+	evt.RequiresCompletion = true
+	ch := make(chan *event.Event, 1)
+	ch <- evt
+	close(ch)
+	forwarded := false
+	eventstream.Attach(inv, func(context.Context, *event.Event) error {
+		forwarded = true
+		return nil
+	})
+
+	_, err := (&workflowGateway{}).collectChildResult(context.Background(), inv, ch)
+	require.NoError(t, err)
+	require.True(t, forwarded)
+	require.NoError(t, inv.AddNoticeChannelAndWait(
+		context.Background(),
+		agent.GetAppendEventNoticeKey(evt.ID),
+		100*time.Millisecond,
+	))
+}
+
 func TestAgentSpecParsingAndSelectionBranches(t *testing.T) {
 	_, err := parseAgentCall(Call{Args: json.RawMessage(`{`)})
 	require.ErrorContains(t, err, "decode input for agent call")
@@ -1283,6 +1394,28 @@ func (a *testAgent) lastInvocation() *agent.Invocation {
 		return nil
 	}
 	return a.invs[len(a.invs)-1]
+}
+
+type runOptionsToolSurfaceAgent struct {
+	*testAgent
+}
+
+func (a *runOptionsToolSurfaceAgent) InvocationToolSurface(
+	_ context.Context,
+	inv *agent.Invocation,
+) ([]tool.Tool, map[string]bool) {
+	tools := append([]tool.Tool(nil), a.tools...)
+	userToolNames := make(map[string]bool, len(a.userToolNames)+len(inv.RunOptions.AdditionalTools))
+	for name, allowed := range a.userToolNames {
+		userToolNames[name] = allowed
+	}
+	for _, tl := range inv.RunOptions.AdditionalTools {
+		tools = append(tools, tl)
+		if name := declarationName(tl); name != "" {
+			userToolNames[name] = true
+		}
+	}
+	return tools, userToolNames
 }
 
 func testAgentPartialEvent(invocationID, author, content string) *event.Event {

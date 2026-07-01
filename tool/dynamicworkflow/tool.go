@@ -263,7 +263,7 @@ func (g *workflowGateway) callAgent(ctx context.Context, call Call) (json.RawMes
 		agent.WithInvocationAgent(candidate.agent),
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationEventFilterKey(childKey),
-		clearInheritedStructuredOutput(),
+		clearInheritedWorkflowRunOptions(),
 		agent.WithInvocationParentMetadata(&agent.ParentInvocationMetadata{
 			TriggerType: agent.TriggerTypeDynamicWorkflow,
 			TriggerID:   g.workflow + "/" + call.ID,
@@ -330,18 +330,17 @@ func (g *workflowGateway) lockChildInstance(key string) func() {
 	return mu.Unlock
 }
 
-// clearInheritedStructuredOutput prevents a root run's response contract from
-// leaking into a workflow child. A child either uses its template's configured
-// output contract or, for a dynamic spec, the contract explicitly requested by
-// that spec.
-func clearInheritedStructuredOutput() agent.InvocationOptions {
+// clearInheritedWorkflowRunOptions prevents root run-scoped overrides from
+// leaking into a workflow child. A child should start from its template's
+// configured behavior and then apply only the dynamic spec requested by the
+// workflow code.
+func clearInheritedWorkflowRunOptions() agent.InvocationOptions {
 	return func(inv *agent.Invocation) {
 		if inv == nil {
 			return
 		}
 		runOpts := inv.RunOptions
-		runOpts.StructuredOutput = nil
-		runOpts.StructuredOutputType = nil
+		sanitizeWorkflowChildRunOptions(&runOpts)
 		inv.RunOptions = runOpts
 		inv.StructuredOutput = nil
 		inv.StructuredOutputType = nil
@@ -427,10 +426,10 @@ func (g *workflowGateway) collectChildResult(
 			if err := g.appendSessionEvent(ctx, inv, evt); err != nil {
 				return agentResult{}, err
 			}
-			if evt.RequiresCompletion {
-				if err := inv.NotifyCompletion(ctx, agent.GetAppendEventNoticeKey(evt.ID)); err != nil {
-					return agentResult{}, err
-				}
+		}
+		if evt.RequiresCompletion {
+			if err := inv.NotifyCompletion(ctx, agent.GetAppendEventNoticeKey(evt.ID)); err != nil {
+				return agentResult{}, err
 			}
 		}
 		content, assistant := assistantEventContent(evt)
