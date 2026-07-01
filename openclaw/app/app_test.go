@@ -2970,6 +2970,17 @@ func TestNewAgent_DeferToolSurfaceUsesDynamicAgent(t *testing.T) {
 	require.Contains(t, system, "tool_search")
 	require.Contains(t, system, "Tool-backed work is available")
 	require.Contains(t, system, "pass exact tool names")
+	require.Contains(t, system, "Skill-backed work is tool-backed work.")
+	require.Contains(
+		t,
+		system,
+		"then call `dynamic_agent` with that skill name.",
+	)
+	require.Contains(
+		t,
+		system,
+		"Do not answer a matching skill task directly from prior knowledge",
+	)
 	require.NotContains(t, system, "OPENCLAW_LAST_UPLOAD_PATH")
 
 	searchTool := findTool(
