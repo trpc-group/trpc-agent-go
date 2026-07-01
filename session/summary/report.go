@@ -27,8 +27,9 @@ const (
 	unitMilliseconds = "milliseconds"
 	unitTokens       = "tokens"
 
-	callModeStandalone    = "standalone"
-	callModeCacheSafeFork = "cache_safe_fork"
+	callModeStandalone     = "standalone"
+	callModeCacheSafeFork  = "cache_safe_fork"
+	callModeCustomResponse = "custom_response"
 )
 
 // Report describes why summary generation was triggered and how the summary

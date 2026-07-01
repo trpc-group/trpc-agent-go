@@ -407,6 +407,8 @@ summarizer := summary.NewSummarizer(
 
 开启 cache-safe forking 时，`report.Call.Mode` 为 `cache_safe_fork`，请求估算值来自 fork
 后的父请求加上追加的 summary 指令。普通独立 summary prompt 模式下，mode 为 `standalone`。
+如果 `BeforeModel` callback 返回 custom response，实际没有发送 summary 模型请求，mode 为
+`custom_response`，prompt 估算值保持为 0。
 
 高级集成如果要在高层 summary 流程前放入同一个 report，可以使用
 `summary.ContextWithReport(ctx, report)`，需要从 context 取出时使用

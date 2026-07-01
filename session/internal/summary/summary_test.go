@@ -433,6 +433,38 @@ func TestSummarizeSession_ForceReportIncludesFilterKey(t *testing.T) {
 	require.Equal(t, "branch", got.Trigger.FilterKey)
 }
 
+func TestCreateSessionSummaryWithCascade_ForceFullReportUsesTriggerFilterKey(t *testing.T) {
+	const branch = "app/branch"
+	var got summary.Report
+	summarizer := summary.NewSummarizer(
+		&reportModel{},
+		summary.WithReportHook(func(_ context.Context, report summary.Report) {
+			got = report
+		}),
+	)
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("new", time.Now(), branch),
+		makeEvent("other", time.Now(), "app/other"),
+	}
+
+	err := CreateSessionSummaryWithCascade(
+		context.Background(),
+		base,
+		branch,
+		true,
+		NewSummaryDispatchPolicy([]string{session.SummaryFilterKeyAllContents}, true),
+		func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+			_, err := SummarizeSession(ctx, summarizer, sess, filterKey, force)
+			return err
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, got.Trigger.Fired)
+	require.Equal(t, "force", got.Trigger.Name)
+	require.Equal(t, branch, got.Trigger.FilterKey)
+}
+
 func TestSummarizeSession_ReusesCallerReport(t *testing.T) {
 	summarizer := summary.NewSummarizer(&reportModel{})
 	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}

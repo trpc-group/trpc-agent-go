@@ -423,7 +423,9 @@ The report keeps two token counts separate:
 
 For cache-safe forking, `report.Call.Mode` is `cache_safe_fork` and the request
 estimate is computed from the forked parent request plus the appended summary
-instruction. For standalone summary prompts, the mode is `standalone`.
+instruction. For standalone summary prompts, the mode is `standalone`. If a
+`BeforeModel` callback returns a custom response and no summary model request is
+sent, the mode is `custom_response` and the prompt estimate remains zero.
 
 Advanced integrations can attach a report before entering a higher-level
 summary flow with `summary.ContextWithReport(ctx, report)` and retrieve it with

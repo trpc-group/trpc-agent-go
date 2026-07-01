@@ -889,14 +889,16 @@ func (s *sessionSummarizer) generateSummary(
 		err = cbErr
 		return ctx, "", cbErr
 	}
-	s.recordReportCall(ctx, request, mode)
 
 	if responseChan == nil {
+		s.recordReportCall(ctx, request, mode)
 		responseChan, cbErr = s.model.GenerateContent(ctx, request)
 		if cbErr != nil {
 			err = fmt.Errorf("failed to generate summary: %w", cbErr)
 			return ctx, "", err
 		}
+	} else {
+		s.recordReportCall(ctx, nil, callModeCustomResponse)
 	}
 
 	var summaryText string

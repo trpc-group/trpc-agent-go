@@ -354,7 +354,7 @@ func shouldGenerateSummary(
 				Fired:     true,
 				Name:      "force",
 				Metric:    "custom",
-				FilterKey: filterKey,
+				FilterKey: reportFilterKey(ctx, filterKey),
 			}
 		}
 		return true
@@ -366,6 +366,16 @@ func shouldGenerateSummary(
 		}
 	}
 	return ShouldSummarize(ctx, m, checkTmp)
+}
+
+func reportFilterKey(ctx context.Context, filterKey string) string {
+	if filterKey != session.SummaryFilterKeyAllContents {
+		return filterKey
+	}
+	if triggerFilterKey := summaryTriggerFilterKeyFromContext(ctx); triggerFilterKey != "" {
+		return triggerFilterKey
+	}
+	return filterKey
 }
 
 // writeSummary stores the generated summary under filterKey.

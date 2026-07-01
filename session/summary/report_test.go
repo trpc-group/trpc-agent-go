@@ -314,6 +314,42 @@ func TestSessionSummarizer_ReportHookEstimatesAfterBeforeModelCallback(t *testin
 	require.Equal(t, 10, got.Call.EstimatedPromptTokens)
 }
 
+func TestSessionSummarizer_ReportHookCustomResponseCall(t *testing.T) {
+	defer SetTokenCounter(nil)
+	SetTokenCounter(testFixedTokenCounter{tokens: 5})
+
+	var got Report
+	callbacks := model.NewCallbacks()
+	callbacks.RegisterBeforeModel(func(
+		_ context.Context,
+		_ *model.BeforeModelArgs,
+	) (*model.BeforeModelResult, error) {
+		return &model.BeforeModelResult{
+			CustomResponse: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.Message{Content: "callback summary"},
+				}},
+			},
+		}, nil
+	})
+	m := &reportModel{}
+	s := NewSummarizer(
+		m,
+		WithModelCallbacks(callbacks),
+		WithReportHook(func(_ context.Context, report Report) {
+			got = report
+		}),
+	)
+
+	text, err := s.Summarize(context.Background(), newReportSession())
+	require.NoError(t, err)
+	require.Equal(t, "callback summary", text)
+	require.Nil(t, m.request)
+	require.Equal(t, callModeCustomResponse, got.Call.Mode)
+	require.Zero(t, got.Call.EstimatedPromptTokens)
+}
+
 func TestSessionSummarizer_ReportHookKeepsUsageFromEarlierResponse(t *testing.T) {
 	defer SetTokenCounter(nil)
 	SetTokenCounter(testFixedTokenCounter{tokens: 1})
