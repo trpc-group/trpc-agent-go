@@ -163,5 +163,3 @@ func containsSubstring(s string, patterns []string) bool {
 	}
 	return false
 }
-
-
