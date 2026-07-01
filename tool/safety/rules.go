@@ -343,7 +343,6 @@ func NewSensitiveInfoLeakRule() *SensitiveInfoLeakRule {
 		"db_password", "db_pass",
 		"token", "bearer", "jwt",
 		"auth_token", "refresh_token",
-		" > ", ">>",
 	}}
 }
 

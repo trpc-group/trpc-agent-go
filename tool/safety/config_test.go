@@ -14,7 +14,7 @@ import (
 )
 
 func TestLoadPolicyFile_Valid(t *testing.T) {
-	policy, err := LoadPolicyFile("tool_safety_policy.yaml")
+	policy, err := LoadPolicyFile("examples/tool_safety_policy.yaml")
 	if err != nil {
 		t.Fatalf("load failed: %v", err)
 	}
