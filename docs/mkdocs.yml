@@ -94,6 +94,7 @@ nav:
       - "Improving AI Agent Quality and Stability with LLM Verifier": blog/llmverifier.md
       - "Building an Enterprise-Grade, Secure, and Controllable OpenClaw Runtime": blog/openclaw.md
       - "A Complete Guide to Automated Prompt Iteration and Engineering Practice for AI Agents": blog/promptiter.md
+      - "Putting Work in the Right Boundary: Multi-Agent Design in tRPC-Agent-Go": blog/multiagent-boundaries.md
 
 plugins:
   - search
@@ -197,6 +198,7 @@ plugins:
                 - "AI Agent 高质量稳定性提升方法": blog/llmverifier.md
                 - "打造企业级安全可控的 OpenClaw Runtime": blog/openclaw.md
                 - "AI Agent 提示词自动迭代与工程实践全解析": blog/promptiter.md
+                - "把工作放到合适边界：tRPC-Agent-Go Multi-Agent 设计与选型": blog/multiagent-boundaries.md
   - git-revision-date-localized:
       enable_creation_date: true
       type: iso_datetime
