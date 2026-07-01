@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -321,6 +322,28 @@ func TestExecTool_Foreground(t *testing.T) {
 	require.Equal(t, "exited", res.Status)
 	require.Contains(t, res.Output, "hello")
 	require.Equal(t, 0, res.ExitCode)
+}
+
+func TestExecTool_UsesManagerDefaultTimeout(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithDefaultTimeout(50 * time.Millisecond))
+	tool := newExecCommandTool(mgr)
+
+	started := time.Now()
+	out, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "sleep 1; printf done",
+		"yieldMs": 0,
+	}))
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 900*time.Millisecond)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.NotEqual(t, 0, res.ExitCode)
+	require.NotContains(t, res.Output, "done")
 }
 
 func TestExecTool_RuntimeProfileWorkspacePolicy(t *testing.T) {
@@ -897,6 +920,36 @@ func TestExecTool_YieldBackgroundAndPoll(t *testing.T) {
 		time.Sleep(pollInterval)
 	}
 	t.Fatalf("process did not exit; output: %s", all)
+}
+
+func TestExecTool_DefaultTimeoutKillsProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group signaling is unix-specific")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	marker := filepath.Join(t.TempDir(), "orphan-marker")
+	mgr := NewManager(WithDefaultTimeout(100 * time.Millisecond))
+	yieldZero := 0
+
+	res, err := mgr.Exec(context.Background(), execParams{
+		Command: "(sleep 0.6; echo orphan > " +
+			strconv.Quote(marker) + ") & wait",
+		YieldMs: &yieldZero,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, 0, res.ExitCode)
+
+	require.Never(t, func() bool {
+		_, err = os.Stat(marker)
+		if err == nil {
+			return true
+		}
+		require.ErrorIs(t, err, os.ErrNotExist)
+		return false
+	}, 900*time.Millisecond, 20*time.Millisecond)
 }
 
 func TestProcessTool_Submit(t *testing.T) {

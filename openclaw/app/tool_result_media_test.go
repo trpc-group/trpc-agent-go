@@ -310,12 +310,12 @@ func TestToolResultPathHelpers(t *testing.T) {
 	require.Equal(t, "gif", mustToolResultImageFormat(t, path))
 	require.Equal(
 		t,
-		"Generated image attached for direct inspection.",
+		"Image attached for direct inspection.",
 		toolResultImageMessageText([]toolResultImage{{}}),
 	)
 	require.Equal(
 		t,
-		"Generated images attached for direct inspection: "+
+		"Images attached for direct inspection: "+
 			"one.png, two.jpg.",
 		toolResultImageMessageText([]toolResultImage{
 			{Name: "one.png"},

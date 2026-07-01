@@ -36,9 +36,9 @@ const (
 )
 
 const (
-	toolResultSingleImageText = "Generated image attached for " +
+	toolResultSingleImageText = "Image attached for " +
 		"direct inspection: %s."
-	toolResultMultiImageText = "Generated images attached for " +
+	toolResultMultiImageText = "Images attached for " +
 		"direct inspection: %s."
 )
 
@@ -342,9 +342,9 @@ func toolResultImageMessageText(images []toolResultImage) string {
 	list := strings.Join(names, ", ")
 	if list == "" {
 		if len(images) == 1 {
-			return "Generated image attached for direct inspection."
+			return "Image attached for direct inspection."
 		}
-		return "Generated images attached for direct inspection."
+		return "Images attached for direct inspection."
 	}
 	if len(images) == 1 {
 		return fmt.Sprintf(toolResultSingleImageText, list)
