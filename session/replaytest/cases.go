@@ -22,7 +22,7 @@ import (
 
 var defaultSessionKey = session.Key{AppName: "replaytest", UserID: "user", SessionID: "session"}
 var defaultUserKey = session.UserKey{AppName: "replaytest", UserID: "user"}
-var fixedTime = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+var fixedTime = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // CaseSingleTurnText covers one user message and one assistant response.
 var CaseSingleTurnText = ReplayCase{
@@ -146,6 +146,18 @@ var CaseConcurrentInterleaved = ReplayCase{
 	},
 }
 
+// CaseSummaryAsyncPipeline covers async summary enqueue and persistence.
+var CaseSummaryAsyncPipeline = ReplayCase{
+	Name:         "summary_async_pipeline",
+	Description:  "async summary enqueue and persist",
+	RequiredCaps: RequiredCapabilities{NeedsAsyncSummary: true},
+	Steps: []ReplayStep{
+		AppendEventStep{Key: "c11.user.1", Event: userEvent("c11.user.1", "async summary input")},
+		AppendEventStep{Key: "c11.assistant.1", Event: assistantEvent("c11.assistant.1", "async summary result")},
+		CreateSummaryStep{Key: "c11.enqueue", SessionKey: defaultSessionKey, FilterKey: "", Force: false, Async: true},
+	},
+}
+
 // AllCases returns all built-in replay cases.
 func AllCases() []ReplayCase {
 	return []ReplayCase{
@@ -159,6 +171,7 @@ func AllCases() []ReplayCase {
 		CaseSummaryWithTruncation,
 		CaseTrackEvents,
 		CaseConcurrentInterleaved,
+		CaseSummaryAsyncPipeline,
 	}
 }
 

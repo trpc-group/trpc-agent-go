@@ -222,6 +222,10 @@ func (e *caseExecutor) execute(ctx context.Context, step ReplayStep) error {
 		if err != nil {
 			return err
 		}
+		if latest, err := e.backend.SessionService.GetSession(ctx, s.SessionKey); err == nil && latest != nil {
+			sess = latest
+			e.sessions[s.SessionKey] = latest
+		}
 		if s.Async {
 			return e.backend.SessionService.EnqueueSummaryJob(ctx, sess, s.FilterKey, s.Force)
 		}
