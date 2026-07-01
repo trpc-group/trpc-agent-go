@@ -393,6 +393,41 @@ func (s *Service) rotateMemory(
 	now time.Time,
 ) error {
 	return s.db.Transaction(ctx, func(tx *sql.Tx) error { // nolint:gosec // table name is validated
+
+		// Pre-check target ID before modifying the source row.
+		// An active (deleted_at IS NULL) target is always a conflict.
+		// A soft-deleted target is OK: revived by ON DUPLICATE KEY UPDATE in
+		// soft-delete mode, or physically removed before INSERT in hard-delete
+		// mode.
+		var targetActive bool
+		checkQ := fmt.Sprintf(
+			"SELECT deleted_at IS NULL FROM %s WHERE memory_id = ? AND app_name = ? AND user_id = ? FOR UPDATE",
+			s.tableName,
+		)
+		err := tx.QueryRowContext(ctx, checkQ, newID, memoryKey.AppName, memoryKey.UserID).Scan(&targetActive)
+		switch {
+		case err == sql.ErrNoRows:
+			// Target does not exist — safe to proceed.
+		case err != nil:
+			return fmt.Errorf("check rotated memory target: %w", err)
+		default:
+			if targetActive {
+				return fmt.Errorf("cannot rotate memory: target id %s already active", newID)
+			}
+			// Target is soft-deleted.  In hard-delete mode, physically remove
+			// it so the subsequent plain INSERT does not hit a duplicate key.
+			if !s.opts.softDelete {
+				sql := fmt.Sprintf(
+					"DELETE FROM %s WHERE memory_id = ? AND app_name = ? AND user_id = ?",
+					s.tableName,
+				)
+				_, err = tx.ExecContext(ctx, sql, newID, memoryKey.AppName, memoryKey.UserID)
+				if err != nil {
+					return fmt.Errorf("delete rotated memory: %w", err)
+				}
+			}
+		}
+
 		var (
 			query string
 			args  []any
@@ -466,20 +501,13 @@ func (s *Service) rotateMemory(
 				s.tableName,
 			)
 		}
-		insertRes, err := tx.ExecContext(ctx, insertQuery,
+		_, err = tx.ExecContext(ctx, insertQuery,
 			newID, memoryKey.AppName, memoryKey.UserID,
 			memoryStr, string(topicsJSON), embeddingArg,
 			ef.kind, ef.eventTime, ef.participants, ef.location,
 			createdAt, now)
 		if err != nil {
 			return fmt.Errorf("insert rotated memory: %w", err)
-		}
-		inserted, err := insertRes.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("insert rotated memory rows affected: %w", err)
-		}
-		if inserted == 0 {
-			return fmt.Errorf("cannot rotate memory: target id %s is already active", newID)
 		}
 
 		return nil
