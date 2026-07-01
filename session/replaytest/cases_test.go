@@ -18,7 +18,7 @@ import (
 
 func TestAllCases(t *testing.T) {
 	cases := AllCases()
-	require.Len(t, cases, 12)
+	require.Len(t, cases, 13)
 	seen := map[string]bool{}
 	for _, tc := range cases {
 		require.NotEmpty(t, tc.Name)

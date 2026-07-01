@@ -171,6 +171,18 @@ var CaseMemoryMulti = ReplayCase{
 	},
 }
 
+// CaseRecoveryDuplicateEvent covers duplicate logical event writes after recovery.
+var CaseRecoveryDuplicateEvent = ReplayCase{
+	Name:        "recovery_duplicate_event",
+	Description: "duplicate event write after simulated recovery",
+	Steps: []ReplayStep{
+		AppendEventStep{Key: "c13.user.1", Event: userEvent("c13.user.1", "original")},
+		AppendEventStep{Key: "c13.assistant.1", Event: assistantEvent("c13.assistant.1", "reply")},
+		AppendEventStep{Key: "c13.user.1", Event: userEvent("c13.user.1", "original")},
+		GetSessionStep{Key: "c13.get", SessionKey: defaultSessionKey},
+	},
+}
+
 // AllCases returns all built-in replay cases.
 func AllCases() []ReplayCase {
 	return []ReplayCase{
@@ -186,6 +198,7 @@ func AllCases() []ReplayCase {
 		CaseConcurrentInterleaved,
 		CaseSummaryAsyncPipeline,
 		CaseMemoryMulti,
+		CaseRecoveryDuplicateEvent,
 	}
 }
 
@@ -206,7 +219,7 @@ func assistantEvent(key, content string) *event.Event {
 }
 
 func branchEvent(key, branch, content string) *event.Event {
-	evt := assistantEvent(key, content)
+	evt := userEvent(key, content)
 	evt.Author = branch
 	evt.Branch = branch
 	return evt
