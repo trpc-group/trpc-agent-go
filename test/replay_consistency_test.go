@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -85,10 +86,9 @@ type summaryEntry struct {
 }
 
 type summaryBoundary struct {
-	Version     int    `json:"version"`
-	FilterKey   string `json:"filter_key"`
-	CutoffAt    string `json:"cutoff_at,omitempty"`
-	LastEventID string `json:"last_event_id,omitempty"`
+	Version   int    `json:"version"`
+	FilterKey string `json:"filter_key"`
+	CutoffAt  string `json:"cutoff_at,omitempty"`
 }
 
 type trackSnapshot struct {
@@ -124,17 +124,18 @@ type allowedDiffRule struct {
 }
 
 type replayCase struct {
-	name         string
-	initialState session.StateMap
-	appState     session.StateMap
-	userState    session.StateMap
-	sessionState session.StateMap
-	events       []eventSpec
-	summaries    []summaryStep
-	tracks       []trackSpec
-	memories     []memoryOpSpec
-	queries      []memoryQuerySpec
-	allowedDiffs []allowedDiffRule
+	name               string
+	initialState       session.StateMap
+	appState           session.StateMap
+	userState          session.StateMap
+	sessionState       session.StateMap
+	events             []eventSpec
+	concurrentMemories []memoryOpSpec
+	summaries          []summaryStep
+	tracks             []trackSpec
+	memories           []memoryOpSpec
+	queries            []memoryQuerySpec
+	allowedDiffs       []allowedDiffRule
 }
 
 type eventSpec struct {
@@ -483,10 +484,9 @@ func normalizeReplaySummaries(summaries map[string]*session.Summary) map[string]
 		}
 		if boundary := summary.CutoffBoundary(); boundary != nil {
 			entry.Boundary = &summaryBoundary{
-				Version:     boundary.Version,
-				FilterKey:   boundary.FilterKey,
-				CutoffAt:    normalizeReplayTime(boundary.CutoffAt),
-				LastEventID: boundary.LastEventID,
+				Version:   boundary.Version,
+				FilterKey: boundary.FilterKey,
+				CutoffAt:  normalizeReplayTime(boundary.CutoffAt),
 			}
 		}
 		out[filterKey] = entry
@@ -959,7 +959,7 @@ func runReplayCaseOnBackend(
 	t.Helper()
 
 	key := session.Key{
-		AppName:   "replay-matrix",
+		AppName:   "replay-matrix-" + tc.name,
 		UserID:    "user-" + tc.name,
 		SessionID: "session-" + tc.name,
 	}
@@ -1000,7 +1000,6 @@ func runReplayCaseOnBackend(
 		evt := buildReplayEvent(tc.name, i, spec)
 		require.NoError(t, backend.sessionService.AppendEvent(ctx, got, evt))
 	}
-
 	for _, spec := range tc.tracks {
 		appendReplayTrack(t, ctx, backend, key, spec)
 	}
@@ -1009,6 +1008,15 @@ func runReplayCaseOnBackend(
 	userKey := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
 	for _, op := range tc.memories {
 		applyReplayMemoryOp(t, ctx, backend.memoryService, userKey, memoryAliases, op)
+	}
+	if len(tc.concurrentMemories) > 0 {
+		applyReplayMemoriesConcurrently(
+			t,
+			ctx,
+			backend.memoryService,
+			userKey,
+			tc.concurrentMemories,
+		)
 	}
 	for _, query := range tc.queries {
 		results, err := backend.memoryService.SearchMemories(ctx, userKey, query.query)
@@ -1053,6 +1061,54 @@ func refreshReplayCaseResultSnapshot(
 		backend:  backend.name,
 		key:      key,
 		snapshot: makeReplaySnapshot(got, memories),
+	}
+}
+
+func applyReplayMemoriesConcurrently(
+	t *testing.T,
+	ctx context.Context,
+	service memory.Service,
+	userKey memory.UserKey,
+	ops []memoryOpSpec,
+) {
+	t.Helper()
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(ops))
+	start := make(chan struct{})
+
+	for _, op := range ops {
+		op := op
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+
+			if op.op != "add" {
+				errCh <- fmt.Errorf("unsupported concurrent memory op %q", op.op)
+				return
+			}
+			var opts []memory.AddOption
+			if op.metadata != nil {
+				opts = append(opts, memory.WithMetadata(op.metadata))
+			}
+			if err := service.AddMemory(
+				ctx,
+				userKey,
+				op.content,
+				append([]string(nil), op.topics...),
+				opts...,
+			); err != nil {
+				errCh <- err
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
 	}
 }
 
@@ -1612,6 +1668,7 @@ func TestReplayConsistencyMatrix_BasicCases(t *testing.T) {
 			for _, backend := range backends {
 				results = append(results, runReplayCaseOnBackend(t, ctx, backend, tc))
 			}
+			requireReplayCaseIsolation(t, tc, results)
 			diffs := compareReplayCaseResults(tc, results)
 			allDiffs = append(allDiffs, diffs...)
 			require.Falsef(
@@ -1629,6 +1686,28 @@ func TestReplayConsistencyMatrix_BasicCases(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, "[]", string(encoded))
 	require.Empty(t, allDiffs)
+}
+
+func requireReplayCaseIsolation(
+	t *testing.T,
+	tc replayCase,
+	results []replayCaseResult,
+) {
+	t.Helper()
+
+	if tc.name == "state_scopes" {
+		return
+	}
+	for _, result := range results {
+		require.NotContains(
+			t,
+			result.snapshot.State,
+			session.StateAppPrefix+"feature_flags",
+			"case %s reused app state from state_scopes in backend %s",
+			tc.name,
+			result.backend,
+		)
+	}
 }
 
 func basicReplayCases() []replayCase {
@@ -1774,6 +1853,50 @@ func basicReplayCases() []replayCase {
 			queries: []memoryQuerySpec{
 				{query: "jasmine tea afternoon", minResults: 1},
 				{query: "Shenzhen library Ada", minResults: 1},
+			},
+		},
+		{
+			name: "concurrent_retry_writes",
+			events: []eventSpec{
+				replayUserEvent(
+					"run concurrent memory writes",
+					withReplayInvocation("concurrent-root"),
+					withReplayBranch("root"),
+				),
+				replayAssistantEvent(
+					"concurrent writes completed",
+					withReplayInvocation("concurrent-root"),
+					withReplayBranch("root"),
+				),
+			},
+			concurrentMemories: []memoryOpSpec{
+				{
+					name:    "concurrent preference",
+					op:      "add",
+					content: "Concurrent write records preferred response style.",
+					topics:  []string{"concurrency", "preference"},
+				},
+				{
+					name:    "concurrent fact",
+					op:      "add",
+					content: "Concurrent write records retry-safe project fact.",
+					topics:  []string{"concurrency", "fact"},
+				},
+				{
+					name:    "retry first attempt",
+					op:      "add",
+					content: "Retry write should remain idempotent across backends.",
+					topics:  []string{"retry", "idempotency"},
+				},
+				{
+					name:    "retry second attempt",
+					op:      "add",
+					content: "Retry write should remain idempotent across backends.",
+					topics:  []string{"retry", "idempotency"},
+				},
+			},
+			queries: []memoryQuerySpec{
+				{query: "concurrent retry idempotent", minResults: 2},
 			},
 		},
 		{
@@ -1976,6 +2099,34 @@ func TestReplayConsistencySnapshotNormalize_IgnoresGeneratedFields(t *testing.T)
 
 	diffs := diffReplaySnapshots(
 		"normalize-generated-fields",
+		left.Session.ID,
+		"in_memory",
+		"sqlite",
+		left,
+		right,
+		nil,
+	)
+	require.Empty(t, diffs)
+}
+
+func TestReplayConsistencySnapshotNormalize_IgnoresSummaryLastEventID(t *testing.T) {
+	left := newReplaySnapshotFixtureWithSummaryEventID(
+		"left",
+		`{"a":1,"b":2}`,
+		`{"a":1,"b":2}`,
+		"raw-left",
+		"event-left",
+	)
+	right := newReplaySnapshotFixtureWithSummaryEventID(
+		"left",
+		`{"a":1,"b":2}`,
+		`{"a":1,"b":2}`,
+		"raw-left",
+		"event-right",
+	)
+
+	diffs := diffReplaySnapshots(
+		"normalize-summary-last-event-id",
 		left.Session.ID,
 		"in_memory",
 		"sqlite",
@@ -2468,6 +2619,22 @@ func newReplaySnapshotFixture(
 	trackPayload string,
 	rawMemoryID string,
 ) replaySnapshot {
+	return newReplaySnapshotFixtureWithSummaryEventID(
+		generated,
+		stateJSON,
+		trackPayload,
+		rawMemoryID,
+		"event-semantic-1",
+	)
+}
+
+func newReplaySnapshotFixtureWithSummaryEventID(
+	generated string,
+	stateJSON string,
+	trackPayload string,
+	rawMemoryID string,
+	summaryLastEventID string,
+) replaySnapshot {
 	fixed := time.Date(2026, 7, 1, 1, 2, 3, 4, time.UTC)
 	eventTime := fixed.Add(-2 * time.Hour)
 	toolCallIndex := 0
@@ -2530,7 +2697,7 @@ func newReplaySnapshotFixture(
 				Boundary: session.NewSummaryBoundaryWithEventID(
 					"branch/a",
 					fixed,
-					"event-semantic-1",
+					summaryLastEventID,
 				),
 			},
 		}),
