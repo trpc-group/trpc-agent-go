@@ -52,16 +52,18 @@ func WithPolicyFile(path string) Option {
 	}
 }
 
-// WithPolicy uses a caller-supplied policy. It is validated and compiled into a
-// private copy, so a Policy built programmatically (not via LoadPolicy) gets its
-// secret/domain/path matchers compiled instead of silently running empty. A nil
-// policy is rejected.
+// WithPolicy uses a caller-supplied policy. It is deep-copied, validated and
+// compiled into a private copy, so a Policy built programmatically (not via
+// LoadPolicy) gets its secret/domain/path matchers compiled instead of silently
+// running empty. The deep copy also means caller mutations to the original
+// policy's maps/slices after NewGuard cannot change the guard's behavior or race
+// with concurrent checks. A nil policy is rejected.
 func WithPolicy(p *Policy) Option {
 	return func(g *Guard) error {
 		if p == nil {
 			return errors.New("safety: WithPolicy received a nil policy")
 		}
-		cp := *p
+		cp := p.clone()
 		if err := cp.compile(); err != nil {
 			return err
 		}

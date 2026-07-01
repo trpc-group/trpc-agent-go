@@ -219,12 +219,24 @@ func (p *Policy) compile() error {
 		return fmt.Errorf("network.on_non_whitelisted: %w", err)
 	}
 	for id, ov := range p.RuleOverrides {
+		changed := false
 		if strings.TrimSpace(string(ov.Action)) != "" {
 			ca, ok := canonicalAction(ov.Action)
 			if !ok {
 				return fmt.Errorf("rule_overrides[%s]: unknown action %q", id, ov.Action)
 			}
 			ov.Action = ca
+			changed = true
+		}
+		if strings.TrimSpace(string(ov.RiskLevel)) != "" {
+			cr, ok := canonicalRisk(ov.RiskLevel)
+			if !ok {
+				return fmt.Errorf("rule_overrides[%s]: unknown risk_level %q", id, ov.RiskLevel)
+			}
+			ov.RiskLevel = cr
+			changed = true
+		}
+		if changed {
 			p.RuleOverrides[id] = ov
 		}
 	}
@@ -244,6 +256,62 @@ func (p *Policy) compile() error {
 	}
 	p.compiled = c
 	return nil
+}
+
+// clone returns a deep copy of the policy's mutable fields. WithPolicy uses it
+// so that compile() (which rewrites RuleOverrides in place) and subsequent
+// concurrent checks operate on the guard's own maps and slices: caller
+// mutations after NewGuard cannot change live policy behavior or race with a
+// check. The compiled field is intentionally reset; the caller recompiles.
+func (p *Policy) clone() Policy {
+	cp := *p
+	cp.compiled = compiledPolicy{}
+	cp.Backends = cloneStringSliceMap(p.Backends)
+	cp.Commands.Allowed = cloneStrings(p.Commands.Allowed)
+	cp.Commands.Denied = cloneStrings(p.Commands.Denied)
+	cp.ForbiddenPaths = cloneStrings(p.ForbiddenPaths)
+	cp.Network.DownloadCommands = cloneStrings(p.Network.DownloadCommands)
+	cp.Network.AllowedDomains = cloneStrings(p.Network.AllowedDomains)
+	cp.Env.AllowedKeys = cloneStrings(p.Env.AllowedKeys)
+	cp.Secrets.Patterns = cloneStrings(p.Secrets.Patterns)
+	if p.DeniedSubcommands != nil {
+		subs := make([]Subcommand, len(p.DeniedSubcommands))
+		for i, s := range p.DeniedSubcommands {
+			s.ArgsPrefix = cloneStrings(s.ArgsPrefix)
+			subs[i] = s
+		}
+		cp.DeniedSubcommands = subs
+	}
+	if p.RuleOverrides != nil {
+		ov := make(map[string]Override, len(p.RuleOverrides))
+		for k, v := range p.RuleOverrides {
+			ov[k] = v
+		}
+		cp.RuleOverrides = ov
+	}
+	return cp
+}
+
+// cloneStrings returns a copy of s, preserving nil.
+func cloneStrings(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
+}
+
+// cloneStringSliceMap returns a deep copy of m, preserving nil.
+func cloneStringSliceMap(m map[string][]string) map[string][]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string][]string, len(m))
+	for k, v := range m {
+		out[k] = cloneStrings(v)
+	}
+	return out
 }
 
 // backendFor returns the backend identifier configured for toolName, or an
@@ -306,6 +374,26 @@ func canonicalAction(a Action) (Action, bool) {
 		return ActionDeny, true
 	case "ask", "needs_human_review":
 		return ActionAsk, true
+	default:
+		return "", false
+	}
+}
+
+// canonicalRisk maps a risk-level keyword (case-insensitive, trimmed) to its
+// canonical form. An unknown keyword is rejected so a typo like "medum" cannot
+// silently map to no action and let the default action permit a finding.
+func canonicalRisk(r RiskLevel) (RiskLevel, bool) {
+	switch strings.ToLower(strings.TrimSpace(string(r))) {
+	case "none":
+		return RiskNone, true
+	case "low":
+		return RiskLow, true
+	case "medium":
+		return RiskMedium, true
+	case "high":
+		return RiskHigh, true
+	case "critical":
+		return RiskCritical, true
 	default:
 		return "", false
 	}

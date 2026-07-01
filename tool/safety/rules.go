@@ -535,18 +535,49 @@ var (
 	domainRe   = regexp.MustCompile(`(?i)^[a-z0-9.-]+$`)
 )
 
-// bareHostCommands accept a bare host argument (host:port, user@host) rather
-// than a URL. curl/wget use URLs, so the bare-host heuristic is skipped for
-// them to avoid flagging local filenames like "config.yaml".
-var bareHostCommands = map[string]bool{
-	"nc": true, "ncat": true, "ssh": true, "scp": true,
-	"sftp": true, "ftp": true, "telnet": true,
+// optionsWithValue lists, per download command, the option flags whose value is
+// the *next* argument, so that value is not mistaken for a bare host (e.g.
+// "curl -o config.yaml" must not treat config.yaml as a host). Only flags that
+// commonly take a filename or arbitrary string are listed; a value-taking flag
+// left out would at worst yield an extra fail-closed host candidate. Crucially
+// the reverse mistake is avoided: boolean flags (curl -sSL, -v, wget -q) are
+// NOT listed, so the operand after them is still parsed and "curl -sSL evil.io"
+// cannot bypass the whitelist. The "--flag=value" form carries its value inline
+// and consumes no following argument.
+var optionsWithValue = map[string]map[string]bool{
+	"curl": {
+		"-o": true, "--output": true, "-T": true, "--upload-file": true,
+		"-d": true, "--data": true, "-F": true, "--form": true,
+		"-H": true, "--header": true, "-A": true, "--user-agent": true,
+		"-e": true, "--referer": true, "-b": true, "--cookie": true,
+		"-c": true, "--cookie-jar": true, "-u": true, "--user": true,
+		"-K": true, "--config": true,
+	},
+	"wget": {
+		"-O": true, "--output-document": true, "-o": true, "--output-file": true,
+		"-a": true, "--append-output": true, "-P": true, "--directory-prefix": true,
+		"-U": true, "--user-agent": true, "--header": true,
+	},
 }
 
-// extractHosts pulls candidate hosts from a download command's arguments.
+// extractHosts pulls candidate hosts from a download command's arguments. It is
+// only called for configured download commands (curl, wget, nc, ssh, scp, ...),
+// all of which take a host/URL operand, so bare domain-like operands are parsed
+// for every such command. To avoid mistaking a filename for a host (e.g.
+// curl -o config.yaml), the operand that immediately follows a value-taking
+// option (optionsWithValue) is skipped; boolean flags such as "curl -sSL" do
+// not consume their following operand, so "curl -sSL evil.io" is still flagged.
+// URLs and user@host operands are detected unconditionally as they are
+// unambiguous.
 func extractHosts(cmd string, args []string) []string {
 	var hosts []string
+	valueOpts := optionsWithValue[cmd]
+	skipNext := false
 	for _, a := range args {
+		if skipNext {
+			skipNext = false
+			continue
+		}
 		if m := urlRe.FindString(a); m != "" {
 			if u, err := url.Parse(m); err == nil && u.Hostname() != "" {
 				hosts = append(hosts, u.Hostname())
@@ -558,17 +589,28 @@ func extractHosts(cmd string, args []string) []string {
 			hosts = append(hosts, mm[1])
 			continue
 		}
-		if !bareHostCommands[cmd] || strings.HasPrefix(a, "-") {
+		if strings.HasPrefix(a, "-") {
+			// An option that consumes the following argument as its value; the
+			// "--flag=value" form is self-contained and consumes nothing.
+			if valueOpts[a] && !strings.Contains(a, "=") {
+				skipNext = true
+			}
 			continue
 		}
-		// Bare host, host:port, or scp host:/path. Strip everything from the
-		// first colon so a trailing port or path cannot hide the host.
+		// Bare host, host:port, scp host:/path, or schemeless host/path. Strip
+		// everything from the first colon (port / scp path) and then from the
+		// first slash (URL path) so a trailing port or path cannot hide the
+		// host. A local relative path like "dir/config" survives as "dir",
+		// which is not domain-like and is dropped below.
 		host := a
 		if i := strings.IndexByte(host, ':'); i > 0 {
 			host = host[:i]
 		}
-		// A surviving slash or @ means this was a local path, not a host.
-		if host == "" || strings.ContainsAny(host, "/@") {
+		if i := strings.IndexByte(host, '/'); i >= 0 {
+			host = host[:i]
+		}
+		// A surviving @ means this was a user@path form, not a bare host.
+		if host == "" || strings.ContainsRune(host, '@') {
 			continue
 		}
 		// Accept domains and raw IPs (ssh 1.2.3.4 must not bypass the whitelist).

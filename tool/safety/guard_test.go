@@ -171,3 +171,43 @@ func TestWithPolicyCompilesUncompiledPolicy(t *testing.T) {
 		t.Error("expected redaction; WithPolicy must compile the policy copy")
 	}
 }
+
+// TestWithPolicyDeepCopyIsolation verifies WithPolicy takes a private deep copy:
+// mutating the caller's policy maps/slices after NewGuard must not change the
+// guard's decisions, and compile() must not have rewritten the caller's maps.
+func TestWithPolicyDeepCopyIsolation(t *testing.T) {
+	p := DefaultPolicy()
+	p.Commands.Denied = []string{"rm"}
+	p.Network.AllowedDomains = []string{"github.com"}
+	p.RuleOverrides = map[string]Override{
+		"R-NET-001": {Action: "needs_human_review"},
+	}
+
+	g, err := NewGuard(WithPolicy(&p))
+	if err != nil {
+		t.Fatalf("NewGuard: %v", err)
+	}
+
+	// compile() canonicalizes "needs_human_review" -> ask; that rewrite must
+	// happen on the guard's copy, not the caller's original map.
+	if got := p.RuleOverrides["R-NET-001"].Action; got != "needs_human_review" {
+		t.Errorf("caller override mutated to %q; WithPolicy must deep-copy RuleOverrides", got)
+	}
+
+	// Mutating the caller's slices after NewGuard must not affect the guard.
+	p.Commands.Denied[0] = "ls"
+	p.Network.AllowedDomains[0] = "evil.io"
+
+	// "rm" must still be denied by the guard's private copy.
+	req := &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"rm file"}`),
+	}
+	dec, err := g.CheckToolPermission(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CheckToolPermission: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("decision = %q, want deny; caller mutation leaked into guard policy", dec.Action)
+	}
+}
