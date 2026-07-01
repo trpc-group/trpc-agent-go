@@ -43,6 +43,14 @@ type ReplayStep interface {
 	LogicalKey() string
 }
 
+// NamedBackend binds a backend name, capability profile, and concrete services.
+type NamedBackend struct {
+	Name           string
+	Profile        BackendProfile
+	SessionService session.Service
+	MemoryService  memory.Service
+}
+
 // StateScope identifies the state scope used by an UpdateStateStep.
 type StateScope string
 
