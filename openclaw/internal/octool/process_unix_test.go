@@ -21,6 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const processUnixSignalHelperEnv = "OPENCLAW_TEST_PROCESS_UNIX_SIGNAL_HELPER"
+
 type testSignal string
 
 func (s testSignal) String() string { return string(s) }
@@ -44,11 +46,8 @@ func TestSignalCommandProcessNoProcess(t *testing.T) {
 }
 
 func TestSignalCommandProcessNonSyscallSignal(t *testing.T) {
-	if _, err := exec.LookPath("sleep"); err != nil {
-		t.Skip("sleep is not available")
-	}
-
-	cmd := exec.Command("sleep", "5")
+	cmd := exec.Command(os.Args[0], "-test.run=TestProcessUnixSignalHelper")
+	cmd.Env = append(os.Environ(), processUnixSignalHelperEnv+"=1")
 	require.NoError(t, cmd.Start())
 	defer func() {
 		_ = cmd.Process.Kill()
@@ -56,4 +55,11 @@ func TestSignalCommandProcessNonSyscallSignal(t *testing.T) {
 	}()
 
 	require.Error(t, signalCommandProcess(cmd, testSignal("custom")))
+}
+
+func TestProcessUnixSignalHelper(t *testing.T) {
+	if os.Getenv(processUnixSignalHelperEnv) != "1" {
+		return
+	}
+	select {}
 }
