@@ -1,0 +1,27 @@
+{
+  "name": "18_memory_update_id_rotation",
+  "description": "Memory update scenario placeholder with stable add path.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u18",
+    "sessionID": "s18"
+  },
+  "operations": [
+    {
+      "type": "add_memory",
+      "value": "initial memory",
+      "topics": [
+        "profile"
+      ],
+      "kind": "fact"
+    },
+    {
+      "type": "add_memory",
+      "value": "updated memory",
+      "topics": [
+        "profile"
+      ],
+      "kind": "fact"
+    }
+  ]
+}

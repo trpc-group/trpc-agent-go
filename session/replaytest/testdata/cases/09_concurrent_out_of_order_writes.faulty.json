@@ -1,0 +1,57 @@
+{
+  "name": "09_concurrent_out_of_order_writes.faulty",
+  "description": "Interleaved tool and sub-agent trajectory.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u09",
+    "sessionID": "s09"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "start"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "agent a",
+        "branch": "agent-a",
+        "tag": "subtask"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "agent b",
+        "branch": "agent-b",
+        "tag": "subtask"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "tool",
+        "role": "tool",
+        "content": "done",
+        "toolID": "tc2"
+      }
+    }
+  ],
+  "faultInjection": "duplicate_event",
+  "expectedDefect": {
+    "category": "event",
+    "fieldPath": "events",
+    "locator": {
+      "sessionID": "s09",
+      "eventIndex": 0
+    }
+  }
+}

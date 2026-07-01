@@ -1,0 +1,34 @@
+{
+  "name": "15_state_scope_boundaries.faulty",
+  "description": "State boundary values stay isolated per unique user.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u15",
+    "sessionID": "s15"
+  },
+  "operations": [
+    {
+      "type": "set_state",
+      "key": "app_pref",
+      "value": "A"
+    },
+    {
+      "type": "set_state",
+      "key": "user_pref",
+      "value": "U"
+    },
+    {
+      "type": "set_state",
+      "key": "temp",
+      "value": "T"
+    }
+  ],
+  "faultInjection": "overwrite_summary",
+  "expectedDefect": {
+    "category": "summary",
+    "fieldPath": "summaries",
+    "locator": {
+      "sessionID": "s15"
+    }
+  }
+}
