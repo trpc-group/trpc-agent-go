@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
@@ -218,7 +219,7 @@ type sessionSummarizer struct {
 	systemPrompt        string
 	cacheSafeForking    bool
 	cacheSafeForkPrompt string
-	checks              []ContextChecker
+	checks              []checkEvaluator
 	maxSummaryWords     int
 	skipRecentFunc      SkipRecentFunc
 
@@ -228,6 +229,8 @@ type sessionSummarizer struct {
 
 	// modelCallbacks configures before/after model callbacks for summarization.
 	modelCallbacks *model.Callbacks
+	// reportHook observes summary trigger and model-call accounting.
+	reportHook ReportHook
 
 	// toolCallFormatter customizes how tool calls are formatted in summary input.
 	toolCallFormatter ToolCallFormatter
@@ -240,7 +243,7 @@ func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 	s := &sessionSummarizer{
 		prompt:              "",                 // Will be set after processing options.
 		cacheSafeForkPrompt: "",                 // Will be set after processing options.
-		checks:              []ContextChecker{}, // No default checks - summarization only when explicitly configured.
+		checks:              []checkEvaluator{}, // No default checks - summarization only when explicitly configured.
 		maxSummaryWords:     0,                  // 0 means no word limit.
 		skipRecentFunc:      nil,                // nil means no events are skipped.
 	}
@@ -286,25 +289,103 @@ func (s *sessionSummarizer) ShouldSummarizeWithContext(
 	ctx context.Context,
 	sess *session.Session,
 ) bool {
+	trigger := s.evaluateTrigger(ctx, sess)
+	if report, ok := reportFromContext(ctx); ok {
+		report.Trigger = trigger
+	}
+	return trigger.Fired
+}
+
+func (s *sessionSummarizer) evaluateTrigger(
+	ctx context.Context,
+	sess *session.Session,
+) Trigger {
 	if sess == nil || len(sess.Events) == 0 {
-		return false
+		return Trigger{}
 	}
 	summaryInputEvents := filterSummaryInputEventsForSession(
 		s.filterEventsForSummary(sess.Events),
 		sess,
 	)
 	if !s.hasSummarizableContent(summaryInputEvents) {
-		return false
+		return Trigger{}
 	}
 
 	checkSess := s.buildCheckSession(sess)
-
-	for _, check := range s.checks {
-		if !check(ctx, checkSess) {
-			return false
+	if len(s.checks) == 0 {
+		return Trigger{
+			Fired:     true,
+			Name:      checkNameAlways,
+			Metric:    metricCustom,
+			FilterKey: triggerFilterKey(checkSess),
 		}
 	}
-	return true
+
+	checks := make([]Check, 0, len(s.checks))
+	for _, check := range s.checks {
+		result := check(ctx, checkSess)
+		checks = append(checks, result)
+		if !result.Passed {
+			trigger := triggerFromCheck(result)
+			trigger.Fired = false
+			trigger.FilterKey = triggerFilterKey(checkSess)
+			trigger.Checks = checks
+			return trigger
+		}
+	}
+	trigger := triggerFromCheck(preferredTriggerCheck(checks))
+	trigger.Fired = true
+	trigger.FilterKey = triggerFilterKey(checkSess)
+	trigger.Checks = checks
+	return trigger
+}
+
+func triggerFilterKey(sess *session.Session) string {
+	if sess == nil {
+		return ""
+	}
+	return isummaryscope.GetScopeFilterKey(sess)
+}
+
+func triggerFromCheck(check Check) Trigger {
+	return Trigger{
+		Fired:          check.Passed,
+		Name:           check.Name,
+		Metric:         check.Metric,
+		Value:          check.Value,
+		Threshold:      check.Threshold,
+		Unit:           check.Unit,
+		ContextWindow:  check.ContextWindow,
+		ThresholdRatio: check.ThresholdRatio,
+	}
+}
+
+func preferredTriggerCheck(checks []Check) Check {
+	for _, name := range []string{
+		checkNameContextThreshold,
+		checkNameTokenThreshold,
+		checkNameEventThreshold,
+		checkNameTimeThreshold,
+	} {
+		for _, check := range checks {
+			if check.Passed && check.Name == name {
+				return check
+			}
+		}
+	}
+	for _, check := range checks {
+		if check.Passed {
+			return check
+		}
+	}
+	if len(checks) > 0 {
+		return checks[len(checks)-1]
+	}
+	return Check{
+		Name:   checkNameAlways,
+		Metric: metricCustom,
+		Passed: true,
+	}
 }
 
 // Summarize generates a summary without modifying the session events.
@@ -315,6 +396,7 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	if len(sess.Events) == 0 {
 		return "", fmt.Errorf("no events to summarize for session %s (events=0)", sess.ID)
 	}
+	ctx = s.ensureReportContext(ctx)
 
 	// Extract conversation text from events. Use filtered events for summarization
 	// to skip recent events while ensuring proper context.
@@ -338,6 +420,11 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		if hookErr == nil {
 			// Propagate context modifications from pre-hook to subsequent operations.
 			if hookCtx.Ctx != nil {
+				if report, ok := reportFromContext(ctx); ok {
+					if _, exists := reportFromContext(hookCtx.Ctx); !exists {
+						hookCtx.Ctx = ContextWithReport(hookCtx.Ctx, report)
+					}
+				}
 				ctx = hookCtx.Ctx
 			}
 			if hookCtx.Text != "" {
@@ -374,6 +461,46 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	}
 
 	return summaryText, nil
+}
+
+func (s *sessionSummarizer) ensureReportContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if report, ok := reportFromContext(ctx); ok {
+		seedManualTrigger(report)
+		return ctx
+	}
+	if s.reportHook == nil {
+		return ctx
+	}
+	report := &Report{}
+	seedManualTrigger(report)
+	return ContextWithReport(ctx, report)
+}
+
+func seedManualTrigger(report *Report) {
+	if report == nil || !triggerIsEmpty(report.Trigger) {
+		return
+	}
+	report.Trigger = Trigger{
+		Fired:  true,
+		Name:   "manual",
+		Metric: metricCustom,
+	}
+}
+
+func triggerIsEmpty(trigger Trigger) bool {
+	return !trigger.Fired &&
+		trigger.Name == "" &&
+		trigger.Metric == "" &&
+		trigger.Value == 0 &&
+		trigger.Threshold == 0 &&
+		trigger.Unit == "" &&
+		trigger.ContextWindow == 0 &&
+		trigger.ThresholdRatio == 0 &&
+		trigger.FilterKey == "" &&
+		len(trigger.Checks) == 0
 }
 
 // recordLastIncludedBoundary records the last included summary boundary in the session state.
@@ -690,9 +817,11 @@ func (s *sessionSummarizer) generateSummary(
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
 	defer span.End()
 
-	request, err := s.buildSummaryRequest(ctx, conversationText)
+	request, mode, err := s.buildSummaryRequest(ctx, conversationText)
 	if err != nil {
-		return ctx, "", fmt.Errorf("failed to build summary request: %w", err)
+		err = fmt.Errorf("failed to build summary request: %w", err)
+		s.emitReport(ctx, err)
+		return ctx, "", err
 	}
 
 	invocation, ok := agent.InvocationFromContext(ctx)
@@ -736,11 +865,14 @@ func (s *sessionSummarizer) generateSummary(
 
 	trackResponse := func(resp *model.Response) {
 		tracker.TrackResponse(resp)
+		s.recordReportUsage(ctx, resp, nil)
 		ensureTimingInfo(resp)
 	}
 
 	var finalResp *model.Response
 	defer func() {
+		s.recordReportUsage(ctx, finalResp, err)
+		s.emitReport(ctx, err)
 		if finalResp == nil {
 			return
 		}
@@ -762,11 +894,14 @@ func (s *sessionSummarizer) generateSummary(
 	}
 
 	if responseChan == nil {
+		s.recordReportCall(ctx, request, mode)
 		responseChan, cbErr = s.model.GenerateContent(ctx, request)
 		if cbErr != nil {
 			err = fmt.Errorf("failed to generate summary: %w", cbErr)
 			return ctx, "", err
 		}
+	} else {
+		s.recordReportCall(ctx, nil, callModeCustomResponse)
 	}
 
 	var summaryText string
@@ -831,10 +966,14 @@ func (s *sessionSummarizer) buildCacheSafeForkPrompt() (string, error) {
 	)
 }
 
-func (s *sessionSummarizer) buildSummaryRequest(ctx context.Context, conversationText string) (*model.Request, error) {
+func (s *sessionSummarizer) buildSummaryRequest(
+	ctx context.Context,
+	conversationText string,
+) (*model.Request, string, error) {
 	if s.cacheSafeForking {
 		if parent, ok := cacheSafeForkRequestFromContext(ctx); ok {
-			return s.buildCacheSafeForkRequest(parent)
+			request, err := s.buildCacheSafeForkRequest(parent)
+			return request, callModeCacheSafeFork, err
 		}
 		log.DebugfContext(ctx, "cache-safe summary forking requested but no parent request is available; falling back to standalone summary request")
 	}
@@ -842,7 +981,7 @@ func (s *sessionSummarizer) buildSummaryRequest(ctx context.Context, conversatio
 	messages := make([]model.Message, 0, 2)
 	systemPrompt, err := s.buildSystemPrompt()
 	if err != nil {
-		return nil, fmt.Errorf("render system prompt: %w", err)
+		return nil, "", fmt.Errorf("render system prompt: %w", err)
 	}
 	if trimmed := strings.TrimSpace(systemPrompt); trimmed != "" {
 		messages = append(messages, model.NewSystemMessage(systemPrompt))
@@ -850,10 +989,10 @@ func (s *sessionSummarizer) buildSummaryRequest(ctx context.Context, conversatio
 
 	userPrompt, err := s.buildSummaryPrompt(conversationText)
 	if err != nil {
-		return nil, fmt.Errorf("render user prompt: %w", err)
+		return nil, "", fmt.Errorf("render user prompt: %w", err)
 	}
 	messages = append(messages, model.NewUserMessage(userPrompt))
-	return newSummaryRequest(messages), nil
+	return newSummaryRequest(messages), callModeStandalone, nil
 }
 
 func (s *sessionSummarizer) buildCacheSafeForkRequest(parent *model.Request) (*model.Request, error) {
@@ -880,6 +1019,89 @@ func newSummaryRequest(messages []model.Message) *model.Request {
 	}
 }
 
+func (s *sessionSummarizer) recordReportCall(
+	ctx context.Context,
+	request *model.Request,
+	mode string,
+) {
+	report, ok := reportFromContext(ctx)
+	if !ok {
+		return
+	}
+	report.Call.Mode = mode
+	report.Call.EstimatedPromptTokens = estimateRequestPromptTokens(ctx, request)
+}
+
+func (s *sessionSummarizer) recordReportUsage(
+	ctx context.Context,
+	response *model.Response,
+	err error,
+) {
+	report, ok := reportFromContext(ctx)
+	if !ok {
+		return
+	}
+	report.Error = err
+	if response == nil || response.Usage == nil {
+		return
+	}
+	if !usageHasTokenCounts(response.Usage) {
+		return
+	}
+	report.Call.PromptTokens = response.Usage.PromptTokens
+	report.Call.CachedTokens = response.Usage.PromptTokensDetails.CachedTokens
+}
+
+func usageHasTokenCounts(usage *model.Usage) bool {
+	if usage == nil {
+		return false
+	}
+	return usage.PromptTokens != 0 ||
+		usage.CompletionTokens != 0 ||
+		usage.TotalTokens != 0 ||
+		usage.PromptTokensDetails.CachedTokens != 0 ||
+		usage.PromptTokensDetails.CacheReadTokens != 0 ||
+		usage.PromptTokensDetails.CacheCreationTokens != 0
+}
+
+func (s *sessionSummarizer) emitReport(ctx context.Context, err error) {
+	if s.reportHook == nil {
+		return
+	}
+	report, ok := reportFromContext(ctx)
+	if !ok {
+		return
+	}
+	report.Error = err
+	cloned := cloneReport(*report)
+	defer func() {
+		if r := recover(); r != nil {
+			log.WarnfContext(ctx, "summary report hook panic: %v", r)
+		}
+	}()
+	s.reportHook(ctx, cloned)
+}
+
+func estimateRequestPromptTokens(ctx context.Context, request *model.Request) int {
+	if request == nil || len(request.Messages) == 0 {
+		return 0
+	}
+	counter := getTokenCounter()
+	tokens, err := counter.CountTokensRange(ctx, request.Messages, 0, len(request.Messages))
+	if err == nil {
+		return tokens
+	}
+	var total int
+	for _, message := range request.Messages {
+		tokens, err := counter.CountTokens(ctx, message)
+		if err != nil {
+			return 0
+		}
+		total += tokens
+	}
+	return total
+}
+
 func (s *sessionSummarizer) runBeforeModelCallbacks(
 	ctx context.Context,
 	request *model.Request,
@@ -896,7 +1118,7 @@ func (s *sessionSummarizer) runBeforeModelCallbacks(
 		return ctx, nil, fmt.Errorf("before model callback failed: %w", err)
 	}
 	if result != nil && result.Context != nil {
-		ctx = result.Context
+		ctx = inheritReportContext(result.Context, ctx)
 	}
 	if result == nil || result.CustomResponse == nil {
 		return ctx, nil, nil
@@ -936,12 +1158,26 @@ func (s *sessionSummarizer) runAfterModelCallbacks(
 		return ctx, nil, fmt.Errorf("after model callback failed: %w", err)
 	}
 	if result != nil && result.Context != nil {
-		ctx = result.Context
+		ctx = inheritReportContext(result.Context, ctx)
 	}
 	if result != nil && result.CustomResponse != nil {
 		response = result.CustomResponse
 	}
 	return ctx, response, nil
+}
+
+func inheritReportContext(next context.Context, current context.Context) context.Context {
+	if next == nil {
+		return current
+	}
+	report, ok := reportFromContext(current)
+	if !ok {
+		return next
+	}
+	if _, exists := reportFromContext(next); exists {
+		return next
+	}
+	return ContextWithReport(next, report)
 }
 
 func (s *sessionSummarizer) collectSummaryFromResponses(
