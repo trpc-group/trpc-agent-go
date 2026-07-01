@@ -40,9 +40,10 @@ const (
 	errSpreadsheetUnsupported = "unsupported spreadsheet type"
 	errSpreadsheetSheetEmpty  = "spreadsheet has no sheets"
 
-	docKindPDF  = "pdf"
-	docKindDOCX = "docx"
-	docKindText = "text"
+	docKindPDF   = "pdf"
+	docKindDOCX  = "docx"
+	docKindText  = "text"
+	docKindImage = "image"
 
 	sheetKindXLSX = "xlsx"
 	sheetKindCSV  = "csv"
@@ -72,13 +73,15 @@ type readDocumentInput struct {
 }
 
 type readDocumentResult struct {
-	Path      string `json:"path"`
-	Kind      string `json:"kind"`
-	Title     string `json:"title"`
-	PageCount int    `json:"page_count,omitempty"`
-	Page      *int   `json:"page,omitempty"`
-	Text      string `json:"text"`
-	Truncated bool   `json:"truncated,omitempty"`
+	Path       string   `json:"path"`
+	Kind       string   `json:"kind"`
+	Title      string   `json:"title"`
+	PageCount  int      `json:"page_count,omitempty"`
+	Page       *int     `json:"page,omitempty"`
+	Text       string   `json:"text,omitempty"`
+	Output     string   `json:"output,omitempty"`
+	MediaFiles []string `json:"media_files,omitempty"`
+	Truncated  bool     `json:"truncated,omitempty"`
 }
 
 type readSpreadsheetInput struct {
@@ -135,8 +138,8 @@ func (t *readDocumentTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolReadDocument,
 		Description: "Read a chat document from a stable local path. " +
-			"Use this for PDFs, DOCX files, and plain text-like " +
-			"documents already present in the chat instead of " +
+			"Use this for PDFs, DOCX files, images, and plain " +
+			"text-like documents already present in the chat instead of " +
 			"calling exec_command to inspect upload paths.",
 		InputSchema: &tool.Schema{
 			Type: schemaTypeObject,
@@ -182,6 +185,23 @@ func (t *readDocumentTool) Call(
 	}
 
 	maxChars := resolvedMaxChars(in.MaxChars, defaultReadDocumentChars)
+	if kind == docKindImage {
+		if normalizedPositive(in.Page) != nil {
+			return nil, errors.New(
+				"page is only supported for PDF files",
+			)
+		}
+		return readDocumentResult{
+			Path:  path,
+			Kind:  kind,
+			Title: filepath.Base(path),
+			Text: "Image file attached for direct inspection. " +
+				"If vision is unavailable, use image or OCR " +
+				"tools against the returned path.",
+			Output:     execOutputMediaMarker + " " + path,
+			MediaFiles: []string{path},
+		}, nil
+	}
 	text, pageCount, err := readDocumentText(path, kind, in.Page)
 	if err != nil {
 		return nil, err
@@ -476,6 +496,8 @@ func documentKindFromPath(path string) string {
 	case ".txt", ".md", ".markdown", ".json", ".csv",
 		".yaml", ".yml", ".log":
 		return docKindText
+	case ".png", ".jpg", ".jpeg", ".webp", ".gif":
+		return docKindImage
 	default:
 		return ""
 	}

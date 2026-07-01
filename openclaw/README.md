@@ -297,6 +297,9 @@ tools:
   # defer_default_direct_tools: true
   # Optional: keep a small set of tools directly callable by the parent agent.
   # defer_direct_tools: ["exec_command"]
+  # Optional: default timeout for host exec_command calls when timeout_sec is
+  # omitted. Leave unset to keep the built-in host exec default.
+  # host_exec_default_timeout: "60s"
   # Optional: configure fenced-code execution without exposing workspace_exec.
   code_executor:
     type: "sandbox" # sandbox; leave empty/unset to inherit enable_local_exec

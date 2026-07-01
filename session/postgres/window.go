@@ -53,7 +53,7 @@ func (s *Service) GetEventWindow(
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("anchor event not found: %s", anchorEventID)
+		return nil, fmt.Errorf("%w: %s", session.ErrEventWindowAnchorNotFound, anchorEventID)
 	}
 
 	roleFilter := sessionwindow.MakeRoleFilter(req.Roles)
@@ -68,7 +68,7 @@ func (s *Service) GetEventWindow(
 		return nil, err
 	}
 	if anchor == nil {
-		return nil, fmt.Errorf("anchor event not found: %s", anchorEventID)
+		return nil, fmt.Errorf("%w: %s", session.ErrEventWindowAnchorNotFound, anchorEventID)
 	}
 
 	beforeEntries, err := s.loadWindowNeighbors(

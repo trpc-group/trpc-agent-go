@@ -13,8 +13,10 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 
@@ -38,6 +40,16 @@ var sessionReconnectErrorPatterns = []string{
 	"broken pipe",            // Broken connection
 	"HTTP 404",               // Session not found on server
 	"session not found",      // Explicit session not found error
+}
+
+const processAlreadyFinishedText = "process already finished"
+
+func isBenignMCPClientCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, os.ErrProcessDone) ||
+		strings.Contains(err.Error(), processAlreadyFinishedText)
 }
 
 // ToolSet implements the ToolSet interface for MCP tools.
@@ -221,7 +233,8 @@ func (m *mcpSessionManager) connect(ctx context.Context) error {
 	// Initialize the session.
 	if err := m.initialize(ctx); err != nil {
 		m.connected = false
-		if closeErr := client.Close(); closeErr != nil {
+		if closeErr := client.Close(); closeErr != nil &&
+			!isBenignMCPClientCloseError(closeErr) {
 			log.ErrorContext(ctx, "Failed to close client after initialization failure",
 				"client_close_error", closeErr, "error", err)
 		}
@@ -438,6 +451,10 @@ func (m *mcpSessionManager) close() error {
 	m.client = nil
 
 	if err != nil {
+		if isBenignMCPClientCloseError(err) {
+			log.Debug("MCP client already finished during close", "error", err)
+			return nil
+		}
 		log.Error("Failed to close MCP client", "error", err)
 		return fmt.Errorf("failed to close MCP client: %w", err)
 	}
@@ -576,8 +593,14 @@ func (m *mcpSessionManager) doRecreateSession(ctx context.Context) error {
 
 	// Close existing client if any.
 	if m.client != nil {
-		if closeErr := m.client.Close(); closeErr != nil {
-			log.WarnContext(ctx, "Failed to close old client during session recreation", "error", closeErr)
+		if closeErr := m.client.Close(); closeErr != nil &&
+			!isBenignMCPClientCloseError(closeErr) {
+			log.WarnContext(
+				ctx,
+				"Failed to close old client during session recreation",
+				"error",
+				closeErr,
+			)
 		}
 		m.client = nil
 	}
@@ -598,7 +621,8 @@ func (m *mcpSessionManager) doRecreateSession(ctx context.Context) error {
 	// Re-initialize the session.
 	if err := m.initialize(ctx); err != nil {
 		m.connected = false
-		if closeErr := client.Close(); closeErr != nil {
+		if closeErr := client.Close(); closeErr != nil &&
+			!isBenignMCPClientCloseError(closeErr) {
 			log.ErrorContext(ctx, "Failed to close client after re-initialization failure",
 				"close_error", closeErr, "init_error", err)
 		}

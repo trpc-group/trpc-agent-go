@@ -138,6 +138,7 @@ const (
 	flagDeferToolSurfaceDefaultDirectTools = "defer-tools-to-dynamic-agent-default-direct-tools"
 	flagDeferToolSurfaceDirect             = "defer-tools-to-dynamic-agent-direct-tools"
 	flagDynamicAgentTimeout                = "dynamic-agent-timeout"
+	flagHostExecDefaultTimeout             = "host-exec-default-timeout"
 
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
@@ -292,6 +293,7 @@ type runOptions struct {
 	DeferToolSurfaceDefaultDirectTools bool
 	DeferToolSurfaceDirect             string
 	DynamicAgentTimeout                time.Duration
+	HostExecDefaultTimeout             time.Duration
 
 	enableOpenClawToolsExplicit  bool
 	deferToolSurfaceModeExplicit bool
@@ -954,6 +956,13 @@ func parseRunOptions(args []string) (runOptions, error) {
 		0,
 		"Maximum duration for one dynamic_agent child call (0 disables)",
 	)
+	fs.DurationVar(
+		&opts.HostExecDefaultTimeout,
+		flagHostExecDefaultTimeout,
+		0,
+		"Default timeout for OpenClaw host exec commands when timeout_sec "+
+			"is omitted (0 keeps the built-in default)",
+	)
 
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, &exitError{Code: 2, Err: err}
@@ -1279,6 +1288,8 @@ type toolsConfig struct {
 	DeferDirectToolsCamel         yamlStringList      `yaml:"deferDirectTools,omitempty"`
 	DynamicAgentTimeout           *string             `yaml:"dynamic_agent_timeout,omitempty"`
 	DynamicAgentTimeoutCamel      *string             `yaml:"dynamicAgentTimeout,omitempty"`
+	HostExecDefaultTimeout        *string             `yaml:"host_exec_default_timeout,omitempty"`
+	HostExecDefaultTimeoutCamel   *string             `yaml:"hostExecDefaultTimeout,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
@@ -2053,6 +2064,21 @@ func (cfg *fileConfig) apply(
 			}
 			opts.DynamicAgentTimeout = dur
 		}
+		hostExecTimeout := firstStringPtr(
+			cfg.Tools.HostExecDefaultTimeout,
+			cfg.Tools.HostExecDefaultTimeoutCamel,
+		)
+		if hostExecTimeout != nil &&
+			!flagWasSet(set, flagHostExecDefaultTimeout) {
+			dur, err := parseDuration(*hostExecTimeout)
+			if err != nil {
+				return fmt.Errorf(
+					"tools.host_exec_default_timeout: %w",
+					err,
+				)
+			}
+			opts.HostExecDefaultTimeout = dur
+		}
 		if len(cfg.Tools.Providers) > 0 {
 			opts.ToolProviders = convertPluginSpecs(cfg.Tools.Providers)
 		}
@@ -2764,6 +2790,12 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid dynamic agent timeout: %s",
 			opts.DynamicAgentTimeout,
+		)
+	}
+	if opts.HostExecDefaultTimeout < 0 {
+		return fmt.Errorf(
+			"invalid host exec default timeout: %s",
+			opts.HostExecDefaultTimeout,
 		)
 	}
 	opts.DeferToolSurfaceDirect = strings.Join(
