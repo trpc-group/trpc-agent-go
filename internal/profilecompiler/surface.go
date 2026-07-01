@@ -6,15 +6,12 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package surface provides internal helpers for PromptIter surface semantics.
-package surface
+package profilecompiler
 
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"reflect"
-	"strings"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 )
@@ -25,7 +22,6 @@ func IsSupportedType(surfaceType astructure.SurfaceType) bool {
 	case astructure.SurfaceTypeInstruction,
 		astructure.SurfaceTypeGlobalInstruction,
 		astructure.SurfaceTypeFewShot,
-		astructure.SurfaceTypeModel,
 		astructure.SurfaceTypeTool:
 		return true
 	default:
@@ -33,18 +29,26 @@ func IsSupportedType(surfaceType astructure.SurfaceType) bool {
 	}
 }
 
-// ValidateValue validates that one surface value matches the target surface type.
-func ValidateValue(surfaceType astructure.SurfaceType, value astructure.SurfaceValue) error {
+func validateValue(surfaceType astructure.SurfaceType, value astructure.SurfaceValue) error {
 	switch surfaceType {
 	case astructure.SurfaceTypeInstruction, astructure.SurfaceTypeGlobalInstruction:
 		if value.Text == nil {
 			return errors.New("text is nil")
+		}
+		if err := validatePromptSyntax(value.PromptSyntax); err != nil {
+			return err
 		}
 		if len(value.FewShot) > 0 {
 			return errors.New("messages are not empty")
 		}
 		if value.Model != nil {
 			return errors.New("model is not nil")
+		}
+		if len(value.Tools) > 0 {
+			return errors.New("tools are not empty")
+		}
+		if len(value.Skills) > 0 {
+			return errors.New("skills are not empty")
 		}
 		return nil
 	case astructure.SurfaceTypeFewShot:
@@ -54,22 +58,17 @@ func ValidateValue(surfaceType astructure.SurfaceType, value astructure.SurfaceV
 		if value.Text != nil {
 			return errors.New("text is not nil")
 		}
+		if value.PromptSyntax != nil {
+			return errors.New("prompt syntax is not nil")
+		}
 		if value.Model != nil {
 			return errors.New("model is not nil")
 		}
-		return nil
-	case astructure.SurfaceTypeModel:
-		if value.Model == nil {
-			return errors.New("model is nil")
+		if len(value.Tools) > 0 {
+			return errors.New("tools are not empty")
 		}
-		if strings.TrimSpace(value.Model.Name) == "" {
-			return errors.New("model name is empty")
-		}
-		if value.Text != nil {
-			return errors.New("text is not nil")
-		}
-		if len(value.FewShot) > 0 {
-			return errors.New("messages are not empty")
+		if len(value.Skills) > 0 {
+			return errors.New("skills are not empty")
 		}
 		return nil
 	case astructure.SurfaceTypeTool:
@@ -110,7 +109,7 @@ func BuildIndex(surfaces []astructure.Surface) (map[string]astructure.Surface, e
 		if !IsSupportedType(item.Type) {
 			return nil, fmt.Errorf("surface type %q is invalid", item.Type)
 		}
-		if err := ValidateValue(item.Type, item.Value); err != nil {
+		if err := validateValue(item.Type, item.Value); err != nil {
 			return nil, fmt.Errorf("surface %q value is invalid: %w", item.SurfaceID, err)
 		}
 		if _, ok := index[item.SurfaceID]; ok {
@@ -121,8 +120,7 @@ func BuildIndex(surfaces []astructure.Surface) (map[string]astructure.Surface, e
 	return index, nil
 }
 
-// SanitizeValue validates one surface value and removes empty noise fields.
-func SanitizeValue(
+func sanitizeValue(
 	surfaceType astructure.SurfaceType,
 	value astructure.SurfaceValue,
 ) (astructure.SurfaceValue, error) {
@@ -131,47 +129,42 @@ func SanitizeValue(
 		if value.Text == nil {
 			return astructure.SurfaceValue{}, errors.New("text is nil")
 		}
+		if value.PromptSyntax != nil {
+			return astructure.SurfaceValue{}, errors.New("prompt syntax is not nil")
+		}
 		if len(value.FewShot) > 0 {
 			return astructure.SurfaceValue{}, errors.New("messages are not empty")
 		}
-		if value.Model != nil && !isEmptyModel(value.Model) {
-			return astructure.SurfaceValue{}, errors.New("model is not empty")
+		if value.Model != nil {
+			return astructure.SurfaceValue{}, errors.New("model is not nil")
 		}
-		sanitized := astructure.SurfaceValue{
-			Text: cloneText(value.Text),
+		if len(value.Tools) > 0 {
+			return astructure.SurfaceValue{}, errors.New("tools are not empty")
 		}
-		return sanitized, nil
+		if len(value.Skills) > 0 {
+			return astructure.SurfaceValue{}, errors.New("skills are not empty")
+		}
+		return astructure.SurfaceValue{Text: cloneText(value.Text)}, nil
 	case astructure.SurfaceTypeFewShot:
+		if value.Text != nil {
+			return astructure.SurfaceValue{}, errors.New("text is not nil")
+		}
+		if value.PromptSyntax != nil {
+			return astructure.SurfaceValue{}, errors.New("prompt syntax is not nil")
+		}
+		if value.Model != nil {
+			return astructure.SurfaceValue{}, errors.New("model is not nil")
+		}
+		if len(value.Tools) > 0 {
+			return astructure.SurfaceValue{}, errors.New("tools are not empty")
+		}
+		if len(value.Skills) > 0 {
+			return astructure.SurfaceValue{}, errors.New("skills are not empty")
+		}
 		if value.FewShot == nil {
 			return astructure.SurfaceValue{}, errors.New("messages are nil")
 		}
-		if value.Text != nil && *value.Text != "" {
-			return astructure.SurfaceValue{}, errors.New("text is not empty")
-		}
-		if value.Model != nil && !isEmptyModel(value.Model) {
-			return astructure.SurfaceValue{}, errors.New("model is not empty")
-		}
-		sanitized := astructure.SurfaceValue{
-			FewShot: cloneExamples(value.FewShot),
-		}
-		return sanitized, nil
-	case astructure.SurfaceTypeModel:
-		if value.Model == nil {
-			return astructure.SurfaceValue{}, errors.New("model is nil")
-		}
-		if strings.TrimSpace(value.Model.Name) == "" {
-			return astructure.SurfaceValue{}, errors.New("model name is empty")
-		}
-		if value.Text != nil && *value.Text != "" {
-			return astructure.SurfaceValue{}, errors.New("text is not empty")
-		}
-		if len(value.FewShot) > 0 {
-			return astructure.SurfaceValue{}, errors.New("messages are not empty")
-		}
-		sanitized := astructure.SurfaceValue{
-			Model: cloneModel(value.Model),
-		}
-		return sanitized, nil
+		return astructure.SurfaceValue{FewShot: cloneExamples(value.FewShot)}, nil
 	case astructure.SurfaceTypeTool:
 		if value.Text != nil {
 			return astructure.SurfaceValue{}, errors.New("text is not nil")
@@ -208,7 +201,7 @@ func SanitizePatchValue(
 	surface astructure.Surface,
 	value astructure.SurfaceValue,
 ) (astructure.SurfaceValue, error) {
-	sanitized, err := SanitizeValue(surface.Type, value)
+	sanitized, err := sanitizeValue(surface.Type, value)
 	if err != nil {
 		return astructure.SurfaceValue{}, err
 	}
@@ -223,13 +216,20 @@ func SanitizePatchValue(
 	return sanitized, nil
 }
 
-// CloneValue copies one supported PromptIter surface value.
-func CloneValue(value astructure.SurfaceValue) astructure.SurfaceValue {
-	return astructure.SurfaceValue{
-		Text:    cloneText(value.Text),
-		FewShot: cloneExamples(value.FewShot),
-		Model:   cloneModel(value.Model),
-		Tools:   cloneToolRefs(value.Tools),
+// PatchValueEqual reports whether value equals the patchable part of surface.
+func PatchValueEqual(surface astructure.Surface, value astructure.SurfaceValue) bool {
+	switch surface.Type {
+	case astructure.SurfaceTypeInstruction, astructure.SurfaceTypeGlobalInstruction:
+		if surface.Value.Text == nil || value.Text == nil {
+			return surface.Value.Text == value.Text
+		}
+		return *surface.Value.Text == *value.Text
+	case astructure.SurfaceTypeFewShot:
+		return reflect.DeepEqual(surface.Value.FewShot, value.FewShot)
+	case astructure.SurfaceTypeTool:
+		return reflect.DeepEqual(surface.Value.Tools, value.Tools)
+	default:
+		return reflect.DeepEqual(surface.Value, value)
 	}
 }
 
@@ -267,32 +267,18 @@ func cloneToolRefs(refs []astructure.ToolRef) []astructure.ToolRef {
 	return append([]astructure.ToolRef(nil), refs...)
 }
 
-func cloneModel(modelValue *astructure.ModelRef) *astructure.ModelRef {
-	if modelValue == nil {
+func validatePromptSyntax(value *astructure.PromptSyntax) error {
+	if value == nil {
 		return nil
 	}
-	cloned := *modelValue
-	cloned.Provider = strings.TrimSpace(modelValue.Provider)
-	cloned.Name = strings.TrimSpace(modelValue.Name)
-	cloned.Variant = strings.TrimSpace(modelValue.Variant)
-	cloned.BaseURL = strings.TrimSpace(modelValue.BaseURL)
-	cloned.APIKey = strings.TrimSpace(modelValue.APIKey)
-	if len(modelValue.Headers) > 0 {
-		cloned.Headers = maps.Clone(modelValue.Headers)
+	switch *value {
+	case astructure.PromptSyntaxMixedBrace,
+		astructure.PromptSyntaxSingleBrace,
+		astructure.PromptSyntaxDoubleBrace:
+		return nil
+	default:
+		return fmt.Errorf("unknown prompt syntax %q", *value)
 	}
-	return &cloned
-}
-
-func isEmptyModel(modelValue *astructure.ModelRef) bool {
-	if modelValue == nil {
-		return true
-	}
-	return strings.TrimSpace(modelValue.Provider) == "" &&
-		strings.TrimSpace(modelValue.Name) == "" &&
-		strings.TrimSpace(modelValue.Variant) == "" &&
-		strings.TrimSpace(modelValue.BaseURL) == "" &&
-		strings.TrimSpace(modelValue.APIKey) == "" &&
-		len(modelValue.Headers) == 0
 }
 
 func validateToolRefs(refs []astructure.ToolRef) error {

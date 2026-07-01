@@ -194,11 +194,11 @@ func buildPromptIterRuntime(ctx context.Context, cfg syncRunConfig) (*promptIter
 	}
 	engineInstance, err := promptiterengine.New(
 		ctx,
-		candidateAgent,
-		agentEvaluator,
-		backwarderInstance,
-		aggregatorInstance,
-		optimizerInstance,
+		promptiterengine.WithTargetAgent(candidateAgent),
+		promptiterengine.WithAgentEvaluator(agentEvaluator),
+		promptiterengine.WithBackwarder(backwarderInstance),
+		promptiterengine.WithAggregator(aggregatorInstance),
+		promptiterengine.WithOptimizer(optimizerInstance),
 	)
 	if err != nil {
 		agentEvaluator.Close()

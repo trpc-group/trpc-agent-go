@@ -12,69 +12,62 @@ package engine
 import (
 	"errors"
 	"fmt"
-	"reflect"
 	"sort"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
-	isurface "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/surface"
+	iprofile "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/profile"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 )
 
 func normalizeProfile(
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	profile *promptiter.Profile,
 ) (*promptiter.Profile, error) {
+	normalized, err := normalizeCompilerProfile(structure, profile)
+	if err != nil {
+		return nil, err
+	}
+	return toPromptIterProfile(normalized), nil
+}
+
+func normalizeCompilerProfile(
+	structure *profilecompiler.Structure,
+	profile *promptiter.Profile,
+) (*profilecompiler.Profile, error) {
 	if structure == nil {
 		return nil, errors.New("structure state is nil")
 	}
-	normalized := &promptiter.Profile{
-		StructureID: structure.snapshot.StructureID,
-		Overrides:   []promptiter.SurfaceOverride{},
-	}
+	return structure.NormalizeProfile(toCompilerProfile(profile))
+}
+
+func toCompilerProfile(profile *promptiter.Profile) *profilecompiler.Profile {
 	if profile == nil {
-		return normalized, nil
+		return nil
 	}
-	if profile.StructureID != "" && profile.StructureID != structure.snapshot.StructureID {
-		return nil, fmt.Errorf(
-			"profile structure id %q does not match structure id %q",
-			profile.StructureID,
-			structure.snapshot.StructureID,
-		)
+	converted := &profilecompiler.Profile{
+		StructureID: profile.StructureID,
+		Overrides:   make([]profilecompiler.SurfaceOverride, 0, len(profile.Overrides)),
 	}
-	seen := make(map[string]struct{}, len(profile.Overrides))
-	normalized.Overrides = make([]promptiter.SurfaceOverride, 0, len(profile.Overrides))
 	for _, override := range profile.Overrides {
-		if override.SurfaceID == "" {
-			return nil, errors.New("profile override surface id is empty")
-		}
-		if _, ok := seen[override.SurfaceID]; ok {
-			return nil, fmt.Errorf("duplicate profile override surface id %q", override.SurfaceID)
-		}
-		seen[override.SurfaceID] = struct{}{}
-		surface, ok := structure.surfaceIndex[override.SurfaceID]
-		if !ok {
-			return nil, fmt.Errorf("profile override surface id %q is unknown", override.SurfaceID)
-		}
-		value, err := isurface.SanitizePatchValue(surface, override.Value)
-		if err != nil {
-			return nil, fmt.Errorf("sanitize profile override %q: %w", override.SurfaceID, err)
-		}
-		if reflect.DeepEqual(value, surface.Value) {
-			continue
-		}
-		normalized.Overrides = append(normalized.Overrides, promptiter.SurfaceOverride{
-			SurfaceID: override.SurfaceID,
-			Value:     value,
-		})
+		converted.Overrides = append(converted.Overrides, profilecompiler.SurfaceOverride(override))
 	}
-	sort.SliceStable(normalized.Overrides, func(i, j int) bool {
-		return normalized.Overrides[i].SurfaceID < normalized.Overrides[j].SurfaceID
-	})
-	return normalized, nil
+	return converted
+}
+
+func toPromptIterProfile(profile *profilecompiler.Profile) *promptiter.Profile {
+	converted := &promptiter.Profile{
+		StructureID: profile.StructureID,
+		Overrides:   make([]promptiter.SurfaceOverride, 0, len(profile.Overrides)),
+	}
+	for _, override := range profile.Overrides {
+		converted.Overrides = append(converted.Overrides, promptiter.SurfaceOverride(override))
+	}
+	return converted
 }
 
 func applyPatchSet(
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	profile *promptiter.Profile,
 	patchSet *promptiter.PatchSet,
 ) (*promptiter.Profile, error) {
@@ -98,20 +91,22 @@ func applyPatchSet(
 			return nil, fmt.Errorf("duplicate patch surface id %q", patch.SurfaceID)
 		}
 		seenPatches[patch.SurfaceID] = struct{}{}
-		surface, ok := structure.surfaceIndex[patch.SurfaceID]
+		surface, ok := structure.SurfaceIndex[patch.SurfaceID]
 		if !ok {
 			return nil, fmt.Errorf("patch surface id %q is unknown", patch.SurfaceID)
 		}
-		value, err := isurface.SanitizePatchValue(surface, patch.Value)
+		value, err := profilecompiler.SanitizePatchValue(surface, patch.Value)
 		if err != nil {
 			return nil, fmt.Errorf("sanitize patch %q: %w", patch.SurfaceID, err)
 		}
-		if reflect.DeepEqual(value, surface.Value) {
+		if profilecompiler.PatchValueEqual(surface, value) {
 			delete(overrideIndex, patch.SurfaceID)
 			continue
 		}
 		overrideIndex[patch.SurfaceID] = promptiter.SurfaceOverride{
 			SurfaceID: patch.SurfaceID,
+			NodeID:    surface.NodeID,
+			Type:      surface.Type,
 			Value:     value,
 		}
 	}
@@ -130,7 +125,7 @@ func buildOverrideIndex(profile *promptiter.Profile) map[string]promptiter.Surfa
 }
 
 func buildProfileFromOverrideIndex(
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	overrideIndex map[string]promptiter.SurfaceOverride,
 ) *promptiter.Profile {
 	if structure == nil {
@@ -138,37 +133,39 @@ func buildProfileFromOverrideIndex(
 	}
 	overrides := make([]promptiter.SurfaceOverride, 0, len(overrideIndex))
 	for surfaceID, override := range overrideIndex {
-		surface := structure.surfaceIndex[surfaceID]
-		if reflect.DeepEqual(override.Value, surface.Value) {
+		surface := structure.SurfaceIndex[surfaceID]
+		if profilecompiler.PatchValueEqual(surface, override.Value) {
 			continue
 		}
+		override.NodeID = surface.NodeID
+		override.Type = surface.Type
 		overrides = append(overrides, override)
 	}
 	sort.SliceStable(overrides, func(i, j int) bool {
 		return overrides[i].SurfaceID < overrides[j].SurfaceID
 	})
 	return &promptiter.Profile{
-		StructureID: structure.snapshot.StructureID,
+		StructureID: structure.Snapshot.StructureID,
 		Overrides:   overrides,
 	}
 }
 
 func resolveProfileSurface(
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	overrideIndex map[string]promptiter.SurfaceOverride,
 	surfaceID string,
 ) (astructure.Surface, error) {
 	if structure == nil {
 		return astructure.Surface{}, errors.New("structure state is nil")
 	}
-	surface, ok := structure.surfaceIndex[surfaceID]
+	surface, ok := structure.SurfaceIndex[surfaceID]
 	if !ok {
 		return astructure.Surface{}, fmt.Errorf("surface id %q is unknown", surfaceID)
 	}
 	if override, ok := overrideIndex[surfaceID]; ok {
-		surface.Value = isurface.CloneValue(override.Value)
+		surface.Value = iprofile.CloneSurfaceValue(override.Value)
 		return surface, nil
 	}
-	surface.Value = isurface.CloneValue(surface.Value)
+	surface.Value = iprofile.CloneSurfaceValue(surface.Value)
 	return surface, nil
 }

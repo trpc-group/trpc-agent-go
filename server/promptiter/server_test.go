@@ -120,6 +120,10 @@ func testEvalSetInputs(evalSetID string) []enginepkg.EvalSetInput {
 	}
 }
 
+func stringPtr(value string) *string {
+	return &value
+}
+
 func (failingWriter) Header() http.Header {
 	return http.Header{}
 }
@@ -150,11 +154,13 @@ func newTestServer(t *testing.T, opts ...Option) *Server {
 							SurfaceID: "candidate#instruction",
 							NodeID:    "candidate",
 							Type:      astructure.SurfaceTypeInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("instruction")},
 						},
 						{
 							SurfaceID: "candidate#global_instruction",
 							NodeID:    "candidate",
 							Type:      astructure.SurfaceTypeGlobalInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("global")},
 						},
 						{
 							SurfaceID: "candidate#tool.lookup_record",
@@ -243,6 +249,7 @@ func TestHandleRunsPassesRequestThrough(t *testing.T) {
 							SurfaceID: "candidate#instruction",
 							NodeID:    "node_1",
 							Type:      astructure.SurfaceTypeInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("instruction")},
 						},
 					},
 				}, nil
@@ -300,6 +307,7 @@ func TestHandleRunsAppliesResponseResultSlimming(t *testing.T) {
 							SurfaceID: "candidate#instruction",
 							NodeID:    "node_1",
 							Type:      astructure.SurfaceTypeInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("instruction")},
 						},
 					},
 				}, nil
@@ -357,6 +365,7 @@ func TestHandleRunsDecodesEvalSetInputs(t *testing.T) {
 							SurfaceID: "candidate#instruction",
 							NodeID:    "node_1",
 							Type:      astructure.SurfaceTypeInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("instruction")},
 						},
 					},
 				}, nil
@@ -687,6 +696,7 @@ func TestHandleRunsMethodAndExecutionErrors(t *testing.T) {
 							SurfaceID: "candidate#instruction",
 							NodeID:    "node_1",
 							Type:      astructure.SurfaceTypeInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("instruction")},
 						},
 					},
 				}, nil
@@ -788,6 +798,7 @@ func TestValidateTargetSurfaceIDs(t *testing.T) {
 							SurfaceID: "tools#global_instruction",
 							NodeID:    "tools",
 							Type:      astructure.SurfaceTypeGlobalInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("global")},
 						},
 						{
 							SurfaceID: astructure.SurfaceID(
@@ -882,29 +893,6 @@ func TestValidateTargetSurfaceIDs(t *testing.T) {
 	)
 	err = unsupportedSurfaceServer.validateTargetSurfaceIDs(context.Background(), []string{"candidate#unsupported"})
 	assert.EqualError(t, err, `target surface id "candidate#unsupported" is unknown`)
-}
-
-func TestIsPromptIterToolTargetSurfaceRejectsMalformedToolSurface(t *testing.T) {
-	nodes := map[string]struct{}{"candidate": {}}
-	assert.False(t, isPromptIterToolTargetSurface(astructure.Surface{
-		SurfaceID: "candidate#tool.lookup",
-		NodeID:    "candidate",
-		Type:      astructure.SurfaceTypeTool,
-		Value: astructure.SurfaceValue{
-			Tools: []astructure.ToolRef{
-				{ID: "lookup"},
-				{ID: "delay"},
-			},
-		},
-	}, nodes))
-	assert.False(t, isPromptIterToolTargetSurface(astructure.Surface{
-		SurfaceID: "candidate#tool.",
-		NodeID:    "candidate",
-		Type:      astructure.SurfaceTypeTool,
-		Value: astructure.SurfaceValue{
-			Tools: []astructure.ToolRef{{}},
-		},
-	}, nodes))
 }
 
 func TestStatusCodeFromError(t *testing.T) {

@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
@@ -30,38 +29,43 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
-	"trpc.group/trpc-go/trpc-agent-go/runner"
+	rootrunner "trpc.group/trpc-go/trpc-agent-go/runner"
+	trpcagentrunner "trpc.group/trpc-go/trpc-agent-go/runner/trpcagent"
 )
 
 const (
-	appName             = "promptiter-flight-tool-app"
-	candidateAppName    = "promptiter-flight-tool-candidate"
-	judgeAppName        = "promptiter-flight-tool-judge"
-	backwarderAppName   = "promptiter-flight-tool-backwarder"
-	aggregatorAppName   = "promptiter-flight-tool-aggregator"
-	optimizerAppName    = "promptiter-flight-tool-optimizer"
-	trainEvalSetID      = "flight-tool-train"
-	validationEvalSetID = "flight-tool-validation"
-	sharedMetricFileID  = "flight-tool"
+	appName             = "promptiter-nba-commentary-app"
+	candidateAppName    = "promptiter-nba-commentary-candidate"
+	judgeAppName        = "promptiter-nba-commentary-judge"
+	backwarderAppName   = "promptiter-nba-commentary-backwarder"
+	aggregatorAppName   = "promptiter-nba-commentary-aggregator"
+	optimizerAppName    = "promptiter-nba-commentary-optimizer"
+	trainEvalSetID      = "nba-commentary-train"
+	validationEvalSetID = "nba-commentary-validation"
+	sharedMetricFileID  = "sports-commentary"
 )
 
-type toolDescConfig struct {
-	DataDir                        string
-	OutputDir                      string
-	CandidateModelName             string
-	JudgeModelName                 string
-	WorkerModelName                string
-	MaxRounds                      int
-	MinScoreGain                   float64
-	MaxRoundsWithoutAcceptance     int
-	TargetScore                    float64
-	EvalCaseParallelism            int
-	EvalCaseParallelInference      bool
-	EvalCaseParallelEvaluation     bool
-	BackwardCaseParallelism        int
-	BackwardCaseParallelismEnabled bool
-	SurfaceParallelism             int
-	SurfaceParallelismEnabled      bool
+type remoteRunConfig struct {
+	DataDir                    string
+	OutputDir                  string
+	CandidateTarget            string
+	CandidateBasePath          string
+	CandidateInstruction       string
+	JudgeModelName             string
+	WorkerModelName            string
+	MaxRounds                  int
+	MinScoreGain               float64
+	MaxRoundsWithoutAcceptance int
+	TargetScore                float64
+	EvalCaseParallelism        int
+	BackwardCaseParallelism    int
+	AggregationParallelism     int
+	OptimizerParallelism       int
+	ParallelInferenceEnabled   bool
+	ParallelEvaluationEnabled  bool
+	ParallelBackwardEnabled    bool
+	ParallelAggregationEnabled bool
+	ParallelOptimizerEnabled   bool
 }
 
 type sharedMetricLocator struct {
@@ -73,31 +77,24 @@ type promptIterRuntime struct {
 	close  func()
 }
 
-func runToolDescExample(ctx context.Context, cfg toolDescConfig) error {
-	result, targetSurfaceID, err := runToolDesc(ctx, cfg)
+func runRemotePromptIterExample(ctx context.Context, cfg remoteRunConfig) error {
+	result, targetSurfaceID, err := runRemotePromptIter(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	if err := printSummary(result, cfg.DataDir, cfg.OutputDir, targetSurfaceID); err != nil {
+	if err := printSummary(result, cfg.DataDir, cfg.OutputDir, cfg.CandidateInstruction, targetSurfaceID); err != nil {
 		return fmt.Errorf("print summary: %w", err)
 	}
 	return nil
 }
 
-func runToolDesc(
-	ctx context.Context,
-	cfg toolDescConfig,
-) (*promptiterengine.RunResult, string, error) {
-	runtime, err := buildPromptIterRuntime(ctx, cfg)
+func runRemotePromptIter(ctx context.Context, cfg remoteRunConfig) (*promptiterengine.RunResult, string, error) {
+	runtime, err := buildRemotePromptIterRuntime(ctx, cfg)
 	if err != nil {
 		return nil, "", err
 	}
 	defer runtime.close()
-	targetSurfaceID := astructure.SurfaceID(
-		candidateAgentName,
-		astructure.SurfaceTypeTool,
-		"lookup_record",
-	)
+	targetSurfaceID := astructure.SurfaceID(candidateAgentName, astructure.SurfaceTypeInstruction)
 	result, err := runtime.engine.Run(ctx, buildRunRequest(cfg, targetSurfaceID))
 	if err != nil {
 		return nil, "", fmt.Errorf("run promptiter: %w", err)
@@ -105,11 +102,7 @@ func runToolDesc(
 	return result, targetSurfaceID, nil
 }
 
-func buildPromptIterRuntime(ctx context.Context, cfg toolDescConfig) (*promptIterRuntime, error) {
-	candidateModel, err := loadOpenAIModel(cfg.CandidateModelName)
-	if err != nil {
-		return nil, fmt.Errorf("load candidate model: %w", err)
-	}
+func buildRemotePromptIterRuntime(ctx context.Context, cfg remoteRunConfig) (*promptIterRuntime, error) {
 	judgeModel, err := loadOpenAIModel(cfg.JudgeModelName)
 	if err != nil {
 		return nil, fmt.Errorf("load judge model: %w", err)
@@ -118,26 +111,28 @@ func buildPromptIterRuntime(ctx context.Context, cfg toolDescConfig) (*promptIte
 	if err != nil {
 		return nil, fmt.Errorf("load worker model: %w", err)
 	}
-	if (cfg.EvalCaseParallelInference || cfg.EvalCaseParallelEvaluation) && cfg.EvalCaseParallelism <= 0 {
+	if cfg.CandidateTarget == "" {
+		return nil, errors.New("candidate target is empty")
+	}
+	if (cfg.ParallelInferenceEnabled || cfg.ParallelEvaluationEnabled) && cfg.EvalCaseParallelism <= 0 {
 		return nil, errors.New("eval case parallelism must be greater than 0 when parallel inference or evaluation is enabled")
 	}
-	candidateAgent, err := newCandidateAgent(
-		candidateModel,
-		"Answer travel operations questions concisely. Use a tool only when its declaration clearly matches the request.",
-		"Look up a traveler loyalty-profile record.",
-	)
+	targetStructure, err := fetchRemoteStructure(ctx, candidateAppName, cfg.CandidateTarget, cfg.CandidateBasePath)
 	if err != nil {
-		return nil, fmt.Errorf("create candidate agent: %w", err)
+		return nil, fmt.Errorf("fetch remote candidate structure: %w", err)
+	}
+	candidateRunner, err := trpcagentrunner.New(candidateAppName, trpcagentrunner.WithTarget(cfg.CandidateTarget), trpcagentrunner.WithBasePath(cfg.CandidateBasePath))
+	if err != nil {
+		return nil, fmt.Errorf("create remote candidate runner: %w", err)
 	}
 	judgeAgent := newJudgeAgent(judgeModel)
 	backwarderAgent := newBackwarderAgent(workerModel)
 	aggregatorAgent := newAggregatorAgent(workerModel)
 	optimizerAgent := newOptimizerAgent(workerModel)
-	candidateRunner := runner.NewRunner(candidateAppName, candidateAgent)
-	judgeRunner := runner.NewRunner(judgeAppName, judgeAgent)
-	backwarderRunner := runner.NewRunner(backwarderAppName, backwarderAgent)
-	aggregatorRunner := runner.NewRunner(aggregatorAppName, aggregatorAgent)
-	optimizerRunner := runner.NewRunner(optimizerAppName, optimizerAgent)
+	judgeRunner := rootrunner.NewRunner(judgeAppName, judgeAgent)
+	backwarderRunner := rootrunner.NewRunner(backwarderAppName, backwarderAgent)
+	aggregatorRunner := rootrunner.NewRunner(aggregatorAppName, aggregatorAgent)
+	optimizerRunner := rootrunner.NewRunner(optimizerAppName, optimizerAgent)
 	closeAll := func() {
 		candidateRunner.Close()
 		judgeRunner.Close()
@@ -146,19 +141,9 @@ func buildPromptIterRuntime(ctx context.Context, cfg toolDescConfig) (*promptIte
 		optimizerRunner.Close()
 	}
 	evalSetManager := evalsetlocal.New(evalset.WithBaseDir(cfg.DataDir))
-	metricManager := metriclocal.New(
-		metric.WithBaseDir(cfg.DataDir),
-		metric.WithLocator(&sharedMetricLocator{metricFileID: sharedMetricFileID}),
-	)
+	metricManager := metriclocal.New(metric.WithBaseDir(cfg.DataDir), metric.WithLocator(&sharedMetricLocator{metricFileID: sharedMetricFileID}))
 	evalResultManager := evalresultlocal.New(evalresult.WithBaseDir(cfg.OutputDir))
-	agentEvaluator, err := evaluation.New(
-		appName,
-		candidateRunner,
-		evaluation.WithEvalSetManager(evalSetManager),
-		evaluation.WithMetricManager(metricManager),
-		evaluation.WithEvalResultManager(evalResultManager),
-		evaluation.WithJudgeRunner(judgeRunner),
-	)
+	agentEvaluator, err := evaluation.New(appName, candidateRunner, evaluation.WithEvalSetManager(evalSetManager), evaluation.WithMetricManager(metricManager), evaluation.WithEvalResultManager(evalResultManager), evaluation.WithJudgeRunner(judgeRunner), evaluation.WithNumRuns(1))
 	if err != nil {
 		closeAll()
 		return nil, fmt.Errorf("create evaluator: %w", err)
@@ -183,63 +168,51 @@ func buildPromptIterRuntime(ctx context.Context, cfg toolDescConfig) (*promptIte
 	}
 	engineInstance, err := promptiterengine.New(
 		ctx,
-		promptiterengine.WithTargetAgent(candidateAgent),
 		promptiterengine.WithAgentEvaluator(agentEvaluator),
 		promptiterengine.WithBackwarder(backwarderInstance),
 		promptiterengine.WithAggregator(aggregatorInstance),
 		promptiterengine.WithOptimizer(optimizerInstance),
+		promptiterengine.WithStructureSnapshot(targetStructure),
 	)
 	if err != nil {
 		agentEvaluator.Close()
 		closeAll()
 		return nil, fmt.Errorf("create promptiter engine: %w", err)
 	}
-	return &promptIterRuntime{
-		engine: engineInstance,
-		close: func() {
-			agentEvaluator.Close()
-			closeAll()
-		},
-	}, nil
+	return &promptIterRuntime{engine: engineInstance, close: func() {
+		agentEvaluator.Close()
+		closeAll()
+	}}, nil
 }
 
-func buildRunRequest(cfg toolDescConfig, targetSurfaceID string) *promptiterengine.RunRequest {
+func buildRunRequest(cfg remoteRunConfig, targetSurfaceID string) *promptiterengine.RunRequest {
 	targetScore := cfg.TargetScore
 	return &promptiterengine.RunRequest{
-		Train: []promptiterengine.EvalSetInput{
-			{
-				EvalSetID: trainEvalSetID,
-			},
-		},
-		Validation: []promptiterengine.EvalSetInput{
-			{EvalSetID: validationEvalSetID},
-		},
+		Train:      []promptiterengine.EvalSetInput{{EvalSetID: trainEvalSetID}},
+		Validation: []promptiterengine.EvalSetInput{{EvalSetID: validationEvalSetID}},
 		EvaluationOptions: promptiterengine.EvaluationOptions{
 			EvalCaseParallelism:               cfg.EvalCaseParallelism,
-			EvalCaseParallelInferenceEnabled:  cfg.EvalCaseParallelInference,
-			EvalCaseParallelEvaluationEnabled: cfg.EvalCaseParallelEvaluation,
+			EvalCaseParallelInferenceEnabled:  cfg.ParallelInferenceEnabled,
+			EvalCaseParallelEvaluationEnabled: cfg.ParallelEvaluationEnabled,
 		},
 		BackwardOptions: promptiterengine.BackwardOptions{
-			CaseParallelismEnabled: cfg.BackwardCaseParallelismEnabled,
+			CaseParallelismEnabled: cfg.ParallelBackwardEnabled,
 			CaseParallelism:        cfg.BackwardCaseParallelism,
 		},
 		AggregationOptions: promptiterengine.AggregationOptions{
-			SurfaceParallelismEnabled: cfg.SurfaceParallelismEnabled,
-			SurfaceParallelism:        cfg.SurfaceParallelism,
+			SurfaceParallelismEnabled: cfg.ParallelAggregationEnabled,
+			SurfaceParallelism:        cfg.AggregationParallelism,
 		},
 		OptimizerOptions: promptiterengine.OptimizerOptions{
-			SurfaceParallelismEnabled: cfg.SurfaceParallelismEnabled,
-			SurfaceParallelism:        cfg.SurfaceParallelism,
+			SurfaceParallelismEnabled: cfg.ParallelOptimizerEnabled,
+			SurfaceParallelism:        cfg.OptimizerParallelism,
 		},
-		AcceptancePolicy: promptiterengine.AcceptancePolicy{
-			MinScoreGain: cfg.MinScoreGain,
-		},
-		StopPolicy: promptiterengine.StopPolicy{
-			MaxRoundsWithoutAcceptance: cfg.MaxRoundsWithoutAcceptance,
-			TargetScore:                &targetScore,
-		},
+		AcceptancePolicy: promptiterengine.AcceptancePolicy{MinScoreGain: cfg.MinScoreGain},
+		StopPolicy:       promptiterengine.StopPolicy{MaxRoundsWithoutAcceptance: cfg.MaxRoundsWithoutAcceptance, TargetScore: &targetScore},
 		MaxRounds:        cfg.MaxRounds,
-		TargetSurfaceIDs: []string{targetSurfaceID},
+		TargetSurfaceIDs: []string{
+			targetSurfaceID,
+		},
 	}
 }
 
@@ -248,17 +221,16 @@ func (l *sharedMetricLocator) Build(baseDir, appName, _ string) string {
 }
 
 func loadOpenAIModel(modelName string) (model.Model, error) {
-	name := strings.TrimSpace(modelName)
-	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
-	baseURL := strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))
+	name := modelName
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	baseURL := os.Getenv("OPENAI_BASE_URL")
 	switch {
 	case name == "":
 		return nil, errors.New("model name is empty")
 	case apiKey == "":
 		return nil, errors.New("OPENAI_API_KEY is empty")
 	}
-	options := make([]openai.Option, 0, 2)
-	options = append(options, openai.WithAPIKey(apiKey))
+	options := []openai.Option{openai.WithAPIKey(apiKey)}
 	if baseURL != "" {
 		options = append(options, openai.WithBaseURL(baseURL))
 	}

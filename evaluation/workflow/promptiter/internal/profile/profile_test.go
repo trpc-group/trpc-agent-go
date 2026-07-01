@@ -31,13 +31,15 @@ func TestClonePreservesNilOverrides(t *testing.T) {
 	assert.Nil(t, cloned.Overrides)
 }
 
-func TestCloneDeepCopiesOverrides(t *testing.T) {
+func TestCloneCopiesOverrideValues(t *testing.T) {
 	text := "prompt"
 	profile := &promptiter.Profile{
 		StructureID: "structure_1",
 		Overrides: []promptiter.SurfaceOverride{
 			{
 				SurfaceID: "candidate#instruction",
+				NodeID:    "candidate",
+				Type:      astructure.SurfaceTypeInstruction,
 				Value: astructure.SurfaceValue{
 					Text: &text,
 					FewShot: []astructure.FewShotExample{
@@ -69,20 +71,16 @@ func TestCloneDeepCopiesOverrides(t *testing.T) {
 	assert.Equal(t, profile.StructureID, cloned.StructureID)
 	if assert.Len(t, cloned.Overrides, 1) {
 		assert.Equal(t, profile.Overrides[0].SurfaceID, cloned.Overrides[0].SurfaceID)
-		if assert.NotNil(t, cloned.Overrides[0].Value.Text) {
-			assert.Equal(t, "prompt", *cloned.Overrides[0].Value.Text)
-			assert.NotSame(t, profile.Overrides[0].Value.Text, cloned.Overrides[0].Value.Text)
-			*cloned.Overrides[0].Value.Text = "mutated"
-			assert.Equal(t, "prompt", *profile.Overrides[0].Value.Text)
-		}
-		if assert.Len(t, cloned.Overrides[0].Value.FewShot, 1) {
-			cloned.Overrides[0].Value.FewShot[0].Messages[0].Content = "mutated"
-			assert.Equal(t, "question", profile.Overrides[0].Value.FewShot[0].Messages[0].Content)
-		}
-		if assert.NotNil(t, cloned.Overrides[0].Value.Model) {
-			assert.NotSame(t, profile.Overrides[0].Value.Model, cloned.Overrides[0].Value.Model)
-			cloned.Overrides[0].Value.Model.Headers["X-Test"] = "mutated"
-			assert.Equal(t, "value", profile.Overrides[0].Value.Model.Headers["X-Test"])
-		}
+		assert.Equal(t, profile.Overrides[0].NodeID, cloned.Overrides[0].NodeID)
+		assert.Equal(t, profile.Overrides[0].Type, cloned.Overrides[0].Type)
+		assert.Equal(t, profile.Overrides[0].Value, cloned.Overrides[0].Value)
+		cloned.Overrides[0].SurfaceID = "mutated"
+		assert.Equal(t, "candidate#instruction", profile.Overrides[0].SurfaceID)
+		*cloned.Overrides[0].Value.Text = "mutated"
+		cloned.Overrides[0].Value.FewShot[0].Messages[0].Content = "mutated"
+		cloned.Overrides[0].Value.Model.Headers["X-Test"] = "mutated"
+		assert.Equal(t, "prompt", *profile.Overrides[0].Value.Text)
+		assert.Equal(t, "question", profile.Overrides[0].Value.FewShot[0].Messages[0].Content)
+		assert.Equal(t, "value", profile.Overrides[0].Value.Model.Headers["X-Test"])
 	}
 }

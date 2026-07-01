@@ -12,12 +12,14 @@ package engine
 import (
 	"errors"
 	"fmt"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 )
 
 type targetSurfaceSet map[string]struct{}
 
 func compileTargetSurfaceIDs(
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	targetSurfaceIDs []string,
 ) (targetSurfaceSet, error) {
 	if targetSurfaceIDs == nil {
@@ -34,7 +36,7 @@ func compileTargetSurfaceIDs(
 		if surfaceID == "" {
 			return nil, errors.New("target surface ids must not contain empty values")
 		}
-		if _, ok := structure.surfaceIndex[surfaceID]; !ok {
+		if _, ok := structure.SurfaceIndex[surfaceID]; !ok {
 			return nil, fmt.Errorf("target surface id %q is unknown", surfaceID)
 		}
 		targets[surfaceID] = struct{}{}
