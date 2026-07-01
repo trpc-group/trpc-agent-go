@@ -155,6 +155,7 @@ var CaseSummaryAsyncPipeline = ReplayCase{
 		AppendEventStep{Key: "c11.user.1", Event: userEvent("c11.user.1", "async summary input")},
 		AppendEventStep{Key: "c11.assistant.1", Event: assistantEvent("c11.assistant.1", "async summary result")},
 		CreateSummaryStep{Key: "c11.enqueue", SessionKey: defaultSessionKey, FilterKey: "", Force: false, Async: true},
+		WaitSummaryStep{Key: "c11.wait", SessionKey: defaultSessionKey, FilterKey: "", Timeout: 2 * time.Second, PollInterval: 10 * time.Millisecond},
 	},
 }
 

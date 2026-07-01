@@ -13,6 +13,7 @@ package replaytest
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -184,81 +185,45 @@ type caseExecutor struct {
 func (e *caseExecutor) execute(ctx context.Context, step ReplayStep) error {
 	switch s := step.(type) {
 	case AppendEventStep:
-		key := inferSessionKey(s.Event, s.Key)
-		sess, err := e.ensureSession(ctx, key)
-		if err != nil {
-			return err
-		}
-		evt := *s.Event
-		event.WithTag(s.Key)(&evt)
-		if err := event.SetExtension(&evt, replayEventKeyExtension, s.Key); err != nil {
-			return err
-		}
-		return e.backend.SessionService.AppendEvent(ctx, sess, &evt)
+		return e.executeAppendEvent(ctx, s)
 	case UpdateStateStep:
-		return e.updateState(ctx, s)
+		return e.executeUpdateState(ctx, s)
 	case AddMemoryStep:
-		if e.backend.MemoryService == nil {
-			return nil
-		}
-		if err := e.backend.MemoryService.AddMemory(ctx, s.UserKey, s.Memory, s.Topics); err != nil {
-			return err
-		}
-		e.snapshot.Memories, _ = e.backend.MemoryService.ReadMemories(ctx, s.UserKey, 0)
+		return e.executeAddMemory(ctx, s)
 	case SearchMemoryStep:
-		if e.backend.MemoryService == nil {
-			return nil
-		}
-		memories, err := e.backend.MemoryService.SearchMemories(ctx, s.UserKey, s.Query)
-		if err != nil {
-			return err
-		}
-		if s.Limit > 0 && len(memories) > s.Limit {
-			memories = memories[:s.Limit]
-		}
-		e.snapshot.MemSearchResults = memories
+		return e.executeSearchMemory(ctx, s)
 	case CreateSummaryStep:
-		sess, err := e.ensureSession(ctx, s.SessionKey)
-		if err != nil {
-			return err
-		}
-		if latest, err := e.backend.SessionService.GetSession(ctx, s.SessionKey); err == nil && latest != nil {
-			sess = latest
-			e.sessions[s.SessionKey] = latest
-		}
-		if s.Async {
-			return e.backend.SessionService.EnqueueSummaryJob(ctx, sess, s.FilterKey, s.Force)
-		}
-		return e.backend.SessionService.CreateSessionSummary(ctx, sess, s.FilterKey, s.Force)
+		return e.executeCreateSummary(ctx, s)
+	case WaitSummaryStep:
+		return e.executeWaitSummary(ctx, s)
 	case AppendTrackStep:
-		sess, err := e.ensureSession(ctx, s.SessionKey)
-		if err != nil {
-			return err
-		}
-		trackSvc, ok := e.backend.SessionService.(session.TrackService)
-		if !ok {
-			return nil
-		}
-		return trackSvc.AppendTrackEvent(ctx, sess, s.Event)
+		return e.executeAppendTrack(ctx, s)
 	case GetSessionStep:
-		return e.captureSession(ctx, s.SessionKey)
+		return e.executeGetSession(ctx, s)
 	case ListAppStatesStep:
-		state, err := e.backend.SessionService.ListAppStates(ctx, s.AppName)
-		if err != nil {
-			return err
-		}
-		e.snapshot.AppStates = state
+		return e.executeListAppStates(ctx, s)
 	case ListUserStatesStep:
-		state, err := e.backend.SessionService.ListUserStates(ctx, s.UserKey)
-		if err != nil {
-			return err
-		}
-		e.snapshot.UserStates = state
+		return e.executeListUserStates(ctx, s)
+	default:
+		return fmt.Errorf("unknown step type: %T", step)
 	}
-	return nil
 }
 
-func (e *caseExecutor) updateState(ctx context.Context, step UpdateStateStep) error {
+func (e *caseExecutor) executeAppendEvent(ctx context.Context, step AppendEventStep) error {
+	key := inferSessionKey(step.Event, step.Key)
+	sess, err := e.ensureSession(ctx, key)
+	if err != nil {
+		return err
+	}
+	evt := *step.Event
+	event.WithTag(step.Key)(&evt)
+	if err := event.SetExtension(&evt, replayEventKeyExtension, step.Key); err != nil {
+		return err
+	}
+	return e.backend.SessionService.AppendEvent(ctx, sess, &evt)
+}
+
+func (e *caseExecutor) executeUpdateState(ctx context.Context, step UpdateStateStep) error {
 	switch step.Scope {
 	case ScopeApp:
 		if step.DeleteKey != "" {
@@ -276,6 +241,127 @@ func (e *caseExecutor) updateState(ctx context.Context, step UpdateStateStep) er
 		}
 		return e.backend.SessionService.UpdateSessionState(ctx, step.SessionKey, step.State)
 	}
+}
+
+func (e *caseExecutor) executeAddMemory(ctx context.Context, step AddMemoryStep) error {
+	if e.backend.MemoryService == nil {
+		return nil
+	}
+	if err := e.backend.MemoryService.AddMemory(ctx, step.UserKey, step.Memory, step.Topics); err != nil {
+		return err
+	}
+	e.snapshot.Memories, _ = e.backend.MemoryService.ReadMemories(ctx, step.UserKey, 0)
+	return nil
+}
+
+func (e *caseExecutor) executeSearchMemory(ctx context.Context, step SearchMemoryStep) error {
+	if e.backend.MemoryService == nil {
+		return nil
+	}
+	memories, err := e.backend.MemoryService.SearchMemories(ctx, step.UserKey, step.Query)
+	if err != nil {
+		return err
+	}
+	if step.Limit > 0 && len(memories) > step.Limit {
+		memories = memories[:step.Limit]
+	}
+	e.snapshot.MemSearchResults = memories
+	return nil
+}
+
+func (e *caseExecutor) executeCreateSummary(ctx context.Context, step CreateSummaryStep) error {
+	sess, err := e.ensureSession(ctx, step.SessionKey)
+	if err != nil {
+		return err
+	}
+	if latest, err := e.backend.SessionService.GetSession(ctx, step.SessionKey); err == nil && latest != nil {
+		sess = latest
+		e.sessions[step.SessionKey] = latest
+	}
+	if step.Async {
+		return e.backend.SessionService.EnqueueSummaryJob(ctx, sess, step.FilterKey, step.Force)
+	}
+	return e.backend.SessionService.CreateSessionSummary(ctx, sess, step.FilterKey, step.Force)
+}
+
+func (e *caseExecutor) executeWaitSummary(ctx context.Context, step WaitSummaryStep) error {
+	timeout := step.Timeout
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	poll := step.PollInterval
+	if poll <= 0 {
+		poll = 10 * time.Millisecond
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		sess, err := e.backend.SessionService.GetSession(ctx, step.SessionKey)
+		if err != nil {
+			return err
+		}
+		e.sessions[step.SessionKey] = sess
+		e.snapshot.Session = sess
+		if summaryText(ctx, sess, step.FilterKey, e.backend.SessionService) != "" {
+			e.captureSummaryAndTracks(sess)
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			e.captureSummaryAndTracks(sess)
+			return fmt.Errorf("summary not available before timeout")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+}
+
+func summaryText(ctx context.Context, sess *session.Session, filterKey string, svc session.Service) string {
+	if filterKey == "" {
+		text, _ := svc.GetSessionSummaryText(ctx, sess)
+		return text
+	}
+	text, _ := svc.GetSessionSummaryText(
+		ctx,
+		sess,
+		session.WithSummaryFilterKey(filterKey),
+	)
+	return text
+}
+
+func (e *caseExecutor) executeAppendTrack(ctx context.Context, step AppendTrackStep) error {
+	sess, err := e.ensureSession(ctx, step.SessionKey)
+	if err != nil {
+		return err
+	}
+	trackSvc, ok := e.backend.SessionService.(session.TrackService)
+	if !ok {
+		return nil
+	}
+	return trackSvc.AppendTrackEvent(ctx, sess, step.Event)
+}
+
+func (e *caseExecutor) executeGetSession(ctx context.Context, step GetSessionStep) error {
+	return e.captureSession(ctx, step.SessionKey)
+}
+
+func (e *caseExecutor) executeListAppStates(ctx context.Context, step ListAppStatesStep) error {
+	state, err := e.backend.SessionService.ListAppStates(ctx, step.AppName)
+	if err != nil {
+		return err
+	}
+	e.snapshot.AppStates = state
+	return nil
+}
+
+func (e *caseExecutor) executeListUserStates(ctx context.Context, step ListUserStatesStep) error {
+	state, err := e.backend.SessionService.ListUserStates(ctx, step.UserKey)
+	if err != nil {
+		return err
+	}
+	e.snapshot.UserStates = state
+	return nil
 }
 
 func (e *caseExecutor) ensureSession(ctx context.Context, key session.Key) (*session.Session, error) {
@@ -301,12 +387,16 @@ func (e *caseExecutor) captureSession(ctx context.Context, key session.Key) erro
 	}
 	e.sessions[key] = sess
 	e.snapshot.Session = sess
+	e.captureSummaryAndTracks(sess)
+	return nil
+}
+
+func (e *caseExecutor) captureSummaryAndTracks(sess *session.Session) {
 	e.snapshot.SummaryMap = sess.Summaries
 	e.snapshot.TrackEvents = map[string]*session.TrackEvents{}
 	for track, events := range sess.Tracks {
 		e.snapshot.TrackEvents[string(track)] = events
 	}
-	return nil
 }
 
 func inferSessionKey(evt *event.Event, fallback string) session.Key {

@@ -135,6 +135,21 @@ func (s CreateSummaryStep) Type() string { return "create_summary" }
 // LogicalKey returns the stable replay key for the step.
 func (s CreateSummaryStep) LogicalKey() string { return s.Key }
 
+// WaitSummaryStep waits until a session summary is available.
+type WaitSummaryStep struct {
+	Key          string
+	SessionKey   session.Key
+	FilterKey    string
+	Timeout      time.Duration
+	PollInterval time.Duration
+}
+
+// Type returns the replay step type.
+func (s WaitSummaryStep) Type() string { return "wait_summary" }
+
+// LogicalKey returns the stable replay key for the step.
+func (s WaitSummaryStep) LogicalKey() string { return s.Key }
+
 // AppendTrackStep appends one track event.
 type AppendTrackStep struct {
 	Key        string

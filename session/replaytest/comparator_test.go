@@ -11,6 +11,7 @@
 package replaytest
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +79,24 @@ func TestComparatorDetectsDuplicateEventKeyAcrossBranches(t *testing.T) {
 	require.Contains(t, result.Diffs[0].Path, "count")
 }
 
+func TestComparatorDetectsScopedStateDiffs(t *testing.T) {
+	a := &SessionSnapshot{
+		BackendName: "a",
+		AppStates:   session.StateMap{"app_key": []byte("a")},
+		UserStates:  session.StateMap{"user_key": []byte("u")},
+	}
+	b := &SessionSnapshot{
+		BackendName: "b",
+		AppStates:   session.StateMap{"app_key": []byte("changed")},
+		UserStates:  session.StateMap{"user_key": []byte("changed")},
+	}
+
+	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), InMemoryProfile())
+	require.Equal(t, StatusFailed, result.Status)
+	requireDiffPathPrefix(t, result.Diffs, "app_states")
+	requireDiffPathPrefix(t, result.Diffs, "user_states")
+}
+
 func TestComparatorMemoryProfile(t *testing.T) {
 	a := &SessionSnapshot{BackendName: "a", Memories: []*memory.Entry{
 		{ID: "target", Score: 0.80, Memory: &memory.Memory{Memory: "likes Go"}},
@@ -102,6 +121,16 @@ func TestRequiredCapabilities(t *testing.T) {
 	unsupported := MissingCapabilities(RequiredCapabilities{NeedsTrack: true}, profile)
 	require.Len(t, unsupported, 1)
 	require.Equal(t, "track", unsupported[0].Feature)
+}
+
+func requireDiffPathPrefix(t *testing.T, diffs []DiffResult, prefix string) {
+	t.Helper()
+	for _, diff := range diffs {
+		if strings.HasPrefix(diff.Path, prefix) {
+			return
+		}
+	}
+	t.Fatalf("diff prefix %q not found in %#v", prefix, diffs)
 }
 
 func testSnapshot(backend, userText, assistantText string) *SessionSnapshot {

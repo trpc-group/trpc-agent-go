@@ -4,8 +4,8 @@ go 1.21
 
 require (
 	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
-	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0
-	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/memory/redis v1.10.0
+	trpc.group/trpc-go/trpc-agent-go/session/redis v1.10.0
 )
 
 require (

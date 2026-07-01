@@ -82,6 +82,7 @@ func (c *Comparator) Compare(
 		})
 	}
 	compareSessions(a, b, add)
+	compareScopedStates(a, b, add)
 	compareMemories(a, b, profileA, profileB, add)
 	result.Diffs = filterAllowedDiffs(diffs, allowedDiffs)
 	if len(result.Diffs) > 0 {
@@ -146,6 +147,14 @@ func compareSessions(a, b *SessionSnapshot, add func(string, any, any)) {
 	if !reflect.DeepEqual(a.Session.Tracks, b.Session.Tracks) {
 		add("tracks", a.Session.Tracks, b.Session.Tracks)
 	}
+}
+
+func compareScopedStates(a, b *SessionSnapshot, add func(string, any, any)) {
+	if a == nil || b == nil {
+		return
+	}
+	compareState("app_states", a.AppStates, b.AppStates, add)
+	compareState("user_states", a.UserStates, b.UserStates, add)
 }
 
 func compareEvents(a, b []event.Event, add func(string, any, any)) {

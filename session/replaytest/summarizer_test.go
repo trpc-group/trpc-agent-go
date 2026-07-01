@@ -180,6 +180,42 @@ func TestSummaryAsyncPipeline(t *testing.T) {
 	t.Fatal("summary was not persisted before timeout")
 }
 
+func TestSummaryAsyncCaseFailsWhenSummaryMissing(t *testing.T) {
+	sessionSvc := sessioninmemory.NewSessionService(
+		sessioninmemory.WithAsyncSummaryNum(1),
+		sessioninmemory.WithSummaryJobTimeout(time.Second),
+	)
+	defer sessionSvc.Close()
+
+	tc := CaseSummaryAsyncPipeline
+	tc.Steps = append([]ReplayStep(nil), tc.Steps...)
+	tc.Steps[len(tc.Steps)-1] = WaitSummaryStep{
+		Key:          "c11.wait",
+		SessionKey:   defaultSessionKey,
+		Timeout:      20 * time.Millisecond,
+		PollInterval: time.Millisecond,
+	}
+	_, err := executeCase(context.Background(), tc, NamedBackend{
+		Name:           "inmemory",
+		Profile:        InMemoryProfile(),
+		SessionService: sessionSvc,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "summary not available")
+}
+
+func TestComparatorDetectsAsyncSummaryMissing(t *testing.T) {
+	result := NewComparator().Compare(
+		summarySnapshot("a", map[string]*session.Summary{"": {Summary: "summary"}}),
+		summarySnapshot("b", map[string]*session.Summary{}),
+		nil,
+		InMemoryProfile(),
+		InMemoryProfile(),
+	)
+	require.Equal(t, StatusFailed, result.Status)
+	require.Equal(t, "summaries", result.Diffs[0].Path)
+}
+
 func eventForSummary(contents ...string) []event.Event {
 	events := make([]event.Event, 0, len(contents))
 	for i, content := range contents {
