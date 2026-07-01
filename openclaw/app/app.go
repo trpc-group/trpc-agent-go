@@ -399,13 +399,14 @@ const (
 		"tool or skill names, then call `dynamic_agent`; pass exact " +
 		"tool names such as web_fetch or browser in its `tools` " +
 		"field, and pass only real skill names in its `skills` " +
-		"field. Skill-backed work is tool-backed work. If the user " +
-		"names a skill, or the task may match a reusable skill " +
-		"workflow, use `tool_search` to find the matching skill, then " +
-		"call `dynamic_agent` with that skill name. Do not answer a " +
+		"field. Skill-backed work is tool-backed work. If a direct " +
+		"`skill_load` tool is available and the user names a skill or " +
+		"the task clearly matches a listed skill description, call " +
+		"`skill_load` first. If direct `skill_load` is unavailable, " +
+		"use `tool_search` to find the matching skill, then call " +
+		"`dynamic_agent` with that skill name. Do not answer a " +
 		"matching skill task directly from prior knowledge before the " +
-		"skill has been searched for and delegated. Use `dynamic_agent` " +
-		"for broader " +
+		"skill has been loaded or delegated. Use `dynamic_agent` for broader " +
 		"files, uploads, browser automation, shell work, messaging, " +
 		"cron, memory, skills, knowledge, external tools, or " +
 		"verification. Give the sub-agent a self-contained request " +

@@ -98,12 +98,25 @@ func appendDeferredSkillOverviewOptions(
 		llmagent.WithSkills(repo),
 		llmagent.WithSkillRepositoryProvider(repoProvider),
 		llmagent.WithSkillScopeMode(cfg.EvolutionSkillScopeMode),
-		llmagent.WithAllowedSkillTools(),
+		llmagent.WithAllowedSkillTools(llmagent.SkillToolLoad),
+		llmagent.WithSkillLoadMode(cfg.SkillsLoadMode),
+		llmagent.WithSkillLoadToolDescription(
+			openClawSkillLoadToolDescription,
+		),
+		llmagent.WithSkillsProtocolGuidance(
+			buildOpenClawSkillsGuidance(cfg),
+		),
 	)
 	if cfg.SkillsOverviewLimit > 0 {
 		opts = append(
 			opts,
 			llmagent.WithMaxOverviewSkills(cfg.SkillsOverviewLimit),
+		)
+	}
+	if cfg.SkillsMaxLoaded > 0 {
+		opts = append(
+			opts,
+			llmagent.WithMaxLoadedSkills(cfg.SkillsMaxLoaded),
 		)
 	}
 	return opts
