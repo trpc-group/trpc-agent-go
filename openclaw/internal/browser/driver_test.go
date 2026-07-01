@@ -58,8 +58,5 @@ func TestMCPProfileDriver_Lifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, extractText(raw), "Example")
 
-	err = drv.Stop()
-	if err != nil {
-		require.Contains(t, err.Error(), "process already finished")
-	}
+	require.NoError(t, drv.Stop())
 }

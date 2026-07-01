@@ -45,6 +45,7 @@ type Manager struct {
 
 	maxLines int
 	jobTTL   time.Duration
+	timeout  time.Duration
 	baseEnv  map[string]string
 	policy   CommandPolicy
 	redactor OutputRedactor
@@ -68,6 +69,14 @@ func WithJobTTL(d time.Duration) Option {
 	return func(m *Manager) {
 		if d > 0 {
 			m.jobTTL = d
+		}
+	}
+}
+
+func WithDefaultTimeout(d time.Duration) Option {
+	return func(m *Manager) {
+		if d > 0 {
+			m.timeout = d
 		}
 	}
 }
@@ -98,6 +107,7 @@ func NewManager(opts ...Option) *Manager {
 		sessions:         map[string]*session{},
 		maxLines:         defaultMaxLines,
 		jobTTL:           defaultJobTTL,
+		timeout:          time.Duration(defaultTimeoutS) * time.Second,
 		clock:            time.Now,
 		shellEnvSnapshot: snapshotLoginShellEnv,
 	}
@@ -157,12 +167,13 @@ func (m *Manager) Exec(
 		yieldMs = *params.YieldMs
 	}
 
-	timeoutS := defaultTimeoutS
+	timeout := m.timeout
 	if params.TimeoutS != nil && *params.TimeoutS > 0 {
-		timeoutS = *params.TimeoutS
+		timeout = time.Duration(*params.TimeoutS) * time.Second
 	}
-
-	timeout := time.Duration(timeoutS) * time.Second
+	if timeout <= 0 {
+		timeout = time.Duration(defaultTimeoutS) * time.Second
+	}
 
 	if !params.Background && yieldMs == 0 && !params.Pty {
 		out, code, err := runForeground(
@@ -246,6 +257,7 @@ func runForeground(
 	defer cancel()
 
 	cmd := shellCmd(ctx, params.Command)
+	prepareCommandProcess(cmd)
 	cmd.Dir = params.Workdir
 	cmd.Env = mergedEnv(baseEnv, params.Env)
 
@@ -255,12 +267,17 @@ func runForeground(
 }
 
 func shellCmd(ctx context.Context, command string) *exec.Cmd {
-	return exec.CommandContext(
+	cmd := exec.CommandContext(
 		ctx,
 		shellProgram,
 		shellLoginFlag,
 		command,
 	)
+	cmd.Cancel = func() error {
+		return forceKillCommandProcess(cmd)
+	}
+	cmd.WaitDelay = defaultIODrain
+	return cmd
 }
 
 func mergedEnv(
@@ -333,6 +350,7 @@ func (m *Manager) startBackground(
 			sess.readFrom(master)
 		}()
 	} else {
+		prepareCommandProcess(cmd)
 		stdin, stdout, stderr, err := startPipes(cmd)
 		if err != nil {
 			cancel()

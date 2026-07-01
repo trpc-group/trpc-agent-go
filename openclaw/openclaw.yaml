@@ -55,6 +55,9 @@ tools:
   # defer_direct_tools, useful for token-sensitive benchmark profiles.
   # defer_default_direct_tools: true
   # defer_direct_tools: ["exec_command"]
+  # Optional: default timeout for host exec_command calls when timeout_sec is
+  # omitted. Leave unset to keep the built-in host exec default.
+  # host_exec_default_timeout: "60s"
   # code_executor:
   #   type: "sandbox" # sandbox; leave empty/unset to inherit enable_local_exec
   #   auto_execute_code_blocks: true

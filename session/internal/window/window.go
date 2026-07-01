@@ -70,7 +70,7 @@ func EventWindowFromOrderedEntries(
 		break
 	}
 	if anchorIndex < 0 {
-		return nil, fmt.Errorf("anchor event not found: %s", anchorEventID)
+		return nil, fmt.Errorf("%w: %s", session.ErrEventWindowAnchorNotFound, anchorEventID)
 	}
 
 	before := collectBefore(entries, anchorIndex, req.Before, roleFilter)
