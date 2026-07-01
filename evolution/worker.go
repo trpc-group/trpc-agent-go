@@ -1308,6 +1308,38 @@ func looksLikeCorrection(content string) bool {
 			return true
 		}
 	}
+	return looksLikeFutureWorkflowFeedback(lower)
+}
+
+func looksLikeFutureWorkflowFeedback(lower string) bool {
+	futureMarkers := []string{
+		"next time", "going forward", "in the future", "future",
+		"default to", "by default", "reuse", "keep using",
+		"以后", "今后", "后续", "下次", "未来", "默认",
+	}
+	workflowMarkers := []string{
+		"workflow", "procedure", "process", "steps", "checklist",
+		"template", "format", "structure", "schema", "fields",
+		"category", "classification", "output", "rule",
+		"工作流", "流程", "步骤", "清单", "模板", "格式",
+		"结构", "字段", "分类", "输出", "规则", "按这套",
+		"照这个", "保持这个", "固定",
+	}
+	hasFuture := false
+	for _, m := range futureMarkers {
+		if strings.Contains(lower, m) {
+			hasFuture = true
+			break
+		}
+	}
+	if !hasFuture {
+		return false
+	}
+	for _, m := range workflowMarkers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
 	return false
 }
 
