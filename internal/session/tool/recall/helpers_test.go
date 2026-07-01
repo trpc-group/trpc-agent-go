@@ -79,6 +79,9 @@ func TestInvocationHelpers(t *testing.T) {
 	sessionKey, err = currentSessionKey(inv, "other")
 	require.NoError(t, err)
 	assert.Equal(t, "other", sessionKey.SessionID)
+	sessionKey, err = currentSessionKey(inv, " current ")
+	require.NoError(t, err)
+	assert.Equal(t, "sess", sessionKey.SessionID)
 
 	_, err = currentUserKey(nil)
 	require.Error(t, err)
