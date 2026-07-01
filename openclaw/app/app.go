@@ -2806,6 +2806,12 @@ func newAgent(
 		)
 	}
 	if deferToolSurface {
+		opts = appendDeferredSkillOverviewOptions(
+			opts,
+			cfg,
+			repo,
+			repoProvider,
+		)
 		searchTool := newDeferredCapabilitySearchTool(
 			deferredToolSurfaceConfig{
 				Model:         mdl,

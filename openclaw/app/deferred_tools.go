@@ -84,6 +84,31 @@ func baseLLMAgentOptions(
 	}
 }
 
+func appendDeferredSkillOverviewOptions(
+	opts []llmagent.Option,
+	cfg agentConfig,
+	repo *ocskills.Repository,
+	repoProvider skill.RepositoryProvider,
+) []llmagent.Option {
+	if repo == nil {
+		return opts
+	}
+	opts = append(
+		opts,
+		llmagent.WithSkills(repo),
+		llmagent.WithSkillRepositoryProvider(repoProvider),
+		llmagent.WithSkillScopeMode(cfg.EvolutionSkillScopeMode),
+		llmagent.WithAllowedSkillTools(),
+	)
+	if cfg.SkillsOverviewLimit > 0 {
+		opts = append(
+			opts,
+			llmagent.WithMaxOverviewSkills(cfg.SkillsOverviewLimit),
+		)
+	}
+	return opts
+}
+
 func openClawToolResultCompactionConfig() *llmagent.ToolResultCompactionConfig {
 	return &llmagent.ToolResultCompactionConfig{
 		KeepToolNames: []string{
