@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder"
 	iloss "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/loss"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 )
 
 // BackwardOptions configures backward-stage execution behavior.
@@ -50,7 +51,7 @@ type BackwardResult struct {
 
 func (e *engine) backward(
 	ctx context.Context,
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	profile *promptiter.Profile,
 	train *EvaluationResult,
 	losses []promptiter.CaseLoss,
@@ -134,7 +135,7 @@ func indexCaseResults(result *EvaluationResult) map[caseResultKey]CaseResult {
 
 func (e *engine) backwardCase(
 	ctx context.Context,
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	overrideIndex map[string]promptiter.SurfaceOverride,
 	evalCase CaseResult,
 	caseLoss promptiter.CaseLoss,
@@ -228,7 +229,7 @@ type indexedTraceStep struct {
 }
 
 func indexTraceSteps(
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	trace *atrace.Trace,
 ) (map[string]indexedTraceStep, error) {
 	if structure == nil {
@@ -245,7 +246,7 @@ func indexTraceSteps(
 		if step.NodeID == "" {
 			return nil, fmt.Errorf("trace step %q node id is empty", step.StepID)
 		}
-		if _, ok := structure.nodeIndex[step.NodeID]; !ok {
+		if _, ok := structure.NodeIndex[step.NodeID]; !ok {
 			return nil, fmt.Errorf("trace step %q references unknown node id %q", step.StepID, step.NodeID)
 		}
 		if _, ok := index[step.StepID]; ok {
@@ -291,7 +292,7 @@ func normalizeIncomingPackets(packets []backwarder.GradientPacket) []backwarder.
 }
 
 func buildBackwardRequest(
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	overrideIndex map[string]promptiter.SurfaceOverride,
 	traceIndex map[string]indexedTraceStep,
 	evalCase CaseResult,
@@ -299,7 +300,7 @@ func buildBackwardRequest(
 	incoming []backwarder.GradientPacket,
 	targetSurfaceSet targetSurfaceSet,
 ) (*backwarder.Request, error) {
-	node, ok := structure.nodeIndex[step.NodeID]
+	node, ok := structure.NodeIndex[step.NodeID]
 	if !ok {
 		return nil, fmt.Errorf("step %q references unknown node id %q", step.StepID, step.NodeID)
 	}
@@ -314,10 +315,10 @@ func buildBackwardRequest(
 			continue
 		}
 		seenSurfaces[surfaceID] = struct{}{}
-		if _, ok := structure.knownSurfaceIDs[surfaceID]; !ok {
+		if _, ok := structure.KnownSurfaceIDs[surfaceID]; !ok {
 			return nil, fmt.Errorf("surface id %q is unknown", surfaceID)
 		}
-		if _, ok := structure.surfaceIndex[surfaceID]; !ok {
+		if _, ok := structure.SurfaceIndex[surfaceID]; !ok {
 			continue
 		}
 		surface, err := resolveProfileSurface(structure, overrideIndex, surfaceID)

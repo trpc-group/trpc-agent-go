@@ -21,7 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	idecode "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/decode"
 	irunner "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/runner"
-	isurface "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/surface"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -391,7 +391,7 @@ func normalizeRequest(request *Request) (*Request, error) {
 	if request.Input == nil {
 		return nil, errors.New("input is nil")
 	}
-	surfaceIndex, err := isurface.BuildIndex(request.Surfaces)
+	surfaceIndex, err := profilecompiler.BuildIndex(request.Surfaces)
 	if err != nil {
 		return nil, fmt.Errorf("build surface index: %w", err)
 	}
@@ -422,7 +422,7 @@ func sanitizeBackwardResult(request *Request, result *Result) (*Result, error) {
 	if result == nil {
 		return nil, errors.New("backward result is nil")
 	}
-	surfaceIndex, err := isurface.BuildIndex(request.Surfaces)
+	surfaceIndex, err := profilecompiler.BuildIndex(request.Surfaces)
 	if err != nil {
 		return nil, fmt.Errorf("build surface index: %w", err)
 	}

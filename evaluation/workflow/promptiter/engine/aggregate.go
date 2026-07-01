@@ -18,6 +18,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 )
 
 // AggregationOptions configures aggregation-stage execution behavior.
@@ -36,7 +37,7 @@ type AggregationResult struct {
 
 func (e *engine) aggregate(
 	ctx context.Context,
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	backward *BackwardResult,
 	targetSurfaceSet targetSurfaceSet,
 	options AggregationOptions,
@@ -78,7 +79,7 @@ func (e *engine) aggregate(
 	}
 	if err := runIndexedParallel(ctx, len(surfaceIDs), parallelism, func(ctx context.Context, index int) error {
 		surfaceID := surfaceIDs[index]
-		surface, ok := structure.surfaceIndex[surfaceID]
+		surface, ok := structure.SurfaceIndex[surfaceID]
 		if !ok {
 			return fmt.Errorf("aggregated surface id %q is unknown", surfaceID)
 		}

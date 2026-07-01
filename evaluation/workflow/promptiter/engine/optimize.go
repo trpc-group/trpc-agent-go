@@ -18,6 +18,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 )
 
 // OptimizerOptions configures optimizer-stage execution behavior.
@@ -30,7 +31,7 @@ type OptimizerOptions struct {
 
 func (e *engine) optimize(
 	ctx context.Context,
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	profile *promptiter.Profile,
 	aggregation *AggregationResult,
 	targetSurfaceSet targetSurfaceSet,

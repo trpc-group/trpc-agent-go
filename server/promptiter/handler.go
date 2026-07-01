@@ -22,9 +22,9 @@ import (
 	"strings"
 	"time"
 
-	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
@@ -240,76 +240,19 @@ func (s *Server) validateTargetSurfaceIDs(ctx context.Context, targetSurfaceIDs 
 	if structure == nil {
 		return errors.New("structure is nil")
 	}
-	nodeIndex := make(map[string]astructure.Node, len(structure.Nodes))
-	for _, node := range structure.Nodes {
-		nodeIndex[node.NodeID] = node
-	}
-	toolDeclarationNodeIDs := make(map[string]struct{})
-	for _, surface := range structure.Surfaces {
-		if surface.Type != astructure.SurfaceTypeGlobalInstruction {
-			continue
-		}
-		node, ok := nodeIndex[surface.NodeID]
-		if !ok || node.Kind != astructure.NodeKindLLM {
-			continue
-		}
-		toolDeclarationNodeIDs[surface.NodeID] = struct{}{}
-	}
-	supportedSurfaceIDs := make(map[string]struct{}, len(structure.Surfaces))
-	for _, surface := range structure.Surfaces {
-		if surface.Type == astructure.SurfaceTypeTool {
-			if isPromptIterToolTargetSurface(surface, toolDeclarationNodeIDs) {
-				supportedSurfaceIDs[surface.SurfaceID] = struct{}{}
-			}
-			continue
-		}
-		if !isSupportedTargetSurfaceType(surface.Type) {
-			continue
-		}
-		supportedSurfaceIDs[surface.SurfaceID] = struct{}{}
+	compiled, err := profilecompiler.NewStructure(structure)
+	if err != nil {
+		return fmt.Errorf("compile structure for target surface validation: %w", err)
 	}
 	for _, surfaceID := range targetSurfaceIDs {
 		if surfaceID == "" {
 			return errors.New("target surface ids must not contain empty values")
 		}
-		if _, ok := supportedSurfaceIDs[surfaceID]; !ok {
+		if _, ok := compiled.SurfaceIndex[surfaceID]; !ok {
 			return fmt.Errorf("target surface id %q is unknown", surfaceID)
 		}
 	}
 	return nil
-}
-
-func isPromptIterToolTargetSurface(
-	surface astructure.Surface,
-	toolDeclarationNodeIDs map[string]struct{},
-) bool {
-	if _, ok := toolDeclarationNodeIDs[surface.NodeID]; !ok {
-		return false
-	}
-	if len(surface.Value.Tools) != 1 {
-		return false
-	}
-	toolID := surface.Value.Tools[0].ID
-	if toolID == "" {
-		return false
-	}
-	return surface.SurfaceID == astructure.SurfaceID(
-		surface.NodeID,
-		astructure.SurfaceTypeTool,
-		toolID,
-	)
-}
-
-func isSupportedTargetSurfaceType(surfaceType astructure.SurfaceType) bool {
-	switch surfaceType {
-	case astructure.SurfaceTypeInstruction,
-		astructure.SurfaceTypeGlobalInstruction,
-		astructure.SurfaceTypeFewShot,
-		astructure.SurfaceTypeModel:
-		return true
-	default:
-		return false
-	}
 }
 
 func newExecutionContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

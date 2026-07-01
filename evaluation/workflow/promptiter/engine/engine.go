@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder"
 	iprofile "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/profile"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -154,8 +155,8 @@ type RoundResult struct {
 
 // engine is the default Engine implementation.
 type engine struct {
-	// targetAgent exports the current PromptIter structure for the optimization target.
-	targetAgent agent.Agent
+	// structureSource describes the current PromptIter optimization target.
+	structureSource structureSource
 	// agentEvaluator executes train and validation evaluations through the shared evaluation framework.
 	agentEvaluator evaluation.AgentEvaluator
 	// backwarder computes sample-level gradient packets from terminal losses.
@@ -166,16 +167,78 @@ type engine struct {
 	optimizer optimizer.Optimizer
 }
 
+type structureSource interface {
+	Describe(ctx context.Context) (*astructure.Snapshot, error)
+	validate() error
+}
+
+type agentStructureSource struct {
+	targetAgent agent.Agent
+}
+
+func (s agentStructureSource) validate() error {
+	if s.targetAgent == nil {
+		return errors.New("target agent is nil")
+	}
+	return nil
+}
+
+func (s agentStructureSource) Describe(ctx context.Context) (*astructure.Snapshot, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	snapshot, err := astructure.Export(ctx, s.targetAgent)
+	if err != nil {
+		return nil, fmt.Errorf("export target agent structure: %w", err)
+	}
+	return profilecompiler.NormalizeStructureSnapshot(snapshot)
+}
+
+type snapshotStructureSource struct {
+	snapshot *astructure.Snapshot
+}
+
+func (s snapshotStructureSource) validate() error {
+	if s.snapshot == nil {
+		return errors.New("structure snapshot is nil")
+	}
+	return nil
+}
+
+func (s snapshotStructureSource) Describe(context.Context) (*astructure.Snapshot, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	return profilecompiler.NormalizeStructureSnapshot(s.snapshot)
+}
+
 // New creates an Engine implementation with injected collaborators.
-func New(ctx context.Context,
-	targetAgent agent.Agent,
+func New(ctx context.Context, opts ...Option) (Engine, error) {
+	options := newOptions(opts...)
+	return newEngine(
+		options.structureSource,
+		options.agentEvaluator,
+		options.backwarder,
+		options.aggregator,
+		options.optimizer,
+	)
+}
+
+func newEngine(
+	source structureSource,
 	agentEvaluator evaluation.AgentEvaluator,
 	backwarder backwarder.Backwarder,
 	aggregator aggregator.Aggregator,
-	optimizer optimizer.Optimizer) (Engine, error) {
+	optimizer optimizer.Optimizer,
+) (Engine, error) {
+	if source != nil {
+		if err := source.validate(); err != nil {
+			return nil, err
+		}
+	}
 	switch {
-	case targetAgent == nil:
-		return nil, errors.New("target agent is nil")
+	case source == nil:
+		return nil, errors.New("structure source is nil")
 	case agentEvaluator == nil:
 		return nil, errors.New("agent evaluator is nil")
 	case backwarder == nil:
@@ -186,11 +249,11 @@ func New(ctx context.Context,
 		return nil, errors.New("optimizer is nil")
 	default:
 		return &engine{
-			targetAgent:    targetAgent,
-			backwarder:     backwarder,
-			aggregator:     aggregator,
-			optimizer:      optimizer,
-			agentEvaluator: agentEvaluator,
+			structureSource: source,
+			backwarder:      backwarder,
+			aggregator:      aggregator,
+			optimizer:       optimizer,
+			agentEvaluator:  agentEvaluator,
 		}, nil
 	}
 }
@@ -225,7 +288,7 @@ func (e *engine) run(
 	if err := appendRunEvent(ctx, observer, EventKindStructureSnapshot, 0, snapshot); err != nil {
 		return nil, err
 	}
-	structure, err := newStructureState(snapshot)
+	structure, err := profilecompiler.NewStructure(snapshot)
 	if err != nil {
 		return nil, fmt.Errorf("create structure state: %w", err)
 	}
@@ -260,7 +323,7 @@ func (e *engine) run(
 	result := &RunResult{
 		Status:             RunStatusRunning,
 		CurrentRound:       0,
-		Structure:          structure.snapshot,
+		Structure:          structure.Snapshot,
 		BaselineValidation: baselineValidation,
 		AcceptedProfile:    iprofile.Clone(acceptedProfile),
 		Rounds:             make([]RoundResult, 0, request.MaxRounds),
@@ -349,8 +412,8 @@ func (e *engine) validateRunRequest(request *RunRequest) error {
 		return errors.New("aggregation surface parallelism must be non-negative")
 	case request.OptimizerOptions.SurfaceParallelism < 0:
 		return errors.New("optimizer surface parallelism must be non-negative")
-	case e.targetAgent == nil:
-		return errors.New("target agent is nil")
+	case e.structureSource == nil:
+		return errors.New("structure source is nil")
 	case e.agentEvaluator == nil:
 		return errors.New("agent evaluator is nil")
 	default:
@@ -359,24 +422,16 @@ func (e *engine) validateRunRequest(request *RunRequest) error {
 }
 
 func (e *engine) describeStructure(ctx context.Context) (*astructure.Snapshot, error) {
-	if e.targetAgent == nil {
-		return nil, errors.New("target agent is nil")
+	if e.structureSource == nil {
+		return nil, errors.New("structure source is nil")
 	}
-	snapshot, err := astructure.Export(ctx, e.targetAgent)
-	if err != nil {
-		return nil, fmt.Errorf("export target agent structure: %w", err)
-	}
-	projected, err := promptIterStructureSnapshot(snapshot)
-	if err != nil {
-		return nil, err
-	}
-	return projected, nil
+	return e.structureSource.Describe(ctx)
 }
 
 func (e *engine) executeRound(
 	ctx context.Context,
 	request *RunRequest,
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	targetSurfaceSet targetSurfaceSet,
 	observer Observer,
 	evaluationOptions EvaluationOptions,
