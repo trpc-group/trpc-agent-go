@@ -83,3 +83,61 @@ func TestNormalizeTime(t *testing.T) {
 	tm := time.Date(2026, 7, 1, 12, 0, 0, 0, loc)
 	require.Equal(t, tm.UTC(), normalizeTime(tm))
 }
+
+func TestNormalizerEdgeBranches(t *testing.T) {
+	norm, err := NewNormalizer().Normalize(nil)
+	require.NoError(t, err)
+	require.Nil(t, norm)
+	require.Equal(t, "event-7", eventLogicalKey(nil, 7))
+	require.Equal(t, json.RawMessage(nil), canonicalRaw(nil))
+	require.Equal(t, json.RawMessage(`{`), canonicalRaw(json.RawMessage(`{`)))
+
+	base := time.Date(2026, 7, 1, 1, 2, 3, 4, time.FixedZone("CST", 8*3600))
+	lastUpdated := base
+	eventTime := base.Add(time.Hour)
+	snap := &SessionSnapshot{
+		TrackEvents: map[string]*session.TrackEvents{
+			"nil": nil,
+			"trace": {
+				Track: "trace",
+				Events: []session.TrackEvent{{
+					Track:     "trace",
+					Payload:   json.RawMessage(`{"b":2,"a":1}`),
+					Timestamp: base,
+				}},
+			},
+		},
+		SummaryMap: map[string]*session.Summary{
+			"nil": nil,
+			"ok":  &session.Summary{Summary: "summary", UpdatedAt: base},
+		},
+		Memories: []*memory.Entry{
+			nil,
+			{
+				ID:        "memory-with-nil-body",
+				CreatedAt: base,
+				UpdatedAt: base,
+			},
+			{
+				ID:        "memory-with-time-fields",
+				CreatedAt: base,
+				UpdatedAt: base,
+				Memory: &memory.Memory{
+					LastUpdated: &lastUpdated,
+					EventTime:   &eventTime,
+				},
+			},
+		},
+	}
+
+	got, err := NewNormalizer().Normalize(snap)
+	require.NoError(t, err)
+	require.Nil(t, got.TrackEvents["nil"])
+	require.JSONEq(t, `{"a":1,"b":2}`, string(got.TrackEvents["trace"].Events[0].Payload))
+	require.Nil(t, got.SummaryMap["nil"])
+	require.Equal(t, base, got.SummaryMap["ok"].UpdatedAt)
+	require.Nil(t, got.Memories[0])
+	require.Nil(t, got.Memories[1].Memory)
+	require.Equal(t, lastUpdated.UTC(), *got.Memories[2].Memory.LastUpdated)
+	require.Equal(t, eventTime.UTC(), *got.Memories[2].Memory.EventTime)
+}

@@ -13,6 +13,7 @@ package replaytest
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +50,33 @@ func TestFakeSummarizerDifferentInput(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotEqual(t, oneText, twoText)
+}
+
+func TestFakeSummarizerEdgeBranches(t *testing.T) {
+	summarizer := NewFakeSummarizer()
+	text, err := summarizer.Summarize(context.Background(), nil)
+	require.NoError(t, err)
+	require.Equal(t, "summary: full events=0 last=''", text)
+
+	require.Equal(t, "full", summaryScope(nil))
+	require.Equal(t, "branch", summaryScope(session.NewSession("app", "user", "sess:branch")))
+	require.Equal(t, "", lastEventText(nil))
+	require.Equal(t, "", lastEventText(session.NewSession("app", "user", "empty")))
+	require.Equal(t, "abc", truncateSummaryText("abc", 0))
+	require.Equal(t, "abc", truncateSummaryText("abc", 10))
+	require.Equal(t, "ab", truncateSummaryText("abcdef", 2))
+
+	evt := event.NewResponseEvent("inv", "assistant", nil)
+	sess := session.NewSession("app", "user", "sess:branch", session.WithSessionEvents([]event.Event{*evt}))
+	text, err = summarizer.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	require.Equal(t, "summary: branch events=1 last=''", text)
+
+	long := strings.Repeat("x", 100)
+	sess = session.NewSession("app", "user", "sess", session.WithSessionEvents(eventForSummary(long)))
+	text, err = summarizer.Summarize(context.Background(), sess)
+	require.NoError(t, err)
+	require.Contains(t, text, "last='"+strings.Repeat("x", 80)+"'")
 }
 
 func TestFakeSummarizerOptions(t *testing.T) {

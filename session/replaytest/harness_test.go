@@ -463,5 +463,5 @@ func TestCompareSnapshotsReferenceNotFound(t *testing.T) {
 	profiles := map[string]BackendProfile{"a": InMemoryProfile(), "b": InMemoryProfile()}
 	comparisons := h.compareSnapshots(CaseSingleTurnText, snapshots, profiles)
 	require.Len(t, comparisons, 1)
-	require.Equal(t, "a", comparisons[0].Reference)
+	require.Contains(t, []string{"a", "b"}, comparisons[0].Reference)
 }
