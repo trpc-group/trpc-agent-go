@@ -682,6 +682,50 @@ func TestScanDelta_DetectsCorrection(t *testing.T) {
 	assert.True(t, ctx.HasUserCorrection)
 }
 
+func TestScanDelta_DetectsChineseCorrection(t *testing.T) {
+	sess := newTestSession()
+	now := time.Now()
+	sess.Events = append(sess.Events,
+		event.Event{
+			Timestamp: now,
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleAssistant, Content: "这里是结果"},
+			}}},
+		},
+		event.Event{
+			Timestamp: now.Add(time.Second),
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleUser, Content: "不是这样，应该按一手来源和发布日期整理"},
+			}}},
+		},
+	)
+
+	_, ctx := scanDelta(sess, time.Time{})
+	assert.True(t, ctx.HasUserCorrection)
+}
+
+func TestScanDelta_PositiveChineseFeedbackIsNotCorrection(t *testing.T) {
+	sess := newTestSession()
+	now := time.Now()
+	sess.Events = append(sess.Events,
+		event.Event{
+			Timestamp: now,
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleAssistant, Content: "这里是结果"},
+			}}},
+		},
+		event.Event{
+			Timestamp: now.Add(time.Second),
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleUser, Content: "这个清单挺好，后续希望保持这个结构"},
+			}}},
+		},
+	)
+
+	_, ctx := scanDelta(sess, time.Time{})
+	assert.False(t, ctx.HasUserCorrection)
+}
+
 func TestScanDelta_DetectsRecoveredError(t *testing.T) {
 	sess := newTestSession()
 	now := time.Now()

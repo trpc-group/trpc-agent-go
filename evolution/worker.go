@@ -1300,6 +1300,8 @@ func looksLikeCorrection(content string) bool {
 	markers := []string{
 		"no,", "wrong", "actually", "instead", "not what i",
 		"that's incorrect", "please fix", "try again",
+		"不对", "错了", "不是", "而是", "请修正",
+		"请修改", "改成", "重新来", "重来",
 	}
 	for _, m := range markers {
 		if strings.Contains(lower, m) {
