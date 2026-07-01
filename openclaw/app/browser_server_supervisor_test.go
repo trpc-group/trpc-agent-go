@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -269,6 +270,61 @@ func TestManagedBrowserServerHelpers(t *testing.T) {
 	require.True(t, isManagedBrowserServerHost("localhost"))
 	require.True(t, isManagedBrowserServerHost("127.0.0.1"))
 	require.False(t, isManagedBrowserServerHost("example.com"))
+}
+
+func TestBrowserServerProcessDoneError(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, isBrowserServerProcessDone(os.ErrProcessDone))
+	require.True(t, isBrowserServerProcessDone(syscall.ESRCH))
+	require.False(t, isBrowserServerProcessDone(fmt.Errorf("still running")))
+}
+
+func TestBrowserServerSupervisorCloseExitedProcess(t *testing.T) {
+	t.Parallel()
+
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	require.NoError(t, cmd.Start())
+	require.NoError(t, cmd.Wait())
+
+	doneCh := make(chan browserServerProcessExit)
+	close(doneCh)
+	sup := &browserServerSup{
+		cmd:    cmd,
+		doneCh: doneCh,
+		state:  browserServerStateRunning,
+	}
+
+	require.NoError(t, sup.Close())
+}
+
+func TestBrowserServerSupervisorCloseUnexpectedSignalError(t *testing.T) {
+	process, err := os.FindProcess(os.Getpid())
+	require.NoError(t, err)
+	oldSignal := browserServerSignal
+	oldKill := browserServerKill
+	browserServerSignal = func(*os.Process, os.Signal) error {
+		return errors.New("interrupt failed")
+	}
+	browserServerKill = func(*os.Process) error {
+		return errors.New("kill failed")
+	}
+	t.Cleanup(func() {
+		browserServerSignal = oldSignal
+		browserServerKill = oldKill
+	})
+
+	sup := &browserServerSup{
+		cmd: &exec.Cmd{
+			Process: process,
+		},
+		doneCh: make(chan browserServerProcessExit),
+		state:  browserServerStateRunning,
+	}
+
+	err = sup.Close()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "stop browser server")
 }
 
 func TestBrowserServerWorkDirHelpers(t *testing.T) {
