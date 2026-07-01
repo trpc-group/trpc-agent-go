@@ -36,14 +36,6 @@ func InMemoryFactory() BackendFactory {
 	}
 }
 
-// SQLiteFactory returns the SQLite factory placeholder and profile.
-// Concrete SQLite adapters live in nested modules and are wired by later work.
-func SQLiteFactory() BackendFactory {
-	return func() (session.Service, memory.Service, BackendProfile, error) {
-		return nil, nil, SQLiteProfile(), ErrBackendNotConfigured
-	}
-}
-
 // RedisFactory returns a placeholder factory for Redis backends.
 func RedisFactory() BackendFactory {
 	return optionalBackendFactory("redis", "REDIS_ADDR")
