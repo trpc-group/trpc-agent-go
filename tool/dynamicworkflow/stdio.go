@@ -21,7 +21,12 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
+
+var errWorkflowGuestExitTimeout = errors.New("dynamicworkflow: guest did not exit after completion")
+
+const workflowGuestExitGrace = 250 * time.Millisecond
 
 // LocalRunner executes workflow Python on the local host through a stdio
 // callback protocol. It is intended only for development or an environment
@@ -133,7 +138,7 @@ func runWorkflowGuest(
 			break
 		}
 	}
-	return finishWorkflowGuest(guest, scanner, calls, writeErr, state)
+	return finishWorkflowGuest(ctx, guest, scanner, calls, writeErr, state)
 }
 
 type workflowWriteError struct {
@@ -228,6 +233,7 @@ func writeWorkflowGuestResponse(
 }
 
 func finishWorkflowGuest(
+	ctx context.Context,
 	guest *workflowGuestProcess,
 	scanner *bufio.Scanner,
 	calls *sync.WaitGroup,
@@ -244,11 +250,14 @@ func finishWorkflowGuest(
 		state.guestErr = fmt.Errorf("dynamicworkflow: read guest output: %w", scanErr)
 	}
 	_ = guest.stdin.Close()
-	waitErr := guest.cmd.Wait()
+	waitErr := waitWorkflowGuest(ctx, guest)
 	if state.guestErr != nil {
 		return Result{}, guestErrorWithStderr(state.guestErr, guest.stderr.String())
 	}
 	if waitErr != nil {
+		if errors.Is(waitErr, errWorkflowGuestExitTimeout) && state.completed != nil {
+			return *state.completed, nil
+		}
 		return Result{}, guestErrorWithStderr(
 			fmt.Errorf("dynamicworkflow: wait for guest: %w", waitErr),
 			guest.stderr.String(),
@@ -261,6 +270,34 @@ func finishWorkflowGuest(
 		)
 	}
 	return *state.completed, nil
+}
+
+func waitWorkflowGuest(ctx context.Context, guest *workflowGuestProcess) error {
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- guest.cmd.Wait()
+	}()
+	timer := time.NewTimer(workflowGuestExitGrace)
+	defer timer.Stop()
+	select {
+	case err := <-waitCh:
+		return err
+	case <-ctx.Done():
+		killWorkflowGuest(guest)
+		<-waitCh
+		return ctx.Err()
+	case <-timer.C:
+		killWorkflowGuest(guest)
+		<-waitCh
+		return errWorkflowGuestExitTimeout
+	}
+}
+
+func killWorkflowGuest(guest *workflowGuestProcess) {
+	if guest == nil || guest.cmd == nil || guest.cmd.Process == nil {
+		return
+	}
+	_ = guest.cmd.Process.Kill()
 }
 
 func guestErrorWithStderr(err error, stderr string) error {

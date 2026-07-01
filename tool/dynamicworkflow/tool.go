@@ -230,6 +230,17 @@ func (g *workflowGateway) callTool(ctx context.Context, call Call) (json.RawMess
 	if err := json.Unmarshal(call.Args, &args); err != nil || args == nil {
 		return nil, fmt.Errorf("dynamicworkflow: tool %q requires a JSON object argument", call.Name)
 	}
+	permissionResult, err := g.checkToolPermission(ctx, call, candidate)
+	if err != nil {
+		return nil, fmt.Errorf("dynamicworkflow: check permission for tool %q: %w", call.Name, err)
+	}
+	if permissionResult != nil {
+		raw, err := json.Marshal(permissionResult)
+		if err != nil {
+			return nil, fmt.Errorf("dynamicworkflow: encode permission result for tool %q: %w", call.Name, err)
+		}
+		return raw, nil
+	}
 	value, err := candidate.Call(ctx, call.Args)
 	if err != nil {
 		return nil, fmt.Errorf("dynamicworkflow: call tool %q: %w", call.Name, err)
@@ -239,6 +250,52 @@ func (g *workflowGateway) callTool(ctx context.Context, call Call) (json.RawMess
 		return nil, fmt.Errorf("dynamicworkflow: encode result from tool %q: %w", call.Name, err)
 	}
 	return raw, nil
+}
+
+func (g *workflowGateway) checkToolPermission(
+	ctx context.Context,
+	call Call,
+	candidate tool.CallableTool,
+) (*tool.PermissionResult, error) {
+	req := &tool.PermissionRequest{
+		Tool:        candidate,
+		ToolName:    call.Name,
+		ToolCallID:  call.ID,
+		Declaration: candidate.Declaration(),
+		Arguments:   append([]byte(nil), call.Args...),
+		Metadata:    tool.MetadataOf(candidate),
+	}
+	if checker, ok := candidate.(tool.PermissionChecker); ok {
+		decision, err := checker.CheckPermission(ctx, req)
+		result, err := normalizeWorkflowToolPermissionResult(req, decision, err)
+		if result != nil || err != nil {
+			return result, err
+		}
+	}
+	if g == nil || g.parent == nil || g.parent.RunOptions.ToolPermissionPolicy == nil {
+		return nil, nil
+	}
+	decision, err := g.parent.RunOptions.ToolPermissionPolicy.CheckToolPermission(ctx, req)
+	return normalizeWorkflowToolPermissionResult(req, decision, err)
+}
+
+func normalizeWorkflowToolPermissionResult(
+	req *tool.PermissionRequest,
+	decision tool.PermissionDecision,
+	checkErr error,
+) (*tool.PermissionResult, error) {
+	if checkErr != nil {
+		return nil, checkErr
+	}
+	decision, err := tool.NormalizePermissionDecision(decision)
+	if err != nil {
+		return nil, err
+	}
+	if decision.Action == tool.PermissionActionAllow {
+		return nil, nil
+	}
+	result := tool.PermissionResultFor(req.ToolName, decision)
+	return &result, nil
 }
 
 func (g *workflowGateway) callAgent(ctx context.Context, call Call) (json.RawMessage, error) {
@@ -252,7 +309,10 @@ func (g *workflowGateway) callAgent(ctx context.Context, call Call) (json.RawMes
 	}
 	parent := parentWithLiveSession(g.parent)
 	childKey := workflowChildKey(parent, g.workflow, req.instanceID)
-	unlock := g.lockChildInstance(childKey)
+	unlock, err := g.lockChildInstance(ctx, childKey)
+	if err != nil {
+		return nil, err
+	}
 	defer unlock()
 	if err := g.acquireAgentSlot(ctx); err != nil {
 		return nil, err
@@ -270,13 +330,11 @@ func (g *workflowGateway) callAgent(ctx context.Context, call Call) (json.RawMes
 			TriggerName: g.toolName,
 		}),
 	}
-	if req.dynamic {
-		dynamicOpt, err := g.dynamicAgentInvocationOption(ctx, candidate, req)
-		if err != nil {
-			return nil, err
-		}
-		invocationOptions = append(invocationOptions, dynamicOpt)
+	childSurfaceOpt, err := g.workflowChildInvocationOption(ctx, candidate, req)
+	if err != nil {
+		return nil, err
 	}
+	invocationOptions = append(invocationOptions, childSurfaceOpt)
 	child := parent.Clone(invocationOptions...)
 	if err := g.appendChildUserMessage(ctx, child); err != nil {
 		return nil, err
@@ -320,14 +378,24 @@ func (g *workflowGateway) releaseAgentSlot() {
 	<-g.agentSlots
 }
 
-func (g *workflowGateway) lockChildInstance(key string) func() {
+func (g *workflowGateway) lockChildInstance(ctx context.Context, key string) (func(), error) {
 	if g == nil || key == "" {
-		return func() {}
+		return func() {}, nil
 	}
-	value, _ := g.instanceLocks.LoadOrStore(key, &sync.Mutex{})
-	mu := value.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+	value, _ := g.instanceLocks.LoadOrStore(key, newChildInstanceLock())
+	lock := value.(chan struct{})
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-lock:
+		return func() { lock <- struct{}{} }, nil
+	}
+}
+
+func newChildInstanceLock() chan struct{} {
+	lock := make(chan struct{}, 1)
+	lock <- struct{}{}
+	return lock
 }
 
 // clearInheritedWorkflowRunOptions prevents root run-scoped overrides from

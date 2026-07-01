@@ -364,12 +364,12 @@ func cleanPathSegment(value string) string {
 	return replacer.Replace(value)
 }
 
-func (g *workflowGateway) dynamicAgentInvocationOption(
+func (g *workflowGateway) workflowChildInvocationOption(
 	ctx context.Context,
 	tmpl agentTemplate,
 	req agentCallRequest,
 ) (agent.InvocationOptions, error) {
-	patch, err := g.dynamicAgentPatch(ctx, tmpl, req.spec)
+	patch, err := g.workflowChildPatch(ctx, tmpl, req.spec)
 	if err != nil {
 		return nil, err
 	}
@@ -492,21 +492,21 @@ func normalizeStrictSchemaValue(value any) {
 	}
 }
 
-func (g *workflowGateway) dynamicAgentPatch(
+func (g *workflowGateway) workflowChildPatch(
 	ctx context.Context,
 	tmpl agentTemplate,
 	spec AgentSpec,
 ) (agent.SurfacePatch, error) {
 	var patch agent.SurfacePatch
-	if spec.Instruction != "" {
-		patch.SetInstruction(spec.Instruction)
-	}
 	selectedTools, err := g.selectAgentTools(ctx, tmpl, spec.Tools)
 	if err != nil {
 		return patch, err
 	}
 	patch.SetTools(selectedTools)
 	patch.SetSuppressSubAgentTransfer()
+	if spec.Instruction != "" {
+		patch.SetInstruction(spec.Instruction)
+	}
 	if spec.Skills != nil {
 		repo, err := g.selectAgentSkills(ctx, tmpl, spec.Skills)
 		if err != nil {

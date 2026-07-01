@@ -494,6 +494,71 @@ func TestWorkflowCoordinatesExplicitAgentAndTool(t *testing.T) {
 	require.Contains(t, persisted[1].FilterKey, "/reviewer")
 }
 
+func TestWorkflowCallToolHonorsPermissionBoundaries(t *testing.T) {
+	reviewer := &testAgent{name: "reviewer"}
+
+	t.Run("tool checker deny skips execution and run policy", func(t *testing.T) {
+		sensitive := &permissionTestTool{
+			name:     "sensitive",
+			decision: tool.DenyPermission("blocked by tool"),
+		}
+		workflow, err := NewTool(scriptedRuntime{run: func(ctx context.Context, handler CallHandler) (Result, error) {
+			raw, err := handler.HandleWorkflowCall(ctx, Call{
+				ID: "tool-1", Kind: CallKindTool, Name: "sensitive", Args: json.RawMessage(`{"id":"42"}`),
+			})
+			return Result{Value: raw}, err
+		}}, []agent.Agent{reviewer}, WithCodeCallableTools(sensitive))
+		require.NoError(t, err)
+
+		policyCalled := false
+		parent := agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+			agent.WithInvocationRunOptions(agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(
+				func(context.Context, *tool.PermissionRequest) (tool.PermissionDecision, error) {
+					policyCalled = true
+					return tool.AllowPermission(), nil
+				},
+			))),
+		)
+
+		value, err := workflow.Call(agent.NewInvocationContext(context.Background(), parent), []byte(`{"code":"return None"}`))
+		require.NoError(t, err)
+		result := value.(Result)
+		require.JSONEq(t, `{"status":"denied","tool":"sensitive","reason":"blocked by tool"}`, string(result.Value))
+		require.False(t, sensitive.called)
+		require.False(t, policyCalled)
+	})
+
+	t.Run("run policy ask skips execution", func(t *testing.T) {
+		sensitive := &permissionTestTool{name: "sensitive", decision: tool.AllowPermission()}
+		workflow, err := NewTool(scriptedRuntime{run: func(ctx context.Context, handler CallHandler) (Result, error) {
+			raw, err := handler.HandleWorkflowCall(ctx, Call{
+				ID: "tool-1", Kind: CallKindTool, Name: "sensitive", Args: json.RawMessage(`{"id":"42"}`),
+			})
+			return Result{Value: raw}, err
+		}}, []agent.Agent{reviewer}, WithCodeCallableTools(sensitive))
+		require.NoError(t, err)
+
+		parent := agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+			agent.WithInvocationRunOptions(agent.NewRunOptions(agent.WithToolPermissionPolicyFunc(
+				func(_ context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+					require.Equal(t, "sensitive", req.ToolName)
+					require.Equal(t, "tool-1", req.ToolCallID)
+					require.JSONEq(t, `{"id":"42"}`, string(req.Arguments))
+					return tool.AskPermission("needs approval"), nil
+				},
+			))),
+		)
+
+		value, err := workflow.Call(agent.NewInvocationContext(context.Background(), parent), []byte(`{"code":"return None"}`))
+		require.NoError(t, err)
+		result := value.(Result)
+		require.JSONEq(t, `{"status":"approval_required","tool":"sensitive","reason":"needs approval"}`, string(result.Value))
+		require.False(t, sensitive.called)
+	})
+}
+
 func TestWorkflowForwardsChildEventsWhenRunnerForwarderIsAttached(t *testing.T) {
 	reviewer := &testAgent{name: "reviewer", response: "done"}
 	workflow, err := NewTool(scriptedRuntime{run: func(ctx context.Context, handler CallHandler) (Result, error) {
@@ -643,6 +708,49 @@ func TestWorkflowDynamicAgentSpecInheritsTemplateCapabilitiesWhenOmitted(t *test
 	require.Equal(t, []string{"lookup", "search"}, toolNames(selectedTools))
 	_, overridesSkills := patch.SkillRepository()
 	require.False(t, overridesSkills, "omitted skills must inherit the template repository")
+}
+
+func TestWorkflowPlainAgentGetsCapabilityBoundaryPatch(t *testing.T) {
+	lookup := &testTool{name: "lookup"}
+	reviewer := &testAgent{
+		name: "reviewer",
+		tools: []tool.Tool{
+			lookup,
+			&testTool{name: "workspace_exec"},
+		},
+		userToolNames: map[string]bool{"lookup": true},
+		response:      "approved",
+	}
+	workflow, err := NewTool(scriptedRuntime{run: func(ctx context.Context, handler CallHandler) (Result, error) {
+		raw, err := handler.HandleWorkflowCall(ctx, Call{
+			ID: "agent-1", Kind: CallKindAgent,
+			Args: json.RawMessage(`{"input":"review it"}`),
+		})
+		return Result{Value: raw}, err
+	}}, []agent.Agent{reviewer})
+	require.NoError(t, err)
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(&testAgent{name: "root"}),
+		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
+	)
+	appender.Attach(parent, func(context.Context, *event.Event) error { return nil })
+
+	_, err = workflow.Call(agent.NewInvocationContext(context.Background(), parent), []byte(`{"code":"return None"}`))
+	require.NoError(t, err)
+
+	child := reviewer.lastInvocation()
+	require.NotNil(t, child)
+	rootNode := agent.InvocationSurfaceRootNodeID(child)
+	require.NotEmpty(t, rootNode)
+	patch, ok := surfacepatch.PatchForNode(child.RunOptions.CustomAgentConfigs, rootNode)
+	require.True(t, ok)
+	selectedTools, ok := patch.Tools()
+	require.True(t, ok)
+	require.Equal(t, []string{"lookup"}, toolNames(selectedTools))
+	require.True(t, patch.SuppressSubAgentTransfer())
+	_, overridesInstruction := patch.Instruction()
+	require.False(t, overridesInstruction)
 }
 
 func TestWorkflowDynamicAgentSpecSetsStructuredOutput(t *testing.T) {
@@ -1093,12 +1201,19 @@ func TestWorkflowGatewayAgentErrorBranches(t *testing.T) {
 func TestWorkflowGatewayHelperBranches(t *testing.T) {
 	require.NoError(t, (*workflowGateway)(nil).acquireAgentSlot(context.Background()))
 	(*workflowGateway)(nil).releaseAgentSlot()
-	(*workflowGateway)(nil).lockChildInstance("")()
+	unlock, err := (*workflowGateway)(nil).lockChildInstance(context.Background(), "")
+	require.NoError(t, err)
+	unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	gateway := &workflowGateway{agentSlots: make(chan struct{})}
 	require.ErrorIs(t, gateway.acquireAgentSlot(ctx), context.Canceled)
+	unlock, err = gateway.lockChildInstance(context.Background(), "shared")
+	require.NoError(t, err)
+	_, err = gateway.lockChildInstance(ctx, "shared")
+	require.ErrorIs(t, err, context.Canceled)
+	unlock()
 
 	parent := agent.NewInvocation(agent.WithInvocationSession(
 		&session.Session{ID: "snapshot", AppName: "app", UserID: "user"},
@@ -1506,6 +1621,29 @@ func (t *testTool) Call(ctx context.Context, raw []byte) (any, error) {
 		return nil, fmt.Errorf("missing test tool callback")
 	}
 	return t.call(ctx, raw)
+}
+
+type permissionTestTool struct {
+	name     string
+	decision tool.PermissionDecision
+	err      error
+	called   bool
+}
+
+func (t *permissionTestTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name, Description: t.name + " tool"}
+}
+
+func (t *permissionTestTool) Call(context.Context, []byte) (any, error) {
+	t.called = true
+	return map[string]any{"ok": true}, nil
+}
+
+func (t *permissionTestTool) CheckPermission(
+	context.Context,
+	*tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	return t.decision, t.err
 }
 
 func normalizeWorkflowResult(t *testing.T, raw []byte) string {

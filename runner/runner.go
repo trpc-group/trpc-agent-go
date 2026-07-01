@@ -725,6 +725,19 @@ func (r *runner) Run(
 	livesession.Attach(invocation, sess)
 	barrier.Enable(invocation)
 
+	rootAgentEventCh := make(chan *event.Event, runnerEventChannelBufferSize(invocation))
+	forwardedEventCh, forwardedEventDone := attachRunnerEventForwarder(invocation)
+	processedEventCh := r.processAgentEvents(
+		execCtx,
+		sess,
+		invocation,
+		rootAgentEventCh,
+		forwardedEventCh,
+		forwardedEventDone,
+		flushChan,
+		handle,
+	)
+
 	// Run the agent and get the event channel.
 	startCtx, startSpan, startStarted := startRunnerLatencySpan(
 		execCtx,
@@ -736,6 +749,7 @@ func (r *runner) Run(
 	finishRunnerLatencySpan(startSpan, startStarted, err)
 	if err != nil {
 		r.persistAgentRunError(execCtx, currentTurnSession, invocation, ag, err)
+		close(rootAgentEventCh)
 		steer.Clear(invocation)
 		r.unregisterRun(ro.RequestID)
 		execCancel()
@@ -743,15 +757,8 @@ func (r *runner) Run(
 		return nil, err
 	}
 
-	// Process the agent events and emit them to the output channel.
-	return r.processAgentEvents(
-		execCtx,
-		sess,
-		invocation,
-		agentEventCh,
-		flushChan,
-		handle,
-	), nil
+	go forwardRootAgentEvents(execCtx, agentEventCh, rootAgentEventCh)
+	return processedEventCh, nil
 }
 
 func (r *runner) newRunInvocation(
@@ -1271,11 +1278,55 @@ func (r *runner) processAgentEvents(
 	sess *session.Session,
 	invocation *agent.Invocation,
 	agentEventCh <-chan *event.Event,
+	forwardedEventCh chan *forwardedEvent,
+	forwardedEventDone chan struct{},
 	flushChan chan *flush.FlushRequest,
 	handle *runHandle,
 ) chan *event.Event {
 	processedEventCh := make(chan *event.Event, cap(agentEventCh))
-	forwardedEventCh := make(chan *forwardedEvent, 64)
+	if cap(processedEventCh) == 0 {
+		processedEventCh = make(chan *event.Event, defaultRunnerEventBufferSize)
+	}
+	if forwardedEventCh == nil {
+		forwardedEventCh = make(chan *forwardedEvent, defaultRunnerEventBufferSize)
+	}
+	if forwardedEventDone == nil {
+		forwardedEventDone = make(chan struct{})
+	}
+	loop := &eventLoopContext{
+		sess:                      sess,
+		invocation:                invocation,
+		agentEventCh:              agentEventCh,
+		forwardedEventCh:          forwardedEventCh,
+		forwardedEventDone:        forwardedEventDone,
+		flushChan:                 flushChan,
+		processedEventCh:          processedEventCh,
+		runHandle:                 handle,
+		baselineFinalResponseID:   baselineFinalResponseID(sess, invocation.RunOptions.RuntimeState),
+		priorAssistantResponseIDs: collectPriorAssistantResponseIDs(sess),
+		streamFilter: graph.NewStreamModeFilter(
+			invocation.RunOptions.StreamModeEnabled,
+			invocation.RunOptions.StreamModes,
+		),
+	}
+	runCtx := agent.CloneContext(ctx)
+	go r.runEventLoop(runCtx, loop)
+	return processedEventCh
+}
+
+const defaultRunnerEventBufferSize = 64
+
+func runnerEventChannelBufferSize(invocation *agent.Invocation) int {
+	if size := agent.GetEventChannelBufferSize(invocation); size > defaultRunnerEventBufferSize {
+		return size
+	}
+	return defaultRunnerEventBufferSize
+}
+
+func attachRunnerEventForwarder(
+	invocation *agent.Invocation,
+) (chan *forwardedEvent, chan struct{}) {
+	forwardedEventCh := make(chan *forwardedEvent, defaultRunnerEventBufferSize)
 	forwardedEventDone := make(chan struct{})
 	eventstream.Attach(invocation, func(ctx context.Context, evt *event.Event) error {
 		request := &forwardedEvent{event: evt, ack: make(chan error, 1)}
@@ -1298,25 +1349,33 @@ func (r *runner) processAgentEvents(
 			return err
 		}
 	})
-	loop := &eventLoopContext{
-		sess:                      sess,
-		invocation:                invocation,
-		agentEventCh:              agentEventCh,
-		forwardedEventCh:          forwardedEventCh,
-		forwardedEventDone:        forwardedEventDone,
-		flushChan:                 flushChan,
-		processedEventCh:          processedEventCh,
-		runHandle:                 handle,
-		baselineFinalResponseID:   baselineFinalResponseID(sess, invocation.RunOptions.RuntimeState),
-		priorAssistantResponseIDs: collectPriorAssistantResponseIDs(sess),
-		streamFilter: graph.NewStreamModeFilter(
-			invocation.RunOptions.StreamModeEnabled,
-			invocation.RunOptions.StreamModes,
-		),
+	return forwardedEventCh, forwardedEventDone
+}
+
+func forwardRootAgentEvents(
+	ctx context.Context,
+	source <-chan *event.Event,
+	target chan<- *event.Event,
+) {
+	defer close(target)
+	if source == nil {
+		return
 	}
-	runCtx := agent.CloneContext(ctx)
-	go r.runEventLoop(runCtx, loop)
-	return processedEventCh
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-source:
+			if !ok {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case target <- evt:
+			}
+		}
+	}
 }
 
 // runEventLoop drives the main event processing loop for a single invocation.

@@ -128,6 +128,37 @@ func TestRunnerForwardedEventDoesNotOverrideRootCompletion(t *testing.T) {
 	require.Equal(t, []string{"child result", "root result"}, sessionAssistantContents(sess))
 }
 
+func TestRunnerForwarderIsAvailableDuringAgentRun(t *testing.T) {
+	service := sessioninmemory.NewSessionService()
+	ag := &synchronousEventForwardingAgent{}
+	r := NewRunner("event-forwarding-sync", ag, WithSessionService(service))
+	defer r.Close()
+
+	events, err := r.Run(
+		context.Background(),
+		"user",
+		"session",
+		model.NewUserMessage("start"),
+	)
+	require.NoError(t, err)
+
+	var authors []string
+	for evt := range events {
+		if evt != nil {
+			authors = append(authors, evt.Author)
+		}
+	}
+	require.True(t, ag.forwarded)
+	require.Contains(t, authors, "child-agent")
+	require.Contains(t, authors, "root-agent")
+
+	sess, err := service.GetSession(context.Background(), session.Key{
+		AppName: "event-forwarding-sync", UserID: "user", SessionID: "session",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"child result", "root result"}, sessionAssistantContents(sess))
+}
+
 func TestForwardedEventIsExcludedFromRootCompletionCapture(t *testing.T) {
 	r := &runner{}
 	rootSession := session.NewSession("app", "user", "session")
@@ -235,6 +266,43 @@ func (a *eventForwardingChildAgent) Info() agent.Info {
 }
 func (a *eventForwardingChildAgent) SubAgents() []agent.Agent { return nil }
 func (a *eventForwardingChildAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
+type synchronousEventForwardingAgent struct {
+	forwarded bool
+}
+
+func (a *synchronousEventForwardingAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	child := inv.Clone(
+		agent.WithInvocationAgent(&eventForwardingChildAgent{}),
+		agent.WithInvocationEventFilterKey(inv.GetEventFilterKey()+"/child-agent"),
+	)
+	childEvent := eventstreamResponseEvent(child.InvocationID, "child-agent", "child result")
+	agent.InjectIntoEvent(child, childEvent)
+	forwarded, err := eventstream.Invoke(ctx, child, childEvent)
+	if err != nil {
+		return nil, err
+	}
+	a.forwarded = forwarded
+
+	ch := make(chan *event.Event, 1)
+	rootEvent := eventstreamResponseEvent(inv.InvocationID, "root-agent", "root result")
+	agent.InjectIntoEvent(inv, rootEvent)
+	ch <- rootEvent
+	close(ch)
+	return ch, nil
+}
+
+func (a *synchronousEventForwardingAgent) Tools() []tool.Tool { return nil }
+func (a *synchronousEventForwardingAgent) Info() agent.Info {
+	return agent.Info{Name: "root-agent"}
+}
+func (a *synchronousEventForwardingAgent) SubAgents() []agent.Agent { return nil }
+func (a *synchronousEventForwardingAgent) FindSubAgent(string) agent.Agent {
 	return nil
 }
 

@@ -323,6 +323,31 @@ return await pipeline(["a", "b"], analyze, review)
 	require.JSONEq(t, `[{"text":"reviewed-a"},{"text":"reviewed-b"}]`, string(result.Value))
 }
 
+func TestLocalRunnerDoesNotHangWhenCompletedGuestKeepsThreadAlive(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	result, err := Execute(ctx, LocalRunner{}, callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+		return nil, nil
+	}), `
+import threading
+import time
+
+def keep_alive():
+    time.sleep(30)
+
+threading.Thread(target=keep_alive).start()
+return {"ok": True}
+`)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"ok":true}`, string(result.Value))
+	require.Less(t, time.Since(start), 1500*time.Millisecond)
+}
+
 func TestExecuteRejectsMissingRequirements(t *testing.T) {
 	_, err := Execute(context.Background(), nil, callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
 		return nil, nil
