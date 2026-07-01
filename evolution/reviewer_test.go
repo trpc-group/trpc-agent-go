@@ -14,6 +14,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,6 +44,14 @@ func (m *recordingReviewModel) GenerateContent(_ context.Context, req *model.Req
 
 func (m *recordingReviewModel) Info() model.Info { return model.Info{Name: "recording-review-model"} }
 
+type blockingReviewModel struct{}
+
+func (m blockingReviewModel) GenerateContent(_ context.Context, _ *model.Request) (<-chan *model.Response, error) {
+	return make(chan *model.Response), nil
+}
+
+func (m blockingReviewModel) Info() model.Info { return model.Info{Name: "blocking-review-model"} }
+
 func TestLLMReviewer_Review_StripsCodeFenceAndNormalizes(t *testing.T) {
 	reviewModel := &recordingReviewModel{
 		responses: []*model.Response{{
@@ -66,6 +75,21 @@ func TestLLMReviewer_Review_StripsCodeFenceAndNormalizes(t *testing.T) {
 	assert.Equal(t, "Before shipping", decision.Skills[0].WhenToUse)
 	assert.Equal(t, []string{"draft notes", "publish"}, decision.Skills[0].Steps)
 	assert.Equal(t, []string{"forget tests"}, decision.Skills[0].Pitfalls)
+}
+
+func TestLLMReviewer_Review_ReturnsWhenContextExpiresDuringResponse(t *testing.T) {
+	reviewer := NewLLMReviewer(blockingReviewModel{})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := reviewer.Review(ctx, &ReviewInput{
+		AppName:    "bench-app",
+		UserID:     "user-1",
+		SessionID:  "sess-1",
+		Transcript: []ReviewMessage{{Role: model.RoleUser, Content: "please make this repeatable"}},
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestLLMReviewer_Review_IncludesTranscriptAndToolCalls(t *testing.T) {
