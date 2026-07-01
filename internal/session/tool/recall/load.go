@@ -11,6 +11,7 @@ package recall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -184,7 +185,7 @@ func shouldRetryLoadByToolCallID(err error, req *LoadSessionRequest) bool {
 	}
 	return strings.TrimSpace(req.EventID) != "" &&
 		strings.TrimSpace(req.ToolCallID) != "" &&
-		strings.Contains(err.Error(), "anchor event not found")
+		errors.Is(err, session.ErrEventWindowAnchorNotFound)
 }
 
 func resolveLoadAnchorEventID(

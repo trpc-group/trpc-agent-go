@@ -69,6 +69,12 @@ var (
 	browserServerProbeFunc = probeBrowserServerEndpoint
 	browserServerWorkDir   = defaultBrowserServerWorkDir
 	browserServerCommand   = defaultBrowserServerCommand
+	browserServerSignal    = func(p *os.Process, sig os.Signal) error {
+		return p.Signal(sig)
+	}
+	browserServerKill = func(p *os.Process) error {
+		return p.Kill()
+	}
 )
 
 type browserServerPlan struct {
@@ -651,9 +657,9 @@ func (s *browserServerSup) Close() error {
 	s.state = browserServerStateStopping
 	s.mu.Unlock()
 
-	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+	if err := browserServerSignal(cmd.Process, os.Interrupt); err != nil {
 		if !isBrowserServerProcessDone(err) {
-			if killErr := cmd.Process.Kill(); killErr != nil &&
+			if killErr := browserServerKill(cmd.Process); killErr != nil &&
 				!isBrowserServerProcessDone(killErr) {
 				return fmt.Errorf(
 					"stop browser server: signal=%v kill=%v",
@@ -668,7 +674,7 @@ func (s *browserServerSup) Close() error {
 	case <-doneCh:
 		return nil
 	case <-time.After(browserServerStopTimeout):
-		if err := cmd.Process.Kill(); err != nil &&
+		if err := browserServerKill(cmd.Process); err != nil &&
 			!isBrowserServerProcessDone(err) {
 			return fmt.Errorf(
 				"kill browser server: %w",

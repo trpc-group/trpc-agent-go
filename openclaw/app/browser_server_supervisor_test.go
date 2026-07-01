@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -298,10 +299,21 @@ func TestBrowserServerSupervisorCloseExitedProcess(t *testing.T) {
 }
 
 func TestBrowserServerSupervisorCloseUnexpectedSignalError(t *testing.T) {
-	t.Parallel()
-
-	process, err := os.FindProcess(-1)
+	process, err := os.FindProcess(os.Getpid())
 	require.NoError(t, err)
+	oldSignal := browserServerSignal
+	oldKill := browserServerKill
+	browserServerSignal = func(*os.Process, os.Signal) error {
+		return errors.New("interrupt failed")
+	}
+	browserServerKill = func(*os.Process) error {
+		return errors.New("kill failed")
+	}
+	t.Cleanup(func() {
+		browserServerSignal = oldSignal
+		browserServerKill = oldKill
+	})
+
 	sup := &browserServerSup{
 		cmd: &exec.Cmd{
 			Process: process,

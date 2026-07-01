@@ -276,6 +276,7 @@ func shellCmd(ctx context.Context, command string) *exec.Cmd {
 	cmd.Cancel = func() error {
 		return forceKillCommandProcess(cmd)
 	}
+	cmd.WaitDelay = defaultIODrain
 	return cmd
 }
 

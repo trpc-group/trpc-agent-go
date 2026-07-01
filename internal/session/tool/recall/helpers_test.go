@@ -12,7 +12,7 @@ package recall
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +25,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
+
+func anchorEventNotFoundErr(anchorEventID string) error {
+	return fmt.Errorf("%w: %s", session.ErrEventWindowAnchorNotFound, anchorEventID)
+}
 
 func TestSupportChecks(t *testing.T) {
 	require.False(t, SupportsSearch(nil))
@@ -432,7 +436,7 @@ func TestLoadToolFallsBackToToolCallIDWhenEventIDIsStale(t *testing.T) {
 		) (*session.EventWindow, error) {
 			anchors = append(anchors, req.AnchorEventID)
 			if req.AnchorEventID == "stale-event" {
-				return nil, errors.New("anchor event not found: stale-event")
+				return nil, anchorEventNotFoundErr("stale-event")
 			}
 			return &session.EventWindow{
 				AnchorEventID: req.AnchorEventID,
@@ -466,12 +470,14 @@ func TestLoadToolFallsBackToToolCallIDWhenEventIDIsStale(t *testing.T) {
 }
 
 func TestLoadToolKeepsStaleEventErrorWhenToolCallIDMissing(t *testing.T) {
+	var anchors []string
 	svc := &mockSessionService{
 		Service: sessioninmemory.NewSessionService(),
 		windowFunc: func(
-			session.EventWindowRequest,
+			req session.EventWindowRequest,
 		) (*session.EventWindow, error) {
-			return nil, errors.New("anchor event not found: stale-event")
+			anchors = append(anchors, req.AnchorEventID)
+			return nil, anchorEventNotFoundErr("stale-event")
 		},
 	}
 	inv := agent.NewInvocation(
@@ -487,7 +493,84 @@ func TestLoadToolKeepsStaleEventErrorWhenToolCallIDMissing(t *testing.T) {
 	require.NoError(t, err)
 	_, err = NewLoadTool().Call(ctx, args)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "anchor event not found")
+	assert.ErrorIs(t, err, session.ErrEventWindowAnchorNotFound)
+	assert.Equal(t, []string{"stale-event"}, anchors)
+}
+
+func TestLoadToolKeepsStaleEventErrorWhenFallbackLookupFails(t *testing.T) {
+	var anchors []string
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		windowFunc: func(
+			req session.EventWindowRequest,
+		) (*session.EventWindow, error) {
+			anchors = append(anchors, req.AnchorEventID)
+			return nil, anchorEventNotFoundErr("stale-event")
+		},
+		getSessionFunc: func(
+			session.Key,
+			...session.Option,
+		) (*session.Session, error) {
+			return nil, assert.AnError
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		EventID:    "stale-event",
+		ToolCallID: "call-1",
+	})
+	require.NoError(t, err)
+	_, err = NewLoadTool().Call(ctx, args)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, session.ErrEventWindowAnchorNotFound)
+	assert.NotErrorIs(t, err, assert.AnError)
+	assert.Equal(t, []string{"stale-event"}, anchors)
+}
+
+func TestLoadToolKeepsStaleEventErrorWhenFallbackMatchesAnchor(t *testing.T) {
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{{
+		ID: "stale-event",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:   model.RoleTool,
+					ToolID: "call-1",
+				},
+			}},
+		},
+	}}
+
+	var anchors []string
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		windowFunc: func(
+			req session.EventWindowRequest,
+		) (*session.EventWindow, error) {
+			anchors = append(anchors, req.AnchorEventID)
+			return nil, anchorEventNotFoundErr("stale-event")
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		EventID:    "stale-event",
+		ToolCallID: "call-1",
+	})
+	require.NoError(t, err)
+	_, err = NewLoadTool().Call(ctx, args)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, session.ErrEventWindowAnchorNotFound)
+	assert.Equal(t, []string{"stale-event"}, anchors)
 }
 
 func TestLoadToolReturnsFallbackWindowError(t *testing.T) {
@@ -510,7 +593,7 @@ func TestLoadToolReturnsFallbackWindowError(t *testing.T) {
 			req session.EventWindowRequest,
 		) (*session.EventWindow, error) {
 			if req.AnchorEventID == "stale-event" {
-				return nil, errors.New("anchor event not found: stale-event")
+				return nil, anchorEventNotFoundErr("stale-event")
 			}
 			return nil, assert.AnError
 		},

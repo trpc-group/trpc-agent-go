@@ -942,9 +942,14 @@ func TestExecTool_DefaultTimeoutKillsProcessGroup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, 0, res.ExitCode)
 
-	time.Sleep(900 * time.Millisecond)
-	_, err = os.Stat(marker)
-	require.ErrorIs(t, err, os.ErrNotExist)
+	require.Never(t, func() bool {
+		_, err = os.Stat(marker)
+		if err == nil {
+			return true
+		}
+		require.ErrorIs(t, err, os.ErrNotExist)
+		return false
+	}, 900*time.Millisecond, 20*time.Millisecond)
 }
 
 func TestProcessTool_Submit(t *testing.T) {
