@@ -22,7 +22,9 @@ const (
 
 // HarnessOpts configures replay harness execution.
 type HarnessOpts struct {
-	ComparisonMode   ComparisonMode
+	// ComparisonMode selects reference or all-pairs backend comparison.
+	ComparisonMode ComparisonMode
+	// ReferenceBackend names the backend used as the reference in reference mode.
 	ReferenceBackend string
 }
 
