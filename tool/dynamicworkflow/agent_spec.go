@@ -647,6 +647,9 @@ func sanitizeWorkflowChildRunOptions(runOpts *agent.RunOptions) {
 	runOpts.Model = nil
 	runOpts.ModelName = ""
 	runOpts.ModelSelector = nil
+	runOpts.ModelContextWindow = 0
+	runOpts.ModelRequestExtraFields = nil
+	runOpts.ModelRequestHeaders = nil
 	runOpts.Instruction = ""
 	runOpts.GlobalInstruction = ""
 	runOpts.CodeExecutor = nil

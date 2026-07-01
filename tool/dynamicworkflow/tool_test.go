@@ -101,6 +101,9 @@ func TestWorkflowAgentDoesNotInheritRootRunScopedOverrides(t *testing.T) {
 		agent.WithInvocationSession(&session.Session{ID: "session-1", AppName: "app", UserID: "user"}),
 	)
 	parent.RunOptions.ModelName = "root-model"
+	parent.RunOptions.ModelContextWindow = 1024
+	parent.RunOptions.ModelRequestExtraFields = map[string]any{"root_only": true}
+	parent.RunOptions.ModelRequestHeaders = map[string]string{"X-Root-Only": "true"}
 	parent.RunOptions.Instruction = "root instruction"
 	parent.RunOptions.GlobalInstruction = "root global instruction"
 	parent.RunOptions.AdditionalTools = []tool.Tool{rootExtra}
@@ -119,6 +122,9 @@ func TestWorkflowAgentDoesNotInheritRootRunScopedOverrides(t *testing.T) {
 	child := reviewer.lastInvocation()
 	require.NotNil(t, child)
 	require.Empty(t, child.RunOptions.ModelName)
+	require.Zero(t, child.RunOptions.ModelContextWindow)
+	require.Nil(t, child.RunOptions.ModelRequestExtraFields)
+	require.Nil(t, child.RunOptions.ModelRequestHeaders)
 	require.Empty(t, child.RunOptions.Instruction)
 	require.Empty(t, child.RunOptions.GlobalInstruction)
 	require.Nil(t, child.RunOptions.AdditionalTools)
