@@ -12,6 +12,7 @@ package replaytest
 
 import (
 	"errors"
+	"fmt"
 	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -36,9 +37,12 @@ func InMemoryFactory() BackendFactory {
 	}
 }
 
-// RedisFactory returns a placeholder factory for Redis backends.
+// RedisFactory returns a factory gate for Redis replay backends.
+//
+// Import trpc.group/trpc-go/trpc-agent-go/session/replaytest/redis and call
+// redis.NewFactory(os.Getenv("REDIS_ADDR")) to create a linked Redis backend.
 func RedisFactory() BackendFactory {
-	return optionalBackendFactory("redis", "REDIS_ADDR")
+	return linkedBackendFactory("redis", "REDIS_ADDR", "session/replaytest/redis")
 }
 
 // PostgresFactory returns a placeholder factory for PostgreSQL backends.
@@ -64,5 +68,21 @@ func optionalBackendFactory(name, envKey string) BackendFactory {
 			return nil, nil, BackendProfile{Name: name}, ErrBackendNotConfigured
 		}
 		return nil, nil, BackendProfile{Name: name}, ErrBackendNotConfigured
+	}
+}
+
+// linkedBackendFactory reports how callers can import an adapter that lives
+// outside the root module dependency graph.
+func linkedBackendFactory(name, envKey, importPath string) BackendFactory {
+	return func() (session.Service, memory.Service, BackendProfile, error) {
+		if os.Getenv(envKey) == "" {
+			return nil, nil, BackendProfile{Name: name}, ErrBackendNotConfigured
+		}
+		return nil, nil, BackendProfile{Name: name}, fmt.Errorf(
+			"%s adapter not linked; import %s and call NewFactory(os.Getenv(%q))",
+			name,
+			importPath,
+			envKey,
+		)
 	}
 }

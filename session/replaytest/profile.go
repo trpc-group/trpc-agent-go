@@ -71,3 +71,22 @@ func SQLiteProfile() BackendProfile {
 		},
 	}
 }
+
+// RedisProfile returns the built-in profile for Redis replay backends.
+func RedisProfile() BackendProfile {
+	return BackendProfile{
+		Name:                 "redis",
+		SupportsTrack:        true,
+		SupportsWindow:       true,
+		SupportsSearch:       false,
+		SupportsAppState:     true,
+		SupportsUserState:    true,
+		SupportsSessionState: true,
+		SupportsSoftDelete:   false,
+		SupportsAsyncSummary: true,
+		RetrievalProfile: RetrievalProfile{
+			Algorithm: "bm25",
+			Tokenizer: "gse_cjk",
+		},
+	}
+}

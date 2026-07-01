@@ -55,11 +55,24 @@
 //		MemoryService:  sqliteMemory,
 //	})
 //
-// External backend factories are not yet implemented. RedisFactory,
+// Redis integration lives in the separate
+// trpc.group/trpc-go/trpc-agent-go/session/replaytest/redis module:
+//
+//	redisFactory := replaytestredis.NewFactory(os.Getenv("REDIS_ADDR"))
+//	redisSession, redisMemory, redisProfile, err := redisFactory()
+//	if err != nil {
+//		return err
+//	}
+//	h.AddBackend(replaytest.NamedBackend{
+//		Name:           "redis",
+//		Profile:        redisProfile,
+//		SessionService: redisSession,
+//		MemoryService:  redisMemory,
+//	})
+//
 // PostgresFactory, MySQLFactory, and ClickHouseFactory are stub placeholders
-// that currently return ErrBackendNotConfigured even when REDIS_ADDR,
-// POSTGRES_DSN, MYSQL_DSN, or CLICKHOUSE_DSN is set. Real integration modules
-// should create concrete services first, then pass them through NamedBackend.
+// that return ErrBackendNotConfigured. Real adapter modules can follow the
+// same injection pattern as the SQLite and Redis modules.
 //
 // Design rationale: see DESIGN.md in this directory.
 package replaytest
