@@ -246,6 +246,27 @@ func (f *fakeSummarizer) SetPrompt(prompt string)  {}
 func (f *fakeSummarizer) SetModel(m model.Model)   {}
 func (f *fakeSummarizer) Metadata() map[string]any { return map[string]any{} }
 
+type reportModel struct{}
+
+func (m *reportModel) Info() model.Info {
+	return model.Info{Name: "report"}
+}
+
+func (m *reportModel) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{Content: "sum"},
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
 type blockingSummarizer struct {
 	mu      sync.Mutex
 	calls   int
@@ -383,6 +404,83 @@ func TestSummarizeSession_FilteredKey_RespectsDeltaAndShould(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.Equal(t, "sum", base.Summaries["b1"].Summary)
+}
+
+func TestSummarizeSession_ForceReportIncludesFilterKey(t *testing.T) {
+	var got summary.Report
+	summarizer := summary.NewSummarizer(
+		&reportModel{},
+		summary.WithReportHook(func(_ context.Context, report summary.Report) {
+			got = report
+		}),
+	)
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("new", time.Now(), "branch"),
+	}
+
+	updated, err := SummarizeSession(
+		context.Background(),
+		summarizer,
+		base,
+		"branch",
+		true,
+	)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.True(t, got.Trigger.Fired)
+	require.Equal(t, "force", got.Trigger.Name)
+	require.Equal(t, "branch", got.Trigger.FilterKey)
+}
+
+func TestCreateSessionSummaryWithCascade_ForceFullReportUsesTriggerFilterKey(t *testing.T) {
+	const branch = "app/branch"
+	var got summary.Report
+	summarizer := summary.NewSummarizer(
+		&reportModel{},
+		summary.WithReportHook(func(_ context.Context, report summary.Report) {
+			got = report
+		}),
+	)
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("new", time.Now(), branch),
+		makeEvent("other", time.Now(), "app/other"),
+	}
+
+	err := CreateSessionSummaryWithCascade(
+		context.Background(),
+		base,
+		branch,
+		true,
+		NewSummaryDispatchPolicy([]string{session.SummaryFilterKeyAllContents}, true),
+		func(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+			_, err := SummarizeSession(ctx, summarizer, sess, filterKey, force)
+			return err
+		},
+	)
+	require.NoError(t, err)
+	require.True(t, got.Trigger.Fired)
+	require.Equal(t, "force", got.Trigger.Name)
+	require.Equal(t, branch, got.Trigger.FilterKey)
+}
+
+func TestSummarizeSession_ReusesCallerReport(t *testing.T) {
+	summarizer := summary.NewSummarizer(&reportModel{})
+	base := &session.Session{ID: "s1", AppName: "a", UserID: "u"}
+	base.Events = []event.Event{
+		makeEvent("new", time.Now(), "branch"),
+	}
+	report := &summary.Report{}
+	ctx := summary.ContextWithReport(context.Background(), report)
+
+	updated, err := SummarizeSession(ctx, summarizer, base, "branch", true)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.True(t, report.Trigger.Fired)
+	require.Equal(t, "force", report.Trigger.Name)
+	require.Equal(t, "branch", report.Trigger.FilterKey)
+	require.Equal(t, "standalone", report.Call.Mode)
 }
 
 func TestSummarizeSession_FullSession_SingleWrite(t *testing.T) {
@@ -1476,6 +1574,48 @@ func TestCreateSessionSummaryWithCascade_MethodValue(t *testing.T) {
 	defer mockSvc.mu.Unlock()
 	require.Equal(t, "summary-user-messages", mockSvc.summaries["user-messages"])
 	require.Equal(t, "summary-", mockSvc.summaries[""])
+}
+
+func TestCreateSessionSummaryWithCascade_ForksReportForParallelTargets(t *testing.T) {
+	now := time.Now()
+	sess := &session.Session{
+		ID:      "test-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+		Events: []event.Event{
+			makeEvent("e1", now.Add(-2*time.Minute), "user-messages"),
+			makeEvent("e2", now.Add(-time.Minute), "tool-calls"),
+		},
+	}
+	rootReport := &summary.Report{}
+	ctx := summary.ContextWithReport(context.Background(), rootReport)
+
+	var (
+		reportsMu sync.Mutex
+		reports   []*summary.Report
+	)
+	err := CreateSessionSummaryWithCascade(
+		ctx,
+		sess,
+		"user-messages",
+		false,
+		NewSummaryDispatchPolicy(nil, true),
+		func(ctx context.Context, _ *session.Session, _ string, _ bool) error {
+			report, ok := summary.ReportFromContext(ctx)
+			if !ok {
+				return errors.New("missing report")
+			}
+			reportsMu.Lock()
+			reports = append(reports, report)
+			reportsMu.Unlock()
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, reports, 2)
+	require.NotSame(t, rootReport, reports[0])
+	require.NotSame(t, rootReport, reports[1])
+	require.NotSame(t, reports[0], reports[1])
 }
 
 func TestCreateSessionSummaryWithCascade_FullTargetUsesTriggerFilterKeyForChecks(t *testing.T) {

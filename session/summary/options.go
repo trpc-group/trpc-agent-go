@@ -131,7 +131,7 @@ func WithSkipRecent(skipFunc SkipRecentFunc) Option {
 // If you call multiple threshold options (e.g. token + event), all must pass.
 func WithTokenThreshold(tokenCount int) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, CheckTokenThresholdContext(tokenCount))
+		s.checks = append(s.checks, evaluateTokenThreshold(tokenCount))
 	}
 }
 
@@ -140,7 +140,7 @@ func WithTokenThreshold(tokenCount int) Option {
 // If you call multiple threshold options (e.g. token + event), all must pass.
 func WithEventThreshold(eventCount int) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, wrapChecker(CheckEventThreshold(eventCount)))
+		s.checks = append(s.checks, evaluateEventThreshold(eventCount))
 	}
 }
 
@@ -149,7 +149,7 @@ func WithEventThreshold(eventCount int) Option {
 // If you call multiple threshold options (e.g. event + time), all must pass.
 func WithTimeThreshold(interval time.Duration) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, wrapChecker(CheckTimeThreshold(interval)))
+		s.checks = append(s.checks, evaluateTimeThreshold(interval))
 	}
 }
 
@@ -176,7 +176,7 @@ func WithChecksAny(checks ...Checker) Option {
 func WithChecksAllContext(checks ...ContextChecker) Option {
 	return func(s *sessionSummarizer) {
 		if len(checks) > 0 {
-			s.checks = append(s.checks, allContextChecks(checks))
+			s.checks = append(s.checks, wrapContextChecker(allContextChecks(checks)))
 		}
 	}
 }
@@ -186,8 +186,16 @@ func WithChecksAllContext(checks ...ContextChecker) Option {
 func WithChecksAnyContext(checks ...ContextChecker) Option {
 	return func(s *sessionSummarizer) {
 		if len(checks) > 0 {
-			s.checks = append(s.checks, anyContextChecks(checks))
+			s.checks = append(s.checks, wrapContextChecker(anyContextChecks(checks)))
 		}
+	}
+}
+
+// WithReportHook observes summary trigger and model-call accounting after a
+// summary attempt finishes.
+func WithReportHook(h ReportHook) Option {
+	return func(s *sessionSummarizer) {
+		s.reportHook = h
 	}
 }
 
@@ -298,6 +306,6 @@ func WithContextThreshold(opts ...ContextThresholdOption) Option {
 				effectiveOpts = append(effectiveOpts, WithContextThresholdFallbackWindow(w))
 			}
 		}
-		s.checks = append(s.checks, CheckContextThreshold(effectiveOpts...))
+		s.checks = append(s.checks, evaluateContextThreshold(effectiveOpts...))
 	}
 }
