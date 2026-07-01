@@ -52,6 +52,23 @@ func (m blockingReviewModel) GenerateContent(_ context.Context, _ *model.Request
 
 func (m blockingReviewModel) Info() model.Info { return model.Info{Name: "blocking-review-model"} }
 
+type blockingGenerateReviewModel struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (m blockingGenerateReviewModel) GenerateContent(_ context.Context, _ *model.Request) (<-chan *model.Response, error) {
+	close(m.started)
+	<-m.release
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+func (m blockingGenerateReviewModel) Info() model.Info {
+	return model.Info{Name: "blocking-generate-review-model"}
+}
+
 func TestLLMReviewer_Review_StripsCodeFenceAndNormalizes(t *testing.T) {
 	reviewModel := &recordingReviewModel{
 		responses: []*model.Response{{
@@ -88,6 +105,27 @@ func TestLLMReviewer_Review_ReturnsWhenContextExpiresDuringResponse(t *testing.T
 		SessionID:  "sess-1",
 		Transcript: []ReviewMessage{{Role: model.RoleUser, Content: "please make this repeatable"}},
 	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestLLMReviewer_Review_ReturnsWhenContextExpiresDuringGenerate(t *testing.T) {
+	mdl := blockingGenerateReviewModel{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	defer close(mdl.release)
+	reviewer := NewLLMReviewer(mdl)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := reviewer.Review(ctx, &ReviewInput{
+		AppName:    "bench-app",
+		UserID:     "user-1",
+		SessionID:  "sess-1",
+		Transcript: []ReviewMessage{{Role: model.RoleUser, Content: "please make this repeatable"}},
+	})
+	<-mdl.started
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }

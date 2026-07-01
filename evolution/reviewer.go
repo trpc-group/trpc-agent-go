@@ -141,7 +141,7 @@ func (r *LLMReviewer) Review(ctx context.Context, input *ReviewInput) (*ReviewDe
 		},
 	}
 
-	respCh, err := r.model.GenerateContent(ctx, req)
+	respCh, err := generateReviewerContent(ctx, r.model, req)
 	if err != nil {
 		return nil, fmt.Errorf("evolution: reviewer generate: %w", err)
 	}
@@ -179,6 +179,30 @@ func (r *LLMReviewer) Review(ctx context.Context, input *ReviewInput) (*ReviewDe
 				}
 			}
 		}
+	}
+}
+
+type reviewerGenerateResult struct {
+	respCh <-chan *model.Response
+	err    error
+}
+
+func generateReviewerContent(
+	ctx context.Context,
+	m model.Model,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	resultCh := make(chan reviewerGenerateResult, 1)
+	go func() {
+		respCh, err := m.GenerateContent(ctx, req)
+		resultCh <- reviewerGenerateResult{respCh: respCh, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-resultCh:
+		return result.respCh, result.err
 	}
 }
 
