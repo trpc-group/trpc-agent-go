@@ -116,7 +116,7 @@ func TestCompileOverrideNormalization(t *testing.T) {
 func TestCompileRejectsUnknownRiskLevel(t *testing.T) {
 	p := DefaultPolicy()
 	p.RuleOverrides = map[string]Override{
-		"R-NET-001": {RiskLevel: "medum"}, // typo for "medium"
+		"R-NET-001": {RiskLevel: "severe"}, // not one of none/low/medium/high/critical
 	}
 	err := p.compile()
 	if err == nil {

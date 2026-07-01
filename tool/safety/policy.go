@@ -380,8 +380,8 @@ func canonicalAction(a Action) (Action, bool) {
 }
 
 // canonicalRisk maps a risk-level keyword (case-insensitive, trimmed) to its
-// canonical form. An unknown keyword is rejected so a typo like "medum" cannot
-// silently map to no action and let the default action permit a finding.
+// canonical form. An unknown keyword is rejected so a typo or unsupported level
+// cannot silently map to no action and let the default action permit a finding.
 func canonicalRisk(r RiskLevel) (RiskLevel, bool) {
 	switch strings.ToLower(strings.TrimSpace(string(r))) {
 	case "none":
