@@ -241,6 +241,36 @@ func TestReadDocumentTool_TextDocxAndErrors(t *testing.T) {
 	require.ErrorContains(t, err, "invalid args")
 }
 
+func TestReadDocumentTool_ImageReturnsMedia(t *testing.T) {
+	t.Parallel()
+
+	imagePath := filepath.Join(t.TempDir(), "chart.png")
+	require.NoError(t, os.WriteFile(
+		imagePath,
+		[]byte("not decoded by read_document"),
+		0o600,
+	))
+	tool := newReadDocumentTool()
+
+	out, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
+		"path": imagePath,
+	}))
+	require.NoError(t, err)
+
+	res := out.(readDocumentResult)
+	require.Equal(t, imagePath, res.Path)
+	require.Equal(t, docKindImage, res.Kind)
+	require.Contains(t, res.Text, "Image file attached")
+	require.Equal(t, execOutputMediaMarker+" "+imagePath, res.Output)
+	require.Equal(t, []string{imagePath}, res.MediaFiles)
+
+	_, err = tool.Call(context.Background(), mustJSON(t, map[string]any{
+		"path": imagePath,
+		"page": 1,
+	}))
+	require.ErrorContains(t, err, "page is only supported")
+}
+
 func TestReadDocumentHelpers(t *testing.T) {
 	t.Parallel()
 
@@ -270,6 +300,8 @@ func TestReadDocumentHelpers(t *testing.T) {
 
 	require.Equal(t, docKindDOCX, documentKindFromPath(docxPath))
 	require.Equal(t, docKindText, documentKindFromPath(logPath))
+	require.Equal(t, docKindImage, documentKindFromPath("chart.png"))
+	require.Equal(t, docKindImage, documentKindFromPath("photo.jpeg"))
 	require.Equal(t, "", documentKindFromPath("bad.bin"))
 
 	text, _, err := readDocumentText(logPath, docKindText, nil)

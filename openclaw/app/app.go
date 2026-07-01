@@ -1089,6 +1089,7 @@ func NewRuntimeWithOptions(
 		stores.uploads,
 		fileMemoryStore,
 		sandboxExecEngine,
+		opts.HostExecDefaultTimeout,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1692,6 +1693,7 @@ func run(
 		stores.uploads,
 		fileMemoryStore,
 		sandboxExecEngine,
+		opts.HostExecDefaultTimeout,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -3355,6 +3357,7 @@ func buildOpenClawTools(
 	uploadStore *uploads.Store,
 	memoryFileStore *memoryfile.Store,
 	sandboxExecEngine codeexecutor.Engine,
+	hostExecDefaultTimeout time.Duration,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
@@ -3385,11 +3388,18 @@ func buildOpenClawTools(
 			outputRedactor,
 		)
 	} else {
-		mgr = octool.NewManager(
+		mgrOpts := []octool.Option{
 			octool.WithBaseEnv(deps.ToolEnv(stateDir)),
 			octool.WithCommandPolicy(commandPolicy),
 			octool.WithOutputRedactor(outputRedactor),
-		)
+		}
+		if hostExecDefaultTimeout > 0 {
+			mgrOpts = append(
+				mgrOpts,
+				octool.WithDefaultTimeout(hostExecDefaultTimeout),
+			)
+		}
+		mgr = octool.NewManager(mgrOpts...)
 		execTool = octool.NewExecCommandTool(mgr, uploadStore)
 		if memoryFileStore != nil {
 			execTool = octool.NewExecCommandToolWithMemoryFileStore(

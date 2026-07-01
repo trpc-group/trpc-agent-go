@@ -51,6 +51,8 @@ var (
 	ErrTracksEmpty = errors.New("tracks is empty")
 	// ErrTrackEventsNotFound indicates the requested track has no events.
 	ErrTrackEventsNotFound = errors.New("track events not found")
+	// ErrEventWindowAnchorNotFound indicates an event-window anchor was missing.
+	ErrEventWindowAnchorNotFound = errors.New("anchor event not found")
 )
 
 // SummaryFilterKeyAllContents is the filter key representing

@@ -85,14 +85,14 @@ func (s *Service) loadHashIdxEventWindow(
 
 	anchorRaw, err := s.redisClient.HGet(ctx, eventDataKey, anchorEventID).Result()
 	if err == goredis.Nil {
-		return nil, fmt.Errorf("anchor event not found: %s", anchorEventID)
+		return nil, fmt.Errorf("%w: %s", session.ErrEventWindowAnchorNotFound, anchorEventID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load redis event window anchor: %w", err)
 	}
 	anchorRank, err := s.redisClient.ZRank(ctx, eventIndexKey, anchorEventID).Result()
 	if err == goredis.Nil {
-		return nil, fmt.Errorf("anchor event not found: %s", anchorEventID)
+		return nil, fmt.Errorf("%w: %s", session.ErrEventWindowAnchorNotFound, anchorEventID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("load redis event window anchor rank: %w", err)
@@ -103,7 +103,7 @@ func (s *Service) loadHashIdxEventWindow(
 	}
 	if anchor.entry.Event.ID != anchorEventID ||
 		!sessionwindow.EventAllowed(&anchor.entry.Event, roleFilter) {
-		return nil, fmt.Errorf("anchor event not found: %s", anchorEventID)
+		return nil, fmt.Errorf("%w: %s", session.ErrEventWindowAnchorNotFound, anchorEventID)
 	}
 
 	beforeEntries, err := s.loadHashIdxWindowNeighbors(
@@ -243,7 +243,7 @@ func (s *Service) loadZSetEventWindow(
 		return nil, err
 	}
 	if anchor == nil {
-		return nil, fmt.Errorf("anchor event not found: %s", anchorEventID)
+		return nil, fmt.Errorf("%w: %s", session.ErrEventWindowAnchorNotFound, anchorEventID)
 	}
 
 	beforeEntries, err := s.loadZSetWindowNeighbors(
