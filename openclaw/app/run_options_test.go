@@ -1172,6 +1172,7 @@ func TestParseRunOptions_DeferToolSurfacePolicyConfig(t *testing.T) {
 tools:
   defer_to_dynamic_agent_mode: auto
   defer_to_dynamic_agent_threshold_chars: 1234
+  dynamic_agent_timeout: "180s"
   defer_direct_tools: ["exec_command", "message", "exec_command"]
 `)
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
@@ -1180,7 +1181,43 @@ tools:
 	require.Equal(t, deferToolSurfaceModeAuto, opts.DeferToolSurfaceMode)
 	require.True(t, opts.deferToolSurfaceModeExplicit)
 	require.Equal(t, 1234, opts.DeferToolSurfaceChars)
+	require.Equal(t, 180*time.Second, opts.DynamicAgentTimeout)
 	require.Equal(t, "exec_command,message", opts.DeferToolSurfaceDirect)
+}
+
+func TestParseRunOptions_DynamicAgentTimeoutInvalidFails(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "parse",
+			raw:  "bad",
+			want: "tools.dynamic_agent_timeout",
+		},
+		{
+			name: "negative",
+			raw:  "-1s",
+			want: "tools.dynamic_agent_timeout must be >= 0",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfgPath := writeTempConfig(t, fmt.Sprintf(`
+tools:
+  dynamic_agent_timeout: %q
+`, tt.raw))
+			_, err := parseRunOptions([]string{"-config", cfgPath})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
 }
 
 func TestParseRunOptions_DeferToolSurfaceDefaultsToAuto(t *testing.T) {

@@ -287,6 +287,7 @@ type runOptions struct {
 	DeferToolSurfaceMode   string
 	DeferToolSurfaceChars  int
 	DeferToolSurfaceDirect string
+	DynamicAgentTimeout    time.Duration
 
 	enableOpenClawToolsExplicit  bool
 	deferToolSurfaceModeExplicit bool
@@ -1238,6 +1239,8 @@ type toolsConfig struct {
 	DeferToDynamicAgentModeCamel  *string             `yaml:"deferToDynamicAgentMode,omitempty"`
 	DeferToDynamicAgentChars      *int                `yaml:"defer_to_dynamic_agent_threshold_chars,omitempty"`
 	DeferToDynamicAgentCharsCamel *int                `yaml:"deferToDynamicAgentThresholdChars,omitempty"`
+	DynamicAgentTimeout           *string             `yaml:"dynamic_agent_timeout,omitempty"`
+	DynamicAgentTimeoutCamel      *string             `yaml:"dynamicAgentTimeout,omitempty"`
 	DeferDirectTools              yamlStringList      `yaml:"defer_direct_tools,omitempty"`
 	DeferDirectToolsCamel         yamlStringList      `yaml:"deferDirectTools,omitempty"`
 
@@ -1969,6 +1972,20 @@ func (cfg *fileConfig) apply(
 		if deferChars != nil &&
 			!flagWasSet(set, flagDeferToolSurfaceChars) {
 			opts.DeferToolSurfaceChars = *deferChars
+		}
+		dynamicAgentTimeout := firstStringPtr(
+			cfg.Tools.DynamicAgentTimeout,
+			cfg.Tools.DynamicAgentTimeoutCamel,
+		)
+		if dynamicAgentTimeout != nil {
+			dur, err := parseDuration(*dynamicAgentTimeout)
+			if err != nil {
+				return fmt.Errorf("tools.dynamic_agent_timeout: %w", err)
+			}
+			if dur < 0 {
+				return fmt.Errorf("tools.dynamic_agent_timeout must be >= 0")
+			}
+			opts.DynamicAgentTimeout = dur
 		}
 		if !flagWasSet(set, flagDeferToolSurfaceDirect) {
 			if len(cfg.Tools.DeferDirectTools) > 0 {
