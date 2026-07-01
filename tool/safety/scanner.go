@@ -98,7 +98,13 @@ func NewScanner(rules ...Rule) *Scanner {
 }
 
 // Scan runs every rule and returns the most severe result.
-// Precedence: deny > ask > allow (first deny wins).
+//
+// Precedence (highest priority first):
+//   - DecisionDeny > DecisionAsk > DecisionAllow
+//   - Within the same decision, the highest RiskLevel wins.
+//
+// All rules are evaluated; the most severe result is returned so that
+// the reported rule/risk does not depend on registration order.
 func (s *Scanner) Scan(input ScanInput) *ScanResult {
 	var worst *ScanResult
 	for _, r := range s.rules {
@@ -106,12 +112,7 @@ func (s *Scanner) Scan(input ScanInput) *ScanResult {
 		if res == nil {
 			continue
 		}
-		// If any rule says deny, stop immediately.
-		if res.Decision == DecisionDeny {
-			return res
-		}
-		// Track the "worst" non-deny result.
-		if worst == nil || severity(res.RiskLevel) > severity(worst.RiskLevel) {
+		if isMoreSevere(res, worst) {
 			worst = res
 		}
 	}
@@ -140,6 +141,33 @@ func severity(r RiskLevel) int {
 	default:
 		return 0
 	}
+}
+
+// decisionPriority returns the priority of a decision: deny > ask > allow.
+func decisionPriority(d Decision) int {
+	switch d {
+	case DecisionDeny:
+		return 3
+	case DecisionAsk:
+		return 2
+	case DecisionAllow:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// isMoreSevere reports whether candidate is more severe than current.
+// A result is more severe if its decision has higher priority, or if
+// the decision is the same and its risk level is higher.
+func isMoreSevere(candidate, current *ScanResult) bool {
+	if current == nil {
+		return true
+	}
+	if decisionPriority(candidate.Decision) != decisionPriority(current.Decision) {
+		return decisionPriority(candidate.Decision) > decisionPriority(current.Decision)
+	}
+	return severity(candidate.RiskLevel) > severity(current.RiskLevel)
 }
 
 // policyConfig mirrors a YAML/JSON policy file.

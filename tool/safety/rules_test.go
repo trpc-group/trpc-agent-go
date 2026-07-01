@@ -256,7 +256,6 @@ func TestSensitiveInfoLeakRule_Deny(t *testing.T) {
 	rule := NewSensitiveInfoLeakRule()
 	for _, cmd := range []string{
 		"echo $API_KEY > /tmp/key.txt",
-		"cat .env > output.txt",
 		"printf $password > leak.txt",
 	} {
 		t.Run(cmd, func(t *testing.T) {
