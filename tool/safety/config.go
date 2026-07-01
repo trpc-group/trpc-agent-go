@@ -17,25 +17,24 @@ import (
 )
 
 // ============================================================
-// YAML 策略配置文件
+// YAML Policy Configuration File
 // ============================================================
 
 // PolicyFile is loaded from tool_safety_policy.yaml.
 type PolicyFile struct {
-	// 拒绝的命令列表（如 curl, wget, rm -rf）
+	// DeniedCommands is the deny list of command keywords.
 	DeniedCommands []string `yaml:"denied_commands" json:"denied_commands"`
-	// 拒绝访问的路径（如 ~/.ssh, /etc/shadow）
+	// DeniedPaths is the deny list of sensitive path patterns.
 	DeniedPaths []string `yaml:"denied_paths" json:"denied_paths"`
-	// 白名单域名（仅允许这些域名的网络访问）
+	// AllowedDomains is the network domain allow list.
 	AllowedDomains []string `yaml:"allowed_domains" json:"allowed_domains,omitempty"`
-	// 拒绝的域名
+	// DeniedDomains is the network domain deny list.
 	DeniedDomains []string `yaml:"denied_domains" json:"denied_domains,omitempty"`
-	// 最大命令执行超时（秒）
+	// MaxTimeoutSeconds is the maximum command execution timeout in seconds.
 	MaxTimeoutSeconds int `yaml:"max_timeout_seconds" json:"max_timeout_seconds"`
-	// 最大输出大小（字节）
+	// MaxOutputBytes is the maximum output size in bytes.
 	MaxOutputBytes int `yaml:"max_output_bytes" json:"max_output_bytes"`
-
-	// 额外环境变量白名单
+	// AllowedEnvVars is the environment variable allow list.
 	AllowedEnvVars []string `yaml:"allowed_env_vars" json:"allowed_env_vars,omitempty"`
 }
 
@@ -79,7 +78,7 @@ func LoadPolicyFile(path string) (*PolicyFile, error) {
 }
 
 // ============================================================
-// 扫描报告（结构化 JSON 输出）
+// Structured Scan Report (JSON output)
 // ============================================================
 
 // ScanReport is the complete structured output for one scan.
@@ -130,7 +129,7 @@ func NewReport(result *ScanResult, input ScanInput, toolName string, dur time.Du
 		r.Decision = DecisionAllow
 		r.RiskLevel = RiskNone
 		r.Blocked = false
-		r.Recommendation = "命令安全，已放行"
+		r.Recommendation = "command is safe, allowed"
 		return r
 	}
 
@@ -143,17 +142,17 @@ func NewReport(result *ScanResult, input ScanInput, toolName string, dur time.Du
 
 	switch result.Decision {
 	case DecisionDeny:
-		r.Recommendation = "命令已拦截，请使用安全替代方案"
+		r.Recommendation = "command blocked, use a safe alternative"
 	case DecisionAsk:
-		r.Recommendation = "需要人工审核后才能执行"
+		r.Recommendation = "requires human review before execution"
 	default:
-		r.Recommendation = "命令已放行"
+		r.Recommendation = "command allowed"
 	}
 	return r
 }
 
 // ============================================================
-// 审计日志（JSONL 格式）
+// Audit Log (JSONL format)
 // ============================================================
 
 // AuditEvent is one line in the audit log.
@@ -193,18 +192,19 @@ func NewAuditEvent(r ScanReport) AuditEvent {
 		Evidence:   r.Evidence,
 		Backend:    r.Backend,
 		Blocked:    r.Blocked,
-		Sanitized:  false, // 默认不脱敏
+		Sanitized:  false, // not sanitized by default
 		DurationUs: r.DurationUs,
 		Timestamp:  r.Timestamp,
 	}
 }
 
 // ============================================================
-// OpenTelemetry Span 属性预留
+// OpenTelemetry Span Attribute Hooks
 // ============================================================
-// 以下常量定义了 OTel span 的 attribute key。
-// 当项目启用 OpenTelemetry tracing 时，调用方可以将这些
-// 键值对设置到当前 span 上，用于安全决策的可观测性。
+//
+// These constants define OTel span attribute keys.
+// When OpenTelemetry tracing is enabled, callers can set these
+// key-value pairs on the current span for safety decision observability.
 
 const (
 	// SpanAttrDecision is the safety decision for this tool call.

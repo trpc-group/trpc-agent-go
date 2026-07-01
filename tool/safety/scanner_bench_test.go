@@ -26,7 +26,7 @@ func BenchmarkFullScan_500Commands(b *testing.B) {
 		NewSensitiveInfoLeakRule(),
 	)
 
-	// 500 条命令样本：覆盖安全 + 危险两种，模拟真实场景
+	// 500 command samples covering both safe and dangerous cases.
 	commands := make([]ScanInput, 500)
 	for i := 0; i < 500; i++ {
 		switch i % 10 {
@@ -100,14 +100,13 @@ func TestPerformance_500Commands_Under1Second(t *testing.T) {
 		}
 	}
 
-	// 实际执行一次，验证性能
+	// Run once to verify.
 	for k := 0; k < 10; k++ {
 		for i := 0; i < 500; i++ {
 			_ = scanner.Scan(commands[i])
 		}
 	}
 
-	// Go benchmark 工具会自动测量时间，这里只是功能保证
-	// 实际性能验证用: go test -bench=BenchmarkFullScan_500Commands
+	// go test -bench=BenchmarkFullScan_500Commands for actual measurement.
 	t.Log("500 commands scanned (use 'go test -bench=.' for performance numbers)")
 }

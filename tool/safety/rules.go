@@ -8,9 +8,7 @@
 
 package safety
 
-import (
-	"strings"
-)
+import "strings"
 
 // combineInput merges Command and CodeBlocks content into a single
 // lower-cased string for unified scanning, preventing CodeBlocks-only
@@ -28,7 +26,7 @@ func combineInput(input ScanInput) string {
 	return strings.ToLower(strings.Join(parts, " "))
 }
 
-// ---------- Rule 1: 危险命令检测 ----------
+// ---------- Rule 1: Dangerous Command Detection ----------
 
 // DangerousCommandRule checks for explicitly dangerous commands.
 //
@@ -61,9 +59,7 @@ func NewDangerousCommandRule() *DangerousCommandRule {
 }
 
 // ID returns the unique identifier of this rule.
-func (r *DangerousCommandRule) ID() string {
-	return "danger_cmd_001"
-}
+func (r *DangerousCommandRule) ID() string { return "danger_cmd_001" }
 
 // Check inspects the input for dangerous command keywords and sensitive path access.
 func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
@@ -71,19 +67,19 @@ func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
 	if cmd == "" {
 		return nil
 	}
-	for _, keyword := range r.dangerousCommands {
-		if strings.Contains(cmd, keyword) {
+	for _, kw := range r.dangerousCommands {
+		if strings.Contains(cmd, kw) {
 			return &ScanResult{
 				Decision:  DecisionDeny,
 				RiskLevel: RiskCritical,
 				RuleID:    r.ID(),
-				Evidence:  keyword,
-				Reason:    "命令包含危险操作：" + keyword + "。该命令可能导致系统损坏或数据丢失。",
+				Evidence:  kw,
+				Reason:    "dangerous command: " + kw,
 			}
 		}
 	}
-	for _, path := range r.sensitivePaths {
-		if strings.Contains(cmd, path) {
+	for _, p := range r.sensitivePaths {
+		if strings.Contains(cmd, p) {
 			if strings.Contains(cmd, "cat ") || strings.Contains(cmd, "less ") ||
 				strings.Contains(cmd, "head ") || strings.Contains(cmd, "tail ") ||
 				strings.Contains(cmd, "grep ") || strings.Contains(cmd, "cp ") {
@@ -91,8 +87,8 @@ func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
 					Decision:  DecisionDeny,
 					RiskLevel: RiskCritical,
 					RuleID:    r.ID(),
-					Evidence:  path,
-					Reason:    "尝试读取敏感文件：" + path + "。该文件可能包含凭据或隐私信息。",
+					Evidence:  p,
+					Reason:    "reading sensitive file: " + p,
 				}
 			}
 			if strings.Contains(cmd, "rm ") || strings.Contains(cmd, "mv ") ||
@@ -101,23 +97,23 @@ func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
 					Decision:  DecisionDeny,
 					RiskLevel: RiskCritical,
 					RuleID:    r.ID(),
-					Evidence:  path,
-					Reason:    "尝试修改/删除敏感文件：" + path + "。",
+					Evidence:  p,
+					Reason:    "modifying/deleting sensitive file: " + p,
 				}
 			}
 			return &ScanResult{
 				Decision:  DecisionDeny,
 				RiskLevel: RiskHigh,
 				RuleID:    r.ID(),
-				Evidence:  path,
-				Reason:    "尝试访问敏感路径：" + path + "。",
+				Evidence:  p,
+				Reason:    "accessing sensitive path: " + p,
 			}
 		}
 	}
 	return nil
 }
 
-// ---------- Rule 2: 网络外连检测 ----------
+// ---------- Rule 2: Network Access Detection ----------
 
 // NetworkAccessRule detects commands that connect to external networks.
 type NetworkAccessRule struct {
@@ -137,9 +133,7 @@ func NewNetworkAccessRule() *NetworkAccessRule {
 }
 
 // ID returns the unique identifier of this rule.
-func (r *NetworkAccessRule) ID() string {
-	return "network_002"
-}
+func (r *NetworkAccessRule) ID() string { return "network_002" }
 
 // Check inspects the input for network access keywords.
 func (r *NetworkAccessRule) Check(input ScanInput) *ScanResult {
@@ -147,21 +141,21 @@ func (r *NetworkAccessRule) Check(input ScanInput) *ScanResult {
 	if cmd == "" {
 		return nil
 	}
-	for _, keyword := range r.dangerousCmds {
-		if strings.Contains(cmd, keyword) {
+	for _, kw := range r.dangerousCmds {
+		if strings.Contains(cmd, kw) {
 			return &ScanResult{
 				Decision:  DecisionDeny,
 				RiskLevel: RiskHigh,
 				RuleID:    r.ID(),
-				Evidence:  keyword,
-				Reason:    "命令尝试进行网络访问：" + keyword + "。可能将数据外传或下载恶意内容。",
+				Evidence:  kw,
+				Reason:    "network access: " + kw,
 			}
 		}
 	}
 	return nil
 }
 
-// ---------- Rule 3: Shell 绕过检测 ----------
+// ---------- Rule 3: Shell Bypass Detection ----------
 
 // ShellBypassRule detects attempts to bypass shell safety restrictions
 // by using -c flags, eval, or other indirect execution methods.
@@ -185,9 +179,7 @@ func NewShellBypassRule() *ShellBypassRule {
 }
 
 // ID returns the unique identifier of this rule.
-func (r *ShellBypassRule) ID() string {
-	return "shell_bypass_003"
-}
+func (r *ShellBypassRule) ID() string { return "shell_bypass_003" }
 
 // Check inspects the input for shell bypass patterns.
 func (r *ShellBypassRule) Check(input ScanInput) *ScanResult {
@@ -195,46 +187,41 @@ func (r *ShellBypassRule) Check(input ScanInput) *ScanResult {
 	if cmd == "" {
 		return nil
 	}
-	for _, pattern := range r.bypassPatterns {
-		if strings.Contains(cmd, pattern) {
+	for _, p := range r.bypassPatterns {
+		if strings.Contains(cmd, p) {
 			return &ScanResult{
 				Decision:  DecisionDeny,
 				RiskLevel: RiskHigh,
 				RuleID:    r.ID(),
-				Evidence:  pattern,
-				Reason:    "命令尝试绕过 shell 安全检查：" + pattern + "。可能通过间接执行方式运行任意命令。",
+				Evidence:  p,
+				Reason:    "shell bypass attempt: " + p,
 			}
 		}
 	}
 	return nil
 }
 
-// ---------- Rule 4: 依赖安装与系统变更检测 ----------
+// ---------- Rule 4: Install and System Mutation Detection ----------
 
 // InstallAndMutateRule detects package manager installs and system config changes.
-type InstallAndMutateRule struct {
-	patterns []string
-}
+type InstallAndMutateRule struct{ patterns []string }
 
 // NewInstallAndMutateRule creates an install/mutation detection rule.
 func NewInstallAndMutateRule() *InstallAndMutateRule {
-	return &InstallAndMutateRule{
-		patterns: []string{
-			"apt install", "apt-get install", "apt-get update",
-			"yum install", "dnf install",
-			"pacman -S", "brew install",
-			"npm install", "npm i ",
-			"pip install", "pip3 install",
-			"go install", "go get ",
-			"gem install", "cargo install",
-			"snap install", "flatpak install",
-			"systemctl enable", "systemctl start",
-			"service start", "service enable",
-			"update-rc.d",
-			"crontab ",
-			"iptables ", "nft ",
-		},
-	}
+	return &InstallAndMutateRule{patterns: []string{
+		"apt install", "apt-get install", "apt-get update",
+		"yum install", "dnf install",
+		"pacman -S", "brew install",
+		"npm install", "npm i ",
+		"pip install", "pip3 install",
+		"go install", "go get ",
+		"gem install", "cargo install",
+		"snap install", "flatpak install",
+		"systemctl enable", "systemctl start",
+		"service start", "service enable",
+		"update-rc.d", "crontab ",
+		"iptables ", "nft ",
+	}}
 }
 
 // ID returns the unique identifier of this rule.
@@ -253,35 +240,31 @@ func (r *InstallAndMutateRule) Check(input ScanInput) *ScanResult {
 				RiskLevel: RiskMedium,
 				RuleID:    r.ID(),
 				Evidence:  p,
-				Reason:    "命令尝试安装软件或修改系统配置：" + p + "。可能引入恶意依赖或破坏系统稳定性。",
+				Reason:    "install or system mutation: " + p,
 			}
 		}
 	}
 	return nil
 }
 
-// ---------- Rule 5: 宿主机执行风险检测 ----------
+// ---------- Rule 5: Host Execution Risk Detection ----------
 
 // HostExecRiskRule detects host-level operations that only apply to the local executor.
-type HostExecRiskRule struct {
-	risks []string
-}
+type HostExecRiskRule struct{ risks []string }
 
 // NewHostExecRiskRule creates a host execution risk detection rule.
 func NewHostExecRiskRule() *HostExecRiskRule {
-	return &HostExecRiskRule{
-		risks: []string{
-			"tty", "pty",
-			"nohup ", "disown", "bg ", "fg ",
-			"daemon", "fork",
-			"sudo ", "su -", "su root",
-			"chmod 777", "chmod -R 777",
-			"chown root", "chown :root",
-			"setuid", "setgid",
-			"insmod ", "modprobe ", "rmmod ",
-			"mount ", "umount ",
-		},
-	}
+	return &HostExecRiskRule{risks: []string{
+		"tty", "pty",
+		"nohup ", "disown", "bg ", "fg ",
+		"daemon", "fork",
+		"sudo ", "su -", "su root",
+		"chmod 777", "chmod -R 777",
+		"chown root", "chown :root",
+		"setuid", "setgid",
+		"insmod ", "modprobe ", "rmmod ",
+		"mount ", "umount ",
+	}}
 }
 
 // ID returns the unique identifier of this rule.
@@ -303,23 +286,21 @@ func (r *HostExecRiskRule) Check(input ScanInput) *ScanResult {
 				RiskLevel: RiskCritical,
 				RuleID:    r.ID(),
 				Evidence:  risk,
-				Reason:    "命令包含宿主机执行风险操作：" + risk + "。可能影响宿主机安全或稳定性。",
+				Reason:    "host execution risk: " + risk,
 			}
 		}
 	}
 	return nil
 }
 
-// ---------- Rule 6: 资源滥用检测 ----------
+// ---------- Rule 6: Resource Abuse Detection ----------
 
 // ResourceAbuseRule detects resource exhaustion patterns such as infinite loops
 // and fork bombs.
 type ResourceAbuseRule struct{}
 
 // NewResourceAbuseRule creates a resource abuse detection rule.
-func NewResourceAbuseRule() *ResourceAbuseRule {
-	return &ResourceAbuseRule{}
-}
+func NewResourceAbuseRule() *ResourceAbuseRule { return &ResourceAbuseRule{} }
 
 // ID returns the unique identifier of this rule.
 func (r *ResourceAbuseRule) ID() string { return "resource_006" }
@@ -330,78 +311,40 @@ func (r *ResourceAbuseRule) Check(input ScanInput) *ScanResult {
 	if cmd == "" {
 		return nil
 	}
-	loopPatterns := []string{
-		"while true", "while :", "for (( ; ; ))",
-		"while [ 1 ]", "while [[ 1 ]]",
-	}
-	for _, lp := range loopPatterns {
+	for _, lp := range []string{"while true", "while :", "for (( ; ; ))", "while [ 1 ]", "while [[ 1 ]]"} {
 		if strings.Contains(cmd, lp) {
-			return &ScanResult{
-				Decision:  DecisionDeny,
-				RiskLevel: RiskHigh,
-				RuleID:    r.ID(),
-				Evidence:  lp,
-				Reason:    "命令包含无限循环：" + lp + "。可能导致 CPU 或内存资源耗尽。",
-			}
+			return &ScanResult{Decision: DecisionDeny, RiskLevel: RiskHigh, RuleID: r.ID(), Evidence: lp, Reason: "infinite loop: " + lp}
 		}
 	}
-	fbPatterns := []string{
-		":(){ :|:& };:",
-		"() {",
-	}
-	for _, fp := range fbPatterns {
+	for _, fp := range []string{":(){ :|:& };:", "() {"} {
 		if strings.Contains(cmd, fp) {
-			return &ScanResult{
-				Decision:  DecisionDeny,
-				RiskLevel: RiskCritical,
-				RuleID:    r.ID(),
-				Evidence:  fp,
-				Reason:    "命令包含 fork bomb 模式，可能导致系统崩溃。",
-			}
+			return &ScanResult{Decision: DecisionDeny, RiskLevel: RiskCritical, RuleID: r.ID(), Evidence: fp, Reason: "fork bomb pattern"}
 		}
 	}
-	resourceCmds := []string{
-		"stress ", "stress-ng",
-		"yes ", "dd if=/dev/zero of=",
-		">/dev/null", ": >",
-		"sha256sum /dev/zero", "md5sum /dev/zero",
-	}
-	for _, rc := range resourceCmds {
+	for _, rc := range []string{"stress ", "stress-ng", "yes ", "dd if=/dev/zero of=", ">/dev/null", ": >", "sha256sum /dev/zero", "md5sum /dev/zero"} {
 		if strings.Contains(cmd, rc) {
-			return &ScanResult{
-				Decision:  DecisionDeny,
-				RiskLevel: RiskHigh,
-				RuleID:    r.ID(),
-				Evidence:  rc,
-				Reason:    "命令尝试消耗大量系统资源：" + rc + "。",
-			}
+			return &ScanResult{Decision: DecisionDeny, RiskLevel: RiskHigh, RuleID: r.ID(), Evidence: rc, Reason: "resource exhaustion: " + rc}
 		}
 	}
 	return nil
 }
 
-// ---------- Rule 7: 敏感信息泄漏检测 ----------
+// ---------- Rule 7: Sensitive Information Leak Detection ----------
 
-// SensitiveInfoLeakRule detects patterns that may leak credentials
-// or sensitive data to files.
-type SensitiveInfoLeakRule struct {
-	patterns []string
-}
+// SensitiveInfoLeakRule detects patterns that may leak credentials or sensitive data to files.
+type SensitiveInfoLeakRule struct{ patterns []string }
 
 // NewSensitiveInfoLeakRule creates a sensitive info leak detection rule.
 func NewSensitiveInfoLeakRule() *SensitiveInfoLeakRule {
-	return &SensitiveInfoLeakRule{
-		patterns: []string{
-			"api_key", "apikey", "api_secret", "apisecret",
-			"access_key", "secret_key",
-			"private_key", "privatekey",
-			"password", "passwd", "passphrase",
-			"db_password", "db_pass",
-			"token", "bearer", "jwt",
-			"auth_token", "refresh_token",
-			" > ", ">>",
-		},
-	}
+	return &SensitiveInfoLeakRule{patterns: []string{
+		"api_key", "apikey", "api_secret", "apisecret",
+		"access_key", "secret_key", "private_key", "privatekey",
+		"password", "passwd", "passphrase",
+		"db_password", "db_pass",
+		"token", "bearer", "jwt",
+		"auth_token", "refresh_token",
+		" > ", ">>",
+	}}
 }
 
 // ID returns the unique identifier of this rule.
@@ -409,45 +352,41 @@ func (r *SensitiveInfoLeakRule) ID() string { return "leak_007" }
 
 // Check inspects the input for sensitive information leakage patterns.
 func (r *SensitiveInfoLeakRule) Check(input ScanInput) *ScanResult {
-	allText := combineInput(input)
-	if allText == "" {
+	all := combineInput(input)
+	if all == "" {
 		return nil
 	}
 	for _, p := range r.patterns {
-		if !strings.Contains(allText, p) {
+		if !strings.Contains(all, p) {
 			continue
 		}
-		if (strings.Contains(allText, "echo ") || strings.Contains(allText, "cat ") ||
-			strings.Contains(allText, "printf ")) && strings.Contains(allText, ">") {
+		if (strings.Contains(all, "echo ") || strings.Contains(all, "cat ") ||
+			strings.Contains(all, "printf ")) && strings.Contains(all, ">") {
 			return &ScanResult{
 				Decision:  DecisionDeny,
 				RiskLevel: RiskCritical,
 				RuleID:    r.ID(),
 				Evidence:  p,
-				Reason:    "命令可能将敏感信息写入文件：" + p + "。存在凭据泄漏风险。",
+				Reason:    "sensitive info leak: " + p,
 			}
 		}
 	}
 	return nil
 }
 
-// ---------- Rule 8: 人工复核（ask 决策）----------
+// ---------- Rule 8: Human Review (ask decision) ----------
 
 // AskForReviewRule returns DecisionAsk for commands that are
 // potentially risky but may have legitimate use cases.
-type AskForReviewRule struct {
-	patterns []string
-}
+type AskForReviewRule struct{ patterns []string }
 
 // NewAskForReviewRule creates a rule that returns ask for risky-but-legitimate commands.
 func NewAskForReviewRule() *AskForReviewRule {
-	return &AskForReviewRule{
-		patterns: []string{
-			"rm -r", "git push", "docker push",
-			"kubectl delete", "drop table", "truncate ",
-			"force",
-		},
-	}
+	return &AskForReviewRule{patterns: []string{
+		"rm -r", "git push", "docker push",
+		"kubectl delete", "drop table", "truncate ",
+		"force",
+	}}
 }
 
 // ID returns the unique identifier of this rule.
@@ -466,7 +405,7 @@ func (r *AskForReviewRule) Check(input ScanInput) *ScanResult {
 				RiskLevel: RiskMedium,
 				RuleID:    r.ID(),
 				Evidence:  p,
-				Reason:    "命令需要人工审核：" + p + "。该操作可能合法，但存在风险。",
+				Reason:    "requires human review: " + p,
 			}
 		}
 	}
