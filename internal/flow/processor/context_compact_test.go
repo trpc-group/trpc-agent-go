@@ -897,6 +897,102 @@ func TestCompactIncrementEvents_AddsRecoverableTruncationRef(t *testing.T) {
 	require.Contains(t, got, "tool_name=worker")
 }
 
+func TestCompactIncrementEvents_CurrentResultNoSessionLoadHint(t *testing.T) {
+	content := "HEAD-" + strings.Repeat("middle-", 400) + "-TAIL"
+	evt := event.Event{
+		ID:           "evt-current",
+		RequestID:    "req-current",
+		InvocationID: "inv-current",
+		FilterKey:    "test-agent",
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewToolMessage(
+					"tool-call-current",
+					"worker",
+					content,
+				),
+			}},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		[]event.Event{evt},
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled:                      true,
+			SessionLoadRecoveryEnabled:   true,
+			OversizedToolResultMaxTokens: 80,
+		},
+	)
+
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+	got := compacted[0].Response.Choices[0].Message.Content
+	require.Contains(t, got, "characters truncated from tool result")
+	require.Contains(t, got, "event_id=evt-current")
+	require.Contains(t, got, "tool_call_id=tool-call-current")
+	require.NotContains(t, got, "session_load")
+	require.Contains(t, got, "re-run only safe read-only/idempotent tools")
+}
+
+func TestCompactIncrementEvents_HistoryResultHasSessionLoadHint(t *testing.T) {
+	content := "HEAD-" + strings.Repeat("middle-", 400) + "-TAIL"
+	events := []event.Event{
+		{
+			RequestID:    "req-current",
+			InvocationID: "inv-current",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						"tool-call-current",
+						"worker",
+						"ok",
+					),
+				}},
+			},
+		},
+		{
+			ID:           "evt-history",
+			RequestID:    "req-history",
+			InvocationID: "inv-history",
+			FilterKey:    "test-agent",
+			Response: &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						"tool-call-history",
+						"worker",
+						content,
+					),
+				}},
+			},
+		},
+	}
+
+	compacted, stats := compactIncrementEvents(
+		context.Background(),
+		events,
+		"req-current",
+		"inv-current",
+		ContextCompactionConfig{
+			Enabled:                      true,
+			SessionLoadRecoveryEnabled:   true,
+			OversizedToolResultMaxTokens: 80,
+		},
+	)
+
+	require.Equal(t, 1, stats.ToolResultsCompacted)
+	got := compacted[1].Response.Choices[0].Message.Content
+	require.Contains(t, got, "characters truncated from tool result")
+	require.Contains(t, got, "event_id=evt-history")
+	require.Contains(t, got, "tool_call_id=tool-call-history")
+	require.Contains(t, got, "session_load")
+}
+
 func TestCompactIncrementEvents_DoesNotTruncateSessionLoadResult(t *testing.T) {
 	content := "SESSION_LOAD_HEAD-" + strings.Repeat("loaded-history-", 300) + "-SESSION_LOAD_TAIL"
 	evt := event.Event{

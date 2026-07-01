@@ -29,6 +29,9 @@ const (
 	SearchToolName = "session_search"
 	// LoadToolName loads a small history window around one anchor result.
 	LoadToolName = "session_load"
+	// currentSessionAlias is accepted by model-generated tool calls as a
+	// natural way to refer to the active session.
+	currentSessionAlias = "current"
 
 	// ScopeCurrentHidden searches summarized-away history in the current
 	// session.
@@ -104,7 +107,7 @@ type SearchSessionResponse struct {
 
 // LoadSessionRequest is the input for session_load.
 type LoadSessionRequest struct {
-	SessionID string `json:"session_id,omitempty" jsonschema:"description=Target session ID. Defaults to the current session when omitted."`
+	SessionID string `json:"session_id,omitempty" jsonschema:"description=Target session ID. Defaults to the current session when omitted or set to current."`
 	EventID   string `json:"event_id,omitempty" jsonschema:"description=Anchor event ID to load around. Prefer this when available."`
 	// ToolCallID is a current-session fallback when event_id is unavailable.
 	ToolCallID string `json:"tool_call_id,omitempty" jsonschema:"description=Optional fallback tool call ID when event_id is unavailable."`
@@ -243,7 +246,7 @@ func currentSessionKey(
 		return session.Key{}, errSessionRequired
 	}
 	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
+	if sessionID == "" || strings.EqualFold(sessionID, currentSessionAlias) {
 		sessionID = inv.Session.ID
 	}
 	key := session.Key{

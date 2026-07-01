@@ -353,6 +353,7 @@ func compactIncrementEvents(
 		passEvents, passStats := applyOversizedToolResultPass(
 			ctx,
 			compacted,
+			currentKey,
 			cfg.OversizedToolResultMaxTokens,
 			cfg,
 		)
@@ -488,16 +489,25 @@ func compactHistoricalToolResultEvent(
 func applyOversizedToolResultPass(
 	ctx context.Context,
 	events []event.Event,
+	currentKey string,
 	maxTokens int,
 	cfg ContextCompactionConfig,
 ) ([]event.Event, ContextCompactionStats) {
 	var stats ContextCompactionStats
 	for i := range events {
+		sessionLoadRecoveryEnabled := cfg.SessionLoadRecoveryEnabled
+		if currentKey != "" &&
+			compactionUnitKey(
+				events[i].RequestID,
+				events[i].InvocationID,
+			) == currentKey {
+			sessionLoadRecoveryEnabled = false
+		}
 		evt, changed, compactedCount, savedTokens := rewriteToolResultEventMessages(
 			ctx,
 			events[i],
 			maxTokens,
-			cfg.SessionLoadRecoveryEnabled,
+			sessionLoadRecoveryEnabled,
 			func(ctx context.Context, msg model.Message, maxTokens int, ref toolResultRecoveryRef) (model.Message, bool, int) {
 				if cfg.keepToolResult(msg) {
 					return msg, false, 0
