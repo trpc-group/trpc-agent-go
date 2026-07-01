@@ -100,7 +100,7 @@ func runCrossBackendCase(t *testing.T, url string, tc replaytest.ReplayCase) *re
 func crossBackendReplayCases() []replaytest.ReplayCase {
 	cases := make([]replaytest.ReplayCase, 0, len(replaytest.AllCases()))
 	for _, tc := range replaytest.AllCases() {
-		if tc.RequiredCaps.NeedsMemory || tc.Name == "summary_async_pipeline" {
+		if tc.RequiredCaps.NeedsMemory || tc.RequiredCaps.NeedsAsyncSummary {
 			continue
 		}
 		cases = append(cases, tc)

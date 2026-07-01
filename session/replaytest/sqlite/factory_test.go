@@ -56,10 +56,14 @@ func runCrossBackendCase(t *testing.T, tc replaytest.ReplayCase) *replaytest.Rep
 	))
 	sqliteSession, sqliteMemory, sqliteProfile, err := sqliteFactory()
 	if err != nil {
+		_ = db.Close()
 		t.Fatal(err)
 	}
-	defer sqliteSession.Close()
-	defer sqliteMemory.Close()
+	defer func() {
+		_ = sqliteSession.Close()
+		_ = sqliteMemory.Close()
+		_ = db.Close()
+	}()
 
 	inMemorySession := sessioninmemory.NewSessionService(
 		sessioninmemory.WithSummarizer(replaytest.NewFakeSummarizer()),
@@ -94,7 +98,7 @@ func runCrossBackendCase(t *testing.T, tc replaytest.ReplayCase) *replaytest.Rep
 func crossBackendReplayCases() []replaytest.ReplayCase {
 	cases := make([]replaytest.ReplayCase, 0, len(replaytest.AllCases()))
 	for _, tc := range replaytest.AllCases() {
-		if tc.RequiredCaps.NeedsMemory || tc.Name == "summary_async_pipeline" {
+		if tc.RequiredCaps.NeedsMemory || tc.RequiredCaps.NeedsAsyncSummary {
 			continue
 		}
 		cases = append(cases, tc)

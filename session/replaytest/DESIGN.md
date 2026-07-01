@@ -22,6 +22,7 @@ Allowed diff rules are explicit and path-scoped. They support ignore,
 same-type, not-empty, and numeric-delta matching, and they are applied only
 after a real comparison has produced a diff. Backend integration is dependency
 injected through `NamedBackend`: lightweight runs use InMemory, SQLite is wired
-from the separate `session/replaytest/sqlite` module, and Redis, PostgreSQL,
-MySQL, and ClickHouse remain placeholder factories until real adapter modules
-are provided.
+from the separate `session/replaytest/sqlite` module, and Redis is wired from
+`session/replaytest/redis` with an environment-gated adapter that requires a
+running Redis instance. PostgreSQL, MySQL, and ClickHouse remain placeholder
+factories until real adapter modules are provided.

@@ -112,7 +112,12 @@ func (h *Harness) compareSnapshots(
 ) []ComparisonResult {
 	if len(snapshots) <= 1 {
 		if len(snapshots) == 1 {
-			return []ComparisonResult{{Status: StatusPassed}}
+			refName := h.reference
+			for name := range snapshots {
+				refName = name
+				break
+			}
+			return []ComparisonResult{{Status: StatusPassed, Reference: refName}}
 		}
 		return nil
 	}
@@ -137,12 +142,12 @@ func (h *Harness) compareSnapshots(
 			break
 		}
 	}
-	for name, snapshot := range snapshots {
+	for _, name := range sortedKeys(snapshots) {
 		if name == refName {
 			continue
 		}
 		cmp := h.comparator.Compare(
-			snapshots[refName], snapshot, tc.AllowedDiffs,
+			snapshots[refName], snapshots[name], tc.AllowedDiffs,
 			profiles[refName], profiles[name],
 		)
 		cmp.Reference = refName
@@ -250,7 +255,11 @@ func (e *caseExecutor) executeAddMemory(ctx context.Context, step AddMemoryStep)
 	if err := e.backend.MemoryService.AddMemory(ctx, step.UserKey, step.Memory, step.Topics); err != nil {
 		return err
 	}
-	e.snapshot.Memories, _ = e.backend.MemoryService.ReadMemories(ctx, step.UserKey, 0)
+	memories, err := e.backend.MemoryService.ReadMemories(ctx, step.UserKey, 0)
+	if err != nil {
+		return err
+	}
+	e.snapshot.Memories = memories
 	return nil
 }
 
