@@ -122,6 +122,79 @@ func TestEnsureSessionFallsBackToExistingSession(t *testing.T) {
 	require.Equal(t, got, exec.sessions[defaultSessionKey])
 }
 
+func TestHarnessRunPropagatesCaseError(t *testing.T) {
+	sessionSvc := sessioninmemory.NewSessionService()
+	defer sessionSvc.Close()
+	h := NewHarness(DefaultHarnessOpts())
+	h.AddBackend(NamedBackend{
+		Name:           "inmemory",
+		Profile:        InMemoryProfile(),
+		SessionService: sessionSvc,
+	})
+
+	report, err := h.Run([]ReplayCase{{
+		Name:  "unknown_step",
+		Steps: []ReplayStep{unknownReplayStep{key: "bad.step"}},
+	}})
+	require.Error(t, err)
+	require.Nil(t, report)
+	require.Contains(t, err.Error(), "unknown step type")
+}
+
+func TestExecuteCaseCapturesSessionWithoutExplicitGet(t *testing.T) {
+	sessionSvc := sessioninmemory.NewSessionService()
+	defer sessionSvc.Close()
+
+	snapshot, err := executeCase(context.Background(), ReplayCase{
+		Name: "fallback_capture",
+		Steps: []ReplayStep{
+			UpdateStateStep{
+				Key:        "session.state",
+				Scope:      ScopeSession,
+				SessionKey: defaultSessionKey,
+				State:      session.StateMap{"captured": []byte("true")},
+			},
+		},
+	}, NamedBackend{
+		Name:           "inmemory",
+		Profile:        InMemoryProfile(),
+		SessionService: sessionSvc,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, snapshot.Session)
+	require.Equal(t, []byte("true"), snapshot.Session.State["captured"])
+}
+
+func TestExecuteUpdateStateDeletesAppState(t *testing.T) {
+	sessionSvc := sessioninmemory.NewSessionService()
+	defer sessionSvc.Close()
+
+	snapshot, err := executeCase(context.Background(), ReplayCase{
+		Name: "app_state_delete",
+		Steps: []ReplayStep{
+			UpdateStateStep{
+				Key:     "app.set",
+				Scope:   ScopeApp,
+				AppName: defaultSessionKey.AppName,
+				State:   session.StateMap{"temp": []byte("value")},
+			},
+			UpdateStateStep{
+				Key:       "app.delete",
+				Scope:     ScopeApp,
+				AppName:   defaultSessionKey.AppName,
+				DeleteKey: "temp",
+			},
+			ListAppStatesStep{Key: "app.list", AppName: defaultSessionKey.AppName},
+		},
+	}, NamedBackend{
+		Name:           "inmemory",
+		Profile:        InMemoryProfile(),
+		SessionService: sessionSvc,
+	})
+	require.NoError(t, err)
+	require.Empty(t, snapshot.AppStates)
+}
+
 func TestExecuteAddMemoryPropagatesReadError(t *testing.T) {
 	readErr := errors.New("read memories failed")
 	sessionSvc := sessioninmemory.NewSessionService()
@@ -353,6 +426,14 @@ func (s createErrorSessionService) CreateSession(
 type sessionOnlyService struct {
 	session.Service
 }
+
+type unknownReplayStep struct {
+	key string
+}
+
+func (s unknownReplayStep) Type() string { return "unknown" }
+
+func (s unknownReplayStep) LogicalKey() string { return s.key }
 
 func TestNewHarnessKeepsEmptyMode(t *testing.T) {
 	h := NewHarness(HarnessOpts{})

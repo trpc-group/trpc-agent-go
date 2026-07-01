@@ -79,6 +79,17 @@ func TestComparatorDetectsDuplicateEventKeyAcrossBranches(t *testing.T) {
 	require.Contains(t, result.Diffs[0].Path, "count")
 }
 
+func TestComparatorDetectsEventOnlyInSecondSnapshot(t *testing.T) {
+	a := testSnapshotWithEvents("a", nil)
+	b := testSnapshotWithEvents("b", []event.Event{
+		*testEvent("only.in.b", "assistant", "new event"),
+	})
+
+	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), InMemoryProfile())
+	require.Equal(t, StatusFailed, result.Status)
+	requireDiff(t, result.Diffs, "events[only.in.b]", "missing", "present")
+}
+
 func TestComparatorDetectsScopedStateDiffs(t *testing.T) {
 	a := &SessionSnapshot{
 		BackendName: "a",
@@ -113,6 +124,20 @@ func TestComparatorMemoryProfile(t *testing.T) {
 	b.MemSearchResults = []*memory.Entry{{ID: "target", Memory: &memory.Memory{Memory: "likes Go"}}}
 	result = NewComparator().Compare(a, b, nil, InMemoryProfile(), vector)
 	require.Equal(t, StatusPassed, result.Status)
+}
+
+func TestComparatorNonStrictMemoryReportsMissingTarget(t *testing.T) {
+	a := &SessionSnapshot{BackendName: "a", Memories: []*memory.Entry{
+		{ID: "target", Memory: &memory.Memory{Memory: "likes Go"}},
+	}}
+	b := &SessionSnapshot{BackendName: "b"}
+	vector := InMemoryProfile()
+	vector.RetrievalProfile.Algorithm = "cosine_vector"
+
+	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), vector)
+	require.Equal(t, StatusFailed, result.Status)
+	requireDiff(t, result.Diffs, "memory_search[target]", "target present", "target missing")
+	require.False(t, containsMemoryID([]*memory.Entry{nil, &memory.Entry{ID: "other"}}, "target"))
 }
 
 func TestAllowedDiffMatchRules(t *testing.T) {
@@ -248,6 +273,16 @@ func requireDiffPathPrefix(t *testing.T, diffs []DiffResult, prefix string) {
 		}
 	}
 	t.Fatalf("diff prefix %q not found in %#v", prefix, diffs)
+}
+
+func requireDiff(t *testing.T, diffs []DiffResult, path string, valueA, valueB any) {
+	t.Helper()
+	for _, diff := range diffs {
+		if diff.Path == path && diff.ValueA == valueA && diff.ValueB == valueB {
+			return
+		}
+	}
+	t.Fatalf("diff %q with values %#v/%#v not found in %#v", path, valueA, valueB, diffs)
 }
 
 func testSnapshot(backend, userText, assistantText string) *SessionSnapshot {

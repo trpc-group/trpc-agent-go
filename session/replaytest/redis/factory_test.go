@@ -14,10 +14,9 @@ import (
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"

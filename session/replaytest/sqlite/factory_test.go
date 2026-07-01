@@ -13,11 +13,10 @@ package sqlite
 import (
 	"database/sql"
 	"testing"
-
-	"github.com/stretchr/testify/require"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/stretchr/testify/require"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest"
