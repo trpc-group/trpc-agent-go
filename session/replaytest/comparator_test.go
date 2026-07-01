@@ -63,6 +63,21 @@ func TestComparatorConcurrent(t *testing.T) {
 	require.Contains(t, result.Diffs[0].Path, "order")
 }
 
+func TestComparatorDetectsDuplicateEventKeyAcrossBranches(t *testing.T) {
+	a := testSnapshotWithEvents("a", []event.Event{
+		*testEvent("c13.user.1", "agent_x", "same"),
+	})
+	b := testSnapshotWithEvents("b", []event.Event{
+		*testEvent("c13.user.1", "agent_z", "same"),
+		*testEvent("c13.user.1", "agent_x", "same"),
+	})
+
+	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), InMemoryProfile())
+	require.Equal(t, StatusFailed, result.Status)
+	require.NotEmpty(t, result.Diffs)
+	require.Contains(t, result.Diffs[0].Path, "count")
+}
+
 func TestComparatorMemoryProfile(t *testing.T) {
 	a := &SessionSnapshot{BackendName: "a", Memories: []*memory.Entry{
 		{ID: "target", Score: 0.80, Memory: &memory.Memory{Memory: "likes Go"}},

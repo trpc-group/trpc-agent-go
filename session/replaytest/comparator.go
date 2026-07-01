@@ -149,6 +149,7 @@ func compareSessions(a, b *SessionSnapshot, add func(string, any, any)) {
 }
 
 func compareEvents(a, b []event.Event, add func(string, any, any)) {
+	compareEventCounts(a, b, add)
 	am := eventsByID(a)
 	bm := eventsByID(b)
 	for key, ea := range am {
@@ -179,6 +180,30 @@ func compareEvents(a, b []event.Event, add func(string, any, any)) {
 		}
 	}
 	compareEventOrder(a, b, add)
+}
+
+func compareEventCounts(a, b []event.Event, add func(string, any, any)) {
+	ac := eventIDCounts(a)
+	bc := eventIDCounts(b)
+	for key, countA := range ac {
+		countB := bc[key]
+		if countA != countB {
+			add("events["+key+"].count", countA, countB)
+		}
+	}
+	for key, countB := range bc {
+		if _, ok := ac[key]; !ok {
+			add("events["+key+"].count", 0, countB)
+		}
+	}
+}
+
+func eventIDCounts(events []event.Event) map[string]int {
+	out := make(map[string]int, len(events))
+	for _, evt := range events {
+		out[evt.ID]++
+	}
+	return out
 }
 
 func eventsByID(events []event.Event) map[string]event.Event {
