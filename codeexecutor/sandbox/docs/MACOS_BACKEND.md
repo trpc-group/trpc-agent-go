@@ -32,12 +32,18 @@ projection has backend-specific behavior for no-access globs, documented below.
 
 The backend includes a curated set of read-only macOS paths needed by common
 tools, dynamic libraries, shells, interpreters, and system metadata. This is a
-Codex-style compromise: stricter than allowing the whole host root, but practical
-enough for normal command execution.
+practical middle ground between strict minimalism and exposing the whole host
+root, while still keeping normal command execution workable.
 
 The baseline currently permits broad `sysctl-read` for tool compatibility. The
 filesystem allow-list remains path-scoped; future iterations may narrow sysctl
 access if compatibility data shows a smaller allow-list is sufficient.
+
+Host temporary directories such as `/tmp` and `/var/folders` are not granted as
+broad read roots. The runtime injects `TMPDIR`, `TMP`, and `TEMP` into the
+workspace `tmp` directory, and the Seatbelt profile only allows ancestor
+metadata for default temp path probes. Use `WithReadPaths` when a command must
+read host temp files outside the workspace.
 
 The defaults intentionally do not grant broad access to the user's home
 directory. Use `WithReadPaths` or `WithWritePaths` for host paths outside the

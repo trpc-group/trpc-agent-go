@@ -72,6 +72,8 @@ func TestMacOSSeatbeltProfileGeneration(t *testing.T) {
 		"(deny default)",
 		"(allow file-read* file-map-executable file-test-existence",
 		"(allow file-write*",
+		"(path-ancestors \"/tmp\")",
+		"(path-ancestors \"/var/folders\")",
 		sbplString(externalReadPolicyPath),
 		sbplString(externalWritePolicyPath),
 		"(require-not (literal " + sbplString(secretPolicyPath) + "))",
@@ -82,6 +84,84 @@ func TestMacOSSeatbeltProfileGeneration(t *testing.T) {
 		if !strings.Contains(policy, want) {
 			t.Fatalf("macOS policy missing %q:\n%s", want, policy)
 		}
+	}
+	for _, disallow := range []string{
+		`(subpath "/tmp")`,
+		`(subpath "/private/tmp")`,
+		`(subpath "/var/folders")`,
+		`(subpath "/private/var/folders")`,
+	} {
+		if strings.Contains(policy, disallow) {
+			t.Fatalf("macOS policy should not grant broad host temp read %q:\n%s", disallow, policy)
+		}
+	}
+}
+
+func TestMacOSPlatformTempMetadataPolicyOnly(t *testing.T) {
+	for _, root := range macosPlatformDefaultReadRoots() {
+		switch root {
+		case "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders", "/private/var/folders":
+			t.Fatalf("platform default read roots still include host temp path %q", root)
+		}
+	}
+	if !strings.Contains(macosPlatformTempMetadataPolicy, `(path-ancestors "/tmp")`) {
+		t.Fatalf("temp metadata policy missing /tmp ancestor metadata")
+	}
+}
+
+func TestMacOSSandboxExecRejectsHostTempFileRead(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	hostTemp := filepath.Join(os.TempDir(), "trpc-agent-sandbox-host-temp-probe")
+	if err := os.WriteFile(hostTemp, []byte("host-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(hostTemp) })
+
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/host-temp", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:  "/bin/cat",
+		Args: []string{hostTemp},
+	})
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if res.ExitCode == 0 {
+		t.Fatalf("host temp read unexpectedly succeeded: %#v", res)
+	}
+}
+
+func TestMacOSRuleTargetRejectsAbsoluteWorkspaceSymlinkGrant(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/symlink-grant", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	link := filepath.Join(ws.Path, "work", "escape-link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	profile := WorkspaceWriteProfile().WithWritePaths(link)
+	_, err = rt.macosSeatbeltProfile(profile, ws)
+	if !isKind(err, ErrPathDenied) {
+		t.Fatalf("symlink grant profile error = %v, want ErrPathDenied", err)
+	}
+	target, ok, err := rt.macosRuleTarget(
+		profile,
+		ws,
+		fileSystemRule{Kind: rulePath, Access: accessWrite, Path: link},
+	)
+	if !isKind(err, ErrPathDenied) || ok || target != "" {
+		t.Fatalf("macosRuleTarget = target=%q ok=%v err=%v, want denied", target, ok, err)
 	}
 }
 

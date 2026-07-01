@@ -118,6 +118,7 @@ func (r *Runtime) macosSeatbeltProfile(
 		macosBaseSeatbeltPolicy,
 		macosPlatformRootLiteralPolicy,
 		macosPlatformAliasPolicy,
+		macosPlatformTempMetadataPolicy,
 		"; allow read-only file operations",
 		readPolicy,
 		"; allow writable file operations",
@@ -138,6 +139,7 @@ func macosPreflightPolicy() string {
 		macosBaseSeatbeltPolicy,
 		macosPlatformRootLiteralPolicy,
 		macosPlatformAliasPolicy,
+		macosPlatformTempMetadataPolicy,
 		readPolicy,
 	}), "\n\n")
 }
@@ -152,6 +154,16 @@ const macosPlatformAliasPolicy = `; Preserve common macOS symlink spellings used
   (subpath "/var/select"))
 (allow file-read-metadata file-test-existence
   (path-ancestors "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin"))`
+
+const macosPlatformTempMetadataPolicy = `; Allow ancestor metadata for default temp path probes without granting host temp file reads.
+; Runtime injects TMPDIR/TMP/TEMP into the workspace tmp directory.
+(allow file-read-metadata file-test-existence
+  (path-ancestors "/tmp")
+  (path-ancestors "/private/tmp")
+  (path-ancestors "/var/tmp")
+  (path-ancestors "/private/var/tmp")
+  (path-ancestors "/var/folders")
+  (path-ancestors "/private/var/folders"))`
 
 func (r *Runtime) macosReadWriteRoots(
 	profile PermissionProfile,
@@ -216,20 +228,26 @@ func (r *Runtime) macosRuleTarget(
 			if err != nil {
 				return "", false, err
 			}
-			if rule.Access != accessNone {
-				wsAbs, err := filepath.Abs(ws.Path)
+			wsAbs, err := filepath.Abs(ws.Path)
+			if err != nil {
+				return "", false, err
+			}
+			if sameOrChild(wsAbs, target) {
+				rel, err := filepath.Rel(wsAbs, target)
 				if err != nil {
 					return "", false, err
 				}
-				if !sameOrChild(wsAbs, target) {
-					if _, err := filepath.EvalSymlinks(target); err != nil {
-						return "", false, deniedf(
-							ErrPathDenied,
-							"grant",
-							target,
-							"grant target unavailable",
-						)
-					}
+				resolved, _, err := r.resolveWorkspacePath(ws, rel)
+				return resolved, err == nil, err
+			}
+			if rule.Access != accessNone {
+				if _, err := filepath.EvalSymlinks(target); err != nil {
+					return "", false, deniedf(
+						ErrPathDenied,
+						"grant",
+						target,
+						"grant target unavailable",
+					)
 				}
 			}
 			return target, true, nil
@@ -481,13 +499,9 @@ func macosPlatformDefaultReadRoots() []string {
 		"/etc",
 		"/opt/homebrew/lib",
 		"/private/etc",
-		"/private/tmp",
 		"/private/var/db",
-		"/private/var/folders",
 		"/private/var/select",
-		"/private/var/tmp",
 		"/sbin",
-		"/tmp",
 		"/usr/bin",
 		"/usr/lib",
 		"/usr/libexec",
@@ -495,9 +509,7 @@ func macosPlatformDefaultReadRoots() []string {
 		"/usr/sbin",
 		"/usr/share",
 		"/var/db",
-		"/var/folders",
 		"/var/select",
-		"/var/tmp",
 	}
 }
 
