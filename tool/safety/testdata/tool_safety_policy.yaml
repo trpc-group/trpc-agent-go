@@ -1,0 +1,62 @@
+# Tool Execution Safety Guard policy.
+#
+# Every risk dimension below is data-driven: edit this file to change allowed
+# domains, forbidden paths or allowed/denied commands WITHOUT touching code.
+version: 1
+
+# Off by default: the guard is risk-based, not a strict allowlist. Set true to
+# require approval for any command not in allowed_commands.
+enforce_allowlist: false
+
+# Applied when a command cannot be conservatively parsed (deny or ask).
+default_decision_on_parse_failure: deny
+
+allowed_commands: [go, git, ls, cat, grep, echo, gofmt, test, head, tail, wc, sed, awk]
+denied_commands: [rm, dd, mkfs, shred, shutdown, reboot, mkfs.ext4]
+
+denied_path_patterns:
+  - "~/.ssh"
+  - "**/id_rsa"
+  - "**/id_ed25519"
+  - "**/*.pem"
+  - "**/.env*"
+  - "/etc/shadow"
+  - "~/.aws/credentials"
+  - "~/.netrc"
+  - "~/.docker/config.json"
+
+network:
+  commands: [curl, wget, nc, ncat, ssh, scp, sftp, telnet, socat]
+  allowed_domains: [github.com, proxy.golang.org, goproxy.cn, pkg.go.dev]
+
+dependency_install:
+  decision: ask
+  patterns:
+    - {cmd: go, args_prefix: [install]}
+    - {cmd: npm, args_prefix: [install]}
+    - {cmd: pnpm, args_prefix: [install]}
+    - {cmd: yarn, args_prefix: [add]}
+    - {cmd: pip, args_prefix: [install]}
+    - {cmd: pip3, args_prefix: [install]}
+    - {cmd: apt, args_prefix: [install]}
+    - {cmd: apt-get, args_prefix: [install]}
+    - {cmd: brew, args_prefix: [install]}
+    - {cmd: gem, args_prefix: [install]}
+    - {cmd: cargo, args_prefix: [install]}
+
+limits:
+  max_timeout_sec: 120
+  max_output_bytes: 1048576
+
+env_whitelist: [PATH, HOME, GOFLAGS, GOCACHE, GOPATH]
+
+secret_patterns:
+  # Broad key=value form first so it masks the whole assignment before
+  # narrower fixed-shape patterns match only a prefix.
+  - {name: generic_secret, regex: "(?i)(api[_-]?key|token|secret|password|passwd|pwd)\\s*[=:]\\s*['\"]?[^\\s'\"]{6,}"}
+  - {name: aws_access_key, regex: "AKIA[0-9A-Z]{16}"}
+  - {name: private_key, regex: "-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----"}
+
+# Optional per-rule risk overrides, e.g.:
+# risk_overrides:
+#   net.non_whitelist: critical
