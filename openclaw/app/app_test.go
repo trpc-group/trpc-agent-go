@@ -2558,6 +2558,11 @@ func TestNewAgent_SandboxOpenClawToolingGuidanceMatchesTools(t *testing.T) {
 		content,
 		"does not automatically mount host paths",
 	)
+	require.Contains(
+		t,
+		content,
+		"Do not use host system package managers",
+	)
 	require.NotContains(
 		t,
 		content,
@@ -2595,6 +2600,11 @@ func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
 		t,
 		sys,
 		"For real browser automation, use browser.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Do not use browser as a substitute for web search",
 	)
 }
 
@@ -2645,6 +2655,11 @@ func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
 		t,
 		sys,
 		"For real browser automation, use browser.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"missing search/fetch blocker",
 	)
 }
 
@@ -2731,6 +2746,88 @@ func TestOpenClawToolingGuidanceKeepsSecretBanAbsolute(t *testing.T) {
 		t,
 		openClawToolingGuidance,
 		"secrets, or large transcripts in memory files unless",
+	)
+}
+
+func TestOpenClawToolingGuidanceAvoidsLocalBrowserMedia(t *testing.T) {
+	t.Parallel()
+
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"Do not open local files through browser",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"normal browser policy blocks those paths",
+	)
+	require.Contains(
+		t,
+		browserToolingGuidance,
+		"Do not use browser to open local or generated files",
+	)
+	require.Contains(
+		t,
+		browserToolingGuidance,
+		"MEDIA or MEDIA_DIR",
+	)
+}
+
+func TestOpenClawToolingGuidancePrefersSearchTools(t *testing.T) {
+	t.Parallel()
+
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"When a web search tool such as duckduckgo_search is present",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"Use web_fetch for known result URLs",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"do not drive Google, Bing, or DuckDuckGo result pages",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"stop retrying that blocked path",
+	)
+}
+
+func TestOpenClawDeferredToolingGuidancePairsBrowserWithSearch(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	require.Contains(
+		t,
+		openClawDeferredToolingGuidance,
+		"include search and fetch tools with browser workers",
+	)
+	require.Contains(
+		t,
+		openClawDeferredToolingGuidance,
+		"avoid browser-only workers for search-engine lookup",
+	)
+}
+
+func TestOpenClawToolingGuidanceAvoidsSystemPackageManagers(t *testing.T) {
+	t.Parallel()
+
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"Do not use host system package managers",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"use preconfigured dependencies or ask for an explicit setup flow",
 	)
 }
 
@@ -4877,6 +4974,23 @@ func (t stubTool) Declaration() *tool.Declaration {
 	}
 }
 
+type stubCloseTool struct {
+	name     string
+	closeErr error
+	closed   *bool
+}
+
+func (t *stubCloseTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+func (t *stubCloseTool) Close() error {
+	if t.closed != nil {
+		*t.closed = true
+	}
+	return t.closeErr
+}
+
 type nilDeclTool struct{}
 
 func (t nilDeclTool) Declaration() *tool.Declaration {
@@ -5031,6 +5145,22 @@ func TestCloseToolSets_CloseErrorDoesNotPanic(t *testing.T) {
 	require.True(t, toolSetClosed)
 }
 
+func TestCloseTools_CloseErrorDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	toolClosed := false
+	closeTools([]tool.Tool{
+		nil,
+		&stubCloseTool{
+			name:     "stub",
+			closeErr: errors.New("boom"),
+			closed:   &toolClosed,
+		},
+		stubTool{name: "plain"},
+	})
+	require.True(t, toolClosed)
+}
+
 func TestRuntime_Close_ReturnsRunnerCloseError(t *testing.T) {
 	t.Parallel()
 
@@ -5046,6 +5176,23 @@ func TestRuntime_Close_ReturnsRunnerCloseError(t *testing.T) {
 
 	require.ErrorIs(t, rt.Close(), closeErr)
 	require.True(t, runnerClosed)
+}
+
+func TestRuntime_Close_ClosesTools(t *testing.T) {
+	t.Parallel()
+
+	toolClosed := false
+	rt := &Runtime{
+		tools: []tool.Tool{
+			&stubCloseTool{
+				name:   "browser",
+				closed: &toolClosed,
+			},
+		},
+	}
+
+	require.NoError(t, rt.Close())
+	require.True(t, toolClosed)
 }
 
 func TestRuntime_Close_ClosesEvolutionService(t *testing.T) {

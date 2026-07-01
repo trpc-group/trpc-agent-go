@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -532,6 +533,19 @@ func probeBrowserServerEndpoint(
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %s", resp.Status)
+	}
+	var payload struct {
+		Profiles []struct {
+			Name string `json:"name"`
+		} `json:"profiles"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(
+		&payload,
+	); err != nil {
+		return fmt.Errorf("decode browser server profiles: %w", err)
+	}
+	if payload.Profiles == nil {
+		return fmt.Errorf("browser server profiles response missing profiles")
 	}
 	return nil
 }
