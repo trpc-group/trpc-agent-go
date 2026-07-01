@@ -79,21 +79,27 @@ func main() {
 	persistedEvent := firstUserEvent(persisted)
 	persistedImage := firstPart(persistedEvent, model.ContentTypeImage)
 	persistedFile := firstPart(persistedEvent, model.ContentTypeFile)
+	firstRequest := rec.requests()[0]
 
 	fmt.Println("After first turn:")
-	fmt.Printf("- model request has image bytes: %t\n", len(firstImageData(rec.requests()[0])) > 0)
-	fmt.Printf("- persisted image bytes empty: %t\n", len(persistedImage.Image.Data) == 0)
-	fmt.Printf("- persisted image ContentRef present: %t\n", persistedImage.ContentRef != nil)
-	fmt.Printf("- persisted data URL removed from file part: %t\n", persistedFile.File.URL == "")
-	fmt.Printf("- persisted file ContentRef present: %t\n", persistedFile.ContentRef != nil)
+	fmt.Println("Runtime request sent to model:")
+	fmt.Printf("- image bytes len: %d\n", len(firstImageData(firstRequest)))
+	fmt.Printf("- file data URL present: %t\n", requestFileURL(firstRequest) != "")
+	fmt.Printf("- contains ContentRef: %t\n", requestHasContentRef(firstRequest))
+	fmt.Println("Persisted session event:")
+	fmt.Printf("- image bytes len: %d\n", len(persistedImage.Image.Data))
+	fmt.Printf("- image artifact ref: %s\n", artifactRef(persistedImage.ContentRef))
+	fmt.Printf("- file URL len: %d\n", len(persistedFile.File.URL))
+	fmt.Printf("- file artifact ref: %s\n", artifactRef(persistedFile.ContentRef))
 
 	if err := drainRun(ctx, r, model.NewUserMessage("Continue with the previous image.")); err != nil {
 		log.Fatalf("second run failed: %v", err)
 	}
 	secondRequest := rec.requests()[1]
 	fmt.Println("After second turn:")
-	fmt.Printf("- second request has hydrated historical image bytes: %t\n", len(firstImageData(secondRequest)) > 0)
-	fmt.Printf("- second request leaks artifact refs: %t\n", requestHasContentRef(secondRequest))
+	fmt.Println("Runtime request sent to model:")
+	fmt.Printf("- hydrated historical image bytes len: %d\n", len(firstImageData(secondRequest)))
+	fmt.Printf("- contains ContentRef: %t\n", requestHasContentRef(secondRequest))
 }
 
 type recordingModel struct {
@@ -189,6 +195,17 @@ func firstImageData(req *model.Request) []byte {
 	return nil
 }
 
+func requestFileURL(req *model.Request) string {
+	for _, msg := range req.Messages {
+		for _, part := range msg.ContentParts {
+			if part.Type == model.ContentTypeFile && part.File != nil && part.File.URL != "" {
+				return part.File.URL
+			}
+		}
+	}
+	return ""
+}
+
 func requestHasContentRef(req *model.Request) bool {
 	for _, msg := range req.Messages {
 		for _, part := range msg.ContentParts {
@@ -198,6 +215,13 @@ func requestHasContentRef(req *model.Request) bool {
 		}
 	}
 	return false
+}
+
+func artifactRef(ref *model.ContentRef) string {
+	if ref == nil {
+		return "<nil>"
+	}
+	return ref.ArtifactRef
 }
 
 func cloneRequest(req *model.Request) *model.Request {
