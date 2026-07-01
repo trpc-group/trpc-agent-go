@@ -1,6 +1,6 @@
 
 <!doctype html>
-<html lang="en" class="no-js">
+<html lang="zh" class="no-js">
   <head>
     
       <meta charset="utf-8">
@@ -8,28 +8,26 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/knowledge/extractor/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/zh/blog/multiagent-boundaries/">
       
       
-        <link rel="prev" href="../filter/">
+        <link rel="prev" href="../promptiter/">
       
       
-        <link rel="next" href="../management/">
       
-      
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
     
     
       
-        <title>Extractor - tRPC-Agent-Go</title>
+        <title>把工作放到合适边界：tRPC-Agent-Go Multi-Agent 设计与选型 - tRPC-Agent-Go</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.7e37652d.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -48,9 +46,9 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/extra.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
   
@@ -86,8 +84,8 @@
     <div data-md-component="skip">
       
         
-        <a href="#extractor-content-extraction" class="md-skip">
-          Skip to content
+        <a href="#trpc-agent-go-multi-agent" class="md-skip">
+          跳转至
         </a>
       
     </div>
@@ -99,10 +97,10 @@
       
 
 <header class="md-header" data-md-component="header">
-  <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../../" title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../assets/img/logo.png" alt="logo">
+  <img src="../../../assets/img/logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -119,7 +117,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Extractor
+              把工作放到合适边界：tRPC-Agent-Go Multi-Agent 设计与选型
             
           </span>
         </div>
@@ -159,20 +157,20 @@
       <div class="md-header__option">
   <div class="md-select">
     
-    <button class="md-header__button md-icon" aria-label="Select language">
+    <button class="md-header__button md-icon" aria-label="选择当前语言">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m12.87 15.07-2.54-2.51.03-.03A17.5 17.5 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2zm-2.62 7 1.62-4.33L19.12 17z"/></svg>
     </button>
     <div class="md-select__inner">
       <ul class="md-select__list">
         
           <li class="md-select__item">
-            <a href="./" hreflang="en" class="md-select__link">
+            <a href="../../../blog/multiagent-boundaries/" hreflang="en" class="md-select__link">
               English
             </a>
           </li>
         
           <li class="md-select__item">
-            <a href="../../zh/knowledge/extractor/" hreflang="zh" class="md-select__link">
+            <a href="./" hreflang="zh" class="md-select__link">
               中文
             </a>
           </li>
@@ -193,21 +191,21 @@
   <label class="md-search__overlay" for="__search"></label>
   <div class="md-search__inner" role="search">
     <form class="md-search__form" name="search">
-      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
       <label class="md-search__icon md-icon" for="__search">
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
         
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
       </label>
-      <nav class="md-search__options" aria-label="Search">
+      <nav class="md-search__options" aria-label="查找">
         
-          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
             
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
           </a>
         
-        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
           
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
         </button>
@@ -220,7 +218,7 @@
       <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
         <div class="md-search-result" data-md-component="search-result">
           <div class="md-search-result__meta">
-            Initializing search
+            正在初始化搜索引擎
           </div>
           <ol class="md-search-result__list" role="presentation"></ol>
         </div>
@@ -232,7 +230,7 @@
     
     
       <div class="md-header__source">
-        <a href="https://github.com/trpc-group/trpc-agent-go" title="Go to repository" class="md-source" data-md-component="source">
+        <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -253,7 +251,7 @@
         
           
             
-<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+<nav class="md-tabs" aria-label="标签" data-md-component="tabs">
   <div class="md-grid">
     <ul class="md-tabs__list">
       
@@ -263,13 +261,13 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href="../../" class="md-tabs__link">
         
   
   
     
   
-  Overview
+  概览
 
       </a>
     </li>
@@ -280,8 +278,6 @@
   
   
   
-    
-  
   
     
     
@@ -289,17 +285,15 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
+      <li class="md-tabs__item">
         <a href="../../agent/" class="md-tabs__link">
           
   
   
-  Components
+  组件
 
         </a>
       </li>
@@ -322,7 +316,7 @@
           
   
   
-  Server
+  服务
 
         </a>
       </li>
@@ -342,7 +336,7 @@
           
   
   
-  Observability
+  可观测
 
         </a>
       </li>
@@ -362,7 +356,7 @@
   
     
   
-  Ecosystem
+  生态
 
       </a>
     </li>
@@ -373,15 +367,17 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../blog/trpcagentgo/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../trpcagentgo/" class="md-tabs__link">
           
   
   
-  Blog
+  博客
 
         </a>
       </li>
@@ -409,18 +405,18 @@
   
 
 
-<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="导航栏" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href="../../" title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../assets/img/logo.png" alt="logo">
+  <img src="../../../assets/img/logo.png" alt="logo">
 
     </a>
     tRPC-Agent-Go
   </label>
   
     <div class="md-nav__source">
-      <a href="https://github.com/trpc-group/trpc-agent-go" title="Go to repository" class="md-source" data-md-component="source">
+      <a href="https://github.com/trpc-group/trpc-agent-go" title="前往仓库" class="md-source" data-md-component="source">
   <div class="md-source__icon md-icon">
     
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.0.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path fill="currentColor" d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
@@ -440,12 +436,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href="../../" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Overview
+    概览
     
   </span>
   
@@ -459,34 +455,29 @@
       
   
   
-    
   
   
-  
     
     
     
     
       
-        
-        
-      
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   
   <span class="md-ellipsis">
-    Components
+    组件
     
   </span>
   
@@ -494,10 +485,10 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
-            Components
+            组件
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -577,7 +568,7 @@
   
   
   <span class="md-ellipsis">
-    Goal Extension
+    Goal 扩展
     
   </span>
   
@@ -623,7 +614,7 @@
   
   
   <span class="md-ellipsis">
-    Task Run Runtime
+    Task Run 运行时
     
   </span>
   
@@ -692,7 +683,7 @@
   
   
   <span class="md-ellipsis">
-    Custom Agent
+    自定义 Agent
     
   </span>
   
@@ -861,7 +852,7 @@
   
   
   <span class="md-ellipsis">
-    Error Handling
+    错误处理
     
   </span>
   
@@ -1385,8 +1376,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1397,11 +1386,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_16" >
         
           
           <label class="md-nav__link" for="__nav_2_16" id="__nav_2_16_label" tabindex="0">
@@ -1417,7 +1406,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_16_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_16_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_16">
             <span class="md-nav__icon md-icon"></span>
             Knowledge
@@ -1431,12 +1420,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../../knowledge/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Overview
+    概述
     
   </span>
   
@@ -1454,7 +1443,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../embedder/" class="md-nav__link">
+      <a href="../../knowledge/embedder/" class="md-nav__link">
         
   
   
@@ -1477,7 +1466,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../reranker/" class="md-nav__link">
+      <a href="../../knowledge/reranker/" class="md-nav__link">
         
   
   
@@ -1500,7 +1489,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../query-enhancer/" class="md-nav__link">
+      <a href="../../knowledge/query-enhancer/" class="md-nav__link">
         
   
   
@@ -1523,12 +1512,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../source/" class="md-nav__link">
+      <a href="../../knowledge/source/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Source
+    数据源
     
   </span>
   
@@ -1546,12 +1535,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../code-rag/" class="md-nav__link">
+      <a href="../../knowledge/code-rag/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Code RAG (Beta)
+    代码知识库（Code RAG, Beta）
     
   </span>
   
@@ -1569,154 +1558,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../filter/" class="md-nav__link">
+      <a href="../../knowledge/extractor/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Filter
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-    
-  
-  
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Extractor
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
-        
-  
-  
-  <span class="md-ellipsis">
-    Extractor
-    
-  </span>
-  
-
-      </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#difference-between-extractor-reader-and-ocr" class="md-nav__link">
-    <span class="md-ellipsis">
-      Difference between Extractor, Reader, and OCR
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#current-integration-points" class="md-nav__link">
-    <span class="md-ellipsis">
-      Current integration points
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#docling-extractor" class="md-nav__link">
-    <span class="md-ellipsis">
-      Docling Extractor
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#example" class="md-nav__link">
-    <span class="md-ellipsis">
-      Example
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#when-to-use-an-extractor" class="md-nav__link">
-    <span class="md-ellipsis">
-      When to use an Extractor
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related-documents" class="md-nav__link">
-    <span class="md-ellipsis">
-      Related documents
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../management/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Management
+    内容提取器
     
   </span>
   
@@ -1734,7 +1581,53 @@
   
   
     <li class="md-nav__item">
-      <a href="../ocr/" class="md-nav__link">
+      <a href="../../knowledge/filter/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    过滤器
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    知识库管理
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../knowledge/ocr/" class="md-nav__link">
         
   
   
@@ -1776,7 +1669,7 @@
   
   
   <span class="md-ellipsis">
-    VectorStore
+    向量存储
     
   </span>
   
@@ -1787,7 +1680,7 @@
         <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_2_16_11_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_16_11">
             <span class="md-nav__icon md-icon"></span>
-            VectorStore
+            向量存储
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -1798,12 +1691,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/" class="md-nav__link">
+      <a href="../../knowledge/vectorstore/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Overview
+    概述
     
   </span>
   
@@ -1821,7 +1714,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/inmemory/" class="md-nav__link">
+      <a href="../../knowledge/vectorstore/inmemory/" class="md-nav__link">
         
   
   
@@ -1844,7 +1737,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/pgvector/" class="md-nav__link">
+      <a href="../../knowledge/vectorstore/pgvector/" class="md-nav__link">
         
   
   
@@ -1867,7 +1760,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/tcvector/" class="md-nav__link">
+      <a href="../../knowledge/vectorstore/tcvector/" class="md-nav__link">
         
   
   
@@ -1890,7 +1783,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/elasticsearch/" class="md-nav__link">
+      <a href="../../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
         
   
   
@@ -1913,7 +1806,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/qdrant/" class="md-nav__link">
+      <a href="../../knowledge/vectorstore/qdrant/" class="md-nav__link">
         
   
   
@@ -1936,7 +1829,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../vectorstore/milvus/" class="md-nav__link">
+      <a href="../../knowledge/vectorstore/milvus/" class="md-nav__link">
         
   
   
@@ -1967,12 +1860,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting/" class="md-nav__link">
+      <a href="../../knowledge/troubleshooting/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Troubleshooting
+    故障排除
     
   </span>
   
@@ -2116,7 +2009,7 @@
   
   
   <span class="md-ellipsis">
-    Server
+    服务
     
   </span>
   
@@ -2127,7 +2020,7 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
-            Server
+            服务
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -2207,7 +2100,7 @@
   
   
   <span class="md-ellipsis">
-    Overview
+    总览
     
   </span>
   
@@ -2230,7 +2123,7 @@
   
   
   <span class="md-ellipsis">
-    Real-Time Conversation Route
+    实时对话路由
     
   </span>
   
@@ -2253,7 +2146,7 @@
   
   
   <span class="md-ellipsis">
-    Messages Snapshot Route
+    消息快照路由
     
   </span>
   
@@ -2276,7 +2169,7 @@
   
   
   <span class="md-ellipsis">
-    Cancel Route
+    取消路由
     
   </span>
   
@@ -2397,7 +2290,7 @@
   
   
   <span class="md-ellipsis">
-    Observability
+    可观测
     
   </span>
   
@@ -2408,7 +2301,7 @@
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
-            Observability
+            可观测
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -2424,7 +2317,7 @@
   
   
   <span class="md-ellipsis">
-    Overview
+    概览
     
   </span>
   
@@ -2447,7 +2340,7 @@
   
   
   <span class="md-ellipsis">
-    Multimodal Telemetry
+    多模态遥测
     
   </span>
   
@@ -2477,7 +2370,7 @@
   
   
   <span class="md-ellipsis">
-    Ecosystem
+    生态
     
   </span>
   
@@ -2491,29 +2384,34 @@
       
   
   
+    
   
   
+  
     
     
     
     
-      
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
         
           
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
             
   
   
   <span class="md-ellipsis">
-    Blog
+    博客
     
   </span>
   
@@ -2521,10 +2419,10 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
-            Blog
+            博客
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
@@ -2535,12 +2433,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/trpcagentgo/" class="md-nav__link">
+      <a href="../trpcagentgo/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    A Go Agent Framework for Building Intelligent AI Applications
+    构建智能 AI 应用的 Go 语言 Agent 框架
     
   </span>
   
@@ -2558,12 +2456,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/summary/" class="md-nav__link">
+      <a href="../summary/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Context Management Design and Evaluation for Long-Running Agents
+    长任务 Agent 上下文管理的设计与评测
     
   </span>
   
@@ -2581,12 +2479,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/observability/" class="md-nav__link">
+      <a href="../observability/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Seeing the Agent Runtime: Observability Design in tRPC-Agent-Go
+    看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍
     
   </span>
   
@@ -2604,12 +2502,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/promptcache/" class="md-nav__link">
+      <a href="../promptcache/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Reducing Agent Token Cost: Prompt Cache Engineering in tRPC-Agent-Go
+    降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践
     
   </span>
   
@@ -2627,12 +2525,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/graphagent/" class="md-nav__link">
+      <a href="../graphagent/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    GraphAgent Seamlessly Combines AI Workflows and Agents
+    GraphAgent 让 AI 工作流与 Agent 无缝融合
     
   </span>
   
@@ -2650,12 +2548,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/agui/" class="md-nav__link">
+      <a href="../agui/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Quickly Build AG-UI-Based Agent Services
+    快速构建基于 AG-UI 的 Agent 服务
     
   </span>
   
@@ -2673,12 +2571,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/skill/" class="md-nav__link">
+      <a href="../skill/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    A Go-Native Implementation of the Anthropic Agent Skills Specification
+    Anthropic Agent Skills 规范的 Go 原生实现
     
   </span>
   
@@ -2696,12 +2594,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/evaluation/" class="md-nav__link">
+      <a href="../evaluation/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    A Complete Guide to AI Agent Automated Evaluation Paradigms and Engineering Practice
+    AI Agent 自动化评估范式与工程实践全解析
     
   </span>
   
@@ -2719,12 +2617,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/llmverifier/" class="md-nav__link">
+      <a href="../llmverifier/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Improving AI Agent Quality and Stability with LLM Verifier
+    AI Agent 高质量稳定性提升方法
     
   </span>
   
@@ -2742,12 +2640,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/openclaw/" class="md-nav__link">
+      <a href="../openclaw/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    Building an Enterprise-Grade, Secure, and Controllable OpenClaw Runtime
+    打造企业级安全可控的 OpenClaw Runtime
     
   </span>
   
@@ -2765,12 +2663,12 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/promptiter/" class="md-nav__link">
+      <a href="../promptiter/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
-    A Complete Guide to Automated Prompt Iteration and Engineering Practice for AI Agents
+    AI Agent 提示词自动迭代与工程实践全解析
     
   </span>
   
@@ -2785,20 +2683,203 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../blog/multiagent-boundaries/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    把工作放到合适边界：tRPC-Agent-Go Multi-Agent 设计与选型
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
   <span class="md-ellipsis">
-    Putting Work in the Right Boundary: Multi-Agent Design in tRPC-Agent-Go
+    把工作放到合适边界：tRPC-Agent-Go Multi-Agent 设计与选型
     
   </span>
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. 先从单 Agent 开始
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Agent 边界到底是什么
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. 六类边界问题
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-trpc-agent-go" class="md-nav__link">
+    <span class="md-ellipsis">
+      4. 用边界读 tRPC-Agent-Go 机制
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5" class="md-nav__link">
+    <span class="md-ellipsis">
+      5. 先分清三种回流路径
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. 先分清三种回流路径">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-agenttool" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.1 AgentTool：调用并返回
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-dynamic-agenttool" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.2 Dynamic AgentTool：按次装配能力
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-transfer-swarm" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.3 transfer 与 Swarm：谁接管当前轮
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-taskrun-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.4 TaskRun：变成可管理的 run
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#55-remote-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.5 Remote Agent：运行所有权在另一侧
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. 能力边界：过滤、固定、按次装配
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7" class="md-nav__link">
+    <span class="md-ellipsis">
+      7. 输出和观测：四个出口不要混在一起
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. 不要急着拆 Agent 的场景
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      结语
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      参考资料
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -2824,7 +2905,7 @@
                   <div class="md-sidebar__inner">
                     
 
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+<nav class="md-nav md-nav--secondary" aria-label="目录">
   
   
   
@@ -2833,59 +2914,146 @@
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
-      Table of contents
+      目录
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#difference-between-extractor-reader-and-ocr" class="md-nav__link">
+  <a href="#1-agent" class="md-nav__link">
     <span class="md-ellipsis">
-      Difference between Extractor, Reader, and OCR
+      1. 先从单 Agent 开始
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#current-integration-points" class="md-nav__link">
+  <a href="#2-agent" class="md-nav__link">
     <span class="md-ellipsis">
-      Current integration points
+      2. Agent 边界到底是什么
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#docling-extractor" class="md-nav__link">
+  <a href="#3" class="md-nav__link">
     <span class="md-ellipsis">
-      Docling Extractor
+      3. 六类边界问题
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#example" class="md-nav__link">
+  <a href="#4-trpc-agent-go" class="md-nav__link">
     <span class="md-ellipsis">
-      Example
+      4. 用边界读 tRPC-Agent-Go 机制
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#when-to-use-an-extractor" class="md-nav__link">
+  <a href="#5" class="md-nav__link">
     <span class="md-ellipsis">
-      When to use an Extractor
+      5. 先分清三种回流路径
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. 先分清三种回流路径">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#51-agenttool" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.1 AgentTool：调用并返回
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#52-dynamic-agenttool" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.2 Dynamic AgentTool：按次装配能力
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#53-transfer-swarm" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.3 transfer 与 Swarm：谁接管当前轮
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#54-taskrun-run" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.4 TaskRun：变成可管理的 run
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#55-remote-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      5.5 Remote Agent：运行所有权在另一侧
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6" class="md-nav__link">
+    <span class="md-ellipsis">
+      6. 能力边界：过滤、固定、按次装配
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#related-documents" class="md-nav__link">
+  <a href="#7" class="md-nav__link">
     <span class="md-ellipsis">
-      Related documents
+      7. 输出和观测：四个出口不要混在一起
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      8. 不要急着拆 Agent 的场景
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      结语
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      参考资料
     </span>
   </a>
   
@@ -2907,7 +3075,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/knowledge/extractor.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/zh/blog/multiagent-boundaries.md" title="编辑此页" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -2916,169 +3084,331 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/knowledge/extractor.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/zh/blog/multiagent-boundaries.md" title="查看本页的源代码" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="extractor-content-extraction">Extractor Content Extraction</h1>
+<h1 id="trpc-agent-go-multi-agent">把工作放到合适边界：tRPC-Agent-Go Multi-Agent 设计与选型</h1>
 <blockquote>
-<p><strong>Full example</strong>: <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/extractor">examples/knowledge/features/extractor</a></p>
+<p>Multi-Agent 的问题，通常不是“要不要多几个角色”，而是“这段工作为什么不适合继续留在当前 Agent 的运行边界里”。上下文、能力、控制权、生命周期、输出观测和运行环境不同，应该选择的 tRPC-Agent-Go 机制也不同。</p>
+<p><a href="https://github.com/trpc-group/trpc-agent-go/">tRPC-Agent-Go</a> 是面向 Go 语言的自主式多 Agent 框架，提供工具调用、会话与记忆管理、制品管理、多 Agent 协作、图编排、知识库、可观测等能力。tRPC-Agent-Go 的成长离不开社区支持，欢迎 Star 项目。</p>
 </blockquote>
-<p>Extractors are used before Reader and Chunking to convert complex raw inputs into an intermediate format that is easier to process downstream.</p>
-<p>The typical pipeline looks like this:</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>raw file / URL response body -&gt; Extractor -&gt; markdown / text -&gt; Reader -&gt; Chunking -&gt; Document
-</span></code></pre></div></td></tr></table></div>
-<p>This is useful for inputs such as PDFs, HTML, Office documents, and images that are not ideal for direct text chunking.</p>
-<h2 id="difference-between-extractor-reader-and-ocr">Difference between Extractor, Reader, and OCR</h2>
+<p>业务接入 Multi-Agent 能力时，真正卡住的往往不是概念，而是几个具体判断：</p>
 <ul>
-<li><strong>Extractor</strong>: converts complex formats into <code>markdown</code> or <code>text</code>; conceptually it is document conversion, and some implementations may also include OCR internally</li>
-<li><strong>Reader</strong>: reads <code>markdown</code>, <code>text</code>, <code>json</code>, <code>csv</code>, and other supported formats, then performs chunking</li>
-<li><strong>OCR</strong>: recognizes text from images or scanned pages, usually as an internal enhancement for PDF reading</li>
+<li>分析类 Agent 把一段复杂检索或统计交给专家以后，主 Agent 是否还要拿回结果继续协调？</li>
+<li>分流类 Agent 把用户交给专家以后，下一轮用户补充信息时，应该继续进入专家，还是重新从入口开始？</li>
+<li>生成类 Agent 需要反复修改同一份产物时，子 Agent 是否应该保留自己的历史轨道？</li>
+<li>支持、审核、咨询这类接力场景里，handoff 时应该传完整历史，还是只传目标 Agent 需要的输入？</li>
+<li>一个任务每次都需要不同工具、技能或约束时，是给主 Agent 挂更多工具，还是按次创建更窄的执行单元？</li>
+<li>外层流程已经用 Graph 编排时，节点内部是否还需要委派给别的 Agent？</li>
 </ul>
-<p>You can think of them like this:</p>
+<p>这些问题看起来分散，本质上都在问同一件事：这段工作需要换成怎样的运行边界。</p>
+<p>本文不把 tRPC-Agent-Go 的 Multi-Agent 能力写成 API 摘要。<code>AgentTool</code>、Dynamic AgentTool、<code>transfer_to_agent</code>、Team / Swarm、Chain / Parallel / Cycle / Graph、TaskRun、A2A / Remote Agent、Explorer 不是同一种能力的不同名字；它们改变的是不同边界。</p>
+<h2 id="1-agent">1. 先从单 Agent 开始</h2>
+<p>多数 Agent 系统的起点仍然应该是单 Agent：一个主 Agent，配一组工具、一段 instruction、必要的知识源和会话管理。只要这个结构能稳定完成任务，就不需要为了“看起来像团队”而拆成多个 Agent。</p>
+<p>Multi-Agent 真正变成工程问题，通常是因为单 Agent 的某条边界开始失效：</p>
 <ul>
-<li><code>Extractor</code> solves “first turn complex content into readable text”</li>
-<li><code>Reader</code> solves “how to organize text into documents and chunks”</li>
-<li><code>OCR</code> solves “whether text can be recognized from image content”</li>
+<li>上下文太脏，搜索、读取、试错、工具结果不断滚进后续轮次。</li>
+<li>能力面太宽，模型面对过多 tools、skills、knowledge，开始误选、漏选或幻觉能力。</li>
+<li>控制权需要交给专家，当前轮不应该再由入口 Agent 继续回答。</li>
+<li>生命周期超出一次调用，任务需要等待、查询、取消、读取过程或恢复。</li>
+<li>输出和观测需要分层，用户不一定要看到过程，父 Agent 却必须拿到可决策结果。</li>
+<li>运行环境本来就在另一套模型、executor、服务身份、权限或远程系统里。</li>
 </ul>
-<p>If your input is already in formats such as <code>.md</code>, <code>.txt</code>, or <code>.json</code>, you usually do not need an extra Extractor and can pass it directly to a Reader.</p>
-<p>If the input is a complex static web page, a complicated PDF, an academic paper, a poster, or other content with strong layout structure, it is generally better to use an <code>Extractor</code> first, especially an implementation such as <code>Docling</code> that preserves structure more effectively.</p>
-<h2 id="current-integration-points">Current integration points</h2>
-<p>The following Sources currently support content extraction via <code>WithExtractor(...)</code>:</p>
+<p>因此，选型时不要先问“要几个 Agent”，而要先问“为什么这段工作不能继续放在当前 Agent 里”。</p>
+<h2 id="2-agent">2. Agent 边界到底是什么</h2>
+<p>在 tRPC-Agent-Go 里，Agent 更适合被看成一层运行边界，而不只是一个 prompt 对象。它决定一段工作由谁执行，本轮请求装配哪些 instruction、messages、tools、skills、runtime state、callbacks，以及事件如何写回 session 和 trace。</p>
+<p>用模型调用的心智看，模型真正看到的是本轮 <code>messages</code> 和 <code>tools</code>。<code>session</code>、<code>memory</code>、runtime state、artifact、trace 都是框架侧事实；除非它们被投影进本轮 <code>messages</code>，或者被声明进本轮 <code>tools</code>，否则不会直接影响这次模型调用。</p>
+<p>所谓“父 Agent”“子 Agent”“当前响应归属谁”“能不能调用某个工具”，不是模型自己记住了身份，而是框架在这一轮运行里重新构造出来的上下文事实。</p>
+<p>所以，Multi-Agent 设计不是角色设计，而是边界设计。换 Agent 时真正变化的是：可见信息、可用能力、控制权、状态延续、输出去向和运行责任。</p>
+<h2 id="3">3. 六类边界问题</h2>
+<p>下面这张表可以作为第一轮判断。一个需求经常同时碰到两三项，但先把主问题问准，后面的 API 才不容易选错。</p>
+<table>
+<thead>
+<tr>
+<th>边界</th>
+<th>业务信号</th>
+<th>先问什么</th>
+<th>不要误判</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>上下文</td>
+<td>检索、读取、试错和工具结果很多，后续对话背着大量低信息密度过程</td>
+<td>父 Agent 需要完整过程，还是结论、证据和必要引用</td>
+<td>隔离不等于让父 Agent 什么都看不见</td>
+</tr>
+<tr>
+<td>能力</td>
+<td>tools、skills、knowledge 太多，模型开始误选、漏选或幻觉能力</td>
+<td>是同一 Agent 内过滤能力，还是建立新的能力边界</td>
+<td>工具可见性不是权限边界</td>
+</tr>
+<tr>
+<td>控制权</td>
+<td>当前轮不该只拿回一个结果，而应交给专家继续处理</td>
+<td>当前轮由谁接管，完成后是否回到主 Agent，下一轮入口是谁</td>
+<td>调用式委派不等于控制权接管</td>
+</tr>
+<tr>
+<td>生命周期</td>
+<td>工作离开当前调用后还要等待、查询、取消或读取过程</td>
+<td>它是否需要 run id、状态机、持久化和结果查询</td>
+<td>后台工作不是更长的一次 tool call</td>
+</tr>
+<tr>
+<td>输出和观测</td>
+<td>过程要被展示或审计，但不一定进入后续 prompt</td>
+<td>父 Agent 收到什么，用户看到什么，什么进入下一轮 <code>messages</code></td>
+<td>UI 隐藏不等于信息流可以断掉</td>
+</tr>
+<tr>
+<td>运行环境</td>
+<td>任务必须在另一套模型、executor、服务身份或远程系统里运行</td>
+<td>边界来自能力差异，还是部署、权限、团队和状态所有权</td>
+<td>不要只因为 prompt 像“专家”就拆服务</td>
+</tr>
+</tbody>
+</table>
+<h2 id="4-trpc-agent-go">4. 用边界读 tRPC-Agent-Go 机制</h2>
+<p>下面这张表不是 API 清单，而是默认边界索引：请求发给谁，带什么上下文，结果回谁，当前轮由谁继续处理。默认边界和业务预期对不上时，再看 option 或外部配套。</p>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>默认边界</th>
+<th>适合</th>
+<th>何时加 option 或配套</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>单 LLMAgent</td>
+<td>一个 Agent 用自己的 instruction 和工具面推进</td>
+<td>工具面可控、链路不复杂</td>
+<td>工具面过大、上下文污染、权限、模型或环境不同</td>
+</tr>
+<tr>
+<td>AgentTool</td>
+<td>固定子 Agent 作为同步 tool；默认隔离历史，结果以 tool result 回父 Agent</td>
+<td>查一下、审一下、分析一段内容</td>
+<td>继承父历史、稳定子历史、裁剪结果、转发内部 stream、跳过外层总结</td>
+</tr>
+<tr>
+<td>Dynamic AgentTool</td>
+<td>一个 <code>dynamic_agent</code> 入口；按次创建短生命周期子 Agent；默认隔离，不保留稳定子历史</td>
+<td>子任务需要临时收窄 instruction、tools 或 skills</td>
+<td>固定能力上限、能力 provider、字段暴露、超时、结果模式</td>
+</tr>
+<tr>
+<td><code>transfer_to_agent</code></td>
+<td><code>WithSubAgents</code> 暴露 transfer；目标 Agent 接管当前 invocation；默认原 Agent 结束当前轮</td>
+<td>当前轮应该由专家继续回答</td>
+<td>默认交接消息、是否结束、消息投影、跨轮 owner</td>
+</tr>
+<tr>
+<td>Coordinator Team</td>
+<td>成员被包装成 member tools；结果回 coordinator</td>
+<td>协调者调用多个成员完成当前轮</td>
+<td>成员历史、内部事件、成员正文展示、coordinator 是否总结</td>
+</tr>
+<tr>
+<td>Swarm</td>
+<td>entry member 开始；成员间 transfer 接力；默认下一轮仍从 entry 开始</td>
+<td>当前轮内多专家接力</td>
+<td>跨轮接管、独立成员历史、自定义 handoff 输入</td>
+</tr>
+<tr>
+<td>Chain / Parallel / Cycle</td>
+<td>代码结构承载顺序、并行或循环执行</td>
+<td>步骤明确、可重复、可评估</td>
+<td>子 Agent 间输入输出、终止条件、错误处理</td>
+</tr>
+<tr>
+<td>Graph</td>
+<td>图结构承载流程、路由、状态和节点执行</td>
+<td>固定或半固定流程，且需要状态、条件路由、检查点或恢复</td>
+<td>节点内部是否还需要 AgentTool / transfer，Graph 状态如何传给节点</td>
+</tr>
+<tr>
+<td>TaskRun</td>
+<td>控制工具启动 worker；worker 有 run id 和 child session；父 Agent 用 list / get / wait / cancel 管理</td>
+<td>长任务、可等待、可取消、可查结果</td>
+<td>外部存储、队列、租约、controller、恢复策略</td>
+</tr>
+<tr>
+<td>A2A / Remote Agent</td>
+<td>远程 Agent 以本地代理形态接入；不自动继承本地 session、memory、runtime state</td>
+<td>复用远程服务里的 Agent 或跨团队部署</td>
+<td>身份、会话映射、权限、memory、结果契约、可观测性</td>
+</tr>
+<tr>
+<td>Explorer</td>
+<td>内置探索 Agent；默认继承直接父 invocation 的用户工具、知识、skills 等能力面</td>
+<td>只读探索、信息收集、定位上下文</td>
+<td>read-only 是 prompt 软约束；硬隔离要收窄工具面或加权限策略</td>
+</tr>
+</tbody>
+</table>
+<p>Graph 这一行尤其容易误读。Graph 管的是外层流程、状态和路由；节点内部是否能继续委派，要看节点实际运行的 Agent 配了什么能力。<code>graphagent.WithSubAgents</code> 让图里的 <code>AddAgentNode(id)</code> 能找到对应 Agent，不会自动给每个 LLM 节点注入委派工具。固定专家步骤可以直接建成 Agent node；如果某个 LLM 节点内部还要自主委派，需要给该节点 Agent 配 AgentTool 或 <code>WithSubAgents</code>。</p>
+<h2 id="5">5. 先分清三种回流路径</h2>
+<p>让另一个 Agent 参与时，先不要急着看 option。先问请求怎么出去、结果怎么回来、当前轮由谁继续处理。tRPC-Agent-Go 里常见路径可以先压成三类。</p>
+<table>
+<thead>
+<tr>
+<th>路径</th>
+<th>包含机制</th>
+<th>默认心智</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>调用式委派</td>
+<td>AgentTool、Dynamic AgentTool、Coordinator member tool、包成 AgentTool 的 Remote Agent</td>
+<td>父 Agent 发出一个 request，目标做完后以 tool result 回到父 Agent</td>
+</tr>
+<tr>
+<td>接力式转移</td>
+<td><code>transfer_to_agent</code>、Swarm handoff、作为 sub-agent 的 Remote Agent</td>
+<td>目标 Agent 接管当前 invocation，输出不是先回原 Agent 的 tool result</td>
+</tr>
+<tr>
+<td>可管理 run</td>
+<td>TaskRun</td>
+<td>父 Agent 启动 worker，拿回 run id，再通过 list / get / wait / cancel 管理状态或结果</td>
+</tr>
+</tbody>
+</table>
+<h3 id="51-agenttool">5.1 AgentTool：调用并返回</h3>
+<p>AgentTool 适合“我需要一个专家结果，然后主 Agent 继续判断”。父 Agent 模型看到的是一个普通 tool；tool 内部运行子 Agent；子 Agent 的最终结果以 tool result 形式回到父 Agent，父 Agent 可以继续下一次模型调用。</p>
+<p>这里的关键不是子 Agent 名字，而是结果契约。父 Agent 不应该收到一大段原始过程，也不应该只收到“已完成”。更稳定的返回通常包含结论、证据、关键动作、不确定性、下一步和 artifact 引用。</p>
+<p>常见 option 要按出口理解：</p>
 <ul>
-<li><code>filesource.WithExtractor(...)</code></li>
-<li><code>dirsource.WithExtractor(...)</code></li>
-<li><code>urlsource.WithExtractor(...)</code></li>
-<li><code>autosource.WithExtractor(...)</code></li>
+<li><code>WithHistoryScope(agenttool.HistoryScopeParentBranch)</code>：子 Agent 可以继承父 branch 历史；默认 <code>NewTool</code> 是 isolated。</li>
+<li><code>WithPersistentHistory*</code>：固定 AgentTool 使用稳定 child history；适合同一个子 Agent 多次修改同一份产物或延续同一条工作轨道。</li>
+<li><code>WithResponseMode(agenttool.ResponseModeFinalOnly)</code>：tool result 只取子 Agent 最后一条完整 assistant message。</li>
+<li><code>WithStreamInner(true)</code>：内部事件向父流程转发，影响 UI / event stream，不等于所有过程进入父 Agent prompt。</li>
+<li><code>WithSkipSummarization(true)</code>：tool 返回后跳过外层总结型 LLM 调用，适合 passthrough 风格，不适合需要 coordinator 综合多个结果的场景。</li>
 </ul>
-<p>For <code>URL Source</code>, the common pipeline is:</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a>URL -&gt; download response body -&gt; Extractor -&gt; markdown -&gt; Markdown Reader -&gt; MarkdownChunking
-</span></code></pre></div></td></tr></table></div>
-<p>This means that when a URL returns complex content such as <code>application/pdf</code> or <code>text/html</code>, you can first pass it through an Extractor and then continue processing it with the appropriate Reader.</p>
-<p>For Extractors that support direct remote source fetching, such as Docling, <code>URL Source</code> can also call the service-side URL conversion API directly instead of downloading the response locally first.</p>
-<h2 id="docling-extractor">Docling Extractor</h2>
-<p>The built-in content extractor currently provided in this repository is <code>Docling</code>:</p>
+<h3 id="52-dynamic-agenttool">5.2 Dynamic AgentTool：按次装配能力</h3>
+<p>Dynamic AgentTool 适合“每次子任务都要临时收窄 instruction、tools 或 skills”。它暴露一个默认名为 <code>dynamic_agent</code> 的入口，运行时按本次 tool call 创建短生命周期子 Agent。</p>
+<p>“动态”不是让模型任意创建 Agent。代码仍然定义能力上限：可以来自父 invocation 的有效能力面，也可以通过 <code>WithCapabilityTools</code>、<code>WithCapabilityProvider</code>、<code>WithCapabilitySurfaceProvider</code>、<code>WithCapabilitySkills</code> 等方式指定。模型只能在这个边界内选择子集，不能任意选择模型、executor 或远程目标。</p>
+<p>它解决的是能力面问题，不解决长期记忆问题。<code>NewDynamicTool</code> 设计上是短生命周期，<code>WithPersistentHistory*</code> 会被忽略。如果需求是“同一个子 Agent 下次继续改同一份产物”，优先考虑固定 AgentTool 的 persistent history，或者把产物状态外置成 artifact / 数据库对象。</p>
+<h3 id="53-transfer-swarm">5.3 transfer 与 Swarm：谁接管当前轮</h3>
+<p><code>transfer_to_agent</code> 回答的是“当前 invocation 应该由谁继续处理”。当 LLMAgent 配置了 <code>WithSubAgents</code> 后，框架会暴露 <code>transfer_to_agent</code>。目标 Agent 被启动后切换到自己的 instruction 和工具面继续当前轮输出；默认情况下，原 Agent 在 transfer 后结束当前轮。</p>
+<p>这和 AgentTool 是不同心智：</p>
 <ul>
-<li>package path: <code>trpc.group/trpc-go/trpc-agent-go/knowledge/extractor/docling</code></li>
-<li>default support: <code>.pdf</code>, <code>.html</code>, <code>.docx</code>, <code>.pptx</code>, images, <code>.csv</code>, and more</li>
-<li>default output: <code>markdown</code></li>
+<li>AgentTool 是“专家做完，把结果作为 tool result 还给我”。</li>
+<li>transfer 是“这轮交给专家继续处理”。</li>
 </ul>
-<p>If you want to try it locally, you can start <code>Docling Serve</code> with Docker:</p>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>docker<span class="w"> </span>run<span class="w"> </span>-p<span class="w"> </span><span class="m">5001</span>:5001<span class="w"> </span>ghcr.io/docling-project/docling-serve
-</span></code></pre></div></td></tr></table></div>
-<p><code>Docling</code> has a relatively low barrier to entry for local usage and is practical to run directly on a development machine for document conversion experiments.</p>
-<p>Docling is a good fit for:</p>
+<p>Swarm 把这种 handoff 封装成 Team 语义。默认每个新用户消息从 entry member 开始；如果要让上一次 handoff 的目标继续拥有后续用户轮次，需要启用 <code>team.WithCrossRequestTransfer(true)</code>，并复用同一个 session。若成员需要私有历史，可以配 <code>team.WithSwarmIndependentAgents()</code>；若 handoff 输入不应该只是 <code>transfer_to_agent</code> 的 <code>message</code> 字段，可以配 <code>team.WithSwarmHandoffInputBuilder</code>。</p>
+<p>因此，“transfer 后下一轮还在不在子 Agent”不能只看 <code>sessionID</code>。<code>sessionID</code> 说明事件落在哪个会话容器里；active member 决定下一轮入口；message filter 和 projector 决定后续模型请求实际看到什么。</p>
+<h3 id="54-taskrun-run">5.4 TaskRun：变成可管理的 run</h3>
+<p>TaskRun 适合“这段工作不能被当前 invocation 包住”。比如它可能跑得久，父 Agent 不应该一直等；后续还需要查询状态、等待结果、取消任务或读取 transcript。</p>
+<p>TaskRun 的核心不是“更久的 AgentTool”，而是 run contract。<code>start_task_run</code> 创建带 run id 的工作，通常在 child session 里执行；父 Agent 后续通过 <code>list_task_runs</code>、<code>get_task_run</code>、<code>wait_task_run</code>、<code>cancel_task_run</code> 管理它。配置 transcript 工具后，还可以读取子 session 片段。</p>
+<p><code>sync</code> 模式只是让控制工具等待子 run 进入终态；它仍然会创建 run id，并走同一套生命周期。生产级 TaskRun 还需要外部存储、队列、租约、取消、重试和恢复策略。框架的 in-process 实现适合本地、测试和单进程适配层；多节点部署应实现自己的 <code>taskrun.Controller</code>。</p>
+<h3 id="55-remote-agent">5.5 Remote Agent：运行所有权在另一侧</h3>
+<p>A2AAgent 是远程 Agent 的本地代理，它实现 <code>agent.Agent</code>。这意味着它可以像普通 Agent 一样被 Runner 执行，也可以放进其他协作模式里。</p>
+<p>但 Remote Agent 只说明运行环境在另一侧，不自动决定回流路径。把 A2AAgent 包成 AgentTool，它就是调用式委派；把它作为 sub-agent，它就可以参与 transfer；把它作为 Graph 节点目标，它就是流程节点。</p>
+<p>远程边界需要额外设计：身份、会话映射、权限、memory、runtime state、artifact、错误语义、trace 关联和结果契约都不会因为“它也是 Agent”而自动一致。</p>
+<h2 id="6">6. 能力边界：过滤、固定、按次装配</h2>
+<p>能力面变大时，常见解法有三层。</p>
+<p><strong>同一 Agent 内过滤。</strong> <code>agent.WithToolFilter(...)</code> 或 <code>llmagent.WithToolFilter(...)</code> 适合用户、会话、租户、模式等低频稳定过滤。它成本低，但没有建立新的 Agent 边界。工具可见性也不是权限边界；真正的执行权限仍要在工具、executor 和 permission policy 里兜住。</p>
+<p><strong>固定能力边界。</strong> AgentTool、<code>WithSubAgents</code>、Coordinator member、Swarm member、TaskRun worker、A2AAgent 都可以把一组稳定的 instruction、tools、skills、model 或 executor 封成更小的工作单元。主 Agent 不必直接背所有工具，只面对稳定的能力入口。</p>
+<p><strong>按次装配。</strong> Dynamic AgentTool 适合每次子任务都要临时收窄能力的场景。它应该由代码定义能力池，再让模型在本次 invocation 内选择子集。不要把它当成长期子 Agent，也不要把高频变化的工具面塞进主 Agent 的每次模型请求里；频繁改变 tool schema 和相关 instruction 往往会降低 prompt cache 命中，也会让行为更难复现。</p>
+<p>一个实用判断是：低频、稳定的收窄，先用过滤；稳定分工，用固定子 Agent 或固定目标 Agent；按次变化，再考虑 Dynamic AgentTool。</p>
+<h2 id="7">7. 输出和观测：四个出口不要混在一起</h2>
+<p>引入子 Agent 后，最容易混在一起的是四个出口：</p>
+<table>
+<thead>
+<tr>
+<th>出口</th>
+<th>需要回答的问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>父 Agent 收到什么</td>
+<td>它后续决策需要哪些结论、证据、假设、下一步和 artifact 引用</td>
+</tr>
+<tr>
+<td>用户看到什么</td>
+<td>是否展示内部 stream、进度、成员输出或最终回答</td>
+</tr>
+<tr>
+<td>trace / artifact 留下什么</td>
+<td>哪些过程要用于调试、审计、复现或大结果存储</td>
+</tr>
+<tr>
+<td>后续 <code>messages</code> 投影什么</td>
+<td>下一次模型请求实际会带哪些历史、tool result 或 foreign-agent context</td>
+</tr>
+</tbody>
+</table>
+<p>UI 不展示内部过程，不代表父 Agent 不需要结果；trace 里有完整过程，也不代表都要塞回 prompt；父 Agent 跳过总结，不代表 tool result 的内容契约可以省略。</p>
+<p>一个稳妥的子 Agent 返回契约通常包括：</p>
 <ul>
-<li>PDF -&gt; Markdown</li>
-<li>HTML pages -&gt; Markdown</li>
-<li>Office documents -&gt; Markdown / text</li>
+<li>结论：任务完成到什么程度，判断是什么。</li>
+<li>证据：依据来自哪里，是否可追溯。</li>
+<li>假设和不确定性：哪些前提没有验证，哪里可能出错。</li>
+<li>关键动作：做过哪些重要查询、检查或修改，不必重放完整过程。</li>
+<li>下一步：应该继续调用工具、追问用户，还是可以最终回答。</li>
+<li>artifact 引用：大结果、文件、报告、任务状态不塞进 prompt，只传可定位引用。</li>
 </ul>
-<p>For scanned PDFs, image-based PDFs, and structurally complex HTML / Office documents, <strong>Docling should generally be the preferred main processing path</strong>.</p>
-<p>Also note that <code>Docling</code> already includes OCR capability internally, so in this kind of pipeline you usually <strong>do not need to configure a separate OCR capability in addition to it</strong>.</p>
-<h2 id="example">Example</h2>
-<p>The example below shows how to inject Docling into URL Source so that linked content is extracted before chunking:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-3-10">10</a></span>
-<span class="normal"><a href="#__codelineno-3-11">11</a></span>
-<span class="normal"><a href="#__codelineno-3-12">12</a></span>
-<span class="normal"><a href="#__codelineno-3-13">13</a></span>
-<span class="normal"><a href="#__codelineno-3-14">14</a></span>
-<span class="normal"><a href="#__codelineno-3-15">15</a></span>
-<span class="normal"><a href="#__codelineno-3-16">16</a></span>
-<span class="normal"><a href="#__codelineno-3-17">17</a></span>
-<span class="normal"><a href="#__codelineno-3-18">18</a></span>
-<span class="normal"><a href="#__codelineno-3-19">19</a></span>
-<span class="normal"><a href="#__codelineno-3-20">20</a></span>
-<span class="normal"><a href="#__codelineno-3-21">21</a></span>
-<span class="normal"><a href="#__codelineno-3-22">22</a></span>
-<span class="normal"><a href="#__codelineno-3-23">23</a></span>
-<span class="normal"><a href="#__codelineno-3-24">24</a></span>
-<span class="normal"><a href="#__codelineno-3-25">25</a></span>
-<span class="normal"><a href="#__codelineno-3-26">26</a></span>
-<span class="normal"><a href="#__codelineno-3-27">27</a></span>
-<span class="normal"><a href="#__codelineno-3-28">28</a></span>
-<span class="normal"><a href="#__codelineno-3-29">29</a></span>
-<span class="normal"><a href="#__codelineno-3-30">30</a></span>
-<span class="normal"><a href="#__codelineno-3-31">31</a></span>
-<span class="normal"><a href="#__codelineno-3-32">32</a></span>
-<span class="normal"><a href="#__codelineno-3-33">33</a></span>
-<span class="normal"><a href="#__codelineno-3-34">34</a></span>
-<span class="normal"><a href="#__codelineno-3-35">35</a></span>
-<span class="normal"><a href="#__codelineno-3-36">36</a></span>
-<span class="normal"><a href="#__codelineno-3-37">37</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a><span class="w">    </span><span class="s">&quot;context&quot;</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/extractor/docling&quot;</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">urlsource</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/source/url&quot;</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="c1">// Register the markdown reader for extractor output.</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/markdown&quot;</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="p">)</span>
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="kd">func</span><span class="w"> </span><span class="nx">main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">()</span>
-</span><span id="__span-3-15"><a id="__codelineno-3-15" name="__codelineno-3-15"></a>
-</span><span id="__span-3-16"><a id="__codelineno-3-16" name="__codelineno-3-16"></a><span class="w">    </span><span class="nx">ext</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">docling</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-3-17"><a id="__codelineno-3-17" name="__codelineno-3-17"></a><span class="w">        </span><span class="nx">docling</span><span class="p">.</span><span class="nx">WithEndpoint</span><span class="p">(</span><span class="s">&quot;http://localhost:5001&quot;</span><span class="p">),</span>
-</span><span id="__span-3-18"><a id="__codelineno-3-18" name="__codelineno-3-18"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-3-19"><a id="__codelineno-3-19" name="__codelineno-3-19"></a><span class="w">    </span><span class="k">defer</span><span class="w"> </span><span class="nx">ext</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
-</span><span id="__span-3-20"><a id="__codelineno-3-20" name="__codelineno-3-20"></a>
-</span><span id="__span-3-21"><a id="__codelineno-3-21" name="__codelineno-3-21"></a><span class="w">    </span><span class="nx">src</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-3-22"><a id="__codelineno-3-22" name="__codelineno-3-22"></a><span class="w">        </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span>
-</span><span id="__span-3-23"><a id="__codelineno-3-23" name="__codelineno-3-23"></a><span class="w">            </span><span class="s">&quot;https://arxiv.org/pdf/1706.03762&quot;</span><span class="p">,</span>
-</span><span id="__span-3-24"><a id="__codelineno-3-24" name="__codelineno-3-24"></a><span class="w">            </span><span class="s">&quot;https://www.rfc-editor.org/rfc/rfc9110.html&quot;</span><span class="p">,</span>
-</span><span id="__span-3-25"><a id="__codelineno-3-25" name="__codelineno-3-25"></a><span class="w">        </span><span class="p">},</span>
-</span><span id="__span-3-26"><a id="__codelineno-3-26" name="__codelineno-3-26"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithExtractor</span><span class="p">(</span><span class="nx">ext</span><span class="p">),</span>
-</span><span id="__span-3-27"><a id="__codelineno-3-27" name="__codelineno-3-27"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithChunkSize</span><span class="p">(</span><span class="mi">500</span><span class="p">),</span>
-</span><span id="__span-3-28"><a id="__codelineno-3-28" name="__codelineno-3-28"></a><span class="w">        </span><span class="nx">urlsource</span><span class="p">.</span><span class="nx">WithChunkOverlap</span><span class="p">(</span><span class="mi">50</span><span class="p">),</span>
-</span><span id="__span-3-29"><a id="__codelineno-3-29" name="__codelineno-3-29"></a><span class="w">    </span><span class="p">)</span>
-</span><span id="__span-3-30"><a id="__codelineno-3-30" name="__codelineno-3-30"></a>
-</span><span id="__span-3-31"><a id="__codelineno-3-31" name="__codelineno-3-31"></a><span class="w">    </span><span class="nx">docs</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">src</span><span class="p">.</span><span class="nx">ReadDocuments</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
-</span><span id="__span-3-32"><a id="__codelineno-3-32" name="__codelineno-3-32"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-3-33"><a id="__codelineno-3-33" name="__codelineno-3-33"></a><span class="w">        </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-</span><span id="__span-3-34"><a id="__codelineno-3-34" name="__codelineno-3-34"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-3-35"><a id="__codelineno-3-35" name="__codelineno-3-35"></a>
-</span><span id="__span-3-36"><a id="__codelineno-3-36" name="__codelineno-3-36"></a><span class="w">    </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">docs</span>
-</span><span id="__span-3-37"><a id="__codelineno-3-37" name="__codelineno-3-37"></a><span class="p">}</span>
-</span></code></pre></div></td></tr></table></div>
-<p>For a more complete example, see <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/features/extractor">examples/knowledge/features/extractor</a>.</p>
-<h2 id="when-to-use-an-extractor">When to use an Extractor</h2>
-<p>Recommended cases for using an <code>Extractor</code>:</p>
+<h2 id="8-agent">8. 不要急着拆 Agent 的场景</h2>
+<p>选型不只要判断什么时候用，也要判断什么时候先不用。</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>更稳的选择</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>只是想调整 instruction 或工具描述</td>
+<td>先改单 Agent 的 instruction、tool description 或 planner</td>
+</tr>
+<tr>
+<td>输入输出确定、单次调用就能完成</td>
+<td>直接封装 tool，不必只为形式再包一层 Agent</td>
+</tr>
+<tr>
+<td>流程固定，比如规划 -&gt; 执行 -&gt; 审查</td>
+<td>Chain、Cycle、Graph 往往比模型自主协作更清楚</td>
+</tr>
+<tr>
+<td>父 Agent 需要关键过程才能判断</td>
+<td>不要过度隔离，至少返回关键证据、过程摘要或 artifact 引用</td>
+</tr>
+<tr>
+<td>只是工具可见性不同</td>
+<td>低频变化用 tool filter；执行前兜底用 permission policy</td>
+</tr>
+<tr>
+<td>没有 trace、UI 和状态管理支撑</td>
+<td>不要轻易引入复杂异步或长期子 Agent</td>
+</tr>
+</tbody>
+</table>
+<p>并发和异步当然可能缩短端到端耗时，但效率不应该是默认拆 Agent 的第一叙事。很多时候，用户更需要的是效果稳定、上下文干净、工具选择可靠，而不是看起来并行了多少个角色。</p>
+<h2 id="_1">结语</h2>
+<p>调用式委派、控制权接管、跨轮入口、run 生命周期、远程运行所有权、UI / trace 展示和 <code>messages</code> 投影，是不同边界。</p>
+<p>所以，不要问“哪个 API 更像 Multi-Agent”，而要问：这段工作需要换哪条边界。主上下文太脏，就处理上下文；能力面太宽，就收窄能力；当前轮需要目标 Agent 接管，才讨论 transfer 或 Swarm；任务要离开当前调用，才讨论 TaskRun；如果只是固定流程，就优先用代码、Chain、Cycle 或 Graph 承载骨架。</p>
+<p>边界判断清楚以后，API 名字反而不容易选错。</p>
+<h2 id="_2">参考资料</h2>
 <ul>
-<li>when you want to preserve better structure from PDF / HTML content</li>
-<li>when the original format is not suitable for direct reading by existing Readers</li>
-<li>when you want to normalize multiple complex formats into Markdown before entering the same chunking pipeline</li>
-</ul>
-<p>Cases where you may not need an <code>Extractor</code>:</p>
-<ul>
-<li>the input is already <code>.md</code>, <code>.txt</code>, <code>.json</code>, or another directly readable format</li>
-<li>you only need plain text extraction from PDF and do not care about Markdown structure</li>
-<li>you only need OCR on image content rather than full document conversion</li>
-</ul>
-<p>Cases where <code>OCR</code> may be a better fit than an <code>Extractor</code>:</p>
-<ul>
-<li>the input is a single image or a pure image stream</li>
-<li>you only care about recognized plain text, not Markdown structure or layout preservation</li>
-<li>you want OCR to be used as an internal enhancement for a Reader instead of introducing a full document conversion service</li>
-</ul>
-<h2 id="related-documents">Related documents</h2>
-<ul>
-<li><a href="../source/">Source</a> - Source types and configuration</li>
-<li><a href="../ocr/">OCR</a> - OCR for scanned documents and images</li>
-<li><a href="../">Knowledge overview</a> - Overall Knowledge module architecture and capabilities</li>
+<li><a href="https://github.com/trpc-group/trpc-agent-go">tRPC-Agent-Go GitHub</a></li>
+<li><a href="../../multiagent/">Multi-Agent 文档</a></li>
+<li><a href="../../team/">Team 文档</a></li>
+<li><a href="../../taskrun/">TaskRun 文档</a></li>
+<li><a href="../../graph/">Graph 文档</a></li>
+<li><a href="../../a2a/">A2A 文档</a></li>
+<li><a href="../../tool/">Tool 文档</a></li>
 </ul>
 
 
@@ -3099,20 +3429,20 @@
     
       
   <span class="md-source-file__fact">
-    <span class="md-icon" title="Last update">
+    <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 10, 2026 07:58:56 UTC">2026-04-10 07:58:56</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月1日 04:31:06 UTC">2026-07-01 04:31:06</span>
   </span>
 
     
     
       
   <span class="md-source-file__fact">
-    <span class="md-icon" title="Created">
+    <span class="md-icon" title="创建日期">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="April 10, 2026 07:58:56 UTC">2026-04-10 07:58:56</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月1日 04:31:06 UTC">2026-07-01 04:31:06</span>
   </span>
 
     
@@ -3190,40 +3520,24 @@
   
     
       
-      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
         
           
-          <a href="../filter/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Filter">
+          <a href="../promptiter/" class="md-footer__link md-footer__link--prev" aria-label="上一页: AI Agent 提示词自动迭代与工程实践全解析">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
             </div>
             <div class="md-footer__title">
               <span class="md-footer__direction">
-                Previous
+                上一页
               </span>
               <div class="md-ellipsis">
-                Filter
+                AI Agent 提示词自动迭代与工程实践全解析
               </div>
             </div>
           </a>
         
-        
-          
-          <a href="../management/" class="md-footer__link md-footer__link--next" aria-label="Next: Management">
-            <div class="md-footer__title">
-              <span class="md-footer__direction">
-                Next
-              </span>
-              <div class="md-ellipsis">
-                Management
-              </div>
-            </div>
-            <div class="md-footer__button md-icon">
-              
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
-            </div>
-          </a>
         
       </nav>
     
@@ -3252,12 +3566,12 @@
     
     
       
-      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "../../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.92b07e13.min.js"></script>
       
-        <script src="../../assets/javascripts/mathjax.js"></script>
+        <script src="../../../assets/javascripts/mathjax.js"></script>
       
         <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
       
