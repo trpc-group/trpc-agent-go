@@ -14,6 +14,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 	"time"
 
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
@@ -112,4 +114,17 @@ func redisKeyPrefix(t *testing.T) string {
 	t.Helper()
 	name := strings.NewReplacer("/", "-", " ", "-", "_", "-").Replace(t.Name())
 	return "replaytest:" + name + ":" + time.Now().UTC().Format("20060102150405.000000000")
+}
+
+func TestNormalizeURL(t *testing.T) {
+	require.Equal(t, "redis://localhost:6379", normalizeURL("localhost:6379"))
+	require.Equal(t, "redis://example.com:6380", normalizeURL("redis://example.com:6380"))
+}
+
+func TestFactoryOpts(t *testing.T) {
+	var o factoryOpts
+	WithSessionOpts()(&o)
+	require.Nil(t, o.sessionOpts)
+	WithMemoryOpts()(&o)
+	require.Nil(t, o.memoryOpts)
 }

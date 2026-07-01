@@ -276,3 +276,50 @@ func testEvent(key, branch, content string) *event.Event {
 	evt.Timestamp = time.Time{}
 	return evt
 }
+
+func TestMissingCapabilitiesAllBranches(t *testing.T) {
+	tests := []struct {
+		name     string
+		required RequiredCapabilities
+		mut      func(*BackendProfile)
+		feature  string
+	}{
+		{"window", RequiredCapabilities{NeedsWindow: true}, func(p *BackendProfile) { p.SupportsWindow = false }, "window"},
+		{"search", RequiredCapabilities{NeedsSearch: true}, func(p *BackendProfile) { p.SupportsSearch = false }, "search"},
+		{"memory", RequiredCapabilities{NeedsMemory: true}, func(p *BackendProfile) { p.RetrievalProfile.Algorithm = ""; p.Name = "test" }, "memory"},
+		{"async_summary", RequiredCapabilities{NeedsAsyncSummary: true}, func(p *BackendProfile) { p.SupportsAsyncSummary = false }, "async_summary"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := InMemoryProfile()
+			tc.mut(&p)
+			unsupported := MissingCapabilities(tc.required, p)
+			require.Len(t, unsupported, 1)
+			require.Equal(t, tc.feature, unsupported[0].Feature)
+		})
+	}
+}
+
+func TestCompareSessionsMismatch(t *testing.T) {
+	a := &SessionSnapshot{BackendName: "a", Session: session.NewSession("app-a", "user-a", "id-a")}
+	b := &SessionSnapshot{BackendName: "b", Session: session.NewSession("app-b", "user-b", "id-b")}
+	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), InMemoryProfile())
+	require.Equal(t, StatusFailed, result.Status)
+	requireDiffPathPrefix(t, result.Diffs, "session.id")
+	requireDiffPathPrefix(t, result.Diffs, "session.app_name")
+	requireDiffPathPrefix(t, result.Diffs, "session.user_id")
+}
+
+func TestBackendNameFallback(t *testing.T) {
+	require.Equal(t, "snap", backendName(&SessionSnapshot{BackendName: "snap"}, BackendProfile{Name: "prof"}))
+	require.Equal(t, "prof", backendName(nil, BackendProfile{Name: "prof"}))
+}
+
+func TestCompareScopedStatesWithNil(t *testing.T) {
+	result := NewComparator().Compare(
+		&SessionSnapshot{BackendName: "a"},
+		&SessionSnapshot{BackendName: "b"},
+		nil, InMemoryProfile(), InMemoryProfile(),
+	)
+	require.Equal(t, StatusPassed, result.Status)
+}

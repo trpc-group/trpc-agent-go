@@ -3,6 +3,7 @@ module trpc.group/trpc-go/trpc-agent-go/session/replaytest/redis
 go 1.25.0
 
 require (
+	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v1.10.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v1.10.0
@@ -12,12 +13,14 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/go-ego/gse v1.0.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/redis/go-redis/v9 v9.11.0 // indirect
 	github.com/vcaesar/cedar v0.20.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

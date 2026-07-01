@@ -13,6 +13,8 @@ package sqlite
 import (
 	"database/sql"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -104,4 +106,13 @@ func crossBackendReplayCases() []replaytest.ReplayCase {
 		cases = append(cases, tc)
 	}
 	return cases
+}
+
+func TestFactoryOptions(t *testing.T) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+	f := NewFactory(db, WithSkipDBInit(true))
+	_, _, _, err = f()
+	require.NoError(t, err)
 }

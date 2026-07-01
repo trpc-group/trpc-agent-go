@@ -43,3 +43,21 @@ func TestReporterJSON(t *testing.T) {
 	require.Equal(t, "a", decoded.Reference)
 	require.Contains(t, buf.String(), `"total_cases"`)
 }
+
+func TestBuildReportWithFailedAndDefaultStatus(t *testing.T) {
+	report := BuildReport([]CaseResult{
+		{CaseName: "mixed", OverallStatus: "unknown"},
+		{CaseName: "explicit-fail", OverallStatus: StatusFailed, Comparisons: []ComparisonResult{{
+			Diffs: []DiffResult{
+				{Severity: SeverityAllowed, Path: "events[1]", ValueA: "a", ValueB: "b"},
+				{Severity: SeverityError, Path: "events[2]", ValueA: "x", ValueB: "y"},
+			},
+		}}},
+	}, []string{"a"}, "a")
+	require.Equal(t, 2, report.TotalCases)
+	require.Equal(t, 0, report.PassedCases)
+	require.Equal(t, 2, report.FailedCases)
+	require.Equal(t, 2, report.TotalDiffs)
+	require.Equal(t, 1, report.AllowedDiffs)
+	require.Equal(t, 1, report.ErrorDiffs)
+}

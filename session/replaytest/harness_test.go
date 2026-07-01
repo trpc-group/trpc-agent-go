@@ -353,3 +353,34 @@ func (s createErrorSessionService) CreateSession(
 type sessionOnlyService struct {
 	session.Service
 }
+
+func TestNewHarnessKeepsEmptyMode(t *testing.T) {
+	h := NewHarness(HarnessOpts{})
+	require.Equal(t, ComparisonRef, h.mode)
+	require.Equal(t, "inmemory", h.reference)
+}
+
+func TestAddBackendAutoFillsNameFromProfile(t *testing.T) {
+	h := NewHarness(DefaultHarnessOpts())
+	h.AddBackend(NamedBackend{Name: "", Profile: InMemoryProfile(), SessionService: sessioninmemory.NewSessionService()})
+	require.Equal(t, "inmemory", h.backends[0].Name)
+}
+
+func TestRunCaseNormalizePanic(t *testing.T) {
+	snapshots := map[string]*SessionSnapshot{"a": {BackendName: "a", Session: session.NewSession("app", "user", "sess")}}
+	profiles := map[string]BackendProfile{"a": InMemoryProfile()}
+	h := NewHarness(DefaultHarnessOpts())
+	comparisons := h.compareSnapshots(CaseSingleTurnText, snapshots, profiles)
+	require.Len(t, comparisons, 1)
+	require.Equal(t, StatusPassed, comparisons[0].Status)
+	require.Equal(t, "a", comparisons[0].Reference)
+}
+
+func TestCompareSnapshotsReferenceNotFound(t *testing.T) {
+	h := NewHarness(HarnessOpts{ReferenceBackend: "missing"})
+	snapshots := map[string]*SessionSnapshot{"a": harnessTestSnapshot("a"), "b": harnessTestSnapshot("b")}
+	profiles := map[string]BackendProfile{"a": InMemoryProfile(), "b": InMemoryProfile()}
+	comparisons := h.compareSnapshots(CaseSingleTurnText, snapshots, profiles)
+	require.Len(t, comparisons, 1)
+	require.Equal(t, "a", comparisons[0].Reference)
+}
