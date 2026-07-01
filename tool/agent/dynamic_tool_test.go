@@ -896,6 +896,45 @@ func TestCallDynamic_TimeoutBoundsSubAgent(t *testing.T) {
 	require.Less(t, time.Since(start), time.Second)
 }
 
+func TestNewDynamicTool_StreamableCall_TimeoutBoundsSubAgent(t *testing.T) {
+	t.Parallel()
+
+	main := llmagent.New("main", llmagent.WithModel(&dynBlockingModel{}))
+	at := NewDynamicTool(WithDynamicTimeout(10 * time.Millisecond))
+	sess := session.NewSession("app", "user", "session")
+	parent := agent.NewInvocation(
+		agent.WithInvocationAgent(main),
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationEventFilterKey("main"),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	start := time.Now()
+	reader, err := at.StreamableCall(ctx, []byte(`{"request":"wait"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+
+	var sb strings.Builder
+	for {
+		chunk, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+		switch c := chunk.Content.(type) {
+		case string:
+			sb.WriteString(c)
+		case *event.Event:
+			if c.Error != nil {
+				sb.WriteString(c.Error.Message)
+			}
+		}
+	}
+
+	require.Contains(t, sb.String(), context.DeadlineExceeded.Error())
+	require.Less(t, time.Since(start), time.Second)
+}
+
 // dynRecordingModel records the set of tool names visible in each request.
 type dynRecordingModel struct {
 	name     string
