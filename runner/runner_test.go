@@ -186,6 +186,7 @@ func (m *capturingInvocationMessagesAgent) Tools() []tool.Tool {
 type staticModel struct {
 	name    string
 	content string
+	usage   *model.Usage
 }
 
 type unsupportedSteerRunner struct{}
@@ -226,6 +227,7 @@ func (m *staticModel) GenerateContent(
 			Index:   0,
 			Message: model.NewAssistantMessage(m.content),
 		}},
+		Usage: m.usage,
 	}
 	close(ch)
 	return ch, nil

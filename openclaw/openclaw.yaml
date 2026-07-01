@@ -50,9 +50,13 @@ tools:
   # it on, or defer_to_dynamic_agent_mode: off to disable it.
   # defer_to_dynamic_agent_mode: auto # off|on|auto
   # defer_to_dynamic_agent_threshold_chars: 4000
+  # dynamic_agent_timeout: "180s"
+  # Set false to expose only tool_search/dynamic_agent plus
+  # defer_direct_tools, useful for token-sensitive benchmark profiles.
+  # defer_default_direct_tools: true
   # defer_direct_tools: ["exec_command"]
   # code_executor:
-  #   type: "sandbox" # none|local|sandbox
+  #   type: "sandbox" # sandbox; leave empty/unset to inherit enable_local_exec
   #   auto_execute_code_blocks: true
   #   sandbox:
   #     workspace_root: "" # default: state_dir/sandbox

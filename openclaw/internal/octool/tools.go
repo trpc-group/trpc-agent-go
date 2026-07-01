@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspacesession"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin/identity"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -37,6 +39,7 @@ const (
 
 	errExecToolNotConfigured  = "exec tool is not configured"
 	errCommandRequired        = "command is required"
+	errSandboxExecUnsupported = "sandbox exec_command only supports foreground non-interactive commands"
 	errWriteToolNotConfigured = "write_stdin tool is not configured"
 	errKillToolNotConfigured  = "kill_session tool is not configured"
 	errSessionIDRequired      = "session id is required"
@@ -102,6 +105,15 @@ type execTool struct {
 	memoryStore *memoryfile.Store
 }
 
+type sandboxExecTool struct {
+	engine      codeexecutor.Engine
+	uploads     *uploads.Store
+	memoryStore *memoryfile.Store
+	registry    *codeexecutor.WorkspaceRegistry
+	policy      CommandPolicy
+	redactor    OutputRedactor
+}
+
 // NewExecCommandTool creates the canonical host command tool.
 func NewExecCommandTool(
 	mgr *Manager,
@@ -114,6 +126,61 @@ func NewExecCommandTool(
 	return &execTool{
 		mgr:     mgr,
 		uploads: store,
+	}
+}
+
+// NewSandboxExecCommandTool creates an exec_command tool backed by a sandbox
+// code executor. The first version supports foreground non-interactive commands
+// only; background, TTY, and session-continuation workflows are rejected in
+// sandbox mode and do not fall back to host execution.
+func NewSandboxExecCommandTool(
+	engine codeexecutor.Engine,
+	stores ...*uploads.Store,
+) tool.Tool {
+	var store *uploads.Store
+	if len(stores) > 0 {
+		store = stores[0]
+	}
+	return &sandboxExecTool{
+		engine:   engine,
+		uploads:  store,
+		registry: codeexecutor.NewWorkspaceRegistry(),
+	}
+}
+
+// NewSandboxExecCommandToolWithMemoryFileStore creates a sandbox-backed
+// exec_command tool with memory-file environment metadata.
+func NewSandboxExecCommandToolWithMemoryFileStore(
+	engine codeexecutor.Engine,
+	uploadStore *uploads.Store,
+	memoryStore *memoryfile.Store,
+) tool.Tool {
+	return NewSandboxExecCommandToolWithPolicy(
+		engine,
+		uploadStore,
+		memoryStore,
+		nil,
+		nil,
+	)
+}
+
+// NewSandboxExecCommandToolWithPolicy creates a sandbox-backed exec_command
+// tool with the same command policy and output redaction hooks as the host
+// manager path.
+func NewSandboxExecCommandToolWithPolicy(
+	engine codeexecutor.Engine,
+	uploadStore *uploads.Store,
+	memoryStore *memoryfile.Store,
+	policy CommandPolicy,
+	redactor OutputRedactor,
+) tool.Tool {
+	return &sandboxExecTool{
+		engine:      engine,
+		uploads:     uploadStore,
+		memoryStore: memoryStore,
+		registry:    codeexecutor.NewWorkspaceRegistry(),
+		policy:      policy,
+		redactor:    redactor,
 	}
 }
 
@@ -132,11 +199,21 @@ func NewExecCommandToolWithMemoryFileStore(
 }
 
 func (t *execTool) Declaration() *tool.Declaration {
+	return execCommandDeclaration(
+		execToolDescription(t != nil && t.memoryStore != nil),
+	)
+}
+
+func (t *sandboxExecTool) Declaration() *tool.Declaration {
+	return execCommandDeclaration(
+		sandboxExecToolDescription(t != nil && t.memoryStore != nil),
+	)
+}
+
+func execCommandDeclaration(description string) *tool.Declaration {
 	return &tool.Declaration{
-		Name: toolExecCommand,
-		Description: execToolDescription(
-			t != nil && t.memoryStore != nil,
-		),
+		Name:        toolExecCommand,
+		Description: description,
 		InputSchema: &tool.Schema{
 			Type:     "object",
 			Required: []string{"command"},
@@ -240,12 +317,16 @@ func execToolDescription(hasMemoryFile bool) string {
 				"the relevant file and quote or summarize the relevant "+
 				"lines.",
 			"If the user explicitly says 'remember this' or asks you to "+
-				"remember a durable fact, preference, or workflow rule, "+
+				"remember a durable fact, preference, task list, "+
+				"checklist, or reminder list, "+
 				"update the narrowest relevant memory file with a short "+
 				"bullet.",
 			"Use memory files only for stable, cross-session facts, "+
-				"preferences, durable user tasks, reminder lists, and "+
-				"working style.",
+				"preferences, durable user tasks, checklists, and "+
+				"reminder lists. Do not update memory files for "+
+				"reusable task workflows, output formats, tool "+
+				"procedures, or post-task feedback unless the user "+
+				"explicitly asks to save that content as memory.",
 		)
 	}
 	parts = append(
@@ -256,6 +337,27 @@ func execToolDescription(hasMemoryFile bool) string {
 			"`MEDIA_DIR: /path/to/dir`, those paths are returned in "+
 			"structured media_files/media_dirs fields.",
 	)
+	return strings.Join(parts, " ")
+}
+
+func sandboxExecToolDescription(hasMemoryFile bool) string {
+	parts := []string{
+		"Execute a shell command inside the configured sandbox.",
+		"Use this for general local shell work when the runtime is " +
+			"configured with Code Executor sandbox.",
+		"Only foreground non-interactive commands are supported in " +
+			"sandbox mode; background, TTY, write_stdin, and " +
+			"kill_session are not available.",
+		"Sandbox filesystem, network, timeout, and environment behavior " +
+			"follow the Code Executor sandbox configuration.",
+	}
+	if hasMemoryFile {
+		parts = append(
+			parts,
+			"Memory-file environment metadata may be present, but host "+
+				"paths are not automatically mounted into the sandbox.",
+		)
+	}
 	return strings.Join(parts, " ")
 }
 
@@ -322,6 +424,132 @@ func (t *execTool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 	annotateExecResult(&res)
 	return res, nil
+}
+
+func (t *sandboxExecTool) Call(ctx context.Context, args []byte) (any, error) {
+	if t == nil || t.engine == nil {
+		return nil, errors.New(errExecToolNotConfigured)
+	}
+
+	var in execInput
+	if err := json.Unmarshal(args, &in); err != nil {
+		return nil, fmt.Errorf("invalid args: %w", err)
+	}
+	if strings.TrimSpace(in.Command) == "" {
+		return nil, errors.New(errCommandRequired)
+	}
+
+	yield := firstInt(in.YieldTimeMS, in.YieldMs)
+	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
+	tty := firstBool(in.TTY, in.PTY)
+	if in.Background || tty || (yield != nil && *yield > 0) {
+		return nil, errors.New(errSandboxExecUnsupported)
+	}
+
+	cwd, err := sandboxExecCwd(in.Workdir)
+	if err != nil {
+		return nil, err
+	}
+	env := mergeExecEnv(
+		in.Env,
+		mergeExecEnv(
+			identity.EnvVarsFromContext(ctx),
+			mergeExecEnv(
+				uploadEnvFromContext(ctx, t.uploads),
+				memoryFileEnvFromContext(ctx, t.memoryStore),
+			),
+		),
+	)
+	req := newCommandRequest(execParams{
+		Command:  in.Command,
+		Workdir:  cwd,
+		Env:      env,
+		YieldMs:  yield,
+		TimeoutS: timeout,
+	})
+	if t.policy != nil {
+		if err := t.policy(ctx, req); err != nil {
+			return nil, err
+		}
+	}
+	redact := t.outputRedactor(req)
+	ws, err := t.workspace(ctx)
+	if err != nil {
+		return nil, err
+	}
+	spec := codeexecutor.RunProgramSpec{
+		Cmd:  shellProgram,
+		Args: []string{shellLoginFlag, in.Command},
+		Env:  env,
+		Cwd:  cwd,
+	}
+	if timeout != nil && *timeout > 0 {
+		spec.Timeout = time.Duration(*timeout) * time.Second
+	}
+	run, err := t.engine.Runner().RunProgram(ctx, ws, spec)
+	output := applyOutputRedactor(redact, run.Stdout+run.Stderr)
+	res := execResult{
+		Status:   "exited",
+		Output:   output,
+		ExitCode: run.ExitCode,
+	}
+	if run.TimedOut {
+		res.Status = "timeout"
+	}
+	annotateExecResult(&res)
+	if err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
+func (t *sandboxExecTool) outputRedactor(
+	req CommandRequest,
+) func(string) string {
+	if t == nil || t.redactor == nil {
+		return nil
+	}
+	copied := copyCommandRequest(req)
+	return func(output string) string {
+		return t.redactor(copied, output)
+	}
+}
+
+func (t *sandboxExecTool) workspace(
+	ctx context.Context,
+) (codeexecutor.Workspace, error) {
+	workspaceID := "openclaw-exec-command"
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+		if key := workspacesession.KeyFromInvocation(inv); key != "" {
+			workspaceID = key
+		}
+	}
+	if t.registry == nil {
+		return codeexecutor.NewWorkspaceRegistry().Acquire(
+			ctx,
+			t.engine.Manager(),
+			workspaceID,
+		)
+	}
+	return t.registry.Acquire(ctx, t.engine.Manager(), workspaceID)
+}
+
+func sandboxExecCwd(workdir string) (string, error) {
+	workdir = strings.TrimSpace(workdir)
+	if workdir == "" {
+		return "", nil
+	}
+	if filepath.IsAbs(workdir) {
+		return "", fmt.Errorf(
+			"%w: absolute workdir is not supported in sandbox exec_command",
+			errors.New(errSandboxExecUnsupported),
+		)
+	}
+	clean := filepath.Clean(workdir)
+	if clean == "." {
+		return "", nil
+	}
+	return filepath.ToSlash(clean), nil
 }
 
 type writeTool struct {

@@ -289,11 +289,17 @@ tools:
   # defer_to_dynamic_agent_mode: on to force it on, or off to disable it.
   defer_to_dynamic_agent_mode: auto # off|on|auto
   defer_to_dynamic_agent_threshold_chars: 4000
+  # Optional: cap one dynamic_agent child call; 0 or unset disables it.
+  dynamic_agent_timeout: "180s"
+  # Optional: keep default direct tools on the parent agent.
+  # Set false for token-sensitive profiles that should expose only
+  # tool_search/dynamic_agent plus defer_direct_tools.
+  # defer_default_direct_tools: true
   # Optional: keep a small set of tools directly callable by the parent agent.
   # defer_direct_tools: ["exec_command"]
   # Optional: configure fenced-code execution without exposing workspace_exec.
   code_executor:
-    type: "sandbox" # none|local|sandbox
+    type: "sandbox" # sandbox; leave empty/unset to inherit enable_local_exec
     auto_execute_code_blocks: true
     sandbox:
       workspace_root: "" # default: state_dir/sandbox
@@ -350,8 +356,22 @@ Notes:
 - For secrets (model keys, Telegram tokens), keep them out of version control.
   Prefer environment variables when available.
 - `tools.code_executor.type: sandbox` wires `codeexecutor/sandbox` into
-  fenced-code execution while keeping the generic `workspace_exec` tool surface
-  disabled. Use OpenClaw `exec_command` for host-side tool work.
+  both fenced-code execution and OpenClaw `exec_command` while keeping the
+  generic `workspace_exec` tool surface disabled. In this mode,
+  `exec_command` only supports foreground non-interactive commands;
+  `write_stdin` and `kill_session` are unavailable.
+- Sandbox decision table:
+
+  | Setting | Fenced code blocks | OpenClaw `exec_command` | Interactive follow-up | Typical reason |
+  | --- | --- | --- | --- | --- |
+  | `tools.code_executor.type: "sandbox"` | Runs in sandbox | Runs in sandbox | Not available (`write_stdin` / `kill_session` are omitted) | Need filesystem, network, timeout, or env isolation |
+  | `tools.code_executor.type: ""` | Runs on host when `enable_local_exec: true`; disabled when `false` | Runs on host | Available for host `exec_command` sessions | Need host shell semantics or interactive shell workflows |
+
+- In sandbox mode, upload and memory variables still expose stable
+  `OPENCLAW_*` metadata, but host paths such as
+  `OPENCLAW_LAST_UPLOAD_PATH`, `OPENCLAW_SESSION_UPLOADS_DIR`,
+  `OPENCLAW_MEMORY_FILE`, `OPENCLAW_USER_MEMORY_FILE`, and
+  `OPENCLAW_CHAT_MEMORY_FILE` are not automatically mounted into the sandbox.
 - `knowledges` currently configures only embedder / vector store wiring.
   Loading documents into a knowledge base is a separate runtime action.
 - Example `pgvector` knowledge config:

@@ -43,18 +43,24 @@ const (
 	// after context compaction. The message MUST make it clear that the call
 	// succeeded and returned data that was already consumed, otherwise the
 	// model may interpret the elided payload as a failed/missing call and
-	// re-invoke the same tool with identical arguments, producing infinite
-	// retry loops at the top of the context window.
-	historicalToolResultPlaceholder = "[elided] Previous tool call succeeded and its result was already consumed by the assistant; payload has been dropped to save context. Do NOT re-invoke the same tool with the same arguments to re-fetch this data."
-	sessionLoadToolName             = "session_load"
-	policyToolResultPlaceholder     = "Tool result omitted by context compaction policy."
+	// retry side-effecting tools at the top of the context window.
+	historicalToolResultPlaceholder = "[elided] Previous tool call " +
+		"succeeded and its result was already consumed by the assistant; " +
+		"payload has been dropped to save context. Use the available " +
+		"summary or recovery hints first. Re-run only read-only or " +
+		"idempotent tools when exact data is essential; do not repeat " +
+		"side-effecting operations just to recover this payload."
+	sessionLoadToolName         = "session_load"
+	policyToolResultPlaceholder = "Tool result omitted by context " +
+		"compaction policy."
 )
 
 type toolResultRecoveryRef struct {
-	EventID    string
-	ToolCallID string
-	ToolName   string
-	Reason     string
+	EventID              string
+	ToolCallID           string
+	ToolName             string
+	Reason               string
+	SessionLoadAvailable bool
 }
 
 func toolResultRecoveryRefForMessage(
@@ -68,6 +74,16 @@ func toolResultRecoveryRefForMessage(
 		ToolName:   strings.TrimSpace(msg.ToolName),
 		Reason:     reason,
 	}
+}
+
+func (cfg ContextCompactionConfig) recoveryRefForMessage(
+	evt event.Event,
+	msg model.Message,
+	reason string,
+) toolResultRecoveryRef {
+	ref := toolResultRecoveryRefForMessage(evt, msg, reason)
+	ref.SessionLoadAvailable = cfg.SessionLoadRecoveryEnabled
+	return ref
 }
 
 func recoverableToolResultPlaceholder(ref toolResultRecoveryRef) string {
@@ -85,7 +101,7 @@ func recoverableToolResultPlaceholder(ref toolResultRecoveryRef) string {
 		b.WriteString(historicalToolResultPlaceholder)
 	}
 	writeRecoveryRefLines(&b, ref)
-	b.WriteString("\nUse session_load with event_id and content_offset/content_limit if the full result is needed.")
+	b.WriteString(toolResultRecoveryInstruction(ref))
 	return b.String()
 }
 
@@ -107,7 +123,12 @@ func recoverableTruncationMarker(
 	if ref.ToolName != "" {
 		fmt.Fprintf(&b, "; tool_name=%s", ref.ToolName)
 	}
-	b.WriteString("; use session_load ...]\n\n")
+	if ref.SessionLoadAvailable {
+		b.WriteString("; use session_load ...")
+	} else {
+		b.WriteString("; re-run only safe read-only/idempotent tools")
+	}
+	b.WriteString("]\n\n")
 	return b.String()
 }
 
@@ -135,8 +156,24 @@ func compactRecoverableTruncationMarker(
 	if wroteField {
 		b.WriteString("; ")
 	}
-	b.WriteString("session_load]\n\n")
+	if ref.SessionLoadAvailable {
+		b.WriteString("session_load")
+	} else {
+		b.WriteString("compacted")
+	}
+	b.WriteString("]\n\n")
 	return b.String()
+}
+
+func toolResultRecoveryInstruction(ref toolResultRecoveryRef) string {
+	if ref.SessionLoadAvailable {
+		return "\nUse session_load with event_id and content_offset/content_limit if the full result is needed."
+	}
+	return "\nThe full result is not available through the current tool surface. " +
+		"Use the available summary if it is enough. If exact data is " +
+		"essential, re-run only tools that are read-only, idempotent, or safe " +
+		"to repeat; do not repeat side-effecting operations just to recover " +
+		"this payload."
 }
 
 func writeRecoveryRefLines(b *strings.Builder, ref toolResultRecoveryRef) {
@@ -186,6 +223,10 @@ type ContextCompactionConfig struct {
 	// SkipRecentFunc returns how many tail events should be treated as recent
 	// and protected from historical tool-result compaction.
 	SkipRecentFunc ContextCompactionSkipRecentFunc
+	// SessionLoadRecoveryEnabled controls whether compacted tool-result
+	// placeholders may instruct the model to recover payload slices with
+	// session_load. It is derived from the actual request tool surface.
+	SessionLoadRecoveryEnabled bool
 
 	toolResultCompactionRules toolResultCompactionRules
 }
@@ -357,6 +398,7 @@ func applyForceCleanToolResultPass(
 			ctx,
 			events[i],
 			0,
+			cfg.SessionLoadRecoveryEnabled,
 			func(ctx context.Context, msg model.Message, _ int, _ toolResultRecoveryRef) (model.Message, bool, int) {
 				if !cfg.forceCleanToolResult(msg) {
 					return msg, false, 0
@@ -430,6 +472,7 @@ func compactHistoricalToolResultEvent(
 		ctx,
 		evt,
 		maxTokens,
+		cfg.SessionLoadRecoveryEnabled,
 		func(ctx context.Context, msg model.Message, maxTokens int, ref toolResultRecoveryRef) (model.Message, bool, int) {
 			if cfg.keepToolResult(msg) {
 				return msg, false, 0
@@ -454,6 +497,7 @@ func applyOversizedToolResultPass(
 			ctx,
 			events[i],
 			maxTokens,
+			cfg.SessionLoadRecoveryEnabled,
 			func(ctx context.Context, msg model.Message, maxTokens int, ref toolResultRecoveryRef) (model.Message, bool, int) {
 				if cfg.keepToolResult(msg) {
 					return msg, false, 0
@@ -478,6 +522,7 @@ func rewriteToolResultEventMessages(
 	ctx context.Context,
 	evt event.Event,
 	maxTokens int,
+	sessionLoadAvailable bool,
 	rewrite func(context.Context, model.Message, int, toolResultRecoveryRef) (model.Message, bool, int),
 	reason string,
 ) (event.Event, bool, int, int) {
@@ -496,11 +541,15 @@ func rewriteToolResultEventMessages(
 			ctx,
 			evt.Response.Choices[j].Message,
 			maxTokens,
-			toolResultRecoveryRefForMessage(
-				evt,
-				evt.Response.Choices[j].Message,
-				reason,
-			),
+			func() toolResultRecoveryRef {
+				ref := toolResultRecoveryRefForMessage(
+					evt,
+					evt.Response.Choices[j].Message,
+					reason,
+				)
+				ref.SessionLoadAvailable = sessionLoadAvailable
+				return ref
+			}(),
 		)
 		if !changed {
 			continue

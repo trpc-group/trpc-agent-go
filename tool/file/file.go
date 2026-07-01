@@ -50,6 +50,13 @@ const (
 	missingFileSearchToolName   = "search_file"
 	missingFileTopLevelPrefix   = "Top-level entries: "
 	missingFileBaseDirPrefix    = "Base directory: "
+	relativePathGuidance        = "Use a relative path under " +
+		"base_directory. If exec_command wrote an absolute temp " +
+		"path, fs_read_file can read it only when that path is " +
+		"under a configured read-only root; otherwise have " +
+		"exec_command print the needed data directly."
+	extraReadRootGuidance = "Absolute paths are readable only when " +
+		"they are under a configured read-only root."
 	missingFileRecoveryGuidance = "Use " +
 		missingFileListToolName + " or " +
 		missingFileSearchToolName +
@@ -147,6 +154,15 @@ func WithMaxFileSize(s int64) Option {
 	}
 }
 
+// WithReadOnlyDirs allows read_file and read_multiple_files to read absolute
+// paths under the given directories. It does not expand write, replace, list,
+// or search permissions.
+func WithReadOnlyDirs(dirs ...string) Option {
+	return func(f *fileToolSet) {
+		f.extraReadRoots = append(f.extraReadRoots, dirs...)
+	}
+}
+
 // WithName sets the name of the file toolset.
 func WithName(name string) Option {
 	return func(f *fileToolSet) {
@@ -157,6 +173,7 @@ func WithName(name string) Option {
 // fileToolSet implements the ToolSet interface for file operations.
 type fileToolSet struct {
 	baseDir                  string
+	extraReadRoots           []string
 	hasInputsDir             bool
 	saveFileEnabled          bool
 	readFileEnabled          bool
@@ -212,6 +229,9 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 	}
 	// Clean the base directory.
 	fileToolSet.baseDir = filepath.Clean(fileToolSet.baseDir)
+	fileToolSet.extraReadRoots = normalizeExtraReadRoots(
+		fileToolSet.extraReadRoots,
+	)
 	// Check if the base directory exists.
 	stat, err := os.Stat(fileToolSet.baseDir)
 	if err != nil {
@@ -266,11 +286,108 @@ func (f *fileToolSet) resolvePath(relativePath string) (string, error) {
 	if filepath.IsAbs(reqPath) || strings.Contains(reqPath, "..") {
 		return "", fmt.Errorf(
 			"invalid path - absolute paths and '..' "+
-				"are not allowed: %s",
+				"are not allowed: %s. %s",
 			relativePath,
+			relativePathGuidance,
 		)
 	}
 	return filepath.Join(f.baseDir, reqPath), nil
+}
+
+func (f *fileToolSet) resolveReadPath(requestPath string) (string, error) {
+	raw := strings.TrimSpace(requestPath)
+	if !filepath.IsAbs(raw) {
+		return f.resolvePath(requestPath)
+	}
+	clean := filepath.Clean(raw)
+	if _, ok := f.matchExtraReadRoot(clean); ok {
+		return clean, nil
+	}
+	return "", fmt.Errorf(
+		"invalid path - absolute path is outside configured "+
+			"read-only roots: %s. %s %s",
+		requestPath,
+		extraReadRootGuidance,
+		relativePathGuidance,
+	)
+}
+
+func (f *fileToolSet) matchExtraReadRoot(absPath string) (string, bool) {
+	if f == nil || len(f.extraReadRoots) == 0 {
+		return "", false
+	}
+	candidate := filepath.Clean(absPath)
+	evaluatedCandidate, resolvedPath := evalPathWithExistingParent(candidate)
+	for _, root := range f.extraReadRoots {
+		candidateInRoot := isPathWithinRoot(candidate, root)
+		evaluatedInRoot := resolvedPath &&
+			isPathWithinRoot(evaluatedCandidate, root)
+		if candidateInRoot && (!resolvedPath || evaluatedInRoot) {
+			return root, true
+		}
+		if !candidateInRoot && evaluatedInRoot {
+			return root, true
+		}
+	}
+	return "", false
+}
+
+func evalPathWithExistingParent(path string) (string, bool) {
+	clean := filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		return filepath.Clean(resolved), true
+	}
+
+	current := clean
+	var suffix []string
+	for {
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", false
+		}
+		suffix = append([]string{filepath.Base(current)}, suffix...)
+		if resolved, err := filepath.EvalSymlinks(parent); err == nil {
+			parts := append([]string{resolved}, suffix...)
+			return filepath.Clean(filepath.Join(parts...)), true
+		}
+		current = parent
+	}
+}
+
+func normalizeExtraReadRoots(roots []string) []string {
+	out := make([]string, 0, len(roots))
+	seen := make(map[string]struct{}, len(roots))
+	for _, raw := range roots {
+		root := strings.TrimSpace(raw)
+		if root == "" {
+			continue
+		}
+		root = filepath.Clean(root)
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			root = filepath.Clean(resolved)
+		}
+		if _, err := os.Stat(root); err != nil {
+			continue
+		}
+		if _, ok := seen[root]; ok {
+			continue
+		}
+		seen[root] = struct{}{}
+		out = append(out, root)
+	}
+	return out
+}
+
+func isPathWithinRoot(candidate string, root string) bool {
+	if strings.TrimSpace(candidate) == "" || strings.TrimSpace(root) == "" {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(candidate))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func (f *fileToolSet) normalizeInputsAlias(relativePath string) string {

@@ -19,18 +19,31 @@ import (
 func TestDefaultedDirectToolSurfaceNames(t *testing.T) {
 	t.Parallel()
 
-	got := defaultedDirectToolSurfaceNames([]string{
-		configKeyExecCommand,
-		configKeyMessage,
-		" ",
-		configKeyMessage,
-	})
+	got := directToolSurfaceNames(
+		true,
+		[]string{
+			configKeyExecCommand,
+			configKeyMessage,
+			" ",
+			configKeyMessage,
+		},
+	)
 	require.Equal(t, []string{
 		configKeyExecCommand,
 		configKeyWriteStdin,
 		configKeyKillSession,
 		configKeyMessage,
 	}, got)
+}
+
+func TestDirectToolSurfaceNamesCanSkipDefaults(t *testing.T) {
+	t.Parallel()
+
+	got := directToolSurfaceNames(false, []string{
+		configKeyMessage,
+		configKeyMessage,
+	})
+	require.Equal(t, []string{configKeyMessage}, got)
 }
 
 func TestResolveDeferredToolSurfaceKeepsDefaultDirectTools(
@@ -55,6 +68,29 @@ func TestResolveDeferredToolSurfaceKeepsDefaultDirectTools(
 		configKeyWriteStdin,
 		configKeyKillSession,
 	}, testToolNames(direct))
+}
+
+func TestResolveDeferredToolSurfaceCanDisableDefaultDirectTools(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	enabled, direct, err := resolveDeferredToolSurface(
+		agentConfig{
+			DeferToolSurface:                   true,
+			DeferToolSurfaceDefaultDirectTools: boolPtr(false),
+		},
+		[]tool.Tool{
+			stubTool{name: configKeyMessage},
+			stubTool{name: configKeyExecCommand},
+			stubTool{name: configKeyWriteStdin},
+			stubTool{name: configKeyKillSession},
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.True(t, enabled)
+	require.Empty(t, testToolNames(direct))
 }
 
 func testToolNames(tools []tool.Tool) []string {

@@ -141,12 +141,22 @@ After completing the above configuration, the summary feature runs automatically
 
 ## Cache-Safe Summary Forking
 
-By default, the summarizer sends a standalone summary request: an optional
-summary system prompt plus a user prompt containing the extracted conversation
-text. This is simple and remains the default behavior.
+The summarizer has two request-construction modes.
+
+**Standalone request** is the default. The framework selects the events that
+should be summarized, converts them to conversation text, runs the
+`WithPreSummaryHook(...)` hook if configured, and sends a summary-model request
+with:
+
+- An optional system message rendered from `WithSystemPrompt(...)`.
+- One user message rendered from `WithPrompt(...)`, with
+  `{conversation_text}` replaced by the extracted conversation text.
+
+This request is independent from the main agent request, so it is simple and
+works for synchronous, asynchronous, and manual summary calls.
 
 For long sessions where prompt-cache reuse matters, you can opt in to
-cache-safe forking:
+**cache-safe forking**:
 
 ```go
 summarizer := summary.NewSummarizer(
@@ -157,17 +167,55 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-When enabled and the framework has the parent model request available, the
-summarizer clones that parent request and appends one compacting user message
-at the end. This preserves the parent request prefix, including system context,
-history, and tools, so providers with prompt caching can reuse more cached
-input. If no parent request is available, for example in asynchronous or manual
-summary calls, the summarizer falls back to the default standalone request.
+When context compaction runs in the normal LLM flow, the framework has already
+built the parent `model.Request` for the current main-agent call. If
+`WithCacheSafeForking(true)` is enabled, the summarizer builds the summary
+request by:
 
-The appended compacting prompt is separate from `WithPrompt(...)` because it
-does not embed `{conversation_text}`; the parent request already contains the
-conversation. Use `WithCacheSafeForkPrompt(...)` only when you need to customize
-that appended user message.
+- Cloning that parent request, including its model-visible prefix such as
+  system context, injected summary, session history, user input, tool
+  definitions, headers, extra fields, and generation settings.
+- Appending one user message rendered from `WithCacheSafeForkPrompt(...)`.
+- Forcing the summary call to be non-streaming and clearing structured output,
+  because the summary call returns plain summary text.
+
+The request prefix remains the same as the parent request prefix, so providers
+with prompt caching can reuse more cached input. If no parent request is
+available, for example in asynchronous or manual summary calls, the summarizer
+falls back to the standalone request path.
+
+Prompt rules:
+
+- `WithPrompt(...)` configures the standalone user prompt. It must include
+  `{conversation_text}`. If `WithMaxSummaryWords(...)` is configured,
+  `{max_summary_words}` must appear in either `WithPrompt(...)` or
+  `WithSystemPrompt(...)`.
+- `WithSystemPrompt(...)` configures the optional standalone system message. It
+  must not include `{conversation_text}`. It may include
+  `{max_summary_words}`.
+- `WithCacheSafeForkPrompt(...)` configures only the user message appended in
+  fork mode. It must not include `{conversation_text}` because the cloned parent
+  request already contains the conversation. It may include
+  `{max_summary_words}`.
+
+Keep the standalone prompt valid even when cache-safe forking is enabled,
+because fallback paths still use it. When writing a custom fork prompt, ask the
+model to summarize the conversation above for future continuation. It should
+preserve user goals, decisions, constraints, open tasks, tool results, and
+important facts. It should not call tools, answer the latest user request, or
+treat system and tool-use instructions as facts to summarize.
+
+`WithPreSummaryHook(...)` still runs before the summary model call. In
+standalone mode its modified text is rendered into `{conversation_text}`. In
+fork mode with a parent request available, that text is not embedded into the
+request because the conversation is already present in the cloned parent
+request; the hook remains useful for context updates, side effects, and
+fallback standalone calls.
+
+In fork mode, `WithPreSummaryHook(...)` text or event edits do not sanitize,
+redact, or filter the cloned parent request. If the hook is used for redaction
+or filtering before summarization, use standalone mode for that flow or ensure
+the parent `model.Request` has already been sanitized before it is cloned.
 
 Cache-safe forking controls the request used to generate the summary. To make
 the next normal conversation request more cache friendly after a summary exists,
@@ -407,6 +455,47 @@ than** that threshold. If you set a very small ratio, for example `0.001`, and
 expect summarization around 1000 tokens, pass
 `summary.WithContextThresholdMinTokens(0)` explicitly, or set it to the
 application-specific minimum you want.
+
+### Trigger and Call Reporting
+
+Use `summary.WithReportHook` when you need to observe why summary generation
+was triggered and how large the summary model request was:
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithContextThreshold(),
+    summary.WithReportHook(func(ctx context.Context, report summary.Report) {
+        triggerTokens := report.Trigger.Value
+        summaryPromptTokens := report.Call.PromptTokens
+        _ = triggerTokens
+        _ = summaryPromptTokens
+    }),
+)
+```
+
+The report keeps two token counts separate:
+
+- `report.Trigger.Value`: the checker value that triggered summarization, such
+  as estimated delta tokens after the previous summary
+- `report.Call.EstimatedPromptTokens`: the framework's local estimate for the
+  complete summary model request
+- `report.Call.PromptTokens`: the provider-reported `usage.prompt_tokens` for
+  the summary model call
+
+For cache-safe forking, `report.Call.Mode` is `cache_safe_fork` and the request
+estimate is computed from the forked parent request plus the appended summary
+instruction. For standalone summary prompts, the mode is `standalone`. If a
+`BeforeModel` callback returns a custom response and no summary model request is
+sent, the mode is `custom_response` and the prompt estimate remains zero.
+
+Advanced integrations can attach a report before entering a higher-level
+summary flow with `summary.ContextWithReport(ctx, report)` and retrieve it with
+`summary.ReportFromContext(ctx)`. The framework reuses that report for a single
+summary path; when a cascade generates multiple summaries in parallel, each
+worker receives a cloned report so branch-specific writes do not race. Those
+forked reports are emitted through their per-call hooks and are not merged back
+into the root report.
 
 For private deployments, endpoint IDs, fine-tuned models, newly released
 models, or multi-tenant custom model configuration, prefer the instance or

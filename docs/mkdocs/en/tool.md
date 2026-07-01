@@ -1755,6 +1755,9 @@ Common options:
 - `WithCapabilitySkills(repo)`: set the maximum skill repository the model may
   choose from. When omitted, it is derived from the parent Agent's effective skill
   repository for the current run.
+- `WithDynamicTimeout(timeout)`: cap one dynamic child Agent invocation. A
+  non-positive value keeps using the parent request context without an extra
+  deadline.
 - `WithExposeToolSelection(false)`: hide the `tools` field from the model. The
   child still receives the code-defined tool surface, but the model cannot narrow
   it.

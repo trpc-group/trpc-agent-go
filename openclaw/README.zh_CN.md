@@ -277,11 +277,14 @@ tools:
   # defer_to_dynamic_agent_mode: on 可强制开启，设置 off 可关闭。
   defer_to_dynamic_agent_mode: auto # off|on|auto
   defer_to_dynamic_agent_threshold_chars: 4000
+  # 可选：是否保留默认的父 agent 直连工具。对 token 敏感的 profile 可
+  # 设为 false，仅暴露 tool_search/dynamic_agent 和 defer_direct_tools。
+  # defer_default_direct_tools: true
   # 可选：保留少量父 agent 可直接调用的工具。
   # defer_direct_tools: ["exec_command"]
   # 可选：配置 fenced-code 执行，但不暴露 workspace_exec。
   code_executor:
-    type: "sandbox" # none|local|sandbox
+    type: "sandbox" # sandbox；留空或不设置时继承 enable_local_exec
     auto_execute_code_blocks: true
     sandbox:
       workspace_root: "" # 默认 state_dir/sandbox
@@ -338,8 +341,21 @@ go run ./cmd/openclaw -config ./openclaw.yaml
 - 对于密钥（模型 key、Telegram token），请勿将其纳入版本控制。
   建议尽可能使用环境变量。
 - `tools.code_executor.type: sandbox` 会把 `codeexecutor/sandbox`
-  接入 fenced-code 执行，同时继续隐藏通用 `workspace_exec` tool 表面。
-  宿主机侧工具工作仍使用 OpenClaw 的 `exec_command`。
+  同时接入 fenced-code 执行和 OpenClaw `exec_command`，并继续隐藏通用
+  `workspace_exec` tool 表面。在这个模式下，`exec_command` 只支持前台、
+  非交互式命令；`write_stdin` 和 `kill_session` 不会暴露出来。
+- Sandbox 决策表：
+
+  | 配置 | Fenced code blocks | OpenClaw `exec_command` | 交互式续写 | 典型场景 |
+  | --- | --- | --- | --- | --- |
+  | `tools.code_executor.type: "sandbox"` | 在 sandbox 中执行 | 在 sandbox 中执行 | 不可用（不会暴露 `write_stdin` / `kill_session`） | 需要文件系统、网络、超时或环境变量隔离 |
+  | `tools.code_executor.type: ""` | `enable_local_exec: true` 时在宿主机执行；`false` 时禁用 | 在宿主机执行 | 宿主机 `exec_command` 会话可继续交互 | 需要宿主机 shell 语义或交互式 shell 工作流 |
+
+- 在 sandbox 模式下，上传和 memory 变量仍会暴露稳定的
+  `OPENCLAW_*` 元数据，但 `OPENCLAW_LAST_UPLOAD_PATH`、
+  `OPENCLAW_SESSION_UPLOADS_DIR`、`OPENCLAW_MEMORY_FILE`、
+  `OPENCLAW_USER_MEMORY_FILE` 和 `OPENCLAW_CHAT_MEMORY_FILE`
+  这类宿主机路径不会自动挂载进 sandbox。
 - `knowledges` 当前只负责把 embedder / vector store 接到 runtime；
   文档加载是独立的运行时动作。
 - `pgvector` knowledge 配置示例：

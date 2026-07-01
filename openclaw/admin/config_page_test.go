@@ -113,12 +113,90 @@ func TestServiceHandlerRendersConfigPage(t *testing.T) {
 	require.Contains(t, body, "Runtime Config")
 	require.Contains(t, body, "Max Loaded Skills")
 	require.Contains(t, body, "/tmp/openclaw.yaml")
-	require.Contains(t, body, `<details class="config-field"`)
+	require.Contains(t, body, `class="config-field"`)
 	require.Contains(t, body, `<summary class="config-field-summary">`)
 	require.NotContains(t, body, malformedSummaryClose)
 	require.Contains(t, body, `action="api/config/save"`)
 	require.Contains(t, body, `formaction="api/config/reset"`)
 	require.Contains(t, body, "Pending restart")
+}
+
+func TestServiceHandlerRendersConditionalConfigFields(t *testing.T) {
+	t.Parallel()
+
+	svc := New(
+		Config{},
+		WithRuntimeConfigProvider(&stubRuntimeConfigProvider{
+			status: RuntimeConfigStatus{
+				ConfigPath: "/tmp/openclaw.yaml",
+				Sections: []RuntimeConfigSection{{
+					Key:   "code_executor",
+					Title: "Code Executor",
+					Fields: []RuntimeConfigField{
+						{
+							Key:         "tools.code_executor.type",
+							Title:       "Executor Type",
+							InputType:   configInputSelect,
+							EditorValue: "",
+							Options: []RuntimeConfigOption{
+								{Value: "", Label: "inherit"},
+								{Value: "sandbox", Label: "sandbox"},
+							},
+						},
+						{
+							Key:       "tools.code_executor.sandbox.profile",
+							Title:     "Sandbox Profile",
+							InputType: configInputSelect,
+							VisibleWhen: RuntimeConfigVisibleWhen{
+								Key:   "tools.code_executor.type",
+								Value: "sandbox",
+							},
+							Hidden: true,
+							Options: []RuntimeConfigOption{
+								{Value: "workspace_write", Label: "workspace_write"},
+							},
+						},
+					},
+				}},
+			},
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, routeConfigPage, nil)
+	rr := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	require.Contains(t, body, `data-config-field-key="tools.code_executor.type"`)
+	require.Contains(t, body, `data-config-field-key="tools.code_executor.sandbox.profile"`)
+	require.Contains(t, body, `data-visible-when-key="tools.code_executor.type"`)
+	require.Contains(t, body, `data-visible-when-value="sandbox"`)
+	conditionalIdx := strings.Index(
+		body,
+		`id="config-field-tools.code_executor.sandbox.profile"`,
+	)
+	require.NotEqual(t, -1, conditionalIdx)
+	conditionalHTML := body[conditionalIdx:]
+	if len(conditionalHTML) > 300 {
+		conditionalHTML = conditionalHTML[:300]
+	}
+	require.Contains(
+		t,
+		conditionalHTML,
+		`data-config-field-key="tools.code_executor.sandbox.profile"`,
+	)
+	require.Contains(
+		t,
+		conditionalHTML,
+		`data-visible-when-key="tools.code_executor.type"`,
+	)
+	require.Contains(
+		t,
+		conditionalHTML,
+		`data-visible-when-value="sandbox"`,
+	)
+	require.Contains(t, conditionalHTML, "hidden")
 }
 
 func TestServiceHandlerRendersReadOnlyConfigField(t *testing.T) {

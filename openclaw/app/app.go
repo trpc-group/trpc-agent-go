@@ -366,10 +366,14 @@ const (
 		"remember or asks to inspect memory, read the relevant " +
 		"file and quote or summarize the relevant lines. If the " +
 		"user explicitly says 'remember this' or asks you to " +
-		"remember a durable fact, preference, workflow rule, task " +
-		"list, or reminder list, update the narrowest relevant " +
+		"remember a durable fact, preference, task list, " +
+		"checklist, or reminder list, update the narrowest relevant " +
 		"memory file with a short bullet in the same turn. Do not " +
-		"store secrets or large transcripts in memory files. " +
+		"store secrets or large transcripts in memory files. Do not " +
+		"store reusable task workflows, output formats, tool " +
+		"procedures, or post-task feedback in memory files unless " +
+		"the user explicitly " +
+		"asks to save that content as memory. " +
 		"If a memory file does not exist yet, you may create it " +
 		"at that exact path. Prefer already installed local tools " +
 		"for OCR, PDF, audio, image, and video work before " +
@@ -388,7 +392,10 @@ const (
 		"latency-sensitive tools kept directly available when " +
 		"configured. Use direct tools for simple local actions when " +
 		"they are present. Use `tool_search` when you need exact " +
-		"tool or skill names, then call `dynamic_agent` for broader " +
+		"tool or skill names, then call `dynamic_agent`; pass exact " +
+		"tool names such as web_fetch or browser in its `tools` " +
+		"field, and pass only real skill names in its `skills` " +
+		"field. Use `dynamic_agent` for broader " +
 		"files, uploads, browser automation, shell work, messaging, " +
 		"cron, memory, skills, knowledge, external tools, or " +
 		"verification. Give the sub-agent a self-contained request " +
@@ -1042,11 +1049,35 @@ func NewRuntimeWithOptions(
 		opts.MemoryBackend,
 		stores.memoryFiles,
 	)
+	codeExec, err := codeExecutorLoader(runtimeOpts)(
+		resolvedStateDir,
+		opts.EnableLocalExec,
+		opts.CodeExecutor,
+	)
+	if err != nil {
+		return nil, &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create code executor failed: %w", err),
+		}
+	}
+	var sandboxExecEngine codeexecutor.Engine
+	if isSandboxCodeExecutor(opts.CodeExecutor) {
+		sandboxExecEngine = codeExecutorEngine(codeExec)
+		if sandboxExecEngine == nil {
+			return nil, &exitError{
+				Code: 1,
+				Err: errors.New(
+					"sandbox code executor does not expose a program runner",
+				),
+			}
+		}
+	}
 	openClawTools := buildOpenClawTools(
 		opts.EnableOpenClawTools,
 		resolvedStateDir,
 		stores.uploads,
 		fileMemoryStore,
+		sandboxExecEngine,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1073,19 +1104,24 @@ func NewRuntimeWithOptions(
 				Err:  fmt.Errorf("create toolsets failed: %w", err),
 			}
 		}
+		postToolPromptEnabled := resolvePostToolPromptEnabled(
+			opts,
+			runtimeOpts,
+		)
 		agentCfg := agentConfig{
 			AppName:                 opts.AppName,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:   opts.MaxHistoryRuns,
-			PreloadMemory:    opts.PreloadMemory,
-			GenerationConfig: opts.GenerationConfig,
-			PostToolPromptEnabled: runtimeOpts.
-				postToolPromptEnabled,
-			Instruction:  prompts.Instruction,
-			SystemPrompt: prompts.SystemPrompt,
+			MaxHistoryRuns:        opts.MaxHistoryRuns,
+			MaxLLMCalls:           opts.MaxLLMCalls,
+			MaxToolIterations:     opts.MaxToolIterations,
+			PreloadMemory:         opts.PreloadMemory,
+			GenerationConfig:      opts.GenerationConfig,
+			PostToolPromptEnabled: postToolPromptEnabled,
+			Instruction:           prompts.Instruction,
+			SystemPrompt:          prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -1117,6 +1153,7 @@ func NewRuntimeWithOptions(
 			EnableOpenClawTools:  opts.EnableOpenClawTools,
 			OpenClawToolingGuide: opts.OpenClawToolingGuide,
 			EnableParallelTools:  opts.EnableParallelTools,
+			codeExecutor:         codeExec,
 
 			ToolProviders: opts.ToolProviders,
 			ToolSets:      opts.ToolSets,
@@ -1126,9 +1163,13 @@ func NewRuntimeWithOptions(
 			DeferToolSurfaceMode: opts.DeferToolSurfaceMode,
 			DeferToolSurfaceThresholdChars: opts.
 				DeferToolSurfaceChars,
+			DeferToolSurfaceDefaultDirectTools: boolPtr(
+				opts.DeferToolSurfaceDefaultDirectTools,
+			),
 			DeferToolSurfaceDirectTools: splitCSV(
 				opts.DeferToolSurfaceDirect,
 			),
+			DynamicAgentTimeout: opts.DynamicAgentTimeout,
 		}
 		cwd, _ := os.Getwd()
 		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
@@ -1611,11 +1652,35 @@ func run(
 		opts.MemoryBackend,
 		stores.memoryFiles,
 	)
+	codeExec, err := codeExecutorLoader(runtimeOpts)(
+		resolvedStateDir,
+		opts.EnableLocalExec,
+		opts.CodeExecutor,
+	)
+	if err != nil {
+		return &exitError{
+			Code: 1,
+			Err:  fmt.Errorf("create code executor failed: %w", err),
+		}
+	}
+	var sandboxExecEngine codeexecutor.Engine
+	if isSandboxCodeExecutor(opts.CodeExecutor) {
+		sandboxExecEngine = codeExecutorEngine(codeExec)
+		if sandboxExecEngine == nil {
+			return &exitError{
+				Code: 1,
+				Err: errors.New(
+					"sandbox code executor does not expose a program runner",
+				),
+			}
+		}
+	}
 	openClawTools := buildOpenClawTools(
 		opts.EnableOpenClawTools,
 		resolvedStateDir,
 		stores.uploads,
 		fileMemoryStore,
+		sandboxExecEngine,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1653,19 +1718,24 @@ func run(
 				Err:  fmt.Errorf("create toolsets failed: %w", err),
 			}
 		}
+		postToolPromptEnabled := resolvePostToolPromptEnabled(
+			opts,
+			runtimeOpts,
+		)
 		agentCfg := agentConfig{
 			AppName:                 opts.AppName,
 			AddSessionSummary:       opts.AddSessionSummary,
 			EnableContextCompaction: opts.EnableContextCompaction,
 			ContextCompactionOversizedToolResultMaxTokens: opts.
 				ContextCompactionOversizedToolResultMaxTokens,
-			MaxHistoryRuns:   opts.MaxHistoryRuns,
-			PreloadMemory:    opts.PreloadMemory,
-			GenerationConfig: opts.GenerationConfig,
-			PostToolPromptEnabled: runtimeOpts.
-				postToolPromptEnabled,
-			Instruction:  prompts.Instruction,
-			SystemPrompt: prompts.SystemPrompt,
+			MaxHistoryRuns:        opts.MaxHistoryRuns,
+			MaxLLMCalls:           opts.MaxLLMCalls,
+			MaxToolIterations:     opts.MaxToolIterations,
+			PreloadMemory:         opts.PreloadMemory,
+			GenerationConfig:      opts.GenerationConfig,
+			PostToolPromptEnabled: postToolPromptEnabled,
+			Instruction:           prompts.Instruction,
+			SystemPrompt:          prompts.SystemPrompt,
 
 			SkillsRoot:      opts.SkillsRoot,
 			SkillsExtraDirs: splitCSV(opts.SkillsExtraDir),
@@ -1696,6 +1766,7 @@ func run(
 			CodeExecutor:        opts.CodeExecutor,
 			EnableOpenClawTools: opts.EnableOpenClawTools,
 			EnableParallelTools: opts.EnableParallelTools,
+			codeExecutor:        codeExec,
 
 			ToolProviders: opts.ToolProviders,
 			ToolSets:      opts.ToolSets,
@@ -1705,9 +1776,13 @@ func run(
 			DeferToolSurfaceMode: opts.DeferToolSurfaceMode,
 			DeferToolSurfaceThresholdChars: opts.
 				DeferToolSurfaceChars,
+			DeferToolSurfaceDefaultDirectTools: boolPtr(
+				opts.DeferToolSurfaceDefaultDirectTools,
+			),
 			DeferToolSurfaceDirectTools: splitCSV(
 				opts.DeferToolSurfaceDirect,
 			),
+			DynamicAgentTimeout: opts.DynamicAgentTimeout,
 		}
 		cwd, _ := os.Getwd()
 		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
@@ -2362,6 +2437,16 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support max-history-runs",
 		)
 	}
+	if opts.MaxToolIterations != 0 {
+		return errors.New(
+			"claude-code agent does not support max-tool-iterations",
+		)
+	}
+	if opts.MaxLLMCalls != 0 {
+		return errors.New(
+			"claude-code agent does not support max-llm-calls",
+		)
+	}
 	if opts.PreloadMemory != 0 {
 		return errors.New(
 			"claude-code agent does not support preload-memory",
@@ -2382,8 +2467,7 @@ func validateAgentRunOptions(agentType string, opts runOptions) error {
 			"claude-code agent does not support enable-local-exec",
 		)
 	}
-	if opts.CodeExecutor.Type != "" &&
-		opts.CodeExecutor.Type != codeExecutorTypeNone {
+	if opts.CodeExecutor.Type != "" {
 		return errors.New(
 			"claude-code agent does not support tools.code_executor",
 		)
@@ -2682,13 +2766,17 @@ func newAgent(
 	)
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 
-	exec, err := codeExecutorFromConfig(
-		cfg.StateDir,
-		cfg.EnableLocalExec,
-		cfg.CodeExecutor,
-	)
-	if err != nil {
-		return nil, nil, err
+	exec := cfg.codeExecutor
+	if exec == nil {
+		var err error
+		exec, err = codeExecutorFromConfig(
+			cfg.StateDir,
+			cfg.EnableLocalExec,
+			cfg.CodeExecutor,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	opts := baseLLMAgentOptions(
@@ -2769,15 +2857,32 @@ func codeExecutorFromConfig(
 		return nil, nil
 	}
 	switch typeName {
-	case codeExecutorTypeNone:
-		return nil, nil
-	case codeExecutorTypeLocal:
-		return localexec.New(), nil
 	case codeExecutorTypeSandbox:
 		return sandboxCodeExecutorFromConfig(stateDir, cfg.Sandbox), nil
 	default:
 		return nil, fmt.Errorf("unsupported code executor type: %s", typeName)
 	}
+}
+
+func isSandboxCodeExecutor(cfg codeExecutorOptions) bool {
+	return strings.ToLower(strings.TrimSpace(cfg.Type)) == codeExecutorTypeSandbox
+}
+
+func codeExecutorEngine(exec codeexecutor.CodeExecutor) codeexecutor.Engine {
+	provider, ok := exec.(codeexecutor.EngineProvider)
+	if !ok || provider == nil {
+		return nil
+	}
+	return provider.Engine()
+}
+
+func codeExecutorLoader(
+	runtimeOpts runtimeOptions,
+) codeExecutorConfigLoader {
+	if runtimeOpts.codeExecutorLoader != nil {
+		return runtimeOpts.codeExecutorLoader
+	}
+	return codeExecutorFromConfig
 }
 
 func sandboxCodeExecutorFromConfig(
@@ -2875,7 +2980,48 @@ func buildOpenClawToolingGuidance(cfg agentConfig) string {
 	if cfg.OpenClawToolingGuide != nil {
 		return strings.TrimSpace(*cfg.OpenClawToolingGuide)
 	}
-	return strings.TrimSpace(openClawToolingGuidance)
+	guidance := strings.TrimSpace(openClawToolingGuidance)
+	if !isSandboxCodeExecutor(cfg.CodeExecutor) {
+		return guidance
+	}
+	guidance = strings.Replace(
+		guidance,
+		"For other general local shell work, use exec_command. For interactive follow-up "+
+			"input, use write_stdin and kill_session when needed. Use message "+
+			"to send to the current chat or an explicit target. ",
+		"For other general local shell work, use exec_command. In sandbox mode, "+
+			"exec_command only supports foreground non-interactive commands; "+
+			"write_stdin, kill_session, background execution, TTY allocation, "+
+			"and session continuation are unavailable. Use message to send to "+
+			"the current chat or an explicit target. ",
+		1,
+	)
+	guidance = strings.Replace(
+		guidance,
+		"Chat uploads are saved to stable host paths. For host "+
+			"commands, prefer OPENCLAW_LAST_UPLOAD_PATH or "+
+			"OPENCLAW_SESSION_UPLOADS_DIR, OPENCLAW_LAST_UPLOAD_HOST_REF, "+
+			"OPENCLAW_LAST_UPLOAD_NAME, "+
+			"OPENCLAW_LAST_UPLOAD_MIME, OPENCLAW_MEMORY_FILE, "+
+			"OPENCLAW_USER_MEMORY_FILE, OPENCLAW_CHAT_MEMORY_FILE, and "+
+			"OPENCLAW_RECENT_UPLOADS_JSON instead of guessing "+
+			"attachment paths. ",
+		"Chat uploads still provide stable OPENCLAW_* metadata, but sandbox "+
+			"exec_command does not automatically mount host paths such as "+
+			"OPENCLAW_LAST_UPLOAD_PATH, OPENCLAW_SESSION_UPLOADS_DIR, "+
+			"OPENCLAW_MEMORY_FILE, OPENCLAW_USER_MEMORY_FILE, or "+
+			"OPENCLAW_CHAT_MEMORY_FILE. Use that metadata for filenames and "+
+			"host refs, and avoid assuming those host paths are directly "+
+			"readable inside the sandbox. ",
+		1,
+	)
+	guidance = strings.Replace(
+		guidance,
+		"When exec_command or write_stdin generates images",
+		"When exec_command generates images",
+		1,
+	)
+	return guidance
 }
 
 func buildOpenClawSkillsGuidance(cfg agentConfig) string {
@@ -3066,6 +3212,8 @@ type agentConfig struct {
 	EnableContextCompaction                       bool
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
+	MaxLLMCalls                                   int
+	MaxToolIterations                             int
 	PreloadMemory                                 int
 	GenerationConfig                              *model.GenerationConfig
 	PostToolPromptEnabled                         *bool
@@ -3100,6 +3248,7 @@ type agentConfig struct {
 
 	EnableLocalExec bool
 	CodeExecutor    codeExecutorOptions
+	codeExecutor    codeexecutor.CodeExecutor
 
 	EnableOpenClawTools  bool
 	OpenClawToolingGuide *string
@@ -3109,11 +3258,23 @@ type agentConfig struct {
 
 	ToolSets []pluginSpec
 
-	RefreshToolSetsOnRun           bool
-	DeferToolSurface               bool
-	DeferToolSurfaceMode           string
-	DeferToolSurfaceThresholdChars int
-	DeferToolSurfaceDirectTools    []string
+	RefreshToolSetsOnRun               bool
+	DeferToolSurface                   bool
+	DeferToolSurfaceMode               string
+	DeferToolSurfaceThresholdChars     int
+	DeferToolSurfaceDefaultDirectTools *bool
+	DeferToolSurfaceDirectTools        []string
+	DynamicAgentTimeout                time.Duration
+}
+
+func resolvePostToolPromptEnabled(
+	opts runOptions,
+	runtimeOpts runtimeOptions,
+) *bool {
+	if runtimeOpts.postToolPromptEnabled != nil {
+		return runtimeOpts.postToolPromptEnabled
+	}
+	return opts.PostToolPromptEnabled
 }
 
 type openClawToolsBundle struct {
@@ -3176,20 +3337,12 @@ func buildOpenClawTools(
 	stateDir string,
 	uploadStore *uploads.Store,
 	memoryFileStore *memoryfile.Store,
+	sandboxExecEngine codeexecutor.Engine,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
 	}
 
-	mgr := octool.NewManager(
-		octool.WithBaseEnv(deps.ToolEnv(stateDir)),
-		octool.WithCommandPolicy(
-			octool.NewChatCommandSafetyPolicy(),
-		),
-		octool.WithOutputRedactor(
-			octool.NewChatCommandOutputRedactor(),
-		),
-	)
 	router := outbound.NewRouter()
 	cronTool := cron.NewTool(nil)
 	subagentTools := subagentrun.NewTools(nil)
@@ -3202,23 +3355,47 @@ func buildOpenClawTools(
 		}
 	}
 
-	execTool := octool.NewExecCommandTool(mgr, uploadStore)
-	if memoryFileStore != nil {
-		execTool = octool.NewExecCommandToolWithMemoryFileStore(
-			mgr,
+	var mgr *octool.Manager
+	var execTool tool.Tool
+	commandPolicy := octool.NewChatCommandSafetyPolicy()
+	outputRedactor := octool.NewChatCommandOutputRedactor()
+	if sandboxExecEngine != nil {
+		execTool = octool.NewSandboxExecCommandToolWithPolicy(
+			sandboxExecEngine,
 			uploadStore,
 			memoryFileStore,
+			commandPolicy,
+			outputRedactor,
 		)
+	} else {
+		mgr = octool.NewManager(
+			octool.WithBaseEnv(deps.ToolEnv(stateDir)),
+			octool.WithCommandPolicy(commandPolicy),
+			octool.WithOutputRedactor(outputRedactor),
+		)
+		execTool = octool.NewExecCommandTool(mgr, uploadStore)
+		if memoryFileStore != nil {
+			execTool = octool.NewExecCommandToolWithMemoryFileStore(
+				mgr,
+				uploadStore,
+				memoryFileStore,
+			)
+		}
 	}
 	tools := []tool.Tool{
 		conversationtool.NewTool(),
 		octool.NewReadDocumentTool(uploadStore),
 		octool.NewReadSpreadsheetTool(uploadStore),
 		execTool,
-		octool.NewWriteStdinTool(mgr),
-		octool.NewKillSessionTool(mgr),
 		outbound.NewTool(router),
 		cronTool,
+	}
+	if mgr != nil {
+		tools = append(
+			tools,
+			octool.NewWriteStdinTool(mgr),
+			octool.NewKillSessionTool(mgr),
+		)
 	}
 	tools = append(tools, subagentTools.All()...)
 	return openClawToolsBundle{

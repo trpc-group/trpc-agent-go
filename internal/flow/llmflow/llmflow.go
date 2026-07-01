@@ -488,9 +488,7 @@ func (f *Flow) maybeResumePendingToolCalls(
 	req := &model.Request{
 		Tools: make(map[string]tool.Tool),
 	}
-	for _, t := range f.getFilteredTools(ctx, invocation) {
-		req.Tools[t.Declaration().Name] = t
-	}
+	f.populateRequestTools(ctx, invocation, req)
 
 	for _, rp := range f.responseProcessors {
 		if toolRP, ok := rp.(*processor.FunctionCallResponseProcessor); ok {
@@ -718,6 +716,9 @@ func (f *Flow) runOneStep(
 		startedSpan,
 	)
 	agent.FinishExecutionTraceStep(invocation, stepID, traceSnapshotFromEvent(lastEvent), err)
+	if lastEvent != nil && lastEvent.Response != nil {
+		agent.SetExecutionTraceStepUsage(invocation, stepID, lastEvent.Response.Usage)
+	}
 	return lastEvent, err
 }
 
@@ -1369,6 +1370,7 @@ func (f *Flow) preprocess(
 		finishLatencySpan(span, started, nil)
 	}()
 
+	f.populateRequestTools(ctx, invocation, llmRequest)
 	// Run request processors - they send events directly to the channel.
 	for _, requestProcessor := range f.requestProcessors {
 		if rebuildPlan == nil {
@@ -1412,13 +1414,6 @@ func (f *Flow) preprocess(
 			stageSpan.SetAttributes(latencyRequestAttrs(llmRequest)...)
 		}
 		finishLatencySpan(stageSpan, stageStarted, nil)
-	}
-	// Add tools to the request with optional filtering.
-	if invocation.Agent != nil {
-		tools := f.getFilteredTools(ctx, invocation)
-		for _, t := range tools {
-			llmRequest.Tools[t.Declaration().Name] = t
-		}
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
 	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(ctx, llmRequest.Messages, llmRequest.Tools)
@@ -1634,11 +1629,6 @@ func (f *Flow) rebuildRequestForContextCompaction(
 			invocation,
 			rebuilt,
 		)
-	}
-	if invocation.Agent != nil {
-		for _, t := range f.getFilteredTools(ctx, invocation) {
-			rebuilt.Tools[t.Declaration().Name] = t
-		}
 	}
 	rebuilt.Messages = toolcall.SanitizeMessagesWithTools(
 		ctx,
@@ -2040,6 +2030,26 @@ func (f *Flow) getFilteredTools(
 	)
 
 	return filtered
+}
+
+func (f *Flow) populateRequestTools(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) {
+	if req == nil || invocation == nil || invocation.Agent == nil {
+		return
+	}
+	if req.Tools == nil {
+		req.Tools = make(map[string]tool.Tool)
+	}
+	for _, tl := range f.getFilteredTools(ctx, invocation) {
+		name := toolName(tl)
+		if name == "" {
+			continue
+		}
+		req.Tools[name] = tl
+	}
 }
 
 func sanitizeTools(tools []tool.Tool) []tool.Tool {

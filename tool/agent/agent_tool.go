@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -99,6 +100,8 @@ type dynamicOptions struct {
 	instructionDescription    *string
 	toolsDescription          *string
 	skillsDescription         *string
+	toolAliases               map[string]string
+	timeout                   time.Duration
 }
 
 func defaultDynamicOptions() *dynamicOptions {
