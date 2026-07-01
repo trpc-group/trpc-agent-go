@@ -12,8 +12,10 @@ package replaytest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -63,6 +65,63 @@ func TestHarnessReferenceModeUsesStableSnapshotOrder(t *testing.T) {
 	require.Equal(t, "inmemory", comparisons[1].Reference)
 }
 
+func TestNewHarnessHonorsExplicitComparisonOptions(t *testing.T) {
+	h := NewHarness(HarnessOpts{
+		ComparisonMode:   ComparisonPairs,
+		ReferenceBackend: "sqlite",
+	})
+	require.Equal(t, ComparisonPairs, h.mode)
+	require.Equal(t, "sqlite", h.reference)
+}
+
+func TestHarnessComparisonPairsComparesAllBackends(t *testing.T) {
+	h := NewHarness(HarnessOpts{ComparisonMode: ComparisonPairs})
+	snapshots := map[string]*SessionSnapshot{
+		"a": harnessTestSnapshot("a"),
+		"b": harnessTestSnapshot("b"),
+		"c": harnessTestSnapshot("c"),
+	}
+	profiles := map[string]BackendProfile{
+		"a": InMemoryProfile(),
+		"b": InMemoryProfile(),
+		"c": InMemoryProfile(),
+	}
+
+	comparisons := h.compareSnapshots(CaseSingleTurnText, snapshots, profiles)
+	require.Len(t, comparisons, 3)
+	require.Equal(t, "a", comparisons[0].BackendA)
+	require.Equal(t, "b", comparisons[0].BackendB)
+	require.Equal(t, "a", comparisons[1].BackendA)
+	require.Equal(t, "c", comparisons[1].BackendB)
+	require.Equal(t, "b", comparisons[2].BackendA)
+	require.Equal(t, "c", comparisons[2].BackendB)
+}
+
+func TestEnsureSessionFallsBackToExistingSession(t *testing.T) {
+	ctx := context.Background()
+	createErr := errors.New("create failed")
+	sessionSvc := sessioninmemory.NewSessionService()
+	defer sessionSvc.Close()
+	expected, err := sessionSvc.CreateSession(ctx, defaultSessionKey, nil)
+	require.NoError(t, err)
+
+	exec := &caseExecutor{
+		backend: NamedBackend{
+			Name: "fallback",
+			SessionService: createErrorSessionService{
+				SessionService: sessionSvc,
+				err:            createErr,
+			},
+		},
+		sessions: map[session.Key]*session.Session{},
+		snapshot: &SessionSnapshot{BackendName: "fallback"},
+	}
+	got, err := exec.ensureSession(ctx, defaultSessionKey)
+	require.NoError(t, err)
+	require.Equal(t, expected.ID, got.ID)
+	require.Equal(t, got, exec.sessions[defaultSessionKey])
+}
+
 func TestExecuteAddMemoryPropagatesReadError(t *testing.T) {
 	readErr := errors.New("read memories failed")
 	sessionSvc := sessioninmemory.NewSessionService()
@@ -84,6 +143,89 @@ func TestExecuteAddMemoryPropagatesReadError(t *testing.T) {
 		MemoryService:  readErrorMemoryService{err: readErr},
 	})
 	require.ErrorIs(t, err, readErr)
+}
+
+func TestExecuteSearchMemoryAppliesStepLimit(t *testing.T) {
+	sessionSvc := sessioninmemory.NewSessionService()
+	defer sessionSvc.Close()
+
+	snapshot, err := executeCase(context.Background(), ReplayCase{
+		Name: "memory_search_limit",
+		Steps: []ReplayStep{
+			SearchMemoryStep{
+				Key:     "memory.search",
+				UserKey: memory.UserKey{AppName: "app", UserID: "user"},
+				Query:   "go",
+				Limit:   1,
+			},
+		},
+	}, NamedBackend{
+		Name:           "memory-search-limit",
+		Profile:        InMemoryProfile(),
+		SessionService: sessionSvc,
+		MemoryService: readErrorMemoryService{searchResults: []*memory.Entry{
+			{ID: "first", Memory: &memory.Memory{Memory: "go first"}},
+			{ID: "second", Memory: &memory.Memory{Memory: "go second"}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, snapshot.MemSearchResults, 1)
+	require.Equal(t, "first", snapshot.MemSearchResults[0].ID)
+}
+
+func TestExecuteAppendTrackCapturesPersistedTrack(t *testing.T) {
+	sessionSvc := sessioninmemory.NewSessionService()
+	defer sessionSvc.Close()
+
+	snapshot, err := executeCase(context.Background(), ReplayCase{
+		Name: "append_track",
+		Steps: []ReplayStep{
+			AppendTrackStep{
+				Key:        "track.append",
+				SessionKey: defaultSessionKey,
+				Event: &session.TrackEvent{
+					Track:     "tool",
+					Payload:   json.RawMessage(`{"status":"ok"}`),
+					Timestamp: time.Unix(1, 0).UTC(),
+				},
+			},
+			GetSessionStep{Key: "track.get", SessionKey: defaultSessionKey},
+		},
+	}, NamedBackend{
+		Name:           "track",
+		Profile:        InMemoryProfile(),
+		SessionService: sessionSvc,
+	})
+	require.NoError(t, err)
+	require.Contains(t, snapshot.TrackEvents, "tool")
+	require.Len(t, snapshot.TrackEvents["tool"].Events, 1)
+	require.JSONEq(t, `{"status":"ok"}`, string(snapshot.TrackEvents["tool"].Events[0].Payload))
+}
+
+func TestExecuteAppendTrackIgnoresSessionServiceWithoutTrackSupport(t *testing.T) {
+	sessionSvc := sessioninmemory.NewSessionService()
+	defer sessionSvc.Close()
+
+	snapshot, err := executeCase(context.Background(), ReplayCase{
+		Name: "append_track_unsupported",
+		Steps: []ReplayStep{
+			AppendTrackStep{
+				Key:        "track.append",
+				SessionKey: defaultSessionKey,
+				Event: &session.TrackEvent{
+					Track:     "tool",
+					Payload:   json.RawMessage(`{"status":"ok"}`),
+					Timestamp: time.Unix(1, 0).UTC(),
+				},
+			},
+		},
+	}, NamedBackend{
+		Name:           "session-only",
+		Profile:        InMemoryProfile(),
+		SessionService: sessionOnlyService{Service: sessionSvc},
+	})
+	require.NoError(t, err)
+	require.Empty(t, snapshot.TrackEvents)
 }
 
 func TestHarnessNoMatchingBackend(t *testing.T) {
@@ -133,7 +275,8 @@ func harnessTestSnapshot(backend string) *SessionSnapshot {
 }
 
 type readErrorMemoryService struct {
-	err error
+	err           error
+	searchResults []*memory.Entry
 }
 
 func (s readErrorMemoryService) AddMemory(
@@ -178,7 +321,7 @@ func (s readErrorMemoryService) SearchMemories(
 	string,
 	...memory.SearchOption,
 ) ([]*memory.Entry, error) {
-	return nil, nil
+	return s.searchResults, nil
 }
 
 func (s readErrorMemoryService) Tools() []tool.Tool {
@@ -191,4 +334,22 @@ func (s readErrorMemoryService) EnqueueAutoMemoryJob(context.Context, *session.S
 
 func (s readErrorMemoryService) Close() error {
 	return nil
+}
+
+type createErrorSessionService struct {
+	*sessioninmemory.SessionService
+	err error
+}
+
+func (s createErrorSessionService) CreateSession(
+	context.Context,
+	session.Key,
+	session.StateMap,
+	...session.Option,
+) (*session.Session, error) {
+	return nil, s.err
+}
+
+type sessionOnlyService struct {
+	session.Service
 }

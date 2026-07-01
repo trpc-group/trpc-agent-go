@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
@@ -204,6 +205,20 @@ func TestSummaryAsyncCaseFailsWhenSummaryMissing(t *testing.T) {
 	require.Contains(t, err.Error(), "summary not available")
 }
 
+func TestSummaryTextUsesFilterKey(t *testing.T) {
+	sessionSvc := sessioninmemory.NewSessionService()
+	defer sessionSvc.Close()
+	sess := session.NewSession("app", "user", "sess")
+	updatedAt := sess.CreatedAt.Add(time.Second)
+	sess.Summaries = map[string]*session.Summary{
+		session.SummaryFilterKeyAllContents: {Summary: "full", UpdatedAt: updatedAt},
+		"branch":                            {Summary: "branch-only", UpdatedAt: updatedAt},
+	}
+
+	require.Equal(t, "full", summaryText(context.Background(), sess, "", sessionSvc))
+	require.Equal(t, "branch-only", summaryText(context.Background(), sess, "branch", sessionSvc))
+}
+
 func TestComparatorDetectsAsyncSummaryMissing(t *testing.T) {
 	result := NewComparator().Compare(
 		summarySnapshot("a", map[string]*session.Summary{"": {Summary: "summary"}}),
@@ -246,4 +261,28 @@ func summaryNamedBackend(
 		SessionService: sessionSvc,
 		MemoryService:  memorySvc,
 	}
+}
+
+func TestFakeSummarizerSetPromptAndModel(t *testing.T) {
+	s := NewFakeSummarizer()
+	s.SetPrompt("test prompt")
+	s.SetModel(nil)
+	require.Equal(t, "test prompt", s.prompt)
+	require.Nil(t, s.model)
+}
+
+func TestFakeSummarizerSetModelNonNil(t *testing.T) {
+	s := NewFakeSummarizer()
+	s.SetModel(nil)
+	require.Nil(t, s.model)
+	m := &testModel{}
+	s.SetModel(m)
+	require.NotNil(t, s.model)
+}
+
+type testModel struct{}
+
+func (m *testModel) Info() model.Info { return model.Info{Name: "test"} }
+func (m *testModel) GenerateContent(context.Context, *model.Request) (<-chan *model.Response, error) {
+	return nil, nil
 }

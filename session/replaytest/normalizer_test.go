@@ -76,3 +76,10 @@ func TestNormalizer(t *testing.T) {
 	require.JSONEq(t, `{"a":1,"b":2}`, string(norm.Session.Events[0].Extensions["z"]))
 	require.JSONEq(t, `{"a":1,"z":2}`, string(norm.Session.Tracks["trace"].Events[0].Payload))
 }
+
+func TestNormalizeTime(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+	tm := time.Date(2026, 7, 1, 12, 0, 0, 0, loc)
+	require.Equal(t, tm.UTC(), normalizeTime(tm))
+}

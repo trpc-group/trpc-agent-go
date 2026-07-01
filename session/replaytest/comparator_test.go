@@ -115,6 +115,123 @@ func TestComparatorMemoryProfile(t *testing.T) {
 	require.Equal(t, StatusPassed, result.Status)
 }
 
+func TestAllowedDiffMatchRules(t *testing.T) {
+	tests := []struct {
+		name    string
+		diff    DiffResult
+		rule    AllowedDiff
+		allowed bool
+	}{
+		{
+			name: "within delta",
+			diff: DiffResult{Path: "memory_search[target].score", ValueA: 0.90, ValueB: float32(0.91)},
+			rule: AllowedDiff{
+				Path:      "memory_search[*].score",
+				MatchRule: MatchRuleWithinDelta,
+				Delta:     0.02,
+			},
+			allowed: true,
+		},
+		{
+			name: "within delta rejects non numeric",
+			diff: DiffResult{Path: "memory_search[target].score", ValueA: "0.90", ValueB: 0.91},
+			rule: AllowedDiff{
+				Path:      "memory_search[*].score",
+				MatchRule: MatchRuleWithinDelta,
+				Delta:     0.02,
+			},
+		},
+		{
+			name: "not empty",
+			diff: DiffResult{Path: "summaries", ValueA: "summary", ValueB: []byte("summary")},
+			rule: AllowedDiff{
+				Path:      "summaries",
+				MatchRule: MatchRuleNotEmpty,
+			},
+			allowed: true,
+		},
+		{
+			name: "not empty rejects empty side",
+			diff: DiffResult{Path: "summaries", ValueA: "summary", ValueB: ""},
+			rule: AllowedDiff{
+				Path:      "summaries",
+				MatchRule: MatchRuleNotEmpty,
+			},
+		},
+		{
+			name: "same type",
+			diff: DiffResult{Path: "state[color]", ValueA: []byte("blue"), ValueB: []byte("green")},
+			rule: AllowedDiff{
+				Path:      "state[color]",
+				MatchRule: MatchRuleSameType,
+			},
+			allowed: true,
+		},
+		{
+			name: "same type rejects different type",
+			diff: DiffResult{Path: "state[color]", ValueA: []byte("blue"), ValueB: "green"},
+			rule: AllowedDiff{
+				Path:      "state[color]",
+				MatchRule: MatchRuleSameType,
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := filterAllowedDiffs([]DiffResult{tc.diff}, []AllowedDiff{tc.rule})
+			if tc.allowed {
+				require.Empty(t, got)
+				return
+			}
+			require.Equal(t, []DiffResult{tc.diff}, got)
+		})
+	}
+}
+
+func TestAsFloat(t *testing.T) {
+	tests := []struct {
+		name string
+		in   any
+		want float64
+		ok   bool
+	}{
+		{name: "float64", in: 1.25, want: 1.25, ok: true},
+		{name: "float32", in: float32(1.5), want: 1.5, ok: true},
+		{name: "int", in: 2, want: 2, ok: true},
+		{name: "string", in: "2", ok: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := asFloat(tc.in)
+			require.Equal(t, tc.ok, ok)
+			if tc.ok {
+				require.Equal(t, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestIsEmpty(t *testing.T) {
+	tests := []struct {
+		name string
+		in   any
+		want bool
+	}{
+		{name: "nil", in: nil, want: true},
+		{name: "empty string", in: "", want: true},
+		{name: "non empty string", in: "x", want: false},
+		{name: "empty slice", in: []string{}, want: true},
+		{name: "non empty slice", in: []string{"x"}, want: false},
+		{name: "empty map", in: map[string]string{}, want: true},
+		{name: "int", in: 0, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, isEmpty(tc.in))
+		})
+	}
+}
+
 func TestRequiredCapabilities(t *testing.T) {
 	profile := InMemoryProfile()
 	profile.SupportsTrack = false
