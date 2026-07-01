@@ -28,26 +28,26 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/externalization"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	sessionmongodb "trpc.group/trpc-go/trpc-agent-go/session/mongodb"
-	sessionmultimodal "trpc.group/trpc-go/trpc-agent-go/session/multimodal"
 	sessionredis "trpc.group/trpc-go/trpc-agent-go/session/redis"
 )
 
-const multimodalE2EApp = "multimodal-session-e2e"
+const externalizationE2EApp = "session-externalization-e2e"
 
-func TestSessionMultimodalExternalizationE2E(t *testing.T) {
+func TestSessionExternalizationE2E(t *testing.T) {
 	for _, backend := range sessionBackendFactories(t) {
 		t.Run(backend.name, func(t *testing.T) {
 			ctx := context.Background()
 			inner := backend.newService(t)
 			closeSessionService(t, inner)
 			artifacts := artifactinmemory.NewService()
-			wrapped := rSessionService(t, inner, artifacts)
+			wrapped := wrappedSessionService(t, inner, artifacts)
 			rec := &recordingModel{name: "capture", responseText: "ok"}
 			ag := llmagent.New("agent", llmagent.WithModel(rec))
 			r := runner.NewRunner(
-				multimodalE2EApp,
+				externalizationE2EApp,
 				ag,
 				runner.WithSessionService(wrapped),
 				runner.WithArtifactService(artifacts),
@@ -70,7 +70,7 @@ func TestSessionMultimodalExternalizationE2E(t *testing.T) {
 			require.Equal(t, imageData, firstImageData(t, rec.requests()[0]))
 
 			key := session.Key{
-				AppName:   multimodalE2EApp,
+				AppName:   externalizationE2EApp,
 				UserID:    userID,
 				SessionID: sessionID,
 			}
@@ -105,12 +105,12 @@ func TestSessionMultimodalExternalizationE2E(t *testing.T) {
 	}
 }
 
-func TestSessionMultimodalExternalizationDisabledKeepsInline(t *testing.T) {
+func TestSessionExternalizationDisabledKeepsInline(t *testing.T) {
 	ctx := context.Background()
 	inner := sessioninmemory.NewSessionService()
 	rec := &recordingModel{name: "capture", responseText: "ok"}
 	r := runner.NewRunner(
-		multimodalE2EApp,
+		externalizationE2EApp,
 		llmagent.New("agent", llmagent.WithModel(rec)),
 		runner.WithSessionService(inner),
 		runner.WithArtifactService(artifactinmemory.NewService()),
@@ -126,7 +126,7 @@ func TestSessionMultimodalExternalizationDisabledKeepsInline(t *testing.T) {
 	require.NoError(t, drainRun(ctx, r, userID, sessionID, msg))
 
 	persisted := getSession(t, ctx, inner, session.Key{
-		AppName:   multimodalE2EApp,
+		AppName:   externalizationE2EApp,
 		UserID:    userID,
 		SessionID: sessionID,
 	})
@@ -135,14 +135,14 @@ func TestSessionMultimodalExternalizationDisabledKeepsInline(t *testing.T) {
 	require.Nil(t, part.ContentRef)
 }
 
-func TestSessionMultimodalProviderBoundaryRejectsUnresolvedRefs(t *testing.T) {
+func TestSessionExternalizationProviderBoundaryRejectsUnresolvedRefs(t *testing.T) {
 	ctx := context.Background()
 	inner := sessioninmemory.NewSessionService()
 	artifacts := artifactinmemory.NewService()
-	wrapped := rSessionService(t, inner, artifacts)
+	wrapped := wrappedSessionService(t, inner, artifacts)
 	rec := &recordingModel{name: "capture", responseText: "ok"}
 	r := runner.NewRunner(
-		multimodalE2EApp,
+		externalizationE2EApp,
 		llmagent.New("agent", llmagent.WithModel(rec)),
 		runner.WithSessionService(wrapped),
 		runner.WithArtifactService(artifacts),
@@ -152,7 +152,7 @@ func TestSessionMultimodalProviderBoundaryRejectsUnresolvedRefs(t *testing.T) {
 	userID := uniqueID("user")
 	sessionID := uniqueID("session")
 	key := session.Key{
-		AppName:   multimodalE2EApp,
+		AppName:   externalizationE2EApp,
 		UserID:    userID,
 		SessionID: sessionID,
 	}
@@ -166,7 +166,7 @@ func TestSessionMultimodalProviderBoundaryRejectsUnresolvedRefs(t *testing.T) {
 	require.Empty(t, rec.requests())
 }
 
-func TestSessionMultimodalArtifactFailuresAreVisible(t *testing.T) {
+func TestSessionExternalizationArtifactFailuresAreVisible(t *testing.T) {
 	t.Run("save failure prevents damaged write", func(t *testing.T) {
 		ctx := context.Background()
 		inner := sessioninmemory.NewSessionService()
@@ -174,9 +174,9 @@ func TestSessionMultimodalArtifactFailuresAreVisible(t *testing.T) {
 			Service: artifactinmemory.NewService(),
 			saveErr: errors.New("save failed"),
 		}
-		wrapped := rSessionService(t, inner, artifacts)
+		wrapped := wrappedSessionService(t, inner, artifacts)
 		r := runner.NewRunner(
-			multimodalE2EApp,
+			externalizationE2EApp,
 			llmagent.New("agent", llmagent.WithModel(&recordingModel{name: "capture", responseText: "ok"})),
 			runner.WithSessionService(wrapped),
 			runner.WithArtifactService(artifacts),
@@ -192,7 +192,7 @@ func TestSessionMultimodalArtifactFailuresAreVisible(t *testing.T) {
 		require.ErrorContains(t, err, "save artifact")
 		require.ErrorContains(t, err, "save failed")
 		persisted := getSession(t, ctx, inner, session.Key{
-			AppName:   multimodalE2EApp,
+			AppName:   externalizationE2EApp,
 			UserID:    userID,
 			SessionID: sessionID,
 		})
@@ -203,9 +203,9 @@ func TestSessionMultimodalArtifactFailuresAreVisible(t *testing.T) {
 		ctx := context.Background()
 		inner := sessioninmemory.NewSessionService()
 		baseArtifacts := artifactinmemory.NewService()
-		wrapped := rSessionService(t, inner, baseArtifacts)
+		wrapped := wrappedSessionService(t, inner, baseArtifacts)
 		r1 := runner.NewRunner(
-			multimodalE2EApp,
+			externalizationE2EApp,
 			llmagent.New("agent", llmagent.WithModel(&recordingModel{name: "capture", responseText: "ok"})),
 			runner.WithSessionService(wrapped),
 			runner.WithArtifactService(baseArtifacts),
@@ -223,9 +223,9 @@ func TestSessionMultimodalArtifactFailuresAreVisible(t *testing.T) {
 			Service: baseArtifacts,
 			loadErr: errors.New("load failed"),
 		}
-		failingWrapped := rSessionService(t, inner, failingArtifacts)
+		failingWrapped := wrappedSessionService(t, inner, failingArtifacts)
 		r2 := runner.NewRunner(
-			multimodalE2EApp,
+			externalizationE2EApp,
 			llmagent.New("agent", llmagent.WithModel(rec)),
 			runner.WithSessionService(failingWrapped),
 			runner.WithArtifactService(failingArtifacts),
@@ -278,7 +278,7 @@ func sessionBackendFactories(t *testing.T) []sessionBackendFactory {
 				}
 				svc, err := sessionmongodb.NewService(
 					sessionmongodb.WithMongoClientURI(uri),
-					sessionmongodb.WithDatabase("trpc_agent_go_multimodal_e2e"),
+					sessionmongodb.WithDatabase("trpc_agent_go_externalization_e2e"),
 					sessionmongodb.WithCollectionPrefix("mm_e2e"),
 				)
 				require.NoError(t, err)
@@ -398,16 +398,16 @@ func getSession(
 	return sess
 }
 
-func rSessionService(
+func wrappedSessionService(
 	t *testing.T,
 	inner session.Service,
 	artifacts artifact.Service,
 ) session.Service {
 	t.Helper()
-	return sessionmultimodal.Wrap(
+	return externalization.Wrap(
 		inner,
 		artifacts,
-		sessionmultimodal.Config{Enabled: true},
+		externalization.Config{Enabled: true},
 	)
 }
 

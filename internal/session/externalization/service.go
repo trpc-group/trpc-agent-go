@@ -7,8 +7,8 @@
 //
 //
 
-// Package multimodal provides internal session multimodal content governance.
-package multimodal
+// Package externalization provides internal session content externalization.
+package externalization
 
 import (
 	"context"
@@ -38,20 +38,20 @@ const (
 )
 
 var (
-	// ErrArtifactServiceNil indicates multimodal governance needed an artifact
+	// ErrArtifactServiceNil indicates content externalization needed an artifact
 	// service but none was configured.
-	ErrArtifactServiceNil = errors.New("session multimodal: artifact service is nil")
+	ErrArtifactServiceNil = errors.New("session externalization: artifact service is nil")
 	// ErrInvalidArtifactRef indicates an internal content reference cannot be
 	// resolved into a pinned artifact name and version.
-	ErrInvalidArtifactRef = errors.New("session multimodal hydrate: invalid artifact ref")
+	ErrInvalidArtifactRef = errors.New("session externalization hydrate: invalid artifact ref")
 )
 
-// Config controls internal session multimodal governance.
+// Config controls internal session content externalization.
 type Config struct {
 	Enabled bool
 }
 
-// Wrap wraps a session service with multimodal externalization and hydration.
+// Wrap wraps a session service with content externalization and hydration.
 func Wrap(inner session.Service, artifactService artifact.Service, cfg Config) session.Service {
 	if inner == nil || !cfg.Enabled {
 		return inner
@@ -64,7 +64,7 @@ func Wrap(inner session.Service, artifactService artifact.Service, cfg Config) s
 	return wrapOptionalInterfaces(base, inner)
 }
 
-// Service decorates a session service with multimodal governance.
+// Service decorates a session service with content externalization.
 type Service struct {
 	session.Service
 	artifactService artifact.Service
@@ -237,7 +237,7 @@ func (s *Service) CreateSession(
 	return sess.Clone(), nil
 }
 
-// AppendEvent externalizes standard multimodal content before persistence.
+// AppendEvent externalizes supported inline content before persistence.
 func (s *Service) AppendEvent(
 	ctx context.Context,
 	sess *session.Session,
@@ -278,7 +278,7 @@ func (s *Service) AppendEvent(
 	return nil
 }
 
-// GetSession hydrates internal multimodal references before returning a session.
+// GetSession hydrates internal content references before returning a session.
 func (s *Service) GetSession(
 	ctx context.Context,
 	key session.Key,
@@ -432,7 +432,7 @@ func externalizeChoiceMessage(
 		return nil, false, nil
 	}
 	if svc == nil {
-		return nil, false, fmt.Errorf("session multimodal externalization: %w", ErrArtifactServiceNil)
+		return nil, false, fmt.Errorf("session content externalization: %w", ErrArtifactServiceNil)
 	}
 	if *cloned == nil {
 		*cloned = cloneEventForMutation(evt)
@@ -455,9 +455,9 @@ func externalizeMessage(
 	msg *model.Message,
 	info artifact.SessionInfo,
 	svc artifact.Service,
-	eventKey string,
+	eventID string,
 	requestID string,
-	messageIndex int,
+	choiceIndex int,
 ) ([]string, error) {
 	saved := make([]string, 0)
 	for partIndex := range msg.ContentParts {
@@ -475,7 +475,7 @@ func externalizeMessage(
 			Name:     target.originalName,
 		})
 		if err != nil {
-			return saved, fmt.Errorf("session multimodal externalization: save artifact %s: %w", filename, err)
+			return saved, fmt.Errorf("session content externalization: save artifact %s: %w", filename, err)
 		}
 		saved = append(saved, filename)
 		ref := &model.ContentRef{
@@ -487,8 +487,8 @@ func externalizeMessage(
 			SHA256:          sha256Hex(target.data),
 			OriginalName:    target.originalName,
 			FromDataURL:     target.fromDataURL,
-			EventKey:        eventKey,
-			MessageIndex:    messageIndex,
+			EventID:         eventID,
+			ChoiceIndex:     choiceIndex,
 			PartIndex:       partIndex,
 			RequestID:       requestID,
 		}
@@ -601,7 +601,7 @@ func hydrateSession(
 		return sess, nil
 	}
 	if svc == nil {
-		return nil, fmt.Errorf("session multimodal hydrate: %w", ErrArtifactServiceNil)
+		return nil, fmt.Errorf("session externalization hydrate: %w", ErrArtifactServiceNil)
 	}
 	hydrated := sess.Clone()
 	for i := range hydrated.Events {
@@ -626,7 +626,7 @@ func hydrateEvent(
 		return evt, false, nil
 	}
 	if svc == nil {
-		return nil, false, fmt.Errorf("session multimodal hydrate: %w", ErrArtifactServiceNil)
+		return nil, false, fmt.Errorf("session externalization hydrate: %w", ErrArtifactServiceNil)
 	}
 	cloned := cloneEventForMutation(evt)
 	for choiceIndex := range cloned.Response.Choices {
@@ -658,10 +658,10 @@ func hydrateMessage(
 		}
 		art, err := svc.LoadArtifact(ctx, info, name, &version)
 		if err != nil {
-			return fmt.Errorf("session multimodal hydrate: load artifact %s@%d: %w", name, version, err)
+			return fmt.Errorf("session externalization hydrate: load artifact %s@%d: %w", name, version, err)
 		}
 		if art == nil {
-			return fmt.Errorf("session multimodal hydrate: artifact not found: %s@%d", name, version)
+			return fmt.Errorf("session externalization hydrate: artifact not found: %s@%d", name, version)
 		}
 		data := cloneBytes(art.Data)
 		if err := validateHydratedArtifact(ref, data, name, version); err != nil {
@@ -707,14 +707,14 @@ func validateHydratedArtifact(
 ) error {
 	if ref.SizeBytes > 0 && int64(len(data)) != ref.SizeBytes {
 		return fmt.Errorf(
-			"session multimodal hydrate: artifact size mismatch: %s@%d",
+			"session externalization hydrate: artifact size mismatch: %s@%d",
 			name,
 			version,
 		)
 	}
 	if ref.SHA256 != "" && !strings.EqualFold(sha256Hex(data), ref.SHA256) {
 		return fmt.Errorf(
-			"session multimodal hydrate: artifact sha256 mismatch: %s@%d",
+			"session externalization hydrate: artifact sha256 mismatch: %s@%d",
 			name,
 			version,
 		)
@@ -915,7 +915,7 @@ func parseDataURL(raw string) ([]byte, string, bool, error) {
 	payload := strings.TrimSpace(raw)[len("data:"):]
 	comma := strings.Index(payload, ",")
 	if comma < 0 {
-		return nil, "", true, fmt.Errorf("session multimodal externalization: invalid data URL")
+		return nil, "", true, fmt.Errorf("session content externalization: invalid data URL")
 	}
 	meta := payload[:comma]
 	body := payload[comma+1:]
@@ -927,13 +927,13 @@ func parseDataURL(raw string) ([]byte, string, bool, error) {
 	if hasDataURLFlag(parts[1:], "base64") {
 		data, err := base64.StdEncoding.DecodeString(body)
 		if err != nil {
-			return nil, "", true, fmt.Errorf("session multimodal externalization: decode data URL: %w", err)
+			return nil, "", true, fmt.Errorf("session content externalization: decode data URL: %w", err)
 		}
 		return data, normalizeMime(mimeType), true, nil
 	}
 	data, err := url.PathUnescape(body)
 	if err != nil {
-		return nil, "", true, fmt.Errorf("session multimodal externalization: decode data URL: %w", err)
+		return nil, "", true, fmt.Errorf("session content externalization: decode data URL: %w", err)
 	}
 	return []byte(data), normalizeMime(mimeType), true, nil
 }

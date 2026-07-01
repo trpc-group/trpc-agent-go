@@ -7,7 +7,7 @@
 //
 //
 
-package multimodal
+package externalization
 
 import (
 	"context"
@@ -137,7 +137,7 @@ func TestAppendEventExternalizesAndHydratesAudioAndFile(t *testing.T) {
 
 	audioData := []byte("audio-bytes")
 	fileData := []byte("file-bytes")
-	msg := model.NewUserMessage("multimodal")
+	msg := model.NewUserMessage("content")
 	msg.AddAudioData(audioData, "mp3")
 	msg.AddFileData("report.pdf", fileData, "application/pdf")
 	evt := responseEvent(msg)
@@ -814,7 +814,7 @@ func TestHydrateMessageEdgeCases(t *testing.T) {
 			t.Fatalf("hydrateMessage() error = %v, want artifact not found", err)
 		}
 	})
-	t.Run("fills nil multimodal parts", func(t *testing.T) {
+	t.Run("fills nil content parts", func(t *testing.T) {
 		artifacts := artifactmem.NewService()
 		entries := []struct {
 			name     string
@@ -871,7 +871,7 @@ func TestHydrateMessageEdgeCases(t *testing.T) {
 	})
 }
 
-func TestMultimodalHelperEdgeCases(t *testing.T) {
+func TestExternalizationHelperEdgeCases(t *testing.T) {
 	if _, _, ok, err := parseDataURL("https://example.com/file"); ok || err != nil {
 		t.Fatalf("parseDataURL(non-data) = ok %v err %v, want false nil", ok, err)
 	}

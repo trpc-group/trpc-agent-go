@@ -1,14 +1,14 @@
-# Session Multimodal Externalization
+# Session Content Externalization
 
-This targeted example demonstrates the opt-in session multimodal externalization flow.
+This targeted example demonstrates the opt-in session content externalization flow.
 
 It uses an in-memory session backend, an in-memory artifact service, and a recording fake model, so it runs without external API keys.
 
 ## What It Shows
 
-- Enabling session multimodal externalization with `session/multimodal.Wrap`.
+- Enabling session content externalization with `session/externalization.Wrap`.
 - Why an `artifact.Service` is required when the feature is enabled.
-- The model request still sees normal inline multimodal content during the current turn.
+- The model request still sees normal inline image/file payloads during the current turn.
 - The persisted session event stores `ContentRef` instead of inline image/file payloads.
 - A later turn hydrates persisted `ContentRef` back into normal `ContentParts` before building the model request.
 
@@ -16,7 +16,7 @@ It uses an in-memory session backend, an in-memory artifact service, and a recor
 
 ```bash
 cd examples/session
-go run ./multimodal_externalization
+go run ./externalization
 ```
 
 ## Expected Output

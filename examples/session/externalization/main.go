@@ -7,11 +7,11 @@
 //
 //
 
-// Package main demonstrates opt-in session multimodal externalization.
+// Package main demonstrates opt-in session content externalization.
 //
 // The example uses a recording model instead of a real provider so it can run
 // without API keys. It shows the three important views:
-//   - the model request still sees inline multimodal bytes;
+//   - the model request still sees inline content payloads;
 //   - the underlying persisted session stores ContentRef instead of bytes;
 //   - a later turn hydrates persisted ContentRef back into normal ContentParts.
 package main
@@ -29,31 +29,31 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/externalization"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	sessionmultimodal "trpc.group/trpc-go/trpc-agent-go/session/multimodal"
 )
 
 const (
-	appName   = "session-multimodal-externalization-example"
+	appName   = "session-externalization-example"
 	userID    = "demo-user"
 	sessionID = "demo-session"
 )
 
 func main() {
 	ctx := context.Background()
-	sessionService := sessioninmemory.NewSessionService()
+	rawSessionService := sessioninmemory.NewSessionService()
 	artifactService := artifactinmemory.NewService()
-	governedSessionService := sessionmultimodal.Wrap(
-		sessionService,
+	wrappedSessionService := externalization.Wrap(
+		rawSessionService,
 		artifactService,
-		sessionmultimodal.Config{Enabled: true},
+		externalization.Config{Enabled: true},
 	)
 	rec := &recordingModel{name: "recording-model"}
-	agent := llmagent.New("multimodal-demo-agent", llmagent.WithModel(rec))
+	agent := llmagent.New("externalization-demo-agent", llmagent.WithModel(rec))
 	r := runner.NewRunner(
 		appName,
 		agent,
-		runner.WithSessionService(governedSessionService),
+		runner.WithSessionService(wrappedSessionService),
 		runner.WithArtifactService(artifactService),
 	)
 	defer func() {
@@ -72,7 +72,7 @@ func main() {
 	}
 
 	key := session.Key{AppName: appName, UserID: userID, SessionID: sessionID}
-	persisted, err := sessionService.GetSession(ctx, key)
+	persisted, err := rawSessionService.GetSession(ctx, key)
 	if err != nil {
 		log.Fatalf("read persisted session: %v", err)
 	}

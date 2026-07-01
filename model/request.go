@@ -294,10 +294,10 @@ type ContentRef struct {
 	OriginalName string `json:"original_name,omitempty"`
 	// FromDataURL indicates whether the content was externalized from a data URL.
 	FromDataURL bool `json:"from_data_url,omitempty"`
-	// EventKey identifies the owning event for debugging.
-	EventKey string `json:"event_key,omitempty"`
-	// MessageIndex identifies the owning message within the event.
-	MessageIndex int `json:"message_index"`
+	// EventID identifies the owning event for debugging.
+	EventID string `json:"event_id,omitempty"`
+	// ChoiceIndex identifies the owning response choice within the event.
+	ChoiceIndex int `json:"choice_index"`
 	// PartIndex identifies the owning content part within the message.
 	PartIndex int `json:"part_index"`
 	// RequestID identifies the owning request for debugging.

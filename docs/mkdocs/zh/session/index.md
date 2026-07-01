@@ -21,7 +21,7 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 - **并发安全**：内置读写锁保证并发访问安全
 - **自动管理**：集成 Runner 后自动处理会话创建、加载和更新
 - **软删除支持**：SQLite/PostgreSQL/PGVector/MySQL/ClickHouse 支持软删除，数据可恢复
-- **多模态外存**：可选地将 session event 中的 inline image/audio/file payload 外存到 Artifact 存储
+- **内容外存**：可选地将 session event 中的 inline image/audio/file payload 外存到 Artifact 存储
 
 ## 快速开始
 
@@ -172,27 +172,29 @@ func main() {
 4. **上下文连续性**：自动将历史对话注入到 LLM 输入，实现多轮对话
 5. **自动摘要生成**（可选）：满足触发条件时后台异步生成摘要，无需手动干预
 
-### 多模态内容外存
+### Session 内容外存
 
-Session event 可以包含多模态 `model.ContentParts`，其中 image、audio、file 都可能携带 inline bytes。对于大 payload，直接写入 session backend 会增加存储体积、序列化成本和读取放大。
+Session event 可以包含 `model.ContentParts`，其中 image、audio、file 都可能携带 inline bytes。对于大 payload，直接写入 session backend 会增加存储体积、序列化成本和读取放大。
 
-Session 多模态外存默认关闭。需要显式 wrap session service，并同时配置 Artifact service：
+Session 内容外存默认关闭。需要显式 wrap session service，并同时配置 Artifact service：
 
 ```go
-import artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
-import sessionmultimodal "trpc.group/trpc-go/trpc-agent-go/session/multimodal"
+import (
+    artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/session/externalization"
+)
 
 artifactService := artifactinmemory.NewService()
-governedSessionService := sessionmultimodal.Wrap(
+wrappedSessionService := externalization.Wrap(
     sessionService,
     artifactService,
-    sessionmultimodal.Config{Enabled: true},
+    externalization.Config{Enabled: true},
 )
 
 r := runner.NewRunner(
     "my-agent",
     agent,
-    runner.WithSessionService(governedSessionService),
+    runner.WithSessionService(wrappedSessionService),
     runner.WithArtifactService(artifactService),
 )
 ```
@@ -208,7 +210,7 @@ r := runner.NewRunner(
 - 当前 runtime event 和活跃 session view 保留原始 bytes，因此当前轮模型请求不会被持久化减重影响。
 - `GetSession`、完整 `ListSessions`、`SearchEvents`、`GetEventWindow` 默认返回 hydrate 后的内容。
 - 使用 `WithListSessionOnlyMeta` 的 `ListSessions` 不做 hydrate，因为该模式本身会省略 event payload。
-- 通过 `runner.WithSessionService` 传入 wrapped service 后，runner callback、tool、plugin 都会看到同一份 governed service。业务代码如果直接调用 `AppendEvent`，也应使用这份 wrapped service，而不是 raw backend。
+- 通过 `runner.WithSessionService` 传入 wrapped service 后，runner callback、tool、plugin 都会看到同一份 wrapped service。业务代码如果直接调用 `AppendEvent`，也应使用这份 wrapped service，而不是 raw backend。
 
 以下内容不会被该能力默认重托管：
 

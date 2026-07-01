@@ -171,27 +171,29 @@ After integrating Session Service, the Runner automatically provides the followi
 4. **Context Continuity**: Automatically injects conversation history into LLM input for multi-turn conversations
 5. **Automatic Summary Generation** (optional): Generates summaries asynchronously in the background when trigger conditions are met
 
-### Multimodal Content Externalization
+### Session Content Externalization
 
-Session events can contain multimodal `model.ContentParts`, including inline image, audio, or file bytes. For large payloads, storing these bytes directly in the session backend can increase storage size, serialization cost, and read amplification.
+Session events can contain `model.ContentParts` such as inline image, audio, or file bytes. For large payloads, storing these bytes directly in the session backend can increase storage size, serialization cost, and read amplification.
 
-Session multimodal externalization is **disabled by default**. Enable it explicitly by wrapping the session service and provide an Artifact service:
+Session content externalization is **disabled by default**. Enable it explicitly by wrapping the session service and provide an Artifact service:
 
 ```go
-import artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
-import sessionmultimodal "trpc.group/trpc-go/trpc-agent-go/session/multimodal"
+import (
+    artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/session/externalization"
+)
 
 artifactService := artifactinmemory.NewService()
-governedSessionService := sessionmultimodal.Wrap(
+wrappedSessionService := externalization.Wrap(
     sessionService,
     artifactService,
-    sessionmultimodal.Config{Enabled: true},
+    externalization.Config{Enabled: true},
 )
 
 r := runner.NewRunner(
     "my-agent",
     agent,
-    runner.WithSessionService(governedSessionService),
+    runner.WithSessionService(wrappedSessionService),
     runner.WithArtifactService(artifactService),
 )
 ```
@@ -207,7 +209,7 @@ When enabled:
 - The current runtime event and active session view keep the original bytes, so the current model request is not affected by persistence compaction.
 - `GetSession`, full `ListSessions`, `SearchEvents`, and `GetEventWindow` return hydrated content by default.
 - `ListSessions` with `WithListSessionOnlyMeta` skips hydration because event payloads are intentionally omitted.
-- Runner callbacks, tools, and plugins see the same governed service when the wrapped service is passed through `runner.WithSessionService`. Business code that calls `AppendEvent` directly should also use this wrapped service rather than the raw backend.
+- Runner callbacks, tools, and plugins see the same wrapped service when it is passed through `runner.WithSessionService`. Business code that calls `AppendEvent` directly should also use this wrapped service rather than the raw backend.
 
 The following inputs are not re-hosted by this feature:
 
