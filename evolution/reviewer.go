@@ -61,6 +61,7 @@ var reviewSystemPrompt = strings.Join([]string{
 	"- Keep skill names and descriptions scope-accurate. If the transcript only covers part of a broader workflow, name the skill narrowly and mention its limits instead of implying full task-family coverage.",
 	"- If you save a skill, include every essential API/tool category, ordering constraint, and output-field requirement that was necessary for successful completion in the transcript.",
 	"- Do not omit required steps from the learned skill just because they appeared obvious in context. If a step (e.g. saving the final artifact, calling a finalize tool, validating output) was required, mention it explicitly.",
+	"- If the user gives future/default workflow feedback for a recurring task category (for example: \"以后遇到 X 默认按这套工作流\", \"going forward use this schema\"), and the feedback contains concrete steps, fields, source-ordering rules, or categories, treat it as reusable procedural knowledge and prefer creating/updating a skill. Do not emit it as durable memory.",
 	"- If nothing is worth saving, set skip_reason and leave skills/updates/deletions empty.",
 	"",
 	"Failure-aware learning (only when `## Session outcome` is present):",

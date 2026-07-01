@@ -520,6 +520,28 @@ func TestLLMReviewer_Review_SystemPromptHasAntiProliferationRules(t *testing.T) 
 		"reviewer must be reminded that skipping is the right answer when the library already covers the workflow")
 }
 
+func TestLLMReviewer_Review_SystemPromptCoversFutureWorkflowFeedback(t *testing.T) {
+	reviewModel := &recordingReviewModel{
+		responses: []*model.Response{{
+			Choices: []model.Choice{{Message: model.Message{Content: `{"skip_reason":"x"}`}}},
+		}},
+	}
+	reviewer := NewLLMReviewer(reviewModel)
+
+	_, err := reviewer.Review(context.Background(), &ReviewInput{
+		Transcript: []ReviewMessage{{
+			Role:    model.RoleUser,
+			Content: "以后遇到周报默认按这个字段输出",
+		}},
+	})
+	require.NoError(t, err)
+	system := reviewModel.request.Messages[0].Content
+
+	assert.Contains(t, system, "future/default workflow feedback")
+	assert.Contains(t, system, "reusable procedural knowledge")
+	assert.Contains(t, system, "Do not emit it as durable memory")
+}
+
 func TestTruncateBodyExcerpt(t *testing.T) {
 	t.Run("short body is returned verbatim", func(t *testing.T) {
 		body := "tiny body"

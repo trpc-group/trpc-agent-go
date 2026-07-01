@@ -398,7 +398,13 @@ func (w *worker) processJob(item *pendingJob) {
 		log.WarnfContext(ctx, "evolution: review failed for session %s: %v", sess.ID, err)
 		return
 	}
-	if decision == nil || decision.SkipReason != "" {
+	if decision == nil {
+		log.InfofContext(ctx, "evolution: review skipped for session %s: empty decision", sess.ID)
+		writeLastReviewAt(sess, latestTs)
+		return
+	}
+	if decision.SkipReason != "" {
+		log.InfofContext(ctx, "evolution: review skipped for session %s: %s", sess.ID, decision.SkipReason)
 		writeLastReviewAt(sess, latestTs)
 		return
 	}
