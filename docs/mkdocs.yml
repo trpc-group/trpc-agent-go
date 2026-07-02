@@ -70,6 +70,7 @@ nav:
       - PromptIter: promptiter.md
   - Server:
     - Gateway: gateway.md
+    - tRPC-Agent API: trpcagent.md
     - AG-UI:
       - Overview: agui/index.md
       - Real-Time Conversation Route: agui/chat.md
