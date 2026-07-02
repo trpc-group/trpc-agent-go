@@ -550,24 +550,14 @@ var (
 	domainRe   = regexp.MustCompile(`(?i)^[a-z0-9.-]+$`)
 )
 
-// optionsWithValue lists, per download command, the option flags whose value is
-// the *next* argument, so that value is not mistaken for a bare host (e.g.
-// "curl -o config.yaml" must not treat config.yaml as a host). Only flags that
-// commonly take a filename or arbitrary string are listed; a value-taking flag
-// left out would at worst yield an extra fail-closed host candidate. Crucially
-// the reverse mistake is avoided: boolean flags (curl -sSL, -v, wget -q) are
-// NOT listed, so the operand after them is still parsed and "curl -sSL evil.io"
-// cannot bypass the whitelist. The "--flag=value" form carries its value inline
-// and consumes no following argument.
+// optionsWithValue lists, per non-curl download command, the option flags whose
+// value is the *next* argument, so that value is not mistaken for a bare host
+// (e.g. "wget -O config.yaml" must not treat config.yaml as a host). Boolean
+// flags (wget -q) are NOT listed, so the operand after them is still parsed and
+// "wget -q evil.io" cannot bypass the whitelist. curl is not here — its richer
+// option surface (short bundles, connection-redirect, opaque config) is handled
+// by extractCurlHosts. The "--flag=value" form carries its value inline.
 var optionsWithValue = map[string]map[string]bool{
-	"curl": {
-		"-o": true, "--output": true, "-T": true, "--upload-file": true,
-		"-d": true, "--data": true, "-F": true, "--form": true,
-		"-H": true, "--header": true, "-A": true, "--user-agent": true,
-		"-e": true, "--referer": true, "-b": true, "--cookie": true,
-		"-c": true, "--cookie-jar": true, "-u": true, "--user": true,
-		"-K": true, "--config": true,
-	},
 	"wget": {
 		"-O": true, "--output-document": true, "-o": true, "--output-file": true,
 		"-a": true, "--append-output": true, "-P": true, "--directory-prefix": true,
@@ -575,92 +565,177 @@ var optionsWithValue = map[string]map[string]bool{
 	},
 }
 
-// curlHostBearingOptions are curl options whose value encodes a *connection*
-// target distinct from the request URL — an egress control the whitelist must
-// still see. Every host/IP field in the value is extracted so a redirect such as
-// "--connect-to github.com:443:evil.io:443" or "--resolve github.com:443:1.2.3.4"
-// cannot smuggle a non-whitelisted destination past a github.com whitelist.
-// Applies to curl only; other download commands do not share this syntax.
-var curlHostBearingOptions = map[string]bool{
-	"--connect-to": true,
-	"--resolve":    true,
-	"-x":           true,
-	"--proxy":      true,
-	"--preproxy":   true,
+// curlHostBearingLong are curl long options whose value carries a connection
+// target or the request URL that the whitelist must still see. --connect-to and
+// --resolve redirect the connection to a host different from the request URL;
+// --proxy/--preproxy route all traffic through a proxy; --url sets the request
+// URL out of band. Every host/IP in the value is extracted so a redirect such as
+// "--connect-to github.com:443:evil.io:443" cannot smuggle evil.io past a
+// github.com whitelist.
+var curlHostBearingLong = map[string]bool{
+	"--connect-to": true, "--resolve": true,
+	"--proxy": true, "--preproxy": true, "--url": true,
+	"--dns-servers": true, "--doh-url": true,
+}
+
+// curlLongValueOptions are curl long options whose value is an opaque
+// string/filename to skip (so it is not mistaken for a host). Host-bearing long
+// options are handled separately and are intentionally absent here.
+var curlLongValueOptions = map[string]bool{
+	"--output": true, "--upload-file": true, "--data": true, "--data-binary": true,
+	"--data-raw": true, "--data-ascii": true, "--form": true, "--header": true,
+	"--user-agent": true, "--referer": true, "--cookie": true, "--cookie-jar": true,
+	"--user": true, "--config": true, "--output-dir": true,
+}
+
+// curlShortValueBytes are curl short flags that consume a value: the value is the
+// remainder of the bundle token if any, else the next argument. 'x' is the proxy
+// flag (its value is a host); 'K' is the opaque config file (detected for
+// fail-closed by curlOpaqueConfigOption). Boolean flags (s, S, L, f, v, k, ...)
+// are absent, so "curl -sSL evil.io" still parses evil.io.
+var curlShortValueBytes = map[byte]bool{
+	'o': true, 'T': true, 'd': true, 'F': true, 'H': true, 'A': true,
+	'e': true, 'b': true, 'c': true, 'u': true, 'K': true, 'x': true,
 }
 
 // extractHosts pulls candidate hosts from a download command's arguments. It is
 // only called for configured download commands (curl, wget, nc, ssh, scp, ...),
-// all of which take a host/URL operand, so bare domain-like operands are parsed
-// for every such command. To avoid mistaking a filename for a host (e.g.
-// curl -o config.yaml), the operand that immediately follows a value-taking
-// option (optionsWithValue) is skipped; boolean flags such as "curl -sSL" do
-// not consume their following operand, so "curl -sSL evil.io" is still flagged.
-// curl connection-redirect options (curlHostBearingOptions) are parsed for their
-// real target, and the opaque -K/--config file is failed closed by ruleNetwork.
-// URLs and user@host operands are detected unconditionally as they are
-// unambiguous. Both "--flag value" and "--flag=value" forms are handled.
+// all of which take a host/URL operand. curl gets a dedicated parser because its
+// option surface (short bundles, connection-redirect and proxy options, the
+// opaque config file) is where whitelist bypasses hide; other commands use the
+// simpler generic parser.
 func extractHosts(cmd string, args []string) []string {
+	if cmd == "curl" {
+		return extractCurlHosts(args)
+	}
+	return extractGenericHosts(cmd, args)
+}
+
+// extractGenericHosts parses non-curl download commands (wget, nc, ssh, scp,
+// ftp, ...). A value-taking option (optionsWithValue) consumes its following
+// operand; everything else that is a URL, user@host or bare domain/IP operand is
+// a host candidate.
+func extractGenericHosts(cmd string, args []string) []string {
 	var hosts []string
 	valueOpts := optionsWithValue[cmd]
-	hostOpts := map[string]bool(nil)
-	if cmd == "curl" {
-		hostOpts = curlHostBearingOptions
-	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if m := urlRe.FindString(a); m != "" {
-			if u, err := url.Parse(m); err == nil && u.Hostname() != "" {
-				hosts = append(hosts, u.Hostname())
-				continue
-			}
-		}
-		// user@host or scp/ssh user@host:/path.
-		if mm := userHostRe.FindStringSubmatch(a); mm != nil {
-			hosts = append(hosts, mm[1])
-			continue
-		}
 		if strings.HasPrefix(a, "-") {
-			flag, inlineVal, hasInline := splitFlagValue(a)
-			// Connection-redirect options: parse the value (this arg or the next)
-			// for the real destination host(s)/IP(s).
-			if hostOpts[flag] {
-				val := inlineVal
-				if !hasInline && i+1 < len(args) {
-					val, i = args[i+1], i+1
-				}
-				hosts = append(hosts, hostsFromCurlOption(flag, val)...)
-				continue
-			}
-			// A value-taking option consumes (and discards) its following
-			// operand; the "--flag=value" form is self-contained.
+			flag, _, hasInline := splitFlagValue(a)
 			if valueOpts[flag] && !hasInline {
 				i++
 			}
 			continue
 		}
-		// Bare host, host:port, scp host:/path, or schemeless host/path. Strip
-		// everything from the first colon (port / scp path) and then from the
-		// first slash (URL path) so a trailing port or path cannot hide the
-		// host. A local relative path like "dir/config" survives as "dir",
-		// which is not domain-like and is dropped below.
-		host := a
-		if j := strings.IndexByte(host, ':'); j > 0 {
-			host = host[:j]
-		}
-		if j := strings.IndexByte(host, '/'); j >= 0 {
-			host = host[:j]
-		}
-		// A surviving @ means this was a user@path form, not a bare host.
-		if host == "" || strings.ContainsRune(host, '@') {
-			continue
-		}
-		// Accept domains and raw IPs (ssh 1.2.3.4 must not bypass the whitelist).
-		if domainLike(host) || net.ParseIP(host) != nil {
-			hosts = append(hosts, host)
+		hosts = append(hosts, operandHosts(a)...)
+	}
+	return hosts
+}
+
+// extractCurlHosts parses curl arguments, resolving short-flag bundles, long
+// options in both "--flag value" and "--flag=value" forms, connection-redirect
+// and proxy options, and the request URL operand. Boolean flags never consume an
+// operand, so "curl -sSL evil.io" is still flagged.
+func extractCurlHosts(args []string) []string {
+	var hosts []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case strings.HasPrefix(a, "--"):
+			flag, inlineVal, hasInline := splitFlagValue(a)
+			if curlHostBearingLong[flag] {
+				val := inlineVal
+				if !hasInline && i+1 < len(args) {
+					val, i = args[i+1], i+1
+				}
+				hosts = append(hosts, hostsFromCurlValue(flag, val)...)
+				continue
+			}
+			if curlLongValueOptions[flag] && !hasInline {
+				i++
+			}
+		case strings.HasPrefix(a, "-") && len(a) > 1:
+			extra, consumesNext, proxyNext := parseCurlShortBundle(a)
+			hosts = append(hosts, extra...)
+			if consumesNext && i+1 < len(args) {
+				if proxyNext {
+					hosts = append(hosts, hostsFromCurlValue("-x", args[i+1])...)
+				}
+				i++
+			}
+		default:
+			hosts = append(hosts, operandHosts(a)...)
 		}
 	}
 	return hosts
+}
+
+// parseCurlShortBundle walks a "-sSx"-style short-flag bundle. curl's first
+// value-taking flag consumes the remainder of the token as its value, or the
+// next argument when the token ends there. It returns any hosts read from an
+// inline proxy value, whether the following argument is consumed as a value, and
+// whether that following argument is a proxy host (so the caller parses it).
+func parseCurlShortBundle(token string) (hosts []string, consumesNext, proxyNext bool) {
+	for j := 1; j < len(token); j++ {
+		c := token[j]
+		if !curlShortValueBytes[c] {
+			continue // boolean flag; keep scanning the bundle
+		}
+		rest := token[j+1:]
+		if c == 'x' { // proxy: value is the rest of the token or the next arg
+			if rest != "" {
+				return hostsFromCurlValue("-x", rest), false, false
+			}
+			return nil, true, true
+		}
+		// Other value flags (incl 'K'): consume the rest of the token, or the
+		// next arg when the value is not inline. The value itself is not a host.
+		return nil, rest == "", false
+	}
+	return nil, false, false
+}
+
+// operandHosts extracts host candidates from a non-option operand: a full URL, a
+// user@host (scp/ssh) form, or a bare domain/IP (with optional port or path).
+func operandHosts(a string) []string {
+	if h := hostFromURL(a); h != "" {
+		return []string{h}
+	}
+	if mm := userHostRe.FindStringSubmatch(a); mm != nil {
+		return []string{mm[1]}
+	}
+	return bareHost(a)
+}
+
+// hostFromURL returns the host of a URL embedded in a, or "" when there is none.
+func hostFromURL(a string) string {
+	if m := urlRe.FindString(a); m != "" {
+		if u, err := url.Parse(m); err == nil {
+			return u.Hostname()
+		}
+	}
+	return ""
+}
+
+// bareHost extracts a single host from a "host[:port][/path]" operand. It strips
+// the port and path and drops non-host tokens (relative paths, user@path forms,
+// pure ports). Both domains and raw IPs are accepted so "ssh 1.2.3.4" cannot
+// bypass the whitelist.
+func bareHost(a string) []string {
+	host := a
+	if j := strings.IndexByte(host, ':'); j > 0 {
+		host = host[:j]
+	}
+	if j := strings.IndexByte(host, '/'); j >= 0 {
+		host = host[:j]
+	}
+	if host == "" || strings.ContainsRune(host, '@') {
+		return nil
+	}
+	if domainLike(host) || net.ParseIP(host) != nil {
+		return []string{host}
+	}
+	return nil
 }
 
 // splitFlagValue splits "--flag=value" into its parts. Without an "=" it returns
@@ -672,24 +747,33 @@ func splitFlagValue(arg string) (flag, val string, hasInline bool) {
 	return arg, "", false
 }
 
-// hostsFromCurlOption extracts the real destination host(s)/IP(s) from a curl
-// connection-redirect option value.
-func hostsFromCurlOption(flag, val string) []string {
+// hostsFromCurlValue extracts the real destination host(s)/IP(s) from a curl
+// host-bearing option value.
+func hostsFromCurlValue(flag, val string) []string {
 	val = strings.TrimSpace(val)
 	if val == "" {
 		return nil
 	}
-	if flag == "-x" || flag == "--proxy" || flag == "--preproxy" {
+	switch flag {
+	case "-x", "--proxy", "--preproxy":
 		// [scheme://]host[:port].
 		if strings.Contains(val, "://") {
 			if u, err := url.Parse(val); err == nil && u.Hostname() != "" {
 				return []string{u.Hostname()}
 			}
 		}
+		return hostsFromColonSpec(val)
+	case "--connect-to", "--resolve", "--dns-servers":
+		// HOST1:PORT1:HOST2:PORT2 / HOST:PORT:ADDR[,ADDR] / IP[,IP]: every
+		// host/IP field (an alternate DNS server is itself an egress control).
+		return hostsFromColonSpec(val)
+	case "--url", "--doh-url":
+		if h := hostFromURL(val); h != "" {
+			return []string{h}
+		}
+		return bareHost(val)
 	}
-	// --connect-to HOST1:PORT1:HOST2:PORT2, --resolve HOST:PORT:ADDR[,ADDR],
-	// or a bare proxy host[:port]: extract every host/IP-like field.
-	return hostsFromColonSpec(val)
+	return nil
 }
 
 // hostsFromColonSpec extracts host/IP-like tokens from a colon/comma-separated
@@ -728,16 +812,23 @@ func hostsFromColonSpec(spec string) []string {
 	return hosts
 }
 
-// curlOpaqueConfigOption reports the first -K/--config option present, in either
-// "-K file" or "--config=file" form. Its file can define url/proxy/resolve and
-// other egress controls the guard cannot read, so its mere presence fails closed.
+// curlOpaqueConfigOption reports whether a -K/--config option is present, in the
+// "-K file", "--config=file" or bundled short-flag ("-sK file") form. Its file
+// can define url/proxy/resolve and other egress controls the guard cannot read,
+// so its mere presence fails closed. Detection is intentionally conservative: a
+// short-flag token containing 'K' anywhere counts, erring toward fail-closed.
 func curlOpaqueConfigOption(args []string) (string, bool) {
 	for _, a := range args {
-		if !strings.HasPrefix(a, "-") {
+		if strings.HasPrefix(a, "--") {
+			if flag, _, _ := splitFlagValue(a); flag == "--config" {
+				return "--config", true
+			}
 			continue
 		}
-		if flag, _, _ := splitFlagValue(a); flag == "-K" || flag == "--config" {
-			return flag, true
+		// Short-flag bundle: -K may appear anywhere (e.g. -sK).
+		if strings.HasPrefix(a, "-") && len(a) > 1 &&
+			strings.IndexByte(a[1:], 'K') >= 0 {
+			return "-K", true
 		}
 	}
 	return "", false

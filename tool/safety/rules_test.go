@@ -285,10 +285,16 @@ func TestCurlConnectionRedirectBypass(t *testing.T) {
 	}{
 		{"connect-to space form", `curl --connect-to github.com:443:evil.io:443 https://github.com/a`},
 		{"connect-to equals form", `curl --connect-to=github.com:443:evil.io:443 https://github.com/a`},
+		{"connect-to match-any host1", `curl --connect-to :443:evil.io:443 https://github.com/a`},
 		{"resolve pins to ip", `curl --resolve github.com:443:1.2.3.4 https://github.com/a`},
 		{"resolve equals form", `curl --resolve=github.com:443:5.6.7.8 https://github.com/a`},
 		{"proxy host", `curl -x http://evil.io:3128 https://github.com/a`},
 		{"proxy equals form", `curl --proxy=socks5://attacker.test:1080 https://github.com/a`},
+		{"proxy no scheme", `curl -x evil.io:3128 https://github.com/a`},
+		{"proxy bundled short flag", `curl -sx http://evil.io:3128 https://github.com/a`},
+		{"proxy inline short flag", `curl -xevil.io:3128 https://github.com/a`},
+		{"url out of band equals", `curl --url=evil.io`},
+		{"url out of band space", `curl --url evil.io`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -319,6 +325,7 @@ func TestCurlOpaqueConfigFailsClosed(t *testing.T) {
 		`curl -K /tmp/opaque.conf https://github.com/a`,
 		`curl --config /tmp/opaque.conf https://github.com/a`,
 		`curl --config=/tmp/opaque.conf https://github.com/a`,
+		`curl -sK /tmp/opaque.conf https://github.com/a`, // -K bundled with -s
 	} {
 		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
 		if decision != DecisionDeny {
@@ -326,6 +333,26 @@ func TestCurlOpaqueConfigFailsClosed(t *testing.T) {
 		}
 		if !hasRule(findings, ruleNetworkID) {
 			t.Errorf("missing R-NET-001 for opaque config %q: %+v", cmd, findings)
+		}
+	}
+}
+
+// TestCurlSafeFlagsAllow guards against over-blocking: common curl flag usage
+// against a whitelisted host must still be allowed after the option-parsing
+// hardening.
+func TestCurlSafeFlagsAllow(t *testing.T) {
+	p := loadExamplePolicy(t)
+	for _, cmd := range []string{
+		`curl https://github.com/org/repo`,
+		`curl -sSL -o out.txt https://github.com/org/repo`,
+		`curl -H "Accept: application/json" https://github.com/a`,
+		`curl --output out.txt --user-agent bot https://github.com/a`,
+		`curl --url https://github.com/a`,
+		`curl --connect-to github.com:443:github.com:443 https://github.com/a`,
+	} {
+		_, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionAllow {
+			t.Errorf("safe curl usage should allow, got %q for %q", decision, cmd)
 		}
 	}
 }
