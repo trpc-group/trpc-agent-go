@@ -73,7 +73,11 @@ func NewGuard(opts ...GuardOption) *Guard {
 }
 
 // CheckToolPermission implements tool.PermissionPolicy.
+//
+// It extracts the command from the request arguments, runs the configured
+// Scanner, and translates the resulting Decision into a tool.PermissionDecision.
 func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+	_ = ctx // reserved for future per-context policy overrides (e.g. user-specific allowlists).
 	input := g.extract(req.Arguments)
 	res := g.scanner.Scan(input)
 
