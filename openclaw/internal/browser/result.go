@@ -88,7 +88,7 @@ func newBaseResult(
 		Profile:         profile,
 		Driver:          driverType,
 		EvaluateEnabled: evaluateEnabled,
-		Supported:       supportedActionsForDriver(driverType),
+		Supported:       visibleActionsForDriver(driverType, evaluateEnabled),
 	}
 }
 

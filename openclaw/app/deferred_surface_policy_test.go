@@ -32,6 +32,8 @@ func TestDefaultedDirectToolSurfaceNames(t *testing.T) {
 		configKeyExecCommand,
 		configKeyWriteStdin,
 		configKeyKillSession,
+		defaultDirectWebSearchTool,
+		defaultDirectWebFetchTool,
 		configKeyMessage,
 	}, got)
 }
@@ -58,6 +60,8 @@ func TestResolveDeferredToolSurfaceKeepsDefaultDirectTools(
 			stubTool{name: configKeyExecCommand},
 			stubTool{name: configKeyWriteStdin},
 			stubTool{name: configKeyKillSession},
+			stubTool{name: defaultDirectWebSearchTool},
+			stubTool{name: defaultDirectWebFetchTool},
 		},
 		nil,
 	)
@@ -67,7 +71,26 @@ func TestResolveDeferredToolSurfaceKeepsDefaultDirectTools(
 		configKeyExecCommand,
 		configKeyWriteStdin,
 		configKeyKillSession,
+		defaultDirectWebSearchTool,
+		defaultDirectWebFetchTool,
 	}, testToolNames(direct))
+}
+
+func TestResolveDeferredToolSurfaceSkipsMissingDefaultDirectTools(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	enabled, direct, err := resolveDeferredToolSurface(
+		agentConfig{DeferToolSurface: true},
+		[]tool.Tool{
+			stubTool{name: configKeyExecCommand},
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.True(t, enabled)
+	require.Equal(t, []string{configKeyExecCommand}, testToolNames(direct))
 }
 
 func TestResolveDeferredToolSurfaceCanDisableDefaultDirectTools(

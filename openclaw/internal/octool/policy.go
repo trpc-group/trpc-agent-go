@@ -22,6 +22,8 @@ const (
 
 	reasonSensitivePath = "reading or modifying shell or " +
 		"credential files is not allowed in chat"
+	reasonSystemPackageInstall = "installing system packages with " +
+		"host package managers is not allowed in chat"
 
 	sensitivePathBoundaryChars = " \t\r\n\"'`=:/\\|&;()[]{}<>"
 
@@ -79,6 +81,12 @@ func NewChatCommandSafetyPolicy() CommandPolicy {
 				reasonSensitivePath,
 			)
 		}
+		if blocksSystemPackageInstall(req.Command) {
+			return fmt.Errorf(
+				errCommandPolicyRejected,
+				reasonSystemPackageInstall,
+			)
+		}
 		return nil
 	}
 }
@@ -100,6 +108,159 @@ func blocksSensitivePath(command string) bool {
 		normalizePolicyCommand(command),
 		protectedPathFragments,
 	)
+}
+
+func blocksSystemPackageInstall(command string) bool {
+	return blocksSystemPackageInstallDepth(normalizePolicyCommand(command), 0)
+}
+
+func blocksSystemPackageInstallDepth(command string, depth int) bool {
+	if command == "" || depth > 2 {
+		return false
+	}
+	words := shellPolicyWords(command)
+	if blocksSystemPackageInstallWords(words) {
+		return true
+	}
+	for i := 0; i < len(words); i++ {
+		if !isShellExecutable(policyCommandName(words[i])) {
+			continue
+		}
+		cmdArg, ok := shellCommandStringArg(words[i+1:])
+		if ok && blocksSystemPackageInstallDepth(cmdArg, depth+1) {
+			return true
+		}
+	}
+	return false
+}
+
+func blocksSystemPackageInstallWords(words []string) bool {
+	for i, word := range words {
+		cmd := policyCommandName(word)
+		switch cmd {
+		case "apt", "apt-get", "aptitude":
+			if nextPolicyWord(words, i+1) == "install" {
+				return true
+			}
+		case "yum", "dnf", "microdnf", "zypper", "brew":
+			if nextPolicyWord(words, i+1) == "install" {
+				return true
+			}
+		case "apk":
+			if nextPolicyWord(words, i+1) == "add" {
+				return true
+			}
+		case "pacman":
+			next := nextPolicyWord(words, i+1)
+			if next == "--sync" || strings.HasPrefix(next, "-s") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func shellPolicyWords(command string) []string {
+	words := make([]string, 0, 8)
+	var b strings.Builder
+	var quote rune
+	flush := func() {
+		word := strings.TrimSpace(b.String())
+		if word != "" {
+			words = append(words, word)
+		}
+		b.Reset()
+	}
+	for _, r := range command {
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+				continue
+			}
+			b.WriteRune(r)
+			continue
+		}
+		switch r {
+		case '\'', '"', '`':
+			quote = r
+		case ' ', '\t', '\r', '\n', ';', '|', '&', '(', ')', '<', '>':
+			flush()
+		default:
+			b.WriteRune(r)
+		}
+	}
+	flush()
+	return words
+}
+
+func nextPolicyWord(words []string, start int) string {
+	for i := start; i < len(words); i++ {
+		word := strings.TrimSpace(words[i])
+		if word == "" {
+			continue
+		}
+		if strings.Contains(word, "=") && !strings.HasPrefix(word, "-") {
+			before, _, _ := strings.Cut(word, "=")
+			if before != "" && !strings.ContainsAny(before, "/.") {
+				continue
+			}
+		}
+		if strings.HasPrefix(word, "-") &&
+			word != "--sync" &&
+			!strings.HasPrefix(word, "-s") {
+			continue
+		}
+		return word
+	}
+	return ""
+}
+
+func policyCommandName(word string) string {
+	word = strings.TrimSpace(word)
+	if word == "" {
+		return ""
+	}
+	word = strings.Trim(word, shellQuoteChars)
+	word = strings.TrimPrefix(word, "command:")
+	word = strings.TrimPrefix(word, "exec:")
+	if strings.Contains(word, "=") && !strings.HasPrefix(word, "-") {
+		before, after, _ := strings.Cut(word, "=")
+		if before != "" && after != "" && !strings.ContainsAny(before, "/.") {
+			return ""
+		}
+	}
+	word = strings.TrimRight(word, ",")
+	return filepath.Base(word)
+}
+
+func isShellExecutable(cmd string) bool {
+	switch cmd {
+	case "sh", "bash", "dash", "ksh", "zsh":
+		return true
+	default:
+		return false
+	}
+}
+
+func shellCommandStringArg(words []string) (string, bool) {
+	for i := 0; i < len(words); i++ {
+		word := strings.TrimSpace(words[i])
+		if word == "" {
+			continue
+		}
+		if word == "-c" || strings.HasSuffix(word, "c") &&
+			strings.HasPrefix(word, "-") &&
+			!strings.HasPrefix(word, "--") {
+			if i+1 < len(words) {
+				return words[i+1], true
+			}
+			return "", false
+		}
+		if !strings.HasPrefix(word, "-") {
+			return "", false
+		}
+	}
+	return "", false
 }
 
 func blocksSensitivePathRequest(req CommandRequest) bool {

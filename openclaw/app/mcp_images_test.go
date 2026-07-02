@@ -64,6 +64,48 @@ func TestMCPImageResultMessages_ReturnsImages(t *testing.T) {
 	require.Equal(t, mcpImageDetailAuto, msgs[1].ContentParts[0].Image.Detail)
 }
 
+func TestMCPImageResultMessages_ConsumesAttachmentBudget(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte("fake image bytes")
+	encoded := base64.StdEncoding.EncodeToString(raw)
+	defaultMsg := model.Message{
+		Role:    model.RoleTool,
+		ToolID:  "tool-call-1",
+		Content: "[]",
+	}
+	in := &tool.ToolResultMessagesInput{
+		ToolName:           "browser_page_screenshot",
+		ToolCallID:         "tool-call-1",
+		DefaultToolMessage: defaultMsg,
+		Result: []mcpContentItem{
+			{
+				Type:     "image",
+				Data:     encoded,
+				MimeType: "image/png",
+			},
+			{
+				Type:     "image",
+				Data:     encoded,
+				MimeType: "image/png",
+			},
+		},
+	}
+	ctx := tool.WithToolResultAttachmentBudget(context.Background(), 1)
+
+	got, err := mcpImageResultMessages(ctx, in)
+	require.NoError(t, err)
+
+	msgs, ok := got.([]model.Message)
+	require.True(t, ok)
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ContentParts, 1)
+
+	got, err = mcpImageResultMessages(ctx, in)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
 func TestMCPImageResultMessages_NoImagesFallsBack(t *testing.T) {
 	t.Parallel()
 

@@ -23,6 +23,7 @@ const (
 	ProfileVideo           = "video"
 	ProfileImage           = "image"
 	ProfileOCR             = "ocr"
+	ProfileChess           = "chess"
 	ProfileCommonFileTools = "common-file-tools"
 )
 
@@ -53,22 +54,29 @@ type Requirement struct {
 	Python  []PythonPackage `yaml:"python,omitempty" json:"python,omitempty"`
 }
 
+type InstallLink struct {
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	Target string `yaml:"target,omitempty" json:"target,omitempty"`
+}
+
 type InstallAction struct {
-	ID              string   `yaml:"id,omitempty" json:"id,omitempty"`
-	Kind            string   `yaml:"kind,omitempty" json:"kind,omitempty"`
-	Formula         string   `yaml:"formula,omitempty" json:"formula,omitempty"`
-	Package         string   `yaml:"package,omitempty" json:"package,omitempty"`
-	Packages        []string `yaml:"packages,omitempty" json:"packages,omitempty"`
-	Bins            []string `yaml:"bins,omitempty" json:"bins,omitempty"`
-	Label           string   `yaml:"label,omitempty" json:"label,omitempty"`
-	Tap             string   `yaml:"tap,omitempty" json:"tap,omitempty"`
-	Module          string   `yaml:"module,omitempty" json:"module,omitempty"`
-	URL             string   `yaml:"url,omitempty" json:"url,omitempty"`
-	Archive         string   `yaml:"archive,omitempty" json:"archive,omitempty"`
-	TargetDir       string   `yaml:"targetDir,omitempty" json:"target_dir,omitempty"`
-	OS              []string `yaml:"os,omitempty" json:"os,omitempty"`
-	Extract         bool     `yaml:"extract,omitempty" json:"extract,omitempty"`
-	StripComponents int      `yaml:"stripComponents,omitempty" json:"strip_components,omitempty"`
+	ID              string        `yaml:"id,omitempty" json:"id,omitempty"`
+	Kind            string        `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Formula         string        `yaml:"formula,omitempty" json:"formula,omitempty"`
+	Package         string        `yaml:"package,omitempty" json:"package,omitempty"`
+	Packages        []string      `yaml:"packages,omitempty" json:"packages,omitempty"`
+	Bins            []string      `yaml:"bins,omitempty" json:"bins,omitempty"`
+	Label           string        `yaml:"label,omitempty" json:"label,omitempty"`
+	Tap             string        `yaml:"tap,omitempty" json:"tap,omitempty"`
+	Module          string        `yaml:"module,omitempty" json:"module,omitempty"`
+	URL             string        `yaml:"url,omitempty" json:"url,omitempty"`
+	Archive         string        `yaml:"archive,omitempty" json:"archive,omitempty"`
+	TargetDir       string        `yaml:"targetDir,omitempty" json:"target_dir,omitempty"`
+	OS              []string      `yaml:"os,omitempty" json:"os,omitempty"`
+	Arch            []string      `yaml:"arch,omitempty" json:"arch,omitempty"`
+	Links           []InstallLink `yaml:"links,omitempty" json:"links,omitempty"`
+	Extract         bool          `yaml:"extract,omitempty" json:"extract,omitempty"`
+	StripComponents int           `yaml:"stripComponents,omitempty" json:"strip_components,omitempty"`
 }
 
 type Source struct {
@@ -285,6 +293,45 @@ var builtinProfiles = map[string]Profile{
 			),
 		},
 	},
+	ProfileChess: {
+		Name:        ProfileChess,
+		Description: "Chess-board analysis and UCI engine helpers.",
+		Requires: Requirement{
+			Bins: []string{"stockfish"},
+			Python: []PythonPackage{
+				{Module: "chess", Package: "python-chess"},
+				{Module: "PIL", Package: "Pillow"},
+				{Module: "numpy", Package: "numpy"},
+				{Module: "scipy", Package: "scipy"},
+			},
+		},
+		Install: []InstallAction{
+			systemInstall(
+				InstallKindBrew,
+				"stockfish",
+				"Install Stockfish engine (brew)",
+				"stockfish",
+			),
+			systemInstall(
+				InstallKindAPT,
+				"stockfish",
+				"Install Stockfish engine (apt)",
+				"stockfish",
+			),
+			systemInstall(
+				InstallKindDNF,
+				"stockfish",
+				"Install Stockfish engine (dnf)",
+				"stockfish",
+			),
+			systemInstall(
+				InstallKindYUM,
+				"stockfish",
+				"Install Stockfish engine (yum)",
+				"stockfish",
+			),
+		},
+	},
 	ProfileCommonFileTools: {
 		Name:        ProfileCommonFileTools,
 		Description: "Recommended default toolchain for common file work.",
@@ -488,7 +535,7 @@ func normalizeInstallActions(
 	actions []InstallAction,
 ) []InstallAction {
 	out := make([]InstallAction, 0, len(actions))
-	seen := map[string]struct{}{}
+	index := map[string]int{}
 	for _, raw := range actions {
 		action := InstallAction{
 			ID:              strings.TrimSpace(raw.ID),
@@ -504,6 +551,8 @@ func normalizeInstallActions(
 			Archive:         strings.ToLower(strings.TrimSpace(raw.Archive)),
 			TargetDir:       strings.TrimSpace(raw.TargetDir),
 			OS:              normalizeOSList(raw.OS),
+			Arch:            normalizeArchList(raw.Arch),
+			Links:           normalizeInstallLinks(raw.Links),
 			Extract:         raw.Extract,
 			StripComponents: raw.StripComponents,
 		}
@@ -513,28 +562,77 @@ func normalizeInstallActions(
 		if action.StripComponents < 0 {
 			action.StripComponents = 0
 		}
-		key := strings.Join([]string{
-			action.Kind,
-			action.ID,
-			action.Formula,
-			action.Package,
-			action.Tap,
-			action.Module,
-			action.URL,
-			action.Archive,
-			action.TargetDir,
-			strings.Join(action.OS, ","),
-			fmt.Sprintf("%t", action.Extract),
-			fmt.Sprintf("%d", action.StripComponents),
-			strings.Join(action.Packages, ","),
-		}, "\x00")
+		key := installActionIdentityKey(action)
+		if i, ok := index[key]; ok {
+			out[i].Bins = mergeStrings(out[i].Bins, action.Bins)
+			out[i].Links = mergeInstallLinks(out[i].Links, action.Links)
+			continue
+		}
+		index[key] = len(out)
+		out = append(out, action)
+	}
+	return out
+}
+
+func installActionIdentityKey(action InstallAction) string {
+	return strings.Join([]string{
+		action.Kind,
+		action.ID,
+		action.Formula,
+		action.Package,
+		action.Tap,
+		action.Module,
+		action.URL,
+		action.Archive,
+		action.TargetDir,
+		strings.Join(action.OS, ","),
+		strings.Join(action.Arch, ","),
+		fmt.Sprintf("%t", action.Extract),
+		fmt.Sprintf("%d", action.StripComponents),
+		strings.Join(action.Packages, ","),
+	}, "\x00")
+}
+
+func normalizeInstallLinks(links []InstallLink) []InstallLink {
+	out := make([]InstallLink, 0, len(links))
+	seen := map[string]struct{}{}
+	for _, raw := range links {
+		link := InstallLink{
+			Source: strings.TrimSpace(raw.Source),
+			Target: strings.TrimSpace(raw.Target),
+		}
+		if link.Source == "" {
+			continue
+		}
+		key := link.Source + "\x00" + link.Target
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
-		out = append(out, action)
+		out = append(out, link)
 	}
 	return out
+}
+
+func mergeInstallLinks(
+	left []InstallLink,
+	right []InstallLink,
+) []InstallLink {
+	links := append([]InstallLink(nil), left...)
+	links = append(links, right...)
+	return normalizeInstallLinks(links)
+}
+
+func installLinksKey(links []InstallLink) string {
+	parts := make([]string, 0, len(links))
+	for _, link := range links {
+		parts = append(parts, link.Source+"\x00"+link.Target)
+	}
+	return strings.Join(parts, "\x01")
+}
+
+func mergeStrings(left []string, right []string) []string {
+	return normalizeStrings(append(append([]string(nil), left...), right...))
 }
 
 func normalizeStrings(values []string) []string {
@@ -569,6 +667,35 @@ func normalizeOSList(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func normalizeArchList(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, raw := range values {
+		value := normalizeArchName(raw)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func normalizeArchName(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	switch value {
+	case "x86_64":
+		return "amd64"
+	case "aarch64":
+		return "arm64"
+	default:
+		return value
+	}
 }
 
 func normalizeOSName(raw string) string {

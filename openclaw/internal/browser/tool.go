@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -57,8 +59,10 @@ const (
 const (
 	actClick          = "click"
 	actType           = "type"
+	actKey            = "key"
 	actPress          = "press"
 	actHover          = "hover"
+	actScroll         = "scroll"
 	actScrollIntoView = "scrollIntoView"
 	actDrag           = "drag"
 	actSelect         = "select"
@@ -76,10 +80,19 @@ const (
 )
 
 const (
+	cancelCleanupStateKey     = "__openclaw_browser_cancel_cleanup__"
+	cancelCleanupNoticePrefix = "__openclaw_browser_cancel_cleanup:"
+)
+
+const (
 	tabActionList   = "list"
 	tabActionNew    = "create"
 	tabActionSelect = "select"
 	tabActionClose  = "close"
+)
+
+const (
+	defaultScrollDeltaY = 800
 )
 
 const (
@@ -134,7 +147,6 @@ var supportedPlaywrightMCPActions = []string{
 	actionScreenshot,
 	actionNavigate,
 	actionConsole,
-	actionPDF,
 	actionUpload,
 	actionDialog,
 	actionAct,
@@ -146,6 +158,28 @@ func supportedActionsForDriver(driverType string) []string {
 		return append([]string(nil), supportedActions...)
 	}
 	return append([]string(nil), supportedPlaywrightMCPActions...)
+}
+
+func visibleActionsForDriver(
+	driverType string,
+	evaluateEnabled bool,
+) []string {
+	actions := supportedActionsForDriver(driverType)
+	if evaluateEnabled {
+		return actions
+	}
+	return filterBrowserAction(actions, actionEvaluate)
+}
+
+func filterBrowserAction(actions []string, hidden string) []string {
+	out := actions[:0]
+	for _, action := range actions {
+		if action == hidden {
+			continue
+		}
+		out = append(out, action)
+	}
+	return out
 }
 
 type actRequest struct {
@@ -173,6 +207,10 @@ type actRequest struct {
 	Selector    string           `json:"selector,omitempty"`
 	URL         string           `json:"url,omitempty"`
 	TargetURL   string           `json:"targetUrl,omitempty"`
+	Direction   string           `json:"direction,omitempty"`
+	DeltaX      *int             `json:"deltaX,omitempty"`
+	DeltaY      *int             `json:"deltaY,omitempty"`
+	Amount      *int             `json:"amount,omitempty"`
 	LoadState   string           `json:"loadState,omitempty"`
 	TextGone    string           `json:"textGone,omitempty"`
 	TimeoutMs   *int             `json:"timeoutMs,omitempty"`
@@ -202,6 +240,10 @@ type input struct {
 	Frame          string            `json:"frame,omitempty"`
 	Labels         *bool             `json:"labels,omitempty"`
 	FullPage       *bool             `json:"fullPage,omitempty"`
+	Direction      string            `json:"direction,omitempty"`
+	DeltaX         *int              `json:"deltaX,omitempty"`
+	DeltaY         *int              `json:"deltaY,omitempty"`
+	Amount         *int              `json:"amount,omitempty"`
 	Ref            string            `json:"ref,omitempty"`
 	Element        string            `json:"element,omitempty"`
 	Type           string            `json:"type,omitempty"`
@@ -261,6 +303,11 @@ type Tool struct {
 	drivers         map[string]driver
 	serverDriversMu sync.RWMutex
 	serverDrivers   map[string]driver
+}
+
+type cancelCleanupRegistry struct {
+	mu       sync.Mutex
+	profiles map[string]struct{}
 }
 
 // NewTool creates a native browser tool backed by MCP or browser-server.
@@ -330,19 +377,74 @@ func newToolWithDrivers(
 
 func (t *Tool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
-		Name: ToolName,
-		Description: "Control a real browser through OpenClaw's " +
-			"native browser contract. Prefer snapshot + act for UI " +
-			"automation. Keep using the same targetId after tabs or " +
-			"snapshot calls. Use profile=\"chrome\" when the user " +
-			"mentions a browser extension, relay, attach tab, or " +
-			"their current browser tab. Omit target for the default " +
-			"host browser. Only set target=\"sandbox\" or " +
-			"target=\"node\" when the runtime configuration exposes " +
-			"those browser servers. Avoid evaluate unless the " +
-			"task truly requires custom page JavaScript.",
-		InputSchema: browserSchema(),
+		Name:        ToolName,
+		Description: browserDescription(t.evaluateEnabled),
+		InputSchema: browserSchema(
+			t.evaluateEnabled,
+			t.driverTypeForProfile(t.defaultProfile),
+		),
 	}
+}
+
+// Close releases browser profile drivers owned by this tool.
+func (t *Tool) Close() error {
+	if t == nil {
+		return nil
+	}
+
+	var errs []error
+	for _, drv := range t.drivers {
+		if drv == nil {
+			continue
+		}
+		if err := drv.Stop(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	t.serverDriversMu.Lock()
+	serverDrivers := make([]driver, 0, len(t.serverDrivers))
+	for _, drv := range t.serverDrivers {
+		serverDrivers = append(serverDrivers, drv)
+	}
+	t.serverDrivers = make(map[string]driver)
+	t.serverDriversMu.Unlock()
+	for _, drv := range serverDrivers {
+		if drv == nil {
+			continue
+		}
+		if err := drv.Stop(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+func browserDescription(evaluateEnabled bool) string {
+	description := "Control a real browser through OpenClaw's " +
+		"native browser contract. Use it for live web pages, " +
+		"public URLs, and configured browser profiles, not for " +
+		"direct inspection of local or generated files. Do not " +
+		"navigate to file://, data:, or ad hoc localhost/127.0.0.1 " +
+		"URLs unless the runtime configuration explicitly exposes " +
+		"that server; normal browser policy may block those paths. " +
+		"For local images, PDFs, audio, video, or generated " +
+		"artifacts, use file/document/exec tools and MEDIA or " +
+		"MEDIA_DIR outputs instead. Prefer snapshot + act for UI " +
+		"automation. Keep using the same targetId after tabs or " +
+		"snapshot calls. Use profile=\"chrome\" when the user " +
+		"mentions a browser extension, relay, attach tab, or " +
+		"their current browser tab. Omit target for the default " +
+		"host browser. Only set target=\"sandbox\" or " +
+		"target=\"node\" when the runtime configuration exposes " +
+		"those browser servers."
+	if evaluateEnabled {
+		return description + " Use evaluate only when the task truly " +
+			"requires custom page JavaScript."
+	}
+	return description + " The evaluate action is disabled in this " +
+		"runtime."
 }
 
 func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
@@ -384,6 +486,7 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 		return nil, err
 	}
 	driverType := t.driverTypeForInput(profileName, in)
+	t.registerCancelCleanup(ctx, profileName, drv)
 
 	switch actionKey {
 	case strings.ToLower(actionStart):
@@ -530,9 +633,100 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 }
 
-func browserSchema() *tool.Schema {
+func (t *Tool) registerCancelCleanup(
+	ctx context.Context,
+	profile string,
+	drv driver,
+) {
+	if drv == nil {
+		return
+	}
+	inv, ok := agent.InvocationFromContext(ctx)
+	if !ok || inv == nil {
+		return
+	}
+
+	reg, ok := agent.GetStateValue[*cancelCleanupRegistry](
+		inv,
+		cancelCleanupStateKey,
+	)
+	if !ok || reg == nil {
+		reg = &cancelCleanupRegistry{
+			profiles: make(map[string]struct{}),
+		}
+		inv.SetState(cancelCleanupStateKey, reg)
+	}
+	cleanupKey := fmt.Sprintf("%s/%p", profile, drv)
+	if !reg.register(cleanupKey) {
+		return
+	}
+
+	noticeKey := cancelCleanupNoticePrefix + cleanupKey
+	ch := inv.AddNoticeChannel(ctx, noticeKey)
+	if ch == nil {
+		return
+	}
+	go func(runCtx context.Context) {
+		<-ch
+		if runCtx.Err() == nil {
+			return
+		}
+		if err := drv.Stop(); err != nil {
+			log.Warnf(
+				"close canceled browser profile %q failed: %v",
+				profile,
+				err,
+			)
+		}
+	}(ctx)
+}
+
+func (r *cancelCleanupRegistry) register(profile string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.profiles == nil {
+		r.profiles = make(map[string]struct{})
+	}
+	if _, ok := r.profiles[profile]; ok {
+		return false
+	}
+	r.profiles[profile] = struct{}{}
+	return true
+}
+
+func browserSchema(evaluateEnabled bool, driverType string) *tool.Schema {
+	actionDescription := "Browser action. Supported actions include: " +
+		strings.Join(visibleActionsForDriver(
+			driverType,
+			evaluateEnabled,
+		), ", ") + "."
+	if driverType == driverTypePlaywrightMCP {
+		actionDescription += " Some backend-dependent actions, such as " +
+			"page export, require matching browser MCP tools; check " +
+			"profiles/status supported actions before using them."
+	}
+	if !evaluateEnabled {
+		actionDescription += " evaluate is not available."
+	}
+	fnDescription := evaluateFunctionDescription(evaluateEnabled)
+	actKindDescription := "Browser act kind. Supported kinds include " +
+		"click, type, press/key, hover, scroll, scrollIntoView, " +
+		"drag, select, fill, resize, wait, navigate, evaluate, " +
+		"and close. Use press/key with key=PageDown, End, or " +
+		"Enter for keyboard input. Use scroll with direction, " +
+		"deltaX, deltaY, or amount for page scrolling; use " +
+		"scrollIntoView with ref for browser-server element scrolling."
+	waitDescription := "Wait selector. Supported by the browser-server " +
+		"driver; Playwright MCP wait supports timeMs, text, and " +
+		"textGone."
+	loadStateDescription := "Wait load state. Supported by the " +
+		"browser-server driver; with Playwright MCP use timeMs " +
+		"or snapshot after navigation."
 	requestProps := map[string]*tool.Schema{
-		"kind":        stringSchema("Browser act kind."),
+		"kind":        stringSchema(actKindDescription),
 		"targetId":    stringSchema("Tab target id from tabs output."),
 		"target":      stringSchema("Element target for browser actions."),
 		"ref":         stringSchema("Snapshot ref id."),
@@ -542,7 +736,7 @@ func browserSchema() *tool.Schema {
 		"text":        stringSchema("Text input."),
 		"submit":      boolSchema("Submit after typing."),
 		"slowly":      boolSchema("Type slowly."),
-		"key":         stringSchema("Keyboard key."),
+		"key":         stringSchema("Keyboard key for press/key."),
 		"delayMs":     numberSchema("Key delay."),
 		"startTarget": stringSchema("Drag start element target."),
 		"startRef":    stringSchema("Drag start ref."),
@@ -559,17 +753,21 @@ func browserSchema() *tool.Schema {
 		"width":     numberSchema("Viewport width."),
 		"height":    numberSchema("Viewport height."),
 		"timeMs":    numberSchema("Wait duration in milliseconds."),
-		"selector":  stringSchema("Selector for wait."),
+		"selector":  stringSchema(waitDescription),
 		"url":       stringSchema("URL for navigate or wait."),
 		"targetUrl": stringSchema("Alias for browser URL."),
-		"loadState": stringSchema("Load state for wait."),
+		"direction": stringSchema("Scroll direction: down, up, left, or right."),
+		"deltaX":    numberSchema("Horizontal scroll delta."),
+		"deltaY":    numberSchema("Vertical scroll delta."),
+		"amount":    numberSchema("Scroll amount in pixels."),
+		"loadState": stringSchema(loadStateDescription),
 		"textGone":  stringSchema("Text that must disappear."),
 		"timeoutMs": numberSchema("Timeout in milliseconds."),
-		"fn":        stringSchema("Page function for evaluate."),
+		"fn":        stringSchema(fnDescription),
 	}
 
 	properties := map[string]*tool.Schema{
-		"action": stringSchema("Browser action."),
+		"action": stringSchema(actionDescription),
 		"target": stringSchema(
 			"Browser target. Omit for default host; only use " +
 				"sandbox or node when configured.",
@@ -590,7 +788,7 @@ func browserSchema() *tool.Schema {
 		"interactive":    boolSchema("Interactive snapshot."),
 		"compact":        boolSchema("Compact snapshot."),
 		"depth":          numberSchema("Snapshot depth."),
-		"selector":       stringSchema("Wait selector."),
+		"selector":       stringSchema(waitDescription),
 		"frame":          stringSchema("Frame id."),
 		"labels":         boolSchema("Include labels."),
 		"fullPage":       boolSchema("Capture full page."),
@@ -634,7 +832,7 @@ func browserSchema() *tool.Schema {
 		"text":        stringSchema("Input text."),
 		"submit":      boolSchema("Submit after typing."),
 		"slowly":      boolSchema("Type slowly."),
-		"key":         stringSchema("Keyboard or state key."),
+		"key":         stringSchema("Keyboard key for press/key or state key."),
 		"delayMs":     numberSchema("Key delay."),
 		"startRef":    stringSchema("Drag start ref."),
 		"endRef":      stringSchema("Drag end ref."),
@@ -650,8 +848,12 @@ func browserSchema() *tool.Schema {
 		"height":    numberSchema("Viewport height."),
 		"timeMs":    numberSchema("Wait duration."),
 		"textGone":  stringSchema("Text that must disappear."),
-		"loadState": stringSchema("Wait load state."),
-		"fn":        stringSchema("Evaluate function."),
+		"direction": stringSchema("Scroll direction: down, up, left, or right."),
+		"deltaX":    numberSchema("Horizontal scroll delta."),
+		"deltaY":    numberSchema("Vertical scroll delta."),
+		"amount":    numberSchema("Scroll amount in pixels."),
+		"loadState": stringSchema(loadStateDescription),
+		"fn":        stringSchema(fnDescription),
 		"request": {
 			Type:       "object",
 			Properties: requestProps,
@@ -663,6 +865,13 @@ func browserSchema() *tool.Schema {
 		Required:   []string{"action"},
 		Properties: properties,
 	}
+}
+
+func evaluateFunctionDescription(evaluateEnabled bool) string {
+	if evaluateEnabled {
+		return "Evaluate function."
+	}
+	return "Evaluate function; evaluate is not available."
 }
 
 func stringSchema(desc string) *tool.Schema {
@@ -811,8 +1020,9 @@ func (t *Tool) handleProfiles(
 		DefaultProfile:  t.defaultProfile,
 		Driver:          ToolName,
 		EvaluateEnabled: t.evaluateEnabled,
-		Supported: supportedActionsForDriver(
+		Supported: visibleActionsForDriver(
 			t.driverTypeForProfile(t.defaultProfile),
+			t.evaluateEnabled,
 		),
 		Profiles: make([]ProfileInfo, 0, len(t.profiles)),
 	}
@@ -825,7 +1035,7 @@ func (t *Tool) handleProfiles(
 			Description: cfg.Description,
 			Default:     name == t.defaultProfile,
 			Driver:      driverType,
-			Supported:   supportedActionsForDriver(driverType),
+			Supported:   visibleActionsForDriver(driverType, t.evaluateEnabled),
 		}
 		drv := t.statusDriver(name, cfg)
 		if drv != nil {
@@ -1927,6 +2137,18 @@ func normalizeActRequest(in input) actRequest {
 		if strings.TrimSpace(req.URL) == "" {
 			req.URL = browserURL(in.URL, in.TargetURL)
 		}
+		if strings.TrimSpace(req.Direction) == "" {
+			req.Direction = in.Direction
+		}
+		if req.DeltaX == nil {
+			req.DeltaX = in.DeltaX
+		}
+		if req.DeltaY == nil {
+			req.DeltaY = in.DeltaY
+		}
+		if req.Amount == nil {
+			req.Amount = in.Amount
+		}
 		req.Kind = defaultActKind(req)
 		return req
 	}
@@ -1960,6 +2182,10 @@ func normalizeActRequest(in input) actRequest {
 		TimeMs:      in.TimeMs,
 		Selector:    in.Selector,
 		URL:         browserURL(in.URL, in.TargetURL),
+		Direction:   in.Direction,
+		DeltaX:      in.DeltaX,
+		DeltaY:      in.DeltaY,
+		Amount:      in.Amount,
 		LoadState:   in.LoadState,
 		TextGone:    in.TextGone,
 		TimeoutMs:   in.TimeoutMs,
@@ -1976,6 +2202,12 @@ func defaultActKind(req actRequest) string {
 	}
 	if browserURL(req.URL, req.TargetURL) != "" {
 		return actionNavigate
+	}
+	if strings.TrimSpace(req.Direction) != "" ||
+		req.DeltaX != nil ||
+		req.DeltaY != nil ||
+		req.Amount != nil {
+		return actScroll
 	}
 	if req.TimeMs != nil ||
 		strings.TrimSpace(req.Text) != "" ||
@@ -2017,7 +2249,7 @@ func (t *Tool) executeAct(
 	req actRequest,
 	driverType string,
 ) (any, error) {
-	kind := strings.ToLower(strings.TrimSpace(req.Kind))
+	kind := normalizeActKind(req.Kind)
 	switch kind {
 	case actClick:
 		args, err := clickArgs(req, driverType)
@@ -2037,13 +2269,7 @@ func (t *Tool) executeAct(
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolType, args)
 	case actPress:
-		args := map[string]any{
-			"key": strings.TrimSpace(req.Key),
-		}
-		if delay := intValue(req.DelayMs); delay > 0 {
-			args["delayMs"] = delay
-		}
-		return drv.Call(ctx, mcpToolPressKey, args)
+		return pressKey(ctx, drv, strings.TrimSpace(req.Key), req.DelayMs)
 	case actHover:
 		args, err := elementActionArgs(req, driverType)
 		if err != nil {
@@ -2063,6 +2289,8 @@ func (t *Tool) executeAct(
 		}
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolScroll, args)
+	case actScroll:
+		return t.executeScroll(ctx, drv, req, driverType)
 	case actDrag:
 		args, err := dragArgs(req, driverType)
 		if err != nil {
@@ -2119,6 +2347,123 @@ func (t *Tool) executeAct(
 			req.Kind,
 		)
 	}
+}
+
+func normalizeActKind(kind string) string {
+	normalized := strings.ToLower(strings.TrimSpace(kind))
+	switch normalized {
+	case actKey, "keyboard":
+		return actPress
+	case "scroll_into_view", "scroll-into-view":
+		return strings.ToLower(actScrollIntoView)
+	default:
+		return normalized
+	}
+}
+
+func pressKey(
+	ctx context.Context,
+	drv driver,
+	key string,
+	delayMs *int,
+) (any, error) {
+	if key == "" {
+		return nil, errors.New("browser press requires key")
+	}
+	args := map[string]any{
+		"key": key,
+	}
+	if delay := intValue(delayMs); delay > 0 {
+		args["delayMs"] = delay
+	}
+	return drv.Call(ctx, mcpToolPressKey, args)
+}
+
+func (t *Tool) executeScroll(
+	ctx context.Context,
+	drv driver,
+	req actRequest,
+	driverType string,
+) (any, error) {
+	if driverType == driverTypeBrowserServer &&
+		strings.TrimSpace(req.Ref) != "" {
+		args := map[string]any{"ref": strings.TrimSpace(req.Ref)}
+		addServerTimeoutArg(args, driverType, req.TimeoutMs)
+		return drv.Call(ctx, mcpToolScroll, args)
+	}
+
+	if driverType == driverTypePlaywrightMCP {
+		raw, err := drv.Call(ctx, mcpToolMouseWheel, scrollWheelArgs(req))
+		if err == nil {
+			return raw, nil
+		}
+		if !isBackendToolUnavailable(err, mcpToolMouseWheel) {
+			return nil, err
+		}
+	}
+
+	return pressKey(ctx, drv, scrollFallbackKey(req), req.DelayMs)
+}
+
+func scrollWheelArgs(req actRequest) map[string]any {
+	deltaX, deltaY := scrollDeltas(req)
+	return map[string]any{
+		"deltaX": deltaX,
+		"deltaY": deltaY,
+	}
+}
+
+func scrollDeltas(req actRequest) (int, int) {
+	deltaX := intValue(req.DeltaX)
+	deltaY := intValue(req.DeltaY)
+	if req.DeltaX != nil || req.DeltaY != nil {
+		return deltaX, deltaY
+	}
+
+	amount := intValue(req.Amount)
+	if amount < 0 {
+		amount = -amount
+	}
+	if amount == 0 {
+		amount = defaultScrollDeltaY
+	}
+
+	switch strings.ToLower(strings.TrimSpace(req.Direction)) {
+	case "up":
+		return 0, -amount
+	case "left":
+		return -amount, 0
+	case "right":
+		return amount, 0
+	default:
+		return 0, amount
+	}
+}
+
+func scrollFallbackKey(req actRequest) string {
+	if key := strings.TrimSpace(req.Key); key != "" {
+		return key
+	}
+	switch strings.ToLower(strings.TrimSpace(req.Direction)) {
+	case "up":
+		return "PageUp"
+	case "left":
+		return "ArrowLeft"
+	case "right":
+		return "ArrowRight"
+	default:
+		return "PageDown"
+	}
+}
+
+func isBackendToolUnavailable(err error, toolName string) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(
+		err.Error(),
+		fmt.Sprintf("does not expose tool %q", toolName),
+	)
 }
 
 func clickArgs(req actRequest, driverType string) (map[string]any, error) {

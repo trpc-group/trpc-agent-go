@@ -10,6 +10,7 @@
 package deps
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
 	"context"
@@ -19,6 +20,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -144,6 +146,89 @@ func TestExtractZip_StripsComponents(t *testing.T) {
 	name, ok := archiveTargetName("pkg/bin/tool", 3)
 	require.False(t, ok)
 	require.Empty(t, name)
+}
+
+func TestExtractTar_StripsComponents(t *testing.T) {
+	t.Parallel()
+
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	require.NoError(t, writer.WriteHeader(&tar.Header{
+		Name: "pkg/bin/tool",
+		Mode: 0o755,
+		Size: int64(len("hello")),
+	}))
+	_, err := writer.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	target := t.TempDir()
+	err = extractArchive(bytes.NewReader(archive.Bytes()), "tar", target, 1)
+	require.NoError(t, err)
+	data, readErr := os.ReadFile(filepath.Join(target, "bin", "tool"))
+	require.NoError(t, readErr)
+	require.Equal(t, "hello", string(data))
+}
+
+func TestArchiveHelpers_RejectsUnsafeNamesAndSymlinks(t *testing.T) {
+	t.Parallel()
+
+	name, ok := archiveTargetName("/absolute/path", 0)
+	require.False(t, ok)
+	require.Empty(t, name)
+
+	name, ok = archiveTargetName("../escape", 0)
+	require.False(t, ok)
+	require.Empty(t, name)
+
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	require.NoError(t, writer.WriteHeader(&tar.Header{
+		Name:     "pkg/bin/link",
+		Typeflag: tar.TypeSymlink,
+		Linkname: "/etc/passwd",
+		Mode:     0o777,
+	}))
+	require.NoError(t, writer.Close())
+
+	err := extractArchive(
+		bytes.NewReader(archive.Bytes()),
+		"tar",
+		t.TempDir(),
+		1,
+	)
+	require.ErrorContains(t, err, "unsupported archive entry mode")
+}
+
+func TestWriteArchiveEntry_RejectsExistingSymlink(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	link := filepath.Join(root, "link")
+	require.NoError(t, os.WriteFile(target, []byte("old"), 0o644))
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	err := writeArchiveEntry(link, 0o644, strings.NewReader("new"))
+	require.ErrorContains(t, err, "symlink")
+}
+
+func TestInstallDownloadLink_RejectsSymlinkSource(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	link := filepath.Join(root, "source-link")
+	target := filepath.Join(root, "bin", "tool")
+	require.NoError(t, os.WriteFile(source, []byte("tool"), 0o755))
+	if err := os.Symlink(source, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	err := installDownloadLink(link, target)
+	require.ErrorContains(t, err, "symlink")
 }
 
 func TestArchiveHelpers(t *testing.T) {
