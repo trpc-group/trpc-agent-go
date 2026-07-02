@@ -222,7 +222,7 @@ var variantConfigs = map[Variant]variantConfig{
 		apiKeyName:                qwenAPIKeyName,
 		defaultBaseURL:            defaultQwenBaseURL,
 		// refer:https://help.aliyun.com/zh/model-studio/deep-thinking
-		thinkingEnabledKey:     model.EnabledThinkingKey,
+		thinkingEnabledKey:     model.EnableThinkingKey,
 		thinkingValueConvertor: defaultThinkingValueConvertor,
 	},
 }

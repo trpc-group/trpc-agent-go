@@ -6876,7 +6876,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 				},
 			},
 			want1: []openaiopt.RequestOption{
-				openaiopt.WithJSONSet(model.EnabledThinkingKey, true),
+				openaiopt.WithJSONSet(model.EnableThinkingKey, true),
 				openaiopt.WithJSONSet(model.ThinkingTokensKey, tokens),
 			},
 		},
@@ -7110,7 +7110,7 @@ func TestBuildThinkingOption(t *testing.T) {
 			name:            "Qwen variant with thinking enabled",
 			variant:         VariantQwen,
 			thinkingEnabled: &trueVal,
-			wantKeys:        []string{model.EnabledThinkingKey},
+			wantKeys:        []string{model.EnableThinkingKey},
 			wantValues:      []any{true},
 		},
 		{
