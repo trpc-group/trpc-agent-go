@@ -579,6 +579,32 @@ func TestServerRoutesOnlyConfiguredCapabilities(t *testing.T) {
 	})
 }
 
+func TestServerOptionsApplyBasePathTimeoutAndCORS(t *testing.T) {
+	srv, err := New(
+		WithAppName("sports-agent"),
+		WithAgent(newFakeAgent()),
+		WithBasePath("/api/apps"),
+		WithTimeout(time.Minute),
+	)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodGet, "/api/apps/sports-agent/structure", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	req = httptest.NewRequest(http.MethodGet, "/trpc-agent/v1/apps/sports-agent/structure", nil)
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	req = httptest.NewRequest(http.MethodOptions, "/api/apps/sports-agent/structure", nil)
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Equal(t, "*", rec.Header().Get(headerAccessControlOrigin))
+	assert.Contains(t, rec.Header().Get("Access-Control-Allow-Methods"), http.MethodGet)
+	assert.Contains(t, rec.Header().Get("Access-Control-Allow-Methods"), http.MethodPost)
+	assert.Equal(t, "Content-Type", rec.Header().Get("Access-Control-Allow-Headers"))
+}
+
 func TestServerErrors(t *testing.T) {
 	t.Run("missing app", func(t *testing.T) {
 		srv, _ := newTestServer(t, nil)
@@ -594,12 +620,30 @@ func TestServerErrors(t *testing.T) {
 		srv.Handler().ServeHTTP(rec, req)
 		require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 	})
+	t.Run("structure method not allowed", func(t *testing.T) {
+		srv, _ := newTestServer(t, nil)
+		req := httptest.NewRequest(http.MethodPost, "/trpc-agent/v1/apps/sports-agent/structure", nil)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+		assert.Equal(t, http.MethodGet, rec.Header().Get(headerAllow))
+	})
 	t.Run("invalid body", func(t *testing.T) {
 		srv, _ := newTestServer(t, nil)
 		req := httptest.NewRequest(http.MethodPost, "/trpc-agent/v1/apps/sports-agent/runs", bytes.NewBufferString("{"))
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, req)
 		require.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+	t.Run("multiple json objects", func(t *testing.T) {
+		srv, _ := newTestServer(t, nil)
+		req := httptest.NewRequest(http.MethodPost, "/trpc-agent/v1/apps/sports-agent/runs", bytes.NewBufferString(`{} {}`))
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		var response map[string]string
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+		assert.Equal(t, "invalid request body: request body must contain a single JSON object", response["error"])
 	})
 	t.Run("non user input", func(t *testing.T) {
 		srv, _ := newTestServer(t, nil)
@@ -624,6 +668,65 @@ func TestServerErrors(t *testing.T) {
 		srv.Handler().ServeHTTP(rec, req)
 		require.Equal(t, http.StatusInternalServerError, rec.Code)
 	})
+}
+
+func TestValidateRunRequestErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *runRequest
+		want string
+	}{
+		{name: "nil request", req: nil, want: "request is nil"},
+		{
+			name: "missing user id",
+			req:  &runRequest{Session: session{SessionID: "session-1"}, Input: model.NewUserMessage("input")},
+			want: "session.userId is required",
+		},
+		{
+			name: "missing session id",
+			req:  &runRequest{Session: session{UserID: "user-1"}, Input: model.NewUserMessage("input")},
+			want: "session.sessionId is required",
+		},
+		{
+			name: "invalid role",
+			req:  &runRequest{Session: session{UserID: "user-1", SessionID: "session-1"}},
+			want: "input.role is invalid",
+		},
+		{
+			name: "empty payload",
+			req:  &runRequest{Session: session{UserID: "user-1", SessionID: "session-1"}, Input: model.Message{Role: model.RoleUser}},
+			want: "input payload is required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateRunRequest(tt.req)
+			require.Error(t, err)
+			assert.Equal(t, tt.want, err.Error())
+		})
+	}
+}
+
+func TestRespondJSONHandlesEncodeError(t *testing.T) {
+	srv, _ := newTestServer(t, nil)
+	req := httptest.NewRequest(http.MethodGet, "/trpc-agent/v1/apps/sports-agent/structure", nil)
+	rec := httptest.NewRecorder()
+	srv.respondJSON(rec, req, http.StatusOK, map[string]any{"bad": make(chan int)})
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, contentTypeJSON, rec.Header().Get(headerContentType))
+	assert.Equal(t, "*", rec.Header().Get(headerAccessControlOrigin))
+}
+
+func TestNewExecutionContextUsesParentDeadlineWhenShorter(t *testing.T) {
+	parent, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	ctx, cancel := newExecutionContext(parent, time.Hour)
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	require.True(t, ok)
+	parentDeadline, ok := parent.Deadline()
+	require.True(t, ok)
+	assert.False(t, deadline.After(parentDeadline))
 }
 
 func TestMessageCollectorMergesToolMessageMetadataAndDelta(t *testing.T) {
