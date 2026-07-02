@@ -22,7 +22,7 @@ func printSummary(
 	initialInstruction string,
 	targetSurfaceID string,
 ) error {
-	if result == nil || result.Structure == nil || len(result.Rounds) == 0 {
+	if result == nil || len(result.Rounds) == 0 {
 		return errors.New("run result is incomplete")
 	}
 	acceptedInstruction := acceptedInstructionText(result, initialInstruction, targetSurfaceID)
@@ -31,7 +31,6 @@ func printSummary(
 	fmt.Println("✅ PromptIter syncrun sports commentary example completed")
 	fmt.Printf("Data directory: %s\n", dataDir)
 	fmt.Printf("Result directory: %s\n", outputDir)
-	fmt.Printf("Structure ID: %s\n", result.Structure.StructureID)
 	fmt.Printf("Target node: %s\n", candidateAgentName)
 	fmt.Printf("Target surface ID: %s\n", targetSurfaceID)
 	fmt.Printf("Initial instruction: %q\n", initialInstruction)

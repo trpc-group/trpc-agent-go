@@ -21,7 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	idecode "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/decode"
 	irunner "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/runner"
-	isurface "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/surface"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -198,7 +198,7 @@ func normalizeRequest(request *Request) (*Request, error) {
 	if surface.NodeID == "" {
 		return nil, errors.New("node id is empty")
 	}
-	if !isurface.IsSupportedType(surface.Type) {
+	if !profilecompiler.IsSupportedType(surface.Type) {
 		return nil, fmt.Errorf("surface type %q is invalid", surface.Type)
 	}
 	if surface.Type == astructure.SurfaceTypeTool && len(surface.Value.Tools) != 1 {
@@ -254,7 +254,7 @@ func sanitizePatchProposal(request *Request, proposal *surfacePatchProposal) (*p
 	if reason == "" {
 		return nil, errors.New("patch reason is empty")
 	}
-	value, err := isurface.SanitizePatchValue(*request.Surface, proposal.Value)
+	value, err := profilecompiler.SanitizePatchValue(*request.Surface, proposal.Value)
 	if err != nil {
 		return nil, fmt.Errorf("sanitize patch value: %w", err)
 	}

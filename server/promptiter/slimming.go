@@ -15,9 +15,6 @@ func slimRunResult(result *engine.RunResult, slimming engine.RunResultSlimming) 
 		return result
 	}
 	slimmed := *result
-	if slimming.OmitStructure {
-		slimmed.Structure = nil
-	}
 	if slimming.OmitProfiles {
 		slimmed.AcceptedProfile = nil
 	}
@@ -27,8 +24,7 @@ func slimRunResult(result *engine.RunResult, slimming engine.RunResultSlimming) 
 }
 
 func runResultSlimmingIsZero(slimming engine.RunResultSlimming) bool {
-	return !slimming.OmitStructure &&
-		!slimming.OmitEvaluationCases &&
+	return !slimming.OmitEvaluationCases &&
 		!slimming.OmitBackward &&
 		!slimming.OmitAggregation &&
 		!slimming.OmitPatches &&
