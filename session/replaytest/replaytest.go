@@ -94,6 +94,9 @@ func (s AppendEventStep) Type() string { return "append_event" }
 func (s AppendEventStep) LogicalKey() string { return s.Key }
 
 // UpdateStateStep updates state in app, user, or session scope.
+// DeleteKey removes one app-scoped or user-scoped state key.
+// Session-scoped DeleteKey is rejected because session.Service does not expose
+// a per-key session state delete method.
 type UpdateStateStep struct {
 	// Key is the stable logical operation key used in errors.
 	Key string
@@ -107,7 +110,7 @@ type UpdateStateStep struct {
 	AppName string
 	// State contains keys and values to write.
 	State session.StateMap
-	// DeleteKey deletes one state key when set.
+	// DeleteKey deletes one app-scoped or user-scoped state key when set.
 	DeleteKey string
 }
 

@@ -246,7 +246,7 @@ func (e *caseExecutor) executeUpdateState(ctx context.Context, step UpdateStateS
 		}
 		if step.DeleteKey != "" {
 			return fmt.Errorf(
-				"session-scoped state delete is not supported by session.Service: use UpdateSessionState to overwrite keys",
+				"session-scoped state delete via DeleteKey is not supported by session.Service: use UpdateSessionState to overwrite keys",
 			)
 		}
 		return e.backend.SessionService.UpdateSessionState(ctx, step.SessionKey, step.State)
