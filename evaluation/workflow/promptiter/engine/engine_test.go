@@ -1978,7 +1978,9 @@ func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T
 			},
 		},
 	}
-	result, err := adaptEvaluationCaseResult("validation", evalCase)
+	structure, err := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, err)
+	result, err := adaptEvaluationCaseResult(structure, "validation", evalCase)
 	assert.NoError(t, err)
 	assert.Equal(t, "validation", result.EvalSetID)
 	assert.Equal(t, "case_1", result.EvalCaseID)
@@ -2336,12 +2338,14 @@ func TestAdaptMetricResults(t *testing.T) {
 }
 
 func TestValidateTrace(t *testing.T) {
-	assert.EqualError(t, validateTrace(nil), "execution trace is nil")
-	err := validateTrace(&atrace.Trace{
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
+	assert.EqualError(t, validateTrace(structure, nil), "execution trace is nil")
+	err := validateTrace(structure, &atrace.Trace{
 		Steps: []atrace.Step{{NodeID: "node_1"}},
 	})
 	assert.EqualError(t, err, "execution trace step id is empty")
-	err = validateTrace(&atrace.Trace{
+	err = validateTrace(structure, &atrace.Trace{
 		Steps: []atrace.Step{
 			{
 				StepID:            "step_1",
@@ -2351,7 +2355,7 @@ func TestValidateTrace(t *testing.T) {
 		},
 	})
 	assert.EqualError(t, err, `execution trace step "step_1" applied surface id is empty`)
-	assert.NoError(t, validateTrace(&atrace.Trace{
+	err = validateTrace(structure, &atrace.Trace{
 		Steps: []atrace.Step{
 			{
 				StepID:            "step_1",
@@ -2359,15 +2363,27 @@ func TestValidateTrace(t *testing.T) {
 				AppliedSurfaceIDs: []string{"unknown#instruction"},
 			},
 		},
+	})
+	assert.EqualError(t, err, `execution trace step "step_1" references unknown surface id "unknown#instruction"`)
+	assert.NoError(t, validateTrace(structure, &atrace.Trace{
+		Steps: []atrace.Step{
+			{
+				StepID:            "step_1",
+				NodeID:            "node_1",
+				AppliedSurfaceIDs: []string{testSurfaceID},
+			},
+		},
 	}))
 }
 
 func TestExtractInferenceTraceDetails(t *testing.T) {
-	trace, sessionID, err := extractInferenceTraceDetails("case_1", nil)
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
+	trace, sessionID, err := extractInferenceTraceDetails(structure, "case_1", nil)
 	assert.Nil(t, trace)
 	assert.Empty(t, sessionID)
 	assert.EqualError(t, err, "inference result is nil")
-	trace, sessionID, err = extractInferenceTraceDetails("case_1", &evaluation.EvaluationInferenceDetails{
+	trace, sessionID, err = extractInferenceTraceDetails(structure, "case_1", &evaluation.EvaluationInferenceDetails{
 		ExecutionTraces: []*atrace.Trace{},
 	})
 	assert.Nil(t, trace)
@@ -2383,14 +2399,14 @@ func TestExtractInferenceTraceDetails(t *testing.T) {
 			},
 		},
 	}
-	trace, sessionID, err = extractInferenceTraceDetails("case_1", &evaluation.EvaluationInferenceDetails{
+	trace, sessionID, err = extractInferenceTraceDetails(structure, "case_1", &evaluation.EvaluationInferenceDetails{
 		SessionID:       "fallback_session",
 		ExecutionTraces: []*atrace.Trace{expectedTrace},
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, expectedTrace, trace)
 	assert.Equal(t, "trace_session", sessionID)
-	trace, sessionID, err = extractInferenceTraceDetails("case_1", &evaluation.EvaluationInferenceDetails{
+	trace, sessionID, err = extractInferenceTraceDetails(structure, "case_1", &evaluation.EvaluationInferenceDetails{
 		SessionID: "fallback_session",
 		ExecutionTraces: []*atrace.Trace{
 			{
@@ -2409,37 +2425,39 @@ func TestExtractInferenceTraceDetails(t *testing.T) {
 }
 
 func TestAdaptEvaluationCaseResultValidationErrors(t *testing.T) {
-	result, err := adaptEvaluationCaseResult("validation", nil)
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
+	result, err := adaptEvaluationCaseResult(structure, "validation", nil)
 	assert.Nil(t, result)
 	assert.EqualError(t, err, "evaluation case result is nil")
-	result, err = adaptEvaluationCaseResult("validation", &evaluation.EvaluationCaseResult{})
+	result, err = adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{})
 	assert.Nil(t, result)
 	assert.EqualError(t, err, "evaluation case id is empty")
-	result, err = adaptEvaluationCaseResult("validation", &evaluation.EvaluationCaseResult{
+	result, err = adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{
 		EvalCaseID: "case_1",
 	})
 	assert.Nil(t, result)
 	assert.EqualError(t, err, `evaluation case "case_1" has no run results`)
-	result, err = adaptEvaluationCaseResult("validation", &evaluation.EvaluationCaseResult{
+	result, err = adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{
 		EvalCaseID:      "case_1",
 		EvalCaseResults: []*evalresult.EvalCaseResult{nil},
 	})
 	assert.Nil(t, result)
 	assert.EqualError(t, err, `evaluation case "case_1" run result is nil`)
-	result, err = adaptEvaluationCaseResult("validation", &evaluation.EvaluationCaseResult{
+	result, err = adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{
 		EvalCaseID:      "case_1",
 		EvalCaseResults: []*evalresult.EvalCaseResult{{RunID: 1}},
 	})
 	assert.Nil(t, result)
 	assert.EqualError(t, err, `evaluation case "case_1" has no run details`)
-	result, err = adaptEvaluationCaseResult("validation", &evaluation.EvaluationCaseResult{
+	result, err = adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{
 		EvalCaseID:      "case_1",
 		EvalCaseResults: []*evalresult.EvalCaseResult{{RunID: 1}},
 		RunDetails:      []*evaluation.EvaluationCaseRunDetails{nil},
 	})
 	assert.Nil(t, result)
 	assert.EqualError(t, err, `evaluation case "case_1" run detail is nil`)
-	result, err = adaptEvaluationCaseResult("validation", &evaluation.EvaluationCaseResult{
+	result, err = adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{
 		EvalCaseID:      "case_1",
 		EvalCaseResults: []*evalresult.EvalCaseResult{{RunID: 1}},
 		RunDetails: []*evaluation.EvaluationCaseRunDetails{
@@ -2451,18 +2469,20 @@ func TestAdaptEvaluationCaseResultValidationErrors(t *testing.T) {
 }
 
 func TestAdaptEvaluationSetResultValidationErrors(t *testing.T) {
-	evalSet, err := adaptEvaluationSetResult("validation", nil)
+	structure, structureErr := profilecompiler.NewStructure(testStructureSnapshot(t))
+	require.NoError(t, structureErr)
+	evalSet, err := adaptEvaluationSetResult(structure, "validation", nil)
 	assert.Nil(t, evalSet)
 	assert.EqualError(t, err, "evaluation result is nil")
-	evalSet, err = adaptEvaluationSetResult("validation", &evaluation.EvaluationResult{})
+	evalSet, err = adaptEvaluationSetResult(structure, "validation", &evaluation.EvaluationResult{})
 	assert.Nil(t, evalSet)
 	assert.EqualError(t, err, "evaluation result eval set id is empty")
-	evalSet, err = adaptEvaluationSetResult("validation", &evaluation.EvaluationResult{
+	evalSet, err = adaptEvaluationSetResult(structure, "validation", &evaluation.EvaluationResult{
 		EvalSetID: "train",
 	})
 	assert.Nil(t, evalSet)
 	assert.EqualError(t, err, `evaluation result eval set id "train" does not match request "validation"`)
-	evalSet, err = adaptEvaluationSetResult("validation", &evaluation.EvaluationResult{
+	evalSet, err = adaptEvaluationSetResult(structure, "validation", &evaluation.EvaluationResult{
 		EvalSetID: "validation",
 	})
 	assert.Nil(t, evalSet)
@@ -3549,9 +3569,8 @@ func TestBuildBackwardRequestValidationErrors(t *testing.T) {
 		nil,
 		nil,
 	)
-	assert.NoError(t, err)
-	require.NotNil(t, request)
-	assert.Equal(t, "unknown", request.Node.NodeID)
+	assert.Nil(t, request)
+	assert.EqualError(t, err, `step "step_2" references unknown node id "unknown"`)
 	request, err = buildBackwardRequest(
 		structure,
 		overrideIndex,

@@ -288,7 +288,10 @@ func buildBackwardRequest(
 	incoming []backwarder.GradientPacket,
 	targetSurfaceSet targetSurfaceSet,
 ) (*backwarder.Request, error) {
-	node := astructure.Node{NodeID: step.NodeID, Name: step.AgentName}
+	node, ok := structure.NodeIndex[step.NodeID]
+	if !ok {
+		return nil, fmt.Errorf("step %q references unknown node id %q", step.StepID, step.NodeID)
+	}
 	surfaces := make([]astructure.Surface, 0, len(step.AppliedSurfaceIDs))
 	allowedGradientSurfaceIDs := make([]string, 0, len(step.AppliedSurfaceIDs))
 	seenSurfaces := make(map[string]struct{}, len(step.AppliedSurfaceIDs))

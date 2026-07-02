@@ -122,7 +122,7 @@ func (e *engine) evaluate(
 		if err != nil {
 			return nil, err
 		}
-		evalSetResult, err := adaptEvaluationSetResult(input.EvalSetID, genericResult)
+		evalSetResult, err := adaptEvaluationSetResult(structure, input.EvalSetID, genericResult)
 		if err != nil {
 			return nil, err
 		}
@@ -197,6 +197,7 @@ func compileProfileRunOptions(
 }
 
 func adaptEvaluationSetResult(
+	structure *profilecompiler.Structure,
 	evalSetID string,
 	result *evaluation.EvaluationResult,
 ) (*EvalSetResult, error) {
@@ -222,7 +223,7 @@ func adaptEvaluationSetResult(
 		if evalCase == nil {
 			continue
 		}
-		converted, err := adaptEvaluationCaseResult(evalSetID, evalCase)
+		converted, err := adaptEvaluationCaseResult(structure, evalSetID, evalCase)
 		if err != nil {
 			return nil, err
 		}
@@ -260,6 +261,7 @@ func calculateEvaluationScore(result *evaluation.EvaluationResult) (float64, err
 }
 
 func adaptEvaluationCaseResult(
+	structure *profilecompiler.Structure,
 	evalSetID string,
 	evalCase *evaluation.EvaluationCaseResult,
 ) (*CaseResult, error) {
@@ -297,7 +299,7 @@ func adaptEvaluationCaseResult(
 			runResult.RunID,
 		)
 	}
-	trace, sessionID, err := extractInferenceTraceDetails(evalCase.EvalCaseID, runDetail.Inference)
+	trace, sessionID, err := extractInferenceTraceDetails(structure, evalCase.EvalCaseID, runDetail.Inference)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"extract inference trace details for eval case %q: %w",
@@ -323,9 +325,13 @@ func adaptEvaluationCaseResult(
 }
 
 func extractInferenceTraceDetails(
+	structure *profilecompiler.Structure,
 	evalCaseID string,
 	result *evaluation.EvaluationInferenceDetails,
 ) (*atrace.Trace, string, error) {
+	if structure == nil {
+		return nil, "", errors.New("structure is nil")
+	}
 	if result == nil {
 		return nil, "", errors.New("inference result is nil")
 	}
@@ -336,7 +342,7 @@ func extractInferenceTraceDetails(
 		)
 	}
 	executionTrace := result.ExecutionTraces[0]
-	if err := validateTrace(executionTrace); err != nil {
+	if err := validateTrace(structure, executionTrace); err != nil {
 		return nil, "", err
 	}
 	sessionID := executionTrace.SessionID
@@ -346,7 +352,10 @@ func extractInferenceTraceDetails(
 	return executionTrace, sessionID, nil
 }
 
-func validateTrace(trace *atrace.Trace) error {
+func validateTrace(structure *profilecompiler.Structure, trace *atrace.Trace) error {
+	if structure == nil {
+		return errors.New("structure is nil")
+	}
 	if trace == nil {
 		return errors.New("execution trace is nil")
 	}
@@ -357,6 +366,13 @@ func validateTrace(trace *atrace.Trace) error {
 		for _, surfaceID := range step.AppliedSurfaceIDs {
 			if surfaceID == "" {
 				return fmt.Errorf("execution trace step %q applied surface id is empty", step.StepID)
+			}
+			if _, ok := structure.KnownSurfaceIDs[surfaceID]; !ok {
+				return fmt.Errorf(
+					"execution trace step %q references unknown surface id %q",
+					step.StepID,
+					surfaceID,
+				)
 			}
 		}
 	}
