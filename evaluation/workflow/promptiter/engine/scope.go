@@ -12,29 +12,25 @@ package engine
 import (
 	"errors"
 	"fmt"
+
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 )
 
 type targetSurfaceSet map[string]struct{}
 
 func compileTargetSurfaceIDs(
-	structure *structureState,
+	surfaceIndex map[string]astructure.Surface,
 	targetSurfaceIDs []string,
 ) (targetSurfaceSet, error) {
-	if targetSurfaceIDs == nil {
-		return nil, nil
-	}
 	if len(targetSurfaceIDs) == 0 {
 		return nil, errors.New("target surface ids must not be empty")
-	}
-	if structure == nil {
-		return nil, errors.New("structure state is nil")
 	}
 	targets := make(targetSurfaceSet, len(targetSurfaceIDs))
 	for _, surfaceID := range targetSurfaceIDs {
 		if surfaceID == "" {
 			return nil, errors.New("target surface ids must not contain empty values")
 		}
-		if _, ok := structure.surfaceIndex[surfaceID]; !ok {
+		if _, ok := surfaceIndex[surfaceID]; !ok {
 			return nil, fmt.Errorf("target surface id %q is unknown", surfaceID)
 		}
 		targets[surfaceID] = struct{}{}
@@ -43,9 +39,6 @@ func compileTargetSurfaceIDs(
 }
 
 func (s targetSurfaceSet) contains(surfaceID string) bool {
-	if s == nil {
-		return true
-	}
 	_, ok := s[surfaceID]
 	return ok
 }

@@ -6,7 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package surface
+package profilecompiler
 
 import (
 	"testing"
@@ -21,60 +21,52 @@ func TestIsSupportedType(t *testing.T) {
 	assert.True(t, IsSupportedType(astructure.SurfaceTypeInstruction))
 	assert.True(t, IsSupportedType(astructure.SurfaceTypeGlobalInstruction))
 	assert.True(t, IsSupportedType(astructure.SurfaceTypeFewShot))
-	assert.True(t, IsSupportedType(astructure.SurfaceTypeModel))
 	assert.True(t, IsSupportedType(astructure.SurfaceTypeTool))
+	assert.False(t, IsSupportedType(astructure.SurfaceTypeModel))
 	assert.False(t, IsSupportedType(astructure.SurfaceType("unknown")))
 }
 
 func TestValidateValue(t *testing.T) {
 	text := "instruction"
 
-	assert.NoError(t, ValidateValue(
+	assert.NoError(t, validateValue(
 		astructure.SurfaceTypeInstruction,
 		astructure.SurfaceValue{Text: &text},
 	))
-	assert.NoError(t, ValidateValue(
+	assert.NoError(t, validateValue(
 		astructure.SurfaceTypeGlobalInstruction,
 		astructure.SurfaceValue{Text: &text},
 	))
-	assert.NoError(t, ValidateValue(
+	assert.NoError(t, validateValue(
 		astructure.SurfaceTypeFewShot,
 		astructure.SurfaceValue{FewShot: []astructure.FewShotExample{}},
 	))
-	assert.NoError(t, ValidateValue(
-		astructure.SurfaceTypeModel,
-		astructure.SurfaceValue{Model: &astructure.ModelRef{
-			Provider: "openai",
-			Name:     "m",
-			Headers:  map[string]string{"X-Test": "1"},
-		}},
-	))
-	assert.NoError(t, ValidateValue(
+	assert.NoError(t, validateValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			Tools: []astructure.ToolRef{{ID: "lookup"}},
 		},
 	))
-	assert.Error(t, ValidateValue(
+	assert.Error(t, validateValue(
 		astructure.SurfaceTypeInstruction,
 		astructure.SurfaceValue{},
 	))
-	assert.Error(t, ValidateValue(
+	assert.Error(t, validateValue(
 		astructure.SurfaceTypeFewShot,
 		astructure.SurfaceValue{Text: &text},
 	))
-	assert.Error(t, ValidateValue(
+	assert.EqualError(t, validateValue(
 		astructure.SurfaceTypeModel,
 		astructure.SurfaceValue{Model: &astructure.ModelRef{}},
-	))
-	assert.EqualError(t, ValidateValue(
+	), `surface type "model" is invalid`)
+	assert.EqualError(t, validateValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			Model: &astructure.ModelRef{},
 			Tools: []astructure.ToolRef{{ID: "lookup"}},
 		},
 	), "model is not nil")
-	assert.EqualError(t, ValidateValue(
+	assert.EqualError(t, validateValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{},
 	), "tools must contain exactly one tool, got 0")
@@ -126,35 +118,30 @@ func TestBuildIndexRejectsInvalidSurface(t *testing.T) {
 
 func TestSanitizeValue(t *testing.T) {
 	text := "instruction"
-	emptyText := ""
 
-	sanitizedInstruction, err := SanitizeValue(
+	sanitizedInstruction, err := sanitizeValue(
 		astructure.SurfaceTypeInstruction,
 		astructure.SurfaceValue{
-			Text:  &text,
-			Model: &astructure.ModelRef{},
+			Text: &text,
 		},
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, &text, sanitizedInstruction.Text)
 	assert.Nil(t, sanitizedInstruction.Model)
-	sanitizedGlobalInstruction, err := SanitizeValue(
+	sanitizedGlobalInstruction, err := sanitizeValue(
 		astructure.SurfaceTypeGlobalInstruction,
 		astructure.SurfaceValue{
-			Text:  &text,
-			Model: &astructure.ModelRef{},
+			Text: &text,
 		},
 	)
 	assert.NoError(t, err)
 	assert.Equal(t, &text, sanitizedGlobalInstruction.Text)
 	assert.Nil(t, sanitizedGlobalInstruction.Model)
 
-	sanitizedFewShot, err := SanitizeValue(
+	sanitizedFewShot, err := sanitizeValue(
 		astructure.SurfaceTypeFewShot,
 		astructure.SurfaceValue{
-			Text:    &emptyText,
 			FewShot: []astructure.FewShotExample{},
-			Model:   &astructure.ModelRef{},
 		},
 	)
 	assert.NoError(t, err)
@@ -162,29 +149,8 @@ func TestSanitizeValue(t *testing.T) {
 	assert.Nil(t, sanitizedFewShot.Model)
 	assert.NotNil(t, sanitizedFewShot.FewShot)
 
-	modelRef := &astructure.ModelRef{
-		Provider: "openai",
-		Name:     "m",
-		Headers:  map[string]string{"X-Test": "1"},
-	}
-	sanitizedModel, err := SanitizeValue(
-		astructure.SurfaceTypeModel,
-		astructure.SurfaceValue{
-			Text:  &emptyText,
-			Model: modelRef,
-		},
-	)
-	assert.NoError(t, err)
-	assert.Nil(t, sanitizedModel.Text)
-	assert.Equal(t, &astructure.ModelRef{
-		Provider: "openai",
-		Name:     "m",
-		Headers:  map[string]string{"X-Test": "1"},
-	}, sanitizedModel.Model)
-	sanitizedModel.Model.Headers["X-Test"] = "2"
-	assert.Equal(t, "1", modelRef.Headers["X-Test"])
 	toolRefs := []astructure.ToolRef{{ID: "lookup", Description: "original"}}
-	sanitizedTool, err := SanitizeValue(
+	sanitizedTool, err := sanitizeValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{Tools: toolRefs},
 	)
@@ -198,25 +164,65 @@ func TestSanitizeValue(t *testing.T) {
 func TestSanitizeValueRejectsInvalidInput(t *testing.T) {
 	text := "instruction"
 
-	_, err := SanitizeValue(
+	_, err := sanitizeValue(
 		astructure.SurfaceTypeInstruction,
 		astructure.SurfaceValue{},
 	)
 	assert.Error(t, err)
 
-	_, err = SanitizeValue(
+	_, err = sanitizeValue(
 		astructure.SurfaceTypeFewShot,
 		astructure.SurfaceValue{Text: &text},
 	)
-	assert.Error(t, err)
+	assert.EqualError(t, err, "text is not nil")
 
-	_, err = SanitizeValue(
+	_, err = sanitizeValue(
 		astructure.SurfaceTypeModel,
 		astructure.SurfaceValue{Model: &astructure.ModelRef{}},
 	)
-	assert.Error(t, err)
+	assert.EqualError(t, err, `surface type "model" is invalid`)
 	emptyText := ""
-	_, err = SanitizeValue(
+	_, err = sanitizeValue(
+		astructure.SurfaceTypeInstruction,
+		astructure.SurfaceValue{
+			Text:         &text,
+			PromptSyntax: promptSyntaxPtr(astructure.PromptSyntaxSingleBrace),
+		},
+	)
+	assert.EqualError(t, err, "prompt syntax is not nil")
+	_, err = sanitizeValue(
+		astructure.SurfaceTypeInstruction,
+		astructure.SurfaceValue{
+			Text:  &text,
+			Model: &astructure.ModelRef{},
+		},
+	)
+	assert.EqualError(t, err, "model is not nil")
+	_, err = sanitizeValue(
+		astructure.SurfaceTypeInstruction,
+		astructure.SurfaceValue{
+			Text:  &text,
+			Tools: []astructure.ToolRef{{ID: "lookup"}},
+		},
+	)
+	assert.EqualError(t, err, "tools are not empty")
+	_, err = sanitizeValue(
+		astructure.SurfaceTypeInstruction,
+		astructure.SurfaceValue{
+			Text:   &text,
+			Skills: []astructure.SkillRef{{ID: "skill"}},
+		},
+	)
+	assert.EqualError(t, err, "skills are not empty")
+	_, err = sanitizeValue(
+		astructure.SurfaceTypeFewShot,
+		astructure.SurfaceValue{
+			FewShot: []astructure.FewShotExample{},
+			Model:   &astructure.ModelRef{},
+		},
+	)
+	assert.EqualError(t, err, "model is not nil")
+	_, err = sanitizeValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			Text: &emptyText,
@@ -226,7 +232,7 @@ func TestSanitizeValueRejectsInvalidInput(t *testing.T) {
 		},
 	)
 	assert.EqualError(t, err, "text is not nil")
-	_, err = SanitizeValue(
+	_, err = sanitizeValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			Model: &astructure.ModelRef{},
@@ -236,12 +242,12 @@ func TestSanitizeValueRejectsInvalidInput(t *testing.T) {
 		},
 	)
 	assert.EqualError(t, err, "model is not nil")
-	_, err = SanitizeValue(
+	_, err = sanitizeValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{},
 	)
 	assert.EqualError(t, err, "tools must contain exactly one tool, got 0")
-	_, err = SanitizeValue(
+	_, err = sanitizeValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			Tools: []astructure.ToolRef{
@@ -251,14 +257,14 @@ func TestSanitizeValueRejectsInvalidInput(t *testing.T) {
 		},
 	)
 	assert.EqualError(t, err, "tools must contain exactly one tool, got 2")
-	_, err = SanitizeValue(
+	_, err = sanitizeValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			Tools: []astructure.ToolRef{{}},
 		},
 	)
 	assert.EqualError(t, err, "tool id is empty")
-	_, err = SanitizeValue(
+	_, err = sanitizeValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			Tools: []astructure.ToolRef{
@@ -549,74 +555,67 @@ func testLookupOutputSchema(description string) *tool.Schema {
 
 func TestValidateValueRejectsExtraFields(t *testing.T) {
 	text := "instruction"
-	assert.EqualError(t, ValidateValue(
+	assert.EqualError(t, validateValue(
 		astructure.SurfaceTypeInstruction,
 		astructure.SurfaceValue{
 			Text:    &text,
 			FewShot: []astructure.FewShotExample{{}},
 		},
 	), "messages are not empty")
-	assert.EqualError(t, ValidateValue(
+	assert.EqualError(t, validateValue(
 		astructure.SurfaceTypeInstruction,
 		astructure.SurfaceValue{
 			Text:  &text,
 			Model: &astructure.ModelRef{Name: "m"},
 		},
 	), "model is not nil")
-	assert.EqualError(t, ValidateValue(
+	assert.EqualError(t, validateValue(
 		astructure.SurfaceTypeFewShot,
 		astructure.SurfaceValue{
 			FewShot: []astructure.FewShotExample{},
 			Model:   &astructure.ModelRef{Name: "m"},
 		},
 	), "model is not nil")
-	assert.EqualError(t, ValidateValue(
+	assert.EqualError(t, validateValue(
 		astructure.SurfaceTypeModel,
 		astructure.SurfaceValue{
 			Model: &astructure.ModelRef{Name: "m"},
 			Text:  &text,
 		},
-	), "text is not nil")
-	assert.EqualError(t, ValidateValue(
-		astructure.SurfaceTypeModel,
-		astructure.SurfaceValue{
-			Model:   &astructure.ModelRef{Name: "m"},
-			FewShot: []astructure.FewShotExample{{}},
-		},
-	), "messages are not empty")
+	), `surface type "model" is invalid`)
 }
 
 func TestValidateValueRejectsToolExtraFields(t *testing.T) {
 	text := "instruction"
-	assert.EqualError(t, ValidateValue(
+	assert.EqualError(t, validateValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			Text:  &text,
 			Tools: []astructure.ToolRef{{ID: "lookup"}},
 		},
 	), "text is not nil")
-	assert.EqualError(t, ValidateValue(
+	assert.EqualError(t, validateValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			PromptSyntax: promptSyntaxPtr(astructure.PromptSyntaxSingleBrace),
 			Tools:        []astructure.ToolRef{{ID: "lookup"}},
 		},
 	), "prompt syntax is not nil")
-	assert.EqualError(t, ValidateValue(
+	assert.EqualError(t, validateValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			FewShot: []astructure.FewShotExample{{}},
 			Tools:   []astructure.ToolRef{{ID: "lookup"}},
 		},
 	), "messages are not empty")
-	assert.EqualError(t, ValidateValue(
+	assert.EqualError(t, validateValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			Skills: []astructure.SkillRef{{ID: "skill"}},
 			Tools:  []astructure.ToolRef{{ID: "lookup"}},
 		},
 	), "skills are not empty")
-	assert.EqualError(t, ValidateValue(
+	assert.EqualError(t, validateValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			Tools: []astructure.ToolRef{{}},
@@ -625,7 +624,7 @@ func TestValidateValueRejectsToolExtraFields(t *testing.T) {
 }
 
 func TestSanitizeValueRejectsToolExtraFields(t *testing.T) {
-	_, err := SanitizeValue(
+	_, err := sanitizeValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			PromptSyntax: promptSyntaxPtr(astructure.PromptSyntaxSingleBrace),
@@ -633,7 +632,7 @@ func TestSanitizeValueRejectsToolExtraFields(t *testing.T) {
 		},
 	)
 	assert.EqualError(t, err, "prompt syntax is not nil")
-	_, err = SanitizeValue(
+	_, err = sanitizeValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			FewShot: []astructure.FewShotExample{{}},
@@ -641,7 +640,7 @@ func TestSanitizeValueRejectsToolExtraFields(t *testing.T) {
 		},
 	)
 	assert.EqualError(t, err, "messages are not empty")
-	_, err = SanitizeValue(
+	_, err = sanitizeValue(
 		astructure.SurfaceTypeTool,
 		astructure.SurfaceValue{
 			Skills: []astructure.SkillRef{{ID: "skill"}},
@@ -658,45 +657,18 @@ func TestSanitizePatchValueReturnsNonToolValue(t *testing.T) {
 		NodeID:    "node",
 		Type:      astructure.SurfaceTypeInstruction,
 	}, astructure.SurfaceValue{
-		Text:  &text,
-		Model: &astructure.ModelRef{},
+		Text: &text,
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, &text, sanitized.Text)
 	assert.Nil(t, sanitized.Model)
-}
-
-func TestCloneValueDeepCopiesAllFields(t *testing.T) {
-	text := "instruction"
-	value := astructure.SurfaceValue{
-		Text: &text,
-		FewShot: []astructure.FewShotExample{
-			{
-				Messages: []astructure.FewShotMessage{
-					{Role: "user", Content: "hi"},
-				},
-			},
-		},
-		Model: &astructure.ModelRef{
-			Provider: " openai ",
-			Name:     " gpt ",
-			Headers:  map[string]string{"X-Test": "1"},
-		},
-		Tools: []astructure.ToolRef{{ID: "lookup", Description: "original"}},
-	}
-	cloned := CloneValue(value)
-	assert.NotNil(t, cloned.Text)
-	assert.NotNil(t, cloned.Model)
-	assert.Equal(t, "openai", cloned.Model.Provider)
-	assert.Equal(t, "gpt", cloned.Model.Name)
-	cloned.FewShot[0].Messages[0].Content = "changed"
-	*cloned.Text = "changed"
-	cloned.Model.Headers["X-Test"] = "2"
-	cloned.Tools[0].Description = "changed"
-	assert.Equal(t, "instruction", *value.Text)
-	assert.Equal(t, "hi", value.FewShot[0].Messages[0].Content)
-	assert.Equal(t, " openai ", value.Model.Provider)
-	assert.Equal(t, " gpt ", value.Model.Name)
-	assert.Equal(t, "1", value.Model.Headers["X-Test"])
-	assert.Equal(t, "original", value.Tools[0].Description)
+	_, err = SanitizePatchValue(astructure.Surface{
+		SurfaceID: "node#instruction",
+		NodeID:    "node",
+		Type:      astructure.SurfaceTypeInstruction,
+	}, astructure.SurfaceValue{
+		Text:  &text,
+		Model: &astructure.ModelRef{},
+	})
+	assert.EqualError(t, err, "model is not nil")
 }
