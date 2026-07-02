@@ -1,0 +1,14 @@
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"allow","risk_level":"none","duration_ms":0,"redacted":false,"blocked":false}
+{"tool_name":"exec_command","backend":"hostexec","decision":"deny","risk_level":"critical","rule_id":"cmd.dangerous_delete","duration_ms":0,"redacted":false,"blocked":true}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"fs.read_secret","duration_ms":0,"redacted":false,"blocked":true}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"net.non_whitelist","duration_ms":0,"redacted":false,"blocked":true}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"allow","risk_level":"low","duration_ms":0,"redacted":false,"blocked":false}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"deny","risk_level":"high","rule_id":"shell.interpreter_inline","duration_ms":0,"redacted":false,"blocked":true}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"allow","risk_level":"none","duration_ms":0,"redacted":false,"blocked":false}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"ask","risk_level":"medium","rule_id":"deps.install","duration_ms":0,"redacted":false,"blocked":true}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"ask","risk_level":"medium","rule_id":"res.timeout_exceeds","duration_ms":0,"redacted":false,"blocked":true}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"ask","risk_level":"low","rule_id":"res.output_flood","duration_ms":0,"redacted":false,"blocked":true}
+{"tool_name":"exec_command","backend":"hostexec","decision":"ask","risk_level":"high","rule_id":"host.long_session","duration_ms":0,"redacted":false,"blocked":true}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"ask","risk_level":"medium","rule_id":"deps.install","duration_ms":0,"redacted":false,"blocked":true}
+{"tool_name":"exec_command","backend":"hostexec","decision":"deny","risk_level":"critical","rule_id":"host.privilege","duration_ms":0,"redacted":false,"blocked":true}
+{"tool_name":"workspace_exec","backend":"workspace_exec","decision":"deny","risk_level":"high","rule_id":"secret.inline","duration_ms":0,"redacted":true,"blocked":true}
