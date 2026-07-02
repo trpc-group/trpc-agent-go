@@ -4053,6 +4053,10 @@ func TestParseOpenAIVariant_Explicit(t *testing.T) {
 	v, err := parseOpenAIVariant(string(openai.VariantOpenAI), "")
 	require.NoError(t, err)
 	require.Equal(t, openai.VariantOpenAI, v)
+
+	v, err = parseOpenAIVariant(string(openai.VariantGLM), "")
+	require.NoError(t, err)
+	require.Equal(t, openai.VariantGLM, v)
 }
 
 func TestParseOpenAIVariant_Auto(t *testing.T) {
@@ -4081,6 +4085,11 @@ func TestInferOpenAIVariant(t *testing.T) {
 		t,
 		openai.VariantHunyuan,
 		inferOpenAIVariant("https://api.hunyuan.cloud.tencent.com/v1"),
+	)
+	require.Equal(
+		t,
+		openai.VariantGLM,
+		inferOpenAIVariant("https://open.bigmodel.cn/api/paas/v4"),
 	)
 	require.Equal(
 		t,
