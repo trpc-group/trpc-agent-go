@@ -22,7 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -342,7 +342,7 @@ func (c *cacheSafeForkCapturingSessionService) EnqueueSummaryJob(
 	filterKey string,
 	force bool,
 ) error {
-	c.capturedParent, c.capturedOK = sessionsummary.CacheSafeForkRequestFromContext(ctx)
+	c.capturedParent, c.capturedOK = summary.CacheSafeForkRequestFromContext(ctx)
 	close(c.done)
 	return c.mockSessionService.EnqueueSummaryJob(ctx, sess, filterKey, force)
 }

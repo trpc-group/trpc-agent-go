@@ -46,7 +46,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/appid"
 )
 
@@ -2509,7 +2509,7 @@ func (r *runner) handleEventPersistence(
 		runnerEventAttrs(agentEvent)...,
 	)
 	if parentRequest, ok := summaryfork.Request(invocation); ok {
-		summaryCtx = sessionsummary.ContextWithCacheSafeForkRequest(
+		summaryCtx = summary.ContextWithCacheSafeForkRequest(
 			summaryCtx,
 			parentRequest,
 		)
