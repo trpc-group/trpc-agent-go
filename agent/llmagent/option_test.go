@@ -524,6 +524,15 @@ func TestWithToolCallRetryPolicy_OnOptions(t *testing.T) {
 	require.Same(t, policy, opts.ToolCallRetryPolicy)
 }
 
+func TestWithToolResultAttachmentBudget_OnOptionsAndAgent(t *testing.T) {
+	opts := &Options{}
+	WithToolResultAttachmentBudget(3)(opts)
+	require.Equal(t, 3, opts.ToolResultAttachmentBudget)
+
+	a := New("budget-agent", WithToolResultAttachmentBudget(3))
+	require.Equal(t, 3, a.option.ToolResultAttachmentBudget)
+}
+
 func TestWithPreloadMemory(t *testing.T) {
 	tests := []struct {
 		name          string
