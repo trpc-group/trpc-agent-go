@@ -118,6 +118,9 @@ func InitMeterProvider(mp metric.MeterProvider) error {
 	if err := initInvokeAgentMetrics(mp); err != nil {
 		return err
 	}
+	if err := initInvokeSkillMetrics(mp); err != nil {
+		return err
+	}
 	if err := initWorkflowMetrics(mp); err != nil {
 		return err
 	}
@@ -141,6 +144,8 @@ func SetHistogramBuckets(meterName string, metricName string, boundaries []float
 		return setExecuteToolHistogramBuckets(metricName, boundaries)
 	case metrics.MeterNameInvokeAgent:
 		return setInvokeAgentHistogramBuckets(metricName, boundaries)
+	case metrics.MeterNameInvokeSkill:
+		return setInvokeSkillHistogramBuckets(metricName, boundaries)
 	case metrics.MeterNameWorkflow:
 		return setWorkflowHistogramBuckets(metricName, boundaries)
 	default:
@@ -236,6 +241,18 @@ func setWorkflowHistogramBuckets(metricName string, boundaries []float64) error 
 	}
 }
 
+func setInvokeSkillHistogramBuckets(metricName string, boundaries []float64) error {
+	switch metricName {
+	case metrics.MetricGenAIClientOperationDuration:
+		if itelemetry.InvokeSkillMetricGenAIClientOperationDuration == nil {
+			return fmt.Errorf("invoke skill metric %s not initialized", metricName)
+		}
+		return itelemetry.InvokeSkillMetricGenAIClientOperationDuration.SetBuckets(boundaries)
+	default:
+		return fmt.Errorf("unknown or unsupported invoke skill histogram metric: %s", metricName)
+	}
+}
+
 func initInvokeAgentMetrics(mp metric.MeterProvider) error {
 	if mp == nil {
 		return fmt.Errorf("invoke agent meter provider is nil")
@@ -274,6 +291,34 @@ func initInvokeAgentMetrics(mp metric.MeterProvider) error {
 		metrics.MeterNameInvokeAgent,
 		metrics.MetricGenAIClientOperationDuration,
 		metric.WithDescription("Duration of client operation"),
+		metric.WithUnit("s"),
+	); err != nil {
+		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIClientOperationDuration, err)
+	}
+
+	return nil
+}
+
+func initInvokeSkillMetrics(mp metric.MeterProvider) error {
+	if mp == nil {
+		return fmt.Errorf("invoke skill meter provider is nil")
+	}
+
+	itelemetry.InvokeSkillMeter = mp.Meter(metrics.MeterNameInvokeSkill)
+	meterName := metrics.MeterNameInvokeSkill
+	var err error
+	if itelemetry.InvokeSkillMetricGenAIRequestCnt, err = itelemetry.InvokeSkillMeter.Int64Counter(
+		metrics.MetricGenAIRequestCnt,
+		metric.WithDescription("Total number of invoke skill requests"),
+		metric.WithUnit("1"),
+	); err != nil {
+		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIRequestCnt, err)
+	}
+	if itelemetry.InvokeSkillMetricGenAIClientOperationDuration, err = histogram.NewDynamicFloat64Histogram(
+		mp,
+		metrics.MeterNameInvokeSkill,
+		metrics.MetricGenAIClientOperationDuration,
+		metric.WithDescription("Duration of skill activation/materialization"),
 		metric.WithUnit("s"),
 	); err != nil {
 		return fmt.Errorf("failed to create %s metric %s: %w", meterName, metrics.MetricGenAIClientOperationDuration, err)

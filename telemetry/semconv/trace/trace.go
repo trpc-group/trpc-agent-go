@@ -140,6 +140,21 @@ const (
 	// KeyGenAIRequestToolDefinitions is the attribute key for tool definitions.
 	KeyGenAIRequestToolDefinitions = "gen_ai.request.tool.definitions"
 
+	// KeyGenAISkillName is the attribute key for skill name.
+	KeyGenAISkillName = "gen_ai.skill.name"
+	// KeyGenAISkillID is the attribute key for skill id.
+	KeyGenAISkillID = "gen_ai.skill.id"
+	// KeyGenAISkillVersion is the attribute key for skill version.
+	KeyGenAISkillVersion = "gen_ai.skill.version"
+	// KeyGenAISkillDescription is the attribute key for skill description.
+	KeyGenAISkillDescription = "gen_ai.skill.description"
+	// KeyGenAISkillPhase is the attribute key for skill lifecycle phase.
+	KeyGenAISkillPhase = "gen_ai.skill.phase"
+	// KeyGenAIInvokeSkillRequest is the attribute key for skill request.
+	KeyGenAIInvokeSkillRequest = "gen_ai.invoke_skill_request"
+	// KeyGenAIInvokeSkillResponse is the attribute key for skill response.
+	KeyGenAIInvokeSkillResponse = "gen_ai.invoke_skill_response"
+
 	// KeyErrorType is the attribute key for error type.
 	// Reference: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/general/recording-errors.md#recording-errors-on-spans
 	KeyErrorType = "error.type"
