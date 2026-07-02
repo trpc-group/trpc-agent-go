@@ -38,7 +38,7 @@ const (
 	RuleTimeoutExceeds     = "res.timeout_exceeds"
 	RuleOutputFlood        = "res.output_flood"
 	RulePythonDangerousAPI = "code.dangerous_api"
-	RuleUnparseableArgs    = "args.unparseable"
+	RuleUnparsableArgs     = "args.unparsable"
 )
 
 var (
@@ -150,8 +150,9 @@ func (s *Scanner) segmentFindings(argv []string, line string, in ScanInput) []Fi
 	out = append(out, s.dependencyInstall(base, argv, seg, line)...)
 	// 10. Resource abuse.
 	out = append(out, s.resourceAbuse(base, argv, seg, line)...)
-	// 11. Optional strict allowlist.
-	if s.policy.EnforceAllowlist && len(out) == 0 {
+	// 11. Optional strict allowlist. Runs unless the segment is already denied,
+	// so an earlier allow finding (e.g. net.allowed_domain) cannot suppress it.
+	if s.policy.EnforceAllowlist && !hasDeny(out) {
 		if _, ok := s.policy.allowedCmdSet[base]; !ok {
 			out = append(out, s.finding(RuleNotAllowed, CategoryDangerousCommand,
 				RiskMedium, DecisionAsk, seg, line,
@@ -159,6 +160,16 @@ func (s *Scanner) segmentFindings(argv []string, line string, in ScanInput) []Fi
 		}
 	}
 	return out
+}
+
+// hasDeny reports whether any finding already denies the segment.
+func hasDeny(fs []Finding) bool {
+	for i := range fs {
+		if fs[i].Decision == DecisionDeny {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Scanner) dangerousDelete(base string, argv []string, seg, line string) []Finding {
@@ -205,14 +216,9 @@ func (s *Scanner) deniedPathAccess(argv []string, seg, line string) []Finding {
 }
 
 func (s *Scanner) overwriteSystem(base string, argv []string, seg, line string) []Finding {
-	writers := map[string]struct{}{"cp": {}, "mv": {}, "tee": {}, "truncate": {}, "ln": {}, "install": {}}
-	if _, ok := writers[base]; !ok {
-		return nil
-	}
-	for _, a := range argv[1:] {
-		if isFlag(a) {
-			continue
-		}
+	// Only inspect the paths the command actually writes to, so a source under
+	// a system dir (e.g. `cp /etc/hosts ./x`) is not falsely denied.
+	for _, a := range writeTargets(base, argv) {
 		n := normalizePathArg(a)
 		for _, d := range systemDirs {
 			if n == d || strings.HasPrefix(n, d+"/") {
@@ -223,6 +229,29 @@ func (s *Scanner) overwriteSystem(base string, argv []string, seg, line string) 
 		}
 	}
 	return nil
+}
+
+// writeTargets returns the argv entries a writer command actually writes to.
+// cp/mv/install/ln write to their last operand (the destination); tee and
+// truncate write to their file operands. Non-writer commands return nil.
+func writeTargets(base string, argv []string) []string {
+	nonFlag := make([]string, 0, len(argv))
+	for _, a := range argv[1:] {
+		if !isFlag(a) {
+			nonFlag = append(nonFlag, a)
+		}
+	}
+	switch base {
+	case "cp", "mv", "install", "ln":
+		if len(nonFlag) > 0 {
+			return nonFlag[len(nonFlag)-1:]
+		}
+		return nil
+	case "tee", "truncate":
+		return nonFlag
+	default:
+		return nil
+	}
 }
 
 func (s *Scanner) network(base string, argv []string, seg, line string, in ScanInput) []Finding {

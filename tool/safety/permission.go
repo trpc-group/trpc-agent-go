@@ -11,7 +11,9 @@ package safety
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -84,7 +86,9 @@ func (p *PermissionPolicy) backendFor(name string) Backend {
 	return BackendUnknown
 }
 
-// execArgs is the union of argument shapes across the exec tools.
+// execArgs is the union of argument shapes across the exec tools. CodeBlocks is
+// kept raw so it can be decoded with the same flexible logic codeexec uses (it
+// accepts an array, a single object, or a double-encoded JSON string).
 type execArgs struct {
 	Command       string            `json:"command"`
 	Cwd           string            `json:"cwd"`
@@ -93,10 +97,45 @@ type execArgs struct {
 	Timeout       int               `json:"timeout"`
 	TimeoutSec    *int              `json:"timeout_sec"`
 	TimeoutSecOld *int              `json:"timeoutSec"`
-	CodeBlocks    []struct {
-		Language string `json:"language"`
-		Code     string `json:"code"`
-	} `json:"code_blocks"`
+	CodeBlocks    json.RawMessage   `json:"code_blocks"`
+}
+
+// decodeCodeBlocks flexibly decodes code_blocks, mirroring codeexec's
+// unmarshalCodeBlocks: the value may be an array, a single object, or a
+// double-encoded JSON string wrapping either form.
+func decodeCodeBlocks(raw json.RawMessage) ([]CodeBlock, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var val any
+	if err := json.Unmarshal(raw, &val); err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
+	if s, ok := val.(string); ok {
+		raw = json.RawMessage(s)
+		if err := json.Unmarshal(raw, &val); err != nil {
+			return nil, err
+		}
+	}
+	switch val.(type) {
+	case []any:
+		var blocks []CodeBlock
+		if err := json.Unmarshal(raw, &blocks); err != nil {
+			return nil, err
+		}
+		return blocks, nil
+	case map[string]any:
+		var b CodeBlock
+		if err := json.Unmarshal(raw, &b); err != nil {
+			return nil, err
+		}
+		return []CodeBlock{b}, nil
+	default:
+		return nil, fmt.Errorf("code_blocks: expected array, object, or string, got %T", val)
+	}
 }
 
 // ScanRequest builds a ScanInput from a permission request and scans it. It is
@@ -107,19 +146,21 @@ func (p *PermissionPolicy) ScanRequest(ctx context.Context, req *tool.Permission
 		return ScanReport{}, false
 	}
 	var a execArgs
-	if err := json.Unmarshal(req.Arguments, &a); err != nil && len(req.Arguments) > 0 {
-		// Non-empty but unparseable arguments: fail closed rather than allow an
+	outerErr := json.Unmarshal(req.Arguments, &a)
+	blocks, blkErr := decodeCodeBlocks(a.CodeBlocks)
+	if (outerErr != nil || blkErr != nil) && len(req.Arguments) > 0 {
+		// Non-empty but unparsable arguments: fail closed rather than allow an
 		// exec tool the guard could not inspect. (Empty/absent args fall
 		// through: the command is empty and the tool itself will reject it.)
 		r := ScanReport{
 			ToolName: req.ToolName,
 			Backend:  backend,
 			Findings: []Finding{{
-				RuleID:         RuleUnparseableArgs,
+				RuleID:         RuleUnparsableArgs,
 				Category:       CategoryShellBypass,
 				RiskLevel:      RiskHigh,
 				Decision:       p.scanner.policy.DefaultDecisionOnParseFailure,
-				Evidence:       "unparseable tool arguments",
+				Evidence:       "unparsable tool arguments",
 				Recommendation: "Tool arguments could not be parsed; the safety guard fails closed.",
 			}},
 		}
@@ -130,6 +171,7 @@ func (p *PermissionPolicy) ScanRequest(ctx context.Context, req *tool.Permission
 		ToolName:   req.ToolName,
 		Backend:    backend,
 		Command:    a.Command,
+		CodeBlocks: blocks,
 		Cwd:        firstNonEmptyStr(a.Cwd, a.Workdir),
 		Env:        a.Env,
 		TimeoutSec: firstTimeout(a.TimeoutSec, a.TimeoutSecOld, a.Timeout),
@@ -137,9 +179,6 @@ func (p *PermissionPolicy) ScanRequest(ctx context.Context, req *tool.Permission
 			ReadOnly:    req.Metadata.ReadOnly,
 			Destructive: req.Metadata.Destructive,
 		},
-	}
-	for _, cb := range a.CodeBlocks {
-		in.CodeBlocks = append(in.CodeBlocks, CodeBlock{Language: cb.Language, Code: cb.Code})
 	}
 	return p.scanner.Scan(ctx, in), true
 }
@@ -155,7 +194,9 @@ func (p *PermissionPolicy) CheckToolPermission(
 		return tool.AllowPermission(), nil
 	}
 	if p.audit != nil {
-		_ = p.audit.Record(report)
+		if err := p.audit.Record(report); err != nil {
+			log.Errorf("tool safety: audit write failed: %v", err)
+		}
 	}
 	if p.telemetry {
 		SetSpanAttributes(ctx, report)
@@ -181,7 +222,7 @@ func firstNonEmptyStr(vals ...string) string {
 	return ""
 }
 
-func firstTimeout(ptrs ...interface{}) int {
+func firstTimeout(ptrs ...any) int {
 	for _, v := range ptrs {
 		switch t := v.(type) {
 		case *int:

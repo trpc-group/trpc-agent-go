@@ -10,6 +10,7 @@ package safety
 
 import (
 	"net/url"
+	"strconv"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
@@ -103,6 +104,25 @@ func extractHost(argv []string) (string, bool) {
 			continue
 		}
 		if h := hostFromToken(a); h != "" {
+			return h, true
+		}
+	}
+	// Positional fallback for tools whose operand is the host, including a
+	// single-label intranet host (`nc host 4444`, `telnet host 23`). The port
+	// (a bare number) is skipped so it is not mistaken for the host.
+	switch commandBase(argv[0]) {
+	case "nc", "ncat", "telnet":
+		for _, a := range argv[1:] {
+			if a == "" || a == "-" || isFlag(a) {
+				continue
+			}
+			h := strings.ToLower(strings.Trim(a, `"'`))
+			if h == "" {
+				continue
+			}
+			if _, err := strconv.Atoi(h); err == nil {
+				continue
+			}
 			return h, true
 		}
 	}

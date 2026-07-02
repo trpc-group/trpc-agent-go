@@ -271,6 +271,22 @@ func (p *Policy) compile() error {
 	}
 	p.applyDefaults()
 
+	// Validate enum-typed config so a typo (e.g. decision "block") cannot
+	// silently rank as allow/none and defeat blocking. decisionRank/riskRank
+	// treat any unknown string as the zero (allow/none) rank.
+	switch p.DependencyInstall.Decision {
+	case DecisionAllow, DecisionAsk, DecisionNeedsHumanReview, DecisionDeny:
+	default:
+		return fmt.Errorf("safety: dependency_install.decision has unknown value %q", p.DependencyInstall.Decision)
+	}
+	for id, r := range p.RiskOverrides {
+		switch r {
+		case RiskNone, RiskLow, RiskMedium, RiskHigh, RiskCritical:
+		default:
+			return fmt.Errorf("safety: risk_overrides[%q] has unknown risk level %q", id, r)
+		}
+	}
+
 	p.deniedCmdSet = toCommandSet(p.DeniedCommands)
 	p.allowedCmdSet = toCommandSet(p.AllowedCommands)
 	p.networkCmdSet = toCommandSet(p.Network.Commands)

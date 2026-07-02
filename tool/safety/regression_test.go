@@ -55,6 +55,10 @@ func TestBypassRegressions(t *testing.T) {
 		{"sleep_minutes", BackendWorkspaceExec, "sleep 5m", DecisionAsk, RuleTimeoutExceeds},
 		{"sleep_hours", BackendWorkspaceExec, "sleep 2h", DecisionAsk, RuleTimeoutExceeds},
 		{"sleep_short", BackendWorkspaceExec, "sleep 1.5", DecisionAllow, ""},
+		// overwriteSystem only inspects the write destination: a source under a
+		// system dir must not be denied; a destination under one must be.
+		{"cp_src_system_ok", BackendWorkspaceExec, "cp /etc/hosts ./hosts", DecisionAllow, ""},
+		{"cp_dest_system", BackendWorkspaceExec, "cp ./x /etc/passwd", DecisionDeny, RuleOverwriteSystem},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -104,15 +108,16 @@ func TestCodeExecGuardedByDefault(t *testing.T) {
 	}
 }
 
-// #10 unparseable arguments for a recognised exec tool fail closed.
-func TestUnparseableArgsFailClosed(t *testing.T) {
+// #10 unparsable arguments for a recognised exec tool fail closed to the exact
+// DefaultDecisionOnParseFailure action (deny by default), not merely non-allow.
+func TestUnparsableArgsFailClosed(t *testing.T) {
 	p := NewPermissionPolicy(NewScanner(nil))
 	d, _ := p.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName:  "exec_command",
 		Arguments: []byte(`{"command": "rm -rf`), // truncated JSON
 	})
-	if d.Action == tool.PermissionActionAllow {
-		t.Errorf("malformed args must not be allowed; got %s", d.Action)
+	if d.Action != tool.PermissionActionDeny {
+		t.Errorf("malformed args must fail closed to deny; got %s", d.Action)
 	}
 }
 

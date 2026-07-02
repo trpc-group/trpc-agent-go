@@ -60,7 +60,11 @@ func main() {
 		fmt.Fprintln(os.Stderr, "create audit:", err)
 		os.Exit(1)
 	}
-	defer auditFile.Close()
+	defer func() {
+		if cerr := auditFile.Close(); cerr != nil {
+			fmt.Fprintln(os.Stderr, "close audit:", cerr)
+		}
+	}()
 	// Deterministic committed output: omit timestamps.
 	audit := safety.NewAuditWriter(auditFile, safety.WithoutTimestamp())
 

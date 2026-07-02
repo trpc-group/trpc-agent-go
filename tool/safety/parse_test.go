@@ -64,7 +64,8 @@ func TestExtractHost(t *testing.T) {
 		{[]string{"curl", "-sSL", "https://proxy.golang.org/list"}, "proxy.golang.org", true},
 		{[]string{"scp", "file", "user@10.0.0.1:/tmp"}, "10.0.0.1", true},
 		{[]string{"curl", "example.com/path"}, "example.com", true},
-		{[]string{"nc", "host", "4444"}, "", false},
+		{[]string{"nc", "host", "4444"}, "host", true},
+		{[]string{"nc", "-lvp", "4444"}, "", false},
 	}
 	for _, c := range cases {
 		h, ok := extractHost(c.argv)

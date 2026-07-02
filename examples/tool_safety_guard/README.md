@@ -91,7 +91,7 @@ allowed/denied commands, limits and secret patterns **without touching code**:
 | `dependency_install.patterns` | install invocations that require review |
 | `limits.max_timeout_sec` / `max_output_bytes` | resource ceilings |
 | `secret_patterns` | inline-secret regexes used for detection and redaction |
-| `default_decision_on_parse_failure` | `deny` (default) or `ask` for unparseable commands |
+| `default_decision_on_parse_failure` | `deny` (default) or `ask` for unparsable commands |
 | `risk_overrides` | bump/lower a rule's risk by id |
 
 ## Backend boundaries
