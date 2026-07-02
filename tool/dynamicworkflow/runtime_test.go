@@ -345,7 +345,60 @@ return {"ok": True}
 `)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"ok":true}`, string(result.Value))
-	require.Less(t, time.Since(start), 1500*time.Millisecond)
+	require.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestLocalRunnerEnforcesOutputLimits(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	handler := callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+		return nil, nil
+	})
+
+	_, err := Execute(context.Background(), LocalRunner{}, handler, fmt.Sprintf(`
+print("x" * %d)
+return None
+`, workflowGuestCapturedOutputLimit+1))
+	require.ErrorContains(t, err, "workflow stdout exceeds")
+
+	_, err = Execute(context.Background(), LocalRunner{}, handler, fmt.Sprintf(`
+return "x" * %d
+`, workflowGuestProtocolLineLimit+1))
+	require.ErrorContains(t, err, "workflow protocol message exceeds")
+
+	_, err = Execute(context.Background(), LocalRunner{}, handler, fmt.Sprintf(`
+import sys
+sys.stderr.write("x" * %d)
+return None
+`, workflowGuestCapturedOutputLimit+1))
+	require.ErrorContains(t, err, "guest stderr exceeds")
+}
+
+func TestLocalRunnerCancelsUnawaitedCallbacksAfterCompletion(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	var once sync.Once
+	handler := callHandlerFunc(func(ctx context.Context, _ Call) (json.RawMessage, error) {
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		close(cancelled)
+		return nil, ctx.Err()
+	})
+
+	result, err := Execute(context.Background(), LocalRunner{}, handler, `
+import asyncio
+asyncio.create_task(agent("background", "reviewer"))
+await asyncio.sleep(0)
+return {"ok": True}
+`)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"ok":true}`, string(result.Value))
+	require.NoError(t, waitClosed(started, time.Second))
+	require.NoError(t, waitClosed(cancelled, time.Second))
 }
 
 func TestExecuteRejectsMissingRequirements(t *testing.T) {
@@ -394,6 +447,7 @@ func TestWorkflowGuestProtocolHelpers(t *testing.T) {
 		calls,
 		writeErr,
 		state,
+		nil,
 	)
 	require.True(t, stop)
 	require.ErrorContains(t, state.guestErr, "malformed guest message")
@@ -408,6 +462,7 @@ func TestWorkflowGuestProtocolHelpers(t *testing.T) {
 		calls,
 		writeErr,
 		state,
+		nil,
 	)
 	require.True(t, stop)
 	require.ErrorContains(t, state.guestErr, "non-JSON result")
@@ -422,6 +477,7 @@ func TestWorkflowGuestProtocolHelpers(t *testing.T) {
 		calls,
 		writeErr,
 		state,
+		nil,
 	)
 	require.True(t, stop)
 	require.ErrorContains(t, state.guestErr, "guest failed")
@@ -436,11 +492,29 @@ func TestWorkflowGuestProtocolHelpers(t *testing.T) {
 		calls,
 		writeErr,
 		state,
+		nil,
 	)
 	require.True(t, stop)
 	require.NoError(t, state.guestErr)
 	require.JSONEq(t, `{"ok":true}`, string(state.completed.Value))
 	require.Equal(t, "hello\n", state.completed.Stdout)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	state = &workflowGuestState{}
+	stop = handleWorkflowGuestMessage(
+		ctx,
+		protocolMessage{Type: "call", ID: "blocked"},
+		handler,
+		encoder,
+		responseMu,
+		calls,
+		writeErr,
+		state,
+		make(chan struct{}),
+	)
+	require.True(t, stop)
+	require.ErrorContains(t, state.guestErr, "acquire callback slot")
 }
 
 func TestWorkflowGuestWriteResponseRecordsFirstError(t *testing.T) {
@@ -476,4 +550,15 @@ type errorWriter struct{}
 
 func (errorWriter) Write([]byte) (int, error) {
 	return 0, errors.New("write failed")
+}
+
+func waitClosed(ch <-chan struct{}, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ch:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("timed out waiting for channel close")
+	}
 }

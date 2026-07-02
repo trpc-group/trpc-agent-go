@@ -1212,6 +1212,7 @@ type eventLoopContext struct {
 	forwardedEventDone                 chan struct{}
 	flushChan                          chan *flush.FlushRequest
 	processedEventCh                   chan *event.Event
+	eventEmitter                       *runnerEventEmitter
 	runHandle                          *runHandle
 	baselineFinalResponseID            string
 	priorAssistantResponseIDs          map[string]struct{}
@@ -1254,6 +1255,94 @@ type eventLoopContext struct {
 type forwardedEvent struct {
 	event *event.Event
 	ack   chan error
+}
+
+// runnerEventEmitter decouples the runner event loop from caller backpressure.
+// Nested work may emit events synchronously before Run returns the caller-facing
+// channel. The event loop must still acknowledge those nested events after
+// session persistence, even when the caller cannot consume output yet.
+type runnerEventEmitter struct {
+	out  chan<- *event.Event
+	done chan struct{}
+
+	mu     sync.Mutex
+	cond   *sync.Cond
+	queue  []runnerQueuedEvent
+	closed bool
+}
+
+type runnerQueuedEvent struct {
+	event *event.Event
+}
+
+func newRunnerEventEmitter(out chan<- *event.Event) *runnerEventEmitter {
+	emitter := &runnerEventEmitter{
+		out:  out,
+		done: make(chan struct{}),
+	}
+	emitter.cond = sync.NewCond(&emitter.mu)
+	go emitter.run()
+	return emitter
+}
+
+func (e *runnerEventEmitter) emit(ctx context.Context, evt *event.Event) error {
+	if e == nil || evt == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return context.Canceled
+	}
+	e.queue = append(e.queue, runnerQueuedEvent{event: evt})
+	e.cond.Signal()
+	return nil
+}
+
+func (e *runnerEventEmitter) close() {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	if !e.closed {
+		e.closed = true
+		e.cond.Broadcast()
+	}
+	e.mu.Unlock()
+	<-e.done
+}
+
+func (e *runnerEventEmitter) run() {
+	defer close(e.out)
+	defer close(e.done)
+	for {
+		queued, ok := e.next()
+		if !ok {
+			return
+		}
+		if err := event.EmitEvent(context.Background(), e.out, queued.event); err != nil {
+			log.Errorf("emit runner event: %v", err)
+		}
+	}
+}
+
+func (e *runnerEventEmitter) next() (runnerQueuedEvent, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for len(e.queue) == 0 && !e.closed {
+		e.cond.Wait()
+	}
+	if len(e.queue) == 0 {
+		return runnerQueuedEvent{}, false
+	}
+	queued := e.queue[0]
+	copy(e.queue, e.queue[1:])
+	e.queue[len(e.queue)-1] = runnerQueuedEvent{}
+	e.queue = e.queue[:len(e.queue)-1]
+	return queued, true
 }
 
 type interruptedAssistantAccumulator struct {
@@ -1301,6 +1390,7 @@ func (r *runner) processAgentEvents(
 		forwardedEventDone:        forwardedEventDone,
 		flushChan:                 flushChan,
 		processedEventCh:          processedEventCh,
+		eventEmitter:              newRunnerEventEmitter(processedEventCh),
 		runHandle:                 handle,
 		baselineFinalResponseID:   baselineFinalResponseID(sess, invocation.RunOptions.RuntimeState),
 		priorAssistantResponseIDs: collectPriorAssistantResponseIDs(sess),
@@ -1433,7 +1523,11 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		livesession.Clear(loop.invocation)
 		steer.Clear(loop.invocation)
 		r.unregisterRun(loop.invocation.RunOptions.RequestID)
-		close(loop.processedEventCh)
+		if loop.eventEmitter != nil {
+			loop.eventEmitter.close()
+		} else {
+			close(loop.processedEventCh)
+		}
 		loop.invocation.CleanupNotice(ctx)
 		if loop.runHandle != nil {
 			loop.runHandle.cancel()
@@ -1651,7 +1745,13 @@ func (r *runner) emitProcessedEvent(
 			runnerEventAttrs(agentEvent)...,
 		)
 	}
-	if err := event.EmitEvent(emitCtx, loop.processedEventCh, agentEvent); err != nil {
+	var err error
+	if loop.eventEmitter != nil {
+		err = loop.eventEmitter.emit(emitCtx, agentEvent)
+	} else {
+		err = event.EmitEvent(emitCtx, loop.processedEventCh, agentEvent)
+	}
+	if err != nil {
 		if !emitStarted {
 			_, emitSpan, emitStarted = startRunnerLatencySpan(
 				ctx,
@@ -2995,8 +3095,8 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 			time.Second,
 		)
 		defer emitCancel()
-		if err := agent.EmitEvent(
-			emitCtx, loop.invocation, loop.processedEventCh, runnerCompletionEvent,
+		if err := r.emitProcessedEvent(
+			emitCtx, loop, runnerCompletionEvent, false,
 		); err != nil {
 			log.Errorf("Failed to emit runner completion event: %v", err)
 		}

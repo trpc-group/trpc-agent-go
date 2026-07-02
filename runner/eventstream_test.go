@@ -11,7 +11,9 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -159,6 +161,52 @@ func TestRunnerForwarderIsAvailableDuringAgentRun(t *testing.T) {
 	require.Equal(t, []string{"child result", "root result"}, sessionAssistantContents(sess))
 }
 
+func TestRunnerForwardedEventsDoNotBlockRunReturn(t *testing.T) {
+	service := sessioninmemory.NewSessionService()
+	ag := &burstSynchronousEventForwardingAgent{
+		count: defaultRunnerEventBufferSize + 8,
+	}
+	r := NewRunner("event-forwarding-burst", ag, WithSessionService(service))
+	defer r.Close()
+
+	type runResult struct {
+		events <-chan *event.Event
+		err    error
+	}
+	resultCh := make(chan runResult, 1)
+	go func() {
+		events, err := r.Run(
+			context.Background(),
+			"user",
+			"session",
+			model.NewUserMessage("start"),
+		)
+		resultCh <- runResult{events: events, err: err}
+	}()
+
+	var result runResult
+	select {
+	case result = <-resultCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner Run blocked on forwarded events before returning")
+	}
+	require.NoError(t, result.err)
+
+	var childEvents int
+	for evt := range result.events {
+		if evt != nil && evt.Author == "child-agent" {
+			childEvents++
+		}
+	}
+	require.Equal(t, ag.count, childEvents)
+
+	sess, err := service.GetSession(context.Background(), session.Key{
+		AppName: "event-forwarding-burst", UserID: "user", SessionID: "session",
+	})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(sessionAssistantContents(sess)), ag.count)
+}
+
 func TestForwardedEventIsExcludedFromRootCompletionCapture(t *testing.T) {
 	r := &runner{}
 	rootSession := session.NewSession("app", "user", "session")
@@ -303,6 +351,46 @@ func (a *synchronousEventForwardingAgent) Info() agent.Info {
 }
 func (a *synchronousEventForwardingAgent) SubAgents() []agent.Agent { return nil }
 func (a *synchronousEventForwardingAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
+type burstSynchronousEventForwardingAgent struct {
+	count int
+}
+
+func (a *burstSynchronousEventForwardingAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	for i := 0; i < a.count; i++ {
+		child := inv.Clone(
+			agent.WithInvocationAgent(&eventForwardingChildAgent{}),
+			agent.WithInvocationEventFilterKey(fmt.Sprintf("%s/child-agent/%d", inv.GetEventFilterKey(), i)),
+		)
+		childEvent := eventstreamResponseEvent(
+			child.InvocationID,
+			"child-agent",
+			fmt.Sprintf("child result %d", i),
+		)
+		agent.InjectIntoEvent(child, childEvent)
+		if _, err := eventstream.Invoke(ctx, child, childEvent); err != nil {
+			return nil, err
+		}
+	}
+	ch := make(chan *event.Event, 1)
+	rootEvent := eventstreamResponseEvent(inv.InvocationID, "root-agent", "root result")
+	agent.InjectIntoEvent(inv, rootEvent)
+	ch <- rootEvent
+	close(ch)
+	return ch, nil
+}
+
+func (a *burstSynchronousEventForwardingAgent) Tools() []tool.Tool { return nil }
+func (a *burstSynchronousEventForwardingAgent) Info() agent.Info {
+	return agent.Info{Name: "root-agent"}
+}
+func (a *burstSynchronousEventForwardingAgent) SubAgents() []agent.Agent { return nil }
+func (a *burstSynchronousEventForwardingAgent) FindSubAgent(string) agent.Agent {
 	return nil
 }
 

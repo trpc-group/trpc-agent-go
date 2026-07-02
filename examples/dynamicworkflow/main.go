@@ -43,7 +43,7 @@ var (
 	)
 	showWorkflowCode = flag.Bool(
 		"show-workflow-code",
-		true,
+		false,
 		"Print the generated Python workflow code before executing it",
 	)
 )
@@ -121,6 +121,7 @@ func (c *dynamicWorkflowChat) printBanner() {
 
 func (c *dynamicWorkflowChat) startChat(ctx context.Context) error {
 	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for {
 		fmt.Print("You: ")
 		if !scanner.Scan() {
@@ -329,7 +330,10 @@ func printToolResults(evt *event.Event) {
 		}
 		content := strings.TrimSpace(msg.Content)
 		if len(content) > 240 {
-			content = content[:240] + "..."
+			runes := []rune(content)
+			if len(runes) > 240 {
+				content = string(runes[:240]) + "..."
+			}
 		}
 		fmt.Printf("[%s] tool result: %s (id: %s) %s\n", eventLabel(evt), name, msg.ToolID, content)
 	}

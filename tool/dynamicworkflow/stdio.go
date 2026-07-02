@@ -26,7 +26,13 @@ import (
 
 var errWorkflowGuestExitTimeout = errors.New("dynamicworkflow: guest did not exit after completion")
 
-const workflowGuestExitGrace = 250 * time.Millisecond
+const (
+	workflowGuestExitGrace           = 250 * time.Millisecond
+	workflowGuestCallbackDrainGrace  = time.Second
+	workflowGuestCallbackConcurrency = 32
+	workflowGuestProtocolLineLimit   = 4 << 20
+	workflowGuestCapturedOutputLimit = 1 << 20
+)
 
 // LocalRunner executes workflow Python on the local host through a stdio
 // callback protocol. It is intended only for development or an environment
@@ -52,7 +58,7 @@ type workflowGuestProcess struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.Reader
-	stderr *bytes.Buffer
+	stderr *limitedBuffer
 }
 
 type workflowGuestState struct {
@@ -99,8 +105,8 @@ func (r LocalRunner) startWorkflowGuest(
 	if err != nil {
 		return nil, fmt.Errorf("dynamicworkflow: create guest stdout: %w", err)
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	stderr := newLimitedBuffer(workflowGuestCapturedOutputLimit)
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("dynamicworkflow: start Python guest: %w", err)
 	}
@@ -108,7 +114,7 @@ func (r LocalRunner) startWorkflowGuest(
 		cmd:    cmd,
 		stdin:  stdin,
 		stdout: stdout,
-		stderr: &stderr,
+		stderr: stderr,
 	}, nil
 }
 
@@ -119,14 +125,17 @@ func runWorkflowGuest(
 ) (Result, error) {
 	encoder := json.NewEncoder(guest.stdin)
 	scanner := bufio.NewScanner(guest.stdout)
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), workflowGuestProtocolLineLimit)
+	callbackCtx, cancelCallbacks := context.WithCancel(ctx)
+	defer cancelCallbacks()
+	callbackSlots := make(chan struct{}, workflowGuestCallbackConcurrency)
 	responseMu := &sync.Mutex{}
 	calls := &sync.WaitGroup{}
 	writeErr := &workflowWriteError{}
 	state := &workflowGuestState{}
 	for scanner.Scan() {
 		if stop := processWorkflowGuestMessage(
-			ctx,
+			callbackCtx,
 			scanner.Bytes(),
 			handler,
 			encoder,
@@ -134,11 +143,12 @@ func runWorkflowGuest(
 			calls,
 			writeErr,
 			state,
+			callbackSlots,
 		); stop {
 			break
 		}
 	}
-	return finishWorkflowGuest(ctx, guest, scanner, calls, writeErr, state)
+	return finishWorkflowGuest(ctx, cancelCallbacks, guest, scanner, calls, writeErr, state)
 }
 
 type workflowWriteError struct {
@@ -155,13 +165,14 @@ func processWorkflowGuestMessage(
 	calls *sync.WaitGroup,
 	writeErr *workflowWriteError,
 	state *workflowGuestState,
+	callbackSlots chan struct{},
 ) bool {
 	var msg protocolMessage
 	if err := json.Unmarshal(raw, &msg); err != nil {
 		state.guestErr = fmt.Errorf("dynamicworkflow: malformed guest message: %w", err)
 		return true
 	}
-	return handleWorkflowGuestMessage(ctx, msg, handler, encoder, responseMu, calls, writeErr, state)
+	return handleWorkflowGuestMessage(ctx, msg, handler, encoder, responseMu, calls, writeErr, state, callbackSlots)
 }
 
 func handleWorkflowGuestMessage(
@@ -173,11 +184,19 @@ func handleWorkflowGuestMessage(
 	calls *sync.WaitGroup,
 	writeErr *workflowWriteError,
 	state *workflowGuestState,
+	callbackSlots chan struct{},
 ) bool {
 	switch msg.Type {
 	case "call":
+		if err := acquireWorkflowGuestCallbackSlot(ctx, callbackSlots); err != nil {
+			state.guestErr = fmt.Errorf("dynamicworkflow: acquire callback slot: %w", err)
+			return true
+		}
 		calls.Add(1)
-		go handleWorkflowGuestCall(ctx, msg, handler, encoder, responseMu, calls, writeErr)
+		go func() {
+			defer releaseWorkflowGuestCallbackSlot(callbackSlots)
+			handleWorkflowGuestCall(ctx, msg, handler, encoder, responseMu, calls, writeErr)
+		}()
 	case "done":
 		if !json.Valid(msg.Result) {
 			state.guestErr = errors.New("dynamicworkflow: guest returned non-JSON result")
@@ -188,6 +207,25 @@ func handleWorkflowGuestMessage(
 		state.guestErr = errors.New(msg.Error)
 	}
 	return state.guestErr != nil || state.completed != nil
+}
+
+func acquireWorkflowGuestCallbackSlot(ctx context.Context, slots chan struct{}) error {
+	if slots == nil {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case slots <- struct{}{}:
+		return nil
+	}
+}
+
+func releaseWorkflowGuestCallbackSlot(slots chan struct{}) {
+	if slots == nil {
+		return
+	}
+	<-slots
 }
 
 func handleWorkflowGuestCall(
@@ -234,20 +272,32 @@ func writeWorkflowGuestResponse(
 
 func finishWorkflowGuest(
 	ctx context.Context,
+	cancelCallbacks context.CancelFunc,
 	guest *workflowGuestProcess,
 	scanner *bufio.Scanner,
 	calls *sync.WaitGroup,
 	writeErr *workflowWriteError,
 	state *workflowGuestState,
 ) (Result, error) {
-	calls.Wait()
+	if cancelCallbacks != nil {
+		cancelCallbacks()
+	}
+	if err := waitWorkflowGuestCallbacks(ctx, calls); err != nil && state.guestErr == nil {
+		state.guestErr = err
+	}
 	writeErr.Lock()
-	if writeErr.err != nil && state.guestErr == nil {
+	if writeErr.err != nil && state.guestErr == nil && state.completed == nil {
 		state.guestErr = fmt.Errorf("dynamicworkflow: write guest response: %w", writeErr.err)
 	}
 	writeErr.Unlock()
-	if scanErr := scanner.Err(); scanErr != nil && state.guestErr == nil {
-		state.guestErr = fmt.Errorf("dynamicworkflow: read guest output: %w", scanErr)
+	if scanErr := workflowGuestScannerError(scanner.Err()); scanErr != nil && state.guestErr == nil {
+		state.guestErr = scanErr
+	}
+	if guest.stderr.Exceeded() && state.guestErr == nil {
+		state.guestErr = fmt.Errorf(
+			"dynamicworkflow: guest stderr exceeds %d bytes",
+			workflowGuestCapturedOutputLimit,
+		)
 	}
 	_ = guest.stdin.Close()
 	waitErr := waitWorkflowGuest(ctx, guest)
@@ -270,6 +320,40 @@ func finishWorkflowGuest(
 		)
 	}
 	return *state.completed, nil
+}
+
+func waitWorkflowGuestCallbacks(ctx context.Context, calls *sync.WaitGroup) error {
+	done := make(chan struct{})
+	go func() {
+		calls.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(workflowGuestCallbackDrainGrace)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return fmt.Errorf(
+			"dynamicworkflow: workflow callbacks did not finish within %s after guest completion",
+			workflowGuestCallbackDrainGrace,
+		)
+	}
+}
+
+func workflowGuestScannerError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(err.Error(), "token too long") {
+		return fmt.Errorf(
+			"dynamicworkflow: guest protocol message exceeds %d bytes",
+			workflowGuestProtocolLineLimit,
+		)
+	}
+	return fmt.Errorf("dynamicworkflow: read guest output: %w", err)
 }
 
 func waitWorkflowGuest(ctx context.Context, guest *workflowGuestProcess) error {
@@ -308,6 +392,58 @@ func guestErrorWithStderr(err error, stderr string) error {
 	return fmt.Errorf("%w: %s", err, stderr)
 }
 
+type limitedBuffer struct {
+	mu       sync.Mutex
+	limit    int
+	buf      bytes.Buffer
+	exceeded bool
+}
+
+func newLimitedBuffer(limit int) *limitedBuffer {
+	return &limitedBuffer{limit: limit}
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if b == nil {
+		return len(p), nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	remaining := b.limit - b.buf.Len()
+	if remaining > 0 {
+		if remaining > len(p) {
+			remaining = len(p)
+		}
+		_, _ = b.buf.Write(p[:remaining])
+	}
+	if remaining < len(p) {
+		b.exceeded = true
+	}
+	return len(p), nil
+}
+
+func (b *limitedBuffer) String() string {
+	if b == nil {
+		return ""
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := b.buf.String()
+	if b.exceeded {
+		out += fmt.Sprintf("\n... stderr truncated after %d bytes", b.limit)
+	}
+	return out
+}
+
+func (b *limitedBuffer) Exceeded() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.exceeded
+}
+
 var _ Runtime = LocalRunner{}
 
 // pythonGuest is deliberately small: workflow source receives only the
@@ -324,14 +460,47 @@ import sys
 import threading
 import traceback
 
+_CAPTURED_OUTPUT_LIMIT = 1048576
+_PROTOCOL_LINE_LIMIT = 4194304
 _protocol_stdout = sys.stdout
-_captured_stdout = io.StringIO()
+
+class _LimitedStdout(io.StringIO):
+    def __init__(self, limit):
+        super().__init__()
+        self._limit = limit
+        self._size = 0
+
+    def write(self, value):
+        data = str(value)
+        encoded = data.encode("utf-8")
+        if self._size + len(encoded) > self._limit:
+            remaining = self._limit - self._size
+            if remaining > 0:
+                super().write(encoded[:remaining].decode("utf-8", errors="ignore"))
+                self._size = self._limit
+            raise RuntimeError(f"workflow stdout exceeds {self._limit} bytes")
+        self._size += len(encoded)
+        return super().write(data)
+
+_captured_stdout = _LimitedStdout(_CAPTURED_OUTPUT_LIMIT)
 sys.stdout = _captured_stdout
 _next_call_id = 0
 _bridge = None
 
 def _send(message):
-    _protocol_stdout.write(json.dumps(message, separators=(",", ":")) + "\n")
+    payload = json.dumps(message, separators=(",", ":"))
+    if len(payload.encode("utf-8")) > _PROTOCOL_LINE_LIMIT:
+        payload = json.dumps({
+            "type": "error",
+            "error": f"workflow protocol message exceeds {_PROTOCOL_LINE_LIMIT} bytes",
+            "stdout": _captured_stdout.getvalue(),
+        }, separators=(",", ":"))
+        if len(payload.encode("utf-8")) > _PROTOCOL_LINE_LIMIT:
+            payload = json.dumps({
+                "type": "error",
+                "error": f"workflow protocol message exceeds {_PROTOCOL_LINE_LIMIT} bytes",
+            }, separators=(",", ":"))
+    _protocol_stdout.write(payload + "\n")
     _protocol_stdout.flush()
 
 class _Bridge:
