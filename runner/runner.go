@@ -2466,6 +2466,10 @@ func (r *runner) handleEventPersistence(
 	}
 	finishRunnerLatencySpan(appendSpan, appendStarted, nil)
 
+	if shouldAppendSummaryForkResponse(agentEvent) {
+		summaryfork.AppendResponse(invocation, agentEvent.Response)
+	}
+
 	// Skip user messages, tool call events, and invalid content.
 	// These should not trigger summarization.
 	if agentEvent.IsUserMessage() ||
@@ -2523,6 +2527,17 @@ func (r *runner) handleEventPersistence(
 
 	// Note: Auto memory extraction is triggered once at runner completion,
 	// not here, to avoid redundant extraction calls.
+	return true
+}
+
+func shouldAppendSummaryForkResponse(agentEvent *event.Event) bool {
+	if agentEvent == nil ||
+		agentEvent.Response == nil ||
+		agentEvent.Response.IsPartial ||
+		agentEvent.IsUserMessage() ||
+		!agentEvent.IsValidContent() {
+		return false
+	}
 	return true
 }
 

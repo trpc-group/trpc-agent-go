@@ -226,9 +226,56 @@ func TestRunner_EnqueueSummaryJob_AttachesCacheSafeForkRequest(t *testing.T) {
 		[]model.Message{
 			model.NewSystemMessage("stable system"),
 			model.NewUserMessage("parent request"),
+			model.NewAssistantMessage("final"),
 		},
 		svc.capturedParent.Messages,
 	)
+}
+
+func TestRunner_EnqueueSummaryJob_CacheSafeForkIncludesToolResult(t *testing.T) {
+	parent := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("stable system"),
+			model.NewUserMessage("use lookup"),
+		},
+	}
+	svc := &cacheSafeForkCapturingSessionService{
+		mockSessionService: &mockSessionService{},
+		done:               make(chan struct{}),
+	}
+	r := NewRunner(
+		"test-app",
+		&cacheSafeForkToolResultMockAgent{
+			name:   "fork-agent",
+			parent: parent,
+		},
+		WithSessionService(svc),
+	)
+
+	_, err := RunWithMessages(
+		context.Background(),
+		r,
+		"user1",
+		"sess1",
+		[]model.Message{{Role: model.RoleUser, Content: "hello"}},
+	)
+	require.NoError(t, err)
+
+	select {
+	case <-svc.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for context to be captured")
+	}
+
+	require.True(t, svc.capturedOK)
+	require.NotNil(t, svc.capturedParent)
+	require.Len(t, svc.capturedParent.Messages, 4)
+	require.Equal(t, model.RoleAssistant, svc.capturedParent.Messages[2].Role)
+	require.Len(t, svc.capturedParent.Messages[2].ToolCalls, 1)
+	require.Equal(t, "call_1", svc.capturedParent.Messages[2].ToolCalls[0].ID)
+	require.Equal(t, model.RoleTool, svc.capturedParent.Messages[3].Role)
+	require.Equal(t, "call_1", svc.capturedParent.Messages[3].ToolID)
+	require.Equal(t, `{"answer":"ok"}`, svc.capturedParent.Messages[3].Content)
 }
 
 func TestRunner_SummaryAwareSessionRestoreHint(t *testing.T) {
@@ -461,6 +508,78 @@ func (m *cacheSafeForkMockAgent) Run(
 		InvocationID: invocation.InvocationID,
 		Author:       m.name,
 		ID:           "evt-fork",
+		Timestamp:    time.Now(),
+	}
+	close(ch)
+	return ch, nil
+}
+
+type cacheSafeForkToolResultMockAgent struct {
+	name   string
+	parent *model.Request
+}
+
+func (m *cacheSafeForkToolResultMockAgent) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *cacheSafeForkToolResultMockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *cacheSafeForkToolResultMockAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
+func (m *cacheSafeForkToolResultMockAgent) Tools() []tool.Tool { return nil }
+
+func (m *cacheSafeForkToolResultMockAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	summaryfork.Attach(invocation, m.parent)
+
+	ch := make(chan *event.Event, 2)
+	ch <- &event.Event{
+		Response: &model.Response{
+			ID:    "tool-call-resp",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID:   "call_1",
+						Type: "function",
+						Function: model.FunctionDefinitionParam{
+							Name:      "lookup",
+							Arguments: []byte(`{"q":"hello"}`),
+						},
+					}},
+				},
+			}},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "evt-tool-call",
+		Timestamp:    time.Now(),
+	}
+	ch <- &event.Event{
+		Response: &model.Response{
+			ID:    "tool-result-resp",
+			Model: "test-model",
+			Done:  true,
+			Choices: []model.Choice{{
+				Message: model.NewToolMessage(
+					"call_1",
+					"lookup",
+					`{"answer":"ok"}`,
+				),
+			}},
+		},
+		InvocationID: invocation.InvocationID,
+		Author:       "lookup",
+		ID:           "evt-tool-result",
 		Timestamp:    time.Now(),
 	}
 	close(ch)
