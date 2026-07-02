@@ -1327,6 +1327,13 @@ func TestAgentSpecParsingAndSelectionBranches(t *testing.T) {
 
 	_, err = decodeAgentOptions(json.RawMessage(`[]`))
 	require.ErrorContains(t, err, "agent options must be a mapping or template name")
+	_, err = decodeAgentOptions(json.RawMessage(`{`))
+	require.ErrorContains(t, err, "agent options must be valid JSON")
+	_, err = decodeAgentOptions(json.RawMessage(`{
+		"template": "reviewer",
+		"structured_output": "{"
+	}`))
+	require.ErrorContains(t, err, "structured_output must be a JSON object")
 
 	optSpec, err := decodeAgentOptions(json.RawMessage(`" reviewer "`))
 	require.NoError(t, err)
@@ -1351,10 +1358,15 @@ func TestAgentSpecParsingAndSelectionBranches(t *testing.T) {
 
 	_, err = canonicalStructuredOutput(json.RawMessage(`[]`))
 	require.ErrorContains(t, err, "structured_output must be a JSON object")
+	_, err = canonicalStructuredOutput(json.RawMessage(`{`))
+	require.ErrorContains(t, err, "structured_output must be valid JSON")
 
 	wrapped, err := canonicalStructuredOutput(json.RawMessage(`{"schema":{"type":"object"}}`))
 	require.NoError(t, err)
 	require.JSONEq(t, `{"schema":{"type":"object"}}`, string(wrapped))
+
+	require.ErrorContains(t, normalizeAgentSpec(nil), "agent options are required")
+	require.ErrorContains(t, normalizeAgentSpec(&AgentSpec{}), "agent spec template is required")
 
 	spec := AgentSpec{Template: " reviewer ", Tools: []string{" lookup ", "", "lookup"}, Skills: []string{}}
 	require.NoError(t, normalizeAgentSpec(&spec))
@@ -1371,7 +1383,26 @@ func TestAgentSpecParsingAndSelectionBranches(t *testing.T) {
 	selectedTools, err := gateway.selectAgentTools(context.Background(), tmpl, nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"lookup"}, toolNames(selectedTools))
+	selectedTools, err = gateway.selectAgentTools(context.Background(), tmpl, []string{})
+	require.NoError(t, err)
+	require.Nil(t, selectedTools)
 
+	plain := &plainTestAgent{name: "plain", tools: []tool.Tool{&testTool{name: "plain_lookup"}}}
+	plainTools, userToolNames := templateToolSurface(context.Background(), plain)
+	require.Equal(t, []string{"plain_lookup"}, toolNames(plainTools))
+	require.Nil(t, userToolNames)
+	tmpl = agentTemplate{
+		name:  "plain",
+		agent: plain,
+		tools: map[string]tool.Tool{"plain_lookup": &testTool{name: "plain_lookup"}},
+	}
+	require.Equal(t, []string{"plain_lookup"}, sortedNames(gateway.selectableAgentTools(context.Background(), tmpl)))
+
+	tmpl = agentTemplate{
+		name:  "reviewer",
+		agent: &testAgent{name: "reviewer", tools: []tool.Tool{&testTool{name: "lookup"}}},
+		tools: map[string]tool.Tool{"lookup": &testTool{name: "lookup"}},
+	}
 	emptyRepo, err := gateway.selectAgentSkills(context.Background(), tmpl, []string{})
 	require.NoError(t, err)
 	require.Nil(t, emptyRepo)
@@ -1384,6 +1415,9 @@ func TestAgentSpecParsingAndSelectionBranches(t *testing.T) {
 	inheritedRepo, err := gateway.selectAgentSkills(context.Background(), tmpl, nil)
 	require.NoError(t, err)
 	require.Same(t, repo, inheritedRepo)
+	disabledRepo, err := gateway.selectAgentSkills(context.Background(), tmpl, []string{})
+	require.NoError(t, err)
+	require.Empty(t, skill.SummariesForContext(context.Background(), disabledRepo))
 	filteredRepo, err := gateway.selectAgentSkills(context.Background(), tmpl, []string{"risk"})
 	require.NoError(t, err)
 	require.Equal(t, []string{"risk"}, skillNames(skill.SummariesForContext(context.Background(), filteredRepo)))
@@ -1397,6 +1431,40 @@ func TestAgentSpecParsingAndSelectionBranches(t *testing.T) {
 	require.Nil(t, selectedRepo)
 	_, err = gateway.selectAgentSkills(context.Background(), tmpl, []string{"risk"})
 	require.ErrorContains(t, err, `does not expose skills`)
+}
+
+func TestWorkflowCapabilityHelpIncludesSchemas(t *testing.T) {
+	lookup := &schemaTestTool{
+		name: "lookup",
+		input: &tool.Schema{Type: "object", Properties: map[string]*tool.Schema{
+			"query": {Type: "string"},
+		}},
+		output: &tool.Schema{Type: "object", Properties: map[string]*tool.Schema{
+			"found": {Type: "boolean"},
+		}},
+	}
+	reviewer := &schemaTestAgent{
+		name:        "reviewer",
+		description: "reviews a plan",
+		tools:       []tool.Tool{lookup},
+		inputSchema: map[string]any{"type": "string"},
+		outputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"approved": map[string]any{"type": "boolean"}},
+		},
+	}
+	registered, err := registerAgentTemplates([]agent.Agent{reviewer})
+	require.NoError(t, err)
+
+	help := buildCapabilityHelp(registered, map[string]tool.CallableTool{"lookup": lookup})
+	require.Contains(t, help, `template "reviewer": reviews a plan`)
+	require.Contains(t, help, "Dynamic narrowing tools: lookup")
+	require.Contains(t, help, `Input JSON Schema: {"type":"string"}`)
+	require.Contains(t, help, `Default structured output JSON Schema:`)
+	require.Contains(t, help, `call_tool("lookup", **json_arguments): lookup tool`)
+	require.Contains(t, help, `"query"`)
+	require.Contains(t, help, `Output JSON Schema:`)
+	require.Contains(t, help, `"found"`)
 }
 
 func TestStrictSchemaNormalizationBranches(t *testing.T) {
@@ -1417,6 +1485,8 @@ func TestStrictSchemaNormalizationBranches(t *testing.T) {
 	require.Equal(t, false, defs["nested"].(map[string]any)["additionalProperties"])
 	items := output.schema["items"].(map[string]any)
 	require.Equal(t, false, items["additionalProperties"])
+	normalizeStrictObjectSchemas(nil)
+	require.False(t, schemaDeclaresObject(map[string]any{"type": []any{"string", "null"}}))
 
 	_, err = dynamicStructuredOutput(&StructuredOutputSpec{Name: "bad", Schema: json.RawMessage(`[]`)})
 	require.ErrorContains(t, err, "structured_output schema must be a JSON object")
@@ -1516,6 +1586,27 @@ func (a *testAgent) lastInvocation() *agent.Invocation {
 	}
 	return a.invs[len(a.invs)-1]
 }
+
+type plainTestAgent struct {
+	name  string
+	tools []tool.Tool
+}
+
+func (a *plainTestAgent) Run(context.Context, *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (a *plainTestAgent) Tools() []tool.Tool { return a.tools }
+
+func (a *plainTestAgent) Info() agent.Info {
+	return agent.Info{Name: a.name, Description: a.name + " agent"}
+}
+
+func (a *plainTestAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *plainTestAgent) FindSubAgent(string) agent.Agent { return nil }
 
 type runOptionsToolSurfaceAgent struct {
 	*testAgent
@@ -1622,6 +1713,67 @@ func (t *testTool) Call(ctx context.Context, raw []byte) (any, error) {
 	}
 	return t.call(ctx, raw)
 }
+
+type schemaTestTool struct {
+	name   string
+	input  *tool.Schema
+	output *tool.Schema
+}
+
+func (t *schemaTestTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:         t.name,
+		Description:  t.name + " tool",
+		InputSchema:  t.input,
+		OutputSchema: t.output,
+	}
+}
+
+func (t *schemaTestTool) Call(context.Context, []byte) (any, error) {
+	return map[string]any{"ok": true}, nil
+}
+
+type schemaTestAgent struct {
+	name         string
+	description  string
+	tools        []tool.Tool
+	inputSchema  map[string]any
+	outputSchema map[string]any
+}
+
+func (a *schemaTestAgent) Run(context.Context, *agent.Invocation) (<-chan *event.Event, error) {
+	ch := make(chan *event.Event)
+	close(ch)
+	return ch, nil
+}
+
+func (a *schemaTestAgent) Tools() []tool.Tool { return a.tools }
+
+func (a *schemaTestAgent) InvocationToolSurface(
+	context.Context,
+	*agent.Invocation,
+) ([]tool.Tool, map[string]bool) {
+	userToolNames := make(map[string]bool, len(a.tools))
+	for _, tl := range a.tools {
+		if name := declarationName(tl); name != "" {
+			userToolNames[name] = true
+		}
+	}
+	return a.tools, userToolNames
+}
+
+func (a *schemaTestAgent) Info() agent.Info {
+	return agent.Info{
+		Name:         a.name,
+		Description:  a.description,
+		InputSchema:  a.inputSchema,
+		OutputSchema: a.outputSchema,
+	}
+}
+
+func (a *schemaTestAgent) SubAgents() []agent.Agent { return nil }
+
+func (a *schemaTestAgent) FindSubAgent(string) agent.Agent { return nil }
 
 type permissionTestTool struct {
 	name     string
