@@ -54,20 +54,32 @@ func AppendResponse(inv *agent.Invocation, rsp *model.Response) {
 }
 
 func responseMessages(rsp *model.Response) []model.Message {
-	if rsp == nil {
+	choice, ok := primaryChoice(rsp)
+	if !ok {
 		return nil
 	}
-	messages := make([]model.Message, 0, len(rsp.Choices))
-	for _, choice := range rsp.Choices {
-		if messageHasPayloadForFork(choice.Message) {
-			messages = append(messages, choice.Message)
-			continue
-		}
-		if messageHasPayloadForFork(choice.Delta) {
-			messages = append(messages, choice.Delta)
-		}
+
+	var messages []model.Message
+	if messageHasPayloadForFork(choice.Message) {
+		messages = append(messages, choice.Message)
+		return messages
+	}
+	if messageHasPayloadForFork(choice.Delta) {
+		messages = append(messages, choice.Delta)
 	}
 	return messages
+}
+
+func primaryChoice(rsp *model.Response) (model.Choice, bool) {
+	if rsp == nil || len(rsp.Choices) == 0 {
+		return model.Choice{}, false
+	}
+	for _, choice := range rsp.Choices {
+		if choice.Index == 0 {
+			return choice, true
+		}
+	}
+	return rsp.Choices[0], true
 }
 
 func messageHasPayloadForFork(msg model.Message) bool {

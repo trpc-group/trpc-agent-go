@@ -116,3 +116,26 @@ func TestAppendResponseExtendsSnapshot(t *testing.T) {
 	require.Equal(t, model.RoleTool, got.Messages[3].Role)
 	require.Equal(t, "result", got.Messages[3].Content)
 }
+
+func TestAppendResponseKeepsPrimaryChoiceOnly(t *testing.T) {
+	inv := agent.NewInvocation()
+	Attach(inv, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+	})
+
+	AppendResponse(inv, &model.Response{Choices: []model.Choice{
+		{
+			Index:   1,
+			Message: model.NewAssistantMessage("alternative"),
+		},
+		{
+			Index:   0,
+			Message: model.NewAssistantMessage("primary"),
+		},
+	}})
+
+	got, ok := Request(inv)
+	require.True(t, ok)
+	require.Len(t, got.Messages, 2)
+	require.Equal(t, "primary", got.Messages[1].Content)
+}
