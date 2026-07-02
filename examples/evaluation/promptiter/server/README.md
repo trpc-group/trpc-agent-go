@@ -32,10 +32,9 @@ candidate#instruction
 | `-base-path` | Base path exposed by the PromptIter server | `/promptiter/v1/apps` |
 | `-data-dir` | Directory containing evaluation set and metric files | `./data` |
 | `-output-dir` | Directory where evaluation results are written | `./output` |
-| `-model` | Model identifier used by the candidate sports recap agent | `$CANDIDATE_MODEL_NAME` or `deepseek-v3.2` |
-| `-candidate-instruction` | Instruction used by the candidate agent | `生成一篇中文体育战报` |
-| `-judge-model` | Model identifier used by the judge agent | `$JUDGE_MODEL_NAME` or `gpt-5.2` |
-| `-worker-model` | Model identifier used by the PromptIter worker agents | `$WORKER_MODEL_NAME` or `gpt-5.2` |
+| `-model` | Model identifier used by the candidate sports recap agent | `deepseek-v3.2` |
+| `-judge-model` | Model identifier used by the judge agent | `gpt-5.2` |
+| `-worker-model` | Model identifier used by the PromptIter worker agents | `gpt-5.2` |
 | `-eval-case-parallelism` | Maximum number of eval cases processed in parallel | `16` |
 | `-parallel-inference` | Enable parallel inference across eval cases | `true` |
 | `-parallel-evaluation` | Enable parallel evaluation across eval cases | `true` |

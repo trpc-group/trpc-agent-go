@@ -13,15 +13,11 @@ import (
 	"os"
 	"testing"
 
-	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
 func TestPrintSummaryAllowsPartialRoundData(t *testing.T) {
 	result := &promptiterengine.RunResult{
-		Structure: &astructure.Snapshot{
-			StructureID: "struct_1",
-		},
 		Rounds: []promptiterengine.RoundResult{
 			{
 				Round:      1,

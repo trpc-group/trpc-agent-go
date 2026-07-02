@@ -23,20 +23,17 @@ func printSummary(
 	outputDir string,
 	targetSurfaceID string,
 ) error {
-	if result == nil || result.Structure == nil || len(result.Rounds) == 0 {
+	if result == nil || len(result.Rounds) == 0 {
 		return errors.New("run result is incomplete")
 	}
-	initialTools := initialToolRefs(result, targetSurfaceID)
 	acceptedTools := acceptedToolRefs(result, targetSurfaceID)
 	initialScore := initialValidationScore(result)
 	finalScore := finalAcceptedValidationScore(result)
 	fmt.Println("PromptIter tool description example completed")
 	fmt.Printf("Data directory: %s\n", dataDir)
 	fmt.Printf("Result directory: %s\n", outputDir)
-	fmt.Printf("Structure ID: %s\n", result.Structure.StructureID)
 	fmt.Printf("Target node: %s\n", candidateAgentName)
 	fmt.Printf("Target surface ID: %s\n", targetSurfaceID)
-	printToolBlock("Initial tool declarations", initialTools)
 	printToolBlock("Accepted tool declarations", acceptedTools)
 	fmt.Printf("Initial validation score: %.2f\n", initialScore)
 	fmt.Printf("Final accepted validation score: %.2f\n", finalScore)
@@ -126,40 +123,12 @@ func evaluationResultScore(result *engine.EvaluationResult) float64 {
 	return result.OverallScore
 }
 
-func initialToolRefs(
-	result *engine.RunResult,
-	targetSurfaceID string,
-) []astructure.ToolRef {
-	if result == nil || result.Structure == nil {
-		return nil
-	}
-	for _, surface := range result.Structure.Surfaces {
-		if surface.SurfaceID == targetSurfaceID {
-			return surface.Value.Tools
-		}
-		if surface.Type != astructure.SurfaceTypeTool {
-			continue
-		}
-		for _, ref := range surface.Value.Tools {
-			if astructure.SurfaceID(
-				surface.NodeID,
-				astructure.SurfaceTypeTool,
-				ref.ID,
-			) == targetSurfaceID {
-				return []astructure.ToolRef{ref}
-			}
-		}
-	}
-	return nil
-}
-
 func acceptedToolRefs(
 	result *engine.RunResult,
 	targetSurfaceID string,
 ) []astructure.ToolRef {
-	accepted := initialToolRefs(result, targetSurfaceID)
 	if result.AcceptedProfile == nil {
-		return accepted
+		return nil
 	}
 	for _, override := range result.AcceptedProfile.Overrides {
 		if override.SurfaceID != targetSurfaceID {
@@ -167,5 +136,5 @@ func acceptedToolRefs(
 		}
 		return override.Value.Tools
 	}
-	return accepted
+	return nil
 }

@@ -115,9 +115,7 @@ func TestOptimizeUsesRunnerStructuredOutput(t *testing.T) {
 				},
 				event.WithStructuredOutputPayload(&surfacePatchProposal{
 					Value: astructure.SurfaceValue{
-						Text:    &updatedText,
-						FewShot: []astructure.FewShotExample{},
-						Model:   &astructure.ModelRef{},
+						Text: &updatedText,
 					},
 					Reason: "tighten the system instruction",
 				}),

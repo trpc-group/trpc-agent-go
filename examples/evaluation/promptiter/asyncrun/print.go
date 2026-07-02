@@ -37,16 +37,9 @@ func printSummary(
 	}
 	initialScore := initialValidationScore(result)
 	finalScore := finalAcceptedValidationScore(result)
-	structureID := ""
-	if result.Structure != nil {
-		structureID = result.Structure.StructureID
-	}
 	fmt.Println("✅ PromptIter asyncrun sports commentary example completed")
 	fmt.Printf("Data directory: %s\n", dataDir)
 	fmt.Printf("Result directory: %s\n", outputDir)
-	if structureID != "" {
-		fmt.Printf("Structure ID: %s\n", structureID)
-	}
 	fmt.Printf("Target node: %s\n", candidateAgentName)
 	fmt.Printf("Target surface ID: %s\n", targetSurfaceID)
 	fmt.Printf("Initial instruction: %q\n", initialInstruction)

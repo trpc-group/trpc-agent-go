@@ -22,7 +22,7 @@ import (
 	idecode "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/decode"
 	iloss "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/loss"
 	irunner "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/runner"
-	isurface "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/surface"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -170,7 +170,7 @@ func normalizeRequest(request *Request) (*Request, error) {
 	if nodeID == "" {
 		return nil, errors.New("node id is empty")
 	}
-	if !isurface.IsSupportedType(request.Type) {
+	if !profilecompiler.IsSupportedType(request.Type) {
 		return nil, fmt.Errorf("surface type %q is invalid", request.Type)
 	}
 	gradients, err := normalizeGradients(surfaceID, request.Gradients)

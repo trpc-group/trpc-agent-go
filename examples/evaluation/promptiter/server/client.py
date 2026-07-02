@@ -8,7 +8,6 @@ from typing import Optional, Set
 import urllib.error
 import urllib.request
 
-
 def log(message: str) -> None:
     print(message, flush=True)
 

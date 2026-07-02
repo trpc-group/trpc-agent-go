@@ -39,9 +39,9 @@ func (s *inMemoryStore) Create(_ context.Context, appName string, run *engine.Ru
 	}
 	persisted := *run
 	persisted.AppName = appName
-	cloned, err := cloneRun(&persisted)
+	snapshot, err := snapshotRun(&persisted)
 	if err != nil {
-		return fmt.Errorf("clone promptiter run: %w", err)
+		return fmt.Errorf("snapshot promptiter run: %w", err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -53,7 +53,7 @@ func (s *inMemoryStore) Create(_ context.Context, appName string, run *engine.Ru
 	if _, ok := appRuns[run.ID]; ok {
 		return fmt.Errorf("run %q for app %q already exists", run.ID, appName)
 	}
-	appRuns[run.ID] = cloned
+	appRuns[run.ID] = snapshot
 	return nil
 }
 
@@ -68,13 +68,13 @@ func (s *inMemoryStore) Get(_ context.Context, appName, runID string) (*engine.R
 	if !ok {
 		return nil, fmt.Errorf("run %q for app %q not found: %w", runID, appName, os.ErrNotExist)
 	}
-	cloned, err := cloneRun(run)
+	snapshot, err := snapshotRun(run)
 	if err != nil {
-		return nil, fmt.Errorf("clone promptiter run %q: %w", runID, err)
+		return nil, fmt.Errorf("snapshot promptiter run %q: %w", runID, err)
 	}
-	cloned.AppName = appName
-	cloned.ID = runID
-	return cloned, nil
+	snapshot.AppName = appName
+	snapshot.ID = runID
+	return snapshot, nil
 }
 
 func (s *inMemoryStore) Update(_ context.Context, appName string, run *engine.RunResult) error {
@@ -83,9 +83,9 @@ func (s *inMemoryStore) Update(_ context.Context, appName string, run *engine.Ru
 	}
 	persisted := *run
 	persisted.AppName = appName
-	cloned, err := cloneRun(&persisted)
+	snapshot, err := snapshotRun(&persisted)
 	if err != nil {
-		return fmt.Errorf("clone promptiter run: %w", err)
+		return fmt.Errorf("snapshot promptiter run: %w", err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -93,7 +93,7 @@ func (s *inMemoryStore) Update(_ context.Context, appName string, run *engine.Ru
 	if _, ok := appRuns[run.ID]; !ok {
 		return fmt.Errorf("run %q for app %q not found: %w", run.ID, appName, os.ErrNotExist)
 	}
-	appRuns[run.ID] = cloned
+	appRuns[run.ID] = snapshot
 	return nil
 }
 
@@ -101,7 +101,7 @@ func (s *inMemoryStore) Close() error {
 	return nil
 }
 
-func cloneRun(run *engine.RunResult) (*engine.RunResult, error) {
+func snapshotRun(run *engine.RunResult) (*engine.RunResult, error) {
 	if run == nil {
 		return nil, nil
 	}
@@ -109,11 +109,11 @@ func cloneRun(run *engine.RunResult) (*engine.RunResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	var cloned engine.RunResult
-	if err := json.Unmarshal(bytes, &cloned); err != nil {
+	var snapshot engine.RunResult
+	if err := json.Unmarshal(bytes, &snapshot); err != nil {
 		return nil, err
 	}
-	return &cloned, nil
+	return &snapshot, nil
 }
 
 func validateRun(appName string, run *engine.RunResult) error {

@@ -18,8 +18,6 @@ import (
 type EventKind string
 
 const (
-	// EventKindStructureSnapshot stores the structure snapshot used by the run.
-	EventKindStructureSnapshot EventKind = "structure_snapshot"
 	// EventKindBaselineValidation stores the accepted baseline validation result.
 	EventKindBaselineValidation EventKind = "baseline_validation"
 	// EventKindRoundStarted stores the start marker for one optimization round.

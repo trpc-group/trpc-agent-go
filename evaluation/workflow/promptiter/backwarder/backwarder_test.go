@@ -1277,12 +1277,13 @@ func newInstructionRequest() *Request {
 
 func newRestrictedInstructionRequest() *Request {
 	request := newInstructionRequest()
+	globalText := "global prompt"
 	request.Surfaces = append(request.Surfaces, astructure.Surface{
 		SurfaceID: "surf_2",
 		NodeID:    "node_1",
-		Type:      astructure.SurfaceTypeModel,
+		Type:      astructure.SurfaceTypeGlobalInstruction,
 		Value: astructure.SurfaceValue{
-			Model: &astructure.ModelRef{Name: "gpt-test"},
+			Text: &globalText,
 		},
 	})
 	request.AllowedGradientSurfaceIDs = []string{"surf_1"}

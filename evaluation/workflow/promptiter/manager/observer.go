@@ -14,10 +14,8 @@ import (
 	"errors"
 	"fmt"
 
-	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
-	iprofile "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/profile"
 )
 
 type observer struct {
@@ -40,8 +38,6 @@ func (o *observer) append(ctx context.Context, event *engine.Event) error {
 
 func (o *observer) applyEvent(event *engine.Event) error {
 	switch event.Kind {
-	case engine.EventKindStructureSnapshot:
-		return o.applyStructureSnapshot(event)
 	case engine.EventKindBaselineValidation:
 		return o.applyBaselineValidation(event)
 	case engine.EventKindRoundStarted:
@@ -66,15 +62,6 @@ func (o *observer) applyEvent(event *engine.Event) error {
 	default:
 		return fmt.Errorf("promptiter event kind %q is unsupported", event.Kind)
 	}
-	return nil
-}
-
-func (o *observer) applyStructureSnapshot(event *engine.Event) error {
-	payload, ok := event.Payload.(*astructure.Snapshot)
-	if !ok || payload == nil {
-		return invalidEventPayloadError(event.Kind)
-	}
-	o.run.Structure = payload
 	return nil
 }
 
@@ -103,7 +90,7 @@ func (o *observer) applyRoundLosses(event *engine.Event) error {
 		return invalidEventPayloadError(event.Kind)
 	}
 	round := o.ensureRound(event.Round)
-	round.Losses = append([]promptiter.CaseLoss(nil), payload...)
+	round.Losses = payload
 	return nil
 }
 
@@ -173,7 +160,7 @@ func (o *observer) applyRoundCompleted(event *engine.Event) error {
 		Reason:     payload.StopReason,
 	}
 	if payload.Accepted && round.OutputProfile != nil {
-		o.run.AcceptedProfile = iprofile.Clone(round.OutputProfile)
+		o.run.AcceptedProfile = round.OutputProfile
 	}
 	return nil
 }
@@ -184,7 +171,7 @@ func invalidEventPayloadError(kind engine.EventKind) error {
 
 func validateEventRound(event *engine.Event) error {
 	switch event.Kind {
-	case engine.EventKindStructureSnapshot, engine.EventKindBaselineValidation:
+	case engine.EventKindBaselineValidation:
 		if event.Round != 0 {
 			return fmt.Errorf("event %q must use round 0, got %d", event.Kind, event.Round)
 		}

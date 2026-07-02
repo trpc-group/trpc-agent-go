@@ -18,6 +18,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 )
 
 // OptimizerOptions configures optimizer-stage execution behavior.
@@ -30,7 +31,7 @@ type OptimizerOptions struct {
 
 func (e *engine) optimize(
 	ctx context.Context,
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	profile *promptiter.Profile,
 	aggregation *AggregationResult,
 	targetSurfaceSet targetSurfaceSet,
@@ -38,9 +39,6 @@ func (e *engine) optimize(
 ) (*promptiter.PatchSet, error) {
 	if e.optimizer == nil {
 		return nil, errors.New("optimizer is nil")
-	}
-	if structure == nil {
-		return nil, errors.New("structure state is nil")
 	}
 	if aggregation == nil || len(aggregation.Surfaces) == 0 {
 		return &promptiter.PatchSet{Patches: []promptiter.SurfacePatch{}}, nil
@@ -65,7 +63,7 @@ func (e *engine) optimize(
 		}
 		response, err := e.optimizer.Optimize(ctx, &optimizer.Request{
 			Surface:  &surface,
-			Gradient: cloneAggregatedGradient(aggregatedSurface),
+			Gradient: &aggregatedSurface,
 		})
 		if err != nil {
 			return fmt.Errorf("optimize surface %q: %w", aggregatedSurface.SurfaceID, err)
@@ -82,14 +80,4 @@ func (e *engine) optimize(
 		return patches[i].SurfaceID < patches[j].SurfaceID
 	})
 	return &promptiter.PatchSet{Patches: patches}, nil
-}
-
-func cloneAggregatedGradient(gradient promptiter.AggregatedSurfaceGradient) *promptiter.AggregatedSurfaceGradient {
-	cloned := &promptiter.AggregatedSurfaceGradient{
-		SurfaceID: gradient.SurfaceID,
-		NodeID:    gradient.NodeID,
-		Type:      gradient.Type,
-		Gradients: append([]promptiter.SurfaceGradient(nil), gradient.Gradients...),
-	}
-	return cloned
 }

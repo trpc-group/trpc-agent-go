@@ -21,7 +21,6 @@ import (
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
-	iprofile "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/profile"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/store"
 )
 
@@ -91,7 +90,7 @@ func (m *manager) Start(ctx context.Context, request *engine.RunRequest) (*engin
 	runCtx, cancel := context.WithCancel(context.Background())
 	m.cancelFuncs[runID] = cancel
 	m.mu.Unlock()
-	go m.run(runCtx, runID, cloneRunRequest(request))
+	go m.run(runCtx, runID, request)
 	return run, nil
 }
 
@@ -265,8 +264,10 @@ func validateRunRequest(request *engine.RunRequest) error {
 	switch {
 	case request.MaxRounds <= 0:
 		return errors.New("max rounds must be greater than 0")
-	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
+	case len(request.TargetSurfaceIDs) == 0:
 		return errors.New("target surface ids must not be empty")
+	case slices.Contains(request.TargetSurfaceIDs, ""):
+		return errors.New("target surface ids must not contain empty values")
 	case request.BackwardOptions.CaseParallelism < 0:
 		return errors.New("backward case parallelism must be non-negative")
 	case request.AggregationOptions.SurfaceParallelism < 0:
@@ -276,22 +277,6 @@ func validateRunRequest(request *engine.RunRequest) error {
 	default:
 		return nil
 	}
-}
-
-func cloneRunRequest(request *engine.RunRequest) *engine.RunRequest {
-	if request == nil {
-		return nil
-	}
-	cloned := *request
-	cloned.Train = cloneEvalSetInputs(request.Train)
-	cloned.Validation = cloneEvalSetInputs(request.Validation)
-	cloned.InitialProfile = iprofile.Clone(request.InitialProfile)
-	cloned.TargetSurfaceIDs = append([]string(nil), request.TargetSurfaceIDs...)
-	if request.StopPolicy.TargetScore != nil {
-		targetScore := *request.StopPolicy.TargetScore
-		cloned.StopPolicy.TargetScore = &targetScore
-	}
-	return &cloned
 }
 
 func validateEvalSetInputs(role string, inputs []engine.EvalSetInput) error {
@@ -366,19 +351,4 @@ func isValidLossHintSeverity(severity promptiter.LossSeverity) bool {
 	default:
 		return false
 	}
-}
-
-func cloneEvalSetInputs(inputs []engine.EvalSetInput) []engine.EvalSetInput {
-	if inputs == nil {
-		return nil
-	}
-	cloned := make([]engine.EvalSetInput, 0, len(inputs))
-	for _, input := range inputs {
-		cloned = append(cloned, engine.EvalSetInput{
-			EvalSetID:   input.EvalSetID,
-			EvalCaseIDs: append([]string(nil), input.EvalCaseIDs...),
-			LossHints:   append([]engine.LossHint(nil), input.LossHints...),
-		})
-	}
-	return cloned
 }
