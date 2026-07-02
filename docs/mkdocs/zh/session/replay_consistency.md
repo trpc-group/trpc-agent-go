@@ -84,7 +84,7 @@ summary 比较重点：
 - full summary：`session.SummaryFilterKeyAllContents`
 - filter-key summary，例如 `root/tools/weather`
 - summary overwrite/update
-- `SummaryBoundary` 的 version、filter key、cutoff、last event ID
+- `SummaryBoundary` 的 version、filter key、cutoff
 - `GetSessionSummaryText` 返回值
 
 track 比较重点：
