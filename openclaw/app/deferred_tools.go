@@ -76,6 +76,9 @@ func baseLLMAgentOptions(
 		llmagent.WithToolResultCompactionConfig(
 			openClawToolResultCompactionConfig(),
 		),
+		llmagent.WithToolResultAttachmentBudget(
+			openClawToolResultAttachmentBudget,
+		),
 		llmagent.WithEnableParallelTools(cfg.EnableParallelTools),
 		llmagent.WithPostToolPrompt(openClawPostToolPrompt),
 		llmagent.WithSkillFilter(

@@ -138,6 +138,52 @@ func TestOpenClawToolResultMessages_RecordsTraceEvent(t *testing.T) {
 	require.Contains(t, string(data), "frame.png")
 }
 
+func TestOpenClawToolResultMessages_ConsumesAttachmentBudget(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	root := t.TempDir()
+	pathA := writeTestFile(t, root, "a.png", []byte("a"))
+	pathB := writeTestFile(t, root, "b.png", []byte("b"))
+	defaultMsg := model.Message{
+		Role:    model.RoleTool,
+		ToolID:  "tool-1",
+		Content: "{}",
+	}
+	ctx := tool.WithToolResultAttachmentBudget(context.Background(), 1)
+
+	got, err := openClawToolResultMessages(
+		ctx,
+		&tool.ToolResultMessagesInput{
+			ToolName:           "exec_command",
+			DefaultToolMessage: defaultMsg,
+			Result: map[string]any{
+				"media_files": []string{pathA, pathB},
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	msgs, ok := got.([]model.Message)
+	require.True(t, ok)
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ContentParts, 1)
+
+	got, err = openClawToolResultMessages(
+		ctx,
+		&tool.ToolResultMessagesInput{
+			ToolName:           "exec_command",
+			DefaultToolMessage: defaultMsg,
+			Result: map[string]any{
+				"media_files": []string{pathA},
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
 func TestToolResultImageMessages_Guards(t *testing.T) {
 	t.Parallel()
 

@@ -517,6 +517,7 @@ func TestProbeBrowserServerEndpoint(t *testing.T) {
 		require.Equal(t, "/profiles", r.URL.Path)
 		require.Equal(t, "Bearer secret", r.Header.Get("Authorization"))
 		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"profiles":[]}`)
 	}))
 	t.Cleanup(server.Close)
 
@@ -544,6 +545,23 @@ func TestProbeBrowserServerEndpoint(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected status")
+
+	htmlServer := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		_ *http.Request,
+	) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "<html>not browser server</html>")
+	}))
+	t.Cleanup(htmlServer.Close)
+
+	err = probeBrowserServerEndpoint(
+		context.Background(),
+		htmlServer.URL,
+		"",
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decode browser server profiles")
 }
 
 func TestBrowserServerSupervisorWaitUntilReadyExitPaths(
