@@ -380,7 +380,7 @@ func (s *Service) updateInPlace(
 	return nil
 }
 
-// rotateMemory replaces a memory entry with a new ID via DELETE + INSERT in a transaction.
+// rotateMemory replaces a memory entry with a new ID via DELETE/UPDATE + INSERT in a transaction.
 func (s *Service) rotateMemory(
 	ctx context.Context,
 	memoryKey memory.Key,
@@ -393,14 +393,60 @@ func (s *Service) rotateMemory(
 	now time.Time,
 ) error {
 	return s.db.Transaction(ctx, func(tx *sql.Tx) error { // nolint:gosec // table name is validated
-		deleteQuery := fmt.Sprintf(
-			"DELETE FROM %s WHERE memory_id = ? AND app_name = ? AND user_id = ?",
+
+		// Pre-check target ID before modifying the source row.
+		// An active (deleted_at IS NULL) target is always a conflict.
+		// A soft-deleted target is OK: revived by ON DUPLICATE KEY UPDATE in
+		// soft-delete mode, or physically removed before INSERT in hard-delete
+		// mode.
+		var targetActive bool
+		checkQ := fmt.Sprintf(
+			"SELECT deleted_at IS NULL FROM %s WHERE memory_id = ? AND app_name = ? AND user_id = ? FOR UPDATE",
 			s.tableName,
 		)
-		if s.opts.softDelete {
-			deleteQuery += " AND deleted_at IS NULL"
+		err := tx.QueryRowContext(ctx, checkQ, newID, memoryKey.AppName, memoryKey.UserID).Scan(&targetActive)
+		switch {
+		case err == sql.ErrNoRows:
+			// Target does not exist — safe to proceed.
+		case err != nil:
+			return fmt.Errorf("check rotated memory target: %w", err)
+		default:
+			if targetActive {
+				return fmt.Errorf("cannot rotate memory: target id %s already active", newID)
+			}
+			// Target is soft-deleted.  In hard-delete mode, physically remove
+			// it so the subsequent plain INSERT does not hit a duplicate key.
+			if !s.opts.softDelete {
+				_, err = tx.ExecContext(ctx,
+					fmt.Sprintf("DELETE FROM %s WHERE memory_id = ? AND app_name = ? AND user_id = ?", s.tableName),
+					newID, memoryKey.AppName, memoryKey.UserID,
+				)
+				if err != nil {
+					return fmt.Errorf("delete soft-deleted target: %w", err)
+				}
+			}
 		}
-		res, err := tx.ExecContext(ctx, deleteQuery, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID)
+
+		var (
+			query string
+			args  []any
+		)
+		if s.opts.softDelete {
+			query = fmt.Sprintf(
+				"UPDATE %s SET deleted_at = ? "+
+					"WHERE memory_id = ? AND app_name = ? AND user_id = ? "+
+					"AND deleted_at IS NULL",
+				s.tableName,
+			)
+			args = []any{now, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID}
+		} else {
+			query = fmt.Sprintf(
+				"DELETE FROM %s WHERE memory_id = ? AND app_name = ? AND user_id = ?",
+				s.tableName,
+			)
+			args = []any{memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID}
+		}
+		res, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("delete rotated memory: %w", err)
 		}
@@ -412,22 +458,57 @@ func (s *Service) rotateMemory(
 			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 		}
 
-		insertQuery := fmt.Sprintf(
-			"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
-				"embedding, memory_kind, event_time, participants, location, "+
-				"created_at, updated_at) "+
-				"VALUES (?, ?, ?, ?, ?, "+embeddingExpr+", ?, ?, ?, ?, ?, ?)",
-			s.tableName,
-		)
+		// When soft-delete is enabled, only revive soft-deleted rows.
+		// For active rows, the ON DUPLICATE KEY UPDATE becomes a no-op.
+		onDupCols := []string{
+			"app_name = VALUES(app_name)",
+			"user_id = VALUES(user_id)",
+			"memory_content = VALUES(memory_content)",
+			"topics = VALUES(topics)",
+			"embedding = VALUES(embedding)",
+			"memory_kind = VALUES(memory_kind)",
+			"event_time = VALUES(event_time)",
+			"participants = VALUES(participants)",
+			"location = VALUES(location)",
+			"deleted_at = NULL",
+			"updated_at = VALUES(updated_at)",
+		}
+		var insertQuery string
+		if s.opts.softDelete {
+			for i, col := range onDupCols {
+				colName := strings.SplitN(col, " = ", 2)[0]
+				valExpr := strings.SplitN(col, " = ", 2)[1]
+				onDupCols[i] = fmt.Sprintf(
+					"%s = IF(deleted_at IS NOT NULL, %s, %s)",
+					colName, valExpr, colName,
+				)
+			}
+			insertQuery = fmt.Sprintf(
+				"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
+					"embedding, memory_kind, event_time, participants, location, "+
+					"created_at, updated_at) "+
+					"VALUES (?, ?, ?, ?, ?, "+embeddingExpr+", ?, ?, ?, ?, ?, ?) "+
+					"ON DUPLICATE KEY UPDATE "+strings.Join(onDupCols, ", "),
+				s.tableName,
+			)
+		} else {
+			insertQuery = fmt.Sprintf(
+				"INSERT INTO %s (memory_id, app_name, user_id, memory_content, topics, "+
+					"embedding, memory_kind, event_time, participants, location, "+
+					"created_at, updated_at) "+
+					"VALUES (?, ?, ?, ?, ?, "+embeddingExpr+", ?, ?, ?, ?, ?, ?) ",
+				s.tableName,
+			)
+		}
 		_, err = tx.ExecContext(ctx, insertQuery,
 			newID, memoryKey.AppName, memoryKey.UserID,
 			memoryStr, string(topicsJSON), embeddingArg,
 			ef.kind, ef.eventTime, ef.participants, ef.location,
-			createdAt, now,
-		)
+			createdAt, now)
 		if err != nil {
 			return fmt.Errorf("insert rotated memory: %w", err)
 		}
+
 		return nil
 	})
 }

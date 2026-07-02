@@ -597,6 +597,9 @@ func TestService_UpdateMemory(t *testing.T) {
 	expectUpdateLoad(mock, key, false)
 	// Content changes → ID changes → rotateMemory.
 	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT deleted_at IS NULL FROM memories").
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID).
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -621,8 +624,11 @@ func TestService_UpdateMemory_IDChanged_RotateMemory(t *testing.T) {
 			key.MemoryID, key.AppName, key.UserID, "old content", `["old"]`,
 			"fact", nil, nil, nil, now, now,
 		))
-	// Content changed → new ID → rotateMemory: BEGIN + DELETE + INSERT + COMMIT.
+	// Content changed → new ID → rotateMemory: BEGIN + pre-check + DELETE + INSERT + COMMIT.
 	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT deleted_at IS NULL FROM memories").
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID).
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
@@ -717,12 +723,92 @@ func TestService_UpdateMemory_SoftDelete(t *testing.T) {
 	key := memory.Key{AppName: "app", UserID: "u1", MemoryID: "mem-1"}
 	expectUpdateLoad(mock, key, true)
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM").WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("SELECT deleted_at IS NULL FROM memories").
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("UPDATE").
+		WithArgs(sqlmock.AnyArg(), key.MemoryID, key.AppName, key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO.*ON DUPLICATE KEY UPDATE.*IF\(deleted_at IS NOT NULL`).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	err := svc.UpdateMemory(context.Background(), key, "updated", []string{"t"})
 	require.NoError(t, err)
+}
+
+// TestService_UpdateMemory_SoftDelete_RotateMemory_ReviveDeletedRow verifies
+// that when soft-delete is enabled, rotateMemory uses INSERT … ON DUPLICATE KEY
+// UPDATE … deleted_at = NULL so that a previously soft-deleted row with the same
+// primary key is revived instead of causing a duplicate-key error.
+// Regression test for the A → B → A memory_id rotation scenario.
+func TestService_UpdateMemory_SoftDelete_RotateMemory_ReviveDeletedRow(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true), WithSoftDelete(true))
+	defer svc.Close()
+
+	key := memory.Key{AppName: "app", UserID: "u1", MemoryID: "mem-A"}
+	now := time.Now()
+	// Load returns original entry with ID "mem-A".
+	mock.ExpectQuery("SELECT memory_id").
+		WithArgs(key.MemoryID, key.AppName, key.UserID).
+		WillReturnRows(sqlmock.NewRows(memCols).AddRow(
+			key.MemoryID, key.AppName, key.UserID, "content A", `["topic"]`,
+			"fact", nil, nil, nil, now, now,
+		))
+	// Content changes → new ID "mem-B" → rotateMemory:
+	// BEGIN + pre-check (no conflict) + soft-delete A + INSERT B (with ON DUPLICATE KEY) + COMMIT.
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT deleted_at IS NULL FROM memories").
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("UPDATE").
+		WithArgs(sqlmock.AnyArg(), key.MemoryID, key.AppName, key.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO.*ON DUPLICATE KEY UPDATE.*IF\(deleted_at IS NOT NULL`).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	var updateResult memory.UpdateResult
+	err := svc.UpdateMemory(context.Background(), key, "content B", []string{"topic"}, memory.WithUpdateResult(&updateResult))
+	require.NotEqual(t, updateResult.MemoryID, key.MemoryID)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestService_UpdateMemory_SoftDelete_RotateMemory_ActiveRowConflict verifies
+// that when rotating A → B and B is already an active (non-soft-deleted) row,
+// the IF guard makes the INSERT a no-op, RowsAffected is 0, and the function
+// returns an error and rolls back — preventing data loss where A is soft-deleted
+// but B is left unchanged.
+func TestService_UpdateMemory_SoftDelete_RotateMemory_ActiveRowConflict(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true), WithSoftDelete(true))
+	defer svc.Close()
+
+	key := memory.Key{AppName: "app", UserID: "u1", MemoryID: "mem-A"}
+	now := time.Now()
+	// Load returns original entry with ID "mem-A".
+	mock.ExpectQuery("SELECT memory_id").
+		WithArgs(key.MemoryID, key.AppName, key.UserID).
+		WillReturnRows(sqlmock.NewRows(memCols).AddRow(
+			key.MemoryID, key.AppName, key.UserID, "content A", `["topic"]`,
+			"fact", nil, nil, nil, now, now,
+		))
+	// Content changes → new ID "mem-B" → rotateMemory:
+	// BEGIN + pre-check finds target is active → error → ROLLBACK.
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT deleted_at IS NULL FROM memories").
+		WithArgs(sqlmock.AnyArg(), key.AppName, key.UserID).
+		WillReturnRows(sqlmock.NewRows([]string{"active"}).AddRow(true))
+	mock.ExpectRollback()
+
+	err := svc.UpdateMemory(context.Background(), key, "content B", []string{"topic"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already active")
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestService_UpdateMemory_SQLError(t *testing.T) {
