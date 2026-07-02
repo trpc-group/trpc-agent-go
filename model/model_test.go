@@ -78,6 +78,11 @@ func TestRequestOptions_IgnoresNilStructuredOutputInputs(t *testing.T) {
 	require.Nil(t, req.StructuredOutput)
 }
 
+func TestThinkingKeys(t *testing.T) {
+	require.Equal(t, "enable_thinking", EnableThinkingKey)
+	require.Equal(t, "enabled_thinking", EnabledThinkingKey)
+}
+
 // mockModel is a simple mock implementation for testing the interface.
 type mockModel struct{}
 
