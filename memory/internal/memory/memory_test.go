@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -32,9 +33,20 @@ func TestAllToolCreators(t *testing.T) {
 		memory.AddToolName,
 		memory.UpdateToolName,
 		memory.SearchToolName,
+		memory.DeepSearchToolName,
 		memory.LoadToolName,
 		memory.DeleteToolName,
 		memory.ClearToolName,
+		deepsearch.CueSearchToolName,
+		deepsearch.TagExpandToolName,
+		deepsearch.ContentLoadToolName,
+		deepsearch.EdgesByTagToolName,
+		deepsearch.ConversationTimeToolName,
+		deepsearch.EventKeywordsToolName,
+		deepsearch.EventContextToolName,
+		deepsearch.PersonalInformationToolName,
+		deepsearch.PersonalAspectToolName,
+		deepsearch.TopicEventsToolName,
 	}
 
 	for _, toolName := range expectedTools {
@@ -75,6 +87,17 @@ func TestDefaultEnabledTools(t *testing.T) {
 	// Verify that delete and clear tools are not included.
 	assert.NotContains(t, DefaultEnabledTools, memory.DeleteToolName)
 	assert.NotContains(t, DefaultEnabledTools, memory.ClearToolName)
+	assert.NotContains(t, DefaultEnabledTools, memory.DeepSearchToolName)
+	assert.NotContains(t, DefaultEnabledTools, deepsearch.CueSearchToolName)
+	assert.NotContains(t, DefaultEnabledTools, deepsearch.TagExpandToolName)
+	assert.NotContains(t, DefaultEnabledTools, deepsearch.ContentLoadToolName)
+	assert.NotContains(t, DefaultEnabledTools, deepsearch.EdgesByTagToolName)
+	assert.NotContains(t, DefaultEnabledTools, deepsearch.ConversationTimeToolName)
+	assert.NotContains(t, DefaultEnabledTools, deepsearch.EventKeywordsToolName)
+	assert.NotContains(t, DefaultEnabledTools, deepsearch.EventContextToolName)
+	assert.NotContains(t, DefaultEnabledTools, deepsearch.PersonalInformationToolName)
+	assert.NotContains(t, DefaultEnabledTools, deepsearch.PersonalAspectToolName)
+	assert.NotContains(t, DefaultEnabledTools, deepsearch.TopicEventsToolName)
 
 	// Verify no extra tools are in the map.
 	assert.Len(t, DefaultEnabledTools, len(expectedTools), "DefaultEnabledTools should contain exactly the expected tools")
@@ -91,7 +114,18 @@ func TestIsValidToolName(t *testing.T) {
 		{"valid delete tool", memory.DeleteToolName, true},
 		{"valid clear tool", memory.ClearToolName, true},
 		{"valid search tool", memory.SearchToolName, true},
+		{"valid deepsearch tool", memory.DeepSearchToolName, true},
 		{"valid load tool", memory.LoadToolName, true},
+		{"valid cue search tool", deepsearch.CueSearchToolName, true},
+		{"valid tag expand tool", deepsearch.TagExpandToolName, true},
+		{"valid content load tool", deepsearch.ContentLoadToolName, true},
+		{"valid edges by tag tool", deepsearch.EdgesByTagToolName, true},
+		{"valid query conversation time tool", deepsearch.ConversationTimeToolName, true},
+		{"valid query event keywords tool", deepsearch.EventKeywordsToolName, true},
+		{"valid query event context tool", deepsearch.EventContextToolName, true},
+		{"valid query personal information tool", deepsearch.PersonalInformationToolName, true},
+		{"valid query personal aspect tool", deepsearch.PersonalAspectToolName, true},
+		{"valid query topic events tool", deepsearch.TopicEventsToolName, true},
 		{"invalid tool", "invalid_tool", false},
 		{"empty tool name", "", false},
 		{"case sensitive", "ADD_MEMORY", false},

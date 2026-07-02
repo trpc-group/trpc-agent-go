@@ -27,6 +27,8 @@ const (
 	ClearToolName  = "memory_clear"
 	SearchToolName = "memory_search"
 	LoadToolName   = "memory_load"
+	// DeepSearchToolName is the tool name for progressive cue/tag memory search.
+	DeepSearchToolName = "memory_deepsearch"
 )
 
 // Session state keys for memory features.

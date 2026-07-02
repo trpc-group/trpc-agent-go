@@ -17,8 +17,10 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const (
@@ -32,7 +34,7 @@ var (
 		memoryLimit:      imemory.DefaultMemoryLimit,
 		searchMinScore:   imemory.DefaultSearchMinScore,
 		maxSearchResults: imemory.DefaultMaxSearchResults,
-		toolCreators:     imemory.AllToolCreators,
+		toolCreators:     imemory.DefaultToolCreators,
 		enabledTools:     imemory.DefaultEnabledTools,
 		asyncMemoryNum:   imemory.DefaultAsyncMemoryNum,
 	}
@@ -68,6 +70,9 @@ type ServiceOpts struct {
 	asyncMemoryNum   int
 	memoryQueueSize  int
 	memoryJobTimeout time.Duration
+
+	deepSearchModel   model.Model
+	deepSearchOptions []deepsearch.Option
 }
 
 func (o ServiceOpts) clone() ServiceOpts {
@@ -84,12 +89,21 @@ func (o ServiceOpts) clone() ServiceOpts {
 
 	// Initialize userExplicitlySet map (empty for new clone).
 	opts.userExplicitlySet = make(map[string]struct{})
+	opts.deepSearchOptions = append([]deepsearch.Option(nil), o.deepSearchOptions...)
 
 	return opts
 }
 
 // ServiceOpt is the option for the mysql memory service.
 type ServiceOpt func(*ServiceOpts)
+
+// WithDeepSearch enables the derived DeepSearch index for this service.
+func WithDeepSearch(indexModel model.Model, options ...deepsearch.Option) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.deepSearchModel = indexModel
+		opts.deepSearchOptions = append([]deepsearch.Option(nil), options...)
+	}
+}
 
 // WithMySQLClientDSN sets the MySQL DSN connection string directly (recommended).
 // Example: "user:password@tcp(localhost:3306)/dbname?parseTime=true&charset=utf8mb4"

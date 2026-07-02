@@ -24,6 +24,7 @@ import (
 
 	"github.com/go-ego/gse"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	memorytool "trpc.group/trpc-go/trpc-agent-go/memory/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -187,15 +188,75 @@ func metadataIdentityLocation(mem *memory.Memory) string {
 	return strings.TrimSpace(mem.Location)
 }
 
-// AllToolCreators contains creators for all valid memory tools.
-// This is shared between different memory service implementations.
-var AllToolCreators = map[string]memory.ToolCreator{
+// DefaultToolCreators contains creators for core memory tools.
+// This is shared between memory service implementations that only support the
+// base memory.Service contract.
+var DefaultToolCreators = map[string]memory.ToolCreator{
 	memory.AddToolName:    func() tool.Tool { return memorytool.NewAddTool() },
 	memory.UpdateToolName: func() tool.Tool { return memorytool.NewUpdateTool() },
 	memory.SearchToolName: func() tool.Tool { return memorytool.NewSearchTool() },
 	memory.LoadToolName:   func() tool.Tool { return memorytool.NewLoadTool() },
 	memory.DeleteToolName: func() tool.Tool { return memorytool.NewDeleteTool() },
 	memory.ClearToolName:  func() tool.Tool { return memorytool.NewClearTool() },
+}
+
+// DeepSearchToolCreators contains creators for optional cue-tag-content memory
+// tools. Only services implementing deepsearch.Service should expose these
+// creators by default.
+var DeepSearchToolCreators = map[string]memory.ToolCreator{
+	memory.DeepSearchToolName: func() tool.Tool {
+		return memorytool.NewDeepSearchTool()
+	},
+	deepsearch.CueSearchToolName: func() tool.Tool {
+		return memorytool.NewCueSearchTool()
+	},
+	deepsearch.TagExpandToolName: func() tool.Tool {
+		return memorytool.NewTagExpandTool()
+	},
+	deepsearch.ContentLoadToolName: func() tool.Tool {
+		return memorytool.NewContentLoadTool()
+	},
+}
+
+// DeepSearchQueryToolCreators contains creators for production cue/tag query tools.
+// Only services implementing deepsearch.QueryService should expose these
+// creators by default.
+var DeepSearchQueryToolCreators = map[string]memory.ToolCreator{
+	deepsearch.EdgesByTagToolName: func() tool.Tool {
+		return memorytool.NewEdgesByTagTool()
+	},
+	deepsearch.ConversationTimeToolName: func() tool.Tool {
+		return memorytool.NewQueryConversationTimeTool()
+	},
+	deepsearch.EventKeywordsToolName: func() tool.Tool {
+		return memorytool.NewQueryEventKeywordsTool()
+	},
+	deepsearch.EventContextToolName: func() tool.Tool {
+		return memorytool.NewQueryEventContextTool()
+	},
+	deepsearch.PersonalInformationToolName: func() tool.Tool {
+		return memorytool.NewQueryPersonalInformationTool()
+	},
+	deepsearch.PersonalAspectToolName: func() tool.Tool {
+		return memorytool.NewQueryPersonalAspectTool()
+	},
+	deepsearch.TopicEventsToolName: func() tool.Tool {
+		return memorytool.NewQueryTopicEventsTool()
+	},
+}
+
+// AllToolCreators contains creators for all valid memory tools.
+var AllToolCreators = MergeToolCreators(DefaultToolCreators, DeepSearchToolCreators, DeepSearchQueryToolCreators)
+
+// MergeToolCreators returns a merged copy of tool creator maps.
+func MergeToolCreators(maps ...map[string]memory.ToolCreator) map[string]memory.ToolCreator {
+	out := make(map[string]memory.ToolCreator)
+	for _, creators := range maps {
+		for name, creator := range creators {
+			out[name] = creator
+		}
+	}
+	return out
 }
 
 // DefaultEnabledTools are the tool names that are enabled by default.
@@ -209,12 +270,23 @@ var DefaultEnabledTools = map[string]struct{}{
 
 // validToolNames contains all valid memory tool names.
 var validToolNames = map[string]struct{}{
-	memory.AddToolName:    {},
-	memory.UpdateToolName: {},
-	memory.DeleteToolName: {},
-	memory.ClearToolName:  {},
-	memory.SearchToolName: {},
-	memory.LoadToolName:   {},
+	memory.AddToolName:                     {},
+	memory.UpdateToolName:                  {},
+	memory.DeleteToolName:                  {},
+	memory.ClearToolName:                   {},
+	memory.SearchToolName:                  {},
+	memory.LoadToolName:                    {},
+	memory.DeepSearchToolName:              {},
+	deepsearch.CueSearchToolName:           {},
+	deepsearch.TagExpandToolName:           {},
+	deepsearch.ContentLoadToolName:         {},
+	deepsearch.EdgesByTagToolName:          {},
+	deepsearch.ConversationTimeToolName:    {},
+	deepsearch.EventKeywordsToolName:       {},
+	deepsearch.EventContextToolName:        {},
+	deepsearch.PersonalInformationToolName: {},
+	deepsearch.PersonalAspectToolName:      {},
+	deepsearch.TopicEventsToolName:         {},
 }
 
 // IsValidToolName checks if the given tool name is valid.

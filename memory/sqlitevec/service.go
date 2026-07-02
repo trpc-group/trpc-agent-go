@@ -24,12 +24,18 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var _ memory.Service = (*Service)(nil)
+var _ deepsearch.QueryService = (*Service)(nil)
+
+type serviceDeepSearch struct {
+	*deepsearch.Runtime
+}
 
 const (
 	sqlVectorFromBlob       = "vec_f32(?)"
@@ -40,6 +46,8 @@ var vecInitOnce sync.Once
 
 // Service is the sqlite-vec memory service.
 type Service struct {
+	*serviceDeepSearch
+
 	opts      ServiceOpts
 	db        *sql.DB
 	tableName string
@@ -89,6 +97,11 @@ func NewService(db *sql.DB, options ...ServiceOpt) (*Service, error) {
 		tableName:   opts.tableName,
 		cachedTools: make(map[string]tool.Tool),
 	}
+	s.serviceDeepSearch = &serviceDeepSearch{Runtime: deepsearch.NewRuntime(
+		opts.deepSearchModel,
+		s.ReadMemories,
+		opts.deepSearchOptions...,
+	)}
 
 	if !opts.skipDBInit {
 		ctx, cancel := context.WithTimeout(

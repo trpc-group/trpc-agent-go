@@ -18,8 +18,10 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const defaultDBInitTimeout = 30 * time.Second
@@ -29,7 +31,7 @@ var defaultOptions = ServiceOpts{
 	memoryLimit:      imemory.DefaultMemoryLimit,
 	searchMinScore:   imemory.DefaultSearchMinScore,
 	maxSearchResults: imemory.DefaultMaxSearchResults,
-	toolCreators:     imemory.AllToolCreators,
+	toolCreators:     imemory.DefaultToolCreators,
 	enabledTools:     imemory.DefaultEnabledTools,
 	asyncMemoryNum:   imemory.DefaultAsyncMemoryNum,
 	memoryQueueSize:  imemory.DefaultMemoryQueueSize,
@@ -62,6 +64,9 @@ type ServiceOpts struct {
 	asyncMemoryNum   int
 	memoryQueueSize  int
 	memoryJobTimeout time.Duration
+
+	deepSearchModel   model.Model
+	deepSearchOptions []deepsearch.Option
 }
 
 func (o ServiceOpts) clone() ServiceOpts {
@@ -79,12 +84,21 @@ func (o ServiceOpts) clone() ServiceOpts {
 	opts.toolExposed = maps.Clone(o.toolExposed)
 	opts.toolHidden = maps.Clone(o.toolHidden)
 	opts.userExplicitlySet = make(map[string]struct{})
+	opts.deepSearchOptions = append([]deepsearch.Option(nil), o.deepSearchOptions...)
 
 	return opts
 }
 
 // ServiceOpt is the option for the sqlite memory service.
 type ServiceOpt func(*ServiceOpts)
+
+// WithDeepSearch enables the derived DeepSearch index for this service.
+func WithDeepSearch(indexModel model.Model, options ...deepsearch.Option) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.deepSearchModel = indexModel
+		opts.deepSearchOptions = append([]deepsearch.Option(nil), options...)
+	}
+}
 
 // WithTableName sets the table name for storing memories.
 // Default is "memories".

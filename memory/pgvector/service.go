@@ -17,11 +17,14 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lib/pq"
 	"github.com/pgvector/pgvector-go"
+	"golang.org/x/sync/singleflight"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
@@ -29,6 +32,7 @@ import (
 )
 
 var _ memory.Service = (*Service)(nil)
+var _ deepsearch.Service = (*Service)(nil)
 
 // Service is the pgvector memory service.
 // Storage structure.
@@ -45,6 +49,11 @@ type Service struct {
 	cachedTools      map[string]tool.Tool
 	precomputedTools []tool.Tool
 	autoMemoryWorker *imemory.AutoMemoryWorker
+
+	deepSearchTables deepSearchTables
+	deepSearchInitMu sync.Mutex
+	deepSearchInited bool
+	deepSearchBuilds singleflight.Group
 }
 
 // NewService creates a new pgvector memory service.
@@ -96,10 +105,11 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	fullTableName := buildFullTableName(opts.schema, opts.tableName)
 
 	s := &Service{
-		opts:        opts,
-		db:          db,
-		tableName:   fullTableName,
-		cachedTools: make(map[string]tool.Tool),
+		opts:             opts,
+		db:               db,
+		tableName:        fullTableName,
+		cachedTools:      make(map[string]tool.Tool),
+		deepSearchTables: buildDeepSearchTables(opts.schema, opts.tableName),
 	}
 
 	// Initialize database schema unless skipped.
@@ -275,7 +285,8 @@ func (s *Service) AddMemory(
 				"participants = EXCLUDED.participants, "+
 				"location = EXCLUDED.location, "+
 				"deleted_at = NULL, "+
-				"updated_at = EXCLUDED.updated_at",
+				"updated_at = EXCLUDED.updated_at "+
+				"RETURNING memory_id, (SELECT memory_id FROM evict)",
 			s.tableName,
 			deletedFilter,
 			s.tableName,
@@ -304,19 +315,53 @@ func (s *Service) AddMemory(
 		)
 	}
 
-	res, err := s.db.ExecContext(ctx, insertQuery, args...)
-	if err != nil {
-		return fmt.Errorf("store memory entry failed: %w", err)
-	}
+	var evictedMemoryID sql.NullString
 	if s.opts.memoryLimit > 0 {
-		affected, err := res.RowsAffected()
+		stored := false
+		err := s.db.Query(ctx, func(rows *sql.Rows) error {
+			if !rows.Next() {
+				return nil
+			}
+			var storedMemoryID string
+			if err := rows.Scan(&storedMemoryID, &evictedMemoryID); err != nil {
+				return err
+			}
+			stored = true
+			return nil
+		}, insertQuery, args...)
 		if err != nil {
-			return fmt.Errorf("store memory entry rows affected failed: %w", err)
+			return fmt.Errorf("store memory entry failed: %w", err)
 		}
-		if affected == 0 {
+		if !stored {
 			return fmt.Errorf("memory eviction failed for user %s, limit: %d",
 				userKey.UserID, s.opts.memoryLimit)
 		}
+	} else {
+		if _, err := s.db.ExecContext(ctx, insertQuery, args...); err != nil {
+			return fmt.Errorf("store memory entry failed: %w", err)
+		}
+	}
+
+	if evictedMemoryID.Valid {
+		if err := s.deleteDeepSearchMemory(ctx, memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: evictedMemoryID.String,
+		}); err != nil {
+			return fmt.Errorf("delete evicted deepsearch memory: %w", err)
+		}
+	}
+
+	entry := &memory.Entry{
+		ID:        memoryID,
+		AppName:   userKey.AppName,
+		UserID:    userKey.UserID,
+		Memory:    mem,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := s.indexDeepSearchEntry(ctx, entry); err != nil {
+		return err
 	}
 
 	return nil
@@ -418,6 +463,14 @@ func (s *Service) UpdateMemory(
 	if affected == 0 {
 		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 	}
+	if newID != memoryKey.MemoryID {
+		if err := s.deleteDeepSearchMemory(ctx, memoryKey); err != nil {
+			return err
+		}
+	}
+	if err := s.indexDeepSearchEntry(ctx, entry); err != nil {
+		return err
+	}
 	if result := memory.ResolveUpdateResult(opts); result != nil {
 		result.MemoryID = newID
 	}
@@ -455,6 +508,9 @@ func (s *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error 
 	if err != nil {
 		return fmt.Errorf("delete memory entry failed: %w", err)
 	}
+	if err := s.deleteDeepSearchMemory(ctx, memoryKey); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -483,6 +539,14 @@ func (s *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) err
 	}
 	if err != nil {
 		return fmt.Errorf("clear memories failed: %w", err)
+	}
+	if s.deepSearchEnabled() {
+		if err := s.DeleteDocuments(ctx, deepsearch.DeleteRequest{
+			UserKey:  userKey,
+			ClearAll: true,
+		}); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -941,6 +1005,59 @@ func (s *Service) Close() error {
 		return s.db.Close()
 	}
 	return nil
+}
+
+func (s *Service) deepSearchEnabled() bool {
+	return s.opts.deepSearchModel != nil
+}
+
+func (s *Service) indexDeepSearchEntry(
+	ctx context.Context,
+	entry *memory.Entry,
+) error {
+	if !s.deepSearchEnabled() || entry == nil {
+		return nil
+	}
+	userKey := memory.UserKey{AppName: entry.AppName, UserID: entry.UserID}
+	docs, err := deepsearch.BuildDocuments(
+		ctx,
+		s.opts.deepSearchModel,
+		[]*memory.Entry{entry},
+		s.opts.deepSearchOptions...,
+	)
+	if len(docs) == 0 {
+		return err
+	}
+	if indexErr := s.IndexDocuments(ctx, deepsearch.IndexRequest{
+		UserKey:   userKey,
+		Documents: docs,
+	}); indexErr != nil {
+		return indexErr
+	}
+	return nil
+}
+
+func (s *Service) deleteDeepSearchMemory(
+	ctx context.Context,
+	memoryKey memory.Key,
+) error {
+	if !s.deepSearchEnabled() {
+		return nil
+	}
+	return s.DeleteDocuments(ctx, deepsearch.DeleteRequest{
+		UserKey: memory.UserKey{
+			AppName: memoryKey.AppName,
+			UserID:  memoryKey.UserID,
+		},
+		Refs: []deepsearch.ContentRef{
+			{
+				Kind:     deepsearch.RefKindMemoryEntry,
+				AppName:  memoryKey.AppName,
+				UserID:   memoryKey.UserID,
+				SourceID: memoryKey.MemoryID,
+			},
+		},
+	})
 }
 
 // scanMemoryEntry scans a memory entry from database rows.

@@ -16,8 +16,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // Default connection settings.
@@ -124,6 +126,10 @@ type ServiceOpts struct {
 
 	// Memory extractor for auto memory mode.
 	extractor extractor.MemoryExtractor
+
+	// Cue/tag memory enhancement configuration. Nil means disabled.
+	deepSearchModel   model.Model
+	deepSearchOptions []deepsearch.Option
 
 	// Async memory worker configuration.
 	asyncMemoryNum   int
@@ -398,6 +404,15 @@ func WithEmbedder(e embedder.Embedder) ServiceOpt {
 func WithExtractor(e extractor.MemoryExtractor) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.extractor = e
+	}
+}
+
+// WithDeepSearch enables cue/tag indexing as an enhancement on memory
+// entries. The stored memory entry remains the authoritative content.
+func WithDeepSearch(m model.Model, deepSearchOptions ...deepsearch.Option) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.deepSearchModel = m
+		opts.deepSearchOptions = append([]deepsearch.Option(nil), deepSearchOptions...)
 	}
 }
 

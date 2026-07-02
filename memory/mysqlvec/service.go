@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
@@ -29,6 +30,11 @@ import (
 )
 
 var _ memory.Service = (*Service)(nil)
+var _ deepsearch.QueryService = (*Service)(nil)
+
+type serviceDeepSearch struct {
+	*deepsearch.Runtime
+}
 
 // Service is the mysqlvec memory service.
 // Storage structure:
@@ -39,6 +45,8 @@ var _ memory.Service = (*Service)(nil)
 //	Primary key: memory_id.
 //	Indexes: (app_name, user_id), updated_at, deleted_at, event_time, kind, fulltext(memory_content).
 type Service struct {
+	*serviceDeepSearch
+
 	opts           ServiceOpts
 	db             storage.Client
 	tableName      string
@@ -89,6 +97,11 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		tableName:   opts.tableName,
 		cachedTools: make(map[string]tool.Tool),
 	}
+	s.serviceDeepSearch = &serviceDeepSearch{Runtime: deepsearch.NewRuntime(
+		opts.deepSearchModel,
+		s.ReadMemories,
+		opts.deepSearchOptions...,
+	)}
 
 	// Always detect vector support (even when skipDBInit is set) so that
 	// pre-created MySQL 9.0+ VECTOR tables are not forced onto the BLOB path.

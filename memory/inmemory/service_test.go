@@ -12,6 +12,7 @@ package inmemory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -22,6 +23,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -29,9 +31,410 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+type deepSearchIndexModel struct {
+	mu    sync.Mutex
+	calls int
+	err   error
+}
+
+func (m *deepSearchIndexModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	if m.err != nil {
+		return nil, m.err
+	}
+	var input []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(req.Messages[len(req.Messages)-1].Content), &input); err != nil {
+		return nil, err
+	}
+	output := struct {
+		Memories []map[string]any `json:"memories"`
+	}{
+		Memories: make([]map[string]any, 0, len(input)),
+	}
+	for _, entry := range input {
+		output.Memories = append(output.Memories, map[string]any{
+			"id":   entry.ID,
+			"cues": []string{"memory cue"},
+			"tags": []string{"memory tag"},
+		})
+	}
+	content, err := json.Marshal(output)
+	if err != nil {
+		return nil, err
+	}
+	responses := make(chan *model.Response, 1)
+	responses <- &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Content: string(content)}}},
+	}
+	close(responses)
+	return responses, nil
+}
+
+func (m *deepSearchIndexModel) Info() model.Info {
+	return model.Info{Name: "inmemory-deepsearch-test"}
+}
+
+func (m *deepSearchIndexModel) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
 func TestNewMemoryService(t *testing.T) {
 	service := NewMemoryService()
 	require.NotNil(t, service, "NewMemoryService should not return nil")
+}
+
+func newDeepSearchTestService() *MemoryService {
+	service := NewMemoryService()
+	service.deepSearchStore = newDeepSearchStore()
+	return service
+}
+
+func TestMemoryService_DeepSearchIndexSearchExpandLoad(t *testing.T) {
+	service := newDeepSearchTestService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	require.NoError(t, service.IndexDocuments(ctx, deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				ID:   "memory-1",
+				Text: "Alice booked a Kyoto hiking trip with the user.",
+				Cues: []string{"Kyoto hiking", "Alice"},
+				Tags: []string{"travel", "plan"},
+				Ref: deepsearch.ContentRef{
+					Kind:     deepsearch.RefKindMemoryEntry,
+					SourceID: "memory-1",
+				},
+				Metadata: deepsearch.Metadata{
+					Topics:       []string{"travel"},
+					Participants: []string{"Alice"},
+					Location:     "Kyoto",
+				},
+			},
+		},
+	}))
+
+	cues, err := service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey:    userKey,
+		Query:      "kyoto",
+		MaxResults: 5,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, cues.Cues)
+	assert.Equal(t, "kyoto hiking", cues.Cues[0].Text)
+
+	expanded, err := service.ExpandTags(ctx, deepsearch.TagExpandRequest{
+		UserKey:        userKey,
+		CueIDs:         []string{cues.Cues[0].ID},
+		MaxTagsPerCue:  10,
+		MaxContents:    10,
+		IncludeContent: true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, expanded.Paths)
+	require.NotNil(t, expanded.Paths[0].Content)
+	assert.Equal(t, "memory-1", expanded.Paths[0].Content.Ref.SourceID)
+
+	loaded, err := service.LoadContents(ctx, deepsearch.ContentLoadRequest{
+		UserKey: userKey,
+		Refs: []deepsearch.ContentRef{
+			{
+				Kind:     deepsearch.RefKindMemoryEntry,
+				SourceID: "memory-1",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, loaded.Contents, 1)
+	assert.Contains(t, loaded.Contents[0].Text, "Kyoto hiking")
+}
+
+func TestMemoryService_DeepSearchReindexReplacesContentEdges(t *testing.T) {
+	service := newDeepSearchTestService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+	ref := deepsearch.ContentRef{
+		Kind:     deepsearch.RefKindMemoryEntry,
+		SourceID: "memory-1",
+	}
+
+	require.NoError(t, service.IndexDocuments(ctx, deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				Text: "The user liked coffee.",
+				Cues: []string{"coffee"},
+				Tags: []string{"preference"},
+				Ref:  ref,
+			},
+		},
+	}))
+	require.NoError(t, service.IndexDocuments(ctx, deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				Text: "The user switched to tea.",
+				Cues: []string{"tea"},
+				Tags: []string{"preference"},
+				Ref:  ref,
+			},
+		},
+	}))
+
+	oldCues, err := service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey: userKey,
+		Query:   "coffee",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, oldCues.Cues)
+
+	newCues, err := service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey: userKey,
+		Query:   "tea",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, newCues.Cues)
+	newPaths, err := service.ExpandTags(ctx, deepsearch.TagExpandRequest{
+		UserKey:        userKey,
+		CueIDs:         []string{newCues.Cues[0].ID},
+		IncludeContent: true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, newPaths.Paths)
+	require.NotNil(t, newPaths.Paths[0].Content)
+	assert.Contains(t, newPaths.Paths[0].Content.Text, "tea")
+}
+
+func TestMemoryService_DeepSearchRejectsMissingCuesAndTags(t *testing.T) {
+	service := newDeepSearchTestService()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+
+	err := service.IndexDocuments(ctx, deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				ID: "memory-1",
+				Text: "[SessionDate: 2023/05/30 (Tue) 17:27] " +
+					"I graduated with a degree in Business Administration.",
+				Ref: deepsearch.ContentRef{
+					Kind:     deepsearch.RefKindMemoryEntry,
+					SourceID: "memory-1",
+				},
+			},
+		},
+		Replace: true,
+	})
+	require.ErrorContains(t, err, "cues are required")
+}
+
+func TestMemoryService_DeepSearchQueries(t *testing.T) {
+	service := newDeepSearchTestService()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	day1 := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	day2 := time.Date(2024, 4, 1, 0, 0, 0, 0, time.UTC)
+
+	require.NoError(t, service.IndexDocuments(ctx, deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				ID:   "event-1",
+				Text: "The user started learning Japanese for a Kyoto trip.",
+				Cues: []string{"learning japanese", "kyoto trip"},
+				Tags: []string{"education", "language", "travel"},
+				Ref: deepsearch.ContentRef{
+					Kind:     deepsearch.RefKindMemoryEntry,
+					SourceID: "event-1",
+				},
+				Metadata: deepsearch.Metadata{
+					EventTime: day1,
+					Topics:    []string{"language", "travel"},
+					Kind:      memory.KindEpisode,
+				},
+			},
+			{
+				ID:   "event-2",
+				Text: "The user prefers quiet hotels near train stations.",
+				Cues: []string{"quiet hotels", "train stations"},
+				Tags: []string{"preference", "travel"},
+				Ref: deepsearch.ContentRef{
+					Kind:     deepsearch.RefKindMemoryEntry,
+					SourceID: "event-2",
+				},
+				Metadata: deepsearch.Metadata{
+					EventTime: day2,
+					Topics:    []string{"travel"},
+					Kind:      memory.KindEpisode,
+				},
+			},
+		},
+		Replace: true,
+	}))
+
+	var _ deepsearch.QueryService = service
+	edges, err := service.EdgesByTag(ctx, deepsearch.EdgesByTagRequest{
+		UserKey:        userKey,
+		Tags:           []string{"preference"},
+		IncludeContent: true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, edges.Paths)
+	require.NotNil(t, edges.Paths[0].Content)
+	assert.Contains(t, edges.Paths[0].Content.Text, "quiet hotels")
+
+	topic, err := service.QueryTopicEvents(ctx, deepsearch.QueryTopicEventsRequest{
+		UserKey: userKey,
+		Topic:   "language",
+	})
+	require.NoError(t, err)
+	require.Len(t, topic.Contents, 1)
+	assert.Equal(t, "event-1", topic.Contents[0].Ref.SourceID)
+
+	aspect, err := service.QueryPersonalAspect(ctx, deepsearch.QueryPersonalAspectRequest{
+		UserKey: userKey,
+		Aspect:  "preference",
+		Query:   "hotel",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, aspect.Contents)
+	assert.Contains(t, aspect.Contents[0].Text, "quiet hotels")
+
+	contextResult, err := service.QueryEventContext(ctx, deepsearch.QueryEventContextRequest{
+		UserKey: userKey,
+		Refs: []deepsearch.ContentRef{{
+			Kind:     deepsearch.RefKindMemoryEntry,
+			SourceID: "event-2",
+		}},
+		MaxResults: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, contextResult.Contents, 1)
+
+	conversationTime, err := service.QueryConversationTime(ctx, deepsearch.QueryConversationTimeRequest{
+		UserKey:    userKey,
+		TimeAfter:  day1.Add(-time.Hour),
+		TimeBefore: day1.Add(time.Hour),
+	})
+	require.NoError(t, err)
+	require.Len(t, conversationTime.Contents, 1)
+	assert.Equal(t, "event-1", conversationTime.Contents[0].Ref.SourceID)
+
+	keywords, err := service.QueryEventKeywords(ctx, deepsearch.QueryEventKeywordsRequest{
+		UserKey:  userKey,
+		Keywords: []string{"Japanese", "Kyoto"},
+	})
+	require.NoError(t, err)
+	require.Len(t, keywords.Contents, 1)
+	assert.Equal(t, "event-1", keywords.Contents[0].Ref.SourceID)
+
+	personal, err := service.QueryPersonalInformation(ctx, deepsearch.QueryPersonalInformationRequest{
+		UserKey: userKey,
+		Query:   "quiet hotels",
+		Aspects: []string{"preference"},
+	})
+	require.NoError(t, err)
+	require.Len(t, personal.Contents, 1)
+	assert.Equal(t, "event-2", personal.Contents[0].Ref.SourceID)
+}
+
+func TestMemoryService_DeepSearchHelpersAndDeleteByContentID(t *testing.T) {
+	service := newDeepSearchTestService()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	now := time.Now()
+	require.NoError(t, service.IndexDocuments(ctx, deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				ID:      "memory-1",
+				Text:    "Alice planned a Kyoto trip.",
+				Cues:    []string{"kyoto trip"},
+				Tags:    []string{"travel"},
+				Ref:     deepsearch.ContentRef{Kind: deepsearch.RefKindMemoryEntry, SourceID: "memory-1"},
+				Created: now.Add(-time.Hour),
+			},
+			{
+				ID:      "memory-2",
+				Text:    "Alice booked a Kyoto hotel.",
+				Cues:    []string{"kyoto trip"},
+				Tags:    []string{"hotel"},
+				Ref:     deepsearch.ContentRef{Kind: deepsearch.RefKindMemoryEntry, SourceID: "memory-2"},
+				Created: now,
+			},
+		},
+	}))
+
+	service.deepSearchStore.mu.RLock()
+	user := service.deepSearchStore.users[deepSearchUserKey(userKey)]
+	require.NotNil(t, user)
+	cueID := user.cueByText["kyoto trip"]
+	contentID := user.contentByRef[contentRefKey(normalizeContentRef(userKey, deepsearch.ContentRef{
+		Kind:     deepsearch.RefKindMemoryEntry,
+		SourceID: "memory-1",
+	}))]
+	tagIDs := sortedTagIDs(user, cueID)
+	require.NotEmpty(t, tagIDs)
+	resolved := resolveCueIDs(
+		user,
+		[]string{"", cueID, cueID},
+		[]string{"Kyoto Trip", "missing"},
+	)
+	assert.Equal(t, []string{cueID}, resolved)
+	anchors := service.resolveDeepSearchAnchors(user, userKey, deepsearch.QueryEventContextRequest{
+		ContentIDs: []string{"", contentID, tagIDs[0], cueID},
+	})
+	assert.Contains(t, anchors, contentID)
+	related := relatedContents(user, anchors, 10)
+	require.Len(t, related, 2)
+	service.deepSearchStore.mu.RUnlock()
+
+	rankDeepSearchContents(related, "hotel", []string{"Kyoto"})
+	assert.Equal(t, "memory-2", related[0].Ref.SourceID)
+	assert.Equal(t, now, deepSearchContentTime(related[0]))
+	assert.Equal(t, now.Add(-time.Hour), deepSearchContentTime(related[1]))
+
+	loaded, err := service.LoadContents(ctx, deepsearch.ContentLoadRequest{
+		UserKey:    userKey,
+		ContentIDs: []string{"", contentID, contentID, "missing"},
+		MaxResults: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, loaded.Contents, 1)
+
+	require.NoError(t, service.DeleteDocuments(ctx, deepsearch.DeleteRequest{
+		UserKey:    userKey,
+		ContentIDs: []string{"", contentID},
+	}))
+	loaded, err = service.LoadContents(ctx, deepsearch.ContentLoadRequest{
+		UserKey:    userKey,
+		ContentIDs: []string{contentID},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, loaded.Contents)
+}
+
+func TestScoreDeepSearchText_TokenAndPhraseScoring(t *testing.T) {
+	assert.Zero(t, scoreDeepSearchText("me", "time"))
+	assert.Zero(t, scoreDeepSearchText("it", "with"))
+	assert.Greater(t, scoreDeepSearchText("graduated degree", "what degree did I graduate with"), 0.8)
+	assert.Greater(t, scoreDeepSearchText("daily commute", "daily commute duration"), 0.8)
 }
 
 func TestMemoryService_AddMemory(t *testing.T) {
@@ -124,6 +527,136 @@ func TestMemoryService_UpdateMemory(t *testing.T) {
 	require.NoError(t, err, "ReadMemories failed")
 
 	assert.Equal(t, "updated memory", memories[0].Memory.Memory, "Expected updated memory content")
+}
+
+func TestMemoryService_UpdateMemory_ConcurrentWithoutDeepSearch(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+	const memoryText = "stable memory"
+	topics := []string{"stable"}
+
+	require.NoError(t, service.AddMemory(ctx, userKey, memoryText, topics))
+	memories, err := service.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, memories, 1)
+	memoryKey := memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: memories[0].ID,
+	}
+
+	const goroutines = 64
+	start := make(chan struct{})
+	errs := make(chan error, goroutines)
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- service.UpdateMemory(ctx, memoryKey, memoryText, topics)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+}
+
+func TestMemoryService_DeepSearchLazyBuildAndLifecycle(t *testing.T) {
+	indexModel := &deepSearchIndexModel{}
+	service := NewMemoryService(WithDeepSearch(indexModel))
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	require.NoError(t, service.AddMemory(ctx, userKey, "first memory", []string{"first"}))
+	require.NoError(t, service.AddMemory(ctx, userKey, "second memory", []string{"second"}))
+	assert.Zero(t, indexModel.callCount())
+
+	require.NoError(t, service.EnsureIndex(ctx, userKey))
+	assert.Equal(t, 1, indexModel.callCount())
+	require.NoError(t, service.EnsureIndex(ctx, userKey))
+	assert.Equal(t, 1, indexModel.callCount())
+
+	loaded, err := service.LoadContents(ctx, deepsearch.ContentLoadRequest{UserKey: userKey})
+	require.NoError(t, err)
+	require.Len(t, loaded.Contents, 2)
+
+	require.NoError(t, service.AddMemory(ctx, userKey, "third memory", []string{"third"}))
+	assert.Equal(t, 2, indexModel.callCount())
+	memories, err := service.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	var third *memory.Entry
+	for _, entry := range memories {
+		if entry.Memory.Memory == "third memory" {
+			third = entry
+			break
+		}
+	}
+	require.NotNil(t, third)
+
+	oldID := third.ID
+	result := &memory.UpdateResult{}
+	require.NoError(t, service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: oldID},
+		"updated third memory",
+		[]string{"updated"},
+		memory.WithUpdateResult(result),
+	))
+	assert.Equal(t, 3, indexModel.callCount())
+	assert.NotEqual(t, oldID, result.MemoryID)
+
+	oldContent, err := service.LoadContents(ctx, deepsearch.ContentLoadRequest{
+		UserKey: userKey,
+		Refs: []deepsearch.ContentRef{{
+			Kind:     deepsearch.RefKindMemoryEntry,
+			SourceID: oldID,
+		}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, oldContent.Contents)
+
+	newContent, err := service.LoadContents(ctx, deepsearch.ContentLoadRequest{
+		UserKey: userKey,
+		Refs: []deepsearch.ContentRef{{
+			Kind:     deepsearch.RefKindMemoryEntry,
+			SourceID: result.MemoryID,
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, newContent.Contents, 1)
+	assert.Equal(t, "updated third memory", newContent.Contents[0].Text)
+
+	require.NoError(t, service.DeleteMemory(ctx, memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: result.MemoryID,
+	}))
+	deletedContent, err := service.LoadContents(ctx, deepsearch.ContentLoadRequest{
+		UserKey: userKey,
+		Refs: []deepsearch.ContentRef{{
+			Kind:     deepsearch.RefKindMemoryEntry,
+			SourceID: result.MemoryID,
+		}},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, deletedContent.Contents)
+
+	require.NoError(t, service.ClearMemories(ctx, userKey))
+	loaded, err = service.LoadContents(ctx, deepsearch.ContentLoadRequest{UserKey: userKey})
+	require.NoError(t, err)
+	assert.Empty(t, loaded.Contents)
 }
 
 func TestMemoryService_UpdateMemory_RotatesIDAndReturnsResult(t *testing.T) {

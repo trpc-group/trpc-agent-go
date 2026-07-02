@@ -12,19 +12,23 @@ package inmemory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 var _ memory.Service = (*MemoryService)(nil)
+var _ deepsearch.Service = (*MemoryService)(nil)
 
 // appMemories represents memories for a specific app.
 type appMemories struct {
@@ -53,6 +57,10 @@ type MemoryService struct {
 	precomputedTools []tool.Tool
 	// autoMemoryWorker handles async memory extraction.
 	autoMemoryWorker *imemory.AutoMemoryWorker
+	// deepSearchStore stores cue-tag-content indexes.
+	deepSearchStore *deepSearchStore
+	// deepSearchBuilds coalesces concurrent lazy index builds per user.
+	deepSearchBuilds singleflight.Group
 }
 
 // NewMemoryService creates a new in-memory memory service.
@@ -73,6 +81,9 @@ func NewMemoryService(options ...ServiceOpt) *MemoryService {
 		apps:        make(map[string]*appMemories),
 		opts:        opts,
 		cachedTools: make(map[string]tool.Tool),
+	}
+	if opts.deepSearchModel != nil {
+		svc.deepSearchStore = newDeepSearchStore()
 	}
 
 	// Pre-compute tools list to avoid lock contention in Tools() method.
@@ -165,12 +176,20 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 	memoryEntry := createMemoryEntry(
 		userKey.AppName, userKey.UserID, memoryStr, topics, ep,
 	)
+	var deepSearchDocuments []deepsearch.Document
+	if s.deepSearchIndexActive(userKey) {
+		var err error
+		deepSearchDocuments, err = s.buildDeepSearchEntry(ctx, memoryEntry)
+		if err != nil {
+			return err
+		}
+	}
 
 	app.mu.Lock()
-	defer app.mu.Unlock()
 
 	// Check memory limit.
 	if len(app.memories[userKey.UserID]) >= s.opts.memoryLimit {
+		app.mu.Unlock()
 		return fmt.Errorf("memory limit exceeded for user %s, limit: %d, current: %d",
 			userKey.UserID, s.opts.memoryLimit, len(app.memories[userKey.UserID]))
 	}
@@ -181,6 +200,17 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 	}
 
 	app.memories[userKey.UserID][memoryEntry.ID] = memoryEntry
+	app.mu.Unlock()
+	if len(deepSearchDocuments) > 0 {
+		if err := s.IndexDocuments(ctx, deepsearch.IndexRequest{
+			UserKey: userKey, Documents: deepSearchDocuments,
+		}); err != nil {
+			app.mu.Lock()
+			delete(app.memories[userKey.UserID], memoryEntry.ID)
+			app.mu.Unlock()
+			return err
+		}
+	}
 	return nil
 }
 
@@ -192,28 +222,114 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, 
 	}
 
 	app := s.getAppMemories(memoryKey.AppName)
+	userKey := memory.UserKey{AppName: memoryKey.AppName, UserID: memoryKey.UserID}
+	if !s.deepSearchIndexActive(userKey) {
+		return s.updateMemoryLocked(app, memoryKey, memoryStr, topics, opts...)
+	}
+
 	app.mu.Lock()
-	defer app.mu.Unlock()
 
 	if app.memories[memoryKey.UserID] == nil {
+		app.mu.Unlock()
 		return fmt.Errorf("user %s not found", memoryKey.UserID)
 	}
 	userMemories := app.memories[memoryKey.UserID]
 	memoryEntry, exists := userMemories[memoryKey.MemoryID]
 	if !exists {
+		app.mu.Unlock()
 		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 	}
 
+	candidate := cloneMemoryEntry(memoryEntry)
 	now := time.Now()
 	ep := memory.ResolveUpdateOptions(opts)
 	newID := imemory.ApplyMemoryUpdate(
-		memoryEntry,
+		candidate,
 		memoryKey.AppName,
 		memoryKey.UserID,
 		memoryStr,
 		topics,
 		ep,
 		now,
+	)
+	if newID != memoryKey.MemoryID {
+		if _, conflict := userMemories[newID]; conflict {
+			app.mu.Unlock()
+			return fmt.Errorf("memory with id %s already exists", newID)
+		}
+	}
+	app.mu.Unlock()
+
+	deepSearchDocuments, err := s.buildDeepSearchEntry(ctx, candidate)
+	if err != nil {
+		return err
+	}
+
+	app.mu.Lock()
+	current := app.memories[memoryKey.UserID][memoryKey.MemoryID]
+	if current == nil || deepsearch.SourceFingerprint(current) != deepsearch.SourceFingerprint(memoryEntry) {
+		app.mu.Unlock()
+		return errors.New("memory changed while preparing deepsearch update")
+	}
+	if newID != memoryKey.MemoryID {
+		if _, conflict := app.memories[memoryKey.UserID][newID]; conflict {
+			app.mu.Unlock()
+			return fmt.Errorf("memory with id %s already exists", newID)
+		}
+		delete(app.memories[memoryKey.UserID], memoryKey.MemoryID)
+	}
+	app.memories[memoryKey.UserID][newID] = candidate
+	app.mu.Unlock()
+
+	if len(deepSearchDocuments) > 0 {
+		if err := s.IndexDocuments(ctx, deepsearch.IndexRequest{
+			UserKey: userKey, Documents: deepSearchDocuments,
+		}); err != nil {
+			app.mu.Lock()
+			delete(app.memories[memoryKey.UserID], newID)
+			app.memories[memoryKey.UserID][memoryKey.MemoryID] = memoryEntry
+			app.mu.Unlock()
+			return err
+		}
+		if newID != memoryKey.MemoryID {
+			if err := s.deleteDeepSearchMemory(ctx, memoryKey); err != nil {
+				return err
+			}
+		}
+	}
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = newID
+	}
+	return nil
+}
+
+func (s *MemoryService) updateMemoryLocked(
+	app *appMemories,
+	memoryKey memory.Key,
+	memoryStr string,
+	topics []string,
+	opts ...memory.UpdateOption,
+) error {
+	app.mu.Lock()
+	defer app.mu.Unlock()
+
+	userMemories := app.memories[memoryKey.UserID]
+	if userMemories == nil {
+		return fmt.Errorf("user %s not found", memoryKey.UserID)
+	}
+	memoryEntry, exists := userMemories[memoryKey.MemoryID]
+	if !exists {
+		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+	}
+
+	newID := imemory.ApplyMemoryUpdate(
+		memoryEntry,
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryStr,
+		topics,
+		memory.ResolveUpdateOptions(opts),
+		time.Now(),
 	)
 	if newID != memoryKey.MemoryID {
 		if _, conflict := userMemories[newID]; conflict {
@@ -237,18 +353,23 @@ func (s *MemoryService) DeleteMemory(ctx context.Context, memoryKey memory.Key) 
 	app := s.getAppMemories(memoryKey.AppName)
 
 	app.mu.Lock()
-	defer app.mu.Unlock()
 
 	// Check if user exists.
 	if app.memories[memoryKey.UserID] == nil {
+		app.mu.Unlock()
 		return fmt.Errorf("user %s not found", memoryKey.UserID)
 	}
 
 	if _, exists := app.memories[memoryKey.UserID][memoryKey.MemoryID]; !exists {
+		app.mu.Unlock()
 		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
 	}
 
 	delete(app.memories[memoryKey.UserID], memoryKey.MemoryID)
+	app.mu.Unlock()
+	if err := s.deleteDeepSearchMemory(ctx, memoryKey); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -261,10 +382,18 @@ func (s *MemoryService) ClearMemories(ctx context.Context, userKey memory.UserKe
 	app := s.getAppMemories(userKey.AppName)
 
 	app.mu.Lock()
-	defer app.mu.Unlock()
 
 	// Remove all memories for the specific user.
 	delete(app.memories, userKey.UserID)
+	app.mu.Unlock()
+	if s.deepSearchEnabled() {
+		if err := s.DeleteDocuments(ctx, deepsearch.DeleteRequest{
+			UserKey:  userKey,
+			ClearAll: true,
+		}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -361,4 +490,74 @@ func (s *MemoryService) Close() error {
 		s.autoMemoryWorker.Stop()
 	}
 	return nil
+}
+
+func (s *MemoryService) deepSearchEnabled() bool {
+	return s.opts.deepSearchModel != nil
+}
+
+func (s *MemoryService) deepSearchIndexActive(userKey memory.UserKey) bool {
+	if !s.deepSearchEnabled() || s.deepSearchStore == nil {
+		return false
+	}
+	s.deepSearchStore.mu.RLock()
+	defer s.deepSearchStore.mu.RUnlock()
+	_, ok := s.deepSearchStore.users[deepSearchUserKey(userKey)]
+	return ok
+}
+
+func (s *MemoryService) buildDeepSearchEntry(
+	ctx context.Context,
+	entry *memory.Entry,
+) ([]deepsearch.Document, error) {
+	if entry == nil {
+		return nil, errors.New("deepsearch memory entry is required")
+	}
+	docs, err := deepsearch.BuildDocuments(
+		ctx,
+		s.opts.deepSearchModel,
+		[]*memory.Entry{entry},
+		s.opts.deepSearchOptions...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("build deepsearch index: %w", err)
+	}
+	if len(docs) != 1 {
+		return nil, fmt.Errorf("build deepsearch index: expected 1 document, got %d", len(docs))
+	}
+	return docs, nil
+}
+
+func cloneMemoryEntry(entry *memory.Entry) *memory.Entry {
+	cloned := *entry
+	if entry.Memory != nil {
+		memoryValue := *entry.Memory
+		memoryValue.Topics = append([]string(nil), entry.Memory.Topics...)
+		memoryValue.Participants = append([]string(nil), entry.Memory.Participants...)
+		cloned.Memory = &memoryValue
+	}
+	return &cloned
+}
+
+func (s *MemoryService) deleteDeepSearchMemory(
+	ctx context.Context,
+	memoryKey memory.Key,
+) error {
+	if !s.deepSearchEnabled() {
+		return nil
+	}
+	return s.DeleteDocuments(ctx, deepsearch.DeleteRequest{
+		UserKey: memory.UserKey{
+			AppName: memoryKey.AppName,
+			UserID:  memoryKey.UserID,
+		},
+		Refs: []deepsearch.ContentRef{
+			{
+				Kind:     deepsearch.RefKindMemoryEntry,
+				AppName:  memoryKey.AppName,
+				UserID:   memoryKey.UserID,
+				SourceID: memoryKey.MemoryID,
+			},
+		},
+	})
 }

@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -35,11 +36,63 @@ type mockMemoryService struct {
 	counter  int
 }
 
+type mockDeepSearchMemoryService struct {
+	*mockMemoryService
+}
+
 func newMockMemoryService() *mockMemoryService {
 	return &mockMemoryService{
 		memories: make(map[string]*memory.Entry),
 		counter:  0,
 	}
+}
+
+func newMockDeepSearchMemoryService() *mockDeepSearchMemoryService {
+	return &mockDeepSearchMemoryService{
+		mockMemoryService: newMockMemoryService(),
+	}
+}
+
+func (m *mockDeepSearchMemoryService) EnsureIndex(
+	context.Context,
+	memory.UserKey,
+) error {
+	return nil
+}
+
+func (m *mockDeepSearchMemoryService) IndexDocuments(
+	ctx context.Context,
+	req deepsearch.IndexRequest,
+) error {
+	return nil
+}
+
+func (m *mockDeepSearchMemoryService) SearchCues(
+	ctx context.Context,
+	req deepsearch.CueSearchRequest,
+) (*deepsearch.CueSearchResult, error) {
+	return nil, nil
+}
+
+func (m *mockDeepSearchMemoryService) ExpandTags(
+	ctx context.Context,
+	req deepsearch.TagExpandRequest,
+) (*deepsearch.TagExpandResult, error) {
+	return nil, nil
+}
+
+func (m *mockDeepSearchMemoryService) LoadContents(
+	ctx context.Context,
+	req deepsearch.ContentLoadRequest,
+) (*deepsearch.ContentLoadResult, error) {
+	return nil, nil
+}
+
+func (m *mockDeepSearchMemoryService) DeleteDocuments(
+	ctx context.Context,
+	req deepsearch.DeleteRequest,
+) error {
+	return nil
 }
 
 func (m *mockMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, memoryStr string, topics []string, opts ...memory.AddOption) error {
@@ -264,6 +317,50 @@ func TestMemoryTool_SearchMemory(t *testing.T) {
 	assert.Equal(t, 1, response.Count, "Expected 1 result, got %d", response.Count)
 	assert.Len(t, response.Results, 1, "Expected 1 result, got %d", len(response.Results))
 	assert.Equal(t, "User likes coffee", response.Results[0].Memory, "Expected memory 'User likes coffee', got '%s'", response.Results[0].Memory)
+}
+
+func TestMemoryTool_DeepSearchRequiresMemorySearch(t *testing.T) {
+	service := newMockDeepSearchMemoryService()
+	tool := NewDeepSearchTool()
+	ctx := createMockContext("test-app", "test-user", service)
+
+	result, err := tool.Call(ctx, []byte(`{"reason":"need more evidence"}`))
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "call memory_search first")
+}
+
+func TestMemoryTool_DeepSearchRequiresService(t *testing.T) {
+	service := newMockMemoryService()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	require.NoError(t, service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"}))
+	ctx := createMockContext("test-app", "test-user", service)
+
+	_, err := NewSearchTool().Call(ctx, []byte(`{"query":"coffee"}`))
+	require.NoError(t, err)
+	result, err := NewDeepSearchTool().Call(ctx, []byte(`{"reason":"need more evidence"}`))
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "memory deepsearch service")
+}
+
+func TestMemoryTool_DeepSearchActivatesAfterMemorySearch(t *testing.T) {
+	service := newMockDeepSearchMemoryService()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	require.NoError(t, service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"}))
+	ctx := createMockContext("test-app", "test-user", service)
+
+	_, err := NewSearchTool().Call(ctx, []byte(`{"query":"coffee"}`))
+	require.NoError(t, err)
+	result, err := NewDeepSearchTool().Call(ctx, []byte(`{"reason":"need more evidence"}`))
+
+	require.NoError(t, err)
+	response, ok := result.(*DeepSearchMemoryResponse)
+	require.True(t, ok)
+	assert.True(t, response.Activated)
+	assert.Contains(t, response.Message, "DeepSearch tools")
 }
 
 func TestMemoryTool_LoadMemory(t *testing.T) {

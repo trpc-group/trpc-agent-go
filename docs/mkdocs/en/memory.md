@@ -43,6 +43,227 @@ Auto Mode is available when an Extractor is configured and is recommended as the
 - **Agentic Mode**: Agent automatically decides when to call memory tools based on conversation content (e.g., when user mentions personal information or preferences), user sees tool calls, suitable for scenarios requiring precise control over memory content
 - **Auto Mode (recommended)**: Natural conversation flow, system passively learns about users, simplified UX
 
+### Progressive DeepSearch
+
+DeepSearch is an optional second-stage retrieval capability for long-term
+memory. It does not replace `memory.Service`, change how memories are written,
+or introduce another authoritative memory store. Instead, it derives a
+cue/tag index from existing `memory.Entry` records so that an Agent can follow
+retrieval clues when ordinary semantic search does not provide enough evidence.
+
+DeepSearch follows four design rules:
+
+1. **Memory entries remain authoritative**: every DeepSearch content node
+   references an existing `memory.Entry`. Raw sessions are not stored as
+   independent DeepSearch memories.
+2. **Normal retrieval remains unchanged**: `memory_search` always calls the
+   original `memory.Service.SearchMemories` implementation. Cue/tag data is
+   never silently fused into its result.
+3. **The capability is explicitly enabled**: the memory service and the Agent
+   must opt in independently.
+4. **Additional tools are progressively disclosed**: the Agent first sees the
+   normal memory tools and `memory_deepsearch`. The detailed DeepSearch tools
+   become visible only after the Agent has tried `memory_search` and explicitly
+   requests deeper retrieval.
+
+#### Retrieval Flow
+
+```text
+User question
+    |
+    v
+memory_search
+    |
+    +-- enough evidence --------------------------> answer
+    |
+    +-- missing or uncertain evidence
+            |
+            v
+       memory_deepsearch
+            |
+            +-- validate that memory_search succeeded
+            +-- build or validate the user's cue/tag index
+            +-- activate DeepSearch tools for this invocation
+            |
+            v
+       cue search -> tag/path expansion -> content loading
+            |
+            v
+          answer
+```
+
+`memory_deepsearch` is a capability gate. It does not return memory evidence by
+itself. On success, it activates the detailed tools for the current invocation,
+allowing the model to choose the retrieval path that matches the question.
+Activation does not leak into later invocations.
+
+#### Index Data Model
+
+DeepSearch organizes a secondary index around the following structures:
+
+The secondary index is rebuildable from authoritative memory entries. A
+memory service may materialize it in its own storage or keep it in a runtime
+index; callers must not treat cue, tag, or content nodes as an independent
+source of truth.
+
+| Structure | Purpose |
+| --------- | ------- |
+| `Document` | Index input derived from one `memory.Entry`, including text, metadata, generated cues, and generated tags. |
+| `Cue` | A short phrase that a future question may contain, such as "graduation degree" or "Kyoto hotel". |
+| `Tag` | A stable entity, topic, relation, date, person, place, or personal aspect that connects a cue to content. |
+| `Content` | A searchable index node containing the entry text and a typed reference back to the source memory entry. |
+| `ContentRef` | Identifies the source by reference kind, app name, user ID, and memory entry ID. |
+| `Metadata` | Carries source fingerprint, memory kind, topics, event time, participants, and location for structured filtering. |
+| `Path` | A scored `Cue -> Tag -> Content` traversal returned by DeepSearch queries. |
+
+The index model generates cues and tags from durable memory entries in batches.
+Generation is strict: invalid JSON, missing entries, empty cue/tag lists, or an
+LLM error fails the build. DeepSearch does not infer replacement keywords or
+write a partial index when generation fails.
+
+Each content node stores a source fingerprint derived from the entry ID,
+update time, and topics. Before using an index, DeepSearch compares these
+fingerprints with the current memory entries. A missing or stale index is
+rebuilt for that user.
+
+#### Index Lifecycle
+
+The index is isolated by the same `<appName, userID>` scope as long-term memory
+and follows the memory lifecycle:
+
+| Event | Behavior |
+| ----- | -------- |
+| First successful `memory_deepsearch` call | Read the current entries, validate the index, and build it when missing or stale. Before publishing a build, verify that entries did not change during generation. |
+| Later DeepSearch call with matching fingerprints | Reuse the existing index without calling the index model. |
+| Later DeepSearch call with stale fingerprints | Rebuild the complete user index before exposing DeepSearch tools. |
+| Add or update after the index is active | Generate and synchronously replace the affected entry's index document. |
+| Delete after the index is active | Delete the referenced content and its cue/tag edges. |
+| Clear after the index is active | Clear the user's DeepSearch index together with the memories. |
+
+Concurrent first-use builds for the same user are coalesced. The source
+fingerprints are checked again before publishing a newly generated index; if
+the entries changed during generation, the build fails instead of committing
+an index for an inconsistent snapshot.
+
+#### Progressive Tool Surface
+
+`llmagent.WithMemoryDeepSearch()` adds only `memory_deepsearch` to the Agent's
+initial tool surface. It preserves every tool returned by
+`memoryService.Tools()`. After successful activation, the following tools
+become available for the current invocation:
+
+| Tool | Purpose |
+| ---- | ------- |
+| `memory_deepsearch_cue_search` | Find likely retrieval cues from the user's question. |
+| `memory_deepsearch_tag_expand` | Expand cue IDs or cue text into scored tag/content paths. |
+| `memory_deepsearch_content_load` | Load content by DeepSearch content ID or source reference. |
+| `memory_deepsearch_edges_by_tag` | Traverse paths matching tag text or a free-text query. |
+| `memory_deepsearch_conversation_time` | Retrieve episode memories within a time range. |
+| `memory_deepsearch_event_keywords` | Retrieve episode memories by keywords and optional time bounds. |
+| `memory_deepsearch_event_context` | Load content related to an already matched cue, tag, or content node. |
+| `memory_deepsearch_personal_information` | Retrieve stable personal facts by query or aspect. |
+| `memory_deepsearch_personal_aspect` | Retrieve memories for one personal aspect. |
+| `memory_deepsearch_topic_events` | Retrieve episode memories for a topic and optional time range. |
+
+The expected model behavior is:
+
+1. Call `memory_search` first.
+2. Answer directly when the returned memories are sufficient.
+3. Call `memory_deepsearch` when evidence is missing, conflicting, or
+   incomplete.
+4. Use the activated tools to follow cues, expand relationships, and load the
+   referenced memory evidence before answering.
+
+#### Configuration
+
+DeepSearch is disabled by default and requires two independent opt-ins:
+
+1. Configure the memory service with `WithDeepSearch(indexModel)`.
+2. Configure `LLMAgent` with `llmagent.WithMemoryDeepSearch()`.
+
+The same memory service must also be registered as Agent tools and attached to
+the Runner so that tool invocations receive it through the invocation context.
+
+```go
+package main
+
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+    "trpc.group/trpc-go/trpc-agent-go/model"
+    "trpc.group/trpc-go/trpc-agent-go/model/openai"
+    "trpc.group/trpc-go/trpc-agent-go/runner"
+    sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // The index model generates cues and tags. It can be configured
+    // independently from the model that answers user questions.
+    indexModel := openai.New("gpt-4o-mini")
+    chatModel := openai.New("gpt-4o-mini")
+
+    memoryService := memoryinmemory.NewMemoryService(
+        memoryinmemory.WithDeepSearch(indexModel),
+    )
+
+    memoryAgent := llmagent.New(
+        "memory-assistant",
+        llmagent.WithModel(chatModel),
+        llmagent.WithInstruction(
+            "Search memory before answering questions about the user. "+
+                "Use memory_deepsearch when the first search leaves "+
+                "important evidence missing or uncertain.",
+        ),
+        // Preserve the normal memory tool surface.
+        llmagent.WithTools(memoryService.Tools()),
+        // Add the progressive DeepSearch capability gate.
+        llmagent.WithMemoryDeepSearch(),
+    )
+
+    appRunner := runner.NewRunner(
+        "memory-app",
+        memoryAgent,
+        runner.WithSessionService(
+            sessioninmemory.NewSessionService(),
+        ),
+        // Makes the same service available to memory tool calls.
+        runner.WithMemoryService(memoryService),
+    )
+    defer appRunner.Close()
+
+    events, err := appRunner.Run(
+        ctx,
+        "user-1",
+        "session-1",
+        model.NewUserMessage("Which degree did I graduate with?"),
+    )
+    if err != nil {
+        panic(err)
+    }
+    for range events {
+        // Handle streaming events.
+    }
+}
+```
+
+If only the memory service is configured, the normal Agent tool surface does
+not change, although maintaining the configured index may call the index model
+as memories change. If only the Agent option is configured,
+`memory_deepsearch` fails because the invocation memory service does not
+provide an index. Applications that do not enable either option retain the
+existing memory behavior and do not incur cue/tag LLM calls or index
+maintenance cost.
+
+For production use, consider the index model's latency and token cost, monitor
+index-generation failures, and keep user-scoped memory operations consistent.
+DeepSearch intentionally propagates generation and storage errors so callers
+can retry or surface an operational failure instead of receiving silently
+degraded retrieval.
+
 ## Core Values
 
 - **Context Continuity**: Maintain user history across sessions, avoiding

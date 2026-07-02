@@ -86,6 +86,15 @@ func TestToolActivationOptionsValidateToolSets(t *testing.T) {
 			WithActivatableToolSets([]tool.ToolSet{
 				activationToolSet{name: "github"},
 			}),
+			WithToolActivationOnToolResult("", []string{"github"}),
+		)
+	})
+	require.Panics(t, func() {
+		New(
+			"agent",
+			WithActivatableToolSets([]tool.ToolSet{
+				activationToolSet{name: "github"},
+			}),
 			WithToolActivationOnSkillLoad("review", nil),
 		)
 	})
@@ -174,6 +183,71 @@ func TestToolActivationPostToolResultWritesRecords(t *testing.T) {
 	require.NotEmpty(t, ev.StateDelta[sessionKey])
 	_, ok := toolsnapshot.Get(inv)
 	require.False(t, ok)
+}
+
+func TestToolActivationPostToolResultActivatesOnToolResult(t *testing.T) {
+	agt := New(
+		"agent",
+		WithActivatableToolSets([]tool.ToolSet{
+			activationToolSet{
+				name:  "cue_tag",
+				tools: []tool.Tool{activationTool{name: "memory_cue_search"}},
+			},
+		}),
+		WithToolActivationOnToolResult(
+			"memory_deepsearch",
+			[]string{"cue_tag"},
+			WithToolActivationMode(ToolActivationModeInclude),
+			WithToolActivationLifetime(ToolActivationLifetimeInvocation),
+		),
+	)
+	inv := &agent.Invocation{
+		AgentName: "agent",
+		Session:   session.NewSession("app", "user", "session"),
+	}
+	toolsnapshot.Set(inv, []tool.Tool{activationTool{name: "memory_search"}}, true)
+	ev := &event.Event{
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{Message: model.NewToolMessage("call-1", "memory_deepsearch", `{"activated":true}`)},
+			},
+		},
+	}
+
+	agt.handleToolActivationPostToolResult(context.Background(), inv, ev)
+
+	require.Equal(t, []toolActivationRecord{
+		{
+			Mode:        ToolActivationModeInclude,
+			Lifetime:    ToolActivationLifetimeInvocation,
+			ToolSetName: "cue_tag",
+		},
+	}, invocationToolActivationRecords(inv))
+	_, ok := toolsnapshot.Get(inv)
+	require.False(t, ok)
+}
+
+func TestToolActivationPostToolResultIgnoresFailedToolResult(t *testing.T) {
+	agt := New(
+		"agent",
+		WithActivatableToolSets([]tool.ToolSet{
+			activationToolSet{name: "deepsearch", tools: []tool.Tool{activationTool{name: "cue_search"}}},
+		}),
+		WithToolActivationOnToolResult("memory_deepsearch", []string{"deepsearch"}),
+	)
+	inv := &agent.Invocation{AgentName: "agent", Session: session.NewSession("app", "user", "session")}
+	ev := &event.Event{Response: &model.Response{Choices: []model.Choice{{
+		Message: model.NewToolMessage("call-1", "memory_deepsearch", "index build failed"),
+	}}}}
+	require.NoError(t, event.SetExtension(
+		ev,
+		event.ToolResultErrorExtensionKey,
+		map[string]bool{"call-1": true},
+	))
+
+	agt.handleToolActivationPostToolResult(context.Background(), inv, ev)
+
+	require.Empty(t, invocationToolActivationRecords(inv))
 }
 
 func TestToolActivationPostToolResultIgnoresUnmatchedSkill(t *testing.T) {

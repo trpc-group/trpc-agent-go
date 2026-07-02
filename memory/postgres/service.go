@@ -20,6 +20,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
@@ -27,6 +28,11 @@ import (
 )
 
 var _ memory.Service = (*Service)(nil)
+var _ deepsearch.QueryService = (*Service)(nil)
+
+type serviceDeepSearch struct {
+	*deepsearch.Runtime
+}
 
 // Service is the postgres memory service.
 // Storage structure:
@@ -36,6 +42,8 @@ var _ memory.Service = (*Service)(nil)
 //	Primary Key: memory_id.
 //	Index: (app_name, user_id).
 type Service struct {
+	*serviceDeepSearch
+
 	opts      ServiceOpts
 	db        storage.Client
 	tableName string
@@ -93,6 +101,11 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		tableName:   fullTableName,
 		cachedTools: make(map[string]tool.Tool),
 	}
+	s.serviceDeepSearch = &serviceDeepSearch{Runtime: deepsearch.NewRuntime(
+		opts.deepSearchModel,
+		s.ReadMemories,
+		opts.deepSearchOptions...,
+	)}
 
 	// Initialize database schema unless skipped.
 	if !opts.skipDBInit {

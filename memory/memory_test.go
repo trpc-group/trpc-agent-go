@@ -10,11 +10,13 @@
 package memory
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -383,4 +385,66 @@ func TestResolveSearchOptions(t *testing.T) {
 
 		assert.Equal(t, expected, got)
 	})
+}
+
+type mockMemoryService struct{}
+
+func (m *mockMemoryService) AddMemory(
+	ctx context.Context,
+	userKey UserKey,
+	memory string,
+	topics []string,
+	opts ...AddOption,
+) error {
+	return nil
+}
+
+func (m *mockMemoryService) UpdateMemory(
+	ctx context.Context,
+	memoryKey Key,
+	memory string,
+	topics []string,
+	opts ...UpdateOption,
+) error {
+	return nil
+}
+
+func (m *mockMemoryService) DeleteMemory(ctx context.Context, memoryKey Key) error {
+	return nil
+}
+
+func (m *mockMemoryService) ClearMemories(ctx context.Context, userKey UserKey) error {
+	return nil
+}
+
+func (m *mockMemoryService) ReadMemories(
+	ctx context.Context,
+	userKey UserKey,
+	limit int,
+) ([]*Entry, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryService) SearchMemories(
+	ctx context.Context,
+	userKey UserKey,
+	query string,
+	opts ...SearchOption,
+) ([]*Entry, error) {
+	return nil, nil
+}
+
+func (m *mockMemoryService) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *mockMemoryService) EnqueueAutoMemoryJob(
+	ctx context.Context,
+	sess *session.Session,
+) error {
+	return nil
+}
+
+func (m *mockMemoryService) Close() error {
+	return nil
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -34,6 +35,41 @@ import (
 type mockEmbedder struct {
 	dimension int
 	err       error
+}
+
+type errorDeepSearchModel struct {
+	err error
+}
+
+type staticDeepSearchModel struct {
+	content string
+}
+
+func (m *staticDeepSearchModel) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	responses := make(chan *model.Response, 1)
+	responses <- &model.Response{
+		Choices: []model.Choice{{Message: model.Message{Content: m.content}}},
+	}
+	close(responses)
+	return responses, nil
+}
+
+func (m *staticDeepSearchModel) Info() model.Info {
+	return model.Info{Name: "deepsearch-static-test"}
+}
+
+func (m *errorDeepSearchModel) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	return nil, m.err
+}
+
+func (m *errorDeepSearchModel) Info() model.Info {
+	return model.Info{Name: "deepsearch-error-test"}
 }
 
 func (m *mockEmbedder) GetEmbedding(ctx context.Context, text string) ([]float64, error) {
@@ -675,6 +711,171 @@ func setupMockService(
 	return svc
 }
 
+func TestService_DeepSearch_LoadContentsByRef(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+	svc.deepSearchInited = true
+
+	var _ deepsearch.QueryService = svc
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+	now := time.Now()
+	mock.ExpectQuery("SELECT content_id, app_name, user_id, content_text, ref_kind, session_id, event_id, turn_id, source_id, metadata, created_at, updated_at FROM memories_cue_tag_contents").
+		WithArgs(
+			userKey.AppName,
+			userKey.UserID,
+			string(deepsearch.RefKindMemoryEntry),
+			"memory-1",
+		).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"content_id", "app_name", "user_id", "content_text", "ref_kind", "session_id", "event_id",
+			"turn_id", "source_id", "metadata", "created_at", "updated_at",
+		}).AddRow(
+			"content-1",
+			userKey.AppName,
+			userKey.UserID,
+			"Alice booked a Kyoto hiking trip.",
+			string(deepsearch.RefKindMemoryEntry),
+			nil,
+			nil,
+			nil,
+			"memory-1",
+			[]byte(`{"topics":["travel"]}`),
+			now,
+			now,
+		))
+
+	loaded, err := svc.LoadContents(ctx, deepsearch.ContentLoadRequest{
+		UserKey: userKey,
+		Refs: []deepsearch.ContentRef{
+			{
+				Kind:     deepsearch.RefKindMemoryEntry,
+				SourceID: "memory-1",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, loaded.Contents, 1)
+	assert.Equal(t, "content-1", loaded.Contents[0].ID)
+	assert.Equal(t, userKey.AppName, loaded.Contents[0].Ref.AppName)
+	assert.Equal(t, userKey.UserID, loaded.Contents[0].Ref.UserID)
+	assert.Equal(t, "memory-1", loaded.Contents[0].Ref.SourceID)
+	assert.Equal(t, []string{"travel"}, loaded.Contents[0].Metadata.Topics)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_DeepSearch_SearchUsesPrecreatedTablesWithoutDDL(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+
+	for range []string{
+		svc.deepSearchTables.cues,
+		svc.deepSearchTables.tags,
+		svc.deepSearchTables.contents,
+	} {
+		mock.ExpectQuery("SELECT to_regclass").
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	}
+	mock.ExpectQuery("SELECT c.cue_id, c.cue_text FROM memories_cue_tag_cues c").
+		WithArgs("test-app", "test-user", sqlmock.AnyArg(), "%kyoto%", "kyoto").
+		WillReturnRows(sqlmock.NewRows([]string{"cue_id", "cue_text"}).
+			AddRow("cue-1", "kyoto"))
+
+	result, err := svc.SearchCues(context.Background(), deepsearch.CueSearchRequest{
+		UserKey: memory.UserKey{AppName: "test-app", UserID: "test-user"},
+		Query:   "kyoto",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Cues, 1)
+	assert.Equal(t, "cue-1", result.Cues[0].ID)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeepSearch_ScoreAvoidsWeakSubstringMatches(t *testing.T) {
+	assert.Zero(t, scoreDeepSearchText("me", "time"))
+	assert.Zero(t, scoreDeepSearchText("it", "with"))
+	assert.Greater(t, scoreDeepSearchText("graduated degree", "what degree did I graduate with"), 0.8)
+	assert.Greater(t, scoreDeepSearchText("daily commute", "daily commute duration"), 0.8)
+}
+
+func TestService_DeepSearch_IndexUsesScopedContentConflict(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true))
+	defer svc.Close()
+	svc.deepSearchInited = true
+
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	ref := deepsearch.ContentRef{
+		Kind:     deepsearch.RefKindMemoryEntry,
+		SourceID: "memory-1",
+	}
+	emptyContentRows := sqlmock.NewRows([]string{
+		"content_id", "app_name", "user_id", "content_text", "ref_kind",
+		"session_id", "event_id", "turn_id", "source_id", "metadata",
+		"created_at", "updated_at",
+	})
+	mock.ExpectQuery("SELECT content_id, app_name, user_id, content_text").
+		WithArgs(userKey.AppName, userKey.UserID, string(ref.Kind), ref.SourceID).
+		WillReturnRows(emptyContentRows)
+	mock.ExpectExec("DELETE FROM memories_cue_tag_tags").
+		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DELETE FROM memories_cue_tag_contents").
+		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DELETE FROM memories_cue_tag_cues c").
+		WithArgs(userKey.AppName, userKey.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO memories_cue_tag_contents .*ON CONFLICT \\(app_name, user_id, content_id\\)").
+		WithArgs(
+			sqlmock.AnyArg(),
+			userKey.AppName,
+			userKey.UserID,
+			"Alice booked Kyoto hiking.",
+			string(ref.Kind),
+			nil,
+			nil,
+			nil,
+			ref.SourceID,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO memories_cue_tag_cues").
+		WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, "kyoto", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO memories_cue_tag_tags .*ON CONFLICT \\(app_name, user_id, cue_id, content_id, tag_text\\)").
+		WithArgs(sqlmock.AnyArg(), userKey.AppName, userKey.UserID, "travel", sqlmock.AnyArg(), sqlmock.AnyArg(), 1.0, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.IndexDocuments(context.Background(), deepsearch.IndexRequest{
+		UserKey: userKey,
+		Documents: []deepsearch.Document{
+			{
+				ID:   "shared-content-id",
+				Text: "Alice booked Kyoto hiking.",
+				Cues: []string{"kyoto"},
+				Tags: []string{"travel"},
+				Ref:  ref,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestService_AddMemory(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
@@ -727,12 +928,78 @@ func TestService_AddMemory_MemoryLimit(t *testing.T) {
 	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
 
 	// At capacity the evict CTE removes the oldest entry, so the insert succeeds.
-	mock.ExpectExec("WITH existing AS").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("WITH existing AS").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_id", "evicted_memory_id"}).
+			AddRow("new-memory", nil))
 
 	err := svc.AddMemory(ctx, userKey, "test memory", nil)
 	require.NoError(t, err)
 
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_AddMemory_MemoryLimitDeletesEvictedDeepSearchContent(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	indexErr := fmt.Errorf("index model unavailable")
+	svc := setupMockService(
+		t,
+		db,
+		mock,
+		WithSkipDBInit(true),
+		WithMemoryLimit(1),
+		WithDeepSearch(&errorDeepSearchModel{err: indexErr}),
+	)
+	defer svc.Close()
+	svc.deepSearchInited = true
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+	const evictedMemoryID = "evicted-memory"
+
+	mock.ExpectQuery("WITH existing AS").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_id", "evicted_memory_id"}).
+			AddRow("new-memory", evictedMemoryID))
+
+	now := time.Now()
+	mock.ExpectQuery("SELECT content_id, app_name, user_id, content_text").
+		WithArgs(
+			userKey.AppName,
+			userKey.UserID,
+			string(deepsearch.RefKindMemoryEntry),
+			evictedMemoryID,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"content_id", "app_name", "user_id", "content_text", "ref_kind",
+			"session_id", "event_id", "turn_id", "source_id", "metadata",
+			"created_at", "updated_at",
+		}).AddRow(
+			"evicted-content",
+			userKey.AppName,
+			userKey.UserID,
+			"old memory",
+			string(deepsearch.RefKindMemoryEntry),
+			nil,
+			nil,
+			nil,
+			evictedMemoryID,
+			[]byte(`{}`),
+			now,
+			now,
+		))
+	mock.ExpectExec("DELETE FROM memories_cue_tag_tags").
+		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DELETE FROM memories_cue_tag_contents").
+		WithArgs(userKey.AppName, userKey.UserID, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DELETE FROM memories_cue_tag_cues c").
+		WithArgs(userKey.AppName, userKey.UserID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := svc.AddMemory(ctx, userKey, "new memory", nil)
+	require.ErrorIs(t, err, indexErr)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -746,9 +1013,9 @@ func TestService_AddMemory_MemoryLimit_EvictionFailed(t *testing.T) {
 	ctx := context.Background()
 	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
 
-	// Safety-net: if eviction somehow fails, 0 rows affected triggers an error.
-	mock.ExpectExec("WITH existing AS").
-		WillReturnResult(sqlmock.NewResult(0, 0))
+	// Safety-net: if eviction somehow fails, no inserted row triggers an error.
+	mock.ExpectQuery("WITH existing AS").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_id", "evicted_memory_id"}))
 
 	err := svc.AddMemory(ctx, userKey, "test memory", nil)
 	require.Error(t, err)
@@ -2069,8 +2336,9 @@ func TestService_AddMemory_MemoryLimit_SoftDelete(t *testing.T) {
 	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
 
 	// Mock atomic insert with limit and soft delete filter.
-	mock.ExpectExec("WITH existing AS").
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery("WITH existing AS").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_id", "evicted_memory_id"}).
+			AddRow("new-memory", nil))
 
 	err := svc.AddMemory(ctx, userKey, "test", nil)
 	require.NoError(t, err)
@@ -2097,7 +2365,7 @@ func TestService_AddMemory_SQLError(t *testing.T) {
 	assert.Contains(t, err.Error(), "store memory entry failed")
 }
 
-func TestService_AddMemory_RowsAffectedError(t *testing.T) {
+func TestService_AddMemory_MemoryLimitQueryError(t *testing.T) {
 	db, mock := setupMockDB(t)
 	defer db.Close()
 
@@ -2110,13 +2378,33 @@ func TestService_AddMemory_RowsAffectedError(t *testing.T) {
 	ctx := context.Background()
 	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
 
-	// Mock with RowsAffected error.
-	mock.ExpectExec("WITH existing AS").
-		WillReturnResult(sqlmock.NewErrorResult(fmt.Errorf("rows affected err")))
+	mock.ExpectQuery("WITH existing AS").
+		WillReturnError(fmt.Errorf("query failed"))
 
 	err := svc.AddMemory(ctx, userKey, "test", nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "store memory entry rows affected failed")
+	assert.Contains(t, err.Error(), "store memory entry failed")
+}
+
+func TestService_AddMemory_MemoryLimitScanError(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db, mock, WithSkipDBInit(true), WithMemoryLimit(1))
+	defer svc.Close()
+
+	mock.ExpectQuery("WITH existing AS").
+		WillReturnRows(sqlmock.NewRows([]string{"memory_id"}).AddRow("new-memory"))
+
+	err := svc.AddMemory(
+		context.Background(),
+		memory.UserKey{AppName: "test-app", UserID: "u1"},
+		"test",
+		nil,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "store memory entry failed")
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestServiceOpts_Clone_Nil(t *testing.T) {

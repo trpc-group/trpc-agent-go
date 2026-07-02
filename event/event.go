@@ -56,6 +56,10 @@ const (
 	// ToolCallArgsExtensionKey stores tool call arguments keyed by tool call ID
 	// on tool result events.
 	ToolCallArgsExtensionKey = "trpc_agent.tool_call_args"
+
+	// ToolResultErrorExtensionKey stores failed tool call IDs on tool result
+	// events. An absent ID means the tool result completed successfully.
+	ToolResultErrorExtensionKey = "trpc_agent.tool_result_errors"
 )
 
 // TriggerType enumerates how a child invocation was created from its parent.
