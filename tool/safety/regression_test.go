@@ -59,6 +59,9 @@ func TestBypassRegressions(t *testing.T) {
 		// system dir must not be denied; a destination under one must be.
 		{"cp_src_system_ok", BackendWorkspaceExec, "cp /etc/hosts ./hosts", DecisionAllow, ""},
 		{"cp_dest_system", BackendWorkspaceExec, "cp ./x /etc/passwd", DecisionDeny, RuleOverwriteSystem},
+		// target-directory option names the destination, not the last operand.
+		{"cp_target_dir", BackendWorkspaceExec, "cp -t /etc/cron.d ./job", DecisionDeny, RuleOverwriteSystem},
+		{"mv_target_dir_eq", BackendWorkspaceExec, "mv --target-directory=/usr/bin ./x", DecisionDeny, RuleOverwriteSystem},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

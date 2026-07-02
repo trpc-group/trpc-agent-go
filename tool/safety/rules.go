@@ -232,26 +232,56 @@ func (s *Scanner) overwriteSystem(base string, argv []string, seg, line string) 
 }
 
 // writeTargets returns the argv entries a writer command actually writes to.
-// cp/mv/install/ln write to their last operand (the destination); tee and
+// cp/mv/install/ln write to their last operand (the destination) unless a
+// target-directory option (-t DIR / --target-directory=DIR) names it; tee and
 // truncate write to their file operands. Non-writer commands return nil.
 func writeTargets(base string, argv []string) []string {
-	nonFlag := make([]string, 0, len(argv))
-	for _, a := range argv[1:] {
-		if !isFlag(a) {
-			nonFlag = append(nonFlag, a)
-		}
-	}
 	switch base {
 	case "cp", "mv", "install", "ln":
-		if len(nonFlag) > 0 {
-			return nonFlag[len(nonFlag)-1:]
+		if dir, ok := targetDirOption(argv); ok {
+			return []string{dir}
+		}
+		nf := nonFlagArgs(argv)
+		if len(nf) > 0 {
+			return nf[len(nf)-1:]
 		}
 		return nil
 	case "tee", "truncate":
-		return nonFlag
+		return nonFlagArgs(argv)
 	default:
 		return nil
 	}
+}
+
+func nonFlagArgs(argv []string) []string {
+	out := make([]string, 0, len(argv))
+	for _, a := range argv[1:] {
+		if !isFlag(a) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// targetDirOption returns the GNU coreutils target directory (-t DIR, -tDIR,
+// --target-directory DIR, --target-directory=DIR) when present. With it, every
+// source is written into DIR, so DIR is the destination to check rather than
+// the last operand.
+func targetDirOption(argv []string) (string, bool) {
+	for i := 1; i < len(argv); i++ {
+		a := argv[i]
+		switch {
+		case a == "-t" || a == "--target-directory":
+			if i+1 < len(argv) {
+				return argv[i+1], true
+			}
+		case strings.HasPrefix(a, "--target-directory="):
+			return strings.TrimPrefix(a, "--target-directory="), true
+		case strings.HasPrefix(a, "-t") && !strings.HasPrefix(a, "--") && len(a) > 2:
+			return a[2:], true
+		}
+	}
+	return "", false
 }
 
 func (s *Scanner) network(base string, argv []string, seg, line string, in ScanInput) []Finding {

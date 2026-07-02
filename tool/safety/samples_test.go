@@ -160,16 +160,15 @@ func TestNoPlaintextSecretInOutput(t *testing.T) {
 	}
 }
 
-// TestScanPerformance verifies the guard scans 500 commands and a 500-line
-// script well within budget (acceptance #4 is 1s). Absolute wall-clock timing
-// can flake on slow/contended CI runners, so it is skipped under -short and
-// given generous headroom over the 1s target — it guards against gross
-// regressions, not micro-variance.
+// TestScanPerformance enforces the 1s acceptance target (acceptance #4): the
+// guard must scan 500 commands and a 500-line script in under a second. It is
+// skipped under -short as the flake-tolerant mechanism for slow/contended CI
+// runners; the scan itself is sub-millisecond, so the 1s gate has a wide margin.
 func TestScanPerformance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping wall-clock performance test in -short mode")
 	}
-	const budget = 5 * time.Second // headroom over the 1s acceptance target
+	const budget = time.Second // the acceptance contract
 	sc := testScanner(t)
 	samples := loadSamples(t)
 
