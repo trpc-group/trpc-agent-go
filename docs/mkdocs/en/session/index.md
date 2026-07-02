@@ -210,6 +210,7 @@ When enabled:
 - `GetSession`, full `ListSessions`, `SearchEvents`, and `GetEventWindow` return hydrated content by default.
 - `ListSessions` with `WithListSessionOnlyMeta` skips hydration because event payloads are intentionally omitted.
 - Runner callbacks, tools, and plugins see the same wrapped service when it is passed through `runner.WithSessionService`. Business code that calls `AppendEvent` directly should also use this wrapped service rather than the raw backend.
+- Artifact lifecycle is not automatically inherited from the session lifecycle. Configure or operate your Artifact backend to handle long-term retention, TTL, deletion with sessions, and orphan cleanup according to your application's policy.
 
 The following inputs are not re-hosted by this feature:
 

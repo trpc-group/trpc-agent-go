@@ -211,6 +211,7 @@ r := runner.NewRunner(
 - `GetSession`、完整 `ListSessions`、`SearchEvents`、`GetEventWindow` 默认返回 hydrate 后的内容。
 - 使用 `WithListSessionOnlyMeta` 的 `ListSessions` 不做 hydrate，因为该模式本身会省略 event payload。
 - 通过 `runner.WithSessionService` 传入 wrapped service 后，runner callback、tool、plugin 都会看到同一份 wrapped service。业务代码如果直接调用 `AppendEvent`，也应使用这份 wrapped service，而不是 raw backend。
+- Artifact 生命周期不会自动继承 Session 生命周期。长期保留、TTL、随 Session 删除清理、孤儿 artifact 清理等，需要业务根据所选 Artifact backend 的能力和自身策略自行配置或处理。
 
 以下内容不会被该能力默认重托管：
 
