@@ -85,7 +85,7 @@ func (c *Comparator) Compare(
 	compareScopedStates(a, b, add)
 	compareMemories(a, b, profileA, profileB, add)
 	result.Diffs = filterAllowedDiffs(diffs, allowedDiffs)
-	if len(result.Diffs) > 0 {
+	if hasErrorDiff(result.Diffs) {
 		result.Status = StatusFailed
 	}
 	return result
@@ -322,33 +322,62 @@ func containsMemoryID(entries []*memory.Entry, id string) bool {
 func filterAllowedDiffs(diffs []DiffResult, rules []AllowedDiff) []DiffResult {
 	var out []DiffResult
 	for _, diff := range diffs {
-		if allowed(diff, rules) {
-			continue
+		if rule, ok := allowedRule(diff, rules); ok {
+			diff.Severity = SeverityAllowed
+			diff.AllowedDiff = allowedDiffSummary(rule)
+			diff.Explanation = rule.Reason
 		}
 		out = append(out, diff)
 	}
 	return out
 }
 
+func hasErrorDiff(diffs []DiffResult) bool {
+	for _, diff := range diffs {
+		if diff.Severity == SeverityError {
+			return true
+		}
+	}
+	return false
+}
+
+func allowedDiffSummary(rule AllowedDiff) string {
+	if rule.MatchRule == MatchRuleWithinDelta {
+		return fmt.Sprintf("%s(%.6g)", rule.MatchRule, rule.Delta)
+	}
+	return rule.MatchRule
+}
+
 func allowed(diff DiffResult, rules []AllowedDiff) bool {
+	_, ok := allowedRule(diff, rules)
+	return ok
+}
+
+func allowedRule(diff DiffResult, rules []AllowedDiff) (AllowedDiff, bool) {
 	for _, rule := range rules {
 		if !pathMatch(rule.Path, diff.Path) {
 			continue
 		}
 		switch rule.MatchRule {
 		case MatchRuleIgnore:
-			return true
+			return rule, true
 		case MatchRuleWithinDelta:
 			af, aok := asFloat(diff.ValueA)
 			bf, bok := asFloat(diff.ValueB)
-			return aok && bok && math.Abs(af-bf) <= rule.Delta
+			if aok && bok && math.Abs(af-bf) <= rule.Delta {
+				return rule, true
+			}
 		case MatchRuleNotEmpty:
-			return !isEmpty(diff.ValueA) && !isEmpty(diff.ValueB)
+			if !isEmpty(diff.ValueA) && !isEmpty(diff.ValueB) {
+				return rule, true
+			}
 		case MatchRuleSameType:
-			return reflect.TypeOf(diff.ValueA) == reflect.TypeOf(diff.ValueB)
+			if reflect.TypeOf(diff.ValueA) == reflect.TypeOf(diff.ValueB) {
+				return rule, true
+			}
 		}
 	}
-	return false
+	return AllowedDiff{}, false
 }
 
 func pathMatch(pattern, path string) bool {

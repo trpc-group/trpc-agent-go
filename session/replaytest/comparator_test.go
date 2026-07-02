@@ -37,7 +37,25 @@ func TestComparatorSequentialAndAllowedDiff(t *testing.T) {
 		MatchRule: MatchRuleIgnore,
 	}}, InMemoryProfile(), InMemoryProfile())
 	require.Equal(t, StatusPassed, result.Status)
-	require.Empty(t, result.Diffs)
+	require.NotEmpty(t, result.Diffs)
+	require.Equal(t, SeverityAllowed, result.Diffs[0].Severity)
+	require.Equal(t, MatchRuleIgnore, result.Diffs[0].AllowedDiff)
+	require.Equal(t, "known text drift", result.Diffs[0].Explanation)
+}
+
+func TestComparatorAllowedAndErrorDiffsFailWithAllowedDiffVisible(t *testing.T) {
+	a := testSnapshot("a", "hello", "answer")
+	b := testSnapshot("b", "hello", "changed")
+	b.Session.UserID = "other-user"
+
+	result := NewComparator().Compare(a, b, []AllowedDiff{{
+		Path:      "events[*].response",
+		Reason:    "known text drift",
+		MatchRule: MatchRuleIgnore,
+	}}, InMemoryProfile(), InMemoryProfile())
+	require.Equal(t, StatusFailed, result.Status)
+	requireDiffSeverity(t, result.Diffs, "events[c1.assistant.1].response", SeverityAllowed)
+	requireDiffSeverity(t, result.Diffs, "session.user_id", SeverityError)
 }
 
 func TestComparatorConcurrent(t *testing.T) {
@@ -205,9 +223,13 @@ func TestAllowedDiffMatchRules(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := filterAllowedDiffs([]DiffResult{tc.diff}, []AllowedDiff{tc.rule})
 			if tc.allowed {
-				require.Empty(t, got)
+				require.True(t, allowed(tc.diff, []AllowedDiff{tc.rule}))
+				require.Len(t, got, 1)
+				require.Equal(t, SeverityAllowed, got[0].Severity)
+				require.Equal(t, allowedDiffSummary(tc.rule), got[0].AllowedDiff)
 				return
 			}
+			require.False(t, allowed(tc.diff, []AllowedDiff{tc.rule}))
 			require.Equal(t, []DiffResult{tc.diff}, got)
 		})
 	}
@@ -283,6 +305,16 @@ func requireDiff(t *testing.T, diffs []DiffResult, path string, valueA, valueB a
 		}
 	}
 	t.Fatalf("diff %q with values %#v/%#v not found in %#v", path, valueA, valueB, diffs)
+}
+
+func requireDiffSeverity(t *testing.T, diffs []DiffResult, path, severity string) {
+	t.Helper()
+	for _, diff := range diffs {
+		if diff.Path == path && diff.Severity == severity {
+			return
+		}
+	}
+	t.Fatalf("diff %q with severity %q not found in %#v", path, severity, diffs)
 }
 
 func testSnapshot(backend, userText, assistantText string) *SessionSnapshot {
