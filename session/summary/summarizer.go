@@ -971,7 +971,7 @@ func (s *sessionSummarizer) buildSummaryRequest(
 	conversationText string,
 ) (*model.Request, string, error) {
 	if s.cacheSafeForking {
-		if parent, ok := cacheSafeForkRequestFromContext(ctx); ok {
+		if parent, ok := CacheSafeForkRequestFromContext(ctx); ok {
 			request, err := s.buildCacheSafeForkRequest(parent)
 			return request, callModeCacheSafeFork, err
 		}

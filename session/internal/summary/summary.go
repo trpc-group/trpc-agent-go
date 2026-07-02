@@ -389,7 +389,27 @@ func shouldSkipBranchForkFullSessionCascade(
 	if _, ok := summary.CacheSafeForkRequestFromContext(ctx); !ok {
 		return false
 	}
-	return summary.CacheSafeForkingEnabled(ctx, m, tmp)
+	return cacheSafeForkingEnabled(ctx, m, tmp)
+}
+
+type cacheSafeForkingResolver interface {
+	CacheSafeForkingEnabled(context.Context, *session.Session) bool
+}
+
+func cacheSafeForkingEnabled(
+	ctx context.Context,
+	m summary.SessionSummarizer,
+	sess *session.Session,
+) bool {
+	if m == nil {
+		return false
+	}
+	if resolver, ok := m.(cacheSafeForkingResolver); ok {
+		return resolver.CacheSafeForkingEnabled(ctx, sess)
+	}
+	metadata := m.Metadata()
+	enabled, _ := metadata["cache_safe_forking"].(bool)
+	return enabled
 }
 
 func reportFilterKey(ctx context.Context, filterKey string) string {

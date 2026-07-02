@@ -181,9 +181,13 @@ summarizer := summary.NewSummarizer(
 
 这样摘要请求和父请求拥有相同的前缀，支持 prompt cache 的模型服务就能复用更多
 已缓存输入。如果当前没有父请求，例如手动或外部调用摘要接口，摘要器会自动
-回退到独立摘要请求。当非空 branch 触发摘要并级联刷新全量会话摘要时，branch
-摘要可以使用父请求 fork；全量会话摘要目标会被跳过，不会复用这个 branch 视角的
-父请求。
+回退到独立摘要请求。
+
+这里有一个重要的 branch 摘要行为：开启 `WithCacheSafeForking(true)` 后，非空
+branch 触发摘要时，可以用当前父请求 fork 来生成 branch 摘要；但同一轮 summary
+pass 不会再跑级联出来的全量会话摘要。框架会直接跳过这个全量摘要目标，而不是
+回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的 fork request。如果
+需要覆盖所有 branch 的全量摘要，需要单独触发一次全量会话摘要。
 
 Prompt 规则：
 
@@ -1413,10 +1417,10 @@ sessionService := inmemory.NewSessionService(
   `session.SummaryFilterKeyAllContents` 这个全量摘要目标。
 - `WithCascadeFullSessionSummary(...)` 控制非空分支触发摘要时，是否同时刷新
   全量会话摘要。
-- 开启 `WithCacheSafeForking(true)` 时，branch 摘要目标可以 fork 当前父请求；
-  但 branch 触发出来的全量会话摘要不会复用这个 branch 视角的 fork request，
-  这次 summary pass 会跳过全量摘要目标。如果确实需要覆盖所有 branch 的全量摘要，
-  请单独触发一次全量会话摘要。
+- 开启 `WithCacheSafeForking(true)` 后，如果当前有父请求可 fork，branch 触发的
+  summary pass 只会生成 branch 摘要；级联出来的全量会话摘要目标会被跳过，不会
+  回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的 fork request。如果
+  确实需要覆盖所有 branch 的全量摘要，请单独触发一次全量会话摘要。
 - 如果只想保留 branch 触发出来的全量摘要，不写任何 branch 摘要，可以显式传入
   空 allowlist，并保持默认 cascade 开启：
 

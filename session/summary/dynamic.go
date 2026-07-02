@@ -119,5 +119,5 @@ func (d *dynamicSummarizer) CacheSafeForkingEnabled(
 	if nested, ok := resolved.(*dynamicSummarizer); ok && nested == d {
 		return false
 	}
-	return CacheSafeForkingEnabled(ctx, resolved, sess)
+	return cacheSafeForkingEnabled(ctx, resolved, sess)
 }

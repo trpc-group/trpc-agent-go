@@ -42,17 +42,11 @@ func CacheSafeForkRequestFromContext(ctx context.Context) (*model.Request, bool)
 	return req, ok && req != nil
 }
 
-func cacheSafeForkRequestFromContext(ctx context.Context) (*model.Request, bool) {
-	return CacheSafeForkRequestFromContext(ctx)
-}
-
 type cacheSafeForkingResolver interface {
 	CacheSafeForkingEnabled(context.Context, *session.Session) bool
 }
 
-// CacheSafeForkingEnabled reports whether the summarizer is configured to use
-// cache-safe summary forking in the current request context.
-func CacheSafeForkingEnabled(
+func cacheSafeForkingEnabled(
 	ctx context.Context,
 	s SessionSummarizer,
 	sess *session.Session,
