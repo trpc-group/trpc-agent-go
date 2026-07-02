@@ -116,11 +116,17 @@ func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
 // ---------- Rule 2: Network Access Detection ----------
 
 // NetworkAccessRule detects commands that connect to external networks.
+//
+// It supports an optional allow list of domains: when the rule fires and the
+// command's URL/host matches an entry in the allow list, the rule returns
+// DecisionAsk instead of DecisionDeny so a human can approve the call.
 type NetworkAccessRule struct {
-	dangerousCmds []string
+	dangerousCmds  []string
+	allowedDomains []string
 }
 
-// NewNetworkAccessRule creates a network access detection rule.
+// NewNetworkAccessRule creates a network access detection rule
+// with an empty allow list (deny-by-default for any detected network access).
 func NewNetworkAccessRule() *NetworkAccessRule {
 	return &NetworkAccessRule{
 		dangerousCmds: []string{
@@ -132,27 +138,88 @@ func NewNetworkAccessRule() *NetworkAccessRule {
 	}
 }
 
+// NewNetworkAccessRuleWithAllowlist creates a NetworkAccessRule that downgrades
+// matches to DecisionAsk when the target domain is in the allow list.
+//
+// Each entry in allowedDomains may be a bare host ("github.com") or a wildcard
+// like "*.example.com". Comparison is case-insensitive.
+func NewNetworkAccessRuleWithAllowlist(allowedDomains []string) *NetworkAccessRule {
+	r := NewNetworkAccessRule()
+	r.allowedDomains = allowedDomains
+	return r
+}
+
+// WithAllowedDomains sets the allow list on an existing rule.
+func (r *NetworkAccessRule) WithAllowedDomains(domains []string) *NetworkAccessRule {
+	r.allowedDomains = domains
+	return r
+}
+
 // ID returns the unique identifier of this rule.
 func (r *NetworkAccessRule) ID() string { return "network_002" }
 
 // Check inspects the input for network access keywords.
+//
+// If a keyword matches, the rule inspects the command for any URL/host
+// arguments. When the host is in the configured allow list, the rule returns
+// DecisionAsk (human review) instead of DecisionDeny.
 func (r *NetworkAccessRule) Check(input ScanInput) *ScanResult {
 	cmd := combineInput(input)
 	if cmd == "" {
 		return nil
 	}
 	for _, kw := range r.dangerousCmds {
-		if strings.Contains(cmd, kw) {
+		if !strings.Contains(cmd, kw) {
+			continue
+		}
+		// If a host in the command matches the allow list, downgrade to ask.
+		if r.matchesAllowlist(cmd) {
 			return &ScanResult{
-				Decision:  DecisionDeny,
-				RiskLevel: RiskHigh,
+				Decision:  DecisionAsk,
+				RiskLevel: RiskMedium,
 				RuleID:    r.ID(),
 				Evidence:  kw,
-				Reason:    "network access: " + kw,
+				Reason:    "network access to allowlisted host: " + kw,
 			}
+		}
+		return &ScanResult{
+			Decision:  DecisionDeny,
+			RiskLevel: RiskHigh,
+			RuleID:    r.ID(),
+			Evidence:  kw,
+			Reason:    "network access: " + kw,
 		}
 	}
 	return nil
+}
+
+// matchesAllowlist reports whether cmd contains a host that is in the
+// configured allow list. The match is case-insensitive and supports the
+// wildcard prefix "*.".
+func (r *NetworkAccessRule) matchesAllowlist(cmd string) bool {
+	if len(r.allowedDomains) == 0 {
+		return false
+	}
+	lower := strings.ToLower(cmd)
+	for _, pattern := range r.allowedDomains {
+		pattern = strings.ToLower(strings.TrimSpace(pattern))
+		if pattern == "" {
+			continue
+		}
+		// Wildcard suffix: "*.example.com" matches "foo.example.com".
+		if strings.HasPrefix(pattern, "*.") {
+			suffix := pattern[1:] // ".example.com"
+			if strings.Contains(lower, suffix) {
+				return true
+			}
+			continue
+		}
+		// Plain substring match against the lower-cased command.
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------- Rule 3: Shell Bypass Detection ----------

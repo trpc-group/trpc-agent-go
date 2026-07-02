@@ -123,6 +123,43 @@ func TestNetworkAccessRule_Allow(t *testing.T) {
 	}
 }
 
+func TestNetworkAccessRule_AllowlistAsk(t *testing.T) {
+	rule := NewNetworkAccessRuleWithAllowlist([]string{
+		"github.com",
+		"*.npmjs.org",
+	})
+	tests := []struct {
+		name string
+		cmd  string
+	}{
+		{name: "github curl", cmd: "curl https://github.com/foo/bar"},
+		{name: "github git clone", cmd: "git clone https://github.com/foo/bar"},
+		{name: "npmjs wildcard", cmd: "npm install foo --registry https://registry.npmjs.org"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := rule.Check(ScanInput{Command: tt.cmd})
+			if res == nil {
+				t.Fatalf("expected ask for %q, got nil", tt.cmd)
+			}
+			if res.Decision != DecisionAsk {
+				t.Errorf("expected ask, got %s", res.Decision)
+			}
+		})
+	}
+}
+
+func TestNetworkAccessRule_AllowlistStillDeniesUnknown(t *testing.T) {
+	rule := NewNetworkAccessRuleWithAllowlist([]string{"github.com"})
+	res := rule.Check(ScanInput{Command: "curl https://evil.example.com/x"})
+	if res == nil {
+		t.Fatal("expected deny for unknown host, got nil")
+	}
+	if res.Decision != DecisionDeny {
+		t.Errorf("expected deny for unknown host, got %s", res.Decision)
+	}
+}
+
 // ---------- Rule 3: Shell Bypass ----------
 
 func TestShellBypassRule_Deny(t *testing.T) {

@@ -141,6 +141,42 @@ func TestSeverity(t *testing.T) {
 	}
 }
 
+// fakeAskHighRule is a test-only rule that returns DecisionAsk with RiskHigh.
+type fakeAskHighRule struct{}
+
+func (fakeAskHighRule) ID() string { return "fake_ask_high" }
+func (fakeAskHighRule) Check(input ScanInput) *ScanResult {
+	if input.Command == "deploy" {
+		return &ScanResult{
+			Decision:  DecisionAsk,
+			RiskLevel: RiskHigh,
+			RuleID:    "fake_ask_high",
+			Evidence:  "deploy",
+			Reason:    "test high-severity ask",
+		}
+	}
+	return nil
+}
+
+// TestScanner_WorstNonDenyWins verifies that when multiple non-deny rules
+// fire, the one with the higher risk level is selected.
+func TestScanner_WorstNonDenyWins(t *testing.T) {
+	scanner := NewScanner(
+		NewAskForReviewRule(), // RiskMedium when triggered
+		fakeAskHighRule{},     // RiskHigh when triggered
+	)
+	res := scanner.Scan(ScanInput{Command: "deploy"})
+	if res.Decision != DecisionAsk {
+		t.Fatalf("expected ask, got %s", res.Decision)
+	}
+	if res.RiskLevel != RiskHigh {
+		t.Errorf("expected high severity to win, got %s", res.RiskLevel)
+	}
+	if res.RuleID != "fake_ask_high" {
+		t.Errorf("expected fake_ask_high to win, got %s", res.RuleID)
+	}
+}
+
 func TestContainsSubstring(t *testing.T) {
 	// match
 	if !containsSubstring("hello world", []string{"hello"}) {
