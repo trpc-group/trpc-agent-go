@@ -1842,6 +1842,68 @@ bestOfNOpt, err := bestofn.NewRunnerOption(
 
 开启执行链路追踪或 Graph checkpoint 恢复时，本轮会绕过 Best-of-N 候选选择，按原有 Runner 流程执行。
 
+## 远程 tRPC-Agent Runner
+
+`runner/trpcagent` 用于把一次 `Runner.Run` 调用转成 [tRPC-Agent API](trpcagent.md) HTTP 请求。它适合平台和业务 Agent 服务分离的场景：业务服务用 `server/trpcagent` 暴露真实 Agent，平台侧用 `runner/trpcagent` 像普通 Runner 一样发起运行。
+
+用户服务侧先暴露 [tRPC-Agent API](trpcagent.md)：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/trpcagent"
+)
+
+agentRunner := runner.NewRunner(appName, agent)
+defer agentRunner.Close()
+
+server, err := trpcagent.New(
+	trpcagent.WithAppName(appName),
+	trpcagent.WithAgent(agent),
+	trpcagent.WithRunner(agentRunner),
+)
+if err != nil {
+	return err
+}
+http.ListenAndServe(":8080", server.Handler())
+```
+
+平台侧创建远程 Runner：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	trpcagentrunner "trpc.group/trpc-go/trpc-agent-go/runner/trpcagent"
+)
+
+remoteRunner, err := trpcagentrunner.New(
+	"calculator",
+	trpcagentrunner.WithTarget("http://127.0.0.1:8080"),
+)
+if err != nil {
+	return err
+}
+defer remoteRunner.Close()
+
+snapshot, err := remoteRunner.Describe(ctx)
+if err != nil {
+	return err
+}
+_ = snapshot
+
+events, err := remoteRunner.Run(
+	ctx,
+	"user1",
+	"session1",
+	model.NewUserMessage("Use the calculator to compute 12 * 7."),
+)
+if err != nil {
+	return err
+}
+```
+
+默认路径为 `/trpc-agent/v1/apps/{appName}`。`Describe` 请求远端 structure，`Run` 请求远端 runs 接口并恢复为框架标准 `event.Event` 流。更多完整代码可参考 `examples/trpcagent`。
+
 ## 📝 总结
 
 Runner 组件是 tRPC-Agent-Go 框架的核心，提供了完整的对话管理和 Agent 编排能力。通过合理使用会话管理、工具集成和事件处理，可以构建强大的智能对话应用。

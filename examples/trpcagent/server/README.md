@@ -24,6 +24,12 @@ go run ./trpcagent/server \
   -address 127.0.0.1:8080
 ```
 
+The companion client example can call this server through `runner/trpcagent`:
+
+```bash
+go run ./trpcagent/client
+```
+
 ## Fetch structure
 
 ```bash
