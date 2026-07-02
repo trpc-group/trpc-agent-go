@@ -46,7 +46,7 @@ const (
 	// EnabledThinkingKey is kept for backward compatibility.
 	//
 	// Deprecated: use EnableThinkingKey.
-	EnabledThinkingKey = EnableThinkingKey
+	EnabledThinkingKey = "enabled_thinking"
 )
 
 // String returns the string representation of the role.
