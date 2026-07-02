@@ -88,7 +88,6 @@ The local `run.log` captures one actual async run with the default flags. This r
 ```text
 Data directory: ./data
 Result directory: ./output
-Structure ID: struct_42eb2243e0a56898a3de887f34c031f73d4e4ebd667515c7a333e10cc857ff22
 Target node: candidate
 Target surface ID: candidate#instruction
 Initial instruction: "生成一篇中文体育战报"

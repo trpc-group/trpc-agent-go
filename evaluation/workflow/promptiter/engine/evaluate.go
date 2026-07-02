@@ -13,23 +13,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
-	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
-	isurface "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/surface"
-	isurfacepatch "trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
-	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/model/provider"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // EvaluationOptions configures evaluation concurrency behavior.
@@ -46,7 +39,7 @@ type EvaluationOptions struct {
 type EvaluationRequest struct {
 	// EvalSets identifies the evaluation sets and case filters to execute.
 	EvalSets []EvalSetInput
-	// Profile is the normalized candidate profile being evaluated.
+	// Profile is the candidate profile being evaluated.
 	Profile *promptiter.Profile
 	// Teacher is the optional runner used by the evaluation runtime.
 	Teacher runner.Runner
@@ -102,14 +95,11 @@ type EvaluationResult struct {
 
 func (e *engine) evaluate(
 	ctx context.Context,
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	request *EvaluationRequest,
 ) (*EvaluationResult, error) {
 	if request == nil {
 		return nil, errors.New("evaluation request is nil")
-	}
-	if structure == nil {
-		return nil, errors.New("structure state is nil")
 	}
 	if err := validateEvalSetInputs("", request.EvalSets); err != nil {
 		return nil, err
@@ -117,10 +107,14 @@ func (e *engine) evaluate(
 	if e.agentEvaluator == nil {
 		return nil, errors.New("agent evaluator is nil")
 	}
+	runOptions, err := compileProfileRunOptions(structure, request.Profile)
+	if err != nil {
+		return nil, err
+	}
 	results := make([]EvalSetResult, 0, len(request.EvalSets))
 	totalScore := 0.0
 	for _, input := range request.EvalSets {
-		options, err := buildEvaluationCallOptions(structure, request, input)
+		options, err := buildEvaluationCallOptions(request, input, runOptions)
 		if err != nil {
 			return nil, err
 		}
@@ -128,7 +122,7 @@ func (e *engine) evaluate(
 		if err != nil {
 			return nil, err
 		}
-		evalSetResult, err := adaptEvaluationSetResult(structure, input.EvalSetID, genericResult)
+		evalSetResult, err := adaptEvaluationSetResult(input.EvalSetID, genericResult)
 		if err != nil {
 			return nil, err
 		}
@@ -152,20 +146,15 @@ func evaluationScore(result *EvaluationResult) (float64, error) {
 }
 
 func buildEvaluationCallOptions(
-	structure *structureState,
 	request *EvaluationRequest,
 	input EvalSetInput,
+	runOptions []agent.RunOption,
 ) ([]evaluation.Option, error) {
 	if request == nil {
 		return nil, errors.New("evaluation request is nil")
 	}
-	runOptions, err := compileProfileRunOptions(structure, request.Profile)
-	if err != nil {
-		return nil, err
-	}
 	options := make([]evaluation.Option, 0, 8)
 	options = append(options, evaluation.WithRunDetailsEnabled(true))
-	runOptions = append(runOptions, withToolSurfaceTracing())
 	options = append(options, evaluation.WithRunOptions(runOptions...))
 	if request.Teacher != nil {
 		options = append(options, evaluation.WithExpectedRunner(request.Teacher))
@@ -190,248 +179,27 @@ func buildEvaluationCallOptions(
 }
 
 func compileProfileRunOptions(
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	profile *promptiter.Profile,
 ) ([]agent.RunOption, error) {
-	if structure == nil {
-		return nil, errors.New("structure state is nil")
+	compilerProfile, err := structure.NormalizeProfile(toCompilerProfile(profile))
+	if err != nil {
+		return nil, err
 	}
-	if profile != nil && profile.StructureID != "" && profile.StructureID != structure.snapshot.StructureID {
-		return nil, fmt.Errorf(
-			"profile structure id %q does not match structure id %q",
-			profile.StructureID,
-			structure.snapshot.StructureID,
-		)
+	runOptions, err := profilecompiler.CompileRunOptions(compilerProfile, true)
+	if err != nil {
+		return nil, err
 	}
-	runOptions := []agent.RunOption{
-		agent.WithExecutionTraceEnabled(true),
-	}
-	if profile == nil {
-		return runOptions, nil
-	}
-	overrideIndex := buildOverrideIndex(profile)
-	if len(overrideIndex) == 0 {
-		return runOptions, nil
-	}
-	surfaceIDs := make([]string, 0, len(overrideIndex))
-	for surfaceID := range overrideIndex {
-		surfaceIDs = append(surfaceIDs, surfaceID)
-	}
-	slices.Sort(surfaceIDs)
-	nodePatches := make(map[string]isurfacepatch.Patch)
-	nodeToolDeclarations := make(map[string][]tool.Declaration)
-	for _, surfaceID := range surfaceIDs {
-		override := overrideIndex[surfaceID]
-		surface, ok := structure.surfaceIndex[surfaceID]
-		if !ok {
-			return nil, fmt.Errorf("profile override references unknown surface id %q", override.SurfaceID)
-		}
-		if surface.Type == astructure.SurfaceTypeTool {
-			declarations, err := toolDeclarationsForSurfaceOverride(surface, override.Value)
-			if err != nil {
-				return nil, err
-			}
-			nodeToolDeclarations[surface.NodeID] = append(
-				nodeToolDeclarations[surface.NodeID],
-				declarations...,
-			)
-			continue
-		}
-		patch := nodePatches[surface.NodeID]
-		if err := applySurfaceOverrideToPatch(&patch, surface, override.Value); err != nil {
-			return nil, err
-		}
-		nodePatches[surface.NodeID] = patch
-	}
-	for nodeID, declarations := range nodeToolDeclarations {
-		patch := nodePatches[nodeID]
-		patch.SetToolDeclarations(declarations)
-		nodePatches[nodeID] = patch
-	}
-	nodeIDs := make([]string, 0, len(nodePatches))
-	for nodeID := range nodePatches {
-		nodeIDs = append(nodeIDs, nodeID)
-	}
-	slices.Sort(nodeIDs)
-	for _, nodeID := range nodeIDs {
-		runOptions = append(runOptions, withSurfacePatchForNode(nodeID, nodePatches[nodeID]))
+	if len(compilerProfile.Overrides) > 0 {
+		runOptions = append(runOptions, profilecompiler.WithProfile(compilerProfile))
 	}
 	return runOptions, nil
 }
 
-func applySurfaceOverrideToPatch(
-	patch *isurfacepatch.Patch,
-	surface astructure.Surface,
-	value astructure.SurfaceValue,
-) error {
-	if patch == nil {
-		return errors.New("surface patch is nil")
-	}
-	switch surface.Type {
-	case astructure.SurfaceTypeInstruction:
-		if value.Text == nil {
-			return fmt.Errorf("surface %q instruction value is nil", surface.SurfaceID)
-		}
-		patch.SetInstruction(*value.Text)
-		return nil
-	case astructure.SurfaceTypeGlobalInstruction:
-		if value.Text == nil {
-			return fmt.Errorf("surface %q global instruction value is nil", surface.SurfaceID)
-		}
-		patch.SetGlobalInstruction(*value.Text)
-		return nil
-	case astructure.SurfaceTypeFewShot:
-		examples, err := convertFewShotExamples(value.FewShot)
-		if err != nil {
-			return fmt.Errorf("surface %q few-shot value is invalid: %w", surface.SurfaceID, err)
-		}
-		patch.SetFewShot(examples)
-		return nil
-	case astructure.SurfaceTypeModel:
-		modelInstance, err := buildModelInstance(value.Model)
-		if err != nil {
-			return fmt.Errorf("surface %q model value is invalid: %w", surface.SurfaceID, err)
-		}
-		patch.SetModel(modelInstance)
-		return nil
-	default:
-		return fmt.Errorf(
-			"surface %q type %q is not supported by generic evaluation",
-			surface.SurfaceID,
-			surface.Type,
-		)
-	}
-}
-
-func withSurfacePatchForNode(nodeID string, patch isurfacepatch.Patch) agent.RunOption {
-	return func(opts *agent.RunOptions) {
-		if opts == nil || nodeID == "" || patch.IsEmpty() {
-			return
-		}
-		opts.CustomAgentConfigs = isurfacepatch.WithPatch(
-			opts.CustomAgentConfigs,
-			nodeID,
-			patch,
-		)
-	}
-}
-
-func withToolSurfaceTracing() agent.RunOption {
-	return func(opts *agent.RunOptions) {
-		if opts == nil {
-			return
-		}
-		opts.CustomAgentConfigs = isurfacepatch.WithToolSurfaceTracing(
-			opts.CustomAgentConfigs,
-		)
-	}
-}
-
-func toolDeclarationsForSurfaceOverride(
-	surface astructure.Surface,
-	value astructure.SurfaceValue,
-) ([]tool.Declaration, error) {
-	value, err := isurface.SanitizePatchValue(surface, value)
-	if err != nil {
-		return nil, fmt.Errorf("surface %q tool value is invalid: %w", surface.SurfaceID, err)
-	}
-	declarations, err := convertToolRefs(value.Tools)
-	if err != nil {
-		return nil, fmt.Errorf("surface %q tool value is invalid: %w", surface.SurfaceID, err)
-	}
-	return declarations, nil
-}
-
-func buildModelInstance(ref *astructure.ModelRef) (model.Model, error) {
-	if ref == nil {
-		return nil, errors.New("model ref is nil")
-	}
-	providerName := strings.TrimSpace(ref.Provider)
-	if providerName == "" {
-		return nil, errors.New("model provider is empty")
-	}
-	modelName := strings.TrimSpace(ref.Name)
-	if modelName == "" {
-		return nil, errors.New("model name is empty")
-	}
-	options := make([]provider.Option, 0, 4)
-	if variant := strings.TrimSpace(ref.Variant); variant != "" {
-		options = append(options, provider.WithVariant(variant))
-	}
-	if baseURL := strings.TrimSpace(ref.BaseURL); baseURL != "" {
-		options = append(options, provider.WithBaseURL(baseURL))
-	}
-	if apiKey := strings.TrimSpace(ref.APIKey); apiKey != "" {
-		options = append(options, provider.WithAPIKey(apiKey))
-	}
-	if len(ref.Headers) > 0 {
-		headers := make(map[string]string, len(ref.Headers))
-		maps.Copy(headers, ref.Headers)
-		options = append(options, provider.WithHeaders(headers))
-	}
-	modelInstance, err := provider.Model(providerName, modelName, options...)
-	if err != nil {
-		return nil, err
-	}
-	return modelInstance, nil
-}
-
-func convertFewShotExamples(
-	examples []astructure.FewShotExample,
-) ([][]model.Message, error) {
-	converted := make([][]model.Message, 0, len(examples))
-	for i, example := range examples {
-		messages := make([]model.Message, 0, len(example.Messages))
-		for j, message := range example.Messages {
-			role := model.Role(message.Role)
-			if !role.IsValid() {
-				return nil, fmt.Errorf(
-					"example %d message %d role %q is invalid",
-					i,
-					j,
-					message.Role,
-				)
-			}
-			messages = append(messages, model.Message{
-				Role:    role,
-				Content: message.Content,
-			})
-		}
-		converted = append(converted, messages)
-	}
-	return converted, nil
-}
-
-func convertToolRefs(refs []astructure.ToolRef) ([]tool.Declaration, error) {
-	declarations := make([]tool.Declaration, 0, len(refs))
-	seen := make(map[string]struct{}, len(refs))
-	for _, ref := range refs {
-		name := ref.ID
-		if name == "" {
-			return nil, errors.New("tool id is empty")
-		}
-		if _, ok := seen[name]; ok {
-			return nil, fmt.Errorf("duplicate tool id %q", name)
-		}
-		seen[name] = struct{}{}
-		declarations = append(declarations, tool.Declaration{
-			Name:         name,
-			Description:  ref.Description,
-			InputSchema:  ref.InputSchema,
-			OutputSchema: ref.OutputSchema,
-		})
-	}
-	return declarations, nil
-}
-
 func adaptEvaluationSetResult(
-	structure *structureState,
 	evalSetID string,
 	result *evaluation.EvaluationResult,
 ) (*EvalSetResult, error) {
-	if structure == nil {
-		return nil, errors.New("structure state is nil")
-	}
 	if result == nil {
 		return nil, errors.New("evaluation result is nil")
 	}
@@ -454,7 +222,7 @@ func adaptEvaluationSetResult(
 		if evalCase == nil {
 			continue
 		}
-		converted, err := adaptEvaluationCaseResult(structure, evalSetID, evalCase)
+		converted, err := adaptEvaluationCaseResult(evalSetID, evalCase)
 		if err != nil {
 			return nil, err
 		}
@@ -492,7 +260,6 @@ func calculateEvaluationScore(result *evaluation.EvaluationResult) (float64, err
 }
 
 func adaptEvaluationCaseResult(
-	structure *structureState,
 	evalSetID string,
 	evalCase *evaluation.EvaluationCaseResult,
 ) (*CaseResult, error) {
@@ -530,7 +297,7 @@ func adaptEvaluationCaseResult(
 			runResult.RunID,
 		)
 	}
-	trace, sessionID, err := extractInferenceTraceDetails(structure, evalCase.EvalCaseID, runDetail.Inference)
+	trace, sessionID, err := extractInferenceTraceDetails(evalCase.EvalCaseID, runDetail.Inference)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"extract inference trace details for eval case %q: %w",
@@ -556,13 +323,9 @@ func adaptEvaluationCaseResult(
 }
 
 func extractInferenceTraceDetails(
-	structure *structureState,
 	evalCaseID string,
 	result *evaluation.EvaluationInferenceDetails,
 ) (*atrace.Trace, string, error) {
-	if structure == nil {
-		return nil, "", errors.New("structure state is nil")
-	}
 	if result == nil {
 		return nil, "", errors.New("inference result is nil")
 	}
@@ -573,7 +336,7 @@ func extractInferenceTraceDetails(
 		)
 	}
 	executionTrace := result.ExecutionTraces[0]
-	if err := validateTraceAgainstStructure(structure, executionTrace); err != nil {
+	if err := validateTrace(executionTrace); err != nil {
 		return nil, "", err
 	}
 	sessionID := executionTrace.SessionID
@@ -583,13 +346,7 @@ func extractInferenceTraceDetails(
 	return executionTrace, sessionID, nil
 }
 
-func validateTraceAgainstStructure(
-	structure *structureState,
-	trace *atrace.Trace,
-) error {
-	if structure == nil {
-		return errors.New("structure state is nil")
-	}
+func validateTrace(trace *atrace.Trace) error {
 	if trace == nil {
 		return errors.New("execution trace is nil")
 	}
@@ -600,13 +357,6 @@ func validateTraceAgainstStructure(
 		for _, surfaceID := range step.AppliedSurfaceIDs {
 			if surfaceID == "" {
 				return fmt.Errorf("execution trace step %q applied surface id is empty", step.StepID)
-			}
-			if _, ok := structure.knownSurfaceIDs[surfaceID]; !ok {
-				return fmt.Errorf(
-					"execution trace step %q references unknown surface id %q",
-					step.StepID,
-					surfaceID,
-				)
 			}
 		}
 	}

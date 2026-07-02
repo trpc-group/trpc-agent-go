@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder"
 	iloss "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/loss"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 )
 
 // BackwardOptions configures backward-stage execution behavior.
@@ -50,7 +51,7 @@ type BackwardResult struct {
 
 func (e *engine) backward(
 	ctx context.Context,
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	profile *promptiter.Profile,
 	train *EvaluationResult,
 	losses []promptiter.CaseLoss,
@@ -59,9 +60,6 @@ func (e *engine) backward(
 ) (*BackwardResult, error) {
 	if e.backwarder == nil {
 		return nil, errors.New("backwarder is nil")
-	}
-	if structure == nil {
-		return nil, errors.New("structure state is nil")
 	}
 	caseIndex := indexCaseResults(train)
 	overrideIndex := buildOverrideIndex(profile)
@@ -134,7 +132,7 @@ func indexCaseResults(result *EvaluationResult) map[caseResultKey]CaseResult {
 
 func (e *engine) backwardCase(
 	ctx context.Context,
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	overrideIndex map[string]promptiter.SurfaceOverride,
 	evalCase CaseResult,
 	caseLoss promptiter.CaseLoss,
@@ -147,7 +145,7 @@ func (e *engine) backwardCase(
 			evalCase.EvalSetID,
 		)
 	}
-	stepIndex, err := indexTraceSteps(structure, evalCase.Trace)
+	stepIndex, err := indexTraceSteps(evalCase.Trace)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"index trace steps for eval case %q in eval set %q: %w",
@@ -204,13 +202,13 @@ func (e *engine) backwardCase(
 			caseResult.StepGradients = append(caseResult.StepGradients, promptiter.StepGradient{
 				StepID:    step.StepID,
 				NodeID:    step.NodeID,
-				Gradients: append([]promptiter.SurfaceGradient(nil), response.Gradients...),
+				Gradients: response.Gradients,
 			})
 		}
 		for _, propagation := range response.Upstream {
 			inbox[propagation.PredecessorStepID] = append(
 				inbox[propagation.PredecessorStepID],
-				append([]backwarder.GradientPacket(nil), propagation.Gradients...)...,
+				propagation.Gradients...,
 			)
 		}
 	}
@@ -227,13 +225,7 @@ type indexedTraceStep struct {
 	order int
 }
 
-func indexTraceSteps(
-	structure *structureState,
-	trace *atrace.Trace,
-) (map[string]indexedTraceStep, error) {
-	if structure == nil {
-		return nil, errors.New("structure state is nil")
-	}
+func indexTraceSteps(trace *atrace.Trace) (map[string]indexedTraceStep, error) {
 	if trace == nil {
 		return nil, errors.New("trace is nil")
 	}
@@ -244,9 +236,6 @@ func indexTraceSteps(
 		}
 		if step.NodeID == "" {
 			return nil, fmt.Errorf("trace step %q node id is empty", step.StepID)
-		}
-		if _, ok := structure.nodeIndex[step.NodeID]; !ok {
-			return nil, fmt.Errorf("trace step %q references unknown node id %q", step.StepID, step.NodeID)
 		}
 		if _, ok := index[step.StepID]; ok {
 			return nil, fmt.Errorf("duplicate trace step id %q", step.StepID)
@@ -291,7 +280,7 @@ func normalizeIncomingPackets(packets []backwarder.GradientPacket) []backwarder.
 }
 
 func buildBackwardRequest(
-	structure *structureState,
+	structure *profilecompiler.Structure,
 	overrideIndex map[string]promptiter.SurfaceOverride,
 	traceIndex map[string]indexedTraceStep,
 	evalCase CaseResult,
@@ -299,10 +288,7 @@ func buildBackwardRequest(
 	incoming []backwarder.GradientPacket,
 	targetSurfaceSet targetSurfaceSet,
 ) (*backwarder.Request, error) {
-	node, ok := structure.nodeIndex[step.NodeID]
-	if !ok {
-		return nil, fmt.Errorf("step %q references unknown node id %q", step.StepID, step.NodeID)
-	}
+	node := astructure.Node{NodeID: step.NodeID, Name: step.AgentName}
 	surfaces := make([]astructure.Surface, 0, len(step.AppliedSurfaceIDs))
 	allowedGradientSurfaceIDs := make([]string, 0, len(step.AppliedSurfaceIDs))
 	seenSurfaces := make(map[string]struct{}, len(step.AppliedSurfaceIDs))
@@ -314,10 +300,10 @@ func buildBackwardRequest(
 			continue
 		}
 		seenSurfaces[surfaceID] = struct{}{}
-		if _, ok := structure.knownSurfaceIDs[surfaceID]; !ok {
-			return nil, fmt.Errorf("surface id %q is unknown", surfaceID)
+		if _, known := structure.KnownSurfaceIDs[surfaceID]; !known {
+			return nil, fmt.Errorf("step %q applied surface id %q is unknown", step.StepID, surfaceID)
 		}
-		if _, ok := structure.surfaceIndex[surfaceID]; !ok {
+		if _, ok := structure.SurfaceIndex[surfaceID]; !ok {
 			continue
 		}
 		surface, err := resolveProfileSurface(structure, overrideIndex, surfaceID)
@@ -338,11 +324,11 @@ func buildBackwardRequest(
 		predecessors = append(predecessors, backwarder.Predecessor{
 			StepID: predecessor.step.StepID,
 			NodeID: predecessor.step.NodeID,
-			Output: cloneTraceSnapshot(predecessor.step.Output),
+			Output: predecessor.step.Output,
 			Error:  predecessor.step.Error,
 		})
 	}
-	input := cloneTraceSnapshot(step.Input)
+	input := step.Input
 	if input == nil {
 		input = &atrace.Snapshot{}
 	}
@@ -352,30 +338,11 @@ func buildBackwardRequest(
 		Node:                      &node,
 		StepID:                    step.StepID,
 		Input:                     input,
-		Output:                    cloneTraceSnapshot(step.Output),
+		Output:                    step.Output,
 		Error:                     step.Error,
 		Surfaces:                  surfaces,
-		AllowedGradientSurfaceIDs: allowedGradientSurfaceIDsOrNil(targetSurfaceSet, allowedGradientSurfaceIDs),
+		AllowedGradientSurfaceIDs: allowedGradientSurfaceIDs,
 		Predecessors:              predecessors,
 		Incoming:                  incoming,
 	}, nil
-}
-
-func allowedGradientSurfaceIDsOrNil(
-	targetSurfaceSet targetSurfaceSet,
-	allowedGradientSurfaceIDs []string,
-) []string {
-	if targetSurfaceSet == nil {
-		return nil
-	}
-	cloned := make([]string, len(allowedGradientSurfaceIDs))
-	copy(cloned, allowedGradientSurfaceIDs)
-	return cloned
-}
-
-func cloneTraceSnapshot(snapshot *atrace.Snapshot) *atrace.Snapshot {
-	if snapshot == nil {
-		return nil
-	}
-	return &atrace.Snapshot{Text: snapshot.Text}
 }
