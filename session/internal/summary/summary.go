@@ -349,6 +349,9 @@ func shouldGenerateSummary(
 	report *summary.Report,
 ) bool {
 	if force {
+		if shouldSkipBranchForkFullSessionCascade(ctx, m, tmp, filterKey) {
+			return false
+		}
 		if report != nil {
 			report.Trigger = summary.Trigger{
 				Fired:     true,
@@ -362,10 +365,31 @@ func shouldGenerateSummary(
 	checkTmp := tmp
 	if filterKey == session.SummaryFilterKeyAllContents {
 		if triggerFilterKey := summaryTriggerFilterKeyFromContext(ctx); triggerFilterKey != "" {
+			if shouldSkipBranchForkFullSessionCascade(ctx, m, tmp, filterKey) {
+				return false
+			}
 			checkTmp = buildFilterSession(base, triggerFilterKey, input)
 		}
 	}
 	return ShouldSummarize(ctx, m, checkTmp)
+}
+
+func shouldSkipBranchForkFullSessionCascade(
+	ctx context.Context,
+	m summary.SessionSummarizer,
+	tmp *session.Session,
+	filterKey string,
+) bool {
+	if filterKey != session.SummaryFilterKeyAllContents {
+		return false
+	}
+	if summaryTriggerFilterKeyFromContext(ctx) == "" {
+		return false
+	}
+	if _, ok := summary.CacheSafeForkRequestFromContext(ctx); !ok {
+		return false
+	}
+	return summary.CacheSafeForkingEnabled(ctx, m, tmp)
 }
 
 func reportFilterKey(ctx context.Context, filterKey string) string {
@@ -609,6 +633,18 @@ func contextWithForkedReport(ctx context.Context) context.Context {
 	return summary.ContextWithReport(ctx, &cloned)
 }
 
+func contextForSummaryTarget(
+	ctx context.Context,
+	triggerFilterKey string,
+	targetFilterKey string,
+) context.Context {
+	if targetFilterKey != session.SummaryFilterKeyAllContents ||
+		triggerFilterKey == session.SummaryFilterKeyAllContents {
+		return ctx
+	}
+	return contextWithSummaryTriggerFilterKey(ctx, triggerFilterKey)
+}
+
 // GetSummaryTextFromSession attempts to retrieve summary text from the session's
 // in-memory summaries using the specified filter key. It parses the provided options
 // and applies the summary selection logic. Filters out summaries with UpdatedAt before sess.CreatedAt.
@@ -717,10 +753,7 @@ func CreateSessionSummaryWithCascade(
 	}
 	if len(targets) == 1 {
 		target := targets[0]
-		if target == session.SummaryFilterKeyAllContents &&
-			filterKey != session.SummaryFilterKeyAllContents {
-			ctx = contextWithSummaryTriggerFilterKey(ctx, filterKey)
-		}
+		ctx = contextForSummaryTarget(ctx, filterKey, target)
 		return createSummaryFunc(ctx, sess, target, force)
 	}
 
@@ -750,10 +783,7 @@ func CreateSessionSummaryWithCascade(
 		callCtx := contextWithForkedReport(ctx)
 		go func(i int, fk string, callCtx context.Context) {
 			defer summaryWg.Done()
-			if fk == session.SummaryFilterKeyAllContents &&
-				filterKey != session.SummaryFilterKeyAllContents {
-				callCtx = contextWithSummaryTriggerFilterKey(callCtx, filterKey)
-			}
+			callCtx = contextForSummaryTarget(callCtx, filterKey, fk)
 			err := createSummaryFunc(callCtx, sess, fk, force)
 			if err != nil {
 				result[i] = fmt.Errorf("create session summary for filterKey %q failed: %w", fk, err)
