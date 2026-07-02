@@ -131,6 +131,9 @@ func (s *Scanner) Scan(input ScanInput) *ScanResult {
 	}
 }
 
+// severity returns a numeric severity score for r. Higher numbers
+// correspond to more dangerous risk levels; unknown values collapse to
+// RiskNone so future additions are fail-safe.
 func severity(r RiskLevel) int {
 	switch r {
 	case RiskNone:
@@ -149,6 +152,8 @@ func severity(r RiskLevel) int {
 }
 
 // decisionPriority returns the priority of a decision: deny > ask > allow.
+// Unknown decisions get the lowest priority so a typo in a future Decision
+// constant cannot accidentally out-rank a real result.
 func decisionPriority(d Decision) int {
 	switch d {
 	case DecisionDeny:
@@ -165,6 +170,11 @@ func decisionPriority(d Decision) int {
 // isMoreSevere reports whether candidate is more severe than current.
 // A result is more severe if its decision has higher priority, or if
 // the decision is the same and its risk level is higher.
+//
+// When current is nil every candidate is considered more severe so the
+// first firing rule is recorded. From then on the strict comparison
+// ensures the final ScanResult is the single most-severe entry across
+// all rules, regardless of rule registration order.
 func isMoreSevere(candidate, current *ScanResult) bool {
 	if current == nil {
 		return true
@@ -176,13 +186,24 @@ func isMoreSevere(candidate, current *ScanResult) bool {
 }
 
 // policyConfig mirrors a YAML/JSON policy file.
+//
+// It is package-private because callers should not construct a Scanner
+// directly from a config struct - use NewScanner with the rule helpers
+// (NewDangerousCommandRule, ...) instead. The struct is kept here so
+// Scan tests and future YAML loaders can share one shape.
 type policyConfig struct {
-	DeniedCommands    []string `yaml:"denied_commands"    json:"denied_commands"`
-	DeniedPaths       []string `yaml:"denied_paths"       json:"denied_paths"`
-	DeniedDomains     []string `yaml:"denied_domains"     json:"denied_domains"`
-	AllowedDomains    []string `yaml:"allowed_domains"    json:"allowed_domains"`
-	MaxTimeoutSeconds int      `yaml:"max_timeout_seconds" json:"max_timeout_seconds"`
-	MaxOutputBytes    int      `yaml:"max_output_bytes"    json:"max_output_bytes"`
+	// DeniedCommands is the deny list of command keywords.
+	DeniedCommands []string `yaml:"denied_commands"    json:"denied_commands"`
+	// DeniedPaths is the deny list of sensitive path patterns.
+	DeniedPaths []string `yaml:"denied_paths"       json:"denied_paths"`
+	// DeniedDomains is the network domain deny list.
+	DeniedDomains []string `yaml:"denied_domains"     json:"denied_domains"`
+	// AllowedDomains is the network domain allow list.
+	AllowedDomains []string `yaml:"allowed_domains"    json:"allowed_domains"`
+	// MaxTimeoutSeconds is the maximum command execution timeout in seconds.
+	MaxTimeoutSeconds int `yaml:"max_timeout_seconds" json:"max_timeout_seconds"`
+	// MaxOutputBytes is the maximum output size in bytes.
+	MaxOutputBytes int `yaml:"max_output_bytes"    json:"max_output_bytes"`
 }
 
 // containsSubstring checks whether any pattern in patterns appears in s.

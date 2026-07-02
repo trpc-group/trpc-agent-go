@@ -28,7 +28,11 @@ import (
 //	//   runner.Run(ctx, userID, sessionID, msg,
 //	//       agent.WithToolPermissionPolicy(guard))
 type Guard struct {
+	// scanner runs the configured rule set on every tool call.
 	scanner *Scanner
+	// extract converts raw tool arguments into a ScanInput. The default
+	// reads a "command" JSON field; callers can substitute their own to
+	// support non-JSON tools or multi-field extraction.
 	extract func(args []byte) ScanInput
 }
 

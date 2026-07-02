@@ -28,7 +28,11 @@ type Redactor struct {
 	KeepBoundaryLen int
 }
 
+// redactPattern pairs a literal substring (preferred, no backtracking)
+// with a compiled regex (fallback for non-literal shapes like JWTs and
+// AWS key ids). Exactly one of exact and re is set per entry.
 type redactPattern struct {
+	// re is the compiled regex used when exact is empty.
 	re *regexp.Regexp
 	// exact is the literal substring; if non-empty, the match is done by
 	// plain string replace (faster, no regex backtracking) using the same

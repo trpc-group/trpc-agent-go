@@ -35,8 +35,12 @@ func combineInput(input ScanInput) string {
 //   - Reading sensitive files (~/.ssh, /etc/passwd, .env)
 //   - Commands that leak credentials (cat ~/.aws/credentials)
 type DangerousCommandRule struct {
+	// dangerousCommands is the deny list of explicitly dangerous command
+	// prefixes (case-insensitive substring match).
 	dangerousCommands []string
-	sensitivePaths    []string
+	// sensitivePaths is the deny list of sensitive file paths; a read or
+	// modify against one of these paths is treated as a critical risk.
+	sensitivePaths []string
 }
 
 // NewDangerousCommandRule creates a rule with the default deny list.
@@ -121,7 +125,11 @@ func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
 // command's URL/host matches an entry in the allow list, the rule returns
 // DecisionAsk instead of DecisionDeny so a human can approve the call.
 type NetworkAccessRule struct {
-	dangerousCmds  []string
+	// dangerousCmds is the set of command names that perform outbound
+	// network access. Matching is case-insensitive substring.
+	dangerousCmds []string
+	// allowedDomains downgrades a match to DecisionAsk when the target
+	// host is in this list. Supports wildcard "*.example.com" entries.
 	allowedDomains []string
 }
 
@@ -227,6 +235,10 @@ func (r *NetworkAccessRule) matchesAllowlist(cmd string) bool {
 // ShellBypassRule detects attempts to bypass shell safety restrictions
 // by using -c flags, eval, or other indirect execution methods.
 type ShellBypassRule struct {
+	// bypassPatterns is the deny list of shell-bypass tokens and flags
+	// ("sh -c", "eval ", "base64 -d", ...). A match is critical risk
+	// because it indicates an attempt to escape the safe-execution
+	// surface.
 	bypassPatterns []string
 }
 
@@ -271,7 +283,11 @@ func (r *ShellBypassRule) Check(input ScanInput) *ScanResult {
 // ---------- Rule 4: Install and System Mutation Detection ----------
 
 // InstallAndMutateRule detects package manager installs and system config changes.
-type InstallAndMutateRule struct{ patterns []string }
+type InstallAndMutateRule struct {
+	// patterns is the deny list of install / system-mutation tokens
+	// ("apt install", "systemctl enable", "iptables ", ...).
+	patterns []string
+}
 
 // NewInstallAndMutateRule creates an install/mutation detection rule.
 func NewInstallAndMutateRule() *InstallAndMutateRule {
@@ -317,7 +333,13 @@ func (r *InstallAndMutateRule) Check(input ScanInput) *ScanResult {
 // ---------- Rule 5: Host Execution Risk Detection ----------
 
 // HostExecRiskRule detects host-level operations that only apply to the local executor.
-type HostExecRiskRule struct{ risks []string }
+type HostExecRiskRule struct {
+	// risks is the deny list of host-execution risk tokens ("mount ",
+	// "chmod 777", "setuid", ...). The rule is a no-op for non-local
+	// executors because these tokens do not apply to containerized
+	// runtimes.
+	risks []string
+}
 
 // NewHostExecRiskRule creates a host execution risk detection rule.
 func NewHostExecRiskRule() *HostExecRiskRule {
@@ -399,7 +421,13 @@ func (r *ResourceAbuseRule) Check(input ScanInput) *ScanResult {
 // ---------- Rule 7: Sensitive Information Leak Detection ----------
 
 // SensitiveInfoLeakRule detects patterns that may leak credentials or sensitive data to files.
-type SensitiveInfoLeakRule struct{ patterns []string }
+type SensitiveInfoLeakRule struct {
+	// patterns is the list of credential / secret key names ("api_key",
+	// "password", "bearer", "jwt", ...). The rule only fires when one of
+	// these names appears together with a write intent ("echo ... >"),
+	// preventing false positives on plain reads.
+	patterns []string
+}
 
 // NewSensitiveInfoLeakRule creates a sensitive info leak detection rule.
 func NewSensitiveInfoLeakRule() *SensitiveInfoLeakRule {
@@ -444,7 +472,11 @@ func (r *SensitiveInfoLeakRule) Check(input ScanInput) *ScanResult {
 
 // AskForReviewRule returns DecisionAsk for commands that are
 // potentially risky but may have legitimate use cases.
-type AskForReviewRule struct{ patterns []string }
+type AskForReviewRule struct {
+	// patterns is the list of tokens that should escalate to human review
+	// ("rm -r", "git push", "kubectl delete", ...).
+	patterns []string
+}
 
 // NewAskForReviewRule creates a rule that returns ask for risky-but-legitimate commands.
 func NewAskForReviewRule() *AskForReviewRule {
