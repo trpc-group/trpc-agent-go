@@ -517,8 +517,16 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 		return
 	}
 
+	summaryCtx := ctx
+	if parentRequest, ok := summaryfork.Request(invocation); ok {
+		summaryCtx = sessionsummary.ContextWithCacheSafeForkRequest(
+			summaryCtx,
+			parentRequest,
+		)
+	}
+
 	err = invocation.SessionService.CreateSessionSummary(
-		ctx,
+		summaryCtx,
 		invocation.Session,
 		invocation.GetEventFilterKey(),
 		false,

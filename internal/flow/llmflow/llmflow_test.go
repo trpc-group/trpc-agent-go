@@ -3823,6 +3823,47 @@ func TestMaybeSyncSummaryIntraRun_ErrorBranch(t *testing.T) {
 	f.maybeSyncSummaryIntraRun(ctx, inv)
 }
 
+func TestMaybeSyncSummaryIntraRun_AttachesCacheSafeForkRequest(t *testing.T) {
+	f := &Flow{syncSummaryIntraRun: true}
+	svc := &contextCapturingSummaryService{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(svc),
+		agent.WithInvocationEventFilterKey("branch/fork"),
+	)
+	parent := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system"),
+			model.NewUserMessage("question"),
+		},
+	}
+	summaryfork.Attach(inv, parent)
+	parent.Messages[1].Content = "mutated"
+
+	f.maybeSyncSummaryIntraRun(context.Background(), inv)
+
+	require.Equal(t, 1, svc.Calls())
+	got := svc.ParentRequest()
+	require.NotNil(t, got)
+	require.Len(t, got.Messages, 2)
+	require.Equal(t, "question", got.Messages[1].Content)
+}
+
+func TestMaybeSyncSummaryIntraRun_FallsBackWithoutForkRequest(t *testing.T) {
+	f := &Flow{syncSummaryIntraRun: true}
+	svc := &contextCapturingSummaryService{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(svc),
+		agent.WithInvocationEventFilterKey("branch/fallback"),
+	)
+
+	f.maybeSyncSummaryIntraRun(context.Background(), inv)
+
+	require.Equal(t, 1, svc.Calls())
+	require.Nil(t, svc.ParentRequest())
+}
+
 func TestRun_SyncSummaryIntraRun_NilInvocation(t *testing.T) {
 	// When invocation is nil and syncSummaryIntraRun is true,
 	// the SetState guard should prevent a nil-pointer panic.
