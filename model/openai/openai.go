@@ -71,6 +71,9 @@ const (
 	VariantDeepSeek Variant = "deepseek"
 	// VariantQwen is the Qwen variant with specific base_url handling.
 	VariantQwen Variant = "qwen"
+	// VariantGLM is the GLM OpenAI-compatible variant. Some GLM gateways
+	// return the visible final answer in reasoning_content with empty content.
+	VariantGLM Variant = "glm"
 )
 
 // thinkingValueConvertor converts ThinkingEnabled bool to the variant-specific value.
@@ -81,10 +84,9 @@ var defaultThinkingValueConvertor = func(enabled bool) any {
 	return enabled
 }
 
-// deepSeekThinkingValueConvertor converts to the DeepSeek thinking-toggle
-// format introduced in v3.2 and reused by v4 (e.g. deepseek-v4-pro /
-// deepseek-v4-flash): {"type": "enabled"/"disabled"}.
-var deepSeekThinkingValueConvertor = func(enabled bool) any {
+// thinkingTypeValueConvertor converts to the nested thinking-toggle format
+// used by providers such as DeepSeek v3.2+ and GLM.
+var thinkingTypeValueConvertor = func(enabled bool) any {
 	const (
 		thinkingTypeEnabled  = "enabled"
 		thinkingTypeDisabled = "disabled"
@@ -127,6 +129,9 @@ type variantConfig struct {
 	// defaultReasoningContentBackfill controls replay-time empty
 	// reasoning_content backfill for assistant messages.
 	defaultReasoningContentBackfill bool
+	// reasoningContentAsContentFallback copies reasoning_content into
+	// content only when content is empty and the response has no tool calls.
+	reasoningContentAsContentFallback bool
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -161,7 +166,7 @@ var variantConfigs = map[Variant]variantConfig{
 		// DeepSeek v3.2+ (incl. v4-pro / v4-flash) uses
 		// {"thinking": {"type": "enabled"/"disabled"}} format.
 		thinkingEnabledKey:              "thinking",
-		thinkingValueConvertor:          deepSeekThinkingValueConvertor,
+		thinkingValueConvertor:          thinkingTypeValueConvertor,
 		defaultReasoningContentBackfill: true,
 	},
 	VariantHunyuan: {
@@ -224,6 +229,16 @@ var variantConfigs = map[Variant]variantConfig{
 		// refer:https://help.aliyun.com/zh/model-studio/deep-thinking
 		thinkingEnabledKey:     model.EnableThinkingKey,
 		thinkingValueConvertor: defaultThinkingValueConvertor,
+	},
+	VariantGLM: {
+		fileUploadPath:                    "/openapi/v1/files",
+		filePurpose:                       openai.FilePurposeUserData,
+		fileDeletionMethod:                http.MethodDelete,
+		skipFileTypeInContent:             false,
+		fileDeletionBodyConvertor:         defaultFileDeletionBodyConvertor,
+		thinkingEnabledKey:                "thinking",
+		thinkingValueConvertor:            thinkingTypeValueConvertor,
+		reasoningContentAsContentFallback: true,
 	},
 }
 
@@ -2328,7 +2343,12 @@ func (m *Model) emitStreamingFinalResponse(
 					{
 						Index: 0,
 						Message: model.Message{
-							Role:             model.RoleAssistant,
+							Role: model.RoleAssistant,
+							Content: m.contentWithReasoningFallback(
+								"",
+								aggregatedReasoning,
+								false,
+							),
 							ReasoningContent: aggregatedReasoning,
 						},
 					},
@@ -2436,13 +2456,19 @@ func (m *Model) createFinalResponse(
 		if reasoningContent == "" && i == 0 && aggregatedReasoning != "" {
 			reasoningContent = aggregatedReasoning
 		}
+		choiceHasToolCalls := hasToolCall && i == 0
+		content := m.contentWithReasoningFallback(
+			choice.Message.Content,
+			reasoningContent,
+			choiceHasToolCalls,
+		)
 
 		finalResponse.Choices[i] = model.Choice{
 			Index:    int(choice.Index),
 			Logprobs: convertChatCompletionChoiceLogprobs(choice.Logprobs),
 			Message: model.Message{
 				Role:             model.RoleAssistant,
-				Content:          choice.Message.Content,
+				Content:          content,
 				ReasoningContent: reasoningContent,
 			},
 		}
@@ -2520,13 +2546,18 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 		for i, choice := range chatCompletion.Choices {
 			// Extract reasoning content from the message if available.
 			reasoningContent := extractReasoningContent(choice.Message.JSON.ExtraFields)
+			content := m.contentWithReasoningFallback(
+				choice.Message.Content,
+				reasoningContent,
+				len(choice.Message.ToolCalls) > 0,
+			)
 
 			response.Choices[i] = model.Choice{
 				Index:    int(choice.Index),
 				Logprobs: convertChatCompletionChoiceLogprobs(choice.Logprobs),
 				Message: model.Message{
 					Role:             model.RoleAssistant,
-					Content:          choice.Message.Content,
+					Content:          content,
 					ReasoningContent: reasoningContent,
 				},
 			}
@@ -2573,6 +2604,20 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 	}
 
 	return response
+}
+
+func (m *Model) contentWithReasoningFallback(
+	content string,
+	reasoningContent string,
+	hasToolCall bool,
+) string {
+	if content != "" || reasoningContent == "" || hasToolCall {
+		return content
+	}
+	if m == nil || !m.variantConfig.reasoningContentAsContentFallback {
+		return content
+	}
+	return reasoningContent
 }
 
 func convertChatCompletionChoiceLogprobs(
