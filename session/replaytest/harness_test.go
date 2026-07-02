@@ -195,6 +195,39 @@ func TestExecuteUpdateStateDeletesAppState(t *testing.T) {
 	require.Empty(t, snapshot.AppStates)
 }
 
+func TestExecuteUpdateStateRejectsSessionStateDelete(t *testing.T) {
+	sessionSvc := sessioninmemory.NewSessionService()
+	defer sessionSvc.Close()
+
+	_, err := executeCase(context.Background(), ReplayCase{
+		Name: "session_state_delete",
+		Steps: []ReplayStep{
+			UpdateStateStep{
+				Key:        "session.set",
+				Scope:      ScopeSession,
+				SessionKey: defaultSessionKey,
+				State: session.StateMap{
+					"keep": []byte("value"),
+					"temp": []byte("value"),
+				},
+			},
+			UpdateStateStep{
+				Key:        "session.delete",
+				Scope:      ScopeSession,
+				SessionKey: defaultSessionKey,
+				DeleteKey:  "temp",
+			},
+			GetSessionStep{Key: "session.get", SessionKey: defaultSessionKey},
+		},
+	}, NamedBackend{
+		Name:           "inmemory",
+		Profile:        InMemoryProfile(),
+		SessionService: sessionSvc,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not supported")
+}
+
 func TestExecuteAddMemoryPropagatesReadError(t *testing.T) {
 	readErr := errors.New("read memories failed")
 	sessionSvc := sessioninmemory.NewSessionService()
