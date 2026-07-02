@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -48,6 +49,44 @@ type ApprovalService struct {
 	store     CandidateStore
 	pointer   ActivePointer
 	publisher Publisher
+}
+
+var approvalDecisionLocks decisionLockRegistry
+
+type decisionLockRegistry struct {
+	mu    sync.Mutex
+	locks map[string]*decisionLock
+}
+
+type decisionLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func (r *decisionLockRegistry) lock(skillID, revisionID string) func() {
+	key := skillID + "\x00" + revisionID
+	r.mu.Lock()
+	if r.locks == nil {
+		r.locks = make(map[string]*decisionLock)
+	}
+	l := r.locks[key]
+	if l == nil {
+		l = &decisionLock{}
+		r.locks[key] = l
+	}
+	l.refs++
+	r.mu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		r.mu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(r.locks, key)
+		}
+		r.mu.Unlock()
+	}
 }
 
 // NewApprovalService creates an ApprovalService backed by the given stores.
@@ -99,6 +138,9 @@ func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision)
 	if s.store == nil {
 		return fmt.Errorf("no candidate store configured")
 	}
+
+	unlock := approvalDecisionLocks.lock(decision.SkillID, decision.RevisionID)
+	defer unlock()
 
 	rev, err := s.store.ReadRevision(ctx, decision.SkillID, decision.RevisionID)
 	if err != nil {

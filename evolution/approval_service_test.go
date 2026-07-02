@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -322,6 +323,60 @@ func TestApprovalService_Decide_AlreadyDecided(t *testing.T) {
 	assert.ErrorIs(t, err, ErrAlreadyDecided)
 }
 
+func TestApprovalService_Decide_SerializesConcurrentDecisions(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+	pub := newBlockingPublisher()
+	ctx := context.Background()
+
+	rev := &Revision{
+		SkillID:    "race-skill",
+		RevisionID: "rev-race",
+		Source:     "reviewer",
+		Action:     RevisionActionCreate,
+		Status:     RevisionPendingApproval,
+		Spec:       &SkillSpec{Name: "Race Skill", Description: "d", WhenToUse: "w", Steps: []string{"s"}},
+		CreatedAt:  time.Now().UTC(),
+	}
+	require.NoError(t, store.WriteRevision(ctx, rev))
+
+	svc := NewApprovalService(store, ptr, pub)
+	firstErr := make(chan error, 1)
+	go func() {
+		firstErr <- svc.Decide(ctx, ApprovalDecision{
+			RevisionID: rev.RevisionID,
+			SkillID:    rev.SkillID,
+			Approved:   true,
+			Reviewer:   autoExpireReviewer,
+			Comment:    "timeout",
+		})
+	}()
+	<-pub.entered
+
+	secondErr := make(chan error, 1)
+	go func() {
+		secondErr <- svc.Decide(ctx, ApprovalDecision{
+			RevisionID: rev.RevisionID,
+			SkillID:    rev.SkillID,
+			Approved:   false,
+			Reviewer:   "human",
+			Comment:    "reject after timeout started",
+		})
+	}()
+
+	close(pub.release)
+	require.NoError(t, <-firstErr)
+	require.ErrorIs(t, <-secondErr, ErrAlreadyDecided)
+	assert.Equal(t, 1, pub.upsertCount())
+
+	stored, err := store.ReadRevision(ctx, rev.SkillID, rev.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionActive, stored.Status)
+	require.NotNil(t, stored.HumanReport)
+	assert.Equal(t, autoExpireReviewer, stored.HumanReport.Reviewer)
+}
+
 func TestApprovalService_ListPending_WithLimit(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileCandidateStore(dir)
@@ -345,6 +400,40 @@ func TestApprovalService_ListPending_WithLimit(t *testing.T) {
 	pending, err := svc.ListPending(ctx, ListPendingOpts{Limit: 2})
 	require.NoError(t, err)
 	assert.Len(t, pending, 2)
+}
+
+type blockingPublisher struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	mu      sync.Mutex
+	upserts int
+}
+
+func newBlockingPublisher() *blockingPublisher {
+	return &blockingPublisher{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (p *blockingPublisher) UpsertSkill(_ context.Context, _ *SkillSpec) error {
+	p.mu.Lock()
+	p.upserts++
+	p.mu.Unlock()
+	p.once.Do(func() { close(p.entered) })
+	<-p.release
+	return nil
+}
+
+func (p *blockingPublisher) DeleteSkill(context.Context, string) error {
+	return nil
+}
+
+func (p *blockingPublisher) upsertCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.upserts
 }
 
 func TestApprovalService_ListPending_NilStore(t *testing.T) {
