@@ -1377,26 +1377,35 @@ func (at *Tool) forwardSubInvocationStream(
 			return
 		}
 	}
-	for ev := range wrapped {
-		if at.handleForwardedStreamEvent(
-			ctx, subInv, ev, writer, &state,
-			managePendingVisibleCompletion, emitFinalResultChunk,
-		) {
+	for {
+		select {
+		case <-ctx.Done():
+			sendStreamableCallError(ctx, writer, "agent tool run error: %w", ctx.Err())
 			return
+		case ev, ok := <-wrapped:
+			if !ok {
+				if managePendingVisibleCompletion {
+					at.flushPendingVisibleCompletionForSession(ctx, subInv, &state)
+				}
+				if emitFinalResultChunk {
+					if at.responseMode == ResponseModeFinalOnly {
+						at.emitFinalOnlyResultChunk(&state, writer)
+						return
+					}
+					at.emitPendingCompletionChunk(&state, writer)
+					return
+				}
+				at.emitPendingVisibleCompletionEvent(&state, writer)
+				return
+			}
+			if at.handleForwardedStreamEvent(
+				ctx, subInv, ev, writer, &state,
+				managePendingVisibleCompletion, emitFinalResultChunk,
+			) {
+				return
+			}
 		}
 	}
-	if managePendingVisibleCompletion {
-		at.flushPendingVisibleCompletionForSession(ctx, subInv, &state)
-	}
-	if emitFinalResultChunk {
-		if at.responseMode == ResponseModeFinalOnly {
-			at.emitFinalOnlyResultChunk(&state, writer)
-			return
-		}
-		at.emitPendingCompletionChunk(&state, writer)
-		return
-	}
-	at.emitPendingVisibleCompletionEvent(&state, writer)
 }
 
 // handleForwardedStreamEvent processes a single forwarded sub-invocation event
