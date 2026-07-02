@@ -14,7 +14,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+type stubTool struct {
+	name string
+}
+
+func (t stubTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
 
 func TestAttachSnapshotsRequest(t *testing.T) {
 	text := "part"
@@ -84,6 +93,84 @@ func TestAttachSnapshotsRequest(t *testing.T) {
 	require.Equal(t, "END", again.GenerationConfig.Stop[0])
 }
 
+func TestAttachHandlesNilAndZeroValueRequest(t *testing.T) {
+	Attach(nil, &model.Request{})
+	Attach(agent.NewInvocation(), nil)
+
+	inv := agent.NewInvocation()
+	_, ok := Request(inv)
+	require.False(t, ok)
+
+	inv.SetState(stateKey, (*model.Request)(nil))
+	_, ok = Request(inv)
+	require.False(t, ok)
+
+	Attach(inv, &model.Request{})
+	got, ok := Request(inv)
+	require.True(t, ok)
+	require.NotNil(t, got)
+	require.Nil(t, got.Messages)
+	require.Nil(t, got.StructuredOutput)
+	require.Nil(t, got.Headers)
+	require.Nil(t, got.Tools)
+}
+
+func TestAttachSnapshotsMultimodalPartsAndTools(t *testing.T) {
+	text := "text"
+	req := &model.Request{
+		Messages: []model.Message{{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{
+				{
+					Type: model.ContentTypeText,
+					Text: &text,
+				},
+				{
+					Type: model.ContentTypeImage,
+					Image: &model.Image{
+						Data: []byte{1, 2, 3},
+					},
+				},
+				{
+					Type: model.ContentTypeAudio,
+					Audio: &model.Audio{
+						Data: []byte{4, 5, 6},
+					},
+				},
+				{
+					Type: model.ContentTypeFile,
+					File: &model.File{
+						Data: []byte{7, 8, 9},
+					},
+				},
+			},
+		}},
+		Tools: map[string]tool.Tool{
+			"lookup": stubTool{name: "lookup"},
+		},
+	}
+
+	inv := agent.NewInvocation()
+	Attach(inv, req)
+
+	*req.Messages[0].ContentParts[0].Text = "changed"
+	req.Messages[0].ContentParts[1].Image.Data[0] = 9
+	req.Messages[0].ContentParts[2].Audio.Data[0] = 9
+	req.Messages[0].ContentParts[3].File.Data[0] = 9
+	req.Tools["lookup"] = stubTool{name: "changed"}
+	req.Tools["extra"] = stubTool{name: "extra"}
+
+	got, ok := Request(inv)
+	require.True(t, ok)
+	parts := got.Messages[0].ContentParts
+	require.Equal(t, "text", *parts[0].Text)
+	require.Equal(t, []byte{1, 2, 3}, parts[1].Image.Data)
+	require.Equal(t, []byte{4, 5, 6}, parts[2].Audio.Data)
+	require.Equal(t, []byte{7, 8, 9}, parts[3].File.Data)
+	require.Len(t, got.Tools, 1)
+	require.Equal(t, "lookup", got.Tools["lookup"].Declaration().Name)
+}
+
 func TestAppendResponseExtendsSnapshot(t *testing.T) {
 	inv := agent.NewInvocation()
 	Attach(inv, &model.Request{
@@ -117,6 +204,44 @@ func TestAppendResponseExtendsSnapshot(t *testing.T) {
 	require.Equal(t, "result", got.Messages[3].Content)
 }
 
+func TestAppendResponseNoopsWithoutPayload(t *testing.T) {
+	AppendResponse(nil, &model.Response{Choices: []model.Choice{{
+		Message: model.NewAssistantMessage("ignored"),
+	}}})
+	AppendResponse(agent.NewInvocation(), &model.Response{Choices: []model.Choice{{
+		Message: model.NewAssistantMessage("ignored"),
+	}}})
+
+	inv := agent.NewInvocation()
+	Attach(inv, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+	})
+
+	AppendResponse(inv, nil)
+	AppendResponse(inv, &model.Response{})
+	AppendResponse(inv, &model.Response{Choices: []model.Choice{{}}})
+
+	got, ok := Request(inv)
+	require.True(t, ok)
+	require.Len(t, got.Messages, 1)
+}
+
+func TestAppendResponseUsesDeltaFallback(t *testing.T) {
+	inv := agent.NewInvocation()
+	Attach(inv, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+	})
+
+	AppendResponse(inv, &model.Response{Choices: []model.Choice{{
+		Delta: model.NewAssistantMessage("streamed"),
+	}}})
+
+	got, ok := Request(inv)
+	require.True(t, ok)
+	require.Len(t, got.Messages, 2)
+	require.Equal(t, "streamed", got.Messages[1].Content)
+}
+
 func TestAppendResponseKeepsPrimaryChoiceOnly(t *testing.T) {
 	inv := agent.NewInvocation()
 	Attach(inv, &model.Request{
@@ -138,4 +263,27 @@ func TestAppendResponseKeepsPrimaryChoiceOnly(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, got.Messages, 2)
 	require.Equal(t, "primary", got.Messages[1].Content)
+}
+
+func TestAppendResponseFallsBackToFirstChoice(t *testing.T) {
+	inv := agent.NewInvocation()
+	Attach(inv, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+	})
+
+	AppendResponse(inv, &model.Response{Choices: []model.Choice{
+		{
+			Index:   2,
+			Message: model.NewAssistantMessage("first"),
+		},
+		{
+			Index:   3,
+			Message: model.NewAssistantMessage("second"),
+		},
+	}})
+
+	got, ok := Request(inv)
+	require.True(t, ok)
+	require.Len(t, got.Messages, 2)
+	require.Equal(t, "first", got.Messages[1].Content)
 }
