@@ -730,46 +730,66 @@ func canonicalizeExistingPath(path string) (string, error) {
 
 func resolvePotentialSymlinkTarget(path string) (string, bool, error) {
 	path = filepath.Clean(path)
-	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(path)
-		if err != nil {
-			return "", false, err
-		}
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(filepath.Dir(path), target)
-		}
-		target, err = filepath.Abs(target)
-		if err != nil {
-			return "", false, err
-		}
-		return target, target != path, nil
-	} else if err != nil && !os.IsNotExist(err) {
+	if target, ok, err := resolveDirectSymlink(path); ok || err != nil {
+		return target, ok, err
+	}
+	return resolveParentSymlinkTarget(path)
+}
+
+func resolveDirectSymlink(path string) (string, bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return "", false, nil
+	}
+	if err != nil {
 		return "", false, err
 	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return "", false, nil
+	}
+	target, err := readSymlinkTarget(path)
+	return target, err == nil && target != path, err
+}
+
+func resolveParentSymlinkTarget(path string) (string, bool, error) {
 	var suffix []string
 	cur := path
 	for {
-		resolved, err := filepath.EvalSymlinks(cur)
+		info, err := os.Lstat(cur)
 		if err == nil {
-			for i := len(suffix) - 1; i >= 0; i-- {
-				resolved = filepath.Join(resolved, suffix[i])
+			if info.Mode()&os.ModeSymlink != 0 {
+				target, err := readSymlinkTarget(cur)
+				if err != nil {
+					return "", false, err
+				}
+				for i := len(suffix) - 1; i >= 0; i-- {
+					target = filepath.Join(target, suffix[i])
+				}
+				return target, target != path, nil
 			}
-			resolved, err = filepath.Abs(resolved)
-			if err != nil {
-				return "", false, err
+			if len(suffix) != 0 && !info.IsDir() {
+				return "", false, fmt.Errorf("%s is not a directory", cur)
 			}
-			return resolved, resolved != path, nil
+			return "", false, nil
 		}
 		if !os.IsNotExist(err) {
 			return "", false, err
 		}
 		parent := filepath.Dir(cur)
-		if parent == cur {
-			return "", false, nil
-		}
 		suffix = append(suffix, filepath.Base(cur))
 		cur = parent
 	}
+}
+
+func readSymlinkTarget(path string) (string, error) {
+	target, err := os.Readlink(path)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(path), target)
+	}
+	return filepath.Abs(target)
 }
 
 func copyPath(src, dst string) error {
