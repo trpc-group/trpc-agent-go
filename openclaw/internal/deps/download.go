@@ -15,6 +15,7 @@ import (
 	"compress/bzip2"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -53,6 +55,10 @@ func downloadInstallStep(
 	if err != nil {
 		return Step{}, err
 	}
+	links, err := downloadStepLinks(toolchain, targetPath, action)
+	if err != nil {
+		return Step{}, err
+	}
 
 	return Step{
 		Label:           actionLabel(action, "Download tool assets"),
@@ -61,6 +67,7 @@ func downloadInstallStep(
 		URL:             rawURL,
 		TargetPath:      targetPath,
 		Archive:         action.Archive,
+		Links:           links,
 		Extract:         action.Extract,
 		StripComponents: action.StripComponents,
 	}, nil
@@ -88,7 +95,10 @@ func executeDownloadStep(
 		); err != nil {
 			return "", err
 		}
-		return "downloaded to " + step.TargetPath, nil
+		if err := installDownloadLinks(step.Links); err != nil {
+			return "", err
+		}
+		return downloadResultText(step.TargetPath, step.Links), nil
 	}
 
 	if err := os.MkdirAll(filepath.Dir(step.TargetPath), 0o755); err != nil {
@@ -97,7 +107,10 @@ func executeDownloadStep(
 	if err := writeDownloadFile(step.TargetPath, reader); err != nil {
 		return "", err
 	}
-	return "downloaded to " + step.TargetPath, nil
+	if err := installDownloadLinks(step.Links); err != nil {
+		return "", err
+	}
+	return downloadResultText(step.TargetPath, step.Links), nil
 }
 
 func writeDownloadFile(
@@ -195,6 +208,53 @@ func downloadCommandLine(
 	return "download " + shellQuote(rawURL) + " -> " + shellQuote(targetPath)
 }
 
+func downloadStepLinks(
+	toolchain Toolchain,
+	targetPath string,
+	action InstallAction,
+) ([]InstallLink, error) {
+	links := normalizeInstallLinks(action.Links)
+	if len(links) == 0 {
+		return nil, nil
+	}
+
+	binDir := ManagedBinDir(toolchain.StateDir)
+	if strings.TrimSpace(binDir) == "" {
+		return nil, fmt.Errorf(
+			"download install action %q cannot link binaries without state dir",
+			action.Label,
+		)
+	}
+	out := make([]InstallLink, 0, len(links))
+	for _, link := range links {
+		source, err := safeJoin(targetPath, link.Source)
+		if err != nil {
+			return nil, err
+		}
+		targetName := link.Target
+		if strings.TrimSpace(targetName) == "" {
+			targetName = filepath.Base(link.Source)
+		}
+		target, err := safeJoin(binDir, targetName)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, InstallLink{
+			Source: source,
+			Target: target,
+		})
+	}
+	return out, nil
+}
+
+func downloadResultText(targetPath string, links []InstallLink) string {
+	text := "downloaded to " + targetPath
+	if len(links) > 0 {
+		text += fmt.Sprintf("; linked %d binaries", len(links))
+	}
+	return text
+}
+
 func downloadFileName(rawURL string) string {
 	parsed, err := neturl.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
@@ -264,6 +324,8 @@ func extractArchive(
 	stripComponents int,
 ) error {
 	switch normalizeArchiveKind(archiveKind) {
+	case "tar":
+		return extractTar(reader, targetPath, stripComponents)
 	case "tar.gz":
 		gz, err := gzip.NewReader(reader)
 		if err != nil {
@@ -282,6 +344,72 @@ func extractArchive(
 	default:
 		return fmt.Errorf("unsupported archive kind %q", archiveKind)
 	}
+}
+
+func installDownloadLinks(links []InstallLink) error {
+	for _, link := range links {
+		source := strings.TrimSpace(link.Source)
+		target := strings.TrimSpace(link.Target)
+		if source == "" || target == "" {
+			continue
+		}
+		if err := installDownloadLink(source, target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func installDownloadLink(source string, target string) error {
+	info, err := os.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("download link source %q is a symlink", source)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("download link source %q is a directory", source)
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	_ = os.Remove(target)
+	if runtime.GOOS != "windows" {
+		if err := os.Symlink(source, target); err == nil {
+			return nil
+		}
+	}
+	return copyDownloadLink(source, target, info.Mode().Perm())
+}
+
+func copyDownloadLink(
+	source string,
+	target string,
+	perm os.FileMode,
+) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	if perm == 0 {
+		perm = 0o755
+	}
+	out, err := os.OpenFile(
+		target,
+		os.O_CREATE|os.O_TRUNC|os.O_WRONLY,
+		perm|0o111,
+	)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func normalizeArchiveKind(raw string) string {
@@ -381,6 +509,9 @@ func archiveTargetName(
 	if cleaned == "." || cleaned == "" {
 		return "", false
 	}
+	if path.IsAbs(cleaned) {
+		return "", false
+	}
 	parts := strings.Split(cleaned, "/")
 	if stripComponents >= len(parts) {
 		return "", false
@@ -401,6 +532,12 @@ func writeArchiveEntry(
 	mode os.FileMode,
 	reader io.Reader,
 ) error {
+	if !mode.IsRegular() && !mode.IsDir() {
+		return fmt.Errorf("unsupported archive entry mode %s for %q", mode, dst)
+	}
+	if err := rejectExistingSymlink(dst); err != nil {
+		return err
+	}
 	if mode.IsDir() {
 		return os.MkdirAll(dst, 0o755)
 	}
@@ -419,6 +556,20 @@ func writeArchiveEntry(
 
 	_, err = io.Copy(file, reader)
 	return err
+}
+
+func rejectExistingSymlink(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to write through symlink %q", path)
+	}
+	return nil
 }
 
 func archiveEntryPerm(mode os.FileMode) os.FileMode {

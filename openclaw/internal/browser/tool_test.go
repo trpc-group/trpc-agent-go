@@ -13,23 +13,29 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	toolpkg "trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const testPNG = "image/png"
 
 type fakeDriver struct {
+	mu          sync.Mutex
 	startStatus driverStatus
 	startErr    error
 	status      driverStatus
 	statusErr   error
 	stopErr     error
+	stopCount   int
 	callResult  map[string]any
 	callErr     error
+	callErrs    map[string]error
 	calls       []fakeCall
 }
 
@@ -81,7 +87,18 @@ func (f *fakeDriver) Status(ctx context.Context) (driverStatus, error) {
 	return f.status, nil
 }
 
-func (f *fakeDriver) Stop() error { return f.stopErr }
+func (f *fakeDriver) Stop() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopCount++
+	return f.stopErr
+}
+
+func (f *fakeDriver) StopCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stopCount
+}
 
 func (f *fakeDriver) Call(
 	ctx context.Context,
@@ -94,6 +111,9 @@ func (f *fakeDriver) Call(
 	})
 	if f.callErr != nil {
 		return nil, f.callErr
+	}
+	if err, ok := f.callErrs[toolName]; ok {
+		return nil, err
 	}
 	if raw, ok := f.callResult[toolName]; ok {
 		return raw, nil
@@ -584,6 +604,8 @@ func TestToolCall_UsesBrowserServerDriverForHostTarget(t *testing.T) {
 		driverTypeBrowserServer,
 		result.Profiles[0].Driver,
 	)
+	require.NotContains(t, result.Supported, actionEvaluate)
+	require.NotContains(t, result.Profiles[0].Supported, actionEvaluate)
 }
 
 func TestToolCall_StatusActionUsesHandleStatus(t *testing.T) {
@@ -764,15 +786,138 @@ func TestNewTool_DeclarationExposesSchema(t *testing.T) {
 	decl := tool.Declaration()
 	require.Equal(t, ToolName, decl.Name)
 	require.Contains(t, decl.Description, "current browser tab")
+	require.Contains(t, decl.Description, "not for direct inspection")
+	require.Contains(t, decl.Description, "file://, data:, or ad hoc localhost")
+	require.Contains(t, decl.Description, "MEDIA or MEDIA_DIR")
+	require.Contains(t, decl.Description, "evaluate action is disabled")
+	require.NotContains(t, decl.Description, "Use evaluate only")
 	require.Contains(t, decl.Description, "Omit target")
 	require.NotNil(t, decl.InputSchema)
 	require.Equal(t, "object", decl.InputSchema.Type)
 	require.Contains(t, decl.InputSchema.Properties, "action")
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["action"].Description,
+		"Supported actions include",
+	)
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["action"].Description,
+		"evaluate is not available",
+	)
+	require.NotContains(
+		t,
+		decl.InputSchema.Properties["action"].Description,
+		"pdf",
+	)
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["action"].Description,
+		"backend-dependent",
+	)
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["fn"].Description,
+		"evaluate is not available",
+	)
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["request"].Properties["fn"].
+			Description,
+		"evaluate is not available",
+	)
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["request"].Properties["kind"].
+			Description,
+		"press/key",
+	)
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["request"].Properties["kind"].
+			Description,
+		"scroll",
+	)
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["request"].Properties["selector"].
+			Description,
+		"Playwright MCP wait supports timeMs",
+	)
+	require.NotContains(
+		t,
+		decl.InputSchema.Properties["action"].Description,
+		"act, evaluate",
+	)
 	require.Contains(t, decl.InputSchema.Properties, "request")
 	require.Contains(
 		t,
 		decl.InputSchema.Properties["target"].Description,
 		"only use sandbox or node when configured",
+	)
+}
+
+func TestNewTool_DeclarationUsesDefaultServerProfileActions(t *testing.T) {
+	t.Parallel()
+
+	tool, err := NewTool(Config{
+		Profiles: []ProfileConfig{{
+			Name:             defaultProfileName,
+			BrowserServerURL: "http://127.0.0.1:19790",
+		}},
+	})
+	require.NoError(t, err)
+
+	decl := tool.Declaration()
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["action"].Description,
+		"pdf",
+	)
+	require.NotContains(
+		t,
+		decl.InputSchema.Properties["action"].Description,
+		"backend-dependent",
+	)
+}
+
+func TestNewTool_DeclarationReflectsEvaluateEnabled(t *testing.T) {
+	t.Parallel()
+
+	evaluateEnabled := true
+	tool, err := NewTool(Config{
+		EvaluateEnabled: &evaluateEnabled,
+		Profiles: []ProfileConfig{{
+			Name:      defaultProfileName,
+			Transport: transportStdio,
+			Command:   "npx",
+		}},
+	})
+	require.NoError(t, err)
+
+	decl := tool.Declaration()
+	require.Contains(t, decl.Description, "Use evaluate only")
+	require.NotContains(t, decl.Description, "evaluate action is disabled")
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["action"].Description,
+		"act, evaluate",
+	)
+	require.NotContains(
+		t,
+		decl.InputSchema.Properties["action"].Description,
+		"evaluate is not available",
+	)
+	require.NotContains(
+		t,
+		decl.InputSchema.Properties["fn"].Description,
+		"evaluate is not available",
+	)
+	require.NotContains(
+		t,
+		decl.InputSchema.Properties["request"].Properties["fn"].
+			Description,
+		"evaluate is not available",
 	)
 }
 
@@ -855,6 +1000,63 @@ func TestToolCall_StartAndStop(t *testing.T) {
 	stopped := raw.(Result)
 	require.Equal(t, actionStop, stopped.Action)
 	require.Equal(t, stateStopped, stopped.State)
+}
+
+func TestToolCall_CanceledInvocationCleanupStopsUsedDriver(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+	baseCtx, cancel := context.WithCancel(context.Background())
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(baseCtx, inv)
+
+	_, err := tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, 0, drv.StopCount())
+
+	cancel()
+	inv.CleanupNotice(ctx)
+	require.Eventually(t, func() bool {
+		return drv.StopCount() == 1
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestToolCall_SuccessfulInvocationCleanupKeepsUsedDriver(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+	inv := agent.NewInvocation()
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	_, err := tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+
+	inv.CleanupNotice(ctx)
+	require.Never(t, func() bool {
+		return drv.StopCount() != 0
+	}, 100*time.Millisecond, 10*time.Millisecond)
+}
+
+func TestToolCloseStopsDrivers(t *testing.T) {
+	t.Parallel()
+
+	profileDriver := &fakeDriver{}
+	serverDriver := &fakeDriver{}
+	tool := newTestTool(profileDriver)
+	tool.serverDrivers["node"] = serverDriver
+
+	require.NoError(t, tool.Close())
+	require.Equal(t, 1, profileDriver.StopCount())
+	require.Equal(t, 1, serverDriver.StopCount())
+	require.Empty(t, tool.serverDrivers)
 }
 
 func TestToolCall_FocusRefreshesTabs(t *testing.T) {
@@ -1324,6 +1526,19 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 			},
 		},
 		{
+			name: "key alias",
+			input: map[string]any{
+				"action": actionAct,
+				"kind":   actKey,
+				"key":    "End",
+			},
+			wantTool: mcpToolPressKey,
+			assertArg: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, "End", call.Args["key"])
+			},
+		},
+		{
 			name: "hover",
 			input: map[string]any{
 				"action": actionAct,
@@ -1335,6 +1550,21 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 				t.Helper()
 				require.Equal(t, "e2", call.Args["target"])
 				require.Equal(t, "element e2", call.Args["element"])
+			},
+		},
+		{
+			name: "scroll",
+			input: map[string]any{
+				"action":    actionAct,
+				"kind":      actScroll,
+				"direction": "up",
+				"amount":    400,
+			},
+			wantTool: mcpToolMouseWheel,
+			assertArg: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, 0, call.Args["deltaX"])
+				require.Equal(t, -400, call.Args["deltaY"])
 			},
 		},
 		{
@@ -3058,6 +3288,35 @@ func TestToolCall_ActScrollIntoViewPassesBrowserServerRef(t *testing.T) {
 	require.Equal(t, "e1", drv.calls[0].Args["ref"])
 }
 
+func TestToolCall_ActScrollPassesBrowserServerRef(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolScroll: textPayload("scrolled"),
+		},
+	}
+	tool := newBrowserServerTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind": actScroll,
+				"ref":  "e1",
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolScroll, drv.calls[0].Tool)
+	require.Equal(t, "e1", drv.calls[0].Args["ref"])
+}
+
 func TestToolCall_ActScrollIntoViewRejectsMCPDriver(t *testing.T) {
 	t.Parallel()
 
@@ -3073,6 +3332,98 @@ func TestToolCall_ActScrollIntoViewRejectsMCPDriver(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "browser-server")
+}
+
+func TestToolCall_ActScrollUsesDefaultWheelDelta(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolMouseWheel: textPayload("scrolled"),
+		},
+	}
+
+	raw, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind": actScroll,
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolMouseWheel, drv.calls[0].Tool)
+	require.Equal(t, 0, drv.calls[0].Args["deltaX"])
+	require.Equal(t, defaultScrollDeltaY, drv.calls[0].Args["deltaY"])
+}
+
+func TestToolCall_ActScrollDefaultsKindFromDelta(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolMouseWheel: textPayload("scrolled"),
+		},
+	}
+
+	raw, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"deltaX": 12,
+				"deltaY": -24,
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolMouseWheel, drv.calls[0].Tool)
+	require.Equal(t, 12, drv.calls[0].Args["deltaX"])
+	require.Equal(t, -24, drv.calls[0].Args["deltaY"])
+}
+
+func TestToolCall_ActScrollFallsBackToPressKey(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callErrs: map[string]error{
+			mcpToolMouseWheel: fmt.Errorf(
+				"browser backend does not expose tool %q",
+				mcpToolMouseWheel,
+			),
+		},
+		callResult: map[string]any{
+			mcpToolPressKey: textPayload("pressed"),
+		},
+	}
+
+	raw, err := newTestTool(drv).Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionAct,
+			"request": map[string]any{
+				"kind":      actScroll,
+				"direction": "up",
+			},
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionAct, got.Action)
+	require.Len(t, drv.calls, 2)
+	require.Equal(t, mcpToolMouseWheel, drv.calls[0].Tool)
+	require.Equal(t, mcpToolPressKey, drv.calls[1].Tool)
+	require.Equal(t, "PageUp", drv.calls[1].Args["key"])
 }
 
 func TestToolCall_ActPressPassesDelayMS(t *testing.T) {

@@ -311,6 +311,10 @@ type Options struct {
 	ModelCallbacks *model.Callbacks
 	// ToolCallbacks contains callbacks for tool operations.
 	ToolCallbacks *tool.Callbacks
+	// ToolResultAttachmentBudget limits callback-managed attachments across
+	// one tool response processing pass. Non-positive values preserve the
+	// default unlimited behavior.
+	ToolResultAttachmentBudget int
 	// ToolCallRetryPolicy configures retry behavior for callable tool calls.
 	ToolCallRetryPolicy *tool.RetryPolicy
 	// Knowledge is the knowledge base for the agent.
@@ -1419,6 +1423,15 @@ func WithModelCallbacks(callbacks *model.Callbacks) Option {
 func WithToolCallbacks(callbacks *tool.Callbacks) Option {
 	return func(opts *Options) {
 		opts.ToolCallbacks = callbacks
+	}
+}
+
+// WithToolResultAttachmentBudget limits callback-managed attachments across
+// one tool response processing pass. Non-positive values preserve the default
+// unlimited behavior.
+func WithToolResultAttachmentBudget(maxAttachments int) Option {
+	return func(opts *Options) {
+		opts.ToolResultAttachmentBudget = maxAttachments
 	}
 }
 

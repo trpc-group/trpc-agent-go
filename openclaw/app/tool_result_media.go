@@ -28,7 +28,9 @@ const (
 	toolResultMediaLineFile = "MEDIA:"
 	toolResultMediaLineDir  = "MEDIA_DIR:"
 
-	maxToolResultImages = 6
+	openClawToolResultAttachmentBudget = 6
+
+	maxToolResultImages = openClawToolResultAttachmentBudget
 
 	maxToolResultImageBytes int64 = 12 << 20
 
@@ -81,6 +83,13 @@ func toolResultImageMessages(
 	images := loadToolResultImages(in.Result)
 	if len(images) == 0 {
 		return nil, nil
+	}
+	allowed := tool.ReserveToolResultAttachments(ctx, len(images))
+	if allowed <= 0 {
+		return nil, nil
+	}
+	if allowed < len(images) {
+		images = images[:allowed]
 	}
 
 	recordToolResultImages(ctx, in.ToolName, images)

@@ -117,6 +117,7 @@ type FunctionCallResponseProcessor struct {
 	toolCallbacks       *tool.Callbacks
 	toolRetryPolicy     *tool.RetryPolicy
 	postToolResultHooks []PostToolResultHook
+	attachmentBudget    int
 }
 
 // FunctionCallResponseProcessorOption configures a function-call response processor.
@@ -149,6 +150,17 @@ func WithPostToolResultHook(
 			return
 		}
 		p.postToolResultHooks = append(p.postToolResultHooks, hook)
+	}
+}
+
+// WithToolResultAttachmentBudget limits callback-managed attachments across
+// one tool response processing pass. Non-positive values preserve the legacy
+// unlimited behavior.
+func WithToolResultAttachmentBudget(
+	maxAttachments int,
+) FunctionCallResponseProcessorOption {
+	return func(p *FunctionCallResponseProcessor) {
+		p.attachmentBudget = maxAttachments
 	}
 }
 
@@ -396,6 +408,12 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 	tools map[string]tool.Tool,
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
+	if p.attachmentBudget > 0 {
+		ctx = tool.WithToolResultAttachmentBudget(
+			ctx,
+			p.attachmentBudget,
+		)
+	}
 	toolCalls := llmResponse.Choices[0].Message.ToolCalls
 
 	// If parallel tools are enabled AND multiple tool calls, execute concurrently
@@ -2400,8 +2418,9 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 	toolCall model.ToolCall,
 	tl tool.CallableTool,
 ) (context.Context, any, error) {
+	callCtx := tool.WithoutToolResultAttachmentBudget(ctx)
 	if p.toolRetryPolicy == nil {
-		result, err := tl.Call(ctx, toolCall.Function.Arguments)
+		result, err := tl.Call(callCtx, toolCall.Function.Arguments)
 		if err != nil {
 			log.ErrorfContext(
 				ctx,
@@ -2418,7 +2437,9 @@ func (p *FunctionCallResponseProcessor) executeCallableTool(
 		ToolCallID: toolCall.ID,
 		Arguments:  toolCall.Function.Arguments,
 		Policy:     p.toolRetryPolicy,
-		Call:       tl.Call,
+		Call: func(_ context.Context, args []byte) (any, error) {
+			return tl.Call(callCtx, args)
+		},
 		ResultError: func(result any) bool {
 			return extractResultError(result)
 		},
@@ -2534,7 +2555,10 @@ func (f *FunctionCallResponseProcessor) executeStreamableTool(
 	eventChan chan<- *event.Event,
 ) (context.Context, any, bool, error) {
 	reader, err := tl.StreamableCall(
-		streamableToolCallContext(ctx, tl),
+		streamableToolCallContext(
+			tool.WithoutToolResultAttachmentBudget(ctx),
+			tl,
+		),
 		toolCall.Function.Arguments,
 	)
 	if err != nil {
