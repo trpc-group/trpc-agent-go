@@ -24,8 +24,8 @@ func TestRedactor_RedactLiteral(t *testing.T) {
 		},
 		{
 			name: "password with quoted value",
-			in:   `db_password="Sup3rS3cretValue"`,
-			want: `db_password="Sup3***REDACTED***alue"`,
+			in:   `db_password="Sup3rS3cretPassw0rd"`,
+			want: `db_password="Sup3***REDACTED***w0rd"`,
 		},
 		{
 			name: "no match",
