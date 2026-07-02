@@ -11,6 +11,7 @@ package trpcagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -305,6 +306,44 @@ func TestRunReturnsHTTPStatusError(t *testing.T) {
 	assert.Contains(t, err.Error(), "invalid request")
 }
 
+func TestRunReturnsPostClientError(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})}
+	runner, err := New("sports-agent", WithTarget("http://example.com"), WithHTTPClient(client))
+	require.NoError(t, err)
+	events, err := runner.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("hello"),
+	)
+	require.Nil(t, events)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trpcagent runner: post run:")
+	assert.Contains(t, err.Error(), "dial failed")
+}
+
+func TestRunReturnsDecodeError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte("{"))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+	runner, err := New("sports-agent", WithTarget(server.URL))
+	require.NoError(t, err)
+	events, err := runner.Run(
+		context.Background(),
+		"user-1",
+		"session-1",
+		model.NewUserMessage("hello"),
+	)
+	require.Nil(t, events)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trpcagent runner: decode run response")
+}
+
 func TestRunUsesWireRunErrorEvents(t *testing.T) {
 	trace := &atrace.Trace{
 		RootInvocationID: "inv-1",
@@ -577,6 +616,34 @@ func TestDescribeReturnsHTTPStatusError(t *testing.T) {
 	require.EqualError(t, err, "trpcagent runner: describe returned 500 Internal Server Error: export structure failed")
 }
 
+func TestDescribeReturnsClientError(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})}
+	runner, err := New("sports-agent", WithTarget("http://example.com"), WithHTTPClient(client))
+	require.NoError(t, err)
+	got, err := runner.Describe(context.Background())
+	require.Nil(t, got)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trpcagent runner: describe:")
+	assert.Contains(t, err.Error(), "dial failed")
+}
+
+func TestDescribeReturnsDecodeError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, err := w.Write([]byte("{"))
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+	runner, err := New("sports-agent", WithTarget(server.URL))
+	require.NoError(t, err)
+	got, err := runner.Describe(context.Background())
+	require.Nil(t, got)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "trpcagent runner: decode describe response")
+}
+
 func TestDescribeAllowsCustomTargetScheme(t *testing.T) {
 	var gotRequest *http.Request
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -611,6 +678,41 @@ func TestNewValidation(t *testing.T) {
 	runner, err = New("app")
 	require.Nil(t, runner)
 	require.EqualError(t, err, "trpcagent runner: target must not be empty")
+}
+
+func TestWithHeaderIgnoresEmptyKeyAndInitializesHeaders(t *testing.T) {
+	var opts options
+	WithHeader("", "ignored")(&opts)
+	assert.Nil(t, opts.headers)
+	WithHeader("X-Test", "value")(&opts)
+	require.NotNil(t, opts.headers)
+	assert.Equal(t, "value", opts.headers.Get("X-Test"))
+}
+
+func TestHTTPStatusErrorHandlesBodyReadErrorAndEmptyBody(t *testing.T) {
+	runner, err := New("sports-agent", WithTarget("http://example.com"))
+	require.NoError(t, err)
+	err = runner.httpStatusError("run", &http.Response{
+		Status: "500 Internal Server Error",
+		Body:   errReadCloser{},
+	})
+	require.EqualError(t, err, "trpcagent runner: run returned 500 Internal Server Error")
+	err = runner.httpStatusError("describe", &http.Response{
+		Status: "404 Not Found",
+		Body:   io.NopCloser(strings.NewReader("")),
+	})
+	require.EqualError(t, err, "trpcagent runner: describe returned 404 Not Found")
+}
+
+func TestErrorMessageFromBodyRejectsMalformedPayloads(t *testing.T) {
+	assert.Empty(t, errorMessageFromBody([]byte("{")))
+	assert.Empty(t, errorMessageFromBody([]byte(`{"error":{"message":"nested"}}`)))
+}
+
+func TestCloseIsNoop(t *testing.T) {
+	runner, err := New("sports-agent", WithTarget("http://example.com"))
+	require.NoError(t, err)
+	require.NoError(t, runner.Close())
 }
 
 func TestRunAllowsCustomTargetScheme(t *testing.T) {
@@ -677,6 +779,16 @@ func collectEvents(ch <-chan *event.Event) []*event.Event {
 		events = append(events, evt)
 	}
 	return events
+}
+
+type errReadCloser struct{}
+
+func (errReadCloser) Read([]byte) (int, error) {
+	return 0, errors.New("read failed")
+}
+
+func (errReadCloser) Close() error {
+	return nil
 }
 
 type fakeServerRunner struct {
