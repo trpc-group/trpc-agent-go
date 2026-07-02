@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/session/mongodb/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/trpcagent/">
       
       
-        <link rel="prev" href="../clickhouse/">
+        <link rel="prev" href="../gateway/">
       
       
-        <link rel="next" href="../../knowledge/">
+        <link rel="next" href="../agui/">
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.17">
     
     
       
-        <title>MongoDB Session - tRPC-Agent-Go</title>
+        <title>tRPC-Agent API - tRPC-Agent-Go</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.7e37652d.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.7e37652d.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.06af60db.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.06af60db.min.css">
       
       
 
@@ -48,9 +48,9 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/extra.css">
+      <link rel="stylesheet" href="../assets/stylesheets/extra.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
   
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#mongodb-storage" class="md-skip">
+        <a href="#trpc-agent-api-server" class="md-skip">
           Skip to content
         </a>
       
@@ -100,9 +100,9 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href=".." title="tRPC-Agent-Go" class="md-header__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../assets/img/logo.png" alt="logo">
+  <img src="../assets/img/logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              MongoDB Session
+              tRPC-Agent API
             
           </span>
         </div>
@@ -172,7 +172,7 @@
           </li>
         
           <li class="md-select__item">
-            <a href="../../zh/session/mongodb/" hreflang="zh" class="md-select__link">
+            <a href="../zh/trpcagent/" hreflang="zh" class="md-select__link">
               中文
             </a>
           </li>
@@ -263,7 +263,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href=".." class="md-tabs__link">
         
   
   
@@ -280,8 +280,6 @@
   
   
   
-    
-  
   
     
     
@@ -289,13 +287,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../agent/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../agent/" class="md-tabs__link">
           
   
   
@@ -314,11 +310,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../gateway/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../gateway/" class="md-tabs__link">
           
   
   
@@ -338,7 +336,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../observability/" class="md-tabs__link">
+        <a href="../observability/" class="md-tabs__link">
           
   
   
@@ -356,7 +354,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../ecosystem/" class="md-tabs__link">
+      <a href="../ecosystem/" class="md-tabs__link">
         
   
   
@@ -377,7 +375,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../blog/trpcagentgo/" class="md-tabs__link">
+        <a href="../blog/trpcagentgo/" class="md-tabs__link">
           
   
   
@@ -411,9 +409,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
+    <a href=".." title="tRPC-Agent-Go" class="md-nav__button md-logo" aria-label="tRPC-Agent-Go" data-md-component="logo">
       
-  <img src="../../assets/img/logo.png" alt="logo">
+  <img src="../assets/img/logo.png" alt="logo">
 
     </a>
     tRPC-Agent-Go
@@ -440,7 +438,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href=".." class="md-nav__link">
         
   
   
@@ -459,29 +457,24 @@
       
   
   
-    
   
   
-  
     
     
     
     
       
-        
-        
-      
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   
@@ -494,7 +487,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Components
@@ -549,7 +542,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agent/" class="md-nav__link">
+      <a href="../agent/" class="md-nav__link">
         
   
   
@@ -572,7 +565,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../goal/" class="md-nav__link">
+      <a href="../goal/" class="md-nav__link">
         
   
   
@@ -595,7 +588,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../multiagent/" class="md-nav__link">
+      <a href="../multiagent/" class="md-nav__link">
         
   
   
@@ -618,7 +611,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../taskrun/" class="md-nav__link">
+      <a href="../taskrun/" class="md-nav__link">
         
   
   
@@ -641,7 +634,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../team/" class="md-nav__link">
+      <a href="../team/" class="md-nav__link">
         
   
   
@@ -664,7 +657,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../graph/" class="md-nav__link">
+      <a href="../graph/" class="md-nav__link">
         
   
   
@@ -687,7 +680,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../custom-agent/" class="md-nav__link">
+      <a href="../custom-agent/" class="md-nav__link">
         
   
   
@@ -710,7 +703,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../dify/" class="md-nav__link">
+      <a href="../dify/" class="md-nav__link">
         
   
   
@@ -733,7 +726,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../claudecode/" class="md-nav__link">
+      <a href="../claudecode/" class="md-nav__link">
         
   
   
@@ -756,7 +749,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../codex/" class="md-nav__link">
+      <a href="../codex/" class="md-nav__link">
         
   
   
@@ -787,7 +780,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../runner/" class="md-nav__link">
+      <a href="../runner/" class="md-nav__link">
         
   
   
@@ -810,7 +803,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../codeexecutor/" class="md-nav__link">
+      <a href="../codeexecutor/" class="md-nav__link">
         
   
   
@@ -833,7 +826,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../codeact/" class="md-nav__link">
+      <a href="../codeact/" class="md-nav__link">
         
   
   
@@ -856,7 +849,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../error-handling/" class="md-nav__link">
+      <a href="../error-handling/" class="md-nav__link">
         
   
   
@@ -879,7 +872,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../model/" class="md-nav__link">
+      <a href="../model/" class="md-nav__link">
         
   
   
@@ -902,7 +895,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../prompt/" class="md-nav__link">
+      <a href="../prompt/" class="md-nav__link">
         
   
   
@@ -925,7 +918,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../callbacks/" class="md-nav__link">
+      <a href="../callbacks/" class="md-nav__link">
         
   
   
@@ -948,7 +941,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../plugin/" class="md-nav__link">
+      <a href="../plugin/" class="md-nav__link">
         
   
   
@@ -971,7 +964,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../memory/" class="md-nav__link">
+      <a href="../memory/" class="md-nav__link">
         
   
   
@@ -994,7 +987,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../artifact/" class="md-nav__link">
+      <a href="../artifact/" class="md-nav__link">
         
   
   
@@ -1017,7 +1010,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../skill/" class="md-nav__link">
+      <a href="../skill/" class="md-nav__link">
         
   
   
@@ -1040,7 +1033,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evolution/" class="md-nav__link">
+      <a href="../evolution/" class="md-nav__link">
         
   
   
@@ -1063,7 +1056,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../tool/" class="md-nav__link">
+      <a href="../tool/" class="md-nav__link">
         
   
   
@@ -1083,8 +1076,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1095,11 +1086,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_15" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_15" >
         
           
           <label class="md-nav__link" for="__nav_2_15" id="__nav_2_15_label" tabindex="0">
@@ -1115,7 +1106,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2_15">
             <span class="md-nav__icon md-icon"></span>
             Session
@@ -1129,7 +1120,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../session/" class="md-nav__link">
         
   
   
@@ -1152,7 +1143,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../summary/" class="md-nav__link">
+      <a href="../session/summary/" class="md-nav__link">
         
   
   
@@ -1175,7 +1166,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../inmemory/" class="md-nav__link">
+      <a href="../session/inmemory/" class="md-nav__link">
         
   
   
@@ -1198,7 +1189,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../sqlite/" class="md-nav__link">
+      <a href="../session/sqlite/" class="md-nav__link">
         
   
   
@@ -1221,7 +1212,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../redis/" class="md-nav__link">
+      <a href="../session/redis/" class="md-nav__link">
         
   
   
@@ -1244,7 +1235,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../mysql/" class="md-nav__link">
+      <a href="../session/mysql/" class="md-nav__link">
         
   
   
@@ -1267,7 +1258,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../tdsql/" class="md-nav__link">
+      <a href="../session/tdsql/" class="md-nav__link">
         
   
   
@@ -1290,7 +1281,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../postgres/" class="md-nav__link">
+      <a href="../session/postgres/" class="md-nav__link">
         
   
   
@@ -1313,7 +1304,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../pgvector/" class="md-nav__link">
+      <a href="../session/pgvector/" class="md-nav__link">
         
   
   
@@ -1336,7 +1327,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../clickhouse/" class="md-nav__link">
+      <a href="../session/clickhouse/" class="md-nav__link">
         
   
   
@@ -1356,32 +1347,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    MongoDB Session
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../session/mongodb/" class="md-nav__link">
         
   
   
@@ -1392,167 +1361,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      Requirements
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#features" class="md-nav__link">
-    <span class="md-ellipsis">
-      Features
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Options
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Options">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#connection-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Connection Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#session-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Session Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#async-persistence-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Async Persistence Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#summary-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Summary Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#collection-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Collection Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#hook-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Hook Configuration
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#basic-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Basic Configuration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#instance-reuse" class="md-nav__link">
-    <span class="md-ellipsis">
-      Instance Reuse
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#collection-prefix" class="md-nav__link">
-    <span class="md-ellipsis">
-      Collection Prefix
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#expiration-and-cleanup" class="md-nav__link">
-    <span class="md-ellipsis">
-      Expiration and Cleanup
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#storage-structure" class="md-nav__link">
-    <span class="md-ellipsis">
-      Storage Structure
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#integration-tests" class="md-nav__link">
-    <span class="md-ellipsis">
-      Integration Tests
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1614,7 +1422,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/" class="md-nav__link">
+      <a href="../knowledge/" class="md-nav__link">
         
   
   
@@ -1637,7 +1445,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/embedder/" class="md-nav__link">
+      <a href="../knowledge/embedder/" class="md-nav__link">
         
   
   
@@ -1660,7 +1468,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/reranker/" class="md-nav__link">
+      <a href="../knowledge/reranker/" class="md-nav__link">
         
   
   
@@ -1683,7 +1491,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/query-enhancer/" class="md-nav__link">
+      <a href="../knowledge/query-enhancer/" class="md-nav__link">
         
   
   
@@ -1706,7 +1514,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/source/" class="md-nav__link">
+      <a href="../knowledge/source/" class="md-nav__link">
         
   
   
@@ -1729,7 +1537,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/code-rag/" class="md-nav__link">
+      <a href="../knowledge/code-rag/" class="md-nav__link">
         
   
   
@@ -1752,7 +1560,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/filter/" class="md-nav__link">
+      <a href="../knowledge/filter/" class="md-nav__link">
         
   
   
@@ -1775,7 +1583,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/extractor/" class="md-nav__link">
+      <a href="../knowledge/extractor/" class="md-nav__link">
         
   
   
@@ -1798,7 +1606,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/management/" class="md-nav__link">
+      <a href="../knowledge/management/" class="md-nav__link">
         
   
   
@@ -1821,7 +1629,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/ocr/" class="md-nav__link">
+      <a href="../knowledge/ocr/" class="md-nav__link">
         
   
   
@@ -1885,7 +1693,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/vectorstore/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/" class="md-nav__link">
         
   
   
@@ -1908,7 +1716,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/vectorstore/inmemory/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/inmemory/" class="md-nav__link">
         
   
   
@@ -1931,7 +1739,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/vectorstore/pgvector/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/pgvector/" class="md-nav__link">
         
   
   
@@ -1954,7 +1762,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/vectorstore/tcvector/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/tcvector/" class="md-nav__link">
         
   
   
@@ -1977,7 +1785,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/elasticsearch/" class="md-nav__link">
         
   
   
@@ -2000,7 +1808,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/vectorstore/qdrant/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/qdrant/" class="md-nav__link">
         
   
   
@@ -2023,7 +1831,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/vectorstore/milvus/" class="md-nav__link">
+      <a href="../knowledge/vectorstore/milvus/" class="md-nav__link">
         
   
   
@@ -2054,7 +1862,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../knowledge/troubleshooting/" class="md-nav__link">
+      <a href="../knowledge/troubleshooting/" class="md-nav__link">
         
   
   
@@ -2085,7 +1893,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../planner/" class="md-nav__link">
+      <a href="../planner/" class="md-nav__link">
         
   
   
@@ -2108,7 +1916,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../event/" class="md-nav__link">
+      <a href="../event/" class="md-nav__link">
         
   
   
@@ -2131,7 +1939,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../evaluation/" class="md-nav__link">
+      <a href="../evaluation/" class="md-nav__link">
         
   
   
@@ -2154,7 +1962,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../promptiter/" class="md-nav__link">
+      <a href="../promptiter/" class="md-nav__link">
         
   
   
@@ -2181,24 +1989,29 @@
       
   
   
+    
   
   
+  
     
     
     
     
-      
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
             
   
   
@@ -2211,7 +2024,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             Server
@@ -2225,7 +2038,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../gateway/" class="md-nav__link">
+      <a href="../gateway/" class="md-nav__link">
         
   
   
@@ -2245,10 +2058,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../trpcagent/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    tRPC-Agent API
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -2259,6 +2094,62 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      Quick start
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#routes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Routes
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Options
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#requests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Requests
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -2312,7 +2203,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/" class="md-nav__link">
+      <a href="../agui/" class="md-nav__link">
         
   
   
@@ -2335,7 +2226,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/chat/" class="md-nav__link">
+      <a href="../agui/chat/" class="md-nav__link">
         
   
   
@@ -2358,7 +2249,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/history/" class="md-nav__link">
+      <a href="../agui/history/" class="md-nav__link">
         
   
   
@@ -2381,7 +2272,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../agui/cancel/" class="md-nav__link">
+      <a href="../agui/cancel/" class="md-nav__link">
         
   
   
@@ -2412,7 +2303,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../a2a/" class="md-nav__link">
+      <a href="../a2a/" class="md-nav__link">
         
   
   
@@ -2435,7 +2326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../a2ui/" class="md-nav__link">
+      <a href="../a2ui/" class="md-nav__link">
         
   
   
@@ -2458,7 +2349,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../openclaw-runtime/" class="md-nav__link">
+      <a href="../openclaw-runtime/" class="md-nav__link">
         
   
   
@@ -2529,7 +2420,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../observability/" class="md-nav__link">
+      <a href="../observability/" class="md-nav__link">
         
   
   
@@ -2552,7 +2443,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../telemetry-multimodal/" class="md-nav__link">
+      <a href="../telemetry-multimodal/" class="md-nav__link">
         
   
   
@@ -2582,7 +2473,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../ecosystem/" class="md-nav__link">
+      <a href="../ecosystem/" class="md-nav__link">
         
   
   
@@ -2645,7 +2536,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/trpcagentgo/" class="md-nav__link">
+      <a href="../blog/trpcagentgo/" class="md-nav__link">
         
   
   
@@ -2668,7 +2559,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/summary/" class="md-nav__link">
+      <a href="../blog/summary/" class="md-nav__link">
         
   
   
@@ -2691,7 +2582,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/observability/" class="md-nav__link">
+      <a href="../blog/observability/" class="md-nav__link">
         
   
   
@@ -2714,7 +2605,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/promptcache/" class="md-nav__link">
+      <a href="../blog/promptcache/" class="md-nav__link">
         
   
   
@@ -2737,7 +2628,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/graphagent/" class="md-nav__link">
+      <a href="../blog/graphagent/" class="md-nav__link">
         
   
   
@@ -2760,7 +2651,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/agui/" class="md-nav__link">
+      <a href="../blog/agui/" class="md-nav__link">
         
   
   
@@ -2783,7 +2674,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/skill/" class="md-nav__link">
+      <a href="../blog/skill/" class="md-nav__link">
         
   
   
@@ -2806,7 +2697,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/evaluation/" class="md-nav__link">
+      <a href="../blog/evaluation/" class="md-nav__link">
         
   
   
@@ -2829,7 +2720,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/llmverifier/" class="md-nav__link">
+      <a href="../blog/llmverifier/" class="md-nav__link">
         
   
   
@@ -2852,7 +2743,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/openclaw/" class="md-nav__link">
+      <a href="../blog/openclaw/" class="md-nav__link">
         
   
   
@@ -2875,7 +2766,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/promptiter/" class="md-nav__link">
+      <a href="../blog/promptiter/" class="md-nav__link">
         
   
   
@@ -2898,7 +2789,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../blog/multiagent-boundaries/" class="md-nav__link">
+      <a href="../blog/multiagent-boundaries/" class="md-nav__link">
         
   
   
@@ -2948,141 +2839,36 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
+  <a href="#quick-start" class="md-nav__link">
     <span class="md-ellipsis">
-      Requirements
+      Quick start
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#features" class="md-nav__link">
+  <a href="#routes" class="md-nav__link">
     <span class="md-ellipsis">
-      Features
+      Routes
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-options" class="md-nav__link">
+  <a href="#options" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Options
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Options">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#connection-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Connection Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#session-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Session Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#async-persistence-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Async Persistence Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#summary-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Summary Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#collection-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Collection Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#hook-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Hook Configuration
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#basic-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Basic Configuration
+      Options
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#instance-reuse" class="md-nav__link">
+  <a href="#requests" class="md-nav__link">
     <span class="md-ellipsis">
-      Instance Reuse
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#collection-prefix" class="md-nav__link">
-    <span class="md-ellipsis">
-      Collection Prefix
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#expiration-and-cleanup" class="md-nav__link">
-    <span class="md-ellipsis">
-      Expiration and Cleanup
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#storage-structure" class="md-nav__link">
-    <span class="md-ellipsis">
-      Storage Structure
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#integration-tests" class="md-nav__link">
-    <span class="md-ellipsis">
-      Integration Tests
+      Requests
     </span>
   </a>
   
@@ -3104,7 +2890,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/session/mongodb.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/trpcagent.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -3113,319 +2899,118 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/session/mongodb.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/trpcagent.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="mongodb-storage">MongoDB Storage</h1>
-<p>MongoDB storage is suitable for production environments that prefer document
-storage while still requiring persistent session state, event history, track
-events, and summaries.</p>
-<h2 id="requirements">Requirements</h2>
-<p>MongoDB session storage requires a deployment that supports multi-document
-transactions, such as a replica set or sharded cluster. Standalone MongoDB
-deployments are not supported because event and track persistence update session
-state and append history in one transaction.</p>
-<h2 id="features">Features</h2>
+<h1 id="trpc-agent-api-server">tRPC-Agent API Server</h1>
+<p><code>server/trpcagent</code> exposes a local <code>tRPC-Agent-Go</code> agent as the tRPC-Agent HTTP API. The server can export the agent structure, forward run requests to a <code>runner.Runner</code>, and return events, messages, and execution traces in a unified run response.</p>
+<p>It is useful when you want to serve an agent from the current process while allowing external systems to fetch its structure and start runs over HTTP.</p>
+<h2 id="quick-start">Quick start</h2>
+<p>Create an agent and runner, then register them with <code>trpcagent.Server</code>:</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-0-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-0-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-0-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-0-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-0-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-0-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-0-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-0-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-0-10">10</a></span>
+<span class="normal"><a href="#__codelineno-0-11">11</a></span>
+<span class="normal"><a href="#__codelineno-0-12">12</a></span>
+<span class="normal"><a href="#__codelineno-0-13">13</a></span>
+<span class="normal"><a href="#__codelineno-0-14">14</a></span>
+<span class="normal"><a href="#__codelineno-0-15">15</a></span>
+<span class="normal"><a href="#__codelineno-0-16">16</a></span>
+<span class="normal"><a href="#__codelineno-0-17">17</a></span>
+<span class="normal"><a href="#__codelineno-0-18">18</a></span>
+<span class="normal"><a href="#__codelineno-0-19">19</a></span>
+<span class="normal"><a href="#__codelineno-0-20">20</a></span>
+<span class="normal"><a href="#__codelineno-0-21">21</a></span>
+<span class="normal"><a href="#__codelineno-0-22">22</a></span>
+<span class="normal"><a href="#__codelineno-0-23">23</a></span>
+<span class="normal"><a href="#__codelineno-0-24">24</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="w">    </span><span class="s">&quot;net/http&quot;</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/log&quot;</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/server/trpcagent&quot;</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a><span class="p">)</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">newAgent</span><span class="p">()</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10"></a><span class="nx">agentRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="s">&quot;calculator&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">agent</span><span class="p">)</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11"></a><span class="k">defer</span><span class="w"> </span><span class="nx">agentRunner</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12"></a>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13"></a><span class="nx">server</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">trpcagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14"></a><span class="w">    </span><span class="nx">trpcagent</span><span class="p">.</span><span class="nx">WithAppName</span><span class="p">(</span><span class="s">&quot;calculator&quot;</span><span class="p">),</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15"></a><span class="w">    </span><span class="nx">trpcagent</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">agent</span><span class="p">),</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16"></a><span class="w">    </span><span class="nx">trpcagent</span><span class="p">.</span><span class="nx">WithRunner</span><span class="p">(</span><span class="nx">agentRunner</span><span class="p">),</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17"></a><span class="p">)</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;create trpc-agent api server failed: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20"></a><span class="p">}</span>
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21"></a>
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ListenAndServe</span><span class="p">(</span><span class="s">&quot;127.0.0.1:8080&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">server</span><span class="p">.</span><span class="nx">Handler</span><span class="p">());</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23"></a><span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;server stopped with error: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>See <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/trpcagent/server">examples/trpcagent/server</a> for a complete runnable example.</p>
+<h2 id="routes">Routes</h2>
+<p>The default base path is <code>/trpc-agent/v1/apps</code>. When the app name is <code>calculator</code>, the server exposes these routes:</p>
 <ul>
-<li>✅ Data persistence</li>
-<li>✅ Distributed support</li>
-<li>✅ Soft delete support</li>
-<li>✅ Collection prefix support</li>
-<li>✅ Async persistence support</li>
-<li>✅ Track service support</li>
-<li>✅ Event window support</li>
+<li><code>GET /trpc-agent/v1/apps/calculator/structure</code>: exports the current agent structure.</li>
+<li><code>POST /trpc-agent/v1/apps/calculator/runs</code>: starts one agent run and returns the run result.</li>
 </ul>
-<h2 id="configuration-options">Configuration Options</h2>
-<h3 id="connection-configuration">Connection Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithMongoClientURI(uri string)</code></td>
-<td><code>string</code></td>
-<td>-</td>
-<td>MongoDB URI, for example <code>mongodb://user:pass@host1:27017,host2:27017/?replicaSet=rs0</code></td>
-</tr>
-<tr>
-<td><code>WithMongoInstance(instanceName string)</code></td>
-<td><code>string</code></td>
-<td>-</td>
-<td>Use a pre-configured MongoDB instance (lower priority than URI)</td>
-</tr>
-<tr>
-<td><code>WithDatabase(database string)</code></td>
-<td><code>string</code></td>
-<td><code>trpc-agent-go-mongo-session</code></td>
-<td>MongoDB database name</td>
-</tr>
-<tr>
-<td><code>WithExtraOptions(extraOptions ...any)</code></td>
-<td><code>[]any</code></td>
-<td><code>nil</code></td>
-<td>Extra options for customized client builders</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Priority</strong>: <code>WithMongoClientURI</code> &gt; <code>WithMongoInstance</code></p>
-<h3 id="session-configuration">Session Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithSessionEventLimit(limit int)</code></td>
-<td><code>int</code></td>
-<td><code>1000</code></td>
-<td>Maximum events per session in context-window mode</td>
-</tr>
-<tr>
-<td><code>WithSessionTTL(ttl time.Duration)</code></td>
-<td><code>time.Duration</code></td>
-<td><code>0</code> (no expiry)</td>
-<td>Session TTL</td>
-</tr>
-<tr>
-<td><code>WithAppStateTTL(ttl time.Duration)</code></td>
-<td><code>time.Duration</code></td>
-<td><code>0</code> (no expiry)</td>
-<td>App state TTL</td>
-</tr>
-<tr>
-<td><code>WithUserStateTTL(ttl time.Duration)</code></td>
-<td><code>time.Duration</code></td>
-<td><code>0</code> (no expiry)</td>
-<td>User state TTL</td>
-</tr>
-<tr>
-<td><code>WithCleanupInterval(interval time.Duration)</code></td>
-<td><code>time.Duration</code></td>
-<td><code>0</code> (auto)</td>
-<td>Event and track cleanup interval; defaults to 5 minutes if session TTL is configured</td>
-</tr>
-<tr>
-<td><code>WithSoftDelete(enable bool)</code></td>
-<td><code>bool</code></td>
-<td><code>true</code></td>
-<td>Enable or disable soft delete</td>
-</tr>
-</tbody>
-</table>
-<h3 id="async-persistence-configuration">Async Persistence Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithEnableAsyncPersist(enable bool)</code></td>
-<td><code>bool</code></td>
-<td><code>false</code></td>
-<td>Enable async persistence for session events and track events</td>
-</tr>
-<tr>
-<td><code>WithAsyncPersisterNum(num int)</code></td>
-<td><code>int</code></td>
-<td><code>10</code></td>
-<td>Number of async persistence workers</td>
-</tr>
-</tbody>
-</table>
-<h3 id="summary-configuration">Summary Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithSummarizer(s summary.SessionSummarizer)</code></td>
-<td><code>summary.SessionSummarizer</code></td>
-<td><code>nil</code></td>
-<td>Inject session summarizer</td>
-</tr>
-<tr>
-<td><code>WithAsyncSummaryNum(num int)</code></td>
-<td><code>int</code></td>
-<td><code>3</code></td>
-<td>Number of summary processing workers</td>
-</tr>
-<tr>
-<td><code>WithSummaryQueueSize(size int)</code></td>
-<td><code>int</code></td>
-<td><code>100</code></td>
-<td>Summary task queue size</td>
-</tr>
-<tr>
-<td><code>WithSummaryJobTimeout(timeout time.Duration)</code></td>
-<td><code>time.Duration</code></td>
-<td><code>60s</code></td>
-<td>Timeout for a single summary job</td>
-</tr>
-<tr>
-<td><code>WithSummaryFilterAllowlist(filterKeys ...string)</code></td>
-<td><code>[]string</code></td>
-<td><code>nil</code></td>
-<td>Restrict branch summary filter keys</td>
-</tr>
-<tr>
-<td><code>WithCascadeFullSessionSummary(enable bool)</code></td>
-<td><code>bool</code></td>
-<td><code>true</code></td>
-<td>Refresh full-session summary after allowed branch summaries</td>
-</tr>
-</tbody>
-</table>
-<h3 id="collection-configuration">Collection Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithCollectionPrefix(prefix string)</code></td>
-<td><code>string</code></td>
-<td><code>""</code></td>
-<td>Collection name prefix</td>
-</tr>
-<tr>
-<td><code>WithSkipDBInit(skip bool)</code></td>
-<td><code>bool</code></td>
-<td><code>false</code></td>
-<td>Skip automatic index initialization and transaction probe</td>
-</tr>
-</tbody>
-</table>
-<h3 id="hook-configuration">Hook Configuration</h3>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithAppendEventHook(hooks ...session.AppendEventHook)</code></td>
-<td><code>[]session.AppendEventHook</code></td>
-<td><code>nil</code></td>
-<td>Add event write hooks</td>
-</tr>
-<tr>
-<td><code>WithGetSessionHook(hooks ...session.GetSessionHook)</code></td>
-<td><code>[]session.GetSessionHook</code></td>
-<td><code>nil</code></td>
-<td>Add session read hooks</td>
-</tr>
-</tbody>
-</table>
-<h2 id="basic-configuration">Basic Configuration</h2>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
-<span class="normal"><a href="#__codelineno-0-2">2</a></span>
-<span class="normal"><a href="#__codelineno-0-3">3</a></span>
-<span class="normal"><a href="#__codelineno-0-4">4</a></span>
-<span class="normal"><a href="#__codelineno-0-5">5</a></span>
-<span class="normal"><a href="#__codelineno-0-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/mongodb&quot;</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a><span class="w">    </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">WithMongoClientURI</span><span class="p">(</span><span class="s">&quot;mongodb://user:password@localhost:27017/?replicaSet=rs0&quot;</span><span class="p">),</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a><span class="w">    </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">WithDatabase</span><span class="p">(</span><span class="s">&quot;trpc_agent_go&quot;</span><span class="p">),</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a><span class="p">)</span>
+<p>If only <code>WithAgent</code> is configured, the server registers only the structure route. If only <code>WithRunner</code> is configured, the server registers only the runs route. This lets each deployment decide whether to expose structure export, run execution, or both.</p>
+<h2 id="options">Options</h2>
+<p><code>WithAppName</code> sets the app name exposed by the server. The value is part of the route path and is also written into run options at execution time.</p>
+<p><code>WithAgent</code> sets the root agent used for structure export. The structure route builds the snapshot from this agent.</p>
+<p><code>WithRunner</code> sets the runner used to execute requests. The runs route converts the request session, input, profile, and run options into one <code>runner.Run()</code> call.</p>
+<p><code>WithBasePath</code> sets the API route prefix. The default value is <code>/trpc-agent/v1/apps</code>. Use it when mounting the server behind an existing HTTP service.</p>
+<p><code>WithTimeout</code> sets the timeout for each HTTP request. The timeout is propagated through the request context to structure export and runner execution.</p>
+<h2 id="requests">Requests</h2>
+<p>Export the structure:</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a>curl<span class="w"> </span>-sS<span class="w"> </span>http://127.0.0.1:8080/trpc-agent/v1/apps/calculator/structure
 </span></code></pre></div></td></tr></table></div>
-<h2 id="instance-reuse">Instance Reuse</h2>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-1-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-1-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-1-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-1-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-1-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-1-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-1-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-1-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-1-10">10</a></span>
-<span class="normal"><a href="#__codelineno-1-11">11</a></span>
-<span class="normal"><a href="#__codelineno-1-12">12</a></span>
-<span class="normal"><a href="#__codelineno-1-13">13</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="w">    </span><span class="nx">storagemongodb</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/storage/mongodb&quot;</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3"></a><span class="w">    </span><span class="nx">sessionmongodb</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/session/mongodb&quot;</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4"></a><span class="p">)</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5"></a>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6"></a><span class="nx">storagemongodb</span><span class="p">.</span><span class="nx">RegisterMongoDBInstance</span><span class="p">(</span><span class="s">&quot;my-mongodb-instance&quot;</span><span class="p">,</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7"></a><span class="w">    </span><span class="nx">storagemongodb</span><span class="p">.</span><span class="nx">WithClientBuilderDSN</span><span class="p">(</span><span class="s">&quot;mongodb://user:password@localhost:27017/?replicaSet=rs0&quot;</span><span class="p">),</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8"></a><span class="p">)</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9"></a>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">sessionmongodb</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11"></a><span class="w">    </span><span class="nx">sessionmongodb</span><span class="p">.</span><span class="nx">WithMongoInstance</span><span class="p">(</span><span class="s">&quot;my-mongodb-instance&quot;</span><span class="p">),</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12"></a><span class="w">    </span><span class="nx">sessionmongodb</span><span class="p">.</span><span class="nx">WithDatabase</span><span class="p">(</span><span class="s">&quot;trpc_agent_go&quot;</span><span class="p">),</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13"></a><span class="p">)</span>
+<p>Start a run:</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-2-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-2-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-2-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-2-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-2-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-2-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-2-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-2-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-2-10">10</a></span>
+<span class="normal"><a href="#__codelineno-2-11">11</a></span>
+<span class="normal"><a href="#__codelineno-2-12">12</a></span>
+<span class="normal"><a href="#__codelineno-2-13">13</a></span>
+<span class="normal"><a href="#__codelineno-2-14">14</a></span>
+<span class="normal"><a href="#__codelineno-2-15">15</a></span>
+<span class="normal"><a href="#__codelineno-2-16">16</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>curl<span class="w"> </span>-sS<span class="w"> </span>http://127.0.0.1:8080/trpc-agent/v1/apps/calculator/runs<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;Content-Type: application/json&#39;</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="s1">    &quot;session&quot;: {</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5"></a><span class="s1">      &quot;userId&quot;: &quot;alice&quot;,</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6"></a><span class="s1">      &quot;sessionId&quot;: &quot;demo-session&quot;</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7"></a><span class="s1">    },</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8"></a><span class="s1">    &quot;input&quot;: {</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9"></a><span class="s1">      &quot;role&quot;: &quot;user&quot;,</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10"></a><span class="s1">      &quot;content&quot;: &quot;Use the calculator to compute 12 * 7.&quot;</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11"></a><span class="s1">    },</span>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12"></a><span class="s1">    &quot;runOptions&quot;: {</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13"></a><span class="s1">      &quot;requestID&quot;: &quot;demo-run-1&quot;,</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14"></a><span class="s1">      &quot;executionTraceEnabled&quot;: true</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15"></a><span class="s1">    }</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16"></a><span class="s1">  }&#39;</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="collection-prefix">Collection Prefix</h2>
-<p>MongoDB supports collection prefix configuration for multi-application shared
-database scenarios:</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span>
-<span class="normal"><a href="#__codelineno-2-2">2</a></span>
-<span class="normal"><a href="#__codelineno-2-3">3</a></span>
-<span class="normal"><a href="#__codelineno-2-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nx">sessionService</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">WithMongoClientURI</span><span class="p">(</span><span class="s">&quot;mongodb://user:password@localhost:27017/?replicaSet=rs0&quot;</span><span class="p">),</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="nx">mongodb</span><span class="p">.</span><span class="nx">WithCollectionPrefix</span><span class="p">(</span><span class="s">&quot;app1_&quot;</span><span class="p">),</span><span class="w"> </span><span class="c1">// app1_session_states</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="p">)</span>
-</span></code></pre></div></td></tr></table></div>
-<h2 id="expiration-and-cleanup">Expiration and Cleanup</h2>
-<p>Session state, app state, and user state use MongoDB TTL indexes on <code>expires_at</code>.
-Summaries do not have an independent TTL and follow the session lifecycle.</p>
-<p>Session events and track events intentionally do not use TTL indexes. They are
-cleaned by the service as whole session groups so a session's history does not
-partially disappear while the session is still active. Dedicated cleanup indexes
-on <code>updated_at</code> support these grouped cleanup scans.</p>
-<h2 id="storage-structure">Storage Structure</h2>
-<p>MongoDB uses these collections:</p>
-<ul>
-<li><code>session_states</code></li>
-<li><code>session_events</code></li>
-<li><code>session_tracks</code></li>
-<li><code>session_summaries</code></li>
-<li><code>app_states</code></li>
-<li><code>user_states</code></li>
-</ul>
-<h2 id="integration-tests">Integration Tests</h2>
-<p>Integration tests require a MongoDB replica set or sharded cluster and are gated
-by the <code>integration</code> build tag and <code>MONGODB_INTEGRATION_URI</code>:</p>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
-<span class="normal"><a href="#__codelineno-3-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nv">MONGODB_INTEGRATION_URI</span><span class="o">=</span><span class="s1">&#39;mongodb://user:pass@host:27017/?replicaSet=rs0&#39;</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">  </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-tags<span class="o">=</span>integration<span class="w"> </span>-count<span class="o">=</span><span class="m">1</span><span class="w"> </span>./...
-</span></code></pre></div></td></tr></table></div>
+<p>The <code>profile</code> field is optional. When omitted, the runner executes with the current agent configuration. When provided, the server compiles the structured profile into runtime options before execution.</p>
 
 
 
@@ -3448,7 +3033,7 @@ by the <code>integration</code> build tag and <code>MONGODB_INTEGRATION_URI</cod
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 23, 2026 09:46:58 UTC">2026-06-23 09:46:58</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 2, 2026 06:46:54 UTC">2026-07-02 06:46:54</span>
   </span>
 
     
@@ -3458,7 +3043,7 @@ by the <code>integration</code> build tag and <code>MONGODB_INTEGRATION_URI</cod
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 23, 2026 09:46:58 UTC">2026-06-23 09:46:58</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 2, 2026 06:46:54 UTC">2026-07-02 06:46:54</span>
   </span>
 
     
@@ -3539,7 +3124,7 @@ by the <code>integration</code> build tag and <code>MONGODB_INTEGRATION_URI</cod
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../clickhouse/" class="md-footer__link md-footer__link--prev" aria-label="Previous: ClickHouse Session">
+          <a href="../gateway/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Gateway">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -3549,14 +3134,14 @@ by the <code>integration</code> build tag and <code>MONGODB_INTEGRATION_URI</cod
                 Previous
               </span>
               <div class="md-ellipsis">
-                ClickHouse Session
+                Gateway
               </div>
             </div>
           </a>
         
         
           
-          <a href="../../knowledge/" class="md-footer__link md-footer__link--next" aria-label="Next: Overview">
+          <a href="../agui/" class="md-footer__link md-footer__link--next" aria-label="Next: Overview">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
@@ -3598,12 +3183,12 @@ by the <code>integration</code> build tag and <code>MONGODB_INTEGRATION_URI</cod
     
     
       
-      <script id="__config" type="application/json">{"base": "../..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"base": "..", "features": ["content.code.copy", "navigation.footer", "navigation.tabs", "search.suggest", "search.share", "content.action.edit", "content.action.view"], "search": "../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.92b07e13.min.js"></script>
+      <script src="../assets/javascripts/bundle.92b07e13.min.js"></script>
       
-        <script src="../../assets/javascripts/mathjax.js"></script>
+        <script src="../assets/javascripts/mathjax.js"></script>
       
         <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
       
