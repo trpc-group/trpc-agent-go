@@ -99,7 +99,11 @@ func defaultExtractor(args []byte) ScanInput {
 		if args[i] == '"' && args[i+1] == 'c' && args[i+2] == 'o' &&
 			args[i+3] == 'm' && args[i+4] == 'm' && args[i+5] == 'a' &&
 			args[i+6] == 'n' && args[i+7] == 'd' && args[i+8] == '"' {
-			start = i + 10 // skip "command":"
+			// Skip past "command":"
+			valueStart := i + 11
+			if valueStart < len(args) && args[valueStart-1] == '"' {
+				start = valueStart
+			}
 			break
 		}
 	}
