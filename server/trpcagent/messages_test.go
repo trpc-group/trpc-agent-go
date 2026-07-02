@@ -306,7 +306,7 @@ func TestMessageCollectorMergesToolCallDeltasByID(t *testing.T) {
 				ToolCalls: []model.ToolCall{{
 					ID: "call-1",
 					Function: model.FunctionDefinitionParam{
-						Arguments: []byte(`{"q":"hel`),
+						Arguments: []byte(`{"q":12`),
 					},
 				}},
 			},
@@ -318,7 +318,7 @@ func TestMessageCollectorMergesToolCallDeltasByID(t *testing.T) {
 				ToolCalls: []model.ToolCall{{
 					ID: "call-1",
 					Function: model.FunctionDefinitionParam{
-						Arguments: []byte(`lo"}`),
+						Arguments: []byte(`3}`),
 					},
 				}},
 			},
@@ -329,7 +329,7 @@ func TestMessageCollectorMergesToolCallDeltasByID(t *testing.T) {
 	require.Len(t, messages, 2)
 	require.Len(t, messages[1].ToolCalls, 1)
 	require.Equal(t, "call-1", messages[1].ToolCalls[0].ID)
-	require.Equal(t, []byte(`{"q":"hello"}`), messages[1].ToolCalls[0].Function.Arguments)
+	require.Equal(t, []byte(`{"q":123}`), messages[1].ToolCalls[0].Function.Arguments)
 }
 
 func TestMessageCollectorMergesToolCallDeltasWhenLaterChunksOmitID(t *testing.T) {
@@ -341,7 +341,7 @@ func TestMessageCollectorMergesToolCallDeltasWhenLaterChunksOmitID(t *testing.T)
 					ID: "call-1",
 					Function: model.FunctionDefinitionParam{
 						Name:      "lookup",
-						Arguments: []byte(`{"q":"hel`),
+						Arguments: []byte(`{"q":12`),
 					},
 				}},
 			},
@@ -352,7 +352,7 @@ func TestMessageCollectorMergesToolCallDeltasWhenLaterChunksOmitID(t *testing.T)
 			Delta: model.Message{
 				ToolCalls: []model.ToolCall{{
 					Function: model.FunctionDefinitionParam{
-						Arguments: []byte(`lo"}`),
+						Arguments: []byte(`3}`),
 					},
 				}},
 			},
@@ -364,7 +364,7 @@ func TestMessageCollectorMergesToolCallDeltasWhenLaterChunksOmitID(t *testing.T)
 	require.Len(t, messages[1].ToolCalls, 1)
 	require.Equal(t, "call-1", messages[1].ToolCalls[0].ID)
 	require.Equal(t, "lookup", messages[1].ToolCalls[0].Function.Name)
-	require.Equal(t, []byte(`{"q":"hello"}`), messages[1].ToolCalls[0].Function.Arguments)
+	require.Equal(t, []byte(`{"q":123}`), messages[1].ToolCalls[0].Function.Arguments)
 }
 
 func TestMessageCollectorKeepsToolCallPositionKeysSeparate(t *testing.T) {
