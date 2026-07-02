@@ -12,6 +12,7 @@ package replaytest
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"math"
 	"reflect"
@@ -182,6 +183,8 @@ func compareEvents(a, b []event.Event, add func(string, any, any)) {
 		if !reflect.DeepEqual(ea.Response, eb.Response) {
 			add("events["+key+"].response", ea.Response, eb.Response)
 		}
+		compareState("events["+key+"].state_delta", ea.StateDelta, eb.StateDelta, add)
+		compareExtensions("events["+key+"].extensions", ea.Extensions, eb.Extensions, add)
 	}
 	for key := range bm {
 		if _, ok := am[key]; !ok {
@@ -189,6 +192,25 @@ func compareEvents(a, b []event.Event, add func(string, any, any)) {
 		}
 	}
 	compareEventOrder(a, b, add)
+}
+
+func compareExtensions(path string, a, b map[string]json.RawMessage, add func(string, any, any)) {
+	keys := map[string]struct{}{}
+	for key := range a {
+		if key != replayEventKeyExtension {
+			keys[key] = struct{}{}
+		}
+	}
+	for key := range b {
+		if key != replayEventKeyExtension {
+			keys[key] = struct{}{}
+		}
+	}
+	for key := range keys {
+		if !bytes.Equal(a[key], b[key]) {
+			add(path+"["+key+"]", a[key], b[key])
+		}
+	}
 }
 
 func compareEventCounts(a, b []event.Event, add func(string, any, any)) {

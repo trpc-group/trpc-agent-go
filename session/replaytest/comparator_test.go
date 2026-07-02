@@ -11,6 +11,7 @@
 package replaytest
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +107,40 @@ func TestComparatorDetectsEventOnlyInSecondSnapshot(t *testing.T) {
 	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), InMemoryProfile())
 	require.Equal(t, StatusFailed, result.Status)
 	requireDiff(t, result.Diffs, "events[only.in.b]", "missing", "present")
+}
+
+func TestComparatorDetectsEventStateDeltaDiff(t *testing.T) {
+	a := testSnapshotWithEvents("a", []event.Event{
+		*testEvent("state.delta", "assistant", "same"),
+	})
+	b := testSnapshotWithEvents("b", []event.Event{
+		*testEvent("state.delta", "assistant", "same"),
+	})
+	a.Session.Events[0].StateDelta = map[string][]byte{"color": []byte("blue")}
+
+	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), InMemoryProfile())
+	require.Equal(t, StatusFailed, result.Status)
+	requireDiff(t, result.Diffs, "events[state.delta].state_delta[color]", "blue", "")
+}
+
+func TestComparatorDetectsPublicEventExtensionDiff(t *testing.T) {
+	a := testSnapshotWithEvents("a", []event.Event{
+		*testEvent("extension", "assistant", "same"),
+	})
+	b := testSnapshotWithEvents("b", []event.Event{
+		*testEvent("extension", "assistant", "same"),
+	})
+	a.Session.Events[0].Extensions = map[string]json.RawMessage{
+		replayEventKeyExtension: json.RawMessage(`"extension"`),
+		"public":                json.RawMessage(`{"enabled":true}`),
+	}
+	b.Session.Events[0].Extensions = map[string]json.RawMessage{
+		replayEventKeyExtension: json.RawMessage(`"extension"`),
+	}
+
+	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), InMemoryProfile())
+	require.Equal(t, StatusFailed, result.Status)
+	requireDiffPathPrefix(t, result.Diffs, "events[extension].extensions[public]")
 }
 
 func TestComparatorDetectsScopedStateDiffs(t *testing.T) {
