@@ -2996,6 +2996,38 @@ func TestNewService_WithInstance_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestNewService_InitDBFailureClosesClient covers NewService closing the client
+// and returning an error when initDB fails (rather than leaking the pool).
+func TestNewService_InitDBFailureClosesClient(t *testing.T) {
+	restrictToSessionStates(t)
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+
+	originalBuilder := storage.GetClientBuilder()
+	defer storage.SetClientBuilder(originalBuilder)
+	storage.SetClientBuilder(func(ctx context.Context, builderOpts ...storage.ClientBuilderOpt) (storage.Client, error) {
+		return &mockPostgresClient{db: db}, nil
+	})
+
+	instanceName := "test-instance-initdb-fail"
+	storage.RegisterPostgresInstance(instanceName,
+		storage.WithClientConnString("test:test@tcp(localhost:5432)/testdb"),
+	)
+
+	// initDB runs (skipDBInit is false) and fails on the first CREATE TABLE;
+	// NewService must then close the client. ExpectClose (with no deferred
+	// db.Close) is only satisfied if NewService actually closed it.
+	mock.ExpectExec("CREATE TABLE").WillReturnError(assert.AnError)
+	mock.ExpectClose()
+
+	svc, err := NewService(WithPostgresInstance(instanceName))
+	require.Error(t, err)
+	require.Nil(t, svc)
+	assert.Contains(t, err.Error(), "init database failed")
+	require.ErrorIs(t, err, assert.AnError)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestNewService_WithDSN_Success(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
 	require.NoError(t, err)
