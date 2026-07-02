@@ -43,7 +43,7 @@ second gate.
 |---|----------|---------|-----------------|------|
 | 1 | dangerous_command | `R-DEL-001` | denied destructive commands; `rm -rf` (all flag spellings), escalated on root/system paths | high → critical |
 | 2 | credential_access | `R-CRED-001` | argv/cwd hitting `~/.ssh`, `**/.env`, `**/id_rsa`, credentials | critical |
-| 3 | network | `R-NET-001` | download commands targeting a non-whitelisted host | high |
+| 3 | network | `R-NET-001` | download commands targeting a non-whitelisted host, including curl connection-redirect egress (`--connect-to`, `--resolve`, `-x/--proxy`, both `flag value` and `flag=value` forms) and fail-closed on the opaque `-K/--config` file | high |
 | 4 | shell_bypass | `R-SHELL-001` | unparsable commands (`$()`, backticks, `$VAR`, redirection, subshell) and shell wrappers / re-executing builtins (`bash -c`, `eval`, `xargs`, `env CMD`) that can bypass the allow/deny list | high |
 | 4b | command_policy | `R-CMD-001` | a plain, parseable command that is simply **not in `commands.allowed`** (an allow-list miss, not a bypass) | high |
 | 5 | host_risk | `R-HOST-001` | host backend background / PTY sessions, `sudo`/`su`/`nohup` | high → critical |

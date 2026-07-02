@@ -338,6 +338,21 @@ func ruleNetwork(c ruleCtx) []Finding {
 		if !dl[cmd] {
 			continue
 		}
+		// An opaque curl config file (-K/--config) can define url/proxy/resolve
+		// and other egress controls the guard cannot see, so it fails closed
+		// regardless of the whitelist.
+		if cmd == "curl" {
+			if opt, ok := curlOpaqueConfigOption(argv[1:]); ok {
+				out = append(out, Finding{
+					RuleID:         ruleNetworkID,
+					Category:       catNetwork,
+					RiskLevel:      RiskHigh,
+					Evidence:       argv[0] + " " + opt + " (opaque config may define url/proxy/resolve)",
+					Recommendation: recNetwork,
+					action:         c.policy.Network.OnNonWhitelisted,
+				})
+			}
+		}
 		for _, host := range extractHosts(cmd, argv[1:]) {
 			if c.policy.domainAllowed(host) {
 				continue
@@ -560,6 +575,20 @@ var optionsWithValue = map[string]map[string]bool{
 	},
 }
 
+// curlHostBearingOptions are curl options whose value encodes a *connection*
+// target distinct from the request URL — an egress control the whitelist must
+// still see. Every host/IP field in the value is extracted so a redirect such as
+// "--connect-to github.com:443:evil.io:443" or "--resolve github.com:443:1.2.3.4"
+// cannot smuggle a non-whitelisted destination past a github.com whitelist.
+// Applies to curl only; other download commands do not share this syntax.
+var curlHostBearingOptions = map[string]bool{
+	"--connect-to": true,
+	"--resolve":    true,
+	"-x":           true,
+	"--proxy":      true,
+	"--preproxy":   true,
+}
+
 // extractHosts pulls candidate hosts from a download command's arguments. It is
 // only called for configured download commands (curl, wget, nc, ssh, scp, ...),
 // all of which take a host/URL operand, so bare domain-like operands are parsed
@@ -567,17 +596,19 @@ var optionsWithValue = map[string]map[string]bool{
 // curl -o config.yaml), the operand that immediately follows a value-taking
 // option (optionsWithValue) is skipped; boolean flags such as "curl -sSL" do
 // not consume their following operand, so "curl -sSL evil.io" is still flagged.
+// curl connection-redirect options (curlHostBearingOptions) are parsed for their
+// real target, and the opaque -K/--config file is failed closed by ruleNetwork.
 // URLs and user@host operands are detected unconditionally as they are
-// unambiguous.
+// unambiguous. Both "--flag value" and "--flag=value" forms are handled.
 func extractHosts(cmd string, args []string) []string {
 	var hosts []string
 	valueOpts := optionsWithValue[cmd]
-	skipNext := false
-	for _, a := range args {
-		if skipNext {
-			skipNext = false
-			continue
-		}
+	hostOpts := map[string]bool(nil)
+	if cmd == "curl" {
+		hostOpts = curlHostBearingOptions
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if m := urlRe.FindString(a); m != "" {
 			if u, err := url.Parse(m); err == nil && u.Hostname() != "" {
 				hosts = append(hosts, u.Hostname())
@@ -590,10 +621,21 @@ func extractHosts(cmd string, args []string) []string {
 			continue
 		}
 		if strings.HasPrefix(a, "-") {
-			// An option that consumes the following argument as its value; the
-			// "--flag=value" form is self-contained and consumes nothing.
-			if valueOpts[a] && !strings.Contains(a, "=") {
-				skipNext = true
+			flag, inlineVal, hasInline := splitFlagValue(a)
+			// Connection-redirect options: parse the value (this arg or the next)
+			// for the real destination host(s)/IP(s).
+			if hostOpts[flag] {
+				val := inlineVal
+				if !hasInline && i+1 < len(args) {
+					val, i = args[i+1], i+1
+				}
+				hosts = append(hosts, hostsFromCurlOption(flag, val)...)
+				continue
+			}
+			// A value-taking option consumes (and discards) its following
+			// operand; the "--flag=value" form is self-contained.
+			if valueOpts[flag] && !hasInline {
+				i++
 			}
 			continue
 		}
@@ -603,11 +645,11 @@ func extractHosts(cmd string, args []string) []string {
 		// host. A local relative path like "dir/config" survives as "dir",
 		// which is not domain-like and is dropped below.
 		host := a
-		if i := strings.IndexByte(host, ':'); i > 0 {
-			host = host[:i]
+		if j := strings.IndexByte(host, ':'); j > 0 {
+			host = host[:j]
 		}
-		if i := strings.IndexByte(host, '/'); i >= 0 {
-			host = host[:i]
+		if j := strings.IndexByte(host, '/'); j >= 0 {
+			host = host[:j]
 		}
 		// A surviving @ means this was a user@path form, not a bare host.
 		if host == "" || strings.ContainsRune(host, '@') {
@@ -619,6 +661,86 @@ func extractHosts(cmd string, args []string) []string {
 		}
 	}
 	return hosts
+}
+
+// splitFlagValue splits "--flag=value" into its parts. Without an "=" it returns
+// the whole flag and hasInline=false.
+func splitFlagValue(arg string) (flag, val string, hasInline bool) {
+	if i := strings.IndexByte(arg, '='); i >= 0 {
+		return arg[:i], arg[i+1:], true
+	}
+	return arg, "", false
+}
+
+// hostsFromCurlOption extracts the real destination host(s)/IP(s) from a curl
+// connection-redirect option value.
+func hostsFromCurlOption(flag, val string) []string {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return nil
+	}
+	if flag == "-x" || flag == "--proxy" || flag == "--preproxy" {
+		// [scheme://]host[:port].
+		if strings.Contains(val, "://") {
+			if u, err := url.Parse(val); err == nil && u.Hostname() != "" {
+				return []string{u.Hostname()}
+			}
+		}
+	}
+	// --connect-to HOST1:PORT1:HOST2:PORT2, --resolve HOST:PORT:ADDR[,ADDR],
+	// or a bare proxy host[:port]: extract every host/IP-like field.
+	return hostsFromColonSpec(val)
+}
+
+// hostsFromColonSpec extracts host/IP-like tokens from a colon/comma-separated
+// spec, honoring bracketed IPv6 literals. Numeric-only fields (ports) are
+// dropped. It is deliberately over-inclusive: extracting every host/IP field so
+// that any non-whitelisted destination in the spec trips the network rule.
+func hostsFromColonSpec(spec string) []string {
+	var hosts []string
+	rest := spec
+	// Pull out bracketed IPv6 literals first so their inner colons survive.
+	for {
+		open := strings.IndexByte(rest, '[')
+		if open < 0 {
+			break
+		}
+		closeRel := strings.IndexByte(rest[open:], ']')
+		if closeRel < 0 {
+			break
+		}
+		end := open + closeRel
+		if inner := strings.TrimSpace(rest[open+1 : end]); inner != "" {
+			hosts = append(hosts, inner)
+		}
+		rest = rest[:open] + " " + rest[end+1:]
+	}
+	for _, f := range strings.FieldsFunc(rest, func(r rune) bool {
+		return r == ':' || r == ',' || r == ' '
+	}) {
+		if f = strings.TrimSpace(f); f == "" {
+			continue
+		}
+		if domainLike(f) || net.ParseIP(f) != nil {
+			hosts = append(hosts, f)
+		}
+	}
+	return hosts
+}
+
+// curlOpaqueConfigOption reports the first -K/--config option present, in either
+// "-K file" or "--config=file" form. Its file can define url/proxy/resolve and
+// other egress controls the guard cannot read, so its mere presence fails closed.
+func curlOpaqueConfigOption(args []string) (string, bool) {
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		if flag, _, _ := splitFlagValue(a); flag == "-K" || flag == "--config" {
+			return flag, true
+		}
+	}
+	return "", false
 }
 
 func domainLike(s string) bool {

