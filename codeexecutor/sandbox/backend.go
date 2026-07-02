@@ -17,6 +17,8 @@ const (
 	BackendAuto BackendType = "auto"
 	// BackendLinuxBubblewrap uses bubblewrap on Linux.
 	BackendLinuxBubblewrap BackendType = "linux-bubblewrap"
+	// BackendMacOSSandboxExec uses sandbox-exec on macOS.
+	BackendMacOSSandboxExec BackendType = "macos-sandbox-exec"
 )
 
 type commandCleanup func()

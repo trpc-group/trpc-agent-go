@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 //
 // Tencent is pleased to support the open source community by making

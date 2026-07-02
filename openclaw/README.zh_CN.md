@@ -291,7 +291,7 @@ tools:
     auto_execute_code_blocks: true
     sandbox:
       workspace_root: "" # 默认 state_dir/sandbox
-      backend: "auto" # auto|linux-bubblewrap
+      backend: "auto" # auto|linux-bubblewrap|macos-sandbox-exec
       profile: "workspace_write" # workspace_write|read_only|disabled
       network: "restricted" # restricted|enabled
       default_timeout: "30s"

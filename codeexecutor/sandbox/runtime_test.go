@@ -1164,9 +1164,28 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 	if err != nil || !changed || resolved != filepath.Join(ws.Path, "work", "target.txt") {
 		t.Fatalf("direct symlink resolved=%q changed=%v err=%v", resolved, changed, err)
 	}
+	relativeDirectLink := filepath.Join(ws.Path, "work", "relative-direct-link.txt")
+	if err := os.Symlink("target.txt", relativeDirectLink); err != nil {
+		t.Fatal(err)
+	}
+	resolved, changed, err = resolvePotentialSymlinkTarget(relativeDirectLink)
+	if err != nil || !changed || resolved != filepath.Join(ws.Path, "work", "target.txt") {
+		t.Fatalf("relative direct symlink resolved=%q changed=%v err=%v", resolved, changed, err)
+	}
 	resolved, changed, err = resolvePotentialSymlinkTarget(filepath.Join(insideLink, "nested.txt"))
 	if err != nil || !changed || resolved != filepath.Join(insideTarget, "nested.txt") {
 		t.Fatalf("parent symlink resolved=%q changed=%v err=%v", resolved, changed, err)
+	}
+	relativeInsideLink := filepath.Join(ws.Path, "work", "relative-inside-link")
+	if err := os.Symlink("inside", relativeInsideLink); err != nil {
+		t.Fatal(err)
+	}
+	resolved, changed, err = resolvePotentialSymlinkTarget(filepath.Join(relativeInsideLink, "nested.txt"))
+	if err != nil || !changed || resolved != filepath.Join(insideTarget, "nested.txt") {
+		t.Fatalf("relative parent symlink resolved=%q changed=%v err=%v", resolved, changed, err)
+	}
+	if resolved, changed, err = resolvePotentialSymlinkTarget(filepath.Join(t.TempDir(), "missing", "child.txt")); err != nil || changed || resolved != "" {
+		t.Fatalf("missing root resolved=%q changed=%v err=%v, want no target", resolved, changed, err)
 	}
 
 	if err := copyPath(filepath.Join(outside, "missing.txt"), filepath.Join(t.TempDir(), "copy.txt")); err == nil {
@@ -1183,6 +1202,19 @@ func TestFilesystemSymlinkAndCopyHelperBranches(t *testing.T) {
 	}
 	if _, _, err := resolvePotentialSymlinkTarget(filepath.Join(source, "child.txt")); err == nil {
 		t.Fatalf("resolvePotentialSymlinkTarget unexpectedly succeeded below file path")
+	}
+	if _, _, err := resolvePotentialSymlinkTarget(string([]byte{'b', 'a', 'd', 0})); err == nil {
+		t.Fatalf("resolvePotentialSymlinkTarget unexpectedly accepted invalid path")
+	}
+	if _, err := readSymlinkTarget(filepath.Join(outside, "missing-link")); err == nil {
+		t.Fatalf("readSymlinkTarget unexpectedly succeeded for missing symlink")
+	}
+	sourceParentLink := filepath.Join(outside, "source-parent-link")
+	if err := os.Symlink(source, sourceParentLink); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := resolvePotentialSymlinkTarget(filepath.Join(sourceParentLink, "child.txt")); err == nil {
+		t.Fatalf("resolvePotentialSymlinkTarget unexpectedly succeeded below symlink-to-file parent")
 	}
 	fileParent := filepath.Join(t.TempDir(), "file-parent")
 	if err := os.WriteFile(fileParent, []byte("not a directory"), 0o600); err != nil {
