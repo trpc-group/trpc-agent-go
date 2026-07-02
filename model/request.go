@@ -41,8 +41,12 @@ const (
 	ReasoningContentKey = "reasoning_content"
 	// ReasoningContentKeyAlt is the alternative key used by some providers (e.g. Ollama).
 	ReasoningContentKeyAlt = "reasoning"
-	// EnabledThinkingKey is the key used for enabling thinking mode in API requests e.g. Qwen model.
-	EnabledThinkingKey = "enabled_thinking"
+	// EnableThinkingKey is the key used for enabling thinking mode in API requests e.g. Qwen model.
+	EnableThinkingKey = "enable_thinking"
+	// EnabledThinkingKey is kept for backward compatibility.
+	//
+	// Deprecated: use EnableThinkingKey.
+	EnabledThinkingKey = EnableThinkingKey
 )
 
 // String returns the string representation of the role.
