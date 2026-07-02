@@ -698,8 +698,19 @@ func writeTestCommand(
 ) string {
 	t.Helper()
 
-	path := filepath.Join(dir, name)
 	script := "#!/bin/sh\nset -eu\n" + body + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	tmp, err := os.CreateTemp(dir, name+".tmp-*")
+	require.NoError(t, err)
+	tmpPath := tmp.Name()
+	t.Cleanup(func() {
+		_ = os.Remove(tmpPath)
+	})
+	_, err = tmp.Write([]byte(script))
+	require.NoError(t, err)
+	require.NoError(t, tmp.Close())
+	require.NoError(t, os.Chmod(tmpPath, 0o755))
+
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.Rename(tmpPath, path))
 	return path
 }
