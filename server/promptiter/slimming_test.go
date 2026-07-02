@@ -22,14 +22,12 @@ import (
 func TestSlimRunResultReturnsOriginalForEmptyInputs(t *testing.T) {
 	result := &engine.RunResult{ID: "run-1"}
 	assert.Same(t, result, slimRunResult(result, engine.RunResultSlimming{}))
-	assert.Nil(t, slimRunResult(nil, engine.RunResultSlimming{OmitStructure: true}))
+	assert.Nil(t, slimRunResult(nil, engine.RunResultSlimming{OmitProfiles: true}))
 	slimmed := slimRunResult(&engine.RunResult{ID: "run-2"}, engine.RunResultSlimming{
-		OmitStructure:       true,
 		OmitEvaluationCases: true,
 	})
 	require.NotNil(t, slimmed)
 	assert.Equal(t, "run-2", slimmed.ID)
-	assert.Nil(t, slimmed.Structure)
 	assert.Nil(t, slimmed.BaselineValidation)
 	assert.Nil(t, slimmed.Rounds)
 }
@@ -39,7 +37,6 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 		ID:           "run-1",
 		Status:       engine.RunStatusSucceeded,
 		CurrentRound: 1,
-		Structure:    &astructure.Snapshot{StructureID: "structure_1", EntryNodeID: "node_1"},
 		BaselineValidation: &engine.EvaluationResult{
 			OverallScore: 0.5,
 			EvalSets: []engine.EvalSetResult{
@@ -86,7 +83,6 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 		},
 	}
 	slimmed := slimRunResult(result, engine.RunResultSlimming{
-		OmitStructure:       true,
 		OmitEvaluationCases: true,
 		OmitBackward:        true,
 		OmitAggregation:     true,
@@ -95,7 +91,6 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 		OmitLosses:          true,
 	})
 	require.NotSame(t, result, slimmed)
-	assert.Nil(t, slimmed.Structure)
 	assert.Nil(t, slimmed.AcceptedProfile)
 	require.NotNil(t, slimmed.BaselineValidation)
 	require.Len(t, slimmed.BaselineValidation.EvalSets, 1)
@@ -113,7 +108,6 @@ func TestSlimRunResultOmitsConfiguredFields(t *testing.T) {
 	assert.Empty(t, round.Train.EvalSets[0].Cases)
 	require.NotNil(t, round.Acceptance)
 	require.NotNil(t, round.Stop)
-	require.NotNil(t, result.Structure)
 	require.Len(t, result.BaselineValidation.EvalSets[0].Cases, 1)
 	require.NotNil(t, result.Rounds[0].Backward)
 }

@@ -278,7 +278,13 @@ func execToolDescription(hasMemoryFile bool) string {
 			"something with host shell work, the same assistant " +
 			"message must call exec_command or the required tool.",
 		"Protected shell and credential paths may be blocked by policy.",
+		"Host system package-manager installs such as apt, yum, dnf, " +
+			"apk, pacman, zypper, and brew are blocked in chat; use " +
+			"preconfigured dependencies or ask for an explicit setup flow.",
 		"Sensitive env values may be redacted from returned output.",
+		"Large stdout/stderr may be truncated before it is returned " +
+			"to the model; write large outputs to files and read only " +
+			"the needed chunks.",
 		"Do not use this just to inspect a PDF or spreadsheet already " +
 			"in chat; prefer read_document or read_spreadsheet for that.",
 	}

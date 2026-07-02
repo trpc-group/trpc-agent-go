@@ -896,7 +896,7 @@ func TestCallDynamic_TimeoutBoundsSubAgent(t *testing.T) {
 	require.Less(t, time.Since(start), time.Second)
 }
 
-func TestNewDynamicTool_StreamableCall_TimeoutBoundsSubAgent(t *testing.T) {
+func TestStreamDynamic_TimeoutBoundsSubAgent(t *testing.T) {
 	t.Parallel()
 
 	main := llmagent.New("main", llmagent.WithModel(&dynBlockingModel{}))
@@ -921,13 +921,8 @@ func TestNewDynamicTool_StreamableCall_TimeoutBoundsSubAgent(t *testing.T) {
 			break
 		}
 		require.NoError(t, recvErr)
-		switch c := chunk.Content.(type) {
-		case string:
-			sb.WriteString(c)
-		case *event.Event:
-			if c.Error != nil {
-				sb.WriteString(c.Error.Message)
-			}
+		if text, ok := chunk.Content.(string); ok {
+			sb.WriteString(text)
 		}
 	}
 

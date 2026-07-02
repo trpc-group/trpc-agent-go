@@ -1380,7 +1380,7 @@ func (at *Tool) forwardSubInvocationStream(
 	for {
 		select {
 		case <-ctx.Done():
-			sendStreamableCallError(ctx, writer, "agent tool stream stopped: %w", ctx.Err())
+			sendStreamableCallError(ctx, writer, "agent tool run error: %w", ctx.Err())
 			return
 		case ev, ok := <-wrapped:
 			if !ok {

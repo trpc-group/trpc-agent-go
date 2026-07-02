@@ -60,6 +60,7 @@ const (
 
 	sandboxBackendAuto            = "auto"
 	sandboxBackendLinuxBubblewrap = "linux-bubblewrap"
+	sandboxBackendMacOSSandbox    = "macos-sandbox-exec"
 
 	sandboxProfileWorkspaceWrite = "workspace_write"
 	sandboxProfileReadOnly       = "read_only"
@@ -608,7 +609,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.OpenAIVariant,
 		"openai-variant",
 		defaultOpenAIVariant,
-		"OpenAI variant: auto, openai, deepseek, qwen, hunyuan (auto uses configured base URL host)",
+		"OpenAI variant: auto, openai, deepseek, qwen, hunyuan, "+
+			"glm (auto uses configured base URL host)",
 	)
 	fs.StringVar(
 		&opts.OpenAIBaseURL,
@@ -2498,11 +2500,11 @@ func convertSandboxCodeExecutorConfig(
 	backend := strings.ToLower(strings.TrimSpace(cfg.Backend))
 	if backend != "" {
 		switch backend {
-		case sandboxBackendAuto, sandboxBackendLinuxBubblewrap:
+		case sandboxBackendAuto, sandboxBackendLinuxBubblewrap, sandboxBackendMacOSSandbox:
 			out.Backend = backend
 		default:
 			return sandboxCodeExecutorOptions{}, fmt.Errorf(
-				"sandbox.backend %q: want auto|linux-bubblewrap",
+				"sandbox.backend %q: want auto|linux-bubblewrap|macos-sandbox-exec",
 				cfg.Backend,
 			)
 		}

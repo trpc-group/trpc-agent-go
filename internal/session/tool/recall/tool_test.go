@@ -1087,6 +1087,7 @@ func TestLoadTool_LoadsToolResultByToolCallIDWithContentWindow(t *testing.T) {
 		Service: sessioninmemory.NewSessionService(),
 		windowFunc: func(req session.EventWindowRequest) (*session.EventWindow, error) {
 			require.Equal(t, "evt-tool", req.AnchorEventID)
+			require.Equal(t, "sess", req.Key.SessionID)
 			return &session.EventWindow{
 				SessionKey:    req.Key,
 				AnchorEventID: req.AnchorEventID,

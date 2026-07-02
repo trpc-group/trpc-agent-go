@@ -52,6 +52,7 @@ type Step struct {
 	URL             string            `json:"url,omitempty"`
 	TargetPath      string            `json:"target_path,omitempty"`
 	Archive         string            `json:"archive,omitempty"`
+	Links           []InstallLink     `json:"links,omitempty"`
 	Extract         bool              `json:"extract,omitempty"`
 	StripComponents int               `json:"strip_components,omitempty"`
 }
@@ -233,6 +234,7 @@ func collectSystemPackages(
 	}
 	platform := Platform{
 		GOOS:           runtime.GOOS,
+		GOARCH:         runtime.GOARCH,
 		PackageManager: manager,
 	}
 
@@ -350,7 +352,7 @@ func selectInstallActionsForMissing(
 	satisfiedGroups := map[string]struct{}{}
 	for _, source := range sources {
 		for _, action := range normalizeInstallActions(source.Install) {
-			if !actionMatchesPlatform(action, platform.GOOS) {
+			if !actionMatchesPlanPlatform(action, platform) {
 				continue
 			}
 			if !include(action) {
@@ -453,16 +455,50 @@ func anyBinGroupKey(group []string) string {
 	return strings.Join(group, "\x00")
 }
 
-func actionMatchesPlatform(
+func actionMatchesPlatform(action InstallAction, goos string) bool {
+	return actionMatchesPlatformArch(action, goos, runtime.GOARCH)
+}
+
+func actionMatchesPlanPlatform(
+	action InstallAction,
+	platform Platform,
+) bool {
+	goos := platform.GOOS
+	if strings.TrimSpace(goos) == "" {
+		goos = runtime.GOOS
+	}
+	goarch := platform.GOARCH
+	if strings.TrimSpace(goarch) == "" {
+		goarch = runtime.GOARCH
+	}
+	return actionMatchesPlatformArch(action, goos, goarch)
+}
+
+func actionMatchesPlatformArch(
 	action InstallAction,
 	goos string,
+	goarch string,
 ) bool {
-	if len(action.OS) == 0 {
+	if len(action.OS) > 0 {
+		goos = normalizeOSName(goos)
+		osMatched := false
+		for _, allowed := range action.OS {
+			if normalizeOSName(allowed) == goos {
+				osMatched = true
+				break
+			}
+		}
+		if !osMatched {
+			return false
+		}
+	}
+
+	if len(action.Arch) == 0 {
 		return true
 	}
-	goos = normalizeOSName(goos)
-	for _, allowed := range action.OS {
-		if normalizeOSName(allowed) == goos {
+	goarch = normalizeArchName(goarch)
+	for _, allowed := range action.Arch {
+		if normalizeArchName(allowed) == goarch {
 			return true
 		}
 	}
@@ -480,8 +516,9 @@ func installActionKey(action InstallAction) string {
 		action.Archive,
 		action.TargetDir,
 		strings.Join(action.Packages, ","),
-		strings.Join(action.Bins, ","),
 		strings.Join(action.OS, ","),
+		strings.Join(action.Arch, ","),
+		installLinksKey(action.Links),
 	}, "\x00")
 }
 
@@ -646,7 +683,7 @@ func isActionCoveredByPlanner(
 	platform Platform,
 	action InstallAction,
 ) bool {
-	if !actionMatchesPlatform(action, platform.GOOS) {
+	if !actionMatchesPlanPlatform(action, platform) {
 		return false
 	}
 
@@ -884,6 +921,15 @@ func ensureStepWorkingDirs(
 		target := strings.TrimSpace(step.TargetPath)
 		if target == "" {
 			return fmt.Errorf("download step %q has empty target", step.Label)
+		}
+		for _, link := range step.Links {
+			linkTarget := strings.TrimSpace(link.Target)
+			if linkTarget == "" {
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(linkTarget), 0o755); err != nil {
+				return err
+			}
 		}
 		if step.Extract {
 			return os.MkdirAll(target, 0o755)
