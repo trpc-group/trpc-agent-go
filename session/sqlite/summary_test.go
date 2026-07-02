@@ -31,9 +31,9 @@ func TestSessionSQLite_EnqueueSummaryJob_And_Fallback(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, svc.Close()) }()
 
-	// Force sync processing for deterministic testing.
-	require.NotNil(t, svc.asyncWorker)
-	svc.asyncWorker.Stop()
+	// When asyncSummaryNum is 0, asyncWorker should be nil and
+	// EnqueueSummaryJob will fall back to synchronous processing.
+	require.Nil(t, svc.asyncWorker)
 
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
