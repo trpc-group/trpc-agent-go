@@ -14,9 +14,11 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -77,12 +79,6 @@ func (s *Service) IngestSession(
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
-	since := readLastExtractAt(sess)
-	latestTs, messages := scanDeltaSince(sess, since)
-	if len(messages) == 0 {
-		return nil
-	}
-	writeLastExtractAt(sess, latestTs)
 	var reqOpts session.IngestOptions
 	for _, opt := range opts {
 		if opt == nil {
@@ -90,10 +86,24 @@ func (s *Service) IngestSession(
 		}
 		opt(&reqOpts)
 	}
+	var since time.Time
+	var latestTs time.Time
+	var messages []model.Message
+	for {
+		since = s.ingestWorker.scanSince(userKey, sess)
+		latestTs, messages = scanDeltaSince(sess, since)
+		if len(messages) == 0 {
+			return nil
+		}
+		if s.ingestWorker.claimInFlight(userKey, sess, since, latestTs) {
+			break
+		}
+	}
 	job := &ingestJob{
 		Ctx:      context.WithoutCancel(ctx),
 		UserKey:  userKey,
 		Session:  sess,
+		Since:    since,
 		LatestTs: latestTs,
 		Messages: messages,
 		Options:  reqOpts,
@@ -101,6 +111,7 @@ func (s *Service) IngestSession(
 	if s.ingestWorker.tryEnqueue(ctx, job) {
 		return nil
 	}
+	defer s.ingestWorker.finishInFlight(userKey, sess, latestTs)
 	if err := ctx.Err(); err != nil {
 		return nil
 	}
@@ -111,7 +122,11 @@ func (s *Service) IngestSession(
 	}
 	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
-	return s.ingestWorker.ingest(syncCtx, userKey, sess, messages, reqOpts)
+	if err := s.ingestWorker.ingest(syncCtx, userKey, sess, messages, reqOpts); err != nil {
+		return err
+	}
+	s.ingestWorker.advanceCheckpoint(sess, since, latestTs)
+	return nil
 }
 
 // ReadMemories reads memories for a user.
