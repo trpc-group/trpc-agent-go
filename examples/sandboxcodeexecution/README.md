@@ -107,22 +107,39 @@ clear message. The example never reads or prints key contents.
   placeholder mount.
 - `file-system-policy-glob-writable-reject`: verifies glob no-access rules that
   overlap writable mounts fail closed before sandbox execution.
+- `file-system-policy-glob-writable-dynamic-deny`: verifies macOS Seatbelt
+  dynamically denies glob-matched paths inside writable roots.
 - `session-workspace-id-sanitization`: verifies distinct session IDs that
   sanitize similarly, such as `user:a` and `user_a`, remain isolated.
 - `session-policy-explicit-zero`: uses a real LLMAgent to call a deterministic
   probe that verifies `SessionPolicy{}` preserves explicit per-turn/parallel
   semantics and cleans up the workspace.
 
+## Platform-specific scenarios
+
+Most scenarios exercise shared `codeexecutor/sandbox` API behavior and run on
+all supported managed backends. A few scenarios intentionally verify backend
+implementation details:
+
+- Linux-only: `file-system-policy-directory-no-access-mask`,
+  `file-system-policy-missing-no-access-mask`, and
+  `file-system-policy-glob-writable-reject`.
+- macOS-only: `file-system-policy-glob-writable-dynamic-deny`.
+
+When `-scenario all` is used, scenarios that do not apply to the current
+`runtime.GOOS` are skipped with a clear message.
+
 ## Flags
 
 ```bash
--scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|network-policy-restricted|network-policy-enabled|network-policy-additional-permissions|network-policy-agent-enforcement|timeout|output-cap|additional-permissions|shell-environment-policy-default-all|shell-environment-policy-core|shell-environment-policy-none-set|shell-environment-policy-include-only|shell-environment-policy-exclude-set|shell-environment-policy-agent|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|file-system-policy-symlink-no-access|file-system-policy-stage-target-validation|file-system-policy-put-files-symlink-target|file-system-policy-host-stage-absolute-grant|file-system-policy-host-stage-source-symlink|file-system-policy-directory-no-access-mask|file-system-policy-missing-no-access-mask|file-system-policy-glob-writable-reject|session-workspace-id-sanitization|session-policy-explicit-zero|all
+-scenario basic|agent-tool-manual-run|agent-tool-basic|agent-tool-session-persistence|agent-tool-security|agent-artifact-stage|agent-artifact-save|agent-artifact-pin|session-persistence|session-isolation|env-redaction|metadata-protection|no-access|network-restricted|network-policy-restricted|network-policy-enabled|network-policy-additional-permissions|network-policy-agent-enforcement|timeout|output-cap|additional-permissions|shell-environment-policy-default-all|shell-environment-policy-core|shell-environment-policy-none-set|shell-environment-policy-include-only|shell-environment-policy-exclude-set|shell-environment-policy-agent|file-system-policy-access-modes|file-system-policy-specificity|file-system-policy-glob-no-access|file-system-policy-agent-enforcement|file-system-policy-symlink-no-access|file-system-policy-stage-target-validation|file-system-policy-put-files-symlink-target|file-system-policy-host-stage-absolute-grant|file-system-policy-host-stage-source-symlink|file-system-policy-directory-no-access-mask|file-system-policy-missing-no-access-mask|file-system-policy-glob-writable-reject|file-system-policy-glob-writable-dynamic-deny|session-workspace-id-sanitization|session-policy-explicit-zero|all
 -model glm-4.7-flash
 -workspace-root /tmp/my-sandbox-root
 -keep-workspace
 -require-os-sandbox=true
 ```
 
-On Linux, the managed sandbox requires `bwrap` and user namespace support. If
-the OS sandbox cannot be set up, the example reports the typed setup/backend
-error and does not fall back to local execution.
+On Linux, the managed sandbox requires `bwrap` and user namespace support. On
+macOS, the managed sandbox requires `/usr/bin/sandbox-exec` and host permission
+to apply Seatbelt profiles. If the OS sandbox cannot be set up, the example
+reports the typed setup/backend error and does not fall back to local execution.

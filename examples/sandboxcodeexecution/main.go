@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -44,8 +45,25 @@ type config struct {
 }
 
 type scenario struct {
-	name string
-	run  func(context.Context, config) error
+	name      string
+	run       func(context.Context, config) error
+	platforms []string
+}
+
+func newScenario(name string, run func(context.Context, config) error, platforms ...string) scenario {
+	return scenario{name: name, run: run, platforms: platforms}
+}
+
+func (s scenario) supportsPlatform(goos string) bool {
+	if len(s.platforms) == 0 {
+		return true
+	}
+	for _, platform := range s.platforms {
+		if platform == goos {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {
@@ -66,7 +84,8 @@ func main() {
 			"file-system-policy-stage-target-validation|file-system-policy-put-files-symlink-target|"+
 			"file-system-policy-host-stage-absolute-grant|file-system-policy-host-stage-source-symlink|"+
 			"file-system-policy-directory-no-access-mask|file-system-policy-missing-no-access-mask|"+
-			"file-system-policy-glob-writable-reject|session-workspace-id-sanitization|"+
+			"file-system-policy-glob-writable-reject|file-system-policy-glob-writable-dynamic-deny|"+
+			"session-workspace-id-sanitization|"+
 			"session-policy-explicit-zero|"+
 			"all",
 	)
@@ -103,47 +122,48 @@ func main() {
 
 func runScenarios(ctx context.Context, cfg config) error {
 	scenarios := []scenario{
-		{"basic", runBasic},
-		{"agent-tool-manual-run", runAgentToolManualRun}, // manual run of agent with tool to see what it can do
-		{"agent-tool-basic", runAgentToolBasic},
-		{"agent-tool-session-persistence", runAgentToolSessionPersistence},
-		{"agent-tool-security", runAgentToolSecurity},
-		{"agent-artifact-stage", runAgentArtifactStage},
-		{"agent-artifact-save", runAgentArtifactSave},
-		{"agent-artifact-pin", runAgentArtifactPin},
-		{"session-persistence", runSessionPersistence},
-		{"session-isolation", runSessionIsolation},
-		{"env-redaction", runEnvRedaction},
-		{"metadata-protection", runMetadataProtection},
-		{"no-access", runNoAccess},
-		{"network-restricted", runNetworkRestricted},
-		{"network-policy-restricted", runNetworkPolicyRestricted},
-		{"network-policy-enabled", runNetworkPolicyEnabled},
-		{"network-policy-additional-permissions", runNetworkPolicyAdditionalPermissions},
-		{"network-policy-agent-enforcement", runNetworkPolicyAgentEnforcement},
-		{"timeout", runTimeout},
-		{"output-cap", runOutputCap},
-		{"additional-permissions", runAdditionalPermissions},
-		{"shell-environment-policy-default-all", runShellEnvironmentPolicyDefaultAll},
-		{"shell-environment-policy-core", runShellEnvironmentPolicyCore},
-		{"shell-environment-policy-none-set", runShellEnvironmentPolicyNoneSet},
-		{"shell-environment-policy-include-only", runShellEnvironmentPolicyIncludeOnly},
-		{"shell-environment-policy-exclude-set", runShellEnvironmentPolicyExcludeSet},
-		{"shell-environment-policy-agent", runShellEnvironmentPolicyAgent},
-		{"file-system-policy-access-modes", runFileSystemPolicyAccessModes},
-		{"file-system-policy-specificity", runFileSystemPolicySpecificity},
-		{"file-system-policy-glob-no-access", runFileSystemPolicyGlobNoAccess},
-		{"file-system-policy-agent-enforcement", runFileSystemPolicyAgentEnforcement},
-		{"file-system-policy-symlink-no-access", runFileSystemPolicySymlinkNoAccess},
-		{"file-system-policy-stage-target-validation", runFileSystemPolicyStageTargetValidation},
-		{"file-system-policy-put-files-symlink-target", runFileSystemPolicyPutFilesSymlinkTarget},
-		{"file-system-policy-host-stage-absolute-grant", runFileSystemPolicyHostStageAbsoluteGrant},
-		{"file-system-policy-host-stage-source-symlink", runFileSystemPolicyHostStageSourceSymlink},
-		{"file-system-policy-directory-no-access-mask", runFileSystemPolicyDirectoryNoAccessMask},
-		{"file-system-policy-missing-no-access-mask", runFileSystemPolicyMissingNoAccessMask},
-		{"file-system-policy-glob-writable-reject", runFileSystemPolicyGlobWritableReject},
-		{"session-workspace-id-sanitization", runSessionWorkspaceIDSanitization},
-		{"session-policy-explicit-zero", runSessionPolicyExplicitZero},
+		newScenario("basic", runBasic),
+		newScenario("agent-tool-manual-run", runAgentToolManualRun), // manual run of agent with tool to see what it can do
+		newScenario("agent-tool-basic", runAgentToolBasic),
+		newScenario("agent-tool-session-persistence", runAgentToolSessionPersistence),
+		newScenario("agent-tool-security", runAgentToolSecurity),
+		newScenario("agent-artifact-stage", runAgentArtifactStage),
+		newScenario("agent-artifact-save", runAgentArtifactSave),
+		newScenario("agent-artifact-pin", runAgentArtifactPin),
+		newScenario("session-persistence", runSessionPersistence),
+		newScenario("session-isolation", runSessionIsolation),
+		newScenario("env-redaction", runEnvRedaction),
+		newScenario("metadata-protection", runMetadataProtection),
+		newScenario("no-access", runNoAccess),
+		newScenario("network-restricted", runNetworkRestricted),
+		newScenario("network-policy-restricted", runNetworkPolicyRestricted),
+		newScenario("network-policy-enabled", runNetworkPolicyEnabled),
+		newScenario("network-policy-additional-permissions", runNetworkPolicyAdditionalPermissions),
+		newScenario("network-policy-agent-enforcement", runNetworkPolicyAgentEnforcement),
+		newScenario("timeout", runTimeout),
+		newScenario("output-cap", runOutputCap),
+		newScenario("additional-permissions", runAdditionalPermissions),
+		newScenario("shell-environment-policy-default-all", runShellEnvironmentPolicyDefaultAll),
+		newScenario("shell-environment-policy-core", runShellEnvironmentPolicyCore),
+		newScenario("shell-environment-policy-none-set", runShellEnvironmentPolicyNoneSet),
+		newScenario("shell-environment-policy-include-only", runShellEnvironmentPolicyIncludeOnly),
+		newScenario("shell-environment-policy-exclude-set", runShellEnvironmentPolicyExcludeSet),
+		newScenario("shell-environment-policy-agent", runShellEnvironmentPolicyAgent),
+		newScenario("file-system-policy-access-modes", runFileSystemPolicyAccessModes),
+		newScenario("file-system-policy-specificity", runFileSystemPolicySpecificity),
+		newScenario("file-system-policy-glob-no-access", runFileSystemPolicyGlobNoAccess),
+		newScenario("file-system-policy-agent-enforcement", runFileSystemPolicyAgentEnforcement),
+		newScenario("file-system-policy-symlink-no-access", runFileSystemPolicySymlinkNoAccess),
+		newScenario("file-system-policy-stage-target-validation", runFileSystemPolicyStageTargetValidation),
+		newScenario("file-system-policy-put-files-symlink-target", runFileSystemPolicyPutFilesSymlinkTarget),
+		newScenario("file-system-policy-host-stage-absolute-grant", runFileSystemPolicyHostStageAbsoluteGrant),
+		newScenario("file-system-policy-host-stage-source-symlink", runFileSystemPolicyHostStageSourceSymlink),
+		newScenario("file-system-policy-directory-no-access-mask", runFileSystemPolicyDirectoryNoAccessMask, "linux"),
+		newScenario("file-system-policy-missing-no-access-mask", runFileSystemPolicyMissingNoAccessMask, "linux"),
+		newScenario("file-system-policy-glob-writable-reject", runFileSystemPolicyGlobWritableReject, "linux"),
+		newScenario("file-system-policy-glob-writable-dynamic-deny", runFileSystemPolicyGlobWritableDynamicDeny, "darwin"),
+		newScenario("session-workspace-id-sanitization", runSessionWorkspaceIDSanitization),
+		newScenario("session-policy-explicit-zero", runSessionPolicyExplicitZero),
 	}
 	selected := map[string]scenario{}
 	for _, sc := range scenarios {
@@ -161,6 +181,14 @@ func runScenarios(ctx context.Context, cfg config) error {
 	}
 	for _, sc := range toRun {
 		fmt.Printf("== %s ==\n", sc.name)
+		if !sc.supportsPlatform(runtime.GOOS) {
+			if cfg.scenario != "all" {
+				return fmt.Errorf("scenario %q is not supported on %s", sc.name, runtime.GOOS)
+			}
+			fmt.Printf("scenario is not supported on %s\n", runtime.GOOS)
+			fmt.Printf("SKIP %s\n\n", sc.name)
+			continue
+		}
 		err := sc.run(ctx, cfg)
 		switch {
 		case err == nil:
