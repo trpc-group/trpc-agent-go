@@ -359,22 +359,25 @@ func parseTableName(fullTableName string) (schema, tableName string) {
 	return "public", fullTableName
 }
 
-// initDB initializes the database schema
-func (s *Service) initDB(ctx context.Context) {
+// initDB initializes the database schema. It returns an error instead of
+// panicking so NewService can surface a startup failure (e.g. the runtime
+// account lacks DDL privilege) rather than crashing the process.
+func (s *Service) initDB(ctx context.Context) error {
 	// Create tables
 	if err := createTables(ctx, s.pgClient, s.opts.schema, s.opts.tablePrefix); err != nil {
-		panic(fmt.Sprintf("create tables failed: %v", err))
+		return fmt.Errorf("create tables failed: %w", err)
 	}
 
 	// Create indexes
 	if err := createIndexes(ctx, s.pgClient, s.opts.schema, s.opts.tablePrefix); err != nil {
-		panic(fmt.Sprintf("create indexes failed: %v", err))
+		return fmt.Errorf("create indexes failed: %w", err)
 	}
 
 	// Verify schema
 	if err := s.verifySchema(ctx); err != nil {
-		panic(fmt.Sprintf("schema verification failed: %v", err))
+		return fmt.Errorf("schema verification failed: %w", err)
 	}
+	return nil
 }
 
 // createTables creates all required tables with the given prefix.
@@ -424,14 +427,10 @@ func (s *Service) verifySchema(ctx context.Context) error {
 			return fmt.Errorf("verify columns for table %s failed: %w", fullTableName, err)
 		}
 
-		// Verify indexes
+		// Verify indexes. A missing UNIQUE index is fatal (uniqueness is no longer
+		// enforced); other index drift is logged as a warning inside verifyIndexes.
 		if err := s.verifyIndexes(ctx, fullTableName, schema.indexes); err != nil {
-			log.WarnfContext(
-				ctx,
-				"verify indexes for table %s failed (non-fatal): %v",
-				fullTableName,
-				err,
-			)
+			return fmt.Errorf("verify indexes for table %s failed: %w", fullTableName, err)
 		}
 	}
 
@@ -511,27 +510,48 @@ func (s *Service) verifyColumns(ctx context.Context, fullTableName string, expec
 // verifyIndexes verifies that table indexes exist
 func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expectedIndexes []tableIndex) error {
 	schema, tableName := parseTableName(fullTableName)
-	// Get actual indexes from database
-	actualIndexes := make(map[string]bool)
+	// Get each index's uniqueness and full definition. Verifying the columns and
+	// partial predicate (via pg_get_indexdef), not just the name and uniqueness,
+	// catches a same-name index that is non-unique, on the wrong columns, or
+	// missing the `deleted_at IS NULL` predicate — any of which would leave the
+	// uniqueness contract unenforced.
+	type indexInfo struct {
+		unique bool
+		def    string
+	}
+	actual := make(map[string]indexInfo)
 	err := s.pgClient.Query(ctx, func(rows *sql.Rows) error {
 		for rows.Next() {
-			var indexName string
-			if err := rows.Scan(&indexName); err != nil {
+			var name, def string
+			var isUnique bool
+			if err := rows.Scan(&name, &isUnique, &def); err != nil {
 				return err
 			}
-			actualIndexes[indexName] = true
+			actual[name] = indexInfo{unique: isUnique, def: def}
 		}
 		return nil
-	}, `SELECT indexname
-		FROM pg_indexes
-		WHERE schemaname = $1
-		AND tablename = $2`, schema, tableName)
+	}, `SELECT i.relname, ix.indisunique, pg_get_indexdef(i.oid)
+		FROM pg_class t
+		JOIN pg_namespace n ON n.oid = t.relnamespace
+		JOIN pg_index ix ON t.oid = ix.indrelid
+		JOIN pg_class i ON i.oid = ix.indexrelid
+		WHERE n.nspname = $1 AND t.relname = $2`, schema, tableName)
 
 	if err != nil {
 		return fmt.Errorf("query indexes failed: %w", err)
 	}
 
-	// Check each expected index
+	// normalizeIndexDef lowercases, strips quotes and collapses whitespace so the
+	// expected column list / predicate can be matched against pg_get_indexdef's
+	// normalized output without being tripped up by quoting or spacing.
+	normalizeIndexDef := func(s string) string {
+		return strings.ToLower(strings.Join(strings.Fields(strings.ReplaceAll(s, `"`, "")), " "))
+	}
+
+	// Check each expected index. The required partial UNIQUE index must exist, be
+	// unique, cover the expected columns, and carry the `deleted_at IS NULL`
+	// predicate; any deviation is fatal. Other missing indexes are only warnings.
+	var invalidUnique []string
 	for _, expected := range expectedIndexes {
 		// Use sqldb.BuildIndexNameWithSchema to construct the expected index.
 		expectedIndexName := sqldb.BuildIndexNameWithSchema(
@@ -541,16 +561,39 @@ func (s *Service) verifyIndexes(ctx context.Context, fullTableName string, expec
 			expected.suffix,
 		)
 
-		if !actualIndexes[expectedIndexName] {
-			log.WarnfContext(
-				ctx,
-				"index %s on table %s is missing",
-				expectedIndexName,
-				fullTableName,
-			)
+		info, exists := actual[expectedIndexName]
+
+		if expected.suffix != sqldb.IndexSuffixUniqueActive {
+			if !exists {
+				log.WarnfContext(ctx, "index %s on table %s is missing", expectedIndexName, fullTableName)
+			}
+			continue
+		}
+
+		switch {
+		case !exists:
+			log.ErrorfContext(ctx, "UNIQUE index %s on table %s is missing; uniqueness is NOT enforced",
+				expectedIndexName, fullTableName)
+			invalidUnique = append(invalidUnique, expectedIndexName)
+		case !info.unique:
+			log.ErrorfContext(ctx, "index %s on table %s exists but is NOT unique; uniqueness is NOT enforced",
+				expectedIndexName, fullTableName)
+			invalidUnique = append(invalidUnique, expectedIndexName)
+		default:
+			def := normalizeIndexDef(info.def)
+			wantCols := normalizeIndexDef("(" + strings.Join(expected.columns, ", ") + ")")
+			if !strings.Contains(def, wantCols) || !strings.Contains(def, "deleted_at is null") {
+				log.ErrorfContext(ctx, "UNIQUE index %s on table %s does not match the expected definition "+
+					"(want columns %v with predicate deleted_at IS NULL); uniqueness may not be enforced as "+
+					"intended. Actual: %s", expectedIndexName, fullTableName, expected.columns, info.def)
+				invalidUnique = append(invalidUnique, expectedIndexName)
+			}
 		}
 	}
 
+	if len(invalidUnique) > 0 {
+		return fmt.Errorf("required unique index(es) invalid on table %s: %v", fullTableName, invalidUnique)
+	}
 	return nil
 }
 
