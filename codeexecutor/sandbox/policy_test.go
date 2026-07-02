@@ -94,6 +94,25 @@ func TestWorkspaceWriteProfileCanSetNetwork(t *testing.T) {
 	if !containsSpecialRule(profile, accessWrite, specialWork) {
 		t.Fatalf("workspace-write network profile missing work write grant: %#v", profile.fileSystem.Rules)
 	}
+
+	profile = WorkspaceWriteProfile().
+		WithMacOSWeakerNetworkIsolation().
+		WithMacOSUnixSocketPaths("/tmp/trpc-agent.sock")
+	if !profile.macOS.allowSystemTrustServices ||
+		len(profile.macOS.unixSocketPaths) != 1 ||
+		profile.macOS.unixSocketPaths[0] != "/tmp/trpc-agent.sock" {
+		t.Fatalf("macOS network extensions = %#v, want trust services and unix socket", profile.macOS)
+	}
+
+	profile = WorkspaceWriteProfile().
+		WithMacOSWeakerNetworkIsolation().
+		WithMacOSUnixSocketPaths("/tmp/trpc-agent.sock").
+		WithNetworkPolicy(NetworkPolicy{Mode: NetworkEnabled})
+	if profile.network.Mode != NetworkEnabled ||
+		!profile.macOS.allowSystemTrustServices ||
+		len(profile.macOS.unixSocketPaths) != 1 {
+		t.Fatalf("network/macos extension order changed profile: network=%#v macOS=%#v", profile.network, profile.macOS)
+	}
 }
 
 func TestShellEnvironmentPolicyDefaultAllInheritsHostEnv(t *testing.T) {

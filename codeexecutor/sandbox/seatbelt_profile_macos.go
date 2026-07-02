@@ -114,6 +114,10 @@ func (r *Runtime) macosSeatbeltProfile(
 	if err != nil {
 		return "", err
 	}
+	networkPolicy, err := macosSeatbeltNetworkPolicy(profile.network, profile.macOS)
+	if err != nil {
+		return "", err
+	}
 	sections := []string{
 		macosBaseSeatbeltPolicy,
 		macosPlatformRootLiteralPolicy,
@@ -125,7 +129,7 @@ func (r *Runtime) macosSeatbeltProfile(
 		writePolicy,
 		"; deny glob-matched no-access paths",
 		globPolicy,
-		macosSeatbeltNetworkPolicy(profile.network),
+		networkPolicy,
 	}
 	return strings.Join(nonEmptySections(sections), "\n\n"), nil
 }
@@ -256,7 +260,17 @@ func (r *Runtime) macosRuleTarget(
 		return target, err == nil, err
 	case ruleSpecial:
 		target, ok, err := specialPathAbs(ws, rule.Special)
-		return target, ok, err
+		if err != nil || !ok {
+			return "", ok, err
+		}
+		wsAbs, err := filepath.Abs(ws.Path)
+		if err != nil {
+			return "", false, err
+		}
+		if err := ensureNoSymlinkEscape(wsAbs, target); err != nil {
+			return "", false, err
+		}
+		return target, true, nil
 	default:
 		return "", false, nil
 	}
@@ -465,14 +479,27 @@ func macosGlobPatternToRegex(pattern string) (string, error) {
 	return b.String(), nil
 }
 
-func macosSeatbeltNetworkPolicy(policy NetworkPolicy) string {
-	if policy.Mode != NetworkEnabled {
-		return ""
-	}
-	return `(allow network-outbound)
+func macosSeatbeltNetworkPolicy(policy NetworkPolicy, macOS macOSProfilePolicy) (string, error) {
+	var sections []string
+	if policy.Mode == NetworkEnabled {
+		sections = append(sections, `(allow network-outbound)
 (allow network-inbound)
-(allow system-socket)
-(allow mach-lookup
+(allow system-socket)`, macosNetworkMachLookupPolicy())
+	} else if macOS.allowSystemTrustServices {
+		sections = append(sections, macosSystemTrustMachLookupPolicy())
+	}
+	unixSocketPolicy, err := macosUnixSocketPolicy(macOS.unixSocketPaths)
+	if err != nil {
+		return "", err
+	}
+	if unixSocketPolicy != "" {
+		sections = append(sections, "; allow macOS Unix domain sockets for local IPC", unixSocketPolicy)
+	}
+	return strings.Join(nonEmptySections(sections), "\n"), nil
+}
+
+func macosNetworkMachLookupPolicy() string {
+	return `(allow mach-lookup
   (global-name "com.apple.SecurityServer")
   (global-name "com.apple.SystemConfiguration.DNSConfiguration")
   (global-name "com.apple.SystemConfiguration.configd")
@@ -480,6 +507,76 @@ func macosSeatbeltNetworkPolicy(policy NetworkPolicy) string {
   (global-name "com.apple.ocspd")
   (global-name "com.apple.trustd")
   (global-name "com.apple.trustd.agent"))`
+}
+
+func macosSystemTrustMachLookupPolicy() string {
+	return `(allow mach-lookup
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.ocspd")
+  (global-name "com.apple.trustd")
+  (global-name "com.apple.trustd.agent"))`
+}
+
+func macosUnixSocketPolicy(paths []string) (string, error) {
+	roots, err := macosUnixSocketRoots(paths)
+	if err != nil {
+		return "", err
+	}
+	if len(roots) == 0 {
+		return "", nil
+	}
+	var rules []string
+	rules = append(rules, "(allow system-socket (socket-domain AF_UNIX))")
+	for _, root := range roots {
+		path := sbplString(root)
+		rules = append(rules,
+			fmt.Sprintf("(allow file-read* file-test-existence (literal %s))", path),
+			fmt.Sprintf("(allow network-bind (literal %s))", path),
+			fmt.Sprintf("(allow network-bind (path %s))", path),
+			fmt.Sprintf("(allow network-bind (local unix-socket (path-literal %s)))", path),
+			fmt.Sprintf("(allow network-outbound (literal %s))", path),
+			fmt.Sprintf("(allow network-outbound (path %s))", path),
+			fmt.Sprintf("(allow network-outbound (remote unix-socket (path-literal %s)))", path),
+		)
+	}
+	return strings.Join(rules, "\n"), nil
+}
+
+func macosUnixSocketRoots(paths []string) ([]string, error) {
+	seen := map[string]bool{}
+	var roots []string
+	addRoot := func(path string) {
+		path = filepath.Clean(path)
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		roots = append(roots, path)
+	}
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) {
+			return nil, deniedf(
+				ErrPolicyViolation,
+				"unix-socket",
+				path,
+				"macOS Unix socket paths must be absolute",
+			)
+		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return nil, err
+		}
+		addRoot(abs)
+		if canonical, err := canonicalizeExistingPath(abs); err == nil {
+			addRoot(canonical)
+		}
+	}
+	sort.Strings(roots)
+	return roots, nil
 }
 
 func macosPlatformDefaultReadRoots() []string {

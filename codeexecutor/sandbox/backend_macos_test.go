@@ -13,10 +13,16 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
@@ -109,6 +115,63 @@ func TestMacOSPlatformTempMetadataPolicyOnly(t *testing.T) {
 	}
 }
 
+func TestMacOSNetworkExtensionPolicies(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/network-policy", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restricted, err := rt.macosSeatbeltProfile(WorkspaceWriteProfile(), ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(restricted, "com.apple.trustd.agent") ||
+		strings.Contains(restricted, "(allow network-outbound)") {
+		t.Fatalf("restricted policy unexpectedly grants broad network/trust services:\n%s", restricted)
+	}
+
+	weaker, err := rt.macosSeatbeltProfile(
+		WorkspaceWriteProfile().WithMacOSWeakerNetworkIsolation(),
+		ws,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(weaker, "com.apple.trustd.agent") {
+		t.Fatalf("weaker macOS network policy missing trustd.agent:\n%s", weaker)
+	}
+	if strings.Contains(weaker, "(allow network-outbound)") {
+		t.Fatalf("weaker macOS network policy should not grant broad network:\n%s", weaker)
+	}
+
+	socketPath := filepath.Join(t.TempDir(), "demo.sock")
+	unixSockets, err := rt.macosSeatbeltProfile(
+		WorkspaceWriteProfile().WithMacOSUnixSocketPaths(socketPath),
+		ws,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"(allow system-socket (socket-domain AF_UNIX))",
+		"(allow network-bind (local unix-socket (path-literal " + sbplString(socketPath) + ")))",
+		"(allow network-outbound (remote unix-socket (path-literal " + sbplString(socketPath) + ")))",
+	} {
+		if !strings.Contains(unixSockets, want) {
+			t.Fatalf("unix socket policy missing %q:\n%s", want, unixSockets)
+		}
+	}
+
+	_, err = rt.macosSeatbeltProfile(
+		WorkspaceWriteProfile().WithMacOSUnixSocketPaths("relative.sock"),
+		ws,
+	)
+	if !isKind(err, ErrPolicyViolation) {
+		t.Fatalf("relative Unix socket path error = %v, want ErrPolicyViolation", err)
+	}
+}
+
 func TestMacOSSandboxExecRejectsHostTempFileRead(t *testing.T) {
 	if _, err := os.Stat(macosSandboxExecPath); err != nil {
 		t.Skip("sandbox-exec not available")
@@ -162,6 +225,26 @@ func TestMacOSRuleTargetRejectsAbsoluteWorkspaceSymlinkGrant(t *testing.T) {
 	)
 	if !isKind(err, ErrPathDenied) || ok || target != "" {
 		t.Fatalf("macosRuleTarget = target=%q ok=%v err=%v, want denied", target, ok, err)
+	}
+}
+
+func TestMacOSRuleTargetRejectsSpecialWorkspaceSymlink(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/special-symlink", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	work := filepath.Join(ws.Path, "work")
+	if err := os.RemoveAll(work); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, work); err != nil {
+		t.Fatal(err)
+	}
+	_, err = rt.macosSeatbeltProfile(WorkspaceWriteProfile(), ws)
+	if !isKind(err, ErrPathDenied) {
+		t.Fatalf("special workspace symlink profile error = %v, want ErrPathDenied", err)
 	}
 }
 
@@ -296,4 +379,176 @@ func TestMacOSSandboxExecNoAccessGlobHardDenyOverridesSpecificRead(t *testing.T)
 	if res.ExitCode == 0 {
 		t.Fatalf("glob hard deny was reopened by specific read grant: %#v", res)
 	}
+}
+
+func TestMacOSSandboxExecChildProcessInheritsSandbox(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	hostTemp := filepath.Join(os.TempDir(), "trpc-agent-sandbox-child-inherit-probe")
+	if err := os.WriteFile(hostTemp, []byte("host-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(hostTemp) })
+
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/child-inherit", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd: "/bin/sh",
+		Args: []string{
+			"-c",
+			`(cat "$1" > child.out 2>/dev/null; echo $? > child.status) & wait; cat child.status`,
+			"sh",
+			hostTemp,
+		},
+	})
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if strings.TrimSpace(res.Stdout) == "0" {
+		t.Fatalf("child process escaped sandbox and read host temp: %#v", res)
+	}
+}
+
+func TestMacOSSandboxExecAllowsConfiguredUnixSocket(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	socketDir, err := os.MkdirTemp("/tmp", "trpc-sock-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "demo.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	socketPolicyPath, err := canonicalizeExistingPath(socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unixListener, ok := listener.(*net.UnixListener); ok {
+		if err := unixListener.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.Close()
+		_, err = conn.Write([]byte("UNIX_SOCKET_OK\n"))
+		done <- err
+	}()
+
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(
+			WorkspaceWriteProfile().
+				WithReadPaths(os.Args[0]).
+				WithMacOSUnixSocketPaths(socketPath),
+		),
+	)
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/unix-socket", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     os.Args[0],
+		Args:    []string{"-test.run=TestMacOSUnixSocketClientHelper"},
+		Env:     map[string]string{"TRPC_MACOS_UNIX_SOCKET_HELPER": "1", "TRPC_MACOS_UNIX_SOCKET_PATH": socketPolicyPath},
+		Timeout: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if res.ExitCode != 0 || !strings.Contains(res.Stdout, "UNIX_SOCKET_OK") {
+		t.Fatalf("unix socket run = %#v, want successful socket read", res)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("unix socket server error: %v", err)
+	}
+}
+
+func TestMacOSUnixSocketClientHelper(t *testing.T) {
+	if os.Getenv("TRPC_MACOS_UNIX_SOCKET_HELPER") != "1" {
+		return
+	}
+	conn, err := net.DialTimeout("unix", os.Getenv("TRPC_MACOS_UNIX_SOCKET_PATH"), time.Second)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	data, err := io.ReadAll(conn)
+	_ = conn.Close()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(3)
+	}
+	fmt.Print(string(data))
+	os.Exit(0)
+}
+
+func TestMacOSSandboxExecTimeoutKillsProcessGroup(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/process-timeout", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "/bin/sh",
+		Args:    []string{"-c", "sleep 30 & echo $! > child.pid; wait"},
+		Timeout: 200 * time.Millisecond,
+	})
+	if !isKind(err, ErrTimeout) || !res.TimedOut {
+		t.Fatalf("timeout run = result:%#v err:%v, want ErrTimeout", res, err)
+	}
+	pidBytes, readErr := os.ReadFile(filepath.Join(ws.Path, "work", "child.pid"))
+	if readErr != nil {
+		t.Fatalf("child pid file missing after timeout: %v", readErr)
+	}
+	pid, parseErr := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if parseErr != nil {
+		t.Fatalf("child pid = %q: %v", pidBytes, parseErr)
+	}
+	cleanupPID := 0
+	t.Cleanup(func() {
+		if cleanupPID == 0 {
+			return
+		}
+		_ = syscall.Kill(cleanupPID, syscall.SIGKILL)
+	})
+	for i := 0; i < 20; i++ {
+		if !processExists(pid) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cleanupPID = pid
+	t.Fatalf("background child process %d still exists after timeout cleanup", pid)
+}
+
+func processExists(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
 }
