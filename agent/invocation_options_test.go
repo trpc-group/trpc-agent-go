@@ -520,6 +520,10 @@ func (m *mockArtifactService) LoadArtifact(ctx context.Context, info artifact.Se
 	return nil, nil
 }
 
+func (m *mockArtifactService) Head(ctx context.Context, req *artifact.HeadRequest, _ ...artifact.HeadOption) (*artifact.HeadResponse, error) {
+	return nil, nil
+}
+
 func (m *mockArtifactService) ListArtifactKeys(ctx context.Context, info artifact.SessionInfo) ([]string, error) {
 	return nil, nil
 }
