@@ -114,6 +114,9 @@ func (r *runner) Describe(ctx context.Context) (*astructure.Snapshot, error) {
 	if err := json.NewDecoder(httpResponse.Body).Decode(&response); err != nil {
 		return nil, fmt.Errorf("trpcagent runner: decode describe response: %w", err)
 	}
+	if response.Structure == nil {
+		return nil, errors.New("trpcagent runner: describe response structure is empty")
+	}
 	return response.Structure, nil
 }
 

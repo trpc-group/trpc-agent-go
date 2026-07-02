@@ -34,10 +34,10 @@ import (
 func TestRunPostsRequestAndConvertsResponseEvents(t *testing.T) {
 	var got runRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodPost, r.Method)
-		require.Equal(t, "/trpc-agent/v1/apps/sports-agent/runs", r.URL.Path)
-		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
-		require.Equal(t, "Bearer token", r.Header.Get("Authorization"))
+		assert.Equal(t, http.MethodPost, r.Method)
+		assert.Equal(t, "/trpc-agent/v1/apps/sports-agent/runs", r.URL.Path)
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "Bearer token", r.Header.Get("Authorization"))
 		toolCall := event.NewResponseEvent("inv-1", "writer", &model.Response{
 			Object: model.ObjectTypeChatCompletion,
 			Choices: []model.Choice{{
@@ -289,7 +289,7 @@ func TestRunUsesAppNameOverrideAndBasePath(t *testing.T) {
 func TestRunReturnsHTTPStatusError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "invalid request"}))
+		assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "invalid request"}))
 	}))
 	defer server.Close()
 	runner, err := New("sports-agent", WithTarget(server.URL))
@@ -328,7 +328,7 @@ func TestRunReturnsDecodeError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, err := w.Write([]byte("{"))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}))
 	defer server.Close()
 	runner, err := New("sports-agent", WithTarget(server.URL))
@@ -438,7 +438,7 @@ func TestRunRejectsMissingEventRequestID(t *testing.T) {
 			Object: model.ObjectTypeRunnerCompletion,
 			Done:   true,
 		})
-		require.NoError(t, json.NewEncoder(w).Encode(runResponse{
+		assert.NoError(t, json.NewEncoder(w).Encode(runResponse{
 			Status: atrace.TraceStatusCompleted,
 			Events: []event.Event{*completion},
 		}))
@@ -560,11 +560,11 @@ func TestRunInteroperatesWithServerTRPCAgent(t *testing.T) {
 func TestDescribeFetchesStructure(t *testing.T) {
 	want := testStructureSnapshot()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodGet, r.Method)
-		require.Equal(t, "/custom/apps/sports%20agent/structure", r.URL.EscapedPath())
-		require.Equal(t, "application/json", r.Header.Get("Accept"))
-		require.Equal(t, "Bearer token", r.Header.Get("Authorization"))
-		require.NoError(t, json.NewEncoder(w).Encode(structureResponse{Structure: want}))
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/custom/apps/sports%20agent/structure", r.URL.EscapedPath())
+		assert.Equal(t, "application/json", r.Header.Get("Accept"))
+		assert.Equal(t, "Bearer token", r.Header.Get("Authorization"))
+		assert.NoError(t, json.NewEncoder(w).Encode(structureResponse{Structure: want}))
 	}))
 	defer server.Close()
 	runner, err := New(
@@ -604,9 +604,9 @@ func TestDescribeInteroperatesWithServerTRPCAgent(t *testing.T) {
 
 func TestDescribeReturnsHTTPStatusError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, http.MethodGet, r.Method)
 		w.WriteHeader(http.StatusInternalServerError)
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "export structure failed"}))
+		assert.NoError(t, json.NewEncoder(w).Encode(map[string]string{"error": "export structure failed"}))
 	}))
 	defer server.Close()
 	runner, err := New("sports-agent", WithTarget(server.URL))
@@ -633,7 +633,7 @@ func TestDescribeReturnsDecodeError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, err := w.Write([]byte("{"))
-		require.NoError(t, err)
+		assert.NoError(t, err)
 	}))
 	defer server.Close()
 	runner, err := New("sports-agent", WithTarget(server.URL))
@@ -642,6 +642,31 @@ func TestDescribeReturnsDecodeError(t *testing.T) {
 	require.Nil(t, got)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "trpcagent runner: decode describe response")
+}
+
+func TestDescribeRejectsEmptyStructure(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "missing structure", body: `{}`},
+		{name: "null structure", body: `{"structure":null}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, err := w.Write([]byte(tt.body))
+				assert.NoError(t, err)
+			}))
+			defer server.Close()
+			runner, err := New("sports-agent", WithTarget(server.URL))
+			require.NoError(t, err)
+			got, err := runner.Describe(context.Background())
+			require.Nil(t, got)
+			require.EqualError(t, err, "trpcagent runner: describe response structure is empty")
+		})
+	}
 }
 
 func TestDescribeAllowsCustomTargetScheme(t *testing.T) {
@@ -759,9 +784,12 @@ func TestRunAllowsCustomTargetScheme(t *testing.T) {
 func writeRunResponse(t *testing.T, w http.ResponseWriter, r *http.Request, response runResponse) runRequest {
 	t.Helper()
 	var request runRequest
-	require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		assert.NoError(t, err)
+		return request
+	}
 	fillResponseRequestID(&response, request.RunOptions.RequestID)
-	require.NoError(t, json.NewEncoder(w).Encode(response))
+	assert.NoError(t, json.NewEncoder(w).Encode(response))
 	return request
 }
 
