@@ -1,0 +1,59 @@
+# ============================================================
+# tRPC-Agent-Go Tool Safety Policy
+# ============================================================
+# 此文件配置 Tool Safety Scanner 的安全策略。
+# 修改后无需重新编译代码即可生效。
+#
+# 用法：
+#   policy, err := safety.LoadPolicyFile("tool_safety_policy.yaml")
+#   scanner := safety.NewScanner(
+#       safety.NewDangerousCommandRule(),
+#       safety.NewNetworkAccessRule(),
+#       ...
+#   )
+#
+# ============================================================
+
+# 拒绝的命令列表（包含这些关键字的命令将被拦截）
+denied_commands:
+  - curl
+  - wget
+  - nc
+  - ssh
+  - telnet
+  - rm -rf
+  - mkfs
+  - fdisk
+  - shutdown
+  - reboot
+  - eval
+  - exec
+  - source
+  - sudo
+
+# 拒绝访问的路径（尝试读取/修改这些路径的命令将被拦截）
+denied_paths:
+  - /etc/shadow
+  - /etc/passwd
+  - ~/.ssh
+  - ~/.aws
+  - .env
+  - id_rsa
+  - id_ed25519
+  - credentials.json
+
+# 白名单域名（仅允许访问这些域名，留空允许所有）
+# allowed_domains:
+#   - api.example.com
+#   - github.com
+
+# 拒绝的域名（禁止访问这些域名）
+# denied_domains:
+#   - evil.com
+#   - malware.org
+
+# 最大命令执行超时（秒），默认 300
+max_timeout_seconds: 300
+
+# 最大输出大小（字节），默认 10MB
+max_output_bytes: 10485760
