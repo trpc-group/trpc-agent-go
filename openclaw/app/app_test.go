@@ -2606,6 +2606,11 @@ func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
 		sys,
 		"Do not use browser as a substitute for web search",
 	)
+	require.Contains(
+		t,
+		sys,
+		"Browser snapshots are for current page structure",
+	)
 }
 
 func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
@@ -2790,6 +2795,16 @@ func TestOpenClawToolingGuidancePrefersSearchTools(t *testing.T) {
 	require.Contains(
 		t,
 		openClawToolingGuidance,
+		"Use the returned web_fetch content as primary evidence",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"session_load with content_limit",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
 		"do not drive Google, Bing, or DuckDuckGo result pages",
 	)
 	require.Contains(
@@ -2813,6 +2828,11 @@ func TestOpenClawDeferredToolingGuidancePairsBrowserWithSearch(
 		t,
 		openClawDeferredToolingGuidance,
 		"avoid browser-only workers for search-engine lookup",
+	)
+	require.Contains(
+		t,
+		openClawDeferredToolingGuidance,
+		"inspect successful web_fetch results first",
 	)
 }
 

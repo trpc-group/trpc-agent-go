@@ -281,6 +281,14 @@ const (
 		"present, use it for general web search before using " +
 		"browser automation or web_fetch against search engine " +
 		"result pages. Use web_fetch for known result URLs. Use " +
+		"the returned web_fetch content as primary evidence when " +
+		"it has status 200; search or parse that returned content " +
+		"before switching to browser automation, downloading large " +
+		"exports, or retrying alternate mirrors. If a successful " +
+		"fetch result is too long, truncated, or hidden behind " +
+		"history compaction, use session_load with content_limit " +
+		"and content_offset around that tool result instead of " +
+		"refetching the same static page through browser. Use " +
 		"browser only when a page requires JavaScript rendering, " +
 		"interaction, download handling, screenshots, or visual " +
 		"verification; do not drive Google, Bing, or DuckDuckGo " +
@@ -422,6 +430,9 @@ const (
 		"fetch tools with browser workers when those tools are " +
 		"available; avoid browser-only workers for search-engine " +
 		"lookup or static page fetches. Give the sub-agent a " +
+		"clear instruction to inspect successful web_fetch results " +
+		"first and to report when a result is truncated instead " +
+		"of looping through browser snapshots. Give the sub-agent a " +
 		"self-contained request " +
 		"and ask it to complete the concrete action or return the " +
 		"exact blocker. Answer directly only when no tool work is " +
@@ -445,6 +456,12 @@ const (
 		"fetching known static URLs; if a worker needs those " +
 		"capabilities but they are unavailable, return the exact " +
 		"missing search/fetch blocker. " +
+		"Browser snapshots are for current page structure and " +
+		"interactive state, not bulk extraction of long static " +
+		"documents; when static page text is needed, prefer " +
+		"web_fetch or file/document tools and use browser only " +
+		"for the specific rendered or visual evidence those tools " +
+		"cannot provide. " +
 		"Do not use browser to open local or generated files " +
 		"through file://, data:, or ad hoc localhost/127.0.0.1 " +
 		"URLs unless the runtime explicitly exposes that server; " +
