@@ -16,6 +16,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/sqldb"
 )
 
 // TestTableExists_TableFound tests tableExists when table exists
@@ -223,12 +224,14 @@ func TestVerifyIndexes_Success(t *testing.T) {
 
 	s := createTestService(t, db)
 
-	// Mock pg_indexes query
-	rows := sqlmock.NewRows([]string{"indexname"}).
-		AddRow("idx_session_states_unique_active").
-		AddRow("idx_session_states_expires")
+	// Mock index query (name + indisunique + definition)
+	rows := sqlmock.NewRows([]string{"relname", "indisunique", "indexdef"}).
+		AddRow("idx_session_states_unique_active", true,
+			"CREATE UNIQUE INDEX idx_session_states_unique_active ON public.session_states USING btree (app_name, user_id, session_id) WHERE (deleted_at IS NULL)").
+		AddRow("idx_session_states_expires", false,
+			"CREATE INDEX idx_session_states_expires ON public.session_states USING btree (expires_at) WHERE (expires_at IS NOT NULL)")
 
-	mock.ExpectQuery("SELECT indexname").
+	mock.ExpectQuery("indisunique, pg_get_indexdef").
 		WithArgs("public", "session_states").
 		WillReturnRows(rows)
 
@@ -250,12 +253,13 @@ func TestVerifyIndexes_MissingIndex(t *testing.T) {
 
 	s := createTestService(t, db)
 
-	// Mock pg_indexes query - missing one index
-	rows := sqlmock.NewRows([]string{"indexname"}).
-		AddRow("idx_session_states_unique_active")
+	// Mock index query - the unique index exists and is valid; the TTL one is missing.
+	rows := sqlmock.NewRows([]string{"relname", "indisunique", "indexdef"}).
+		AddRow("idx_session_states_unique_active", true,
+			"CREATE UNIQUE INDEX idx_session_states_unique_active ON public.session_states USING btree (app_name, user_id, session_id) WHERE (deleted_at IS NULL)")
 	// idx_session_states_expires is missing
 
-	mock.ExpectQuery("SELECT indexname").
+	mock.ExpectQuery("indisunique, pg_get_indexdef").
 		WithArgs("public", "session_states").
 		WillReturnRows(rows)
 
@@ -270,6 +274,258 @@ func TestVerifyIndexes_MissingIndex(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestVerifyIndexes_MissingUniqueIndex tests that a missing UNIQUE index is fatal.
+func TestVerifyIndexes_MissingUniqueIndex(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+
+	// Mock index query - the unique index is missing (only the TTL one exists).
+	rows := sqlmock.NewRows([]string{"relname", "indisunique", "indexdef"}).
+		AddRow("idx_session_states_expires", false,
+			"CREATE INDEX idx_session_states_expires ON public.session_states USING btree (expires_at) WHERE (expires_at IS NOT NULL)")
+
+	mock.ExpectQuery("indisunique, pg_get_indexdef").
+		WithArgs("public", "session_states").
+		WillReturnRows(rows)
+
+	expectedIndexes := []tableIndex{
+		{"session_states", "unique_active", []string{"app_name", "user_id", "session_id"}}, // missing -> fatal
+		{"session_states", "expires", []string{"expires_at"}},
+	}
+
+	err = s.verifyIndexes(context.Background(), "session_states", expectedIndexes)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unique index")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestVerifyIndexes_UniqueIndexNotUnique tests that an index with the expected
+// unique_active name which exists but is NOT unique is fatal.
+func TestVerifyIndexes_UniqueIndexNotUnique(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+
+	// The unique_active name exists but the index is NOT unique.
+	rows := sqlmock.NewRows([]string{"relname", "indisunique", "indexdef"}).
+		AddRow("idx_session_states_unique_active", false,
+			"CREATE INDEX idx_session_states_unique_active ON public.session_states USING btree (app_name, user_id, session_id) WHERE (deleted_at IS NULL)").
+		AddRow("idx_session_states_expires", false,
+			"CREATE INDEX idx_session_states_expires ON public.session_states USING btree (expires_at) WHERE (expires_at IS NOT NULL)")
+
+	mock.ExpectQuery("indisunique, pg_get_indexdef").
+		WithArgs("public", "session_states").
+		WillReturnRows(rows)
+
+	expectedIndexes := []tableIndex{
+		{"session_states", "unique_active", []string{"app_name", "user_id", "session_id"}},
+		{"session_states", "expires", []string{"expires_at"}},
+	}
+
+	err = s.verifyIndexes(context.Background(), "session_states", expectedIndexes)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestVerifyIndexes_UniqueIndexWrongDefinition tests that a unique index with the
+// expected name but a definition missing the partial predicate is fatal.
+func TestVerifyIndexes_UniqueIndexWrongDefinition(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+
+	// Unique, right columns, but missing the `deleted_at IS NULL` predicate
+	// (a full unique index instead of the required partial one).
+	rows := sqlmock.NewRows([]string{"relname", "indisunique", "indexdef"}).
+		AddRow("idx_session_states_unique_active", true,
+			"CREATE UNIQUE INDEX idx_session_states_unique_active ON public.session_states USING btree (app_name, user_id, session_id)")
+
+	mock.ExpectQuery("indisunique, pg_get_indexdef").
+		WithArgs("public", "session_states").
+		WillReturnRows(rows)
+
+	expectedIndexes := []tableIndex{
+		{"session_states", "unique_active", []string{"app_name", "user_id", "session_id"}},
+	}
+
+	err = s.verifyIndexes(context.Background(), "session_states", expectedIndexes)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestServiceInitDB_ReturnsErrorOnDDLFailure verifies the Service initDB returns
+// an error (instead of panicking) when a DDL step fails.
+func TestServiceInitDB_ReturnsErrorOnDDLFailure(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+
+	// First CREATE TABLE fails.
+	mock.ExpectExec("CREATE TABLE").WillReturnError(assert.AnError)
+
+	assert.NotPanics(t, func() {
+		err = s.initDB(context.Background())
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create tables failed")
+	require.ErrorIs(t, err, assert.AnError) // %w wrapping preserved
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// restrictToSessionStates overrides the package-level schema definitions to
+// cover only session_states, so initDB/verifySchema tests run deterministically
+// on a single table (no Go map-iteration randomness). Restored via t.Cleanup.
+func restrictToSessionStates(t *testing.T) {
+	t.Helper()
+	origTables, origIndexes, origSchema := tableDefs, indexDefs, expectedSchema
+	t.Cleanup(func() {
+		tableDefs, indexDefs, expectedSchema = origTables, origIndexes, origSchema
+	})
+	for _, td := range origTables {
+		if td.name == sqldb.TableNameSessionStates {
+			tableDefs = []tableDefinition{td}
+			break
+		}
+	}
+	indexDefs = nil
+	for _, id := range origIndexes {
+		if id.table == sqldb.TableNameSessionStates {
+			indexDefs = append(indexDefs, id)
+		}
+	}
+	expectedSchema = map[string]struct {
+		columns []tableColumn
+		indexes []tableIndex
+	}{
+		sqldb.TableNameSessionStates: origSchema[sqldb.TableNameSessionStates],
+	}
+}
+
+// mockSessionStatesColumns queues a verifyColumns response with the expected columns.
+func mockSessionStatesColumns(mock sqlmock.Sqlmock) {
+	colRows := sqlmock.NewRows([]string{"column_name", "data_type", "is_nullable"})
+	for _, c := range expectedSchema[sqldb.TableNameSessionStates].columns {
+		nullable := "NO"
+		if c.nullable {
+			nullable = "YES"
+		}
+		colRows.AddRow(c.name, c.dataType, nullable)
+	}
+	mock.ExpectQuery("SELECT column_name").
+		WithArgs("public", "session_states").
+		WillReturnRows(colRows)
+}
+
+// mockSessionStatesValidIndexes queues a verifyIndexes response with a valid
+// partial unique index plus the TTL index.
+func mockSessionStatesValidIndexes(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("indisunique, pg_get_indexdef").
+		WithArgs("public", "session_states").
+		WillReturnRows(sqlmock.NewRows([]string{"relname", "indisunique", "indexdef"}).
+			AddRow("idx_session_states_unique_active", true,
+				"CREATE UNIQUE INDEX idx_session_states_unique_active ON public.session_states USING btree (app_name, user_id, session_id) WHERE (deleted_at IS NULL)").
+			AddRow("idx_session_states_expires", false,
+				"CREATE INDEX idx_session_states_expires ON public.session_states USING btree (expires_at) WHERE (expires_at IS NOT NULL)"))
+}
+
+// TestServiceInitDB_Success drives initDB through create + verify to success.
+func TestServiceInitDB_Success(t *testing.T) {
+	restrictToSessionStates(t)
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db)
+
+	// createTables (1) + createIndexes (unique + expires).
+	mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
+	// verifySchema: exists, columns, indexes all valid.
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("public", "session_states").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mockSessionStatesColumns(mock)
+	mockSessionStatesValidIndexes(mock)
+
+	require.NoError(t, s.initDB(context.Background()))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestServiceInitDB_CreateIndexesError covers the createIndexes failure path.
+func TestServiceInitDB_CreateIndexesError(t *testing.T) {
+	restrictToSessionStates(t)
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db)
+
+	mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE").WillReturnError(assert.AnError)
+
+	err = s.initDB(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create indexes failed")
+	require.ErrorIs(t, err, assert.AnError) // %w wrapping preserved
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestServiceInitDB_VerifySchemaError covers the verifySchema failure path.
+func TestServiceInitDB_VerifySchemaError(t *testing.T) {
+	restrictToSessionStates(t)
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db)
+
+	mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
+	// verifySchema reports the table as missing.
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("public", "session_states").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	err = s.initDB(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "schema verification failed")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestVerifySchema_IndexVerificationFails covers verifySchema propagating a
+// fatal verifyIndexes error (missing unique index).
+func TestVerifySchema_IndexVerificationFails(t *testing.T) {
+	restrictToSessionStates(t)
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	s := createTestService(t, db)
+
+	mock.ExpectQuery("SELECT EXISTS").
+		WithArgs("public", "session_states").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mockSessionStatesColumns(mock)
+	// verifyIndexes: unique index missing -> fatal, propagated by verifySchema.
+	mock.ExpectQuery("indisunique, pg_get_indexdef").
+		WithArgs("public", "session_states").
+		WillReturnRows(sqlmock.NewRows([]string{"relname", "indisunique", "indexdef"}))
+
+	err = s.verifySchema(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "verify indexes")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // TestVerifyIndexes_QueryError tests verifyIndexes when query fails
 func TestVerifyIndexes_QueryError(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -279,7 +535,7 @@ func TestVerifyIndexes_QueryError(t *testing.T) {
 	s := createTestService(t, db)
 
 	// Mock query error
-	mock.ExpectQuery("SELECT indexname").
+	mock.ExpectQuery("indisunique, pg_get_indexdef").
 		WithArgs("public", "session_states").
 		WillReturnError(assert.AnError)
 
