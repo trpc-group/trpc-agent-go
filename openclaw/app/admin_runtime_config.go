@@ -380,6 +380,7 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					"deepseek",
 					"qwen",
 					"hunyuan",
+					"glm",
 				),
 			},
 		},
