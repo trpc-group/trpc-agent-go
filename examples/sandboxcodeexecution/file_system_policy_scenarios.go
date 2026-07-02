@@ -37,6 +37,7 @@ const (
 	fileSystemPolicyDirectoryNoAccessMarker     = "FILE_SYSTEM_POLICY_DIRECTORY_NO_ACCESS_MASK_OK"
 	fileSystemPolicyMissingNoAccessMarker       = "FILE_SYSTEM_POLICY_MISSING_NO_ACCESS_MASK_OK"
 	fileSystemPolicyGlobWritableRejectMarker    = "FILE_SYSTEM_POLICY_GLOB_WRITABLE_REJECT_OK"
+	fileSystemPolicyGlobDynamicDenyMarker       = "FILE_SYSTEM_POLICY_GLOB_WRITABLE_DYNAMIC_DENY_OK"
 	sessionPolicyExplicitZeroMarker             = "SESSION_POLICY_EXPLICIT_ZERO_OK"
 	fileSystemPolicySecretSentinel              = "FILE_SYSTEM_POLICY_SECRET_SHOULD_NOT_APPEAR"
 )
@@ -605,6 +606,44 @@ func runFileSystemPolicyGlobWritableReject(ctx context.Context, cfg config) erro
 		return fmt.Errorf("glob setup rejection still created matching file, stat err=%v", err)
 	}
 	fmt.Println(fileSystemPolicyGlobWritableRejectMarker)
+	return nil
+}
+
+func runFileSystemPolicyGlobWritableDynamicDeny(ctx context.Context, cfg config) error {
+	profile := sandbox.WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")
+	rt := newRuntime(cfg, profile, 1<<20, 3*time.Second)
+	if err := requireManagedSandbox(ctx, rt, cfg); err != nil {
+		return err
+	}
+	ws, err := rt.CreateWorkspace(ctx, "file-system-policy-glob-writable-dynamic-deny", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(ws.Path, "work", "future.env")
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		return fmt.Errorf("glob target unexpectedly exists before run, stat err=%v", err)
+	}
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "bash",
+		Args: []string{
+			"-c",
+			"echo unexpected > future.env 2>/dev/null || echo " + fileSystemPolicyGlobDynamicDenyMarker,
+		},
+		Cwd: codeexecutor.DirWork,
+	})
+	if err != nil {
+		return err
+	}
+	if strings.Contains(res.Stdout, "unexpected") {
+		return fmt.Errorf("glob no-access write unexpectedly succeeded: result=%#v", res)
+	}
+	if err := expectContains(res.Stdout, fileSystemPolicyGlobDynamicDenyMarker); err != nil {
+		return err
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		return fmt.Errorf("glob-denied file appeared on host, stat err=%v", err)
+	}
+	fmt.Println(fileSystemPolicyGlobDynamicDenyMarker)
 	return nil
 }
 

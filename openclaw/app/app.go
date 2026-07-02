@@ -2912,6 +2912,8 @@ func sandboxBackendFromConfig(raw string) sandboxexec.BackendType {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case sandboxBackendLinuxBubblewrap:
 		return sandboxexec.BackendLinuxBubblewrap
+	case sandboxBackendMacOSSandbox:
+		return sandboxexec.BackendMacOSSandboxExec
 	default:
 		return sandboxexec.BackendAuto
 	}
