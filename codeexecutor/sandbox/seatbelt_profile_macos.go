@@ -554,7 +554,6 @@ func macosUnixSocketRoots(paths []string) ([]string, error) {
 		roots = append(roots, path)
 	}
 	for _, path := range paths {
-		path = strings.TrimSpace(path)
 		if path == "" {
 			continue
 		}

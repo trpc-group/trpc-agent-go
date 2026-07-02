@@ -138,12 +138,18 @@ func (p PermissionProfile) WithMacOSWeakerNetworkIsolation() PermissionProfile {
 // paths. Linux keeps the existing namespace-level network model and does not
 // claim support for these macOS-specific paths.
 func (p PermissionProfile) WithMacOSUnixSocketPaths(paths ...string) PermissionProfile {
+	var filtered []string
 	for _, path := range paths {
-		if path == "" {
-			continue
+		if path != "" {
+			filtered = append(filtered, path)
 		}
-		p.macOS.unixSocketPaths = append(p.macOS.unixSocketPaths, path)
 	}
+	if len(filtered) == 0 {
+		return p
+	}
+	merged := make([]string, len(p.macOS.unixSocketPaths), len(p.macOS.unixSocketPaths)+len(filtered))
+	copy(merged, p.macOS.unixSocketPaths)
+	p.macOS.unixSocketPaths = append(merged, filtered...)
 	return p
 }
 

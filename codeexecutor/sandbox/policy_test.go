@@ -115,6 +115,32 @@ func TestWorkspaceWriteProfileCanSetNetwork(t *testing.T) {
 	}
 }
 
+func TestWithMacOSUnixSocketPathsCopyOnWrite(t *testing.T) {
+	base := WorkspaceWriteProfile().WithMacOSUnixSocketPaths("/a.sock", "/b.sock", "/c.sock")
+	p1 := base.WithMacOSUnixSocketPaths("/d.sock")
+	p2 := base.WithMacOSUnixSocketPaths("/e.sock")
+
+	if len(base.macOS.unixSocketPaths) != 3 {
+		t.Fatalf("base socket paths = %#v, want 3 entries", base.macOS.unixSocketPaths)
+	}
+	if len(p1.macOS.unixSocketPaths) != 4 || p1.macOS.unixSocketPaths[3] != "/d.sock" {
+		t.Fatalf("p1 socket paths = %#v, want 4 entries ending with /d.sock", p1.macOS.unixSocketPaths)
+	}
+	if len(p2.macOS.unixSocketPaths) != 4 || p2.macOS.unixSocketPaths[3] != "/e.sock" {
+		t.Fatalf("p2 socket paths = %#v, want 4 entries ending with /e.sock", p2.macOS.unixSocketPaths)
+	}
+	if base.macOS.unixSocketPaths[0] != "/a.sock" || p1.macOS.unixSocketPaths[0] != "/a.sock" {
+		t.Fatalf("branched profiles mutated base socket list: base=%#v p1=%#v", base.macOS.unixSocketPaths, p1.macOS.unixSocketPaths)
+	}
+}
+
+func TestWithMacOSUnixSocketPathsSkipsEmptyPaths(t *testing.T) {
+	profile := WorkspaceWriteProfile().WithMacOSUnixSocketPaths("", "/tmp/x.sock", "")
+	if len(profile.macOS.unixSocketPaths) != 1 || profile.macOS.unixSocketPaths[0] != "/tmp/x.sock" {
+		t.Fatalf("socket paths = %#v, want only /tmp/x.sock", profile.macOS.unixSocketPaths)
+	}
+}
+
 func TestShellEnvironmentPolicyDefaultAllInheritsHostEnv(t *testing.T) {
 	t.Setenv("TRPC_SANDBOX_DEFAULT_ALL_VISIBLE", "yes")
 	rt := NewRuntime(WithPermissionProfile(DangerFullAccessProfile()))

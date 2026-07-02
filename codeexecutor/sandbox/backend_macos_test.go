@@ -411,7 +411,15 @@ func TestMacOSSandboxExecChildProcessInheritsSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run error: %v", err)
 	}
-	if strings.TrimSpace(res.Stdout) == "0" {
+	statusText := strings.TrimSpace(res.Stdout)
+	if res.ExitCode != 0 || statusText == "" {
+		t.Fatalf("child status probe did not complete: %#v", res)
+	}
+	status, parseErr := strconv.Atoi(statusText)
+	if parseErr != nil {
+		t.Fatalf("child status = %q: %v", statusText, parseErr)
+	}
+	if status == 0 {
 		t.Fatalf("child process escaped sandbox and read host temp: %#v", res)
 	}
 }
@@ -518,12 +526,22 @@ func TestMacOSSandboxExecTimeoutKillsProcessGroup(t *testing.T) {
 	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
 		Cmd:     "/bin/sh",
 		Args:    []string{"-c", "sleep 30 & echo $! > child.pid; wait"},
-		Timeout: 200 * time.Millisecond,
+		Timeout: 2 * time.Second,
 	})
 	if !isKind(err, ErrTimeout) || !res.TimedOut {
 		t.Fatalf("timeout run = result:%#v err:%v, want ErrTimeout", res, err)
 	}
-	pidBytes, readErr := os.ReadFile(filepath.Join(ws.Path, "work", "child.pid"))
+	pidPath := filepath.Join(ws.Path, "work", "child.pid")
+	var pidBytes []byte
+	var readErr error
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		pidBytes, readErr = os.ReadFile(pidPath)
+		if readErr == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if readErr != nil {
 		t.Fatalf("child pid file missing after timeout: %v", readErr)
 	}
