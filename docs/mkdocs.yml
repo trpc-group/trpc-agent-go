@@ -12,6 +12,7 @@ nav:
           - Agent: agent.md
           - Goal Extension: goal.md
           - Multi Agent: multiagent.md
+          - Dynamic Workflow: dynamic-workflow.md
           - Task Run Runtime: taskrun.md
           - Team: team.md
           - Graph Agent: graph.md
@@ -116,6 +117,7 @@ plugins:
                     - Agent: agent.md
                     - Goal 扩展: goal.md
                     - Multi Agent: multiagent.md
+                    - 动态工作流: dynamic-workflow.md
                     - Task Run 运行时: taskrun.md
                     - Team: team.md
                     - Graph Agent: graph.md
