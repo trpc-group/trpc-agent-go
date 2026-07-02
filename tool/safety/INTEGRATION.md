@@ -15,6 +15,7 @@ This document explains how the `tool/safety` package integrates with
                                        ▼
                             ┌─────────────────────┐
                             │   Runner.Run        │
+                            │   (per-run policy)  │
                             └──────────┬──────────┘
                                        │  check
                                        ▼
@@ -23,6 +24,8 @@ This document explains how the `tool/safety` package integrates with
                 │  (e.g. safety.Guard)                     │
                 │  ┌──────────────────────────────────┐    │
                 │  │  Scanner                          │    │
+                │  │   ├─ ParseFailureRule            │    │
+                │  │   ├─ ShellWrapperRule            │    │
                 │  │   ├─ DangerousCommandRule        │    │
                 │  │   ├─ NetworkAccessRule           │    │
                 │  │   ├─ ShellBypassRule             │    │
@@ -54,7 +57,7 @@ import (
     "trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
-// 1. Build a guard with the default 8 rules.
+// 1. Build a guard with the default 10 rules.
 guard := safety.NewGuard()
 
 // 2. (Optional) customize: only a subset of rules, or add an allow list.
@@ -86,6 +89,53 @@ events, err := r.Run(
 | `DecisionDeny`   | `DenyPermission(reason)` | Skipped; denial result returned to model. |
 | `DecisionAsk`    | `AskPermission(reason)`  | Skipped; approval-required result returned. |
 | `DecisionAllow`  | `AllowPermission()`      | Executed normally. |
+
+## Pre-execution Wiring (hostexec / workspaceexec)
+
+The Guard implements `tool.PermissionPolicy` for the **Runner level**,
+so every tool call is checked before the framework dispatches it. For
+executor packages (`hostexec`, `workspaceexec`, ...) that already
+expose a `tool.ToolSet`, two extra wiring paths are available without
+modifying the executor packages themselves:
+
+### Option A — Runner-level injection (recommended)
+
+```go
+guard := safety.NewGuard()
+r.Run(ctx, userID, sessionID, msg,
+    agent.WithToolPermissionPolicy(guard),
+)
+```
+
+This is the lowest-friction path: the guard is consulted by the
+framework before any tool is dispatched, and the executor packages do
+not need to know about safety.
+
+### Option B — Wrap a ToolSet (per-tool gating)
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
+    "trpc.group/trpc-go/trpc-agent-go/tool/safety"
+)
+
+hostexecTS, _ := hostexec.NewToolSet()
+guard := safety.NewGuard()
+
+// Every tool exposed by hostexec is now gated by guard.
+guardedTS := safety.WrapToolSet(hostexecTS, guard)
+
+// Pass `guardedTS` to the agent / runner instead of hostexecTS.
+```
+
+`WrapToolSet` is a thin shim: it forwards `Tools(ctx)`, `Close()`, and
+`Name()` to the inner tool set, but returns a wrapped slice so each
+tool's `Call` is checked by the guard first. A nil guard is a no-op,
+and a denied / approval-required call returns a structured
+`tool.PermissionResult` instead of invoking the inner implementation.
+
+`WrapTool` and `WrapTools` are the corresponding single-tool / slice
+helpers; pick whichever shape matches your integration.
 
 ## Audit and Observability
 
@@ -134,4 +184,12 @@ modifying their internal logic. Reviewers can verify the contract in
 `Guard.CheckToolPermission`, and the rule logic stays modular and
 unit-testable in `Scanner.Scan`.
 
-See `examples/tool_safety_guard/main.go` for a runnable demo.
+For executor packages that prefer a per-tool wiring shim, `WrapToolSet`
+provides a one-liner that intercepts every `Call` before the
+underlying implementation runs. This is a complementary path to the
+Runner-level `WithToolPermissionPolicy`, not a replacement: both can
+coexist (the Runner policy runs first, then the wrapped tool's
+`Call` performs its own check).
+
+See `examples/tool_safety_guard/main.go` for a runnable demo and
+`tool/safety/wiring_test.go` for the wrap-tool contract tests.
