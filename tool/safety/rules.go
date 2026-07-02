@@ -477,3 +477,92 @@ func (r *AskForReviewRule) Check(input ScanInput) *ScanResult {
 	}
 	return nil
 }
+
+// ---------- Rule 9: Parse Failure (fail-closed) ----------
+
+// ParseFailureRule denies any command that the shellsafe parser
+// rejects. This is the "fail-closed" half of the safety contract:
+// a structurally unsafe command (variable expansion, command
+// substitution, subshells, ...) must never reach the executor even
+// if no other rule fires.
+//
+// Empty input is treated as "no rule applies" and returns nil, so
+// non-command code blocks (e.g. pure documentation snippets) are
+// not penalised.
+type ParseFailureRule struct{}
+
+// NewParseFailureRule creates a rule that fails closed on parser errors.
+func NewParseFailureRule() *ParseFailureRule { return &ParseFailureRule{} }
+
+// ID returns the unique identifier of this rule.
+func (r *ParseFailureRule) ID() string { return "parse_fail_009" }
+
+// Check parses the input.Command via shellsafe. On any parse error
+// the rule returns DecisionDeny with RiskCritical.
+func (r *ParseFailureRule) Check(input ScanInput) *ScanResult {
+	cmd := strings.TrimSpace(input.Command)
+	if cmd == "" {
+		return nil
+	}
+	if _, err := ParseCommand(cmd); err != nil {
+		return &ScanResult{
+			Decision:  DecisionDeny,
+			RiskLevel: RiskCritical,
+			RuleID:    r.ID(),
+			Evidence:  err.Error(),
+			Reason:    "unparsable command (shellsafe rejected): " + err.Error(),
+		}
+	}
+	return nil
+}
+
+// ---------- Rule 10: Shell Wrapper Detection (structural) ----------
+
+// ShellWrapperRule denies commands whose pipeline starts with a
+// shell wrapper / re-executing builtin (sh, bash, sudo, xargs,
+// eval, ...). The check is structural - it inspects argv[0] of
+// every segment via the shellsafe parser rather than scanning the
+// raw command text, so encoded / wrapped forms ("$(echo sh)",
+// "/usr/bin/SH", "sh.exe", "${X}sh") cannot smuggle past.
+//
+// Empty input is treated as "no rule applies" and returns nil.
+type ShellWrapperRule struct{}
+
+// NewShellWrapperRule creates a rule that denies shell wrappers.
+func NewShellWrapperRule() *ShellWrapperRule { return &ShellWrapperRule{} }
+
+// ID returns the unique identifier of this rule.
+func (r *ShellWrapperRule) ID() string { return "shell_wrapper_010" }
+
+// Check parses the input.Command via shellsafe and rejects any
+// segment whose argv[0] is a known shell wrapper.
+//
+// If the command cannot be parsed at all, the rule returns nil so it
+// does not double-report the failure (that is ParseFailureRule's job).
+// The fail-closed behaviour is still preserved because the parser
+// will emit a separate deny.
+func (r *ShellWrapperRule) Check(input ScanInput) *ScanResult {
+	cmd := strings.TrimSpace(input.Command)
+	if cmd == "" {
+		return nil
+	}
+	parsed, err := ParseCommand(cmd)
+	if err != nil {
+		return nil
+	}
+	for _, seg := range parsed.Segments {
+		if len(seg) == 0 {
+			continue
+		}
+		if IsShellWrapper(seg[0]) {
+			return &ScanResult{
+				Decision:  DecisionDeny,
+				RiskLevel: RiskCritical,
+				RuleID:    r.ID(),
+				Evidence:  seg[0],
+				Reason:    "shell wrapper detected: " + seg[0],
+			}
+		}
+	}
+	return nil
+}

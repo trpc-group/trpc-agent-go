@@ -53,6 +53,8 @@ func TestSamplesFromTestdata(t *testing.T) {
 	for _, s := range samples {
 		t.Run(s.Name, func(t *testing.T) {
 			rules := []Rule{
+				NewParseFailureRule(),
+				NewShellWrapperRule(),
 				NewDangerousCommandRule(),
 				NewNetworkAccessRuleWithAllowlist(s.AllowedDomains),
 				NewShellBypassRule(),

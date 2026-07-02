@@ -59,6 +59,8 @@ func NewGuard(opts ...GuardOption) *Guard {
 	}
 	if g.scanner == nil {
 		g.scanner = NewScanner(
+			NewParseFailureRule(),
+			NewShellWrapperRule(),
 			NewDangerousCommandRule(),
 			NewNetworkAccessRule(),
 			NewShellBypassRule(),

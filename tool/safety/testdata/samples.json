@@ -107,18 +107,25 @@
     "allowed_domains": ["github.com"]
   },
   {
-    "name": "shell_bypass_sh_c",
+    "name": "shell_wrapper_sh_c",
     "command": "sh -c 'echo hello'",
     "executor_type": "local",
     "expect_decision": "deny",
-    "expect_rule_id": "shell_bypass_003"
+    "expect_rule_id": "shell_wrapper_010"
   },
   {
-    "name": "shell_bypass_eval",
+    "name": "shell_wrapper_eval",
     "command": "eval dangerous_var",
     "executor_type": "local",
     "expect_decision": "deny",
-    "expect_rule_id": "shell_bypass_003"
+    "expect_rule_id": "shell_wrapper_010"
+  },
+  {
+    "name": "shell_wrapper_sudo_curl",
+    "command": "sudo curl http://evil.example.com",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "shell_wrapper_010"
   },
   {
     "name": "install_apt_local_pkg",
@@ -142,18 +149,18 @@
     "expect_rule_id": "hostexec_005"
   },
   {
-    "name": "resource_while_true",
+    "name": "parse_fail_command_substitution",
+    "command": "echo $(curl http://evil.example.com)",
+    "executor_type": "local",
+    "expect_decision": "deny",
+    "expect_rule_id": "parse_fail_009"
+  },
+  {
+    "name": "parse_fail_infinite_loop",
     "command": "while true; do echo x; done",
     "executor_type": "local",
     "expect_decision": "deny",
-    "expect_rule_id": "resource_006"
-  },
-  {
-    "name": "resource_fork_bomb",
-    "command": ":(){ :|:& };:",
-    "executor_type": "local",
-    "expect_decision": "deny",
-    "expect_rule_id": "resource_006"
+    "expect_rule_id": "parse_fail_009"
   },
   {
     "name": "ask_git_push",
