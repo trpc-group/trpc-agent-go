@@ -27,11 +27,11 @@ func TestFullReport(t *testing.T) {
 	h.AddBackend(backend)
 	report, err := h.Run(AllCases())
 	require.NoError(t, err)
-	require.Equal(t, 13, report.TotalCases)
-	require.Equal(t, 13, report.PassedCases)
+	require.Equal(t, 14, report.TotalCases)
+	require.Equal(t, 14, report.PassedCases)
 	require.Equal(t, 0, report.FailedCases)
 	require.Equal(t, 0, report.SkippedCases)
-	require.Len(t, report.Results, 13)
+	require.Len(t, report.Results, 14)
 	requireAllCaseNames(t, report)
 
 	var out bytes.Buffer
@@ -47,8 +47,8 @@ func TestFullReport(t *testing.T) {
 	var sample Report
 	require.NoError(t, json.Unmarshal(raw, &sample))
 	require.False(t, sample.GeneratedAt.IsZero())
-	require.Equal(t, 13, sample.TotalCases)
-	require.Equal(t, 13, sample.PassedCases)
+	require.Equal(t, 14, sample.TotalCases)
+	require.Equal(t, 14, sample.PassedCases)
 	require.Equal(t, 0, sample.FailedCases)
 	require.Equal(t, 0, sample.SkippedCases)
 	requireAllCaseNames(t, &sample)

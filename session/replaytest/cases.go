@@ -122,6 +122,18 @@ var CaseSummaryWithTruncation = ReplayCase{
 	},
 }
 
+// CaseSummaryWithFilterKey covers keyed summary persistence and lookup.
+var CaseSummaryWithFilterKey = ReplayCase{
+	Name:        "summary_with_filter_key",
+	Description: "summary creation with non-empty filter key",
+	Steps: []ReplayStep{
+		AppendEventStep{Key: "c14.user.1", Event: userEvent("c14.user.1", "branch summary input")},
+		AppendEventStep{Key: "c14.assistant.1", Event: assistantEvent("c14.assistant.1", "branch summary result")},
+		CreateSummaryStep{Key: "c14.summary", SessionKey: defaultSessionKey, FilterKey: "branch", Force: true},
+		GetSessionStep{Key: "c14.get", SessionKey: defaultSessionKey},
+	},
+}
+
 // CaseTrackEvents covers track event persistence.
 var CaseTrackEvents = ReplayCase{
 	Name:         "track_events",
@@ -195,6 +207,7 @@ func AllCases() []ReplayCase {
 		CaseMemoryWriteAndRead,
 		CaseSummaryGeneration,
 		CaseSummaryWithTruncation,
+		CaseSummaryWithFilterKey,
 		CaseTrackEvents,
 		CaseConcurrentInterleaved,
 		CaseSummaryAsyncPipeline,

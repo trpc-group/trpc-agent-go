@@ -101,23 +101,37 @@ func TestSummaryReplayCasesRunWithFakeSummarizer(t *testing.T) {
 	defer memorySvc.Close()
 
 	h.AddBackend(summaryNamedBackend(sessionSvc, memorySvc))
-	report, err := h.Run([]ReplayCase{CaseSummaryGeneration, CaseSummaryWithTruncation})
+	report, err := h.Run([]ReplayCase{CaseSummaryGeneration, CaseSummaryWithTruncation, CaseSummaryWithFilterKey})
 	require.NoError(t, err)
-	require.Equal(t, 2, report.PassedCases)
+	require.Equal(t, 3, report.PassedCases)
 
-	for _, tc := range []ReplayCase{CaseSummaryGeneration, CaseSummaryWithTruncation} {
+	for _, tc := range []struct {
+		replayCase ReplayCase
+		filterKey  string
+	}{
+		{replayCase: CaseSummaryGeneration, filterKey: session.SummaryFilterKeyAllContents},
+		{replayCase: CaseSummaryWithTruncation, filterKey: session.SummaryFilterKeyAllContents},
+		{replayCase: CaseSummaryWithFilterKey, filterKey: "branch"},
+	} {
 		sessionSvc, memorySvc := newSummaryReplayServices()
 		defer sessionSvc.Close()
 		defer memorySvc.Close()
-		snapshot, err := executeCase(context.Background(), tc, summaryNamedBackend(sessionSvc, memorySvc))
+		snapshot, err := executeCase(context.Background(), tc.replayCase, summaryNamedBackend(sessionSvc, memorySvc))
 		require.NoError(t, err)
-		require.NotEmpty(t, snapshot.Session.Events, tc.Name)
-		require.NotEmpty(t, snapshot.Session.Summaries, tc.Name)
-		require.Contains(t, snapshot.Session.Summaries, session.SummaryFilterKeyAllContents, tc.Name)
-		require.NotEmpty(t, snapshot.Session.Summaries[session.SummaryFilterKeyAllContents].Summary, tc.Name)
+		require.NotEmpty(t, snapshot.Session.Events, tc.replayCase.Name)
+		require.NotEmpty(t, snapshot.Session.Summaries, tc.replayCase.Name)
+		require.Contains(t, snapshot.Session.Summaries, tc.filterKey, tc.replayCase.Name)
+		require.NotEmpty(t, snapshot.Session.Summaries[tc.filterKey].Summary, tc.replayCase.Name)
 		text, ok := sessionSvc.GetSessionSummaryText(context.Background(), snapshot.Session)
-		require.True(t, ok, tc.Name)
-		require.NotEmpty(t, text, tc.Name)
+		if tc.filterKey != session.SummaryFilterKeyAllContents {
+			text, ok = sessionSvc.GetSessionSummaryText(
+				context.Background(),
+				snapshot.Session,
+				session.WithSummaryFilterKey(tc.filterKey),
+			)
+		}
+		require.True(t, ok, tc.replayCase.Name)
+		require.NotEmpty(t, text, tc.replayCase.Name)
 	}
 }
 

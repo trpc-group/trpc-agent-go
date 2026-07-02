@@ -4,8 +4,8 @@
   "backends": [
     "inmemory"
   ],
-  "total_cases": 13,
-  "passed_cases": 13,
+  "total_cases": 14,
+  "passed_cases": 14,
   "failed_cases": 0,
   "skipped_cases": 0,
   "total_diffs": 0,
@@ -84,6 +84,16 @@
     },
     {
       "case": "summary_with_truncation",
+      "comparisons": [
+        {
+          "reference": "inmemory",
+          "status": "passed"
+        }
+      ],
+      "overall_status": "passed"
+    },
+    {
+      "case": "summary_with_filter_key",
       "comparisons": [
         {
           "reference": "inmemory",

@@ -18,7 +18,7 @@ import (
 
 func TestAllCases(t *testing.T) {
 	cases := AllCases()
-	require.Len(t, cases, 13)
+	require.Len(t, cases, 14)
 	seen := map[string]bool{}
 	for _, tc := range cases {
 		require.NotEmpty(t, tc.Name)
@@ -26,6 +26,7 @@ func TestAllCases(t *testing.T) {
 		require.False(t, seen[tc.Name])
 		seen[tc.Name] = true
 	}
+	require.True(t, seen[CaseSummaryWithFilterKey.Name])
 }
 
 func TestCasesInjectFault(t *testing.T) {
