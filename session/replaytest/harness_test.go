@@ -308,11 +308,11 @@ func TestExecuteAppendTrackCapturesPersistedTrack(t *testing.T) {
 	require.JSONEq(t, `{"status":"ok"}`, string(snapshot.TrackEvents["tool"].Events[0].Payload))
 }
 
-func TestExecuteAppendTrackIgnoresSessionServiceWithoutTrackSupport(t *testing.T) {
+func TestExecuteAppendTrackRequiresTrackService(t *testing.T) {
 	sessionSvc := sessioninmemory.NewSessionService()
 	defer sessionSvc.Close()
 
-	snapshot, err := executeCase(context.Background(), ReplayCase{
+	_, err := executeCase(context.Background(), ReplayCase{
 		Name: "append_track_unsupported",
 		Steps: []ReplayStep{
 			AppendTrackStep{
@@ -330,8 +330,8 @@ func TestExecuteAppendTrackIgnoresSessionServiceWithoutTrackSupport(t *testing.T
 		Profile:        InMemoryProfile(),
 		SessionService: sessionOnlyService{Service: sessionSvc},
 	})
-	require.NoError(t, err)
-	require.Empty(t, snapshot.TrackEvents)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "TrackService")
 }
 
 func TestHarnessNoMatchingBackend(t *testing.T) {

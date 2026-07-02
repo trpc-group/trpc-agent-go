@@ -351,7 +351,7 @@ func (e *caseExecutor) executeAppendTrack(ctx context.Context, step AppendTrackS
 	}
 	trackSvc, ok := e.backend.SessionService.(session.TrackService)
 	if !ok {
-		return nil
+		return fmt.Errorf("append track step requires session.TrackService support")
 	}
 	return trackSvc.AppendTrackEvent(ctx, sess, step.Event)
 }
