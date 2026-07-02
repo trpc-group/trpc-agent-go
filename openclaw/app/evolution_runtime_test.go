@@ -60,7 +60,8 @@ func TestMaybeCreateEvolutionService_MockMode(t *testing.T) {
 		ModelMode:        modeMock,
 	}
 	svc := maybeCreateEvolutionService(opts, repo)
-	assert.Nil(t, svc, "should return nil when model mode is mock")
+	assert.NotNil(t, svc, "should reuse the configured mock model")
+	t.Cleanup(func() { _ = svc.Close() })
 }
 
 func TestMaybeCreateEvolutionService_Success(t *testing.T) {
@@ -94,7 +95,7 @@ func TestMaybeCreateEvolutionService_DefaultModel(t *testing.T) {
 		EvolutionEnabled: true,
 		StateDir:         dir,
 		ModelMode:        modeOpenAI,
-		OpenAIModel:      "", // empty → uses defaultOpenAIModel
+		OpenAIModel:      defaultOpenAIModel,
 	}
 	svc := maybeCreateEvolutionService(opts, repo)
 	assert.NotNil(t, svc, "should create service with default model name")
@@ -118,6 +119,22 @@ func TestMaybeCreateEvolutionService_WithBaseURL(t *testing.T) {
 	t.Cleanup(func() { _ = svc.Close() })
 }
 
+func TestMaybeCreateEvolutionService_InvalidModelConfig(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := skill.NewFSRepository(dir)
+	require.NoError(t, err)
+
+	opts := runOptions{
+		EvolutionEnabled: true,
+		StateDir:         dir,
+		ModelMode:        modeOpenAI,
+		OpenAIModel:      "gpt-4o-mini",
+		OpenAIVariant:    "unsupported",
+	}
+	svc := maybeCreateEvolutionService(opts, repo)
+	assert.Nil(t, svc, "should fail when the shared model config is invalid")
+}
+
 func TestMaybeCreateEvolutionService_InvalidManagedDir(t *testing.T) {
 	dir := t.TempDir()
 	repo, err := skill.NewFSRepository(dir)
@@ -139,32 +156,4 @@ func TestMaybeCreateEvolutionService_InvalidManagedDir(t *testing.T) {
 	}
 	svc := maybeCreateEvolutionService(opts, repo)
 	assert.Nil(t, svc, "should return nil when skills dir cannot be created")
-}
-
-func TestNewEvolutionReviewerModel_Mock(t *testing.T) {
-	opts := runOptions{ModelMode: modeMock}
-	mdl := newEvolutionReviewerModel(opts)
-	assert.Nil(t, mdl)
-}
-
-func TestNewEvolutionReviewerModel_DefaultName(t *testing.T) {
-	opts := runOptions{ModelMode: modeOpenAI, OpenAIModel: ""}
-	mdl := newEvolutionReviewerModel(opts)
-	assert.NotNil(t, mdl)
-}
-
-func TestNewEvolutionReviewerModel_CustomName(t *testing.T) {
-	opts := runOptions{ModelMode: modeOpenAI, OpenAIModel: "gpt-4o"}
-	mdl := newEvolutionReviewerModel(opts)
-	assert.NotNil(t, mdl)
-}
-
-func TestNewEvolutionReviewerModel_WithBaseURL(t *testing.T) {
-	opts := runOptions{
-		ModelMode:     modeOpenAI,
-		OpenAIModel:   "gpt-4o",
-		OpenAIBaseURL: "https://example.com/v1",
-	}
-	mdl := newEvolutionReviewerModel(opts)
-	assert.NotNil(t, mdl)
 }

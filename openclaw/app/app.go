@@ -204,8 +204,12 @@ const (
 		"pattern, or to remember an executable workflow or " +
 		"integration, prefer creating or updating a local " +
 		"skill over treating it as a one-off answer. For " +
-		"lightweight facts, preferences, or simple standing " +
-		"rules, use memory instead. " +
+		"lightweight facts, stable persona or tone preferences, " +
+		"and simple non-procedural standing facts, use memory " +
+		"instead. Do not use memory for reusable task workflows, " +
+		"output formats, tool procedures, or post-task feedback " +
+		"unless the user explicitly asks to save that content as " +
+		"memory. " +
 		"Use platform code and tools for stable safety " +
 		"boundaries, secrets, permissions, file paths, " +
 		"validation, and execution guarantees; use skill " +
@@ -395,7 +399,14 @@ const (
 		"tool or skill names, then call `dynamic_agent`; pass exact " +
 		"tool names such as web_fetch or browser in its `tools` " +
 		"field, and pass only real skill names in its `skills` " +
-		"field. Use `dynamic_agent` for broader " +
+		"field. Skill-backed work is tool-backed work. If a direct " +
+		"`skill_load` tool is available and the user names a skill or " +
+		"the task clearly matches a listed skill description, call " +
+		"`skill_load` first. If direct `skill_load` is unavailable, " +
+		"use `tool_search` to find the matching skill, then call " +
+		"`dynamic_agent` with that skill name. Do not answer a " +
+		"matching skill task directly from prior knowledge before the " +
+		"skill has been loaded or delegated. Use `dynamic_agent` for broader " +
 		"files, uploads, browser automation, shell work, messaging, " +
 		"cron, memory, skills, knowledge, external tools, or " +
 		"verification. Give the sub-agent a self-contained request " +
@@ -2798,6 +2809,12 @@ func newAgent(
 		)
 	}
 	if deferToolSurface {
+		opts = appendDeferredSkillOverviewOptions(
+			opts,
+			cfg,
+			repo,
+			repoProvider,
+		)
 		searchTool := newDeferredCapabilitySearchTool(
 			deferredToolSurfaceConfig{
 				Model:         mdl,
