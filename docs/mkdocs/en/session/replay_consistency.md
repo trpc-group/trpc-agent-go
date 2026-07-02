@@ -84,7 +84,7 @@ Summary comparison covers:
 - full summary: `session.SummaryFilterKeyAllContents`
 - filter-key summaries such as `root/tools/weather`
 - summary overwrite/update
-- `SummaryBoundary` version, filter key, cutoff, and last event ID
+- `SummaryBoundary` version, filter key, and cutoff
 - `GetSessionSummaryText` results
 
 Track comparison covers:
