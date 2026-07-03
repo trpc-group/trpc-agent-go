@@ -2871,6 +2871,10 @@ func newAgent(
 		cfg.MemoryFileStore,
 		cfg.StateDir,
 	)
+	registerToolArgumentGuardCallback(
+		callbacks,
+		os.Getenv(envBlockedToolArgumentSubstrings),
+	)
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 
 	exec := cfg.codeExecutor
