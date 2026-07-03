@@ -1379,6 +1379,7 @@ func NewRuntimeWithOptions(
 			),
 		),
 	)
+	gwOpts = appendModelCompatibilityGatewayRunOptions(gwOpts, opts)
 	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
@@ -1996,6 +1997,7 @@ func run(
 			),
 		),
 	)
+	gwOpts = appendModelCompatibilityGatewayRunOptions(gwOpts, opts)
 	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
@@ -3921,6 +3923,40 @@ func parseOpenAIVariant(
 		return variant, nil
 	default:
 		return "", fmt.Errorf("unsupported openai variant: %s", raw)
+	}
+}
+
+func appendModelCompatibilityGatewayRunOptions(
+	opts []gateway.Option,
+	runOpts runOptions,
+) []gateway.Option {
+	staticRunOpts := modelCompatibilityRunOptions(runOpts)
+	if len(staticRunOpts) == 0 {
+		return opts
+	}
+	return append(
+		opts,
+		gateway.WithRunOptionResolver(func(
+			ctx context.Context,
+			_ gateway.RunOptionInput,
+		) (context.Context, []agent.RunOption, error) {
+			return ctx, append([]agent.RunOption(nil), staticRunOpts...), nil
+		}),
+	)
+}
+
+func modelCompatibilityRunOptions(
+	opts runOptions,
+) []agent.RunOption {
+	if strings.TrimSpace(opts.ModelMode) != modeOpenAI {
+		return nil
+	}
+	variant, err := parseOpenAIVariant(opts.OpenAIVariant, opts.OpenAIBaseURL)
+	if err != nil || variant != openai.VariantGLM {
+		return nil
+	}
+	return []agent.RunOption{
+		agent.WithToolCallArgumentsJSONRepairEnabled(true),
 	}
 }
 

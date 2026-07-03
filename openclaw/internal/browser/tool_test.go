@@ -1539,6 +1539,19 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 			},
 		},
 		{
+			name: "press key schema alias",
+			input: map[string]any{
+				"action": actionAct,
+				"kind":   "press/key",
+				"key":    "End",
+			},
+			wantTool: mcpToolPressKey,
+			assertArg: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, "End", call.Args["key"])
+			},
+		},
+		{
 			name: "hover",
 			input: map[string]any{
 				"action": actionAct,

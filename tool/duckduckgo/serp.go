@@ -73,6 +73,21 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 		}
 		return fallback, nil
 	}
+	if apiFallback, ok := t.searchAPIFallbackAfterSERPFailure(
+		ctx,
+		req,
+		backend,
+		baseURL,
+	); ok {
+		if strings.TrimSpace(apiFallback.Summary) != "" {
+			apiFallback.Summary += fmt.Sprintf(
+				" (fallback from %s/%s after SERP failure)",
+				backend,
+				fallbackBackend,
+			)
+		}
+		return apiFallback, nil
+	}
 	result.Summary = fmt.Sprintf(
 		"%s; fallback %s failed: %v",
 		result.Summary,
@@ -216,6 +231,22 @@ func fallbackSERPBackend(backend string) string {
 	}
 }
 
+func (t *ddgTool) searchAPIFallbackAfterSERPFailure(
+	ctx context.Context,
+	req searchRequest,
+	backend string,
+	baseURL string,
+) (searchResponse, bool) {
+	if ctx.Err() != nil || !isDefaultSERPBaseURL(backend, baseURL) {
+		return searchResponse{}, false
+	}
+	result, err := t.searchAPIWithDefaultBaseURL(req)
+	if err != nil || len(result.Results) == 0 {
+		return searchResponse{}, false
+	}
+	return result, true
+}
+
 func fallbackSERPBaseURL(backend string, baseURL string) string {
 	fallbackBackend := fallbackSERPBackend(backend)
 	if fallbackBackend == "" {
@@ -242,6 +273,11 @@ func fallbackSERPBaseURL(backend string, baseURL string) string {
 		return u.String()
 	}
 	return ""
+}
+
+func isDefaultSERPBaseURL(backend string, baseURL string) bool {
+	baseURL = strings.TrimSpace(baseURL)
+	return baseURL == "" || baseURL == defaultBaseURLForBackend(backend)
 }
 
 func apiFallbackSERPBaseURL(apiBaseURL string) string {

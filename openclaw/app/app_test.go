@@ -4232,6 +4232,46 @@ func TestParseOpenAIVariant_Unknown(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestModelCompatibilityRunOptions_GLMEnablesJSONRepair(t *testing.T) {
+	t.Parallel()
+
+	runOpts := modelCompatibilityRunOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantGLM),
+	})
+	require.NotEmpty(t, runOpts)
+	agentOpts := agent.NewRunOptions(runOpts...)
+	require.NotNil(t, agentOpts.ToolCallArgumentsJSONRepairEnabled)
+	require.True(t, *agentOpts.ToolCallArgumentsJSONRepairEnabled)
+}
+
+func TestModelCompatibilityRunOptions_GLMCanBeInferred(t *testing.T) {
+	t.Parallel()
+
+	runOpts := modelCompatibilityRunOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: openAIVariantAuto,
+		OpenAIBaseURL: "https://open.bigmodel.cn/api/paas/v4",
+	})
+	require.NotEmpty(t, runOpts)
+	agentOpts := agent.NewRunOptions(runOpts...)
+	require.NotNil(t, agentOpts.ToolCallArgumentsJSONRepairEnabled)
+	require.True(t, *agentOpts.ToolCallArgumentsJSONRepairEnabled)
+}
+
+func TestModelCompatibilityRunOptions_NonGLMUnaffected(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, modelCompatibilityRunOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantOpenAI),
+	}))
+	require.Empty(t, modelCompatibilityRunOptions(runOptions{
+		ModelMode:     modeMock,
+		OpenAIVariant: string(openai.VariantGLM),
+	}))
+}
+
 func TestInferOpenAIVariant(t *testing.T) {
 	require.Equal(
 		t,
