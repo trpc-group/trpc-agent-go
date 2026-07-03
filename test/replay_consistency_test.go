@@ -45,6 +45,7 @@ type backendBundle struct {
 	sessionService session.Service
 	trackService   session.TrackService
 	memoryService  memory.Service
+	sqliteMemoryDB *sql.DB
 	summarizer     *deterministicSummarizer
 }
 
@@ -247,8 +248,9 @@ func makeReplayBackends(t *testing.T) []backendBundle {
 		sesssqlite.WithSummarizer(sqliteSummarizer),
 	)
 	require.NoError(t, err)
+	sqliteMemoryDB := openSQLiteDB(t, "replay-memory")
 	sqliteMemoryService, err := memsqlite.NewService(
-		openSQLiteDB(t, "replay-memory"),
+		sqliteMemoryDB,
 		memsqlite.WithMinSearchScore(0),
 		memsqlite.WithMaxResults(0),
 	)
@@ -267,6 +269,7 @@ func makeReplayBackends(t *testing.T) []backendBundle {
 			sessionService: sqliteSessionService,
 			trackService:   sqliteSessionService,
 			memoryService:  sqliteMemoryService,
+			sqliteMemoryDB: sqliteMemoryDB,
 			summarizer:     sqliteSummarizer,
 		},
 	}
@@ -1064,6 +1067,54 @@ func refreshReplayCaseResultSnapshot(
 	}
 }
 
+// injectSQLiteReplayMemoryRow bypasses AddMemory so anomaly tests can model a
+// backend bug that persists duplicate retry effects despite idempotent APIs.
+func injectSQLiteReplayMemoryRow(
+	t *testing.T,
+	ctx context.Context,
+	backend backendBundle,
+	key session.Key,
+	memoryID string,
+	content string,
+	topics []string,
+) {
+	t.Helper()
+	require.NotNil(t, backend.sqliteMemoryDB)
+
+	now := replayBaseTime.Add(100 * time.Second)
+	entry := &memory.Entry{
+		ID:      memoryID,
+		AppName: key.AppName,
+		UserID:  key.UserID,
+		Memory: &memory.Memory{
+			Memory:      content,
+			Topics:      append([]string(nil), topics...),
+			LastUpdated: &now,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	memoryData, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	const insertSQL = `
+INSERT INTO memories (
+  memory_id, app_name, user_id, memory_data, created_at, updated_at,
+  deleted_at
+) VALUES (?, ?, ?, ?, ?, ?, NULL)`
+	_, err = backend.sqliteMemoryDB.ExecContext(
+		ctx,
+		insertSQL,
+		memoryID,
+		key.AppName,
+		key.UserID,
+		memoryData,
+		now.UTC().UnixNano(),
+		now.UTC().UnixNano(),
+	)
+	require.NoError(t, err)
+}
+
 func applyReplayMemoriesConcurrently(
 	t *testing.T,
 	ctx context.Context,
@@ -1856,7 +1907,7 @@ func basicReplayCases() []replayCase {
 			},
 		},
 		{
-			name: "concurrent_retry_writes",
+			name: "concurrent_writes",
 			events: []eventSpec{
 				replayUserEvent(
 					"run concurrent memory writes",
@@ -1879,24 +1930,24 @@ func basicReplayCases() []replayCase {
 				{
 					name:    "concurrent fact",
 					op:      "add",
-					content: "Concurrent write records retry-safe project fact.",
+					content: "Concurrent write records project fact.",
 					topics:  []string{"concurrency", "fact"},
 				},
 				{
-					name:    "retry first attempt",
+					name:    "duplicate content first write",
 					op:      "add",
-					content: "Retry write should remain idempotent across backends.",
-					topics:  []string{"retry", "idempotency"},
+					content: "Concurrent write records repeated project note.",
+					topics:  []string{"concurrency", "duplicate"},
 				},
 				{
-					name:    "retry second attempt",
+					name:    "duplicate content second write",
 					op:      "add",
-					content: "Retry write should remain idempotent across backends.",
-					topics:  []string{"retry", "idempotency"},
+					content: "Concurrent write records repeated project note.",
+					topics:  []string{"concurrency", "duplicate"},
 				},
 			},
 			queries: []memoryQuerySpec{
-				{query: "concurrent retry idempotent", minResults: 2},
+				{query: "concurrent repeated project note", minResults: 2},
 			},
 		},
 		{
@@ -2474,6 +2525,40 @@ func TestReplayConsistencyAnomaly_SQLitePublicAPIInjection(t *testing.T) {
 			requireReplayReportFields(t, reportPath)
 		})
 	}
+}
+
+func TestReplayConsistencyAnomaly_SQLiteStorageInjection(t *testing.T) {
+	ctx := context.Background()
+	reportPath := filepath.Join(t.TempDir(), "replay-storage-injection-report.json")
+	t.Setenv("TRPC_AGENT_REPLAY_REPORT_PATH", reportPath)
+
+	diffs := runReplayCaseWithBackendInjection(
+		t,
+		ctx,
+		replayCaseByName(t, "concurrent_writes"),
+		"sqlite",
+		func(t *testing.T, ctx context.Context, backend backendBundle, key session.Key) {
+			injectSQLiteReplayMemoryRow(
+				t,
+				ctx,
+				backend,
+				key,
+				"retry-duplicate-"+key.SessionID,
+				"Concurrent write records repeated project note.",
+				[]string{"concurrency", "duplicate"},
+			)
+		},
+	)
+	require.NotEmpty(t, diffs)
+	for _, diff := range diffs {
+		require.False(t, diff.Allowed)
+	}
+	found := requireReplayDiff(t, diffs, "memory", "$.memory[*]*", nil)
+	require.NotNil(t, found.Context)
+	require.Contains(t, found.Context, "memory_key")
+
+	require.NoError(t, writeReplayDiffReport("", diffs))
+	requireReplayReportFields(t, reportPath)
 }
 
 func TestReplayConsistencyAllowedDiffRules_RequireExplicitMatch(t *testing.T) {
