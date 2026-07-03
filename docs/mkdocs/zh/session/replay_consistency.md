@@ -98,10 +98,11 @@ track 比较重点：
 
 ## 异常检测
 
-测试框架包含两类异常注入：
+测试框架包含三类异常注入：
 
 - snapshot mutation：partial event loss、summary loss、wrong session attribution、wrong summary filter key、track payload drift、track order drift
 - SQLite/public API injection：duplicate event、state pollution、memory pollution、summary overwrite
+- SQLite/storage injection：直接注入 duplicate memory row，用于模拟 backend retry bug 或 duplicate retry effect，并验证它会被报告为 unallowed memory diff
 
 这些异常默认都必须产生 unallowed diff。正常 replay matrix 的误报必须为 0。
 

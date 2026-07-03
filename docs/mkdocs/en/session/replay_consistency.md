@@ -98,10 +98,11 @@ Note that `AppendTrackEvent` maintains `state["tracks"]`. When debugging track d
 
 ## Anomaly Detection
 
-The test harness includes two kinds of anomaly injection:
+The test harness includes three kinds of anomaly injection:
 
 - snapshot mutation: partial event loss, summary loss, wrong session attribution, wrong summary filter key, track payload drift, and track order drift
 - SQLite/public API injection: duplicate event, state pollution, memory pollution, and summary overwrite
+- SQLite/storage injection: a duplicate memory row that simulates a backend retry bug or duplicate retry effect and verifies that it is reported as an unallowed memory diff
 
 Injected anomalies must produce unallowed diffs by default. The normal replay matrix must have zero false positives.
 
