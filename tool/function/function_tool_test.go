@@ -80,6 +80,25 @@ func TestFunctionTool_EmptyInputArgs(t *testing.T) {
 	}
 }
 
+func TestFunctionTool_EmptyArgsRejectedWhenInputHasProperties(t *testing.T) {
+	type inputArgs struct {
+		A int `json:"a"`
+	}
+	fn := func(_ context.Context, args inputArgs) (inputArgs, error) {
+		return args, nil
+	}
+	fTool := function.NewFunctionTool(fn, function.WithName("NeedsArgsTool"))
+
+	_, err := fTool.Call(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil args on tool with input properties, got nil")
+	}
+	_, err = fTool.Call(context.Background(), []byte{})
+	if err == nil {
+		t.Fatal("expected error for empty args on tool with input properties, got nil")
+	}
+}
+
 // Helper function to create Arguments from any struct.
 func toArguments(t *testing.T, v any) json.RawMessage {
 	t.Helper()
