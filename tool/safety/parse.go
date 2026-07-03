@@ -95,38 +95,79 @@ func isFlag(s string) bool {
 	return strings.HasPrefix(s, "-") && s != "-"
 }
 
-// extractHost returns the target host of a network command's arguments, if one
-// can be determined. It understands scheme URLs, user@host forms and bare
-// host[:port][/path] tokens.
-func extractHost(argv []string) (string, bool) {
+// operandCandidates returns the path/host candidate strings in a command's
+// arguments. Beyond the raw tokens it expands operands embedded in options so
+// they are not missed by denied-path or host matching: option values
+// (--output=/etc/shadow, --url=https://x), curl-style file uploads
+// (@/etc/shadow, name=@/etc/shadow) and short flags with an attached path
+// (-o/etc/shadow).
+func operandCandidates(argv []string) []string {
+	out := make([]string, 0, len(argv))
 	for _, a := range argv[1:] {
-		if a == "" || isFlag(a) {
+		if a == "" {
 			continue
 		}
-		if h := hostFromToken(a); h != "" {
-			return h, true
+		out = append(out, a)
+		if i := strings.IndexByte(a, '='); i >= 0 && i+1 < len(a) {
+			out = append(out, a[i+1:])
+		}
+		if i := strings.LastIndexByte(a, '@'); i >= 0 && i+1 < len(a) {
+			out = append(out, a[i+1:])
+		}
+		// A short flag with an attached path (curl -o/etc/shadow) hides the
+		// path behind the flag letters; surface it from the first '/'.
+		if isFlag(a) {
+			if i := strings.IndexByte(a, '/'); i > 0 {
+				out = append(out, a[i:])
+			}
 		}
 	}
-	// Positional fallback for tools whose operand is the host, including a
-	// single-label intranet host (`nc host 4444`, `telnet host 23`). The port
-	// (a bare number) is skipped so it is not mistaken for the host.
+	return out
+}
+
+// extractHosts returns the target hosts referenced by a network command. For
+// multi-target tools (curl/wget/ssh/scp/...) it returns every referenced host
+// (positional operands and option values), de-duplicated in first-seen order,
+// so a benign host cannot mask a second non-allowlisted target. For single-host
+// tools (nc/ncat/telnet) it returns only the first operand, since trailing
+// operands are ports or data rather than additional hosts.
+func extractHosts(argv []string) []string {
+	// Single-host tools: only the first operand is the target — trailing
+	// operands are ports or data, not additional hosts. A single-label intranet
+	// host (`nc host 4444`, `telnet host 23`) is accepted; a bare number (port)
+	// is skipped.
 	switch commandBase(argv[0]) {
 	case "nc", "ncat", "telnet":
 		for _, a := range argv[1:] {
 			if a == "" || a == "-" || isFlag(a) {
 				continue
 			}
-			h := strings.ToLower(strings.Trim(a, `"'`))
-			if h == "" {
+			if _, err := strconv.Atoi(a); err == nil {
 				continue
 			}
-			if _, err := strconv.Atoi(h); err == nil {
-				continue
+			if h := hostFromToken(a); h != "" {
+				return []string{h}
 			}
-			return h, true
+			return []string{strings.ToLower(strings.Trim(a, `"'`))}
 		}
+		return nil
 	}
-	return "", false
+	// Multi-target tools (curl/wget/ssh/scp/...): every referenced host, so a
+	// benign host cannot mask a second non-allowlisted exfil target.
+	var hosts []string
+	seen := make(map[string]struct{})
+	for _, c := range operandCandidates(argv) {
+		h := hostFromToken(c)
+		if h == "" {
+			continue
+		}
+		if _, ok := seen[h]; ok {
+			continue
+		}
+		seen[h] = struct{}{}
+		hosts = append(hosts, h)
+	}
+	return hosts
 }
 
 // hostFromToken extracts a hostname from a single token, or "" if the token is

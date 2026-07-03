@@ -44,8 +44,8 @@ const (
 var (
 	forkBombRe     = regexp.MustCompile(`:\s*\(\s*\)\s*\{[^}]*\|[^}]*&[^}]*\}`)
 	reverseShellRe = regexp.MustCompile(`(?i)(/dev/tcp/|/dev/udp/|\bnc\b[^|;]*\s-e\b|\bncat\b[^|;]*\s-e\b|\bbash\s+-i\b|\bsh\s+-i\b|\bmkfifo\b)`)
-	pyDangerRe     = regexp.MustCompile(`(?i)(os\.system|subprocess\.(Popen|call|run|check_output)|pty\.spawn|\beval\(|\bexec\()`)
-	pyShellCallRe  = regexp.MustCompile(`(?is)(?:os\.system|subprocess\.(?:Popen|call|run|check_output)|commands\.getoutput|pty\.spawn)\s*\(([^)]*)\)`)
+	pyDangerRe     = regexp.MustCompile(`(?i)(os\.system|os\.popen|subprocess\.(Popen|call|run|check_output)|pty\.spawn|\beval\(|\bexec\()`)
+	pyShellCallRe  = regexp.MustCompile(`(?is)(?:os\.system|os\.popen|subprocess\.(?:Popen|call|run|check_output)|commands\.getoutput|pty\.spawn)\s*\(([^)]*)\)`)
 	quotedRe       = regexp.MustCompile(`'([^']*)'|"([^"]*)"`)
 )
 
@@ -116,6 +116,8 @@ func (s *Scanner) segmentFindings(argv []string, line string, in ScanInput) []Fi
 
 	// 1. Dangerous filesystem destruction.
 	out = append(out, s.dangerousDelete(base, argv, seg, line)...)
+	// 1b. Permission / ownership changes on system or root paths.
+	out = append(out, s.dangerousPerms(base, argv, seg, line)...)
 	// 2. Secret / credential path access.
 	out = append(out, s.deniedPathAccess(argv, seg, line)...)
 	// 3. Overwrite of system paths by a writer command.
@@ -200,14 +202,35 @@ func (s *Scanner) dangerousDelete(base string, argv []string, seg, line string) 
 	return nil
 }
 
+// dangerousPerms flags recursive/broad permission or ownership changes on
+// system or root paths (chmod -R 777 /, chown -R user /etc, chmod 777
+// /etc/passwd), which can hand an attacker control of the host.
+func (s *Scanner) dangerousPerms(base string, argv []string, seg, line string) []Finding {
+	if base != "chmod" && base != "chown" && base != "chgrp" {
+		return nil
+	}
+	if targetsDangerousRoot(argv) {
+		return []Finding{s.finding(RuleDangerousPerms, CategoryDangerousCommand,
+			RiskHigh, DecisionDeny, seg, line,
+			"Permission/ownership change on system or root paths is blocked.")}
+	}
+	return nil
+}
+
 func (s *Scanner) deniedPathAccess(argv []string, seg, line string) []Finding {
-	for _, a := range argv[1:] {
-		if isFlag(a) {
+	// Check operand candidates (including option values like --output=PATH and
+	// curl-style @file uploads) so a secret path embedded in a flag is not
+	// missed, e.g. `curl --data-binary @/etc/shadow ...`.
+	for _, c := range operandCandidates(argv) {
+		// A bare filename glob (grep --include=*.pem, find -name '*.pem') is a
+		// search pattern, not a concrete secret path; skip it to avoid a false
+		// deny. Globs that include a directory (~/.ssh/*) still match.
+		if strings.ContainsAny(c, "*?") && !strings.ContainsAny(c, `/\`) {
 			continue
 		}
-		if pat, ok := s.policy.matchesDeniedPath(a); ok {
+		if pat, ok := s.policy.matchesDeniedPath(c); ok {
 			return []Finding{s.finding(RuleReadSecret, CategoryDangerousCommand,
-				RiskCritical, DecisionDeny, "path="+normalizePathArg(a)+" ("+pat+")", line,
+				RiskCritical, DecisionDeny, "path="+normalizePathArg(c)+" ("+pat+")", line,
 				"Access to secret/credential paths is blocked.")}
 		}
 	}
@@ -294,21 +317,25 @@ func (s *Scanner) network(base string, argv []string, seg, line string, in ScanI
 	if _, ok := s.policy.networkCmdSet[base]; !ok {
 		return nil
 	}
-	host, found := extractHost(argv)
-	if !found {
+	hosts := extractHosts(argv)
+	if len(hosts) == 0 {
 		return []Finding{s.finding(RuleNetUnknownTarget, CategoryNetworkExfil,
 			RiskMedium, DecisionAsk, seg, line,
 			"Network command with an undetermined target requires review.")}
 	}
-	if s.policy.isDomainAllowed(host) {
-		return []Finding{s.finding(RuleNetAllowedDomain, CategoryNetworkExfil,
-			RiskLow, DecisionAllow, "host="+host, line,
-			"Network target is on the allowlist.")}
+	// Every target must be allowlisted; a single non-allowlisted host denies the
+	// whole command so a benign host cannot smuggle a second exfil target.
+	for _, h := range hosts {
+		if !s.policy.isDomainAllowed(h) {
+			return []Finding{s.finding(RuleNetNonWhitelist, CategoryNetworkExfil,
+				RiskCritical, DecisionDeny, "host="+h, line,
+				"Network egress to a non-allowlisted host is blocked; add the domain to network.allowed_domains if intended.")}
+		}
 	}
 	_ = in
-	return []Finding{s.finding(RuleNetNonWhitelist, CategoryNetworkExfil,
-		RiskCritical, DecisionDeny, "host="+host, line,
-		"Network egress to a non-allowlisted host is blocked; add the domain to network.allowed_domains if intended.")}
+	return []Finding{s.finding(RuleNetAllowedDomain, CategoryNetworkExfil,
+		RiskLow, DecisionAllow, "hosts="+strings.Join(hosts, ","), line,
+		"Network target(s) are on the allowlist.")}
 }
 
 func (s *Scanner) interpreterInline(base string, argv []string, seg, line string) []Finding {

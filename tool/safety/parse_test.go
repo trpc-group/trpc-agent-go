@@ -10,6 +10,7 @@ package safety
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -54,23 +55,24 @@ func TestUnsafeConstructDenied(t *testing.T) {
 	}
 }
 
-func TestExtractHost(t *testing.T) {
+func TestExtractHosts(t *testing.T) {
 	cases := []struct {
-		argv  []string
-		host  string
-		found bool
+		argv []string
+		want []string
 	}{
-		{[]string{"curl", "http://evil.example.com/x"}, "evil.example.com", true},
-		{[]string{"curl", "-sSL", "https://proxy.golang.org/list"}, "proxy.golang.org", true},
-		{[]string{"scp", "file", "user@10.0.0.1:/tmp"}, "10.0.0.1", true},
-		{[]string{"curl", "example.com/path"}, "example.com", true},
-		{[]string{"nc", "host", "4444"}, "host", true},
-		{[]string{"nc", "-lvp", "4444"}, "", false},
+		{[]string{"curl", "http://evil.example.com/x"}, []string{"evil.example.com"}},
+		{[]string{"curl", "-sSL", "https://proxy.golang.org/list"}, []string{"proxy.golang.org"}},
+		{[]string{"scp", "file", "user@10.0.0.1:/tmp"}, []string{"10.0.0.1"}},
+		{[]string{"curl", "example.com/path"}, []string{"example.com"}},
+		{[]string{"nc", "host", "4444"}, []string{"host"}},
+		{[]string{"nc", "-lvp", "4444"}, nil},
+		// Multiple targets: all are returned so a mixed allow/deny command
+		// cannot pass on the first host alone.
+		{[]string{"curl", "https://github.com/ok", "https://evil.example.com/exfil"}, []string{"github.com", "evil.example.com"}},
 	}
 	for _, c := range cases {
-		h, ok := extractHost(c.argv)
-		if h != c.host || ok != c.found {
-			t.Errorf("extractHost(%v)=%q,%v want %q,%v", c.argv, h, ok, c.host, c.found)
+		if got := extractHosts(c.argv); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("extractHosts(%v)=%v want %v", c.argv, got, c.want)
 		}
 	}
 }

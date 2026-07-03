@@ -96,8 +96,8 @@
         "category": "network_exfil",
         "risk_level": "low",
         "decision": "allow",
-        "evidence": "host=proxy.golang.org",
-        "recommendation": "Network target is on the allowlist.",
+        "evidence": "hosts=proxy.golang.org",
+        "recommendation": "Network target(s) are on the allowlist.",
         "segment": "curl https://proxy.golang.org/list"
       }
     ],

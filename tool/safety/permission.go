@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -82,6 +83,15 @@ func NewPermissionPolicy(sc *Scanner, opts ...PolicyOption) *PermissionPolicy {
 func (p *PermissionPolicy) backendFor(name string) Backend {
 	if b, ok := p.backends[name]; ok {
 		return b
+	}
+	// Tools registered through a named toolset are exposed with a "<set>_"
+	// prefix (e.g. hostexec.NewToolSet -> "hostexec_exec_command"), so match a
+	// known tool name as a trailing "_<name>" segment too. Without this a
+	// prefixed exec tool would fall through to allow, unscanned and unaudited.
+	for known, b := range p.backends {
+		if strings.HasSuffix(name, "_"+known) {
+			return b
+		}
 	}
 	return BackendUnknown
 }
