@@ -8,7 +8,10 @@
 
 package safety
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // combineInput merges Command and CodeBlocks content into a single
 // lower-cased string for unified scanning, preventing CodeBlocks-only
@@ -187,6 +190,15 @@ func NewDangerousCommandRule() *DangerousCommandRule {
 // from p are appended to (and de-duplicated against) the built-in lists so
 // policy authors can extend the deny surface without re-stating defaults.
 //
+// Network client keywords (curl, wget, ssh, ...) must NOT be placed in
+// p.DeniedCommands, because the dangerous-command rule fires before
+// NetworkAccessRule has a chance to evaluate AllowedDomains. New policy
+// files should use p.DangerousCommandDeny for destructive commands and
+// p.NetworkClientDeny for network clients; the constructor reads
+// p.DangerousCommandDeny first and falls back to p.DeniedCommands only
+// when DangerousCommandDeny is empty (for backward compatibility with
+// pre-split policy files).
+//
 // A nil p is treated as "no policy", so the constructor behaves identically
 // to NewDangerousCommandRule in that case.
 func NewDangerousCommandRuleWithPolicy(p *PolicyFile) *DangerousCommandRule {
@@ -194,7 +206,15 @@ func NewDangerousCommandRuleWithPolicy(p *PolicyFile) *DangerousCommandRule {
 	if p == nil {
 		return r
 	}
-	r.dangerousCommands = mergeUnique(r.dangerousCommands, p.DeniedCommands)
+	// Prefer the explicit DangerousCommandDeny; fall back to the legacy
+	// DeniedCommands only when DangerousCommandDeny is empty. This is the
+	// single source of the "split by rule" semantics called out in the
+	// policy-aware review on PR #2044.
+	cmdSource := p.DangerousCommandDeny
+	if len(cmdSource) == 0 {
+		cmdSource = p.DeniedCommands
+	}
+	r.dangerousCommands = mergeUnique(r.dangerousCommands, cmdSource)
 	r.sensitivePaths = mergeUnique(r.sensitivePaths, p.DeniedPaths)
 	return r
 }
@@ -344,8 +364,19 @@ func NewNetworkAccessRuleWithAllowlist(allowedDomains []string) *NetworkAccessRu
 // NewNetworkAccessRuleWithPolicy builds a NetworkAccessRule that uses
 // p.AllowedDomains as the allow list (downgrading matches to DecisionAsk
 // when the target host is in the list). The built-in dangerousCmds set is
-// preserved unchanged, so a policy cannot accidentally widen the deny
-// surface for any keyword the rule already knows about.
+// preserved unchanged.
+//
+// The keyword deny list is taken from p.NetworkClientDeny (new, preferred)
+// or p.DeniedCommands (legacy, only when NetworkClientDeny is empty). This
+// split is what lets a policy like:
+//
+//	denied_commands: [rm -rf, sudo, ...]   # destructive only
+//	network_client_deny: [curl, wget, ...] # outbound only
+//	allowed_domains: [github.com]
+//
+// produce a DecisionAsk for `curl https://github.com/...` instead of the
+// previous silent deny caused by the dangerous-command rule shadowing the
+// allow list. See the policy-aware review on PR #2044 for context.
 //
 // A nil p is treated as "no policy", so the constructor behaves identically
 // to NewNetworkAccessRule in that case. The wildcard prefix "*." is honored
@@ -356,6 +387,13 @@ func NewNetworkAccessRuleWithPolicy(p *PolicyFile) *NetworkAccessRule {
 		return r
 	}
 	r.allowedDomains = append([]string(nil), p.AllowedDomains...)
+	cliSource := p.NetworkClientDeny
+	if len(cliSource) == 0 {
+		cliSource = p.DeniedCommands
+	}
+	if len(cliSource) > 0 {
+		r.dangerousCmds = mergeUnique(r.dangerousCmds, cliSource)
+	}
 	return r
 }
 
@@ -433,30 +471,139 @@ func (r *NetworkAccessRule) Check(input ScanInput) *ScanResult {
 	return nil
 }
 
-// matchesAllowlist reports whether cmd contains a host that is in the
-// configured allow list. The match is case-insensitive and supports the
-// wildcard prefix "*.".
+// parseHosts extracts the host portion of every URL / scp-like target / bare
+// hostname it can find in cmd. Matching is intentionally conservative:
+// we only return a host if we are confident we found a real network target,
+// never a substring of a longer word. This is the only correct way to feed
+// the allow list; substring matching (e.g. "github.com" inside "evilgithub.com"
+// or "evil.com/?next=github.com") is exactly the failure mode called out in
+// the policy-aware review on PR #2044.
+//
+// Recognized shapes:
+//   https://user@host:port/path?query
+//   http://host/path
+//   ssh://user@host:port
+//   git@host:user/repo         (scp-style)
+//   user@host:path             (scp-style)
+//   host:port                  (bare host:port, e.g. "nc evil.com 4444")
+//
+// Anything that does not match one of these shapes is ignored; the caller
+// treats the absence of any parsed host as "no allow-listed target found",
+// which falls through to a deny for the network call.
+func parseHosts(cmd string) []string {
+	lower := strings.ToLower(cmd)
+var hosts []string
+appendHost := func(h string) {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			return
+		}
+		// Strip an optional :port tail. We only do this for the bare-host
+		// case to avoid clobbering scheme://user@host:port URLs (those are
+		// already split by the scheme parser above).
+		if i := strings.LastIndex(h, ":"); i > 0 && i < len(h)-1 {
+			// Only strip if the part after the colon looks numeric (port).
+			tail := h[i+1:]
+			allDigits := true
+			for j := 0; j < len(tail); j++ {
+				if tail[j] < '0' || tail[j] > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				h = h[:i]
+			}
+		}
+		// Strip a trailing dot (FQDN canonical form).
+		h = strings.TrimSuffix(h, ".")
+		hosts = append(hosts, h)
+	}
+// (1) http://, https://, ssh://, ftp://, file://, ws://, wss://.
+schemeRe := regexp.MustCompile(`[a-z][a-z0-9+.\-]*://(?:[^/@\s]+@)?([a-z0-9._\-]+)`)
+for _, m := range schemeRe.FindAllStringSubmatch(lower, -1) {
+		if len(m) > 1 {
+			appendHost(m[1])
+		}
+	}
+// (2) scp-style "user@host:path" (no scheme). Bound the user part to
+// non-space, non-@ characters and the host to non-colon, non-space,
+// non-/ characters. We require the trailing ":path" to disambiguate
+// from a bare "user@host" without a path.
+scpRe := regexp.MustCompile(`(?:^|[\s])([a-z0-9._\-]+)@([a-z0-9.\-]+):[^\s]`)
+for _, m := range scpRe.FindAllStringSubmatch(lower, -1) {
+		if len(m) > 2 {
+			appendHost(m[2])
+		}
+	}
+// (3) bare "host:port" (e.g. "nc evil.com 4444", "telnet host 23").
+// We require the host to be a valid DNS label and the tail to be a
+// numeric port. The surrounding context is bounded by whitespace or
+// start/end-of-string so that "host:path" scp-style above is not
+// double-counted.
+// "host:port" (e.g. "nc evil.com:4444") AND "host port" with whitespace
+// (e.g. "nc github.com 443"). Both are valid invocations of netcat /
+	// telnet / curl-against-bare-host. We require the host to look like a
+	// DNS label and the port to be numeric so we do not mistake path
+	// segments for ports.
+	bareRe := regexp.MustCompile(`(?:^|[\s])([a-z0-9][a-z0-9.\-]*)[ :](\d+)(?:[\s]|$)`)
+	for _, m := range bareRe.FindAllStringSubmatch(lower, -1) {
+		if len(m) > 2 {
+			appendHost(m[1])
+		}
+	}
+return hosts
+}
+
+// hostMatchesPattern reports whether host is an exact match for pattern,
+// or a valid subdomain of pattern when pattern starts with "*.". The
+// match is performed on the lower-cased forms. Substring matching is
+// intentionally rejected: "evilgithub.com" must not match "github.com",
+// and "github.com.evil.com" must not match "github.com" either. Hosts
+// are extracted by parseHosts, which guarantees they are full DNS labels,
+// not free-form URL fragments.
+func hostMatchesPattern(host, pattern string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	if host == "" || pattern == "" {
+		return false
+	}
+	if strings.HasPrefix(pattern, "*.") {
+		suffix := pattern[1:] // ".example.com"
+		return strings.HasSuffix(host, suffix) && len(host) > len(suffix)
+	}
+	// Exact match OR valid subdomain match (host ends with
+	// "."+pattern). The dot prefix is mandatory so "evilgithub.com" does
+	// not match "github.com" while "api.github.com" does.
+	if host == pattern {
+		return true
+	}
+	return strings.HasSuffix(host, "."+pattern)
+}
+
+// matchesAllowlist reports whether any host in cmd is in the configured
+// allow list. Hosts are extracted by parseHosts, and each host is matched
+// against every pattern with hostMatchesPattern (exact match or valid
+// "*.example.com" subdomain). Substring matching has been removed because
+// it accepted "evilgithub.com" against "github.com" and similar evasion
+// patterns called out in the policy-aware review on PR #2044.
 func (r *NetworkAccessRule) matchesAllowlist(cmd string) bool {
 	if len(r.allowedDomains) == 0 {
 		return false
 	}
-	lower := strings.ToLower(cmd)
-	for _, pattern := range r.allowedDomains {
+hosts := parseHosts(cmd)
+if len(hosts) == 0 {
+		return false
+	}
+for _, pattern := range r.allowedDomains {
 		pattern = strings.ToLower(strings.TrimSpace(pattern))
 		if pattern == "" {
 			continue
 		}
-		// Wildcard suffix: "*.example.com" matches "foo.example.com".
-		if strings.HasPrefix(pattern, "*.") {
-			suffix := pattern[1:] // ".example.com"
-			if strings.Contains(lower, suffix) {
+		for _, h := range hosts {
+			if hostMatchesPattern(h, pattern) {
 				return true
 			}
-			continue
-		}
-		// Plain substring match against the lower-cased command.
-		if strings.Contains(lower, pattern) {
-			return true
 		}
 	}
 	return false

@@ -24,6 +24,15 @@ import (
 type PolicyFile struct {
 	// DeniedCommands is the deny list of command keywords.
 	DeniedCommands []string `yaml:"denied_commands" json:"denied_commands"`
+	// DangerousCommandDeny is an explicit alias of DeniedCommands kept
+	// for clarity in new policy files. New policies should prefer this
+	// name; DeniedCommands is still honoured for backward compatibility.
+	DangerousCommandDeny []string `yaml:"dangerous_command_deny" json:"dangerous_command_deny,omitempty"`
+	// NetworkClientDeny is the deny list consumed by NetworkAccessRule.
+	// Splitting it out from DeniedCommands lets the two rules evolve
+	// their deny lists independently and preserves the precedence that
+	// allows AllowedDomains to take effect.
+	NetworkClientDeny []string `yaml:"network_client_deny" json:"network_client_deny,omitempty"`
 	// DeniedPaths is the deny list of sensitive path patterns.
 	DeniedPaths []string `yaml:"denied_paths" json:"denied_paths"`
 	// AllowedDomains is the network domain allow list.

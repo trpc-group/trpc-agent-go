@@ -10,6 +10,7 @@ package safety
 
 import (
 	"context"
+	"encoding/json"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -97,42 +98,92 @@ func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionReq
 	}
 }
 
-// defaultExtractor reads a "command" field from JSON arguments.
+// defaultExtractor reads the "command" string and "code_blocks" array
+// from JSON arguments, populating ScanInput.Command and
+// ScanInput.CodeBlocks respectively.
+//
+// This is the default Guard argument extractor; it is intentionally
+// permissive: any JSON-decode failure returns a ScanInput with
+// ExecutorType set and both fields empty, so a later rule can still
+// fire on empty input rather than silently allowing the call. Callers
+// that need a richer argument shape (e.g. nested structs, raw bytes)
+// should override the extractor with WithExtractor / WithGuardedExtractor.
+//
+// Recognized shapes:
+//
+//	{"command": "rm -rf /tmp/x"}
+//	{"code": "rm -rf /tmp/x"}                       // legacy "code" alias
+//	{"command": "ls", "code_blocks": [
+//	    {"language": "python", "code": "import os; os.system('rm -rf /')"},
+//	    {"code": "print('hi')"},
+//	]}
+//	{"code_blocks": ["raw string 1", {"code": "..."}]}  // strings allowed
+//
+// Anything else falls through with Command = "" and CodeBlocks = nil,
+// which is the same behaviour as the previous substring-only extractor.
 func defaultExtractor(args []byte) ScanInput {
 	in := ScanInput{ExecutorType: "local"}
 	if len(args) == 0 {
 		return in
 	}
-	// Simple JSON extraction: look for "command":"..." pattern.
-	start := -1
-	for i := 0; i < len(args)-9; i++ {
-		if args[i] == '"' && args[i+1] == 'c' && args[i+2] == 'o' &&
-			args[i+3] == 'm' && args[i+4] == 'm' && args[i+5] == 'a' &&
-			args[i+6] == 'n' && args[i+7] == 'd' && args[i+8] == '"' {
-			// Skip past "command":"
-			valueStart := i + 11
-			if valueStart < len(args) && args[valueStart-1] == '"' {
-				start = valueStart
-			}
-			break
-		}
-	}
-	if start < 0 {
+	// Fast path: a non-JSON blob (e.g. raw shell) — return empty so the
+	// scan pipeline still runs with a zero-value input. We deliberately
+	// do not try to parse it as JSON to avoid a misleading panic on
+	// malformed payloads.
+	if args[0] != '{' && args[0] != '[' {
 		return in
 	}
-	// Read until the closing unescaped quote.
-	var cmd []byte
-	for i := start; i < len(args); i++ {
-		if args[i] == '\\' && i+1 < len(args) {
-			cmd = append(cmd, args[i+1])
-			i++
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(args, &raw); err != nil {
+		return in
+	}
+	// "command" is the primary field; "code" is a legacy alias kept
+	// for back-compat with callers that pre-date the code_blocks
+	// support added in response to WineChord's review on PR #2044.
+	for _, key := range []string{"command", "code"} {
+		v, ok := raw[key]
+		if !ok {
 			continue
 		}
-		if args[i] == '"' {
+		var s string
+		if err := json.Unmarshal(v, &s); err == nil {
+			in.Command = s
 			break
 		}
-		cmd = append(cmd, args[i])
 	}
-	in.Command = string(cmd)
+	// "code_blocks" is the canonical list shape used by tool/codeexec.
+	// Each entry may be a string (treated as code with empty language)
+	// or an object with "code" / "language" / "lang" keys.
+	if v, ok := raw["code_blocks"]; ok {
+		// First try: array of objects.
+		var objects []map[string]any
+		if err := json.Unmarshal(v, &objects); err == nil {
+			for _, obj := range objects {
+				cb := CodeBlock{}
+				if s, ok := obj["code"].(string); ok {
+					cb.Code = s
+				}
+				if s, ok := obj["language"].(string); ok {
+					cb.Language = s
+				} else if s, ok := obj["lang"].(string); ok {
+					cb.Language = s
+				}
+				if cb.Code != "" {
+					in.CodeBlocks = append(in.CodeBlocks, cb)
+				}
+			}
+		} else {
+			// Fallback: array of raw strings.
+			var strs []string
+			if err := json.Unmarshal(v, &strs); err == nil {
+				for _, s := range strs {
+					if s == "" {
+						continue
+					}
+					in.CodeBlocks = append(in.CodeBlocks, CodeBlock{Code: s})
+				}
+			}
+		}
+	}
 	return in
 }

@@ -18,23 +18,32 @@
 #
 # ============================================================
 
-# 拒绝的命令列表（包含这些关键字的命令将被拦截）
+# 拒绝的危险命令（破坏性本地操作，匹配时被 DangerousCommandRule 拦截）
+# 注意：网络客户端（curl/wget/ssh/...）必须放在下面的 network_client_deny
+# 中，避免 dangerous-command rule 先 deny 让 network rule 的 allowed_domains
+# 失效。
 denied_commands:
-  - curl
-  - wget
-  - nc
-  - ssh
-  - telnet
   - rm -rf
   - mkfs
   - fdisk
   - shutdown
   - reboot
+  - chmod 777 /
+  - chown -R
+  - dd if=
   - eval
   - exec
   - source
   - sudo
   - policy_canary
+
+# 拒绝的网络客户端（出站调用，匹配时被 NetworkAccessRule 拦截）
+network_client_deny:
+  - curl
+  - wget
+  - nc
+  - ssh
+  - telnet
 
 # 拒绝访问的路径（尝试读取/修改这些路径的命令将被拦截）
 denied_paths:

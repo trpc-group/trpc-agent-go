@@ -435,7 +435,7 @@ func TestSensitiveInfoLeakRule_Allow(t *testing.T) {
 	for _, cmd := range []string{"ls -la", "echo hello", "git status"} {
 		t.Run(cmd, func(t *testing.T) {
 			if result := rule.Check(ScanInput{Command: cmd}); result != nil {
-				t.Errorf("expected allow for %q", cmd)
+				t.Errorf("expected allow for %q, got %+v", cmd, result)
 			}
 		})
 	}
@@ -466,7 +466,7 @@ func TestAskForReviewRule_Allow(t *testing.T) {
 	for _, cmd := range []string{"ls -la", "echo hello", "git status"} {
 		t.Run(cmd, func(t *testing.T) {
 			if result := rule.Check(ScanInput{Command: cmd}); result != nil {
-				t.Errorf("expected allow for %q", cmd)
+				t.Errorf("expected allow for %q, got %+v", cmd, result)
 			}
 		})
 	}
@@ -600,5 +600,134 @@ func TestRules_LoadPolicyFileEnforced(t *testing.T) {
 	}
 	if r := NewNetworkAccessRuleWithPolicy(nil); r == nil {
 		t.Fatalf("nil policy must produce a usable built-in rule, got nil")
+	}
+}
+
+// TestNetworkAccessRule_AllowlistNoSubstringEvasion covers the host-parser
+// rewrite called out in the policy-aware review on PR #2044: substring
+// matching previously allowed "evilgithub.com" and "evil.com/?next=github.com"
+// to satisfy an allow-listed "github.com". parseHosts + hostMatchesPattern
+// must reject both.
+func TestNetworkAccessRule_AllowlistNoSubstringEvasion(t *testing.T) {
+	rule := NewNetworkAccessRuleWithAllowlist([]string{"github.com"})
+
+	tests := []struct {
+		name    string
+		command string
+		want    bool // expected matchesAllowlist result
+	}{
+		// Legitimate matches must still work.
+		{"plain host", "curl https://github.com/foo/bar", true},
+		{"subdomain", "curl https://api.github.com/foo", true},
+		{"scp-style", "git@github.com:user/repo.git", true},
+		{"bare host:port", "nc github.com 443", true},
+
+		// Evasion attempts must NOT match.
+		{"evil subdomain prefix", "curl https://evilgithub.com/x", false},
+		{"evil domain suffix", "curl https://github.com.evil.com/x", false},
+		{"query-string smuggling", "curl 'https://evil.com/?next=github.com'", false},
+		{"path-injection", "curl https://github.com.attacker.com/x", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rule.matchesAllowlist(tt.command)
+			if got != tt.want {
+				t.Errorf("matchesAllowlist(%q) = %v, want %v", tt.command, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNetworkAccessRule_AllowlistWildcardExact covers wildcard
+// "*.example.com" matching exact and subdomain only.
+func TestNetworkAccessRule_AllowlistWildcardExact(t *testing.T) {
+	rule := NewNetworkAccessRuleWithAllowlist([]string{"*.example.com"})
+
+	tests := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{"subdomain match", "curl https://api.example.com/x", true},
+		{"deeper subdomain", "curl https://a.b.example.com/x", true},
+		{"apex only no match", "curl https://example.com/x", false},
+		{"suffix-evasion", "curl https://example.com.attacker.com/x", false},
+		{"prefix-evasion", "curl https://evilexample.com/x", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rule.matchesAllowlist(tt.command)
+			if got != tt.want {
+				t.Errorf("matchesAllowlist(%q) = %v, want %v", tt.command, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestScanner_PolicyAllowsListedCurl is the scanner-level precedence
+// test called out in the policy-aware review on PR #2044. With the
+// network_client_deny split, "curl https://github.com/..." plus
+// allowed_domains must downgrade to DecisionAsk, not silently be
+// denied by the dangerous-command rule.
+func TestScanner_PolicyAllowsListedCurl(t *testing.T) {
+	policy := &PolicyFile{
+		DangerousCommandDeny: []string{"rm -rf", "sudo", "eval"},
+		NetworkClientDeny:    []string{"curl", "wget"},
+		AllowedDomains:       []string{"github.com"},
+	}
+	scanner := NewScanner(
+		NewDangerousCommandRuleWithPolicy(policy),
+		NewNetworkAccessRuleWithPolicy(policy),
+	)
+	res := scanner.Scan(ScanInput{Command: "curl https://github.com/foo/bar"})
+	if res == nil {
+		t.Fatalf("scanner returned nil; expected at least a DecisionAsk")
+	}
+	if res.Decision != DecisionAsk {
+		t.Fatalf("expected DecisionAsk for allow-listed curl, got %s (rule=%s, reason=%s)",
+			res.Decision, res.RuleID, res.Reason)
+	}
+	// Sanity: a non-allow-listed curl must be denied.
+	res2 := scanner.Scan(ScanInput{Command: "curl https://evil.example.org/x"})
+	if res2 == nil || res2.Decision != DecisionDeny {
+		t.Fatalf("expected DecisionDeny for non-allow-listed curl, got %+v", res2)
+	}
+	// Sanity: a dangerous command must be denied even when the
+	// dangerous-command rule is policy-backed.
+	res3 := scanner.Scan(ScanInput{Command: "rm -rf /tmp/foo"})
+	if res3 == nil || res3.Decision != DecisionDeny {
+		t.Fatalf("expected DecisionDeny for 'rm -rf /tmp/foo', got %+v", res3)
+	}
+}
+
+// TestGuard_DefaultExtractor_ReadsCodeBlocks covers the guard-default-
+// extractor rewrite called out in the policy-aware review on PR #2044.
+// code_blocks payloads must reach the scanner; previously they were
+// scanned as empty input and allowed.
+func TestGuard_DefaultExtractor_ReadsCodeBlocks(t *testing.T) {
+	g := NewGuard()
+
+	// Build args with both command and code_blocks.
+	args := []byte(`{"command": "ls", "code_blocks": [{"language": "python", "code": "import os; os.system('rm -rf /')"}]}`)
+	in := g.extract(args)
+	if in.Command != "ls" {
+		t.Fatalf("expected Command=ls, got %q", in.Command)
+	}
+	if len(in.CodeBlocks) != 1 {
+		t.Fatalf("expected 1 CodeBlock, got %d", len(in.CodeBlocks))
+	}
+	cb := in.CodeBlocks[0]
+	if cb.Code != "import os; os.system('rm -rf /')" {
+		t.Fatalf("CodeBlock.Code = %q", cb.Code)
+	}
+	if cb.Language != "python" {
+		t.Fatalf("CodeBlock.Language = %q", cb.Language)
+	}
+
+	// Scanner-level end-to-end: a code-block-only payload carrying a
+	// dangerous command must NOT be allowed.
+	res := g.scanner.Scan(in)
+	if res == nil || res.Decision != DecisionDeny {
+		t.Fatalf("expected DecisionDeny for code-block dangerous payload, got %+v", res)
 	}
 }
