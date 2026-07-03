@@ -60,13 +60,17 @@ import (
 // 1. Build a guard with the default 10 rules.
 guard := safety.NewGuard()
 
-// 2. (Optional) customize: only a subset of rules, or add an allow list.
+// 2. (Optional) load a YAML policy and wire it into the rules so the
+//    deny/allow lists are enforced. A nil policy falls back to built-in
+//    defaults; an empty YAML never silently disables a security check
+//    because built-in deny lists are always kept.
+policy, err := safety.LoadPolicyFile("tool_safety_policy.yaml")
+if err != nil { /* handle */ }
+
 guard = safety.NewGuard(
     safety.WithRules(
-        safety.NewDangerousCommandRule(),
-        safety.NewNetworkAccessRuleWithAllowlist([]string{
-            "github.com", "*.npmjs.org",
-        }),
+        safety.NewDangerousCommandRuleWithPolicy(policy),
+        safety.NewNetworkAccessRuleWithPolicy(policy),
         safety.NewAskForReviewRule(),
     ),
 )

@@ -8,7 +8,10 @@
 
 package safety
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestDangerousCommandRule_Deny(t *testing.T) {
 	rule := NewDangerousCommandRule()
@@ -512,5 +515,90 @@ func TestWhiteListNetwork_AllowedAfterReview(t *testing.T) {
 	safe := rule.Check(ScanInput{Command: "echo hello"})
 	if safe != nil {
 		t.Errorf("safe command should not trigger network rule")
+	}
+}
+
+// TestRules_LoadPolicyFileEnforced locks down WineChord's blocking
+// requirement that LoadPolicyFile's output must actually flow into the
+// rule constructors. It loads the checked-in examples YAML (which contains
+// the standard deny/allow entries), constructs both rule types via the
+// *WithPolicy constructors, and asserts:
+//
+//	(a) a built-in deny keyword ("rm -rf /") is still denied even when the
+//	    YAML does not mention it (proves fail-closed);
+//	(b) a built-in sensitive path ("/etc/shadow") is still denied; and
+//	(c) an allow-listed host is downgraded to DecisionAsk while a
+//	    non-allow-listed host is denied.
+func TestRules_LoadPolicyFileEnforced(t *testing.T) {
+	policyPath := filepath.Join("examples", "tool_safety_policy.yaml")
+	policy, err := LoadPolicyFile(policyPath)
+	if err != nil {
+		t.Fatalf("LoadPolicyFile(%q) failed: %v", policyPath, err)
+	}
+	if policy == nil {
+		t.Fatalf("LoadPolicyFile returned nil policy")
+	}
+
+	dangerous := NewDangerousCommandRuleWithPolicy(policy)
+
+	// (a) Built-in deny list is preserved even if the YAML omits the
+	//     keyword. A partial policy must never silently disable a
+	//     built-in critical deny.
+	if res := dangerous.Check(ScanInput{Command: "rm -rf /"}); res == nil {
+		t.Fatalf("built-in 'rm -rf /' must remain denied even with a partial policy; " +
+			"built-in deny list is not always-on")
+	} else if res.Decision != DecisionDeny {
+		t.Fatalf("expected DecisionDeny for built-in 'rm -rf /', got %s", res.Decision)
+	}
+
+	// (b) Built-in sensitive path is preserved.
+	if res := dangerous.Check(ScanInput{Command: "cat /etc/shadow"}); res == nil {
+		t.Fatalf("built-in '/etc/shadow' must remain denied even with a partial policy")
+	}
+
+	// Verify that the YAML's denied_commands ("curl") is also enforced:
+	// without the wire-up this command would still be caught by the
+	// NetworkAccessRule, so we use a custom canary keyword that no
+	// built-in deny list contains.
+	const canary = "policy_canary"
+	policyWithCanary := &PolicyFile{
+		DeniedCommands: append(append([]string{}, policy.DeniedCommands...), canary),
+		DeniedPaths:    append([]string{}, policy.DeniedPaths...),
+	}
+	dangerousCanary := NewDangerousCommandRuleWithPolicy(policyWithCanary)
+	if res := dangerousCanary.Check(ScanInput{Command: canary + " --destroy"}); res == nil {
+		t.Fatalf("policy-backed DangerousCommandRule did not deny a custom YAML entry; " +
+			"LoadPolicyFile output is not wired into the rule constructor")
+	} else if res.Decision != DecisionDeny {
+		t.Fatalf("expected DecisionDeny for custom policy entry %q, got %s",
+			canary, res.Decision)
+	}
+
+	// (c) Allow-listed host is downgraded to DecisionAsk; non-allow-listed
+	//     host is denied.
+	network := NewNetworkAccessRuleWithPolicy(&PolicyFile{
+		AllowedDomains: []string{"github.com"},
+	})
+	if res := network.Check(ScanInput{Command: "curl https://github.com/foo/bar"}); res == nil {
+		t.Fatalf("allow-listed host did not produce any scan result")
+	} else if res.Decision != DecisionAsk {
+		t.Fatalf("expected DecisionAsk for allow-listed host, got %s (%s)",
+			res.Decision, res.Reason)
+	}
+	if res := network.Check(ScanInput{Command: "curl https://evil.example.org/x"}); res == nil {
+		t.Fatalf("non-allow-listed host did not produce any scan result")
+	} else if res.Decision != DecisionDeny {
+		t.Fatalf("expected DecisionDeny for non-allow-listed host, got %s", res.Decision)
+	}
+
+	// Nil policy must fall back to built-in defaults (no panic, no
+	// empty rule).
+	if r := NewDangerousCommandRuleWithPolicy(nil); r == nil {
+		t.Fatalf("nil policy must produce a usable built-in rule, got nil")
+	} else if got := r.Check(ScanInput{Command: "rm -rf /"}); got == nil {
+		t.Fatalf("nil policy must not strip built-in deny lists")
+	}
+	if r := NewNetworkAccessRuleWithPolicy(nil); r == nil {
+		t.Fatalf("nil policy must produce a usable built-in rule, got nil")
 	}
 }

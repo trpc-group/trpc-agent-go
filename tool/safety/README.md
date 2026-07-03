@@ -95,6 +95,14 @@ max_output_bytes: 10485760
 
 ```go
 policy, err := safety.LoadPolicyFile("tool/safety/tool_safety_policy.yaml")
+if err != nil { /* handle */ }
+
+// 重要：把 policy 传给 rule 构造器才能让它真正生效。
+scanner := safety.NewScanner(
+    safety.NewDangerousCommandRuleWithPolicy(policy),
+    safety.NewNetworkAccessRuleWithPolicy(policy),
+    // ...其它 rule
+)
 ```
 
 ## Structured report

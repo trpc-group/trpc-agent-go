@@ -4,13 +4,17 @@
 # 此文件配置 Tool Safety Scanner 的安全策略。
 # 修改后无需重新编译代码即可生效。
 #
-# 用法：
+# 用法（policy 必须 wire 到 rule 才能生效）：
 #   policy, err := safety.LoadPolicyFile("tool_safety_policy.yaml")
+#   if err != nil { log.Fatal(err) }
 #   scanner := safety.NewScanner(
-#       safety.NewDangerousCommandRule(),
-#       safety.NewNetworkAccessRule(),
+#       safety.NewDangerousCommandRuleWithPolicy(policy),
+#       safety.NewNetworkAccessRuleWithPolicy(policy),
 #       ...
 #   )
+#
+# 注意：内置的 deny list 永远保留，policy 只是在它之上追加
+# 条目；删除某个 denied_commands 项不会解除默认拦截。
 #
 # ============================================================
 
@@ -30,6 +34,7 @@ denied_commands:
   - exec
   - source
   - sudo
+  - policy_canary
 
 # 拒绝访问的路径（尝试读取/修改这些路径的命令将被拦截）
 denied_paths:

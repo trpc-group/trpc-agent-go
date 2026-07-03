@@ -174,6 +174,36 @@ type DangerousCommandRule struct {
 
 // NewDangerousCommandRule creates a rule with the default deny list.
 func NewDangerousCommandRule() *DangerousCommandRule {
+	return defaultDangerousCommandRule()
+}
+
+// NewDangerousCommandRuleWithPolicy builds a DangerousCommandRule whose
+// dangerousCommands and sensitivePaths are taken from p in addition to the
+// built-in defaults.
+//
+// The built-in deny lists are always kept: a partial YAML that omits
+// "rm -rf /" or "/etc/shadow" cannot silently disable those checks, which
+// would otherwise be a fail-open posture for a security component. Entries
+// from p are appended to (and de-duplicated against) the built-in lists so
+// policy authors can extend the deny surface without re-stating defaults.
+//
+// A nil p is treated as "no policy", so the constructor behaves identically
+// to NewDangerousCommandRule in that case.
+func NewDangerousCommandRuleWithPolicy(p *PolicyFile) *DangerousCommandRule {
+	r := defaultDangerousCommandRule()
+	if p == nil {
+		return r
+	}
+	r.dangerousCommands = mergeUnique(r.dangerousCommands, p.DeniedCommands)
+	r.sensitivePaths = mergeUnique(r.sensitivePaths, p.DeniedPaths)
+	return r
+}
+
+// defaultDangerousCommandRule returns the canonical rule with the built-in
+// deny list. It is the single source of truth shared by the public
+// constructors so a future tightening of the default list lands in both
+// NewDangerousCommandRule and NewDangerousCommandRuleWithPolicy.
+func defaultDangerousCommandRule() *DangerousCommandRule {
 	return &DangerousCommandRule{
 		dangerousCommands: []string{
 			"rm -rf /", "rm -rf ~", "rm -rf .", "rm -rf /*",
@@ -311,10 +341,58 @@ func NewNetworkAccessRuleWithAllowlist(allowedDomains []string) *NetworkAccessRu
 	return r
 }
 
+// NewNetworkAccessRuleWithPolicy builds a NetworkAccessRule that uses
+// p.AllowedDomains as the allow list (downgrading matches to DecisionAsk
+// when the target host is in the list). The built-in dangerousCmds set is
+// preserved unchanged, so a policy cannot accidentally widen the deny
+// surface for any keyword the rule already knows about.
+//
+// A nil p is treated as "no policy", so the constructor behaves identically
+// to NewNetworkAccessRule in that case. The wildcard prefix "*." is honored
+// by the underlying matchesAllowlist helper.
+func NewNetworkAccessRuleWithPolicy(p *PolicyFile) *NetworkAccessRule {
+	r := NewNetworkAccessRule()
+	if p == nil {
+		return r
+	}
+	r.allowedDomains = append([]string(nil), p.AllowedDomains...)
+	return r
+}
+
 // WithAllowedDomains sets the allow list on an existing rule.
 func (r *NetworkAccessRule) WithAllowedDomains(domains []string) *NetworkAccessRule {
 	r.allowedDomains = domains
 	return r
+}
+
+// mergeUnique returns the union of base and extra, preserving order and
+// dropping exact-match duplicates. Comparison is case-insensitive so that
+// "Curl" and "curl" do not both appear in the merged deny list. Nil/empty
+// inputs are tolerated on both sides.
+func mergeUnique(base, extra []string) []string {
+	if len(base) == 0 && len(extra) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(base)+len(extra))
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	push := func(s string) {
+		key := strings.ToLower(strings.TrimSpace(s))
+		if key == "" {
+			return
+		}
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, s)
+	}
+	for _, s := range base {
+		push(s)
+	}
+	for _, s := range extra {
+		push(s)
+	}
+	return out
 }
 
 // ID returns the unique identifier of this rule.
