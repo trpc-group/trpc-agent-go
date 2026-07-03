@@ -632,6 +632,54 @@ func TestDDGTool_SERPFallbackUsesAPIForDefaultDuckDuckGoURLs(t *testing.T) {
 	require.Equal(t, 1, calls["api.duckduckgo.com"])
 }
 
+func TestDDGTool_SERPFallbackReportsAPIFallbackFailure(t *testing.T) {
+	t.Parallel()
+
+	ddgTool := &ddgTool{
+		httpClient: &http.Client{Transport: roundTripFunc(
+			func(r *http.Request) (*http.Response, error) {
+				require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+				switch r.URL.Host {
+				case "html.duckduckgo.com", "lite.duckduckgo.com":
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body: io.NopCloser(strings.NewReader(`
+<html><body>
+  <div class="anomaly-modal__title">
+    Unfortunately, bots use DuckDuckGo too.
+  </div>
+</body></html>`)),
+						Header: make(http.Header),
+					}, nil
+				case "api.duckduckgo.com":
+					return &http.Response{
+						StatusCode: http.StatusServiceUnavailable,
+						Body:       io.NopCloser(strings.NewReader("down")),
+						Header:     make(http.Header),
+					}, nil
+				default:
+					t.Fatalf("unexpected host %s", r.URL.Host)
+					return nil, nil
+				}
+			},
+		)},
+		baseURL:   defaultHTMLBaseURL,
+		backend:   backendHTML,
+		userAgent: defaultSERPUserAgent,
+	}
+
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA benchmark"},
+	)
+	require.Error(t, err)
+	require.Empty(t, result.Results)
+	require.Contains(t, result.Summary, "fallback lite failed")
+	require.Contains(t, result.Summary, "api fallback failed")
+	require.Contains(t, err.Error(), "api fallback failed")
+	require.Contains(t, err.Error(), "status 503")
+}
+
 func TestDDGTool_SERPHTTPFailures(t *testing.T) {
 	t.Parallel()
 
