@@ -255,7 +255,7 @@ func (e *caseExecutor) executeUpdateState(ctx context.Context, step UpdateStateS
 
 func (e *caseExecutor) executeAddMemory(ctx context.Context, step AddMemoryStep) error {
 	if e.backend.MemoryService == nil {
-		return nil
+		return fmt.Errorf("add memory step requires memory.Service support")
 	}
 	if err := e.backend.MemoryService.AddMemory(ctx, step.UserKey, step.Memory, step.Topics); err != nil {
 		return err
@@ -270,7 +270,7 @@ func (e *caseExecutor) executeAddMemory(ctx context.Context, step AddMemoryStep)
 
 func (e *caseExecutor) executeSearchMemory(ctx context.Context, step SearchMemoryStep) error {
 	if e.backend.MemoryService == nil {
-		return nil
+		return fmt.Errorf("search memory step requires memory.Service support")
 	}
 	memories, err := e.backend.MemoryService.SearchMemories(ctx, step.UserKey, step.Query)
 	if err != nil {

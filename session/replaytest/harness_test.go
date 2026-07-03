@@ -251,6 +251,28 @@ func TestExecuteAddMemoryPropagatesReadError(t *testing.T) {
 	require.ErrorIs(t, err, readErr)
 }
 
+func TestExecuteAddMemoryRequiresMemoryService(t *testing.T) {
+	sessionSvc := sessioninmemory.NewSessionService()
+	defer sessionSvc.Close()
+
+	_, err := executeCase(context.Background(), ReplayCase{
+		Name: "memory_add_without_service",
+		Steps: []ReplayStep{
+			AddMemoryStep{
+				Key:     "memory.add",
+				UserKey: memory.UserKey{AppName: "app", UserID: "user"},
+				Memory:  "remember this",
+			},
+		},
+	}, NamedBackend{
+		Name:           "session-only",
+		Profile:        InMemoryProfile(),
+		SessionService: sessionSvc,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "memory.Service")
+}
+
 func TestExecuteSearchMemoryAppliesStepLimit(t *testing.T) {
 	sessionSvc := sessioninmemory.NewSessionService()
 	defer sessionSvc.Close()
@@ -277,6 +299,28 @@ func TestExecuteSearchMemoryAppliesStepLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, snapshot.MemSearchResults, 1)
 	require.Equal(t, "first", snapshot.MemSearchResults[0].ID)
+}
+
+func TestExecuteSearchMemoryRequiresMemoryService(t *testing.T) {
+	sessionSvc := sessioninmemory.NewSessionService()
+	defer sessionSvc.Close()
+
+	_, err := executeCase(context.Background(), ReplayCase{
+		Name: "memory_search_without_service",
+		Steps: []ReplayStep{
+			SearchMemoryStep{
+				Key:     "memory.search",
+				UserKey: memory.UserKey{AppName: "app", UserID: "user"},
+				Query:   "go",
+			},
+		},
+	}, NamedBackend{
+		Name:           "session-only",
+		Profile:        InMemoryProfile(),
+		SessionService: sessionSvc,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "memory.Service")
 }
 
 func TestExecuteAppendTrackCapturesPersistedTrack(t *testing.T) {
