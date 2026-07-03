@@ -838,6 +838,12 @@ func TestNewTool_DeclarationExposesSchema(t *testing.T) {
 			Description,
 		"scroll",
 	)
+	require.NotContains(
+		t,
+		decl.InputSchema.Properties["request"].Properties["kind"].
+			Description,
+		"evaluate",
+	)
 	require.Contains(
 		t,
 		decl.InputSchema.Properties["request"].Properties["selector"].
@@ -918,6 +924,12 @@ func TestNewTool_DeclarationReflectsEvaluateEnabled(t *testing.T) {
 		decl.InputSchema.Properties["request"].Properties["fn"].
 			Description,
 		"evaluate is not available",
+	)
+	require.Contains(
+		t,
+		decl.InputSchema.Properties["request"].Properties["kind"].
+			Description,
+		"evaluate",
 	)
 }
 
@@ -1088,6 +1100,32 @@ func TestToolCall_FocusRefreshesTabs(t *testing.T) {
 	require.Equal(t, mcpToolTabs, drv.calls[1].Tool)
 }
 
+func TestToolCall_FocusDefaultTargetRefreshesTabs(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolTabs: tabsPayload(),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":   actionFocus,
+			"targetId": "default",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionFocus, got.Action)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolTabs, drv.calls[0].Tool)
+	require.Equal(t, tabActionList, drv.calls[0].Args["action"])
+}
+
 func TestToolCall_CloseRefreshesTabs(t *testing.T) {
 	t.Parallel()
 
@@ -1141,6 +1179,33 @@ func TestToolCall_NavigateSelectsTarget(t *testing.T) {
 	require.Len(t, drv.calls, 2)
 	require.Equal(t, mcpToolTabs, drv.calls[0].Tool)
 	require.Equal(t, mcpToolNavigate, drv.calls[1].Tool)
+}
+
+func TestToolCall_NavigateDefaultTargetDoesNotSelect(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: textPayload("navigated"),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":   actionNavigate,
+			"targetId": "default",
+			"url":      "https://example.com",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Equal(t, actionNavigate, got.Action)
+	require.Contains(t, got.Text, "navigated")
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolNavigate, drv.calls[0].Tool)
 }
 
 func TestToolCall_NavigateAcceptsTargetURL(t *testing.T) {
@@ -1677,6 +1742,70 @@ func TestToolCall_ActClickAcceptsElementTarget(t *testing.T) {
 	)
 	require.Equal(t, "left", drv.calls[0].Args["button"])
 	require.Equal(t, []string{"Shift"}, drv.calls[0].Args["modifiers"])
+}
+
+func TestToolCall_ActClickAcceptsTopLevelElementTarget(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":  actionAct,
+			"kind":    actClick,
+			"target":  "article",
+			"element": "article list",
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolClick, drv.calls[0].Tool)
+	require.Equal(t, "article", drv.calls[0].Args["target"])
+	require.Equal(t, "element article", drv.calls[0].Args["element"])
+}
+
+func TestToolCall_ProfileAliasUsesDefaultProfile(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":  actionSnapshot,
+			"profile": "chrome",
+		}),
+	)
+	require.NoError(t, err)
+	got := raw.(Result)
+	require.Equal(t, defaultProfileName, got.Profile)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolSnapshot, drv.calls[0].Tool)
+}
+
+func TestToolCall_ActDragAcceptsTopLevelElementTargets(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	tool := newTestTool(drv)
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":      actionAct,
+			"kind":        actDrag,
+			"startTarget": "source-card",
+			"endTarget":   "destination-list",
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(t, mcpToolDrag, drv.calls[0].Tool)
+	require.Equal(t, "source-card", drv.calls[0].Args["startTarget"])
+	require.Equal(t, "destination-list", drv.calls[0].Args["endTarget"])
 }
 
 func TestToolCall_ActPassesTimeoutToBrowserServer(t *testing.T) {
@@ -3512,6 +3641,15 @@ func TestToolCall_RejectsInvalidInputs(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported browser action")
+
+	_, err = tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionFocus,
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "targetId is empty")
 
 	_, err = tool.Call(
 		context.Background(),
