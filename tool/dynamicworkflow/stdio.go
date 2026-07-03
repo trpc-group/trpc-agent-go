@@ -293,14 +293,14 @@ func finishWorkflowGuest(
 	if scanErr := workflowGuestScannerError(scanner.Err()); scanErr != nil && state.guestErr == nil {
 		state.guestErr = scanErr
 	}
+	_ = guest.stdin.Close()
+	waitErr := waitWorkflowGuest(ctx, guest)
 	if guest.stderr.Exceeded() && state.guestErr == nil {
 		state.guestErr = fmt.Errorf(
 			"dynamicworkflow: guest stderr exceeds %d bytes",
 			workflowGuestCapturedOutputLimit,
 		)
 	}
-	_ = guest.stdin.Close()
-	waitErr := waitWorkflowGuest(ctx, guest)
 	if state.guestErr != nil {
 		return Result{}, guestErrorWithStderr(state.guestErr, guest.stderr.String())
 	}
