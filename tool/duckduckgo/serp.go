@@ -78,12 +78,13 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 		}
 		return fallback, nil
 	}
-	if apiFallback, ok := t.searchAPIFallbackAfterSERPFailure(
+	apiFallback, apiFallbackErr := t.searchAPIFallbackAfterSERPFailure(
 		ctx,
 		req,
 		backend,
 		baseURL,
-	); ok {
+	)
+	if apiFallbackErr == nil {
 		if strings.TrimSpace(apiFallback.Summary) != "" {
 			apiFallback.Summary += fmt.Sprintf(
 				" (fallback from %s/%s after SERP failure)",
@@ -105,16 +106,18 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 		}, nil
 	}
 	result.Summary = fmt.Sprintf(
-		"%s; fallback %s failed: %v",
+		"%s; fallback %s failed: %v; api fallback failed: %v",
 		result.Summary,
 		fallbackBackend,
 		fallbackErr,
+		apiFallbackErr,
 	)
 	return result, fmt.Errorf(
-		"%w; fallback %s failed: %w",
+		"%w; fallback %s failed: %w; api fallback failed: %w",
 		err,
 		fallbackBackend,
 		fallbackErr,
+		apiFallbackErr,
 	)
 }
 
@@ -273,15 +276,25 @@ func (t *ddgTool) searchAPIFallbackAfterSERPFailure(
 	req searchRequest,
 	backend string,
 	baseURL string,
-) (searchResponse, bool) {
-	if ctx.Err() != nil || !isDefaultSERPBaseURL(backend, baseURL) {
-		return searchResponse{}, false
+) (searchResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return searchResponse{}, err
+	}
+	if !isDefaultSERPBaseURL(backend, baseURL) {
+		return searchResponse{}, fmt.Errorf(
+			"api fallback is disabled for non-default %s base URL %q",
+			backend,
+			baseURL,
+		)
 	}
 	result, err := t.searchAPIWithDefaultBaseURL(req)
-	if err != nil || len(result.Results) == 0 {
-		return searchResponse{}, false
+	if err != nil {
+		return searchResponse{}, err
 	}
-	return result, true
+	if len(result.Results) == 0 {
+		return searchResponse{}, fmt.Errorf("api fallback returned no results")
+	}
+	return result, nil
 }
 
 func fallbackSERPBaseURL(backend string, baseURL string) string {
