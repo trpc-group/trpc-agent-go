@@ -2404,6 +2404,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#remote-inference-iteration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Remote Inference Iteration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#tool-description-iteration" class="md-nav__link">
     <span class="md-ellipsis">
       Tool Description Iteration
@@ -3649,6 +3658,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#remote-inference-iteration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Remote Inference Iteration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#tool-description-iteration" class="md-nav__link">
     <span class="md-ellipsis">
       Tool Description Iteration
@@ -4058,7 +4076,7 @@
 </span></code></pre></div></td></tr></table></div>
 <p><code>final_response_avg_score</code> is the final-response evaluator provided by Evaluation. The example uses it to constrain recap length. <code>llm_rubric_critic</code> is an LLM Judge metric. The example uses it together with the reference recap and rubrics to check factual grounding, the main storyline, decisive process, numbers, title, data interpretation, and the quality of Chinese sports copy.</p>
 <h3 id="construct-engine">Construct Engine</h3>
-<p>When constructing the PromptIter <code>Engine</code>, provide the target Agent and <code>AgentEvaluator</code> first. The target Agent is used to export the structure snapshot, and <code>AgentEvaluator</code> is used to run training-set and validation-set evaluation. Candidate patches also depend on <code>Backwarder</code>, <code>Aggregator</code>, and <code>Optimizer</code>. <code>Backwarder</code> performs backpropagation attribution and converts training-set failure signals into text gradients, that is, modification directions pointing to related steps and prompts. <code>Aggregator</code> aggregates text gradients by merging multiple text gradients on the same prompt to be modified. <code>Optimizer</code> generates optimization patches by producing a candidate patch for that prompt from the aggregated result.</p>
+<p>When constructing the PromptIter <code>Engine</code>, provide the target Agent, <code>AgentEvaluator</code>, and three PromptIter worker components. The target Agent is used to export the structure snapshot, and <code>AgentEvaluator</code> is used to run training-set and validation-set evaluation. Candidate patches also depend on <code>Backwarder</code>, <code>Aggregator</code>, and <code>Optimizer</code>. <code>Backwarder</code> performs backpropagation attribution and converts training-set failure signals into text gradients, that is, modification directions pointing to related steps and prompts. <code>Aggregator</code> aggregates text gradients by merging multiple text gradients on the same prompt to be modified. <code>Optimizer</code> generates optimization patches by producing a candidate patch for that prompt from the aggregated result.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
@@ -4135,11 +4153,11 @@
 </span><span id="__span-6-32"><a id="__codelineno-6-32" name="__codelineno-6-32"></a><span class="c1">// Engine binds the target Agent, evaluator, and three PromptIter worker components.</span>
 </span><span id="__span-6-33"><a id="__codelineno-6-33" name="__codelineno-6-33"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-6-34"><a id="__codelineno-6-34" name="__codelineno-6-34"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-6-35"><a id="__codelineno-6-35" name="__codelineno-6-35"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-6-36"><a id="__codelineno-6-36" name="__codelineno-6-36"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-6-37"><a id="__codelineno-6-37" name="__codelineno-6-37"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-6-38"><a id="__codelineno-6-38" name="__codelineno-6-38"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-6-39"><a id="__codelineno-6-39" name="__codelineno-6-39"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-6-35"><a id="__codelineno-6-35" name="__codelineno-6-35"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-6-36"><a id="__codelineno-6-36" name="__codelineno-6-36"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-6-37"><a id="__codelineno-6-37" name="__codelineno-6-37"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-6-38"><a id="__codelineno-6-38" name="__codelineno-6-38"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-6-39"><a id="__codelineno-6-39" name="__codelineno-6-39"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-6-40"><a id="__codelineno-6-40" name="__codelineno-6-40"></a><span class="p">)</span>
 </span><span id="__span-6-41"><a id="__codelineno-6-41" name="__codelineno-6-41"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-6-42"><a id="__codelineno-6-42" name="__codelineno-6-42"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -4323,7 +4341,7 @@
 </span></code></pre></div></td></tr></table></div>
 <p>The example enables evaluation-case-level concurrent inference and concurrent evaluation for the training set and validation set by default. It also enables iteration-target-level concurrency for text-gradient aggregation and optimization patch generation by default. Backpropagation attribution processes evaluation cases sequentially by default. If the model service limits concurrency, reduce <code>-eval-case-parallelism</code>, <code>-aggregation-parallelism</code>, or <code>-optimizer-parallelism</code>, or disable the corresponding concurrency switch.</p>
 <h3 id="view-results">View Results</h3>
-<p>After synchronous prompt iteration finishes, <code>engine.Run(...)</code> returns a <code>RunResult</code>. The example prints the structure ID, iteration target, initial prompt, final accepted baseline prompt, validation score, and each round's decision in the terminal.</p>
+<p>After synchronous prompt iteration finishes, <code>engine.Run(...)</code> returns a <code>RunResult</code>. The example prints the iteration target, initial prompt, final accepted baseline prompt, validation score, and each round's decision in the terminal.</p>
 <p>Example output is shown below.</p>
 <table>
 <thead>
@@ -4378,7 +4396,7 @@
 <li><strong>Validation Evaluation</strong> runs validation-set evaluation on the candidate prompt snapshot and outputs validation scores and metric details.</li>
 <li><strong>Accept Policy</strong> compares the candidate prompt snapshot with the validation result of the current baseline and decides whether to update the current baseline.</li>
 <li><strong>Stop Policy</strong> decides whether to end the current run according to run state. If no stop condition is met, the workflow returns to training-set evaluation and enters the next round.</li>
-<li><strong>Run Result</strong> summarizes the structure snapshot, initial baseline validation, training evaluation, failure signals, backpropagation attribution, text-gradient aggregation, candidate patches, candidate prompt snapshot, validation evaluation, and decision results of the current run.</li>
+<li><strong>Run Result</strong> summarizes the initial baseline validation, training evaluation, failure signals, backpropagation attribution, text-gradient aggregation, candidate patches, candidate prompt snapshot, validation evaluation, and decision results of the current run.</li>
 </ul>
 <p>One PromptIter run usually contains these steps.</p>
 <ol>
@@ -5687,61 +5705,55 @@
 <span class="normal"><a href="#__codelineno-30-46">46</a></span>
 <span class="normal"><a href="#__codelineno-30-47">47</a></span>
 <span class="normal"><a href="#__codelineno-30-48">48</a></span>
-<span class="normal"><a href="#__codelineno-30-49">49</a></span>
-<span class="normal"><a href="#__codelineno-30-50">50</a></span>
-<span class="normal"><a href="#__codelineno-30-51">51</a></span>
-<span class="normal"><a href="#__codelineno-30-52">52</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2"></a><span class="w">    </span><span class="nx">astructure</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/structure&quot;</span>
-</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter&quot;</span>
-</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4"></a><span class="p">)</span>
-</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5"></a>
-</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6"></a><span class="c1">// RunResult stores the state and historical results of one PromptIter run.</span>
-</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RunResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8"></a><span class="w">    </span><span class="c1">// AppName identifies the owning application.</span>
-</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9"></a><span class="w">    </span><span class="nx">AppName</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-30-10"><a id="__codelineno-30-10" name="__codelineno-30-10"></a><span class="w">    </span><span class="c1">// ID identifies the current PromptIter run.</span>
-</span><span id="__span-30-11"><a id="__codelineno-30-11" name="__codelineno-30-11"></a><span class="w">    </span><span class="nx">ID</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-30-12"><a id="__codelineno-30-12" name="__codelineno-30-12"></a><span class="w">    </span><span class="c1">// Status stores the current run status.</span>
-</span><span id="__span-30-13"><a id="__codelineno-30-13" name="__codelineno-30-13"></a><span class="w">    </span><span class="nx">Status</span><span class="w"> </span><span class="nx">RunStatus</span>
-</span><span id="__span-30-14"><a id="__codelineno-30-14" name="__codelineno-30-14"></a><span class="w">    </span><span class="c1">// CurrentRound records the current or last executed round.</span>
-</span><span id="__span-30-15"><a id="__codelineno-30-15" name="__codelineno-30-15"></a><span class="w">    </span><span class="nx">CurrentRound</span><span class="w"> </span><span class="kt">int</span>
-</span><span id="__span-30-16"><a id="__codelineno-30-16" name="__codelineno-30-16"></a><span class="w">    </span><span class="c1">// Structure stores the structure snapshot of the target Agent.</span>
-</span><span id="__span-30-17"><a id="__codelineno-30-17" name="__codelineno-30-17"></a><span class="w">    </span><span class="nx">Structure</span><span class="w"> </span><span class="o">*</span><span class="nx">astructure</span><span class="p">.</span><span class="nx">Snapshot</span>
-</span><span id="__span-30-18"><a id="__codelineno-30-18" name="__codelineno-30-18"></a><span class="w">    </span><span class="c1">// BaselineValidation stores the validation result of the initial baseline.</span>
-</span><span id="__span-30-19"><a id="__codelineno-30-19" name="__codelineno-30-19"></a><span class="w">    </span><span class="nx">BaselineValidation</span><span class="w"> </span><span class="o">*</span><span class="nx">EvaluationResult</span>
-</span><span id="__span-30-20"><a id="__codelineno-30-20" name="__codelineno-30-20"></a><span class="w">    </span><span class="c1">// AcceptedProfile stores the current baseline Profile.</span>
-</span><span id="__span-30-21"><a id="__codelineno-30-21" name="__codelineno-30-21"></a><span class="w">    </span><span class="nx">AcceptedProfile</span><span class="w"> </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">Profile</span>
-</span><span id="__span-30-22"><a id="__codelineno-30-22" name="__codelineno-30-22"></a><span class="w">    </span><span class="c1">// Rounds stores training, patch, and validation results for each round.</span>
-</span><span id="__span-30-23"><a id="__codelineno-30-23" name="__codelineno-30-23"></a><span class="w">    </span><span class="nx">Rounds</span><span class="w"> </span><span class="p">[]</span><span class="nx">RoundResult</span>
-</span><span id="__span-30-24"><a id="__codelineno-30-24" name="__codelineno-30-24"></a><span class="w">    </span><span class="c1">// ErrorMessage stores the error message on failure or cancellation.</span>
-</span><span id="__span-30-25"><a id="__codelineno-30-25" name="__codelineno-30-25"></a><span class="w">    </span><span class="nx">ErrorMessage</span><span class="w"> </span><span class="kt">string</span>
-</span><span id="__span-30-26"><a id="__codelineno-30-26" name="__codelineno-30-26"></a><span class="p">}</span>
-</span><span id="__span-30-27"><a id="__codelineno-30-27" name="__codelineno-30-27"></a>
-</span><span id="__span-30-28"><a id="__codelineno-30-28" name="__codelineno-30-28"></a><span class="c1">// RoundResult stores the complete result of one iteration round.</span>
-</span><span id="__span-30-29"><a id="__codelineno-30-29" name="__codelineno-30-29"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RoundResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-30-30"><a id="__codelineno-30-30" name="__codelineno-30-30"></a><span class="w">    </span><span class="c1">// Round is the current round number.</span>
-</span><span id="__span-30-31"><a id="__codelineno-30-31" name="__codelineno-30-31"></a><span class="w">    </span><span class="nx">Round</span><span class="w"> </span><span class="kt">int</span>
-</span><span id="__span-30-32"><a id="__codelineno-30-32" name="__codelineno-30-32"></a><span class="w">    </span><span class="c1">// InputProfile is the current baseline Profile at the start of this round.</span>
-</span><span id="__span-30-33"><a id="__codelineno-30-33" name="__codelineno-30-33"></a><span class="w">    </span><span class="nx">InputProfile</span><span class="w"> </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">Profile</span>
-</span><span id="__span-30-34"><a id="__codelineno-30-34" name="__codelineno-30-34"></a><span class="w">    </span><span class="c1">// Train stores the training-set evaluation result of this round.</span>
-</span><span id="__span-30-35"><a id="__codelineno-30-35" name="__codelineno-30-35"></a><span class="w">    </span><span class="nx">Train</span><span class="w"> </span><span class="o">*</span><span class="nx">EvaluationResult</span>
-</span><span id="__span-30-36"><a id="__codelineno-30-36" name="__codelineno-30-36"></a><span class="w">    </span><span class="c1">// Losses stores losses extracted from failed training-set metrics.</span>
-</span><span id="__span-30-37"><a id="__codelineno-30-37" name="__codelineno-30-37"></a><span class="w">    </span><span class="nx">Losses</span><span class="w"> </span><span class="p">[]</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">CaseLoss</span>
-</span><span id="__span-30-38"><a id="__codelineno-30-38" name="__codelineno-30-38"></a><span class="w">    </span><span class="c1">// Backward stores backpropagation-attribution results.</span>
-</span><span id="__span-30-39"><a id="__codelineno-30-39" name="__codelineno-30-39"></a><span class="w">    </span><span class="nx">Backward</span><span class="w"> </span><span class="o">*</span><span class="nx">BackwardResult</span>
-</span><span id="__span-30-40"><a id="__codelineno-30-40" name="__codelineno-30-40"></a><span class="w">    </span><span class="c1">// Aggregation stores text-gradient aggregation results.</span>
-</span><span id="__span-30-41"><a id="__codelineno-30-41" name="__codelineno-30-41"></a><span class="w">    </span><span class="nx">Aggregation</span><span class="w"> </span><span class="o">*</span><span class="nx">AggregationResult</span>
-</span><span id="__span-30-42"><a id="__codelineno-30-42" name="__codelineno-30-42"></a><span class="w">    </span><span class="c1">// Patches stores the candidate patch collection generated by Optimizer.</span>
-</span><span id="__span-30-43"><a id="__codelineno-30-43" name="__codelineno-30-43"></a><span class="w">    </span><span class="nx">Patches</span><span class="w"> </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">PatchSet</span>
-</span><span id="__span-30-44"><a id="__codelineno-30-44" name="__codelineno-30-44"></a><span class="w">    </span><span class="c1">// OutputProfile is the candidate Profile after candidate patches are applied.</span>
-</span><span id="__span-30-45"><a id="__codelineno-30-45" name="__codelineno-30-45"></a><span class="w">    </span><span class="nx">OutputProfile</span><span class="w"> </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">Profile</span>
-</span><span id="__span-30-46"><a id="__codelineno-30-46" name="__codelineno-30-46"></a><span class="w">    </span><span class="c1">// Validation stores the validation-set evaluation result of the candidate Profile.</span>
-</span><span id="__span-30-47"><a id="__codelineno-30-47" name="__codelineno-30-47"></a><span class="w">    </span><span class="nx">Validation</span><span class="w"> </span><span class="o">*</span><span class="nx">EvaluationResult</span>
-</span><span id="__span-30-48"><a id="__codelineno-30-48" name="__codelineno-30-48"></a><span class="w">    </span><span class="c1">// Acceptance stores the acceptance decision of this round.</span>
-</span><span id="__span-30-49"><a id="__codelineno-30-49" name="__codelineno-30-49"></a><span class="w">    </span><span class="nx">Acceptance</span><span class="w"> </span><span class="o">*</span><span class="nx">AcceptanceDecision</span>
-</span><span id="__span-30-50"><a id="__codelineno-30-50" name="__codelineno-30-50"></a><span class="w">    </span><span class="c1">// Stop stores the stop decision of this round.</span>
-</span><span id="__span-30-51"><a id="__codelineno-30-51" name="__codelineno-30-51"></a><span class="w">    </span><span class="nx">Stop</span><span class="w"> </span><span class="o">*</span><span class="nx">StopDecision</span>
-</span><span id="__span-30-52"><a id="__codelineno-30-52" name="__codelineno-30-52"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-30-49">49</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter&quot;</span>
+</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3"></a><span class="p">)</span>
+</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4"></a>
+</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5"></a><span class="c1">// RunResult stores the state and historical results of one PromptIter run.</span>
+</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RunResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7"></a><span class="w">    </span><span class="c1">// AppName identifies the owning application.</span>
+</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8"></a><span class="w">    </span><span class="nx">AppName</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9"></a><span class="w">    </span><span class="c1">// ID identifies the current PromptIter run.</span>
+</span><span id="__span-30-10"><a id="__codelineno-30-10" name="__codelineno-30-10"></a><span class="w">    </span><span class="nx">ID</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-30-11"><a id="__codelineno-30-11" name="__codelineno-30-11"></a><span class="w">    </span><span class="c1">// Status stores the current run status.</span>
+</span><span id="__span-30-12"><a id="__codelineno-30-12" name="__codelineno-30-12"></a><span class="w">    </span><span class="nx">Status</span><span class="w"> </span><span class="nx">RunStatus</span>
+</span><span id="__span-30-13"><a id="__codelineno-30-13" name="__codelineno-30-13"></a><span class="w">    </span><span class="c1">// CurrentRound records the current or last executed round.</span>
+</span><span id="__span-30-14"><a id="__codelineno-30-14" name="__codelineno-30-14"></a><span class="w">    </span><span class="nx">CurrentRound</span><span class="w"> </span><span class="kt">int</span>
+</span><span id="__span-30-15"><a id="__codelineno-30-15" name="__codelineno-30-15"></a><span class="w">    </span><span class="c1">// BaselineValidation stores the validation result of the initial baseline.</span>
+</span><span id="__span-30-16"><a id="__codelineno-30-16" name="__codelineno-30-16"></a><span class="w">    </span><span class="nx">BaselineValidation</span><span class="w"> </span><span class="o">*</span><span class="nx">EvaluationResult</span>
+</span><span id="__span-30-17"><a id="__codelineno-30-17" name="__codelineno-30-17"></a><span class="w">    </span><span class="c1">// AcceptedProfile stores the current baseline Profile.</span>
+</span><span id="__span-30-18"><a id="__codelineno-30-18" name="__codelineno-30-18"></a><span class="w">    </span><span class="nx">AcceptedProfile</span><span class="w"> </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">Profile</span>
+</span><span id="__span-30-19"><a id="__codelineno-30-19" name="__codelineno-30-19"></a><span class="w">    </span><span class="c1">// Rounds stores training, patch, and validation results for each round.</span>
+</span><span id="__span-30-20"><a id="__codelineno-30-20" name="__codelineno-30-20"></a><span class="w">    </span><span class="nx">Rounds</span><span class="w"> </span><span class="p">[]</span><span class="nx">RoundResult</span>
+</span><span id="__span-30-21"><a id="__codelineno-30-21" name="__codelineno-30-21"></a><span class="w">    </span><span class="c1">// ErrorMessage stores the error message on failure or cancellation.</span>
+</span><span id="__span-30-22"><a id="__codelineno-30-22" name="__codelineno-30-22"></a><span class="w">    </span><span class="nx">ErrorMessage</span><span class="w"> </span><span class="kt">string</span>
+</span><span id="__span-30-23"><a id="__codelineno-30-23" name="__codelineno-30-23"></a><span class="p">}</span>
+</span><span id="__span-30-24"><a id="__codelineno-30-24" name="__codelineno-30-24"></a>
+</span><span id="__span-30-25"><a id="__codelineno-30-25" name="__codelineno-30-25"></a><span class="c1">// RoundResult stores the complete result of one iteration round.</span>
+</span><span id="__span-30-26"><a id="__codelineno-30-26" name="__codelineno-30-26"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RoundResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-27"><a id="__codelineno-30-27" name="__codelineno-30-27"></a><span class="w">    </span><span class="c1">// Round is the current round number.</span>
+</span><span id="__span-30-28"><a id="__codelineno-30-28" name="__codelineno-30-28"></a><span class="w">    </span><span class="nx">Round</span><span class="w"> </span><span class="kt">int</span>
+</span><span id="__span-30-29"><a id="__codelineno-30-29" name="__codelineno-30-29"></a><span class="w">    </span><span class="c1">// InputProfile is the current baseline Profile at the start of this round.</span>
+</span><span id="__span-30-30"><a id="__codelineno-30-30" name="__codelineno-30-30"></a><span class="w">    </span><span class="nx">InputProfile</span><span class="w"> </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">Profile</span>
+</span><span id="__span-30-31"><a id="__codelineno-30-31" name="__codelineno-30-31"></a><span class="w">    </span><span class="c1">// Train stores the training-set evaluation result of this round.</span>
+</span><span id="__span-30-32"><a id="__codelineno-30-32" name="__codelineno-30-32"></a><span class="w">    </span><span class="nx">Train</span><span class="w"> </span><span class="o">*</span><span class="nx">EvaluationResult</span>
+</span><span id="__span-30-33"><a id="__codelineno-30-33" name="__codelineno-30-33"></a><span class="w">    </span><span class="c1">// Losses stores losses extracted from failed training-set metrics.</span>
+</span><span id="__span-30-34"><a id="__codelineno-30-34" name="__codelineno-30-34"></a><span class="w">    </span><span class="nx">Losses</span><span class="w"> </span><span class="p">[]</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">CaseLoss</span>
+</span><span id="__span-30-35"><a id="__codelineno-30-35" name="__codelineno-30-35"></a><span class="w">    </span><span class="c1">// Backward stores backpropagation-attribution results.</span>
+</span><span id="__span-30-36"><a id="__codelineno-30-36" name="__codelineno-30-36"></a><span class="w">    </span><span class="nx">Backward</span><span class="w"> </span><span class="o">*</span><span class="nx">BackwardResult</span>
+</span><span id="__span-30-37"><a id="__codelineno-30-37" name="__codelineno-30-37"></a><span class="w">    </span><span class="c1">// Aggregation stores text-gradient aggregation results.</span>
+</span><span id="__span-30-38"><a id="__codelineno-30-38" name="__codelineno-30-38"></a><span class="w">    </span><span class="nx">Aggregation</span><span class="w"> </span><span class="o">*</span><span class="nx">AggregationResult</span>
+</span><span id="__span-30-39"><a id="__codelineno-30-39" name="__codelineno-30-39"></a><span class="w">    </span><span class="c1">// Patches stores the candidate patch collection generated by Optimizer.</span>
+</span><span id="__span-30-40"><a id="__codelineno-30-40" name="__codelineno-30-40"></a><span class="w">    </span><span class="nx">Patches</span><span class="w"> </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">PatchSet</span>
+</span><span id="__span-30-41"><a id="__codelineno-30-41" name="__codelineno-30-41"></a><span class="w">    </span><span class="c1">// OutputProfile is the candidate Profile after candidate patches are applied.</span>
+</span><span id="__span-30-42"><a id="__codelineno-30-42" name="__codelineno-30-42"></a><span class="w">    </span><span class="nx">OutputProfile</span><span class="w"> </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">Profile</span>
+</span><span id="__span-30-43"><a id="__codelineno-30-43" name="__codelineno-30-43"></a><span class="w">    </span><span class="c1">// Validation stores the validation-set evaluation result of the candidate Profile.</span>
+</span><span id="__span-30-44"><a id="__codelineno-30-44" name="__codelineno-30-44"></a><span class="w">    </span><span class="nx">Validation</span><span class="w"> </span><span class="o">*</span><span class="nx">EvaluationResult</span>
+</span><span id="__span-30-45"><a id="__codelineno-30-45" name="__codelineno-30-45"></a><span class="w">    </span><span class="c1">// Acceptance stores the acceptance decision of this round.</span>
+</span><span id="__span-30-46"><a id="__codelineno-30-46" name="__codelineno-30-46"></a><span class="w">    </span><span class="nx">Acceptance</span><span class="w"> </span><span class="o">*</span><span class="nx">AcceptanceDecision</span>
+</span><span id="__span-30-47"><a id="__codelineno-30-47" name="__codelineno-30-47"></a><span class="w">    </span><span class="c1">// Stop stores the stop decision of this round.</span>
+</span><span id="__span-30-48"><a id="__codelineno-30-48" name="__codelineno-30-48"></a><span class="w">    </span><span class="nx">Stop</span><span class="w"> </span><span class="o">*</span><span class="nx">StopDecision</span>
+</span><span id="__span-30-49"><a id="__codelineno-30-49" name="__codelineno-30-49"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>To inspect one run, read results in this order.</p>
 <ol>
@@ -5778,7 +5790,7 @@
 </span><span id="__span-31-10"><a id="__codelineno-31-10" name="__codelineno-31-10"></a><span class="w">    </span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">RunRequest</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">RunResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </span><span id="__span-31-11"><a id="__codelineno-31-11" name="__codelineno-31-11"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>The default implementation is created through <code>engine.New</code>. It requires the target Agent, <code>AgentEvaluator</code>, <code>Backwarder</code>, <code>Aggregator</code>, and <code>Optimizer</code>.</p>
+<p>The default implementation is created through <code>engine.New</code>. It requires one structure source, <code>AgentEvaluator</code>, <code>Backwarder</code>, <code>Aggregator</code>, and <code>Optimizer</code>. There are two structure-source forms. <code>WithAgent</code> is used for a local Agent, and Engine exports the structure snapshot from it. <code>WithStructure</code> is used for remote integration, and the caller provides an already fetched structure snapshot. Configure exactly one of them.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-32-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-32-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-32-3"> 3</a></span>
@@ -5795,23 +5807,59 @@
 <span class="normal"><a href="#__codelineno-32-14">14</a></span>
 <span class="normal"><a href="#__codelineno-32-15">15</a></span>
 <span class="normal"><a href="#__codelineno-32-16">16</a></span>
-<span class="normal"><a href="#__codelineno-32-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-32-17">17</a></span>
+<span class="normal"><a href="#__codelineno-32-18">18</a></span>
+<span class="normal"><a href="#__codelineno-32-19">19</a></span>
+<span class="normal"><a href="#__codelineno-32-20">20</a></span>
+<span class="normal"><a href="#__codelineno-32-21">21</a></span>
+<span class="normal"><a href="#__codelineno-32-22">22</a></span>
+<span class="normal"><a href="#__codelineno-32-23">23</a></span>
+<span class="normal"><a href="#__codelineno-32-24">24</a></span>
+<span class="normal"><a href="#__codelineno-32-25">25</a></span>
+<span class="normal"><a href="#__codelineno-32-26">26</a></span>
+<span class="normal"><a href="#__codelineno-32-27">27</a></span>
+<span class="normal"><a href="#__codelineno-32-28">28</a></span>
+<span class="normal"><a href="#__codelineno-32-29">29</a></span>
+<span class="normal"><a href="#__codelineno-32-30">30</a></span>
+<span class="normal"><a href="#__codelineno-32-31">31</a></span>
+<span class="normal"><a href="#__codelineno-32-32">32</a></span>
+<span class="normal"><a href="#__codelineno-32-33">33</a></span>
+<span class="normal"><a href="#__codelineno-32-34">34</a></span>
+<span class="normal"><a href="#__codelineno-32-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
-</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
-</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator&quot;</span>
-</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder&quot;</span>
-</span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer&quot;</span>
-</span><span id="__span-32-7"><a id="__codelineno-32-7" name="__codelineno-32-7"></a><span class="p">)</span>
-</span><span id="__span-32-8"><a id="__codelineno-32-8" name="__codelineno-32-8"></a>
-</span><span id="__span-32-9"><a id="__codelineno-32-9" name="__codelineno-32-9"></a><span class="c1">// New creates the default Engine implementation.</span>
-</span><span id="__span-32-10"><a id="__codelineno-32-10" name="__codelineno-32-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-32-11"><a id="__codelineno-32-11" name="__codelineno-32-11"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
-</span><span id="__span-32-12"><a id="__codelineno-32-12" name="__codelineno-32-12"></a><span class="w">    </span><span class="nx">targetAgent</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">,</span>
-</span><span id="__span-32-13"><a id="__codelineno-32-13" name="__codelineno-32-13"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">AgentEvaluator</span><span class="p">,</span>
-</span><span id="__span-32-14"><a id="__codelineno-32-14" name="__codelineno-32-14"></a><span class="w">    </span><span class="nx">backwarder</span><span class="w"> </span><span class="nx">backwarder</span><span class="p">.</span><span class="nx">Backwarder</span><span class="p">,</span>
-</span><span id="__span-32-15"><a id="__codelineno-32-15" name="__codelineno-32-15"></a><span class="w">    </span><span class="nx">aggregator</span><span class="w"> </span><span class="nx">aggregator</span><span class="p">.</span><span class="nx">Aggregator</span><span class="p">,</span>
-</span><span id="__span-32-16"><a id="__codelineno-32-16" name="__codelineno-32-16"></a><span class="w">    </span><span class="nx">optimizer</span><span class="w"> </span><span class="nx">optimizer</span><span class="p">.</span><span class="nx">Optimizer</span><span class="p">,</span>
-</span><span id="__span-32-17"><a id="__codelineno-32-17" name="__codelineno-32-17"></a><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Engine</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3"></a><span class="w">    </span><span class="nx">astructure</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/structure&quot;</span>
+</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
+</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator&quot;</span>
+</span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder&quot;</span>
+</span><span id="__span-32-7"><a id="__codelineno-32-7" name="__codelineno-32-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer&quot;</span>
+</span><span id="__span-32-8"><a id="__codelineno-32-8" name="__codelineno-32-8"></a><span class="p">)</span>
+</span><span id="__span-32-9"><a id="__codelineno-32-9" name="__codelineno-32-9"></a>
+</span><span id="__span-32-10"><a id="__codelineno-32-10" name="__codelineno-32-10"></a><span class="c1">// New creates the default Engine implementation.</span>
+</span><span id="__span-32-11"><a id="__codelineno-32-11" name="__codelineno-32-11"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Engine</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-32-12"><a id="__codelineno-32-12" name="__codelineno-32-12"></a>
+</span><span id="__span-32-13"><a id="__codelineno-32-13" name="__codelineno-32-13"></a><span class="c1">// Option configures Engine.</span>
+</span><span id="__span-32-14"><a id="__codelineno-32-14" name="__codelineno-32-14"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Option</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="o">*</span><span class="nx">options</span><span class="p">)</span>
+</span><span id="__span-32-15"><a id="__codelineno-32-15" name="__codelineno-32-15"></a>
+</span><span id="__span-32-16"><a id="__codelineno-32-16" name="__codelineno-32-16"></a><span class="c1">// WithAgent sets the local Agent used to export the structure snapshot.</span>
+</span><span id="__span-32-17"><a id="__codelineno-32-17" name="__codelineno-32-17"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">agentInstance</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
+</span><span id="__span-32-18"><a id="__codelineno-32-18" name="__codelineno-32-18"></a>
+</span><span id="__span-32-19"><a id="__codelineno-32-19" name="__codelineno-32-19"></a><span class="c1">// WithStructure sets the structure snapshot used by this run directly.</span>
+</span><span id="__span-32-20"><a id="__codelineno-32-20" name="__codelineno-32-20"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithStructure</span><span class="p">(</span><span class="nx">structure</span><span class="w"> </span><span class="o">*</span><span class="nx">astructure</span><span class="p">.</span><span class="nx">Snapshot</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
+</span><span id="__span-32-21"><a id="__codelineno-32-21" name="__codelineno-32-21"></a>
+</span><span id="__span-32-22"><a id="__codelineno-32-22" name="__codelineno-32-22"></a><span class="c1">// WithAgentEvaluator sets the training-set and validation-set evaluator.</span>
+</span><span id="__span-32-23"><a id="__codelineno-32-23" name="__codelineno-32-23"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">AgentEvaluator</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
+</span><span id="__span-32-24"><a id="__codelineno-32-24" name="__codelineno-32-24"></a>
+</span><span id="__span-32-25"><a id="__codelineno-32-25" name="__codelineno-32-25"></a><span class="c1">// WithBackwarder sets the backpropagation-attribution component.</span>
+</span><span id="__span-32-26"><a id="__codelineno-32-26" name="__codelineno-32-26"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="w"> </span><span class="nx">backwarder</span><span class="p">.</span><span class="nx">Backwarder</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
+</span><span id="__span-32-27"><a id="__codelineno-32-27" name="__codelineno-32-27"></a>
+</span><span id="__span-32-28"><a id="__codelineno-32-28" name="__codelineno-32-28"></a><span class="c1">// WithAggregator sets the gradient aggregation component.</span>
+</span><span id="__span-32-29"><a id="__codelineno-32-29" name="__codelineno-32-29"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="w"> </span><span class="nx">aggregator</span><span class="p">.</span><span class="nx">Aggregator</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
+</span><span id="__span-32-30"><a id="__codelineno-32-30" name="__codelineno-32-30"></a>
+</span><span id="__span-32-31"><a id="__codelineno-32-31" name="__codelineno-32-31"></a><span class="c1">// WithOptimizer sets the patch optimization component.</span>
+</span><span id="__span-32-32"><a id="__codelineno-32-32" name="__codelineno-32-32"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="w"> </span><span class="nx">optimizer</span><span class="p">.</span><span class="nx">Optimizer</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
+</span><span id="__span-32-33"><a id="__codelineno-32-33" name="__codelineno-32-33"></a>
+</span><span id="__span-32-34"><a id="__codelineno-32-34" name="__codelineno-32-34"></a><span class="c1">// WithObserver sets the run event observer and can be passed to Engine.Run.</span>
+</span><span id="__span-32-35"><a id="__codelineno-32-35" name="__codelineno-32-35"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithObserver</span><span class="p">(</span><span class="nx">observer</span><span class="w"> </span><span class="nx">Observer</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Example usage:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-33-1"> 1</a></span>
@@ -5836,11 +5884,11 @@
 </span><span id="__span-33-5"><a id="__codelineno-33-5" name="__codelineno-33-5"></a><span class="c1">// engine.New assembles the synchronous PromptIter iteration entry point.</span>
 </span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-33-10"><a id="__codelineno-33-10" name="__codelineno-33-10"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-33-11"><a id="__codelineno-33-11" name="__codelineno-33-11"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-33-12"><a id="__codelineno-33-12" name="__codelineno-33-12"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-33-10"><a id="__codelineno-33-10" name="__codelineno-33-10"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-33-11"><a id="__codelineno-33-11" name="__codelineno-33-11"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-33-12"><a id="__codelineno-33-12" name="__codelineno-33-12"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-33-13"><a id="__codelineno-33-13" name="__codelineno-33-13"></a><span class="p">)</span>
 </span><span id="__span-33-14"><a id="__codelineno-33-14" name="__codelineno-33-14"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-33-15"><a id="__codelineno-33-15" name="__codelineno-33-15"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -6081,25 +6129,21 @@
 <span class="normal"><a href="#__codelineno-41-12">12</a></span>
 <span class="normal"><a href="#__codelineno-41-13">13</a></span>
 <span class="normal"><a href="#__codelineno-41-14">14</a></span>
-<span class="normal"><a href="#__codelineno-41-15">15</a></span>
-<span class="normal"><a href="#__codelineno-41-16">16</a></span>
-<span class="normal"><a href="#__codelineno-41-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a><span class="c1">// RunResultSlimming controls which fields in RunResult are omitted before saving or returning.</span>
+<span class="normal"><a href="#__codelineno-41-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a><span class="c1">// RunResultSlimming controls which fields in RunResult are omitted before saving or returning.</span>
 </span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RunResultSlimming</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a><span class="w">    </span><span class="c1">// OmitStructure omits the exported Agent structure snapshot.</span>
-</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="w">    </span><span class="nx">OmitStructure</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a><span class="w">    </span><span class="c1">// OmitEvaluationCases omits evaluation-case details in each stage&#39;s evaluation results.</span>
-</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6"></a><span class="w">    </span><span class="nx">OmitEvaluationCases</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7"></a><span class="w">    </span><span class="c1">// OmitBackward omits each round&#39;s backpropagation-attribution result.</span>
-</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8"></a><span class="w">    </span><span class="nx">OmitBackward</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9"></a><span class="w">    </span><span class="c1">// OmitAggregation omits each round&#39;s text-gradient aggregation result.</span>
-</span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10"></a><span class="w">    </span><span class="nx">OmitAggregation</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-11"><a id="__codelineno-41-11" name="__codelineno-41-11"></a><span class="w">    </span><span class="c1">// OmitPatches omits each round&#39;s optimization patch result.</span>
-</span><span id="__span-41-12"><a id="__codelineno-41-12" name="__codelineno-41-12"></a><span class="w">    </span><span class="nx">OmitPatches</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-13"><a id="__codelineno-41-13" name="__codelineno-41-13"></a><span class="w">    </span><span class="c1">// OmitProfiles omits input Profile, candidate Profile, and current baseline Profile.</span>
-</span><span id="__span-41-14"><a id="__codelineno-41-14" name="__codelineno-41-14"></a><span class="w">    </span><span class="nx">OmitProfiles</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-15"><a id="__codelineno-41-15" name="__codelineno-41-15"></a><span class="w">    </span><span class="c1">// OmitLosses omits each round&#39;s loss details.</span>
-</span><span id="__span-41-16"><a id="__codelineno-41-16" name="__codelineno-41-16"></a><span class="w">    </span><span class="nx">OmitLosses</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-17"><a id="__codelineno-41-17" name="__codelineno-41-17"></a><span class="p">}</span>
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a><span class="w">    </span><span class="c1">// OmitEvaluationCases omits evaluation-case details in each stage&#39;s evaluation results.</span>
+</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="w">    </span><span class="nx">OmitEvaluationCases</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a><span class="w">    </span><span class="c1">// OmitBackward omits each round&#39;s backpropagation-attribution result.</span>
+</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6"></a><span class="w">    </span><span class="nx">OmitBackward</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7"></a><span class="w">    </span><span class="c1">// OmitAggregation omits each round&#39;s text-gradient aggregation result.</span>
+</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8"></a><span class="w">    </span><span class="nx">OmitAggregation</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9"></a><span class="w">    </span><span class="c1">// OmitPatches omits each round&#39;s optimization patch result.</span>
+</span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10"></a><span class="w">    </span><span class="nx">OmitPatches</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-41-11"><a id="__codelineno-41-11" name="__codelineno-41-11"></a><span class="w">    </span><span class="c1">// OmitProfiles omits input Profile, candidate Profile, and current baseline Profile.</span>
+</span><span id="__span-41-12"><a id="__codelineno-41-12" name="__codelineno-41-12"></a><span class="w">    </span><span class="nx">OmitProfiles</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-41-13"><a id="__codelineno-41-13" name="__codelineno-41-13"></a><span class="w">    </span><span class="c1">// OmitLosses omits each round&#39;s loss details.</span>
+</span><span id="__span-41-14"><a id="__codelineno-41-14" name="__codelineno-41-14"></a><span class="w">    </span><span class="nx">OmitLosses</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-41-15"><a id="__codelineno-41-15" name="__codelineno-41-15"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="store">Store</h3>
 <p><code>Store</code> persists the <code>RunResult</code> of asynchronous iteration. <code>Manager.Start</code> calls <code>Create</code> when creating a run record. During background execution, it writes the latest result through <code>Update</code>. <code>Manager.Get</code> queries the current result through <code>Get</code>.</p>
@@ -6789,11 +6833,11 @@
 </span><span id="__span-55-77"><a id="__codelineno-55-77" name="__codelineno-55-77"></a><span class="c1">// Engine binds the target Agent, evaluator, and three PromptIter worker components.</span>
 </span><span id="__span-55-78"><a id="__codelineno-55-78" name="__codelineno-55-78"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-55-79"><a id="__codelineno-55-79" name="__codelineno-55-79"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-55-80"><a id="__codelineno-55-80" name="__codelineno-55-80"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-55-81"><a id="__codelineno-55-81" name="__codelineno-55-81"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-55-82"><a id="__codelineno-55-82" name="__codelineno-55-82"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-55-83"><a id="__codelineno-55-83" name="__codelineno-55-83"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-55-84"><a id="__codelineno-55-84" name="__codelineno-55-84"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-55-80"><a id="__codelineno-55-80" name="__codelineno-55-80"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-55-81"><a id="__codelineno-55-81" name="__codelineno-55-81"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-55-82"><a id="__codelineno-55-82" name="__codelineno-55-82"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-55-83"><a id="__codelineno-55-83" name="__codelineno-55-83"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-55-84"><a id="__codelineno-55-84" name="__codelineno-55-84"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-55-85"><a id="__codelineno-55-85" name="__codelineno-55-85"></a><span class="p">)</span>
 </span><span id="__span-55-86"><a id="__codelineno-55-86" name="__codelineno-55-86"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-55-87"><a id="__codelineno-55-87" name="__codelineno-55-87"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -6872,7 +6916,7 @@
 </span><span id="__span-55-160"><a id="__codelineno-55-160" name="__codelineno-55-160"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
 </span><span id="__span-55-161"><a id="__codelineno-55-161" name="__codelineno-55-161"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>The <code>RunResult</code> returned by <code>Engine.Run</code> records the structure ID, iteration target, initial prompt, final baseline prompt, validation score, and each round's decision result.</p>
+<p>The <code>RunResult</code> returned by <code>Engine.Run</code> records the iteration target, initial prompt, final baseline prompt, validation score, and each round's decision result.</p>
 <table>
 <thead>
 <tr>
@@ -7173,11 +7217,11 @@
 </span><span id="__span-56-79"><a id="__codelineno-56-79" name="__codelineno-56-79"></a><span class="c1">// Engine binds the target Agent, evaluator, and three PromptIter worker components.</span>
 </span><span id="__span-56-80"><a id="__codelineno-56-80" name="__codelineno-56-80"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-56-81"><a id="__codelineno-56-81" name="__codelineno-56-81"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-56-82"><a id="__codelineno-56-82" name="__codelineno-56-82"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-56-83"><a id="__codelineno-56-83" name="__codelineno-56-83"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-56-84"><a id="__codelineno-56-84" name="__codelineno-56-84"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-56-85"><a id="__codelineno-56-85" name="__codelineno-56-85"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-56-86"><a id="__codelineno-56-86" name="__codelineno-56-86"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-56-82"><a id="__codelineno-56-82" name="__codelineno-56-82"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-56-83"><a id="__codelineno-56-83" name="__codelineno-56-83"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-56-84"><a id="__codelineno-56-84" name="__codelineno-56-84"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-56-85"><a id="__codelineno-56-85" name="__codelineno-56-85"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-56-86"><a id="__codelineno-56-86" name="__codelineno-56-86"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-56-87"><a id="__codelineno-56-87" name="__codelineno-56-87"></a><span class="p">)</span>
 </span><span id="__span-56-88"><a id="__codelineno-56-88" name="__codelineno-56-88"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-56-89"><a id="__codelineno-56-89" name="__codelineno-56-89"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -7320,11 +7364,11 @@
 </span><span id="__span-57-8"><a id="__codelineno-57-8" name="__codelineno-57-8"></a><span class="c1">// engineInstance binds the target Agent, evaluator, and three PromptIter worker components.</span>
 </span><span id="__span-57-9"><a id="__codelineno-57-9" name="__codelineno-57-9"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-57-10"><a id="__codelineno-57-10" name="__codelineno-57-10"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-57-11"><a id="__codelineno-57-11" name="__codelineno-57-11"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-57-12"><a id="__codelineno-57-12" name="__codelineno-57-12"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-57-13"><a id="__codelineno-57-13" name="__codelineno-57-13"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-57-14"><a id="__codelineno-57-14" name="__codelineno-57-14"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-57-15"><a id="__codelineno-57-15" name="__codelineno-57-15"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-57-11"><a id="__codelineno-57-11" name="__codelineno-57-11"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-57-12"><a id="__codelineno-57-12" name="__codelineno-57-12"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-57-13"><a id="__codelineno-57-13" name="__codelineno-57-13"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-57-14"><a id="__codelineno-57-14" name="__codelineno-57-14"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-57-15"><a id="__codelineno-57-15" name="__codelineno-57-15"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-57-16"><a id="__codelineno-57-16" name="__codelineno-57-16"></a><span class="p">)</span>
 </span><span id="__span-57-17"><a id="__codelineno-57-17" name="__codelineno-57-17"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-57-18"><a id="__codelineno-57-18" name="__codelineno-57-18"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -7402,11 +7446,11 @@
 </span><span id="__span-58-9"><a id="__codelineno-58-9" name="__codelineno-58-9"></a><span class="c1">// engineInstance binds the target Agent, evaluator, and three PromptIter worker components.</span>
 </span><span id="__span-58-10"><a id="__codelineno-58-10" name="__codelineno-58-10"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-58-11"><a id="__codelineno-58-11" name="__codelineno-58-11"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-58-12"><a id="__codelineno-58-12" name="__codelineno-58-12"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-58-13"><a id="__codelineno-58-13" name="__codelineno-58-13"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-58-14"><a id="__codelineno-58-14" name="__codelineno-58-14"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-58-15"><a id="__codelineno-58-15" name="__codelineno-58-15"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-58-16"><a id="__codelineno-58-16" name="__codelineno-58-16"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-58-12"><a id="__codelineno-58-12" name="__codelineno-58-12"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-58-13"><a id="__codelineno-58-13" name="__codelineno-58-13"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-58-14"><a id="__codelineno-58-14" name="__codelineno-58-14"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-58-15"><a id="__codelineno-58-15" name="__codelineno-58-15"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-58-16"><a id="__codelineno-58-16" name="__codelineno-58-16"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-58-17"><a id="__codelineno-58-17" name="__codelineno-58-17"></a><span class="p">)</span>
 </span><span id="__span-58-18"><a id="__codelineno-58-18" name="__codelineno-58-18"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-58-19"><a id="__codelineno-58-19" name="__codelineno-58-19"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -7752,11 +7796,11 @@
 </span><span id="__span-60-38"><a id="__codelineno-60-38" name="__codelineno-60-38"></a><span class="c1">// engineInstance binds the target Graph Agent, evaluator, and three PromptIter worker components.</span>
 </span><span id="__span-60-39"><a id="__codelineno-60-39" name="__codelineno-60-39"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-60-40"><a id="__codelineno-60-40" name="__codelineno-60-40"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-60-41"><a id="__codelineno-60-41" name="__codelineno-60-41"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-60-42"><a id="__codelineno-60-42" name="__codelineno-60-42"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-60-43"><a id="__codelineno-60-43" name="__codelineno-60-43"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-60-44"><a id="__codelineno-60-44" name="__codelineno-60-44"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-60-45"><a id="__codelineno-60-45" name="__codelineno-60-45"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-60-41"><a id="__codelineno-60-41" name="__codelineno-60-41"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-60-42"><a id="__codelineno-60-42" name="__codelineno-60-42"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-60-43"><a id="__codelineno-60-43" name="__codelineno-60-43"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-60-44"><a id="__codelineno-60-44" name="__codelineno-60-44"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-60-45"><a id="__codelineno-60-45" name="__codelineno-60-45"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-60-46"><a id="__codelineno-60-46" name="__codelineno-60-46"></a><span class="p">)</span>
 </span><span id="__span-60-47"><a id="__codelineno-60-47" name="__codelineno-60-47"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-60-48"><a id="__codelineno-60-48" name="__codelineno-60-48"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -7776,9 +7820,9 @@
 </span><span id="__span-60-62"><a id="__codelineno-60-62" name="__codelineno-60-62"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>Multi-node iteration follows the main PromptIter workflow. The difference is that one run can write multiple AgentNode <code>instruction surface</code> values into <code>TargetSurfaceIDs</code>. Training-set failure signals are attributed through backpropagation with the actual execution trace. Later text-gradient aggregation and optimization patch generation are limited to these target prompts.</p>
-<h3 id="tool-description-iteration">Tool Description Iteration</h3>
-<p>Tool descriptions are also part of the prompt. Tool-description iteration optimizes the <code>Description</code> in a tool declaration. When the target object has static tools, the structure snapshot exports one <code>tool surface</code> for each tool declaration. At run time, <code>RunRequest.TargetSurfaceIDs</code> selects the tool descriptions to iterate. See the complete <code>tooldesc</code> example code at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/promptiter/tooldesc">examples/evaluation/promptiter/tooldesc</a>.</p>
-<p><code>tooldesc</code> constructs an LLMAgent with a local function tool, <code>lookup_record</code>. The code below shows the target Agent's tool declaration and Runner creation.</p>
+<h3 id="remote-inference-iteration">Remote Inference Iteration</h3>
+<p>Remote inference iteration applies when PromptIter and the target Agent are deployed separately. The process running PromptIter handles evaluation, optimization, and acceptance decisions, while the remote Agent service executes the target Agent. During remote inference integration, <code>AgentEvaluator</code> uses a remote Runner as the target Runner, and <code>Engine</code> is created with the remote structure snapshot. See <a href="../trpcagent/">tRPC-Agent API service</a> for exposing the remote Agent service, and <a href="../runner/#remote-trpc-agent-runner">remote tRPC-Agent Runner</a> for creating the remote Runner.</p>
+<p>See the complete example at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/promptiter/remote">examples/evaluation/promptiter/remote</a>.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-61-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-61-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-61-3"> 3</a></span>
@@ -7798,28 +7842,78 @@
 <span class="normal"><a href="#__codelineno-61-17">17</a></span>
 <span class="normal"><a href="#__codelineno-61-18">18</a></span>
 <span class="normal"><a href="#__codelineno-61-19">19</a></span>
-<span class="normal"><a href="#__codelineno-61-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
-</span><span id="__span-61-5"><a id="__codelineno-61-5" name="__codelineno-61-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/function&quot;</span>
-</span><span id="__span-61-6"><a id="__codelineno-61-6" name="__codelineno-61-6"></a><span class="p">)</span>
-</span><span id="__span-61-7"><a id="__codelineno-61-7" name="__codelineno-61-7"></a>
-</span><span id="__span-61-8"><a id="__codelineno-61-8" name="__codelineno-61-8"></a><span class="nx">travelLookupTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
-</span><span id="__span-61-9"><a id="__codelineno-61-9" name="__codelineno-61-9"></a><span class="w">    </span><span class="nx">getFlightStatus</span><span class="p">,</span>
-</span><span id="__span-61-10"><a id="__codelineno-61-10" name="__codelineno-61-10"></a><span class="w">    </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;lookup_record&quot;</span><span class="p">),</span>
-</span><span id="__span-61-11"><a id="__codelineno-61-11" name="__codelineno-61-11"></a><span class="w">    </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;Look up a traveler loyalty-profile record.&quot;</span><span class="p">),</span>
-</span><span id="__span-61-12"><a id="__codelineno-61-12" name="__codelineno-61-12"></a><span class="p">)</span>
-</span><span id="__span-61-13"><a id="__codelineno-61-13" name="__codelineno-61-13"></a>
-</span><span id="__span-61-14"><a id="__codelineno-61-14" name="__codelineno-61-14"></a><span class="nx">candidateAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-61-15"><a id="__codelineno-61-15" name="__codelineno-61-15"></a><span class="w">    </span><span class="nx">candidateAgentName</span><span class="p">,</span>
-</span><span id="__span-61-16"><a id="__codelineno-61-16" name="__codelineno-61-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">candidateModel</span><span class="p">),</span>
-</span><span id="__span-61-17"><a id="__codelineno-61-17" name="__codelineno-61-17"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;Answer travel operations questions concisely. Use a tool only when its declaration clearly matches the request.&quot;</span><span class="p">),</span>
-</span><span id="__span-61-18"><a id="__codelineno-61-18" name="__codelineno-61-18"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">travelLookupTool</span><span class="p">}),</span>
-</span><span id="__span-61-19"><a id="__codelineno-61-19" name="__codelineno-61-19"></a><span class="p">)</span>
-</span><span id="__span-61-20"><a id="__codelineno-61-20" name="__codelineno-61-20"></a><span class="nx">candidateRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">candidateAppName</span><span class="p">,</span><span class="w"> </span><span class="nx">candidateAgent</span><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-61-20">20</a></span>
+<span class="normal"><a href="#__codelineno-61-21">21</a></span>
+<span class="normal"><a href="#__codelineno-61-22">22</a></span>
+<span class="normal"><a href="#__codelineno-61-23">23</a></span>
+<span class="normal"><a href="#__codelineno-61-24">24</a></span>
+<span class="normal"><a href="#__codelineno-61-25">25</a></span>
+<span class="normal"><a href="#__codelineno-61-26">26</a></span>
+<span class="normal"><a href="#__codelineno-61-27">27</a></span>
+<span class="normal"><a href="#__codelineno-61-28">28</a></span>
+<span class="normal"><a href="#__codelineno-61-29">29</a></span>
+<span class="normal"><a href="#__codelineno-61-30">30</a></span>
+<span class="normal"><a href="#__codelineno-61-31">31</a></span>
+<span class="normal"><a href="#__codelineno-61-32">32</a></span>
+<span class="normal"><a href="#__codelineno-61-33">33</a></span>
+<span class="normal"><a href="#__codelineno-61-34">34</a></span>
+<span class="normal"><a href="#__codelineno-61-35">35</a></span>
+<span class="normal"><a href="#__codelineno-61-36">36</a></span>
+<span class="normal"><a href="#__codelineno-61-37">37</a></span>
+<span class="normal"><a href="#__codelineno-61-38">38</a></span>
+<span class="normal"><a href="#__codelineno-61-39">39</a></span>
+<span class="normal"><a href="#__codelineno-61-40">40</a></span>
+<span class="normal"><a href="#__codelineno-61-41">41</a></span>
+<span class="normal"><a href="#__codelineno-61-42">42</a></span>
+<span class="normal"><a href="#__codelineno-61-43">43</a></span>
+<span class="normal"><a href="#__codelineno-61-44">44</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
+</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine&quot;</span>
+</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4"></a><span class="w">    </span><span class="nx">trpcagentrunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner/trpcagent&quot;</span>
+</span><span id="__span-61-5"><a id="__codelineno-61-5" name="__codelineno-61-5"></a><span class="p">)</span>
+</span><span id="__span-61-6"><a id="__codelineno-61-6" name="__codelineno-61-6"></a>
+</span><span id="__span-61-7"><a id="__codelineno-61-7" name="__codelineno-61-7"></a><span class="nx">candidateRunner</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">trpcagentrunner</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-61-8"><a id="__codelineno-61-8" name="__codelineno-61-8"></a><span class="w">    </span><span class="nx">candidateAppName</span><span class="p">,</span>
+</span><span id="__span-61-9"><a id="__codelineno-61-9" name="__codelineno-61-9"></a><span class="w">    </span><span class="nx">trpcagentrunner</span><span class="p">.</span><span class="nx">WithTarget</span><span class="p">(</span><span class="nx">candidateTarget</span><span class="p">),</span>
+</span><span id="__span-61-10"><a id="__codelineno-61-10" name="__codelineno-61-10"></a><span class="p">)</span>
+</span><span id="__span-61-11"><a id="__codelineno-61-11" name="__codelineno-61-11"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-12"><a id="__codelineno-61-12" name="__codelineno-61-12"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-61-13"><a id="__codelineno-61-13" name="__codelineno-61-13"></a><span class="p">}</span>
+</span><span id="__span-61-14"><a id="__codelineno-61-14" name="__codelineno-61-14"></a>
+</span><span id="__span-61-15"><a id="__codelineno-61-15" name="__codelineno-61-15"></a><span class="nx">targetStructure</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">candidateRunner</span><span class="p">.</span><span class="nx">Describe</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
+</span><span id="__span-61-16"><a id="__codelineno-61-16" name="__codelineno-61-16"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-17"><a id="__codelineno-61-17" name="__codelineno-61-17"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-61-18"><a id="__codelineno-61-18" name="__codelineno-61-18"></a><span class="p">}</span>
+</span><span id="__span-61-19"><a id="__codelineno-61-19" name="__codelineno-61-19"></a>
+</span><span id="__span-61-20"><a id="__codelineno-61-20" name="__codelineno-61-20"></a><span class="c1">// AgentEvaluator still uses the remote Runner for train and validation evaluation.</span>
+</span><span id="__span-61-21"><a id="__codelineno-61-21" name="__codelineno-61-21"></a><span class="nx">agentEvaluator</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-61-22"><a id="__codelineno-61-22" name="__codelineno-61-22"></a><span class="w">    </span><span class="nx">appName</span><span class="p">,</span>
+</span><span id="__span-61-23"><a id="__codelineno-61-23" name="__codelineno-61-23"></a><span class="w">    </span><span class="nx">candidateRunner</span><span class="p">,</span>
+</span><span id="__span-61-24"><a id="__codelineno-61-24" name="__codelineno-61-24"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalSetManager</span><span class="p">(</span><span class="nx">evalSetManager</span><span class="p">),</span>
+</span><span id="__span-61-25"><a id="__codelineno-61-25" name="__codelineno-61-25"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithMetricManager</span><span class="p">(</span><span class="nx">metricManager</span><span class="p">),</span>
+</span><span id="__span-61-26"><a id="__codelineno-61-26" name="__codelineno-61-26"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalResultManager</span><span class="p">(</span><span class="nx">evalResultManager</span><span class="p">),</span>
+</span><span id="__span-61-27"><a id="__codelineno-61-27" name="__codelineno-61-27"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
+</span><span id="__span-61-28"><a id="__codelineno-61-28" name="__codelineno-61-28"></a><span class="p">)</span>
+</span><span id="__span-61-29"><a id="__codelineno-61-29" name="__codelineno-61-29"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-30"><a id="__codelineno-61-30" name="__codelineno-61-30"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-61-31"><a id="__codelineno-61-31" name="__codelineno-61-31"></a><span class="p">}</span>
+</span><span id="__span-61-32"><a id="__codelineno-61-32" name="__codelineno-61-32"></a>
+</span><span id="__span-61-33"><a id="__codelineno-61-33" name="__codelineno-61-33"></a><span class="c1">// Engine uses the remote structure snapshot instead of a local Agent.</span>
+</span><span id="__span-61-34"><a id="__codelineno-61-34" name="__codelineno-61-34"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-61-35"><a id="__codelineno-61-35" name="__codelineno-61-35"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-61-36"><a id="__codelineno-61-36" name="__codelineno-61-36"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithStructure</span><span class="p">(</span><span class="nx">targetStructure</span><span class="p">),</span>
+</span><span id="__span-61-37"><a id="__codelineno-61-37" name="__codelineno-61-37"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-61-38"><a id="__codelineno-61-38" name="__codelineno-61-38"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-61-39"><a id="__codelineno-61-39" name="__codelineno-61-39"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-61-40"><a id="__codelineno-61-40" name="__codelineno-61-40"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
+</span><span id="__span-61-41"><a id="__codelineno-61-41" name="__codelineno-61-41"></a><span class="p">)</span>
+</span><span id="__span-61-42"><a id="__codelineno-61-42" name="__codelineno-61-42"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-43"><a id="__codelineno-61-43" name="__codelineno-61-43"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-61-44"><a id="__codelineno-61-44" name="__codelineno-61-44"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>The example below omits repeated assembly code for <code>Engine</code>, <code>AgentEvaluator</code>, <code>Manager</code>, and the three PromptIter worker components. It focuses on <code>TargetSurfaceIDs</code> in the tool-description scenario. A single tool-description surface has a <code>SurfaceID</code> in the form <code>&lt;node ID&gt;#tool.&lt;tool name&gt;</code>. If a node contains multiple static tools, each tool description corresponds to an independent surface, so targets can be selected at tool granularity.</p>
+<h3 id="tool-description-iteration">Tool Description Iteration</h3>
+<p>Tool descriptions are also part of the prompt. Tool-description iteration optimizes the <code>Description</code> in a tool declaration. When the target object has static tools, the structure snapshot exports one <code>tool surface</code> for each tool declaration. At run time, <code>RunRequest.TargetSurfaceIDs</code> selects the tool descriptions to iterate. See the complete <code>tooldesc</code> example code at <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/promptiter/tooldesc">examples/evaluation/promptiter/tooldesc</a>.</p>
+<p><code>tooldesc</code> constructs an LLMAgent with a local function tool, <code>lookup_record</code>. The code below shows the target Agent's tool declaration and Runner creation.</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-62-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-62-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-62-3"> 3</a></span>
@@ -7839,28 +7933,69 @@
 <span class="normal"><a href="#__codelineno-62-17">17</a></span>
 <span class="normal"><a href="#__codelineno-62-18">18</a></span>
 <span class="normal"><a href="#__codelineno-62-19">19</a></span>
-<span class="normal"><a href="#__codelineno-62-20">20</a></span>
-<span class="normal"><a href="#__codelineno-62-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2"></a><span class="w">    </span><span class="nx">astructure</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/structure&quot;</span>
-</span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine&quot;</span>
-</span><span id="__span-62-4"><a id="__codelineno-62-4" name="__codelineno-62-4"></a><span class="p">)</span>
-</span><span id="__span-62-5"><a id="__codelineno-62-5" name="__codelineno-62-5"></a>
-</span><span id="__span-62-6"><a id="__codelineno-62-6" name="__codelineno-62-6"></a><span class="nx">targetSurfaceID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">astructure</span><span class="p">.</span><span class="nx">SurfaceID</span><span class="p">(</span>
-</span><span id="__span-62-7"><a id="__codelineno-62-7" name="__codelineno-62-7"></a><span class="w">    </span><span class="nx">candidateAgentName</span><span class="p">,</span>
-</span><span id="__span-62-8"><a id="__codelineno-62-8" name="__codelineno-62-8"></a><span class="w">    </span><span class="nx">astructure</span><span class="p">.</span><span class="nx">SurfaceTypeTool</span><span class="p">,</span>
-</span><span id="__span-62-9"><a id="__codelineno-62-9" name="__codelineno-62-9"></a><span class="w">    </span><span class="s">&quot;lookup_record&quot;</span><span class="p">,</span>
-</span><span id="__span-62-10"><a id="__codelineno-62-10" name="__codelineno-62-10"></a><span class="p">)</span>
-</span><span id="__span-62-11"><a id="__codelineno-62-11" name="__codelineno-62-11"></a>
-</span><span id="__span-62-12"><a id="__codelineno-62-12" name="__codelineno-62-12"></a><span class="nx">runRequest</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">engine</span><span class="p">.</span><span class="nx">RunRequest</span><span class="p">{</span>
-</span><span id="__span-62-13"><a id="__codelineno-62-13" name="__codelineno-62-13"></a><span class="w">    </span><span class="nx">Train</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">engine</span><span class="p">.</span><span class="nx">EvalSetInput</span><span class="p">{</span>
-</span><span id="__span-62-14"><a id="__codelineno-62-14" name="__codelineno-62-14"></a><span class="w">        </span><span class="p">{</span><span class="nx">EvalSetID</span><span class="p">:</span><span class="w"> </span><span class="nx">trainEvalSetID</span><span class="p">},</span>
-</span><span id="__span-62-15"><a id="__codelineno-62-15" name="__codelineno-62-15"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-62-16"><a id="__codelineno-62-16" name="__codelineno-62-16"></a><span class="w">    </span><span class="nx">Validation</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">engine</span><span class="p">.</span><span class="nx">EvalSetInput</span><span class="p">{</span>
-</span><span id="__span-62-17"><a id="__codelineno-62-17" name="__codelineno-62-17"></a><span class="w">        </span><span class="p">{</span><span class="nx">EvalSetID</span><span class="p">:</span><span class="w"> </span><span class="nx">validationEvalSetID</span><span class="p">},</span>
-</span><span id="__span-62-18"><a id="__codelineno-62-18" name="__codelineno-62-18"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-62-19"><a id="__codelineno-62-19" name="__codelineno-62-19"></a><span class="w">    </span><span class="nx">MaxRounds</span><span class="p">:</span><span class="w">        </span><span class="nx">maxRounds</span><span class="p">,</span>
-</span><span id="__span-62-20"><a id="__codelineno-62-20" name="__codelineno-62-20"></a><span class="w">    </span><span class="nx">TargetSurfaceIDs</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="nx">targetSurfaceID</span><span class="p">},</span>
-</span><span id="__span-62-21"><a id="__codelineno-62-21" name="__codelineno-62-21"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-62-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-62-4"><a id="__codelineno-62-4" name="__codelineno-62-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
+</span><span id="__span-62-5"><a id="__codelineno-62-5" name="__codelineno-62-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/function&quot;</span>
+</span><span id="__span-62-6"><a id="__codelineno-62-6" name="__codelineno-62-6"></a><span class="p">)</span>
+</span><span id="__span-62-7"><a id="__codelineno-62-7" name="__codelineno-62-7"></a>
+</span><span id="__span-62-8"><a id="__codelineno-62-8" name="__codelineno-62-8"></a><span class="nx">travelLookupTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
+</span><span id="__span-62-9"><a id="__codelineno-62-9" name="__codelineno-62-9"></a><span class="w">    </span><span class="nx">getFlightStatus</span><span class="p">,</span>
+</span><span id="__span-62-10"><a id="__codelineno-62-10" name="__codelineno-62-10"></a><span class="w">    </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;lookup_record&quot;</span><span class="p">),</span>
+</span><span id="__span-62-11"><a id="__codelineno-62-11" name="__codelineno-62-11"></a><span class="w">    </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;Look up a traveler loyalty-profile record.&quot;</span><span class="p">),</span>
+</span><span id="__span-62-12"><a id="__codelineno-62-12" name="__codelineno-62-12"></a><span class="p">)</span>
+</span><span id="__span-62-13"><a id="__codelineno-62-13" name="__codelineno-62-13"></a>
+</span><span id="__span-62-14"><a id="__codelineno-62-14" name="__codelineno-62-14"></a><span class="nx">candidateAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-62-15"><a id="__codelineno-62-15" name="__codelineno-62-15"></a><span class="w">    </span><span class="nx">candidateAgentName</span><span class="p">,</span>
+</span><span id="__span-62-16"><a id="__codelineno-62-16" name="__codelineno-62-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">candidateModel</span><span class="p">),</span>
+</span><span id="__span-62-17"><a id="__codelineno-62-17" name="__codelineno-62-17"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;Answer travel operations questions concisely. Use a tool only when its declaration clearly matches the request.&quot;</span><span class="p">),</span>
+</span><span id="__span-62-18"><a id="__codelineno-62-18" name="__codelineno-62-18"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">travelLookupTool</span><span class="p">}),</span>
+</span><span id="__span-62-19"><a id="__codelineno-62-19" name="__codelineno-62-19"></a><span class="p">)</span>
+</span><span id="__span-62-20"><a id="__codelineno-62-20" name="__codelineno-62-20"></a><span class="nx">candidateRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">candidateAppName</span><span class="p">,</span><span class="w"> </span><span class="nx">candidateAgent</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The example below omits repeated assembly code for <code>Engine</code>, <code>AgentEvaluator</code>, <code>Manager</code>, and the three PromptIter worker components. It focuses on <code>TargetSurfaceIDs</code> in the tool-description scenario. A single tool-description surface has a <code>SurfaceID</code> in the form <code>&lt;node ID&gt;#tool.&lt;tool name&gt;</code>. If a node contains multiple static tools, each tool description corresponds to an independent surface, so targets can be selected at tool granularity.</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-63-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-63-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-63-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-63-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-63-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-63-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-63-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-63-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-63-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-63-10">10</a></span>
+<span class="normal"><a href="#__codelineno-63-11">11</a></span>
+<span class="normal"><a href="#__codelineno-63-12">12</a></span>
+<span class="normal"><a href="#__codelineno-63-13">13</a></span>
+<span class="normal"><a href="#__codelineno-63-14">14</a></span>
+<span class="normal"><a href="#__codelineno-63-15">15</a></span>
+<span class="normal"><a href="#__codelineno-63-16">16</a></span>
+<span class="normal"><a href="#__codelineno-63-17">17</a></span>
+<span class="normal"><a href="#__codelineno-63-18">18</a></span>
+<span class="normal"><a href="#__codelineno-63-19">19</a></span>
+<span class="normal"><a href="#__codelineno-63-20">20</a></span>
+<span class="normal"><a href="#__codelineno-63-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-63-2"><a id="__codelineno-63-2" name="__codelineno-63-2"></a><span class="w">    </span><span class="nx">astructure</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/structure&quot;</span>
+</span><span id="__span-63-3"><a id="__codelineno-63-3" name="__codelineno-63-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine&quot;</span>
+</span><span id="__span-63-4"><a id="__codelineno-63-4" name="__codelineno-63-4"></a><span class="p">)</span>
+</span><span id="__span-63-5"><a id="__codelineno-63-5" name="__codelineno-63-5"></a>
+</span><span id="__span-63-6"><a id="__codelineno-63-6" name="__codelineno-63-6"></a><span class="nx">targetSurfaceID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">astructure</span><span class="p">.</span><span class="nx">SurfaceID</span><span class="p">(</span>
+</span><span id="__span-63-7"><a id="__codelineno-63-7" name="__codelineno-63-7"></a><span class="w">    </span><span class="nx">candidateAgentName</span><span class="p">,</span>
+</span><span id="__span-63-8"><a id="__codelineno-63-8" name="__codelineno-63-8"></a><span class="w">    </span><span class="nx">astructure</span><span class="p">.</span><span class="nx">SurfaceTypeTool</span><span class="p">,</span>
+</span><span id="__span-63-9"><a id="__codelineno-63-9" name="__codelineno-63-9"></a><span class="w">    </span><span class="s">&quot;lookup_record&quot;</span><span class="p">,</span>
+</span><span id="__span-63-10"><a id="__codelineno-63-10" name="__codelineno-63-10"></a><span class="p">)</span>
+</span><span id="__span-63-11"><a id="__codelineno-63-11" name="__codelineno-63-11"></a>
+</span><span id="__span-63-12"><a id="__codelineno-63-12" name="__codelineno-63-12"></a><span class="nx">runRequest</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">engine</span><span class="p">.</span><span class="nx">RunRequest</span><span class="p">{</span>
+</span><span id="__span-63-13"><a id="__codelineno-63-13" name="__codelineno-63-13"></a><span class="w">    </span><span class="nx">Train</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">engine</span><span class="p">.</span><span class="nx">EvalSetInput</span><span class="p">{</span>
+</span><span id="__span-63-14"><a id="__codelineno-63-14" name="__codelineno-63-14"></a><span class="w">        </span><span class="p">{</span><span class="nx">EvalSetID</span><span class="p">:</span><span class="w"> </span><span class="nx">trainEvalSetID</span><span class="p">},</span>
+</span><span id="__span-63-15"><a id="__codelineno-63-15" name="__codelineno-63-15"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-63-16"><a id="__codelineno-63-16" name="__codelineno-63-16"></a><span class="w">    </span><span class="nx">Validation</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">engine</span><span class="p">.</span><span class="nx">EvalSetInput</span><span class="p">{</span>
+</span><span id="__span-63-17"><a id="__codelineno-63-17" name="__codelineno-63-17"></a><span class="w">        </span><span class="p">{</span><span class="nx">EvalSetID</span><span class="p">:</span><span class="w"> </span><span class="nx">validationEvalSetID</span><span class="p">},</span>
+</span><span id="__span-63-18"><a id="__codelineno-63-18" name="__codelineno-63-18"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-63-19"><a id="__codelineno-63-19" name="__codelineno-63-19"></a><span class="w">    </span><span class="nx">MaxRounds</span><span class="p">:</span><span class="w">        </span><span class="nx">maxRounds</span><span class="p">,</span>
+</span><span id="__span-63-20"><a id="__codelineno-63-20" name="__codelineno-63-20"></a><span class="w">    </span><span class="nx">TargetSurfaceIDs</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="nx">targetSurfaceID</span><span class="p">},</span>
+</span><span id="__span-63-21"><a id="__codelineno-63-21" name="__codelineno-63-21"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="practical-experience">Practical Experience</h2>
 <p>The practical experience below follows PromptIter's integration order: first stabilize evaluation criteria and expected outputs, then complete judge context and failure reasons, and finally narrow iteration targets.</p>
@@ -7904,7 +8039,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 28, 2026 09:15:33 UTC">2026-06-28 09:15:33</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 3, 2026 02:07:59 UTC">2026-07-03 02:07:59</span>
   </span>
 
     

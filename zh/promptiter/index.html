@@ -2406,6 +2406,15 @@
           <li class="md-nav__item">
   <a href="#_19" class="md-nav__link">
     <span class="md-ellipsis">
+      远程推理迭代
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_20" class="md-nav__link">
+    <span class="md-ellipsis">
       工具描述迭代
     </span>
   </a>
@@ -2418,7 +2427,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_20" class="md-nav__link">
+  <a href="#_21" class="md-nav__link">
     <span class="md-ellipsis">
       实践经验
     </span>
@@ -2428,7 +2437,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_21" class="md-nav__link">
+  <a href="#_22" class="md-nav__link">
     <span class="md-ellipsis">
       评估指标对齐
     </span>
@@ -2437,7 +2446,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_22" class="md-nav__link">
+  <a href="#_23" class="md-nav__link">
     <span class="md-ellipsis">
       预期输出来源
     </span>
@@ -2446,7 +2455,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_23" class="md-nav__link">
+  <a href="#_24" class="md-nav__link">
     <span class="md-ellipsis">
       裁判上下文
     </span>
@@ -2464,7 +2473,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_24" class="md-nav__link">
+  <a href="#_25" class="md-nav__link">
     <span class="md-ellipsis">
       迭代目标选择
     </span>
@@ -3651,6 +3660,15 @@
           <li class="md-nav__item">
   <a href="#_19" class="md-nav__link">
     <span class="md-ellipsis">
+      远程推理迭代
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_20" class="md-nav__link">
+    <span class="md-ellipsis">
       工具描述迭代
     </span>
   </a>
@@ -3663,7 +3681,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_20" class="md-nav__link">
+  <a href="#_21" class="md-nav__link">
     <span class="md-ellipsis">
       实践经验
     </span>
@@ -3673,7 +3691,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_21" class="md-nav__link">
+  <a href="#_22" class="md-nav__link">
     <span class="md-ellipsis">
       评估指标对齐
     </span>
@@ -3682,7 +3700,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_22" class="md-nav__link">
+  <a href="#_23" class="md-nav__link">
     <span class="md-ellipsis">
       预期输出来源
     </span>
@@ -3691,7 +3709,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_23" class="md-nav__link">
+  <a href="#_24" class="md-nav__link">
     <span class="md-ellipsis">
       裁判上下文
     </span>
@@ -3709,7 +3727,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_24" class="md-nav__link">
+  <a href="#_25" class="md-nav__link">
     <span class="md-ellipsis">
       迭代目标选择
     </span>
@@ -4058,7 +4076,7 @@
 </span></code></pre></div></td></tr></table></div>
 <p><code>final_response_avg_score</code> 是 Evaluation 提供的最终回答评估器，示例用它约束战报长度。<code>llm_rubric_critic</code> 是 LLM Judge 类指标，示例用它结合参考战报和 rubric 检查事实依据、主线、决定性过程、数字、标题、数据解释和中文体育文案质量。</p>
 <h3 id="engine">构造 Engine</h3>
-<p>构造 PromptIter 的 <code>Engine</code> 时，需要先提供待测 Agent 和 <code>AgentEvaluator</code>。待测 Agent 用于导出结构快照，<code>AgentEvaluator</code> 用于执行训练集和验证集评估。候选补丁还依赖 <code>Backwarder</code>、<code>Aggregator</code> 和 <code>Optimizer</code>。<code>Backwarder</code> 负责反向传播归因，把训练集失败信号转成文本梯度，即指向相关步骤和提示词的修改方向。<code>Aggregator</code> 负责文本梯度聚合，把同一段待修改提示词上的多条文本梯度合成聚合结果。<code>Optimizer</code> 负责优化补丁生成，根据聚合结果生成这段提示词的候选补丁。</p>
+<p>构造 PromptIter 的 <code>Engine</code> 时，需要提供待测 Agent、<code>AgentEvaluator</code> 和三个 PromptIter 工作组件。待测 Agent 用于导出结构快照，<code>AgentEvaluator</code> 用于执行训练集和验证集评估。候选补丁还依赖 <code>Backwarder</code>、<code>Aggregator</code> 和 <code>Optimizer</code>。<code>Backwarder</code> 负责反向传播归因，把训练集失败信号转成文本梯度，即指向相关步骤和提示词的修改方向。<code>Aggregator</code> 负责文本梯度聚合，把同一段待修改提示词上的多条文本梯度合成聚合结果。<code>Optimizer</code> 负责优化补丁生成，根据聚合结果生成这段提示词的候选补丁。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
@@ -4135,11 +4153,11 @@
 </span><span id="__span-6-32"><a id="__codelineno-6-32" name="__codelineno-6-32"></a><span class="c1">// Engine 绑定待测 Agent、评估器和三个 PromptIter 工作组件。</span>
 </span><span id="__span-6-33"><a id="__codelineno-6-33" name="__codelineno-6-33"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-6-34"><a id="__codelineno-6-34" name="__codelineno-6-34"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-6-35"><a id="__codelineno-6-35" name="__codelineno-6-35"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-6-36"><a id="__codelineno-6-36" name="__codelineno-6-36"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-6-37"><a id="__codelineno-6-37" name="__codelineno-6-37"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-6-38"><a id="__codelineno-6-38" name="__codelineno-6-38"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-6-39"><a id="__codelineno-6-39" name="__codelineno-6-39"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-6-35"><a id="__codelineno-6-35" name="__codelineno-6-35"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-6-36"><a id="__codelineno-6-36" name="__codelineno-6-36"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-6-37"><a id="__codelineno-6-37" name="__codelineno-6-37"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-6-38"><a id="__codelineno-6-38" name="__codelineno-6-38"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-6-39"><a id="__codelineno-6-39" name="__codelineno-6-39"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-6-40"><a id="__codelineno-6-40" name="__codelineno-6-40"></a><span class="p">)</span>
 </span><span id="__span-6-41"><a id="__codelineno-6-41" name="__codelineno-6-41"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-6-42"><a id="__codelineno-6-42" name="__codelineno-6-42"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -4323,7 +4341,7 @@
 </span></code></pre></div></td></tr></table></div>
 <p>示例默认开启训练集和验证集的评估用例级并发推理与并发评估，也默认开启文本梯度聚合和优化补丁生成阶段的迭代目标级并发。反向传播归因阶段默认按评估用例串行处理。如果模型服务限制并发，可调低 <code>-eval-case-parallelism</code>、<code>-aggregation-parallelism</code> 或 <code>-optimizer-parallelism</code>，也可关闭对应的并发开关。</p>
 <h3 id="_7">查看结果</h3>
-<p>提示词同步迭代完成后，<code>engine.Run(...)</code> 返回 <code>RunResult</code>。示例会在终端打印结构 ID、迭代目标、起始提示词、最终采纳的基准提示词、验证分数和每轮判定结果。</p>
+<p>提示词同步迭代完成后，<code>engine.Run(...)</code> 返回 <code>RunResult</code>。示例会在终端打印迭代目标、起始提示词、最终采纳的基准提示词、验证分数和每轮判定结果。</p>
 <p>示例输出如下表所示。</p>
 <table>
 <thead>
@@ -4378,7 +4396,7 @@
 <li><strong>验证集评估 Validation Evaluation</strong> 基于候选提示词快照执行验证集评估，输出验证分数和指标明细。</li>
 <li><strong>接受策略 Accept Policy</strong> 对照候选提示词快照与当前基准的验证结果，判断是否更新当前基准。</li>
 <li><strong>停止策略 Stop Policy</strong> 根据运行状态判断是否结束本次运行。未满足停止条件时，流程回到训练集评估并进入下一轮。</li>
-<li><strong>运行结果 RunResult</strong> 汇总本次运行的结构快照、起始基线验证、训练评估、失败信号、反向传播归因、文本梯度聚合、候选补丁、候选提示词快照、验证评估和判定结果。</li>
+<li><strong>运行结果 RunResult</strong> 汇总本次运行的起始基线验证、训练评估、失败信号、反向传播归因、文本梯度聚合、候选补丁、候选提示词快照、验证评估和判定结果。</li>
 </ul>
 <p>一次 PromptIter 运行通常包含以下步骤。</p>
 <ol>
@@ -5701,61 +5719,55 @@
 <span class="normal"><a href="#__codelineno-30-46">46</a></span>
 <span class="normal"><a href="#__codelineno-30-47">47</a></span>
 <span class="normal"><a href="#__codelineno-30-48">48</a></span>
-<span class="normal"><a href="#__codelineno-30-49">49</a></span>
-<span class="normal"><a href="#__codelineno-30-50">50</a></span>
-<span class="normal"><a href="#__codelineno-30-51">51</a></span>
-<span class="normal"><a href="#__codelineno-30-52">52</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2"></a><span class="w">    </span><span class="nx">astructure</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/structure&quot;</span>
-</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter&quot;</span>
-</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4"></a><span class="p">)</span>
-</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5"></a>
-</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6"></a><span class="c1">// RunResult 保存一次 PromptIter 运行的状态和历史结果。</span>
-</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RunResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8"></a><span class="w">    </span><span class="c1">// AppName 标识所属应用。</span>
-</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9"></a><span class="w">    </span><span class="nx">AppName</span><span class="w">            </span><span class="kt">string</span>
-</span><span id="__span-30-10"><a id="__codelineno-30-10" name="__codelineno-30-10"></a><span class="w">    </span><span class="c1">// ID 标识本次 PromptIter 运行。</span>
-</span><span id="__span-30-11"><a id="__codelineno-30-11" name="__codelineno-30-11"></a><span class="w">    </span><span class="nx">ID</span><span class="w">                 </span><span class="kt">string</span>
-</span><span id="__span-30-12"><a id="__codelineno-30-12" name="__codelineno-30-12"></a><span class="w">    </span><span class="c1">// Status 保存当前运行状态。</span>
-</span><span id="__span-30-13"><a id="__codelineno-30-13" name="__codelineno-30-13"></a><span class="w">    </span><span class="nx">Status</span><span class="w">             </span><span class="nx">RunStatus</span>
-</span><span id="__span-30-14"><a id="__codelineno-30-14" name="__codelineno-30-14"></a><span class="w">    </span><span class="c1">// CurrentRound 记录当前或最后执行到的轮次。</span>
-</span><span id="__span-30-15"><a id="__codelineno-30-15" name="__codelineno-30-15"></a><span class="w">    </span><span class="nx">CurrentRound</span><span class="w">       </span><span class="kt">int</span>
-</span><span id="__span-30-16"><a id="__codelineno-30-16" name="__codelineno-30-16"></a><span class="w">    </span><span class="c1">// Structure 保存待测 Agent 的结构快照。</span>
-</span><span id="__span-30-17"><a id="__codelineno-30-17" name="__codelineno-30-17"></a><span class="w">    </span><span class="nx">Structure</span><span class="w">          </span><span class="o">*</span><span class="nx">astructure</span><span class="p">.</span><span class="nx">Snapshot</span>
-</span><span id="__span-30-18"><a id="__codelineno-30-18" name="__codelineno-30-18"></a><span class="w">    </span><span class="c1">// BaselineValidation 保存起始基线的验证结果。</span>
-</span><span id="__span-30-19"><a id="__codelineno-30-19" name="__codelineno-30-19"></a><span class="w">    </span><span class="nx">BaselineValidation</span><span class="w"> </span><span class="o">*</span><span class="nx">EvaluationResult</span>
-</span><span id="__span-30-20"><a id="__codelineno-30-20" name="__codelineno-30-20"></a><span class="w">    </span><span class="c1">// AcceptedProfile 保存当前基准 Profile。</span>
-</span><span id="__span-30-21"><a id="__codelineno-30-21" name="__codelineno-30-21"></a><span class="w">    </span><span class="nx">AcceptedProfile</span><span class="w">    </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">Profile</span>
-</span><span id="__span-30-22"><a id="__codelineno-30-22" name="__codelineno-30-22"></a><span class="w">    </span><span class="c1">// Rounds 保存每轮训练、补丁和验证结果。</span>
-</span><span id="__span-30-23"><a id="__codelineno-30-23" name="__codelineno-30-23"></a><span class="w">    </span><span class="nx">Rounds</span><span class="w">             </span><span class="p">[]</span><span class="nx">RoundResult</span>
-</span><span id="__span-30-24"><a id="__codelineno-30-24" name="__codelineno-30-24"></a><span class="w">    </span><span class="c1">// ErrorMessage 保存失败或取消时的错误信息。</span>
-</span><span id="__span-30-25"><a id="__codelineno-30-25" name="__codelineno-30-25"></a><span class="w">    </span><span class="nx">ErrorMessage</span><span class="w">       </span><span class="kt">string</span>
-</span><span id="__span-30-26"><a id="__codelineno-30-26" name="__codelineno-30-26"></a><span class="p">}</span>
-</span><span id="__span-30-27"><a id="__codelineno-30-27" name="__codelineno-30-27"></a>
-</span><span id="__span-30-28"><a id="__codelineno-30-28" name="__codelineno-30-28"></a><span class="c1">// RoundResult 保存单轮迭代的完整结果。</span>
-</span><span id="__span-30-29"><a id="__codelineno-30-29" name="__codelineno-30-29"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RoundResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-30-30"><a id="__codelineno-30-30" name="__codelineno-30-30"></a><span class="w">    </span><span class="c1">// Round 是当前轮次编号。</span>
-</span><span id="__span-30-31"><a id="__codelineno-30-31" name="__codelineno-30-31"></a><span class="w">    </span><span class="nx">Round</span><span class="w">         </span><span class="kt">int</span>
-</span><span id="__span-30-32"><a id="__codelineno-30-32" name="__codelineno-30-32"></a><span class="w">    </span><span class="c1">// InputProfile 是本轮开始时的当前基准 Profile。</span>
-</span><span id="__span-30-33"><a id="__codelineno-30-33" name="__codelineno-30-33"></a><span class="w">    </span><span class="nx">InputProfile</span><span class="w">  </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">Profile</span>
-</span><span id="__span-30-34"><a id="__codelineno-30-34" name="__codelineno-30-34"></a><span class="w">    </span><span class="c1">// Train 保存本轮训练集评估结果。</span>
-</span><span id="__span-30-35"><a id="__codelineno-30-35" name="__codelineno-30-35"></a><span class="w">    </span><span class="nx">Train</span><span class="w">         </span><span class="o">*</span><span class="nx">EvaluationResult</span>
-</span><span id="__span-30-36"><a id="__codelineno-30-36" name="__codelineno-30-36"></a><span class="w">    </span><span class="c1">// Losses 保存从训练集失败指标提取的 loss。</span>
-</span><span id="__span-30-37"><a id="__codelineno-30-37" name="__codelineno-30-37"></a><span class="w">    </span><span class="nx">Losses</span><span class="w">        </span><span class="p">[]</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">CaseLoss</span>
-</span><span id="__span-30-38"><a id="__codelineno-30-38" name="__codelineno-30-38"></a><span class="w">    </span><span class="c1">// Backward 保存反向传播归因结果。</span>
-</span><span id="__span-30-39"><a id="__codelineno-30-39" name="__codelineno-30-39"></a><span class="w">    </span><span class="nx">Backward</span><span class="w">      </span><span class="o">*</span><span class="nx">BackwardResult</span>
-</span><span id="__span-30-40"><a id="__codelineno-30-40" name="__codelineno-30-40"></a><span class="w">    </span><span class="c1">// Aggregation 保存文本梯度聚合结果。</span>
-</span><span id="__span-30-41"><a id="__codelineno-30-41" name="__codelineno-30-41"></a><span class="w">    </span><span class="nx">Aggregation</span><span class="w">   </span><span class="o">*</span><span class="nx">AggregationResult</span>
-</span><span id="__span-30-42"><a id="__codelineno-30-42" name="__codelineno-30-42"></a><span class="w">    </span><span class="c1">// Patches 保存 Optimizer 生成的候选补丁集合。</span>
-</span><span id="__span-30-43"><a id="__codelineno-30-43" name="__codelineno-30-43"></a><span class="w">    </span><span class="nx">Patches</span><span class="w">       </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">PatchSet</span>
-</span><span id="__span-30-44"><a id="__codelineno-30-44" name="__codelineno-30-44"></a><span class="w">    </span><span class="c1">// OutputProfile 是应用候选补丁后的候选 Profile。</span>
-</span><span id="__span-30-45"><a id="__codelineno-30-45" name="__codelineno-30-45"></a><span class="w">    </span><span class="nx">OutputProfile</span><span class="w"> </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">Profile</span>
-</span><span id="__span-30-46"><a id="__codelineno-30-46" name="__codelineno-30-46"></a><span class="w">    </span><span class="c1">// Validation 保存候选 Profile 的验证集评估结果。</span>
-</span><span id="__span-30-47"><a id="__codelineno-30-47" name="__codelineno-30-47"></a><span class="w">    </span><span class="nx">Validation</span><span class="w">    </span><span class="o">*</span><span class="nx">EvaluationResult</span>
-</span><span id="__span-30-48"><a id="__codelineno-30-48" name="__codelineno-30-48"></a><span class="w">    </span><span class="c1">// Acceptance 保存本轮接受判定。</span>
-</span><span id="__span-30-49"><a id="__codelineno-30-49" name="__codelineno-30-49"></a><span class="w">    </span><span class="nx">Acceptance</span><span class="w">    </span><span class="o">*</span><span class="nx">AcceptanceDecision</span>
-</span><span id="__span-30-50"><a id="__codelineno-30-50" name="__codelineno-30-50"></a><span class="w">    </span><span class="c1">// Stop 保存本轮停止判定。</span>
-</span><span id="__span-30-51"><a id="__codelineno-30-51" name="__codelineno-30-51"></a><span class="w">    </span><span class="nx">Stop</span><span class="w">          </span><span class="o">*</span><span class="nx">StopDecision</span>
-</span><span id="__span-30-52"><a id="__codelineno-30-52" name="__codelineno-30-52"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-30-49">49</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter&quot;</span>
+</span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3"></a><span class="p">)</span>
+</span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4"></a>
+</span><span id="__span-30-5"><a id="__codelineno-30-5" name="__codelineno-30-5"></a><span class="c1">// RunResult 保存一次 PromptIter 运行的状态和历史结果。</span>
+</span><span id="__span-30-6"><a id="__codelineno-30-6" name="__codelineno-30-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RunResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-7"><a id="__codelineno-30-7" name="__codelineno-30-7"></a><span class="w">    </span><span class="c1">// AppName 标识所属应用。</span>
+</span><span id="__span-30-8"><a id="__codelineno-30-8" name="__codelineno-30-8"></a><span class="w">    </span><span class="nx">AppName</span><span class="w">            </span><span class="kt">string</span>
+</span><span id="__span-30-9"><a id="__codelineno-30-9" name="__codelineno-30-9"></a><span class="w">    </span><span class="c1">// ID 标识本次 PromptIter 运行。</span>
+</span><span id="__span-30-10"><a id="__codelineno-30-10" name="__codelineno-30-10"></a><span class="w">    </span><span class="nx">ID</span><span class="w">                 </span><span class="kt">string</span>
+</span><span id="__span-30-11"><a id="__codelineno-30-11" name="__codelineno-30-11"></a><span class="w">    </span><span class="c1">// Status 保存当前运行状态。</span>
+</span><span id="__span-30-12"><a id="__codelineno-30-12" name="__codelineno-30-12"></a><span class="w">    </span><span class="nx">Status</span><span class="w">             </span><span class="nx">RunStatus</span>
+</span><span id="__span-30-13"><a id="__codelineno-30-13" name="__codelineno-30-13"></a><span class="w">    </span><span class="c1">// CurrentRound 记录当前或最后执行到的轮次。</span>
+</span><span id="__span-30-14"><a id="__codelineno-30-14" name="__codelineno-30-14"></a><span class="w">    </span><span class="nx">CurrentRound</span><span class="w">       </span><span class="kt">int</span>
+</span><span id="__span-30-15"><a id="__codelineno-30-15" name="__codelineno-30-15"></a><span class="w">    </span><span class="c1">// BaselineValidation 保存起始基线的验证结果。</span>
+</span><span id="__span-30-16"><a id="__codelineno-30-16" name="__codelineno-30-16"></a><span class="w">    </span><span class="nx">BaselineValidation</span><span class="w"> </span><span class="o">*</span><span class="nx">EvaluationResult</span>
+</span><span id="__span-30-17"><a id="__codelineno-30-17" name="__codelineno-30-17"></a><span class="w">    </span><span class="c1">// AcceptedProfile 保存当前基准 Profile。</span>
+</span><span id="__span-30-18"><a id="__codelineno-30-18" name="__codelineno-30-18"></a><span class="w">    </span><span class="nx">AcceptedProfile</span><span class="w">    </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">Profile</span>
+</span><span id="__span-30-19"><a id="__codelineno-30-19" name="__codelineno-30-19"></a><span class="w">    </span><span class="c1">// Rounds 保存每轮训练、补丁和验证结果。</span>
+</span><span id="__span-30-20"><a id="__codelineno-30-20" name="__codelineno-30-20"></a><span class="w">    </span><span class="nx">Rounds</span><span class="w">             </span><span class="p">[]</span><span class="nx">RoundResult</span>
+</span><span id="__span-30-21"><a id="__codelineno-30-21" name="__codelineno-30-21"></a><span class="w">    </span><span class="c1">// ErrorMessage 保存失败或取消时的错误信息。</span>
+</span><span id="__span-30-22"><a id="__codelineno-30-22" name="__codelineno-30-22"></a><span class="w">    </span><span class="nx">ErrorMessage</span><span class="w">       </span><span class="kt">string</span>
+</span><span id="__span-30-23"><a id="__codelineno-30-23" name="__codelineno-30-23"></a><span class="p">}</span>
+</span><span id="__span-30-24"><a id="__codelineno-30-24" name="__codelineno-30-24"></a>
+</span><span id="__span-30-25"><a id="__codelineno-30-25" name="__codelineno-30-25"></a><span class="c1">// RoundResult 保存单轮迭代的完整结果。</span>
+</span><span id="__span-30-26"><a id="__codelineno-30-26" name="__codelineno-30-26"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RoundResult</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-27"><a id="__codelineno-30-27" name="__codelineno-30-27"></a><span class="w">    </span><span class="c1">// Round 是当前轮次编号。</span>
+</span><span id="__span-30-28"><a id="__codelineno-30-28" name="__codelineno-30-28"></a><span class="w">    </span><span class="nx">Round</span><span class="w">         </span><span class="kt">int</span>
+</span><span id="__span-30-29"><a id="__codelineno-30-29" name="__codelineno-30-29"></a><span class="w">    </span><span class="c1">// InputProfile 是本轮开始时的当前基准 Profile。</span>
+</span><span id="__span-30-30"><a id="__codelineno-30-30" name="__codelineno-30-30"></a><span class="w">    </span><span class="nx">InputProfile</span><span class="w">  </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">Profile</span>
+</span><span id="__span-30-31"><a id="__codelineno-30-31" name="__codelineno-30-31"></a><span class="w">    </span><span class="c1">// Train 保存本轮训练集评估结果。</span>
+</span><span id="__span-30-32"><a id="__codelineno-30-32" name="__codelineno-30-32"></a><span class="w">    </span><span class="nx">Train</span><span class="w">         </span><span class="o">*</span><span class="nx">EvaluationResult</span>
+</span><span id="__span-30-33"><a id="__codelineno-30-33" name="__codelineno-30-33"></a><span class="w">    </span><span class="c1">// Losses 保存从训练集失败指标提取的 loss。</span>
+</span><span id="__span-30-34"><a id="__codelineno-30-34" name="__codelineno-30-34"></a><span class="w">    </span><span class="nx">Losses</span><span class="w">        </span><span class="p">[]</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">CaseLoss</span>
+</span><span id="__span-30-35"><a id="__codelineno-30-35" name="__codelineno-30-35"></a><span class="w">    </span><span class="c1">// Backward 保存反向传播归因结果。</span>
+</span><span id="__span-30-36"><a id="__codelineno-30-36" name="__codelineno-30-36"></a><span class="w">    </span><span class="nx">Backward</span><span class="w">      </span><span class="o">*</span><span class="nx">BackwardResult</span>
+</span><span id="__span-30-37"><a id="__codelineno-30-37" name="__codelineno-30-37"></a><span class="w">    </span><span class="c1">// Aggregation 保存文本梯度聚合结果。</span>
+</span><span id="__span-30-38"><a id="__codelineno-30-38" name="__codelineno-30-38"></a><span class="w">    </span><span class="nx">Aggregation</span><span class="w">   </span><span class="o">*</span><span class="nx">AggregationResult</span>
+</span><span id="__span-30-39"><a id="__codelineno-30-39" name="__codelineno-30-39"></a><span class="w">    </span><span class="c1">// Patches 保存 Optimizer 生成的候选补丁集合。</span>
+</span><span id="__span-30-40"><a id="__codelineno-30-40" name="__codelineno-30-40"></a><span class="w">    </span><span class="nx">Patches</span><span class="w">       </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">PatchSet</span>
+</span><span id="__span-30-41"><a id="__codelineno-30-41" name="__codelineno-30-41"></a><span class="w">    </span><span class="c1">// OutputProfile 是应用候选补丁后的候选 Profile。</span>
+</span><span id="__span-30-42"><a id="__codelineno-30-42" name="__codelineno-30-42"></a><span class="w">    </span><span class="nx">OutputProfile</span><span class="w"> </span><span class="o">*</span><span class="nx">promptiter</span><span class="p">.</span><span class="nx">Profile</span>
+</span><span id="__span-30-43"><a id="__codelineno-30-43" name="__codelineno-30-43"></a><span class="w">    </span><span class="c1">// Validation 保存候选 Profile 的验证集评估结果。</span>
+</span><span id="__span-30-44"><a id="__codelineno-30-44" name="__codelineno-30-44"></a><span class="w">    </span><span class="nx">Validation</span><span class="w">    </span><span class="o">*</span><span class="nx">EvaluationResult</span>
+</span><span id="__span-30-45"><a id="__codelineno-30-45" name="__codelineno-30-45"></a><span class="w">    </span><span class="c1">// Acceptance 保存本轮接受判定。</span>
+</span><span id="__span-30-46"><a id="__codelineno-30-46" name="__codelineno-30-46"></a><span class="w">    </span><span class="nx">Acceptance</span><span class="w">    </span><span class="o">*</span><span class="nx">AcceptanceDecision</span>
+</span><span id="__span-30-47"><a id="__codelineno-30-47" name="__codelineno-30-47"></a><span class="w">    </span><span class="c1">// Stop 保存本轮停止判定。</span>
+</span><span id="__span-30-48"><a id="__codelineno-30-48" name="__codelineno-30-48"></a><span class="w">    </span><span class="nx">Stop</span><span class="w">          </span><span class="o">*</span><span class="nx">StopDecision</span>
+</span><span id="__span-30-49"><a id="__codelineno-30-49" name="__codelineno-30-49"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>定位一次运行时，可按以下顺序查看结果。</p>
 <ol>
@@ -5792,7 +5804,7 @@
 </span><span id="__span-31-10"><a id="__codelineno-31-10" name="__codelineno-31-10"></a><span class="w">    </span><span class="nx">Run</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">RunRequest</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">RunResult</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </span><span id="__span-31-11"><a id="__codelineno-31-11" name="__codelineno-31-11"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>默认实现通过 <code>engine.New</code> 创建，需要注入待测 Agent、<code>AgentEvaluator</code>、<code>Backwarder</code>、<code>Aggregator</code> 和 <code>Optimizer</code>，定义如下。</p>
+<p>默认实现通过 <code>engine.New</code> 创建，需要注入一个结构来源、<code>AgentEvaluator</code>、<code>Backwarder</code>、<code>Aggregator</code> 和 <code>Optimizer</code>。结构来源有两种形式：<code>WithAgent</code> 用于本地 Agent，由 Engine 调用结构导出；<code>WithStructure</code> 用于远程或平台化场景，由调用方直接提供已获取的结构快照。两者必须且只能配置一个。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-32-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-32-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-32-3"> 3</a></span>
@@ -5809,23 +5821,59 @@
 <span class="normal"><a href="#__codelineno-32-14">14</a></span>
 <span class="normal"><a href="#__codelineno-32-15">15</a></span>
 <span class="normal"><a href="#__codelineno-32-16">16</a></span>
-<span class="normal"><a href="#__codelineno-32-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-32-17">17</a></span>
+<span class="normal"><a href="#__codelineno-32-18">18</a></span>
+<span class="normal"><a href="#__codelineno-32-19">19</a></span>
+<span class="normal"><a href="#__codelineno-32-20">20</a></span>
+<span class="normal"><a href="#__codelineno-32-21">21</a></span>
+<span class="normal"><a href="#__codelineno-32-22">22</a></span>
+<span class="normal"><a href="#__codelineno-32-23">23</a></span>
+<span class="normal"><a href="#__codelineno-32-24">24</a></span>
+<span class="normal"><a href="#__codelineno-32-25">25</a></span>
+<span class="normal"><a href="#__codelineno-32-26">26</a></span>
+<span class="normal"><a href="#__codelineno-32-27">27</a></span>
+<span class="normal"><a href="#__codelineno-32-28">28</a></span>
+<span class="normal"><a href="#__codelineno-32-29">29</a></span>
+<span class="normal"><a href="#__codelineno-32-30">30</a></span>
+<span class="normal"><a href="#__codelineno-32-31">31</a></span>
+<span class="normal"><a href="#__codelineno-32-32">32</a></span>
+<span class="normal"><a href="#__codelineno-32-33">33</a></span>
+<span class="normal"><a href="#__codelineno-32-34">34</a></span>
+<span class="normal"><a href="#__codelineno-32-35">35</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
-</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
-</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator&quot;</span>
-</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder&quot;</span>
-</span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer&quot;</span>
-</span><span id="__span-32-7"><a id="__codelineno-32-7" name="__codelineno-32-7"></a><span class="p">)</span>
-</span><span id="__span-32-8"><a id="__codelineno-32-8" name="__codelineno-32-8"></a>
-</span><span id="__span-32-9"><a id="__codelineno-32-9" name="__codelineno-32-9"></a><span class="c1">// New 创建默认 Engine 实现。</span>
-</span><span id="__span-32-10"><a id="__codelineno-32-10" name="__codelineno-32-10"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-32-11"><a id="__codelineno-32-11" name="__codelineno-32-11"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
-</span><span id="__span-32-12"><a id="__codelineno-32-12" name="__codelineno-32-12"></a><span class="w">    </span><span class="nx">targetAgent</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">,</span>
-</span><span id="__span-32-13"><a id="__codelineno-32-13" name="__codelineno-32-13"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">AgentEvaluator</span><span class="p">,</span>
-</span><span id="__span-32-14"><a id="__codelineno-32-14" name="__codelineno-32-14"></a><span class="w">    </span><span class="nx">backwarder</span><span class="w"> </span><span class="nx">backwarder</span><span class="p">.</span><span class="nx">Backwarder</span><span class="p">,</span>
-</span><span id="__span-32-15"><a id="__codelineno-32-15" name="__codelineno-32-15"></a><span class="w">    </span><span class="nx">aggregator</span><span class="w"> </span><span class="nx">aggregator</span><span class="p">.</span><span class="nx">Aggregator</span><span class="p">,</span>
-</span><span id="__span-32-16"><a id="__codelineno-32-16" name="__codelineno-32-16"></a><span class="w">    </span><span class="nx">optimizer</span><span class="w"> </span><span class="nx">optimizer</span><span class="p">.</span><span class="nx">Optimizer</span><span class="p">,</span>
-</span><span id="__span-32-17"><a id="__codelineno-32-17" name="__codelineno-32-17"></a><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Engine</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3"></a><span class="w">    </span><span class="nx">astructure</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/structure&quot;</span>
+</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
+</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator&quot;</span>
+</span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder&quot;</span>
+</span><span id="__span-32-7"><a id="__codelineno-32-7" name="__codelineno-32-7"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer&quot;</span>
+</span><span id="__span-32-8"><a id="__codelineno-32-8" name="__codelineno-32-8"></a><span class="p">)</span>
+</span><span id="__span-32-9"><a id="__codelineno-32-9" name="__codelineno-32-9"></a>
+</span><span id="__span-32-10"><a id="__codelineno-32-10" name="__codelineno-32-10"></a><span class="c1">// New 创建默认 Engine 实现。</span>
+</span><span id="__span-32-11"><a id="__codelineno-32-11" name="__codelineno-32-11"></a><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">Engine</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-32-12"><a id="__codelineno-32-12" name="__codelineno-32-12"></a>
+</span><span id="__span-32-13"><a id="__codelineno-32-13" name="__codelineno-32-13"></a><span class="c1">// Option 配置 Engine。</span>
+</span><span id="__span-32-14"><a id="__codelineno-32-14" name="__codelineno-32-14"></a><span class="kd">type</span><span class="w"> </span><span class="nx">Option</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="o">*</span><span class="nx">options</span><span class="p">)</span>
+</span><span id="__span-32-15"><a id="__codelineno-32-15" name="__codelineno-32-15"></a>
+</span><span id="__span-32-16"><a id="__codelineno-32-16" name="__codelineno-32-16"></a><span class="c1">// WithAgent 设置用于导出结构快照的本地 Agent。</span>
+</span><span id="__span-32-17"><a id="__codelineno-32-17" name="__codelineno-32-17"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">agentInstance</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
+</span><span id="__span-32-18"><a id="__codelineno-32-18" name="__codelineno-32-18"></a>
+</span><span id="__span-32-19"><a id="__codelineno-32-19" name="__codelineno-32-19"></a><span class="c1">// WithStructure 直接设置本次迭代使用的结构快照。</span>
+</span><span id="__span-32-20"><a id="__codelineno-32-20" name="__codelineno-32-20"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithStructure</span><span class="p">(</span><span class="nx">structure</span><span class="w"> </span><span class="o">*</span><span class="nx">astructure</span><span class="p">.</span><span class="nx">Snapshot</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
+</span><span id="__span-32-21"><a id="__codelineno-32-21" name="__codelineno-32-21"></a>
+</span><span id="__span-32-22"><a id="__codelineno-32-22" name="__codelineno-32-22"></a><span class="c1">// WithAgentEvaluator 设置训练集和验证集评估器。</span>
+</span><span id="__span-32-23"><a id="__codelineno-32-23" name="__codelineno-32-23"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">AgentEvaluator</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
+</span><span id="__span-32-24"><a id="__codelineno-32-24" name="__codelineno-32-24"></a>
+</span><span id="__span-32-25"><a id="__codelineno-32-25" name="__codelineno-32-25"></a><span class="c1">// WithBackwarder 设置反向传播器。</span>
+</span><span id="__span-32-26"><a id="__codelineno-32-26" name="__codelineno-32-26"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="w"> </span><span class="nx">backwarder</span><span class="p">.</span><span class="nx">Backwarder</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
+</span><span id="__span-32-27"><a id="__codelineno-32-27" name="__codelineno-32-27"></a>
+</span><span id="__span-32-28"><a id="__codelineno-32-28" name="__codelineno-32-28"></a><span class="c1">// WithAggregator 设置梯度聚合器。</span>
+</span><span id="__span-32-29"><a id="__codelineno-32-29" name="__codelineno-32-29"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="w"> </span><span class="nx">aggregator</span><span class="p">.</span><span class="nx">Aggregator</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
+</span><span id="__span-32-30"><a id="__codelineno-32-30" name="__codelineno-32-30"></a>
+</span><span id="__span-32-31"><a id="__codelineno-32-31" name="__codelineno-32-31"></a><span class="c1">// WithOptimizer 设置补丁优化器。</span>
+</span><span id="__span-32-32"><a id="__codelineno-32-32" name="__codelineno-32-32"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="w"> </span><span class="nx">optimizer</span><span class="p">.</span><span class="nx">Optimizer</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
+</span><span id="__span-32-33"><a id="__codelineno-32-33" name="__codelineno-32-33"></a>
+</span><span id="__span-32-34"><a id="__codelineno-32-34" name="__codelineno-32-34"></a><span class="c1">// WithObserver 设置运行事件观察器，可传给 Engine.Run。</span>
+</span><span id="__span-32-35"><a id="__codelineno-32-35" name="__codelineno-32-35"></a><span class="kd">func</span><span class="w"> </span><span class="nx">WithObserver</span><span class="p">(</span><span class="nx">observer</span><span class="w"> </span><span class="nx">Observer</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span>
 </span></code></pre></div></td></tr></table></div>
 <p>使用示例如下。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-33-1"> 1</a></span>
@@ -5852,11 +5900,11 @@
 </span><span id="__span-33-6"><a id="__codelineno-33-6" name="__codelineno-33-6"></a><span class="c1">// engine.New 组装 PromptIter 同步迭代入口。</span>
 </span><span id="__span-33-7"><a id="__codelineno-33-7" name="__codelineno-33-7"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-33-8"><a id="__codelineno-33-8" name="__codelineno-33-8"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-33-10"><a id="__codelineno-33-10" name="__codelineno-33-10"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-33-11"><a id="__codelineno-33-11" name="__codelineno-33-11"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-33-12"><a id="__codelineno-33-12" name="__codelineno-33-12"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-33-13"><a id="__codelineno-33-13" name="__codelineno-33-13"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-33-9"><a id="__codelineno-33-9" name="__codelineno-33-9"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-33-10"><a id="__codelineno-33-10" name="__codelineno-33-10"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-33-11"><a id="__codelineno-33-11" name="__codelineno-33-11"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-33-12"><a id="__codelineno-33-12" name="__codelineno-33-12"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-33-13"><a id="__codelineno-33-13" name="__codelineno-33-13"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-33-14"><a id="__codelineno-33-14" name="__codelineno-33-14"></a><span class="p">)</span>
 </span><span id="__span-33-15"><a id="__codelineno-33-15" name="__codelineno-33-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-33-16"><a id="__codelineno-33-16" name="__codelineno-33-16"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -6103,25 +6151,21 @@
 <span class="normal"><a href="#__codelineno-41-12">12</a></span>
 <span class="normal"><a href="#__codelineno-41-13">13</a></span>
 <span class="normal"><a href="#__codelineno-41-14">14</a></span>
-<span class="normal"><a href="#__codelineno-41-15">15</a></span>
-<span class="normal"><a href="#__codelineno-41-16">16</a></span>
-<span class="normal"><a href="#__codelineno-41-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a><span class="c1">// RunResultSlimming 控制 RunResult 中哪些字段会在保存或返回前被省略。</span>
+<span class="normal"><a href="#__codelineno-41-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-41-1"><a id="__codelineno-41-1" name="__codelineno-41-1"></a><span class="c1">// RunResultSlimming 控制 RunResult 中哪些字段会在保存或返回前被省略。</span>
 </span><span id="__span-41-2"><a id="__codelineno-41-2" name="__codelineno-41-2"></a><span class="kd">type</span><span class="w"> </span><span class="nx">RunResultSlimming</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a><span class="w">    </span><span class="c1">// OmitStructure 省略导出的 Agent 结构快照。</span>
-</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="w">    </span><span class="nx">OmitStructure</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a><span class="w">    </span><span class="c1">// OmitEvaluationCases 省略各阶段评估结果中的评估用例明细。</span>
-</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6"></a><span class="w">    </span><span class="nx">OmitEvaluationCases</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7"></a><span class="w">    </span><span class="c1">// OmitBackward 省略每轮反向传播归因结果。</span>
-</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8"></a><span class="w">    </span><span class="nx">OmitBackward</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9"></a><span class="w">    </span><span class="c1">// OmitAggregation 省略每轮文本梯度聚合结果。</span>
-</span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10"></a><span class="w">    </span><span class="nx">OmitAggregation</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-11"><a id="__codelineno-41-11" name="__codelineno-41-11"></a><span class="w">    </span><span class="c1">// OmitPatches 省略每轮优化补丁结果。</span>
-</span><span id="__span-41-12"><a id="__codelineno-41-12" name="__codelineno-41-12"></a><span class="w">    </span><span class="nx">OmitPatches</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-13"><a id="__codelineno-41-13" name="__codelineno-41-13"></a><span class="w">    </span><span class="c1">// OmitProfiles 省略输入 Profile、候选 Profile 和当前基准 Profile。</span>
-</span><span id="__span-41-14"><a id="__codelineno-41-14" name="__codelineno-41-14"></a><span class="w">    </span><span class="nx">OmitProfiles</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-15"><a id="__codelineno-41-15" name="__codelineno-41-15"></a><span class="w">    </span><span class="c1">// OmitLosses 省略每轮 loss 明细。</span>
-</span><span id="__span-41-16"><a id="__codelineno-41-16" name="__codelineno-41-16"></a><span class="w">    </span><span class="nx">OmitLosses</span><span class="w"> </span><span class="kt">bool</span>
-</span><span id="__span-41-17"><a id="__codelineno-41-17" name="__codelineno-41-17"></a><span class="p">}</span>
+</span><span id="__span-41-3"><a id="__codelineno-41-3" name="__codelineno-41-3"></a><span class="w">    </span><span class="c1">// OmitEvaluationCases 省略各阶段评估结果中的评估用例明细。</span>
+</span><span id="__span-41-4"><a id="__codelineno-41-4" name="__codelineno-41-4"></a><span class="w">    </span><span class="nx">OmitEvaluationCases</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-41-5"><a id="__codelineno-41-5" name="__codelineno-41-5"></a><span class="w">    </span><span class="c1">// OmitBackward 省略每轮反向传播归因结果。</span>
+</span><span id="__span-41-6"><a id="__codelineno-41-6" name="__codelineno-41-6"></a><span class="w">    </span><span class="nx">OmitBackward</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-41-7"><a id="__codelineno-41-7" name="__codelineno-41-7"></a><span class="w">    </span><span class="c1">// OmitAggregation 省略每轮文本梯度聚合结果。</span>
+</span><span id="__span-41-8"><a id="__codelineno-41-8" name="__codelineno-41-8"></a><span class="w">    </span><span class="nx">OmitAggregation</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-41-9"><a id="__codelineno-41-9" name="__codelineno-41-9"></a><span class="w">    </span><span class="c1">// OmitPatches 省略每轮优化补丁结果。</span>
+</span><span id="__span-41-10"><a id="__codelineno-41-10" name="__codelineno-41-10"></a><span class="w">    </span><span class="nx">OmitPatches</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-41-11"><a id="__codelineno-41-11" name="__codelineno-41-11"></a><span class="w">    </span><span class="c1">// OmitProfiles 省略输入 Profile、候选 Profile 和当前基准 Profile。</span>
+</span><span id="__span-41-12"><a id="__codelineno-41-12" name="__codelineno-41-12"></a><span class="w">    </span><span class="nx">OmitProfiles</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-41-13"><a id="__codelineno-41-13" name="__codelineno-41-13"></a><span class="w">    </span><span class="c1">// OmitLosses 省略每轮 loss 明细。</span>
+</span><span id="__span-41-14"><a id="__codelineno-41-14" name="__codelineno-41-14"></a><span class="w">    </span><span class="nx">OmitLosses</span><span class="w"> </span><span class="kt">bool</span>
+</span><span id="__span-41-15"><a id="__codelineno-41-15" name="__codelineno-41-15"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="store">Store</h3>
 <p><code>Store</code> 负责持久化异步迭代的 <code>RunResult</code>。<code>Manager.Start</code> 创建运行记录时调用 <code>Create</code>，后台运行过程中通过 <code>Update</code> 写入最新结果，<code>Manager.Get</code> 通过 <code>Get</code> 查询当前结果。</p>
@@ -6821,11 +6865,11 @@
 </span><span id="__span-55-77"><a id="__codelineno-55-77" name="__codelineno-55-77"></a><span class="c1">// Engine 绑定待测 Agent、评估器和三个 PromptIter 工作组件。</span>
 </span><span id="__span-55-78"><a id="__codelineno-55-78" name="__codelineno-55-78"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-55-79"><a id="__codelineno-55-79" name="__codelineno-55-79"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-55-80"><a id="__codelineno-55-80" name="__codelineno-55-80"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-55-81"><a id="__codelineno-55-81" name="__codelineno-55-81"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-55-82"><a id="__codelineno-55-82" name="__codelineno-55-82"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-55-83"><a id="__codelineno-55-83" name="__codelineno-55-83"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-55-84"><a id="__codelineno-55-84" name="__codelineno-55-84"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-55-80"><a id="__codelineno-55-80" name="__codelineno-55-80"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-55-81"><a id="__codelineno-55-81" name="__codelineno-55-81"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-55-82"><a id="__codelineno-55-82" name="__codelineno-55-82"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-55-83"><a id="__codelineno-55-83" name="__codelineno-55-83"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-55-84"><a id="__codelineno-55-84" name="__codelineno-55-84"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-55-85"><a id="__codelineno-55-85" name="__codelineno-55-85"></a><span class="p">)</span>
 </span><span id="__span-55-86"><a id="__codelineno-55-86" name="__codelineno-55-86"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-55-87"><a id="__codelineno-55-87" name="__codelineno-55-87"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -6904,7 +6948,7 @@
 </span><span id="__span-55-160"><a id="__codelineno-55-160" name="__codelineno-55-160"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
 </span><span id="__span-55-161"><a id="__codelineno-55-161" name="__codelineno-55-161"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p><code>Engine.Run</code> 返回的 <code>RunResult</code> 会记录结构 ID、迭代目标、起始提示词、最终基准提示词、验证分数和每轮判定结果。</p>
+<p><code>Engine.Run</code> 返回的 <code>RunResult</code> 会记录迭代目标、起始提示词、最终基准提示词、验证分数和每轮判定结果。</p>
 <table>
 <thead>
 <tr>
@@ -7205,11 +7249,11 @@
 </span><span id="__span-56-79"><a id="__codelineno-56-79" name="__codelineno-56-79"></a><span class="c1">// Engine 绑定待测 Agent、评估器和三个 PromptIter 工作组件。</span>
 </span><span id="__span-56-80"><a id="__codelineno-56-80" name="__codelineno-56-80"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-56-81"><a id="__codelineno-56-81" name="__codelineno-56-81"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-56-82"><a id="__codelineno-56-82" name="__codelineno-56-82"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-56-83"><a id="__codelineno-56-83" name="__codelineno-56-83"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-56-84"><a id="__codelineno-56-84" name="__codelineno-56-84"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-56-85"><a id="__codelineno-56-85" name="__codelineno-56-85"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-56-86"><a id="__codelineno-56-86" name="__codelineno-56-86"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-56-82"><a id="__codelineno-56-82" name="__codelineno-56-82"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-56-83"><a id="__codelineno-56-83" name="__codelineno-56-83"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-56-84"><a id="__codelineno-56-84" name="__codelineno-56-84"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-56-85"><a id="__codelineno-56-85" name="__codelineno-56-85"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-56-86"><a id="__codelineno-56-86" name="__codelineno-56-86"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-56-87"><a id="__codelineno-56-87" name="__codelineno-56-87"></a><span class="p">)</span>
 </span><span id="__span-56-88"><a id="__codelineno-56-88" name="__codelineno-56-88"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-56-89"><a id="__codelineno-56-89" name="__codelineno-56-89"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -7352,11 +7396,11 @@
 </span><span id="__span-57-8"><a id="__codelineno-57-8" name="__codelineno-57-8"></a><span class="c1">// engineInstance 绑定待测 Agent、评估器和三个 PromptIter 工作组件。</span>
 </span><span id="__span-57-9"><a id="__codelineno-57-9" name="__codelineno-57-9"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-57-10"><a id="__codelineno-57-10" name="__codelineno-57-10"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-57-11"><a id="__codelineno-57-11" name="__codelineno-57-11"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-57-12"><a id="__codelineno-57-12" name="__codelineno-57-12"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-57-13"><a id="__codelineno-57-13" name="__codelineno-57-13"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-57-14"><a id="__codelineno-57-14" name="__codelineno-57-14"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-57-15"><a id="__codelineno-57-15" name="__codelineno-57-15"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-57-11"><a id="__codelineno-57-11" name="__codelineno-57-11"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-57-12"><a id="__codelineno-57-12" name="__codelineno-57-12"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-57-13"><a id="__codelineno-57-13" name="__codelineno-57-13"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-57-14"><a id="__codelineno-57-14" name="__codelineno-57-14"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-57-15"><a id="__codelineno-57-15" name="__codelineno-57-15"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-57-16"><a id="__codelineno-57-16" name="__codelineno-57-16"></a><span class="p">)</span>
 </span><span id="__span-57-17"><a id="__codelineno-57-17" name="__codelineno-57-17"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-57-18"><a id="__codelineno-57-18" name="__codelineno-57-18"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -7434,11 +7478,11 @@
 </span><span id="__span-58-9"><a id="__codelineno-58-9" name="__codelineno-58-9"></a><span class="c1">// engineInstance 绑定待测 Agent、评估器和三个 PromptIter 工作组件。</span>
 </span><span id="__span-58-10"><a id="__codelineno-58-10" name="__codelineno-58-10"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-58-11"><a id="__codelineno-58-11" name="__codelineno-58-11"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-58-12"><a id="__codelineno-58-12" name="__codelineno-58-12"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-58-13"><a id="__codelineno-58-13" name="__codelineno-58-13"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-58-14"><a id="__codelineno-58-14" name="__codelineno-58-14"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-58-15"><a id="__codelineno-58-15" name="__codelineno-58-15"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-58-16"><a id="__codelineno-58-16" name="__codelineno-58-16"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-58-12"><a id="__codelineno-58-12" name="__codelineno-58-12"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-58-13"><a id="__codelineno-58-13" name="__codelineno-58-13"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-58-14"><a id="__codelineno-58-14" name="__codelineno-58-14"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-58-15"><a id="__codelineno-58-15" name="__codelineno-58-15"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-58-16"><a id="__codelineno-58-16" name="__codelineno-58-16"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-58-17"><a id="__codelineno-58-17" name="__codelineno-58-17"></a><span class="p">)</span>
 </span><span id="__span-58-18"><a id="__codelineno-58-18" name="__codelineno-58-18"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-58-19"><a id="__codelineno-58-19" name="__codelineno-58-19"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -7784,11 +7828,11 @@
 </span><span id="__span-60-38"><a id="__codelineno-60-38" name="__codelineno-60-38"></a><span class="c1">// engineInstance 绑定待测 Graph Agent、评估器和三个 PromptIter 工作组件。</span>
 </span><span id="__span-60-39"><a id="__codelineno-60-39" name="__codelineno-60-39"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
 </span><span id="__span-60-40"><a id="__codelineno-60-40" name="__codelineno-60-40"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
-</span><span id="__span-60-41"><a id="__codelineno-60-41" name="__codelineno-60-41"></a><span class="w">    </span><span class="nx">candidateAgent</span><span class="p">,</span>
-</span><span id="__span-60-42"><a id="__codelineno-60-42" name="__codelineno-60-42"></a><span class="w">    </span><span class="nx">agentEvaluator</span><span class="p">,</span>
-</span><span id="__span-60-43"><a id="__codelineno-60-43" name="__codelineno-60-43"></a><span class="w">    </span><span class="nx">backwarderInstance</span><span class="p">,</span>
-</span><span id="__span-60-44"><a id="__codelineno-60-44" name="__codelineno-60-44"></a><span class="w">    </span><span class="nx">aggregatorInstance</span><span class="p">,</span>
-</span><span id="__span-60-45"><a id="__codelineno-60-45" name="__codelineno-60-45"></a><span class="w">    </span><span class="nx">optimizerInstance</span><span class="p">,</span>
+</span><span id="__span-60-41"><a id="__codelineno-60-41" name="__codelineno-60-41"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgent</span><span class="p">(</span><span class="nx">candidateAgent</span><span class="p">),</span>
+</span><span id="__span-60-42"><a id="__codelineno-60-42" name="__codelineno-60-42"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-60-43"><a id="__codelineno-60-43" name="__codelineno-60-43"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-60-44"><a id="__codelineno-60-44" name="__codelineno-60-44"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-60-45"><a id="__codelineno-60-45" name="__codelineno-60-45"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
 </span><span id="__span-60-46"><a id="__codelineno-60-46" name="__codelineno-60-46"></a><span class="p">)</span>
 </span><span id="__span-60-47"><a id="__codelineno-60-47" name="__codelineno-60-47"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-60-48"><a id="__codelineno-60-48" name="__codelineno-60-48"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
@@ -7808,9 +7852,9 @@
 </span><span id="__span-60-62"><a id="__codelineno-60-62" name="__codelineno-60-62"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <p>多节点迭代沿用 PromptIter 主流程，差异在于一次运行可以把多个 AgentNode 的 <code>instruction surface</code> 写入 <code>TargetSurfaceIDs</code>。训练集失败信号会结合实际执行轨迹做反向传播归因，后续文本梯度聚合和优化补丁生成都限定在这些目标提示词上。</p>
-<h3 id="_19">工具描述迭代</h3>
-<p>工具描述也是提示词的一部分，工具描述迭代优化的是工具声明中的 <code>Description</code>。待测对象带有静态工具时，结构快照会为每个工具声明导出一个 <code>tool surface</code>，运行时通过 <code>RunRequest.TargetSurfaceIDs</code> 选择要迭代的工具描述。<code>tooldesc</code> 的完整示例代码见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/promptiter/tooldesc">examples/evaluation/promptiter/tooldesc</a>。</p>
-<p><code>tooldesc</code> 构造了一个带本地函数工具 <code>lookup_record</code> 的 LLMAgent。下面代码展示待测 Agent 的工具声明和 Runner 创建过程。</p>
+<h3 id="_19">远程推理迭代</h3>
+<p>远程推理迭代适用于 PromptIter 与待测 Agent 分开部署的场景。运行 PromptIter 的进程负责评估、优化和接受判定，远端 Agent 服务负责执行待测 Agent。接入远程推理时，<code>AgentEvaluator</code> 使用远程 Runner 作为待测 Runner，<code>Engine</code> 使用远端结构快照创建。远端 Agent 服务接入见 <a href="../trpcagent/">tRPC-Agent API 服务</a>，远程 Runner 创建见 <a href="../runner/#远程-trpc-agent-runner">远程 tRPC-Agent Runner</a>。</p>
+<p>完整示例见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/promptiter/remote">examples/evaluation/promptiter/remote</a>。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-61-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-61-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-61-3"> 3</a></span>
@@ -7830,28 +7874,78 @@
 <span class="normal"><a href="#__codelineno-61-17">17</a></span>
 <span class="normal"><a href="#__codelineno-61-18">18</a></span>
 <span class="normal"><a href="#__codelineno-61-19">19</a></span>
-<span class="normal"><a href="#__codelineno-61-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
-</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
-</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
-</span><span id="__span-61-5"><a id="__codelineno-61-5" name="__codelineno-61-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/function&quot;</span>
-</span><span id="__span-61-6"><a id="__codelineno-61-6" name="__codelineno-61-6"></a><span class="p">)</span>
-</span><span id="__span-61-7"><a id="__codelineno-61-7" name="__codelineno-61-7"></a>
-</span><span id="__span-61-8"><a id="__codelineno-61-8" name="__codelineno-61-8"></a><span class="nx">travelLookupTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
-</span><span id="__span-61-9"><a id="__codelineno-61-9" name="__codelineno-61-9"></a><span class="w">    </span><span class="nx">getFlightStatus</span><span class="p">,</span>
-</span><span id="__span-61-10"><a id="__codelineno-61-10" name="__codelineno-61-10"></a><span class="w">    </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;lookup_record&quot;</span><span class="p">),</span>
-</span><span id="__span-61-11"><a id="__codelineno-61-11" name="__codelineno-61-11"></a><span class="w">    </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;Look up a traveler loyalty-profile record.&quot;</span><span class="p">),</span>
-</span><span id="__span-61-12"><a id="__codelineno-61-12" name="__codelineno-61-12"></a><span class="p">)</span>
-</span><span id="__span-61-13"><a id="__codelineno-61-13" name="__codelineno-61-13"></a>
-</span><span id="__span-61-14"><a id="__codelineno-61-14" name="__codelineno-61-14"></a><span class="nx">candidateAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-61-15"><a id="__codelineno-61-15" name="__codelineno-61-15"></a><span class="w">    </span><span class="nx">candidateAgentName</span><span class="p">,</span>
-</span><span id="__span-61-16"><a id="__codelineno-61-16" name="__codelineno-61-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">candidateModel</span><span class="p">),</span>
-</span><span id="__span-61-17"><a id="__codelineno-61-17" name="__codelineno-61-17"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;Answer travel operations questions concisely. Use a tool only when its declaration clearly matches the request.&quot;</span><span class="p">),</span>
-</span><span id="__span-61-18"><a id="__codelineno-61-18" name="__codelineno-61-18"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">travelLookupTool</span><span class="p">}),</span>
-</span><span id="__span-61-19"><a id="__codelineno-61-19" name="__codelineno-61-19"></a><span class="p">)</span>
-</span><span id="__span-61-20"><a id="__codelineno-61-20" name="__codelineno-61-20"></a><span class="nx">candidateRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">candidateAppName</span><span class="p">,</span><span class="w"> </span><span class="nx">candidateAgent</span><span class="p">)</span>
+<span class="normal"><a href="#__codelineno-61-20">20</a></span>
+<span class="normal"><a href="#__codelineno-61-21">21</a></span>
+<span class="normal"><a href="#__codelineno-61-22">22</a></span>
+<span class="normal"><a href="#__codelineno-61-23">23</a></span>
+<span class="normal"><a href="#__codelineno-61-24">24</a></span>
+<span class="normal"><a href="#__codelineno-61-25">25</a></span>
+<span class="normal"><a href="#__codelineno-61-26">26</a></span>
+<span class="normal"><a href="#__codelineno-61-27">27</a></span>
+<span class="normal"><a href="#__codelineno-61-28">28</a></span>
+<span class="normal"><a href="#__codelineno-61-29">29</a></span>
+<span class="normal"><a href="#__codelineno-61-30">30</a></span>
+<span class="normal"><a href="#__codelineno-61-31">31</a></span>
+<span class="normal"><a href="#__codelineno-61-32">32</a></span>
+<span class="normal"><a href="#__codelineno-61-33">33</a></span>
+<span class="normal"><a href="#__codelineno-61-34">34</a></span>
+<span class="normal"><a href="#__codelineno-61-35">35</a></span>
+<span class="normal"><a href="#__codelineno-61-36">36</a></span>
+<span class="normal"><a href="#__codelineno-61-37">37</a></span>
+<span class="normal"><a href="#__codelineno-61-38">38</a></span>
+<span class="normal"><a href="#__codelineno-61-39">39</a></span>
+<span class="normal"><a href="#__codelineno-61-40">40</a></span>
+<span class="normal"><a href="#__codelineno-61-41">41</a></span>
+<span class="normal"><a href="#__codelineno-61-42">42</a></span>
+<span class="normal"><a href="#__codelineno-61-43">43</a></span>
+<span class="normal"><a href="#__codelineno-61-44">44</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-61-1"><a id="__codelineno-61-1" name="__codelineno-61-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-61-2"><a id="__codelineno-61-2" name="__codelineno-61-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation&quot;</span>
+</span><span id="__span-61-3"><a id="__codelineno-61-3" name="__codelineno-61-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine&quot;</span>
+</span><span id="__span-61-4"><a id="__codelineno-61-4" name="__codelineno-61-4"></a><span class="w">    </span><span class="nx">trpcagentrunner</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner/trpcagent&quot;</span>
+</span><span id="__span-61-5"><a id="__codelineno-61-5" name="__codelineno-61-5"></a><span class="p">)</span>
+</span><span id="__span-61-6"><a id="__codelineno-61-6" name="__codelineno-61-6"></a>
+</span><span id="__span-61-7"><a id="__codelineno-61-7" name="__codelineno-61-7"></a><span class="nx">candidateRunner</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">trpcagentrunner</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-61-8"><a id="__codelineno-61-8" name="__codelineno-61-8"></a><span class="w">    </span><span class="nx">candidateAppName</span><span class="p">,</span>
+</span><span id="__span-61-9"><a id="__codelineno-61-9" name="__codelineno-61-9"></a><span class="w">    </span><span class="nx">trpcagentrunner</span><span class="p">.</span><span class="nx">WithTarget</span><span class="p">(</span><span class="nx">candidateTarget</span><span class="p">),</span>
+</span><span id="__span-61-10"><a id="__codelineno-61-10" name="__codelineno-61-10"></a><span class="p">)</span>
+</span><span id="__span-61-11"><a id="__codelineno-61-11" name="__codelineno-61-11"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-12"><a id="__codelineno-61-12" name="__codelineno-61-12"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-61-13"><a id="__codelineno-61-13" name="__codelineno-61-13"></a><span class="p">}</span>
+</span><span id="__span-61-14"><a id="__codelineno-61-14" name="__codelineno-61-14"></a>
+</span><span id="__span-61-15"><a id="__codelineno-61-15" name="__codelineno-61-15"></a><span class="nx">targetStructure</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">candidateRunner</span><span class="p">.</span><span class="nx">Describe</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
+</span><span id="__span-61-16"><a id="__codelineno-61-16" name="__codelineno-61-16"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-17"><a id="__codelineno-61-17" name="__codelineno-61-17"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-61-18"><a id="__codelineno-61-18" name="__codelineno-61-18"></a><span class="p">}</span>
+</span><span id="__span-61-19"><a id="__codelineno-61-19" name="__codelineno-61-19"></a>
+</span><span id="__span-61-20"><a id="__codelineno-61-20" name="__codelineno-61-20"></a><span class="c1">// AgentEvaluator 仍使用远程 Runner 执行训练集和验证集评估。</span>
+</span><span id="__span-61-21"><a id="__codelineno-61-21" name="__codelineno-61-21"></a><span class="nx">agentEvaluator</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-61-22"><a id="__codelineno-61-22" name="__codelineno-61-22"></a><span class="w">    </span><span class="nx">appName</span><span class="p">,</span>
+</span><span id="__span-61-23"><a id="__codelineno-61-23" name="__codelineno-61-23"></a><span class="w">    </span><span class="nx">candidateRunner</span><span class="p">,</span>
+</span><span id="__span-61-24"><a id="__codelineno-61-24" name="__codelineno-61-24"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalSetManager</span><span class="p">(</span><span class="nx">evalSetManager</span><span class="p">),</span>
+</span><span id="__span-61-25"><a id="__codelineno-61-25" name="__codelineno-61-25"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithMetricManager</span><span class="p">(</span><span class="nx">metricManager</span><span class="p">),</span>
+</span><span id="__span-61-26"><a id="__codelineno-61-26" name="__codelineno-61-26"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithEvalResultManager</span><span class="p">(</span><span class="nx">evalResultManager</span><span class="p">),</span>
+</span><span id="__span-61-27"><a id="__codelineno-61-27" name="__codelineno-61-27"></a><span class="w">    </span><span class="nx">evaluation</span><span class="p">.</span><span class="nx">WithJudgeRunner</span><span class="p">(</span><span class="nx">judgeRunner</span><span class="p">),</span>
+</span><span id="__span-61-28"><a id="__codelineno-61-28" name="__codelineno-61-28"></a><span class="p">)</span>
+</span><span id="__span-61-29"><a id="__codelineno-61-29" name="__codelineno-61-29"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-30"><a id="__codelineno-61-30" name="__codelineno-61-30"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-61-31"><a id="__codelineno-61-31" name="__codelineno-61-31"></a><span class="p">}</span>
+</span><span id="__span-61-32"><a id="__codelineno-61-32" name="__codelineno-61-32"></a>
+</span><span id="__span-61-33"><a id="__codelineno-61-33" name="__codelineno-61-33"></a><span class="c1">// Engine 使用远端结构快照，而不是本地 Agent。</span>
+</span><span id="__span-61-34"><a id="__codelineno-61-34" name="__codelineno-61-34"></a><span class="nx">engineInstance</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">engine</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-61-35"><a id="__codelineno-61-35" name="__codelineno-61-35"></a><span class="w">    </span><span class="nx">ctx</span><span class="p">,</span>
+</span><span id="__span-61-36"><a id="__codelineno-61-36" name="__codelineno-61-36"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithStructure</span><span class="p">(</span><span class="nx">targetStructure</span><span class="p">),</span>
+</span><span id="__span-61-37"><a id="__codelineno-61-37" name="__codelineno-61-37"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAgentEvaluator</span><span class="p">(</span><span class="nx">agentEvaluator</span><span class="p">),</span>
+</span><span id="__span-61-38"><a id="__codelineno-61-38" name="__codelineno-61-38"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithBackwarder</span><span class="p">(</span><span class="nx">backwarderInstance</span><span class="p">),</span>
+</span><span id="__span-61-39"><a id="__codelineno-61-39" name="__codelineno-61-39"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithAggregator</span><span class="p">(</span><span class="nx">aggregatorInstance</span><span class="p">),</span>
+</span><span id="__span-61-40"><a id="__codelineno-61-40" name="__codelineno-61-40"></a><span class="w">    </span><span class="nx">engine</span><span class="p">.</span><span class="nx">WithOptimizer</span><span class="p">(</span><span class="nx">optimizerInstance</span><span class="p">),</span>
+</span><span id="__span-61-41"><a id="__codelineno-61-41" name="__codelineno-61-41"></a><span class="p">)</span>
+</span><span id="__span-61-42"><a id="__codelineno-61-42" name="__codelineno-61-42"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-61-43"><a id="__codelineno-61-43" name="__codelineno-61-43"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-61-44"><a id="__codelineno-61-44" name="__codelineno-61-44"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>下例省略 <code>Engine</code>、<code>AgentEvaluator</code>、<code>Manager</code> 和三个 PromptIter 工作组件的重复组装代码，重点展示工具描述场景的 <code>TargetSurfaceIDs</code>。单个工具描述 surface 的 <code>SurfaceID</code> 形如 <code>&lt;节点 ID&gt;#tool.&lt;工具名&gt;</code>。如果一个节点包含多个静态工具，每个工具描述对应一个独立 surface，因此可以按工具粒度选择迭代目标。</p>
+<h3 id="_20">工具描述迭代</h3>
+<p>工具描述也是提示词的一部分，工具描述迭代优化的是工具声明中的 <code>Description</code>。待测对象带有静态工具时，结构快照会为每个工具声明导出一个 <code>tool surface</code>，运行时通过 <code>RunRequest.TargetSurfaceIDs</code> 选择要迭代的工具描述。<code>tooldesc</code> 的完整示例代码见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/promptiter/tooldesc">examples/evaluation/promptiter/tooldesc</a>。</p>
+<p><code>tooldesc</code> 构造了一个带本地函数工具 <code>lookup_record</code> 的 LLMAgent。下面代码展示待测 Agent 的工具声明和 Runner 创建过程。</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-62-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-62-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-62-3"> 3</a></span>
@@ -7871,46 +7965,87 @@
 <span class="normal"><a href="#__codelineno-62-17">17</a></span>
 <span class="normal"><a href="#__codelineno-62-18">18</a></span>
 <span class="normal"><a href="#__codelineno-62-19">19</a></span>
-<span class="normal"><a href="#__codelineno-62-20">20</a></span>
-<span class="normal"><a href="#__codelineno-62-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2"></a><span class="w">    </span><span class="nx">astructure</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/structure&quot;</span>
-</span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine&quot;</span>
-</span><span id="__span-62-4"><a id="__codelineno-62-4" name="__codelineno-62-4"></a><span class="p">)</span>
-</span><span id="__span-62-5"><a id="__codelineno-62-5" name="__codelineno-62-5"></a>
-</span><span id="__span-62-6"><a id="__codelineno-62-6" name="__codelineno-62-6"></a><span class="nx">targetSurfaceID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">astructure</span><span class="p">.</span><span class="nx">SurfaceID</span><span class="p">(</span>
-</span><span id="__span-62-7"><a id="__codelineno-62-7" name="__codelineno-62-7"></a><span class="w">    </span><span class="nx">candidateAgentName</span><span class="p">,</span>
-</span><span id="__span-62-8"><a id="__codelineno-62-8" name="__codelineno-62-8"></a><span class="w">    </span><span class="nx">astructure</span><span class="p">.</span><span class="nx">SurfaceTypeTool</span><span class="p">,</span>
-</span><span id="__span-62-9"><a id="__codelineno-62-9" name="__codelineno-62-9"></a><span class="w">    </span><span class="s">&quot;lookup_record&quot;</span><span class="p">,</span>
-</span><span id="__span-62-10"><a id="__codelineno-62-10" name="__codelineno-62-10"></a><span class="p">)</span>
-</span><span id="__span-62-11"><a id="__codelineno-62-11" name="__codelineno-62-11"></a>
-</span><span id="__span-62-12"><a id="__codelineno-62-12" name="__codelineno-62-12"></a><span class="nx">runRequest</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">engine</span><span class="p">.</span><span class="nx">RunRequest</span><span class="p">{</span>
-</span><span id="__span-62-13"><a id="__codelineno-62-13" name="__codelineno-62-13"></a><span class="w">    </span><span class="nx">Train</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">engine</span><span class="p">.</span><span class="nx">EvalSetInput</span><span class="p">{</span>
-</span><span id="__span-62-14"><a id="__codelineno-62-14" name="__codelineno-62-14"></a><span class="w">        </span><span class="p">{</span><span class="nx">EvalSetID</span><span class="p">:</span><span class="w"> </span><span class="nx">trainEvalSetID</span><span class="p">},</span>
-</span><span id="__span-62-15"><a id="__codelineno-62-15" name="__codelineno-62-15"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-62-16"><a id="__codelineno-62-16" name="__codelineno-62-16"></a><span class="w">    </span><span class="nx">Validation</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">engine</span><span class="p">.</span><span class="nx">EvalSetInput</span><span class="p">{</span>
-</span><span id="__span-62-17"><a id="__codelineno-62-17" name="__codelineno-62-17"></a><span class="w">        </span><span class="p">{</span><span class="nx">EvalSetID</span><span class="p">:</span><span class="w"> </span><span class="nx">validationEvalSetID</span><span class="p">},</span>
-</span><span id="__span-62-18"><a id="__codelineno-62-18" name="__codelineno-62-18"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-62-19"><a id="__codelineno-62-19" name="__codelineno-62-19"></a><span class="w">    </span><span class="nx">MaxRounds</span><span class="p">:</span><span class="w">        </span><span class="nx">maxRounds</span><span class="p">,</span>
-</span><span id="__span-62-20"><a id="__codelineno-62-20" name="__codelineno-62-20"></a><span class="w">    </span><span class="nx">TargetSurfaceIDs</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="nx">targetSurfaceID</span><span class="p">},</span>
-</span><span id="__span-62-21"><a id="__codelineno-62-21" name="__codelineno-62-21"></a><span class="p">}</span>
+<span class="normal"><a href="#__codelineno-62-20">20</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-62-1"><a id="__codelineno-62-1" name="__codelineno-62-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-62-2"><a id="__codelineno-62-2" name="__codelineno-62-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
+</span><span id="__span-62-3"><a id="__codelineno-62-3" name="__codelineno-62-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/runner&quot;</span>
+</span><span id="__span-62-4"><a id="__codelineno-62-4" name="__codelineno-62-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool&quot;</span>
+</span><span id="__span-62-5"><a id="__codelineno-62-5" name="__codelineno-62-5"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/function&quot;</span>
+</span><span id="__span-62-6"><a id="__codelineno-62-6" name="__codelineno-62-6"></a><span class="p">)</span>
+</span><span id="__span-62-7"><a id="__codelineno-62-7" name="__codelineno-62-7"></a>
+</span><span id="__span-62-8"><a id="__codelineno-62-8" name="__codelineno-62-8"></a><span class="nx">travelLookupTool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">function</span><span class="p">.</span><span class="nx">NewFunctionTool</span><span class="p">(</span>
+</span><span id="__span-62-9"><a id="__codelineno-62-9" name="__codelineno-62-9"></a><span class="w">    </span><span class="nx">getFlightStatus</span><span class="p">,</span>
+</span><span id="__span-62-10"><a id="__codelineno-62-10" name="__codelineno-62-10"></a><span class="w">    </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithName</span><span class="p">(</span><span class="s">&quot;lookup_record&quot;</span><span class="p">),</span>
+</span><span id="__span-62-11"><a id="__codelineno-62-11" name="__codelineno-62-11"></a><span class="w">    </span><span class="nx">function</span><span class="p">.</span><span class="nx">WithDescription</span><span class="p">(</span><span class="s">&quot;Look up a traveler loyalty-profile record.&quot;</span><span class="p">),</span>
+</span><span id="__span-62-12"><a id="__codelineno-62-12" name="__codelineno-62-12"></a><span class="p">)</span>
+</span><span id="__span-62-13"><a id="__codelineno-62-13" name="__codelineno-62-13"></a>
+</span><span id="__span-62-14"><a id="__codelineno-62-14" name="__codelineno-62-14"></a><span class="nx">candidateAgent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-62-15"><a id="__codelineno-62-15" name="__codelineno-62-15"></a><span class="w">    </span><span class="nx">candidateAgentName</span><span class="p">,</span>
+</span><span id="__span-62-16"><a id="__codelineno-62-16" name="__codelineno-62-16"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">candidateModel</span><span class="p">),</span>
+</span><span id="__span-62-17"><a id="__codelineno-62-17" name="__codelineno-62-17"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span><span class="s">&quot;Answer travel operations questions concisely. Use a tool only when its declaration clearly matches the request.&quot;</span><span class="p">),</span>
+</span><span id="__span-62-18"><a id="__codelineno-62-18" name="__codelineno-62-18"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">travelLookupTool</span><span class="p">}),</span>
+</span><span id="__span-62-19"><a id="__codelineno-62-19" name="__codelineno-62-19"></a><span class="p">)</span>
+</span><span id="__span-62-20"><a id="__codelineno-62-20" name="__codelineno-62-20"></a><span class="nx">candidateRunner</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runner</span><span class="p">.</span><span class="nx">NewRunner</span><span class="p">(</span><span class="nx">candidateAppName</span><span class="p">,</span><span class="w"> </span><span class="nx">candidateAgent</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_20">实践经验</h2>
+<p>下例省略 <code>Engine</code>、<code>AgentEvaluator</code>、<code>Manager</code> 和三个 PromptIter 工作组件的重复组装代码，重点展示工具描述场景的 <code>TargetSurfaceIDs</code>。单个工具描述 surface 的 <code>SurfaceID</code> 形如 <code>&lt;节点 ID&gt;#tool.&lt;工具名&gt;</code>。如果一个节点包含多个静态工具，每个工具描述对应一个独立 surface，因此可以按工具粒度选择迭代目标。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-63-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-63-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-63-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-63-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-63-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-63-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-63-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-63-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-63-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-63-10">10</a></span>
+<span class="normal"><a href="#__codelineno-63-11">11</a></span>
+<span class="normal"><a href="#__codelineno-63-12">12</a></span>
+<span class="normal"><a href="#__codelineno-63-13">13</a></span>
+<span class="normal"><a href="#__codelineno-63-14">14</a></span>
+<span class="normal"><a href="#__codelineno-63-15">15</a></span>
+<span class="normal"><a href="#__codelineno-63-16">16</a></span>
+<span class="normal"><a href="#__codelineno-63-17">17</a></span>
+<span class="normal"><a href="#__codelineno-63-18">18</a></span>
+<span class="normal"><a href="#__codelineno-63-19">19</a></span>
+<span class="normal"><a href="#__codelineno-63-20">20</a></span>
+<span class="normal"><a href="#__codelineno-63-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-63-1"><a id="__codelineno-63-1" name="__codelineno-63-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+</span><span id="__span-63-2"><a id="__codelineno-63-2" name="__codelineno-63-2"></a><span class="w">    </span><span class="nx">astructure</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/structure&quot;</span>
+</span><span id="__span-63-3"><a id="__codelineno-63-3" name="__codelineno-63-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine&quot;</span>
+</span><span id="__span-63-4"><a id="__codelineno-63-4" name="__codelineno-63-4"></a><span class="p">)</span>
+</span><span id="__span-63-5"><a id="__codelineno-63-5" name="__codelineno-63-5"></a>
+</span><span id="__span-63-6"><a id="__codelineno-63-6" name="__codelineno-63-6"></a><span class="nx">targetSurfaceID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">astructure</span><span class="p">.</span><span class="nx">SurfaceID</span><span class="p">(</span>
+</span><span id="__span-63-7"><a id="__codelineno-63-7" name="__codelineno-63-7"></a><span class="w">    </span><span class="nx">candidateAgentName</span><span class="p">,</span>
+</span><span id="__span-63-8"><a id="__codelineno-63-8" name="__codelineno-63-8"></a><span class="w">    </span><span class="nx">astructure</span><span class="p">.</span><span class="nx">SurfaceTypeTool</span><span class="p">,</span>
+</span><span id="__span-63-9"><a id="__codelineno-63-9" name="__codelineno-63-9"></a><span class="w">    </span><span class="s">&quot;lookup_record&quot;</span><span class="p">,</span>
+</span><span id="__span-63-10"><a id="__codelineno-63-10" name="__codelineno-63-10"></a><span class="p">)</span>
+</span><span id="__span-63-11"><a id="__codelineno-63-11" name="__codelineno-63-11"></a>
+</span><span id="__span-63-12"><a id="__codelineno-63-12" name="__codelineno-63-12"></a><span class="nx">runRequest</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">engine</span><span class="p">.</span><span class="nx">RunRequest</span><span class="p">{</span>
+</span><span id="__span-63-13"><a id="__codelineno-63-13" name="__codelineno-63-13"></a><span class="w">    </span><span class="nx">Train</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">engine</span><span class="p">.</span><span class="nx">EvalSetInput</span><span class="p">{</span>
+</span><span id="__span-63-14"><a id="__codelineno-63-14" name="__codelineno-63-14"></a><span class="w">        </span><span class="p">{</span><span class="nx">EvalSetID</span><span class="p">:</span><span class="w"> </span><span class="nx">trainEvalSetID</span><span class="p">},</span>
+</span><span id="__span-63-15"><a id="__codelineno-63-15" name="__codelineno-63-15"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-63-16"><a id="__codelineno-63-16" name="__codelineno-63-16"></a><span class="w">    </span><span class="nx">Validation</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="nx">engine</span><span class="p">.</span><span class="nx">EvalSetInput</span><span class="p">{</span>
+</span><span id="__span-63-17"><a id="__codelineno-63-17" name="__codelineno-63-17"></a><span class="w">        </span><span class="p">{</span><span class="nx">EvalSetID</span><span class="p">:</span><span class="w"> </span><span class="nx">validationEvalSetID</span><span class="p">},</span>
+</span><span id="__span-63-18"><a id="__codelineno-63-18" name="__codelineno-63-18"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-63-19"><a id="__codelineno-63-19" name="__codelineno-63-19"></a><span class="w">    </span><span class="nx">MaxRounds</span><span class="p">:</span><span class="w">        </span><span class="nx">maxRounds</span><span class="p">,</span>
+</span><span id="__span-63-20"><a id="__codelineno-63-20" name="__codelineno-63-20"></a><span class="w">    </span><span class="nx">TargetSurfaceIDs</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">{</span><span class="nx">targetSurfaceID</span><span class="p">},</span>
+</span><span id="__span-63-21"><a id="__codelineno-63-21" name="__codelineno-63-21"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<h2 id="_21">实践经验</h2>
 <p>实践经验按 PromptIter 的接入顺序展开。先稳定评估口径和预期输出，再补足裁判上下文与失败原因，最后收敛迭代目标。</p>
-<h4 id="_21">评估指标对齐</h4>
+<h4 id="_22">评估指标对齐</h4>
 <p>训练集用于暴露问题并产生优化信号，验证集用于判断候选提示词是否可接受。两者可以包含不同评估用例，但评估指标应面向训练集和验证集都需要满足的质量要求。专门围绕训练样本编写的指标，会把优化信号收窄到训练集，使训练分数可能提升，但候选提示词无法通过验证集接受判定。</p>
 <p>评估细则应拆成可观察、可独立验证的要求，例如事实有依据、关键过程不遗漏、标题准确。少数训练样本中的表达偏好，不应上升为训练集和验证集共用的评估指标要求。</p>
-<h4 id="_22">预期输出来源</h4>
+<h4 id="_23">预期输出来源</h4>
 <p>使用需要预期输出的指标时，Evaluation 会将待测 Agent 的实际响应或轨迹与预期侧内容对照，并生成评分和判定结果。在这类指标中，训练集预期输出通过失败原因影响 loss、文本梯度和候选补丁；验证集预期输出通过验证分数和接受策略影响候选提示词是否被接受，不参与本轮补丁生成。预期输出的常见来源是人工金标和 Teacher 蒸馏。</p>
 <p>人工金标指经过标注或审核的预期输出，适合输入分布稳定、评估口径明确、需要长期回归的任务。金标用于训练集时，事实错误或口径不一致可能产生错误失败原因；用于验证集时，可能导致候选提示词被误接收或误拒绝。因此，金标进入训练集或验证集前，应完成事实、格式与口径复核。</p>
 <p>Teacher 蒸馏指在评估阶段用更强模型，或用包含更多规则、示例和上下文的提示词生成动态预期输出。Teacher 可以比待测 Agent 更重，因为它只用于生成评估对照，不直接进入待测 Agent 的生产调用路径。它适合样本规模较大、人工标注成本较高，或预期输出依赖实时上下文且可复现生成的场景。</p>
 <p>Teacher 输出仍需抽样复核。若 Teacher 存在事实错误、格式漂移或口径不一致，训练集评估会把偏差转成错误优化信号，验证集评估会把偏差转成失真的接受判定。复杂提示词可以用于 Teacher，但不应直接迁移到待测 Agent。Teacher 提示词中的规则、示例和上下文不一定对待测 Agent 有效。提示词过长还会增加上下文占用、约束冲突和维护成本。Teacher 蒸馏的目标不是复刻 Teacher 的完整提示词，而是把高质量预期输出转成评估信号，再由 PromptIter 生成待测 Agent 可长期维护的提示词补丁。</p>
-<h4 id="_23">裁判上下文</h4>
+<h4 id="_24">裁判上下文</h4>
 <p>裁判上下文用于构造 LLM Judge 的裁判输入，应围绕评估细则组织。评估细则只检查表达质量、结构完整性或与参考答案的一致性时，用户输入、实际最终回答和参考答案通常足够。评估细则涉及事实依据、检索结果、工具结果或业务规则时，相关证据也需要进入裁判输入。证据可以来自业务数据、关键检索结果、工具结果或评估样本；没有进入裁判输入的内容，不会参与 LLM Judge 判定。</p>
 <p>补充裁判上下文时，只纳入与评估细则直接相关、可核验的材料，例如业务数据、关键检索结果、工具结果和规则说明。证据不足时，失败原因容易变得笼统。材料过多时，无关信息会稀释评估重点，增加判定波动。训练集和验证集应使用一致的上下文构造规则，避免训练阶段的失败原因和验证阶段的分数来自不同评估口径。</p>
 <h4 id="losshint">LossHint 补充原因</h4>
 <p>PromptIter 会从训练集失败指标中提取 loss。<code>LossHint</code> 用于在已有 loss 上补充业务侧已知的问题原因。它的作用位置是训练集优化信号，训练分数仍由评估指标产生，验证集接受判定仍由验证集评估结果和接受策略产生。<code>LossHint</code> 匹配本轮训练评估中已经失败的评估用例和指标后，会并入对应 loss，供 <code>Backward</code> 生成文本梯度。</p>
 <p><code>LossHint</code> 的收益来自增量问题信息。评估结果中的失败原因已经覆盖业务侧问题时，同义 <code>LossHint</code> 主要起记录作用，优化收益有限。它更适合用于裁判生成的失败原因不准、不全的训练样本。此时，<code>LossHint</code> 把人工确认的问题补进训练集 loss，作为后续反向传播归因和提示词补丁生成的优化方向。</p>
-<h4 id="_24">迭代目标选择</h4>
+<h4 id="_25">迭代目标选择</h4>
 <p>选择迭代目标时，需要先将失败信号与节点职责对齐。结构快照用于确认待测 Agent 中可迭代的节点提示词，执行轨迹用于还原本次运行经过的节点和步骤。结合失败原因和节点输出后，可以判断问题主要归因于哪些节点提示词。</p>
 <p>失败原因集中于单个节点输出时，迭代目标可限定为该节点提示词。失败原因涉及多个协作节点时，可将职责相邻、共同影响同一类质量问题的节点提示词纳入同一轮。已有执行轨迹和评估结果显示质量稳定、优化空间有限的提示词，宜保持当前版本。目标数量过多会扩大补丁影响范围，降低验证结果的可解释性。</p>
 <p>目标范围较集中时，候选补丁与验证结果的对应关系更清晰。扩大目标范围时，新增目标应承载本轮失败信号，并与同轮目标共同指向同一类质量问题。候选提示词通过接受判定后，需要在测试环境审查各目标的补丁内容、修改原因和验证结果，再进入业务发布流程。</p>
@@ -7936,7 +8071,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月28日 09:15:33 UTC">2026-06-28 09:15:33</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月3日 02:07:59 UTC">2026-07-03 02:07:59</span>
   </span>
 
     
