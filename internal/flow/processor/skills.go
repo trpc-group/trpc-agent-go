@@ -20,6 +20,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -637,7 +638,7 @@ func skillNameFromToolResponse(msg model.Message) string {
 		return parseLoadedSkillFromText(msg.Content)
 	case skillToolSelectDocs:
 		var in skillNameInput
-		if err := json.Unmarshal([]byte(msg.Content), &in); err != nil {
+		if err := jsonutils.DecodeFlexibleJSON(msg.Content, &in); err != nil {
 			return ""
 		}
 		return strings.TrimSpace(in.Skill)
