@@ -76,9 +76,18 @@ func TestInvocationHelpers(t *testing.T) {
 	sessionKey, err := currentSessionKey(inv, "")
 	require.NoError(t, err)
 	assert.Equal(t, "sess", sessionKey.SessionID)
+	sessionKey, err = currentSessionKey(inv, " current ")
+	require.NoError(t, err)
+	assert.Equal(t, "sess", sessionKey.SessionID)
+	sessionKey, err = currentSessionKey(inv, "active-session")
+	require.NoError(t, err)
+	assert.Equal(t, "sess", sessionKey.SessionID)
 	sessionKey, err = currentSessionKey(inv, "other")
 	require.NoError(t, err)
 	assert.Equal(t, "other", sessionKey.SessionID)
+	assert.True(t, isCurrentSessionAlias("current_session"))
+	assert.True(t, isCurrentSessionAlias("self"))
+	assert.False(t, isCurrentSessionAlias("other"))
 
 	_, err = currentUserKey(nil)
 	require.Error(t, err)
@@ -467,6 +476,62 @@ func TestLoadToolFallsBackToToolCallIDWhenEventIDIsStale(t *testing.T) {
 	assert.Equal(t, []string{"stale-event", "evt-tool-result"}, anchors)
 	require.Len(t, resp.Messages, 1)
 	assert.Equal(t, "lookup: fresh result", resp.Messages[0].Content)
+}
+
+func TestLoadToolCurrentSessionAliasFindsToolCallID(t *testing.T) {
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{
+		{
+			ID: "evt-tool-result",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:     model.RoleTool,
+						ToolID:   "call-1",
+						ToolName: "lookup",
+						Content:  "fresh result",
+					},
+				}},
+			},
+		},
+	}
+
+	var windowKeys []string
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		windowFunc: func(
+			req session.EventWindowRequest,
+		) (*session.EventWindow, error) {
+			windowKeys = append(windowKeys, req.Key.SessionID)
+			return &session.EventWindow{
+				SessionKey:    req.Key,
+				AnchorEventID: req.AnchorEventID,
+				Entries: []session.EventWindowEntry{{
+					Event:     sess.Events[0],
+					CreatedAt: time.Date(2025, 4, 7, 11, 0, 0, 0, time.UTC),
+				}},
+			}, nil
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		SessionID:  "current",
+		ToolCallID: "call-1",
+	})
+	require.NoError(t, err)
+	result, err := NewLoadTool().Call(ctx, args)
+	require.NoError(t, err)
+
+	resp, ok := result.(*LoadSessionResponse)
+	require.True(t, ok)
+	assert.Equal(t, "sess", resp.SessionID)
+	assert.Equal(t, "evt-tool-result", resp.EventID)
+	assert.Equal(t, []string{"sess"}, windowKeys)
 }
 
 func TestLoadToolKeepsStaleEventErrorWhenToolCallIDMissing(t *testing.T) {

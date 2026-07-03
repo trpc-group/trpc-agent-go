@@ -104,7 +104,7 @@ type SearchSessionResponse struct {
 
 // LoadSessionRequest is the input for session_load.
 type LoadSessionRequest struct {
-	SessionID string `json:"session_id,omitempty" jsonschema:"description=Target session ID. Defaults to the current session when omitted."`
+	SessionID string `json:"session_id,omitempty" jsonschema:"description=Target session ID. Defaults to the current session when omitted or set to current."`
 	EventID   string `json:"event_id,omitempty" jsonschema:"description=Anchor event ID to load around. Prefer this when available."`
 	// ToolCallID is a current-session fallback when event_id is unavailable.
 	ToolCallID string `json:"tool_call_id,omitempty" jsonschema:"description=Optional fallback tool call ID when event_id is unavailable."`
@@ -243,7 +243,7 @@ func currentSessionKey(
 		return session.Key{}, errSessionRequired
 	}
 	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
+	if sessionID == "" || isCurrentSessionAlias(sessionID) {
 		sessionID = inv.Session.ID
 	}
 	key := session.Key{
@@ -255,6 +255,21 @@ func currentSessionKey(
 		return session.Key{}, err
 	}
 	return key, nil
+}
+
+func isCurrentSessionAlias(sessionID string) bool {
+	switch strings.ToLower(strings.TrimSpace(sessionID)) {
+	case "current",
+		"current_session",
+		"current-session",
+		"active",
+		"active_session",
+		"active-session",
+		"self":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeScope(scope string) string {
