@@ -4085,8 +4085,15 @@ request by:</p>
 </ul>
 <p>The request prefix remains the same as the parent request prefix, so providers
 with prompt caching can reuse more cached input. If no parent request is
-available, for example in asynchronous or manual summary calls, the summarizer
+available, for example in manual or external summary calls, the summarizer
 falls back to the standalone request path.</p>
+<p>One important branch-summary behavior: after <code>WithCacheSafeForking(true)</code> is
+enabled, a non-empty branch trigger may fork the current parent request for the
+branch summary, but it will not also run the cascaded full-session summary in
+that same summary pass. The framework skips that full-session target instead of
+falling back to a standalone full-session prompt or reusing the branch-scoped
+fork request. Trigger a full-session summary separately when you need an
+all-branch summary.</p>
 <p>Prompt rules:</p>
 <ul>
 <li><code>WithPrompt(...)</code> configures the standalone user prompt. It must include
@@ -5913,6 +5920,12 @@ cascade:</p>
   targets. It does not block <code>session.SummaryFilterKeyAllContents</code>.</li>
 <li><code>WithCascadeFullSessionSummary(...)</code> controls whether a non-empty branch
   trigger also refreshes the full-session summary.</li>
+<li>With <code>WithCacheSafeForking(true)</code>, a branch-triggered summary pass only runs
+  the branch summary target when a parent fork request is available. The
+  full-session cascade target is skipped in that pass; it does not fall back to
+  the standalone full-session prompt and does not reuse the branch-scoped fork
+  request. Request a full-session summary separately when you need one for all
+  branches.</li>
 <li>To keep only full-session summaries from branch-triggered automatic summary,
   pass an explicit empty allowlist and leave cascade enabled:</li>
 </ul>
@@ -6124,7 +6137,7 @@ cascade:</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 1, 2026 04:31:13 UTC">2026-07-01 04:31:13</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 3, 2026 06:53:06 UTC">2026-07-03 06:53:06</span>
   </span>
 
     
