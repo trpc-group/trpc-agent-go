@@ -43,7 +43,7 @@ second gate.
 |---|----------|---------|-----------------|------|
 | 1 | dangerous_command | `R-DEL-001` | denied destructive commands; `rm -rf` (all flag spellings), escalated on root/system paths | high → critical |
 | 2 | credential_access | `R-CRED-001` | argv/cwd hitting `~/.ssh`, `**/.env`, `**/id_rsa`, credentials | critical |
-| 3 | network | `R-NET-001` | download commands targeting a non-whitelisted host, including curl egress-redirect options (`--connect-to`, `--resolve`, `-x/--proxy`, `--url`, `--dns-servers`, `--doh-url`) parsed for their real target across `flag value`, `flag=value` and bundled/inline short-flag (`-sx`, `-xhost`) forms, and fail-closed on the opaque `-K/--config` file (incl. `-sK`) | high |
+| 3 | network | `R-NET-001` | download commands targeting a non-whitelisted host, including curl egress-redirect options (`--connect-to`, `--resolve`, `-x/--proxy`, `--url`, `--dns-servers`, `--doh-url`) parsed for their real target across `flag value`, `flag=value` and bundled/inline short-flag (`-sx`, `-xhost`) forms. `--resolve` uses an option-specific `[+]host:port:addr[,addr]` parser so an **unbracketed IPv6** rewrite target (`--resolve github.com:443:2001:db8::1`) is extracted whole instead of being shattered on its colons. Fails closed on the opaque `-K/--config` file (incl. `-sK`); optionally fails closed on curl's **implicit default config** (see below) | high |
 | 4 | shell_bypass | `R-SHELL-001` | unparsable commands (`$()`, backticks, `$VAR`, redirection, subshell) and shell wrappers / re-executing builtins (`bash -c`, `eval`, `xargs`, `env CMD`) that can bypass the allow/deny list | high |
 | 4b | command_policy | `R-CMD-001` | a plain, parseable command that is simply **not in `commands.allowed`** (an allow-list miss, not a bypass) | high |
 | 5 | host_risk | `R-HOST-001` | host backend background / PTY sessions, `sudo`/`su`/`nohup` | high → critical |
@@ -161,6 +161,19 @@ Explicit limitations:
   timeout / output cap in workspaceexec and the sandbox.
 - **hostexec PTY long sessions** are intercepted only at the establishment
   point; in-session input is not inspected.
+- **curl's implicit default config is invisible to the guard.** Beyond the
+  explicit `-K/--config` file (always failed closed), curl also reads an implicit
+  default config (`~/.curlrc`, `$CURL_HOME/.curlrc`, `$XDG_CONFIG_HOME/curlrc`;
+  `_curlrc` on Windows) that can inject `url`/`proxy`/`resolve` egress unless
+  `-q`/`--disable` is curl's **first** option. A clean-looking `curl https://<allowed>`
+  can therefore be redirected by a planted config file. Because denying every
+  curl without `-q` would break legitimate whitelisted downloads (and the
+  `≤10%` false-positive budget), this is an **opt-in** control:
+  `network.curl_require_disabled_config` (default `false`). Set it to `true` to
+  fail such invocations closed via `on_non_whitelisted`. The env-scrub in
+  workspaceexec (`CleanEnv`) drops a caller-supplied `HOME` but does not clear
+  `CURL_HOME`/`XDG_CONFIG_HOME` or the inherited home, so it does not by itself
+  neutralize this vector — the runtime sandbox remains the real containment.
 - **The 12 shipped samples are a smoke matrix.** The acceptance metrics
   (≥90% detection, ≤10% false positive) are statistical; with 12 cases they are
   coarse. The hard guarantee is the 100% deny on the three critical categories

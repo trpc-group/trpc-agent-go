@@ -351,6 +351,19 @@ func ruleNetwork(c ruleCtx) []Finding {
 					Recommendation: recNetwork,
 					action:         c.policy.Network.OnNonWhitelisted,
 				})
+			} else if c.policy.Network.CurlRequireDisabledConfig &&
+				!curlDefaultConfigDisabled(argv[1:]) {
+				// curl reads an implicit default config (~/.curlrc et al.) that
+				// can inject url/proxy/resolve unless -q/--disable is the first
+				// option. Opt-in fail-closed; the guard cannot see the file.
+				out = append(out, Finding{
+					RuleID:         ruleNetworkID,
+					Category:       catNetwork,
+					RiskLevel:      RiskHigh,
+					Evidence:       argv[0] + " (implicit curl config may define url/proxy/resolve; pass -q/--disable first)",
+					Recommendation: recNetwork,
+					action:         c.policy.Network.OnNonWhitelisted,
+				})
 			}
 		}
 		for _, host := range extractHosts(cmd, argv[1:]) {
@@ -763,9 +776,17 @@ func hostsFromCurlValue(flag, val string) []string {
 			}
 		}
 		return hostsFromColonSpec(val)
-	case "--connect-to", "--resolve", "--dns-servers":
-		// HOST1:PORT1:HOST2:PORT2 / HOST:PORT:ADDR[,ADDR] / IP[,IP]: every
-		// host/IP field (an alternate DNS server is itself an egress control).
+	case "--resolve":
+		// [+]HOST:PORT:ADDR[,ADDR]. The address tail is everything after the
+		// second colon, so a dedicated parser is needed: the generic colon
+		// splitter shatters an unbracketed IPv6 addr (2001:db8::1) into port-
+		// like fragments that all get dropped, letting the rewrite ride a
+		// whitelisted HOST past the network rule.
+		return hostsFromResolveSpec(val)
+	case "--connect-to", "--dns-servers":
+		// HOST1:PORT1:HOST2:PORT2 / IP[,IP]: every host/IP field (an alternate
+		// DNS server is itself an egress control). IPv6 here requires brackets,
+		// which hostsFromColonSpec already honors.
 		return hostsFromColonSpec(val)
 	case "--url", "--doh-url":
 		if h := hostFromURL(val); h != "" {
@@ -812,6 +833,60 @@ func hostsFromColonSpec(spec string) []string {
 	return hosts
 }
 
+// hostsFromResolveSpec parses a curl --resolve value of the form
+// "[+]HOST:PORT:ADDR[,ADDR]...". curl treats everything after the second colon
+// as the address list, so ADDR may be an unbracketed IPv6 literal
+// ("github.com:443:2001:db8::1") whose inner colons must not be split. Splitting
+// on every colon (as hostsFromColonSpec does) drops the IPv6 addr entirely and
+// lets the rewrite ride the whitelisted HOST past R-NET-001. Both HOST and every
+// address (each optionally bracketed or "+"-prefixed) are returned so a redirect
+// to a non-whitelisted endpoint trips the network rule.
+func hostsFromResolveSpec(val string) []string {
+	val = strings.TrimSpace(val)
+	// The optional leading "+" marks a TTL-honoring entry; strip it off HOST.
+	val = strings.TrimPrefix(val, "+")
+	c1 := strings.IndexByte(val, ':')
+	if c1 < 0 {
+		// Malformed (no port/addr); fall back to the over-inclusive splitter.
+		return hostsFromColonSpec(val)
+	}
+	var hosts []string
+	if h := cleanHostField(val[:c1]); h != "" {
+		hosts = append(hosts, h)
+	}
+	rest := val[c1+1:]
+	c2 := strings.IndexByte(rest, ':')
+	if c2 < 0 {
+		return hosts // "HOST:PORT" with no address list.
+	}
+	for _, addr := range strings.Split(rest[c2+1:], ",") {
+		if h := cleanHostField(addr); h != "" {
+			hosts = append(hosts, h)
+		}
+	}
+	return hosts
+}
+
+// cleanHostField normalizes a single --resolve host/address field: it strips a
+// leading "+", surrounding IPv6 brackets and surrounding whitespace, then keeps
+// the value only if it is a domain or a parseable IP (so ports and empty fields
+// are dropped). Unbracketed IPv6 literals survive because net.ParseIP accepts
+// them.
+func cleanHostField(f string) string {
+	f = strings.TrimSpace(f)
+	f = strings.TrimPrefix(f, "+")
+	f = strings.TrimPrefix(f, "[")
+	f = strings.TrimSuffix(f, "]")
+	f = strings.TrimSpace(f)
+	if f == "" {
+		return ""
+	}
+	if domainLike(f) || net.ParseIP(f) != nil {
+		return f
+	}
+	return ""
+}
+
 // curlOpaqueConfigOption reports whether a -K/--config option is present, in the
 // "-K file", "--config=file" or bundled short-flag ("-sK file") form. Its file
 // can define url/proxy/resolve and other egress controls the guard cannot read,
@@ -832,6 +907,17 @@ func curlOpaqueConfigOption(args []string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// curlDefaultConfigDisabled reports whether curl's implicit default config is
+// suppressed, which is true only when -q or --disable is the very first option.
+// curl checks solely the first parameter, so a later or bundled -q (e.g. "-sq")
+// does not count; this stays conservative and matches curl's own behavior.
+func curlDefaultConfigDisabled(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	return args[0] == "-q" || args[0] == "--disable"
 }
 
 func domainLike(s string) bool {

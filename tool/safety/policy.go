@@ -79,6 +79,15 @@ type NetworkPolicy struct {
 	DownloadCommands []string `yaml:"download_commands" json:"download_commands"`
 	AllowedDomains   []string `yaml:"allowed_domains" json:"allowed_domains"`
 	OnNonWhitelisted Action   `yaml:"on_non_whitelisted" json:"on_non_whitelisted"`
+	// CurlRequireDisabledConfig fails a curl invocation closed (via
+	// OnNonWhitelisted) unless its first option is -q/--disable. curl reads an
+	// implicit default config (~/.curlrc, $CURL_HOME/.curlrc,
+	// $XDG_CONFIG_HOME/curlrc) that can inject url/proxy/resolve egress the
+	// guard cannot see; -q/--disable as the first parameter is the only way to
+	// suppress it. Off by default so a plain whitelisted "curl https://host"
+	// still allows; opt in for defence-in-depth without a code change. The
+	// explicit -K/--config file is always failed closed regardless of this flag.
+	CurlRequireDisabledConfig bool `yaml:"curl_require_disabled_config" json:"curl_require_disabled_config"`
 }
 
 // ResourcePolicy configures resource-abuse limits. Static detection here is

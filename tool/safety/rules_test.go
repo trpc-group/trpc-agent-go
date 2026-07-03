@@ -372,6 +372,102 @@ func TestHostsFromColonSpec(t *testing.T) {
 	}
 }
 
+// TestCurlResolveUnbracketedIPv6Deny covers --resolve rewrites whose target is
+// an unbracketed IPv6 literal or a "+"-prefixed host. curl keeps everything
+// after the second colon as the address list, so the address must be extracted
+// whole; the generic colon splitter would shatter it and leak the rewrite past
+// the whitelist.
+func TestCurlResolveUnbracketedIPv6Deny(t *testing.T) {
+	p := loadExamplePolicy(t) // allows github.com; on_non_whitelisted: deny
+	for _, cmd := range []string{
+		`curl --resolve github.com:443:2001:db8::1 https://github.com/a`,
+		`curl --resolve github.com:443:fe80::1 https://github.com/a`,
+		`curl --resolve=github.com:443:2001:db8::1 https://github.com/a`,
+		`curl --resolve +github.com:443:2001:db8::1 https://github.com/a`,
+		`curl --resolve github.com:443:+example.com https://github.com/a`,
+		// Multiple addresses: an evil address alongside a benign one still trips.
+		`curl --resolve github.com:443:1.1.1.1,2001:db8::99 https://github.com/a`,
+	} {
+		findings, decision := scanCmd(t, p, BackendWorkspace, cmd)
+		if decision != DecisionDeny {
+			t.Errorf("resolve rewrite must deny for %q, got %q: %+v", cmd, decision, findings)
+		}
+		if !hasRule(findings, ruleNetworkID) {
+			t.Errorf("missing R-NET-001 for %q: %+v", cmd, findings)
+		}
+	}
+}
+
+// TestHostsFromResolveSpec unit-checks the --resolve address-tail parser.
+func TestHostsFromResolveSpec(t *testing.T) {
+	cases := []struct {
+		spec string
+		want []string
+	}{
+		{"github.com:443:2001:db8::1", []string{"github.com", "2001:db8::1"}},
+		{"github.com:443:[2001:db8::1]", []string{"github.com", "2001:db8::1"}},
+		{"+github.com:443:1.2.3.4", []string{"github.com", "1.2.3.4"}},
+		{"github.com:443:1.1.1.1,2001:db8::99", []string{"github.com", "1.1.1.1", "2001:db8::99"}},
+		{"github.com:443", []string{"github.com"}}, // no address list
+	}
+	for _, tc := range cases {
+		got := hostsFromResolveSpec(tc.spec)
+		if len(got) != len(tc.want) {
+			t.Errorf("hostsFromResolveSpec(%q) = %v, want %v", tc.spec, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("hostsFromResolveSpec(%q) = %v, want %v", tc.spec, got, tc.want)
+				break
+			}
+		}
+	}
+}
+
+// TestCurlImplicitCurlrcConfigurable covers the opt-in fail-closed for curl's
+// implicit default config (~/.curlrc et al.). It is off by default (a plain
+// whitelisted curl still allows), and when enabled it denies unless -q/--disable
+// is the first option.
+func TestCurlImplicitCurlrcConfigurable(t *testing.T) {
+	// Default policy: knob off -> whitelisted curl still allows.
+	pOff := loadExamplePolicy(t)
+	if pOff.Network.CurlRequireDisabledConfig {
+		t.Fatalf("curl_require_disabled_config should default to false")
+	}
+	if _, dec := scanCmd(t, pOff, BackendWorkspace, `curl https://github.com/a`); dec != DecisionAllow {
+		t.Errorf("knob off: plain whitelisted curl should allow, got %q", dec)
+	}
+
+	// Knob on -> fail closed unless -q/--disable is first.
+	pOn := loadExamplePolicy(t)
+	pOn.Network.CurlRequireDisabledConfig = true
+	deny := []string{
+		`curl https://github.com/a`,       // no -q: implicit config active
+		`curl -s https://github.com/a`,    // -s is boolean, not -q
+		`curl -v -q https://github.com/a`, // -q not first: config already read
+		`curl -sq https://github.com/a`,   // bundled: not the literal first option
+	}
+	for _, cmd := range deny {
+		findings, dec := scanCmd(t, pOn, BackendWorkspace, cmd)
+		if dec != DecisionDeny {
+			t.Errorf("knob on: %q should deny, got %q: %+v", cmd, dec, findings)
+		}
+		if !hasRule(findings, ruleNetworkID) {
+			t.Errorf("knob on: missing R-NET-001 for %q: %+v", cmd, findings)
+		}
+	}
+	allow := []string{
+		`curl -q https://github.com/a`,        // -q first: config disabled
+		`curl --disable https://github.com/a`, // long form first
+	}
+	for _, cmd := range allow {
+		if _, dec := scanCmd(t, pOn, BackendWorkspace, cmd); dec != DecisionAllow {
+			t.Errorf("knob on: %q should allow (config disabled), got %q", cmd, dec)
+		}
+	}
+}
+
 func TestExtractHosts(t *testing.T) {
 	hosts := extractHosts("curl", []string{"-s", "https://evil.io/p", "-o", "config.yaml"})
 	if len(hosts) != 1 || hosts[0] != "evil.io" {

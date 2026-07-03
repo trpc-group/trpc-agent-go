@@ -42,6 +42,11 @@ network:
   download_commands: [curl, wget, nc, ssh, scp, ftp]
   allowed_domains: [github.com, "*.googleapis.com", pypi.org, registry.npmjs.org]
   on_non_whitelisted: deny
+  # Fail curl closed unless -q/--disable is its first option (the implicit
+  # ~/.curlrc can inject url/proxy/resolve the guard cannot see). Off by default
+  # so a plain whitelisted "curl https://host" still allows; the explicit
+  # -K/--config file is always failed closed regardless of this flag.
+  curl_require_disabled_config: false
 
 resources:
   max_timeout_sec: 300
