@@ -77,8 +77,56 @@ The network model stays binary:
 - `NetworkRestricted` does not add broad network allow rules.
 - `NetworkEnabled` adds broad outbound and inbound network allow rules.
 
-Proxy-aware routing, Unix socket allow-lists, and loopback-only network policies
-are not part of this implementation.
+This is not the same as Linux `--unshare-net`. Linux uses a network namespace
+boundary. macOS uses Seatbelt network rules plus Mach service and Unix socket
+policy. The cross-platform model remains binary, while macOS-specific extension
+fields expose IPC affordances that Linux does not claim to support.
+
+`WithMacOSWeakerNetworkIsolation` allows certificate trust services such as
+`com.apple.trustd.agent` for tools that need system TLS trust validation. This
+can be useful for Go-based CLI tools behind proxies or custom CAs, but it
+reduces isolation because Mach services can become data-exfiltration channels.
+
+`WithMacOSUnixSocketPaths` allows AF_UNIX socket bind/connect operations for
+explicit absolute socket paths. Linux keeps the namespace-level network model and
+does not provide a matching Unix socket path policy in this backend. Prefer the
+canonical macOS spelling for socket clients, for example `/private/tmp/...`
+instead of `/tmp/...`, because Seatbelt matches Unix socket paths at connect
+time.
+
+Proxy-aware routing, per-domain/IP/port allow-lists, and loopback-only network
+policies are not part of this implementation.
+
+## Process Model
+
+Seatbelt restrictions are inherited by child processes, so forked or exec'd
+descendants remain inside the same macOS sandbox boundary. The profile permits
+`process-fork` and `process-exec` so normal shell workflows can run, but the
+kernel continues to enforce the same file-system, network, Mach service, and
+Unix socket rules.
+
+macOS does not provide the Linux backend's PID namespace or bubblewrap
+`--die-with-parent` semantics. Runtime cancellation and timeouts rely on the
+shared Unix process-group cleanup used by the package. This is useful for
+terminating descendant processes, but it is not equivalent to a Linux PID
+namespace.
+
+## Capability Matrix
+
+| Capability | Linux `linux-bubblewrap` | macOS `macos-sandbox-exec` |
+| --- | --- | --- |
+| OS sandbox mechanism | `bubblewrap` namespaces and mounts | Apple Seatbelt through `/usr/bin/sandbox-exec` |
+| Host root visibility | Read-only bind of `/` | Selected platform defaults plus explicit grants |
+| Mount namespace | Supported | Not supported |
+| PID namespace | Supported with `--unshare-pid` | Not supported |
+| Parent death handling | `--die-with-parent` plus process-group cleanup | Process-group cleanup only |
+| Network boundary | Binary namespace model via `--unshare-net` | Binary Seatbelt model, with macOS IPC extensions |
+| Mach services | Not applicable | Backend-specific allow-list |
+| Unix socket path policy | Not exposed by this backend | Supported for exact absolute macOS socket paths |
+| Dynamic glob deny | Static mount masks | Dynamic Seatbelt regex hard deny |
+| Protected metadata | Read-only masks | Write allow exclusions |
+| Resource quotas | Not implemented | Not implemented |
+| PTY / ports / snapshot | Not implemented | Not implemented |
 
 ## Shell Environment
 
@@ -92,5 +140,7 @@ sanitized environment with `ShellEnvironmentPolicy` and passes it directly to th
 - macOS no-access glob enforcement is dynamic; Linux enforcement is based on
   static mount masks.
 - macOS uses Seatbelt rules instead of namespace and mount operations.
+- macOS does not provide PID or network namespaces; process and network
+  isolation are expressed through Seatbelt and process-group cleanup.
 - Linux behavior and tests remain unchanged; platform differences are documented
   rather than hidden behind new public APIs.
