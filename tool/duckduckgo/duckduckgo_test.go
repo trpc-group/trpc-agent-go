@@ -655,6 +655,65 @@ func TestDDGTool_SERPFallbackFailureAddsContext(t *testing.T) {
 	require.Contains(t, err.Error(), "fallback lite failed")
 }
 
+func TestDDGTool_SERPFallbackUsesAPIForDefaultDuckDuckGoURLs(t *testing.T) {
+	t.Parallel()
+
+	calls := make(map[string]int)
+	ddgTool := &ddgTool{
+		httpClient: &http.Client{Transport: roundTripFunc(
+			func(r *http.Request) (*http.Response, error) {
+				calls[r.URL.Host]++
+				require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+				switch r.URL.Host {
+				case "html.duckduckgo.com", "lite.duckduckgo.com":
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body: io.NopCloser(strings.NewReader(`
+<html><body>
+  <div class="anomaly-modal__title">
+    Unfortunately, bots use DuckDuckGo too.
+  </div>
+</body></html>`)),
+						Header: make(http.Header),
+					}, nil
+				case "api.duckduckgo.com":
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body: io.NopCloser(strings.NewReader(`{
+  "RelatedTopics": [
+    {
+      "Text": "GAIA benchmark - General AI assistant benchmark.",
+      "FirstURL": "https://example.com/gaia"
+    }
+  ],
+  "Results": []
+}`)),
+						Header: make(http.Header),
+					}, nil
+				default:
+					t.Fatalf("unexpected host %s", r.URL.Host)
+					return nil, nil
+				}
+			},
+		)},
+		baseURL:   defaultHTMLBaseURL,
+		backend:   backendHTML,
+		userAgent: defaultSERPUserAgent,
+	}
+
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA benchmark"},
+	)
+	require.NoError(t, err)
+	require.Len(t, result.Results, 1)
+	require.Equal(t, "https://example.com/gaia", result.Results[0].URL)
+	require.Contains(t, result.Summary, "fallback from html/lite")
+	require.Equal(t, 1, calls["html.duckduckgo.com"])
+	require.Equal(t, 1, calls["lite.duckduckgo.com"])
+	require.Equal(t, 1, calls["api.duckduckgo.com"])
+}
+
 func TestDDGTool_SERPHTTPFailures(t *testing.T) {
 	t.Parallel()
 

@@ -2443,7 +2443,7 @@ func (t *Tool) executeAct(
 func normalizeActKind(kind string) string {
 	normalized := strings.ToLower(strings.TrimSpace(kind))
 	switch normalized {
-	case actKey, "keyboard":
+	case actKey, "keyboard", "press/key", "press-key":
 		return actPress
 	case "scroll_into_view", "scroll-into-view":
 		return strings.ToLower(actScrollIntoView)
