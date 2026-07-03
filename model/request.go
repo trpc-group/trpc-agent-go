@@ -292,14 +292,8 @@ type ContentRef struct {
 	SHA256 string `json:"sha256,omitempty"`
 	// OriginalName is the user-facing filename or display name, if any.
 	OriginalName string `json:"original_name,omitempty"`
-	// FromDataURL indicates whether the content was externalized from a data URL.
-	FromDataURL bool `json:"from_data_url,omitempty"`
 	// EventID identifies the owning event for debugging.
 	EventID string `json:"event_id,omitempty"`
-	// ChoiceIndex identifies the owning response choice within the event.
-	ChoiceIndex int `json:"choice_index"`
-	// PartIndex identifies the owning content part within the message.
-	PartIndex int `json:"part_index"`
 	// RequestID identifies the owning request for debugging.
 	RequestID string `json:"request_id,omitempty"`
 }

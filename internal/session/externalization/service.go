@@ -484,10 +484,7 @@ func externalizeMessage(
 			SizeBytes:       int64(len(target.data)),
 			SHA256:          sha256Hex(target.data),
 			OriginalName:    target.originalName,
-			FromDataURL:     target.fromDataURL,
 			EventID:         eventID,
-			ChoiceIndex:     choiceIndex,
-			PartIndex:       partIndex,
 			RequestID:       requestID,
 		}
 		target.apply(&msg.ContentParts[partIndex], ref)

@@ -212,14 +212,14 @@ func TestAppendEventExternalizesDataURLs(t *testing.T) {
 	if parts[0].Image.URL != "" {
 		t.Fatalf("persisted image URL = %q, want empty", parts[0].Image.URL)
 	}
-	if parts[0].ContentRef == nil || !parts[0].ContentRef.FromDataURL {
-		t.Fatalf("image ContentRef = %#v, want FromDataURL", parts[0].ContentRef)
+	if parts[0].ContentRef == nil {
+		t.Fatal("image ContentRef is nil")
 	}
 	if parts[1].File.URL != "" {
 		t.Fatalf("persisted file URL = %q, want empty", parts[1].File.URL)
 	}
-	if parts[1].ContentRef == nil || !parts[1].ContentRef.FromDataURL {
-		t.Fatalf("file ContentRef = %#v, want FromDataURL", parts[1].ContentRef)
+	if parts[1].ContentRef == nil {
+		t.Fatal("file ContentRef is nil")
 	}
 
 	hydrated, err := svc.GetSession(ctx, key)
