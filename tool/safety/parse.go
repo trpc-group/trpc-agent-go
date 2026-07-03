@@ -19,6 +19,10 @@ import (
 // windowsExecExts are stripped from command names so "curl.exe" matches "curl".
 var windowsExecExts = []string{".exe", ".cmd", ".bat", ".com", ".ps1"}
 
+// ncAddrFlags are nc/ncat/telnet short flags whose next argv token is an
+// address (source/proxy/bind), which must not be mistaken for the target host.
+var ncAddrFlags = map[string]struct{}{"-s": {}, "-x": {}, "-X": {}, "-b": {}}
+
 // commandBase returns the lower-cased basename of an executable reference with
 // any Windows executable suffix removed, e.g. "/usr/bin/Curl" -> "curl",
 // "cmd.exe" -> "cmd". It mirrors the normalisation internal/shellsafe applies
@@ -138,12 +142,26 @@ func extractHosts(argv []string) []string {
 	// is skipped.
 	switch commandBase(argv[0]) {
 	case "nc", "ncat", "telnet":
+		skipNext := false
 		for _, a := range argv[1:] {
-			if a == "" || a == "-" || isFlag(a) {
+			if skipNext {
+				skipNext = false
+				continue
+			}
+			if a == "" || a == "-" {
+				continue
+			}
+			if isFlag(a) {
+				// An address-carrying flag (-s source, -x/-X proxy, -b bind)
+				// consumes the next token; skip it so the source/proxy address
+				// is not mistaken for the target host.
+				if _, ok := ncAddrFlags[a]; ok {
+					skipNext = true
+				}
 				continue
 			}
 			if _, err := strconv.Atoi(a); err == nil {
-				continue
+				continue // bare port
 			}
 			if h := hostFromToken(a); h != "" {
 				return []string{h}

