@@ -349,6 +349,9 @@ func shouldGenerateSummary(
 	report *summary.Report,
 ) bool {
 	if force {
+		if shouldSkipBranchForkFullSessionCascade(ctx, m, tmp, filterKey) {
+			return false
+		}
 		if report != nil {
 			report.Trigger = summary.Trigger{
 				Fired:     true,
@@ -362,10 +365,57 @@ func shouldGenerateSummary(
 	checkTmp := tmp
 	if filterKey == session.SummaryFilterKeyAllContents {
 		if triggerFilterKey := summaryTriggerFilterKeyFromContext(ctx); triggerFilterKey != "" {
+			if shouldSkipBranchForkFullSessionCascade(ctx, m, tmp, filterKey) {
+				return false
+			}
 			checkTmp = buildFilterSession(base, triggerFilterKey, input)
 		}
 	}
 	return ShouldSummarize(ctx, m, checkTmp)
+}
+
+// shouldSkipBranchForkFullSessionCascade suppresses only the full-session target
+// that is explicitly marked as a branch cascade. This also applies to force=true:
+// force should not turn a branch fork request into a full-session summary.
+func shouldSkipBranchForkFullSessionCascade(
+	ctx context.Context,
+	m summary.SessionSummarizer,
+	tmp *session.Session,
+	filterKey string,
+) bool {
+	if !skipBranchForkFullSessionCascadeFromContext(ctx) {
+		return false
+	}
+	if filterKey != session.SummaryFilterKeyAllContents {
+		return false
+	}
+	if summaryTriggerFilterKeyFromContext(ctx) == "" {
+		return false
+	}
+	if _, ok := summary.CacheSafeForkRequestFromContext(ctx); !ok {
+		return false
+	}
+	return cacheSafeForkingEnabled(ctx, m, tmp)
+}
+
+type cacheSafeForkingResolver interface {
+	CacheSafeForkingEnabled(context.Context, *session.Session) bool
+}
+
+func cacheSafeForkingEnabled(
+	ctx context.Context,
+	m summary.SessionSummarizer,
+	sess *session.Session,
+) bool {
+	if m == nil {
+		return false
+	}
+	if resolver, ok := m.(cacheSafeForkingResolver); ok {
+		return resolver.CacheSafeForkingEnabled(ctx, sess)
+	}
+	metadata := m.Metadata()
+	enabled, _ := metadata["cache_safe_forking"].(bool)
+	return enabled
 }
 
 func reportFilterKey(ctx context.Context, filterKey string) string {
@@ -429,6 +479,7 @@ func selectSummaryBoundary(
 }
 
 type summaryTriggerFilterKeyContextKey struct{}
+type skipBranchForkFullSessionCascadeContextKey struct{}
 
 // summaryLockKey identifies the summary scope that must be serialized.
 type summaryLockKey struct {
@@ -522,12 +573,27 @@ func contextWithSummaryTriggerFilterKey(ctx context.Context, filterKey string) c
 	return context.WithValue(ctx, summaryTriggerFilterKeyContextKey{}, filterKey)
 }
 
+func contextWithSkipBranchForkFullSessionCascade(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, skipBranchForkFullSessionCascadeContextKey{}, true)
+}
+
 func summaryTriggerFilterKeyFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
 	}
 	filterKey, _ := ctx.Value(summaryTriggerFilterKeyContextKey{}).(string)
 	return filterKey
+}
+
+func skipBranchForkFullSessionCascadeFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	skip, _ := ctx.Value(skipBranchForkFullSessionCascadeContextKey{}).(bool)
+	return skip
 }
 
 func readLastIncludedTimestamp(tmp *session.Session) time.Time {
@@ -607,6 +673,18 @@ func contextWithForkedReport(ctx context.Context) context.Context {
 	// caller-attached root report.
 	cloned := report.Clone()
 	return summary.ContextWithReport(ctx, &cloned)
+}
+
+func contextForSummaryTarget(
+	ctx context.Context,
+	triggerFilterKey string,
+	targetFilterKey string,
+) context.Context {
+	if targetFilterKey != session.SummaryFilterKeyAllContents ||
+		triggerFilterKey == session.SummaryFilterKeyAllContents {
+		return ctx
+	}
+	return contextWithSummaryTriggerFilterKey(ctx, triggerFilterKey)
 }
 
 // GetSummaryTextFromSession attempts to retrieve summary text from the session's
@@ -717,10 +795,7 @@ func CreateSessionSummaryWithCascade(
 	}
 	if len(targets) == 1 {
 		target := targets[0]
-		if target == session.SummaryFilterKeyAllContents &&
-			filterKey != session.SummaryFilterKeyAllContents {
-			ctx = contextWithSummaryTriggerFilterKey(ctx, filterKey)
-		}
+		ctx = contextForSummaryTarget(ctx, filterKey, target)
 		return createSummaryFunc(ctx, sess, target, force)
 	}
 
@@ -750,9 +825,10 @@ func CreateSessionSummaryWithCascade(
 		callCtx := contextWithForkedReport(ctx)
 		go func(i int, fk string, callCtx context.Context) {
 			defer summaryWg.Done()
+			callCtx = contextForSummaryTarget(callCtx, filterKey, fk)
 			if fk == session.SummaryFilterKeyAllContents &&
 				filterKey != session.SummaryFilterKeyAllContents {
-				callCtx = contextWithSummaryTriggerFilterKey(callCtx, filterKey)
+				callCtx = contextWithSkipBranchForkFullSessionCascade(callCtx)
 			}
 			err := createSummaryFunc(callCtx, sess, fk, force)
 			if err != nil {

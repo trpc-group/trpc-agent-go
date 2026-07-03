@@ -105,3 +105,19 @@ func (d *dynamicSummarizer) Metadata() map[string]any {
 		"type": metadataDynamicSummarizerType,
 	}
 }
+
+// CacheSafeForkingEnabled resolves the current summarizer and reports its
+// cache-safe forking configuration.
+func (d *dynamicSummarizer) CacheSafeForkingEnabled(
+	ctx context.Context,
+	sess *session.Session,
+) bool {
+	resolved, err := d.resolveSummarizer(ctx, sess)
+	if err != nil || resolved == nil {
+		return false
+	}
+	if nested, ok := resolved.(*dynamicSummarizer); ok && nested == d {
+		return false
+	}
+	return cacheSafeForkingEnabled(ctx, resolved, sess)
+}
