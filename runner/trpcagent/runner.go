@@ -40,7 +40,7 @@ type runner struct {
 	appName    string
 	target     string
 	basePath   string
-	httpClient *http.Client
+	httpClient HTTPClient
 	headers    http.Header
 }
 
