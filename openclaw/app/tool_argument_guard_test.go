@@ -53,7 +53,8 @@ func TestToolArgumentGuardCallbackBlocksConfiguredPattern(t *testing.T) {
 			`{"urls":["https://github.com/ServiceNow/TapeAgents"]}`,
 		),
 	})
-	require.ErrorContains(t, err, errToolArgumentBlocked)
+	require.ErrorIs(t, err, errToolArgumentBlocked)
+	require.ErrorContains(t, err, errToolArgumentBlocked.Error())
 }
 
 func TestToolArgumentGuardCallbackAllowsUnmatchedArgs(t *testing.T) {
