@@ -391,7 +391,6 @@ func dynamicProtectedWorkdirFragments(env map[string]string) []string {
 	if stateDir == "" {
 		return out
 	}
-	out = appendProtectedPathFragment(out, stateDir)
 	out = appendProtectedPathFragment(
 		out,
 		filepath.Join(

@@ -2785,6 +2785,11 @@ func TestOpenClawToolingGuidancePrefersSearchTools(t *testing.T) {
 	require.Contains(
 		t,
 		openClawToolingGuidance,
+		"Do not use exec_command for public web search or static page fetches",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
 		"When a web search tool such as duckduckgo_search is present",
 	)
 	require.Contains(

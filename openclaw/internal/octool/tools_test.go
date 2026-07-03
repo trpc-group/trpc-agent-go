@@ -596,6 +596,40 @@ func TestExecTool_BlocksShellProfileAccess(t *testing.T) {
 	)
 }
 
+func TestChatCommandSafetyPolicyAllowsStateScratchWorkdir(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "state")
+	policy := NewChatCommandSafetyPolicy()
+	err := policy(context.Background(), CommandRequest{
+		Command: "pwd",
+		Workdir: filepath.Join(stateDir, "workspaces", "scratch"),
+		Env: map[string]string{
+			envTRPCClawStateDir: stateDir,
+		},
+	})
+	require.NoError(t, err)
+}
+
+func TestChatCommandSafetyPolicyBlocksRuntimeEnvWorkdir(t *testing.T) {
+	t.Parallel()
+
+	stateDir := filepath.Join(t.TempDir(), "state")
+	policy := NewChatCommandSafetyPolicy()
+	err := policy(context.Background(), CommandRequest{
+		Command: "pwd",
+		Workdir: filepath.Join(stateDir, "runtime"),
+		Env: map[string]string{
+			envTRPCClawStateDir: stateDir,
+		},
+	})
+	require.ErrorContains(
+		t,
+		err,
+		"shell or credential files is not allowed",
+	)
+}
+
 func TestExecTool_RedactsSensitiveKeyValueOutput(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
