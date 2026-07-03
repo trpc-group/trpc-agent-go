@@ -56,7 +56,7 @@ func TestWrapTool_AllowsSafeCommand(t *testing.T) {
 
 	wrapped := WrapTool(stub, guard)
 
-	out, err := wrapped.Call(context.Background(), guardJSONForTest("ls -la"))
+	out, err := wrapped.Call(context.Background(), jsonCommandArgs("ls -la"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestWrapTool_DeniesDangerousCommand(t *testing.T) {
 
 	wrapped := WrapTool(stub, guard)
 
-	out, err := wrapped.Call(context.Background(), guardJSONForTest("rm -rf /"))
+	out, err := wrapped.Call(context.Background(), jsonCommandArgs("rm -rf /"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestWrapTool_AskResultEscalates(t *testing.T) {
 
 	wrapped := WrapTool(stub, guard)
 
-	out, err := wrapped.Call(context.Background(), guardJSONForTest("git push origin main"))
+	out, err := wrapped.Call(context.Background(), jsonCommandArgs("git push origin main"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestWrapTools_BatchGating(t *testing.T) {
 	if !ok {
 		t.Fatalf("wrapped[0] is not a CallableTool: %T", wrapped[0])
 	}
-	out, err := wrappedCall.Call(context.Background(), guardJSONForTest("ls -la"))
+	out, err := wrappedCall.Call(context.Background(), jsonCommandArgs("ls -la"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestWrapToolSet_GuardsEveryTool(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *GuardedTool, got %T", tools[0])
 	}
-	out, err := guarded.Call(context.Background(), guardJSONForTest("rm -rf /"))
+	out, err := guarded.Call(context.Background(), jsonCommandArgs("rm -rf /"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestGuardedTool_CallInnerErrorPropagates(t *testing.T) {
 	guard := NewGuard(WithRules(NewDangerousCommandRule()))
 	wrapped := WrapTool(stub, guard)
 
-	_, err := wrapped.Call(context.Background(), guardJSONForTest("ls"))
+	_, err := wrapped.Call(context.Background(), jsonCommandArgs("ls"))
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Errorf("expected inner error to propagate, got %v", err)
 	}

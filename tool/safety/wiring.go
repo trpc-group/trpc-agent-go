@@ -183,25 +183,11 @@ func (g *GuardedTool) Call(ctx context.Context, args []byte) (any, error) {
 	return g.inner.Call(ctx, args)
 }
 
-// buildGuardedScanInput is a small convenience for tests and external
-// callers that want to reuse a guard's extractor without going through
-// Guard.CheckToolPermission.
-//
-// It is intentionally exported as a free function (not a method) so the
-// test-suite can drive the guard from pre-built JSON arguments
-// without standing up a tool.PermissionRequest.
-func buildGuardedScanInput(guard *Guard, args []byte) ScanInput {
-	if guard == nil {
-		return ScanInput{ExecutorType: "local"}
-	}
-	return guard.extract(args)
-}
-
-// guardJSONForTest is a tiny helper used by the wiring tests to keep
-// the test bodies free of inline map literals. Exported via a var so
-// the lint check treats it as an intentional helper rather than dead
-// code.
-var guardJSONForTest = func(command string) []byte {
+// jsonCommandArgs marshals a {"command": <cmd>} JSON object. It is a
+// test-only helper so the wiring tests can avoid inline map literals
+// at every Call site. The name is unexported on purpose: this is not
+// part of the package's public surface.
+var jsonCommandArgs = func(command string) []byte {
 	b, _ := json.Marshal(map[string]string{"command": command})
 	return b
 }
