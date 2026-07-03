@@ -12,6 +12,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -278,6 +279,7 @@ func TestMessagesSnapshotOmitsRunEventsByDefault(t *testing.T) {
 }
 
 func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
+	baseTime := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
 	assistantMetadata := source.Metadata{
 		EventID:      "evt-assistant",
 		Author:       "member-a",
@@ -298,34 +300,45 @@ func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
 	}
 	svc := &testSessionService{
 		trackEvents: []session.TrackEvent{
-			newTrackEvent(t, withSnapshotRawEvent(
-				aguievents.NewTextMessageStartEvent(
+			newTrackEventAt(t, withSnapshotRawEvent(
+				withSnapshotTimestamp(aguievents.NewTextMessageStartEvent(
 					"orphan-assistant",
 					aguievents.WithRole("assistant"),
-				),
+				), baseTime.Add(-time.Second)),
 				orphanMetadata,
-			)),
-			newUserMessageTrackEvent(t, "user-1", "hi"),
-			newTrackEvent(t, withSnapshotRawEvent(
-				aguievents.NewToolCallStartEvent(
+			), baseTime.Add(time.Hour)),
+			newTrackEventAt(t, withSnapshotTimestamp(aguievents.NewCustomEvent(
+				multimodal.CustomEventNameUserMessage,
+				aguievents.WithValue(types.Message{
+					ID:      "user-1",
+					Role:    types.RoleUser,
+					Content: "hi",
+				}),
+			), baseTime), baseTime.Add(time.Hour)),
+			newTrackEventAt(t, withSnapshotTimestamp(
+				aguievents.NewRunFinishedEvent("thread", "real-run"),
+				baseTime.Add(500*time.Millisecond),
+			), baseTime.Add(time.Hour)),
+			newTrackEventAt(t, withSnapshotRawEvent(
+				withSnapshotTimestamp(aguievents.NewToolCallStartEvent(
 					"tool-call-1",
 					"calc",
 					aguievents.WithParentMessageID("assistant-1"),
-				),
+				), baseTime.Add(time.Second)),
 				assistantMetadata,
-			)),
-			newTrackEvent(t, withSnapshotRawEvent(
-				aguievents.NewToolCallEndEvent("tool-call-1"),
+			), baseTime.Add(time.Hour)),
+			newTrackEventAt(t, withSnapshotRawEvent(
+				withSnapshotTimestamp(aguievents.NewToolCallEndEvent("tool-call-1"), baseTime.Add(2*time.Second)),
 				assistantMetadata,
-			)),
-			newTrackEvent(t, withSnapshotRawEvent(
-				aguievents.NewToolCallResultEvent(
+			), baseTime.Add(time.Hour)),
+			newTrackEventAt(t, withSnapshotRawEvent(
+				withSnapshotTimestamp(aguievents.NewToolCallResultEvent(
 					"tool-msg-1",
 					"tool-call-1",
 					"42",
-				),
+				), baseTime.Add(3*time.Second)),
 				toolMetadata,
-			)),
+			), baseTime.Add(time.Hour)),
 		},
 	}
 	tracker, err := track.New(svc)
@@ -352,15 +365,20 @@ func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
 	require.True(t, ok)
 	got, ok := snapshot.GetBaseEvent().RawEvent.(source.SnapshotMetadata)
 	require.True(t, ok)
-	assert.Equal(t, source.SnapshotMetadata{
-		Messages: map[string]source.Metadata{
-			"assistant-1": assistantMetadata,
-			"tool-msg-1":  toolMetadata,
-		},
-		ToolCalls: map[string]source.Metadata{
-			"tool-call-1": assistantMetadata,
-		},
-	}, got)
+	require.Len(t, got.Messages, 3)
+	require.Len(t, got.ToolCalls, 1)
+	require.Contains(t, got.Messages, "user-1")
+	require.Contains(t, got.Messages, "assistant-1")
+	require.Contains(t, got.Messages, "tool-msg-1")
+	require.Contains(t, got.ToolCalls, "tool-call-1")
+	assertSnapshotSourceMetadata(t, source.Metadata{}, got.Messages["user-1"])
+	assertSnapshotMetadataTimestamp(t, got.Messages["user-1"], baseTime)
+	assertSnapshotSourceMetadata(t, assistantMetadata, got.Messages["assistant-1"])
+	assertSnapshotMetadataTimestamp(t, got.Messages["assistant-1"], baseTime.Add(time.Second))
+	assertSnapshotSourceMetadata(t, toolMetadata, got.Messages["tool-msg-1"])
+	assertSnapshotMetadataTimestamp(t, got.Messages["tool-msg-1"], baseTime.Add(3*time.Second))
+	assertSnapshotSourceMetadata(t, assistantMetadata, got.ToolCalls["tool-call-1"])
+	assertSnapshotMetadataTimestamp(t, got.ToolCalls["tool-call-1"], baseTime.Add(time.Second))
 }
 
 func TestMessagesSnapshotUsesResolvedAppName(t *testing.T) {
@@ -697,6 +715,32 @@ func TestMessagesSnapshotUserIDResolverError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, stream)
 	assert.Contains(t, err.Error(), "resolve user ID")
+}
+
+func TestMessagesSnapshotRecoversUserIDResolverPanic(t *testing.T) {
+	svc := &testSessionService{trackEvents: []session.TrackEvent{newUserMessageTrackEvent(t, "user-1", "hi")}}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner: noopBaseRunner{},
+		userIDResolver: func(context.Context, *adapter.RunAgentInput) (string, error) {
+			panic("bad forwarded props")
+		},
+		runAgentInputHook: NewOptions().RunAgentInputHook,
+		appName:           "demo",
+		tracker:           tracker,
+	}
+
+	stream, err := r.MessagesSnapshot(
+		context.Background(),
+		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
+	)
+	require.Error(t, err)
+	assert.Nil(t, stream)
+	assert.Equal(t, "messages snapshot internal error", err.Error())
+	// The panic payload may carry request internals and must stay out of the
+	// error returned to HTTP clients.
+	assert.NotContains(t, err.Error(), "bad forwarded props")
 }
 
 func TestMessagesSnapshotAppNameResolverError(t *testing.T) {
@@ -1076,6 +1120,45 @@ func TestMessagesSnapshotFollowSkipsWhenInitialAlreadyTerminal(t *testing.T) {
 	require.Equal(t, 1, calls)
 }
 
+func TestMessagesSnapshotFollowSkipsWhenInitialTrackEmpty(t *testing.T) {
+	base := time.Now().Add(-time.Second)
+	initial := &session.TrackEvents{Track: track.TrackAGUI}
+	follow := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "real-run"), base),
+		},
+	}
+	tr := &sequenceTracker{first: initial, second: follow}
+	r := &runner{
+		runner:                            noopBaseRunner{},
+		userIDResolver:                    NewOptions().UserIDResolver,
+		runAgentInputHook:                 NewOptions().RunAgentInputHook,
+		appName:                           "demo",
+		tracker:                           tr,
+		flushInterval:                     time.Millisecond,
+		timeout:                           50 * time.Millisecond,
+		messagesSnapshotFollowEnabled:     true,
+		messagesSnapshotFollowMaxDuration: 50 * time.Millisecond,
+	}
+
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "req-run"})
+	require.NoError(t, err)
+
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Empty(t, snapshot.Messages)
+	require.IsType(t, (*aguievents.RunFinishedEvent)(nil), collected[2])
+
+	tr.mu.Lock()
+	calls := tr.calls
+	tr.mu.Unlock()
+	require.Equal(t, 1, calls)
+}
+
 func TestMessagesSnapshotFollowEmitsRunErrorOnTerminalErrorEvent(t *testing.T) {
 	base := time.Now().Add(-time.Second)
 	initial := &session.TrackEvents{
@@ -1155,6 +1238,50 @@ func TestMessagesSnapshotFollowEmitsRunErrorOnFollowGetEventsError(t *testing.T)
 	require.True(t, ok)
 	require.Equal(t, "req-run", errEvt.RunID())
 	require.Contains(t, errEvt.Message, "follow track events: boom")
+}
+
+func TestMessagesSnapshotFollowTreatsEmptyTrackAsNoUpdate(t *testing.T) {
+	base := time.Now().Add(-time.Second)
+	initial := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newUserMessageTrackEventAt(t, "user-1", "hi", base.Add(-time.Millisecond)),
+			newTrackEventAt(t, aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")), base),
+			newTrackEventAt(t, aguievents.NewTextMessageContentEvent("msg-1", "hello"), base.Add(time.Millisecond)),
+			newTrackEventAt(t, aguievents.NewTextMessageEndEvent("msg-1"), base.Add(2*time.Millisecond)),
+		},
+	}
+	terminal := &session.TrackEvents{
+		Track: track.TrackAGUI,
+		Events: []session.TrackEvent{
+			newTrackEventAt(t, aguievents.NewRunFinishedEvent("thread", "real-run"), base.Add(3*time.Millisecond)),
+		},
+	}
+	tracker := &emptyTrackThenTerminalTracker{initial: initial, terminal: terminal}
+	r := &runner{
+		runner:                            noopBaseRunner{},
+		userIDResolver:                    NewOptions().UserIDResolver,
+		runAgentInputHook:                 NewOptions().RunAgentInputHook,
+		appName:                           "demo",
+		tracker:                           tracker,
+		flushInterval:                     time.Millisecond,
+		timeout:                           100 * time.Millisecond,
+		messagesSnapshotFollowEnabled:     true,
+		messagesSnapshotFollowMaxDuration: 100 * time.Millisecond,
+	}
+	stream, err := r.MessagesSnapshot(context.Background(), &adapter.RunAgentInput{ThreadID: "thread", RunID: "req-run"})
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	require.IsType(t, (*aguievents.RunStartedEvent)(nil), collected[0])
+	require.IsType(t, (*aguievents.MessagesSnapshotEvent)(nil), collected[1])
+	finished, ok := collected[2].(*aguievents.RunFinishedEvent)
+	require.True(t, ok)
+	require.Equal(t, "req-run", finished.RunID())
+	tracker.mu.Lock()
+	calls := tracker.calls
+	tracker.mu.Unlock()
+	require.GreaterOrEqual(t, calls, 3)
 }
 
 func TestMessagesSnapshotFollowEmitsTimeoutWhenNoTerminalEvent(t *testing.T) {
@@ -1256,6 +1383,34 @@ func withSnapshotRawEvent(
 ) aguievents.Event {
 	event.GetBaseEvent().RawEvent = metadata
 	return event
+}
+
+func withSnapshotTimestamp(event aguievents.Event, timestamp time.Time) aguievents.Event {
+	event.GetBaseEvent().SetTimestamp(timestamp.UnixMilli())
+	return event
+}
+
+func assertSnapshotSourceMetadata(
+	t *testing.T,
+	want source.Metadata,
+	got source.Metadata,
+) {
+	t.Helper()
+	assert.Equal(t, want.EventID, got.EventID)
+	assert.Equal(t, want.Author, got.Author)
+	assert.Equal(t, want.InvocationID, got.InvocationID)
+	assert.Equal(t, want.ParentInvocationID, got.ParentInvocationID)
+	assert.Equal(t, want.Branch, got.Branch)
+}
+
+func assertSnapshotMetadataTimestamp(
+	t *testing.T,
+	got source.Metadata,
+	wantTimestamp time.Time,
+) {
+	t.Helper()
+	require.NotNil(t, got.Timestamp)
+	assert.Equal(t, wantTimestamp.UnixMilli(), *got.Timestamp)
 }
 
 func newTrackEvent(t *testing.T, evt aguievents.Event) session.TrackEvent {
@@ -1433,6 +1588,34 @@ func (t *errorAfterFirstTracker) GetEvents(ctx context.Context, key session.Key,
 }
 
 func (t *errorAfterFirstTracker) Flush(ctx context.Context, key session.Key) error {
+	return nil
+}
+
+type emptyTrackThenTerminalTracker struct {
+	mu       sync.Mutex
+	calls    int
+	initial  *session.TrackEvents
+	terminal *session.TrackEvents
+}
+
+func (t *emptyTrackThenTerminalTracker) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
+	return nil
+}
+
+func (t *emptyTrackThenTerminalTracker) GetEvents(ctx context.Context, key session.Key, opts ...session.Option) (*session.TrackEvents, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.calls++
+	if t.calls == 1 {
+		return t.initial, nil
+	}
+	if t.calls == 2 {
+		return nil, fmt.Errorf("get track events: %w", session.ErrTracksEmpty)
+	}
+	return t.terminal, nil
+}
+
+func (t *emptyTrackThenTerminalTracker) Flush(ctx context.Context, key session.Key) error {
 	return nil
 }
 

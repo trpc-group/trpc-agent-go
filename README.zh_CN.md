@@ -10,22 +10,27 @@
 [![Coverage](https://codecov.io/gh/trpc-group/trpc-agent-go/branch/main/graph/badge.svg)](https://app.codecov.io/gh/trpc-group/trpc-agent-go/tree/main)
 [![Documentation](https://img.shields.io/badge/Docs-Website-blue.svg)](https://trpc-group.github.io/trpc-agent-go/)
 
-**一个用于构建智能 agent 系统的强大 Go 框架**，彻底改变您创建 AI 应用的方式。构建能够思考、记忆、协作和行动的自主 agent，前所未有地简单。
+**tRPC-Agent-Go 是一个用于构建生产级 Agent 系统的 Go 框架。**
+它把 LLM Agent、图工作流、工具调用、Session/Memory 状态、知识检索、
+Agent 自进化、评测与 OpenTelemetry 可观测性整合到一套 Go-native 技术栈中。
+
+如果你希望 Agent 应用天然适配 Go 服务开发、并发执行、可观测部署，并能接入
+A2A、AG-UI、MCP 等协议，tRPC-Agent-Go 可以作为底层框架。
 
 **为什么选择 tRPC-Agent-Go？**
 
-- **智能推理**：先进的分层 planner 和多 agent 编排
-- **丰富的 Tool 生态系统**：与外部 API、数据库和服务的无缝集成
-- **持久化 Memory**：长期状态管理和上下文感知
-- **多 Agent 协作**：Chain、Parallel 和基于 Graph 的 agent 工作流
+- **Go-Native Agent Runtime**：流式 Runner、context cancel 和服务友好的 API
 - **GraphAgent**：类型安全的图工作流，支持多条件路由，功能对标 LangGraph 的 Go 实现
+- **多 Agent 协作**：Chain、Parallel 和 Cycle 工作流
+- **丰富的 Tool 生态系统**：Function Tool、MCP Tool、Web 搜索、代码执行和自定义服务
+- **持久化状态**：Session、Memory、Artifacts 与知识检索
 - **Agent Skills**：可复用的 `SKILL.md` 工作流，支持安全执行
-- **Artifacts**：对 agent/tool 产出的文件进行版本化存储
+- **Agent 自进化**：Hermes-style 会话复盘，自动提取、门禁校验并发布可复用
+  `SKILL.md` 工作流
+- **Prompt Caching**：自动优化成本，缓存内容最高可节省 90%
 - **评测与基准**：EvalSet + Metric 用于长期质量度量
-- **UI 与服务集成**：AG-UI（Agent-User Interaction），
-  以及 Agent-to-Agent（A2A）互通
-- **生产就绪**：内置 telemetry、tracing 和企业级可靠性
-- **高性能**：针对可扩展性和低延迟进行优化
+- **协议集成**：AG-UI 对接前端、A2A 实现 Agent 互通、MCP 接入工具生态
+- **生产可观测性**：OpenTelemetry tracing、metrics 与 Langfuse 示例
 
 ## 使用场景
 
@@ -143,6 +148,27 @@ tools := []tool.Tool{
 </td>
 <td valign="top">
 
+### Agent 自进化
+
+```go
+repo, _ := skill.NewFSRepository("./managed_skills")
+evo := evolution.NewService(reviewerModel,
+    evolution.WithManagedSkillsDir("./managed_skills"),
+    evolution.WithSkillRepository(repo))
+defer evo.Close()
+
+runner := runner.NewRunner("app", agent,
+    runner.WithEvolutionService(evo))
+```
+
+已完成的会话可以被异步复盘，通过质量门禁后发布为托管 Agent Skill，
+供后续轮次直接复用。
+
+</td>
+</tr>
+<tr>
+<td colspan="2" valign="top">
+
 ### 评测与基准
 
 ```go
@@ -166,9 +192,11 @@ _ = result.OverallStatus
     - [**丰富的 Tool 集成**](#丰富的-tool-集成)
     - [**生产可观测性**](#生产可观测性)
     - [**Agent Skills**](#agent-skills)
+    - [**Agent 自进化**](#agent-自进化)
     - [**评测与基准**](#评测与基准)
   - [目录](#目录)
   - [文档](#文档)
+    - [博客](#博客)
   - [快速开始](#快速开始)
     - [前置条件](#前置条件)
     - [运行示例](#运行示例)
@@ -186,9 +214,10 @@ _ = result.OverallStatus
     - [9. AG-UI Demo](#9-ag-ui-demo)
     - [10. 评测（Evaluation）](#10-评测evaluation)
     - [11. Agent Skills](#11-agent-skills)
-    - [12. Artifacts](#12-artifacts)
-    - [13. A2A 互通](#13-a2a-互通)
-    - [14. Gateway 服务](#14-gateway-服务)
+    - [12. Agent 自进化](#12-agent-自进化)
+    - [13. Artifacts](#13-artifacts)
+    - [14. A2A 互通](#14-a2a-互通)
+    - [15. Gateway 服务](#15-gateway-服务)
   - [架构概览](#架构概览)
     - [**执行流程**](#执行流程)
   - [使用内置 Agents](#使用内置-agents)
@@ -201,15 +230,30 @@ _ = result.OverallStatus
     - [**开源灵感**](#开源灵感)
   - [Star 历史](#star-历史)
   - [许可证](#许可证)
-    - [**在 GitHub 上为我们加星** • **报告问题** • **加入讨论**](#在-github-上为我们加星--报告问题--加入讨论)
+    - [**GitHub 仓库** • **报告问题** • **加入讨论**](#github-仓库--报告问题--加入讨论)
 
 ## 文档
 
 准备好深入了解 tRPC-Agent-Go 了吗？我们的[文档](https://trpc-group.github.io/trpc-agent-go/)涵盖从基础概念到高级技巧的一切，帮助你自信地构建强大的 AI 应用。无论你是 AI agent 新手还是有经验的开发者，都能在其中找到详细指南、实用示例和最佳实践，加速你的开发旅程。
 
+### 博客
+
+这些博客围绕框架全景、核心能力与工程实践展开，可按需阅读：
+
+- [构建智能 AI 应用的 Go 语言 Agent 框架](docs/mkdocs/zh/blog/trpcagentgo.md)
+- [GraphAgent 让 AI 工作流与 Agent 无缝融合](docs/mkdocs/zh/blog/graphagent.md)
+- [快速构建基于 AG-UI 的 Agent 服务](docs/mkdocs/zh/blog/agui.md)
+- [Anthropic Agent Skills 规范的 Go 原生实现](docs/mkdocs/zh/blog/skill.md)
+- [打造企业级安全可控的 OpenClaw Runtime](docs/mkdocs/zh/blog/openclaw.md)
+- [AI Agent 自动化评估范式与工程实践全解析](docs/mkdocs/zh/blog/evaluation.md)
+- [AI Agent 提示词自动迭代与工程实践全解析](docs/mkdocs/zh/blog/promptiter.md)
+
 ## 快速开始
 
-> **实际演示**：_[Demo GIF 占位符 - 展示 agent 推理和 tool 使用]_
+![AG-UI report agent demo](docs/mkdocs/assets/gif/agui/report.gif)
+
+上面的 Demo 展示了 tRPC-Agent-Go 服务将 Agent 事件流式输出到 AG-UI
+客户端，Agent 在执行过程中完成规划、工具调用并更新界面。
 
 ### 前置条件
 
@@ -434,6 +478,16 @@ _ = mr.Cancel(requestID)
 
 `examples` 目录包含涵盖各主要功能的可运行 Demo。
 
+如果你还不确定从哪里开始，可以按目标选择：
+
+- 第一个多轮 Agent：[examples/runner](examples/runner)
+- 可控图工作流：[examples/graph](examples/graph)
+- Agent 前端或流式 UI：[examples/agui](examples/agui)
+- A2A 互通：[examples/a2aagent](examples/a2aagent)
+- RAG 与知识检索：[examples/knowledge](examples/knowledge)
+- 评测与提示词迭代：[examples/evaluation](examples/evaluation)
+- Skills 与本地自动化：[examples/skillrun](examples/skillrun)
+
 ### 1. Tool 用法
 
 - [examples/agenttool](examples/agenttool) – 将 agent 封装为可调用的 tool。
@@ -547,21 +601,29 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
   `examples/structuredoutputskills`
   都采用了这种配置，避免自动执行 assistant 文本里的围栏代码块。
 
-### 12. Artifacts
+### 12. Agent 自进化
+
+示例：[examples/evolution](examples/evolution)
+
+- 在后台复盘已完成会话，并提取可复用的 `SKILL.md` 工作流。
+- 支持 revision 存储、质量门禁、人工审批，以及技能在后续运行中的 warm-start。
+- Runner 集成只需要一个选项：`runner.WithEvolutionService(...)`。
+
+### 13. Artifacts
 
 示例：[examples/artifact](examples/artifact)
 
 - 保存并读取工具产出的版本化文件（图片、文本、报告等）。
 - 支持多种后端（in-memory、S3、COS）。
 
-### 13. A2A 互通
+### 14. A2A 互通
 
 示例：[examples/a2aadk](examples/a2aadk)
 
 - Agent-to-Agent（A2A）与 ADK Python A2A Server 的互通示例。
 - 演示跨运行时的流式输出、工具调用与代码执行。
 
-### 14. Gateway 服务
+### 15. Gateway 服务
 
 示例：[openclaw](openclaw)
 
@@ -591,6 +653,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 4. **Tools** 执行特定任务（API 调用、计算、web 搜索）
 5. **Memory** 维护上下文并从交互中学习
 6. **Knowledge** 为文档理解提供 RAG 能力
+7. **Evolution** 复盘已完成会话，并把可复用过程沉淀为托管技能
 
 关键包：
 
@@ -606,6 +669,7 @@ sg.SetFinishPoint("A").SetFinishPoint("B")
 | `planner`   | 提供 agent 的规划与推理能力。                                         |
 | `artifact`  | 存储并读取工具/agent 产出的版本化文件（图片、报告等）。                    |
 | `skill`     | 管理并执行以 `SKILL.md` 定义的可复用 Agent Skills。                   |
+| `evolution` | 复盘已完成会话，并将可复用过程发布为托管 Agent Skills。                 |
 | `event`     | 定义 Runner 与各类服务使用的事件结构与流式载荷。                        |
 | `evaluation`| 提供 EvalSet/Metric 驱动的评测框架并管理评测结果。                     |
 | `server`    | 提供 Gateway、AG-UI、A2A 等 HTTP 服务端能力。                       |
@@ -706,9 +770,9 @@ go vet ./...
 
 <div align="center">
 
-### **在 GitHub 上为我们加星** • **报告问题** • **加入讨论**
+### **GitHub 仓库** • **报告问题** • **加入讨论**
 
-**由 tRPC-Agent-Go 团队用爱构建**
+如果 tRPC-Agent-Go 对你的 Go Agent 项目有帮助，欢迎顺手 star。
 
 _赋能开发者构建下一代智能应用_
 

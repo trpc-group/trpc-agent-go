@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 func TestMain(m *testing.M) {
@@ -341,6 +342,9 @@ observability:
     ui_base_url: " http://127.0.0.1:3000/ "
     trace_url_template: " http://127.0.0.1:3000/project/local-dev/traces/{{trace_id}} "
     observation_leaf_value_max_bytes: 4096
+  latency_diagnostics:
+    enabled: true
+    events: true
 `)
 
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
@@ -359,6 +363,30 @@ observability:
 		4096,
 		*opts.LangfuseObservationLeafValueMaxBytes,
 	)
+	require.True(t, opts.LatencyDiagnosticsEnabled)
+	require.True(t, opts.LatencyDiagnosticsEvents)
+}
+
+func TestParseRunOptions_LatencyDiagnosticsFlagsOverrideConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+observability:
+  latency_diagnostics:
+    enabled: true
+    events: true
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-latency-diagnostics=false",
+		"-latency-diagnostics-events=false",
+	})
+	require.NoError(t, err)
+	require.False(t, opts.LatencyDiagnosticsEnabled)
+	require.False(t, opts.LatencyDiagnosticsEvents)
 }
 
 func TestParseRunOptions_UsesDefaultConfigPath(t *testing.T) {
@@ -443,6 +471,8 @@ agent:
   enable_context_compaction: false
   context_compaction_oversized_tool_result_max_tokens: 2048
   max_history_runs: 123
+  max_llm_calls: 22
+  max_tool_iterations: 123
   preload_memory: 2
 `)
 
@@ -466,6 +496,8 @@ agent:
 		"-enable-context-compaction",
 		"-context-compaction-oversized-tool-result-max-tokens", "256",
 		"-max-history-runs", "9",
+		"-max-llm-calls", "4",
+		"-max-tool-iterations", "6",
 		"-preload-memory", "-1",
 	})
 	require.NoError(t, err)
@@ -487,7 +519,25 @@ agent:
 	require.True(t, opts.EnableContextCompaction)
 	require.Equal(t, 256, opts.ContextCompactionOversizedToolResultMaxTokens)
 	require.Equal(t, 9, opts.MaxHistoryRuns)
+	require.Equal(t, 4, opts.MaxLLMCalls)
+	require.Equal(t, 6, opts.MaxToolIterations)
 	require.Equal(t, -1, opts.PreloadMemory)
+}
+
+func TestParseRunOptions_MaxToolIterationsNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{"-max-tool-iterations", "-1"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid max tool iterations")
+}
+
+func TestParseRunOptions_MaxLLMCallsNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{"-max-llm-calls", "-1"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid max LLM calls")
 }
 
 func TestParseRunOptions_ModelGenerationConfig_DefaultsStreamTrue(
@@ -728,6 +778,8 @@ agent:
   enable_context_compaction: true
   context_compaction_oversized_tool_result_max_tokens: 4096
   max_history_runs: 50
+  max_llm_calls: 13
+  max_tool_iterations: 11
   preload_memory: 10
   instruction: "instruction"
   instruction_files: ["i1.md","i2.md"]
@@ -751,6 +803,9 @@ model:
   mode: "mock"
   name: "gpt-5"
   openai_variant: "openai"
+  headers:
+    X-SMG-Routing-Key: "wineguo"
+    X-SMG-Agent-Name: "trpc-claw-benchmark"
 
 gateway:
   allow_users: ["u1","u2"]
@@ -779,6 +834,9 @@ skills:
   watch: false
   watch_bundled: true
   watch_debounce_ms: 125
+  summary_cache_ttl_ms: 60000
+  overview_limit: 12
+  overview_pinned: ["coding-agent","skill-creator"]
   tool_profile: "knowledge_only"
   load_mode: "session"
   max_loaded_skills: 3
@@ -799,10 +857,28 @@ skills:
 
 tools:
   enable_local_exec: true
+  code_executor:
+    type: "sandbox"
+    auto_execute_code_blocks: true
+    sandbox:
+      workspace_root: "/tmp/openclaw-sandbox"
+      backend: "linux-bubblewrap"
+      profile: "workspace_write"
+      network: "restricted"
+      default_timeout: "45s"
+      output_max_bytes: 2048
+      shell_env:
+        inherit: "core"
+        apply_default_excludes: true
+        exclude: ["*_TOKEN"]
+        include_only: ["PATH", "HOME", "CUSTOM"]
+        set:
+          CUSTOM: "ok"
   enable_openclaw_tools: true
   openclaw_tooling_guidance: ""
   enable_parallel_tools: true
   refresh_toolsets_on_run: true
+  defer_to_dynamic_agent: true
   providers:
     - type: "duckduckgo"
       name: "ddg"
@@ -871,6 +947,8 @@ memory:
 	require.True(t, opts.EnableContextCompaction)
 	require.Equal(t, 4096, opts.ContextCompactionOversizedToolResultMaxTokens)
 	require.Equal(t, 50, opts.MaxHistoryRuns)
+	require.Equal(t, 13, opts.MaxLLMCalls)
+	require.Equal(t, 11, opts.MaxToolIterations)
 	require.Equal(t, 10, opts.PreloadMemory)
 	require.Equal(t, "instruction", opts.AgentInstruction)
 	require.Equal(t, "i1.md,i2.md", opts.AgentInstructionFiles)
@@ -891,6 +969,10 @@ memory:
 	require.Equal(t, modeMock, opts.ModelMode)
 	require.Equal(t, "gpt-5", opts.OpenAIModel)
 	require.Equal(t, "openai", opts.OpenAIVariant)
+	require.Equal(t, map[string]string{
+		"X-SMG-Routing-Key": "wineguo",
+		"X-SMG-Agent-Name":  "trpc-claw-benchmark",
+	}, opts.OpenAIHeaders)
 
 	require.Equal(t, "u1,u2", opts.AllowUsers)
 	require.True(t, opts.RequireMention)
@@ -923,6 +1005,13 @@ memory:
 	require.False(t, opts.SkillsWatch)
 	require.True(t, opts.SkillsWatchBundled)
 	require.Equal(t, 125*time.Millisecond, opts.SkillsWatchDebounce)
+	require.Equal(t, time.Minute, opts.SkillsSummaryCacheTTL)
+	require.Equal(t, 12, opts.SkillsOverviewLimit)
+	require.Equal(
+		t,
+		"coding-agent,skill-creator",
+		opts.SkillsOverviewPinned,
+	)
 	require.Equal(
 		t,
 		skillprofile.KnowledgeOnly,
@@ -955,11 +1044,58 @@ memory:
 	)
 
 	require.True(t, opts.EnableLocalExec)
+	require.Equal(t, codeExecutorTypeSandbox, opts.CodeExecutor.Type)
+	require.NotNil(t, opts.CodeExecutor.AutoExecuteCodeBlocks)
+	require.True(t, *opts.CodeExecutor.AutoExecuteCodeBlocks)
+	require.Equal(
+		t,
+		"/tmp/openclaw-sandbox",
+		opts.CodeExecutor.Sandbox.WorkspaceRoot,
+	)
+	require.Equal(
+		t,
+		sandboxBackendLinuxBubblewrap,
+		opts.CodeExecutor.Sandbox.Backend,
+	)
+	require.Equal(
+		t,
+		sandboxProfileWorkspaceWrite,
+		opts.CodeExecutor.Sandbox.Profile,
+	)
+	require.Equal(
+		t,
+		sandboxNetworkRestricted,
+		opts.CodeExecutor.Sandbox.Network,
+	)
+	require.Equal(t, 45*time.Second, opts.CodeExecutor.Sandbox.DefaultTimeout)
+	require.Equal(t, 2048, opts.CodeExecutor.Sandbox.OutputMaxBytes)
+	require.Equal(
+		t,
+		sandboxShellEnvInheritCore,
+		opts.CodeExecutor.Sandbox.ShellEnv.Inherit,
+	)
+	require.True(t, opts.CodeExecutor.Sandbox.ShellEnv.ApplyDefaultExcludes)
+	require.Equal(
+		t,
+		[]string{"*_TOKEN"},
+		opts.CodeExecutor.Sandbox.ShellEnv.Exclude,
+	)
+	require.Equal(
+		t,
+		[]string{"PATH", "HOME", "CUSTOM"},
+		opts.CodeExecutor.Sandbox.ShellEnv.IncludeOnly,
+	)
+	require.Equal(
+		t,
+		"ok",
+		opts.CodeExecutor.Sandbox.ShellEnv.Set["CUSTOM"],
+	)
 	require.True(t, opts.EnableOpenClawTools)
 	require.NotNil(t, opts.OpenClawToolingGuide)
 	require.Equal(t, "", *opts.OpenClawToolingGuide)
 	require.True(t, opts.EnableParallelTools)
 	require.True(t, opts.RefreshToolSetsOnRun)
+	require.True(t, opts.DeferToolSurface)
 
 	require.Len(t, opts.ToolProviders, 1)
 	require.Equal(t, "duckduckgo", opts.ToolProviders[0].Type)
@@ -1007,6 +1143,399 @@ func TestParseRunOptions_UnexpectedArgsFails(t *testing.T) {
 	var exitErr *exitError
 	require.True(t, errors.As(err, &exitErr))
 	require.Equal(t, 2, exitErr.Code)
+}
+
+func TestParseRunOptions_CodeExecutorSandboxDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  code_executor:
+    type: "sandbox"
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, codeExecutorTypeSandbox, opts.CodeExecutor.Type)
+	require.Nil(t, opts.CodeExecutor.AutoExecuteCodeBlocks)
+	require.Equal(
+		t,
+		sandboxBackendAuto,
+		opts.CodeExecutor.Sandbox.Backend,
+	)
+	require.Equal(
+		t,
+		sandboxProfileWorkspaceWrite,
+		opts.CodeExecutor.Sandbox.Profile,
+	)
+	require.Equal(
+		t,
+		sandboxNetworkRestricted,
+		opts.CodeExecutor.Sandbox.Network,
+	)
+	require.Equal(
+		t,
+		defaultSandboxCodeExecutorTimeout,
+		opts.CodeExecutor.Sandbox.DefaultTimeout,
+	)
+	require.Equal(
+		t,
+		defaultSandboxCodeExecutorOutputMaxBytes,
+		opts.CodeExecutor.Sandbox.OutputMaxBytes,
+	)
+	require.Equal(
+		t,
+		sandboxShellEnvInheritCore,
+		opts.CodeExecutor.Sandbox.ShellEnv.Inherit,
+	)
+	require.True(t, opts.CodeExecutor.Sandbox.ShellEnv.ApplyDefaultExcludes)
+}
+
+func TestParseRunOptions_DeferToolSurfacePolicyConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_to_dynamic_agent_mode: auto
+  defer_to_dynamic_agent_threshold_chars: 1234
+  defer_direct_tools: ["exec_command", "message", "exec_command"]
+  dynamic_agent_timeout: "3m"
+  host_exec_default_timeout: "60s"
+`)
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.False(t, opts.DeferToolSurface)
+	require.Equal(t, deferToolSurfaceModeAuto, opts.DeferToolSurfaceMode)
+	require.True(t, opts.deferToolSurfaceModeExplicit)
+	require.Equal(t, 1234, opts.DeferToolSurfaceChars)
+	require.Equal(t, "exec_command,message", opts.DeferToolSurfaceDirect)
+	require.Equal(t, 3*time.Minute, opts.DynamicAgentTimeout)
+	require.Equal(t, time.Minute, opts.HostExecDefaultTimeout)
+}
+
+func TestParseRunOptions_DynamicAgentTimeoutFlagOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  dynamic_agent_timeout: "3m"
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-dynamic-agent-timeout", "45s",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Second, opts.DynamicAgentTimeout)
+}
+
+func TestParseRunOptions_HostExecDefaultTimeoutFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  host_exec_default_timeout: "3m"
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-host-exec-default-timeout", "45s",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Second, opts.HostExecDefaultTimeout)
+}
+
+func TestParseRunOptions_DynamicAgentTimeoutNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{"-dynamic-agent-timeout", "-1s"})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "dynamic agent timeout")
+}
+
+func TestParseRunOptions_HostExecDefaultTimeoutNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-host-exec-default-timeout",
+		"-1s",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "host exec default timeout")
+}
+
+func TestParseRunOptions_DeferToolSurfaceDefaultsToAuto(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  enable_parallel_tools: true
+`)
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.False(t, opts.DeferToolSurface)
+	require.Equal(t, deferToolSurfaceModeAuto, opts.DeferToolSurfaceMode)
+	require.False(t, opts.deferToolSurfaceModeExplicit)
+}
+
+func TestParseRunOptions_DeferToolSurfaceFalseDisablesAuto(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_to_dynamic_agent: false
+`)
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.False(t, opts.DeferToolSurface)
+	require.Equal(t, deferToolSurfaceModeOff, opts.DeferToolSurfaceMode)
+	require.False(t, opts.deferToolSurfaceModeExplicit)
+}
+
+func TestParseRunOptions_DeferToolSurfaceFlagFalseDisablesAuto(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  enable_parallel_tools: true
+`)
+	opts, err := parseRunOptions([]string{
+		"-config",
+		cfgPath,
+		"--defer-tools-to-dynamic-agent=false",
+	})
+	require.NoError(t, err)
+	require.False(t, opts.DeferToolSurface)
+	require.Equal(t, deferToolSurfaceModeOff, opts.DeferToolSurfaceMode)
+	require.False(t, opts.deferToolSurfaceModeExplicit)
+}
+
+func TestParseRunOptions_DeferDirectToolsStringConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_direct_tools: "exec_command, message, exec_command"
+`)
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, "exec_command,message", opts.DeferToolSurfaceDirect)
+}
+
+func TestParseRunOptions_DeferDefaultDirectToolsConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_default_direct_tools: false
+`)
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.False(t, opts.DeferToolSurfaceDefaultDirectTools)
+}
+
+func TestParseRunOptions_DeferDefaultDirectToolsFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_default_direct_tools: false
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-defer-tools-to-dynamic-agent-default-direct-tools=true",
+	})
+	require.NoError(t, err)
+	require.True(t, opts.DeferToolSurfaceDefaultDirectTools)
+}
+
+func TestParseRunOptions_DeferToolSurfaceInvalidModeFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  defer_to_dynamic_agent_mode: sometimes
+`)
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid defer tool surface mode")
+}
+
+func TestParseRunOptions_CodeExecutorInvalidEnumFails(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  code_executor:
+    type: "sandbox"
+    sandbox:
+      profile: "everything"
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tools.code_executor")
+	require.Contains(t, err.Error(), "sandbox.profile")
+}
+
+func TestConvertCodeExecutorConfigBranches(t *testing.T) {
+	t.Parallel()
+
+	empty, err := convertCodeExecutorConfig(nil)
+	require.NoError(t, err)
+	require.Equal(t, codeExecutorOptions{}, empty)
+
+	autoExecute := false
+	inherited, err := convertCodeExecutorConfig(&codeExecutorConfig{
+		AutoExecuteCodeBlocks: &autoExecute,
+	})
+	require.NoError(t, err)
+	require.Empty(t, inherited.Type)
+	require.NotNil(t, inherited.AutoExecuteCodeBlocks)
+	require.False(t, *inherited.AutoExecuteCodeBlocks)
+
+	_, err = convertCodeExecutorConfig(&codeExecutorConfig{
+		Sandbox: &sandboxCodeExecutorConfig{},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "sandbox config requires type")
+
+	for _, typ := range []string{"none", "local", "remote"} {
+		_, err = convertCodeExecutorConfig(&codeExecutorConfig{Type: typ})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "invalid type")
+	}
+
+	_, err = convertCodeExecutorConfig(&codeExecutorConfig{
+		Type:    "local",
+		Sandbox: &sandboxCodeExecutorConfig{},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid type")
+}
+
+func TestConvertSandboxCodeExecutorConfigValidationBranches(t *testing.T) {
+	t.Parallel()
+
+	maxBytes := 512
+	got, err := convertSandboxCodeExecutorConfig(&sandboxCodeExecutorConfig{
+		WorkspaceRoot:  " /tmp/sandbox ",
+		Backend:        " MACOS-SANDBOX-EXEC ",
+		Profile:        " READ_ONLY ",
+		Network:        " ENABLED ",
+		DefaultTimeout: "2s",
+		OutputMaxBytes: &maxBytes,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "/tmp/sandbox", got.WorkspaceRoot)
+	require.Equal(t, sandboxBackendMacOSSandbox, got.Backend)
+	require.Equal(t, sandboxProfileReadOnly, got.Profile)
+	require.Equal(t, sandboxNetworkEnabled, got.Network)
+	require.Equal(t, 2*time.Second, got.DefaultTimeout)
+	require.Equal(t, maxBytes, got.OutputMaxBytes)
+
+	linuxBackend, err := convertSandboxCodeExecutorConfig(&sandboxCodeExecutorConfig{
+		Backend: " LINUX-BUBBLEWRAP ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, sandboxBackendLinuxBubblewrap, linuxBackend.Backend)
+
+	cases := []struct {
+		name string
+		cfg  sandboxCodeExecutorConfig
+		want string
+	}{
+		{
+			name: "backend",
+			cfg:  sandboxCodeExecutorConfig{Backend: "firejail"},
+			want: "sandbox.backend",
+		},
+		{
+			name: "profile",
+			cfg:  sandboxCodeExecutorConfig{Profile: "everything"},
+			want: "sandbox.profile",
+		},
+		{
+			name: "network",
+			cfg:  sandboxCodeExecutorConfig{Network: "egress-only"},
+			want: "sandbox.network",
+		},
+		{
+			name: "timeout parse",
+			cfg:  sandboxCodeExecutorConfig{DefaultTimeout: "bad"},
+			want: "sandbox.default_timeout",
+		},
+		{
+			name: "timeout positive",
+			cfg:  sandboxCodeExecutorConfig{DefaultTimeout: "0s"},
+			want: "must be positive",
+		},
+		{
+			name: "output positive",
+			cfg:  sandboxCodeExecutorConfig{OutputMaxBytes: intPtrValue(0)},
+			want: "sandbox.output_max_bytes",
+		},
+		{
+			name: "shell env",
+			cfg: sandboxCodeExecutorConfig{
+				ShellEnv: &sandboxShellEnvConfig{Inherit: "bad"},
+			},
+			want: "sandbox.shell_env.inherit",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := convertSandboxCodeExecutorConfig(&tc.cfg)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestConvertSandboxShellEnvConfigBranches(t *testing.T) {
+	t.Parallel()
+
+	applyDefaultExcludes := false
+	got, err := convertSandboxShellEnvConfig(&sandboxShellEnvConfig{
+		Inherit:              " NONE ",
+		ApplyDefaultExcludes: &applyDefaultExcludes,
+		Exclude:              []string{" *_TOKEN ", ""},
+		IncludeOnly:          []string{" PATH ", " "},
+		Set: map[string]string{
+			" CUSTOM ": "ok",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, sandboxShellEnvInheritNone, got.Inherit)
+	require.False(t, got.ApplyDefaultExcludes)
+	require.Equal(t, []string{"*_TOKEN"}, got.Exclude)
+	require.Equal(t, []string{"PATH"}, got.IncludeOnly)
+	require.Equal(t, map[string]string{"CUSTOM": "ok"}, got.Set)
+
+	got, err = convertSandboxShellEnvConfig(nil)
+	require.NoError(t, err)
+	require.Equal(t, sandboxShellEnvInheritCore, got.Inherit)
+	require.True(t, got.ApplyDefaultExcludes)
+
+	_, err = convertSandboxShellEnvConfig(&sandboxShellEnvConfig{
+		Set: map[string]string{" ": "bad"},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty key")
+
+	require.Nil(t, trimStringSlice(nil))
+	require.Nil(t, trimStringSlice([]string{" ", "\t"}))
+	require.Equal(t, []string{"a", "b"}, trimStringSlice([]string{" a ", "", "b"}))
 }
 
 func TestParseRunOptions_MultipleYAMLDocsFails(t *testing.T) {
@@ -1081,6 +1610,62 @@ skills:
 	})
 	require.NoError(t, err)
 	require.Equal(t, "b,c", opts.SkillsAllowBundled)
+}
+
+func TestParseRunOptions_SkillsSummaryCacheTTLFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  summary_cache_ttl_ms: 1000
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-skills-summary-cache-ttl", "2m",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2*time.Minute, opts.SkillsSummaryCacheTTL)
+}
+
+func TestParseRunOptions_SkillsOverviewFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  overview_limit: 4
+  overview_pinned: ["alpha"]
+`)
+
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-skills-overview-limit", "2",
+		"-skills-overview-pinned", "beta,gamma",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, opts.SkillsOverviewLimit)
+	require.Equal(t, "beta,gamma", opts.SkillsOverviewPinned)
+}
+
+func TestParseRunOptions_SkillsCamelCaseConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+skills:
+  summaryCacheTtlMs: 1500
+  overviewLimit: 3
+  overviewPinned: ["alpha","beta"]
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, 1500*time.Millisecond, opts.SkillsSummaryCacheTTL)
+	require.Equal(t, 3, opts.SkillsOverviewLimit)
+	require.Equal(t, "alpha,beta", opts.SkillsOverviewPinned)
 }
 
 func TestParseRunOptions_KnowledgesProvidersConfig(t *testing.T) {
@@ -1248,6 +1833,36 @@ debug_recorder:
 	require.Equal(t, "safe", opts.DebugRecorderMode)
 }
 
+func TestParseRunOptions_AgentDisablePostToolPromptConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  disable_post_tool_prompt: true
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.NotNil(t, opts.PostToolPromptEnabled)
+	require.False(t, *opts.PostToolPromptEnabled)
+}
+
+func TestParseRunOptions_AgentDisablePostToolPromptCamelConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  disablePostToolPrompt: false
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.NotNil(t, opts.PostToolPromptEnabled)
+	require.True(t, *opts.PostToolPromptEnabled)
+}
+
 func TestParseRunOptions_SkillsDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -1260,6 +1875,9 @@ func TestParseRunOptions_SkillsDefaults(t *testing.T) {
 		defaultSkillsWatchDebounce,
 		opts.SkillsWatchDebounce,
 	)
+	require.Zero(t, opts.SkillsSummaryCacheTTL)
+	require.Zero(t, opts.SkillsOverviewLimit)
+	require.Empty(t, opts.SkillsOverviewPinned)
 	require.Equal(
 		t,
 		defaultSkillsToolProfile,
@@ -1270,6 +1888,71 @@ func TestParseRunOptions_SkillsDefaults(t *testing.T) {
 	require.True(t, opts.SkillsSkipFallback)
 	require.Zero(t, opts.SkillsMaxLoaded)
 	require.Nil(t, opts.SkillsToolingGuide)
+	require.False(t, opts.LatencyDiagnosticsEnabled)
+	require.False(t, opts.LatencyDiagnosticsEvents)
+}
+
+func TestParseRunOptions_EvolutionSkillScopeModeConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		mode string
+		want skill.SkillScopeMode
+	}{
+		{name: "app", mode: " app ", want: skill.SkillScopeApp},
+		{name: "user", mode: "USER", want: skill.SkillScopeUser},
+		{name: "none", mode: " ", want: skill.SkillScopeNone},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfgPath := writeTempConfig(t, fmt.Sprintf(`
+evolution:
+  skill_scope:
+    mode: %q
+`, tt.mode))
+
+			opts, err := parseRunOptions([]string{"-config", cfgPath})
+			require.NoError(t, err)
+			require.Equal(t, tt.want, opts.EvolutionSkillScopeMode)
+		})
+	}
+}
+
+func TestParseRunOptions_EvolutionEnabledConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+evolution:
+  enabled: true
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.True(t, opts.EvolutionEnabled)
+}
+
+func TestParseRunOptions_EvolutionSkillScopeModeConfigInvalidFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+evolution:
+  skill_scope:
+    mode: tenant
+`)
+
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	var exitErr *exitError
+	require.True(t, errors.As(err, &exitErr))
+	require.Equal(t, 1, exitErr.Code)
+	require.Contains(t, err.Error(), "evolution.skill_scope.mode")
+	require.Contains(t, err.Error(), "tenant")
 }
 
 func TestParseRunOptions_SkillsLoadMode_InvalidFails(t *testing.T) {
@@ -1466,5 +2149,35 @@ func TestFinalizeRunOptions_SkillsWatchDebounce(t *testing.T) {
 		t,
 		err,
 		"invalid skills watch debounce: -1ms",
+	)
+}
+
+func TestFinalizeRunOptions_SkillsSummaryCacheTTL(t *testing.T) {
+	t.Parallel()
+
+	opts := &runOptions{
+		SkillsSummaryCacheTTL: -time.Millisecond,
+	}
+
+	err := finalizeRunOptions(opts)
+	require.EqualError(
+		t,
+		err,
+		"invalid skills summary cache ttl: -1ms",
+	)
+}
+
+func TestFinalizeRunOptions_SkillsOverviewLimit(t *testing.T) {
+	t.Parallel()
+
+	opts := &runOptions{
+		SkillsOverviewLimit: -1,
+	}
+
+	err := finalizeRunOptions(opts)
+	require.EqualError(
+		t,
+		err,
+		"invalid skills overview limit: -1",
 	)
 }

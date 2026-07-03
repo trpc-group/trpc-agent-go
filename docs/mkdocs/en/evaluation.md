@@ -537,6 +537,7 @@ EvalSet is a collection of evaluation cases. Each case is an EvalCase. In defaul
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -593,6 +594,7 @@ type Invocation struct {
 	UserContent           *model.Message       // UserContent is the user input for this turn, required.
 	FinalResponse         *model.Message       // FinalResponse is the final response, optional.
 	Tools                 []*Tool              // Tools are tool traces, optional.
+	ToolMock              *toolmock.ToolMock   // ToolMock configures mocked tool results for this turn, optional.
 	IntermediateResponses []*model.Message     // IntermediateResponses are intermediate responses, optional.
 	CreationTimestamp     *epochtime.EpochTime // CreationTimestamp is the creation timestamp, optional.
 }
@@ -618,6 +620,8 @@ EvalSet is identified by `evalSetId` and contains multiple EvalCases, each ident
 In default mode, inference can be organized in two ways. With `conversation`, the framework reads `userContent` turn by turn as input. With `conversationScenario`, the framework first creates the target Agent session and then uses UserSimulator to generate each user turn dynamically from the scenario. Both modes create the session with `sessionInput.userId`, can inject initial state through `sessionInput.state`, and inject additional context through `contextMessages` before each inference. In trace mode, inference is skipped and `actualConversation` is used directly as actual traces.
 
 `tools` and `finalResponse` in EvalSet describe tool traces and final responses. Whether they are needed depends on the selected evaluation metrics.
+
+`toolMock` replaces tool execution results during inference. It is not an expected output for the evaluation phase. It only applies to the invocation where it is configured; the model still decides whether to call tools based on the real tool declarations, and the framework only replaces the return value at the tool execution point. The mocked result is still captured in the actual tool trace.
 
 In trace mode, you can configure actual output traces explicitly via `actualConversation`.
 
@@ -867,6 +871,7 @@ type Criterion struct {
 - `llm_final_response`: LLM final response evaluator, requires expected output.
 - `llm_hallucinations`: LLM hallucination evaluator, checks whether the final answer is supported by evidence captured during execution, and typically does not require expected output.
 - `llm_judge_template`: LLM template evaluator, uses custom prompt, variable bindings, and response scoring strategy from `criterion.llmJudge.template`.
+- `llm_verifier_pairwise`: LLM pairwise comparison evaluator, compares the quality of the actual-side and expected-side final responses. It requires LLMJudge and rubrics, and the judge model must return logprobs.
 - `llm_rubric_critic`: LLM rubric critic evaluator, requires expected output plus LLMJudge rubrics.
 - `llm_rubric_reference_critic`: LLM rubric reference critic evaluator, requires expected output plus LLMJudge rubrics, and uses the reference answer as a quality anchor instead of an exact-match golden target.
 - `llm_rubric_response`: LLM rubric response evaluator, requires EvalSet to provide session input and LLMJudge plus rubrics.
@@ -1526,9 +1531,11 @@ import "trpc.group/trpc-go/trpc-agent-go/model"
 
 // LLMCriterion represents the LLM Judge criterion.
 type LLMCriterion struct {
-	Rubrics    []*Rubric             // Rubrics is the list of evaluation rubrics.
-	JudgeModel *JudgeModelOptions    // JudgeModel is the judge model configuration.
-	Template   *JudgeTemplateOptions // Template is the template evaluator configuration.
+	Rubrics                  []*Rubric             // Rubrics is the list of evaluation rubrics.
+	JudgeModel               *JudgeModelOptions    // JudgeModel is the judge model configuration.
+	SampleParallelismEnabled bool                  // SampleParallelismEnabled enables parallel sample requests.
+	SampleParallelism        int                   // SampleParallelism caps concurrent sample requests.
+	Template                 *JudgeTemplateOptions // Template is the template evaluator configuration.
 }
 
 // JudgeModelOptions represents judge model configuration.
@@ -1600,6 +1607,55 @@ type RubricContent struct {
 `Generation` defaults to `MaxTokens=2000`, `Temperature=0.8`, `Stream=false`.
 
 `numSamples` controls the number of samples per turn. The default is 1. More samples reduce judge variance but increase cost.
+
+`sampleParallelismEnabled` controls whether judge samples can be requested concurrently for one turn. The default is `false`, which keeps the original serial behavior. `sampleParallelism` only caps the concurrency after sample parallelism is enabled. When `sampleParallelismEnabled=true` and `sampleParallelism=0`, the evaluator uses `runtime.GOMAXPROCS(0)` and then caps it at `numSamples`. When `sampleParallelism>0`, the evaluator uses `min(sampleParallelism, numSamples)`. If the model provider has QPS or concurrency limits, set `sampleParallelism` explicitly to a conservative value.
+
+Example configurations:
+
+When `sampleParallelismEnabled` is not configured, the evaluator keeps the default serial behavior:
+
+```json
+{
+  "llmJudge": {
+    "judgeModel": {
+      "providerName": "openai",
+      "modelName": "gpt-4o-mini",
+      "numSamples": 3
+    }
+  }
+}
+```
+
+When `sampleParallelismEnabled=true` and `sampleParallelism` is not configured, sample parallelism is enabled, and the parallelism defaults to `runtime.GOMAXPROCS(0)` before being capped by `numSamples`:
+
+```json
+{
+  "llmJudge": {
+    "sampleParallelismEnabled": true,
+    "judgeModel": {
+      "providerName": "openai",
+      "modelName": "gpt-4o-mini",
+      "numSamples": 3
+    }
+  }
+}
+```
+
+When `sampleParallelismEnabled=true` and `sampleParallelism=2`, the parallelism is 2:
+
+```json
+{
+  "llmJudge": {
+    "sampleParallelismEnabled": true,
+    "sampleParallelism": 2,
+    "judgeModel": {
+      "providerName": "openai",
+      "modelName": "gpt-4o-mini",
+      "numSamples": 3
+    }
+  }
+}
+```
 
 `providerName` indicates the judge model provider, which maps to the framework Model Provider. The framework creates a judge model instance based on `providerName` and `modelName`. Common values include `openai`, `anthropic`, and `gemini`. See [Provider](./model.md#provider) for details.
 
@@ -2042,6 +2098,7 @@ The framework includes the following LLM Judge evaluators:
 - `llm_final_response` focuses on consistency between the final answer and reference answer, typically requiring `finalResponse` on the expected side.
 - `llm_hallucinations` checks whether the final answer is supported by evidence collected during execution, and is well suited to tool-calling, RAG, and workflow scenarios.
 - `llm_judge_template` uses `criterion.llmJudge.template` to define custom judge prompts, variable bindings, and response parsing strategy, and is suitable for template-based evaluation where the prompt changes but the orchestration stays the same.
+- `llm_verifier_pairwise` focuses on comparing the quality of the actual-side and expected-side final responses. Both sides must provide `finalResponse`, and `criterion.llmJudge.rubrics` must be configured.
 - `llm_rubric_critic` focuses on a failure-oriented rubric review against the reference answer, requiring `finalResponse` on the expected side plus `criterion.llmJudge.rubrics`.
 - `llm_rubric_reference_critic` focuses on rubric-based review against a reference answer while allowing faithful paraphrases and non-identical wording, requiring `finalResponse` on the expected side plus `criterion.llmJudge.rubrics`.
 - `llm_rubric_response` focuses on whether the final answer satisfies evaluation rubrics, requires `criterion.llmJudge.rubrics`, and aggregates scores by rubric pass status.
@@ -2108,6 +2165,7 @@ The framework includes multiple `MessagesConstructor` implementations for differ
 - `messagesconstructor/finalresponse` for `llm_final_response`, organizing user input, actual final response, and expected final response as judge input.
 - `messagesconstructor/hallucination` for `llm_hallucinations`, splitting the actual final answer into sentence-level or bullet-level items and combining them with captured execution context, tool calls, and tool outputs.
 - `messagesconstructor/template` for `llm_judge_template`, rendering judge input from `template.prompt` and `template.variableBindings`.
+- `messagesconstructor/verifierpairwise` for `llm_verifier_pairwise`, organizing user input, actual final response, expected final response, and `rubrics` as pairwise judge input.
 - `messagesconstructor/rubriccritic` for `llm_rubric_critic`, organizing user input, actual final response, expected final response, and `rubrics` as judge input, with stricter failure-oriented instructions.
 - `messagesconstructor/rubricreferencecritic` for `llm_rubric_reference_critic`, organizing user input, actual final response, expected final response, and `rubrics` as judge input, and treating the reference answer as a quality anchor rather than an exact-match target.
 - `messagesconstructor/rubricresponse` for `llm_rubric_response`, organizing user input, actual final response, and `rubrics` as judge input.
@@ -2139,6 +2197,7 @@ The framework includes multiple `ResponseScorer` implementations. Default select
 - `responsescorer/finalresponse` for `llm_final_response`, parsing `valid` or `invalid` from judge output and mapping to 1 or 0, while preserving `reasoning` as `reason`.
 - `responsescorer/hallucination` for `llm_hallucinations`, parsing sentence-level judgments, scoring supported or non-factual sentences as 1 and the rest as 0, and averaging across sentences for the turn score.
 - `responsescorer/singlescore` for the `single_score` mode of `llm_judge_template`, parsing `score` and `reason`.
+- `responsescorer/verifierpairwise` for `llm_verifier_pairwise`, computing a comparison score for the two candidates from the logprobs of the A-to-T quality-label tokens in the judge output.
 - `responsescorer/rubricscores` for the `rubric_scores` mode of `llm_judge_template`, and for `llm_rubric_critic`, `llm_rubric_reference_critic`, `llm_rubric_response`, and `llm_rubric_knowledge_recall`, parsing `rubricScores` and averaging per-item `score` values as the turn score.
 
 ##### Samples Aggregator Operator
@@ -2314,6 +2373,54 @@ Example metric configuration using `judgeModel`:
 ```
 
 If you inject a judge runner with `evaluation.WithJudgeRunner(...)`, you can keep `llmJudge` as an empty object in the metric file, as shown in the full example. See [examples/evaluation/llm/hallucination](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/hallucination) for a complete runnable example. That example includes both a normal passing path and a `-force-hallucination` failing path for local validation.
+
+##### LLM Pairwise Comparison Evaluator
+
+The LLM pairwise comparison evaluator uses the evaluator name `llm_verifier_pairwise` and belongs to the LLM Judge evaluator family. It compares the quality of two final responses on the actual side and expected side, and is suitable for use with `bestofn.SelectionModePairwise` in online Best-of-N candidate selection.
+
+This evaluator follows the quality-label and logprobs expected score method from [LLM-as-a-Verifier](https://llm-as-a-verifier.notion.site/). During evaluation, `actual.finalResponse` is treated as Candidate A, and `expected.finalResponse` is treated as Candidate B. The evaluator builds judge input from the user input, Candidate A, Candidate B, and `criterion.llmJudge.rubrics`, asking the judge model to output one of 20 quality labels from A to T for each candidate. A is the highest quality level, T is the lowest quality level, and earlier letters indicate higher quality.
+
+The evaluator reads the logprobs of quality-label tokens, computes the expected quality score for each candidate from those logprobs, and then converts the two scores into a comparison score between 0 and 1. A score greater than 0.5 means Candidate A has higher quality, a score less than 0.5 means Candidate B has higher quality, and a score equal to 0.5 means the two candidates are comparable. When used with `SelectionModePairwise`, Best-of-N accumulates wins based on this comparison score, and uses the distance from 0.5 as the tie-breaker when win counts are equal.
+
+When using `llm_verifier_pairwise`, the judge model must return logprobs, which are token-level probability distributions. If you call the judge model directly through `criterion.llmJudge.judgeModel`, enable `logprobs` in `generationConfig` and preferably set `top_logprobs` to 20 so the distribution can cover the A-to-T quality labels. If you inject a judge Runner through `evaluation.WithJudgeRunner(...)` or `bestofn.WithJudgeRunner(...)`, enable the same capability in the judge Agent generation config. If the model service does not support or return logprobs, evaluation returns an error.
+
+Example metric configuration for LLM pairwise comparison:
+
+```json
+[
+  {
+    "metricName": "llm_verifier_quality",
+    "evaluatorName": "llm_verifier_pairwise",
+    "threshold": 0.5,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "deepseek-v4-flash",
+          "baseURL": "${JUDGE_MODEL_BASE_URL}",
+          "apiKey": "${JUDGE_MODEL_API_KEY}",
+          "numSamples": 1,
+          "generationConfig": {
+            "max_tokens": 128,
+            "temperature": 0,
+            "stream": false,
+            "logprobs": true,
+            "top_logprobs": 20
+          }
+        },
+        "rubrics": [
+          {
+            "id": "quality",
+            "content": {
+              "text": "The better answer should directly satisfy the user's request, follow all constraints, and avoid unsupported claims."
+            }
+          }
+        ]
+      }
+    }
+  }
+]
+```
 
 ##### LLM Template Evaluator
 
@@ -2615,6 +2722,7 @@ Registry manages evaluator registrations. Evaluation fetches the corresponding E
 - `llm_final_response`: LLM final response evaluator, requires expected output.
 - `llm_hallucinations`: LLM hallucination evaluator, checks whether the final answer is supported by evidence captured during execution, and typically does not require expected output.
 - `llm_judge_template`: LLM template evaluator, uses custom prompt, variable bindings, and response scoring strategy from `criterion.llmJudge.template`.
+- `llm_verifier_pairwise`: LLM pairwise comparison evaluator, compares the quality of the actual-side and expected-side final responses. It requires LLMJudge and rubrics, and the judge model must return logprobs.
 - `llm_rubric_critic`: LLM rubric critic evaluator, requires expected output and LLMJudge with rubrics.
 - `llm_rubric_reference_critic`: LLM rubric reference critic evaluator, requires expected output and LLMJudge with rubrics, and treats the reference answer as a quality anchor.
 - `llm_rubric_response`: LLM rubric response evaluator, requires EvalSet to provide session input and LLMJudge with rubrics.
@@ -3190,6 +3298,144 @@ agentEvaluator, err := evaluation.New(
 	evaluation.WithExpectedRunner(expectedRunner),
 )
 ```
+
+### ToolMock for Tool Result Simulation
+
+When an evaluation case depends on external tools, live services, or unstable data, configure `toolMock` on an EvalSet `Invocation` to return a fixed result at the tool execution point. ToolMock does not change the tool declarations seen by the model and does not force the model to call a tool; the model still decides whether to issue a tool call, and the framework replaces the tool result only after a configured tool name and argument rule matches.
+
+`toolMock` is invocation-level only. `EvalCase` and `Metric` do not configure ToolMock. `conversationScenario` has no predeclared invocation, so declarative ToolMock is not supported there.
+
+Structure definition:
+
+```go
+package toolmock
+
+type ToolMock struct {
+	Actual   []*Tool // Actual applies to the tested Runner.
+	Expected []*Tool // Expected applies to ExpectedRunner.
+}
+
+type Tool struct {
+	Name         string          // Name is the tool name to mock.
+	Arguments    *ArgumentsMatch // Arguments defines how tool arguments are matched. When it is nil, only the tool name is matched.
+	Result       any             // Result is the static tool result.
+	LLMGenerator *LLMGenerator   // LLMGenerator generates the tool result through ToolMockRunner.
+}
+
+type ArgumentsMatch struct {
+	Ignore          bool           // Ignore skips argument comparison and matches only by tool name.
+	Expected        any            // Expected is the expected tool arguments.
+	OnlyTree        map[string]any // OnlyTree compares only selected fields.
+	IgnoreTree      map[string]any // IgnoreTree skips selected fields.
+	NumberTolerance *float64       // NumberTolerance is the numeric comparison tolerance. The default is 0.
+}
+
+type LLMGenerator struct {
+	Prompt string // Prompt is the ToolMockRunner instruction.
+}
+```
+
+`actual` and `expected` apply to the tested Runner and ExpectedRunner respectively. The two sides can use different mock results for the same tool, which is useful when the candidate implementation and the reference implementation should see different external states. The same tool name can appear multiple times. Rules are checked in configuration order, and the first match returns; put more specific argument rules before a tool-name-only fallback.
+
+Choose argument matching by intent. The common case is returning a fixed result for a tool regardless of its arguments. In that case, omit `arguments`:
+
+```json
+{
+  "name": "get_weather",
+  "result": {"condition": "sunny"}
+}
+```
+
+When the same tool needs different results for different inputs, configure `arguments.expected`. JSON is compared exactly by default, including numbers. Use `onlyTree` when only stable fields matter, `ignoreTree` when unstable fields should be skipped, and a nonnegative `numberTolerance` only when numeric differences should be tolerated.
+
+```json
+{
+  "name": "get_weather",
+  "arguments": {
+    "expected": {"city": "Shenzhen", "date": "2026-07-01"},
+    "onlyTree": {"city": true, "date": true}
+  },
+  "result": {"condition": "sunny"}
+}
+```
+
+`ignore=true` is the explicit form of "do not compare arguments". It has the same matching behavior as omitting `arguments`, and is useful only when the configuration should state that choice explicitly. Do not combine it with `expected`, `onlyTree`, `ignoreTree`, or `numberTolerance`. `onlyTree` and `ignoreTree` should not be configured together.
+
+Static result example:
+
+```json
+{
+  "evalId": "weather-case",
+  "conversation": [
+    {
+      "invocationId": "turn-1",
+      "userContent": {
+        "role": "user",
+        "content": "Is Shenzhen suitable for outdoor activities tomorrow?"
+      },
+      "toolMock": {
+        "actual": [
+          {
+            "name": "get_weather",
+            "arguments": {
+              "expected": {"city": "Shenzhen", "date": "2026-07-01"},
+              "onlyTree": {"city": true, "date": true}
+            },
+            "result": {"city": "Shenzhen", "condition": "sunny", "temperature": 28}
+          }
+        ],
+        "expected": [
+          {
+            "name": "get_weather",
+            "result": {"city": "Shenzhen", "condition": "sunny", "temperature": 28}
+          }
+        ]
+      }
+    }
+  ],
+  "sessionInput": {
+    "appName": "weather-eval-app",
+    "userId": "demo-user"
+  }
+}
+```
+
+If ToolMock is configured for a tool name but a tool call does not match any configured rule, that inference turn fails instead of falling back to the real tool. This keeps evaluations precise and avoids silently reaching real external dependencies when the mock configuration is stale.
+
+In addition to a static `result`, `llmGenerator` can use a separate ToolMockRunner to generate the tool result dynamically. `prompt` is used as the ToolMockRunner instruction, and the current tool arguments JSON is sent as the user message. When tool arguments are empty, the user message is `{}`. Inject ToolMockRunner when creating AgentEvaluator.
+
+```json
+{
+  "toolMock": {
+    "actual": [
+      {
+        "name": "search_hotels",
+        "arguments": {"ignore": true},
+        "llmGenerator": {
+          "prompt": "Return only the tool result JSON, for example {\"hotels\":[]}."
+        }
+      }
+    ]
+  }
+}
+```
+
+```go
+mockRunner := runner.NewRunner(appName, toolMockAgent)
+agentEvaluator, err := evaluation.New(
+	appName,
+	actualRunner,
+	evaluation.WithToolMockRunner(mockRunner),
+)
+```
+
+When using the lower-level `evaluation/service` API directly, inject the same ToolMockRunner with `service.WithToolMockRunner(mockRunner)`.
+
+If the tool declaration contains an `OutputSchema` whose type is `object`, the framework reuses that schema as the structured output constraint when calling ToolMockRunner. The schema name uses the real tool declaration name, and the description uses the tool output schema description. ToolMock does not define an extra output schema field and does not require users to configure a separate schema for mock results. Without structured output, the final text from ToolMockRunner is parsed as JSON when possible; otherwise the raw text is used. Empty output and JSON `null` are invalid.
+
+In trace mode, the actual side does not run the tested Runner, so `toolMock.actual` does not take effect. If `expectedRunnerEnabled` is enabled, ExpectedRunner still runs and `toolMock.expected` can take effect. When a trace case configures both `actualConversation` and `conversation`, ExpectedRunner uses `actualConversation[i].userContent` as input and `conversation[i].toolMock.expected` as the expected-side tool mock configuration.
+
+See the full example at [examples/evaluation/toolmock](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/toolmock).
 
 ### UserSimulation for Dynamic User Turns
 
@@ -4136,6 +4382,123 @@ After the remote evaluation completes, Langfuse shows the results at multiple la
 How results are persisted depends on the `EvalResultManager` implementation. With the local implementation, results are written to a local directory, which is useful for offline debugging and regression comparison.
 
 ![langfuse-run-results](../assets/img/evaluation/langfuse/run-results.png)
+
+### LLM Verifier
+
+[LLM Verifier](https://llm-as-a-verifier.notion.site/) is a method for using a judge model to evaluate candidate quality. It is suitable when multiple candidate outputs exist for the same request and you need to select the highest-quality result.
+
+A regular LLM Judge often asks the judge model to output a single discrete score, and uses that score to represent candidate quality. When two complex answers fall into the same score bucket, ranking loses resolution. When the judge model is uncertain between adjacent buckets, using only the final generated score also discards that uncertainty. The core idea of LLM Verifier is to let the judge model express its judgment over an ordered set of quality labels, then read the token logprobs at the quality-label position and compute an expected quality score from the probability distribution.
+
+One LLM Verifier judgment usually contains four kinds of input: the user request, the candidate output, the evaluation criteria, and the judge model. The user request defines the task objective, the candidate output is the answer being compared, the evaluation criteria describe which quality dimensions should be considered, and the judge model assigns a quality label to the candidate according to those criteria.
+
+Quality labels are a strictly ordered set of discrete levels. This document uses 20 labels from A to T, where A means the highest quality, T means the lowest quality, and earlier letters indicate higher quality. A means the response clearly and completely satisfies the request, B-D indicate only minor issues, E-G indicate mostly correct but still problematic, H-J indicate likely success with uncertainty, K-M indicate likely failure, N-P indicate significant remaining issues, Q-S indicate failure with partial progress, and T indicates clear failure.
+
+During scoring, the judge model generates one label token at the quality-label position, and the model service can also return logprobs for that position. Logprobs are the log probabilities assigned by the model to different tokens at that position. They can be understood as the model's relative preference among candidate tokens; the closer the value is to 0, the higher the token probability. `top_logprobs` represents several higher-probability candidate tokens at that position and their logprobs. For example, after enabling `logprobs` and `top_logprobs` on an OpenAI-compatible API, the returned fragment for a quality-label token may look like this:
+
+```json
+{
+  "choices": [
+    {
+      "logprobs": {
+        "content": [
+          {
+            "token": "B",
+            "logprob": -0.20,
+            "top_logprobs": [
+              { "token": "B", "logprob": -0.20 },
+              { "token": "C", "logprob": -1.10 },
+              { "token": "D", "logprob": -2.30 }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+This fragment means that the judge model finally generated B at the quality-label position, but also assigned some probability to C and D at the same position. LLM Verifier includes these neighboring labels in the expected-score calculation instead of treating B as the only conclusion. This preserves the judge model's uncertainty between adjacent quality levels and reduces ties caused by using only a single discrete label.
+
+The quality score of a candidate can be written as:
+
+$$
+R(t, \tau)
+= \frac{1}{CK} \sum_{c=1}^{C} \sum_{k=1}^{K}
+\sum_{g=1}^{G} p_{\theta}(v_g \mid t, c, \tau)\,\phi(v_g)
+$$
+
+Here, $t$ is the task input, $\tau$ is the candidate output being verified, $G$ is the number of quality labels, $v_g$ is the $g$-th quality label, $K$ is the number of repeated verifications, $C$ is the number of evaluation criteria, and $c$ is the $c$-th evaluation criterion. $p_{\theta}(v_g \mid t, c, \tau)$ is the probability assigned by the judge model to that quality label given the task, criterion, and candidate output. $\phi(v_g)$ maps a quality label to a numeric score. Each evaluation criterion and each verification run computes one probability-weighted score from the quality-label distribution, and the final candidate quality score is the average of these weighted scores.
+
+Pairwise comparison names the two candidates Candidate A and Candidate B. Here, A/B in Candidate A/B are candidate identifiers, not quality labels. The judge model outputs a quality label for each candidate. The evaluator then maps A through T to a continuous quality scale from 1 to 0, where A corresponds to 1, T corresponds to 0, and the intermediate letters decrease linearly in order. It then uses label logprobs to compute each candidate's expected quality score, and finally converts the two expected quality scores into a comparison score between 0 and 1. A comparison score greater than 0.5 means Candidate A has higher quality, a score less than 0.5 means Candidate B has higher quality, and a score equal to 0.5 means the two candidates are comparable.
+
+In tRPC-Agent-Go, LLM Verifier is integrated through the `llm_verifier_pairwise` evaluator. It is an LLM Judge evaluator in the Evaluation module, and its input is two final responses under the same user request. In Evaluation, the actual-side `actual.finalResponse` is used as Candidate A, and the expected-side `expected.finalResponse` is used as Candidate B.
+
+The judge input for `llm_verifier_pairwise` consists of the user request, Candidate A, Candidate B, and `criterion.llmJudge.rubrics`. `rubrics` are the evaluation criteria the judge model must follow when judging quality, such as whether the answer directly satisfies the user request, whether it misses key constraints, and whether it introduces unsupported claims.
+
+The evaluator runs as follows.
+
+1. `messagesconstructor/verifierpairwise` builds the judge input, putting the same user request, both final responses, and rubrics into one judge message.
+2. LLM Judge calls the judge model and asks it to output two quality labels, `<score_A>` and `<score_B>`.
+3. `responsescorer/verifierpairwise` locates the two label positions in the judge model response and reads the logprobs of the label tokens.
+4. The evaluator maps A through T to a continuous quality scale from 1 to 0.
+5. The evaluator reconstructs the probability distribution from the label-token logprobs and computes the expected quality scores of Candidate A and Candidate B.
+6. The evaluator converts the two expected quality scores into a comparison score between 0 and 1.
+
+`llm_verifier_pairwise` locates the quality-label tokens in judge output through the fixed `<score_A>` and `<score_B>` tags, and uses the logprobs of those tokens to compute scores. Therefore, the judge model must support and return logprobs. If you call the judge model directly through `criterion.llmJudge.judgeModel`, enable `logprobs` in `generationConfig` and preferably set `top_logprobs` to 20 so the A-to-T quality-label distribution is covered. If you inject a judge Runner through `evaluation.WithJudgeRunner(...)` or `bestofn.WithJudgeRunner(...)`, enable the same capability in the judge Agent generation config.
+
+[Online Best-of-N Candidate Selection](runner.md#online-best-of-n-candidate-selection) lets the same Agent generate multiple candidate outputs for the same input, and then selects the final output through evaluation metrics. To integrate with it, configure `llm_verifier_pairwise` as the candidate selection metric through `WithEvalMetrics`, and use `SelectionModePairwise` to compare candidates pairwise, as shown below.
+
+```go
+qualityMetric := &metric.EvalMetric{
+	MetricName: "llm_verifier_pairwise",
+	Threshold:  0.5,
+	Criterion: &criterion.Criterion{
+		LLMJudge: &criterionllm.LLMCriterion{
+			Rubrics: []*criterionllm.Rubric{
+				{
+					ID: "quality",
+					Content: &criterionllm.RubricContent{
+						Text: "The final answer directly satisfies the user's request and does not introduce unsupported claims.",
+					},
+				},
+			},
+		},
+	},
+}
+
+func newJudgeAgent(modelName string, opts ...openai.Option) agent.Agent {
+	logprobs := true
+	topLogprobs := 20
+	return llmagent.New(
+		"judge-agent",
+		llmagent.WithModel(openai.New(modelName, opts...)),
+		llmagent.WithGenerationConfig(model.GenerationConfig{
+			Logprobs:    &logprobs,
+			TopLogprobs: &topLogprobs,
+		}),
+	)
+}
+
+judgeAgent := newJudgeAgent("deepseek-v4-flash")
+judgeRunner := runner.NewRunner("my-app-judge", judgeAgent)
+defer judgeRunner.Close()
+
+bestOfNOpt, err := bestofn.NewRunnerOption(
+	bestofn.WithAttempts(3),
+	bestofn.WithSelectionMode(bestofn.SelectionModePairwise),
+	bestofn.WithEvalMetrics(qualityMetric),
+	bestofn.WithJudgeRunner(judgeRunner),
+	bestofn.WithJudgeRunnerNumSamples(1),
+)
+if err != nil {
+	return err
+}
+
+r := runner.NewRunner("my-app", candidateAgent, bestOfNOpt)
+defer r.Close()
+```
+
+For a complete runnable example, see [examples/evaluation/llmverifier](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llmverifier).
 
 ## Best Practices
 

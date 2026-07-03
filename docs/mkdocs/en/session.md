@@ -1841,14 +1841,17 @@ tailoring may.
 > controlled by `WithAddSessionSummary(true)` and the configured session
 > summarizer.
 
-When `WithEnableContextCompaction(true)` is enabled, the framework adds prompt-side compaction before the LLM call:
+When `WithEnableContextCompaction(true)` is enabled, the framework applies prompt-side `tool result` compaction before the LLM call, depending on configuration:
 
+- **Pass 0** — Historical tool results whose tool name appears in `ForceCleanToolNames` are replaced with a policy placeholder without requiring them to exceed `ContextCompactionToolResultMaxTokens`; current/recent protection and `KeepToolNames` still apply.
 - **Pass 1** — Historical tool results from older requests that exceed `ContextCompactionToolResultMaxTokens` (default 1024 tokens) are replaced with a placeholder while keeping `ToolID` and `ToolName`.
 - **Pass 2** — Any single tool result (including the current request) exceeding `ContextCompactionOversizedToolResultMaxTokens` is truncated using head+tail preservation with a `[...N characters truncated...]` marker. **Disabled by default (value `0`)** — you must explicitly call `WithContextCompactionOversizedToolResultMaxTokens(...)` and keep `WithEnableContextCompaction(true)` for Pass 2 to fire (recommended opt-in value: 8192 tokens).
-- The latest `ContextCompactionKeepRecentRequests` completed requests are exempt from Pass 1. You can also use `WithToolResultCompactionConfig(...).SkipRecentFunc` to decide how many tail events are recent (but if Pass 2 is opted into, recent/current tool results remain subject to Pass 2 truncation).
+- The recent protected set is exempt from Pass 0 and Pass 1. It includes the current request, the latest `ContextCompactionKeepRecentRequests` completed requests, and the request/invocation units that own the tail events returned by `WithToolResultCompactionConfig(...).SkipRecentFunc`. `SkipRecentFunc` and `ContextCompactionKeepRecentRequests` are additive; set `ContextCompactionKeepRecentRequests` to `0` if the custom recency function should define the boundary by itself. If Pass 2 is opted into, recent/current tool results remain subject to Pass 2 truncation unless kept by tool policy.
 - `WithToolResultCompactionConfig(...)` also supports tool-name policy: `ForceCleanToolNames` forces selected historical tool results to be cleaned after current/recent protection, while `KeepToolNames` preserves selected tool results and has higher priority.
+- When a Pass 1 placeholder or Pass 2 truncation marker is created from an event with an `event_id`, it includes recovery hints such as `event_id`, `tool_call_id`, and `tool_name`; Pass 0 policy placeholders do not include these recovery hints. With `WithEnableOnDemandSession(true)` and a session backend that implements `session.WindowService`, the model can call `session_load` with `content_offset` / `content_limit` to reload a precise slice of the original tool result.
+- Pass 2 skips tool results returned by `session_load` itself. This prevents recovered slices from being silently compacted again; `session_load` output size is controlled by its own window parameters and `content_limit`, so very large results should be reloaded in slices instead of as one full payload.
 - If `WithAddSessionSummary(true)` is also enabled and the rebuilt request still approaches the model context window, the framework performs one synchronous `CreateSessionSummary(...)` retry before calling the model.
-- Model-layer token tailoring remains the final fallback.
+- Model-layer token tailoring remains the final fallback. It trims whole message rounds, so keep recovered slices small enough that they still fit in the final provider request.
 - Context compaction uses `SimpleTokenCounter` by default. For CJK-heavy
   workloads or provider-specific tokenization, pass the same custom counter
   used by token tailoring via `WithContextCompactionTokenCounter(...)`.

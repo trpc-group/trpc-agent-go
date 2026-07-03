@@ -10,6 +10,7 @@ nav:
   - Components:
       - Agent:
           - Agent: agent.md
+          - Goal Extension: goal.md
           - Multi Agent: multiagent.md
           - Task Run Runtime: taskrun.md
           - Team: team.md
@@ -17,8 +18,10 @@ nav:
           - Custom Agent: custom-agent.md
           - Dify Agent: dify.md
           - Claude Code Agent: claudecode.md
+          - Codex Agent: codex.md
       - Runner: runner.md
       - Code Executor: codeexecutor.md
+      - CodeAct: codeact.md
       - Error Handling: error-handling.md
       - Model: model.md
       - Prompt Template: prompt.md
@@ -27,6 +30,7 @@ nav:
       - Memory: memory.md
       - Artifact: artifact.md
       - Skill: skill.md
+      - Evolution: evolution.md
       - Tool: tool.md
       - Session:
           - Overview: session/index.md
@@ -39,11 +43,14 @@ nav:
           - PostgreSQL Session: session/postgres.md
           - PGVector Session: session/pgvector.md
           - ClickHouse Session: session/clickhouse.md
+          - MongoDB Session: session/mongodb.md
       - Knowledge:
           - Overview: knowledge/index.md
           - Embedder: knowledge/embedder.md
           - Reranker: knowledge/reranker.md
+          - Query Enhancer: knowledge/query-enhancer.md
           - Source: knowledge/source.md
+          - Code RAG (Beta): knowledge/code-rag.md
           - Filter: knowledge/filter.md
           - Extractor: knowledge/extractor.md
           - Management: knowledge/management.md
@@ -63,6 +70,7 @@ nav:
       - PromptIter: promptiter.md
   - Server:
     - Gateway: gateway.md
+    - tRPC-Agent API: trpcagent.md
     - AG-UI:
       - Overview: agui/index.md
       - Real-Time Conversation Route: agui/chat.md
@@ -75,6 +83,19 @@ nav:
       - Overview: observability.md
       - Multimodal Telemetry: telemetry-multimodal.md
   - Ecosystem: ecosystem.md
+  - Blog:
+      - "A Go Agent Framework for Building Intelligent AI Applications": blog/trpcagentgo.md
+      - "Context Management Design and Evaluation for Long-Running Agents": blog/summary.md
+      - "Seeing the Agent Runtime: Observability Design in tRPC-Agent-Go": blog/observability.md
+      - "Reducing Agent Token Cost: Prompt Cache Engineering in tRPC-Agent-Go": blog/promptcache.md
+      - "GraphAgent Seamlessly Combines AI Workflows and Agents": blog/graphagent.md
+      - "Quickly Build AG-UI-Based Agent Services": blog/agui.md
+      - "A Go-Native Implementation of the Anthropic Agent Skills Specification": blog/skill.md
+      - "A Complete Guide to AI Agent Automated Evaluation Paradigms and Engineering Practice": blog/evaluation.md
+      - "Improving AI Agent Quality and Stability with LLM Verifier": blog/llmverifier.md
+      - "Building an Enterprise-Grade, Secure, and Controllable OpenClaw Runtime": blog/openclaw.md
+      - "A Complete Guide to Automated Prompt Iteration and Engineering Practice for AI Agents": blog/promptiter.md
+      - "Putting Work in the Right Boundary: Multi-Agent Design in tRPC-Agent-Go": blog/multiagent-boundaries.md
 
 plugins:
   - search
@@ -94,6 +115,7 @@ plugins:
             - 组件:
                 - Agent:
                     - Agent: agent.md
+                    - Goal 扩展: goal.md
                     - Multi Agent: multiagent.md
                     - Task Run 运行时: taskrun.md
                     - Team: team.md
@@ -101,8 +123,10 @@ plugins:
                     - 自定义 Agent: custom-agent.md
                     - Dify Agent: dify.md
                     - Claude Code Agent: claudecode.md
+                    - Codex Agent: codex.md
                 - Runner: runner.md
                 - Code Executor: codeexecutor.md
+                - CodeAct: codeact.md
                 - 错误处理: error-handling.md
                 - Model: model.md
                 - Prompt Template: prompt.md
@@ -111,6 +135,7 @@ plugins:
                 - Memory: memory.md
                 - Artifact: artifact.md
                 - Skill: skill.md
+                - Evolution: evolution.md
                 - Tool: tool.md
                 - Session:
                     - Overview: session/index.md
@@ -123,11 +148,14 @@ plugins:
                     - PostgreSQL Session: session/postgres.md
                     - PGVector Session: session/pgvector.md
                     - ClickHouse Session: session/clickhouse.md
+                    - MongoDB Session: session/mongodb.md
                 - Knowledge:
                     - 概述: knowledge/index.md
                     - Embedder: knowledge/embedder.md
                     - Reranker: knowledge/reranker.md
+                    - Query Enhancer: knowledge/query-enhancer.md
                     - 数据源: knowledge/source.md
+                    - 代码知识库（Code RAG, Beta）: knowledge/code-rag.md
                     - 内容提取器: knowledge/extractor.md
                     - 过滤器: knowledge/filter.md
                     - 知识库管理: knowledge/management.md
@@ -147,6 +175,7 @@ plugins:
                 - PromptIter: promptiter.md
             - 服务:
               - Gateway: gateway.md
+              - tRPC-Agent API: trpcagent.md
               - AG-UI:
                 - 总览: agui/index.md
                 - 实时对话路由: agui/chat.md
@@ -159,6 +188,19 @@ plugins:
                 - 概览: observability.md
                 - 多模态遥测: telemetry-multimodal.md
             - 生态: ecosystem.md
+            - 博客:
+                - "构建智能 AI 应用的 Go 语言 Agent 框架": blog/trpcagentgo.md
+                - "长任务 Agent 上下文管理的设计与评测": blog/summary.md
+                - "看见 Agent 运行时：tRPC-Agent-Go 可观测的设计与取舍": blog/observability.md
+                - "降低 Agent Token 成本：tRPC-Agent-Go 的 Prompt Cache 工程实践": blog/promptcache.md
+                - "GraphAgent 让 AI 工作流与 Agent 无缝融合": blog/graphagent.md
+                - "快速构建基于 AG-UI 的 Agent 服务": blog/agui.md
+                - "Anthropic Agent Skills 规范的 Go 原生实现": blog/skill.md
+                - "AI Agent 自动化评估范式与工程实践全解析": blog/evaluation.md
+                - "AI Agent 高质量稳定性提升方法": blog/llmverifier.md
+                - "打造企业级安全可控的 OpenClaw Runtime": blog/openclaw.md
+                - "AI Agent 提示词自动迭代与工程实践全解析": blog/promptiter.md
+                - "把工作放到合适边界：tRPC-Agent-Go Multi-Agent 设计与选型": blog/multiagent-boundaries.md
   - git-revision-date-localized:
       enable_creation_date: true
       type: iso_datetime

@@ -1592,6 +1592,7 @@ func TestGraphAgent_CreateInitialStateWithContextCompaction(t *testing.T) {
 				},
 			},
 			{
+				ID:        "event-old",
 				RequestID: "req-old",
 				FilterKey: agentName,
 				Response: &model.Response{
@@ -1655,7 +1656,12 @@ func TestGraphAgent_CreateInitialStateWithContextCompaction(t *testing.T) {
 	require.Len(t, messages, 5)
 	require.Equal(t, model.RoleAssistant, messages[0].Role)
 	require.Equal(t, model.RoleTool, messages[1].Role)
-	require.Equal(t, "Historical tool result omitted to save context.", messages[1].Content)
+	require.Contains(t, messages[1].Content, "Previous tool call succeeded")
+	require.Contains(t, messages[1].Content, "read-only or idempotent tools")
+	require.Contains(t, messages[1].Content, "do not repeat side-effecting")
+	require.Contains(t, messages[1].Content, "event_id: event-old")
+	require.Contains(t, messages[1].Content, "tool_call_id: tool-call-old")
+	require.Contains(t, messages[1].Content, "tool_name: worker")
 	require.Equal(t, "tool-call-old", messages[1].ToolID)
 	require.Equal(t, "worker", messages[1].ToolName)
 	require.Equal(t, model.RoleAssistant, messages[2].Role)
@@ -1780,6 +1786,43 @@ func TestGraphAgent_CreateInitialStateWithToolMessageDoesNotSetUserInput(t *test
 	require.Equal(t, model.RoleTool, messages[len(messages)-1].Role)
 	require.Equal(t, "call-1", messages[len(messages)-1].ToolID)
 	require.Equal(t, "result", messages[len(messages)-1].Content)
+}
+
+func TestGraphAgent_CreateInitialStateWithToolMessageNoSession(t *testing.T) {
+	schema := graph.NewStateSchema().
+		AddField(graph.StateKeyMessages, graph.StateField{
+			Type:    reflect.TypeOf([]model.Message{}),
+			Reducer: graph.DefaultReducer,
+		}).
+		AddField(graph.StateKeyUserInput, graph.StateField{
+			Type:    reflect.TypeOf(""),
+			Reducer: graph.DefaultReducer,
+		})
+	g, err := graph.NewStateGraph(schema).
+		AddNode("process", func(ctx context.Context, state graph.State) (any, error) {
+			return state, nil
+		}).
+		SetEntryPoint("process").
+		SetFinishPoint("process").
+		Compile()
+	require.NoError(t, err)
+	graphAgent, err := New("test-agent", g)
+	require.NoError(t, err)
+	toolMsg := model.NewToolMessage("call-1", "calc", "result")
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("inv"),
+		agent.WithInvocationMessage(toolMsg),
+	)
+	graphAgent.setupInvocation(invocation)
+	state := graphAgent.createInitialState(context.Background(), invocation)
+	_, hasUserInput := state[graph.StateKeyUserInput]
+	require.False(t, hasUserInput)
+	messages, ok := graph.GetStateValue[[]model.Message](state, graph.StateKeyMessages)
+	require.True(t, ok)
+	require.Len(t, messages, 1)
+	require.Equal(t, model.RoleTool, messages[0].Role)
+	require.Equal(t, "call-1", messages[0].ToolID)
+	require.Equal(t, "result", messages[0].Content)
 }
 
 // mockCheckpointSaver is a mock implementation of graph.CheckpointSaver.

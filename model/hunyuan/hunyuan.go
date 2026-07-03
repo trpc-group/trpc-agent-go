@@ -26,6 +26,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/hunyuan/internal/hunyuan"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/internal/modeltailoring"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -313,14 +314,16 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	if err != nil {
 		if len(tailored) > 0 {
 			log.WarnContext(ctx, "token tailoring returned best-effort messages in hunyuan.Model", err)
-			request.Messages = tailored
+			modeltailoring.ApplyResult(ctx, "hunyuan.Model", request, tailored)
 			return
 		}
 		log.WarnContext(ctx, "token tailoring failed in hunyuan.Model", "error", err)
 		return
 	}
 
-	request.Messages = tailored
+	if !modeltailoring.ApplyResult(ctx, "hunyuan.Model", request, tailored) {
+		return
+	}
 
 	// Calculate remaining tokens for output based on context window.
 	usedTokens := 0

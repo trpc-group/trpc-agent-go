@@ -337,6 +337,62 @@ func TestRunner_Run_AwaitUserReplyRoutingResolvesNestedPath(t *testing.T) {
 	require.Equal(t, 0, topLevelChild.calls)
 }
 
+func TestRunner_Run_AwaitUserReplyRoutingPreservesNestedPathOnRepeatedAwait(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	svc := sessioninmemory.NewSessionService()
+	key := session.Key{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "sess-nested-repeat",
+	}
+	state, err := (agent.AwaitUserReplyRoute{
+		AgentName:  "child",
+		LookupPath: "parent/child",
+	}).State()
+	require.NoError(t, err)
+	_, err = svc.CreateSession(ctx, key, state)
+	require.NoError(t, err)
+
+	child := &awaitReplyTrackingAgent{
+		name:      "child",
+		markAwait: true,
+	}
+	parent := &awaitReplyTrackingAgent{
+		name:      "parent",
+		subAgents: []agent.Agent{child},
+	}
+	r := NewRunner(
+		"app",
+		parent,
+		WithSessionService(svc),
+		WithAwaitUserReplyRouting(true),
+	)
+
+	eventCh, err := r.Run(
+		ctx,
+		key.UserID,
+		key.SessionID,
+		model.NewUserMessage("follow up"),
+		agent.WithRequestID("req-await-nested-repeat"),
+	)
+	require.NoError(t, err)
+	for range eventCh {
+	}
+
+	require.Equal(t, 0, parent.calls)
+	require.Equal(t, 1, child.calls)
+
+	sess, err := svc.GetSession(ctx, key)
+	require.NoError(t, err)
+	route, ok, err := agent.PendingAwaitUserReplyRoute(sess)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "child", route.AgentName)
+	require.Equal(t, "parent/child", route.LookupPath)
+}
+
 func TestRunner_Run_AwaitUserReplyRoutingPersistsFactoryLookupPath(
 	t *testing.T,
 ) {
@@ -471,7 +527,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 	t.Run("disabled", func(t *testing.T) {
 		r := &runner{}
 
-		got, rootName, err := r.applyAwaitUserReplyRoute(
+		got, rootName, lookupPath, err := r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			nil,
@@ -480,6 +536,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Empty(t, rootName)
+		require.Empty(t, lookupPath)
 		require.Nil(t, got.Agent)
 		require.Empty(t, got.AgentByName)
 	})
@@ -487,7 +544,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 	t.Run("non user message", func(t *testing.T) {
 		r := &runner{awaitUserReplyRouting: true}
 
-		got, rootName, err := r.applyAwaitUserReplyRoute(
+		got, rootName, lookupPath, err := r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			nil,
@@ -496,6 +553,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Empty(t, rootName)
+		require.Empty(t, lookupPath)
 		require.Nil(t, got.Agent)
 	})
 
@@ -503,7 +561,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 		r := &runner{awaitUserReplyRouting: true}
 		sess := session.NewSession("app", "user", "sess")
 
-		got, rootName, err := r.applyAwaitUserReplyRoute(
+		got, rootName, lookupPath, err := r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
@@ -512,6 +570,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Empty(t, rootName)
+		require.Empty(t, lookupPath)
 		require.Nil(t, got.Agent)
 	})
 
@@ -533,7 +592,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			}),
 		)
 
-		_, _, err := r.applyAwaitUserReplyRoute(
+		_, _, _, err := r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
@@ -564,7 +623,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			}),
 		)
 
-		got, rootName, err := r.applyAwaitUserReplyRoute(
+		got, rootName, lookupPath, err := r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
@@ -573,6 +632,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Empty(t, rootName)
+		require.Empty(t, lookupPath)
 		require.Nil(t, got.Agent)
 		require.Len(t, svc.updateCalls, 1)
 	})
@@ -598,7 +658,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			session.WithSessionState(state),
 		)
 
-		_, _, err = r.applyAwaitUserReplyRoute(
+		_, _, _, err = r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,
@@ -609,6 +669,45 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			t,
 			err,
 			"clear stale await_user_reply route",
+		)
+	})
+
+	t.Run("consume route clear error", func(t *testing.T) {
+		state, err := (agent.AwaitUserReplyRoute{
+			AgentName:  "root",
+			LookupPath: "root",
+		}).State()
+		require.NoError(t, err)
+
+		svc := &awaitReplySessionService{
+			mockSessionService: &mockSessionService{},
+			updateErr:          errors.New("clear failed"),
+		}
+		r := &runner{
+			awaitUserReplyRouting: true,
+			sessionService:        svc,
+			agents: map[string]agent.Agent{
+				"root": &awaitReplyTrackingAgent{name: "root"},
+			},
+		}
+		sess := session.NewSession(
+			"app",
+			"user",
+			"sess",
+			session.WithSessionState(state),
+		)
+
+		_, _, _, err = r.applyAwaitUserReplyRoute(
+			ctx,
+			key,
+			sess,
+			userMessage,
+			agent.RunOptions{},
+		)
+		require.ErrorContains(
+			t,
+			err,
+			"consume await_user_reply route",
 		)
 	})
 
@@ -636,7 +735,7 @@ func TestRunner_ApplyAwaitUserReplyRoute_EdgeCases(t *testing.T) {
 			session.WithSessionState(state),
 		)
 
-		_, _, err = r.applyAwaitUserReplyRoute(
+		_, _, _, err = r.applyAwaitUserReplyRoute(
 			ctx,
 			key,
 			sess,

@@ -16,11 +16,9 @@ import (
 	"errors"
 	"io"
 	"os/exec"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -342,15 +340,13 @@ func (s *session) kill(grace time.Duration) error {
 		return nil
 	}
 
-	if runtime.GOOS != "windows" {
-		_ = cmd.Process.Signal(syscall.SIGTERM)
-	}
+	_ = terminateCommandProcess(cmd)
 
 	select {
 	case <-s.doneCh:
 		return nil
 	case <-time.After(grace):
-		return cmd.Process.Kill()
+		return forceKillCommandProcess(cmd)
 	}
 }
 

@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/buildinfo"
 )
 
 func TestParseMode(t *testing.T) {
@@ -107,6 +108,15 @@ func TestRecorder_Start_WritesMetaAndEvents(t *testing.T) {
 	require.NoError(t, err)
 	_, err = os.Stat(filepath.Join(trace.Dir(), eventsFileName))
 	require.NoError(t, err)
+
+	metaRaw, err := os.ReadFile(filepath.Join(trace.Dir(), metaFileName))
+	require.NoError(t, err)
+	var meta struct {
+		Runtime buildinfo.Info `json:"runtime"`
+	}
+	require.NoError(t, json.Unmarshal(metaRaw, &meta))
+	require.Equal(t, buildinfo.CurrentVersion(), meta.Runtime.Version)
+	require.NotEmpty(t, meta.Runtime.GoVersion)
 
 	evs, err := os.Open(filepath.Join(trace.Dir(), eventsFileName))
 	require.NoError(t, err)
@@ -1103,13 +1113,14 @@ func TestSummarizeRequest_NilTraceDoesNotPanic(t *testing.T) {
 	require.Empty(t, summary.ContentParts[0].File.Data.Ref)
 }
 
-func TestSummarizeRequest_StoresRequestSystemPrompt(t *testing.T) {
+func TestSummarizeRequest_StoresRequestPrompts(t *testing.T) {
 	t.Parallel()
 
 	req := gwproto.MessageRequest{
-		Channel:             "gateway",
-		Text:                "hello",
-		RequestSystemPrompt: "Use the active persona for tone.",
+		Channel:                  "gateway",
+		Text:                     "hello",
+		RequestSystemPrompt:      "Use the active persona for tone.",
+		RequestLateContextPrompt: "Current request environment.",
 	}
 
 	summary, err := SummarizeRequest(nil, req)
@@ -1119,6 +1130,11 @@ func TestSummarizeRequest_StoresRequestSystemPrompt(t *testing.T) {
 		t,
 		"Use the active persona for tone.",
 		summary.RequestSystemPrompt,
+	)
+	require.Equal(
+		t,
+		"Current request environment.",
+		summary.RequestLateContextPrompt,
 	)
 }
 

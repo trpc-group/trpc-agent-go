@@ -10,6 +10,10 @@ This directory shows AG-UI servers that can talk to the AG-UI client examples.
 - [`finishresult/`](finishresult/) – Demonstrates populating `RUN_FINISHED.result` by wrapping the default translator.
 - [`externaltool/llmagent/`](externaltool/llmagent/) – Demonstrates `llmagent + agui + WithExternalTools` with two internal tools and two dynamically declared external tools in the same conversation.
 - [`externaltool/graphagent/`](externaltool/graphagent/) – Demonstrates a `GraphAgent` interrupt workflow with two internal tools and two external tools in the same turn.
+- [`externaltool/agentnode_llmagent/`](externaltool/agentnode_llmagent/) – Demonstrates AgentNode child `LLMAgent` external tools with AG-UI interrupt and resume.
+- [`externaltool/agentnode_graphagent/`](externaltool/agentnode_graphagent/) – Demonstrates a parent `GraphAgent` with two `AgentNode` children, where the first child `GraphAgent` interrupts internally and the second child `LLMAgent` runs after resume.
+- [`externaltool/agenttool_graphagent_graphagent/`](externaltool/agenttool_graphagent_graphagent/) – Demonstrates a parent `GraphAgent` `ToolsNode` calling an `AgentTool` whose child `GraphAgent` interrupts and resumes through AG-UI.
+- [`externaltool/agentnode_handoff_agenttool/`](externaltool/agentnode_handoff_agenttool/) – Demonstrates an outer `AgentNode` producing a `handoff_task` external tool call that a normal graph node executes through a dynamically selected `AgentTool` child `GraphAgent`.
 - [`streamtool/`](streamtool/) – Demonstrates a minimal `StreamableTool` that uses `agui.WithStreamingToolResultActivityEnabled(true)` to stream tool progress as `ACTIVITY_SNAPSHOT` / `ACTIVITY_DELTA` while preserving a final `TOOL_CALL_RESULT`.
 - [`heartbeat/`](heartbeat/) – Demonstrates SSE heartbeat keepalive frames with `agui.WithHeartbeatInterval`.
 - [`graph/`](graph/) – Demonstrates graph node start activity events via `ACTIVITY_DELTA`.

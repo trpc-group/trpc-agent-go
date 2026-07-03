@@ -17,12 +17,14 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1087,6 +1089,70 @@ func TestToolSet_WebSearchDuckDuckGoLikeHTML(t *testing.T) {
 	require.Len(t, out.Results[0].Content, 1)
 	require.Equal(t, "https://golang.org/doc/", out.Results[0].Content[0].URL)
 	require.NotZero(t, out.DurationSeconds)
+}
+
+func TestNewSearchBackendDuckDuckGoUsesCompatibleHTTPClient(t *testing.T) {
+	t.Parallel()
+
+	backend, err := newSearchBackend(&WebSearchOptions{
+		Provider: "duckduckgo",
+		Timeout:  10 * time.Second,
+	})
+	require.NoError(t, err)
+	duckBackend, ok := backend.(*duckDuckGoSearchBackend)
+	require.True(t, ok)
+	require.Equal(t, 10*time.Second, duckBackend.client.Timeout)
+	transport, ok := duckBackend.client.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.NotNil(t, transport.DialContext)
+	require.False(t, transport.ForceAttemptHTTP2)
+	require.True(t,
+		transport.TLSClientConfig == nil ||
+			!transport.TLSClientConfig.InsecureSkipVerify,
+	)
+	require.Equal(t, duckDuckGoHTTPTLSHandshake,
+		transport.TLSHandshakeTimeout)
+	require.Equal(t, duckDuckGoHTTPExpectContinue,
+		transport.ExpectContinueTimeout)
+}
+
+func TestNewSearchBackendDuckDuckGoUsesTransportNetwork(t *testing.T) {
+	t.Parallel()
+	if goruntime.GOOS == "windows" {
+		t.Skip("unix sockets are not available on windows")
+	}
+
+	socketPath := t.TempDir() + "/duckduckgo-web-search-test.sock"
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	defer listener.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+		close(accepted)
+	}()
+
+	backend, err := newSearchBackend(&WebSearchOptions{
+		Provider: "duckduckgo",
+		Timeout:  10 * time.Second,
+	})
+	require.NoError(t, err)
+	duckBackend, ok := backend.(*duckDuckGoSearchBackend)
+	require.True(t, ok)
+	transport, ok := duckBackend.client.Transport.(*http.Transport)
+	require.True(t, ok)
+
+	conn, err := transport.DialContext(context.Background(), "unix", socketPath)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	serverConn := <-accepted
+	require.NotNil(t, serverConn)
+	serverConn.Close()
 }
 
 func TestToolSet_WebSearchDuckDuckGoNormalizesWrappedLinksAndDeduplicates(t *testing.T) {

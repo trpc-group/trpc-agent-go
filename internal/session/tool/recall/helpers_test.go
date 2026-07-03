@@ -12,6 +12,8 @@ package recall
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,10 +26,22 @@ import (
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
+func anchorEventNotFoundErr(anchorEventID string) error {
+	return fmt.Errorf("%w: %s", session.ErrEventWindowAnchorNotFound, anchorEventID)
+}
+
 func TestSupportChecks(t *testing.T) {
 	require.False(t, SupportsSearch(nil))
 	require.False(t, SupportsLoad(nil))
 	require.False(t, SupportsOnDemandSession(nil))
+
+	loadOnlyInv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(sessioninmemory.NewSessionService()),
+	)
+	require.False(t, SupportsSearch(loadOnlyInv))
+	require.True(t, SupportsLoad(loadOnlyInv))
+	require.True(t, SupportsOnDemandSession(loadOnlyInv))
 
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
@@ -251,7 +265,7 @@ func TestExtractSessionMessageText(t *testing.T) {
 }
 
 func TestLoadedMessagesFromWindow_SkipsUnusableEntries(t *testing.T) {
-	require.Nil(t, loadedMessagesFromWindow(nil))
+	require.Nil(t, loadedMessagesFromWindow(nil, loadContentWindow{}))
 
 	window := &session.EventWindow{
 		Entries: []session.EventWindowEntry{
@@ -287,10 +301,505 @@ func TestLoadedMessagesFromWindow_SkipsUnusableEntries(t *testing.T) {
 		},
 	}
 
-	messages := loadedMessagesFromWindow(window)
+	messages := loadedMessagesFromWindow(window, loadContentWindow{})
 	require.Len(t, messages, 1)
 	assert.Equal(t, "evt-user", messages[0].EventID)
 	assert.Equal(t, "hello", messages[0].Content)
+}
+
+func TestLoadToolResolvesToolCallIDFromSessionService(t *testing.T) {
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{
+		{
+			ID: "evt-tool-result",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  "call-1",
+						Content: "tool result",
+					},
+				}},
+			},
+		},
+	}
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		getSessionFunc: func(
+			key session.Key,
+			_ ...session.Option,
+		) (*session.Session, error) {
+			assert.Equal(t, "sess", key.SessionID)
+			return sess, nil
+		},
+		window: &session.EventWindow{
+			AnchorEventID: "evt-tool-result",
+			Entries: []session.EventWindowEntry{{
+				Event:     sess.Events[0],
+				CreatedAt: time.Date(2025, 4, 7, 11, 0, 0, 0, time.UTC),
+			}},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{ToolCallID: " call-1 "})
+	require.NoError(t, err)
+	result, err := NewLoadTool().Call(ctx, args)
+	require.NoError(t, err)
+
+	resp, ok := result.(*LoadSessionResponse)
+	require.True(t, ok)
+	assert.Equal(t, "evt-tool-result", resp.EventID)
+	assert.Equal(t, "evt-tool-result", svc.lastWindowReq.AnchorEventID)
+}
+
+func TestLoadToolEventIDSelectsMatchingToolCallID(t *testing.T) {
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		window: &session.EventWindow{
+			AnchorEventID: "evt-anchor",
+			Entries: []session.EventWindowEntry{{
+				Event: event.Event{
+					ID: "evt-anchor",
+					Response: &model.Response{
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Role:    model.RoleTool,
+									ToolID:  "call-other",
+									Content: "wrong-tool-result",
+								},
+							},
+							{
+								Message: model.Message{
+									Role:    model.RoleTool,
+									ToolID:  "call-anchor",
+									Content: "0123456789",
+								},
+							},
+						},
+					},
+				},
+			}},
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		EventID:       "evt-anchor",
+		ToolCallID:    "call-anchor",
+		ContentOffset: 2,
+		ContentLimit:  3,
+	})
+	require.NoError(t, err)
+	result, err := NewLoadTool().Call(ctx, args)
+	require.NoError(t, err)
+
+	resp, ok := result.(*LoadSessionResponse)
+	require.True(t, ok)
+	require.Len(t, resp.Messages, 1)
+	assert.Equal(t, "234", resp.Messages[0].Content)
+	assert.Equal(t, 2, resp.Messages[0].ContentOffset)
+}
+
+func TestLoadToolFallsBackToToolCallIDWhenEventIDIsStale(t *testing.T) {
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{
+		{
+			ID: "evt-tool-result",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:     model.RoleTool,
+						ToolID:   "call-1",
+						ToolName: "lookup",
+						Content:  "fresh result",
+					},
+				}},
+			},
+		},
+	}
+
+	var anchors []string
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		windowFunc: func(
+			req session.EventWindowRequest,
+		) (*session.EventWindow, error) {
+			anchors = append(anchors, req.AnchorEventID)
+			if req.AnchorEventID == "stale-event" {
+				return nil, anchorEventNotFoundErr("stale-event")
+			}
+			return &session.EventWindow{
+				AnchorEventID: req.AnchorEventID,
+				Entries: []session.EventWindowEntry{{
+					Event:     sess.Events[0],
+					CreatedAt: time.Date(2025, 4, 7, 11, 0, 0, 0, time.UTC),
+				}},
+			}, nil
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		EventID:    "stale-event",
+		ToolCallID: "call-1",
+	})
+	require.NoError(t, err)
+	result, err := NewLoadTool().Call(ctx, args)
+	require.NoError(t, err)
+
+	resp, ok := result.(*LoadSessionResponse)
+	require.True(t, ok)
+	assert.Equal(t, "evt-tool-result", resp.EventID)
+	assert.Equal(t, []string{"stale-event", "evt-tool-result"}, anchors)
+	require.Len(t, resp.Messages, 1)
+	assert.Equal(t, "lookup: fresh result", resp.Messages[0].Content)
+}
+
+func TestLoadToolKeepsStaleEventErrorWhenToolCallIDMissing(t *testing.T) {
+	var anchors []string
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		windowFunc: func(
+			req session.EventWindowRequest,
+		) (*session.EventWindow, error) {
+			anchors = append(anchors, req.AnchorEventID)
+			return nil, anchorEventNotFoundErr("stale-event")
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		EventID:    "stale-event",
+		ToolCallID: "missing-call",
+	})
+	require.NoError(t, err)
+	_, err = NewLoadTool().Call(ctx, args)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, session.ErrEventWindowAnchorNotFound)
+	assert.Equal(t, []string{"stale-event"}, anchors)
+}
+
+func TestLoadToolKeepsStaleEventErrorWhenFallbackLookupFails(t *testing.T) {
+	var anchors []string
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		windowFunc: func(
+			req session.EventWindowRequest,
+		) (*session.EventWindow, error) {
+			anchors = append(anchors, req.AnchorEventID)
+			return nil, anchorEventNotFoundErr("stale-event")
+		},
+		getSessionFunc: func(
+			session.Key,
+			...session.Option,
+		) (*session.Session, error) {
+			return nil, assert.AnError
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		EventID:    "stale-event",
+		ToolCallID: "call-1",
+	})
+	require.NoError(t, err)
+	_, err = NewLoadTool().Call(ctx, args)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, session.ErrEventWindowAnchorNotFound)
+	assert.NotErrorIs(t, err, assert.AnError)
+	assert.Equal(t, []string{"stale-event"}, anchors)
+}
+
+func TestLoadToolKeepsStaleEventErrorWhenFallbackMatchesAnchor(t *testing.T) {
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{{
+		ID: "stale-event",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:   model.RoleTool,
+					ToolID: "call-1",
+				},
+			}},
+		},
+	}}
+
+	var anchors []string
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		windowFunc: func(
+			req session.EventWindowRequest,
+		) (*session.EventWindow, error) {
+			anchors = append(anchors, req.AnchorEventID)
+			return nil, anchorEventNotFoundErr("stale-event")
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		EventID:    "stale-event",
+		ToolCallID: "call-1",
+	})
+	require.NoError(t, err)
+	_, err = NewLoadTool().Call(ctx, args)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, session.ErrEventWindowAnchorNotFound)
+	assert.Equal(t, []string{"stale-event"}, anchors)
+}
+
+func TestLoadToolReturnsFallbackWindowError(t *testing.T) {
+	sess := session.NewSession("app", "user", "sess")
+	sess.Events = []event.Event{{
+		ID: "evt-tool-result",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:   model.RoleTool,
+					ToolID: "call-1",
+				},
+			}},
+		},
+	}}
+
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		windowFunc: func(
+			req session.EventWindowRequest,
+		) (*session.EventWindow, error) {
+			if req.AnchorEventID == "stale-event" {
+				return nil, anchorEventNotFoundErr("stale-event")
+			}
+			return nil, assert.AnError
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{
+		EventID:    "stale-event",
+		ToolCallID: "call-1",
+	})
+	require.NoError(t, err)
+	_, err = NewLoadTool().Call(ctx, args)
+	require.ErrorIs(t, err, assert.AnError)
+}
+
+func TestLoadToolReturnsSessionServiceFallbackError(t *testing.T) {
+	svc := &mockSessionService{
+		Service: sessioninmemory.NewSessionService(),
+		getSessionFunc: func(
+			session.Key,
+			...session.Option,
+		) (*session.Session, error) {
+			return nil, assert.AnError
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationSessionService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	args, err := json.Marshal(&LoadSessionRequest{ToolCallID: "call-1"})
+	require.NoError(t, err)
+	_, err = NewLoadTool().Call(ctx, args)
+	require.ErrorIs(t, err, assert.AnError)
+}
+
+func TestToolCallIDLookupAndContentWindowBoundaries(t *testing.T) {
+	assert.Empty(t, toolResultEventIDByToolCallID(nil, " "))
+	assert.Empty(t, toolResultEventIDByToolCallID([]event.Event{
+		{
+			ID: "evt-partial",
+			Response: &model.Response{
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:   model.RoleTool,
+						ToolID: "call-1",
+					},
+				}},
+			},
+		},
+	}, "call-1"))
+
+	offset, limit := normalizeContentWindow(-10, maxContentLimit+1)
+	assert.Equal(t, 0, offset)
+	assert.Equal(t, maxContentLimit, limit)
+
+	offset, limit, apply := contentWindowForToolResult(
+		"evt-neighbor",
+		"call-neighbor",
+		loadContentWindow{ToolCallID: "call-anchor", Limit: 4},
+	)
+	assert.False(t, apply)
+	assert.Equal(t, 0, offset)
+	assert.Equal(t, 0, limit)
+
+	assert.False(t, isAnchorToolResult(
+		"evt-anchor",
+		"call-other",
+		loadContentWindow{ToolCallID: "call-anchor"},
+	))
+}
+
+func TestLoadedMessageFromModelMessageContentPartsAndSlicingEdges(t *testing.T) {
+	part1 := "  "
+	part2 := "alpha"
+	part3 := "beta"
+	loaded, ok := loadedMessageFromModelMessage(
+		"evt-parts",
+		time.Date(2025, 4, 7, 11, 0, 0, 0, time.UTC),
+		model.Message{
+			ContentParts: []model.ContentPart{
+				{},
+				{Text: &part1},
+				{Text: &part2},
+				{Text: &part3},
+			},
+		},
+		loadContentWindow{},
+	)
+	require.True(t, ok)
+	assert.Equal(t, model.RoleAssistant, loaded.Role)
+	assert.Equal(t, "alpha\nbeta", loaded.Content)
+
+	_, ok = loadedMessageFromModelMessage(
+		"evt-empty",
+		time.Time{},
+		model.Message{ContentParts: []model.ContentPart{{Text: &part1}}},
+		loadContentWindow{},
+	)
+	assert.False(t, ok)
+
+	_, ok = loadedMessageFromModelMessage(
+		"evt-system",
+		time.Time{},
+		model.Message{Role: model.RoleSystem, Content: "system"},
+		loadContentWindow{},
+	)
+	assert.False(t, ok)
+
+	loaded, ok = loadedMessageFromModelMessage(
+		"evt-tool",
+		time.Time{},
+		model.Message{
+			Role:    model.RoleTool,
+			ToolID:  "call-1",
+			Content: "short",
+		},
+		loadContentWindow{AnchorEventID: "evt-tool", Limit: maxContentLimit},
+	)
+	require.True(t, ok)
+	assert.Equal(t, "short", loaded.Content)
+	assert.Equal(t, 5, loaded.ReturnedBytes)
+	assert.False(t, loaded.ContentTruncated)
+
+	loaded, ok = loadedMessageFromModelMessage(
+		"evt-tool-parts",
+		time.Time{},
+		model.Message{
+			Role: model.RoleTool,
+			ContentParts: []model.ContentPart{
+				{Text: &part2},
+				{Text: &part3},
+			},
+			ToolID:   "call-parts",
+			ToolName: "parts_tool",
+		},
+		loadContentWindow{AnchorEventID: "evt-tool-parts", Limit: 64},
+	)
+	require.True(t, ok)
+	assert.Equal(t, "parts_tool: alpha\nbeta", loaded.Content)
+	assert.Equal(t, len("alpha\nbeta"), loaded.ContentBytes)
+
+	loaded, ok = loadedMessageFromModelMessage(
+		"evt-slice",
+		time.Time{},
+		model.Message{
+			Role:    model.RoleTool,
+			ToolID:  "call-slice",
+			Content: "0123456789",
+		},
+		loadContentWindow{ToolCallID: "call-slice", Offset: 3, Limit: 4},
+	)
+	require.True(t, ok)
+	assert.Equal(t, "3456", loaded.Content)
+	assert.Equal(t, 3, loaded.ContentOffset)
+	assert.Equal(t, 4, loaded.ReturnedBytes)
+	assert.True(t, loaded.ContentTruncated)
+
+	sliced, start, returned, truncated := sliceContentByBytes("你好", 100, 3)
+	assert.Empty(t, sliced)
+	assert.Equal(t, len("你好"), start)
+	assert.Equal(t, 0, returned)
+	assert.True(t, truncated)
+
+	sliced, start, returned, truncated = sliceContentByBytes("你a", 2, 1)
+	assert.Equal(t, "你", sliced)
+	assert.Equal(t, 0, start)
+	assert.Equal(t, len("你"), returned)
+	assert.True(t, truncated)
+}
+
+func TestToolResultSnippetTruncationFollowsVisibleSnippet(t *testing.T) {
+	content := strings.Repeat("你", maxSnippetLength)
+	result := session.EventSearchResult{
+		Event: event.Event{
+			ID: "evt-tool",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleTool,
+						ToolID:  "call-1",
+						Content: content,
+					},
+				}},
+			},
+		},
+	}
+
+	_, _, contentBytes, isTool := toolResultMetadata(result.Event)
+	require.True(t, isTool)
+	require.Greater(t, contentBytes, maxSnippetLength)
+	snippet, truncated := resultSnippetWithTruncation(result, nil)
+	assert.Equal(t, content, snippet)
+	assert.False(t, truncated)
+
+	longResult := result
+	longResult.Event.Response.Choices[0].Message.Content += "超"
+	snippet, truncated = resultSnippetWithTruncation(longResult, nil)
+	assert.True(t, strings.HasSuffix(snippet, "..."))
+	assert.True(t, truncated)
 }
 
 func TestSearchHelperFunctions(t *testing.T) {
@@ -1119,4 +1628,11 @@ func TestLoadTool_ErrorPaths(t *testing.T) {
 	_, err = NewLoadTool().Call(ctx, args)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "session load tool")
+
+	args, err = json.Marshal(&LoadSessionRequest{ToolCallID: "missing-call"})
+	require.NoError(t, err)
+	_, err = NewLoadTool().Call(ctx, args)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tool_call_id")
+	assert.Contains(t, err.Error(), "not found")
 }

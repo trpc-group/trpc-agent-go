@@ -212,6 +212,16 @@ func TestActionMatchesPlatform(t *testing.T) {
 		InstallAction{OS: []string{"darwin"}},
 		"linux",
 	))
+	require.True(t, actionMatchesPlatformArch(
+		InstallAction{OS: []string{"linux"}, Arch: []string{"x86_64"}},
+		"linux",
+		"amd64",
+	))
+	require.False(t, actionMatchesPlatformArch(
+		InstallAction{OS: []string{"linux"}, Arch: []string{"arm64"}},
+		"linux",
+		"amd64",
+	))
 }
 
 func TestSelectInstallActionsForMissing(t *testing.T) {
@@ -325,6 +335,49 @@ func TestBuildPlanForSources_DownloadActionWithoutBins(t *testing.T) {
 		),
 		plan.Steps[0].TargetPath,
 	)
+}
+
+func TestBuildPlanForSources_DownloadActionLinksBins(t *testing.T) {
+	t.Parallel()
+
+	plan, err := BuildPlanForSources(
+		t.TempDir(),
+		[]string{"engine"},
+		[]Source{{
+			Name: "engine",
+			Requires: Requirement{
+				Bins: []string{"engine"},
+			},
+			Install: []InstallAction{{
+				Kind:      InstallKindDownload,
+				URL:       "https://example.com/engine.tar",
+				Archive:   "tar",
+				Extract:   true,
+				TargetDir: "engine",
+				Bins:      []string{"engine"},
+				Links: []InstallLink{{
+					Source: "bin/engine-linux",
+					Target: "engine",
+				}},
+			}},
+		}},
+	)
+	require.NoError(t, err)
+	require.Len(t, plan.Steps, 1)
+	step := plan.Steps[0]
+	require.Equal(t, stepKindDownload, step.Kind)
+	require.Len(t, step.Links, 1)
+	require.Equal(
+		t,
+		filepath.Join(step.TargetPath, "bin", "engine-linux"),
+		step.Links[0].Source,
+	)
+	require.Equal(
+		t,
+		filepath.Join(ManagedBinDir(plan.Toolchain.StateDir), "engine"),
+		step.Links[0].Target,
+	)
+	require.Empty(t, plan.Unresolved.Bins)
 }
 
 func TestBuildPlan_ResolvesBuiltinProfiles(t *testing.T) {
@@ -445,7 +498,7 @@ func TestApplyPlan_RejectsRootOnlyStep(t *testing.T) {
 	require.Contains(t, result.Steps[0].Error, "requires root privileges")
 }
 
-func TestApplyPlan_DownloadStepExtractsArchive(t *testing.T) {
+func TestApplyPlan_DownloadStepExtractsArchiveAndLinksBin(t *testing.T) {
 	t.Parallel()
 
 	archivePath := filepath.Join(t.TempDir(), "runtime.tar.gz")
@@ -458,13 +511,20 @@ func TestApplyPlan_DownloadStepExtractsArchive(t *testing.T) {
 	)
 
 	target := filepath.Join(t.TempDir(), "out")
+	stateDir := t.TempDir()
+	binLink := filepath.Join(ManagedBinDir(stateDir), "tool")
 	result, err := ApplyPlan(context.Background(), Plan{
+		Toolchain: Toolchain{StateDir: stateDir},
 		Steps: []Step{{
-			Label:           "download runtime",
-			Kind:            stepKindDownload,
-			URL:             "file://" + archivePath,
-			TargetPath:      target,
-			Archive:         "tar.gz",
+			Label:      "download runtime",
+			Kind:       stepKindDownload,
+			URL:        "file://" + archivePath,
+			TargetPath: target,
+			Archive:    "tar.gz",
+			Links: []InstallLink{{
+				Source: filepath.Join(target, "bin", "tool"),
+				Target: binLink,
+			}},
 			Extract:         true,
 			StripComponents: 1,
 		}},
@@ -476,6 +536,10 @@ func TestApplyPlan_DownloadStepExtractsArchive(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(target, "bin", "tool"))
 	require.NoError(t, err)
 	require.Equal(t, "hello", string(data))
+
+	info, err := os.Stat(binLink)
+	require.NoError(t, err)
+	require.False(t, info.IsDir())
 }
 
 func TestInstallHelpers(t *testing.T) {
@@ -634,8 +698,19 @@ func writeTestCommand(
 ) string {
 	t.Helper()
 
-	path := filepath.Join(dir, name)
 	script := "#!/bin/sh\nset -eu\n" + body + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	tmp, err := os.CreateTemp(dir, name+".tmp-*")
+	require.NoError(t, err)
+	tmpPath := tmp.Name()
+	t.Cleanup(func() {
+		_ = os.Remove(tmpPath)
+	})
+	_, err = tmp.Write([]byte(script))
+	require.NoError(t, err)
+	require.NoError(t, tmp.Close())
+	require.NoError(t, os.Chmod(tmpPath, 0o755))
+
+	path := filepath.Join(dir, name)
+	require.NoError(t, os.Rename(tmpPath, path))
 	return path
 }

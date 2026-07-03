@@ -24,6 +24,7 @@ import (
 
 const (
 	defaultPostRunFinalizationTimeout             = 5 * time.Second
+	defaultTrackPersistenceTimeout                = 5 * time.Second
 	defaultTimeout                                = time.Hour
 	defaultGraphNodeLifecycleActivityEnabled      = false
 	defaultGraphNodeInterruptActivityEnabled      = false
@@ -33,6 +34,7 @@ const (
 	defaultToolResultInputTranslationEnabled      = false
 	defaultToolCallDeltaStreamingEnabled          = false
 	defaultStreamingToolResultActivityEnabled     = false
+	defaultConcurrentMessageStreamsEnabled        = false
 	defaultDistributedCancelEnabled               = false
 	defaultDistributedCancelPollInterval          = time.Second
 )
@@ -56,6 +58,7 @@ type Options struct {
 	MessagesSnapshotRunLifecycleEventsEnabled bool                  // MessagesSnapshotRunLifecycleEventsEnabled includes persisted RUN_* events as activity messages in MESSAGES_SNAPSHOT.
 	StartSpan                                 StartSpan             // StartSpan starts a span for an AG-UI run.
 	PostRunFinalizationTimeout                time.Duration         // PostRunFinalizationTimeout bounds how long post-run finalization is allowed to take.
+	TrackPersistenceTimeout                   time.Duration         // TrackPersistenceTimeout bounds how long AG-UI track persistence is allowed to take.
 	Timeout                                   time.Duration         // Timeout controls how long a run is allowed to execute.
 	CancelOnContextDoneEnabled                bool                  // CancelOnContextDoneEnabled cancels the run when the parent context is done.
 	GraphNodeLifecycleActivityEnabled         bool                  // GraphNodeLifecycleActivityEnabled enables graph node lifecycle activity events.
@@ -66,6 +69,7 @@ type Options struct {
 	ToolResultInputTranslationEnabled         bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
 	ToolCallDeltaStreamingEnabled             bool                  // ToolCallDeltaStreamingEnabled streams partial tool-call arguments.
 	StreamingToolResultActivityEnabled        bool                  // StreamingToolResultActivityEnabled rewrites partial tool results as activity events.
+	ConcurrentMessageStreamsEnabled           bool                  // ConcurrentMessageStreamsEnabled keeps multiple message streams open by message ID.
 	DistributedCancelEnabled                  bool                  // DistributedCancelEnabled enables best-effort cancel signaling through SessionState.
 	DistributedCancelPollInterval             time.Duration         // DistributedCancelPollInterval controls how often owner runs poll cancel markers.
 }
@@ -83,6 +87,7 @@ func NewOptions(opt ...Option) *Options {
 		FlushInterval:                          track.DefaultFlushInterval,
 		StartSpan:                              defaultStartSpan,
 		PostRunFinalizationTimeout:             defaultPostRunFinalizationTimeout,
+		TrackPersistenceTimeout:                defaultTrackPersistenceTimeout,
 		Timeout:                                defaultTimeout,
 		GraphNodeLifecycleActivityEnabled:      defaultGraphNodeLifecycleActivityEnabled,
 		GraphNodeInterruptActivityEnabled:      defaultGraphNodeInterruptActivityEnabled,
@@ -92,6 +97,7 @@ func NewOptions(opt ...Option) *Options {
 		ToolResultInputTranslationEnabled:      defaultToolResultInputTranslationEnabled,
 		ToolCallDeltaStreamingEnabled:          defaultToolCallDeltaStreamingEnabled,
 		StreamingToolResultActivityEnabled:     defaultStreamingToolResultActivityEnabled,
+		ConcurrentMessageStreamsEnabled:        defaultConcurrentMessageStreamsEnabled,
 		DistributedCancelEnabled:               defaultDistributedCancelEnabled,
 		DistributedCancelPollInterval:          defaultDistributedCancelPollInterval,
 	}
@@ -251,6 +257,13 @@ func WithPostRunFinalizationTimeout(d time.Duration) Option {
 	}
 }
 
+// WithTrackPersistenceTimeout sets the maximum duration allowed for AG-UI track persistence.
+func WithTrackPersistenceTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		o.TrackPersistenceTimeout = d
+	}
+}
+
 // WithCancelOnContextDoneEnabled controls whether a run is canceled when the parent context is done.
 func WithCancelOnContextDoneEnabled(enabled bool) Option {
 	return func(o *Options) {
@@ -314,6 +327,14 @@ func WithToolCallDeltaStreamingEnabled(enabled bool) Option {
 func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.StreamingToolResultActivityEnabled = enabled
+	}
+}
+
+// WithConcurrentMessageStreamsEnabled controls whether multiple text and reasoning
+// message streams with different message IDs may stay open concurrently.
+func WithConcurrentMessageStreamsEnabled(enabled bool) Option {
+	return func(o *Options) {
+		o.ConcurrentMessageStreamsEnabled = enabled
 	}
 }
 

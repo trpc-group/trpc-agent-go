@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -20,7 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	idecode "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/decode"
 	irunner "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/runner"
-	isurface "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/internal/surface"
+	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -47,6 +48,11 @@ type Result struct {
 type surfacePatchProposal struct {
 	Value  astructure.SurfaceValue
 	Reason string
+}
+
+type toolDescriptionProposal struct {
+	Description string
+	Reason      string
 }
 
 // optimizer is the default Optimizer implementation used by the engine.
@@ -120,12 +126,16 @@ func (o *optimizer) Optimize(ctx context.Context, request *Request) (*Result, er
 	if sessionID == "" {
 		return nil, errors.New("session id is empty")
 	}
+	runOptions := o.runOptions
+	if normalizedRequest.Surface.Type == astructure.SurfaceTypeTool {
+		runOptions = append(slices.Clone(o.runOptions), toolDescriptionStructuredOutput())
+	}
 	events, err := o.runner.Run(
 		ctx,
 		userID,
 		sessionID,
 		*message,
-		o.runOptions...,
+		runOptions...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("runner run: %w", err)
@@ -133,6 +143,20 @@ func (o *optimizer) Optimize(ctx context.Context, request *Request) (*Result, er
 	output, err := irunner.CaptureOutput(events)
 	if err != nil {
 		return nil, fmt.Errorf("capture runner output: %w", err)
+	}
+	if normalizedRequest.Surface.Type == astructure.SurfaceTypeTool {
+		proposal, err := idecode.DecodeOutputJSON[toolDescriptionProposal](output)
+		if err != nil {
+			return nil, fmt.Errorf("decode tool description proposal: %w", err)
+		}
+		if proposal == nil {
+			return nil, errors.New("tool description proposal is empty")
+		}
+		patch, err := sanitizeToolDescriptionProposal(normalizedRequest, proposal)
+		if err != nil {
+			return nil, fmt.Errorf("sanitize tool description proposal: %w", err)
+		}
+		return &Result{Patch: patch}, nil
 	}
 	proposal, err := idecode.DecodeOutputJSON[surfacePatchProposal](output)
 	if err != nil {
@@ -146,6 +170,14 @@ func (o *optimizer) Optimize(ctx context.Context, request *Request) (*Result, er
 		return nil, fmt.Errorf("sanitize surface patch proposal: %w", err)
 	}
 	return &Result{Patch: patch}, nil
+}
+
+func toolDescriptionStructuredOutput() agent.RunOption {
+	return agent.WithStructuredOutputJSON(
+		new(toolDescriptionProposal),
+		true,
+		"One PromptIter tool description proposal.",
+	)
 }
 
 func normalizeRequest(request *Request) (*Request, error) {
@@ -166,8 +198,14 @@ func normalizeRequest(request *Request) (*Request, error) {
 	if surface.NodeID == "" {
 		return nil, errors.New("node id is empty")
 	}
-	if !isurface.IsSupportedType(surface.Type) {
+	if !profilecompiler.IsSupportedType(surface.Type) {
 		return nil, fmt.Errorf("surface type %q is invalid", surface.Type)
+	}
+	if surface.Type == astructure.SurfaceTypeTool && len(surface.Value.Tools) != 1 {
+		return nil, fmt.Errorf(
+			"tools must contain exactly one tool, got %d",
+			len(surface.Value.Tools),
+		)
 	}
 	if gradient.SurfaceID == "" {
 		return nil, errors.New("aggregated gradient surface id is empty")
@@ -216,7 +254,7 @@ func sanitizePatchProposal(request *Request, proposal *surfacePatchProposal) (*p
 	if reason == "" {
 		return nil, errors.New("patch reason is empty")
 	}
-	value, err := isurface.SanitizeValue(request.Surface.Type, proposal.Value)
+	value, err := profilecompiler.SanitizePatchValue(*request.Surface, proposal.Value)
 	if err != nil {
 		return nil, fmt.Errorf("sanitize patch value: %w", err)
 	}
@@ -225,4 +263,37 @@ func sanitizePatchProposal(request *Request, proposal *surfacePatchProposal) (*p
 		Value:     value,
 		Reason:    reason,
 	}, nil
+}
+
+func sanitizeToolDescriptionProposal(
+	request *Request,
+	proposal *toolDescriptionProposal,
+) (*promptiter.SurfacePatch, error) {
+	if proposal == nil {
+		return nil, errors.New("tool description proposal is nil")
+	}
+	if request == nil {
+		return nil, errors.New("request is nil")
+	}
+	if request.Surface == nil {
+		return nil, errors.New("surface is nil")
+	}
+	if len(request.Surface.Value.Tools) != 1 {
+		return nil, fmt.Errorf(
+			"tools must contain exactly one tool, got %d",
+			len(request.Surface.Value.Tools),
+		)
+	}
+	toolRef := request.Surface.Value.Tools[0]
+	return sanitizePatchProposal(request, &surfacePatchProposal{
+		Reason: proposal.Reason,
+		Value: astructure.SurfaceValue{
+			Tools: []astructure.ToolRef{
+				{
+					ID:          toolRef.ID,
+					Description: proposal.Description,
+				},
+			},
+		},
+	})
 }

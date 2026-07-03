@@ -10,23 +10,33 @@ English | [中文](README.zh_CN.md)
 [![Coverage](https://codecov.io/gh/trpc-group/trpc-agent-go/branch/main/graph/badge.svg)](https://app.codecov.io/gh/trpc-group/trpc-agent-go/tree/main)
 [![Documentation](https://img.shields.io/badge/Docs-Website-blue.svg)](https://trpc-group.github.io/trpc-agent-go/)
 
-**A powerful Go framework for building intelligent agent systems** that transforms how you create AI applications. Build autonomous agents that think, remember, collaborate, and act with unprecedented ease.
+**tRPC-Agent-Go is a Go framework for building production agent systems.**
+It provides LLM agents, graph workflows, tool calling, session and memory
+state, knowledge retrieval, agent self-evolution, evaluation, and OpenTelemetry
+observability in one Go-native stack.
+
+Use it when you want agent applications that fit Go services: concurrent,
+observable, easy to deploy, and ready to integrate with A2A, AG-UI, and MCP.
 
 **Why tRPC-Agent-Go?**
 
-- **Intelligent Reasoning**: Advanced hierarchical planners and multi-agent orchestration
-- **Rich Tool Ecosystem**: Seamless integration with external APIs, databases, and services
-- **Persistent Memory**: Long-term state management and contextual awareness
-- **Multi-Agent Collaboration**: Chain, parallel, and graph-based agent workflows
-- **GraphAgent**: Type-safe graph workflows with multi-conditional routing, functionally equivalent to LangGraph for Go
+- **Go-Native Agent Runtime**: Streaming runners, context cancellation, and
+  service-friendly APIs
+- **GraphAgent**: Type-safe graph workflows with multi-conditional routing,
+  functionally equivalent to LangGraph for Go
+- **Multi-Agent Collaboration**: Chain, parallel, and cycle-based workflows
+- **Rich Tool Ecosystem**: Function tools, MCP tools, web search, code
+  execution, and custom services
+- **Persistent State**: Session, memory, artifacts, and knowledge retrieval
 - **Agent Skills**: Reusable `SKILL.md` workflows with safe execution
-- **Artifacts**: Versioned storage for files produced by agents and tools
+- **Agent Self-Evolution**: Hermes-style session reviews that extract, gate,
+  and publish reusable `SKILL.md` workflows
 - **Prompt Caching**: Automatic cost optimization with 90% savings on cached content
 - **Evaluation & Benchmarks**: Eval sets + metrics to measure quality over time
-- **UI & Server Integration**: AG-UI (Agent-User Interaction),
-  and Agent-to-Agent (A2A) interoperability
-- **Production Ready**: Built-in telemetry, tracing, and enterprise-grade reliability
-- **High Performance**: Optimized for scalability and low latency
+- **Protocol Integration**: AG-UI for frontends, A2A for agent
+  interoperability, and MCP for tools
+- **Production Observability**: OpenTelemetry tracing, metrics, and Langfuse
+  examples
 
 ## Use Cases
 
@@ -151,6 +161,27 @@ enabled.
 </td>
 <td valign="top">
 
+### Agent Self-Evolution
+
+```go
+repo, _ := skill.NewFSRepository("./managed_skills")
+evo := evolution.NewService(reviewerModel,
+    evolution.WithManagedSkillsDir("./managed_skills"),
+    evolution.WithSkillRepository(repo))
+defer evo.Close()
+
+runner := runner.NewRunner("app", agent,
+    runner.WithEvolutionService(evo))
+```
+
+Completed sessions can be reviewed asynchronously, promoted through quality
+gates, and published back as managed Agent Skills for future turns.
+
+</td>
+</tr>
+<tr>
+<td colspan="2" valign="top">
+
 ### Evaluation & Benchmarks
 
 ```go
@@ -174,9 +205,11 @@ _ = result.OverallStatus
     - [Rich Tool Integration](#rich-tool-integration)
     - [Production Observability](#production-observability)
     - [Agent Skills](#agent-skills)
+    - [Agent Self-Evolution](#agent-self-evolution)
     - [Evaluation \& Benchmarks](#evaluation--benchmarks)
   - [Table of Contents](#table-of-contents)
   - [Documentation](#documentation)
+    - [Blog](#blog)
   - [Quick Start](#quick-start)
     - [Prerequisites](#prerequisites)
     - [Run the Example](#run-the-example)
@@ -194,9 +227,10 @@ _ = result.OverallStatus
     - [9. AG-UI Demo](#9-ag-ui-demo)
     - [10. Evaluation](#10-evaluation)
     - [11. Agent Skills](#11-agent-skills)
-    - [12. Artifacts](#12-artifacts)
-    - [13. A2A Interop](#13-a2a-interop)
-    - [14. Gateway Server](#14-gateway-server)
+    - [12. Agent Self-Evolution](#12-agent-self-evolution)
+    - [13. Artifacts](#13-artifacts)
+    - [14. A2A Interop](#14-a2a-interop)
+    - [15. Gateway Server](#15-gateway-server)
   - [Architecture Overview](#architecture-overview)
     - [**Execution Flow**](#execution-flow)
   - [Using Built-in Agents](#using-built-in-agents)
@@ -209,15 +243,30 @@ _ = result.OverallStatus
     - [**Open Source Inspiration**](#open-source-inspiration)
   - [Star History](#star-history)
   - [License](#license)
-    - [**Star us on GitHub** • **Report Issues** • **Join Discussions**](#star-us-on-github--report-issues--join-discussions)
+    - [**GitHub Repository** • **Report Issues** • **Join Discussions**](#github-repository--report-issues--join-discussions)
 
 ## Documentation
 
 Ready to dive into tRPC-Agent-Go? Our [documentation](https://trpc-group.github.io/trpc-agent-go/) covers everything from basic concepts to advanced techniques, helping you build powerful AI applications with confidence. Whether you're new to AI agents or an experienced developer, you'll find detailed guides, practical examples, and best practices to accelerate your development journey.
 
+### Blog
+
+These blog posts cover the framework overview, core capabilities, and engineering practices—read as needed:
+
+- [A Go Agent Framework for Building Intelligent AI Applications](docs/mkdocs/en/blog/trpcagentgo.md)
+- [GraphAgent Seamlessly Combines AI Workflows and Agents](docs/mkdocs/en/blog/graphagent.md)
+- [Quickly Build AG-UI-Based Agent Services](docs/mkdocs/en/blog/agui.md)
+- [A Go-Native Implementation of the Anthropic Agent Skills Specification](docs/mkdocs/en/blog/skill.md)
+- [Building an Enterprise-Grade, Secure, and Controllable OpenClaw Runtime](docs/mkdocs/en/blog/openclaw.md)
+- [A Complete Guide to AI Agent Automated Evaluation Paradigms and Engineering Practice](docs/mkdocs/en/blog/evaluation.md)
+- [A Complete Guide to Automated Prompt Iteration and Engineering Practice for AI Agents](docs/mkdocs/en/blog/promptiter.md)
+
 ## Quick Start
 
-> **See it in Action**: _[Demo GIF placeholder - showing agent reasoning and tool usage]_
+![AG-UI report agent demo](docs/mkdocs/assets/gif/agui/report.gif)
+
+The demo above shows a tRPC-Agent-Go service streaming agent events to an
+AG-UI client while the agent plans, calls tools, and updates the interface.
 
 ### Prerequisites
 
@@ -444,6 +493,16 @@ routes), see `docs/mkdocs/en/runner.md` and `docs/mkdocs/en/agui.md`.
 
 The `examples` directory contains runnable demos covering every major feature.
 
+Not sure where to start? Pick a path by what you want to build:
+
+- First multi-turn agent: [examples/runner](examples/runner)
+- Controllable graph workflow: [examples/graph](examples/graph)
+- Agent frontend or streaming UI: [examples/agui](examples/agui)
+- A2A interoperability: [examples/a2aagent](examples/a2aagent)
+- RAG and knowledge retrieval: [examples/knowledge](examples/knowledge)
+- Evaluation and prompt iteration: [examples/evaluation](examples/evaluation)
+- Skills and local automation: [examples/skillrun](examples/skillrun)
+
 ### 1. Tool Usage
 
 - [examples/agenttool](examples/agenttool) – Wrap agents as callable tools.
@@ -587,21 +646,31 @@ Examples: [examples/skillrun](examples/skillrun),
   Local execution stays off by default and can be enabled explicitly
   when you want to run an installed skill.
 
-### 12. Artifacts
+### 12. Agent Self-Evolution
+
+Example: [examples/evolution](examples/evolution)
+
+- Reviews completed sessions in the background and extracts reusable
+  `SKILL.md` workflows.
+- Supports revision storage, quality gates, human approval, and warm-start
+  behavior when skills are available on later runs.
+- Runner integration is a single option: `runner.WithEvolutionService(...)`.
+
+### 13. Artifacts
 
 Example: [examples/artifact](examples/artifact)
 
 - Save and retrieve versioned files (images, text, reports) produced by tools.
 - Supports multiple backends (in-memory, S3, COS).
 
-### 13. A2A Interop
+### 14. A2A Interop
 
 Example: [examples/a2aadk](examples/a2aadk)
 
 - Agent-to-Agent (A2A) interop with an ADK Python A2A server.
 - Demonstrates streaming, tool calls, and code execution across runtimes.
 
-### 14. Gateway Server
+### 15. Gateway Server
 
 Example: [openclaw](openclaw)
 
@@ -631,6 +700,8 @@ Architecture
 4. **Tools** execute specific tasks (API calls, calculations, web searches)
 5. **Memory** maintains context and learns from interactions
 6. **Knowledge** provides RAG capabilities for document understanding
+7. **Evolution** reviews completed sessions and turns reusable procedures into
+   managed skills
 
 Key packages:
 
@@ -646,6 +717,7 @@ Key packages:
 | `planner`   | Provides Agent planning and reasoning capabilities.                                                         |
 | `artifact`  | Stores and retrieves versioned files produced by agents and tools (images, reports, etc.).                  |
 | `skill`     | Loads and executes reusable Agent Skills defined by `SKILL.md`.                                             |
+| `evolution` | Reviews completed sessions and publishes reusable procedures as managed Agent Skills.                       |
 | `event`     | Defines event types and streaming payloads used across Runner and servers.                                  |
 | `evaluation` | Evaluates agents on eval sets using pluggable metrics and stores results.                                  |
 | `server`    | Exposes HTTP servers (Gateway, AG-UI, A2A) for integration and UIs.                                         |
@@ -750,9 +822,9 @@ Licensed under the **Apache 2.0 License** - see [LICENSE](LICENSE) file for deta
 
 <div align="center">
 
-### **Star us on GitHub** • **Report Issues** • **Join Discussions**
+### **GitHub Repository** • **Report Issues** • **Join Discussions**
 
-**Built with love by the tRPC-Agent-Go team**
+If tRPC-Agent-Go is useful for your Go agent projects, stars are welcome.
 
 _Empowering developers to build the next generation of intelligent applications_
 

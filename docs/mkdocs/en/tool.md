@@ -226,7 +226,11 @@ For Function Tools, the input `req` is automatically converted into a JSON Schem
 
 - **Field name**: use `json:"..."` as the schema property name.
 - **Field description (recommended)**: use `jsonschema:"description=..."` to populate `properties.<field>.description`.
+- **String pattern constraint**: use `jsonschema:"pattern=^[a-z0-9_-]+$"` to populate `properties.<field>.pattern`.
+- **Manual schemas**: when constructing `tool.Schema` directly, set `Pattern: "^[a-z0-9_-]+$"` to emit the JSON Schema `pattern` keyword.
 - **Note**: the `jsonschema` tag uses comma `,` as the separator, so **the description value must not contain `,`**; otherwise it will be parsed as multiple tag items.
+- **Note**: `pattern` is subject to the same comma separator limitation. If the regular expression itself needs commas, use `function.WithInputSchema(customInputSchema)` to define the schema directly.
+- **Runtime compatibility**: tool-call sanitization enforces `pattern` with Go `regexp`, not strict JSON Schema ECMA-262 regular expressions. Patterns that cannot compile with Go `regexp` are treated as non-enforcing at runtime.
 - **Compatibility**: `description:"..."` is also supported for legacy code. If both `jsonschema:"description=..."` and `description:"..."` are present, the `jsonschema` description wins.
 - **More flexible schema**: if you need full control over the input schema (e.g. complex JSON Schema constraints), use `function.WithInputSchema(customInputSchema)` to bypass auto-generation.
 
@@ -738,7 +742,7 @@ agent := llmagent.New("todo-assistant",
 )
 ```
 
-The extension contributes both `todo_write` and `todo_declare_blocker`; do not also pass a separate `todo.New()` through `WithTools`. To reuse `tool/todo` options such as `WithStateKeyPrefix`, `WithClearOnAllDone`, or `WithNudgeHook`, construct the tool yourself and pass it with `todoenforcer.WithTodoTool(todo.New(...))`. `todo_declare_blocker` is the escape hatch for objective blockers such as missing permissions, credentials, infrastructure, or user decisions.
+The extension contributes both `todo_write` and `todo_declare_blocker`; do not also pass a separate `todo.New()` through `WithTools`. To reuse `tool/todo` options such as `WithStateKeyPrefix`, `WithClearOnAllDone`, or `WithNudgeHook`, construct the tool yourself and pass it with `todoenforcer.WithTodoTool(todo.New(...))`. `todo_declare_blocker` is the escape hatch for objective blockers such as missing permissions, credentials, infrastructure, or user decisions. The extension preserves the caller's streaming setting: text from an unfinished attempt may already reach the client, but its final response is converted into a continuation signal and is not persisted as the turn's terminal assistant history.
 
 #### Tool Result
 
@@ -1529,10 +1533,16 @@ still fall back to `Event.Branch` for compatibility.
 AgentTool currently has two history scopes:
 
 - `HistoryScopeIsolated` (default): the child Agent uses an independent
-  `FilterKey`, such as `math-specialist-<uuid>`. With normal Runner-generated
-  events, the child sees only the current tool arguments and does not inherit
-  parent Agent history. Child events are still stored in the same session, but
-  under a separate view.
+  `FilterKey`, such as `math-specialist-<uuid>` (a new child key is generated on
+  every call). With normal Runner-generated events, the child sees only the
+  current tool arguments and does not inherit parent Agent history. Child events
+  are still stored in the same session, but under a separate view.
+  - If you want the same AgentTool to be called multiple times while the child
+    Agent continues from its own prior execution history, enable
+    `WithPersistentHistory*` under `HistoryScopeIsolated` (see Options below).
+    This switches the child key to a stable value (for example
+    `agenttool:math-specialist:default`) so the child context becomes
+    continuous.
 - `HistoryScopeParentBranch`: the child Agent uses a sub-key under the parent
   key, such as `assistant/math-specialist-<uuid>`. The default prefix matching
   treats ancestors and descendants as the same lineage. This means the child
@@ -1590,6 +1600,33 @@ change when you switch history scope:
   - `ResponseModeFinalOnly`: return only the last complete child assistant
     message as the tool result
 
+- WithPersistentHistory() / WithPersistentHistoryKey(string) / WithPersistentHistoryKeyFunc(...):
+
+  - Purpose: use a **stable child `FilterKey`** under `HistoryScopeIsolated` so
+    the child Agent can read its own history across multiple AgentTool calls
+    within the same session (instead of starting from a fresh UUID key every
+    time).
+  - Default key: `agenttool:<toolName>:default` (intentionally avoids `/` so it
+    does not accidentally fall under the parent's prefix/subtree filters).
+  - Advanced: use `WithPersistentHistoryKey(...)` or
+    `WithPersistentHistoryKeyFunc(...)` to shard different tasks onto different
+    keys and avoid interleaving history when multiple tasks share one tool.
+  - Notes:
+    - This is not a permission boundary. If the parent uses `BranchFilterModeAll`
+      / an empty key, or you design keys that create a prefix relationship such
+      as `parent/...`, parent context may still include child events.
+    - Whether the child can see earlier history also depends on the child Agent
+      message filter/timeline settings (defaults include history; "current
+      request/invocation only" modes will limit cross-call visibility even with
+      a stable key).
+    - Currently supported only for `agenttool.NewTool(agent)`. It is ignored by
+      `agenttool.NewDynamicTool()` (dynamic tools are intentionally short-lived
+      and memoryless).
+    - Incompatible with `HistoryScopeParentBranch`: when both are set, the
+      framework ignores persistent history and uses the `parent/child-uuid`
+      semantics.
+  - Complete example: see `examples/agenttool/` (use `-persistent-child-history` / `-persistent-child-key`).
+
 - WithHistoryScope(HistoryScope):
   - `HistoryScopeIsolated` (default): Use an independent child `FilterKey`; the child usually sees only the current tool arguments and does not inherit parent history.
   - `HistoryScopeParentBranch`: Use a hierarchical `FilterKey` in the form `parent/child-uuid`. Parent and child events share one lineage, and prefix matching can include either side in the other's context. Typical use cases: edit, optimize, or continue previous output.
@@ -1623,6 +1660,138 @@ child := agenttool.NewTool(
   details should not appear in later parent context, keep the default
   `HistoryScopeIsolated` and pass the needed context through tool arguments.
 - `WithSkipSummarization(true)` only skips the extra outer summarization LLM call. It does not make `tool.response` a final assistant response; keep consuming until `runner.completion` if you need the real terminal signal
+
+### Dynamic AgentTool
+
+`agenttool.NewTool(agent)` is a good fit when the tool is backed by one clear
+specialist Agent. In that case, the application constructs the Agent first
+including its model, tools, skills, permissions, and runtime policy, then exposes
+that Agent as a tool to the parent.
+
+Use `agenttool.NewDynamicTool()` when the application cannot predefine every
+specialist role, and the parent Agent should choose a tool subset or per-call
+instruction for each task. It exposes a model-facing tool named `dynamic_agent`
+by default. Calling this tool does not create arbitrary Go objects and does not
+select one pre-registered Agent by name; it runs one short-lived child Agent
+invocation within a boundary defined by application code.
+
+Typical setup:
+
+```go
+dynamicAgent := agenttool.NewDynamicTool()
+
+parent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools([]tool.Tool{
+        readFileTool,
+        searchCodeTool,
+        dynamicAgent,
+    }),
+)
+```
+
+By default, `dynamic_agent` derives its capability boundary from the parent
+Agent's currently available user tools. The model can pass `tools` to narrow the
+child Agent's tools for this call. If `tools` is omitted, the child may use all
+tools inside the boundary. `dynamic_agent` itself, `transfer_to_agent`, and
+caller-executed external tools are not selectable for the child.
+
+The default model-facing arguments are:
+
+```json
+{
+  "request": "Analyze this code for authorization bypass risks. Relevant context: ...",
+  "instruction": "Act as a security auditor. Return only risks and fixes.",
+  "tools": ["read_file", "search_code"]
+}
+```
+
+- `request`: Required task description. The default history scope is
+  `HistoryScopeIsolated`, so include the context the child needs in `request`.
+- `instruction`: Optional role, constraints, or execution guidance for this
+  child invocation.
+- `tools`: Optional exact tool names allowed for this invocation. An empty array
+  means the child receives no user tools.
+
+If the default parent-derived boundary is not the right business boundary, set a
+template Agent or explicit maximum capability surface in code:
+
+```go
+workerTemplate := llmagent.New(
+    "worker-template",
+    llmagent.WithModel(workerModel),
+    llmagent.WithInstruction("You are a focused worker Agent for one task."),
+)
+
+dynamicAgent := agenttool.NewDynamicTool(
+    // Optional: define the child Agent execution boundary: model, executor,
+    // callbacks, permission policy, and similar runtime settings.
+    agenttool.WithTemplateAgent(workerTemplate),
+    // Optional: restrict the maximum tool set the model can choose from.
+    agenttool.WithCapabilityTools([]tool.Tool{readFileTool, searchCodeTool}),
+)
+```
+
+`WithTemplateAgent` is a code-side boundary, not a model parameter. The model
+cannot use `dynamic_agent` to choose arbitrary Agents, models, or executors. It
+can only fill `request`, optionally set `instruction`, and optionally narrow the
+tools/skills subset inside the boundary configured by the developer.
+
+Common options:
+
+- `WithName(name)`: change the model-facing tool name. This only applies to
+  `NewDynamicTool`; regular `NewTool(agent)` always uses the wrapped Agent's
+  `Info().Name`.
+- `WithTemplateAgent(agent)`: set the dynamic child Agent template, commonly used
+  to fix the model, executor, callbacks, permission policy, and other runtime
+  boundaries.
+- `WithCapabilityTools(tools)`: set the maximum tool surface the model may choose
+  from. When omitted, it is derived from the parent Agent's effective user tools
+  for the current run. When set, the tool names are enumerated in the `tools`
+  schema so the model selects from a known set instead of guessing strings (the
+  parent-derived surface and `WithCapabilityProvider` are resolved per call and
+  are not enumerated).
+- `WithCapabilitySkills(repo)`: set the maximum skill repository the model may
+  choose from. When omitted, it is derived from the parent Agent's effective skill
+  repository for the current run.
+- `WithDynamicTimeout(timeout)`: cap one dynamic child Agent invocation. A
+  non-positive value keeps using the parent request context without an extra
+  deadline.
+- `WithExposeToolSelection(false)`: hide the `tools` field from the model. The
+  child still receives the code-defined tool surface, but the model cannot narrow
+  it.
+- `WithExposeSkillSelection(true)`: expose the `skills` field to the model. This
+  is disabled by default because skill execution usually depends on deployment
+  environment and code executor availability.
+- `WithExposeInstruction(false)`: hide the `instruction` field from the model.
+- `WithRequestDescription` / `WithInstructionDescription` /
+  `WithToolsDescription` / `WithSkillsDescription`: customize field descriptions
+  using business-specific wording so the model fills arguments more reliably.
+
+Take extra care when exposing `skills`. Dynamic AgentTool checks whether selected
+skill names exist in the boundary repository. If the child has no available code
+executor and a selected skill may require running code, the tool result includes a
+warning. In production, prefer defining the executable range in code with
+`WithCapabilitySkills` and a template Agent before exposing the `skills` field to
+the model.
+
+Dynamic AgentTool has a different boundary from the other multi-Agent mechanisms:
+
+| Mechanism | What the model chooses | Lifetime | Control |
+| --- | --- | --- | --- |
+| `agenttool.NewTool(agent)` | one fixed tool entrypoint | per tool call | returns a tool result to the parent Agent |
+| `transfer_to_agent` | one registered sub-agent | target Agent continues the current turn | hands off control |
+| `agenttool.NewDynamicTool()` | `request`, `instruction`, and a tools/skills subset for this call | per tool call | returns a tool result to the parent Agent |
+
+If the same specialist Agent is exposed through both `WithSubAgents` and
+`agenttool.NewTool(agent)`, the parent model sees two different paths:
+`transfer_to_agent` and a regular AgentTool. The framework can run this, but the
+developer should explain when to use each path in the instruction or tool
+description, or expose only one path. A `dynamic_agent` child does not receive
+`transfer_to_agent`, but regular AgentTools are treated as user tools. If a
+dynamic child should not call other AgentTools, narrow the boundary with
+`WithCapabilityTools` or a runtime `ToolFilter`.
 
 ## Tool Integration and Usage
 

@@ -38,6 +38,12 @@ type Event struct {
     // Branch 是分支标识符，用于多 Agent 协作
     Branch string `json:"branch,omitempty"`
 
+    // ParentMetadata 描述触发本次事件所属 invocation 的「直接父级触发边」，
+    // 携带父级的 toolCallId，使子 Agent 的事件能够与具体的父级 tool call
+    // 关联。详见后文 RequestID/ParentInvocationID/InvocationID/ParentMetadata
+    // 关系章节。
+    ParentMetadata *ParentInvocationMetadata `json:"parentMetadata,omitempty"`
+
     // Tag 使用 tags 为事件打业务标签
     Tag string `json:"tag,omitempty"`
 
@@ -716,6 +722,12 @@ func (c *multiTurnChat) displayContent(
 - `RequestID string`：用于标识区分同一session会话下的多次用户交互请求，可由runner.Run通过agent.WithRequestID绑定业务层自己的请求ID。
 - `ParentInvocationID string`：用于关联父级执行上下文，可通过此ID关联到父级执行中的相关事件
 - `InvocationID string`：当前执行上下文ID。可通过此ID关联同一个执行上下文中的相关事件
+- `ParentMetadata *ParentInvocationMetadata`：描述本次 invocation 由**直接父级**通过哪条触发边产生。`ParentInvocationID` 只能指向父级执行，而 `ParentMetadata` 进一步给出关联到父级内部具体某次 tool call 的 join key：
+    - `TriggerType`：`tool_call` 表示 AgentTool 调用，`transfer` 表示 `transfer_to_agent` 转交。
+    - `TriggerID`：父级的 `toolCallId`，用于把子 invocation 的事件挂回到父级的具体 `TOOL_CALL_START`。
+    - `TriggerName`：人类可读名称（AgentTool 名字，或 `transfer_to_agent`）。
+
+  该字段是并行 AgentTool 调用的关键消歧器：当模型在一轮里对同一子 Agent 发起多个并行调用时，所有派生 invocation 共享同一个 `ParentInvocationID`，只有 `ParentMetadata.TriggerID` 才能区分每个子 invocation 对应的是哪一次 `TOOL_CALL_START`。当本次 invocation 不是经由父级工具调用触发（如顶层 run），该字段为 `nil`。
 
 可通过以上三个ID，将事件流按照层级结构组织，如下：
 - requestID-1:

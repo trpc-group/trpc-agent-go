@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestSessionSummarizer_ShouldSummarize(t *testing.T) {
@@ -29,7 +30,12 @@ func TestSessionSummarizer_ShouldSummarize(t *testing.T) {
 		s := NewSummarizer(&fakeModel{}, WithChecksAny(checks...))
 		sess := &session.Session{Events: make([]event.Event, 4)}
 		for i := range sess.Events {
-			sess.Events[i] = event.Event{Timestamp: time.Now()}
+			sess.Events[i] = event.Event{
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.Message{Content: "message"},
+				}}},
+			}
 		}
 		assert.True(t, s.ShouldSummarize(sess))
 	})
@@ -40,6 +46,15 @@ func TestSessionSummarizer_ShouldSummarize(t *testing.T) {
 		sess := &session.Session{Events: []event.Event{{Timestamp: time.Now()}}}
 		assert.False(t, s.ShouldSummarize(sess))
 	})
+}
+
+func TestDefaultSummarizerPromptPreservesToolLimitations(t *testing.T) {
+	prompt := getDefaultSummarizerPrompt(0)
+
+	require.Contains(t, prompt, "Do not create new instructions")
+	require.Contains(t, prompt, "pre-loaded data")
+	require.Contains(t, prompt, "tool result was truncated")
+	require.Contains(t, prompt, "instead of treating it as complete evidence")
 }
 
 func TestSessionSummarizer_Summarize(t *testing.T) {
@@ -318,6 +333,82 @@ func TestSessionSummarizer_PlaceholderReplacement(t *testing.T) {
 	})
 }
 
+func TestSessionSummarizer_CacheSafeForking(t *testing.T) {
+	newTestSession := func() *session.Session {
+		return &session.Session{ID: "cache-safe", Events: []event.Event{
+			{
+				Author:    "user",
+				Timestamp: time.Now(),
+				Response: &model.Response{Choices: []model.Choice{{
+					Message: model.NewUserMessage("event text for standalone fallback"),
+				}}},
+			},
+		}}
+	}
+
+	t.Run("appends compaction prompt to parent request", func(t *testing.T) {
+		capture := &cacheSafeCaptureModel{response: "fork summary"}
+		s := NewSummarizer(
+			capture,
+			WithCacheSafeForking(true),
+			WithMaxSummaryWords(42),
+		)
+		lookupTool := &testTool{name: "lookup"}
+		parent := &model.Request{
+			Messages: []model.Message{
+				model.NewSystemMessage("stable system"),
+				model.NewUserMessage("cached conversation"),
+			},
+			GenerationConfig: model.GenerationConfig{Stream: true},
+			StructuredOutput: &model.StructuredOutput{
+				Type: model.StructuredOutputJSONSchema,
+				JSONSchema: &model.JSONSchemaConfig{
+					Name:   "answer",
+					Schema: map[string]any{"type": "object"},
+				},
+			},
+			Tools: map[string]tool.Tool{"lookup": lookupTool},
+		}
+		ctx := ContextWithCacheSafeForkRequest(context.Background(), parent)
+
+		text, err := s.Summarize(ctx, newTestSession())
+		require.NoError(t, err)
+		require.Equal(t, "fork summary", text)
+		require.NotNil(t, capture.request)
+		require.Len(t, capture.request.Messages, 3)
+		require.Equal(t, parent.Messages[0], capture.request.Messages[0])
+		require.Equal(t, parent.Messages[1], capture.request.Messages[1])
+		require.Equal(t, model.RoleUser, capture.request.Messages[2].Role)
+		require.Contains(t, capture.request.Messages[2].Content, "Summarize the user, assistant, and tool conversation above")
+		require.Contains(t, capture.request.Messages[2].Content, "42")
+		require.NotContains(t, capture.request.Messages[2].Content, "{conversation_text}")
+		require.NotContains(t, capture.request.Messages[2].Content, "event text for standalone fallback")
+		require.False(t, capture.request.GenerationConfig.Stream)
+		require.Nil(t, capture.request.StructuredOutput)
+		require.Equal(t, lookupTool, capture.request.Tools["lookup"])
+		require.Len(t, parent.Messages, 2, "parent request must not be mutated")
+		require.True(t, parent.GenerationConfig.Stream, "parent generation config must not be mutated")
+		require.NotNil(t, parent.StructuredOutput, "parent structured output must not be mutated")
+	})
+
+	t.Run("falls back to standalone request without parent request", func(t *testing.T) {
+		capture := &cacheSafeCaptureModel{response: "standalone summary"}
+		s := NewSummarizer(
+			capture,
+			WithCacheSafeForking(true),
+			WithPrompt("Conversation:\n{conversation_text}\n\nSummary:"),
+		)
+
+		text, err := s.Summarize(context.Background(), newTestSession())
+		require.NoError(t, err)
+		require.Equal(t, "standalone summary", text)
+		require.NotNil(t, capture.request)
+		require.Len(t, capture.request.Messages, 1)
+		require.Equal(t, model.RoleUser, capture.request.Messages[0].Role)
+		require.Contains(t, capture.request.Messages[0].Content, "event text for standalone fallback")
+	})
+}
+
 // fakeModel is a minimal model that returns the conversation content back to simulate LLM.
 type fakeModel struct{}
 
@@ -344,6 +435,39 @@ func (f *fakeModel) GenerateContent(ctx context.Context, req *model.Request) (<-
 	ch <- &model.Response{Done: true, Choices: []model.Choice{{Message: model.Message{Content: content}}}}
 	close(ch)
 	return ch, nil
+}
+
+type cacheSafeCaptureModel struct {
+	request  *model.Request
+	response string
+}
+
+func (m *cacheSafeCaptureModel) Info() model.Info {
+	return model.Info{Name: "capture"}
+}
+
+func (m *cacheSafeCaptureModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.request = req
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.Message{Role: model.RoleAssistant, Content: m.response},
+		}},
+	}
+	close(ch)
+	return ch, nil
+}
+
+type testTool struct {
+	name string
+}
+
+func (t *testTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
 }
 
 func TestSessionSummarizer_Summarize_NilModel(t *testing.T) {
@@ -479,7 +603,7 @@ func TestSessionSummarizer_Metadata_NilModel(t *testing.T) {
 	s := &sessionSummarizer{
 		model:           nil,
 		maxSummaryWords: 100,
-		checks:          []ContextChecker{},
+		checks:          []checkEvaluator{},
 	}
 	md := s.Metadata()
 	assert.Equal(t, "", md[metadataKeyModelName])
@@ -1681,10 +1805,11 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 		assert.Nil(t, s.buildCheckSession(nil))
 	})
 
-	t.Run("injects effective token text from formatter-aware delta", func(t *testing.T) {
+	t.Run("injects token text without summary input formatter", func(t *testing.T) {
 		s := &sessionSummarizer{
-			toolResultFormatter: func(model.Message) string { return "" },
+			toolResultFormatter: func(model.Message) string { return "[tool result]" },
 		}
+		content := strings.Repeat("x", 2000)
 		sess := &session.Session{
 			Events: []event.Event{
 				{
@@ -1694,7 +1819,7 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 						Message: model.Message{
 							ToolID:   "call-1",
 							ToolName: "read_file",
-							Content:  strings.Repeat("x", 2000),
+							Content:  content,
 						},
 					}}},
 				},
@@ -1706,7 +1831,7 @@ func TestSessionSummarizer_BuildCheckSession(t *testing.T) {
 
 		raw, ok := checkSess.GetState(tokenThresholdConversationTextStateKey)
 		require.True(t, ok)
-		assert.Empty(t, string(raw))
+		assert.Contains(t, string(raw), content)
 	})
 
 	t.Run("injects reasoning content only for token threshold checks", func(t *testing.T) {

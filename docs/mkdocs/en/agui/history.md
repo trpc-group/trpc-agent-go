@@ -98,6 +98,7 @@ Related configuration:
 
 - `aggregator.WithEnabled(true)` controls whether event aggregation is enabled. It is enabled by default.
 - `agui.WithFlushInterval(time.Second)` controls the periodic flush interval for aggregation results. The default is `1s`. Setting it to `0` disables periodic flushing.
+- `agui.WithTrackPersistenceTimeout(5*time.Second)` limits the maximum duration for event history persistence. The default is `5s`. Setting it to `0` means no timeout is applied.
 - `agui.WithPostRunFinalizationTimeout(5*time.Second)` limits the maximum duration of post-run finalization. The default is `5s`. Finalization needs to fill in protocol closing events and write the aggregation cache to `SessionService`; if session storage becomes slow or fails, the timeout prevents the request from blocking for too long. Setting it to `0` means no timeout is applied.
 
 ```go
@@ -116,6 +117,7 @@ server, err := agui.New(
     agui.WithSessionService(sessionService),
     agui.WithMessagesSnapshotEnabled(true),
     agui.WithFlushInterval(time.Second),
+    agui.WithTrackPersistenceTimeout(5*time.Second),
     agui.WithPostRunFinalizationTimeout(5*time.Second),
     agui.WithAGUIRunnerOptions(
         aguirunner.WithAggregationOption(aggregator.WithEnabled(true)),

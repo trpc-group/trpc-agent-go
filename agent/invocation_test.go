@@ -132,6 +132,80 @@ func TestInvocation_Clone(t *testing.T) {
 	require.Equal(t, inv.noticeMu, subInv.noticeMu)
 }
 
+func TestInvocation_Clone_PropagatesParentMetadata(t *testing.T) {
+	parentMeta := &ParentInvocationMetadata{
+		TriggerType: TriggerTypeToolCall,
+		TriggerID:   "call-abc",
+		TriggerName: "tool-x",
+	}
+	inv := NewInvocation(
+		WithInvocationID("test-invocation"),
+		WithInvocationParentMetadata(parentMeta),
+	)
+
+	// Clone without explicit ParentMetadata option should inherit from parent.
+	cloned := inv.Clone(WithInvocationAgent(&mockAgent{name: "child-agent"}))
+	require.NotNil(t, cloned.ParentMetadata)
+	require.Equal(t, "call-abc", cloned.ParentMetadata.TriggerID,
+		"Clone should propagate ParentMetadata so events from derived invocations preserve correlation")
+
+	// Clone with explicit ParentMetadata option should override the parent value.
+	overrideMeta := &ParentInvocationMetadata{
+		TriggerType: TriggerTypeToolCall,
+		TriggerID:   "call-xyz",
+		TriggerName: "tool-y",
+	}
+	overridden := inv.Clone(
+		WithInvocationAgent(&mockAgent{name: "child-agent"}),
+		WithInvocationParentMetadata(overrideMeta),
+	)
+	require.Equal(t, "call-xyz", overridden.ParentMetadata.TriggerID,
+		"explicit WithInvocationParentMetadata should override the inherited value")
+}
+
+func TestInvocation_View_PropagatesParentMetadata(t *testing.T) {
+	parentMeta := &ParentInvocationMetadata{
+		TriggerType: TriggerTypeToolCall,
+		TriggerID:   "call-abc",
+		TriggerName: "tool-x",
+	}
+	inv := NewInvocation(
+		WithInvocationID("test-invocation"),
+		WithInvocationAgent(&mockAgent{name: "root-agent"}),
+		WithInvocationParentMetadata(parentMeta),
+	)
+
+	view := inv.View()
+	require.NotNil(t, view.ParentMetadata)
+	require.Equal(t, "call-abc", view.ParentMetadata.TriggerID,
+		"View should preserve ParentMetadata since it is part of invocation identity")
+}
+
+func TestInvocation_SyncView_PropagatesParentMetadata(t *testing.T) {
+	originalMeta := &ParentInvocationMetadata{
+		TriggerType: TriggerTypeToolCall,
+		TriggerID:   "call-original",
+		TriggerName: "tool-x",
+	}
+	source := NewInvocation(
+		WithInvocationID("test-invocation"),
+		WithInvocationAgent(&mockAgent{name: "root-agent"}),
+		WithInvocationParentMetadata(originalMeta),
+	)
+
+	view := source.View()
+	view.ParentMetadata = &ParentInvocationMetadata{
+		TriggerType: TriggerTypeToolCall,
+		TriggerID:   "call-updated",
+		TriggerName: "tool-x",
+	}
+
+	source.SyncView(view)
+	require.NotNil(t, source.ParentMetadata)
+	require.Equal(t, "call-updated", source.ParentMetadata.TriggerID,
+		"SyncView should sync ParentMetadata back to the source invocation")
+}
+
 func TestInvocation_View_PreservesIdentityWithoutMutatingSource(t *testing.T) {
 	sourceConfigs := map[string]any{"source": "config"}
 	inv := NewInvocation(
@@ -924,6 +998,31 @@ func TestInjectIntoEvent(t *testing.T) {
 				require.Equal(t, "parent-id", e.ParentInvocationID)
 			},
 		},
+		{
+			name: "inject parent metadata",
+			inv: NewInvocation(WithInvocationID("inv-id"), WithInvocationParentMetadata(
+				&ParentInvocationMetadata{TriggerType: TriggerTypeToolCall, TriggerID: "call-123", TriggerName: "tool-x"},
+			)),
+			event: &event.Event{},
+			validate: func(t *testing.T, e *event.Event) {
+				require.Equal(t, "inv-id", e.InvocationID)
+				require.NotNil(t, e.ParentMetadata)
+				require.Equal(t, "call-123", e.ParentMetadata.TriggerID)
+				require.Equal(t, TriggerTypeToolCall, e.ParentMetadata.TriggerType)
+			},
+		},
+		{
+			name: "does not overwrite existing parent metadata",
+			inv: NewInvocation(WithInvocationID("inv-id"), WithInvocationParentMetadata(
+				&ParentInvocationMetadata{TriggerType: TriggerTypeToolCall, TriggerID: "call-new", TriggerName: "tool-x"},
+			)),
+			event: &event.Event{ParentMetadata: &event.ParentInvocationMetadata{
+				TriggerType: TriggerTypeToolCall, TriggerID: "call-existing", TriggerName: "tool-x",
+			}},
+			validate: func(t *testing.T, e *event.Event) {
+				require.Equal(t, "call-existing", e.ParentMetadata.TriggerID)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1362,6 +1461,21 @@ func TestWithInjectedContextMessages(t *testing.T) {
 		{Role: model.RoleUser, Content: "Hello"},
 		{Role: model.RoleAssistant, Content: "Hello"},
 	}, opts.InjectedContextMessages)
+}
+
+func TestWithLateContextMessages(t *testing.T) {
+	opts := &RunOptions{}
+	WithLateContextMessages([]model.Message{
+		{Role: model.RoleUser, Content: "Rules A"},
+	})(opts)
+	WithLateContextMessages([]model.Message{
+		{Role: model.RoleUser, Content: "Rules B"},
+	})(opts)
+
+	require.Equal(t, []model.Message{
+		{Role: model.RoleUser, Content: "Rules A"},
+		{Role: model.RoleUser, Content: "Rules B"},
+	}, opts.LateContextMessages)
 }
 
 func TestWithUserMessageRewriter(t *testing.T) {

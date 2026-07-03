@@ -21,11 +21,10 @@ var (
 	basePath                  = flag.String("base-path", "/promptiter/v1/apps", "Base path exposed by the PromptIter server")
 	dataDir                   = flag.String("data-dir", "./data", "Directory containing evaluation set and metric files")
 	outputDir                 = flag.String("output-dir", "./output", "Directory where evaluation results will be stored")
-	modelName                 = flag.String("model", "deepseek-v4-flash", "Model identifier used by the candidate agent")
-	candidateInstruction      = flag.String("candidate-instruction", defaultCandidateInstruction, "Instruction used by the candidate agent")
-	judgeModelName            = flag.String("judge-model", "gpt-5.4", "Model identifier used by the judge agent")
-	workerModelName           = flag.String("worker-model", "gpt-5.4", "Model identifier used by the PromptIter backwarder, aggregator, and optimizer agents")
-	evalCaseParallelism       = flag.Int("eval-case-parallelism", 8, "Maximum number of eval cases processed in parallel")
+	modelName                 = flag.String("model", "deepseek-v3.2", "Model identifier used by the candidate sports recap agent")
+	judgeModelName            = flag.String("judge-model", "gpt-5.2", "Model identifier used by the judge agent")
+	workerModelName           = flag.String("worker-model", "gpt-5.2", "Model identifier used by the PromptIter worker agents")
+	evalCaseParallelism       = flag.Int("eval-case-parallelism", 16, "Maximum number of eval cases processed in parallel")
 	parallelInferenceEnabled  = flag.Bool("parallel-inference", true, "Enable parallel inference across eval cases")
 	parallelEvaluationEnabled = flag.Bool("parallel-evaluation", true, "Enable parallel evaluation across eval cases")
 )
@@ -49,7 +48,7 @@ func main() {
 		DataDir:                   *dataDir,
 		OutputDir:                 *outputDir,
 		CandidateModelName:        *modelName,
-		CandidateInstruction:      *candidateInstruction,
+		CandidateInstruction:      defaultCandidateInstruction,
 		JudgeModelName:            *judgeModelName,
 		WorkerModelName:           *workerModelName,
 		EvalCaseParallelism:       *evalCaseParallelism,

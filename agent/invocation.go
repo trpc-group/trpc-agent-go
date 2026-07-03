@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/structuredoutput"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -58,6 +59,12 @@ const (
 	// appenderStateKey is the invocation state key used by internal appender
 	// attachment (see internal/state/appender).
 	appenderStateKey = "__append_event__"
+	// liveSessionStateKey is the invocation state key used by internal
+	// livesession attachment (see internal/state/livesession). Sub-agents
+	// (e.g., AgentTool) read this pointer to restore the runner's live
+	// session after the function-call processor clones the invocation
+	// session for state-delta isolation.
+	liveSessionStateKey = "__live_session__"
 
 	// streamHubStateKey is the invocation state key used by the graph to
 	// share ephemeral streams across node invocations within the same run.
@@ -80,7 +87,34 @@ type TransferInfo struct {
 	TargetAgentName string
 	// Message is the message to send to the target agent.
 	Message string
+	// ToolCallID is the originating toolCallId of the transfer_to_agent
+	// invocation. transfer_to_agent tool captures it from its ctx so the
+	// transfer response processor can build a ParentInvocationMetadata for
+	// the target invocation; without this, the toolCallId is lost when the
+	// per-tool ctx is discarded.
+	ToolCallID string
 }
+
+// TriggerType enumerates how a child invocation was created from its parent.
+const (
+	// TriggerTypeToolCall indicates the child invocation was created because
+	// the parent agent invoked an AgentTool (sub-task delegation pattern).
+	TriggerTypeToolCall = event.TriggerTypeToolCall
+	// TriggerTypeTransfer indicates the child invocation was created because
+	// the parent agent invoked the transfer_to_agent tool (handoff pattern).
+	TriggerTypeTransfer = event.TriggerTypeTransfer
+)
+
+// ParentInvocationMetadata describes how a child invocation was triggered by
+// its parent. It is set on the child Invocation (not the parent), and is
+// propagated into events emitted by the child via InjectIntoEvent so that
+// downstream consumers (e.g., AGUI) can correlate child events with the
+// specific parent action that spawned them.
+//
+// The canonical type lives in the event package (where Event also carries it)
+// to avoid a cyclic import; this is an alias for ergonomic use within the
+// agent package.
+type ParentInvocationMetadata = event.ParentInvocationMetadata
 
 // Invocation represents the context for a flow execution.
 type Invocation struct {
@@ -93,6 +127,22 @@ type Invocation struct {
 	// Branch records agent execution chain information.
 	// In multi-agent mode, this is useful for tracing agent execution trajectories.
 	Branch string
+	// ParentMetadata describes how this invocation was created from its
+	// parent. It is non-nil when the framework spawned this invocation via a
+	// known mechanism (AgentTool, transfer). Top-level invocations (started
+	// directly by Runner) have ParentMetadata == nil.
+	//
+	// ParentMetadata describes the *immediate* parent edge only (e.g., a
+	// transferred-to agent records the transfer that produced it, not
+	// whatever spawned the transferring agent). Walking the ancestral chain
+	// requires following parent invocations via GetParentInvocation.
+	//
+	// Downstream consumers (e.g., AGUI) can read ParentMetadata.TriggerID to
+	// correlate this invocation's events with the specific parent action
+	// that spawned it. This is critical when a parent agent issues parallel
+	// AgentTool calls to the same sub-agent: parentInvocationId alone cannot
+	// disambiguate the parallel branches; ParentMetadata.TriggerID can.
+	ParentMetadata *ParentInvocationMetadata
 	// EndInvocation is a flag that indicates if the invocation is complete.
 	EndInvocation bool
 	// Session is the session that is being used for the invocation.
@@ -284,6 +334,23 @@ func WithModelRequestExtraFields(fields map[string]any) RunOption {
 	}
 }
 
+// WithModelRequestHeaders merges provider-specific HTTP headers into each
+// model request created during this run. Request-level headers take precedence
+// over model-level headers in adapters that support merging.
+func WithModelRequestHeaders(headers map[string]string) RunOption {
+	return func(opts *RunOptions) {
+		if len(headers) == 0 {
+			return
+		}
+		if opts.ModelRequestHeaders == nil {
+			opts.ModelRequestHeaders = make(map[string]string, len(headers))
+		}
+		for key, value := range headers {
+			opts.ModelRequestHeaders[key] = value
+		}
+	}
+}
+
 // MergeRuntimeState merges runtime state into existing RunOptions state.
 //
 // When a key already exists, the new value replaces the old one.
@@ -378,6 +445,15 @@ func WithMessages(messages []model.Message) RunOption {
 func WithInjectedContextMessages(messages []model.Message) RunOption {
 	return func(opts *RunOptions) {
 		opts.InjectedContextMessages = append(opts.InjectedContextMessages, messages...)
+	}
+}
+
+// WithLateContextMessages appends per-run messages that are injected into the
+// model request near the latest user turn but are not persisted into the session
+// transcript.
+func WithLateContextMessages(messages []model.Message) RunOption {
+	return func(opts *RunOptions) {
+		opts.LateContextMessages = append(opts.LateContextMessages, messages...)
 	}
 }
 
@@ -538,6 +614,21 @@ func WithDisableResponseUsageTracking(disable bool) RunOption {
 func WithDisableModelExecutionEvents(disable bool) RunOption {
 	return func(opts *RunOptions) {
 		opts.DisableModelExecutionEvents = disable
+	}
+}
+
+// WithLatencyDiagnostics enables pre-LLM diagnostic spans and status events.
+func WithLatencyDiagnostics(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.LatencyDiagnosticsEnabled = enabled
+		opts.LatencyDiagnosticsEmitEvents = enabled
+	}
+}
+
+// WithLatencyDiagnosticsEvents controls whether diagnostics emit events.
+func WithLatencyDiagnosticsEvents(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.LatencyDiagnosticsEmitEvents = enabled
 	}
 }
 
@@ -1045,6 +1136,11 @@ type RunOptions struct {
 	// session events and therefore must be provided on every run if needed.
 	InjectedContextMessages []model.Message
 
+	// LateContextMessages allows callers to inject additional context messages
+	// near the latest user turn for this run. These messages are not persisted
+	// into session events and therefore must be provided on every run if needed.
+	LateContextMessages []model.Message
+
 	// UserMessageRewriter rewrites the current-turn input into an ordered
 	// message sequence before runner persists it into the session transcript.
 	UserMessageRewriter UserMessageRewriter
@@ -1109,6 +1205,12 @@ type RunOptions struct {
 	// DisableModelExecutionEvents disables emitting model execution start/complete events.
 	DisableModelExecutionEvents bool
 
+	// LatencyDiagnosticsEnabled enables detailed pre-LLM diagnostic spans.
+	LatencyDiagnosticsEnabled bool
+
+	// LatencyDiagnosticsEmitEvents emits caller-visible diagnostic status events.
+	LatencyDiagnosticsEmitEvents bool
+
 	// DisablePartialEventIDs disables generating IDs for partial response events.
 	DisablePartialEventIDs bool
 
@@ -1150,6 +1252,9 @@ type RunOptions struct {
 	// Key: agent type, Value: agent-specific config.
 	CustomAgentConfigs map[string]any
 
+	// Plugins contains plugin managers that apply only to this run.
+	Plugins []PluginManager
+
 	// Agent overrides the runner's default agent for this run.
 	Agent Agent
 
@@ -1179,6 +1284,13 @@ type RunOptions struct {
 	// Adapters that support extra fields merge these with model-level extra
 	// fields, with these request-level values taking precedence.
 	ModelRequestExtraFields map[string]any
+
+	// ModelRequestHeaders contains provider-specific HTTP headers for model
+	// calls made during this run.
+	//
+	// Adapters that support request headers merge these with model-level
+	// headers, with these request-level values taking precedence.
+	ModelRequestHeaders map[string]string
 
 	// CodeExecutor is the code executor to use for this specific run.
 	// If set, it temporarily overrides the agent's default code executor for
@@ -1302,7 +1414,7 @@ func (opts RunOptions) ShouldExecuteTool(
 	if opts.ToolExecutionFilter == nil {
 		return true
 	}
-	return opts.ToolExecutionFilter(ctx, tl)
+	return opts.ToolExecutionFilter(ctx, itool.ResolveDeclaration(tl))
 }
 
 func (opts RunOptions) isExternalTool(tl tool.Tool) bool {
@@ -1401,6 +1513,7 @@ func (inv *Invocation) Clone(invocationOpts ...InvocationOptions) *Invocation {
 	}
 	newInv := &Invocation{
 		InvocationID:    uuid.NewString(),
+		ParentMetadata:  inv.ParentMetadata,
 		Session:         inv.Session,
 		SessionService:  inv.SessionService,
 		Message:         inv.Message,
@@ -1457,6 +1570,7 @@ func (inv *Invocation) View(invocationOpts ...InvocationOptions) *Invocation {
 		Agent:                inv.Agent,
 		AgentName:            inv.AgentName,
 		InvocationID:         inv.InvocationID,
+		ParentMetadata:       inv.ParentMetadata,
 		Branch:               inv.Branch,
 		EndInvocation:        inv.EndInvocation,
 		Session:              inv.Session,
@@ -1500,6 +1614,7 @@ func (inv *Invocation) SyncView(view *Invocation) {
 	inv.Agent = view.Agent
 	inv.AgentName = view.AgentName
 	inv.InvocationID = view.InvocationID
+	inv.ParentMetadata = view.ParentMetadata
 	inv.Branch = view.Branch
 	inv.EndInvocation = view.EndInvocation
 	inv.Session = view.Session
@@ -1584,6 +1699,7 @@ func isCloneStateKey(key string) bool {
 	case flusherStateKey,
 		barrierStateKey,
 		appenderStateKey,
+		liveSessionStateKey,
 		streamHubStateKey,
 		surfaceRootNodeIDStateKey,
 		teamMemberTraceRootStateKey:
@@ -1876,6 +1992,9 @@ func InjectIntoEvent(inv *Invocation, e *event.Event) {
 	e.InvocationID = inv.InvocationID
 	e.Branch = inv.Branch
 	e.FilterKey = inv.GetEventFilterKey()
+	if e.ParentMetadata == nil && inv.ParentMetadata != nil {
+		e.ParentMetadata = inv.ParentMetadata
+	}
 }
 
 // EmitEvent inject invocation information into event and emit it to channel.

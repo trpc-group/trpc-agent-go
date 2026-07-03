@@ -2145,12 +2145,83 @@ func Test_repairToolUseInputIfNeeded(t *testing.T) {
 
 func Test_StreamingMessageAccumulator_IncompleteToolUseInputFinalizes(t *testing.T) {
 	acc := newStreamingMessageAccumulator()
+	// Partial JSON in tool-use Input is now handled gracefully:
+	// ensureValidToolInput resets invalid Input to {} before refreshContentBlockRawJSON.
 	acc.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}}
 	acc.inputDeltaStartedAt = []bool{false}
 	require.NoError(t, acc.Accumulate(mustMessageStreamEventUnion(t,
 		`{"type":"content_block_stop","index":0}`)))
 	require.NoError(t, acc.Finalize())
 	assert.JSONEq(t, `{}`, string(acc.message.Content[0].Input))
+	// The invalid Input should have been reset to {}.
+	assert.Equal(t, json.RawMessage("{}"), acc.message.Content[0].Input)
+	// Proxy sends "input": null (literal JSON null) with no input_json_delta.
+	// ensureValidToolInput must treat this as empty and reset to {}.
+	acc3 := newStreamingMessageAccumulator()
+	acc3.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("null")}}
+	acc3.inputDeltaStartedAt = []bool{false}
+	require.NoError(t, acc3.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_stop","index":0}`)))
+	assert.Equal(t, json.RawMessage("{}"), acc3.message.Content[0].Input)
+
+	// Non-tool_use blocks with malformed Input must NOT be auto-repaired.
+	acc2 := newStreamingMessageAccumulator()
+	acc2.message.Content = []anthropic.ContentBlockUnion{{Type: "text", Input: json.RawMessage("{")}}
+	acc2.inputDeltaStartedAt = []bool{false}
+	require.Error(t, acc2.Accumulate(mustMessageStreamEventUnion(t,
+		`{"type":"content_block_stop","index":0}`)))
+	// Input remains unchanged — auto-repair is tool_use-specific.
+	assert.Equal(t, json.RawMessage("{"), acc2.message.Content[0].Input)
+
+	// refreshContentBlockRawJSON repairs invalid tool_use Input when called directly.
+	block := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("{")}
+	require.NoError(t, refreshContentBlockRawJSON(block))
+	assert.JSONEq(t, `{}`, string(block.Input))
+
+	require.NoError(t, finalizeStreamingMessage(&anthropic.Message{
+		Content: []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}},
+	}))
+}
+
+func Test_ensureValidToolInput(t *testing.T) {
+	// nil input — no-op.
+	var nilBlock *anthropic.ContentBlockUnion
+	ensureValidToolInput(nilBlock) // should not panic
+
+	// non-tool_use block — no-op.
+	nonTool := &anthropic.ContentBlockUnion{Type: "text", Input: json.RawMessage("{bad")}
+	ensureValidToolInput(nonTool)
+	assert.Equal(t, json.RawMessage("{bad"), nonTool.Input, "non-tool_use Input must not be modified")
+
+	// tool_use with nil Input — reset to {}.
+	nilInput := &anthropic.ContentBlockUnion{Type: "tool_use"}
+	ensureValidToolInput(nilInput)
+	assert.Equal(t, json.RawMessage("{}"), nilInput.Input)
+
+	// tool_use with empty Input — reset to {}.
+	emptyInput := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("")}
+	ensureValidToolInput(emptyInput)
+	assert.Equal(t, json.RawMessage("{}"), emptyInput.Input)
+
+	// tool_use with whitespace-only Input — reset to {}.
+	wsInput := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("  ")}
+	ensureValidToolInput(wsInput)
+	assert.Equal(t, json.RawMessage("{}"), wsInput.Input)
+
+	// tool_use with partial JSON — reset to {}.
+	partialInput := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("{")}
+	ensureValidToolInput(partialInput)
+	assert.Equal(t, json.RawMessage("{}"), partialInput.Input)
+
+	// tool_use with literal "null" (json.Valid("null") is true) — reset to {}.
+	nullLiteral := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("null")}
+	ensureValidToolInput(nullLiteral)
+	assert.Equal(t, json.RawMessage("{}"), nullLiteral.Input)
+
+	// tool_use with valid JSON — unchanged.
+	validInput := &anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage(`{"key":"val"}`)}
+	ensureValidToolInput(validInput)
+	assert.Equal(t, json.RawMessage(`{"key":"val"}`), validInput.Input)
 }
 
 func mustMessageStreamEventUnion(t *testing.T, raw string) anthropic.MessageStreamEventUnion {
@@ -2735,17 +2806,17 @@ func TestWithEnableTokenTailoring_Disabled(t *testing.T) {
 func TestWithEnableTokenTailoring_UnknownModel(t *testing.T) {
 	// Capture the built Anthropic request.
 	var captured *anthropic.MessageNewParams
-	m := New("unknown-model-xyz", // Unknown model should fallback to default context window
+	m := New("unknown-model-xyz", // Unknown model should fallback to the 128000-token default context window
 		WithEnableTokenTailoring(true),
 		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
 			captured = req
 		}),
 	)
 
-	// Create many messages to trigger tailoring.
+	// Create messages large enough to trigger tailoring with the unknown-model fallback window.
 	messages := []model.Message{model.NewSystemMessage("You are a helpful assistant.")}
 	for i := 0; i < 50; i++ {
-		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 50))))
+		messages = append(messages, model.NewUserMessage(fmt.Sprintf("Message %d: %s", i, strings.Repeat("lorem ipsum ", 1000))))
 	}
 
 	req := &model.Request{Messages: messages}
@@ -3059,33 +3130,19 @@ func (emptyTailoringStrategy) TailorMessages(
 	return []model.Message{}, nil
 }
 
-// TestWithEnableTokenTailoring_TailoredToEmpty tests tailoring dropping all messages.
-func TestWithEnableTokenTailoring_TailoredToEmpty(t *testing.T) {
-	var captured *anthropic.MessageNewParams
+// TestWithTokenTailoring_PreservesOriginalOnEmptyResult verifies empty tailoring
+// results do not wipe a non-empty request (modeltailoring.ApplyResult guard).
+func TestWithTokenTailoring_PreservesOriginalOnEmptyResult(t *testing.T) {
+	original := []model.Message{model.NewUserMessage("A")}
 	m := New("claude-3-5-sonnet",
 		WithEnableTokenTailoring(true),
 		WithMaxInputTokens(100),
 		WithTokenCounter(testStubCounter{}),
 		WithTailoringStrategy(emptyTailoringStrategy{}),
-		WithChatRequestCallback(func(ctx context.Context, req *anthropic.MessageNewParams) {
-			captured = req
-		}),
 	)
-
-	req := &model.Request{Messages: []model.Message{
-		model.NewUserMessage("A"),
-	}}
-
-	ch, err := m.GenerateContent(context.Background(), req)
-	require.NoError(t, err, "GenerateContent")
-
-	select {
-	case <-ch:
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	require.NotNil(t, captured, "expected request callback to capture request")
-	require.Len(t, captured.Messages, 0, "expected messages to be empty")
+	req := &model.Request{Messages: append([]model.Message(nil), original...)}
+	m.applyTokenTailoring(context.Background(), req)
+	require.Equal(t, original, req.Messages)
 }
 
 // ============================================================================

@@ -272,6 +272,33 @@ tools:
   # 可选：覆盖内置的 OpenClaw tooling guidance 提示词。
   # 不设置时使用内置默认值，设为 "" 可禁用它。
   openclaw_tooling_guidance: ""
+  # 可选：当直接工具面超过 auto 阈值时，先只向父模型暴露轻量
+  # tool_search + dynamic_agent 入口。默认模式为 auto；设置
+  # defer_to_dynamic_agent_mode: on 可强制开启，设置 off 可关闭。
+  defer_to_dynamic_agent_mode: auto # off|on|auto
+  defer_to_dynamic_agent_threshold_chars: 4000
+  # 可选：是否保留默认的父 agent 直连工具。对 token 敏感的 profile 可
+  # 设为 false，仅暴露 tool_search/dynamic_agent 和 defer_direct_tools。
+  # defer_default_direct_tools: true
+  # 可选：保留少量父 agent 可直接调用的工具。
+  # defer_direct_tools: ["exec_command"]
+  # 可选：host exec_command 未传 timeout_sec 时使用的默认超时。
+  # 留空则沿用内置 host exec 默认值。
+  # host_exec_default_timeout: "60s"
+  # 可选：配置 fenced-code 执行，但不暴露 workspace_exec。
+  code_executor:
+    type: "sandbox" # sandbox；留空或不设置时继承 enable_local_exec
+    auto_execute_code_blocks: true
+    sandbox:
+      workspace_root: "" # 默认 state_dir/sandbox
+      backend: "auto" # auto|linux-bubblewrap|macos-sandbox-exec
+      profile: "workspace_write" # workspace_write|read_only|disabled
+      network: "restricted" # restricted|enabled
+      default_timeout: "30s"
+      output_max_bytes: 1048576
+      shell_env:
+        inherit: "core" # all|core|none
+        apply_default_excludes: true
   providers:
     - type: "browser"
       name: "browser-runtime"
@@ -316,6 +343,22 @@ go run ./cmd/openclaw -config ./openclaw.yaml
 - 时长字段使用 Go 风格的字符串，如 `60s`、`10m`、`1h`。
 - 对于密钥（模型 key、Telegram token），请勿将其纳入版本控制。
   建议尽可能使用环境变量。
+- `tools.code_executor.type: sandbox` 会把 `codeexecutor/sandbox`
+  同时接入 fenced-code 执行和 OpenClaw `exec_command`，并继续隐藏通用
+  `workspace_exec` tool 表面。在这个模式下，`exec_command` 只支持前台、
+  非交互式命令；`write_stdin` 和 `kill_session` 不会暴露出来。
+- Sandbox 决策表：
+
+  | 配置 | Fenced code blocks | OpenClaw `exec_command` | 交互式续写 | 典型场景 |
+  | --- | --- | --- | --- | --- |
+  | `tools.code_executor.type: "sandbox"` | 在 sandbox 中执行 | 在 sandbox 中执行 | 不可用（不会暴露 `write_stdin` / `kill_session`） | 需要文件系统、网络、超时或环境变量隔离 |
+  | `tools.code_executor.type: ""` | `enable_local_exec: true` 时在宿主机执行；`false` 时禁用 | 在宿主机执行 | 宿主机 `exec_command` 会话可继续交互 | 需要宿主机 shell 语义或交互式 shell 工作流 |
+
+- 在 sandbox 模式下，上传和 memory 变量仍会暴露稳定的
+  `OPENCLAW_*` 元数据，但 `OPENCLAW_LAST_UPLOAD_PATH`、
+  `OPENCLAW_SESSION_UPLOADS_DIR`、`OPENCLAW_MEMORY_FILE`、
+  `OPENCLAW_USER_MEMORY_FILE` 和 `OPENCLAW_CHAT_MEMORY_FILE`
+  这类宿主机路径不会自动挂载进 sandbox。
 - `knowledges` 当前只负责把 embedder / vector store 接到 runtime；
   文档加载是独立的运行时动作。
 - `pgvector` knowledge 配置示例：
@@ -641,6 +684,29 @@ go run ./cmd/openclaw \
 - `OPENAI_BASE_URL`（环境变量），或
 - `-openai-base-url`（CLI 参数），或
 - `model.base_url`（YAML 配置）。
+
+某些 OpenAI 兼容网关还要求额外 HTTP header。可以用
+`OPENAI_HEADERS` 设置，格式为空格、逗号或换行分隔的 `KEY=VALUE`：
+
+```bash
+export OPENAI_HEADERS="X-Example-User=alice X-Example-Agent=openclaw"
+```
+
+如果 header 值包含空格或逗号，请加引号：
+
+```bash
+export OPENAI_HEADERS='X-Example-User=alice Authorization="Bearer token"'
+```
+
+也可以写在 YAML 里：
+
+```yaml
+model:
+  headers:
+    X-Example-User: "alice"
+    X-Example-Agent: "openclaw"
+    X-Example-Token: "Bearer token-with-space"
+```
 
 ### DeepSeek（OpenAI 兼容）
 
@@ -1208,6 +1274,10 @@ OpenClaw 支持以下扩展点：
   `registry.RegisterMemoryBackend(type, factory)` 注册。
   通过 `memory.backend`（`-memory-backend`）和可选的
   `memory.config` 选择。
+- **Gateway Run Options**：在自定义二进制文件中传入
+  `app.WithGatewayRunOptions(...)` 或
+  `app.WithGatewayRunOptionResolver(...)`，为每个请求注入
+  `agent.RunOption`。
 - **Skills**：无需 Go 代码；将 `skills.extra_dirs` 指向一个文件夹。
 
 有关插件编写的分步指南（含复制粘贴模板），参见 `openclaw/EXTENDING.md`。

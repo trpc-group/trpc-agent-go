@@ -218,6 +218,8 @@ func missingReaderError(fileType string) error {
 	switch fileType {
 	case "go":
 		return fmt.Errorf("no reader available for file type: go; import _ %q", "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/golang")
+	case "python":
+		return fmt.Errorf("no reader available for file type: python; import _ %q", "trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/python")
 	default:
 		return fmt.Errorf("no reader available for file type: %s", fileType)
 	}

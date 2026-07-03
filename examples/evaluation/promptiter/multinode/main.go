@@ -40,7 +40,7 @@ var (
 	parallelOptimizerEnabled   = flag.Bool("parallel-optimization", true, "Enable parallel optimization across target surfaces")
 	minScoreGain               = flag.Float64("min-score-gain", 0.01, "Minimum validation score gain required to accept a patch")
 	maxRoundsWithoutAcceptance = flag.Int("max-rounds-without-acceptance", 3, "Maximum consecutive rejected rounds before stopping")
-	targetScore                = flag.Float64("target-score", 1.01, "Target validation score that stops optimization when reached")
+	targetScore                = flag.Float64("target-score", 1.0, "Target validation score that stops optimization when reached")
 	pollInterval               = flag.Duration("poll-interval", 30*time.Second, "Polling interval used to report PromptIter manager progress")
 )
 

@@ -208,10 +208,8 @@ func TestTraceWorkflow(t *testing.T) {
 				gotRsp = kv.Value.AsString()
 			}
 		}
-		require.Contains(t, gotReq, "<not json serializable:")
-		require.Contains(t, gotReq, "unsupported type")
-		require.Contains(t, gotRsp, "<not json serializable>:")
-		require.Contains(t, gotRsp, "unsupported type")
+		require.Equal(t, gotReq, "<not json serializable>")
+		require.Equal(t, gotRsp, "<not json serializable>")
 	})
 
 	t.Run("error sets status and records error", func(t *testing.T) {

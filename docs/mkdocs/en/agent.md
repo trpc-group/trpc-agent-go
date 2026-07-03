@@ -371,6 +371,63 @@ agent := llmagent.New(
 
 **Note:** This option only affects how historical messages are processed before sending to the model. The current response's `reasoning_content` is always captured and stored in session events.
 
+### Tool Transcript History Mode
+
+By default, LLMAgent sends historical tool calls and their matching tool
+results back to the model on later requests. This is the most conservative
+behavior and preserves full compatibility, but long sessions with many completed
+tool rounds can spend unnecessary context on tool transcripts that the model no
+longer needs.
+
+LLMAgent provides `WithToolTranscriptMode` to control how completed historical
+tool-call/tool-result pairs are projected into model requests:
+
+| Mode | Constant | Description |
+|------|----------|-------------|
+| Keep All | `ToolTranscriptModeKeepAll` | Keep all historical tool-call/tool-result transcripts in model requests. **(Default)** |
+| Omit Previous Completed | `ToolTranscriptModeOmitPreviousCompleted` | Omit completed tool-call/tool-result pairs from previous requests while preserving active or incomplete tool rounds. |
+
+**Usage Example:**
+
+```go
+agent := llmagent.New(
+    "assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithInstruction("You are a helpful assistant."),
+    // Reduce prompt size by omitting completed tool transcripts from previous requests.
+    llmagent.WithToolTranscriptMode(llmagent.ToolTranscriptModeOmitPreviousCompleted),
+)
+```
+
+**How It Works:**
+
+- **`keep_all`**: All historical tool calls and tool results are preserved in
+  model requests.
+- **`omit_previous_completed`**: When building the message list for a new
+  request, completed tool-call/tool-result pairs from previous requests are
+  omitted from the projected history.
+
+The omit mode is intentionally conservative:
+
+- Current-request tool loops are preserved, so the model can still see the tool
+  calls it is actively resolving.
+- Incomplete historical tool calls are preserved because dropping them could
+  produce an invalid tool-call transcript.
+- Assistant text attached to an omitted tool-call event is retained; only the
+  tool calls and matching tool results are removed.
+- Session events are not deleted. The mode only changes what is sent to the
+  model request.
+
+Use `ToolTranscriptModeOmitPreviousCompleted` when completed historical tool
+transcripts are no longer needed by the model and prompt size matters. Keep the
+default `ToolTranscriptModeKeepAll` if later answers must inspect previous raw
+tool calls or tool results exactly.
+
+This option is different from context compaction: tool transcript mode can omit
+whole completed historical tool-call/tool-result pairs from request projection,
+while context compaction keeps the tool result message shape and only shrinks
+large tool-result content.
+
 ### Delegation Visibility Options
 
 When building multi‑Agent systems (task delegation between Agents), LLMAgent provides a unified fallback option for delegation events. Transfer events always include announcement text and are tagged `transfer` so UIs (User Interfaces) can filter them if desired.
@@ -404,8 +461,10 @@ When the model calls tools, the tool outputs are added to the conversation as
 on the tool result…”, or reveal internal process details.
 
 To make the assistant respond more naturally after tool calls, LLMAgent
-injects a short “post-tool” dynamic prompt into the system message **only when
-tool results are present**.
+injects a short “post-tool” guidance block into the system message when the
+feature is enabled. The guidance is present from the first model request so
+later tool-call turns keep the same prompt prefix and can reuse provider-side
+prompt caches more effectively.
 
 - Default: enabled, using the built-in prompt.
 - Customize the injected text: `llmagent.WithPostToolPrompt("...")`.
@@ -1046,6 +1105,45 @@ Memory Service is used to record user preference information, supporting persona
 1. [Runner](runner.md) - Learn the recommended usage
 2. [Session](session/index.md) - Understand session management
 3. [Multi-Agent](multiagent.md) - Learn multi-Agent systems
+
+## Prompt Scaffolding (“Rules” / Context Injection)
+
+Many agent products expose a “rules” feature (project memory, per‑turn constraints, etc.). In practice, “rules” is not a single stable framework‑level concept: different products choose different semantics (system vs user role, placement relative to history, persistence, file‑scoped selection, cache behavior).
+
+tRPC‑Agent‑Go intentionally keeps this generic and provides **prompt / context injection primitives** that you can combine to implement your product’s “rules” semantics.
+
+### Choose the right primitive
+
+- Always‑on stable guidance (recommended for “global rules”):
+  - Agent‑level: `llmagent.WithGlobalInstruction(...)` / `llmagent.WithInstruction(...)`
+  - Per‑run override (does not mutate the agent): `agent.WithGlobalInstruction(...)` / `agent.WithInstruction(...)`
+- Per‑run, non‑persistent context injected **before session history** (good for background seed context):
+  - `agent.WithInjectedContextMessages([]model.Message{...})`
+- Per‑run, non‑persistent context injected **near the latest user turn** (useful for per‑turn “rules” / dynamic constraints):
+  - `agent.WithLateContextMessages([]model.Message{...})`
+- Full control over the final request messages:
+  - Use a structured `BeforeModel` callback to rewrite `request.Messages` (see `docs/mkdocs/en/callbacks.md`).
+
+### Message placement (high level)
+
+The content request processor assembles the final model request roughly like this:
+
+1. System prompt / instructions (stable prefix)
+2. Few-shot examples (if configured, inserted after the leading system block)
+3. Injected context messages (`WithInjectedContextMessages`) — **before history**
+4. Session history (canonical transcript)
+5. Late context messages (`WithLateContextMessages`) — **inserted before the latest user message** (if there is no user message, they are inserted immediately after the leading system block)
+6. (If already present) tool / assistant tail belonging to the current turn
+
+This “late” placement is useful when your injected content is dynamic and you want it close to the current user request, while keeping the prefix stable for prompt caching.
+
+### Notes and best practices
+
+- Prefer `role=user` for late context messages. Injecting `role=system` in the middle of the message list is not universally supported across providers and may interact poorly with validators.
+- `WithInjectedContextMessages` and `WithLateContextMessages` are **not persisted** into the session transcript (they affect only the current model request).
+- In multi‑agent runs, these options live on `RunOptions` and are propagated via invocation cloning. If you need per‑agent scoping, use callbacks and filter by `invocation.AgentName`.
+
+Runnable example: `examples/prompt/late_context_messages`.
 
 ## Runtime Instruction Updates
 

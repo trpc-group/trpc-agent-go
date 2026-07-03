@@ -55,6 +55,13 @@ func (p *SurfacePatch) SetSkillRepository(repo skill.Repository) {
 	p.patch.SetSkillRepository(repo)
 }
 
+// SetSuppressSubAgentTransfer omits framework-managed sub-agent transfer
+// (transfer_to_agent) from the node's tool surface even when the node's agent
+// has sub-agents.
+func (p *SurfacePatch) SetSuppressSubAgentTransfer() {
+	p.patch.SetSuppressSubAgentTransfer()
+}
+
 // WithSurfacePatchForNode applies one node's runtime surface overrides to this run.
 func WithSurfacePatchForNode(nodeID string, patch SurfacePatch) RunOption {
 	return func(opts *RunOptions) {

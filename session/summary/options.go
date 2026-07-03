@@ -59,6 +59,31 @@ func WithSystemPrompt(prompt string) Option {
 	}
 }
 
+// WithCacheSafeForking enables cache-safe summary request construction when a
+// parent model request is available in the context. When enabled, the
+// summarizer clones the parent request and appends a compacting user message
+// instead of sending a standalone summary prompt. If no parent request is
+// available, summarization falls back to the standalone prompt path.
+//
+// This is disabled by default.
+func WithCacheSafeForking(enable bool) Option {
+	return func(s *sessionSummarizer) {
+		s.cacheSafeForking = enable
+	}
+}
+
+// WithCacheSafeForkPrompt sets the user message appended to a parent request
+// when cache-safe forking is enabled. The prompt may include
+// {max_summary_words}, but it must not include {conversation_text}; the parent
+// request already contains the conversation prefix.
+func WithCacheSafeForkPrompt(prompt string) Option {
+	return func(s *sessionSummarizer) {
+		if prompt != "" {
+			s.cacheSafeForkPrompt = prompt
+		}
+	}
+}
+
 // WithMaxSummaryWords sets the maximum word count for summaries.
 // A value <= 0 means no word limit. The word limit will be included in the
 // prompt to guide the model's generation rather than truncating the output.
@@ -106,7 +131,7 @@ func WithSkipRecent(skipFunc SkipRecentFunc) Option {
 // If you call multiple threshold options (e.g. token + event), all must pass.
 func WithTokenThreshold(tokenCount int) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, CheckTokenThresholdContext(tokenCount))
+		s.checks = append(s.checks, evaluateTokenThreshold(tokenCount))
 	}
 }
 
@@ -115,7 +140,7 @@ func WithTokenThreshold(tokenCount int) Option {
 // If you call multiple threshold options (e.g. token + event), all must pass.
 func WithEventThreshold(eventCount int) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, wrapChecker(CheckEventThreshold(eventCount)))
+		s.checks = append(s.checks, evaluateEventThreshold(eventCount))
 	}
 }
 
@@ -124,7 +149,7 @@ func WithEventThreshold(eventCount int) Option {
 // If you call multiple threshold options (e.g. event + time), all must pass.
 func WithTimeThreshold(interval time.Duration) Option {
 	return func(s *sessionSummarizer) {
-		s.checks = append(s.checks, wrapChecker(CheckTimeThreshold(interval)))
+		s.checks = append(s.checks, evaluateTimeThreshold(interval))
 	}
 }
 
@@ -151,7 +176,7 @@ func WithChecksAny(checks ...Checker) Option {
 func WithChecksAllContext(checks ...ContextChecker) Option {
 	return func(s *sessionSummarizer) {
 		if len(checks) > 0 {
-			s.checks = append(s.checks, allContextChecks(checks))
+			s.checks = append(s.checks, wrapContextChecker(allContextChecks(checks)))
 		}
 	}
 }
@@ -161,8 +186,16 @@ func WithChecksAllContext(checks ...ContextChecker) Option {
 func WithChecksAnyContext(checks ...ContextChecker) Option {
 	return func(s *sessionSummarizer) {
 		if len(checks) > 0 {
-			s.checks = append(s.checks, anyContextChecks(checks))
+			s.checks = append(s.checks, wrapContextChecker(anyContextChecks(checks)))
 		}
+	}
+}
+
+// WithReportHook observes summary trigger and model-call accounting after a
+// summary attempt finishes.
+func WithReportHook(h ReportHook) Option {
+	return func(s *sessionSummarizer) {
+		s.reportHook = h
 	}
 }
 
@@ -200,6 +233,9 @@ func WithSummaryHookAbortOnError(abort bool) Option {
 // WithToolCallFormatter sets a custom formatter for tool calls in the summary input.
 // The formatter receives a ToolCall and returns a formatted string.
 // Return empty string to exclude the tool call from the summary.
+// For non-empty summary input, this does not affect token threshold counting
+// used by ShouldSummarize. Returning empty for all included content suppresses
+// summarization because there is no effective summary input.
 //
 // Example:
 //
@@ -216,6 +252,9 @@ func WithToolCallFormatter(f ToolCallFormatter) Option {
 // WithToolResultFormatter sets a custom formatter for tool results in the summary input.
 // The formatter receives the Message containing the tool result and returns a formatted string.
 // Return empty string to exclude the tool result from the summary.
+// For non-empty summary input, this does not affect token threshold counting
+// used by ShouldSummarize. Returning empty for all included content suppresses
+// summarization because there is no effective summary input.
 //
 // Example:
 //
@@ -267,6 +306,6 @@ func WithContextThreshold(opts ...ContextThresholdOption) Option {
 				effectiveOpts = append(effectiveOpts, WithContextThresholdFallbackWindow(w))
 			}
 		}
-		s.checks = append(s.checks, CheckContextThreshold(effectiveOpts...))
+		s.checks = append(s.checks, evaluateContextThreshold(effectiveOpts...))
 	}
 }

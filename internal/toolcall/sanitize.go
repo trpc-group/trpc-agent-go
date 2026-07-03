@@ -12,12 +12,15 @@ package toolcall
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/util/message"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -45,7 +48,8 @@ var (
 // This function also downgrades orphan tool calls that are not associated with a kept
 // tool result message, and orphan tool result messages that are not associated with a
 // kept tool call message, to avoid invalid tool message sequences in strict chat APIs.
-func SanitizeMessagesWithTools(messages []model.Message, tools map[string]tool.Tool) []model.Message {
+// The context is used to attach request-scoped metadata to downgrade warnings.
+func SanitizeMessagesWithTools(ctx context.Context, messages []model.Message, tools map[string]tool.Tool) []model.Message {
 	if len(messages) == 0 {
 		return messages
 	}
@@ -57,12 +61,12 @@ func SanitizeMessagesWithTools(messages []model.Message, tools map[string]tool.T
 			for next < len(messages) && messages[next].Role == model.RoleTool {
 				next++
 			}
-			out = append(out, sanitizeToolRound(msg, messages[i+1:next], tools)...)
+			out = append(out, sanitizeToolRound(ctx, msg, messages[i+1:next], tools)...)
 			i = next
 			continue
 		}
 		if msg.Role == model.RoleTool {
-			out = append(out, downgradeOrphanToolResult(msg))
+			out = append(out, downgradeOrphanToolResult(ctx, msg))
 			i++
 			continue
 		}
@@ -96,7 +100,7 @@ type toolCallSplit struct {
 }
 
 // sanitizeToolRound sanitizes a single assistant tool-call round with its following tool results.
-func sanitizeToolRound(assistant model.Message, toolResults []model.Message, tools map[string]tool.Tool) []model.Message {
+func sanitizeToolRound(ctx context.Context, assistant model.Message, toolResults []model.Message, tools map[string]tool.Tool) []model.Message {
 	validation := validateToolCalls(assistant.ToolCalls, tools)
 	split := splitToolResults(toolResults, validation.validIDs, validation.invalidIDs)
 	toolCallSplit := splitToolCalls(validation.validToolCalls, split.kept)
@@ -115,16 +119,16 @@ func sanitizeToolRound(assistant model.Message, toolResults []model.Message, too
 		out = append(out, split.kept...)
 	}
 	for _, orphanCall := range toolCallSplit.orphan {
-		out = append(out, downgradeOrphanToolCall(orphanCall))
+		out = append(out, downgradeOrphanToolCall(ctx, orphanCall))
 	}
 	for _, invalid := range validation.invalidToolCalls {
-		out = append(out, downgradeInvalidToolCall(invalid.call, invalid.reason))
+		out = append(out, downgradeInvalidToolCall(ctx, invalid.call, invalid.reason))
 		for _, tr := range split.invalidByID[invalid.call.ID] {
-			out = append(out, downgradeInvalidToolResult(tr))
+			out = append(out, downgradeInvalidToolResult(ctx, tr))
 		}
 	}
 	for _, orphan := range split.orphan {
-		out = append(out, downgradeOrphanToolResult(orphan))
+		out = append(out, downgradeOrphanToolResult(ctx, orphan))
 	}
 	return out
 }
@@ -304,7 +308,7 @@ func validateValueAgainstSchema(value any, schema *tool.Schema, defs map[string]
 	case "array":
 		return validateArrayValueAgainstSchema(value, schema, defs, path)
 	case "string":
-		return validateStringValueAgainstSchema(value, path)
+		return validateStringValueAgainstSchema(value, schema, path)
 	case "boolean":
 		return validateBooleanValueAgainstSchema(value, path)
 	case "integer":
@@ -351,11 +355,23 @@ func validateArrayValueAgainstSchema(value any, schema *tool.Schema, defs map[st
 	return true, ""
 }
 
-func validateStringValueAgainstSchema(value any, path string) (bool, string) {
-	if _, ok := value.(string); ok {
+func validateStringValueAgainstSchema(value any, schema *tool.Schema, path string) (bool, string) {
+	str, ok := value.(string)
+	if !ok {
+		return false, fmt.Sprintf("expected string at %s", path)
+	}
+	if schema == nil || schema.Pattern == "" {
 		return true, ""
 	}
-	return false, fmt.Sprintf("expected string at %s", path)
+	re, err := regexp.Compile(schema.Pattern)
+	if err != nil {
+		// JSON Schema patterns use ECMA-262 syntax; Go regexp supports a subset.
+		return true, ""
+	}
+	if re.MatchString(str) {
+		return true, ""
+	}
+	return false, fmt.Sprintf("string at %s does not match pattern", path)
 }
 
 func validateBooleanValueAgainstSchema(value any, path string) (bool, string) {
@@ -418,7 +434,13 @@ func splitToolResults(toolResults []model.Message, validIDs map[string]struct{},
 }
 
 // downgradeInvalidToolCall converts an invalid tool call into a user message that preserves its payload.
-func downgradeInvalidToolCall(call model.ToolCall, reason string) model.Message {
+func downgradeInvalidToolCall(ctx context.Context, call model.ToolCall, reason string) model.Message {
+	log.WarnfContext(ctx,
+		"toolcall: downgraded invalid tool call to user message: name=%q id=%q reason=%q",
+		call.Function.Name,
+		call.ID,
+		reason,
+	)
 	content := fmt.Sprintf(
 		"%s Tool call arguments were downgraded to a user message (%s).\nname: %s\nid: %s\narguments:\n```text\n%s\n```",
 		invalidToolCallTag,
@@ -434,7 +456,12 @@ func downgradeInvalidToolCall(call model.ToolCall, reason string) model.Message 
 }
 
 // downgradeOrphanToolCall converts a tool call without a matching tool result into a user message.
-func downgradeOrphanToolCall(call model.ToolCall) model.Message {
+func downgradeOrphanToolCall(ctx context.Context, call model.ToolCall) model.Message {
+	log.WarnfContext(ctx,
+		"toolcall: downgraded orphan tool call to user message: name=%q id=%q",
+		call.Function.Name,
+		call.ID,
+	)
 	content := fmt.Sprintf(
 		"%s Tool call was downgraded to a user message because no matching tool result exists.\nname: %s\nid: %s\narguments:\n```text\n%s\n```",
 		orphanToolCallTag,
@@ -449,7 +476,12 @@ func downgradeOrphanToolCall(call model.ToolCall) model.Message {
 }
 
 // downgradeInvalidToolResult converts a tool result associated with an invalid tool call into a user message.
-func downgradeInvalidToolResult(msg model.Message) model.Message {
+func downgradeInvalidToolResult(ctx context.Context, msg model.Message) model.Message {
+	log.WarnfContext(ctx,
+		"toolcall: downgraded invalid tool result to user message: tool_name=%q tool_call_id=%q",
+		msg.ToolName,
+		msg.ToolID,
+	)
 	content := fmt.Sprintf(
 		"%s Tool result was downgraded to a user message.\ntool_call_id: %s\ntool_name: %s\ncontent:\n```text\n%s\n```",
 		invalidToolResultTag,
@@ -464,7 +496,12 @@ func downgradeInvalidToolResult(msg model.Message) model.Message {
 }
 
 // downgradeOrphanToolResult converts an orphaned tool result into a user message.
-func downgradeOrphanToolResult(msg model.Message) model.Message {
+func downgradeOrphanToolResult(ctx context.Context, msg model.Message) model.Message {
+	log.WarnfContext(ctx,
+		"toolcall: downgraded orphan tool result to user message: tool_name=%q tool_call_id=%q",
+		msg.ToolName,
+		msg.ToolID,
+	)
 	content := fmt.Sprintf(
 		"%s Tool result was downgraded to a user message because it is orphaned.\ntool_call_id: %s\ntool_name: %s\ncontent:\n```text\n%s\n```",
 		orphanToolResultTag,

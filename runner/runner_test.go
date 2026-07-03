@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/chainagent"
@@ -185,6 +186,7 @@ func (m *capturingInvocationMessagesAgent) Tools() []tool.Tool {
 type staticModel struct {
 	name    string
 	content string
+	usage   *model.Usage
 }
 
 type unsupportedSteerRunner struct{}
@@ -225,6 +227,7 @@ func (m *staticModel) GenerateContent(
 			Index:   0,
 			Message: model.NewAssistantMessage(m.content),
 		}},
+		Usage: m.usage,
 	}
 	close(ch)
 	return ch, nil
@@ -447,6 +450,33 @@ func TestEnqueueUserMessage_Errors(t *testing.T) {
 		model.Message{Role: model.RoleUser},
 	)
 	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
+
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type:  model.ContentTypeImage,
+				Image: &model.Image{URL: " "},
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrInvalidQueuedUserMessage)
+
+	textPart := "hello from part"
+	err = EnqueueUserMessage(
+		r,
+		"req-1",
+		model.Message{
+			Role: model.RoleUser,
+			ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeText,
+				Text: &textPart,
+			}},
+		},
+	)
+	require.ErrorIs(t, err, ErrRunNotFound)
 
 	err = EnqueueUserMessage(
 		r,
@@ -1419,6 +1449,347 @@ func TestRunner_WithPlugins_AppliesHooks(t *testing.T) {
 	for _, evt := range events {
 		require.Equal(t, tagged, evt.Tag)
 	}
+}
+
+type closeableTestPlugin struct {
+	testPlugin
+	closed bool
+}
+
+func (p *closeableTestPlugin) Close(ctx context.Context) error {
+	p.closed = true
+	return nil
+}
+
+type chainTestPluginManager struct {
+	agentCallbacks *agent.Callbacks
+	modelCallbacks *model.Callbacks
+	toolCallbacks  *tool.Callbacks
+	eventHook      func(context.Context, *agent.Invocation, *event.Event) (*event.Event, error)
+	closeHook      func(context.Context) error
+}
+
+func (m *chainTestPluginManager) AgentCallbacks() *agent.Callbacks {
+	return m.agentCallbacks
+}
+
+func (m *chainTestPluginManager) ModelCallbacks() *model.Callbacks {
+	return m.modelCallbacks
+}
+
+func (m *chainTestPluginManager) ToolCallbacks() *tool.Callbacks {
+	return m.toolCallbacks
+}
+
+func (m *chainTestPluginManager) OnEvent(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	e *event.Event,
+) (*event.Event, error) {
+	if m.eventHook == nil {
+		return e, nil
+	}
+	return m.eventHook(ctx, invocation, e)
+}
+
+func (m *chainTestPluginManager) Close(ctx context.Context) error {
+	if m.closeHook == nil {
+		return nil
+	}
+	return m.closeHook(ctx)
+}
+
+func TestRunner_RunWithPlugins_AppliesAfterRunnerPluginsAndDoesNotClosePlugin(t *testing.T) {
+	var order []string
+	runnerPlugin := &testPlugin{
+		name: "runner",
+		reg: func(r *plugin.Registry) {
+			r.BeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+				order = append(order, "runner")
+				return nil, nil
+			})
+		},
+	}
+	runPlugin := &closeableTestPlugin{
+		testPlugin: testPlugin{
+			name: "run",
+			reg: func(r *plugin.Registry) {
+				r.BeforeAgent(func(ctx context.Context, args *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+					order = append(order, "run")
+					return nil, nil
+				})
+			},
+		},
+	}
+	sessionService := sessioninmemory.NewSessionService()
+	ag := &mockAgent{name: "test-agent"}
+	r := NewRunner(
+		"test-app",
+		ag,
+		WithSessionService(sessionService),
+		WithPlugins(runnerPlugin),
+	)
+	for _, sessionID := range []string{"s1", "s2"} {
+		ch, err := r.Run(
+			context.Background(),
+			"u",
+			sessionID,
+			model.NewUserMessage("hi"),
+			plugin.WithPlugins(runPlugin),
+		)
+		require.NoError(t, err)
+		for range ch {
+		}
+	}
+	require.Equal(t, []string{"runner", "run", "runner", "run"}, order)
+	require.False(t, runPlugin.closed)
+}
+
+func TestPluginManagerChain_FiltersManagers(t *testing.T) {
+	manager := &chainTestPluginManager{}
+	require.Nil(t, newPluginManagerChain(nil, nil))
+	require.Same(t, manager, newPluginManagerChain(nil, manager))
+	chain, ok := newPluginManagerChain(manager, nil, &chainTestPluginManager{}).(pluginManagerChain)
+	require.True(t, ok)
+	require.Len(t, chain, 2)
+}
+
+func TestPluginManagerChain_RunsCallbacksInManagerOrder(t *testing.T) {
+	var order []string
+	first := newChainTestPluginManager("first", &order)
+	second := newChainTestPluginManager("second", &order)
+	chain := newPluginManagerChain(first, second)
+	_, err := chain.AgentCallbacks().RunBeforeAgent(context.Background(), &agent.BeforeAgentArgs{})
+	require.NoError(t, err)
+	_, err = chain.AgentCallbacks().RunAfterAgent(context.Background(), &agent.AfterAgentArgs{})
+	require.NoError(t, err)
+	_, err = chain.ModelCallbacks().RunBeforeModel(context.Background(), &model.BeforeModelArgs{})
+	require.NoError(t, err)
+	_, err = chain.ModelCallbacks().RunAfterModel(context.Background(), &model.AfterModelArgs{})
+	require.NoError(t, err)
+	_, err = chain.ToolCallbacks().RunBeforeTool(context.Background(), &tool.BeforeToolArgs{})
+	require.NoError(t, err)
+	_, err = chain.ToolCallbacks().RunAfterTool(context.Background(), &tool.AfterToolArgs{})
+	require.NoError(t, err)
+	eventOut, err := chain.OnEvent(context.Background(), nil, &event.Event{Tag: "start"})
+	require.NoError(t, err)
+	require.Equal(t, "start-first-second", eventOut.Tag)
+	require.Equal(t, []string{
+		"first:before-agent",
+		"second:before-agent",
+		"first:after-agent",
+		"second:after-agent",
+		"first:before-model",
+		"second:before-model",
+		"first:after-model",
+		"second:after-model",
+		"first:before-tool",
+		"second:before-tool",
+		"first:after-tool",
+		"second:after-tool",
+		"first:event",
+		"second:event",
+	}, order)
+}
+
+func TestPluginManagerChain_ReturnsNilWhenManagersHaveNoCallbacks(t *testing.T) {
+	chain := pluginManagerChain{&chainTestPluginManager{}}
+	require.Nil(t, chain.AgentCallbacks())
+	require.Nil(t, chain.ModelCallbacks())
+	require.Nil(t, chain.ToolCallbacks())
+}
+
+func TestPluginManagerChain_ToolResultMessagesSurvivesMerge(t *testing.T) {
+	toolCallbacks := tool.NewCallbacks()
+	toolCallbacks.RegisterToolResultMessages(func(ctx context.Context, in *tool.ToolResultMessagesInput) (any, error) {
+		return model.NewToolMessage(in.ToolCallID, in.ToolName, "summary"), nil
+	})
+	chain := pluginManagerChain{
+		&chainTestPluginManager{},
+		&chainTestPluginManager{toolCallbacks: toolCallbacks},
+	}
+	callbacks := chain.ToolCallbacks()
+	require.NotNil(t, callbacks)
+	got, err := callbacks.RunToolResultMessages(context.Background(), &tool.ToolResultMessagesInput{
+		ToolName:   "lookup",
+		ToolCallID: "call-1",
+	})
+	require.NoError(t, err)
+	require.Equal(t, model.NewToolMessage("call-1", "lookup", "summary"), got)
+}
+
+func TestPluginManagerChain_OnEventKeepsEventWhenManagerReturnsNil(t *testing.T) {
+	called := false
+	chain := pluginManagerChain{
+		&chainTestPluginManager{eventHook: func(context.Context, *agent.Invocation, *event.Event) (*event.Event, error) {
+			called = true
+			return nil, nil
+		}},
+	}
+	original := &event.Event{Tag: "original"}
+	got, err := chain.OnEvent(context.Background(), nil, original)
+	require.NoError(t, err)
+	require.True(t, called)
+	require.Same(t, original, got)
+}
+
+func TestPluginManagerChain_OnEventStopsOnError(t *testing.T) {
+	expected := errors.New("event failed")
+	chain := pluginManagerChain{
+		&chainTestPluginManager{eventHook: func(context.Context, *agent.Invocation, *event.Event) (*event.Event, error) {
+			return nil, expected
+		}},
+	}
+	got, err := chain.OnEvent(context.Background(), nil, &event.Event{})
+	require.ErrorIs(t, err, expected)
+	require.Nil(t, got)
+}
+
+func newChainTestPluginManager(name string, order *[]string) *chainTestPluginManager {
+	agentCallbacks := agent.NewCallbacks()
+	agentCallbacks.RegisterBeforeAgent(func(context.Context, *agent.BeforeAgentArgs) (*agent.BeforeAgentResult, error) {
+		*order = append(*order, name+":before-agent")
+		return nil, nil
+	})
+	agentCallbacks.RegisterAfterAgent(func(context.Context, *agent.AfterAgentArgs) (*agent.AfterAgentResult, error) {
+		*order = append(*order, name+":after-agent")
+		return nil, nil
+	})
+	modelCallbacks := model.NewCallbacks()
+	modelCallbacks.RegisterBeforeModel(func(context.Context, *model.BeforeModelArgs) (*model.BeforeModelResult, error) {
+		*order = append(*order, name+":before-model")
+		return nil, nil
+	})
+	modelCallbacks.RegisterAfterModel(func(context.Context, *model.AfterModelArgs) (*model.AfterModelResult, error) {
+		*order = append(*order, name+":after-model")
+		return nil, nil
+	})
+	toolCallbacks := tool.NewCallbacks()
+	toolCallbacks.RegisterBeforeTool(func(context.Context, *tool.BeforeToolArgs) (*tool.BeforeToolResult, error) {
+		*order = append(*order, name+":before-tool")
+		return nil, nil
+	})
+	toolCallbacks.RegisterAfterTool(func(context.Context, *tool.AfterToolArgs) (*tool.AfterToolResult, error) {
+		*order = append(*order, name+":after-tool")
+		return nil, nil
+	})
+	return &chainTestPluginManager{
+		agentCallbacks: agentCallbacks,
+		modelCallbacks: modelCallbacks,
+		toolCallbacks:  toolCallbacks,
+		eventHook: func(_ context.Context, _ *agent.Invocation, e *event.Event) (*event.Event, error) {
+			*order = append(*order, name+":event")
+			e.Tag += "-" + name
+			return e, nil
+		},
+	}
+}
+
+func TestPluginManagerChain_AfterToolMessagesRunsManagersInOrder(t *testing.T) {
+	var order []string
+	runnerPlugin := &testPlugin{
+		name: "runner-messages",
+		reg: func(r *plugin.Registry) {
+			r.AfterToolMessages(func(ctx context.Context, args *plugin.AfterToolMessagesArgs) (*plugin.AfterToolMessagesResult, error) {
+				order = append(order, "runner:"+args.ToolResultMessages[0].Content)
+				msg := args.ToolResultMessages[0]
+				msg.Content = "runner summary"
+				return &plugin.AfterToolMessagesResult{ToolResultMessages: []model.Message{msg}}, nil
+			})
+		},
+	}
+	runPlugin := &testPlugin{
+		name: "run-messages",
+		reg: func(r *plugin.Registry) {
+			r.AfterToolMessages(func(ctx context.Context, args *plugin.AfterToolMessagesArgs) (*plugin.AfterToolMessagesResult, error) {
+				order = append(order, "run:"+args.ToolResultMessages[0].Content)
+				msg := args.ToolResultMessages[0]
+				msg.Content = "run summary"
+				return &plugin.AfterToolMessagesResult{ToolResultMessages: []model.Message{msg}}, nil
+			})
+		},
+	}
+	chain := newPluginManagerChain(
+		plugin.MustNewManager(runnerPlugin),
+		plugin.MustNewManager(runPlugin),
+	)
+	hooks, ok := chain.(afterToolMessagesManager)
+	require.True(t, ok)
+	toolMessage := model.NewToolMessage("call-1", "lookup", "raw")
+	args := &plugin.AfterToolMessagesArgs{
+		ToolResultEvent: event.NewResponseEvent("inv", "agent", &model.Response{
+			Object: model.ObjectTypeToolResponse,
+			Choices: []model.Choice{
+				{Message: toolMessage},
+			},
+		}),
+		Messages: []model.Message{
+			model.NewUserMessage("hi"),
+			toolMessage,
+		},
+		ToolResultMessages: []model.Message{toolMessage},
+	}
+	result, err := hooks.AfterToolMessages(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, []string{"runner:raw", "run:runner summary"}, order)
+	require.Equal(t, "run summary", result.ToolResultMessages[0].Content)
+	require.Equal(t, "run summary", args.ToolResultMessages[0].Content)
+	require.Equal(t, "run summary", args.Messages[len(args.Messages)-1].Content)
+	require.Equal(t, "run summary", args.ToolResultEvent.Response.Choices[0].Message.Content)
+}
+
+func TestPluginManagerChain_AfterToolMessagesSkipsManagersWithoutHook(t *testing.T) {
+	chain := pluginManagerChain{&chainTestPluginManager{}}
+	hooks, ok := agent.PluginManager(chain).(afterToolMessagesManager)
+	require.True(t, ok)
+	result, err := hooks.AfterToolMessages(context.Background(), &plugin.AfterToolMessagesArgs{})
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
+func TestPluginManagerChain_AfterToolMessagesStopsOnError(t *testing.T) {
+	expected := errors.New("messages failed")
+	failingPlugin := &testPlugin{
+		name: "failing-messages",
+		reg: func(r *plugin.Registry) {
+			r.AfterToolMessages(func(context.Context, *plugin.AfterToolMessagesArgs) (*plugin.AfterToolMessagesResult, error) {
+				return &plugin.AfterToolMessagesResult{
+					ToolResultMessages: []model.Message{
+						model.NewToolMessage("call-1", "lookup", "summary"),
+					},
+				}, expected
+			})
+		},
+	}
+	chain := pluginManagerChain{
+		&chainTestPluginManager{},
+		plugin.MustNewManager(failingPlugin),
+	}
+	hooks, ok := agent.PluginManager(chain).(afterToolMessagesManager)
+	require.True(t, ok)
+	result, err := hooks.AfterToolMessages(context.Background(), &plugin.AfterToolMessagesArgs{})
+	require.ErrorIs(t, err, expected)
+	require.NotNil(t, result)
+}
+
+func TestPluginManagerChain_CloseRunsInReverseOrderAndJoinsErrors(t *testing.T) {
+	var order []string
+	firstErr := errors.New("first failed")
+	secondErr := errors.New("second failed")
+	first := &chainTestPluginManager{closeHook: func(context.Context) error {
+		order = append(order, "first")
+		return firstErr
+	}}
+	second := &chainTestPluginManager{closeHook: func(context.Context) error {
+		order = append(order, "second")
+		return secondErr
+	}}
+	err := newPluginManagerChain(first, second).Close(context.Background())
+	require.Error(t, err)
+	require.ErrorIs(t, err, firstErr)
+	require.ErrorIs(t, err, secondErr)
+	require.Equal(t, []string{"second", "first"}, order)
 }
 
 func TestRunner_applyEventPlugins_ReplacesEventAndCopiesFields(t *testing.T) {
@@ -4015,10 +4386,184 @@ func TestNewRunner_DefaultSessionService(t *testing.T) {
 }
 
 func TestRunner_Run_AgentRunError(t *testing.T) {
-	r := NewRunner("app", &failingAgent{name: "f"})
-	ch, err := r.Run(context.Background(), "u", "s", model.NewUserMessage("m"))
+	const (
+		requestID = "req-run-error"
+		filterKey = "filter/run-error"
+	)
+	ctx := context.Background()
+	sessionService := sessioninmemory.NewSessionService()
+	r := NewRunner(
+		"app",
+		&failingAgent{name: "f"},
+		WithSessionService(sessionService),
+	)
+	ch, err := r.Run(
+		ctx,
+		"u",
+		"s",
+		model.NewUserMessage("m"),
+		agent.WithRequestID(requestID),
+		agent.WithEventFilterKey(filterKey),
+	)
 	require.Error(t, err)
 	require.Nil(t, ch)
+
+	sess, err := sessionService.GetSession(ctx, session.Key{
+		AppName:   "app",
+		UserID:    "u",
+		SessionID: "s",
+	})
+	require.NoError(t, err)
+	var errorEvent event.Event
+	foundErrorEvent := false
+	for _, evt := range sess.Events {
+		if evt.Error == nil || evt.Error.Type != model.ErrorTypeRunError {
+			continue
+		}
+		errorEvent = evt
+		foundErrorEvent = true
+		break
+	}
+	require.True(t, foundErrorEvent)
+	require.NotNil(t, errorEvent.Error)
+	require.Equal(t, model.ErrorTypeRunError, errorEvent.Error.Type)
+	require.Equal(t, requestID, errorEvent.RequestID)
+	require.Equal(t, filterKey, errorEvent.FilterKey)
+}
+
+func TestRunnerLatencyDiagnosticHelpers(t *testing.T) {
+	ctx := context.Background()
+	_, disabledSpan, disabledStarted := startRunnerLatencySpan(
+		ctx,
+		nil,
+		runnerLatencySpanRun,
+	)
+	require.False(t, disabledStarted)
+	require.NotNil(t, disabledSpan)
+	finishRunnerLatencySpan(disabledSpan, false, errors.New("ignored"))
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&noOpAgent{name: "a"}),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			LatencyDiagnosticsEnabled: true,
+			RequestID:                 "req-latency",
+		}),
+	)
+	require.True(t, runnerLatencyEnabled(inv))
+	require.False(t, runnerLatencyEnabled(nil))
+	require.True(t, runnerRunOptionsLatencyEnabled(agent.RunOptions{
+		LatencyDiagnosticsEnabled: true,
+	}))
+	require.False(t, runnerRunOptionsLatencyEnabled(agent.RunOptions{
+		LatencyDiagnosticsEnabled: true,
+		DisableTracing:            true,
+	}))
+
+	_, span, started := startRunnerLatencySpan(
+		ctx,
+		inv,
+		runnerLatencySpanProcessEvent,
+		attribute.String("test.attr", "value"),
+	)
+	require.True(t, started)
+	finishRunnerLatencySpan(span, started, errors.New("boom"))
+
+	_, optionSpan, optionStarted := startRunnerRunOptionsLatencySpan(
+		ctx,
+		agent.RunOptions{LatencyDiagnosticsEnabled: true},
+		runnerLatencySpanRun,
+		attribute.String("runner.option", "value"),
+	)
+	require.True(t, optionStarted)
+	finishRunnerLatencySpan(optionSpan, optionStarted, nil)
+
+	_, optionSpan, optionStarted = startRunnerRunOptionsLatencySpan(
+		ctx,
+		agent.RunOptions{LatencyDiagnosticsEnabled: true, DisableTracing: true},
+		runnerLatencySpanRun,
+	)
+	require.False(t, optionStarted)
+	finishRunnerLatencySpan(optionSpan, optionStarted, nil)
+
+	runAttrs := runnerRunAttrs(
+		"app",
+		"user",
+		"sess",
+		model.NewUserMessage("hello"),
+		agent.RunOptions{
+			RequestID: "req-latency",
+			Messages:  []model.Message{model.NewSystemMessage("seed")},
+		},
+	)
+	require.True(t, runnerHasAttr(runAttrs, "runner.app", "app"))
+	require.True(t, runnerHasAttr(runAttrs, "runner.request_id", "req-latency"))
+	require.True(t, runnerHasAttr(runAttrs, "runner.message.role", "user"))
+	require.True(t, runnerHasAttr(runAttrs, "runner.message.has_payload", true))
+	require.True(t, runnerHasAttr(runAttrs, "runner.options.seed_messages", 1))
+
+	invAttrs := runnerInvocationAttrs(inv)
+	require.True(t, runnerHasAttr(invAttrs, "runner.agent", "a"))
+	require.True(t, runnerHasAttr(invAttrs, "runner.request_id", "req-latency"))
+	require.Nil(t, runnerInvocationAttrs(nil))
+
+	sess := session.NewSession("app", "user", "sess")
+	sess.SetState("state-key", []byte("value"))
+	sess.Summaries = map[string]*session.Summary{"default": {}}
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	sessionAttrs := runnerSessionAttrs(key, sess)
+	require.True(t, runnerHasAttr(sessionAttrs, "runner.session.app", "app"))
+	require.True(t, runnerHasAttr(sessionAttrs, "runner.session.events", 0))
+	require.True(t, runnerHasAttr(sessionAttrs, runnerAttrSessionStateKeys, 1))
+	require.True(t, runnerHasAttr(sessionAttrs, runnerAttrSessionSummaryKeys, 1))
+
+	evt := event.New(
+		inv.InvocationID,
+		"a",
+		event.WithResponse(&model.Response{
+			Object:  model.ObjectTypePreprocessingStatus,
+			Choices: []model.Choice{{Index: 1}},
+		}),
+		event.WithStateDelta(map[string][]byte{"k": []byte("v")}),
+	)
+	eventAttrs := runnerEventAttrs(evt)
+	require.True(
+		t,
+		runnerHasAttr(
+			eventAttrs,
+			"runner.event.object",
+			model.ObjectTypePreprocessingStatus,
+		),
+	)
+	require.True(t, runnerHasAttr(eventAttrs, "runner.event.choices", 1))
+	require.True(
+		t,
+		runnerHasAttr(eventAttrs, "runner.event.state_delta_keys", 1),
+	)
+	require.Nil(t, runnerEventAttrs(nil))
+
+	require.True(t, runnerTraceEventDetails(nil))
+	require.True(t, runnerTraceEventDetails(&event.Event{}))
+	require.False(t, runnerTraceEventDetails(&event.Event{
+		Response: &model.Response{},
+	}))
+	require.True(t, runnerTraceEventDetails(&event.Event{
+		Response: &model.Response{Done: true},
+	}))
+	require.True(t, runnerTraceEventDetails(&event.Event{
+		Response: &model.Response{
+			Error: &model.ResponseError{Type: model.ErrorTypeRunError},
+		},
+	}))
+}
+
+func runnerHasAttr(attrs []attribute.KeyValue, key string, want any) bool {
+	for _, kv := range attrs {
+		if string(kv.Key) == key &&
+			fmt.Sprint(kv.Value.AsInterface()) == fmt.Sprint(want) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestGetOrCreateSession_Existing(t *testing.T) {

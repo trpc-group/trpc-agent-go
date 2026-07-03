@@ -4,9 +4,9 @@ import argparse
 import json
 import sys
 import time
+from typing import Optional, Set
 import urllib.error
 import urllib.request
-
 
 def log(message: str) -> None:
     print(message, flush=True)
@@ -40,13 +40,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--min-score-gain",
         type=float,
-        default=0.005,
+        default=0.01,
         help="Minimum validation score gain required to accept a patch.",
     )
     parser.add_argument(
         "--max-rounds-without-acceptance",
         type=int,
-        default=5,
+        default=3,
         help="Maximum consecutive rejected rounds before stopping.",
     )
     parser.add_argument(
@@ -58,8 +58,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--eval-case-parallelism",
         type=int,
-        default=8,
+        default=16,
         help="Maximum number of eval cases processed in parallel.",
+    )
+    parser.add_argument(
+        "--backward-case-parallelism",
+        type=int,
+        default=16,
+        help="Maximum number of train eval cases processed in parallel during backward; 0 uses GOMAXPROCS.",
+    )
+    parser.add_argument(
+        "--aggregation-parallelism",
+        type=int,
+        default=16,
+        help="Maximum number of target surfaces aggregated in parallel; 0 uses GOMAXPROCS.",
+    )
+    parser.add_argument(
+        "--optimizer-parallelism",
+        type=int,
+        default=16,
+        help="Maximum number of target surfaces optimized in parallel; 0 uses GOMAXPROCS.",
     )
     parser.add_argument(
         "--parallel-inference",
@@ -87,13 +105,52 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Disable parallel evaluation across eval cases.",
     )
+    parser.add_argument(
+        "--parallel-backward",
+        dest="parallel_backward",
+        action="store_true",
+        default=False,
+        help="Enable parallel backward processing across train eval cases.",
+    )
+    parser.add_argument(
+        "--no-parallel-backward",
+        dest="parallel_backward",
+        action="store_false",
+        help="Disable parallel backward processing across train eval cases.",
+    )
+    parser.add_argument(
+        "--parallel-aggregation",
+        dest="parallel_aggregation",
+        action="store_true",
+        default=True,
+        help="Enable parallel aggregation across target surfaces.",
+    )
+    parser.add_argument(
+        "--no-parallel-aggregation",
+        dest="parallel_aggregation",
+        action="store_false",
+        help="Disable parallel aggregation across target surfaces.",
+    )
+    parser.add_argument(
+        "--parallel-optimization",
+        dest="parallel_optimization",
+        action="store_true",
+        default=True,
+        help="Enable parallel optimization across target surfaces.",
+    )
+    parser.add_argument(
+        "--no-parallel-optimization",
+        dest="parallel_optimization",
+        action="store_false",
+        help="Disable parallel optimization across target surfaces.",
+    )
     args = parser.parse_args()
     if args.poll_interval <= 0:
         parser.error("--poll-interval must be > 0")
     return args
 
 
-def request_json(method: str, url: str, payload: dict | None = None) -> dict:
+def request_json(method: str, url: str, payload: Optional[dict] = None) -> dict:
     data = None
     headers = {"Accept": "application/json"}
     if payload is not None:
@@ -145,6 +202,18 @@ def build_run_request(args: argparse.Namespace, target_surface_id: str) -> dict:
                 "EvalCaseParallelism": args.eval_case_parallelism,
                 "EvalCaseParallelInferenceEnabled": args.parallel_inference,
                 "EvalCaseParallelEvaluationEnabled": args.parallel_evaluation,
+            },
+            "BackwardOptions": {
+                "CaseParallelismEnabled": args.parallel_backward,
+                "CaseParallelism": args.backward_case_parallelism,
+            },
+            "AggregationOptions": {
+                "SurfaceParallelismEnabled": args.parallel_aggregation,
+                "SurfaceParallelism": args.aggregation_parallelism,
+            },
+            "OptimizerOptions": {
+                "SurfaceParallelismEnabled": args.parallel_optimization,
+                "SurfaceParallelism": args.optimizer_parallelism,
             },
             "AcceptancePolicy": {
                 "MinScoreGain": args.min_score_gain,
@@ -203,14 +272,14 @@ def describe_run_progress(run: dict) -> str:
     return f"round {current_round} completed and rejected"
 
 
-def current_round_result(run: dict, round_number: int) -> dict | None:
+def current_round_result(run: dict, round_number: int) -> Optional[dict]:
     for round_result in run.get("Rounds") or []:
         if round_result.get("Round") == round_number:
             return round_result
     return None
 
 
-def final_validation_score(run: dict) -> float | None:
+def final_validation_score(run: dict) -> Optional[float]:
     baseline = ((run.get("BaselineValidation") or {}).get("OverallScore"))
     score = baseline
     for round_result in run.get("Rounds") or []:
@@ -221,7 +290,7 @@ def final_validation_score(run: dict) -> float | None:
     return score
 
 
-def accepted_instruction(run: dict, target_surface_id: str) -> str | None:
+def accepted_instruction(run: dict, target_surface_id: str) -> Optional[str]:
     profile = run.get("AcceptedProfile") or {}
     for override in profile.get("Overrides") or []:
         if override.get("SurfaceID") != target_surface_id:
@@ -274,7 +343,7 @@ def run_async(base_url: str, payload: dict, target_surface_id: str, poll_interva
     log(f"Started async run: {run_id}")
     last_progress = ""
     reported_baseline = False
-    reported_validation_rounds: set[int] = set()
+    reported_validation_rounds: Set[int] = set()
     while True:
         response = request_json("GET", f"{base_url}/async-runs/{run_id}")
         run = get_object_field(response, "result", "Result")

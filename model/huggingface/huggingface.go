@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/internal/modeltailoring"
 )
 
 // Model implements the model.Model interface for HuggingFace API.
@@ -482,14 +483,16 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 	if err != nil {
 		if len(tailored) > 0 {
 			log.WarnContext(ctx, "token tailoring returned best-effort messages in huggingface.Model", err)
-			request.Messages = tailored
+			modeltailoring.ApplyResult(ctx, "huggingface.Model", request, tailored)
 			return
 		}
 		log.Warn("token tailoring failed in huggingface.Model", err)
 		return
 	}
 
-	request.Messages = tailored
+	if !modeltailoring.ApplyResult(ctx, "huggingface.Model", request, tailored) {
+		return
+	}
 
 	// Intentionally do not infer GenerationConfig.MaxTokens here: the Hugging Face
 	// integration tests expect MaxTokens to remain unset unless the user sets it

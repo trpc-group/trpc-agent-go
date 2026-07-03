@@ -10,19 +10,50 @@ package llmagent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/toolsnapshot"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+var errAlwaysFails = errors.New("provider failure")
+
+func withSurfacePatchForNode(nodeID string, patch surfacepatch.Patch) agent.RunOption {
+	return func(opts *agent.RunOptions) {
+		if opts == nil || nodeID == "" || patch.IsEmpty() {
+			return
+		}
+		opts.CustomAgentConfigs = surfacepatch.WithPatch(
+			opts.CustomAgentConfigs,
+			nodeID,
+			patch,
+		)
+	}
+}
+
+func withToolSurfaceTracing() agent.RunOption {
+	return func(opts *agent.RunOptions) {
+		if opts == nil {
+			return
+		}
+		opts.CustomAgentConfigs = surfacepatch.WithToolSurfaceTracing(
+			opts.CustomAgentConfigs,
+		)
+	}
+}
 
 func TestLLMAgent_SurfacePatch_OverridesInstructionAndSystemPrompt(t *testing.T) {
 	agt := New(
@@ -120,7 +151,7 @@ func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs(t *testing.T) {
 	)
 }
 
-func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesFilteredToolSnapshot(t *testing.T) {
+func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesFilteredToolNames(t *testing.T) {
 	agt := New(
 		"test-agent",
 		WithModel(newDummyModel()),
@@ -132,13 +163,70 @@ func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_UsesFilteredToolSnapshot(t *te
 		agent.WithInvocationTraceNodeID("test-agent"),
 		agent.WithInvocationRunOptions(agent.NewRunOptions(
 			agent.WithExecutionTraceEnabled(true),
+			withToolSurfaceTracing(),
+			agent.WithAdditionalTools([]tool.Tool{
+				itool.NewUnprefixedNamedTool(dummyTool{decl: &tool.Declaration{Name: "run_option_tool"}}),
+			}),
 		)),
 	)
 	agt.setupInvocation(inv)
-	inv.SetState("llmflow:has_filtered_user_tools", false)
-	require.NotContains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "test-agent#tool")
-	inv.SetState("llmflow:has_filtered_user_tools", true)
-	require.Contains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "test-agent#tool")
+	staticTool := dummyTool{decl: &tool.Declaration{Name: "user_tool"}}
+	toolsnapshot.Set(inv, []tool.Tool{staticTool}, false, []string{})
+	require.NotContains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "test-agent#tool.user_tool")
+	toolsnapshot.Set(inv, []tool.Tool{
+		agt.UserTools()[0],
+		itool.NewUnprefixedNamedTool(dummyTool{decl: &tool.Declaration{Name: "run_option_tool"}}),
+	}, true, []string{"user_tool"})
+	surfaceIDs := agt.ExecutionTraceAppliedSurfaceIDs(inv)
+	require.Contains(t, surfaceIDs, "test-agent#tool.user_tool")
+	require.NotContains(t, surfaceIDs, "test-agent#tool.run_option_tool")
+	toolsnapshot.Set(inv, []tool.Tool{
+		dummyTool{decl: &tool.Declaration{Name: "user_tool"}},
+	}, true, []string{})
+	fallbackSurfaceIDs := agt.ExecutionTraceAppliedSurfaceIDs(inv)
+	require.Contains(t, fallbackSurfaceIDs, "test-agent#tool")
+	require.NotContains(t, fallbackSurfaceIDs, "test-agent#tool.user_tool")
+}
+
+type traceRefreshToolSet struct {
+	calls int
+}
+
+func (s *traceRefreshToolSet) Tools(context.Context) []tool.Tool {
+	s.calls++
+	name := "dynamic_first"
+	if s.calls > 1 {
+		name = "dynamic_second"
+	}
+	return []tool.Tool{dummyTool{decl: &tool.Declaration{Name: name}}}
+}
+
+func (s *traceRefreshToolSet) Close() error { return nil }
+
+func (s *traceRefreshToolSet) Name() string { return "dynamic" }
+
+func TestLLMAgent_ExecutionTraceAppliedSurfaceIDs_FiltersRuntimeOnlyToolSets(t *testing.T) {
+	toolSet := &traceRefreshToolSet{}
+	agt := New(
+		"dynamic-agent",
+		WithModel(newDummyModel()),
+		WithToolSets([]tool.ToolSet{toolSet}),
+		WithRefreshToolSetsOnRun(true),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationTraceNodeID("dynamic-agent"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+			withToolSurfaceTracing(),
+		)),
+	)
+	agt.setupInvocation(inv)
+	toolSet.calls = 0
+	toolsnapshot.Set(inv, []tool.Tool{
+		itool.NewUnprefixedNamedTool(dummyTool{decl: &tool.Declaration{Name: "dynamic_first"}}),
+	}, true, []string{"dynamic_first"})
+	require.Contains(t, agt.ExecutionTraceAppliedSurfaceIDs(inv), "dynamic-agent#tool.dynamic_first")
+	require.Zero(t, toolSet.calls)
 }
 
 func TestLLMAgent_SurfaceRuntimeHelpers_CoverPatchAndFallbackBranches(t *testing.T) {
@@ -155,7 +243,7 @@ func TestLLMAgent_SurfaceRuntimeHelpers_CoverPatchAndFallbackBranches(t *testing
 	_, ok = agt.rootSurfacePatch(emptyPatchInv)
 	require.False(t, ok)
 	require.Nil(t, agt.fewShotForInvocation(emptyPatchInv))
-	require.Nil(t, agt.skillRepositoryForInvocation(emptyPatchInv))
+	require.Nil(t, agt.skillRepositoryForInvocation(context.Background(), emptyPatchInv))
 	_, ok = agt.modelSurfaceForInvocation(emptyPatchInv)
 	require.False(t, ok)
 	require.Nil(t, agt.ExecutionTraceAppliedSurfaceIDs(emptyPatchInv))
@@ -190,9 +278,9 @@ func TestLLMAgent_SurfaceRuntimeHelpers_CoverPatchAndFallbackBranches(t *testing
 		)),
 	)
 	agt.setupInvocation(patchedInv)
-	patchedInv.SetState("llmflow:has_filtered_user_tools", false)
+	patchedInv.SetState(toolsnapshot.HasFilteredUserToolsKey, false)
 	require.Len(t, agt.fewShotForInvocation(patchedInv), 1)
-	require.NotNil(t, agt.skillRepositoryForInvocation(patchedInv))
+	require.NotNil(t, agt.skillRepositoryForInvocation(context.Background(), patchedInv))
 	m, ok := agt.modelSurfaceForInvocation(patchedInv)
 	require.True(t, ok)
 	require.NotNil(t, m)
@@ -235,6 +323,141 @@ func TestLLMAgent_SurfaceRuntimeHelpers_CoverPatchAndFallbackBranches(t *testing
 	require.Len(t, filteredTools, 1)
 	require.Equal(t, "keep", filteredTools[0].Declaration().Name)
 	require.Equal(t, map[string]bool{"keep": true}, filteredNames)
+}
+
+func TestLLMAgent_SkillRepositoryForInvocation_ScopedProvider(t *testing.T) {
+	repoA := &mockSkillRepository{
+		summaries: []skill.Summary{{Name: "app-a-skill"}},
+	}
+	repoB := &mockSkillRepository{
+		summaries: []skill.Summary{{Name: "app-b-skill"}},
+	}
+	var gotScopes []skill.SkillScope
+	provider := skill.RepositoryProviderFunc(
+		func(_ context.Context, scope skill.SkillScope) (skill.Repository, error) {
+			gotScopes = append(gotScopes, scope)
+			if scope.UserID == "u-b" {
+				return repoB, nil
+			}
+			return repoA, nil
+		},
+	)
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithSkillRepositoryProvider(provider),
+		WithSkillScopeMode(skill.SkillScopeUser),
+	)
+
+	invA := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{AppName: "app", UserID: "u-a"}),
+	)
+	invB := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{AppName: "app", UserID: "u-b"}),
+	)
+
+	// Different users resolve to isolated repositories.
+	require.Same(t, repoA, agt.skillRepositoryForInvocation(context.Background(), invA))
+	require.Same(t, repoB, agt.skillRepositoryForInvocation(context.Background(), invB))
+	require.Equal(t, []skill.SkillScope{
+		{AppName: "app", UserID: "u-a"},
+		{AppName: "app", UserID: "u-b"},
+	}, gotScopes)
+}
+
+func TestLLMAgent_SkillRepositoryForInvocation_UserModeFailsClosed(t *testing.T) {
+	provider := skill.RepositoryProviderFunc(
+		func(_ context.Context, _ skill.SkillScope) (skill.Repository, error) {
+			t.Fatal("provider must not be called when scope cannot be derived")
+			return nil, nil
+		},
+	)
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithSkillRepositoryProvider(provider),
+		WithSkillScopeMode(skill.SkillScopeUser),
+	)
+	// Missing UserID in user mode → scope derivation fails → nil (isolated).
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{AppName: "app"}),
+	)
+	require.Nil(t, agt.skillRepositoryForInvocation(context.Background(), inv))
+}
+
+func TestLLMAgent_SkillRepositoryForInvocation_AppModeFallsBackToStatic(t *testing.T) {
+	staticRepo := &mockSkillRepository{summaries: []skill.Summary{{Name: "static"}}}
+	provider := skill.RepositoryProviderFunc(
+		func(_ context.Context, _ skill.SkillScope) (skill.Repository, error) {
+			return nil, errAlwaysFails
+		},
+	)
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithSkills(staticRepo),
+		WithSkillRepositoryProvider(provider),
+		WithSkillScopeMode(skill.SkillScopeApp),
+	)
+	// Provider error in app mode → fall back to the static repository.
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{AppName: "app"}),
+	)
+	require.Same(t, staticRepo, agt.skillRepositoryForInvocation(context.Background(), inv))
+
+	// A nil session yields a zero scope → static fallback as well.
+	require.Same(
+		t,
+		staticRepo,
+		agt.skillRepositoryForInvocation(context.Background(), agent.NewInvocation()),
+	)
+}
+
+func TestLLMAgent_SkillRepositoryForInvocation_NoneModeIsUnscoped(t *testing.T) {
+	staticRepo := &mockSkillRepository{summaries: []skill.Summary{{Name: "static"}}}
+	provider := skill.RepositoryProviderFunc(
+		func(_ context.Context, _ skill.SkillScope) (skill.Repository, error) {
+			t.Fatal("provider must not be called when skill scope mode is none")
+			return nil, nil
+		},
+	)
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithSkills(staticRepo),
+		WithSkillRepositoryProvider(provider),
+		WithSkillScopeMode(skill.SkillScopeNone),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{AppName: "app", UserID: "u"}),
+	)
+
+	require.Same(t, staticRepo, agt.skillRepositoryForInvocation(context.Background(), inv))
+}
+
+func TestSkillScopeForInvocation(t *testing.T) {
+	// Nil session → zero scope, no error.
+	scope, err := skillScopeForInvocation(skill.SkillScopeApp, nil)
+	require.NoError(t, err)
+	require.True(t, scope.IsZero())
+
+	scope, err = skillScopeForInvocation(
+		skill.SkillScopeNone,
+		agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{AppName: "app", UserID: "u"}),
+		),
+	)
+	require.NoError(t, err)
+	require.True(t, scope.IsZero())
+
+	scope, err = skillScopeForInvocation(
+		skill.SkillScopeUser,
+		agent.NewInvocation(
+			agent.WithInvocationSession(&session.Session{AppName: "app", UserID: "u"}),
+		),
+	)
+	require.NoError(t, err)
+	require.Equal(t, skill.SkillScope{AppName: "app", UserID: "u"}, scope)
 }
 
 func TestLLMAgent_RunOptions_OverrideStaticInstructionAndSystemPrompt(
@@ -447,6 +670,104 @@ func TestLLMAgent_Run_AgentToolFilterStillAppliesWithInvocationToolSurface(
 	require.Contains(t, m.got.Tools, testTransferToolName)
 }
 
+func TestLLMAgent_Run_SurfacePatch_OverridesToolDeclarations(t *testing.T) {
+	m := &captureModel{}
+	agt := New(
+		"test-agent",
+		WithModel(m),
+		WithTools([]tool.Tool{
+			dummyTool{decl: &tool.Declaration{
+				Name:        "allowed_user_tool",
+				Description: "old description",
+				InputSchema: &tool.Schema{
+					Type: "object",
+					Properties: map[string]*tool.Schema{
+						"query": {Type: "string", Description: "old query"},
+					},
+				},
+			}},
+			dummyTool{decl: &tool.Declaration{Name: "blocked_user_tool"}},
+		}),
+		WithToolFilter(func(_ context.Context, tl tool.Tool) bool {
+			declaration := tl.Declaration()
+			return declaration != nil && declaration.Description == "patched description"
+		}),
+	)
+	var patch surfacepatch.Patch
+	patch.SetToolDeclarations([]tool.Declaration{{
+		Name:        "allowed_user_tool",
+		Description: "patched description",
+		InputSchema: &tool.Schema{
+			Type: "object",
+			Properties: map[string]*tool.Schema{
+				"query": {Type: "string", Description: "patched query"},
+			},
+		},
+	}})
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			withSurfacePatchForNode("test-agent", patch),
+		)),
+	)
+	ch, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.NotNil(t, m.got)
+	gotTool, ok := m.got.Tools["allowed_user_tool"]
+	require.True(t, ok)
+	require.Equal(t, "patched description", gotTool.Declaration().Description)
+	require.Equal(t, "patched query", gotTool.Declaration().InputSchema.Properties["query"].Description)
+	require.NotContains(t, m.got.Tools, "blocked_user_tool")
+}
+
+func TestLLMAgent_Run_SurfacePatchToolDeclarationTraceUsesStaticSurfaces(t *testing.T) {
+	m := &captureModel{}
+	agt := New(
+		"test-agent",
+		WithModel(m),
+		WithTools([]tool.Tool{
+			dummyTool{decl: &tool.Declaration{
+				Name:        "allowed_user_tool",
+				Description: "old description",
+				InputSchema: &tool.Schema{Type: "object"},
+			}},
+		}),
+	)
+	var patch surfacepatch.Patch
+	patch.SetToolDeclarations([]tool.Declaration{{
+		Name:        "allowed_user_tool",
+		Description: "patched description",
+		InputSchema: &tool.Schema{Type: "object"},
+	}})
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hello")),
+		agent.WithInvocationTraceNodeID("test-agent"),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithExecutionTraceEnabled(true),
+			withToolSurfaceTracing(),
+			agent.WithAdditionalTools([]tool.Tool{
+				dummyTool{decl: &tool.Declaration{Name: "run_option_tool"}},
+			}),
+			withSurfacePatchForNode("test-agent", patch),
+		)),
+	)
+	ch, err := agt.Run(context.Background(), inv)
+	require.NoError(t, err)
+	for range ch {
+	}
+	require.NotNil(t, m.got)
+	require.Contains(t, m.got.Tools, "allowed_user_tool")
+	require.Contains(t, m.got.Tools, "run_option_tool")
+	require.Equal(t, "patched description", m.got.Tools["allowed_user_tool"].Declaration().Description)
+	trace := agent.BuildExecutionTrace(inv, atrace.TraceStatusCompleted)
+	require.NotNil(t, trace)
+	require.Len(t, trace.Steps, 1)
+	require.Contains(t, trace.Steps[0].AppliedSurfaceIDs, "test-agent#tool.allowed_user_tool")
+	require.NotContains(t, trace.Steps[0].AppliedSurfaceIDs, "test-agent#tool.run_option_tool")
+}
+
 func TestLLMAgent_Run_SurfacePatch_DisablesStaticSkills(t *testing.T) {
 	root := createTestSkill(t)
 	repo, err := skill.NewFSRepository(root)
@@ -570,6 +891,63 @@ func TestLLMAgent_InvocationToolSurface_HidesWorkspaceExecWhenDisabled(
 	require.Nil(t, findTool(tools, "workspace_exec"))
 	require.Nil(t, findTool(tools, "workspace_write_stdin"))
 	require.Nil(t, findTool(tools, "workspace_kill_session"))
+}
+
+func TestLLMAgent_InvocationCapabilityAccessors(t *testing.T) {
+	repo := &mockSkillRepository{
+		summaries: []skill.Summary{{Name: "skill-a", Description: "desc"}},
+	}
+	staticExec := &interactiveStubExec{}
+	runExec := &interactiveStubExec{}
+	kb := &minimalKnowledge{}
+	knowledgeFilter := map[string]any{"tenant": "acme"}
+	conditionedFilter := &searchfilter.UniversalFilterCondition{
+		Field:    "tenant",
+		Operator: searchfilter.OperatorEqual,
+		Value:    "acme",
+	}
+	agenticInfo := map[string][]any{"tenant": {"acme"}}
+	agt := New(
+		"test-agent",
+		WithModel(newDummyModel()),
+		WithSkills(repo),
+		WithCodeExecutor(staticExec),
+		WithKnowledge(kb),
+		WithKnowledgeFilter(knowledgeFilter),
+		WithKnowledgeConditionedFilter(conditionedFilter),
+		WithEnableKnowledgeAgenticFilter(true),
+		WithKnowledgeAgenticFilterInfo(agenticInfo),
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithCodeExecutor(runExec),
+		)),
+	)
+
+	require.Same(t, repo, agt.InvocationSkillRepository(context.Background(), inv))
+	require.Same(t, runExec, agt.InvocationCodeExecutor(context.Background(), inv))
+
+	var opts Options
+	for _, opt := range agt.InvocationKnowledgeOptions(inv) {
+		opt(&opts)
+	}
+	require.Same(t, kb, opts.Knowledge)
+	require.Equal(t, knowledgeFilter, opts.KnowledgeFilter)
+	require.Same(t, conditionedFilter, opts.KnowledgeConditionedFilter)
+	require.True(t, opts.EnableKnowledgeAgenticFilter)
+	require.Equal(t, agenticInfo, opts.AgenticFilterInfo)
+}
+
+func TestLLMAgent_InvocationCapabilityAccessors_NilAndEmpty(t *testing.T) {
+	var nilAgent *LLMAgent
+	require.Nil(t, nilAgent.InvocationSkillRepository(context.Background(), nil))
+	require.Nil(t, nilAgent.InvocationCodeExecutor(context.Background(), nil))
+	require.Nil(t, nilAgent.InvocationKnowledgeOptions(nil))
+
+	agt := New("test-agent", WithModel(newDummyModel()))
+	require.Nil(t, agt.InvocationSkillRepository(context.Background(), nil))
+	require.Nil(t, agt.InvocationCodeExecutor(context.Background(), nil))
+	require.Nil(t, agt.InvocationKnowledgeOptions(nil))
 }
 
 func TestLLMAgent_SurfaceRuntimeHelpers_NilAgentBranches(t *testing.T) {

@@ -59,7 +59,7 @@ func TestRecoverCallbackPanic_RecoversAndLogs(t *testing.T) {
 	})
 
 	require.True(t, logged)
-	assert.Equal(t, "%s panic: %v\n%s", capturedFormat)
+	assert.Equal(t, log.PanicPrefix+" %s panic: %v\n%s", capturedFormat)
 	require.Len(t, capturedArgs, 3)
 	assert.Equal(t, "test callback", capturedArgs[0])
 	assert.Equal(t, "boom", capturedArgs[1])

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -237,6 +238,7 @@ func cloneRequest(request *model.Request) (*model.Request, error) {
 		return nil, fmt.Errorf("unmarshal request: %w", err)
 	}
 	cloned.ExtraFields = jsonmap.Clone(request.ExtraFields)
+	cloned.Headers = maps.Clone(request.Headers)
 	if len(request.Tools) > 0 {
 		cloned.Tools = make(map[string]tool.Tool, len(request.Tools))
 		for name, toolImpl := range request.Tools {

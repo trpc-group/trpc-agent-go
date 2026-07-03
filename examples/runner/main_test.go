@@ -28,15 +28,24 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
+const (
+	envModelName    = "MODEL_NAME"
+	envOpenAIAPIKey = "OPENAI_API_KEY"
+)
+
 func TestMain(m *testing.M) {
 	if !flag.Parsed() {
 		flag.Parse()
 	}
-	*modelName = os.Getenv("MODEL_NAME")
+	if env := os.Getenv(envModelName); env != "" {
+		*modelName = env
+	}
 	os.Exit(m.Run())
 }
 
 func TestTool(t *testing.T) {
+	requireOpenAIAPIKey(t)
+
 	tests := []struct {
 		name      string
 		evalSetID string
@@ -48,10 +57,6 @@ func TestTool(t *testing.T) {
 		{
 			name:      "currenttime",
 			evalSetID: "currenttime_tool",
-		},
-		{
-			name:      "compound_interest",
-			evalSetID: "compound_interest",
 		},
 	}
 	for _, tt := range tests {
@@ -69,7 +74,9 @@ func TestTool(t *testing.T) {
 			evaluationDir := "evaluation"
 			localEvalSetManager := localevalset.New(evalset.WithBaseDir(evaluationDir))
 			localMetricManager := localmetric.New(metric.WithBaseDir(evaluationDir))
-			localEvalResultManager := localevalresult.New(evalresult.WithBaseDir(evaluationDir))
+			localEvalResultManager := localevalresult.New(
+				evalresult.WithBaseDir(evaluationDir),
+			)
 			evaluator, err := evaluation.New(
 				appName,
 				chat.runner,
@@ -86,12 +93,19 @@ func TestTool(t *testing.T) {
 			assert.NotNil(t, result)
 			resultData, err := json.MarshalIndent(result, "", "  ")
 			assert.NoError(t, err)
-			assert.Equal(t, status.EvalStatusPassed, result.OverallStatus, string(resultData))
+			assert.Equal(
+				t,
+				status.EvalStatusPassed,
+				result.OverallStatus,
+				string(resultData),
+			)
 		})
 	}
 }
 
 func TestRubric_CompoundInterest_FinalAnswerPresent(t *testing.T) {
+	requireOpenAIAPIKey(t)
+
 	chat := &multiTurnChat{
 		modelName: *modelName,
 		streaming: *streaming,
@@ -105,7 +119,9 @@ func TestRubric_CompoundInterest_FinalAnswerPresent(t *testing.T) {
 	evaluationDir := "evaluation"
 	localEvalSetManager := localevalset.New(evalset.WithBaseDir(evaluationDir))
 	localMetricManager := localmetric.New(metric.WithBaseDir(evaluationDir))
-	localEvalResultManager := localevalresult.New(evalresult.WithBaseDir(evaluationDir))
+	localEvalResultManager := localevalresult.New(
+		evalresult.WithBaseDir(evaluationDir),
+	)
 	evaluator, err := evaluation.New(
 		appName,
 		chat.runner,
@@ -122,5 +138,17 @@ func TestRubric_CompoundInterest_FinalAnswerPresent(t *testing.T) {
 	assert.NotNil(t, result)
 	resultData, err := json.MarshalIndent(result, "", "  ")
 	assert.NoError(t, err)
-	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus, string(resultData))
+	assert.Equal(
+		t,
+		status.EvalStatusPassed,
+		result.OverallStatus,
+		string(resultData),
+	)
+}
+
+func requireOpenAIAPIKey(t *testing.T) {
+	t.Helper()
+	if os.Getenv(envOpenAIAPIKey) == "" {
+		t.Skipf("%s is required for runner evaluation tests", envOpenAIAPIKey)
+	}
 }

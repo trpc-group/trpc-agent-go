@@ -681,7 +681,7 @@ func (m *messageProcessor) processStreamingMessage(
 			if r := recover(); r != nil {
 				log.ErrorfContext(
 					ctx,
-					"panic in streaming processing for task %s: %v",
+					log.PanicPrefix+" panic in streaming processing for task %s: %v",
 					taskID,
 					r,
 				)

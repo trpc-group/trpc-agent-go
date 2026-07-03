@@ -20,23 +20,30 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/toolsnapshot"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolsurface"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -50,20 +57,10 @@ const (
 	errMsgNoModelResponse = "no response received from model"
 	errMsgNoLLMMessages   = "no messages available for LLM call"
 
-	flowRunPanicLogFmt = "Flow execution panic (invocation: %s, " +
+	flowRunPanicLogFmt = log.PanicPrefix + " Flow execution panic (invocation: %s, " +
 		"agent: %s): %v\n%s"
 
 	flowRunPanicErrFmt = "flow panic: %v"
-
-	// stateKeyToolsSnapshot is the invocation state key used to cache the
-	// final tool list for a single Invocation. This ensures that the tool
-	// set (including ToolSet-based tools and filters) stays stable for the
-	// entire lifetime of an Invocation, even when underlying ToolSets are
-	// dynamic.
-	stateKeyToolsSnapshot = "llmflow:tools_snapshot"
-	// stateKeyHasFilteredUserTools caches whether the final filtered tool
-	// snapshot for this invocation still contains any user tool.
-	stateKeyHasFilteredUserTools = "llmflow:has_filtered_user_tools"
 
 	defaultContextCompactionThresholdRatio = 0.7
 	contextCompactionFallbackWindow        = 8192
@@ -73,10 +70,12 @@ const (
 // InvocationHasFilteredUserTools reports whether the cached filtered tool
 // snapshot for this invocation still contains any user tool.
 func InvocationHasFilteredUserTools(invocation *agent.Invocation) (bool, bool) {
-	if invocation == nil {
-		return false, false
-	}
-	return agent.GetStateValue[bool](invocation, stateKeyHasFilteredUserTools)
+	return toolsnapshot.HasFilteredUserTools(invocation)
+}
+
+// InvocationFilteredTraceableUserToolNames reports filtered user tool names that have structure surfaces.
+func InvocationFilteredTraceableUserToolNames(invocation *agent.Invocation) ([]string, bool) {
+	return toolsnapshot.FilteredTraceableUserToolNames(invocation)
 }
 
 // Options contains configuration options for creating a Flow.
@@ -88,7 +87,17 @@ type Options struct {
 	SyncSummaryIntraRun             bool
 	EnableContextCompaction         bool
 	ContextCompactionThresholdRatio float64
+	ToolActivationApplier           ToolActivationApplier
 }
+
+// ToolActivationApplier applies invocation-specific tool activation.
+type ToolActivationApplier func(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	tools []tool.Tool,
+	userToolNames map[string]bool,
+	externalToolNames map[string]bool,
+) ([]tool.Tool, map[string]bool, map[string]bool)
 
 // ModelBaseResolution describes the base model for one LLM call.
 type ModelBaseResolution struct {
@@ -110,6 +119,7 @@ type Flow struct {
 	syncSummaryIntraRun             bool
 	enableContextCompaction         bool
 	contextCompactionThresholdRatio float64
+	toolActivationApplier           ToolActivationApplier
 }
 
 type contextCompactionTailProcessor interface {
@@ -153,6 +163,7 @@ func New(
 		modelSelector:           opts.ModelSelector,
 		syncSummaryIntraRun:     opts.SyncSummaryIntraRun,
 		enableContextCompaction: opts.EnableContextCompaction,
+		toolActivationApplier:   opts.ToolActivationApplier,
 		contextCompactionThresholdRatio: normalizeContextCompactionThresholdRatio(
 			opts.ContextCompactionThresholdRatio,
 		),
@@ -165,6 +176,16 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 
 	runCtx := agent.CloneContext(ctx)
 	go func(ctx context.Context) {
+		ctx, runSpan, runStarted := startLatencySpan(
+			ctx,
+			invocation,
+			latencySpanFlowRun,
+			latencyInvocationAttrs(invocation)...,
+		)
+		var runErr error
+		defer func() {
+			finishLatencySpan(runSpan, runStarted, runErr)
+		}()
 		defer close(eventChan)
 		defer steer.Close(invocation)
 		defer recoverFlowRunPanic(ctx, invocation, eventChan)
@@ -186,6 +207,7 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 		for {
 			// emit start event and wait for completion notice.
 			if err := f.emitStartEventAndWait(ctx, invocation, eventChan); err != nil {
+				runErr = err
 				return
 			}
 
@@ -200,12 +222,14 @@ func (f *Flow) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *e
 				invocation,
 				eventChan,
 			); err != nil {
+				runErr = err
 				return
 			}
 
 			// Run one step (one LLM call cycle).
 			lastEvent, err := f.runOneStep(ctx, invocation, eventChan)
 			if err != nil {
+				runErr = err
 				steer.Close(invocation)
 				// Treat context cancellation as graceful termination (common in streaming
 				// pipelines where the client closes the stream after final event).
@@ -334,12 +358,25 @@ func (f *Flow) maybeConsumeQueuedUserMessages(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) error {
+) (err error) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanQueuedMessages,
+	)
+	var drained int
+	defer func() {
+		if started {
+			span.SetAttributes(attribute.Int("llmflow.queued_messages", drained))
+		}
+		finishLatencySpan(span, started, err)
+	}()
 	if !steer.IsAttached(invocation) {
 		return nil
 	}
 
 	messages := steer.Drain(invocation)
+	drained = len(messages)
 	if len(messages) == 0 {
 		return nil
 	}
@@ -357,6 +394,12 @@ func (f *Flow) maybeConsumeQueuedUserMessages(
 					Message: message,
 				}},
 			},
+			event.WithExtension(
+				steer.ExtensionKeyQueuedUserMessage,
+				steer.QueuedUserMessageMetadata{
+					Status: steer.QueuedUserMessageStatusConsumed,
+				},
+			),
 		)
 		evt.RequiresCompletion = true
 
@@ -408,6 +451,18 @@ func (f *Flow) maybeResumePendingToolCalls(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 ) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanResumeTools,
+	)
+	var resumed bool
+	defer func() {
+		if started {
+			span.SetAttributes(attribute.Bool("llmflow.resume_tools.resumed", resumed))
+		}
+		finishLatencySpan(span, started, nil)
+	}()
 	if invocation == nil || !invocation.RunOptions.Resume {
 		return
 	}
@@ -430,13 +485,12 @@ func (f *Flow) maybeResumePendingToolCalls(
 	if lastResp == nil {
 		return
 	}
+	resumed = true
 
 	req := &model.Request{
 		Tools: make(map[string]tool.Tool),
 	}
-	for _, t := range f.getFilteredTools(ctx, invocation) {
-		req.Tools[t.Declaration().Name] = t
-	}
+	f.populateRequestTools(ctx, invocation, req)
 
 	for _, rp := range f.responseProcessors {
 		if toolRP, ok := rp.(*processor.FunctionCallResponseProcessor); ok {
@@ -450,17 +504,35 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 	ctx context.Context,
 	invocation *agent.Invocation,
 ) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanSyncSummary,
+	)
+	var err error
+	defer func() {
+		finishLatencySpan(span, started, err)
+	}()
 	if !f.syncSummaryIntraRun || invocation == nil || invocation.Session == nil ||
 		invocation.SessionService == nil {
 		return
 	}
 
-	if err := invocation.SessionService.CreateSessionSummary(
-		ctx,
+	summaryCtx := ctx
+	if parentRequest, ok := summaryfork.Request(invocation); ok {
+		summaryCtx = summary.ContextWithCacheSafeForkRequest(
+			summaryCtx,
+			parentRequest,
+		)
+	}
+
+	err = invocation.SessionService.CreateSessionSummary(
+		summaryCtx,
 		invocation.Session,
 		invocation.GetEventFilterKey(),
 		false,
-	); err != nil {
+	)
+	if err != nil {
 		log.DebugfContext(
 			ctx,
 			"Intra-run summary skipped or failed for agent %s: %v",
@@ -472,6 +544,16 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 
 func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invocation,
 	eventChan chan<- *event.Event) error {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanEmitStartWait,
+	)
+	var err error
+	defer func() {
+		finishLatencySpan(span, started, err)
+	}()
+
 	invocationID, agentName := "", ""
 	if invocation != nil {
 		invocationID = invocation.InvocationID
@@ -484,7 +566,7 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 	// Wait for completion notice.
 	// Ensure that the events of the previous agent or the previous step have been synchronized to the session.
 	completionID := agent.GetAppendEventNoticeKey(startEvent.ID)
-	err := invocation.AddNoticeChannelAndWait(ctx, completionID, eventCompletionTimeout)
+	err = invocation.AddNoticeChannelAndWait(ctx, completionID, eventCompletionTimeout)
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
@@ -494,7 +576,24 @@ func (f *Flow) emitStartEventAndWait(ctx context.Context, invocation *agent.Invo
 func (f *Flow) selectModelForStep(
 	ctx context.Context,
 	invocation *agent.Invocation,
-) (model.Model, error) {
+) (selectedModel model.Model, err error) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanSelectModel,
+	)
+	defer func() {
+		if selectedModel != nil && started {
+			span.SetAttributes(
+				attribute.String(
+					"llmflow.model",
+					selectedModel.Info().Name,
+				),
+			)
+		}
+		finishLatencySpan(span, started, err)
+	}()
+
 	if invocation == nil {
 		return nil, nil
 	}
@@ -533,7 +632,7 @@ func runModelSelector(
 ) (selected model.Model, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Errorf("model selector panic: %v\n%s", r, debug.Stack())
+			log.Errorf(log.PanicPrefix+" model selector panic: %v\n%s", r, debug.Stack())
 			err = fmt.Errorf("panic: %v", r)
 		}
 	}()
@@ -546,8 +645,22 @@ func (f *Flow) runOneStep(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
-) (*event.Event, error) {
-	var lastEvent *event.Event
+) (lastEvent *event.Event, err error) {
+	ctx, stepSpan, stepStarted := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanRunOneStep,
+		latencyInvocationAttrs(invocation)...,
+	)
+	defer func() {
+		if stepStarted && lastEvent != nil {
+			stepSpan.SetAttributes(
+				attribute.String("llmflow.last_event.object", lastEvent.Object),
+				attribute.Bool("llmflow.last_event.final", lastEvent.IsFinalResponse()),
+			)
+		}
+		finishLatencySpan(stepSpan, stepStarted, err)
+	}()
 	// Initialize empty LLM request.
 	llmRequest := &model.Request{
 		Tools: make(map[string]tool.Tool), // Initialize tools map
@@ -571,6 +684,7 @@ func (f *Flow) runOneStep(
 	llmRequest = f.maybeCompactContextBeforeLLM(
 		ctx,
 		invocation,
+		eventChan,
 		llmRequest,
 		rebuildPlan,
 	)
@@ -612,6 +726,9 @@ func (f *Flow) runOneStep(
 		startedSpan,
 	)
 	agent.FinishExecutionTraceStep(invocation, stepID, traceSnapshotFromEvent(lastEvent), err)
+	if lastEvent != nil && lastEvent.Response != nil {
+		agent.SetExecutionTraceStepUsage(invocation, stepID, lastEvent.Response.Usage)
+	}
 	return lastEvent, err
 }
 
@@ -626,6 +743,100 @@ func (f *Flow) processStreamingResponses(
 	span oteltrace.Span,
 	startedSpan bool,
 ) (lastEvent *event.Event, err error) {
+	ctx, streamSpan, streamStarted := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanStreamResponses,
+		latencyRequestAttrs(llmRequest)...,
+	)
+	processor := newStreamingResponseProcessor(
+		f,
+		ctx,
+		invocation,
+		observabilityInvocation,
+		llmRequest,
+		eventChan,
+		span,
+		startedSpan,
+		&err,
+	)
+	defer func() {
+		if streamStarted {
+			streamSpan.SetAttributes(
+				attribute.Int(
+					"llmflow.response.count",
+					processor.responseCount,
+				),
+				attribute.Int(
+					"llmflow.response.partial_count",
+					processor.partialResponseCount,
+				),
+				attribute.Int(
+					"llmflow.response.terminal_count",
+					processor.terminalResponseCount,
+				),
+				attribute.Int(
+					"llmflow.response.error_count",
+					processor.errorResponseCount,
+				),
+				attribute.Int(
+					"llmflow.response.tool_count",
+					processor.toolResponseCount,
+				),
+				attribute.Int(
+					"llmflow.response.detail_span_count",
+					processor.detailSpanCount,
+				),
+			)
+		}
+		finishLatencySpan(streamSpan, streamStarted, err)
+	}()
+	if processor.tracker != nil {
+		defer processor.tracker.RecordMetrics()()
+	}
+	responseSeq(func(response *model.Response) bool {
+		return processor.process(response)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return processor.lastEvent, nil
+}
+
+type streamingResponseProcessor struct {
+	flow                    *Flow
+	ctx                     context.Context
+	invocation              *agent.Invocation
+	observabilityInvocation *agent.Invocation
+	currentInvocation       *agent.Invocation
+	llmRequest              *model.Request
+	eventChan               chan<- *event.Event
+	span                    oteltrace.Span
+	startedSpan             bool
+	tracker                 *itelemetry.ChatMetricsTracker
+	timingInfo              *model.TimingInfo
+	partialUsageState       responseusage.PartialState
+	lastEvent               *event.Event
+	err                     *error
+	responseCount           int
+	partialResponseCount    int
+	terminalResponseCount   int
+	errorResponseCount      int
+	toolResponseCount       int
+	detailSpanCount         int
+}
+
+func newStreamingResponseProcessor(
+	flow *Flow,
+	ctx context.Context,
+	invocation *agent.Invocation,
+	observabilityInvocation *agent.Invocation,
+	llmRequest *model.Request,
+	eventChan chan<- *event.Event,
+	span oteltrace.Span,
+	startedSpan bool,
+	err *error,
+) *streamingResponseProcessor {
 	currentInvocation := invocationFromContextOrDefault(ctx, invocation)
 	metricsInvocation := observabilityInvocation
 	if metricsInvocation == nil {
@@ -634,139 +845,237 @@ func (f *Flow) processStreamingResponses(
 	if metricsInvocation == nil {
 		metricsInvocation = currentInvocation
 	}
-	var tracker *itelemetry.ChatMetricsTracker
-	var timingInfo *model.TimingInfo
-	var partialUsageState responseusage.PartialState
+	processor := &streamingResponseProcessor{
+		flow:                    flow,
+		ctx:                     ctx,
+		invocation:              invocation,
+		observabilityInvocation: observabilityInvocation,
+		currentInvocation:       currentInvocation,
+		llmRequest:              llmRequest,
+		eventChan:               eventChan,
+		span:                    span,
+		startedSpan:             startedSpan,
+		err:                     err,
+	}
 	if metricsInvocation != nil {
-		timingInfo = responseUsageTimingInfo(currentInvocation)
-		tracker = itelemetry.NewChatMetricsTracker(
+		processor.timingInfo = responseUsageTimingInfo(currentInvocation)
+		processor.tracker = itelemetry.NewChatMetricsTracker(
 			ctx,
 			metricsInvocation,
 			llmRequest,
-			timingInfo,
+			processor.timingInfo,
 			nil,
-			&err,
+			err,
 		)
-		defer tracker.RecordMetrics()()
 	}
+	return processor
+}
 
-	responseSeq(func(response *model.Response) bool {
-		currentInvocation = invocationFromContextOrDefault(
-			ctx,
-			currentInvocation,
+func (p *streamingResponseProcessor) process(
+	response *model.Response,
+) bool {
+	p.recordResponseStats(response)
+	traceDetails := latencyTraceResponseDetails(response)
+	responseCtx := p.ctx
+	var responseSpan oteltrace.Span
+	responseStarted := false
+	if traceDetails {
+		p.detailSpanCount++
+		responseCtx, responseSpan, responseStarted = startLatencySpan(
+			p.ctx,
+			p.invocation,
+			latencySpanProcessResponse,
+			latencyResponseAttrs(response)...,
 		)
-		timingInfo = responseUsageTimingInfo(currentInvocation)
-		if tracker != nil {
-			tracker.SetInvocationState(
-				metricsInvocationForCurrent(
-					currentInvocation,
-					observabilityInvocation,
-				),
-				timingInfo,
-			)
-		}
-		trackModelResponseTelemetry(
-			response,
-			tracker,
-		)
-		callbackTimingAttachment := responseusage.AttachTimingForCallback(
-			response,
-			timingInfo,
-			&partialUsageState,
-		)
-		eventInvocation := invocation
-		if eventInvocation == nil {
-			eventInvocation = currentInvocation
-		}
-		// Handle after model callbacks.
-		updatedCtx, customResp, cbErr := f.handleAfterModelCallbacks(
-			ctx,
-			eventInvocation,
-			currentInvocation,
-			llmRequest,
-			response,
-			eventChan,
-		)
-		if cbErr != nil {
-			err = cbErr
-			return false
-		}
-		ctx = updatedCtx
-		responseReplaced := customResp != nil
-		if responseReplaced {
-			callbackTimingAttachment.Restore()
-			response = customResp
-		}
-		currentInvocation = invocationFromContextOrDefault(
-			ctx,
-			currentInvocation,
-		)
-		timingInfo = responseUsageTimingInfo(currentInvocation)
-		if tracker != nil {
-			tracker.SetInvocationState(
-				metricsInvocationForCurrent(
-					currentInvocation,
-					observabilityInvocation,
-				),
-				timingInfo,
-			)
-		}
-		if !responseReplaced {
-			callbackTimingAttachment.RestoreIfTimingInfoChanged(timingInfo)
-		}
-		responseusage.AttachTiming(response, timingInfo, &partialUsageState)
-		// Repair tool call arguments in place when needed.
-		if currentInvocation != nil &&
-			jsonrepair.IsToolCallArgumentsJSONRepairEnabled(currentInvocation) {
-			jsonrepair.RepairResponseToolCallArgumentsInPlace(ctx, response)
-		}
-		// 4. Create and send LLM response using the clean constructor.
-		llmResponseEvent := f.createLLMResponseEvent(
-			eventInvocation,
-			currentInvocation,
-			response,
-			llmRequest,
-		)
-		agent.EmitEvent(ctx, eventInvocation, eventChan, llmResponseEvent)
-		lastEvent = llmResponseEvent
-		if tracker != nil {
-			tracker.SetLastEvent(lastEvent)
-		}
-		// 5. Check context cancellation.
-		if err = agent.CheckContextCancelled(ctx); err != nil {
-			return false
-		}
-		// 6. Postprocess response.
-		f.postprocess(
-			ctx,
-			eventInvocation,
-			llmRequest,
-			response,
-			eventChan,
-		)
-		if ctxErr := agent.CheckContextCancelled(ctx); ctxErr != nil {
-			err = ctxErr
-			return false
-		}
-		var ttfb time.Duration
-		if tracker != nil {
-			ttfb = tracker.FirstTokenTimeDuration()
-		}
-		if startedSpan {
-			itelemetry.TraceChat(span, &itelemetry.TraceChatAttributes{
-				Invocation:       observabilityInvocationForCurrent(eventInvocation, observabilityInvocation),
-				Request:          llmRequest,
-				Response:         response,
-				EventID:          llmResponseEvent.ID,
-				TimeToFirstToken: ttfb,
-			})
-		}
-		return true
-	})
-	if err != nil {
-		return nil, err
 	}
-	return lastEvent, nil
+	responseErr := error(nil)
+	defer func() {
+		finishLatencySpan(responseSpan, responseStarted, responseErr)
+	}()
+	p.ctx = responseCtx
+	p.currentInvocation = invocationFromContextOrDefault(
+		p.ctx,
+		p.currentInvocation,
+	)
+	p.updateMetricsState()
+	trackModelResponseTelemetry(response, p.tracker)
+	callbackTimingAttachment := responseusage.AttachTimingForCallback(
+		response,
+		p.timingInfo,
+		&p.partialUsageState,
+	)
+	eventInvocation := p.eventInvocation()
+	updatedCtx, customResp, cbErr := p.flow.handleAfterModelCallbacks(
+		p.ctx,
+		eventInvocation,
+		p.currentInvocation,
+		p.llmRequest,
+		response,
+		p.eventChan,
+		traceDetails,
+	)
+	if cbErr != nil {
+		*p.err = cbErr
+		responseErr = cbErr
+		return false
+	}
+	p.ctx = updatedCtx
+	p.currentInvocation = invocationFromContextOrDefault(
+		p.ctx,
+		p.currentInvocation,
+	)
+	p.updateMetricsState()
+	response = p.applyCallbackResponse(response, customResp, callbackTimingAttachment)
+	responseusage.AttachTiming(response, p.timingInfo, &p.partialUsageState)
+	p.repairToolCallArguments(response)
+	llmResponseEvent := p.emitLLMResponse(
+		eventInvocation,
+		response,
+		traceDetails,
+	)
+	p.lastEvent = llmResponseEvent
+	if p.tracker != nil {
+		p.tracker.SetLastEvent(p.lastEvent)
+	}
+	if err := agent.CheckContextCancelled(p.ctx); err != nil {
+		*p.err = err
+		responseErr = err
+		return false
+	}
+	p.flow.postprocessWithLatencySpans(
+		p.ctx,
+		eventInvocation,
+		p.llmRequest,
+		response,
+		p.eventChan,
+		traceDetails,
+	)
+	if err := agent.CheckContextCancelled(p.ctx); err != nil {
+		*p.err = err
+		responseErr = err
+		return false
+	}
+	p.traceChat(eventInvocation, response, llmResponseEvent)
+	if responseStarted && response != nil {
+		responseSpan.SetAttributes(latencyResponseAttrs(response)...)
+	}
+	return true
+}
+
+func (p *streamingResponseProcessor) recordResponseStats(response *model.Response) {
+	p.responseCount++
+	if response == nil {
+		return
+	}
+	if response.IsPartial {
+		p.partialResponseCount++
+	}
+	if response.Done {
+		p.terminalResponseCount++
+	}
+	if response.Error != nil {
+		p.errorResponseCount++
+	}
+	if response.IsToolCallResponse() || response.IsToolResultResponse() {
+		p.toolResponseCount++
+	}
+}
+
+func (p *streamingResponseProcessor) updateMetricsState() {
+	p.timingInfo = responseUsageTimingInfo(p.currentInvocation)
+	if p.tracker == nil {
+		return
+	}
+	p.tracker.SetInvocationState(
+		metricsInvocationForCurrent(
+			p.currentInvocation,
+			p.observabilityInvocation,
+		),
+		p.timingInfo,
+	)
+}
+
+func (p *streamingResponseProcessor) eventInvocation() *agent.Invocation {
+	if p.invocation != nil {
+		return p.invocation
+	}
+	return p.currentInvocation
+}
+
+func (p *streamingResponseProcessor) applyCallbackResponse(
+	response *model.Response,
+	customResp *model.Response,
+	callbackTimingAttachment responseusage.TimingAttachment,
+) *model.Response {
+	if customResp != nil {
+		callbackTimingAttachment.Restore()
+		return customResp
+	}
+	callbackTimingAttachment.RestoreIfTimingInfoChanged(p.timingInfo)
+	return response
+}
+
+func (p *streamingResponseProcessor) repairToolCallArguments(
+	response *model.Response,
+) {
+	if p.currentInvocation == nil {
+		return
+	}
+	if !jsonrepair.IsToolCallArgumentsJSONRepairEnabled(p.currentInvocation) {
+		return
+	}
+	jsonrepair.RepairResponseToolCallArgumentsInPlace(p.ctx, response)
+}
+
+func (p *streamingResponseProcessor) emitLLMResponse(
+	eventInvocation *agent.Invocation,
+	response *model.Response,
+	traceDetails bool,
+) *event.Event {
+	llmResponseEvent := p.flow.createLLMResponseEvent(
+		eventInvocation,
+		p.currentInvocation,
+		response,
+		p.llmRequest,
+	)
+	emitCtx := p.ctx
+	var emitSpan oteltrace.Span
+	emitStarted := false
+	if traceDetails {
+		emitCtx, emitSpan, emitStarted = startLatencySpan(
+			p.ctx,
+			eventInvocation,
+			latencySpanEmitResponse,
+			latencyResponseAttrs(response)...,
+		)
+	}
+	agent.EmitEvent(emitCtx, eventInvocation, p.eventChan, llmResponseEvent)
+	finishLatencySpan(emitSpan, emitStarted, nil)
+	return llmResponseEvent
+}
+
+func (p *streamingResponseProcessor) traceChat(
+	eventInvocation *agent.Invocation,
+	response *model.Response,
+	llmResponseEvent *event.Event,
+) {
+	if !p.startedSpan {
+		return
+	}
+	var ttfb time.Duration
+	if p.tracker != nil {
+		ttfb = p.tracker.FirstTokenTimeDuration()
+	}
+	itelemetry.TraceChat(p.span, &itelemetry.TraceChatAttributes{
+		Invocation: observabilityInvocationForCurrent(
+			eventInvocation,
+			p.observabilityInvocation,
+		),
+		Request:          p.llmRequest,
+		Response:         response,
+		EventID:          llmResponseEvent.ID,
+		TimeToFirstToken: ttfb,
+	})
 }
 
 // handleAfterModelCallbacks processes after model callbacks.
@@ -777,13 +1086,61 @@ func (f *Flow) handleAfterModelCallbacks(
 	llmRequest *model.Request,
 	response *model.Response,
 	eventChan chan<- *event.Event,
+	traceDetails bool,
 ) (context.Context, *model.Response, error) {
-	ctx, customResp, err := f.runAfterModelCallbacks(
+	if !traceDetails {
+		updatedCtx, customResp, err := f.runAfterModelCallbacks(
+			ctx,
+			invocation,
+			llmRequest,
+			response,
+		)
+		return f.handleAfterModelCallbackResult(
+			updatedCtx,
+			eventInvocation,
+			eventChan,
+			customResp,
+			err,
+		)
+	}
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanAfterModel,
+		latencyResponseAttrs(response)...,
+	)
+	var err error
+	var customResp *model.Response
+	defer func() {
+		if started {
+			span.SetAttributes(
+				attribute.Bool("llmflow.callback.custom_response", customResp != nil),
+			)
+		}
+		finishLatencySpan(span, started, err)
+	}()
+	ctx, customResp, err = f.runAfterModelCallbacks(
 		ctx,
 		invocation,
 		llmRequest,
 		response,
 	)
+	return f.handleAfterModelCallbackResult(
+		ctx,
+		eventInvocation,
+		eventChan,
+		customResp,
+		err,
+	)
+}
+
+func (f *Flow) handleAfterModelCallbackResult(
+	ctx context.Context,
+	eventInvocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	customResp *model.Response,
+	err error,
+) (context.Context, *model.Response, error) {
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
 			return ctx, nil, err
@@ -920,7 +1277,7 @@ func collectLongRunningToolIDs(ToolCalls []model.ToolCall, tools map[string]tool
 		if !ok {
 			continue
 		}
-		caller, ok := t.(function.LongRunner)
+		caller, ok := itool.ResolveDeclaration(t).(function.LongRunner)
 		if !ok {
 			continue
 		}
@@ -1010,7 +1367,20 @@ func (f *Flow) preprocess(
 	eventChan chan<- *event.Event,
 ) *contextCompactionRebuildPlan {
 	var rebuildPlan *contextCompactionRebuildPlan
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanPreprocess,
+		latencyRequestAttrs(llmRequest)...,
+	)
+	defer func() {
+		if started {
+			span.SetAttributes(latencyRequestAttrs(llmRequest)...)
+		}
+		finishLatencySpan(span, started, nil)
+	}()
 
+	f.populateRequestTools(ctx, invocation, llmRequest)
 	// Run request processors - they send events directly to the channel.
 	for _, requestProcessor := range f.requestProcessors {
 		if rebuildPlan == nil {
@@ -1032,17 +1402,31 @@ func (f *Flow) preprocess(
 				rebuildPlan.tailProcessors = append(rebuildPlan.tailProcessors, tailProcessor)
 			}
 		}
-		requestProcessor.ProcessRequest(ctx, invocation, llmRequest, eventChan)
-	}
-	// Add tools to the request with optional filtering.
-	if invocation.Agent != nil {
-		tools := f.getFilteredTools(ctx, invocation)
-		for _, t := range tools {
-			llmRequest.Tools[t.Declaration().Name] = t
+		stageCtx, stageSpan, stageStarted := startLatencySpan(
+			ctx,
+			invocation,
+			latencyProcessorStageSpanName(
+				latencySpanPreprocessStage,
+				requestProcessor,
+			),
+			attribute.String(
+				"llmflow.preprocess.stage",
+				latencyProcessorName(requestProcessor),
+			),
+		)
+		requestProcessor.ProcessRequest(
+			stageCtx,
+			invocation,
+			llmRequest,
+			eventChan,
+		)
+		if stageStarted {
+			stageSpan.SetAttributes(latencyRequestAttrs(llmRequest)...)
 		}
+		finishLatencySpan(stageSpan, stageStarted, nil)
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
-	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(llmRequest.Messages, llmRequest.Tools)
+	llmRequest.Messages = toolcall.SanitizeMessagesWithTools(ctx, llmRequest.Messages, llmRequest.Tools)
 	return rebuildPlan
 }
 
@@ -1056,35 +1440,129 @@ func normalizeContextCompactionThresholdRatio(ratio float64) float64 {
 func (f *Flow) maybeCompactContextBeforeLLM(
 	ctx context.Context,
 	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
 	req *model.Request,
 	rebuildPlan *contextCompactionRebuildPlan,
 ) *model.Request {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanContextCheck,
+		latencyRequestAttrs(req)...,
+	)
+	defer func() {
+		finishLatencySpan(span, started, nil)
+	}()
 	if req == nil || !f.enableContextCompaction || invocation == nil ||
 		invocation.Session == nil || invocation.SessionService == nil ||
 		!f.supportsSyncSummaryRetry() || rebuildPlan == nil ||
 		rebuildPlan.beforeContent == nil || rebuildPlan.contentProcessor == nil {
+		if started {
+			span.SetAttributes(
+				attribute.Bool(
+					"llmflow.context_compaction.available",
+					false,
+				),
+			)
+		}
 		return req
 	}
-	if !shouldSyncCompactContext(
+	decision := syncCompactContextDecision(
 		ctx,
 		invocation,
 		req,
 		f.contextCompactionThresholdRatio,
 		rebuildPlan.contentProcessor.ContextCompactionConfig.TokenCounter,
-	) {
+	)
+	if started {
+		span.SetAttributes(contextCompactionAttrs(decision, req)...)
+	}
+	if decision.err != nil {
+		if started {
+			span.RecordError(decision.err)
+			span.SetStatus(codes.Error, decision.err.Error())
+		}
+	}
+	if !decision.shouldCompact {
 		return req
 	}
+	return f.runContextCompaction(
+		ctx,
+		invocation,
+		eventChan,
+		req,
+		rebuildPlan,
+		decision,
+	)
+}
 
+func (f *Flow) runContextCompaction(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	req *model.Request,
+	rebuildPlan *contextCompactionRebuildPlan,
+	decision contextCompactionDecision,
+) *model.Request {
 	filterKey := invocation.GetEventFilterKey()
 	before := snapshotSummary(invocation.Session, filterKey)
-	err := invocation.SessionService.CreateSessionSummary(
+	emitLatencyDiagnosticEvent(
 		ctx,
+		invocation,
+		eventChan,
+		event.LatencyDiagnostic{
+			Stage:         latencyDiagnosticStageCompact,
+			Status:        latencyDiagnosticStatusStart,
+			Summary:       "Context compaction is running.",
+			TokenCount:    decision.tokenCount,
+			Threshold:     decision.threshold,
+			ContextWindow: decision.contextWindow,
+			MessageCount:  len(req.Messages),
+			ToolCount:     len(req.Tools),
+			FilterKey:     filterKey,
+		},
+	)
+	summaryCtx, summarySpan, summaryStarted := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanContextSummary,
+		contextCompactionAttrs(decision, req)...,
+	)
+	summaryCtx = summary.ContextWithCacheSafeForkRequest(summaryCtx, req)
+	err := invocation.SessionService.CreateSessionSummary(
+		summaryCtx,
 		invocation.Session,
 		filterKey,
 		false,
 	)
+	finishLatencySpan(summarySpan, summaryStarted, err)
 	after := snapshotSummary(invocation.Session, filterKey)
-	if !before.advanced(after) {
+	updated := before.advanced(after)
+	status := latencyDiagnosticStatusDone
+	if !updated {
+		status = latencyDiagnosticStatusSkip
+	}
+	if err != nil {
+		status = latencyDiagnosticStatusError
+	}
+	emitLatencyDiagnosticEvent(
+		ctx,
+		invocation,
+		eventChan,
+		event.LatencyDiagnostic{
+			Stage:         latencyDiagnosticStageCompact,
+			Status:        status,
+			Summary:       "Context compaction finished.",
+			TokenCount:    decision.tokenCount,
+			Threshold:     decision.threshold,
+			ContextWindow: decision.contextWindow,
+			MessageCount:  len(req.Messages),
+			ToolCount:     len(req.Tools),
+			FilterKey:     filterKey,
+			Updated:       &updated,
+		},
+	)
+	if !updated {
 		if err != nil {
 			log.DebugfContext(
 				ctx,
@@ -1096,11 +1574,20 @@ func (f *Flow) maybeCompactContextBeforeLLM(
 		return req
 	}
 
-	rebuilt := f.rebuildRequestForContextCompaction(
+	rebuildCtx, rebuildSpan, rebuildStarted := startLatencySpan(
 		ctx,
+		invocation,
+		latencySpanContextRebuild,
+	)
+	rebuilt := f.rebuildRequestForContextCompaction(
+		rebuildCtx,
 		invocation,
 		rebuildPlan,
 	)
+	if rebuildStarted && rebuilt != nil {
+		rebuildSpan.SetAttributes(latencyRequestAttrs(rebuilt)...)
+	}
+	finishLatencySpan(rebuildSpan, rebuildStarted, nil)
 	if rebuilt == nil {
 		log.DebugfContext(
 			ctx,
@@ -1153,12 +1640,8 @@ func (f *Flow) rebuildRequestForContextCompaction(
 			rebuilt,
 		)
 	}
-	if invocation.Agent != nil {
-		for _, t := range f.getFilteredTools(ctx, invocation) {
-			rebuilt.Tools[t.Declaration().Name] = t
-		}
-	}
 	rebuilt.Messages = toolcall.SanitizeMessagesWithTools(
+		ctx,
 		rebuilt.Messages,
 		rebuilt.Tools,
 	)
@@ -1383,23 +1866,44 @@ func shouldSyncCompactContext(
 	ratio float64,
 	counter model.TokenCounter,
 ) bool {
+	return syncCompactContextDecision(
+		ctx,
+		inv,
+		req,
+		ratio,
+		counter,
+	).shouldCompact
+}
+
+func syncCompactContextDecision(
+	ctx context.Context,
+	inv *agent.Invocation,
+	req *model.Request,
+	ratio float64,
+	counter model.TokenCounter,
+) contextCompactionDecision {
+	decision := contextCompactionDecision{}
 	if inv == nil || inv.Model == nil || req == nil || len(req.Messages) == 0 {
-		return false
+		return decision
 	}
 
+	decision.threshold = contextCompactionThreshold(inv, ratio)
+	decision.contextWindow = contextCompactionWindow(inv)
 	if counter == nil {
 		counter = model.NewSimpleTokenCounter()
 	}
 	tokens, err := counter.CountTokensRange(ctx, req.Messages, 0, len(req.Messages))
+	decision.tokenCount = tokens
 	if err != nil {
-		return false
+		decision.err = err
+		return decision
 	}
 
-	threshold := contextCompactionThreshold(inv, ratio)
-	return tokens >= threshold
+	decision.shouldCompact = tokens >= decision.threshold
+	return decision
 }
 
-func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
+func contextCompactionWindow(inv *agent.Invocation) int {
 	contextWindow := contextCompactionFallbackWindow
 	if inv != nil {
 		if window, ok := agent.ModelContextWindowFromRunOptions(
@@ -1416,7 +1920,11 @@ func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
 	if contextWindow <= 0 {
 		contextWindow = contextCompactionFallbackWindow
 	}
+	return contextWindow
+}
 
+func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
+	contextWindow := contextCompactionWindow(inv)
 	threshold := int(float64(contextWindow) * normalizeContextCompactionThresholdRatio(ratio))
 	if threshold < contextCompactionMinTokens {
 		threshold = contextCompactionMinTokens
@@ -1425,30 +1933,6 @@ func contextCompactionThreshold(inv *agent.Invocation, ratio float64) int {
 		threshold = contextWindow
 	}
 	return threshold
-}
-
-// UserToolsProvider is an optional interface that agents can implement to expose
-// which tools were explicitly registered by the user (WithTools, WithToolSets)
-// vs framework-added tools (Knowledge, SubAgents).
-//
-// User tools are subject to filtering via WithToolFilter.
-// Framework tools are never filtered and always available to the agent.
-type UserToolsProvider interface {
-	UserTools() []tool.Tool
-}
-
-// ToolFilterProvider is an optional interface that agents can implement to provide
-type ToolFilterProvider interface {
-	FilterTools(ctx context.Context) []tool.Tool
-}
-
-// InvocationToolSurfaceProvider is an optional interface that exposes
-// invocation-scoped tools and user-tool classification.
-type InvocationToolSurfaceProvider interface {
-	InvocationToolSurface(
-		ctx context.Context,
-		invocation *agent.Invocation,
-	) ([]tool.Tool, map[string]bool)
 }
 
 // getFilteredTools returns the list of tools for this invocation after applying the filter.
@@ -1462,187 +1946,133 @@ type InvocationToolSurfaceProvider interface {
 //   - knowledge_search / agentic_knowledge_search (auto-added when Knowledge is configured)
 //
 // This method is called during the preprocess stage, before sending the request to the model.
-func (f *Flow) getFilteredTools(ctx context.Context, invocation *agent.Invocation) []tool.Tool {
+func (f *Flow) getFilteredTools(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (resolved []tool.Tool) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanResolveTools,
+	)
+	defer func() {
+		if started {
+			span.SetAttributes(
+				attribute.Int("llmflow.tools.count", len(resolved)),
+			)
+		}
+		finishLatencySpan(span, started, nil)
+	}()
+
 	if invocation == nil || invocation.Agent == nil {
 		return nil
 	}
 
-	if cached, ok := agent.GetStateValue[[]tool.Tool](
-		invocation,
-		stateKeyToolsSnapshot,
-	); ok && cached != nil {
+	if cached, ok := toolsnapshot.Get(invocation); ok && cached != nil {
 		return cached
 	}
 
-	var allTools []tool.Tool
-	var userToolNames map[string]bool
-	hasUserToolTracking := false
-	if provider, ok := invocation.Agent.(InvocationToolSurfaceProvider); ok {
-		allTools, userToolNames = provider.InvocationToolSurface(
-			ctx,
-			invocation,
-		)
-		hasUserToolTracking = userToolNames != nil
-	} else if provider, ok := invocation.Agent.(ToolFilterProvider); ok {
-		allTools = provider.FilterTools(ctx)
-	} else {
-		allTools = invocation.Agent.Tools()
-	}
-
-	// Get user tools (if the agent supports it).
-	// User tools are those explicitly registered via WithTools and
-	// WithToolSets. Framework tools (Knowledge, SubAgents) are never filtered.
-	if invocation.RunOptions.ToolFilter != nil && !hasUserToolTracking {
-		if provider, ok := invocation.Agent.(UserToolsProvider); ok {
-			userTools := provider.UserTools()
-			hasUserToolTracking = true
-			userToolNames = make(map[string]bool, len(userTools))
-			for _, t := range userTools {
-				userToolNames[t.Declaration().Name] = true
-			}
-		}
-	}
+	allTools, userToolNames, hasUserToolTracking := toolsurface.ResolveBase(
+		ctx,
+		invocation,
+	)
+	traceableUserToolNames := trackedUserToolNames(
+		allTools,
+		hasUserToolTracking,
+		userToolNames,
+	)
 	allTools, userToolNames, hasUserToolTracking, externalToolNames :=
-		appendRunOptionTools(
+		toolsurface.AppendRunOptionTools(
 			allTools,
 			userToolNames,
 			hasUserToolTracking,
 			invocation.RunOptions,
 		)
+	if f.toolActivationApplier != nil {
+		allTools = append([]tool.Tool(nil), allTools...)
+		if userToolNames != nil {
+			userToolNames = copyToolNames(userToolNames)
+		}
+		if externalToolNames != nil {
+			externalToolNames = copyToolNames(externalToolNames)
+		}
+		allTools, userToolNames, externalToolNames =
+			f.toolActivationApplier(
+				ctx,
+				invocation,
+				allTools,
+				userToolNames,
+				externalToolNames,
+			)
+		hasUserToolTracking = userToolNames != nil
+	}
 
 	// If no filter is specified, return all tools for this invocation.
 	if invocation.RunOptions.ToolFilter == nil {
+		allTools = sanitizeTools(allTools)
 		setVisibleExternalToolNames(invocation, allTools, externalToolNames)
-		invocation.SetState(stateKeyToolsSnapshot, allTools)
-		invocation.SetState(
-			stateKeyHasFilteredUserTools,
-			hasTrackedUserTool(allTools, hasUserToolTracking, userToolNames),
+		toolsnapshot.Set(
+			invocation,
+			allTools,
+			len(trackedUserToolNames(allTools, hasUserToolTracking, userToolNames)) > 0,
+			filteredTraceableToolNames(allTools, traceableUserToolNames),
 		)
 		return allTools
 	}
 
-	// Apply the filter function to each tool.
-	// Framework tools are never filtered.
-	filtered := make([]tool.Tool, 0, len(allTools))
-	for _, t := range allTools {
-		toolName := t.Declaration().Name
-
-		// Determine if this is a user tool or framework tool.
-		isUserTool := !hasUserToolTracking || userToolNames[toolName]
-
-		// Framework tools are always included (never filtered).
-		if !isUserTool {
-			filtered = append(filtered, t)
-			continue
-		}
-
-		// User tool: apply the filter function.
-		if invocation.RunOptions.ToolFilter(ctx, t) {
-			filtered = append(filtered, t)
-		}
-	}
-
-	// Sort tools by name to ensure stable order for better prompt cache hit rate.
-	// Map iteration order is random in Go, so sorting ensures consistent tool ordering
-	// across requests, which improves cache efficiency.
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].Declaration().Name < filtered[j].Declaration().Name
-	})
+	// Framework tools are never filtered; user tools must pass the run-scoped
+	// filter. Shared via toolsurface so getFilteredTools and the dynamic tool's
+	// surface derivation stay in lockstep.
+	filtered := toolsurface.ApplyToolFilter(
+		ctx,
+		allTools,
+		userToolNames,
+		hasUserToolTracking,
+		invocation.RunOptions,
+	)
 
 	setVisibleExternalToolNames(invocation, filtered, externalToolNames)
-	invocation.SetState(stateKeyToolsSnapshot, filtered)
-	invocation.SetState(
-		stateKeyHasFilteredUserTools,
-		hasTrackedUserTool(filtered, hasUserToolTracking, userToolNames),
+	toolsnapshot.Set(
+		invocation,
+		filtered,
+		len(trackedUserToolNames(filtered, hasUserToolTracking, userToolNames)) > 0,
+		filteredTraceableToolNames(filtered, traceableUserToolNames),
 	)
 
 	return filtered
 }
 
-func appendRunOptionTools(
-	allTools []tool.Tool,
-	userToolNames map[string]bool,
-	hasUserToolTracking bool,
-	opts agent.RunOptions,
-) ([]tool.Tool, map[string]bool, bool, map[string]bool) {
-	if len(opts.AdditionalTools) == 0 && len(opts.ExternalTools) == 0 {
-		return allTools, userToolNames, hasUserToolTracking, nil
+func (f *Flow) populateRequestTools(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+) {
+	if req == nil || invocation == nil || invocation.Agent == nil {
+		return
 	}
-	allTools = append([]tool.Tool(nil), allTools...)
-	if hasUserToolTracking {
-		userToolNames = copyToolNames(userToolNames)
+	if req.Tools == nil {
+		req.Tools = make(map[string]tool.Tool)
 	}
-	serverNames := collectToolNames(allTools)
-	seen := copyToolNames(serverNames)
-	allTools, userToolNames = appendRunOptionToolList(
-		allTools,
-		userToolNames,
-		hasUserToolTracking,
-		seen,
-		opts.AdditionalTools,
-	)
-	externalNames := make(map[string]bool, len(opts.ExternalTools))
-	for _, tl := range opts.ExternalTools {
+	for _, tl := range f.getFilteredTools(ctx, invocation) {
 		name := toolName(tl)
-		if name == "" || serverNames[name] {
+		if name == "" {
 			continue
 		}
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		allTools = append(allTools, tl)
-		externalNames[name] = true
-		if hasUserToolTracking {
-			if userToolNames == nil {
-				userToolNames = make(map[string]bool)
-			}
-			userToolNames[name] = true
-		}
+		req.Tools[name] = tl
 	}
-	return allTools, userToolNames, hasUserToolTracking, externalNames
 }
 
-func appendRunOptionToolList(
-	allTools []tool.Tool,
-	userToolNames map[string]bool,
-	hasUserToolTracking bool,
-	seen map[string]bool,
-	tools []tool.Tool,
-) ([]tool.Tool, map[string]bool) {
+func sanitizeTools(tools []tool.Tool) []tool.Tool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]tool.Tool, 0, len(tools))
 	for _, tl := range tools {
-		name := toolName(tl)
-		if name == "" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		allTools = append(allTools, tl)
-		if hasUserToolTracking {
-			if userToolNames == nil {
-				userToolNames = make(map[string]bool)
-			}
-			userToolNames[name] = true
+		if toolName(tl) != "" {
+			out = append(out, tl)
 		}
 	}
-	return allTools, userToolNames
-}
-
-func collectToolNames(tools []tool.Tool) map[string]bool {
-	names := make(map[string]bool, len(tools))
-	for _, tl := range tools {
-		if name := toolName(tl); name != "" {
-			names[name] = true
-		}
-	}
-	return names
-}
-
-func copyToolNames(src map[string]bool) map[string]bool {
-	dst := make(map[string]bool, len(src))
-	for name, ok := range src {
-		dst[name] = ok
-	}
-	return dst
+	return out
 }
 
 func setVisibleExternalToolNames(
@@ -1663,6 +2093,14 @@ func setVisibleExternalToolNames(
 	invocation.RunOptions.ExternalToolNames = visible
 }
 
+func copyToolNames(src map[string]bool) map[string]bool {
+	dst := make(map[string]bool, len(src))
+	for name, ok := range src {
+		dst[name] = ok
+	}
+	return dst
+}
+
 func toolName(tl tool.Tool) string {
 	if tl == nil {
 		return ""
@@ -1674,26 +2112,66 @@ func toolName(tl tool.Tool) string {
 	return decl.Name
 }
 
-func hasTrackedUserTool(
+func trackedUserToolNames(
 	tools []tool.Tool,
 	hasUserToolTracking bool,
 	userToolNames map[string]bool,
-) bool {
+) []string {
 	if len(tools) == 0 {
-		return false
+		return nil
 	}
+	seen := make(map[string]struct{}, len(tools))
 	if !hasUserToolTracking {
-		return true
+		for _, tl := range tools {
+			if name := toolName(tl); name != "" {
+				seen[name] = struct{}{}
+			}
+		}
+		return sortedToolNames(seen)
 	}
 	for _, tl := range tools {
-		if tl == nil || tl.Declaration() == nil {
-			continue
-		}
-		if userToolNames[tl.Declaration().Name] {
-			return true
+		name := toolName(tl)
+		if name != "" && userToolNames[name] {
+			seen[name] = struct{}{}
 		}
 	}
-	return false
+	return sortedToolNames(seen)
+}
+
+func sortedToolNames(names map[string]struct{}) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func filteredTraceableToolNames(
+	tools []tool.Tool,
+	traceableToolNames []string,
+) []string {
+	if len(tools) == 0 || len(traceableToolNames) == 0 {
+		return nil
+	}
+	traceable := make(map[string]struct{}, len(traceableToolNames))
+	for _, name := range traceableToolNames {
+		traceable[name] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(tools))
+	for _, tl := range tools {
+		name := toolName(tl)
+		if name == "" {
+			continue
+		}
+		if _, ok := traceable[name]; ok {
+			seen[name] = struct{}{}
+		}
+	}
+	return sortedToolNames(seen)
 }
 
 // callLLM performs the actual LLM call using core/model.
@@ -1703,8 +2181,24 @@ func (f *Flow) callLLM(
 	llmRequest *model.Request,
 	callModel model.Model,
 ) (context.Context, model.Seq[*model.Response], error) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanCallLLM,
+		latencyRequestAttrs(llmRequest)...,
+	)
+	var err error
+	defer func() {
+		if started && callModel != nil {
+			span.SetAttributes(
+				attribute.String("llmflow.model", callModel.Info().Name),
+			)
+		}
+		finishLatencySpan(span, started, err)
+	}()
 	if callModel == nil {
-		return ctx, nil, errors.New("no model available for LLM call")
+		err = errors.New("no model available for LLM call")
+		return ctx, nil, err
 	}
 	log.DebugfContext(
 		ctx,
@@ -1713,7 +2207,7 @@ func (f *Flow) callLLM(
 	)
 	// Enforce optional per-invocation LLM call limit. When the limit is not
 	// configured (<= 0), this is a no-op and preserves existing behavior.
-	if err := invocation.IncLLMCallCount(); err != nil {
+	if err = invocation.IncLLMCallCount(); err != nil {
 		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
 		return ctx, nil, err
 	}
@@ -1727,6 +2221,7 @@ func (f *Flow) callLLM(
 			yield(customResp)
 		}, nil
 	}
+	summaryfork.Attach(invocation, llmRequest)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
 		return ctx, nil, err
@@ -1739,6 +2234,22 @@ func (f *Flow) runBeforeModelCallbacks(
 	invocation *agent.Invocation,
 	llmRequest *model.Request,
 ) (context.Context, *model.Response, error) {
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanBeforeModel,
+		latencyRequestAttrs(llmRequest)...,
+	)
+	var err error
+	var resp *model.Response
+	defer func() {
+		if started {
+			span.SetAttributes(
+				attribute.Bool("llmflow.callback.custom_response", resp != nil),
+			)
+		}
+		finishLatencySpan(span, started, err)
+	}()
 	var pluginCallbacks *model.Callbacks
 	if invocation != nil && invocation.Plugins != nil {
 		pluginCallbacks = invocation.Plugins.ModelCallbacks()
@@ -1748,7 +2259,7 @@ func (f *Flow) runBeforeModelCallbacks(
 		return ctx, nil, nil
 	}
 	callbackCtx := withInvocationContextIfMissing(ctx, invocation)
-	ctx, resp, err := runBeforeModelCallbacksWith(callbackCtx, invocation, llmRequest, pluginCallbacks)
+	ctx, resp, err = runBeforeModelCallbacksWith(callbackCtx, invocation, llmRequest, pluginCallbacks)
 	if err != nil {
 		log.ErrorfContext(ctx, "Before model plugin failed for agent %s: %v", invocation.AgentName, err)
 		return ctx, nil, err
@@ -1846,8 +2357,24 @@ func (f *Flow) generateContentSeq(
 	if llmRequest == nil || len(llmRequest.Messages) == 0 {
 		return nil, errors.New(errMsgNoLLMMessages)
 	}
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanGenerateContent,
+		latencyRequestAttrs(llmRequest)...,
+	)
+	var err error
+	defer func() {
+		if started && callModel != nil {
+			span.SetAttributes(
+				attribute.String("llmflow.model", callModel.Info().Name),
+			)
+		}
+		finishLatencySpan(span, started, err)
+	}()
 	if iterModel, ok := callModel.(model.IterModel); ok {
-		seq, err := iterModel.GenerateContentIter(ctx, llmRequest)
+		seq, genErr := iterModel.GenerateContentIter(ctx, llmRequest)
+		err = genErr
 		if err != nil {
 			log.ErrorfContext(
 				ctx,
@@ -1863,7 +2390,8 @@ func (f *Flow) generateContentSeq(
 		return normalizeResponseIDs(seq), nil
 	}
 
-	responseChan, err := callModel.GenerateContent(ctx, llmRequest)
+	responseChan, genErr := callModel.GenerateContent(ctx, llmRequest)
+	err = genErr
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
@@ -1931,13 +2459,79 @@ func (f *Flow) postprocess(
 	llmResponse *model.Response,
 	eventChan chan<- *event.Event,
 ) {
+	f.postprocessWithLatencySpans(
+		ctx,
+		invocation,
+		llmRequest,
+		llmResponse,
+		eventChan,
+		true,
+	)
+}
+
+func (f *Flow) postprocessWithLatencySpans(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmRequest *model.Request,
+	llmResponse *model.Response,
+	eventChan chan<- *event.Event,
+	traceDetails bool,
+) {
+	if !traceDetails {
+		for _, processor := range f.responseProcessors {
+			processor.ProcessResponse(
+				ctx,
+				invocation,
+				llmRequest,
+				llmResponse,
+				eventChan,
+			)
+		}
+		return
+	}
+	ctx, span, started := startLatencySpan(
+		ctx,
+		invocation,
+		latencySpanPostprocess,
+		latencyResponseAttrs(llmResponse)...,
+	)
+	defer func() {
+		if started {
+			span.SetAttributes(
+				attribute.Int(
+					"llmflow.postprocess.stages",
+					len(f.responseProcessors),
+				),
+			)
+		}
+		finishLatencySpan(span, started, nil)
+	}()
 	if llmResponse == nil {
 		return
 	}
 
 	// Run response processors - they send events directly to the channel.
 	for _, processor := range f.responseProcessors {
-		processor.ProcessResponse(ctx, invocation, llmRequest, llmResponse, eventChan)
+		stageCtx, stageSpan, stageStarted := startLatencySpan(
+			ctx,
+			invocation,
+			latencyProcessorStageSpanName(
+				latencySpanPostprocessStage,
+				processor,
+			),
+			attribute.String(
+				"llmflow.postprocess.stage",
+				latencyProcessorName(processor),
+			),
+		)
+		processor.ProcessResponse(
+			stageCtx,
+			invocation,
+			llmRequest,
+			llmResponse,
+			eventChan,
+		)
+		finishLatencySpan(stageSpan, stageStarted, nil)
 	}
 }
 
