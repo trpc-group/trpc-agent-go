@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 	"math"
 	"os"
@@ -32,12 +33,13 @@ import (
 )
 
 const (
-	defaultName        = "image_inspect"
-	defaultTimeout     = 20 * time.Second
-	defaultMaxOCRChars = 12000
-	defaultASCIIWidth  = 96
-	maxASCIIWidth      = 160
-	maxASCIIHeight     = 80
+	defaultName              = "image_inspect"
+	defaultTimeout           = 20 * time.Second
+	defaultMaxOCRChars       = 12000
+	defaultASCIIWidth        = 96
+	maxASCIIWidth            = 160
+	maxASCIIHeight           = 80
+	maxBasenameSearchEntries = 10000
 )
 
 // Config configures the image inspection tool.
@@ -60,8 +62,9 @@ func NewTool(cfg Config) (tool.CallableTool, error) {
 		function.WithName(defaultName),
 		function.WithDescription(
 			"Inspect a local raster image. Returns dimensions and, "+
-				"when tesseract is available, OCR text. Supports "+
-				"optional crop rectangles and ASCII previews for "+
+				"when tesseract is available, OCR text. Supports optional "+
+				"crop rectangles, OCR preprocessing with scale, threshold, "+
+				"or invert, and ASCII previews for "+
 				"screenshots, scanned documents, math worksheets, "+
 				"diagrams, and other visible-image tasks.",
 		),
@@ -89,7 +92,11 @@ func newInspector(cfg Config) (*inspector, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolve allowed dir %q: %w", dir, err)
 		}
-		allowedDirs = append(allowedDirs, filepath.Clean(abs))
+		real, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return nil, fmt.Errorf("resolve allowed dir %q: %w", dir, err)
+		}
+		allowedDirs = append(allowedDirs, filepath.Clean(real))
 	}
 
 	timeout := cfg.Timeout
@@ -123,6 +130,9 @@ type inspectRequest struct {
 	Crop       *cropRequest `json:"crop,omitempty"`
 	ASCII      bool         `json:"ascii,omitempty"`
 	ASCIIWidth int          `json:"ascii_width,omitempty"`
+	Scale      float64      `json:"scale,omitempty"`
+	Threshold  *int         `json:"threshold,omitempty"`
+	Invert     bool         `json:"invert,omitempty"`
 }
 
 type cropRequest struct {
@@ -187,6 +197,9 @@ func (i *inspector) inspect(
 		target = cropped
 		resp.Crop = crop
 	}
+	if needsImagePreprocess(req) {
+		target = preprocessImage(target, req)
+	}
 	if req.ASCII {
 		resp.ASCII = asciiPreview(target, req.ASCIIWidth)
 	}
@@ -197,7 +210,7 @@ func (i *inspector) inspect(
 	}
 	if runOCR {
 		ocrPath := path
-		if req.Crop != nil {
+		if req.Crop != nil || needsImagePreprocess(req) {
 			ocrPath, cleanup, err = writeTempPNG(target)
 			if err != nil {
 				return inspectResponse{}, err
@@ -220,6 +233,11 @@ func (i *inspector) resolvePath(raw string) (string, error) {
 	if raw == "" {
 		return "", errors.New("path is required")
 	}
+	if !filepath.IsAbs(raw) && !i.allowAllFiles {
+		if path, ok, err := i.resolveAllowedRelativePath(raw); ok || err != nil {
+			return path, err
+		}
+	}
 	abs, err := filepath.Abs(raw)
 	if err != nil {
 		return "", fmt.Errorf("resolve path: %w", err)
@@ -228,12 +246,101 @@ func (i *inspector) resolvePath(raw string) (string, error) {
 	if i.allowAllFiles {
 		return abs, nil
 	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolve image path: %w", err)
+	}
+	real = filepath.Clean(real)
 	for _, dir := range i.allowedDirs {
-		if abs == dir || strings.HasPrefix(abs, dir+string(os.PathSeparator)) {
-			return abs, nil
+		if pathInAllowedDir(real, dir) {
+			return real, nil
 		}
 	}
 	return "", fmt.Errorf("path %q is outside allowed_dirs", raw)
+}
+
+func (i *inspector) resolveAllowedRelativePath(
+	raw string,
+) (string, bool, error) {
+	cleaned := filepath.Clean(raw)
+	if cleaned == ".." ||
+		strings.HasPrefix(cleaned, ".."+string(os.PathSeparator)) {
+		return "", true, fmt.Errorf("path %q is outside allowed_dirs", raw)
+	}
+	for _, dir := range i.allowedDirs {
+		candidate := filepath.Clean(filepath.Join(dir, cleaned))
+		if !pathInAllowedDir(candidate, dir) {
+			continue
+		}
+		if !fileExists(candidate) {
+			continue
+		}
+		real, err := filepath.EvalSymlinks(candidate)
+		if err != nil {
+			return "", true, fmt.Errorf("resolve image path: %w", err)
+		}
+		real = filepath.Clean(real)
+		if !pathInAllowedDir(real, dir) {
+			return "", true, fmt.Errorf("path %q is outside allowed_dirs", raw)
+		}
+		return real, true, nil
+	}
+
+	if strings.Contains(cleaned, string(os.PathSeparator)) {
+		return "", false, nil
+	}
+	var match string
+	visited := 0
+	for _, dir := range i.allowedDirs {
+		if err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d == nil || d.IsDir() {
+				return nil
+			}
+			visited++
+			if visited > maxBasenameSearchEntries {
+				return fmt.Errorf(
+					"basename search exceeded %d files in allowed_dirs",
+					maxBasenameSearchEntries,
+				)
+			}
+			if d.Name() != cleaned {
+				return nil
+			}
+			if match != "" {
+				return fmt.Errorf("multiple files named %q in allowed_dirs", cleaned)
+			}
+			match = path
+			return nil
+		}); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return "", true, err
+		}
+	}
+	if match == "" {
+		return "", false, nil
+	}
+	real, err := filepath.EvalSymlinks(match)
+	if err != nil {
+		return "", true, fmt.Errorf("resolve image path: %w", err)
+	}
+	real = filepath.Clean(real)
+	for _, dir := range i.allowedDirs {
+		if pathInAllowedDir(real, dir) {
+			return real, true, nil
+		}
+	}
+	return "", true, fmt.Errorf("path %q is outside allowed_dirs", raw)
+}
+
+func pathInAllowedDir(path string, dir string) bool {
+	return path == dir || strings.HasPrefix(path, dir+string(os.PathSeparator))
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func cropImage(
@@ -258,6 +365,84 @@ func cropImage(
 		Width:  rect.Dx(),
 		Height: rect.Dy(),
 	}
+}
+
+func needsImagePreprocess(req inspectRequest) bool {
+	return req.Invert ||
+		req.Threshold != nil ||
+		(req.Scale > 0 && math.Abs(req.Scale-1) > 0.001)
+}
+
+func preprocessImage(img image.Image, req inspectRequest) image.Image {
+	out := img
+	if req.Scale > 0 && math.Abs(req.Scale-1) > 0.001 {
+		out = scaleImage(out, req.Scale)
+	}
+	if req.Threshold != nil || req.Invert {
+		out = thresholdImage(out, req.Threshold, req.Invert)
+	}
+	return out
+}
+
+func scaleImage(img image.Image, scale float64) image.Image {
+	if scale < 0.25 {
+		scale = 0.25
+	}
+	if scale > 6 {
+		scale = 6
+	}
+	b := img.Bounds()
+	width := int(math.Round(float64(b.Dx()) * scale))
+	height := int(math.Round(float64(b.Dy()) * scale))
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+	out := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		srcY := b.Min.Y + clamp(int(float64(y)/scale), 0, b.Dy()-1)
+		for x := 0; x < width; x++ {
+			srcX := b.Min.X + clamp(int(float64(x)/scale), 0, b.Dx()-1)
+			out.Set(x, y, img.At(srcX, srcY))
+		}
+	}
+	return out
+}
+
+func thresholdImage(img image.Image, threshold *int, invert bool) image.Image {
+	b := img.Bounds()
+	out := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	thresholdValue := 0
+	if threshold != nil {
+		thresholdValue = clamp(*threshold, 0, 255)
+	}
+	for y := 0; y < b.Dy(); y++ {
+		for x := 0; x < b.Dx(); x++ {
+			r, g, bl, a := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
+			luma := uint8(0.299*float64(r>>8) +
+				0.587*float64(g>>8) +
+				0.114*float64(bl>>8))
+			if threshold != nil {
+				if int(luma) > thresholdValue {
+					luma = 255
+				} else {
+					luma = 0
+				}
+			}
+			if invert {
+				luma = 255 - luma
+			}
+			out.SetRGBA(x, y, color.RGBA{
+				R: luma,
+				G: luma,
+				B: luma,
+				A: uint8(a >> 8),
+			})
+		}
+	}
+	return out
 }
 
 func clamp(v, minV, maxV int) int {
