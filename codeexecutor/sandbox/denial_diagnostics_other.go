@@ -49,3 +49,15 @@ func (r *Runtime) collectSandboxDenials(
 	_ = settleTimeout
 	return nil
 }
+
+func (r *Runtime) sandboxDenialRunForCollecting(
+	profile PermissionProfile,
+) sandboxDenialRun {
+	_ = r
+	_ = profile
+	return sandboxDenialRun{}
+}
+
+func (r *Runtime) sandboxDenialCollectingReady() bool {
+	return false
+}
