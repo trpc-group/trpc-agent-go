@@ -63,16 +63,19 @@ type decisionLock struct {
 	refs int
 }
 
-func (r *decisionLockRegistry) lock(skillID, revisionID string) func() {
-	key := skillID + "\x00" + revisionID
+type candidateStoreSkillLocker interface {
+	lockSkill(ctx context.Context, skillID string) (func(), error)
+}
+
+func (r *decisionLockRegistry) lock(skillID string) func() {
 	r.mu.Lock()
 	if r.locks == nil {
 		r.locks = make(map[string]*decisionLock)
 	}
-	l := r.locks[key]
+	l := r.locks[skillID]
 	if l == nil {
 		l = &decisionLock{}
-		r.locks[key] = l
+		r.locks[skillID] = l
 	}
 	l.refs++
 	r.mu.Unlock()
@@ -83,10 +86,27 @@ func (r *decisionLockRegistry) lock(skillID, revisionID string) func() {
 		r.mu.Lock()
 		l.refs--
 		if l.refs == 0 {
-			delete(r.locks, key)
+			delete(r.locks, skillID)
 		}
 		r.mu.Unlock()
 	}
+}
+
+func (s *ApprovalService) lockSkill(ctx context.Context, skillID string) (func(), error) {
+	localUnlock := approvalDecisionLocks.lock(skillID)
+	locker, ok := s.store.(candidateStoreSkillLocker)
+	if !ok || locker == nil {
+		return localUnlock, nil
+	}
+	storeUnlock, err := locker.lockSkill(ctx, skillID)
+	if err != nil {
+		localUnlock()
+		return nil, err
+	}
+	return func() {
+		storeUnlock()
+		localUnlock()
+	}, nil
 }
 
 // NewApprovalService creates an ApprovalService backed by the given stores.
@@ -139,7 +159,10 @@ func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision)
 		return fmt.Errorf("no candidate store configured")
 	}
 
-	unlock := approvalDecisionLocks.lock(decision.SkillID, decision.RevisionID)
+	unlock, err := s.lockSkill(ctx, decision.SkillID)
+	if err != nil {
+		return fmt.Errorf("lock skill %q: %w", decision.SkillID, err)
+	}
 	defer unlock()
 
 	rev, err := s.store.ReadRevision(ctx, decision.SkillID, decision.RevisionID)
@@ -294,6 +317,12 @@ func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts Rol
 		return nil, fmt.Errorf("rollback: empty skill id")
 	}
 
+	unlock, err := s.lockSkill(ctx, skillID)
+	if err != nil {
+		return nil, fmt.Errorf("lock skill %q: %w", skillID, err)
+	}
+	defer unlock()
+
 	target, err := s.selectRollbackTarget(ctx, skillID, opts.TargetRevisionID)
 	if err != nil {
 		return nil, err
@@ -314,6 +343,12 @@ func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts Rol
 		decidedAt = time.Now().UTC()
 	}
 
+	currentBefore, err := s.readRevisionForRollbackRestore(ctx, skillID, currentRevID)
+	if err != nil {
+		return nil, err
+	}
+	targetBefore := cloneRevision(target)
+
 	// Apply the publisher mutation first so any failure happens before
 	// we touch on-disk revision state. This keeps rollback "all or
 	// nothing" from the agent's perspective: if publishing fails, the
@@ -325,9 +360,9 @@ func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts Rol
 	// Now that the publisher reflects the restored skill, demote the
 	// previous active revision and update the candidate store / pointer
 	// to match. These steps are local writes against the candidate
-	// store; if any of them fails we surface the error but the
-	// publisher already shows the restored content, which matches the
-	// rollback intent.
+	// store. If the final pointer update fails, restore both revision
+	// statuses so ActivePointer never keeps referencing an archived
+	// previous-active revision.
 	if currentRevID != "" {
 		if err := s.archiveActive(ctx, skillID, currentRevID, target.RevisionID, decidedAt, opts); err != nil {
 			return nil, err
@@ -339,14 +374,11 @@ func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts Rol
 	if err := s.store.WriteRevision(ctx, target); err != nil {
 		return nil, fmt.Errorf("write restored revision: %w", err)
 	}
-	if target.Action == RevisionActionDelete {
-		if err := s.pointer.Clear(ctx, skillID); err != nil {
-			return nil, fmt.Errorf("clear active pointer: %w", err)
+	if err := s.updateRollbackPointer(ctx, skillID, target); err != nil {
+		if restoreErr := s.restoreRollbackRevisions(ctx, currentBefore, targetBefore); restoreErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("restore rollback revisions: %w", restoreErr))
 		}
-	} else {
-		if err := s.pointer.Set(ctx, skillID, target.RevisionID); err != nil {
-			return nil, fmt.Errorf("set active pointer: %w", err)
-		}
+		return nil, err
 	}
 
 	_ = s.store.AppendAudit(ctx, AuditEvent{
@@ -364,6 +396,94 @@ func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts Rol
 		PreviousActiveID: currentRevID,
 		RestoredID:       target.RevisionID,
 	}, nil
+}
+
+func (s *ApprovalService) updateRollbackPointer(ctx context.Context, skillID string, target *Revision) error {
+	if target.Action == RevisionActionDelete {
+		if err := s.pointer.Clear(ctx, skillID); err != nil {
+			return fmt.Errorf("clear active pointer: %w", err)
+		}
+		return nil
+	}
+	if err := s.pointer.Set(ctx, skillID, target.RevisionID); err != nil {
+		return fmt.Errorf("set active pointer: %w", err)
+	}
+	return nil
+}
+
+func (s *ApprovalService) readRevisionForRollbackRestore(
+	ctx context.Context, skillID, revisionID string,
+) (*Revision, error) {
+	if strings.TrimSpace(revisionID) == "" {
+		return nil, nil
+	}
+	rev, err := s.store.ReadRevision(ctx, skillID, revisionID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read rollback restore revision %q: %w", revisionID, err)
+	}
+	return cloneRevision(rev), nil
+}
+
+func (s *ApprovalService) restoreRollbackRevisions(ctx context.Context, revs ...*Revision) error {
+	var errs []error
+	for _, rev := range revs {
+		if rev == nil {
+			continue
+		}
+		if err := s.store.WriteRevision(ctx, rev); err != nil {
+			errs = append(errs, fmt.Errorf("restore revision %q: %w", rev.RevisionID, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func cloneRevision(rev *Revision) *Revision {
+	if rev == nil {
+		return nil
+	}
+	cp := *rev
+	if rev.Spec != nil {
+		spec := *rev.Spec
+		spec.Steps = append([]string(nil), rev.Spec.Steps...)
+		spec.Pitfalls = append([]string(nil), rev.Spec.Pitfalls...)
+		cp.Spec = &spec
+	}
+	if rev.PromotedAt != nil {
+		promotedAt := *rev.PromotedAt
+		cp.PromotedAt = &promotedAt
+	}
+	if rev.SpecReport != nil {
+		report := *rev.SpecReport
+		report.Reasons = append([]string(nil), rev.SpecReport.Reasons...)
+		cp.SpecReport = &report
+	}
+	if rev.SafetyReport != nil {
+		report := *rev.SafetyReport
+		report.Reasons = append([]string(nil), rev.SafetyReport.Reasons...)
+		cp.SafetyReport = &report
+	}
+	if rev.EffectivenessReport != nil {
+		report := *rev.EffectivenessReport
+		report.Reasons = append([]string(nil), rev.EffectivenessReport.Reasons...)
+		cp.EffectivenessReport = &report
+	}
+	if rev.HumanReport != nil {
+		report := *rev.HumanReport
+		if rev.HumanReport.Approved != nil {
+			approved := *rev.HumanReport.Approved
+			report.Approved = &approved
+		}
+		if rev.HumanReport.DecidedAt != nil {
+			decidedAt := *rev.HumanReport.DecidedAt
+			report.DecidedAt = &decidedAt
+		}
+		report.Reasons = append([]string(nil), rev.HumanReport.Reasons...)
+		cp.HumanReport = &report
+	}
+	return &cp
 }
 
 // currentActiveRevisionID resolves the revision that should be archived

@@ -377,6 +377,122 @@ func TestApprovalService_Decide_SerializesConcurrentDecisions(t *testing.T) {
 	assert.Equal(t, autoExpireReviewer, stored.HumanReport.Reviewer)
 }
 
+func TestApprovalService_Decide_SerializesConcurrentDecisionsForSkill(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+	pub := newBlockingPublisher()
+	ctx := context.Background()
+	skillID := "race-skill"
+
+	for _, revID := range []string{"rev-a", "rev-b"} {
+		require.NoError(t, store.WriteRevision(ctx, &Revision{
+			SkillID:    skillID,
+			RevisionID: revID,
+			Source:     "reviewer",
+			Action:     RevisionActionCreate,
+			Status:     RevisionPendingApproval,
+			Spec:       &SkillSpec{Name: "Race Skill", Description: revID, WhenToUse: "w", Steps: []string{"s"}},
+			CreatedAt:  time.Now().UTC(),
+		}))
+	}
+
+	svc := NewApprovalService(store, ptr, pub)
+	firstErr := make(chan error, 1)
+	go func() {
+		firstErr <- svc.Decide(ctx, ApprovalDecision{
+			RevisionID: "rev-a",
+			SkillID:    skillID,
+			Approved:   true,
+			Reviewer:   "first",
+		})
+	}()
+	<-pub.entered
+
+	secondErr := make(chan error, 1)
+	go func() {
+		secondErr <- svc.Decide(ctx, ApprovalDecision{
+			RevisionID: "rev-b",
+			SkillID:    skillID,
+			Approved:   true,
+			Reviewer:   "second",
+		})
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 1, pub.upsertCount(), "second revision must wait for the skill-level decision lock")
+
+	close(pub.release)
+	require.NoError(t, <-firstErr)
+	require.NoError(t, <-secondErr)
+
+	active, err := ptr.Get(ctx, skillID)
+	require.NoError(t, err)
+	assert.Equal(t, "rev-b", active)
+	first, err := store.ReadRevision(ctx, skillID, "rev-a")
+	require.NoError(t, err)
+	assert.Equal(t, RevisionArchived, first.Status)
+	second, err := store.ReadRevision(ctx, skillID, "rev-b")
+	require.NoError(t, err)
+	assert.Equal(t, RevisionActive, second.Status)
+}
+
+func TestApprovalService_Decide_WaitsForFileStoreSkillLock(t *testing.T) {
+	dir := t.TempDir()
+	store := newFileCandidateStore(dir)
+	ptr := NewFileActivePointer(dir)
+	pub := &mockPublisher{}
+	ctx := context.Background()
+	skillID := "locked-skill"
+	revID := "rev-lock"
+
+	require.NoError(t, store.WriteRevision(ctx, &Revision{
+		SkillID:    skillID,
+		RevisionID: revID,
+		Source:     "reviewer",
+		Action:     RevisionActionCreate,
+		Status:     RevisionPendingApproval,
+		Spec:       &SkillSpec{Name: "Locked Skill", Description: "d", WhenToUse: "w", Steps: []string{"s"}},
+		CreatedAt:  time.Now().UTC(),
+	}))
+	unlock, err := store.lockSkill(ctx, skillID)
+	require.NoError(t, err)
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
+
+	svc := NewApprovalService(store, ptr, pub)
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.Decide(ctx, ApprovalDecision{
+			RevisionID: revID,
+			SkillID:    skillID,
+			Approved:   true,
+			Reviewer:   "alice",
+		})
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+		require.Fail(t, "decision completed while file-store skill lock was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+	assert.Equal(t, 0, pub.upsertCount())
+
+	unlock()
+	unlock = nil
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.Fail(t, "decision did not complete after file-store skill lock was released")
+	}
+	assert.Equal(t, 1, pub.upsertCount())
+}
+
 func TestApprovalService_ListPending_WithLimit(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileCandidateStore(dir)
@@ -434,6 +550,12 @@ func (p *blockingPublisher) upsertCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.upserts
+}
+
+func (m *mockPublisher) upsertCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.skills)
 }
 
 func TestApprovalService_ListPending_NilStore(t *testing.T) {

@@ -278,6 +278,85 @@ func TestApprovalService_Rollback_ToDeleteRevisionClearsPointer(t *testing.T) {
 	assert.Empty(t, active)
 }
 
+func TestApprovalService_Rollback_SetFailureRestoresRevisionStatuses(t *testing.T) {
+	_, skillID, store, pointer, pub, revs := rollbackHarness(t, 2)
+	ctx := context.Background()
+	ptr := failingActivePointer{
+		ActivePointer: pointer,
+		setErr:        fmt.Errorf("set unavailable"),
+	}
+
+	svc := NewApprovalService(store, ptr, pub)
+	_, err := svc.Rollback(ctx, skillID, RollbackOpts{Reviewer: "alice"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "set active pointer")
+
+	previous, err := store.ReadRevision(ctx, skillID, revs[1].RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionActive, previous.Status)
+	target, err := store.ReadRevision(ctx, skillID, revs[0].RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionArchived, target.Status)
+	active, err := pointer.Get(ctx, skillID)
+	require.NoError(t, err)
+	assert.Equal(t, revs[1].RevisionID, active)
+}
+
+func TestApprovalService_Rollback_ClearFailureRestoresRevisionStatuses(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileCandidateStore(dir)
+	pointer := NewFileActivePointer(dir)
+	pub := &mockPublisher{}
+	ctx := context.Background()
+	skillID := "delete-rollback-clear-fails"
+
+	deleteRev := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-delete",
+		Action:     RevisionActionDelete,
+		Status:     RevisionArchived,
+		TargetName: "Delete Skill",
+		CreatedAt:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	createRev := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-create",
+		Action:     RevisionActionCreate,
+		Status:     RevisionActive,
+		Spec: &SkillSpec{
+			Name: "Delete Skill", Description: "d", WhenToUse: "w", Steps: []string{"s"},
+		},
+		CreatedAt: time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC),
+	}
+	require.NoError(t, store.WriteRevision(ctx, deleteRev))
+	require.NoError(t, store.WriteRevision(ctx, createRev))
+	setRevisionMtime(t, dir, skillID, deleteRev.RevisionID, deleteRev.CreatedAt)
+	setRevisionMtime(t, dir, skillID, createRev.RevisionID, createRev.CreatedAt)
+	require.NoError(t, pointer.Set(ctx, skillID, createRev.RevisionID))
+
+	ptr := failingActivePointer{
+		ActivePointer: pointer,
+		clearErr:      fmt.Errorf("clear unavailable"),
+	}
+	svc := NewApprovalService(store, ptr, pub)
+	_, err := svc.Rollback(ctx, skillID, RollbackOpts{
+		TargetRevisionID: deleteRev.RevisionID,
+		Reviewer:         "alice",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "clear active pointer")
+
+	previous, err := store.ReadRevision(ctx, skillID, createRev.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionActive, previous.Status)
+	target, err := store.ReadRevision(ctx, skillID, deleteRev.RevisionID)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionArchived, target.Status)
+	active, err := pointer.Get(ctx, skillID)
+	require.NoError(t, err)
+	assert.Equal(t, createRev.RevisionID, active)
+}
+
 func TestApprovalService_Rollback_FromDeleteTombstoneArchivesDelete(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileCandidateStore(dir)
@@ -626,6 +705,26 @@ func (p errActivePointer) Set(_ context.Context, _, _ string) error {
 
 func (p errActivePointer) Clear(_ context.Context, _ string) error {
 	return nil
+}
+
+type failingActivePointer struct {
+	ActivePointer
+	setErr   error
+	clearErr error
+}
+
+func (p failingActivePointer) Set(ctx context.Context, skillID, revisionID string) error {
+	if p.setErr != nil {
+		return p.setErr
+	}
+	return p.ActivePointer.Set(ctx, skillID, revisionID)
+}
+
+func (p failingActivePointer) Clear(ctx context.Context, skillID string) error {
+	if p.clearErr != nil {
+		return p.clearErr
+	}
+	return p.ActivePointer.Clear(ctx, skillID)
 }
 
 type listErrorStore struct {
