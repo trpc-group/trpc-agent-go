@@ -81,3 +81,43 @@ func CalculateMaxInputTokensWithParams(
 	ratioLimit := int(float64(contextWindow) * maxInputTokensRatio)
 	return max(min(calculatedMax, ratioLimit), inputTokensFloor)
 }
+
+// CalculateMaxOutputTokens computes a safe max completion token budget from the
+// remaining context after the request input (usedTokens), using the same
+// default overhead and safety margin as CalculateMaxInputTokens.
+func CalculateMaxOutputTokens(contextWindow, usedTokens int) int {
+	return CalculateMaxOutputTokensWithParams(
+		contextWindow,
+		usedTokens,
+		DefaultProtocolOverheadTokens,
+		0,
+		DefaultSafetyMarginRatio,
+	)
+}
+
+// CalculateMaxOutputTokensWithParams is like CalculateMaxOutputTokens but uses
+// custom protocol overhead, minimum output floor, and safety margin ratio.
+func CalculateMaxOutputTokensWithParams(
+	contextWindow int,
+	usedTokens int,
+	protocolOverheadTokens int,
+	outputTokensFloor int,
+	safetyMarginRatio float64,
+) int {
+	if contextWindow <= 0 {
+		return 0
+	}
+	remaining := contextWindow - usedTokens
+	if remaining <= 0 {
+		return 0
+	}
+	safetyMargin := int(float64(contextWindow) * safetyMarginRatio)
+	maxOut := remaining - protocolOverheadTokens - safetyMargin
+	if maxOut < 0 {
+		maxOut = 0
+	}
+	if outputTokensFloor > 0 {
+		return max(maxOut, outputTokensFloor)
+	}
+	return maxOut
+}

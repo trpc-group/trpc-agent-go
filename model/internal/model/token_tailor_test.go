@@ -58,3 +58,17 @@ func TestCalculateMaxInputTokens(t *testing.T) {
 		})
 	}
 }
+
+func TestCalculateMaxOutputTokens(t *testing.T) {
+	// context 128000, used 100000 -> remaining 28000
+	// safetyMargin = 12800, maxOut = 28000 - 512 - 12800 = 14688
+	out := CalculateMaxOutputTokens(128000, 100000)
+	if out != 14688 {
+		t.Fatalf("expected 14688 output tokens, got %d", out)
+	}
+
+	zero := CalculateMaxOutputTokens(128000, 200000)
+	if zero != 0 {
+		t.Fatalf("expected 0 when input exceeds context, got %d", zero)
+	}
+}

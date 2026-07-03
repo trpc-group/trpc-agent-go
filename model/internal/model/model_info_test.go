@@ -521,3 +521,26 @@ func TestConcurrentResolveContextWindow(t *testing.T) {
 		<-done
 	}
 }
+
+func TestResolveMaxOutputTokens(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelName string
+		expected  int
+	}{
+		{name: "empty model name", modelName: "", expected: 0},
+		{name: "exact gpt-4o", modelName: "gpt-4o", expected: 16384},
+		{name: "prefix gpt-4o-mini", modelName: "gpt-4o-mini", expected: 16384},
+		{name: "exact gpt-5.2", modelName: "gpt-5.2", expected: 128000},
+		{name: "claude prefix", modelName: "claude-3-5-sonnet-20241022", expected: 8192},
+		{name: "gemini flash", modelName: "gemini-2.5-flash", expected: 65536},
+		{name: "deepseek reasoner", modelName: "deepseek-reasoner", expected: 65536},
+		{name: "unknown model", modelName: "not-a-real-model", expected: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, ResolveMaxOutputTokens(tt.modelName))
+		})
+	}
+}
