@@ -10,16 +10,14 @@
 package responsejson
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // UnmarshalContent decodes the first response choice content as JSON into dst.
-// Leading prose, markdown fences, trailing footers, and minor JSON syntax errors
-// from judge models are repaired via internal/jsonutils before unmarshaling.
 func UnmarshalContent(resp *model.Response, dst any) error {
 	if resp == nil {
 		return fmt.Errorf("response is nil")
@@ -31,8 +29,20 @@ func UnmarshalContent(resp *model.Response, dst any) error {
 	if content == "" {
 		return fmt.Errorf("empty response text")
 	}
-	if err := jsonutils.DecodeFlexibleJSON(content, dst); err != nil {
+	content = trimCodeFence(content)
+	if err := json.Unmarshal([]byte(content), dst); err != nil {
 		return fmt.Errorf("unmarshal response json: %w", err)
 	}
 	return nil
+}
+
+func trimCodeFence(content string) string {
+	if !strings.HasPrefix(content, "```") {
+		return content
+	}
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```JSON")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	return strings.TrimSpace(content)
 }

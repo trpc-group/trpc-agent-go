@@ -55,29 +55,6 @@ func TestUnmarshalContentRejectsInvalidJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "unmarshal response json")
 }
 
-func TestUnmarshalContentRepairsMalformedJSON(t *testing.T) {
-	var payload struct {
-		Score float64 `json:"score"`
-	}
-
-	err := UnmarshalContent(makeResponse("{score:0.5}"), &payload)
-	require.NoError(t, err)
-	assert.Equal(t, 0.5, payload.Score)
-}
-
-func TestUnmarshalContentIgnoresTrailingProse(t *testing.T) {
-	var payload struct {
-		Score float64 `json:"score"`
-	}
-
-	raw := `{"score":0.75}
-
-Judge note: overall acceptable.`
-	err := UnmarshalContent(makeResponse(raw), &payload)
-	require.NoError(t, err)
-	assert.Equal(t, 0.75, payload.Score)
-}
-
 func makeResponse(content string) *model.Response {
 	return &model.Response{
 		Choices: []model.Choice{{Message: model.Message{Content: content}}},
