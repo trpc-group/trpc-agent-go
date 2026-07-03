@@ -207,6 +207,11 @@ func TestResolveContextWindow(t *testing.T) {
 			expected:  128000,
 		},
 		{
+			name:      "exact match - MiniMax M3",
+			modelName: "minimax-m3",
+			expected:  1000000,
+		},
+		{
 			name:      "exact match - MiniMax M2.7",
 			modelName: "minimax-m2.7",
 			expected:  204800,
