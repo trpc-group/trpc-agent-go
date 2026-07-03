@@ -13,8 +13,6 @@ package engine
 //
 // The zero value keeps every field so existing callers keep the full result.
 type RunResultSlimming struct {
-	// OmitStructure removes the exported agent structure snapshot.
-	OmitStructure bool
 	// OmitEvaluationCases removes per-case evaluation details from all phases.
 	OmitEvaluationCases bool
 	// OmitBackward removes per-case backward results from each round.

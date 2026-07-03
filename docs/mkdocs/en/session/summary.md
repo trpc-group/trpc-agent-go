@@ -181,8 +181,16 @@ request by:
 
 The request prefix remains the same as the parent request prefix, so providers
 with prompt caching can reuse more cached input. If no parent request is
-available, for example in asynchronous or manual summary calls, the summarizer
+available, for example in manual or external summary calls, the summarizer
 falls back to the standalone request path.
+
+One important branch-summary behavior: after `WithCacheSafeForking(true)` is
+enabled, a non-empty branch trigger may fork the current parent request for the
+branch summary, but it will not also run the cascaded full-session summary in
+that same summary pass. The framework skips that full-session target instead of
+falling back to a standalone full-session prompt or reusing the branch-scoped
+fork request. Trigger a full-session summary separately when you need an
+all-branch summary.
 
 Prompt rules:
 
@@ -455,6 +463,47 @@ than** that threshold. If you set a very small ratio, for example `0.001`, and
 expect summarization around 1000 tokens, pass
 `summary.WithContextThresholdMinTokens(0)` explicitly, or set it to the
 application-specific minimum you want.
+
+### Trigger and Call Reporting
+
+Use `summary.WithReportHook` when you need to observe why summary generation
+was triggered and how large the summary model request was:
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithContextThreshold(),
+    summary.WithReportHook(func(ctx context.Context, report summary.Report) {
+        triggerTokens := report.Trigger.Value
+        summaryPromptTokens := report.Call.PromptTokens
+        _ = triggerTokens
+        _ = summaryPromptTokens
+    }),
+)
+```
+
+The report keeps two token counts separate:
+
+- `report.Trigger.Value`: the checker value that triggered summarization, such
+  as estimated delta tokens after the previous summary
+- `report.Call.EstimatedPromptTokens`: the framework's local estimate for the
+  complete summary model request
+- `report.Call.PromptTokens`: the provider-reported `usage.prompt_tokens` for
+  the summary model call
+
+For cache-safe forking, `report.Call.Mode` is `cache_safe_fork` and the request
+estimate is computed from the forked parent request plus the appended summary
+instruction. For standalone summary prompts, the mode is `standalone`. If a
+`BeforeModel` callback returns a custom response and no summary model request is
+sent, the mode is `custom_response` and the prompt estimate remains zero.
+
+Advanced integrations can attach a report before entering a higher-level
+summary flow with `summary.ContextWithReport(ctx, report)` and retrieve it with
+`summary.ReportFromContext(ctx)`. The framework reuses that report for a single
+summary path; when a cascade generates multiple summaries in parallel, each
+worker receives a cloned report so branch-specific writes do not race. Those
+forked reports are emitted through their per-call hooks and are not merged back
+into the root report.
 
 For private deployments, endpoint IDs, fine-tuned models, newly released
 models, or multi-tenant custom model configuration, prefer the instance or
@@ -1420,6 +1469,12 @@ Behavior notes:
   targets. It does not block `session.SummaryFilterKeyAllContents`.
 - `WithCascadeFullSessionSummary(...)` controls whether a non-empty branch
   trigger also refreshes the full-session summary.
+- With `WithCacheSafeForking(true)`, a branch-triggered summary pass only runs
+  the branch summary target when a parent fork request is available. The
+  full-session cascade target is skipped in that pass; it does not fall back to
+  the standalone full-session prompt and does not reuse the branch-scoped fork
+  request. Request a full-session summary separately when you need one for all
+  branches.
 - To keep only full-session summaries from branch-triggered automatic summary,
   pass an explicit empty allowlist and leave cascade enabled:
 

@@ -282,13 +282,16 @@ tools:
   # defer_default_direct_tools: true
   # 可选：保留少量父 agent 可直接调用的工具。
   # defer_direct_tools: ["exec_command"]
+  # 可选：host exec_command 未传 timeout_sec 时使用的默认超时。
+  # 留空则沿用内置 host exec 默认值。
+  # host_exec_default_timeout: "60s"
   # 可选：配置 fenced-code 执行，但不暴露 workspace_exec。
   code_executor:
     type: "sandbox" # sandbox；留空或不设置时继承 enable_local_exec
     auto_execute_code_blocks: true
     sandbox:
       workspace_root: "" # 默认 state_dir/sandbox
-      backend: "auto" # auto|linux-bubblewrap
+      backend: "auto" # auto|linux-bubblewrap|macos-sandbox-exec
       profile: "workspace_write" # workspace_write|read_only|disabled
       network: "restricted" # restricted|enabled
       default_timeout: "30s"

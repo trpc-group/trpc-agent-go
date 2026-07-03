@@ -23,12 +23,14 @@ The managed file-system boundary is designed around three rules:
    workspace grant. The default protected set is `.git`, `.agents`, and
    `.trpc-agent-sandbox`.
 
-This boundary is not intended to hide the entire host file system by default.
-On Linux, managed execution starts with a read-only bind mount of `/`, then adds
-writable bind mounts for the workspace and any explicit external write grants.
-Sensitive files that must not be readable should be covered by no-access
-denials, for example through `WithNoAccessPaths` or `WithNoAccessGlobs`, or kept
-outside the host paths visible to the sandbox.
+This boundary is backend-specific at the OS layer. On Linux, managed execution
+starts with a read-only bind mount of `/`, then adds writable bind mounts for the
+workspace and any explicit external write grants. On macOS, managed execution
+starts from a Seatbelt deny-default profile, adds selected platform read
+defaults required by common tools, and then grants the workspace and explicit
+external paths. Sensitive files that must not be readable should be covered by
+no-access denials, for example through `WithNoAccessPaths` or
+`WithNoAccessGlobs`, or kept outside the host paths visible to the sandbox.
 
 ## Rule Targets
 
@@ -84,6 +86,29 @@ The implementation is intentionally path-based. It supports concrete path grants
 workspace-relative glob no-access denials, and protected metadata masks, but it
 does not currently implement per-file capabilities beyond read, write, and none.
 
+## macOS Enforcement
+
+The macOS backend uses Apple Seatbelt through `/usr/bin/sandbox-exec`:
+
+- The generated SBPL starts with `(deny default)`.
+- Selected macOS platform paths are allowed read-only so common shells,
+  interpreters, dynamic libraries, and system metadata can be used.
+- Workspace and explicit external path grants are projected as Seatbelt
+  `allow` rules.
+- Exact no-access paths are carved out from broader allows with `require-not`.
+- Protected metadata paths are excluded from write allows but remain readable.
+- Workspace-relative no-access globs are translated into anchored Seatbelt
+  regular-expression denies.
+
+Unlike Linux, macOS glob denials are dynamic Seatbelt rules rather than
+startup-time mount masks. They can apply to files created after the command
+starts and to matching paths under writable roots. Linux keeps its bubblewrap
+behavior and may fail closed when a glob denial overlaps a writable mount.
+macOS no-access globs are hard OS-level denials: more-specific read or write
+grants do not reopen glob-matched paths in the child process. Avoid combining
+broad no-access globs with narrower grants when OS-level reopen semantics are
+required.
+
 ## Protected Metadata
 
 Protected metadata is a built-in write protection for sensitive directories
@@ -111,14 +136,20 @@ explicitly.
 The runtime defaults to `WorkspaceWriteProfile()`. When callers pass
 `WithPermissionProfile`, that explicit profile replaces the default.
 
-`WorkspaceWriteProfile()` starts from a read-only host view and grants writes to
-the session-owned workspace directories:
+`WorkspaceWriteProfile()` grants writes to the session-owned workspace
+directories. The host view depends on the backend:
 
-- The host root is readable, giving the sandbox a read-only host view.
+- Linux gives the sandbox a read-only host root view.
+- macOS gives the sandbox selected platform read defaults plus explicit grants.
 - The workspace root, `work`, `home`, `tmp`, `runs`, `out`, and `skills`
   directories are writable.
 - Default protected metadata still blocks writes to `.git`, `.agents`, and
   `.trpc-agent-sandbox` inside the workspace.
+
+The runtime creates the well-known workspace directories during workspace
+preparation. On macOS, these special directories are checked before they become
+Seatbelt roots so a retained workspace cannot replace `work`, `tmp`, `home`,
+`runs`, `out`, or `skills` with a symlink that points outside the workspace.
 
 ## Public Builders
 

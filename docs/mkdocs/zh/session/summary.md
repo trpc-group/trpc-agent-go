@@ -180,8 +180,14 @@ summarizer := summary.NewSummarizer(
 - 强制摘要调用使用非流式输出，并清掉 structured output，因为摘要调用只需要返回普通摘要文本。
 
 这样摘要请求和父请求拥有相同的前缀，支持 prompt cache 的模型服务就能复用更多
-已缓存输入。如果当前没有父请求，例如异步摘要或手动调用摘要接口，摘要器会自动
+已缓存输入。如果当前没有父请求，例如手动或外部调用摘要接口，摘要器会自动
 回退到独立摘要请求。
+
+这里有一个重要的 branch 摘要行为：开启 `WithCacheSafeForking(true)` 后，非空
+branch 触发摘要时，可以用当前父请求 fork 来生成 branch 摘要；但同一轮 summary
+pass 不会再跑级联出来的全量会话摘要。框架会直接跳过这个全量摘要目标，而不是
+回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的 fork request。如果
+需要覆盖所有 branch 的全量摘要，需要单独触发一次全量会话摘要。
 
 Prompt 规则：
 
@@ -435,6 +441,41 @@ resolver 返回 nil 会跳过自动摘要检查；如果直接调用 `Summarize`
 checker 只有在估算 token 数**大于**阈值时才触发。如果把 ratio 设置得很小，
 例如 `0.001`，但希望 1000 token 左右就开始摘要，需要显式传入
 `summary.WithContextThresholdMinTokens(0)`，或设置成业务希望的最小值。
+
+### 触发和调用上报
+
+如果需要观察“为什么触发 summary”以及“summary 模型请求实际用了多少 token”，
+可以配置 `summary.WithReportHook`：
+
+```go
+summarizer := summary.NewSummarizer(
+    summaryModel,
+    summary.WithContextThreshold(),
+    summary.WithReportHook(func(ctx context.Context, report summary.Report) {
+        triggerTokens := report.Trigger.Value
+        summaryPromptTokens := report.Call.PromptTokens
+        _ = triggerTokens
+        _ = summaryPromptTokens
+    }),
+)
+```
+
+`Report` 会把两个 token 口径拆开：
+
+- `report.Trigger.Value`：触发 checker 使用的值，例如上次 summary 之后增量事件的估算 token 数
+- `report.Call.EstimatedPromptTokens`：框架在发起 summary 模型请求前，对完整请求做的本地估算
+- `report.Call.PromptTokens`：summary 模型返回的官方 `usage.prompt_tokens`
+
+开启 cache-safe forking 时，`report.Call.Mode` 为 `cache_safe_fork`，请求估算值来自 fork
+后的父请求加上追加的 summary 指令。普通独立 summary prompt 模式下，mode 为 `standalone`。
+如果 `BeforeModel` callback 返回 custom response，实际没有发送 summary 模型请求，mode 为
+`custom_response`，prompt 估算值保持为 0。
+
+高级集成如果要在高层 summary 流程前放入同一个 report，可以使用
+`summary.ContextWithReport(ctx, report)`，需要从 context 取出时使用
+`summary.ReportFromContext(ctx)`。单一路径会复用这个 report；cascade 并行生成多个
+summary 时，框架会给每个 worker 克隆一份 report，避免不同分支同时写同一个对象。
+这些 fork 出来的 report 会通过各自调用的 hook 发出，不会再合并回 root report。
 
 对于私有部署、endpoint ID、微调模型、新模型或多租户自定义模型配置，优先使用模型实例或单次运行 option，
 避免不同用户覆盖同一个进程级注册表：
@@ -1376,6 +1417,10 @@ sessionService := inmemory.NewSessionService(
   `session.SummaryFilterKeyAllContents` 这个全量摘要目标。
 - `WithCascadeFullSessionSummary(...)` 控制非空分支触发摘要时，是否同时刷新
   全量会话摘要。
+- 开启 `WithCacheSafeForking(true)` 后，如果当前有父请求可 fork，branch 触发的
+  summary pass 只会生成 branch 摘要；级联出来的全量会话摘要目标会被跳过，不会
+  回退到独立的全量摘要 prompt，也不会复用这个 branch 视角的 fork request。如果
+  确实需要覆盖所有 branch 的全量摘要，请单独触发一次全量会话摘要。
 - 如果只想保留 branch 触发出来的全量摘要，不写任何 branch 摘要，可以显式传入
   空 allowlist，并保持默认 cascade 开启：
 

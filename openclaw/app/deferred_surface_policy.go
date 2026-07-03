@@ -24,12 +24,16 @@ const (
 	deferToolSurfaceModeAuto = "auto"
 
 	defaultDeferToolSurfaceThresholdChars = 4000
+	defaultDirectWebSearchTool            = "duckduckgo_search"
+	defaultDirectWebFetchTool             = "web_fetch"
 )
 
 var defaultDeferToolSurfaceDirectTools = []string{
 	configKeyExecCommand,
 	configKeyWriteStdin,
 	configKeyKillSession,
+	defaultDirectWebSearchTool,
+	defaultDirectWebFetchTool,
 }
 
 func normalizeDeferToolSurfaceMode(raw string) (string, error) {

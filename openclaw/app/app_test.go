@@ -652,7 +652,7 @@ func TestFileMemoryStoreForBackend_FileOnly(t *testing.T) {
 func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -663,6 +663,42 @@ func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
 	require.NotContains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
 }
 
+func TestBuildOpenClawTools_HostExecDefaultTimeout(t *testing.T) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		nil,
+		50*time.Millisecond,
+	)
+	execTool := findTool(bundle.tools, "exec_command")
+	callable, ok := execTool.(tool.CallableTool)
+	require.True(t, ok)
+
+	started := time.Now()
+	out, err := callable.Call(
+		context.Background(),
+		[]byte(`{"command":"sleep 5; printf done","yield_time_ms":0}`),
+	)
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 3*time.Second)
+
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	var got struct {
+		Status   string `json:"status"`
+		Output   string `json:"output"`
+		ExitCode int    `json:"exitCode"`
+	}
+	require.NoError(t, json.Unmarshal(data, &got))
+	require.Equal(t, "exited", got.Status)
+	require.NotEqual(t, 0, got.ExitCode)
+	require.NotContains(t, got.Output, "done")
+}
+
 func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	t.Parallel()
 
@@ -671,7 +707,7 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	store, err := memoryfile.NewStore(root)
 	require.NoError(t, err)
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, nil, 0)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
@@ -688,7 +724,7 @@ func TestBuildOpenClawTools_UsesSandboxExecCommand(t *testing.T) {
 	t.Parallel()
 
 	engine := codeexecutor.NewEngine(nil, nil, nil)
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, engine)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, engine, 0)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "inside the configured sandbox")
@@ -716,7 +752,7 @@ func TestBuildOpenClawTools_UsesSandboxExecCommandWithMemoryFileStore(
 	require.NoError(t, err)
 
 	engine := codeexecutor.NewEngine(nil, nil, nil)
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, engine)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, engine, 0)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "inside the configured sandbox")
@@ -735,7 +771,7 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 ) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0)
 	decl := findToolDeclaration(bundle.tools, "conversation_history")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -748,7 +784,7 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0)
 	require.NotNil(
 		t,
 		findToolDeclaration(bundle.tools, "subagents_spawn"),
@@ -2522,6 +2558,11 @@ func TestNewAgent_SandboxOpenClawToolingGuidanceMatchesTools(t *testing.T) {
 		content,
 		"does not automatically mount host paths",
 	)
+	require.Contains(
+		t,
+		content,
+		"Do not use host system package managers",
+	)
 	require.NotContains(
 		t,
 		content,
@@ -2559,6 +2600,16 @@ func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
 		t,
 		sys,
 		"For real browser automation, use browser.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Do not use browser as a substitute for web search",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Browser snapshots are for current page structure",
 	)
 }
 
@@ -2609,6 +2660,11 @@ func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
 		t,
 		sys,
 		"For real browser automation, use browser.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"missing search/fetch blocker",
 	)
 }
 
@@ -2695,6 +2751,103 @@ func TestOpenClawToolingGuidanceKeepsSecretBanAbsolute(t *testing.T) {
 		t,
 		openClawToolingGuidance,
 		"secrets, or large transcripts in memory files unless",
+	)
+}
+
+func TestOpenClawToolingGuidanceAvoidsLocalBrowserMedia(t *testing.T) {
+	t.Parallel()
+
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"Do not open local files through browser",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"normal browser policy blocks those paths",
+	)
+	require.Contains(
+		t,
+		browserToolingGuidance,
+		"Do not use browser to open local or generated files",
+	)
+	require.Contains(
+		t,
+		browserToolingGuidance,
+		"MEDIA or MEDIA_DIR",
+	)
+}
+
+func TestOpenClawToolingGuidancePrefersSearchTools(t *testing.T) {
+	t.Parallel()
+
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"When a web search tool such as duckduckgo_search is present",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"Use web_fetch for known result URLs",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"Use the returned web_fetch content as primary evidence",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"session_load with content_limit",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"do not drive Google, Bing, or DuckDuckGo result pages",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"stop retrying that blocked path",
+	)
+}
+
+func TestOpenClawDeferredToolingGuidancePairsBrowserWithSearch(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	require.Contains(
+		t,
+		openClawDeferredToolingGuidance,
+		"include search and fetch tools with browser workers",
+	)
+	require.Contains(
+		t,
+		openClawDeferredToolingGuidance,
+		"avoid browser-only workers for search-engine lookup",
+	)
+	require.Contains(
+		t,
+		openClawDeferredToolingGuidance,
+		"inspect successful web_fetch results first",
+	)
+}
+
+func TestOpenClawToolingGuidanceAvoidsSystemPackageManagers(t *testing.T) {
+	t.Parallel()
+
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"Do not use host system package managers",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"use preconfigured dependencies or ask for an explicit setup flow",
 	)
 }
 
@@ -4017,6 +4170,10 @@ func TestParseOpenAIVariant_Explicit(t *testing.T) {
 	v, err := parseOpenAIVariant(string(openai.VariantOpenAI), "")
 	require.NoError(t, err)
 	require.Equal(t, openai.VariantOpenAI, v)
+
+	v, err = parseOpenAIVariant(string(openai.VariantGLM), "")
+	require.NoError(t, err)
+	require.Equal(t, openai.VariantGLM, v)
 }
 
 func TestParseOpenAIVariant_Auto(t *testing.T) {
@@ -4045,6 +4202,11 @@ func TestInferOpenAIVariant(t *testing.T) {
 		t,
 		openai.VariantHunyuan,
 		inferOpenAIVariant("https://api.hunyuan.cloud.tencent.com/v1"),
+	)
+	require.Equal(
+		t,
+		openai.VariantGLM,
+		inferOpenAIVariant("https://open.bigmodel.cn/api/paas/v4"),
 	)
 	require.Equal(
 		t,
@@ -4841,6 +5003,23 @@ func (t stubTool) Declaration() *tool.Declaration {
 	}
 }
 
+type stubCloseTool struct {
+	name     string
+	closeErr error
+	closed   *bool
+}
+
+func (t *stubCloseTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+func (t *stubCloseTool) Close() error {
+	if t.closed != nil {
+		*t.closed = true
+	}
+	return t.closeErr
+}
+
 type nilDeclTool struct{}
 
 func (t nilDeclTool) Declaration() *tool.Declaration {
@@ -4995,6 +5174,22 @@ func TestCloseToolSets_CloseErrorDoesNotPanic(t *testing.T) {
 	require.True(t, toolSetClosed)
 }
 
+func TestCloseTools_CloseErrorDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	toolClosed := false
+	closeTools([]tool.Tool{
+		nil,
+		&stubCloseTool{
+			name:     "stub",
+			closeErr: errors.New("boom"),
+			closed:   &toolClosed,
+		},
+		stubTool{name: "plain"},
+	})
+	require.True(t, toolClosed)
+}
+
 func TestRuntime_Close_ReturnsRunnerCloseError(t *testing.T) {
 	t.Parallel()
 
@@ -5010,6 +5205,23 @@ func TestRuntime_Close_ReturnsRunnerCloseError(t *testing.T) {
 
 	require.ErrorIs(t, rt.Close(), closeErr)
 	require.True(t, runnerClosed)
+}
+
+func TestRuntime_Close_ClosesTools(t *testing.T) {
+	t.Parallel()
+
+	toolClosed := false
+	rt := &Runtime{
+		tools: []tool.Tool{
+			&stubCloseTool{
+				name:   "browser",
+				closed: &toolClosed,
+			},
+		},
+	}
+
+	require.NoError(t, rt.Close())
+	require.True(t, toolClosed)
 }
 
 func TestRuntime_Close_ClosesEvolutionService(t *testing.T) {
@@ -7291,6 +7503,11 @@ func TestSandboxProfileAndBackendConfigBranches(t *testing.T) {
 		t,
 		sandboxexec.BackendLinuxBubblewrap,
 		sandboxBackendFromConfig(" LINUX-BUBBLEWRAP "),
+	)
+	require.Equal(
+		t,
+		sandboxexec.BackendMacOSSandboxExec,
+		sandboxBackendFromConfig(" MACOS-SANDBOX-EXEC "),
 	)
 	require.Equal(t, sandboxexec.BackendAuto, sandboxBackendFromConfig("unknown"))
 

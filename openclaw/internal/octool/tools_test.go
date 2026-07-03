@@ -19,9 +19,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -321,6 +323,28 @@ func TestExecTool_Foreground(t *testing.T) {
 	require.Equal(t, "exited", res.Status)
 	require.Contains(t, res.Output, "hello")
 	require.Equal(t, 0, res.ExitCode)
+}
+
+func TestExecTool_UsesManagerDefaultTimeout(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithDefaultTimeout(50 * time.Millisecond))
+	tool := newExecCommandTool(mgr)
+
+	started := time.Now()
+	out, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "sleep 1; printf done",
+		"yieldMs": 0,
+	}))
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 900*time.Millisecond)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.NotEqual(t, 0, res.ExitCode)
+	require.NotContains(t, res.Output, "done")
 }
 
 func TestExecTool_RuntimeProfileWorkspacePolicy(t *testing.T) {
@@ -899,6 +923,36 @@ func TestExecTool_YieldBackgroundAndPoll(t *testing.T) {
 	t.Fatalf("process did not exit; output: %s", all)
 }
 
+func TestExecTool_DefaultTimeoutKillsProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group signaling is unix-specific")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	marker := filepath.Join(t.TempDir(), "orphan-marker")
+	mgr := NewManager(WithDefaultTimeout(100 * time.Millisecond))
+	yieldZero := 0
+
+	res, err := mgr.Exec(context.Background(), execParams{
+		Command: "(sleep 0.6; echo orphan > " +
+			strconv.Quote(marker) + ") & wait",
+		YieldMs: &yieldZero,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, 0, res.ExitCode)
+
+	require.Never(t, func() bool {
+		_, err = os.Stat(marker)
+		if err == nil {
+			return true
+		}
+		require.ErrorIs(t, err, os.ErrNotExist)
+		return false
+	}, 900*time.Millisecond, 20*time.Millisecond)
+}
+
 func TestProcessTool_Submit(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
@@ -1006,6 +1060,111 @@ func TestManager_MaxLinesTrimsOutput(t *testing.T) {
 
 	log := logAny
 	require.Equal(t, "c", strings.TrimSpace(log.Output))
+}
+
+func TestManager_MaxResultOutputCharsTruncatesForeground(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	const maxResultOutputChars = 80
+	mgr := NewManager(WithMaxResultOutputChars(maxResultOutputChars))
+	execTool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command":       "printf 'abcdefghijklmnopqrstuvwxyz%.0s' {1..8}",
+		"yield_time_ms": 0,
+	})
+	out, err := execTool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	prefix, _, ok := strings.Cut(res.Output, "\n\n[OpenClaw")
+	require.True(t, ok)
+	require.Equal(t, maxResultOutputChars, utf8.RuneCountInString(prefix))
+	require.Contains(t, prefix, "abcdefghijklmnopqrstuvwxyz")
+	longChunk := strings.Repeat("abcdefghijklmnopqrstuvwxyz", 4)
+	require.NotContains(t, res.Output, longChunk)
+	requireTruncatedExecOutput(t, res.Output)
+}
+
+func TestManager_MaxResultOutputCharsTruncatesUTF8Foreground(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithMaxResultOutputChars(81))
+	execTool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command":       `printf '\303\251%.0s' {1..90}`,
+		"yield_time_ms": 0,
+	})
+	out, err := execTool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.True(t, utf8.ValidString(res.Output))
+	require.Contains(t, res.Output, "\xc3\xa9")
+	requireTruncatedExecOutput(t, res.Output)
+}
+
+func TestManager_MaxResultOutputCharsHelperEdges(t *testing.T) {
+	var nilManager *Manager
+	require.Equal(t, "abc", nilManager.limitResultOutput("abc"))
+	require.Equal(t, "abc", NewManager().limitResultOutput("abc"))
+	require.Equal(t, "abc", truncateResultOutput("abc", 0))
+	require.Equal(t, "abc", truncateResultOutput("abc", 3))
+	require.Equal(t, "", firstRunes("abc", 0))
+	require.Equal(t, "abc", firstRunes("abc", 5))
+}
+
+func TestManager_MaxResultOutputCharsTruncatesSessionCompletion(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pty is not supported on windows")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithMaxResultOutputChars(80))
+	execTool := newExecCommandTool(mgr)
+
+	ptyArgs := mustJSON(t, map[string]any{
+		"command":       "printf 'abcdefghijklmnopqrstuvwxyz%.0s' {1..8}",
+		"pty":           true,
+		"yield_time_ms": 0,
+	})
+	out, err := execTool.Call(context.Background(), ptyArgs)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	requireTruncatedExecOutput(t, res.Output)
+
+	timerArgs := mustJSON(t, map[string]any{
+		"command":       "printf 'abcdefghijklmnopqrstuvwxyz%.0s' {1..8}",
+		"yield_time_ms": 1000,
+	})
+	out, err = execTool.Call(context.Background(), timerArgs)
+	require.NoError(t, err)
+
+	res = out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	requireTruncatedExecOutput(t, res.Output)
+}
+
+func requireTruncatedExecOutput(t *testing.T, output string) {
+	t.Helper()
+
+	require.Contains(t, output, "OpenClaw truncated command output")
+	require.Contains(t, output, "Write large outputs to a file")
+	require.Contains(t, output, "chars")
+	require.NotContains(t, output, "bytes")
 }
 
 func TestProcessTool_ListKillClearRemove(t *testing.T) {

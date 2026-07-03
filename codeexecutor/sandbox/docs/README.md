@@ -7,12 +7,16 @@ but they do not provide local managed sandbox enforcement on every platform.
 | Platform | Managed OS sandbox support | Backend | Notes |
 | --- | --- | --- | --- |
 | Linux | Supported | `linux-bubblewrap` | Uses `bubblewrap` with user, PID, mount, and optional network namespaces. |
-| macOS | Not implemented | N/A | Managed profiles return an unsupported-backend error. Disabled profiles run without sandboxing. |
+| macOS | Supported | `macos-sandbox-exec` | Uses Apple Seatbelt through `/usr/bin/sandbox-exec`. See [`MACOS_BACKEND.md`](MACOS_BACKEND.md) for platform differences. |
 | Windows | Not implemented | N/A | Managed profiles return an unsupported-backend error. Disabled profiles run without sandboxing. |
 
 ## Prerequisites
 
 On Linux, Sandbox Code Executor uses the `bwrap` executable found on `PATH`. If `bwrap` is unavailable, setup fails before the command starts.
+
+On macOS, managed sandbox profiles use `/usr/bin/sandbox-exec`. Managed
+execution fails closed if the tool is unavailable or the host rejects Seatbelt
+profiles.
 
 When the runtime itself runs inside Docker, Kubernetes, or a managed container
 platform, the outer container must allow the namespace and mount operations
@@ -31,7 +35,8 @@ host network access:
 - `NetworkRestricted` asks the backend to block outbound networking when it can
   enforce that boundary.
 - `NetworkEnabled` allows the command to use the host network. On Linux this
-  means the command is launched without network namespace isolation.
+  means the command is launched without network namespace isolation. On macOS
+  this means the generated Seatbelt profile includes broad network allow rules.
 
 ## File System
 

@@ -1200,6 +1200,7 @@ tools:
   defer_to_dynamic_agent_threshold_chars: 1234
   defer_direct_tools: ["exec_command", "message", "exec_command"]
   dynamic_agent_timeout: "3m"
+  host_exec_default_timeout: "60s"
 `)
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
 	require.NoError(t, err)
@@ -1209,6 +1210,7 @@ tools:
 	require.Equal(t, 1234, opts.DeferToolSurfaceChars)
 	require.Equal(t, "exec_command,message", opts.DeferToolSurfaceDirect)
 	require.Equal(t, 3*time.Minute, opts.DynamicAgentTimeout)
+	require.Equal(t, time.Minute, opts.HostExecDefaultTimeout)
 }
 
 func TestParseRunOptions_DynamicAgentTimeoutFlagOverridesConfig(t *testing.T) {
@@ -1226,12 +1228,40 @@ tools:
 	require.Equal(t, 45*time.Second, opts.DynamicAgentTimeout)
 }
 
+func TestParseRunOptions_HostExecDefaultTimeoutFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  host_exec_default_timeout: "3m"
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-host-exec-default-timeout", "45s",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Second, opts.HostExecDefaultTimeout)
+}
+
 func TestParseRunOptions_DynamicAgentTimeoutNegativeFails(t *testing.T) {
 	t.Parallel()
 
 	_, err := parseRunOptions([]string{"-dynamic-agent-timeout", "-1s"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "dynamic agent timeout")
+}
+
+func TestParseRunOptions_HostExecDefaultTimeoutNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-host-exec-default-timeout",
+		"-1s",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "host exec default timeout")
 }
 
 func TestParseRunOptions_DeferToolSurfaceDefaultsToAuto(t *testing.T) {
@@ -1398,7 +1428,7 @@ func TestConvertSandboxCodeExecutorConfigValidationBranches(t *testing.T) {
 	maxBytes := 512
 	got, err := convertSandboxCodeExecutorConfig(&sandboxCodeExecutorConfig{
 		WorkspaceRoot:  " /tmp/sandbox ",
-		Backend:        " LINUX-BUBBLEWRAP ",
+		Backend:        " MACOS-SANDBOX-EXEC ",
 		Profile:        " READ_ONLY ",
 		Network:        " ENABLED ",
 		DefaultTimeout: "2s",
@@ -1406,11 +1436,17 @@ func TestConvertSandboxCodeExecutorConfigValidationBranches(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "/tmp/sandbox", got.WorkspaceRoot)
-	require.Equal(t, sandboxBackendLinuxBubblewrap, got.Backend)
+	require.Equal(t, sandboxBackendMacOSSandbox, got.Backend)
 	require.Equal(t, sandboxProfileReadOnly, got.Profile)
 	require.Equal(t, sandboxNetworkEnabled, got.Network)
 	require.Equal(t, 2*time.Second, got.DefaultTimeout)
 	require.Equal(t, maxBytes, got.OutputMaxBytes)
+
+	linuxBackend, err := convertSandboxCodeExecutorConfig(&sandboxCodeExecutorConfig{
+		Backend: " LINUX-BUBBLEWRAP ",
+	})
+	require.NoError(t, err)
+	require.Equal(t, sandboxBackendLinuxBubblewrap, linuxBackend.Backend)
 
 	cases := []struct {
 		name string

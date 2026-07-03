@@ -380,6 +380,7 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					"deepseek",
 					"qwen",
 					"hunyuan",
+					"glm",
 				),
 			},
 		},
@@ -664,6 +665,27 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 							return ""
 						}
 						return opts.DynamicAgentTimeout.String()
+					},
+				),
+				adminRuntimeTextField(
+					"tools.host_exec_default_timeout",
+					"Host Exec Default Timeout",
+					"Default timeout for host exec_command calls "+
+						"when timeout_sec is omitted, for example "+
+						"60s. Empty keeps the built-in default.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"host_exec_default_timeout",
+							"hostExecDefaultTimeout",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.HostExecDefaultTimeout <= 0 {
+							return ""
+						}
+						return opts.HostExecDefaultTimeout.String()
 					},
 				),
 				adminRuntimeTextField(

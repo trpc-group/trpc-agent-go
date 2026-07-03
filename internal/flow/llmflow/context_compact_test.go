@@ -24,7 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -76,7 +76,7 @@ func (s *contextCapturingSummaryService) CreateSessionSummary(
 	filterKey string,
 	_ bool,
 ) error {
-	parent, _ := sessionsummary.CacheSafeForkRequestFromContext(ctx)
+	parent, _ := summary.CacheSafeForkRequestFromContext(ctx)
 	s.mu.Lock()
 	s.calls++
 	s.parentRequest = parent

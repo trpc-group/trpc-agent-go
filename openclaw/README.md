@@ -297,13 +297,16 @@ tools:
   # defer_default_direct_tools: true
   # Optional: keep a small set of tools directly callable by the parent agent.
   # defer_direct_tools: ["exec_command"]
+  # Optional: default timeout for host exec_command calls when timeout_sec is
+  # omitted. Leave unset to keep the built-in host exec default.
+  # host_exec_default_timeout: "60s"
   # Optional: configure fenced-code execution without exposing workspace_exec.
   code_executor:
     type: "sandbox" # sandbox; leave empty/unset to inherit enable_local_exec
     auto_execute_code_blocks: true
     sandbox:
       workspace_root: "" # default: state_dir/sandbox
-      backend: "auto" # auto|linux-bubblewrap
+      backend: "auto" # auto|linux-bubblewrap|macos-sandbox-exec
       profile: "workspace_write" # workspace_write|read_only|disabled
       network: "restricted" # restricted|enabled
       default_timeout: "30s"
@@ -1035,6 +1038,17 @@ go run ./cmd/openclaw bootstrap deps \
   -apply
 ```
 
+Some specialized toolchains are intentionally opt-in. For example,
+`chess` checks for a Stockfish-compatible UCI engine and installs Python
+board-analysis helpers for chess-position tasks:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw bootstrap deps \
+  -profile chess \
+  -apply
+```
+
 The bootstrap command never runs automatically on startup. Startup logs may
 print a suggested `bootstrap deps` command when optional file tools are
 missing, but installation is always explicit. The managed Python environment
@@ -1047,7 +1061,9 @@ Go, npm, managed-Python, and asset download install actions. Explicit
 default dependency profiles automatically. `bootstrap deps --apply` is
 best-effort: user-space installs and downloads run first, while root-only
 steps are reported as deferred instead of aborting the entire run. Download
-actions store assets under `<state_dir>/tools/<skill>/...`.
+actions store assets under `<state_dir>/tools/<skill>/...` and may link
+selected executables into the managed toolchain `bin` directory when their
+metadata declares `links`.
 
 ### 5) Send a message
 

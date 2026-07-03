@@ -1917,6 +1917,68 @@ Tools, plugins, Skills, MCP ToolSets, and callbacks execute during candidate run
 
 When execution trace or Graph checkpoint resume is enabled, this turn bypasses Best-of-N candidate selection and follows the original Runner flow.
 
+## Remote tRPC-Agent Runner
+
+`runner/trpcagent` turns a `Runner.Run` call into an HTTP request to the [tRPC-Agent API](trpcagent.md). It is useful when the platform and business Agent service are deployed separately: the business service exposes the real Agent through `server/trpcagent`, and the platform side uses `runner/trpcagent` like a regular Runner.
+
+Expose the [tRPC-Agent API](trpcagent.md) on the user service side first:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/trpcagent"
+)
+
+agentRunner := runner.NewRunner(appName, agent)
+defer agentRunner.Close()
+
+server, err := trpcagent.New(
+	trpcagent.WithAppName(appName),
+	trpcagent.WithAgent(agent),
+	trpcagent.WithRunner(agentRunner),
+)
+if err != nil {
+	return err
+}
+http.ListenAndServe(":8080", server.Handler())
+```
+
+Create the remote Runner on the platform side:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	trpcagentrunner "trpc.group/trpc-go/trpc-agent-go/runner/trpcagent"
+)
+
+remoteRunner, err := trpcagentrunner.New(
+	"calculator",
+	trpcagentrunner.WithTarget("http://127.0.0.1:8080"),
+)
+if err != nil {
+	return err
+}
+defer remoteRunner.Close()
+
+snapshot, err := remoteRunner.Describe(ctx)
+if err != nil {
+	return err
+}
+_ = snapshot
+
+events, err := remoteRunner.Run(
+	ctx,
+	"user1",
+	"session1",
+	model.NewUserMessage("Use the calculator to compute 12 * 7."),
+)
+if err != nil {
+	return err
+}
+```
+
+The default path is `/trpc-agent/v1/apps/{appName}`. `Describe` requests the remote structure, and `Run` requests the remote runs endpoint and restores the response into the framework-standard `event.Event` stream. For complete code, see `examples/trpcagent`.
+
 ## 📝 Summary
 
 The Runner component is a core part of the tRPC-Agent-Go framework, providing complete conversation management and Agent orchestration capabilities. By properly using session management, tool integration, and event handling, you can build powerful intelligent conversational applications.

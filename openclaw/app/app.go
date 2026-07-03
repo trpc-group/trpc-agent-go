@@ -270,10 +270,35 @@ const (
 		"Do not call exec_command just to print OPENCLAW_* upload " +
 		"vars or inspect recent upload metadata when a matching " +
 		"chat file is already available. For other general local " +
-		"shell work, use exec_command. For interactive follow-up " +
+		"shell work, use exec_command. Do not use host system package " +
+		"managers such as apt, yum, dnf, apk, pacman, zypper, or brew " +
+		"from chat; use preconfigured dependencies or ask for an " +
+		"explicit setup flow. For interactive follow-up " +
 		"input, use " +
 		"write_stdin and kill_session when needed. Use message " +
 		"to send to the current chat or an explicit target. " +
+		"When a web search tool such as duckduckgo_search is " +
+		"present, use it for general web search before using " +
+		"browser automation or web_fetch against search engine " +
+		"result pages. Use web_fetch for known result URLs. Use " +
+		"the returned web_fetch content as primary evidence when " +
+		"it has status 200; search or parse that returned content " +
+		"before switching to browser automation, downloading large " +
+		"exports, or retrying alternate mirrors. If a successful " +
+		"fetch result is too long, truncated, or hidden behind " +
+		"history compaction, use session_load with content_limit " +
+		"and content_offset around that tool result instead of " +
+		"refetching the same static page through browser. Use " +
+		"browser only when a page requires JavaScript rendering, " +
+		"interaction, download handling, screenshots, or visual " +
+		"verification; do not drive Google, Bing, or DuckDuckGo " +
+		"result pages through browser when a search tool is " +
+		"available. If a public site repeatedly blocks access " +
+		"with sign-in, bot-check, CAPTCHA, or anti-automation " +
+		"errors and the user has not provided credentials, stop " +
+		"retrying that blocked path; use search, fetch, metadata, " +
+		"or the evidence already available to complete the task or " +
+		"state the exact blocker. " +
 		artifactCompletionRule + " " +
 		"Use the available tool path to complete the request " +
 		"in this turn. " +
@@ -340,8 +365,11 @@ const (
 		"absolute image paths on their own lines. OpenClaw can " +
 		"reattach those generated images to the model for direct " +
 		"visual inspection, so inspect the image before assuming " +
-		"OCR failed. If you intentionally " +
-		"use that directive path, keep the visible prose separate " +
+		"OCR failed. Do not open local files through browser " +
+		"`file://` URLs or ad hoc localhost/127.0.0.1 servers; " +
+		"normal browser policy blocks those paths and wastes " +
+		"tool calls. If you intentionally " +
+		"use the MEDIA directive path, keep the visible prose separate " +
 		"from the `MEDIA:` lines. If a compatible audio reply " +
 		"should arrive as a Telegram voice bubble instead of a " +
 		"generic audio file, call message with as_voice=true or " +
@@ -398,7 +426,14 @@ const (
 		"field. Use `dynamic_agent` for broader " +
 		"files, uploads, browser automation, shell work, messaging, " +
 		"cron, memory, skills, knowledge, external tools, or " +
-		"verification. Give the sub-agent a self-contained request " +
+		"verification. For public web research, include search and " +
+		"fetch tools with browser workers when those tools are " +
+		"available; avoid browser-only workers for search-engine " +
+		"lookup or static page fetches. Give the sub-agent a " +
+		"clear instruction to inspect successful web_fetch results " +
+		"first and to report when a result is truncated instead " +
+		"of looping through browser snapshots. Give the sub-agent a " +
+		"self-contained request " +
 		"and ask it to complete the concrete action or return the " +
 		"exact blocker. Answer directly only when no tool work is " +
 		"needed."
@@ -416,7 +451,22 @@ const (
 		"verification matters, and keep using the same targetId " +
 		"after tabs or snapshot calls. When the user mentions " +
 		"their current browser tab, relay, or extension attach " +
-		"flow, use profile=\"chrome\" when that profile exists."
+		"flow, use profile=\"chrome\" when that profile exists. " +
+		"Do not use browser as a substitute for web search or " +
+		"fetching known static URLs; if a worker needs those " +
+		"capabilities but they are unavailable, return the exact " +
+		"missing search/fetch blocker. " +
+		"Browser snapshots are for current page structure and " +
+		"interactive state, not bulk extraction of long static " +
+		"documents; when static page text is needed, prefer " +
+		"web_fetch or file/document tools and use browser only " +
+		"for the specific rendered or visual evidence those tools " +
+		"cannot provide. " +
+		"Do not use browser to open local or generated files " +
+		"through file://, data:, or ad hoc localhost/127.0.0.1 " +
+		"URLs unless the runtime explicitly exposes that server; " +
+		"use file/document/exec tools and MEDIA or MEDIA_DIR " +
+		"outputs for local media inspection."
 
 	agentTypeLLM        = "llm"
 	agentTypeClaudeCode = "claude-code"
@@ -425,9 +475,12 @@ const (
 
 	defaultOpenAIVariant = openAIVariantAuto
 
+	defaultExecResultOutputChars = 20_000
+
 	deepSeekAPIHost = "api.deepseek.com"
 	qwenAPIHost     = "dashscope.aliyuncs.com"
 	hunyuanAPIHost  = "api.hunyuan.cloud.tencent.com"
+	glmAPIHost      = "open.bigmodel.cn"
 
 	openAIAPIKeyEnvName  = "OPENAI_API_KEY"
 	openAIBaseURLEnvName = "OPENAI_BASE_URL"
@@ -708,6 +761,7 @@ type Runtime struct {
 	cronSvc           closeFunc
 	subagentSvc       closeFunc
 	skillsWatch       closeFunc
+	tools             []tool.Tool
 	evolutionService  evolution.Service
 	toolSets          []tool.ToolSet
 	telemetryShutdown func(context.Context) error
@@ -1078,16 +1132,18 @@ func NewRuntimeWithOptions(
 		stores.uploads,
 		fileMemoryStore,
 		sandboxExecEngine,
+		opts.HostExecDefaultTimeout,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
 
 	var (
-		toolSets    []tool.ToolSet
-		ag          agent.Agent
-		skillsRepo  *ocskills.Repository
-		skillsProv  skill.RepositoryProvider
-		skillsWatch *ocskills.WatchService
+		toolSets     []tool.ToolSet
+		runtimeTools []tool.Tool
+		ag           agent.Agent
+		skillsRepo   *ocskills.Repository
+		skillsProv   skill.RepositoryProvider
+		skillsWatch  *ocskills.WatchService
 	)
 	if agentType == agentTypeClaudeCode {
 		ag, err = newClaudeCodeAgent(opts)
@@ -1174,6 +1230,9 @@ func NewRuntimeWithOptions(
 		cwd, _ := os.Getwd()
 		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
 		agentCfg.SkillRepositoryProvider = skillsProv
+		agentCfg.ownedToolsSink = func(tools []tool.Tool) {
+			runtimeTools = tools
+		}
 		ag, skillsRepo, err = newAgent(
 			mdl,
 			agentCfg,
@@ -1189,6 +1248,7 @@ func NewRuntimeWithOptions(
 		}
 	}
 	if err != nil {
+		closeTools(runtimeTools)
 		closeToolSets(toolSets)
 		return nil, &exitError{
 			Code: 1,
@@ -1201,6 +1261,7 @@ func NewRuntimeWithOptions(
 		prompts.SystemPrompt,
 	)
 	rt.toolSets = toolSets
+	rt.tools = runtimeTools
 	rt.skillsWatch = skillsWatch
 
 	bridgedSessionSvc := conversationscope.WrapSessionService(sessionSvc)
@@ -1490,6 +1551,7 @@ func (r *Runtime) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	closeTools(r.tools)
 	closeToolSets(r.toolSets)
 	closeMemoryService(r.memorySvc)
 	closeSessionService(r.sessionSvc)
@@ -1681,18 +1743,21 @@ func run(
 		stores.uploads,
 		fileMemoryStore,
 		sandboxExecEngine,
+		opts.HostExecDefaultTimeout,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
 
 	var (
-		toolSets    []tool.ToolSet
-		ag          agent.Agent
-		skillsRepo  *ocskills.Repository
-		skillsProv  skill.RepositoryProvider
-		skillsWatch *ocskills.WatchService
+		toolSets     []tool.ToolSet
+		runtimeTools []tool.Tool
+		ag           agent.Agent
+		skillsRepo   *ocskills.Repository
+		skillsProv   skill.RepositoryProvider
+		skillsWatch  *ocskills.WatchService
 	)
 	defer func() {
+		closeTools(runtimeTools)
 		closeToolSets(toolSets)
 	}()
 	defer func() {
@@ -1787,6 +1852,9 @@ func run(
 		cwd, _ := os.Getwd()
 		skillsProv = newScopedSkillRepositoryProvider(cwd, agentCfg)
 		agentCfg.SkillRepositoryProvider = skillsProv
+		agentCfg.ownedToolsSink = func(tools []tool.Tool) {
+			runtimeTools = tools
+		}
 		ag, skillsRepo, err = newAgent(
 			mdl,
 			agentCfg,
@@ -2224,6 +2292,24 @@ func closeMemoryService(svc closeFunc) {
 	}
 	if err := svc.Close(); err != nil {
 		log.Warnf("close memory service failed: %v", err)
+	}
+}
+
+func closeTools(tools []tool.Tool) {
+	for _, tl := range tools {
+		closer, ok := tl.(closeFunc)
+		if !ok || closer == nil {
+			continue
+		}
+		name := "unknown"
+		if decl := tl.Declaration(); decl != nil {
+			if toolName := strings.TrimSpace(decl.Name); toolName != "" {
+				name = toolName
+			}
+		}
+		if err := closer.Close(); err != nil {
+			log.Warnf("close tool %q failed: %v", name, err)
+		}
 	}
 }
 
@@ -2712,6 +2798,9 @@ func newAgent(
 		}
 		tools = append(tools, extra...)
 	}
+	if cfg.ownedToolsSink != nil {
+		cfg.ownedToolsSink(append([]tool.Tool(nil), tools...))
+	}
 
 	deferToolSurface, directTools, err := resolveDeferredToolSurface(
 		cfg,
@@ -2910,6 +2999,8 @@ func sandboxBackendFromConfig(raw string) sandboxexec.BackendType {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case sandboxBackendLinuxBubblewrap:
 		return sandboxexec.BackendLinuxBubblewrap
+	case sandboxBackendMacOSSandbox:
+		return sandboxexec.BackendMacOSSandboxExec
 	default:
 		return sandboxexec.BackendAuto
 	}
@@ -2986,13 +3077,19 @@ func buildOpenClawToolingGuidance(cfg agentConfig) string {
 	}
 	guidance = strings.Replace(
 		guidance,
-		"For other general local shell work, use exec_command. For interactive follow-up "+
-			"input, use write_stdin and kill_session when needed. Use message "+
+		"For other general local shell work, use exec_command. "+
+			"Do not use host system package managers such as apt, yum, dnf, "+
+			"apk, pacman, zypper, or brew from chat; use preconfigured "+
+			"dependencies or ask for an explicit setup flow. For interactive "+
+			"follow-up input, use write_stdin and kill_session when needed. Use message "+
 			"to send to the current chat or an explicit target. ",
 		"For other general local shell work, use exec_command. In sandbox mode, "+
 			"exec_command only supports foreground non-interactive commands; "+
 			"write_stdin, kill_session, background execution, TTY allocation, "+
-			"and session continuation are unavailable. Use message to send to "+
+			"and session continuation are unavailable. Do not use host system "+
+			"package managers such as apt, yum, dnf, apk, pacman, zypper, "+
+			"or brew from chat; use preconfigured dependencies or ask for an "+
+			"explicit setup flow. Use message to send to "+
 			"the current chat or an explicit target. ",
 		1,
 	)
@@ -3090,6 +3187,7 @@ func toolsFromProviders(
 			Config: spec.Config,
 		})
 		if err != nil {
+			closeTools(out)
 			return nil, fmt.Errorf(
 				"tool provider %s failed: %w",
 				typeName,
@@ -3258,6 +3356,8 @@ type agentConfig struct {
 
 	ToolSets []pluginSpec
 
+	ownedToolsSink func([]tool.Tool)
+
 	RefreshToolSetsOnRun               bool
 	DeferToolSurface                   bool
 	DeferToolSurfaceMode               string
@@ -3338,6 +3438,7 @@ func buildOpenClawTools(
 	uploadStore *uploads.Store,
 	memoryFileStore *memoryfile.Store,
 	sandboxExecEngine codeexecutor.Engine,
+	hostExecDefaultTimeout time.Duration,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
@@ -3368,11 +3469,21 @@ func buildOpenClawTools(
 			outputRedactor,
 		)
 	} else {
-		mgr = octool.NewManager(
+		mgrOpts := []octool.Option{
 			octool.WithBaseEnv(deps.ToolEnv(stateDir)),
 			octool.WithCommandPolicy(commandPolicy),
 			octool.WithOutputRedactor(outputRedactor),
-		)
+			octool.WithMaxResultOutputChars(
+				defaultExecResultOutputChars,
+			),
+		}
+		if hostExecDefaultTimeout > 0 {
+			mgrOpts = append(
+				mgrOpts,
+				octool.WithDefaultTimeout(hostExecDefaultTimeout),
+			)
+		}
+		mgr = octool.NewManager(mgrOpts...)
 		execTool = octool.NewExecCommandTool(mgr, uploadStore)
 		if memoryFileStore != nil {
 			execTool = octool.NewExecCommandToolWithMemoryFileStore(
@@ -3797,7 +3908,8 @@ func parseOpenAIVariant(
 	case openai.VariantOpenAI,
 		openai.VariantDeepSeek,
 		openai.VariantHunyuan,
-		openai.VariantQwen:
+		openai.VariantQwen,
+		openai.VariantGLM:
 		return variant, nil
 	default:
 		return "", fmt.Errorf("unsupported openai variant: %s", raw)
@@ -3816,6 +3928,8 @@ func inferOpenAIVariant(baseURL string) openai.Variant {
 		return openai.VariantQwen
 	case strings.EqualFold(host, hunyuanAPIHost):
 		return openai.VariantHunyuan
+	case strings.EqualFold(host, glmAPIHost):
+		return openai.VariantGLM
 	default:
 		return openai.VariantOpenAI
 	}

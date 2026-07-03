@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -651,6 +652,49 @@ func TestRunOneStep_RecordsExecutionTraceStepOnSuccess(t *testing.T) {
 	require.Contains(t, step.Output.Text, "ok")
 	require.Empty(t, step.PredecessorStepIDs)
 	require.Empty(t, step.Error)
+}
+
+func TestRunOneStep_AttachesCacheSafeSummaryForkRequest(t *testing.T) {
+	f := New(
+		[]flow.RequestProcessor{
+			&seedMessagesRequestProcessor{
+				messages: []model.Message{
+					model.NewSystemMessage("stable system"),
+					model.NewUserMessage("current user"),
+				},
+			},
+		},
+		nil,
+		Options{},
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{}),
+		agent.WithInvocationModel(&mockModel{
+			responses: []*model.Response{
+				{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage("ok")},
+					},
+				},
+			},
+		}),
+	)
+	eventChan := make(chan *event.Event, 8)
+	_, err := f.runOneStep(context.Background(), inv, eventChan)
+	require.NoError(t, err)
+
+	parent, ok := summaryfork.Request(inv)
+	require.True(t, ok)
+	require.NotNil(t, parent)
+	require.Equal(
+		t,
+		[]model.Message{
+			model.NewSystemMessage("stable system"),
+			model.NewUserMessage("current user"),
+		},
+		parent.Messages,
+	)
 }
 
 func TestRunOneStep_RecordsExecutionTraceStepErrorWhenModelFails(t *testing.T) {
@@ -3777,6 +3821,47 @@ func TestMaybeSyncSummaryIntraRun_ErrorBranch(t *testing.T) {
 
 	// Should not panic; just logs the error internally.
 	f.maybeSyncSummaryIntraRun(ctx, inv)
+}
+
+func TestMaybeSyncSummaryIntraRun_AttachesCacheSafeForkRequest(t *testing.T) {
+	f := &Flow{syncSummaryIntraRun: true}
+	svc := &contextCapturingSummaryService{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(svc),
+		agent.WithInvocationEventFilterKey("branch/fork"),
+	)
+	parent := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system"),
+			model.NewUserMessage("question"),
+		},
+	}
+	summaryfork.Attach(inv, parent)
+	parent.Messages[1].Content = "mutated"
+
+	f.maybeSyncSummaryIntraRun(context.Background(), inv)
+
+	require.Equal(t, 1, svc.Calls())
+	got := svc.ParentRequest()
+	require.NotNil(t, got)
+	require.Len(t, got.Messages, 2)
+	require.Equal(t, "question", got.Messages[1].Content)
+}
+
+func TestMaybeSyncSummaryIntraRun_FallsBackWithoutForkRequest(t *testing.T) {
+	f := &Flow{syncSummaryIntraRun: true}
+	svc := &contextCapturingSummaryService{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(svc),
+		agent.WithInvocationEventFilterKey("branch/fallback"),
+	)
+
+	f.maybeSyncSummaryIntraRun(context.Background(), inv)
+
+	require.Equal(t, 1, svc.Calls())
+	require.Nil(t, svc.ParentRequest())
 }
 
 func TestRun_SyncSummaryIntraRun_NilInvocation(t *testing.T) {
