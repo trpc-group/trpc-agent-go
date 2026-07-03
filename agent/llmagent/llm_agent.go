@@ -38,7 +38,6 @@ import (
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	toolcurrenttime "trpc.group/trpc-go/trpc-agent-go/internal/tool/currenttime"
-	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
