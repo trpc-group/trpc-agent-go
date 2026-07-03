@@ -251,3 +251,31 @@ func TestAppendExternalToolRunOption_PropagatesError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, got)
 }
+
+func TestAppendExternalToolRunOption_SkipsWhenToolChoiceNone(t *testing.T) {
+	req := &openAIRequest{
+		ToolChoice: openAIToolChoiceNone,
+		Tools: []openAITool{
+			{
+				Type: "function",
+				Function: openAIFunction{
+					Name:        "client_search",
+					Description: "search",
+					Parameters:  json.RawMessage(`{"type":"object"}`),
+				},
+			},
+		},
+	}
+	got, err := appendExternalToolRunOption(nil, req)
+	require.NoError(t, err)
+	opts := agent.NewRunOptions(got...)
+	assert.Empty(t, opts.ExternalTools)
+}
+
+func TestOpenAIToolChoiceDisablesTools(t *testing.T) {
+	assert.False(t, openAIToolChoiceDisablesTools(nil))
+	assert.False(t, openAIToolChoiceDisablesTools(&openAIRequest{}))
+	assert.False(t, openAIToolChoiceDisablesTools(&openAIRequest{ToolChoice: "auto"}))
+	assert.True(t, openAIToolChoiceDisablesTools(&openAIRequest{ToolChoice: openAIToolChoiceNone}))
+	assert.False(t, openAIToolChoiceDisablesTools(&openAIRequest{ToolChoice: 0}))
+}

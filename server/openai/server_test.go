@@ -1671,6 +1671,45 @@ func TestServer_handleNonStreaming_InjectsExternalTools(t *testing.T) {
 	))
 }
 
+func TestServer_handleNonStreaming_SkipsExternalToolsWhenToolChoiceNone(t *testing.T) {
+	runner := &mockRunnerCapturing{events: newToolCallEventsNonStreaming(t)}
+	s, err := New(WithRunner(runner))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{Role: "user", Content: "search for go"},
+		},
+		ToolChoice: openAIToolChoiceNone,
+		Tools: []openAITool{
+			{
+				Type: "function",
+				Function: openAIFunction{
+					Name:        "client_search",
+					Description: "Search a frontend-owned source.",
+					Parameters: json.RawMessage(
+						`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`,
+					),
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewReader(body),
+	)
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Empty(t, runner.gotOpts.ExternalTools)
+}
+
 func TestServer_handleNonStreaming_ToolCallResponse(t *testing.T) {
 	runner := &mockRunnerCapturing{events: newToolCallEventsNonStreaming(t)}
 	s, err := New(WithRunner(runner))

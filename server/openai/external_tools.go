@@ -23,6 +23,10 @@ const (
 	// the OpenAI Chat Completions adapter for external tools.
 	openAIToolTypeFunction = "function"
 
+	// openAIToolChoiceNone disables tool calling per the OpenAI Chat
+	// Completions API even when tools are present in the request.
+	openAIToolChoiceNone = "none"
+
 	// jsonSchemaTypeObject is the default JSON Schema type used when the
 	// caller omits function.parameters.
 	jsonSchemaTypeObject = "object"
@@ -44,6 +48,9 @@ func appendExternalToolRunOption(
 	opts []agent.RunOption,
 	req *openAIRequest,
 ) ([]agent.RunOption, error) {
+	if openAIToolChoiceDisablesTools(req) {
+		return opts, nil
+	}
 	externalTools, err := externalToolsFromOpenAIRequest(req)
 	if err != nil {
 		return nil, err
@@ -52,6 +59,17 @@ func appendExternalToolRunOption(
 		return opts, nil
 	}
 	return append(opts, agent.WithExternalTools(externalTools)), nil
+}
+
+// openAIToolChoiceDisablesTools reports whether the request's tool_choice
+// disables tool calling. Per OpenAI Chat Completions API, "none" means the
+// model must not call tools even when tools are present in the request.
+func openAIToolChoiceDisablesTools(req *openAIRequest) bool {
+	if req == nil || req.ToolChoice == nil {
+		return false
+	}
+	choice, ok := req.ToolChoice.(string)
+	return ok && choice == openAIToolChoiceNone
 }
 
 // externalToolsFromOpenAIRequest converts req.Tools into framework tools.
