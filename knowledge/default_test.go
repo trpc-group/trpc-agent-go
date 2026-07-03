@@ -87,6 +87,50 @@ func (m *mockSource) GetMetadata() map[string]any {
 	}
 }
 
+type stableSyncSource struct {
+	name     string
+	docs     []*document.Document
+	metadata map[string]any
+}
+
+func (s *stableSyncSource) Name() string {
+	return s.name
+}
+
+func (s *stableSyncSource) Type() string {
+	return "mock"
+}
+
+func (s *stableSyncSource) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
+	return s.docs, nil
+}
+
+func (s *stableSyncSource) SourceID() string {
+	return s.name
+}
+
+func (s *stableSyncSource) GetMetadata() map[string]any {
+	if s.metadata == nil {
+		return map[string]any{
+			"type": []string{"mock"},
+		}
+	}
+	return s.metadata
+}
+
+func newStableSyncTestDocument(uri string, chunkIndex int, content string) *document.Document {
+	return &document.Document{
+		ID:      fmt.Sprintf("seed-%s-%d", uri, chunkIndex),
+		Name:    uri,
+		Content: content,
+		Metadata: map[string]any{
+			source.MetaSourceName: "stable-source",
+			source.MetaURI:        uri,
+			source.MetaChunkIndex: chunkIndex,
+		},
+	}
+}
+
 // TestBuiltinKnowledge_LoadOptions is redundant with TestLoadOptions, removed
 
 func TestBuiltinKnowledge_LoadNoSources(t *testing.T) {
@@ -1656,6 +1700,64 @@ func TestLoad_WithSync(t *testing.T) {
 	err = kb.Load(ctx)
 	if err != nil {
 		t.Fatalf("Second load failed: %v", err)
+	}
+}
+
+func TestLoad_WithSync_CleansDeletedDocumentsAcrossLoads(t *testing.T) {
+	src := &stableSyncSource{
+		name: "stable-source",
+		docs: []*document.Document{
+			newStableSyncTestDocument("a.md", 0, "content-a"),
+			newStableSyncTestDocument("b.md", 0, "content-b"),
+		},
+		metadata: map[string]any{
+			"type": []string{"mock"},
+		},
+	}
+
+	kb := New(
+		WithSources([]source.Source{src}),
+		WithEnableSourceSync(true),
+	)
+	store := newSyncMockVectorStore()
+	kb.vectorStore = store
+	kb.embedder = stubEmbedder{}
+
+	ctx := context.Background()
+
+	if err := kb.Load(ctx); err != nil {
+		t.Fatalf("first load failed: %v", err)
+	}
+
+	metas, err := store.GetMetadata(ctx)
+	if err != nil {
+		t.Fatalf("GetMetadata after first load failed: %v", err)
+	}
+	if len(metas) != 2 {
+		t.Fatalf("after first load, got %d documents, want 2", len(metas))
+	}
+
+	src.docs = []*document.Document{
+		newStableSyncTestDocument("a.md", 0, "content-a"),
+	}
+
+	if err := kb.Load(ctx); err != nil {
+		t.Fatalf("second load failed: %v", err)
+	}
+
+	metas, err = store.GetMetadata(ctx)
+	if err != nil {
+		t.Fatalf("GetMetadata after second load failed: %v", err)
+	}
+	if len(metas) != 1 {
+		t.Fatalf("after second load, got %d documents, want 1", len(metas))
+	}
+
+	for _, meta := range metas {
+		uri, _ := meta.Metadata[source.MetaURI].(string)
+		if uri != "a.md" {
+			t.Fatalf("after second load, found unexpected remaining uri %q", uri)
+		}
 	}
 }
 

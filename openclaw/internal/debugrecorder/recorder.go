@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/gwproto"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/buildinfo"
 )
 
 const (
@@ -66,6 +67,7 @@ const (
 	KindRuntimeProfile = "runtime.profile"
 	KindModelReq       = "model.chat.request"
 	KindRunnerEvent    = "runner.event"
+	KindPromptCache    = "prompt_cache.usage"
 
 	ProviderOpenAIChatCompletions = "openai.chat.completions"
 
@@ -199,16 +201,18 @@ func (r *Recorder) Start(start TraceStart) (*Trace, error) {
 	}
 
 	meta := struct {
-		StartedAt time.Time  `json:"started_at"`
-		Mode      Mode       `json:"mode"`
-		Start     TraceStart `json:"start"`
-		TraceID   string     `json:"trace_id,omitempty"`
-		Version   string     `json:"version"`
+		StartedAt time.Time      `json:"started_at"`
+		Mode      Mode           `json:"mode"`
+		Start     TraceStart     `json:"start"`
+		TraceID   string         `json:"trace_id,omitempty"`
+		Runtime   buildinfo.Info `json:"runtime"`
+		Version   string         `json:"version"`
 	}{
 		StartedAt: now,
 		Mode:      r.mode,
 		Start:     start,
 		TraceID:   strings.TrimSpace(start.TraceID),
+		Runtime:   buildinfo.Snapshot(),
 		Version:   "v1",
 	}
 	metaPath := filepath.Join(root, metaFileName)
@@ -449,7 +453,8 @@ type RequestSummary struct {
 	MessageID string `json:"message_id,omitempty"`
 	Text      string `json:"text,omitempty"`
 
-	RequestSystemPrompt string `json:"request_system_prompt,omitempty"`
+	RequestSystemPrompt      string `json:"request_system_prompt,omitempty"`
+	RequestLateContextPrompt string `json:"request_late_context_prompt,omitempty"`
 
 	UserID    string `json:"user_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
@@ -503,6 +508,9 @@ func SummarizeRequest(
 		Text:      strings.TrimSpace(req.Text),
 		RequestSystemPrompt: strings.TrimSpace(
 			req.RequestSystemPrompt,
+		),
+		RequestLateContextPrompt: strings.TrimSpace(
+			req.RequestLateContextPrompt,
 		),
 		UserID:    strings.TrimSpace(req.UserID),
 		SessionID: strings.TrimSpace(req.SessionID),

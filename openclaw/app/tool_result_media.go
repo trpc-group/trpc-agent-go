@@ -28,7 +28,9 @@ const (
 	toolResultMediaLineFile = "MEDIA:"
 	toolResultMediaLineDir  = "MEDIA_DIR:"
 
-	maxToolResultImages = 6
+	openClawToolResultAttachmentBudget = 6
+
+	maxToolResultImages = openClawToolResultAttachmentBudget
 
 	maxToolResultImageBytes int64 = 12 << 20
 
@@ -36,9 +38,9 @@ const (
 )
 
 const (
-	toolResultSingleImageText = "Generated image attached for " +
+	toolResultSingleImageText = "Image attached for " +
 		"direct inspection: %s."
-	toolResultMultiImageText = "Generated images attached for " +
+	toolResultMultiImageText = "Images attached for " +
 		"direct inspection: %s."
 )
 
@@ -81,6 +83,13 @@ func toolResultImageMessages(
 	images := loadToolResultImages(in.Result)
 	if len(images) == 0 {
 		return nil, nil
+	}
+	allowed := tool.ReserveToolResultAttachments(ctx, len(images))
+	if allowed <= 0 {
+		return nil, nil
+	}
+	if allowed < len(images) {
+		images = images[:allowed]
 	}
 
 	recordToolResultImages(ctx, in.ToolName, images)
@@ -342,9 +351,9 @@ func toolResultImageMessageText(images []toolResultImage) string {
 	list := strings.Join(names, ", ")
 	if list == "" {
 		if len(images) == 1 {
-			return "Generated image attached for direct inspection."
+			return "Image attached for direct inspection."
 		}
-		return "Generated images attached for direct inspection."
+		return "Images attached for direct inspection."
 	}
 	if len(images) == 1 {
 		return fmt.Sprintf(toolResultSingleImageText, list)

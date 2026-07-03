@@ -137,6 +137,22 @@ func expectLimitedEventRefs(
 		WillReturnRows(rows)
 }
 
+func expectLimitedEventRefsWithTimestamp(
+	mock sqlmock.Sqlmock,
+	key session.Key,
+	afterTime any,
+	limit int,
+	refs ...eventRef,
+) *sqlmock.ExpectedQuery {
+	rows := sqlmock.NewRows([]string{"id", "created_at", "event_timestamp"})
+	for _, ref := range refs {
+		rows.AddRow(ref.id, ref.createdAt, ref.eventTimestamp.Format(time.RFC3339Nano))
+	}
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, created_at, JSON_UNQUOTE(JSON_EXTRACT(event, '$.timestamp')) FROM session_events")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, afterTime, limit).
+		WillReturnRows(rows)
+}
+
 func expectEventsByRefs(
 	mock sqlmock.Sqlmock,
 	key session.Key,
@@ -159,11 +175,11 @@ func expectFullSessionEventsList(
 	key session.Key,
 	rows ...limitedEventRow,
 ) *sqlmock.ExpectedQuery {
-	sqlRows := sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"})
+	sqlRows := sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"})
 	for _, row := range rows {
-		sqlRows.AddRow(row.id, key.AppName, key.UserID, key.SessionID, row.event, row.createdAt)
+		sqlRows.AddRow(key.AppName, key.UserID, key.SessionID, row.event, row.createdAt)
 	}
-	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM")).
 		WithArgs(key.AppName, key.UserID, key.SessionID, key.UserID).
 		WillReturnRows(sqlRows)
 }
@@ -182,6 +198,20 @@ func expectNoUserAnchor(
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}))
 }
 
+func expectNoUserAnchorWithTimestamp(
+	mock sqlmock.Sqlmock,
+	key session.Key,
+	sessionCreatedAt driver.Value,
+	extraArgs ...driver.Value,
+) *sqlmock.ExpectedQuery {
+	args := []driver.Value{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
+	args = append(args, extraArgs...)
+	args = append(args, userAnchorSearchBatchSize)
+	return mock.ExpectQuery(regexp.QuoteMeta("SELECT id, created_at, JSON_UNQUOTE(JSON_EXTRACT(event, '$.timestamp')) FROM session_events")).
+		WithArgs(args...).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at", "event_timestamp"}))
+}
+
 func expectPreviousEventRefs(
 	mock sqlmock.Sqlmock,
 	key session.Key,
@@ -191,7 +221,7 @@ func expectPreviousEventRefs(
 ) *sqlmock.ExpectedQuery {
 	args := []driver.Value{key.AppName, key.UserID, key.SessionID, sessionCreatedAt}
 	if before != nil {
-		args = append(args, before.createdAt, before.createdAt, before.id)
+		args = append(args, before.createdAt)
 	}
 	args = append(args, userAnchorSearchBatchSize)
 	rows := sqlmock.NewRows([]string{"id", "created_at"})
@@ -2189,9 +2219,9 @@ func TestListSessions_WithEvents(t *testing.T) {
 	eventBytes, _ := json.Marshal(evt)
 
 	// Mock: Batch load events with data
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, app_name, user_id, session_id, event, created_at FROM")).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "app_name", "user_id", "session_id", "event", "created_at"}).
-			AddRow(int64(1), userKey.AppName, userKey.UserID, "session-1", eventBytes, time.Now()))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT app_name, user_id, session_id, event, created_at FROM")).
+		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id", "event", "created_at"}).
+			AddRow(userKey.AppName, userKey.UserID, "session-1", eventBytes, time.Now()))
 
 	// Prepare mock summary
 	summary := session.Summary{Summary: "test summary", Topics: []string{}}
@@ -2330,7 +2360,7 @@ func TestGetTrackEvents_WithLimit(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"event"}).AddRow(eventBytes)
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT event FROM session_track_events")).
-		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), sqlmock.AnyArg(), 1).
+		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), 1).
 		WillReturnRows(rows)
 
 	result, err := s.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, 1, time.Time{})
@@ -2339,6 +2369,96 @@ func TestGetTrackEvents_WithLimit(t *testing.T) {
 	alpha := result[0]["alpha"]
 	require.Len(t, alpha, 1)
 	assert.Equal(t, json.RawMessage(`"limited"`), alpha[0].Payload)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetTrackEvents_ZeroAfterTimeOmitsCreatedAtFilter guards against binding
+// a zero time.Time into the created_at predicate: go-sql-driver encodes
+// time.Time{} as '0000-00-00', which strict-mode MySQL rejects or matches
+// nothing, silently dropping every persisted track event.
+func TestGetTrackEvents_ZeroAfterTimeOmitsCreatedAtFilter(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "session-1",
+	}
+	sessState := &SessionState{
+		State: session.StateMap{
+			"tracks": []byte(`["alpha"]`),
+		},
+	}
+
+	event := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"kept"`),
+		Timestamp: time.Now(),
+	}
+	eventBytes, _ := json.Marshal(event)
+	rows := sqlmock.NewRows([]string{"event"}).AddRow(eventBytes)
+
+	// Without limit and with a zero afterTime, only the key, track, and
+	// expiry arguments may be bound; no created_at predicate may be added.
+	mock.ExpectQuery(`SELECT event FROM session_track_events\s+`+
+		`WHERE app_name = \? AND user_id = \? AND session_id = \? AND track = \?\s+`+
+		`AND \(expires_at IS NULL OR expires_at > \?\)\s+`+
+		`AND deleted_at IS NULL\s+`+
+		`ORDER BY created_at DESC$`).
+		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg()).
+		WillReturnRows(rows)
+
+	result, err := s.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	alpha := result[0]["alpha"]
+	require.Len(t, alpha, 1)
+	assert.Equal(t, json.RawMessage(`"kept"`), alpha[0].Payload)
+
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestGetTrackEvents_AfterTimeBindsCreatedAtFilter verifies a non-zero
+// afterTime still narrows the query through the created_at predicate.
+func TestGetTrackEvents_AfterTimeBindsCreatedAtFilter(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "session-1",
+	}
+	sessState := &SessionState{
+		State: session.StateMap{
+			"tracks": []byte(`["alpha"]`),
+		},
+	}
+
+	afterTime := time.Now().Add(-time.Hour)
+	mock.ExpectQuery(`SELECT event FROM session_track_events\s+`+
+		`WHERE app_name = \? AND user_id = \? AND session_id = \? AND track = \?\s+`+
+		`AND \(expires_at IS NULL OR expires_at > \?\)\s+`+
+		`AND deleted_at IS NULL\s+`+
+		`AND created_at > \?\s+`+
+		`ORDER BY created_at DESC$`).
+		WithArgs("test-app", "test-user", "session-1", "alpha", sqlmock.AnyArg(), afterTime).
+		WillReturnRows(sqlmock.NewRows([]string{"event"}))
+
+	result, err := s.getTrackEvents(ctx, []session.Key{key}, []*SessionState{sessState}, 0, afterTime)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.Empty(t, result[0]["alpha"])
 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -3094,8 +3214,11 @@ func TestNewService_DBInitFailure(t *testing.T) {
 		return &mockMySQLClient{db: db}, nil
 	})
 
-	// Mock DB init failure
-	mock.ExpectExec("CREATE TABLE").WillReturnError(assert.AnError)
+	// Mock DB init failure: existence check passes (table absent), then the
+	// CREATE TABLE fails.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS")).WillReturnError(assert.AnError)
 
 	svc, err := NewService(
 		WithMySQLClientDSN("test:test@tcp(localhost:3306)/testdb"),
@@ -3365,17 +3488,30 @@ func mockDBInit(mock sqlmock.Sqlmock) {
 	mockDBInitWithPrefix(mock, "")
 }
 
+// mockCreateMissingTables mocks initDB's DDL path for the case where none of
+// the tables exist yet: per table, an existence check returning 0 followed by a
+// CREATE TABLE and one CREATE statement per index.
+func mockCreateMissingTables(mock sqlmock.Sqlmock, tablePrefix string) {
+	indexCount := make(map[string]int)
+	for _, idx := range indexDefs {
+		indexCount[idx.table]++
+	}
+	for _, tableDef := range tableDefs {
+		fullTableName := sqldb.BuildTableName(tablePrefix, tableDef.name)
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)")).
+			WithArgs(fullTableName).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		mock.ExpectExec(regexp.QuoteMeta("CREATE TABLE IF NOT EXISTS")).WillReturnResult(sqlmock.NewResult(0, 0))
+		for i := 0; i < indexCount[tableDef.name]; i++ {
+			mock.ExpectExec("CREATE (UNIQUE )?INDEX").WillReturnResult(sqlmock.NewResult(0, 0))
+		}
+	}
+}
+
 // mockDBInitWithPrefix mocks the database initialization process with table prefix
 func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
-	// Mock: Create 6 tables
-	for i := 0; i < 6; i++ {
-		mock.ExpectExec("CREATE TABLE").WillReturnResult(sqlmock.NewResult(0, 0))
-	}
-
-	// Mock: Create 12 indexes
-	for i := 0; i < 12; i++ {
-		mock.ExpectExec("CREATE").WillReturnResult(sqlmock.NewResult(0, 0))
-	}
+	// Mock: create each (missing) table together with its indexes.
+	mockCreateMissingTables(mock, tablePrefix)
 
 	// Mock: verifySchema queries for each table
 	tableNames := []string{
@@ -3409,15 +3545,19 @@ func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
 			WithArgs(fullTableName).
 			WillReturnRows(colRows)
 
-		// 3. verifyIndexes query
-		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME"})
+		// 3. verifyIndexes query (INDEX_NAME, COLUMN_NAME, NON_UNIQUE)
+		idxRows := sqlmock.NewRows([]string{"INDEX_NAME", "COLUMN_NAME", "NON_UNIQUE"})
 		for _, idx := range schema.indexes {
 			idxName := sqldb.BuildIndexName(tablePrefix, idx.table, idx.suffix)
+			nonUnique := 1
+			if idx.unique {
+				nonUnique = 0
+			}
 			for _, col := range idx.columns {
-				idxRows.AddRow(idxName, col)
+				idxRows.AddRow(idxName, col, nonUnique)
 			}
 		}
-		idxRows.AddRow("PRIMARY", "id")
+		idxRows.AddRow("PRIMARY", "id", 0)
 		mock.ExpectQuery("SELECT INDEX_NAME").
 			WithArgs(fullTableName).
 			WillReturnRows(idxRows)

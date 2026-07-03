@@ -56,6 +56,7 @@ const (
 	mcpToolInstall      = "browser_install"
 	mcpToolNavigate     = "browser_navigate"
 	mcpToolPDF          = "browser_pdf_save"
+	mcpToolMouseWheel   = "browser_mouse_wheel"
 	mcpToolPressKey     = "browser_press_key"
 	mcpToolResize       = "browser_resize"
 	mcpToolScroll       = "browser_scroll_into_view"
@@ -80,6 +81,7 @@ var supportedMCPTools = []string{
 	mcpToolInstall,
 	mcpToolNavigate,
 	mcpToolPDF,
+	mcpToolMouseWheel,
 	mcpToolPressKey,
 	mcpToolResize,
 	mcpToolScroll,

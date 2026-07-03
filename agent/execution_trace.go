@@ -15,6 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // WithExecutionTraceEnabled toggles execution trace recording for this run.
@@ -185,6 +186,19 @@ func SetExecutionTraceStepAppliedSurfaceIDs(inv *Invocation, stepID string) {
 		return
 	}
 	capture.SetStepAppliedSurfaceIDs(stepID, reporter.ExecutionTraceAppliedSurfaceIDs(inv))
+}
+
+// SetExecutionTraceStepUsage records token usage for one execution trace step.
+func SetExecutionTraceStepUsage(inv *Invocation, stepID string, usage *model.Usage) {
+	if inv == nil || stepID == "" || usage == nil {
+		return
+	}
+	inv.initializeExecutionTrace()
+	capture := inv.executionTraceCapture()
+	if capture == nil {
+		return
+	}
+	capture.SetStepUsage(stepID, usage)
 }
 
 // NextExecutionTracePredecessors returns the predecessor set for the next real step or child invocation.

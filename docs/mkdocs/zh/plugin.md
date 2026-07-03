@@ -192,6 +192,27 @@ runnerInstance := runner.NewRunner(
 defer runnerInstance.Close()
 ```
 
+## 单次 Run 插件
+
+如果插件只应该影响当前请求，而不是挂到整个 Runner 上，可以在
+`Runner.Run(...)` 中通过 `plugin.WithPlugins(...)` 临时注入：
+
+```go
+events, err := runnerInstance.Run(
+	ctx,
+	userID,
+	sessionID,
+	message,
+	plugin.WithPlugins(&RequestScopedPlugin{}),
+)
+```
+
+`plugin.WithPlugins(...)` 是 RunOption，只对本次运行生效。它复用同一套
+`plugin.Plugin` 接口和 Hook 点，适合请求级策略、测试替身和临时审计打标。同一次
+`plugin.WithPlugins(...)` 里的插件名仍然需要唯一；配置无效时，框架会记录错误并跳过
+这组 Run 级插件。Runner 不会因为单次 Run 结束而调用这些插件的 `Close()`，如果插件
+持有资源，需要调用方自行管理。
+
 ## 工具身份注入
 
 插件可以通过 `BeforeTool` 和 `AfterTool` 对所有工具调用增加前置或后置处理。
@@ -299,7 +320,14 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 
 ### 执行顺序与短路（short-circuit）
 
-插件会 **按注册顺序执行**。
+插件会按作用域和注册顺序执行：
+
+1. 先执行 `runner.WithPlugins(...)` 注册的 Runner 级插件。
+2. 再执行 `plugin.WithPlugins(...)` 注入的单次 Run 插件；多个 RunOption 按传入
+   `Runner.Run(...)` 的顺序执行。
+3. 最后执行 Agent 自己配置的回调（如果有）。
+
+同一个 `WithPlugins(...)` 调用里的多个插件仍按传入顺序执行。
 
 某些 Before* 回调支持“短路”默认行为：
 
@@ -342,8 +370,13 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 
 ### Close（资源释放）
 
-如果插件实现了 `plugin.Closer`，当你调用 `Runner.Close()` 时，Runner 会调用插件的
-`Close()` 来释放资源。关闭顺序是 **按注册顺序的反向**（后注册的先关闭）。
+如果通过 `runner.WithPlugins(...)` 注册的插件实现了 `plugin.Closer`，当你调用
+`Runner.Close()` 时，Runner 会调用插件的 `Close()` 来释放资源。关闭顺序是
+**按注册顺序的反向**（后注册的先关闭）。
+
+通过 `plugin.WithPlugins(...)` 注入的单次 Run 插件不会在本次运行结束时被 Runner
+关闭。它们通常是调用方临时借给本次运行的对象；如果插件持有需要释放的资源，请由
+调用方在合适的时机关闭。
 
 ## Hook 点（Hook Points）
 
@@ -559,6 +592,57 @@ func (p *ToolArgsPlugin) Register(reg *plugin.Registry) {
 
 `plugin.NewLogging()` 会记录 agent/model/tool 的开始与结束信息，适合用于调试与
 性能分析。
+
+### DebugLog
+
+`debuglog.New(opts...)` 通过框架 debug logger 输出单行 JSON，用于临时排查 model
+request/response 和 tool arguments/result。
+
+默认跳过 Runner event 和 model partial response；需要时打开
+`debuglog.WithEventEnabled(true)`、`debuglog.WithModelPartialResponseEnabled(true)`。
+
+使用示例如下：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/plugin/debuglog"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(debuglog.New()),
+)
+```
+
+也可以只在单次 Run 临时启用：
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/debuglog"
+)
+
+events, err := runnerInstance.Run(
+	ctx,
+	userID,
+	sessionID,
+	message,
+	plugin.WithPlugins(
+		debuglog.New(
+			debuglog.WithEventEnabled(true),
+			debuglog.WithModelPartialResponseEnabled(true),
+		),
+	),
+)
+```
+
+输出是一行 JSON debug message，例如：
+
+```json
+{"time":"2026-06-16T10:20:30.123456789+08:00","sequence":7,"plugin":"debug_log","phase":"before_tool","tool_name":"calculator","tool_call_id":"call-1","payload":{"arguments":{"operation":"add","a":1,"b":2},"arguments_bytes":33}}
+```
 
 ### GlobalInstruction
 
@@ -940,7 +1024,7 @@ FinishReason：
 
 完整示例见 [examples/plugin/errormessage](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/plugin/errormessage)。
 
-说明：目前仓库内置了 Logging、GlobalInstruction、ToolCallID、MessageMerger、ErrorMessage、Guardrail 六类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
+说明：目前仓库内置了 Logging、DebugLog、GlobalInstruction、ToolCallID、MessageMerger、ErrorMessage、Guardrail 七类插件。其中 Guardrail 插件当前提供的内置 capability 包括工具审批、Prompt Injection 和 Unsafe Intent。更多插件可通过自定义插件实现。
 
 ## 如何扩展：写一个自己的插件
 

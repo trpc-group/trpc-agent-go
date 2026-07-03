@@ -149,7 +149,7 @@ func TestInMemoryStoreIsolatesRunsByAppName(t *testing.T) {
 	assert.Equal(t, engine.RunStatusSucceeded, appB.Status)
 }
 
-func TestInMemoryStoreCloneErrors(t *testing.T) {
+func TestInMemoryStoreSnapshotErrors(t *testing.T) {
 	ctx := context.Background()
 	store := New().(*inMemoryStore)
 	t.Cleanup(func() {
@@ -163,17 +163,17 @@ func TestInMemoryStoreCloneErrors(t *testing.T) {
 		},
 	}
 	err := store.Create(ctx, "demo-app", badRun)
-	assert.ErrorContains(t, err, "clone promptiter run")
+	assert.ErrorContains(t, err, "snapshot promptiter run")
 	store.runs["demo-app"] = map[string]*engine.RunResult{"run-1": badRun}
 	loaded, err := store.Get(ctx, "demo-app", "run-1")
 	assert.Nil(t, loaded)
-	assert.ErrorContains(t, err, "clone promptiter run")
+	assert.ErrorContains(t, err, "snapshot promptiter run")
 	err = store.Update(ctx, "demo-app", badRun)
-	assert.ErrorContains(t, err, "clone promptiter run")
+	assert.ErrorContains(t, err, "snapshot promptiter run")
 }
 
-func TestCloneRunNil(t *testing.T) {
-	cloned, err := cloneRun(nil)
+func TestSnapshotRunNil(t *testing.T) {
+	snapshot, err := snapshotRun(nil)
 	assert.NoError(t, err)
-	assert.Nil(t, cloned)
+	assert.Nil(t, snapshot)
 }

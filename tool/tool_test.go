@@ -11,6 +11,7 @@ package tool
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -43,5 +44,24 @@ func (d *testStreamableTool) Declaration() *Declaration {
 			Required:    []string{"input"},
 			Description: "Input for the test streamable tool.",
 		},
+	}
+}
+
+func TestSchemaPatternJSON(t *testing.T) {
+	schema := &Schema{Type: "string", Pattern: "^[a-z0-9_-]+$"}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	if string(data) != `{"type":"string","pattern":"^[a-z0-9_-]+$"}` {
+		t.Fatalf("unexpected schema JSON: %s", string(data))
+	}
+
+	var roundTrip Schema
+	if err := json.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+	if roundTrip.Pattern != schema.Pattern {
+		t.Fatalf("pattern = %q, want %q", roundTrip.Pattern, schema.Pattern)
 	}
 }

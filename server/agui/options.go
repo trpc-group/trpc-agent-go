@@ -152,6 +152,13 @@ func WithPostRunFinalizationTimeout(d time.Duration) Option {
 	}
 }
 
+// WithTrackPersistenceTimeout sets the maximum duration allowed for AG-UI track persistence.
+func WithTrackPersistenceTimeout(d time.Duration) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithTrackPersistenceTimeout(d))
+	}
+}
+
 // WithHeartbeatInterval sets how often the SSE transport sends heartbeat frames.
 func WithHeartbeatInterval(d time.Duration) Option {
 	return func(o *options) {
@@ -219,6 +226,14 @@ func WithToolCallDeltaStreamingEnabled(enabled bool) Option {
 func WithStreamingToolResultActivityEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithStreamingToolResultActivityEnabled(enabled))
+	}
+}
+
+// WithConcurrentMessageStreamsEnabled controls whether multiple text and reasoning
+// message streams with different message IDs may stay open concurrently.
+func WithConcurrentMessageStreamsEnabled(enabled bool) Option {
+	return func(o *options) {
+		o.aguiRunnerOptions = append(o.aguiRunnerOptions, aguirunner.WithConcurrentMessageStreamsEnabled(enabled))
 	}
 }
 

@@ -58,7 +58,16 @@ func mcpImageResultMessages(
 		return nil, nil
 	}
 
-	images := extractMCPImages(ctx, in.Result)
+	items := extractMCPContentItems(in.Result)
+	candidates := countMCPImageCandidates(items)
+	if candidates == 0 {
+		return nil, nil
+	}
+	allowed := tool.ReserveToolResultAttachments(ctx, candidates)
+	if allowed <= 0 {
+		return nil, nil
+	}
+	images := extractMCPImagesUpTo(ctx, items, allowed)
 	if len(images) == 0 {
 		return nil, nil
 	}
@@ -75,6 +84,16 @@ func mcpImageResultMessages(
 }
 
 func extractMCPImages(ctx context.Context, result any) []mcpImage {
+	return extractMCPImagesUpTo(
+		ctx,
+		extractMCPContentItems(result),
+		maxMCPImagesNoLimit,
+	)
+}
+
+const maxMCPImagesNoLimit = int(^uint(0) >> 1)
+
+func extractMCPContentItems(result any) []mcpContentItem {
 	payload := unwrapMCPResultContent(result)
 	if payload == nil {
 		return nil
@@ -89,8 +108,37 @@ func extractMCPImages(ctx context.Context, result any) []mcpImage {
 	if err := json.Unmarshal(body, &items); err != nil {
 		return nil
 	}
+	return items
+}
 
-	images := make([]mcpImage, 0, len(items))
+func countMCPImageCandidates(items []mcpContentItem) int {
+	var count int
+	for _, item := range items {
+		if strings.ToLower(strings.TrimSpace(item.Type)) !=
+			mcpContentTypeImage {
+			continue
+		}
+		if _, ok := mcpImageFormatFromMime(item.MimeType); ok {
+			count++
+		}
+	}
+	return count
+}
+
+func extractMCPImagesUpTo(
+	ctx context.Context,
+	items []mcpContentItem,
+	maxImages int,
+) []mcpImage {
+	if maxImages <= 0 {
+		return nil
+	}
+
+	capacity := len(items)
+	if capacity > maxImages {
+		capacity = maxImages
+	}
+	images := make([]mcpImage, 0, capacity)
 	for _, item := range items {
 		if strings.ToLower(strings.TrimSpace(item.Type)) !=
 			mcpContentTypeImage {
@@ -119,6 +167,9 @@ func extractMCPImages(ctx context.Context, result any) []mcpImage {
 			Data:   data,
 			Format: format,
 		})
+		if len(images) >= maxImages {
+			break
+		}
 	}
 
 	if len(images) == 0 {

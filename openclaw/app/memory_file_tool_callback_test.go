@@ -25,11 +25,13 @@ import (
 )
 
 const (
-	testMemoryAppName = "openclaw"
-	testMemoryUserID  = "wecom:dm:test-user"
-	testMemoryName    = "Sample User"
-	testMemoryOldText = "Original Name"
-	testMemoryNewText = "Updated Name"
+	testMemoryAppName       = "openclaw"
+	testMemoryUserID        = "wecom:dm:test-user"
+	testMemoryUserStorageID = "wecom:dm:T123"
+	testMemoryChatStorageID = "wecom:chat:room-1"
+	testMemoryName          = "Sample User"
+	testMemoryOldText       = "Original Name"
+	testMemoryNewText       = "Updated Name"
 )
 
 func TestMemoryFileToolCallback_SaveFileWritesScopedMemory(t *testing.T) {
@@ -77,7 +79,7 @@ func TestMemoryFileToolCallback_SaveFileUsesStorageScopedMemory(
 	stateDir, store := newTestMemoryFileStore(t)
 	ctx := conversationscope.WithStorageUserID(
 		newTestMemoryToolContext(),
-		"wecom:chat:room-1",
+		testMemoryChatStorageID,
 	)
 	callback := newMemoryFileToolCallback(store, stateDir)
 
@@ -93,7 +95,7 @@ func TestMemoryFileToolCallback_SaveFileUsesStorageScopedMemory(
 	chatPath, err := store.EnsureMemory(
 		context.Background(),
 		testMemoryAppName,
-		"wecom:chat:room-1",
+		testMemoryChatStorageID,
 	)
 	require.NoError(t, err)
 	chatRaw, err := os.ReadFile(chatPath)
@@ -109,6 +111,129 @@ func TestMemoryFileToolCallback_SaveFileUsesStorageScopedMemory(
 	userRaw, err := os.ReadFile(userPath)
 	require.NoError(t, err)
 	require.NotContains(t, string(userRaw), "- Shared rule")
+}
+
+func TestMemoryFileToolCallback_UsesExplicitMemoryScopes(t *testing.T) {
+	t.Parallel()
+
+	stateDir, store := newTestMemoryFileStore(t)
+	ctx := conversationscope.WithStorageUserID(
+		conversationscope.WithUserStorageID(
+			newTestMemoryToolContext(),
+			testMemoryUserStorageID,
+		),
+		testMemoryChatStorageID,
+	)
+	callback := newMemoryFileToolCallback(store, stateDir)
+
+	result, err := callback(ctx, &tool.BeforeToolArgs{
+		ToolName: memoryToolSaveFileFS,
+		Arguments: []byte(
+			`{"file_name":"USER_MEMORY.md",` +
+				`"contents":"- Personal task\n",` +
+				`"overwrite":false}`,
+		),
+	})
+	require.NoError(t, err)
+	rsp, ok := result.CustomResult.(memorySaveFileResponse)
+	require.True(t, ok)
+	require.Equal(t, "Successfully saved: USER_MEMORY.md", rsp.Message)
+
+	result, err = callback(ctx, &tool.BeforeToolArgs{
+		ToolName: memoryToolSaveFileFS,
+		Arguments: []byte(
+			`{"file_name":"CHAT_MEMORY.md",` +
+				`"contents":"- Shared task\n",` +
+				`"overwrite":false}`,
+		),
+	})
+	require.NoError(t, err)
+	rsp, ok = result.CustomResult.(memorySaveFileResponse)
+	require.True(t, ok)
+	require.Equal(t, "Successfully saved: CHAT_MEMORY.md", rsp.Message)
+
+	userPath, err := store.EnsureMemory(
+		context.Background(),
+		testMemoryAppName,
+		testMemoryUserStorageID,
+	)
+	require.NoError(t, err)
+	userRaw, err := os.ReadFile(userPath)
+	require.NoError(t, err)
+	require.Contains(t, string(userRaw), "- Personal task")
+	require.NotContains(t, string(userRaw), "- Shared task")
+
+	chatPath, err := store.EnsureMemory(
+		context.Background(),
+		testMemoryAppName,
+		testMemoryChatStorageID,
+	)
+	require.NoError(t, err)
+	chatRaw, err := os.ReadFile(chatPath)
+	require.NoError(t, err)
+	require.Contains(t, string(chatRaw), "- Shared task")
+	require.NotContains(t, string(chatRaw), "- Personal task")
+}
+
+func TestMemoryFileToolCallback_CurrentAndChatScopesFallBackToUserStorageID(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	stateDir, store := newTestMemoryFileStore(t)
+	ctx := conversationscope.WithUserStorageID(
+		newTestMemoryToolContext(),
+		testMemoryUserStorageID,
+	)
+	callback := newMemoryFileToolCallback(store, stateDir)
+
+	result, err := callback(ctx, &tool.BeforeToolArgs{
+		ToolName: memoryToolSaveFileFS,
+		Arguments: []byte(
+			`{"file_name":"MEMORY.md",` +
+				`"contents":"- Personal fallback\n",` +
+				`"overwrite":false}`,
+		),
+	})
+	require.NoError(t, err)
+	rsp, ok := result.CustomResult.(memorySaveFileResponse)
+	require.True(t, ok)
+	require.Equal(t, "Successfully saved: MEMORY.md", rsp.Message)
+
+	result, err = callback(ctx, &tool.BeforeToolArgs{
+		ToolName: memoryToolSaveFileFS,
+		Arguments: []byte(
+			`{"file_name":"CHAT_MEMORY.md",` +
+				`"contents":"- Chat fallback\n",` +
+				`"overwrite":false}`,
+		),
+	})
+	require.NoError(t, err)
+	rsp, ok = result.CustomResult.(memorySaveFileResponse)
+	require.True(t, ok)
+	require.Equal(t, "Successfully saved: CHAT_MEMORY.md", rsp.Message)
+
+	userPath, err := store.EnsureMemory(
+		context.Background(),
+		testMemoryAppName,
+		testMemoryUserStorageID,
+	)
+	require.NoError(t, err)
+	userRaw, err := os.ReadFile(userPath)
+	require.NoError(t, err)
+	require.Contains(t, string(userRaw), "- Personal fallback")
+	require.Contains(t, string(userRaw), "- Chat fallback")
+
+	sessionPath, err := store.EnsureMemory(
+		context.Background(),
+		testMemoryAppName,
+		testMemoryUserID,
+	)
+	require.NoError(t, err)
+	sessionRaw, err := os.ReadFile(sessionPath)
+	require.NoError(t, err)
+	require.NotContains(t, string(sessionRaw), "- Personal fallback")
+	require.NotContains(t, string(sessionRaw), "- Chat fallback")
 }
 
 func TestMemoryFileToolCallback_ReadFilePrefersScopedMemory(t *testing.T) {
@@ -622,6 +747,8 @@ func TestMemoryFileHelpers(t *testing.T) {
 
 	require.True(t, isMemoryFileAlias("./MEMORY.md"))
 	require.True(t, isMemoryFileAlias("././memory.md"))
+	require.True(t, isMemoryFileAlias("USER_MEMORY.md"))
+	require.True(t, isMemoryFileAlias("CHAT_MEMORY.md"))
 	require.False(t, isMemoryFileAlias("notes/MEMORY.md"))
 
 	next, err := nextMemorySaveContents("current", "replacement", true)

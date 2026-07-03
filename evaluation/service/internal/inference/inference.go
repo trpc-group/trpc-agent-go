@@ -20,9 +20,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	itoolmock "trpc.group/trpc-go/trpc-agent-go/evaluation/internal/toolmock"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -40,6 +43,7 @@ func Inference(
 	initialSession *evalset.SessionInput,
 	sessionID string,
 	runOptions []agent.RunOption,
+	opt ...Option,
 ) (*Result, error) {
 	if len(invocations) == 0 {
 		return nil, errors.New("invocations are empty")
@@ -47,11 +51,12 @@ func Inference(
 	if initialSession == nil {
 		return nil, errors.New("session input is nil")
 	}
+	opts := newOptions(opt...)
 	// Accumulate each invocation response.
 	responseInvocations := make([]*evalset.Invocation, 0, len(invocations))
 	executionTraces := make([]*trace.Trace, 0, len(invocations))
 	for _, invocation := range invocations {
-		responseInvocation, executionTrace, err := inferenceInvocation(ctx, runner, sessionID, initialSession, invocation, runOptions)
+		responseInvocation, executionTrace, err := inferenceInvocation(ctx, runner, sessionID, initialSession, invocation, runOptions, opts)
 		if err != nil && responseInvocation == nil && executionTrace == nil {
 			return &Result{
 				Invocations:     responseInvocations,
@@ -142,7 +147,7 @@ func InferenceWithConversationScenario(
 		}
 		responseInvocation, executionTrace, nextErr := inferenceInvocation(ctx, r, sessionID, initialSession, &evalset.Invocation{
 			UserContent: &userMessage,
-		}, runOptions)
+		}, runOptions, nil)
 		if nextErr != nil {
 			return nil, nextErr
 		}
@@ -163,12 +168,24 @@ func inferenceInvocation(
 	initialSession *evalset.SessionInput,
 	invocation *evalset.Invocation,
 	runOptions []agent.RunOption,
+	opts *options,
 ) (*evalset.Invocation, *trace.Trace, error) {
 	if invocation.UserContent == nil {
 		return nil, nil, fmt.Errorf("invocation user content is nil for eval case invocation %q", invocation.InvocationID)
 	}
 	mergedOpts := make([]agent.RunOption, 0, 1+len(runOptions))
 	mergedOpts = append(mergedOpts, runOptions...)
+	toolMockEntries, err := selectToolMockEntries(invocation, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(toolMockEntries) > 0 {
+		toolMockPlugin, err := buildToolMockPlugin(toolMockEntries, opts.toolMockRunner)
+		if err != nil {
+			return nil, nil, err
+		}
+		mergedOpts = append(mergedOpts, plugin.WithPlugins(toolMockPlugin))
+	}
 	if initialSession.State != nil {
 		mergedOpts = append(mergedOpts, agent.WithRuntimeState(initialSession.State))
 	}
@@ -220,6 +237,9 @@ func inferenceInvocation(
 			eventErr = errors.Join(eventErr, fmt.Errorf("event: %w", event.Error))
 			continue
 		}
+		if event.Response != nil && event.Response.IsPartial {
+			continue
+		}
 		if event.IsFinalResponse() {
 			continue
 		}
@@ -260,6 +280,31 @@ func inferenceInvocation(
 		return result, executionTrace, eventErr
 	}
 	return result, executionTrace, nil
+}
+
+func buildToolMockPlugin(entries []*toolmock.Tool, toolMockRunner runner.Runner) (plugin.Plugin, error) {
+	p, err := itoolmock.NewPlugin(entries, toolMockRunner)
+	if err != nil {
+		return nil, fmt.Errorf("build tool mock plugin: %w", err)
+	}
+	return p, nil
+}
+
+func selectToolMockEntries(invocation *evalset.Invocation, opts *options) ([]*toolmock.Tool, error) {
+	if opts == nil || opts.toolMockMode == "" {
+		return nil, nil
+	}
+	if invocation == nil || invocation.ToolMock == nil {
+		return nil, nil
+	}
+	switch opts.toolMockMode {
+	case ToolMockModeActual:
+		return invocation.ToolMock.Actual, nil
+	case ToolMockModeExpected:
+		return invocation.ToolMock.Expected, nil
+	default:
+		return nil, fmt.Errorf("invalid tool mock mode %q", opts.toolMockMode)
+	}
 }
 
 func eventFinalResponse(evt *event.Event) *model.Message {

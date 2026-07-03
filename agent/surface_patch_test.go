@@ -112,6 +112,7 @@ func TestSurfacePatch_Setters_ApplyAllSupportedSurfaces(t *testing.T) {
 	patch.SetTools([]tool.Tool{surfacePatchTestTool{name: "tool_one"}})
 	patch.AppendTools([]tool.Tool{surfacePatchTestTool{name: "tool_two"}})
 	patch.SetSkillRepository(repoValue)
+	patch.SetSuppressSubAgentTransfer()
 	opts := NewRunOptions(WithSurfacePatchForNode("root", patch))
 	stored, ok := surfacepatch.PatchForNode(opts.CustomAgentConfigs, "root")
 	require.True(t, ok)
@@ -136,6 +137,7 @@ func TestSurfacePatch_Setters_ApplyAllSupportedSurfaces(t *testing.T) {
 	gotRepo, ok := stored.SkillRepository()
 	require.True(t, ok)
 	require.NotNil(t, gotRepo)
+	require.True(t, stored.SuppressSubAgentTransfer())
 }
 
 func TestWithSurfacePatchForNode_IgnoresEmptyInputs(t *testing.T) {

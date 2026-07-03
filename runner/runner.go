@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -22,23 +23,30 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/appid"
 )
 
@@ -112,6 +120,15 @@ func WithArtifactService(service artifact.Service) Option {
 	}
 }
 
+// WithEvolutionService sets the evolution service that reviews
+// completed sessions and extracts reusable skills.
+// The caller owns the service lifecycle; Runner.Close does not close it.
+func WithEvolutionService(service evolution.Service) Option {
+	return func(opts *Options) {
+		opts.evolutionService = service
+	}
+}
+
 // WithAgent adds an agent to the runner registry for name-based lookup.
 func WithAgent(name string, ag agent.Agent) Option {
 	return func(opts *Options) {
@@ -166,6 +183,25 @@ func WithPersistInterruptedAssistant(enabled bool) Option {
 	}
 }
 
+// WithCandidateSelector enables candidate selection for runner-managed agent runs.
+//
+// Candidate selection is automatically bypassed for execution-trace and graph
+// checkpoint resume runs because candidate selection cannot safely replay those
+// execution modes.
+func WithCandidateSelector(
+	selector CandidateSelector,
+	opts ...candidateSelectOption,
+) Option {
+	return func(options *Options) {
+		options.candidateSelector = selector
+		for _, opt := range opts {
+			if opt != nil {
+				opt(&options.candidateSelectOptions)
+			}
+		}
+	}
+}
+
 // Runner is the interface for running agents.
 type Runner interface {
 	Run(
@@ -212,17 +248,43 @@ type SteerableRunner interface {
 	EnqueueUserMessage(requestID string, message model.Message) error
 }
 
+// QueuedUserMessagesCanceler is an optional capability detected by the
+// package-level CancelQueuedUserMessages helper. It is intentionally independent
+// from SteerableRunner so existing steerable runner implementations remain
+// compatible.
+type QueuedUserMessagesCanceler interface {
+	// CancelQueuedUserMessages discards user messages that are queued but not
+	// yet consumed for the active request.
+	CancelQueuedUserMessages(requestID string) bool
+}
+
+type queuedUserMessageEnqueuer interface {
+	EnqueueUserMessage(requestID string, message model.Message) error
+}
+
 // EnqueueUserMessage queues a user message on runners that support steering.
+// The helper detects the EnqueueUserMessage method directly, so custom runners
+// do not need to satisfy SteerableRunner by name.
 func EnqueueUserMessage(
 	r Runner,
 	requestID string,
 	message model.Message,
 ) error {
-	steerable, ok := r.(SteerableRunner)
+	steerable, ok := r.(queuedUserMessageEnqueuer)
 	if !ok {
 		return ErrQueuedUserMessageUnsupported
 	}
 	return steerable.EnqueueUserMessage(requestID, message)
+}
+
+// CancelQueuedUserMessages discards queued user messages on runners that
+// support steering.
+func CancelQueuedUserMessages(r Runner, requestID string) bool {
+	cancelable, ok := r.(QueuedUserMessagesCanceler)
+	if !ok {
+		return false
+	}
+	return cancelable.CancelQueuedUserMessages(requestID)
 }
 
 // RunStatus is a snapshot of a running invocation.
@@ -246,8 +308,11 @@ type runner struct {
 	memoryService                      memory.Service
 	ingestor                           session.Ingestor
 	artifactService                    artifact.Service
+	evolutionService                   evolution.Service
 	pluginManager                      agent.PluginManager
 	ralphLoop                          *RalphLoopConfig
+	candidateSelector                  CandidateSelector
+	candidateSelectOptions             candidateSelectOptions
 	awaitUserReplyRouting              bool
 	persistInterruptedAssistantDefault bool
 
@@ -273,10 +338,13 @@ type Options struct {
 	memoryService                      memory.Service
 	ingestor                           session.Ingestor
 	artifactService                    artifact.Service
+	evolutionService                   evolution.Service
 	agents                             map[string]agent.Agent
 	agentFactories                     map[string]AgentFactory
 	plugins                            []plugin.Plugin
 	ralphLoop                          *RalphLoopConfig
+	candidateSelector                  CandidateSelector
+	candidateSelectOptions             candidateSelectOptions
 	awaitUserReplyRouting              bool
 	persistInterruptedAssistantDefault bool
 }
@@ -286,6 +354,9 @@ func newOptions(opt ...Option) Options {
 	opts := Options{
 		agents:         make(map[string]agent.Agent),
 		agentFactories: make(map[string]AgentFactory),
+		candidateSelectOptions: candidateSelectOptions{
+			attempts: defaultCandidateAttempts,
+		},
 	}
 	for _, o := range opt {
 		o(&opts)
@@ -326,8 +397,11 @@ func NewRunner(appName string, ag agent.Agent, opts ...Option) Runner {
 		memoryService:                      options.memoryService,
 		ingestor:                           options.ingestor,
 		artifactService:                    options.artifactService,
+		evolutionService:                   options.evolutionService,
 		pluginManager:                      pm,
 		ralphLoop:                          options.ralphLoop,
+		candidateSelector:                  options.candidateSelector,
+		candidateSelectOptions:             options.candidateSelectOptions,
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
 		ownedSessionService:                ownedSessionService,
@@ -379,8 +453,11 @@ func NewRunnerWithAgentFactory(
 		memoryService:                      options.memoryService,
 		ingestor:                           options.ingestor,
 		artifactService:                    options.artifactService,
+		evolutionService:                   options.evolutionService,
 		pluginManager:                      pm,
 		ralphLoop:                          options.ralphLoop,
+		candidateSelector:                  options.candidateSelector,
+		candidateSelectOptions:             options.candidateSelectOptions,
 		awaitUserReplyRouting:              options.awaitUserReplyRouting,
 		persistInterruptedAssistantDefault: options.persistInterruptedAssistantDefault,
 		ownedSessionService:                ownedSessionService,
@@ -389,7 +466,8 @@ func NewRunnerWithAgentFactory(
 
 // Close closes the runner and cleans up owned resources.
 // It's safe to call Close multiple times.
-// Only resources created by this runner will be closed.
+// User-provided evolution services registered via WithEvolutionService are
+// borrowed and remain owned by the caller.
 func (r *runner) Close() error {
 	var closeErr error
 	r.closeOnce.Do(func() {
@@ -438,7 +516,7 @@ func (r *runner) Run(
 	sessionID string,
 	message model.Message,
 	runOpts ...agent.RunOption,
-) (<-chan *event.Event, error) {
+) (out <-chan *event.Event, err error) {
 	if message.Role == "" && model.HasPayload(message) {
 		log.WarnfContext(
 			ctx,
@@ -463,6 +541,15 @@ func (r *runner) Run(
 	if ro.AppName != "" {
 		effectiveAppName = ro.AppName
 	}
+	ctx, runSpan, runStarted := startRunnerRunOptionsLatencySpan(
+		ctx,
+		ro,
+		runnerLatencySpanRun,
+		runnerRunAttrs(effectiveAppName, userID, sessionID, message, ro)...,
+	)
+	defer func() {
+		finishRunnerLatencySpan(runSpan, runStarted, err)
+	}()
 
 	execCtx, execCancel := r.newExecutionContext(ctx, ro)
 
@@ -473,69 +560,94 @@ func (r *runner) Run(
 		SessionID: sessionID,
 	}
 
-	sess, err := r.getOrCreateSession(execCtx, sessionKey)
+	sessionCtx, sessionSpan, sessionStarted := startRunnerRunOptionsLatencySpan(
+		execCtx,
+		ro,
+		runnerLatencySpanGetSession,
+		runnerSessionAttrs(sessionKey, nil)...,
+	)
+	sessionCtx = summaryrestore.ContextWithFilterKey(
+		sessionCtx,
+		sessionRestoreFilterKey(effectiveAppName, ro),
+	)
+	sess, err := r.getOrCreateSession(sessionCtx, ro, sessionKey)
+	if sessionStarted && sess != nil {
+		sessionSpan.SetAttributes(runnerSessionAttrs(sessionKey, sess)...)
+	}
+	finishRunnerLatencySpan(sessionSpan, sessionStarted, err)
 	if err != nil {
 		execCancel()
 		return nil, err
 	}
 
-	ro, awaitUserReplyRootName, err := r.applyAwaitUserReplyRoute(
+	awaitCtx, awaitSpan, awaitStarted := startRunnerRunOptionsLatencySpan(
 		execCtx,
+		ro,
+		runnerLatencySpanAwaitRoute,
+	)
+	ro, awaitUserReplyRootName, awaitUserReplyLookupPath, err := r.applyAwaitUserReplyRoute(
+		awaitCtx,
 		sessionKey,
 		sess,
 		message,
 		ro,
 	)
+	finishRunnerLatencySpan(awaitSpan, awaitStarted, err)
 	if err != nil {
 		execCancel()
 		return nil, err
 	}
 
-	ag, err := r.selectAgent(execCtx, ro)
+	selectCtx, selectSpan, selectStarted := startRunnerRunOptionsLatencySpan(
+		execCtx,
+		ro,
+		runnerLatencySpanSelectAgent,
+	)
+	ag, err := r.selectAgent(selectCtx, ro)
+	if selectStarted && ag != nil {
+		selectSpan.SetAttributes(attribute.String("runner.agent", ag.Info().Name))
+	}
+	finishRunnerLatencySpan(selectSpan, selectStarted, err)
 	if err != nil {
 		execCancel()
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
-	invocationMessage, persistedCurrentTurnMessages, err := r.resolveCurrentTurnMessages(
+	resolveCtx, resolveSpan, resolveStarted := startRunnerRunOptionsLatencySpan(
 		execCtx,
+		ro,
+		runnerLatencySpanResolveMessages,
+	)
+	invocationMessage, persistedCurrentTurnMessages, err := r.resolveCurrentTurnMessages(
+		resolveCtx,
 		effectiveAppName,
 		userID,
 		sessionID,
 		message,
 		ro,
 	)
+	if resolveStarted {
+		resolveSpan.SetAttributes(
+			attribute.Int(
+				"runner.messages.persisted_current_turn",
+				len(persistedCurrentTurnMessages),
+			),
+		)
+	}
+	finishRunnerLatencySpan(resolveSpan, resolveStarted, err)
 	if err != nil {
 		execCancel()
 		return nil, err
 	}
 
-	eventFilterKey := effectiveAppName
-	if ro.EventFilterKey != "" {
-		eventFilterKey = ro.EventFilterKey
-	}
-
-	invocation := agent.NewInvocation(
-		agent.WithInvocationSession(sess),
-		agent.WithInvocationSessionService(r.sessionService),
-		agent.WithInvocationMessage(invocationMessage),
-		agent.WithInvocationAgent(ag),
-		agent.WithInvocationRunOptions(ro),
-		agent.WithInvocationStructuredOutput(ro.StructuredOutput),
-		agent.WithInvocationStructuredOutputType(ro.StructuredOutputType),
-		agent.WithInvocationMemoryService(r.memoryService),
-		agent.WithInvocationArtifactService(r.artifactService),
-		agent.WithInvocationEventFilterKey(eventFilterKey),
-		agent.WithInvocationPlugins(r.pluginManager),
-	)
-	if rootLookupName := r.selectedRootLookupName(
+	invocation := r.newRunInvocation(
+		sess,
+		invocationMessage,
+		ag,
 		ro,
+		effectiveAppName,
 		awaitUserReplyRootName,
-	); rootLookupName != "" {
-		agent.SetAwaitUserReplyRootLookupName(
-			invocation,
-			rootLookupName,
-		)
-	}
+		awaitUserReplyLookupPath,
+	)
 	currentTurnSession, err := sessionroute.ResolveCurrentTurnSession(
 		execCtx,
 		r.sessionService,
@@ -550,6 +662,12 @@ func (r *runner) Run(
 	queuedUserMessages := steer.NewQueue()
 	steer.Attach(invocation, queuedUserMessages)
 
+	registerCtx, registerSpan, registerStarted := startRunnerLatencySpan(
+		execCtx,
+		invocation,
+		runnerLatencySpanRegisterRun,
+		runnerInvocationAttrs(invocation)...,
+	)
 	handle, err := r.registerRun(
 		ro.RequestID,
 		RunStatus{
@@ -562,13 +680,21 @@ func (r *runner) Run(
 		execCancel,
 		queuedUserMessages,
 	)
+	finishRunnerLatencySpan(registerSpan, registerStarted, err)
+	_ = registerCtx
 	if err != nil {
 		execCancel()
 		return nil, err
 	}
 
-	if err := r.persistCurrentTurnMessages(
+	persistCtx, persistSpan, persistStarted := startRunnerLatencySpan(
 		execCtx,
+		invocation,
+		runnerLatencySpanPersistTurn,
+		runnerSessionAttrs(sessionKey, currentTurnSession)...,
+	)
+	if err := r.persistCurrentTurnMessages(
+		persistCtx,
 		currentTurnSession,
 		invocation,
 		ag,
@@ -576,11 +702,13 @@ func (r *runner) Run(
 		persistedCurrentTurnMessages,
 		ro,
 	); err != nil {
+		finishRunnerLatencySpan(persistSpan, persistStarted, err)
 		steer.Clear(invocation)
 		r.unregisterRun(ro.RequestID)
 		execCancel()
 		return nil, err
 	}
+	finishRunnerLatencySpan(persistSpan, persistStarted, nil)
 
 	// Ensure the invocation can be accessed by downstream components (e.g., tools)
 	// by embedding it into the context. This is necessary for tools like
@@ -591,40 +719,24 @@ func (r *runner) Run(
 	// Create flush channel and attach flusher before agent.Run to ensure cloned invocations inherit it.
 	flushChan := make(chan *flush.FlushRequest)
 	flush.Attach(execCtx, invocation, flushChan)
-	appender.Attach(invocation, func(ctx context.Context, e *event.Event) error {
-		if e == nil {
-			return nil
-		}
-		persistSession, ok := sessionroute.RouteEvent(
-			invocation,
-			e,
-		)
-		if !ok || persistSession == nil {
-			persistSession = sess
-		}
-		return r.sessionService.AppendEvent(ctx, persistSession, e)
-	})
+	r.attachSessionAppender(invocation, sess)
+	// Expose the live session pointer so that downstream components (such
+	// as AgentTool sub-agents) can restore it after the function-call
+	// processor clones the session for state-delta isolation.
+	livesession.Attach(invocation, sess)
 	barrier.Enable(invocation)
 
 	// Run the agent and get the event channel.
-	agentEventCh, err := agent.RunWithPlugins(execCtx, invocation, ag)
+	startCtx, startSpan, startStarted := startRunnerLatencySpan(
+		execCtx,
+		invocation,
+		runnerLatencySpanStartAgent,
+		runnerInvocationAttrs(invocation)...,
+	)
+	agentEventCh, err := agent.RunWithPlugins(startCtx, invocation, ag)
+	finishRunnerLatencySpan(startSpan, startStarted, err)
 	if err != nil {
-		// Attempt to persist the error event so the session reflects the failure.
-		errorEvent := event.NewErrorEvent(
-			invocation.InvocationID,
-			ag.Info().Name,
-			model.ErrorTypeRunError,
-			err.Error(),
-		)
-		// Populate content to ensure it is valid for persistence (and viewable by users).
-		ensureErrorEventContent(errorEvent)
-		errorEvent = r.applyEventPlugins(execCtx, invocation, errorEvent)
-
-		appendErr := r.sessionService.AppendEvent(execCtx, currentTurnSession, errorEvent)
-		if appendErr != nil {
-			log.Errorf("failed to append agent run error event: %v", appendErr)
-		}
-
+		r.persistAgentRunError(execCtx, currentTurnSession, invocation, ag, err)
 		steer.Clear(invocation)
 		r.unregisterRun(ro.RequestID)
 		execCancel()
@@ -641,6 +753,105 @@ func (r *runner) Run(
 		flushChan,
 		handle,
 	), nil
+}
+
+func (r *runner) newRunInvocation(
+	sess *session.Session,
+	message model.Message,
+	ag agent.Agent,
+	ro agent.RunOptions,
+	effectiveAppName string,
+	awaitUserReplyRootName string,
+	awaitUserReplyLookupPath string,
+) *agent.Invocation {
+	eventFilterKey := sessionRestoreFilterKey(effectiveAppName, ro)
+	invocationOpts := []agent.InvocationOptions{
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationSessionService(r.sessionService),
+		agent.WithInvocationMessage(message),
+		agent.WithInvocationAgent(ag),
+		agent.WithInvocationRunOptions(ro),
+		agent.WithInvocationStructuredOutput(ro.StructuredOutput),
+		agent.WithInvocationStructuredOutputType(ro.StructuredOutputType),
+		agent.WithInvocationMemoryService(r.memoryService),
+		agent.WithInvocationArtifactService(r.artifactService),
+		agent.WithInvocationEventFilterKey(eventFilterKey),
+		agent.WithInvocationPlugins(combineRunPlugins(r.pluginManager, ro.Plugins)),
+	}
+	if awaitUserReplyLookupPath != "" {
+		invocationOpts = append(
+			invocationOpts,
+			agent.WithInvocationBranch(awaitUserReplyLookupPath),
+		)
+	}
+	invocation := agent.NewInvocation(invocationOpts...)
+	if rootLookupName := r.selectedRootLookupName(
+		ro,
+		awaitUserReplyRootName,
+	); rootLookupName != "" {
+		agent.SetAwaitUserReplyRootLookupName(invocation, rootLookupName)
+	}
+	return invocation
+}
+
+func sessionRestoreFilterKey(effectiveAppName string, ro agent.RunOptions) string {
+	if ro.EventFilterKey != "" {
+		return ro.EventFilterKey
+	}
+	return effectiveAppName
+}
+
+func (r *runner) attachSessionAppender(
+	invocation *agent.Invocation,
+	defaultSession *session.Session,
+) {
+	appender.Attach(invocation, func(ctx context.Context, e *event.Event) error {
+		if e == nil {
+			return nil
+		}
+		persistSession, ok := sessionroute.RouteEvent(invocation, e)
+		if !ok || persistSession == nil {
+			persistSession = defaultSession
+		}
+		appendCtx, appendSpan, appendStarted := startRunnerLatencySpan(
+			ctx,
+			invocation,
+			runnerLatencySpanPersistEvent,
+			runnerEventAttrs(e)...,
+		)
+		err := r.sessionService.AppendEvent(appendCtx, persistSession, e)
+		finishRunnerLatencySpan(appendSpan, appendStarted, err)
+		return err
+	})
+}
+
+func (r *runner) persistAgentRunError(
+	ctx context.Context,
+	currentTurnSession *session.Session,
+	invocation *agent.Invocation,
+	ag agent.Agent,
+	runErr error,
+) {
+	persistCtx, cancel := sessionPersistenceContext(ctx)
+	defer cancel()
+
+	errorEvent := event.NewErrorEvent(
+		invocation.InvocationID,
+		ag.Info().Name,
+		model.ErrorTypeRunError,
+		runErr.Error(),
+	)
+	agent.InjectIntoEvent(invocation, errorEvent)
+	ensureErrorEventContent(errorEvent)
+	errorEvent = r.applyEventPlugins(persistCtx, invocation, errorEvent)
+	appendErr := r.sessionService.AppendEvent(
+		persistCtx,
+		currentTurnSession,
+		errorEvent,
+	)
+	if appendErr != nil {
+		log.Errorf("failed to append agent run error event: %v", appendErr)
+	}
 }
 
 func (r *runner) applyRunnerRunDefaults(ro *agent.RunOptions) {
@@ -780,6 +991,15 @@ func (r *runner) EnqueueUserMessage(
 	return nil
 }
 
+func (r *runner) CancelQueuedUserMessages(requestID string) bool {
+	handle := r.lookupRun(requestID)
+	if handle == nil || handle.queue == nil {
+		return false
+	}
+	handle.queue.Discard()
+	return true
+}
+
 func (r *runner) newExecutionContext(
 	ctx context.Context,
 	ro agent.RunOptions,
@@ -917,24 +1137,64 @@ func (r *runner) wrapSelectedAgent(ag agent.Agent) agent.Agent {
 	if ag == nil {
 		return nil
 	}
-	if r.ralphLoop == nil {
-		return ag
+	selected := ag
+	if r.ralphLoop != nil {
+		selected = wrapAgentWithRalphLoop(selected, *r.ralphLoop)
 	}
-	return wrapAgentWithRalphLoop(ag, *r.ralphLoop)
+	if r.candidateSelector != nil {
+		selected = wrapAgentWithCandidateSelector(
+			selected,
+			r.candidateSelector,
+			r.candidateSelectOptions,
+		)
+	}
+	return selected
 }
 
 // getOrCreateSession returns an existing session or creates a new one.
 func (r *runner) getOrCreateSession(
-	ctx context.Context, key session.Key,
+	ctx context.Context,
+	ro agent.RunOptions,
+	key session.Key,
 ) (*session.Session, error) {
-	sess, err := r.sessionService.GetSession(ctx, key)
+	readCtx, readSpan, readStarted := startRunnerRunOptionsLatencySpan(
+		ctx,
+		ro,
+		runnerLatencySpanSessionRead,
+		runnerSessionAttrs(key, nil)...,
+	)
+	sess, err := r.sessionService.GetSession(readCtx, key)
+	if readStarted {
+		readSpan.SetAttributes(
+			attribute.Bool(runnerAttrSessionHit, err == nil && sess != nil),
+		)
+		if sess != nil {
+			readSpan.SetAttributes(runnerSessionAttrs(key, sess)...)
+		}
+	}
+	finishRunnerLatencySpan(readSpan, readStarted, err)
 	if err != nil {
 		return nil, err
 	}
 	if sess != nil {
 		return sess, nil
 	}
-	return r.sessionService.CreateSession(ctx, key, session.StateMap{})
+	createCtx, createSpan, createStarted := startRunnerRunOptionsLatencySpan(
+		ctx,
+		ro,
+		runnerLatencySpanSessionCreate,
+		runnerSessionAttrs(key, nil)...,
+	)
+	sess, err = r.sessionService.CreateSession(
+		createCtx,
+		key,
+		session.StateMap{},
+	)
+	if createStarted && sess != nil {
+		createSpan.SetAttributes(runnerSessionAttrs(key, sess)...)
+	}
+	finishRunnerLatencySpan(createSpan, createStarted, err)
+	return sess, err
 }
 
 // eventLoopContext bundles all channels and state required by the event loop.
@@ -970,6 +1230,13 @@ type eventLoopContext struct {
 	// It is used to avoid echoing the same final assistant message again in the
 	// runner-completion event when graph final model responses are emitted.
 	emittedAssistantResponseIDs map[string]struct{}
+
+	processedEventCount int
+	partialEventCount   int
+	doneEventCount      int
+	errorEventCount     int
+	emittedEventCount   int
+	detailSpanCount     int
 }
 
 type interruptedAssistantAccumulator struct {
@@ -1019,9 +1286,44 @@ func (r *runner) processAgentEvents(
 
 // runEventLoop drives the main event processing loop for a single invocation.
 func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
+	ctx, span, started := startRunnerLatencySpan(
+		ctx,
+		loop.invocation,
+		runnerLatencySpanEventLoop,
+		runnerInvocationAttrs(loop.invocation)...,
+	)
 	defer func() {
+		if started {
+			span.SetAttributes(
+				attribute.Int(
+					"runner.events.processed_count",
+					loop.processedEventCount,
+				),
+				attribute.Int(
+					"runner.events.partial_count",
+					loop.partialEventCount,
+				),
+				attribute.Int(
+					"runner.events.done_count",
+					loop.doneEventCount,
+				),
+				attribute.Int(
+					"runner.events.error_count",
+					loop.errorEventCount,
+				),
+				attribute.Int(
+					"runner.events.emitted_count",
+					loop.emittedEventCount,
+				),
+				attribute.Int(
+					"runner.events.detail_span_count",
+					loop.detailSpanCount,
+				),
+			)
+		}
+		finishRunnerLatencySpan(span, started, nil)
 		if rr := recover(); rr != nil {
-			log.Errorf("panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
+			log.Errorf(log.PanicPrefix+" panic in runner event loop: %v\n%s", rr, string(debug.Stack()))
 		}
 		// Agent event stream completed.
 		steer.Close(loop.invocation)
@@ -1030,6 +1332,7 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 		// Disable further flush requests for this invocation.
 		flush.Clear(loop.invocation)
 		appender.Clear(loop.invocation)
+		livesession.Clear(loop.invocation)
 		steer.Clear(loop.invocation)
 		r.unregisterRun(loop.invocation.RunOptions.RequestID)
 		close(loop.processedEventCh)
@@ -1069,7 +1372,35 @@ func (r *runner) runEventLoop(ctx context.Context, loop *eventLoopContext) {
 }
 
 // processSingleAgentEvent handles a single agent event.
-func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopContext, agentEvent *event.Event) error {
+func (r *runner) processSingleAgentEvent(
+	ctx context.Context,
+	loop *eventLoopContext,
+	agentEvent *event.Event,
+) (err error) {
+	recordRunnerEventStats(loop, agentEvent)
+	traceDetails := runnerTraceEventDetails(agentEvent)
+	var span oteltrace.Span
+	started := false
+	if traceDetails {
+		loop.detailSpanCount++
+		ctx, span, started = startRunnerLatencySpan(
+			ctx,
+			loop.invocation,
+			runnerLatencySpanProcessEvent,
+			runnerEventAttrs(agentEvent)...,
+		)
+	}
+	defer func() {
+		if !started && err != nil {
+			_, span, started = startRunnerLatencySpan(
+				ctx,
+				loop.invocation,
+				runnerLatencySpanProcessEvent,
+				runnerEventAttrs(agentEvent)...,
+			)
+		}
+		finishRunnerLatencySpan(span, started, err)
+	}()
 	if agentEvent == nil {
 		// Preserve existing behavior: skip nil events without failing the loop.
 		log.Errorf("agentEvent is nil")
@@ -1083,10 +1414,16 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	if shouldPersistInterruptedAssistant(loop) {
 		r.recordInterruptedAssistantDelta(loop, agentEvent, persistSession)
 	}
-	agentEvent = r.applyEventPlugins(ctx, loop.invocation, agentEvent)
+	agentEvent = r.applyEventPluginsWithLatencySpan(
+		ctx,
+		loop.invocation,
+		agentEvent,
+		traceDetails,
+	)
 	if agentEvent == nil {
 		return nil
 	}
+	agentEvent = errorEventWithContent(agentEvent)
 	excludeRootCompletion := routedEvent && !sameSession(persistSession, loop.sess)
 	if excludeRootCompletion {
 		r.captureRoutedCompletionError(loop, agentEvent)
@@ -1150,11 +1487,52 @@ func (r *runner) processSingleAgentEvent(ctx context.Context, loop *eventLoopCon
 	}
 
 	// Emit event to output channel.
-	if err := event.EmitEvent(ctx, loop.processedEventCh, agentEvent); err != nil {
+	emitCtx := ctx
+	var emitSpan oteltrace.Span
+	emitStarted := false
+	if traceDetails {
+		emitCtx, emitSpan, emitStarted = startRunnerLatencySpan(
+			ctx,
+			loop.invocation,
+			runnerLatencySpanEmitEvent,
+			runnerEventAttrs(agentEvent)...,
+		)
+	}
+	if err := event.EmitEvent(emitCtx, loop.processedEventCh, agentEvent); err != nil {
+		if !emitStarted {
+			_, emitSpan, emitStarted = startRunnerLatencySpan(
+				ctx,
+				loop.invocation,
+				runnerLatencySpanEmitEvent,
+				runnerEventAttrs(agentEvent)...,
+			)
+		}
+		finishRunnerLatencySpan(emitSpan, emitStarted, err)
 		return fmt.Errorf("emit event to output channel: %w", err)
 	}
+	loop.emittedEventCount++
+	finishRunnerLatencySpan(emitSpan, emitStarted, nil)
 
 	return nil
+}
+
+func recordRunnerEventStats(loop *eventLoopContext, evt *event.Event) {
+	if loop == nil {
+		return
+	}
+	loop.processedEventCount++
+	if evt == nil {
+		return
+	}
+	if evt.IsPartial {
+		loop.partialEventCount++
+	}
+	if evt.Done {
+		loop.doneEventCount++
+	}
+	if evt.Response != nil && evt.Response.Error != nil {
+		loop.errorEventCount++
+	}
 }
 
 func (r *runner) recordPersistedAssistantEvent(
@@ -1288,6 +1666,36 @@ func (r *runner) recordRunEvent(loop *eventLoopContext) {
 }
 
 func (r *runner) applyEventPlugins(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	e *event.Event,
+) *event.Event {
+	return r.applyEventPluginsWithLatencySpan(ctx, invocation, e, true)
+}
+
+func (r *runner) applyEventPluginsWithLatencySpan(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	e *event.Event,
+	traceDetails bool,
+) *event.Event {
+	if !traceDetails {
+		return r.applyEventPluginsNoSpan(ctx, invocation, e)
+	}
+	ctx, span, started := startRunnerLatencySpan(
+		ctx,
+		invocation,
+		runnerLatencySpanEventPlugins,
+		runnerEventAttrs(e)...,
+	)
+	var err error
+	defer func() {
+		finishRunnerLatencySpan(span, started, err)
+	}()
+	return r.applyEventPluginsNoSpan(ctx, invocation, e)
+}
+
+func (r *runner) applyEventPluginsNoSpan(
 	ctx context.Context,
 	invocation *agent.Invocation,
 	e *event.Event,
@@ -1726,9 +2134,15 @@ func injectInterruptedAssistantEventIdentity(
 // safePersistInterruptedAssistant guards cancellation-time partial persistence
 // against panics from session services.
 func (r *runner) safePersistInterruptedAssistant(ctx context.Context, loop *eventLoopContext) {
+	ctx, span, started := startRunnerLatencySpan(
+		ctx,
+		loop.invocation,
+		runnerLatencySpanInterrupted,
+	)
 	defer func() {
+		finishRunnerLatencySpan(span, started, nil)
 		if rr := recover(); rr != nil {
-			log.Errorf("panic persisting interrupted assistant: %v\n%s", rr, string(debug.Stack()))
+			log.Errorf(log.PanicPrefix+" panic persisting interrupted assistant: %v\n%s", rr, string(debug.Stack()))
 		}
 	}()
 	r.persistInterruptedAssistant(ctx, loop)
@@ -1957,9 +2371,15 @@ func sessionPersistenceContext(ctx context.Context) (context.Context, context.Ca
 
 // safeEmitRunnerCompletion guards emitRunnerCompletion against panics from session services.
 func (r *runner) safeEmitRunnerCompletion(ctx context.Context, loop *eventLoopContext) {
+	ctx, span, started := startRunnerLatencySpan(
+		ctx,
+		loop.invocation,
+		runnerLatencySpanCompletion,
+	)
 	defer func() {
+		finishRunnerLatencySpan(span, started, nil)
 		if rr := recover(); rr != nil {
-			log.Errorf("panic emitting runner completion: %v\n%s", rr, string(debug.Stack()))
+			log.Errorf(log.PanicPrefix+" panic emitting runner completion: %v\n%s", rr, string(debug.Stack()))
 		}
 	}()
 	r.emitRunnerCompletion(ctx, loop)
@@ -1967,7 +2387,19 @@ func (r *runner) safeEmitRunnerCompletion(ctx context.Context, loop *eventLoopCo
 
 // handleFlushRequest drains buffered agent events when a flush request arrives and closes the request's ACK channel
 // once all events currently buffered in the agent event channel have been processed.
-func (r *runner) handleFlushRequest(ctx context.Context, loop *eventLoopContext, req *flush.FlushRequest) error {
+func (r *runner) handleFlushRequest(
+	ctx context.Context,
+	loop *eventLoopContext,
+	req *flush.FlushRequest,
+) (err error) {
+	ctx, span, started := startRunnerLatencySpan(
+		ctx,
+		loop.invocation,
+		runnerLatencySpanFlush,
+	)
+	defer func() {
+		finishRunnerLatencySpan(span, started, err)
+	}()
 	defer close(req.ACK)
 	for {
 		select {
@@ -1996,7 +2428,7 @@ func (r *runner) handleEventPersistence(
 	agentEvent *event.Event,
 ) bool {
 	// Ensure error events have content so they are valid for persistence.
-	ensureErrorEventContent(agentEvent)
+	agentEvent = errorEventWithContent(agentEvent)
 
 	// Append event to session if it's complete (not partial).
 	if !r.shouldPersistEvent(agentEvent) {
@@ -2017,13 +2449,25 @@ func (r *runner) handleEventPersistence(
 		persistEvent = &eventCopy
 	}
 
-	if err := r.sessionService.AppendEvent(
+	appendCtx, appendSpan, appendStarted := startRunnerLatencySpan(
 		ctx,
+		invocation,
+		runnerLatencySpanPersistEvent,
+		runnerEventAttrs(persistEvent)...,
+	)
+	if err := r.sessionService.AppendEvent(
+		appendCtx,
 		persistSession,
 		persistEvent,
 	); err != nil {
+		finishRunnerLatencySpan(appendSpan, appendStarted, err)
 		log.Errorf("Failed to append event to session: %v", err)
 		return false
+	}
+	finishRunnerLatencySpan(appendSpan, appendStarted, nil)
+
+	if shouldAppendSummaryForkResponse(agentEvent) {
+		summaryfork.AppendResponse(invocation, agentEvent.Response)
 	}
 
 	// Skip user messages, tool call events, and invalid content.
@@ -2058,16 +2502,42 @@ func (r *runner) handleEventPersistence(
 
 	// Use EnqueueSummaryJob for true asynchronous processing.
 	// Prefer filter-specific summarization to avoid scanning all filters.
+	summaryCtx, summarySpan, summaryStarted := startRunnerLatencySpan(
+		ctx,
+		invocation,
+		runnerLatencySpanEnqueueSummary,
+		runnerEventAttrs(agentEvent)...,
+	)
+	if parentRequest, ok := summaryfork.Request(invocation); ok {
+		summaryCtx = summary.ContextWithCacheSafeForkRequest(
+			summaryCtx,
+			parentRequest,
+		)
+	}
 	if err := r.sessionService.EnqueueSummaryJob(
-		ctx, persistSession, agentEvent.FilterKey, false,
+		summaryCtx, persistSession, agentEvent.FilterKey, false,
 	); err != nil {
+		finishRunnerLatencySpan(summarySpan, summaryStarted, err)
 		log.DebugfContext(ctx, "Auto summarize after append skipped or failed: %v.", err)
+	} else {
+		finishRunnerLatencySpan(summarySpan, summaryStarted, nil)
 	}
 	// Do not enqueue full-session summary here. The worker will cascade
 	// a full-session summarization after a branch update when appropriate.
 
 	// Note: Auto memory extraction is triggered once at runner completion,
 	// not here, to avoid redundant extraction calls.
+	return true
+}
+
+func shouldAppendSummaryForkResponse(agentEvent *event.Event) bool {
+	if agentEvent == nil ||
+		agentEvent.Response == nil ||
+		agentEvent.Response.IsPartial ||
+		agentEvent.IsUserMessage() ||
+		!agentEvent.IsValidContent() {
+		return false
+	}
 	return true
 }
 
@@ -2401,6 +2871,10 @@ func (r *runner) emitRunnerCompletion(ctx context.Context, loop *eventLoopContex
 
 	// Enqueue auto memory extraction job if memory service is configured.
 	r.enqueueAutoMemoryJob(ctx, loop.sess)
+
+	// Enqueue evolution learning job if the evolution service is configured.
+	r.enqueueEvolutionLearningJob(ctx, loop.sess)
+
 	// Enqueue external session ingestion if configured.
 	r.enqueueSessionIngest(ctx, loop.sess, loop.invocation)
 }
@@ -2481,10 +2955,7 @@ func (r *runner) propagateGraphCompletion(
 		runnerCompletionEvent.Response != nil &&
 		len(runnerCompletionEvent.Response.Choices) == 0 &&
 		len(finalChoices) > 0 {
-		// Keep only content to avoid carrying tool deltas etc.
-		// Use JSON marshal/unmarshal to deep-copy minimal fields safely.
-		b, _ := json.Marshal(finalChoices)
-		_ = json.Unmarshal(b, &runnerCompletionEvent.Response.Choices)
+		runnerCompletionEvent.Response.Choices = cloneChoices(finalChoices)
 	}
 }
 
@@ -2681,9 +3152,190 @@ func cloneChoices(choices []model.Choice) []model.Choice {
 	if len(choices) == 0 {
 		return nil
 	}
-	b, _ := json.Marshal(choices)
-	var cloned []model.Choice
-	_ = json.Unmarshal(b, &cloned)
+	cloned := make([]model.Choice, len(choices))
+	for i, choice := range choices {
+		cloned[i] = choice
+		cloned[i].Message = cloneMessage(choice.Message)
+		cloned[i].Delta = cloneMessage(choice.Delta)
+		if choice.FinishReason != nil {
+			reason := *choice.FinishReason
+			cloned[i].FinishReason = &reason
+		}
+		cloned[i].Logprobs = cloneChoiceLogprobs(choice.Logprobs)
+	}
+	return cloned
+}
+
+func cloneMessage(message model.Message) model.Message {
+	cloned := message
+	cloned.ContentParts = cloneContentParts(message.ContentParts)
+	cloned.ToolCalls = cloneToolCalls(message.ToolCalls)
+	return cloned
+}
+
+func cloneContentParts(parts []model.ContentPart) []model.ContentPart {
+	if parts == nil {
+		return nil
+	}
+	cloned := make([]model.ContentPart, len(parts))
+	for i, part := range parts {
+		cloned[i] = part
+		if part.Text != nil {
+			text := *part.Text
+			cloned[i].Text = &text
+		}
+		if part.Image != nil {
+			image := *part.Image
+			image.Data = append([]byte(nil), part.Image.Data...)
+			cloned[i].Image = &image
+		}
+		if part.Audio != nil {
+			audio := *part.Audio
+			audio.Data = append([]byte(nil), part.Audio.Data...)
+			cloned[i].Audio = &audio
+		}
+		if part.File != nil {
+			file := *part.File
+			file.Data = append([]byte(nil), part.File.Data...)
+			cloned[i].File = &file
+		}
+	}
+	return cloned
+}
+
+func cloneToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
+	if toolCalls == nil {
+		return nil
+	}
+	cloned := make([]model.ToolCall, len(toolCalls))
+	for i, toolCall := range toolCalls {
+		cloned[i] = toolCall
+		cloned[i].Function.Arguments = append([]byte(nil), toolCall.Function.Arguments...)
+		if toolCall.Index != nil {
+			index := *toolCall.Index
+			cloned[i].Index = &index
+		}
+		cloned[i].ExtraFields = cloneAnyMap(toolCall.ExtraFields)
+	}
+	return cloned
+}
+
+func cloneAnyMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(values))
+	for key, value := range values {
+		cloned[key] = cloneAnyValue(value)
+	}
+	return cloned
+}
+
+func cloneAnySlice(values []any) []any {
+	if values == nil {
+		return nil
+	}
+	cloned := make([]any, len(values))
+	for i, value := range values {
+		cloned[i] = cloneAnyValue(value)
+	}
+	return cloned
+}
+
+func cloneAnyValue(value any) any {
+	switch typed := value.(type) {
+	case json.RawMessage:
+		return append(json.RawMessage(nil), typed...)
+	case []byte:
+		return append([]byte(nil), typed...)
+	case map[string]any:
+		return cloneAnyMap(typed)
+	case []any:
+		return cloneAnySlice(typed)
+	default:
+		if cloned, ok := cloneReflectContainer(reflect.ValueOf(value)); ok {
+			return cloned.Interface()
+		}
+		return typed
+	}
+}
+
+func cloneReflectContainer(value reflect.Value) (reflect.Value, bool) {
+	if !value.IsValid() {
+		return value, false
+	}
+	switch value.Kind() {
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type()), true
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			mapValue := iter.Value()
+			if clonedValue, ok := cloneReflectContainer(mapValue); ok &&
+				clonedValue.Type().AssignableTo(value.Type().Elem()) {
+				mapValue = clonedValue
+			}
+			cloned.SetMapIndex(iter.Key(), mapValue)
+		}
+		return cloned, true
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type()), true
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			item := value.Index(i)
+			if clonedItem, ok := cloneReflectContainer(item); ok &&
+				clonedItem.Type().AssignableTo(value.Type().Elem()) {
+				item = clonedItem
+			}
+			cloned.Index(i).Set(item)
+		}
+		return cloned, true
+	case reflect.Array:
+		cloned := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.Len(); i++ {
+			item := value.Index(i)
+			if clonedItem, ok := cloneReflectContainer(item); ok &&
+				clonedItem.Type().AssignableTo(value.Type().Elem()) {
+				item = clonedItem
+			}
+			cloned.Index(i).Set(item)
+		}
+		return cloned, true
+	default:
+		return value, false
+	}
+}
+
+func cloneChoiceLogprobs(logprobs *model.Logprobs) *model.Logprobs {
+	if logprobs == nil {
+		return nil
+	}
+	cloned := &model.Logprobs{}
+	if logprobs.Content == nil {
+		return cloned
+	}
+	cloned.Content = make([]model.TokenLogprob, len(logprobs.Content))
+	for i, token := range logprobs.Content {
+		cloned.Content[i] = model.TokenLogprob{
+			Token:   token.Token,
+			Logprob: token.Logprob,
+			Bytes:   append([]int(nil), token.Bytes...),
+		}
+		if token.TopLogprobs != nil {
+			cloned.Content[i].TopLogprobs = make([]model.TopLogprob, len(token.TopLogprobs))
+			for j, top := range token.TopLogprobs {
+				cloned.Content[i].TopLogprobs[j] = model.TopLogprob{
+					Token:   top.Token,
+					Logprob: top.Logprob,
+					Bytes:   append([]int(nil), top.Bytes...),
+				}
+			}
+		}
+	}
 	return cloned
 }
 
@@ -3150,7 +3802,44 @@ func normalizeQueuedUserMessage(
 	if message.Role != model.RoleUser || !model.HasPayload(message) {
 		return model.Message{}, ErrInvalidQueuedUserMessage
 	}
+	if !queuedUserMessageContentPartsSupported(message.ContentParts) {
+		return model.Message{}, ErrInvalidQueuedUserMessage
+	}
 	return message, nil
+}
+
+func queuedUserMessageContentPartsSupported(parts []model.ContentPart) bool {
+	for _, part := range parts {
+		switch part.Type {
+		case model.ContentTypeText:
+			if part.Text == nil {
+				return false
+			}
+		case model.ContentTypeImage:
+			if part.Image == nil {
+				return false
+			}
+			if strings.TrimSpace(part.Image.URL) == "" && len(part.Image.Data) == 0 {
+				return false
+			}
+		case model.ContentTypeAudio:
+			if part.Audio == nil || len(part.Audio.Data) == 0 {
+				return false
+			}
+		case model.ContentTypeFile:
+			if part.File == nil {
+				return false
+			}
+			if strings.TrimSpace(part.File.FileID) == "" &&
+				strings.TrimSpace(part.File.URL) == "" &&
+				len(part.File.Data) == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ensureErrorEventContent ensures that error events have valid content.
@@ -3187,6 +3876,22 @@ func ensureErrorEventContent(e *event.Event) {
 	}
 }
 
+func errorEventWithContent(e *event.Event) *event.Event {
+	if e == nil || e.Response == nil || e.Response.Error == nil {
+		return e
+	}
+	if e.IsValidContent() {
+		return e
+	}
+
+	// Preserve event identity but repair content on an owned response copy.
+	eventCopy := *e
+	eventCopy.Response = e.Response.Clone()
+	ensureErrorEventContent(&eventCopy)
+
+	return &eventCopy
+}
+
 // RunWithMessages is a convenience helper that lets callers pass a full
 // conversation history ([]model.Message) directly. The messages seed the LLM
 // request while the runner continues to merge in newer session events. It
@@ -3221,6 +3926,28 @@ func (r *runner) enqueueAutoMemoryJob(ctx context.Context, sess *session.Session
 	}
 	if err := r.memoryService.EnqueueAutoMemoryJob(ctx, sess); err != nil {
 		log.DebugfContext(ctx, "Auto memory extraction skipped or failed: %v", err)
+		return
+	}
+}
+
+// enqueueEvolutionLearningJob triggers evolution extraction if the evolution
+// service is configured. The runner-driven hook submits the session
+// without an Outcome (online services have no evaluator); benchmark
+// runners and RLHF pipelines that DO have an evaluator should attach
+// the service themselves and call EnqueueLearningJob with a populated
+// Outcome instead of relying on this hook.
+//
+// NOTE: We use context.WithoutCancel because this is called from the
+// runner completion handler (defer), at which point the request context
+// may already be cancelled (e.g. WeCom one-shot response mode). The
+// evolution worker manages its own timeouts internally.
+func (r *runner) enqueueEvolutionLearningJob(ctx context.Context, sess *session.Session) {
+	if r.evolutionService == nil || sess == nil {
+		return
+	}
+	enqueueCtx := context.WithoutCancel(ctx)
+	if err := r.evolutionService.EnqueueLearningJob(enqueueCtx, evolution.LearningJob{Session: sess}); err != nil {
+		log.DebugfContext(ctx, "Evolution learning job skipped or failed: %v", err)
 		return
 	}
 }

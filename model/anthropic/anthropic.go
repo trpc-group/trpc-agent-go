@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/internal/modeltailoring"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -266,7 +267,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in anthropic.Model",
 				err,
 			)
-			request.Messages = tailored
+			modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
 			return
 		}
 		log.WarnContext(
@@ -277,7 +278,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	request.Messages = tailored
+	modeltailoring.ApplyResult(ctx, "anthropic.Model", request, tailored)
 }
 
 // buildChatRequest builds the chat request for the Anthropic API.
@@ -716,6 +717,11 @@ func (a *streamingMessageAccumulator) Accumulate(event anthropic.MessageStreamEv
 		if err != nil {
 			return fmt.Errorf("received event of type %s but %w", event.Type, err)
 		}
+		// Guard against invalid/partial JSON in tool-use Input fields.
+		// Certain Anthropic-compatible APIs send content_block_stop before
+		// all input_json_delta events, leaving accumulated Input as
+		// incomplete JSON.
+		ensureValidToolInput(block)
 		if err := refreshContentBlockRawJSON(block); err != nil {
 			return fmt.Errorf("error converting content block to JSON: %w", err)
 		}
@@ -788,6 +794,28 @@ func refreshContentBlockRawJSON(block *anthropic.ContentBlockUnion) error {
 		return err
 	}
 	return block.UnmarshalJSON(raw)
+}
+
+// ensureValidToolInput resets a ContentBlockUnion's Input to an empty JSON
+// object if it is empty, nil, or contains invalid/partial JSON. This handles
+// three cases with Anthropic-compatible proxies:
+//  1. "input": null decodes to nil bytes — normalize to {} so the tool call
+//     arguments stay valid JSON.
+//  2. "input":"null" (the literal JSON null) — json.Valid returns true but
+//     null is not a valid tool arguments object, so normalize to {}.
+//  3. The stream ends before all input_json_delta events are received, leaving
+//     accumulated Input as incomplete JSON.
+func ensureValidToolInput(cb *anthropic.ContentBlockUnion) {
+	if cb == nil {
+		return
+	}
+	if cb.Type != "tool_use" {
+		return
+	}
+	input := bytes.TrimSpace(cb.Input)
+	if len(input) == 0 || string(input) == "null" || !json.Valid(input) {
+		cb.Input = json.RawMessage("{}")
+	}
 }
 
 // buildStreamingPartialResponse builds a partial streaming response for a chunk.

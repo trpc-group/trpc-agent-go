@@ -103,6 +103,23 @@ module_readable_name() {
 	printf '%s\n' "${rel_dir}"
 }
 
+module_path_from_go_mod() {
+	local mod_file="$1"
+	local directive module_path _
+	while read -r directive module_path _; do
+		if [[ "${directive}" == "module" ]]; then
+			if [[ -z "${module_path}" ]]; then
+				echo "empty module path in ${mod_file}" >&2
+				return 1
+			fi
+			printf '%s\n' "${module_path}"
+			return 0
+		fi
+	done <"${mod_file}"
+	echo "unable to read module path from ${mod_file}" >&2
+	return 1
+}
+
 is_external_importable_path() {
 	local import_path="$1"
 	[[ "${import_path}" != */internal ]] && [[ "${import_path}" != */internal/* ]]
@@ -149,11 +166,13 @@ write_consumer_test() {
 
 add_repository_replaces() {
 	local mod_file mod_dir module_path
+	local -a replace_args=()
 	for mod_file in "${repository_modules[@]}"; do
 		mod_dir="$(cd "$(dirname "${mod_file}")" && pwd)"
-		module_path="$(cd "${mod_dir}" && go list -m -f '{{.Path}}')"
-		go mod edit -replace "${module_path}=${mod_dir}"
+		module_path="$(module_path_from_go_mod "${mod_file}")"
+		replace_args+=("-replace" "${module_path}=${mod_dir}")
 	done
+	go mod edit "${replace_args[@]}"
 }
 
 check_module_as_external_consumer() {
@@ -161,7 +180,7 @@ check_module_as_external_consumer() {
 	local mod_dir module_path readable package_file consumer_dir status
 	mod_dir="$(cd "$(dirname "${mod_file}")" && pwd)"
 	readable="$(module_readable_name "${mod_file}")"
-	module_path="$(cd "${mod_dir}" && go list -m -f '{{.Path}}')"
+	module_path="$(module_path_from_go_mod "${mod_file}")"
 
 	echo "::group::External consumer: ${readable}"
 	echo "module path: ${module_path}"

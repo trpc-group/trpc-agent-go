@@ -152,6 +152,29 @@ runnerInstance := runner.NewRunner(
 defer runnerInstance.Close()
 ```
 
+## Per-run Plugins
+
+If a plugin should affect only the current request instead of the whole Runner,
+inject it into `Runner.Run(...)` through `plugin.WithPlugins(...)`:
+
+```go
+events, err := runnerInstance.Run(
+	ctx,
+	userID,
+	sessionID,
+	message,
+	plugin.WithPlugins(&RequestScopedPlugin{}),
+)
+```
+
+`plugin.WithPlugins(...)` is a RunOption and only affects this run. It reuses
+the same `plugin.Plugin` interface and hook points, which makes it suitable for
+request-scoped policies, test doubles, and temporary audit tagging. Plugin names
+within the same `plugin.WithPlugins(...)` call still must be unique; if the
+configuration is invalid, the framework logs the error and skips that set of
+run-level plugins. Runner does not call `Close()` on these plugins when the
+single run ends. If a plugin owns resources, the caller must manage them.
+
 ## Tool Identity Injection
 
 Plugins can add pre-processing or post-processing to every tool call through
@@ -263,7 +286,15 @@ if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok {
 
 ### Order and early-exit (short-circuit)
 
-Plugins run **in the order they are registered**.
+Plugins run by scope and registration order:
+
+1. Runner-level plugins registered through `runner.WithPlugins(...)` run first.
+2. Per-run plugins injected through `plugin.WithPlugins(...)` run next; multiple
+   RunOptions run in the order passed to `Runner.Run(...)`.
+3. Agent callbacks run last, if any.
+
+Multiple plugins in the same `WithPlugins(...)` call still run in argument
+order.
 
 Some “before” hooks can short-circuit default behavior:
 
@@ -314,9 +345,15 @@ stores shared state, make it safe for concurrent use (for example, by using
 
 ### Close (resource cleanup)
 
-If a plugin implements `plugin.Closer`, Runner calls `Close()` when you call
-`Runner.Close()`. Plugins are closed in **reverse registration order**, so
-later plugins can depend on earlier ones during shutdown.
+If a plugin registered through `runner.WithPlugins(...)` implements
+`plugin.Closer`, Runner calls `Close()` when you call `Runner.Close()`.
+Plugins are closed in **reverse registration order**, so later plugins can
+depend on earlier ones during shutdown.
+
+Per-run plugins injected through `plugin.WithPlugins(...)` are not closed by
+Runner when the run ends. They are usually objects temporarily provided by the
+caller for this run; if they own resources that must be released, close them at
+the appropriate time in the caller.
 
 ## Hook Points (What you can intercept)
 
@@ -538,6 +575,59 @@ func (p *ToolArgsPlugin) Register(reg *plugin.Registry) {
 
 `plugin.NewLogging()` logs high-level start/end markers for agent/model/tool
 operations. It is useful for debugging and performance profiling.
+
+### DebugLog
+
+`debuglog.New(opts...)` writes single-line JSON through the framework debug
+logger for temporary diagnosis of model requests/responses and tool
+arguments/results.
+
+Runner event logging and model partial response logging are disabled by
+default. Enable them with `debuglog.WithEventEnabled(true)` and
+`debuglog.WithModelPartialResponseEnabled(true)`.
+
+A typical runner-level setup looks like this:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/plugin/debuglog"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+)
+
+runnerInstance := runner.NewRunner(
+	"my-app",
+	agentInstance,
+	runner.WithPlugins(debuglog.New()),
+)
+```
+
+You can also enable DebugLog for a single run:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/plugin"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/debuglog"
+)
+
+events, err := runnerInstance.Run(
+	ctx,
+	userID,
+	sessionID,
+	message,
+	plugin.WithPlugins(
+		debuglog.New(
+			debuglog.WithEventEnabled(true),
+			debuglog.WithModelPartialResponseEnabled(true),
+		),
+	),
+)
+```
+
+The output is one JSON debug message per line, for example:
+
+```json
+{"time":"2026-06-16T10:20:30.123456789+08:00","sequence":7,"plugin":"debug_log","phase":"before_tool","tool_name":"calculator","tool_call_id":"call-1","payload":{"arguments":{"operation":"add","a":1,"b":2},"arguments_bytes":33}}
+```
 
 ### GlobalInstruction
 
@@ -960,10 +1050,11 @@ The example includes verified scenarios for:
 - A clearly unsafe request that is blocked
 - A defensive analysis request that is allowed
 
-The repository currently includes Logging, GlobalInstruction, ToolCallID,
-MessageMerger, ErrorMessage, and Guardrail as built-in plugins. Tool Approval,
-Prompt Injection, and Unsafe Intent are currently built-in capabilities under
-the Guardrail plugin. Additional plugins can be implemented as custom plugins.
+The repository currently includes Logging, DebugLog, GlobalInstruction,
+ToolCallID, MessageMerger, ErrorMessage, and Guardrail as built-in plugins.
+Tool Approval, Prompt Injection, and Unsafe Intent are currently built-in
+capabilities under the Guardrail plugin. Additional plugins can be implemented
+as custom plugins.
 
 ## Writing Your Own Plugin
 

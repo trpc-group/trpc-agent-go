@@ -622,6 +622,44 @@ if ev.Response != nil && ev.Object == model.ObjectTypeToolResponse {
 使用 `ResponseModeFinalOnly`。如果还希望在流式 UI 中隐藏子 Agent 的正文，
 再单独组合 `InnerTextModeExclude`。
 
+#### 钉住模型与结构化输出
+
+默认情况下，子 Agent 会继承调用方从 `RunOptions` 带下来的运行时覆盖项。
+这只在调用方于 `runner.Run` 时传入选项时才会产生影响（例如 AGUI 服务端转发
+终端用户选择的模型或输出格式）。如果 `RunOptions` 中没有设置运行时覆盖项，
+子 Agent 自然使用自己的静态配置。
+
+对固定的 `AgentTool` 子 Agent，可以在 AgentTool 边界清掉指定的继承覆盖项，
+让子 Agent 自己的配置重新生效：
+
+```go
+agenttool.NewTool(subAgent,
+    agenttool.WithPinModel(true),
+    agenttool.WithPinStructuredOutput(true),
+)
+```
+
+这几个选项分别对应不同的继承字段：
+
+- `WithPinModel(true)`：清掉 `RunOptions.ModelName`、`RunOptions.Model` 和
+  `RunOptions.ModelSelector`，让子 Agent 自己的 `llmagent.WithModel(...)`
+  或模型选择器生效。
+- `WithPinStructuredOutput(true)`：清掉 `RunOptions.StructuredOutput` 和
+  `RunOptions.StructuredOutputType`，让子 Agent 自己的
+  `llmagent.WithStructuredOutputJSON(...)` 或
+  `llmagent.WithStructuredOutputJSONSchema(...)` 生效。
+
+#### 关联子 Agent 事件到父级工具调用
+
+通过 `AgentTool` 调用的子 Agent 发出的事件会带有 `ParentMetadata` 字段，其
+`TriggerID` 即父级的 `toolCallId`。AG-UI 调用方可以用它作为 join key，把子
+Agent 的事件挂回到具体那一次 `TOOL_CALL_START`。这在模型于一轮里对同一子
+Agent 发起多个并行 AgentTool 调用时尤为重要——所有派生 invocation 共享同一
+`ParentInvocationID`，只有 `ParentMetadata.TriggerID` 才能区分。具体线上格式
+和字段语义见 AG-UI chat 文档的
+[事件来源元数据](agui/chat.md#事件来源元数据) 章节，以及 Event 文档的
+[ParentMetadata 字段](event.md#requestidparentinvocationidinvocationid三者的关系与使用场景)。
+
 ### Agent 委托 (Agent Transfer)
 
 Agent 委托通过 `transfer_to_agent` 工具实现 Agent 间的任务委托，允许主 Agent 根据任务类型自动选择合适的 SubAgent。
@@ -864,6 +902,87 @@ for evt := range events {
 
 如果你不是用 `LLMAgent`，而是自己实现 `agent.Agent`，请看 `runner`
 文档里的底层 API：`agent.MarkAwaitingUserReply(...)`。
+
+#### 关联 Transfer 目标事件到触发的工具调用
+
+`transfer_to_agent` 把控制权转交给目标 Agent 后，目标 invocation 发出的事件会
+带有 `ParentMetadata` 字段：`TriggerType=transfer`、`TriggerID=<父级的
+toolCallId>`、`TriggerName=transfer_to_agent`。AG-UI 调用方可以用 `TriggerID`
+把目标的事件挂回到具体那一次 `transfer_to_agent` 的 `TOOL_CALL_START`。线上
+格式见 AG-UI chat 文档的
+[事件来源元数据](agui/chat.md#事件来源元数据) 章节。
+
+## 内置 Explorer（只读探索 Agent）
+
+`agent/llmagent/builtin` 提供一个开箱即用的只读“探索 / 检索 / 分析 / 查看”型
+Agent 预设，省去每次手写名字、description、只读 prompt、继承父能力面的样板代码。
+
+`builtin.NewExplorer()` 返回一个普通的 `agent.Agent`，因此两种接入方式都支持：
+
+```go
+import (
+    "trpc.group/trpc-go/trpc-agent-go/agent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+    "trpc.group/trpc-go/trpc-agent-go/agent/llmagent/builtin"
+    agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
+)
+
+// 方式一：作为 SubAgent，模型通过 transfer_to_agent 把控制权交给 explorer
+root := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(tools),
+    llmagent.WithSubAgents([]agent.Agent{builtin.NewExplorer()}),
+)
+
+// 方式二：包成 AgentTool，模型同步调用 explorer，拿结果后主 Agent 继续
+root := llmagent.New("assistant",
+    llmagent.WithModel(modelInstance),
+    llmagent.WithTools(append(tools, agenttool.NewTool(builtin.NewExplorer()))),
+)
+```
+
+两种方式的能力继承一致：transfer 和 AgentTool 都在父 invocation 的克隆上运行子
+Agent，Explorer 在 `Run` 时通过直接父 invocation 推导默认能力面。
+
+### 默认继承行为
+
+不传任何选项时，Explorer 默认从**直接父 invocation**继承：
+
+- **用户工具**：父 Agent 通过 `WithTools` / `WithToolSets` 注册的工具。框架自动注入的
+  工具（`transfer_to_agent`、`await_user_reply` 等）不会被继承。
+- **knowledge**：父的知识检索能力（`knowledge_search` 等）会按父配置重新生成。
+- **skills / code executor**：按父配置重新生成，绑定到子调用而非硬搬父运行时状态。
+- **model**：继承父 invocation 当前解析出的 model。
+
+### 只读语义是软约束
+
+Explorer 的 read-only 是 **system prompt 软约束，不是权限隔离**。它的定位是一个便捷的
+内置只读角色：模型会被提示去检索、查看和总结，但框架不会自动把工具分类成只读工具或写
+工具。
+
+### 自定义能力面
+
+```go
+builtin.NewExplorer(
+    builtin.WithName("explorer"),
+    builtin.WithDescription("Reads and investigates available context without modifying anything."),
+    builtin.WithInstruction(customReadOnlyPrompt),
+    builtin.WithSkills(readOnlySkillsRepo),            // 显式替换
+    builtin.WithModel(modelInstance),                  // 显式指定，否则继承父 model
+)
+```
+
+可用选项：`WithName`、`WithDescription`、`WithInstruction`、`WithTools`、
+`WithSkills`、`WithModel`、`WithCodeExecutor`，以及高级逃生口
+`WithLLMAgentOptions`（直接透传内部 `llmagent.Option`，谨慎使用）。
+
+行为说明：
+
+- 不传 `WithTools`：运行时继承父用户工具；传了则使用显式工具集，且不再继承父用户工具
+  与 knowledge。
+- 不传 `WithSkills` / `WithCodeExecutor`：运行时按父能力重新生成。
+- 不传 `WithModel`：继承父 invocation 当前 model；若父也没有 model，`Run` 返回清晰错误。
+- 没有父 invocation（例如作为 root 运行）：不继承，只使用显式配置。
 
 ## 环境变量配置
 

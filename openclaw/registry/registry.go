@@ -196,7 +196,9 @@ type ModelSpec struct {
 	Type                 string
 	Name                 string
 	BaseURL              string
+	APIKey               string
 	OpenAIVariant        string
+	Headers              map[string]string
 	DebugRecorderEnabled bool
 
 	Config *yaml.Node

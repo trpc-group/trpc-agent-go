@@ -33,6 +33,7 @@ type Options struct {
 	MetricRegistry                    metricregistry.Registry          // MetricRegistry resolves runtime metric extensions.
 	SessionIDSupplier                 func(ctx context.Context) string // SessionIDSupplier is used to generate session IDs.
 	ExpectedRunner                    runner.Runner                    // ExpectedRunner is used to generate dynamic expected outputs.
+	ToolMockRunner                    runner.Runner                    // ToolMockRunner generates dynamic tool mock results.
 	UserSimulator                     usersimulation.Simulator         // UserSimulator drives conversationScenario inference.
 	Callbacks                         *Callbacks                       // Callbacks holds evaluation callbacks.
 	RunOptions                        []agent.RunOption                // RunOptions configures runner.Run calls during inference.
@@ -107,6 +108,13 @@ func WithSessionIDSupplier(s func(ctx context.Context) string) Option {
 func WithExpectedRunner(r runner.Runner) Option {
 	return func(o *Options) {
 		o.ExpectedRunner = r
+	}
+}
+
+// WithToolMockRunner sets the runner used to generate dynamic tool mock results.
+func WithToolMockRunner(r runner.Runner) Option {
+	return func(o *Options) {
+		o.ToolMockRunner = r
 	}
 }
 

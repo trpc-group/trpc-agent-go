@@ -19,12 +19,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/conversationscope"
@@ -48,6 +51,259 @@ func newKillSessionTool(mgr *Manager) tool.CallableTool {
 	return NewKillSessionTool(mgr).(tool.CallableTool)
 }
 
+func newSandboxExecCommandTool(engine codeexecutor.Engine) tool.CallableTool {
+	return NewSandboxExecCommandTool(engine).(tool.CallableTool)
+}
+
+func TestSandboxExecToolDescription(t *testing.T) {
+	t.Parallel()
+
+	withoutMemory := sandboxExecToolDescription(false)
+	require.Contains(t, withoutMemory, "inside the configured sandbox")
+	require.Contains(
+		t,
+		withoutMemory,
+		"Only foreground non-interactive commands are supported",
+	)
+	require.NotContains(
+		t,
+		withoutMemory,
+		"host paths are not automatically mounted into the sandbox",
+	)
+
+	withMemory := sandboxExecToolDescription(true)
+	require.Contains(
+		t,
+		withMemory,
+		"host paths are not automatically mounted into the sandbox",
+	)
+}
+
+func TestNewSandboxExecCommandToolWithMemoryFileStore_WiresRegistry(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	tool := NewSandboxExecCommandToolWithMemoryFileStore(
+		&fakeSandboxExecEngine{},
+		nil,
+		store,
+	)
+	sandboxTool, ok := tool.(*sandboxExecTool)
+	require.True(t, ok)
+	require.Same(t, store, sandboxTool.memoryStore)
+	require.NotNil(t, sandboxTool.registry)
+}
+
+func TestSandboxExecTool_WorkspaceFallsBackWithoutRegistry(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := &sandboxExecTool{engine: engine}
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				sessionpkg.NewSession("app", "u1", "s1"),
+			),
+		),
+	)
+
+	ws, err := tl.workspace(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "app/u1/s1", ws.ID)
+	require.Equal(t, "app/u1/s1", ws.Path)
+	require.Len(t, engine.manager.workspaces, 1)
+	require.Equal(t, ws, engine.manager.workspaces[0])
+}
+
+func TestSandboxExecTool_Foreground(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{
+		runResult: codeexecutor.RunResult{
+			Stdout:   "hello\n",
+			Stderr:   "warn\n",
+			ExitCode: 7,
+		},
+	}
+	tl := newSandboxExecCommandTool(engine)
+
+	out, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command":     "echo hello",
+		"workdir":     "subdir",
+		"timeout_sec": 3,
+		"env": map[string]string{
+			"OPENCLAW_TEST_ENV": "ok",
+		},
+	}))
+	require.NoError(t, err)
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.Equal(t, "hello\nwarn\n", res.Output)
+	require.Equal(t, 7, res.ExitCode)
+
+	require.Len(t, engine.runner.specs, 1)
+	spec := engine.runner.specs[0]
+	require.Equal(t, shellProgram, spec.Cmd)
+	require.Equal(t, []string{shellLoginFlag, "echo hello"}, spec.Args)
+	require.Equal(t, "subdir", spec.Cwd)
+	require.Equal(t, 3*time.Second, spec.Timeout)
+	require.Equal(t, "ok", spec.Env["OPENCLAW_TEST_ENV"])
+	require.Len(t, engine.manager.workspaces, 1)
+}
+
+func TestSandboxExecTool_AppliesCommandPolicy(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := NewSandboxExecCommandToolWithPolicy(
+		engine,
+		nil,
+		nil,
+		NewChatCommandSafetyPolicy(),
+		nil,
+	).(tool.CallableTool)
+
+	_, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "cat ~/.ssh/id_rsa",
+	}))
+	require.ErrorContains(t, err, reasonSensitivePath)
+	require.Empty(t, engine.runner.specs)
+	require.Empty(t, engine.manager.workspaces)
+}
+
+func TestSandboxExecTool_RedactsSensitiveEnvValueOutput(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{
+		runResult: codeexecutor.RunResult{
+			Stdout:   "token=sk-test-secret\n",
+			ExitCode: 0,
+		},
+	}
+	tl := NewSandboxExecCommandToolWithPolicy(
+		engine,
+		nil,
+		nil,
+		nil,
+		NewChatCommandOutputRedactor(),
+	).(tool.CallableTool)
+
+	out, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "echo \"$OPENAI_API_KEY\"",
+		"env": map[string]string{
+			"OPENAI_API_KEY": "sk-test-secret",
+		},
+	}))
+	require.NoError(t, err)
+	res := out.(execResult)
+	require.Contains(t, res.Output, redactedValue)
+	require.NotContains(t, res.Output, "sk-test-secret")
+}
+
+func TestSandboxExecTool_ReusesWorkspacePerSession(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := newSandboxExecCommandTool(engine)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				sessionpkg.NewSession("app", "u1", "s1"),
+			),
+		),
+	)
+
+	for i := 0; i < 2; i++ {
+		_, err := tl.Call(ctx, mustJSON(t, map[string]any{
+			"command": "pwd",
+		}))
+		require.NoError(t, err)
+	}
+
+	require.Len(t, engine.manager.workspaces, 1)
+	require.Equal(t, "app/u1/s1", engine.manager.workspaces[0].ID)
+}
+
+func TestSandboxExecTool_IsolatesWorkspacesAcrossSessions(t *testing.T) {
+	t.Parallel()
+
+	engine := &fakeSandboxExecEngine{}
+	tl := newSandboxExecCommandTool(engine)
+	ctx1 := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				sessionpkg.NewSession("app", "u1", "s1"),
+			),
+		),
+	)
+	ctx2 := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(
+			agent.WithInvocationSession(
+				sessionpkg.NewSession("app", "u1", "s2"),
+			),
+		),
+	)
+
+	_, err := tl.Call(ctx1, mustJSON(t, map[string]any{
+		"command": "pwd",
+	}))
+	require.NoError(t, err)
+	_, err = tl.Call(ctx2, mustJSON(t, map[string]any{
+		"command": "pwd",
+	}))
+	require.NoError(t, err)
+
+	require.Len(t, engine.manager.workspaces, 2)
+	require.Equal(t, "app/u1/s1", engine.manager.workspaces[0].ID)
+	require.Equal(t, "app/u1/s2", engine.manager.workspaces[1].ID)
+}
+
+func TestSandboxExecTool_RejectsUnsupportedSessionModes(t *testing.T) {
+	t.Parallel()
+
+	tl := newSandboxExecCommandTool(&fakeSandboxExecEngine{})
+	cases := []map[string]any{
+		{"command": "sleep 1", "background": true},
+		{"command": "vim", "tty": true},
+		{"command": "vim", "pty": true},
+		{"command": "sleep 1", "yield_time_ms": 10},
+		{"command": "pwd", "workdir": "/tmp"},
+	}
+	for _, args := range cases {
+		_, err := tl.Call(context.Background(), mustJSON(t, args))
+		require.Error(t, err)
+		require.Contains(t, err.Error(), errSandboxExecUnsupported)
+	}
+}
+
+func TestSandboxExecTool_TimeoutResult(t *testing.T) {
+	t.Parallel()
+
+	tl := newSandboxExecCommandTool(&fakeSandboxExecEngine{
+		runResult: codeexecutor.RunResult{
+			Stderr:   "timed out\n",
+			ExitCode: 124,
+			TimedOut: true,
+		},
+	})
+	out, err := tl.Call(context.Background(), mustJSON(t, map[string]any{
+		"command":     "sleep 10",
+		"timeout_sec": 1,
+	}))
+	require.NoError(t, err)
+	res := out.(execResult)
+	require.Equal(t, "timeout", res.Status)
+	require.Equal(t, 124, res.ExitCode)
+	require.Contains(t, res.Output, "timed out")
+}
+
 func TestExecTool_Foreground(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
@@ -67,6 +323,28 @@ func TestExecTool_Foreground(t *testing.T) {
 	require.Equal(t, "exited", res.Status)
 	require.Contains(t, res.Output, "hello")
 	require.Equal(t, 0, res.ExitCode)
+}
+
+func TestExecTool_UsesManagerDefaultTimeout(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithDefaultTimeout(50 * time.Millisecond))
+	tool := newExecCommandTool(mgr)
+
+	started := time.Now()
+	out, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "sleep 1; printf done",
+		"yieldMs": 0,
+	}))
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 900*time.Millisecond)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.NotEqual(t, 0, res.ExitCode)
+	require.NotContains(t, res.Output, "done")
 }
 
 func TestExecTool_RuntimeProfileWorkspacePolicy(t *testing.T) {
@@ -372,7 +650,10 @@ func TestExecTool_UsesMemoryFileEnvFromContext(t *testing.T) {
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
 	args := mustJSON(t, map[string]any{
-		"command": "printf %s \"$OPENCLAW_MEMORY_FILE\"",
+		"command": "printf '%s\\n%s\\n%s' " +
+			"\"$OPENCLAW_MEMORY_FILE\" " +
+			"\"$OPENCLAW_USER_MEMORY_FILE\" " +
+			"\"$OPENCLAW_CHAT_MEMORY_FILE\"",
 		"yieldMs": 0,
 	})
 	out, err := execTool.Call(ctx, args)
@@ -384,6 +665,7 @@ func TestExecTool_UsesMemoryFileEnvFromContext(t *testing.T) {
 	path, err := store.MemoryPath("app", "u1")
 	require.NoError(t, err)
 	require.Contains(t, res.Output, path)
+	require.Equal(t, strings.Count(res.Output, path), 3)
 	require.FileExists(t, path)
 }
 
@@ -407,19 +689,29 @@ func TestExecTool_UsesStorageScopedMemoryFileEnvFromContext(t *testing.T) {
 
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(
-			sessionpkg.NewSession("app", "u1", "wecom:chat:room-1"),
+			sessionpkg.NewSession(
+				"app",
+				"wecom:dm:wineguo",
+				"wecom:chat:room-1",
+			),
 		),
 	)
 	ctx := agent.NewInvocationContext(
 		conversationscope.WithStorageUserID(
-			context.Background(),
+			conversationscope.WithUserStorageID(
+				context.Background(),
+				"wecom:dm:T123",
+			),
 			"wecom:chat:room-1",
 		),
 		inv,
 	)
 
 	args := mustJSON(t, map[string]any{
-		"command": "printf %s \"$OPENCLAW_MEMORY_FILE\"",
+		"command": "printf '%s\\n%s\\n%s' " +
+			"\"$OPENCLAW_MEMORY_FILE\" " +
+			"\"$OPENCLAW_USER_MEMORY_FILE\" " +
+			"\"$OPENCLAW_CHAT_MEMORY_FILE\"",
 		"yieldMs": 0,
 	})
 	out, err := execTool.Call(ctx, args)
@@ -431,6 +723,72 @@ func TestExecTool_UsesStorageScopedMemoryFileEnvFromContext(t *testing.T) {
 	path, err := store.MemoryPath("app", "wecom:chat:room-1")
 	require.NoError(t, err)
 	require.Contains(t, res.Output, path)
+	require.FileExists(t, path)
+	userPath, err := store.MemoryPath("app", "wecom:dm:T123")
+	require.NoError(t, err)
+	require.Contains(t, res.Output, userPath)
+	require.NotContains(t, res.Output, "wecom:dm:wineguo")
+	require.FileExists(t, userPath)
+}
+
+func TestExecTool_UsesUserStorageScopedMemoryFileEnvFallback(
+	t *testing.T,
+) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	const (
+		appName       = "app"
+		sessionUserID = "wecom:dm:wineguo"
+		storageUserID = "wecom:dm:T123"
+		sessionID     = "wecom:dm:wineguo:s1"
+	)
+
+	stateDir := t.TempDir()
+	root, err := memoryfile.DefaultRoot(stateDir)
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	mgr := NewManager()
+	execTool := NewExecCommandToolWithMemoryFileStore(
+		mgr,
+		nil,
+		store,
+	).(tool.CallableTool)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession(appName, sessionUserID, sessionID),
+		),
+	)
+	ctx := agent.NewInvocationContext(
+		conversationscope.WithUserStorageID(
+			context.Background(),
+			storageUserID,
+		),
+		inv,
+	)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf '%s\\n%s\\n%s' " +
+			"\"$OPENCLAW_MEMORY_FILE\" " +
+			"\"$OPENCLAW_USER_MEMORY_FILE\" " +
+			"\"$OPENCLAW_CHAT_MEMORY_FILE\"",
+		"yieldMs": 0,
+	})
+	out, err := execTool.Call(ctx, args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+
+	path, err := store.MemoryPath(appName, storageUserID)
+	require.NoError(t, err)
+	require.Contains(t, res.Output, path)
+	require.Equal(t, strings.Count(res.Output, path), 3)
+	require.NotContains(t, res.Output, sessionUserID)
 	require.FileExists(t, path)
 }
 
@@ -448,6 +806,26 @@ func TestMemoryFileEnvFromContext_EmptyScopeReturnsNil(t *testing.T) {
 		),
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	require.Nil(t, memoryFileEnvFromContext(ctx, store))
+}
+
+func TestMemoryFileEnvFromContext_CanceledContextReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	root, err := memoryfile.DefaultRoot(t.TempDir())
+	require.NoError(t, err)
+	store, err := memoryfile.NewStore(root)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("app", "u1", "telegram:dm:u1:s1"),
+		),
+	)
+	baseCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx := agent.NewInvocationContext(baseCtx, inv)
 
 	require.Nil(t, memoryFileEnvFromContext(ctx, store))
 }
@@ -543,6 +921,36 @@ func TestExecTool_YieldBackgroundAndPoll(t *testing.T) {
 		time.Sleep(pollInterval)
 	}
 	t.Fatalf("process did not exit; output: %s", all)
+}
+
+func TestExecTool_DefaultTimeoutKillsProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group signaling is unix-specific")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	marker := filepath.Join(t.TempDir(), "orphan-marker")
+	mgr := NewManager(WithDefaultTimeout(100 * time.Millisecond))
+	yieldZero := 0
+
+	res, err := mgr.Exec(context.Background(), execParams{
+		Command: "(sleep 0.6; echo orphan > " +
+			strconv.Quote(marker) + ") & wait",
+		YieldMs: &yieldZero,
+	})
+	require.NoError(t, err)
+	require.NotEqual(t, 0, res.ExitCode)
+
+	require.Never(t, func() bool {
+		_, err = os.Stat(marker)
+		if err == nil {
+			return true
+		}
+		require.ErrorIs(t, err, os.ErrNotExist)
+		return false
+	}, 900*time.Millisecond, 20*time.Millisecond)
 }
 
 func TestProcessTool_Submit(t *testing.T) {
@@ -652,6 +1060,111 @@ func TestManager_MaxLinesTrimsOutput(t *testing.T) {
 
 	log := logAny
 	require.Equal(t, "c", strings.TrimSpace(log.Output))
+}
+
+func TestManager_MaxResultOutputCharsTruncatesForeground(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	const maxResultOutputChars = 80
+	mgr := NewManager(WithMaxResultOutputChars(maxResultOutputChars))
+	execTool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command":       "printf 'abcdefghijklmnopqrstuvwxyz%.0s' {1..8}",
+		"yield_time_ms": 0,
+	})
+	out, err := execTool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	prefix, _, ok := strings.Cut(res.Output, "\n\n[OpenClaw")
+	require.True(t, ok)
+	require.Equal(t, maxResultOutputChars, utf8.RuneCountInString(prefix))
+	require.Contains(t, prefix, "abcdefghijklmnopqrstuvwxyz")
+	longChunk := strings.Repeat("abcdefghijklmnopqrstuvwxyz", 4)
+	require.NotContains(t, res.Output, longChunk)
+	requireTruncatedExecOutput(t, res.Output)
+}
+
+func TestManager_MaxResultOutputCharsTruncatesUTF8Foreground(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithMaxResultOutputChars(81))
+	execTool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command":       `printf '\303\251%.0s' {1..90}`,
+		"yield_time_ms": 0,
+	})
+	out, err := execTool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.True(t, utf8.ValidString(res.Output))
+	require.Contains(t, res.Output, "\xc3\xa9")
+	requireTruncatedExecOutput(t, res.Output)
+}
+
+func TestManager_MaxResultOutputCharsHelperEdges(t *testing.T) {
+	var nilManager *Manager
+	require.Equal(t, "abc", nilManager.limitResultOutput("abc"))
+	require.Equal(t, "abc", NewManager().limitResultOutput("abc"))
+	require.Equal(t, "abc", truncateResultOutput("abc", 0))
+	require.Equal(t, "abc", truncateResultOutput("abc", 3))
+	require.Equal(t, "", firstRunes("abc", 0))
+	require.Equal(t, "abc", firstRunes("abc", 5))
+}
+
+func TestManager_MaxResultOutputCharsTruncatesSessionCompletion(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pty is not supported on windows")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithMaxResultOutputChars(80))
+	execTool := newExecCommandTool(mgr)
+
+	ptyArgs := mustJSON(t, map[string]any{
+		"command":       "printf 'abcdefghijklmnopqrstuvwxyz%.0s' {1..8}",
+		"pty":           true,
+		"yield_time_ms": 0,
+	})
+	out, err := execTool.Call(context.Background(), ptyArgs)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	requireTruncatedExecOutput(t, res.Output)
+
+	timerArgs := mustJSON(t, map[string]any{
+		"command":       "printf 'abcdefghijklmnopqrstuvwxyz%.0s' {1..8}",
+		"yield_time_ms": 1000,
+	})
+	out, err = execTool.Call(context.Background(), timerArgs)
+	require.NoError(t, err)
+
+	res = out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	requireTruncatedExecOutput(t, res.Output)
+}
+
+func requireTruncatedExecOutput(t *testing.T, output string) {
+	t.Helper()
+
+	require.Contains(t, output, "OpenClaw truncated command output")
+	require.Contains(t, output, "Write large outputs to a file")
+	require.Contains(t, output, "chars")
+	require.NotContains(t, output, "bytes")
 }
 
 func TestProcessTool_ListKillClearRemove(t *testing.T) {
@@ -1591,6 +2104,65 @@ func mustJSON(t *testing.T, v any) []byte {
 	b, err := json.Marshal(v)
 	require.NoError(t, err)
 	return b
+}
+
+type fakeSandboxExecEngine struct {
+	manager   fakeSandboxExecManager
+	runner    fakeSandboxExecRunner
+	runResult codeexecutor.RunResult
+}
+
+func (e *fakeSandboxExecEngine) Manager() codeexecutor.WorkspaceManager {
+	return &e.manager
+}
+
+func (e *fakeSandboxExecEngine) FS() codeexecutor.WorkspaceFS { return nil }
+
+func (e *fakeSandboxExecEngine) Runner() codeexecutor.ProgramRunner {
+	e.runner.result = e.runResult
+	return &e.runner
+}
+
+func (e *fakeSandboxExecEngine) Describe() codeexecutor.Capabilities {
+	return codeexecutor.Capabilities{}
+}
+
+type fakeSandboxExecManager struct {
+	workspaces []codeexecutor.Workspace
+}
+
+func (m *fakeSandboxExecManager) CreateWorkspace(
+	ctx context.Context,
+	execID string,
+	pol codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	_ = ctx
+	ws := codeexecutor.Workspace{ID: execID, Path: execID}
+	m.workspaces = append(m.workspaces, ws)
+	return ws, nil
+}
+
+func (m *fakeSandboxExecManager) Cleanup(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+) error {
+	_, _ = ctx, ws
+	return nil
+}
+
+type fakeSandboxExecRunner struct {
+	specs  []codeexecutor.RunProgramSpec
+	result codeexecutor.RunResult
+}
+
+func (r *fakeSandboxExecRunner) RunProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	_, _ = ctx, ws
+	r.specs = append(r.specs, spec)
+	return r.result, nil
 }
 
 func outputField(result map[string]any) string {

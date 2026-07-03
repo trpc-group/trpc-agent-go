@@ -79,3 +79,8 @@ Model: deepseek-v4-flash
 2. **User mode**: Summary is merged into the first user message alongside the follow-up question. Token tailoring can trim it like any other user round.
 3. Both modes produce correct responses — the LLM can access the summary context regardless of injection position.
 4. Phase 2 and Phase 3 run on separate sessions with identical history, ensuring a clean A/B comparison.
+
+Memory preload and session recall preload keep independent injection modes. They
+stay in system context by default; use `WithPreloadMemoryInjectionMode` or
+`WithPreloadSessionRecallInjectionMode` with the `User` mode to opt into
+cache-friendly user/history placement, where token tailoring can trim them.

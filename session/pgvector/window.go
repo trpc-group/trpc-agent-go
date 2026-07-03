@@ -63,7 +63,8 @@ func (s *Service) GetEventWindow(
 	}
 	if anchor == nil {
 		return nil, fmt.Errorf(
-			"anchor event not found: %s",
+			"%w: %s",
+			session.ErrEventWindowAnchorNotFound,
 			anchorEventID,
 		)
 	}
