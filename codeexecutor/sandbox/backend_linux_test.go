@@ -611,6 +611,7 @@ func TestLinuxPreflightUnsupportedBackendAndProbeError(t *testing.T) {
 		ws.Path,
 		nil,
 		codeexecutor.RunProgramSpec{Cmd: "true"},
+		sandboxDenialRun{},
 	)
 	if backend != string(BackendLinuxBubblewrap) || !isKind(err, ErrUnsupportedBackend) {
 		t.Fatalf("osSandboxCommand backend=%q err=%v, want bubblewrap unsupported", backend, err)
@@ -722,6 +723,7 @@ func TestLinuxSandboxCommandBindsDenyReadDataFDAndCleansSyntheticTargets(t *test
 		filepath.Join(ws.Path, "work"),
 		[]string{"SANDBOX_TEST=1"},
 		codeexecutor.RunProgramSpec{Cmd: "/bin/echo", Args: []string{"ok"}},
+		sandboxDenialRun{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -774,6 +776,7 @@ func TestLinuxSandboxCommandPropagatesSetupError(t *testing.T) {
 		filepath.Join(ws.Path, "work"),
 		nil,
 		codeexecutor.RunProgramSpec{Cmd: "true"},
+		sandboxDenialRun{},
 	)
 	if backend != string(BackendLinuxBubblewrap) || err == nil || cleanup != nil {
 		t.Fatalf("osSandboxCommand backend=%q cleanup=%v err=%v, want setup error", backend, cleanup, err)
@@ -798,6 +801,7 @@ func TestLinuxSandboxCommandPrepareAndArgsErrors(t *testing.T) {
 		ws.Path,
 		nil,
 		codeexecutor.RunProgramSpec{Cmd: "true"},
+		sandboxDenialRun{},
 	)
 	if backend != string(BackendLinuxBubblewrap) || err == nil {
 		t.Fatalf("osSandboxCommand backend=%q err=%v, want prepare error", backend, err)
