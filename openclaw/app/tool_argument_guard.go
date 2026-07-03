@@ -19,8 +19,11 @@ import (
 
 const (
 	envBlockedToolArgumentSubstrings = "OPENCLAW_BLOCKED_TOOL_ARGUMENT_SUBSTRINGS"
-	errToolArgumentBlocked           = "tool call blocked by runtime guard: " +
-		"argument matched a configured blocked benchmark/eval artifact pattern"
+)
+
+var errToolArgumentBlocked = errors.New(
+	"tool call blocked by runtime guard: " +
+		"argument matched a configured blocked benchmark/eval artifact pattern",
 )
 
 func registerToolArgumentGuardCallback(
@@ -56,7 +59,7 @@ func newToolArgumentGuardCallback(
 		lowerArgs := strings.ToLower(string(args.Arguments))
 		for _, pattern := range patterns {
 			if strings.Contains(lowerArgs, pattern) {
-				return nil, errors.New(errToolArgumentBlocked)
+				return nil, errToolArgumentBlocked
 			}
 		}
 		return nil, nil
