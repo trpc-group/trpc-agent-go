@@ -374,6 +374,9 @@ func shouldGenerateSummary(
 	return ShouldSummarize(ctx, m, checkTmp)
 }
 
+// shouldSkipBranchForkFullSessionCascade suppresses only the full-session target
+// that is explicitly marked as a branch cascade. This also applies to force=true:
+// force should not turn a branch fork request into a full-session summary.
 func shouldSkipBranchForkFullSessionCascade(
 	ctx context.Context,
 	m summary.SessionSummarizer,
