@@ -132,6 +132,23 @@ func (r *Runtime) newSandboxDenialRun(
 	}
 }
 
+func (r *Runtime) sandboxDenialRunForCollecting(
+	profile PermissionProfile,
+) sandboxDenialRun {
+	run := r.newSandboxDenialRun(profile)
+	if !run.enabled || !r.sandboxDenialCollectingReady() {
+		return sandboxDenialRun{}
+	}
+	return run
+}
+
+func (r *Runtime) sandboxDenialCollectingReady() bool {
+	d := r.macosDenialDiagnostics()
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.prodMonitor != nil && d.caps.EventStreamAvailable
+}
+
 func (r *Runtime) ensureDenialMonitor() error {
 	d := r.macosDenialDiagnostics()
 	d.monitorOnce.Do(func() {
