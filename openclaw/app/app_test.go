@@ -3469,6 +3469,46 @@ func TestNewAgent_ContextCompactionKeepsDynamicAgentResults(t *testing.T) {
 	require.NotContains(t, all, "tool_name: dynamic_agent")
 }
 
+func TestNewAgent_DefaultKeepsToolSurfaceDirect(t *testing.T) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:  "demo",
+		StateDir: t.TempDir(),
+	}, []tool.Tool{
+		stubTool{name: "exec_command"},
+		stubTool{name: "message"},
+	}, nil)
+	require.NoError(t, err)
+
+	parentTools := agt.Tools()
+	require.NotNil(t, findToolDeclaration(parentTools, "exec_command"))
+	require.NotNil(t, findToolDeclaration(parentTools, "message"))
+	require.Nil(
+		t,
+		findToolDeclaration(parentTools, agenttool.DefaultDynamicToolName),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(
+			parentTools,
+			agenttool.DefaultCapabilitySearchToolName,
+		),
+	)
+
+	req := runAgentAndCapture(t, agt, mdl, &session.Session{})
+	require.NotNil(t, req.Tools["exec_command"])
+	require.NotNil(t, req.Tools["message"])
+	require.Nil(t, req.Tools[agenttool.DefaultDynamicToolName])
+	require.Nil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
+	require.NotContains(
+		t,
+		joinSystemMessages(req),
+		"Tool-backed work is available",
+	)
+}
+
 func TestNewAgent_DeferToolSurfaceAutoKeepsSmallToolSurface(t *testing.T) {
 	t.Parallel()
 
@@ -4087,7 +4127,7 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			agentType: agentTypeClaudeCode,
 		},
 		{
-			name:      "claude default defer auto ok",
+			name:      "claude implicit defer auto ok",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{
 				DeferToolSurfaceMode: deferToolSurfaceModeAuto,
