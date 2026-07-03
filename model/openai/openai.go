@@ -79,6 +79,8 @@ const (
 // thinkingValueConvertor converts ThinkingEnabled bool to the variant-specific value.
 type thinkingValueConvertor func(enabled bool) any
 
+const thinkingKey = "thinking"
+
 // defaultThinkingValueConvertor returns the bool value as-is.
 var defaultThinkingValueConvertor = func(enabled bool) any {
 	return enabled
@@ -165,7 +167,7 @@ var variantConfigs = map[Variant]variantConfig{
 		defaultBaseURL:            defaultDeepSeekBaseURL,
 		// DeepSeek v3.2+ (incl. v4-pro / v4-flash) uses
 		// {"thinking": {"type": "enabled"/"disabled"}} format.
-		thinkingEnabledKey:              "thinking",
+		thinkingEnabledKey:              thinkingKey,
 		thinkingValueConvertor:          thinkingTypeValueConvertor,
 		defaultReasoningContentBackfill: true,
 	},
@@ -217,7 +219,7 @@ var variantConfigs = map[Variant]variantConfig{
 		},
 		// TokenHub Hunyuan thinking models use
 		// {"thinking": {"type": "enabled"/"disabled"}} format.
-		thinkingEnabledKey:     "thinking",
+		thinkingEnabledKey:     thinkingKey,
 		thinkingValueConvertor: thinkingTypeValueConvertor,
 	},
 	VariantQwen: {
@@ -238,7 +240,7 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionMethod:                http.MethodDelete,
 		skipFileTypeInContent:             false,
 		fileDeletionBodyConvertor:         defaultFileDeletionBodyConvertor,
-		thinkingEnabledKey:                "thinking",
+		thinkingEnabledKey:                thinkingKey,
 		thinkingValueConvertor:            thinkingTypeValueConvertor,
 		reasoningContentAsContentFallback: true,
 	},

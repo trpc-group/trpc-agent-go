@@ -3622,7 +3622,7 @@ func TestModel_GenerateContent_GLMThinkingPayload(t *testing.T) {
 				require.Nil(t, resp.Error)
 			}
 
-			thinking, ok := captured["thinking"].(map[string]any)
+			thinking, ok := captured[thinkingKey].(map[string]any)
 			require.True(t, ok)
 			require.Equal(t, tt.want, thinking["type"])
 			require.NotContains(t, captured, model.ThinkingEnabledKey)
@@ -3697,7 +3697,7 @@ func TestModel_GenerateContent_HunyuanThinkingPayload(t *testing.T) {
 				require.Nil(t, resp.Error)
 			}
 
-			thinking, ok := captured["thinking"].(map[string]any)
+			thinking, ok := captured[thinkingKey].(map[string]any)
 			require.True(t, ok)
 			require.Equal(t, tt.want, thinking["type"])
 			require.NotContains(t, captured, model.ThinkingEnabledKey)
@@ -7260,7 +7260,7 @@ func TestModel_buildChatRequest(t *testing.T) {
 				},
 			},
 			want1: []openaiopt.RequestOption{
-				openaiopt.WithJSONSet("thinking", map[string]string{"type": "enabled"}),
+				openaiopt.WithJSONSet(thinkingKey, map[string]string{"type": "enabled"}),
 			},
 		},
 		{
@@ -7428,14 +7428,14 @@ func TestBuildThinkingOption(t *testing.T) {
 			name:            "DeepSeek variant with thinking enabled",
 			variant:         VariantDeepSeek,
 			thinkingEnabled: &trueVal,
-			wantKeys:        []string{"thinking"},
+			wantKeys:        []string{thinkingKey},
 			wantValues:      []any{map[string]string{"type": "enabled"}},
 		},
 		{
 			name:            "DeepSeek variant with thinking disabled",
 			variant:         VariantDeepSeek,
 			thinkingEnabled: &falseVal,
-			wantKeys:        []string{"thinking"},
+			wantKeys:        []string{thinkingKey},
 			wantValues:      []any{map[string]string{"type": "disabled"}},
 		},
 		{
@@ -7443,21 +7443,21 @@ func TestBuildThinkingOption(t *testing.T) {
 			variant:         VariantDeepSeek,
 			thinkingEnabled: &trueVal,
 			thinkingTokens:  &thinkingTokens,
-			wantKeys:        []string{model.ThinkingTokensKey, "thinking"},
+			wantKeys:        []string{model.ThinkingTokensKey, thinkingKey},
 			wantValues:      []any{1024, map[string]string{"type": "enabled"}},
 		},
 		{
 			name:            "GLM variant with thinking enabled",
 			variant:         VariantGLM,
 			thinkingEnabled: &trueVal,
-			wantKeys:        []string{"thinking"},
+			wantKeys:        []string{thinkingKey},
 			wantValues:      []any{map[string]string{"type": "enabled"}},
 		},
 		{
 			name:            "Hunyuan variant with thinking enabled",
 			variant:         VariantHunyuan,
 			thinkingEnabled: &trueVal,
-			wantKeys:        []string{"thinking"},
+			wantKeys:        []string{thinkingKey},
 			wantValues:      []any{map[string]string{"type": "enabled"}},
 		},
 		{
