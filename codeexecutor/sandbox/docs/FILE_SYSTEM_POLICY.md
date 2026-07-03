@@ -146,6 +146,11 @@ directories. The host view depends on the backend:
 - Default protected metadata still blocks writes to `.git`, `.agents`, and
   `.trpc-agent-sandbox` inside the workspace.
 
+The runtime creates the well-known workspace directories during workspace
+preparation. On macOS, these special directories are checked before they become
+Seatbelt roots so a retained workspace cannot replace `work`, `tmp`, `home`,
+`runs`, `out`, or `skills` with a symlink that points outside the workspace.
+
 ## Public Builders
 
 The builder API mirrors the access model:
