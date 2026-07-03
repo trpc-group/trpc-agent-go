@@ -85,7 +85,7 @@ var defaultThinkingValueConvertor = func(enabled bool) any {
 }
 
 // thinkingTypeValueConvertor converts to the nested thinking-toggle format
-// used by providers such as DeepSeek v3.2+ and GLM.
+// used by providers such as DeepSeek v3.2+, Hunyuan, and GLM.
 var thinkingTypeValueConvertor = func(enabled bool) any {
 	const (
 		thinkingTypeEnabled  = "enabled"
@@ -215,8 +215,10 @@ var variantConfigs = map[Variant]variantConfig{
 			r.ContentLength = int64(body.Len())
 			return r, nil
 		},
-		thinkingEnabledKey:     model.ThinkingEnabledKey,
-		thinkingValueConvertor: defaultThinkingValueConvertor,
+		// TokenHub Hunyuan thinking models use
+		// {"thinking": {"type": "enabled"/"disabled"}} format.
+		thinkingEnabledKey:     "thinking",
+		thinkingValueConvertor: thinkingTypeValueConvertor,
 	},
 	VariantQwen: {
 		fileUploadPath:            "/openapi/v1/files",

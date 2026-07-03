@@ -3630,6 +3630,81 @@ func TestModel_GenerateContent_GLMThinkingPayload(t *testing.T) {
 	}
 }
 
+func TestModel_GenerateContent_HunyuanThinkingPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+		want    string
+	}{
+		{
+			name:    "enabled",
+			enabled: true,
+			want:    "enabled",
+		},
+		{
+			name:    "disabled",
+			enabled: false,
+			want:    "disabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+						http.Error(w, "not found", http.StatusNotFound)
+						return
+					}
+					require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+					w.Header().Set("Content-Type", "application/json")
+					fmt.Fprint(w, `{
+						"id": "test",
+						"object": "chat.completion",
+						"created": 1699200000,
+						"model": "hy3-preview",
+						"choices": [{
+							"index": 0,
+							"message": {
+								"role": "assistant",
+								"content": "ok"
+							},
+							"finish_reason": "stop"
+						}]
+					}`)
+				},
+			))
+			defer server.Close()
+
+			m := New(
+				"hy3-preview",
+				WithVariant(VariantHunyuan),
+				WithBaseURL(server.URL),
+				WithAPIKey("test-key"),
+			)
+			req := &model.Request{
+				Messages: []model.Message{
+					model.NewUserMessage("hi"),
+				},
+				GenerationConfig: model.GenerationConfig{
+					ThinkingEnabled: &tt.enabled,
+				},
+			}
+			ch, err := m.GenerateContent(context.Background(), req)
+			require.NoError(t, err)
+			for resp := range ch {
+				require.Nil(t, resp.Error)
+			}
+
+			thinking, ok := captured["thinking"].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tt.want, thinking["type"])
+			require.NotContains(t, captured, model.ThinkingEnabledKey)
+		})
+	}
+}
+
 // TestModel_GenerateContent_NonStreaming_ToolCallNoID_Synthesized verifies that
 // when the provider omits tool_call.id in a non-streaming response, we synthesize
 // a stable ID (auto_call_<index>). This covers the non-streaming code path in
@@ -7374,6 +7449,13 @@ func TestBuildThinkingOption(t *testing.T) {
 		{
 			name:            "GLM variant with thinking enabled",
 			variant:         VariantGLM,
+			thinkingEnabled: &trueVal,
+			wantKeys:        []string{"thinking"},
+			wantValues:      []any{map[string]string{"type": "enabled"}},
+		},
+		{
+			name:            "Hunyuan variant with thinking enabled",
+			variant:         VariantHunyuan,
 			thinkingEnabled: &trueVal,
 			wantKeys:        []string{"thinking"},
 			wantValues:      []any{map[string]string{"type": "enabled"}},
