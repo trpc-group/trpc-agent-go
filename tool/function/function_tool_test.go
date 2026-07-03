@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -47,6 +48,35 @@ func TestFunctionTool_Run_Success(t *testing.T) {
 	}
 	if sum.Result != 5 {
 		t.Errorf("expected 5, got %d", sum)
+	}
+}
+
+func TestFunctionTool_EmptyInputArgs(t *testing.T) {
+	type emptyInput struct{}
+	type emptyOutput struct {
+		OK bool `json:"ok"`
+	}
+	fn := func(_ context.Context, _ emptyInput) (emptyOutput, error) {
+		return emptyOutput{OK: true}, nil
+	}
+	fTool := function.NewFunctionTool(fn,
+		function.WithName("EmptyInputTool"),
+		function.WithDescription("No-arg tool"))
+
+	for name, args := range map[string][]byte{
+		"nil":   nil,
+		"empty": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := fTool.Call(context.Background(), args)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			out, ok := result.(emptyOutput)
+			if !ok || !out.OK {
+				t.Fatalf("expected ok result, got %T %v", result, result)
+			}
+		})
 	}
 }
 
@@ -341,11 +371,85 @@ func TestFunctionTool_Call_UnmarshalError(t *testing.T) {
 
 	fTool := function.NewFunctionTool(fn, function.WithName("TestTool"))
 
-	// Invalid JSON
+	// Truly unrecoverable JSON still fails without repair enabled.
 	invalidJSON := []byte(`{invalid json}`)
 	_, err := fTool.Call(context.Background(), invalidJSON)
 	if err == nil {
 		t.Error("expected error for invalid JSON, got nil")
+	}
+}
+
+func TestFunctionTool_Call_RejectsLeadingProse(t *testing.T) {
+	type inputArgs struct {
+		A int `json:"a"`
+	}
+	fn := func(_ context.Context, args inputArgs) (inputArgs, error) {
+		return args, nil
+	}
+	fTool := function.NewFunctionTool(fn, function.WithName("TestTool"))
+
+	enabled := true
+	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			ToolCallArgumentsJSONRepairEnabled: &enabled,
+		},
+	})
+	_, err := fTool.Call(ctx, []byte(`Summary: {"a":1}`))
+	if err == nil {
+		t.Fatal("expected error for leading prose before JSON, got nil")
+	}
+}
+
+func TestFunctionTool_Call_RepairsMalformedJSONWhenEnabled(t *testing.T) {
+	type inputArgs struct {
+		A int `json:"a"`
+	}
+	type outputArgs struct {
+		Result int `json:"result"`
+	}
+
+	fn := func(_ context.Context, args inputArgs) (outputArgs, error) {
+		return outputArgs{Result: args.A}, nil
+	}
+
+	fTool := function.NewFunctionTool(fn, function.WithName("TestTool"))
+
+	enabled := true
+	ctx := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			ToolCallArgumentsJSONRepairEnabled: &enabled,
+		},
+	})
+	got, err := fTool.Call(ctx, []byte(`{a:1}`))
+	if err != nil {
+		t.Fatalf("expected repaired malformed JSON to succeed, got %v", err)
+	}
+	out, ok := got.(outputArgs)
+	if !ok {
+		t.Fatalf("expected outputArgs, got %T", got)
+	}
+	if out.Result != 1 {
+		t.Fatalf("expected result 1, got %d", out.Result)
+	}
+}
+
+func TestFunctionTool_Call_StrictJSONWhenRepairDisabled(t *testing.T) {
+	type inputArgs struct {
+		A int `json:"a"`
+	}
+	type outputArgs struct {
+		Result int `json:"result"`
+	}
+
+	fn := func(_ context.Context, args inputArgs) (outputArgs, error) {
+		return outputArgs{Result: args.A}, nil
+	}
+
+	fTool := function.NewFunctionTool(fn, function.WithName("TestTool"))
+
+	_, err := fTool.Call(context.Background(), []byte(`{a:1}`))
+	if err == nil {
+		t.Fatal("expected strict unmarshal error when repair is disabled")
 	}
 }
 
