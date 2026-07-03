@@ -16,6 +16,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -1551,4 +1552,506 @@ func TestServer_handleChatCompletions_PathWithSlash(t *testing.T) {
 	s.handleChatCompletions(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// mockRunnerCapturing captures the RunOptions passed to Run and returns
+// the pre-seeded events channel.
+type mockRunnerCapturing struct {
+	events  chan *event.Event
+	gotOpts agent.RunOptions
+	gotMsg  model.Message
+}
+
+func (m *mockRunnerCapturing) Run(
+	ctx context.Context,
+	userID, sessionID string,
+	message model.Message,
+	opts ...agent.RunOption,
+) (<-chan *event.Event, error) {
+	m.gotOpts = agent.NewRunOptions(opts...)
+	m.gotMsg = message
+	return m.events, nil
+}
+
+func (m *mockRunnerCapturing) Close() error {
+	return nil
+}
+
+// newToolCallEventsNonStreaming returns a channel with a single non-streaming
+// event carrying an assistant tool_call message with finish_reason="tool_calls".
+func newToolCallEventsNonStreaming(t *testing.T) chan *event.Event {
+	t.Helper()
+	ch := make(chan *event.Event, 1)
+	finishReason := finishReasonToolCalls
+	ch <- &event.Event{
+		ID: "evt-tool-call",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{
+								ID:   "call-1",
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name:      "client_search",
+									Arguments: []byte(`{"query":"go"}`),
+								},
+							},
+						},
+					},
+					FinishReason: &finishReason,
+				},
+			},
+			Done:    true,
+			Created: time.Now().Unix(),
+			Usage: &model.Usage{
+				PromptTokens:     8,
+				CompletionTokens: 4,
+				TotalTokens:      12,
+			},
+		},
+	}
+	close(ch)
+	return ch
+}
+
+func externalToolsRequestBody(t *testing.T, stream bool) []byte {
+	t.Helper()
+	body, err := json.Marshal(openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{Role: "user", Content: "search for go"},
+		},
+		Stream: stream,
+		Tools: []openAITool{
+			{
+				Type: "function",
+				Function: openAIFunction{
+					Name:        "client_search",
+					Description: "Search a frontend-owned source.",
+					Parameters: json.RawMessage(
+						`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}`,
+					),
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	return body
+}
+
+func TestServer_handleNonStreaming_InjectsExternalTools(t *testing.T) {
+	runner := &mockRunnerCapturing{events: newToolCallEventsNonStreaming(t)}
+	s, err := New(WithRunner(runner))
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewReader(externalToolsRequestBody(t, false)),
+	)
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, runner.gotOpts.ExternalTools, 1)
+	decl := runner.gotOpts.ExternalTools[0].Declaration()
+	require.NotNil(t, decl)
+	assert.Equal(t, "client_search", decl.Name)
+	assert.Equal(t, "Search a frontend-owned source.", decl.Description)
+	require.NotNil(t, decl.InputSchema)
+	assert.Equal(t, jsonSchemaTypeObject, decl.InputSchema.Type)
+	require.Contains(t, decl.InputSchema.Properties, "query")
+	assert.False(t, runner.gotOpts.ShouldExecuteTool(
+		context.Background(),
+		runner.gotOpts.ExternalTools[0],
+	))
+}
+
+func TestServer_handleNonStreaming_ToolCallResponse(t *testing.T) {
+	runner := &mockRunnerCapturing{events: newToolCallEventsNonStreaming(t)}
+	s, err := New(WithRunner(runner))
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewReader(externalToolsRequestBody(t, false)),
+	)
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp openAIResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.Len(t, resp.Choices, 1)
+	require.NotNil(t, resp.Choices[0].FinishReason)
+	assert.Equal(t, finishReasonToolCalls, *resp.Choices[0].FinishReason)
+	require.Len(t, resp.Choices[0].Message.ToolCalls, 1)
+	tc := resp.Choices[0].Message.ToolCalls[0]
+	assert.Equal(t, "call-1", tc.ID)
+	assert.Equal(t, "function", tc.Type)
+	assert.Equal(t, "client_search", tc.Function.Name)
+	assert.Equal(t, `{"query":"go"}`, tc.Function.Arguments)
+}
+
+func TestServer_handleStreaming_ToolCallResponse(t *testing.T) {
+	ch := make(chan *event.Event, 2)
+	ch <- &event.Event{
+		ID: "evt-tool-delta",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{
+								ID:   "call-1",
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name:      "client_search",
+									Arguments: []byte(`{"query":"go"}`),
+								},
+							},
+						},
+					},
+				},
+			},
+			Created: time.Now().Unix(),
+		},
+	}
+	finishReason := finishReasonToolCalls
+	ch <- &event.Event{
+		ID: "evt-tool-final",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta:        model.Message{},
+					FinishReason: &finishReason,
+				},
+			},
+			Done:    true,
+			Created: time.Now().Unix(),
+			Usage: &model.Usage{
+				PromptTokens:     8,
+				CompletionTokens: 4,
+				TotalTokens:      12,
+			},
+		},
+	}
+	close(ch)
+
+	runner := &mockRunnerCapturing{events: ch}
+	s, err := New(WithRunner(runner))
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewReader(externalToolsRequestBody(t, true)),
+	)
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, runner.gotOpts.ExternalTools, 1)
+
+	chunks, done := parseSSEChunks(t, w.Body.String())
+	assert.True(t, done, "expected [DONE] marker in SSE stream")
+	// The stream should contain at least one chunk with tool_calls in delta
+	// and end with a chunk whose finish_reason is "tool_calls".
+	var sawToolCallDelta bool
+	var finalFinishReason string
+	for _, c := range chunks {
+		if len(c.Choices) == 0 {
+			continue
+		}
+		if len(c.Choices[0].Delta.ToolCalls) > 0 {
+			sawToolCallDelta = true
+			tc := c.Choices[0].Delta.ToolCalls[0]
+			assert.Equal(t, "call-1", tc.ID)
+			assert.Equal(t, "client_search", tc.Function.Name)
+			assert.Equal(t, `{"query":"go"}`, tc.Function.Arguments)
+		}
+		if c.Choices[0].FinishReason != nil {
+			finalFinishReason = *c.Choices[0].FinishReason
+		}
+	}
+	assert.True(t, sawToolCallDelta, "expected a chunk with delta.tool_calls")
+	assert.Equal(t, finishReasonToolCalls, finalFinishReason)
+}
+
+func TestServer_handleChatCompletions_InvalidToolMissingName(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{Role: "user", Content: "hi"},
+		},
+		Tools: []openAITool{
+			{Type: "function", Function: openAIFunction{Description: "no name"}},
+		},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var errResp openAIError
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&errResp))
+	assert.Equal(t, errorTypeInvalidRequest, errResp.Error.Type)
+	assert.Contains(t, errResp.Error.Message, "function.name")
+}
+
+func TestServer_handleChatCompletions_InvalidToolUnsupportedType(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{Role: "user", Content: "hi"},
+		},
+		Stream: true,
+		Tools: []openAITool{
+			{
+				Type:     "code_interpreter",
+				Function: openAIFunction{Name: "ignored"},
+			},
+		},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var errResp openAIError
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&errResp))
+	assert.Contains(t, errResp.Error.Message, "code_interpreter")
+}
+
+func TestServer_handleNonStreaming_ParallelToolResultResume(t *testing.T) {
+	ch := make(chan *event.Event, 1)
+	finishReason := finishReasonStop
+	ch <- &event.Event{
+		ID: "evt-final",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "combined answer",
+					},
+					FinishReason: &finishReason,
+				},
+			},
+			Done:    true,
+			Created: time.Now().Unix(),
+			Usage:   &model.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		},
+	}
+	close(ch)
+
+	runner := &mockRunnerCapturing{events: ch}
+	s, err := New(WithRunner(runner))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{Role: "assistant", Content: "calling tools"},
+			{
+				Role:       "tool",
+				ToolCallID: "call-1",
+				Name:       "search",
+				Content:    "result 1",
+			},
+			{
+				Role:       "tool",
+				ToolCallID: "call-2",
+				Name:       "lookup",
+				Content:    "result 2",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleChatCompletions(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, model.RoleTool, runner.gotMsg.Role)
+	assert.Equal(t, "call-2", runner.gotMsg.ToolID)
+	require.Len(t, runner.gotOpts.Messages, 1)
+	assert.Equal(t, "assistant", string(runner.gotOpts.Messages[0].Role))
+	require.NotNil(t, runner.gotOpts.UserMessageRewriter)
+
+	currentTurn, err := runner.gotOpts.UserMessageRewriter(
+		context.Background(),
+		&agent.UserMessageRewriteArgs{OriginalMessage: runner.gotMsg},
+	)
+	require.NoError(t, err)
+	require.Len(t, currentTurn, 2)
+	assert.Equal(t, "call-1", currentTurn[0].ToolID)
+	assert.Equal(t, "result 1", currentTurn[0].Content)
+	assert.Equal(t, "call-2", currentTurn[1].ToolID)
+	assert.Equal(t, "result 2", currentTurn[1].Content)
+
+	var resp openAIResponse
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	assert.Equal(t, "combined answer", resp.Choices[0].Message.Content)
+}
+
+func TestServer_handleStreaming_ParallelToolResultResume(t *testing.T) {
+	ch := make(chan *event.Event, 2)
+	finishReason := finishReasonStop
+	ch <- &event.Event{
+		ID: "evt-stream",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "combined answer",
+					},
+				},
+			},
+			Created: time.Now().Unix(),
+		},
+	}
+	ch <- &event.Event{
+		ID: "evt-final",
+		Response: &model.Response{
+			Choices: []model.Choice{
+				{
+					Delta:        model.Message{},
+					FinishReason: &finishReason,
+				},
+			},
+			Done:    true,
+			Created: time.Now().Unix(),
+			Usage:   &model.Usage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
+		},
+	}
+	close(ch)
+
+	runner := &mockRunnerCapturing{events: ch}
+	s, err := New(WithRunner(runner))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(openAIRequest{
+		Model:  "gpt-3.5-turbo",
+		Stream: true,
+		Messages: []openAIMessage{
+			{Role: "assistant", Content: "calling tools"},
+			{
+				Role:       "tool",
+				ToolCallID: "call-1",
+				Name:       "search",
+				Content:    "result 1",
+			},
+			{
+				Role:       "tool",
+				ToolCallID: "call-2",
+				Name:       "lookup",
+				Content:    "result 2",
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleChatCompletions(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, contentTypeEventStream, w.Header().Get(headerContentType))
+	assert.Equal(t, model.RoleTool, runner.gotMsg.Role)
+	assert.Equal(t, "call-2", runner.gotMsg.ToolID)
+	require.Len(t, runner.gotOpts.Messages, 1)
+	require.NotNil(t, runner.gotOpts.UserMessageRewriter)
+
+	currentTurn, err := runner.gotOpts.UserMessageRewriter(
+		context.Background(),
+		&agent.UserMessageRewriteArgs{OriginalMessage: runner.gotMsg},
+	)
+	require.NoError(t, err)
+	require.Len(t, currentTurn, 2)
+	assert.Equal(t, "call-1", currentTurn[0].ToolID)
+	assert.Equal(t, "call-2", currentTurn[1].ToolID)
+
+	chunks, done := parseSSEChunks(t, w.Body.String())
+	assert.True(t, done)
+	require.NotEmpty(t, chunks)
+	var content string
+	for _, chunk := range chunks {
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		if c, ok := chunk.Choices[0].Delta.Content.(string); ok {
+			content += c
+		}
+	}
+	assert.Equal(t, "combined answer", content)
+}
+
+func TestServer_handleNonStreaming_AssistantLastMessagePrefill(t *testing.T) {
+	runner := &mockRunnerCapturing{events: newToolCallEventsNonStreaming(t)}
+	s, err := New(WithRunner(runner))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{Role: "user", Content: "continue"},
+			{Role: "assistant", Content: "partial "},
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleChatCompletions(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, model.RoleAssistant, runner.gotMsg.Role)
+	assert.Equal(t, "partial ", runner.gotMsg.Content)
+	require.Len(t, runner.gotOpts.Messages, 1)
+	assert.Equal(t, model.RoleUser, runner.gotOpts.Messages[0].Role)
+}
+
+// parseSSEChunks extracts openAIChunk payloads from an SSE response body.
+// It returns the parsed chunks and whether the [DONE] marker was seen.
+func parseSSEChunks(t *testing.T, body string) ([]openAIChunk, bool) {
+	t.Helper()
+	var chunks []openAIChunk
+	var sawDone bool
+	for _, block := range strings.Split(body, sseLineEnding) {
+		line := strings.TrimPrefix(strings.TrimSpace(block), sseDataPrefix)
+		if line == "" {
+			continue
+		}
+		if line == sseDoneMarker {
+			sawDone = true
+			continue
+		}
+		var chunk openAIChunk
+		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+			t.Fatalf("failed to unmarshal SSE chunk %q: %v", line, err)
+		}
+		chunks = append(chunks, chunk)
+	}
+	return chunks, sawDone
 }
