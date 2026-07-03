@@ -604,9 +604,10 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 				adminRuntimeSelectField(
 					"tools.defer_to_dynamic_agent_mode",
 					"Deferred Tool Surface Mode",
-					"Control whether broad tool surfaces are loaded "+
-						"directly or through tool_search and "+
-						"dynamic_agent.",
+					"Control whether broad tool surfaces stay "+
+						"direct on the parent agent or move behind "+
+						"tool_search and dynamic_agent. Default "+
+						"is off.",
 					[]adminRuntimeConfigKeyRef{
 						adminRuntimeKey("tools"),
 						adminRuntimeKey(

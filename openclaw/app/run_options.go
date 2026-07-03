@@ -339,7 +339,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 		MemoryAutoPolicy: summaryPolicyAny,
 
-		DeferToolSurfaceMode:               deferToolSurfaceModeAuto,
+		DeferToolSurfaceMode:               deferToolSurfaceModeOff,
 		DeferToolSurfaceDefaultDirectTools: true,
 	}
 
@@ -928,8 +928,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 	fs.StringVar(
 		&opts.DeferToolSurfaceMode,
 		flagDeferToolSurfaceMode,
-		deferToolSurfaceModeAuto,
-		"Deferred tool surface mode: off, on, auto",
+		deferToolSurfaceModeOff,
+		"Deferred tool surface mode: off, on, auto (default off)",
 	)
 	fs.IntVar(
 		&opts.DeferToolSurfaceChars,
