@@ -123,6 +123,20 @@ func TestComparatorDetectsEventStateDeltaDiff(t *testing.T) {
 	requireDiff(t, result.Diffs, "events[state.delta].state_delta[color]", "blue", "")
 }
 
+func TestComparatorDetectsEventFilterKeyDiff(t *testing.T) {
+	a := testSnapshotWithEvents("a", []event.Event{
+		*testEvent("filter.key", "assistant", "same"),
+	})
+	b := testSnapshotWithEvents("b", []event.Event{
+		*testEvent("filter.key", "assistant", "same"),
+	})
+	a.Session.Events[0].FilterKey = "branch"
+
+	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), InMemoryProfile())
+	require.Equal(t, StatusFailed, result.Status)
+	requireDiff(t, result.Diffs, "events[filter.key].filter_key", "branch", "")
+}
+
 func TestComparatorDetectsPublicEventExtensionDiff(t *testing.T) {
 	a := testSnapshotWithEvents("a", []event.Event{
 		*testEvent("extension", "assistant", "same"),

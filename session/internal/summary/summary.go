@@ -13,6 +13,7 @@ package summary
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,7 +42,7 @@ func computeDeltaSince(sess *session.Session, since time.Time, filterKey string)
 			continue
 		}
 		// Apply filterKey filter
-		if filterKey != "" && !e.Filter(filterKey) {
+		if !matchesSummaryFilter(e, filterKey) {
 			continue
 		}
 		out = append(out, e)
@@ -70,7 +71,7 @@ func computeDeltaAfterBoundary(
 		if !eventAfterBoundaryIndex(i, e, startIndex, boundary) {
 			continue
 		}
-		if filterKey != "" && !e.Filter(filterKey) {
+		if !matchesSummaryFilter(e, filterKey) {
 			continue
 		}
 		out = append(out, e)
@@ -111,6 +112,23 @@ func eventAfterBoundaryIndex(
 		return true
 	}
 	return !evt.Timestamp.Before(cutoff)
+}
+
+func matchesSummaryFilter(e event.Event, filterKey string) bool {
+	if filterKey == "" {
+		return true
+	}
+	eventFilterKey := e.FilterKey
+	if e.Version != event.CurrentVersion && e.Branch != "" {
+		eventFilterKey = e.Branch
+	}
+	if eventFilterKey == "" {
+		return false
+	}
+	filterKey += event.FilterKeyDelimiter
+	eventFilterKey += event.FilterKeyDelimiter
+	return strings.HasPrefix(filterKey, eventFilterKey) ||
+		strings.HasPrefix(eventFilterKey, filterKey)
 }
 
 func laterBoundary(

@@ -127,8 +127,9 @@ var CaseSummaryWithFilterKey = ReplayCase{
 	Name:        "summary_with_filter_key",
 	Description: "summary creation with non-empty filter key",
 	Steps: []ReplayStep{
-		AppendEventStep{Key: "c14.user.1", Event: userEvent("c14.user.1", "branch summary input")},
-		AppendEventStep{Key: "c14.assistant.1", Event: assistantEvent("c14.assistant.1", "branch summary result")},
+		AppendEventStep{Key: "c14.user.1", Event: eventWithFilterKey(userEvent("c14.user.1", "branch summary input"), "branch")},
+		AppendEventStep{Key: "c14.assistant.1", Event: eventWithFilterKey(assistantEvent("c14.assistant.1", "branch summary result"), "branch")},
+		AppendEventStep{Key: "c14.full.1", Event: userEvent("c14.full.1", "full summary input")},
 		CreateSummaryStep{Key: "c14.summary", SessionKey: defaultSessionKey, FilterKey: "branch", Force: true},
 		GetSessionStep{Key: "c14.get", SessionKey: defaultSessionKey},
 	},
@@ -229,6 +230,11 @@ func assistantEvent(key, content string) *event.Event {
 		Choices: []model.Choice{{Message: model.NewAssistantMessage(content)}},
 	}, event.WithTag(key))
 	evt.Timestamp = fixedTime
+	return evt
+}
+
+func eventWithFilterKey(evt *event.Event, filterKey string) *event.Event {
+	evt.FilterKey = filterKey
 	return evt
 }
 

@@ -122,6 +122,20 @@ func TestSummaryReplayCasesRunWithFakeSummarizer(t *testing.T) {
 		require.NotEmpty(t, snapshot.Session.Summaries, tc.replayCase.Name)
 		require.Contains(t, snapshot.Session.Summaries, tc.filterKey, tc.replayCase.Name)
 		require.NotEmpty(t, snapshot.Session.Summaries[tc.filterKey].Summary, tc.replayCase.Name)
+		if tc.replayCase.Name == CaseSummaryWithFilterKey.Name {
+			userEvent := requireEventByTag(t, snapshot.Session.Events, "c14.user.1")
+			assistantEvent := requireEventByTag(t, snapshot.Session.Events, "c14.assistant.1")
+			fullEvent := requireEventByTag(t, snapshot.Session.Events, "c14.full.1")
+			require.Equal(t, "branch", userEvent.FilterKey)
+			require.Equal(t, "branch", assistantEvent.FilterKey)
+			require.Empty(t, fullEvent.FilterKey)
+
+			branchSummary := snapshot.Session.Summaries["branch"]
+			require.NotNil(t, branchSummary.Boundary)
+			require.Equal(t, "branch", branchSummary.Boundary.FilterKey)
+			require.Equal(t, assistantEvent.ID, branchSummary.Boundary.LastEventID)
+			require.NotEqual(t, fullEvent.ID, branchSummary.Boundary.LastEventID)
+		}
 		text, ok := sessionSvc.GetSessionSummaryText(context.Background(), snapshot.Session)
 		if tc.filterKey != session.SummaryFilterKeyAllContents {
 			text, ok = sessionSvc.GetSessionSummaryText(
@@ -279,6 +293,17 @@ func eventForSummary(contents ...string) []event.Event {
 		events = append(events, *testEvent("summary.event."+string(rune('a'+i)), "", content))
 	}
 	return events
+}
+
+func requireEventByTag(t *testing.T, events []event.Event, tag string) event.Event {
+	t.Helper()
+	for i := range events {
+		if eventLogicalKey(&events[i], i) == tag {
+			return events[i]
+		}
+	}
+	t.Fatalf("event with tag %q not found in %#v", tag, events)
+	return event.Event{}
 }
 
 func summarySnapshot(backend string, summaries map[string]*session.Summary) *SessionSnapshot {

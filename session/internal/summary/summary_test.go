@@ -141,6 +141,65 @@ func TestSummarizeSession_WritesSummaryBoundary(t *testing.T) {
 	assert.Equal(t, "event-2", sum.Boundary.LastEventID)
 }
 
+func TestSummarizeSession_FilterKeyBoundaryIgnoresEmptyFilterKeyEvent(t *testing.T) {
+	t1 := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Minute)
+	t3 := t2.Add(time.Minute)
+	sess := &session.Session{
+		ID: "s1",
+		Events: []event.Event{
+			{
+				ID:        "branch-user",
+				FilterKey: "branch",
+				Timestamp: t1,
+				Version:   event.CurrentVersion,
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "branch input",
+				}}}},
+			},
+			{
+				ID:        "branch-assistant",
+				FilterKey: "branch",
+				Timestamp: t2,
+				Version:   event.CurrentVersion,
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "branch output",
+				}}}},
+			},
+			{
+				ID:        "full-user",
+				Timestamp: t3,
+				Version:   event.CurrentVersion,
+				Response: &model.Response{Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleUser,
+					Content: "full input",
+				}}}},
+			},
+		},
+	}
+
+	updated, err := SummarizeSession(
+		context.Background(),
+		&fakeSummarizer{allow: true, out: "summary"},
+		sess,
+		"branch",
+		true,
+	)
+	require.NoError(t, err)
+	require.True(t, updated)
+
+	sess.SummariesMu.RLock()
+	sum := sess.Summaries["branch"]
+	sess.SummariesMu.RUnlock()
+	require.NotNil(t, sum)
+	require.NotNil(t, sum.Boundary)
+	require.Equal(t, "branch", sum.Boundary.FilterKey)
+	require.Equal(t, "branch-assistant", sum.Boundary.LastEventID)
+	require.True(t, sum.Boundary.CutoffAt.Equal(t2.UTC()))
+}
+
 func TestSummarizeSession_UsesPreviousBoundaryCutoff(t *testing.T) {
 	t1 := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
 	t2 := t1.Add(time.Minute)
