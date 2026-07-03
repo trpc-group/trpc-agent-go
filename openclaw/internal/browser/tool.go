@@ -1397,6 +1397,7 @@ func (t *Tool) handleSnapshot(
 	if err != nil {
 		return Result{}, err
 	}
+	raw = compactBrowserErrorResult(raw)
 	result := t.textResult(
 		actionSnapshot,
 		profile,
@@ -1445,6 +1446,7 @@ func (t *Tool) handleScreenshot(
 	if err != nil {
 		return Result{}, err
 	}
+	raw = compactBrowserErrorResult(raw)
 
 	result := newBaseResult(
 		actionScreenshot,
@@ -1482,6 +1484,7 @@ func (t *Tool) handleNavigate(
 	if err != nil {
 		return Result{}, err
 	}
+	raw = compactBrowserErrorResult(raw)
 	return t.textResult(
 		actionNavigate,
 		profile,
@@ -2776,6 +2779,7 @@ func (t *Tool) textResult(
 	maxChars *int,
 	raw any,
 ) Result {
+	raw = compactBrowserErrorResult(raw)
 	result := newBaseResult(
 		action,
 		profile,
