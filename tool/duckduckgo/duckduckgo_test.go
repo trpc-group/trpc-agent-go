@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -348,6 +349,88 @@ func TestDDGTool_SERPFallbackOnChallenge(t *testing.T) {
 	require.Contains(t, result.Summary, "fallback from html")
 }
 
+func TestDDGTool_SERPBothBackendsChallengeReturnsBlocker(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+			switch r.URL.Path {
+			case "/html/", "/lite/":
+				_, _ = w.Write([]byte(`
+<html><body>
+  <div class="anomaly-modal__title">
+    Unfortunately, bots use DuckDuckGo too.
+  </div>
+</body></html>`))
+			default:
+				t.Fatalf("unexpected path %s", r.URL.Path)
+			}
+		},
+	))
+	defer server.Close()
+
+	ddgTool := &ddgTool{
+		httpClient: server.Client(),
+		baseURL:    server.URL + "/html/",
+		backend:    backendHTML,
+		userAgent:  "test-agent/1.0",
+	}
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA benchmark"},
+	)
+	require.NoError(t, err)
+	require.Empty(t, result.Results)
+	require.Contains(t, result.Summary, "html and lite")
+	require.Contains(t, result.Summary, "anti-bot challenge")
+	require.Contains(t, result.Summary, "direct URLs")
+}
+
+func TestDDGTool_SERPTransportAndChallengeReturnsBlocker(t *testing.T) {
+	t.Parallel()
+
+	searchTool := &ddgTool{
+		httpClient: &http.Client{Transport: roundTripFunc(
+			func(r *http.Request) (*http.Response, error) {
+				require.Equal(t, "GAIA benchmark", r.URL.Query().Get("q"))
+				switch r.URL.Path {
+				case "/html/":
+					return nil, errors.New(
+						"server gave HTTP response to HTTPS client",
+					)
+				case "/lite/":
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body: io.NopCloser(strings.NewReader(`
+<html><body>
+  <div class="anomaly-modal__title">
+    Unfortunately, bots use DuckDuckGo too.
+  </div>
+</body></html>`)),
+						Header: make(http.Header),
+					}, nil
+				default:
+					t.Fatalf("unexpected path %s", r.URL.Path)
+					return nil, nil
+				}
+			},
+		)},
+		baseURL:   "https://example.com/html/",
+		backend:   backendHTML,
+		userAgent: "test-agent/1.0",
+	}
+	result, err := searchTool.search(
+		context.Background(),
+		searchRequest{Query: "GAIA benchmark"},
+	)
+	require.NoError(t, err)
+	require.Empty(t, result.Results)
+	require.Contains(t, result.Summary, "both unavailable")
+	require.Contains(t, result.Summary, "transport errors")
+	require.Contains(t, result.Summary, "anti-bot challenge")
+}
+
 func TestDDGTool_SERPHTTPFallbackForPlainHTTPOnHTTPS(t *testing.T) {
 	t.Parallel()
 
@@ -547,8 +630,8 @@ func TestDDGTool_SERPFallbackFailureAddsContext(t *testing.T) {
   </div>
 </body></html>`))
 			case "/lite/":
-				w.WriteHeader(http.StatusServiceUnavailable)
-				_, _ = w.Write([]byte("temporarily unavailable"))
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte("unexpected upstream failure"))
 			default:
 				t.Fatalf("unexpected path %s", r.URL.Path)
 			}
