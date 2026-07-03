@@ -1347,6 +1347,10 @@ func NewRuntimeWithOptions(
 		opts.SkillsOverviewLimit,
 		splitCSV(opts.SkillsOverviewPinned),
 	)
+	gwOpts = appendToolCallArgumentsJSONRepairGatewayOption(
+		gwOpts,
+		opts.ToolCallArgumentsJSONRepair,
+	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -1963,6 +1967,10 @@ func run(
 		gwOpts,
 		opts.SkillsOverviewLimit,
 		splitCSV(opts.SkillsOverviewPinned),
+	)
+	gwOpts = appendToolCallArgumentsJSONRepairGatewayOption(
+		gwOpts,
+		opts.ToolCallArgumentsJSONRepair,
 	)
 	gwOpts = append(
 		gwOpts,

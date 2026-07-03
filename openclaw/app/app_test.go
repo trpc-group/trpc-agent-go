@@ -1565,6 +1565,28 @@ func TestRuntimeGatewayRunOptionsEdgeCases(t *testing.T) {
 	require.Nil(t, input.Extensions)
 }
 
+func TestToolCallArgumentsJSONRepairRunOptionResolver(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "enabled", enabled: true},
+		{name: "disabled", enabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, runOpts, err := buildToolCallArgumentsJSONRepairRunOptionResolver(
+				tc.enabled,
+			)(context.Background(), gateway.RunOptionInput{})
+			require.NoError(t, err)
+			opts := agent.NewRunOptions(runOpts...)
+			require.NotNil(t, opts.ToolCallArgumentsJSONRepairEnabled)
+			require.Equal(t, tc.enabled, *opts.ToolCallArgumentsJSONRepairEnabled)
+		})
+	}
+}
+
 func TestRuntimePostToolPromptOption(t *testing.T) {
 	t.Parallel()
 
