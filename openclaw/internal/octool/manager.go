@@ -47,6 +47,8 @@ type Manager struct {
 	maxLines             int
 	jobTTL               time.Duration
 	timeout              time.Duration
+	maxTimeout           time.Duration
+	maxYield             time.Duration
 	baseEnv              map[string]string
 	policy               CommandPolicy
 	redactor             OutputRedactor
@@ -79,6 +81,26 @@ func WithDefaultTimeout(d time.Duration) Option {
 	return func(m *Manager) {
 		if d > 0 {
 			m.timeout = d
+		}
+	}
+}
+
+// WithMaxTimeout caps command runtime, including timeout_sec requested by the
+// model. Non-positive values preserve the legacy uncapped behavior.
+func WithMaxTimeout(d time.Duration) Option {
+	return func(m *Manager) {
+		if d > 0 {
+			m.maxTimeout = d
+		}
+	}
+}
+
+// WithMaxYield caps how long exec_command and write_stdin wait before returning
+// interim output. Non-positive values preserve the legacy uncapped behavior.
+func WithMaxYield(d time.Duration) Option {
+	return func(m *Manager) {
+		if d > 0 {
+			m.maxYield = d
 		}
 	}
 }
@@ -178,14 +200,9 @@ func (m *Manager) Exec(
 	if params.YieldMs != nil && *params.YieldMs >= 0 {
 		yieldMs = *params.YieldMs
 	}
+	yieldMs = m.clampYieldMs(yieldMs)
 
-	timeout := m.timeout
-	if params.TimeoutS != nil && *params.TimeoutS > 0 {
-		timeout = time.Duration(*params.TimeoutS) * time.Second
-	}
-	if timeout <= 0 {
-		timeout = time.Duration(defaultTimeoutS) * time.Second
-	}
+	timeout := m.commandTimeout(params.TimeoutS)
 
 	if !params.Background && yieldMs == 0 && !params.Pty {
 		out, code, err := runForeground(
@@ -206,7 +223,7 @@ func (m *Manager) Exec(
 		}, nil
 	}
 
-	sess, err := m.startBackground(params, timeout, redact)
+	sess, err := m.startBackground(ctx, params, timeout, redact)
 	if err != nil {
 		return execResult{}, err
 	}
@@ -338,11 +355,15 @@ func exitCode(err error) int {
 }
 
 func (m *Manager) startBackground(
+	parentCtx context.Context,
 	params execParams,
 	timeout time.Duration,
 	redact func(string) string,
 ) (*session, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	cmd := shellCmd(ctx, params.Command)
 	cmd.Dir = params.Workdir
 	cmd.Env = mergedEnv(m.baseEnv, params.Env)
@@ -517,6 +538,34 @@ func (m *Manager) limitResultOutput(output string) string {
 		return output
 	}
 	return truncateResultOutput(output, m.maxResultOutputChars)
+}
+
+func (m *Manager) commandTimeout(timeoutS *int) time.Duration {
+	timeout := m.timeout
+	if timeoutS != nil && *timeoutS > 0 {
+		timeout = time.Duration(*timeoutS) * time.Second
+	}
+	if timeout <= 0 {
+		timeout = time.Duration(defaultTimeoutS) * time.Second
+	}
+	if m.maxTimeout > 0 && timeout > m.maxTimeout {
+		return m.maxTimeout
+	}
+	return timeout
+}
+
+func (m *Manager) clampYieldMs(yieldMs int) int {
+	if yieldMs <= 0 || m == nil || m.maxYield <= 0 {
+		return yieldMs
+	}
+	maxMs := int(m.maxYield / time.Millisecond)
+	if maxMs <= 0 {
+		maxMs = 1
+	}
+	if yieldMs > maxMs {
+		return maxMs
+	}
+	return yieldMs
 }
 
 func truncateResultOutput(output string, maxChars int) string {

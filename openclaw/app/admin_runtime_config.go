@@ -689,6 +689,48 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 					},
 				),
 				adminRuntimeTextField(
+					"tools.host_exec_max_timeout",
+					"Host Exec Max Timeout",
+					"Maximum timeout for host exec_command calls, "+
+						"including timeout_sec requested by the model. "+
+						"Empty or 0 disables this cap.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"host_exec_max_timeout",
+							"hostExecMaxTimeout",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.HostExecMaxTimeout <= 0 {
+							return ""
+						}
+						return opts.HostExecMaxTimeout.String()
+					},
+				),
+				adminRuntimeTextField(
+					"tools.host_exec_max_yield",
+					"Host Exec Max Yield",
+					"Maximum wait before exec_command or write_stdin "+
+						"returns interim output. Empty or 0 disables "+
+						"this cap.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"host_exec_max_yield",
+							"hostExecMaxYield",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.HostExecMaxYield <= 0 {
+							return ""
+						}
+						return opts.HostExecMaxYield.String()
+					},
+				),
+				adminRuntimeTextField(
 					"tools.defer_direct_tools",
 					"Deferred Direct Tools",
 					"Comma-separated additional tool names to keep "+
