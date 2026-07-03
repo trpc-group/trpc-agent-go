@@ -226,7 +226,7 @@ The metric file contains two metrics. The key fields are shown below.
 
 ### Construct Engine
 
-When constructing the PromptIter `Engine`, provide the target Agent and `AgentEvaluator` first. The target Agent is used to export the structure snapshot, and `AgentEvaluator` is used to run training-set and validation-set evaluation. Candidate patches also depend on `Backwarder`, `Aggregator`, and `Optimizer`. `Backwarder` performs backpropagation attribution and converts training-set failure signals into text gradients, that is, modification directions pointing to related steps and prompts. `Aggregator` aggregates text gradients by merging multiple text gradients on the same prompt to be modified. `Optimizer` generates optimization patches by producing a candidate patch for that prompt from the aggregated result.
+When constructing the PromptIter `Engine`, provide the target Agent, `AgentEvaluator`, and three PromptIter worker components. The target Agent is used to export the structure snapshot, and `AgentEvaluator` is used to run training-set and validation-set evaluation. Candidate patches also depend on `Backwarder`, `Aggregator`, and `Optimizer`. `Backwarder` performs backpropagation attribution and converts training-set failure signals into text gradients, that is, modification directions pointing to related steps and prompts. `Aggregator` aggregates text gradients by merging multiple text gradients on the same prompt to be modified. `Optimizer` generates optimization patches by producing a candidate patch for that prompt from the aggregated result.
 
 ```go
 import (
@@ -263,11 +263,11 @@ if err != nil {
 // Engine binds the target Agent, evaluator, and three PromptIter worker components.
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -378,7 +378,7 @@ The example enables evaluation-case-level concurrent inference and concurrent ev
 
 ### View Results
 
-After synchronous prompt iteration finishes, `engine.Run(...)` returns a `RunResult`. The example prints the structure ID, iteration target, initial prompt, final accepted baseline prompt, validation score, and each round's decision in the terminal.
+After synchronous prompt iteration finishes, `engine.Run(...)` returns a `RunResult`. The example prints the iteration target, initial prompt, final accepted baseline prompt, validation score, and each round's decision in the terminal.
 
 Example output is shown below.
 
@@ -410,7 +410,7 @@ As shown below, PromptIter starts iterating from the initial prompt. At run star
 - **Validation Evaluation** runs validation-set evaluation on the candidate prompt snapshot and outputs validation scores and metric details.
 - **Accept Policy** compares the candidate prompt snapshot with the validation result of the current baseline and decides whether to update the current baseline.
 - **Stop Policy** decides whether to end the current run according to run state. If no stop condition is met, the workflow returns to training-set evaluation and enters the next round.
-- **Run Result** summarizes the structure snapshot, initial baseline validation, training evaluation, failure signals, backpropagation attribution, text-gradient aggregation, candidate patches, candidate prompt snapshot, validation evaluation, and decision results of the current run.
+- **Run Result** summarizes the initial baseline validation, training evaluation, failure signals, backpropagation attribution, text-gradient aggregation, candidate patches, candidate prompt snapshot, validation evaluation, and decision results of the current run.
 
 One PromptIter run usually contains these steps.
 
@@ -1253,7 +1253,6 @@ type OptimizerOptions struct {
 
 ```go
 import (
-	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 )
 
@@ -1267,8 +1266,6 @@ type RunResult struct {
 	Status RunStatus
 	// CurrentRound records the current or last executed round.
 	CurrentRound int
-	// Structure stores the structure snapshot of the target Agent.
-	Structure *astructure.Snapshot
 	// BaselineValidation stores the validation result of the initial baseline.
 	BaselineValidation *EvaluationResult
 	// AcceptedProfile stores the current baseline Profile.
@@ -1336,11 +1333,12 @@ type Engine interface {
 }
 ```
 
-The default implementation is created through `engine.New`. It requires the target Agent, `AgentEvaluator`, `Backwarder`, `Aggregator`, and `Optimizer`.
+The default implementation is created through `engine.New`. It requires one structure source, `AgentEvaluator`, `Backwarder`, `Aggregator`, and `Optimizer`. There are two structure-source forms. `WithAgent` is used for a local Agent, and Engine exports the structure snapshot from it. `WithStructure` is used for remote integration, and the caller provides an already fetched structure snapshot. Configure exactly one of them.
 
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder"
@@ -1348,14 +1346,31 @@ import (
 )
 
 // New creates the default Engine implementation.
-func New(
-	ctx context.Context,
-	targetAgent agent.Agent,
-	agentEvaluator evaluation.AgentEvaluator,
-	backwarder backwarder.Backwarder,
-	aggregator aggregator.Aggregator,
-	optimizer optimizer.Optimizer,
-) (Engine, error)
+func New(ctx context.Context, opts ...Option) (Engine, error)
+
+// Option configures Engine.
+type Option func(*options)
+
+// WithAgent sets the local Agent used to export the structure snapshot.
+func WithAgent(agentInstance agent.Agent) Option
+
+// WithStructure sets the structure snapshot used by this run directly.
+func WithStructure(structure *astructure.Snapshot) Option
+
+// WithAgentEvaluator sets the training-set and validation-set evaluator.
+func WithAgentEvaluator(agentEvaluator evaluation.AgentEvaluator) Option
+
+// WithBackwarder sets the backpropagation-attribution component.
+func WithBackwarder(backwarderInstance backwarder.Backwarder) Option
+
+// WithAggregator sets the gradient aggregation component.
+func WithAggregator(aggregatorInstance aggregator.Aggregator) Option
+
+// WithOptimizer sets the patch optimization component.
+func WithOptimizer(optimizerInstance optimizer.Optimizer) Option
+
+// WithObserver sets the run event observer and can be passed to Engine.Run.
+func WithObserver(observer Observer) Option
 ```
 
 Example usage:
@@ -1368,11 +1383,11 @@ import (
 // engine.New assembles the synchronous PromptIter iteration entry point.
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -1517,8 +1532,6 @@ func WithStoredResultSlimming(slimming engine.RunResultSlimming) Option
 ```go
 // RunResultSlimming controls which fields in RunResult are omitted before saving or returning.
 type RunResultSlimming struct {
-	// OmitStructure omits the exported Agent structure snapshot.
-	OmitStructure bool
 	// OmitEvaluationCases omits evaluation-case details in each stage's evaluation results.
 	OmitEvaluationCases bool
 	// OmitBackward omits each round's backpropagation-attribution result.
@@ -1902,11 +1915,11 @@ if err != nil {
 // Engine binds the target Agent, evaluator, and three PromptIter worker components.
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -1986,7 +1999,7 @@ if err != nil {
 }
 ```
 
-The `RunResult` returned by `Engine.Run` records the structure ID, iteration target, initial prompt, final baseline prompt, validation score, and each round's decision result.
+The `RunResult` returned by `Engine.Run` records the iteration target, initial prompt, final baseline prompt, validation score, and each round's decision result.
 
 | Output item | Example value |
 | --- | --- |
@@ -2086,11 +2099,11 @@ if err != nil {
 // Engine binds the target Agent, evaluator, and three PromptIter worker components.
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -2205,11 +2218,11 @@ import (
 // engineInstance binds the target Agent, evaluator, and three PromptIter worker components.
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -2246,11 +2259,11 @@ import (
 // engineInstance binds the target Agent, evaluator, and three PromptIter worker components.
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -2432,11 +2445,11 @@ runRequest := &engine.RunRequest{
 // engineInstance binds the target Graph Agent, evaluator, and three PromptIter worker components.
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -2457,6 +2470,59 @@ if err != nil {
 ```
 
 Multi-node iteration follows the main PromptIter workflow. The difference is that one run can write multiple AgentNode `instruction surface` values into `TargetSurfaceIDs`. Training-set failure signals are attributed through backpropagation with the actual execution trace. Later text-gradient aggregation and optimization patch generation are limited to these target prompts.
+
+### Remote Inference Iteration
+
+Remote inference iteration applies when PromptIter and the target Agent are deployed separately. The process running PromptIter handles evaluation, optimization, and acceptance decisions, while the remote Agent service executes the target Agent. During remote inference integration, `AgentEvaluator` uses a remote Runner as the target Runner, and `Engine` is created with the remote structure snapshot. See [tRPC-Agent API service](trpcagent.md) for exposing the remote Agent service, and [remote tRPC-Agent Runner](runner.md#remote-trpc-agent-runner) for creating the remote Runner.
+
+See the complete example at [examples/evaluation/promptiter/remote](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/promptiter/remote).
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
+	trpcagentrunner "trpc.group/trpc-go/trpc-agent-go/runner/trpcagent"
+)
+
+candidateRunner, err := trpcagentrunner.New(
+	candidateAppName,
+	trpcagentrunner.WithTarget(candidateTarget),
+)
+if err != nil {
+	return err
+}
+
+targetStructure, err := candidateRunner.Describe(ctx)
+if err != nil {
+	return err
+}
+
+// AgentEvaluator still uses the remote Runner for train and validation evaluation.
+agentEvaluator, err := evaluation.New(
+	appName,
+	candidateRunner,
+	evaluation.WithEvalSetManager(evalSetManager),
+	evaluation.WithMetricManager(metricManager),
+	evaluation.WithEvalResultManager(evalResultManager),
+	evaluation.WithJudgeRunner(judgeRunner),
+)
+if err != nil {
+	return err
+}
+
+// Engine uses the remote structure snapshot instead of a local Agent.
+engineInstance, err := engine.New(
+	ctx,
+	engine.WithStructure(targetStructure),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
+)
+if err != nil {
+	return err
+}
+```
 
 ### Tool Description Iteration
 

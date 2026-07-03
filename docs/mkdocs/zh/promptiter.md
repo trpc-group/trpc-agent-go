@@ -226,7 +226,7 @@ data/
 
 ### 构造 Engine
 
-构造 PromptIter 的 `Engine` 时，需要先提供待测 Agent 和 `AgentEvaluator`。待测 Agent 用于导出结构快照，`AgentEvaluator` 用于执行训练集和验证集评估。候选补丁还依赖 `Backwarder`、`Aggregator` 和 `Optimizer`。`Backwarder` 负责反向传播归因，把训练集失败信号转成文本梯度，即指向相关步骤和提示词的修改方向。`Aggregator` 负责文本梯度聚合，把同一段待修改提示词上的多条文本梯度合成聚合结果。`Optimizer` 负责优化补丁生成，根据聚合结果生成这段提示词的候选补丁。
+构造 PromptIter 的 `Engine` 时，需要提供待测 Agent、`AgentEvaluator` 和三个 PromptIter 工作组件。待测 Agent 用于导出结构快照，`AgentEvaluator` 用于执行训练集和验证集评估。候选补丁还依赖 `Backwarder`、`Aggregator` 和 `Optimizer`。`Backwarder` 负责反向传播归因，把训练集失败信号转成文本梯度，即指向相关步骤和提示词的修改方向。`Aggregator` 负责文本梯度聚合，把同一段待修改提示词上的多条文本梯度合成聚合结果。`Optimizer` 负责优化补丁生成，根据聚合结果生成这段提示词的候选补丁。
 
 ```go
 import (
@@ -263,11 +263,11 @@ if err != nil {
 // Engine 绑定待测 Agent、评估器和三个 PromptIter 工作组件。
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -378,7 +378,7 @@ go -C examples/evaluation run ./promptiter/syncrun \
 
 ### 查看结果
 
-提示词同步迭代完成后，`engine.Run(...)` 返回 `RunResult`。示例会在终端打印结构 ID、迭代目标、起始提示词、最终采纳的基准提示词、验证分数和每轮判定结果。
+提示词同步迭代完成后，`engine.Run(...)` 返回 `RunResult`。示例会在终端打印迭代目标、起始提示词、最终采纳的基准提示词、验证分数和每轮判定结果。
 
 示例输出如下表所示。
 
@@ -410,7 +410,7 @@ go -C examples/evaluation run ./promptiter/syncrun \
 - **验证集评估 Validation Evaluation** 基于候选提示词快照执行验证集评估，输出验证分数和指标明细。
 - **接受策略 Accept Policy** 对照候选提示词快照与当前基准的验证结果，判断是否更新当前基准。
 - **停止策略 Stop Policy** 根据运行状态判断是否结束本次运行。未满足停止条件时，流程回到训练集评估并进入下一轮。
-- **运行结果 RunResult** 汇总本次运行的结构快照、起始基线验证、训练评估、失败信号、反向传播归因、文本梯度聚合、候选补丁、候选提示词快照、验证评估和判定结果。
+- **运行结果 RunResult** 汇总本次运行的起始基线验证、训练评估、失败信号、反向传播归因、文本梯度聚合、候选补丁、候选提示词快照、验证评估和判定结果。
 
 一次 PromptIter 运行通常包含以下步骤。
 
@@ -1260,7 +1260,6 @@ type OptimizerOptions struct {
 
 ```go
 import (
-	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 )
 
@@ -1274,8 +1273,6 @@ type RunResult struct {
 	Status             RunStatus
 	// CurrentRound 记录当前或最后执行到的轮次。
 	CurrentRound       int
-	// Structure 保存待测 Agent 的结构快照。
-	Structure          *astructure.Snapshot
 	// BaselineValidation 保存起始基线的验证结果。
 	BaselineValidation *EvaluationResult
 	// AcceptedProfile 保存当前基准 Profile。
@@ -1343,11 +1340,12 @@ type Engine interface {
 }
 ```
 
-默认实现通过 `engine.New` 创建，需要注入待测 Agent、`AgentEvaluator`、`Backwarder`、`Aggregator` 和 `Optimizer`，定义如下。
+默认实现通过 `engine.New` 创建，需要注入一个结构来源、`AgentEvaluator`、`Backwarder`、`Aggregator` 和 `Optimizer`。结构来源有两种形式：`WithAgent` 用于本地 Agent，由 Engine 调用结构导出；`WithStructure` 用于远程或平台化场景，由调用方直接提供已获取的结构快照。两者必须且只能配置一个。
 
 ```go
 import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder"
@@ -1355,14 +1353,31 @@ import (
 )
 
 // New 创建默认 Engine 实现。
-func New(
-	ctx context.Context,
-	targetAgent agent.Agent,
-	agentEvaluator evaluation.AgentEvaluator,
-	backwarder backwarder.Backwarder,
-	aggregator aggregator.Aggregator,
-	optimizer optimizer.Optimizer,
-) (Engine, error)
+func New(ctx context.Context, opts ...Option) (Engine, error)
+
+// Option 配置 Engine。
+type Option func(*options)
+
+// WithAgent 设置用于导出结构快照的本地 Agent。
+func WithAgent(agentInstance agent.Agent) Option
+
+// WithStructure 直接设置本次迭代使用的结构快照。
+func WithStructure(structure *astructure.Snapshot) Option
+
+// WithAgentEvaluator 设置训练集和验证集评估器。
+func WithAgentEvaluator(agentEvaluator evaluation.AgentEvaluator) Option
+
+// WithBackwarder 设置反向传播器。
+func WithBackwarder(backwarderInstance backwarder.Backwarder) Option
+
+// WithAggregator 设置梯度聚合器。
+func WithAggregator(aggregatorInstance aggregator.Aggregator) Option
+
+// WithOptimizer 设置补丁优化器。
+func WithOptimizer(optimizerInstance optimizer.Optimizer) Option
+
+// WithObserver 设置运行事件观察器，可传给 Engine.Run。
+func WithObserver(observer Observer) Option
 ```
 
 使用示例如下。
@@ -1376,11 +1391,11 @@ import (
 // engine.New 组装 PromptIter 同步迭代入口。
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -1528,8 +1543,6 @@ func WithStoredResultSlimming(slimming engine.RunResultSlimming) Option
 ```go
 // RunResultSlimming 控制 RunResult 中哪些字段会在保存或返回前被省略。
 type RunResultSlimming struct {
-	// OmitStructure 省略导出的 Agent 结构快照。
-	OmitStructure bool
 	// OmitEvaluationCases 省略各阶段评估结果中的评估用例明细。
 	OmitEvaluationCases bool
 	// OmitBackward 省略每轮反向传播归因结果。
@@ -1918,11 +1931,11 @@ if err != nil {
 // Engine 绑定待测 Agent、评估器和三个 PromptIter 工作组件。
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -2002,7 +2015,7 @@ if err != nil {
 }
 ```
 
-`Engine.Run` 返回的 `RunResult` 会记录结构 ID、迭代目标、起始提示词、最终基准提示词、验证分数和每轮判定结果。
+`Engine.Run` 返回的 `RunResult` 会记录迭代目标、起始提示词、最终基准提示词、验证分数和每轮判定结果。
 
 | 输出项 | 示例值 |
 | --- | --- |
@@ -2102,11 +2115,11 @@ if err != nil {
 // Engine 绑定待测 Agent、评估器和三个 PromptIter 工作组件。
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -2221,11 +2234,11 @@ import (
 // engineInstance 绑定待测 Agent、评估器和三个 PromptIter 工作组件。
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -2262,11 +2275,11 @@ import (
 // engineInstance 绑定待测 Agent、评估器和三个 PromptIter 工作组件。
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -2448,11 +2461,11 @@ runRequest := &engine.RunRequest{
 // engineInstance 绑定待测 Graph Agent、评估器和三个 PromptIter 工作组件。
 engineInstance, err := engine.New(
 	ctx,
-	candidateAgent,
-	agentEvaluator,
-	backwarderInstance,
-	aggregatorInstance,
-	optimizerInstance,
+	engine.WithAgent(candidateAgent),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
 )
 if err != nil {
 	return err
@@ -2473,6 +2486,59 @@ if err != nil {
 ```
 
 多节点迭代沿用 PromptIter 主流程，差异在于一次运行可以把多个 AgentNode 的 `instruction surface` 写入 `TargetSurfaceIDs`。训练集失败信号会结合实际执行轨迹做反向传播归因，后续文本梯度聚合和优化补丁生成都限定在这些目标提示词上。
+
+### 远程推理迭代
+
+远程推理迭代适用于 PromptIter 与待测 Agent 分开部署的场景。运行 PromptIter 的进程负责评估、优化和接受判定，远端 Agent 服务负责执行待测 Agent。接入远程推理时，`AgentEvaluator` 使用远程 Runner 作为待测 Runner，`Engine` 使用远端结构快照创建。远端 Agent 服务接入见 [tRPC-Agent API 服务](trpcagent.md)，远程 Runner 创建见 [远程 tRPC-Agent Runner](runner.md#远程-trpc-agent-runner)。
+
+完整示例见 [examples/evaluation/promptiter/remote](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/promptiter/remote)。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
+	trpcagentrunner "trpc.group/trpc-go/trpc-agent-go/runner/trpcagent"
+)
+
+candidateRunner, err := trpcagentrunner.New(
+	candidateAppName,
+	trpcagentrunner.WithTarget(candidateTarget),
+)
+if err != nil {
+	return err
+}
+
+targetStructure, err := candidateRunner.Describe(ctx)
+if err != nil {
+	return err
+}
+
+// AgentEvaluator 仍使用远程 Runner 执行训练集和验证集评估。
+agentEvaluator, err := evaluation.New(
+	appName,
+	candidateRunner,
+	evaluation.WithEvalSetManager(evalSetManager),
+	evaluation.WithMetricManager(metricManager),
+	evaluation.WithEvalResultManager(evalResultManager),
+	evaluation.WithJudgeRunner(judgeRunner),
+)
+if err != nil {
+	return err
+}
+
+// Engine 使用远端结构快照，而不是本地 Agent。
+engineInstance, err := engine.New(
+	ctx,
+	engine.WithStructure(targetStructure),
+	engine.WithAgentEvaluator(agentEvaluator),
+	engine.WithBackwarder(backwarderInstance),
+	engine.WithAggregator(aggregatorInstance),
+	engine.WithOptimizer(optimizerInstance),
+)
+if err != nil {
+	return err
+}
+```
 
 ### 工具描述迭代
 
