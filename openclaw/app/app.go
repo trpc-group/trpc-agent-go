@@ -262,29 +262,27 @@ const (
 		"prior knowledge, or partial memory when a matching " +
 		"skill exists. Load `SKILL.md` first, then load " +
 		"only the extra docs you still need."
-	openClawHostShellGuidance = "For other general local shell work, " +
-		"use exec_command. Do not use exec_command for public web search " +
+	openClawShellSharedGuidance = "Do not use exec_command for public web search " +
 		"or static page fetches when duckduckgo_search or web_fetch is " +
 		"present; reserve shell network commands for installed media " +
 		"tools, deterministic data processing, or sites not covered by " +
 		"a dedicated web tool. Do not use host system package managers " +
 		"such as apt, yum, dnf, apk, pacman, zypper, or brew from chat; " +
 		"use preconfigured dependencies or ask for an explicit setup " +
-		"flow. For interactive follow-up input, use write_stdin and " +
+		"flow. "
+	openClawHostShellGuidance = "For other general local shell work, " +
+		"use exec_command. " +
+		openClawShellSharedGuidance +
+		"For interactive follow-up input, use write_stdin and " +
 		"kill_session when needed. Use message to send to the current " +
 		"chat or an explicit target. "
 	openClawSandboxShellGuidance = "For other general local shell work, " +
 		"use exec_command. In sandbox mode, exec_command only supports " +
 		"foreground non-interactive commands; write_stdin, kill_session, " +
 		"background execution, TTY allocation, and session continuation " +
-		"are unavailable. Do not use exec_command for public web search " +
-		"or static page fetches when duckduckgo_search or web_fetch is " +
-		"present; reserve shell network commands for installed media " +
-		"tools, deterministic data processing, or sites not covered by " +
-		"a dedicated web tool. Do not use host system package managers " +
-		"such as apt, yum, dnf, apk, pacman, zypper, or brew from chat; " +
-		"use preconfigured dependencies or ask for an explicit setup " +
-		"flow. Use message to send to the current chat or an explicit " +
+		"are unavailable. " +
+		openClawShellSharedGuidance +
+		"Use message to send to the current chat or an explicit " +
 		"target. "
 	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
 		"and spreadsheet uploads already in the chat, prefer " +
