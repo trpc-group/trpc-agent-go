@@ -14,10 +14,11 @@ import "net/http"
 type Option func(*options)
 
 type options struct {
-	target     string
-	basePath   string
-	httpClient *http.Client
-	headers    http.Header
+	target            string
+	basePath          string
+	httpClient        HTTPClient
+	httpClientOptions []HTTPClientOption
+	headers           http.Header
 }
 
 // WithTarget sets the tRPC-Agent API service target.
@@ -34,11 +35,10 @@ func WithBasePath(basePath string) Option {
 	}
 }
 
-// WithHTTPClient sets the HTTP client used by the runner.
-// Custom transports may resolve non-http targets such as service discovery schemes.
-func WithHTTPClient(client *http.Client) Option {
+// WithHTTPClientOptions sets options for the default HTTP client builder.
+func WithHTTPClientOptions(httpOpts ...HTTPClientOption) Option {
 	return func(opts *options) {
-		opts.httpClient = client
+		opts.httpClientOptions = httpOpts
 	}
 }
 
@@ -57,14 +57,16 @@ func WithHeader(key string, value string) Option {
 
 func newOptions(opts ...Option) options {
 	options := options{
-		basePath:   defaultBasePath,
-		headers:    make(http.Header),
-		httpClient: http.DefaultClient,
+		basePath: defaultBasePath,
+		headers:  make(http.Header),
 	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&options)
 		}
+	}
+	if options.httpClient == nil {
+		options.httpClient = DefaultNewHTTPClient(options.httpClientOptions...)
 	}
 	return options
 }

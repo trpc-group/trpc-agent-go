@@ -307,10 +307,14 @@ func TestRunReturnsHTTPStatusError(t *testing.T) {
 }
 
 func TestRunReturnsPostClientError(t *testing.T) {
-	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		return nil, errors.New("dial failed")
-	})}
-	runner, err := New("sports-agent", WithTarget("http://example.com"), WithHTTPClient(client))
+	})
+	runner, err := New(
+		"sports-agent",
+		WithTarget("http://example.com"),
+		WithHTTPClientOptions(WithHTTPClientTransport(transport)),
+	)
 	require.NoError(t, err)
 	events, err := runner.Run(
 		context.Background(),
@@ -617,10 +621,14 @@ func TestDescribeReturnsHTTPStatusError(t *testing.T) {
 }
 
 func TestDescribeReturnsClientError(t *testing.T) {
-	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		return nil, errors.New("dial failed")
-	})}
-	runner, err := New("sports-agent", WithTarget("http://example.com"), WithHTTPClient(client))
+	})
+	runner, err := New(
+		"sports-agent",
+		WithTarget("http://example.com"),
+		WithHTTPClientOptions(WithHTTPClientTransport(transport)),
+	)
 	require.NoError(t, err)
 	got, err := runner.Describe(context.Background())
 	require.Nil(t, got)
@@ -671,7 +679,7 @@ func TestDescribeRejectsEmptyStructure(t *testing.T) {
 
 func TestDescribeAllowsCustomTargetScheme(t *testing.T) {
 	var gotRequest *http.Request
-	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		gotRequest = request
 		body, err := json.Marshal(structureResponse{Structure: testStructureSnapshot()})
 		require.NoError(t, err)
@@ -682,8 +690,12 @@ func TestDescribeAllowsCustomTargetScheme(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader(string(body))),
 			Request:    request,
 		}, nil
-	})}
-	runner, err := New("sports-agent", WithTarget("polaris://trpc.foo.bar"), WithHTTPClient(httpClient))
+	})
+	runner, err := New(
+		"sports-agent",
+		WithTarget("polaris://trpc.foo.bar"),
+		WithHTTPClientOptions(WithHTTPClientTransport(transport)),
+	)
 	require.NoError(t, err)
 	got, err := runner.Describe(context.Background())
 	require.NoError(t, err)
@@ -742,7 +754,7 @@ func TestCloseIsNoop(t *testing.T) {
 
 func TestRunAllowsCustomTargetScheme(t *testing.T) {
 	var gotRequest *http.Request
-	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		gotRequest = request
 		completion := event.NewResponseEvent("inv-1", "sports-agent", &model.Response{
 			Object: model.ObjectTypeRunnerCompletion,
@@ -764,8 +776,12 @@ func TestRunAllowsCustomTargetScheme(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader(string(body))),
 			Request:    request,
 		}, nil
-	})}
-	runner, err := New("sports-agent", WithTarget("polaris://trpc.foo.bar"), WithHTTPClient(client))
+	})
+	runner, err := New(
+		"sports-agent",
+		WithTarget("polaris://trpc.foo.bar"),
+		WithHTTPClientOptions(WithHTTPClientTransport(transport)),
+	)
 	require.NoError(t, err)
 	events, err := runner.Run(
 		context.Background(),

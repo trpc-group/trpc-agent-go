@@ -76,6 +76,11 @@ func (s *Server) Handler() http.Handler {
 	return s.handler
 }
 
+// BasePath returns the base path exposed by the tRPC-Agent API server.
+func (s *Server) BasePath() string {
+	return s.basePath
+}
+
 func (s *Server) setupHandler() error {
 	mux := http.NewServeMux()
 	if s.agent != nil {
