@@ -29,16 +29,17 @@ func backendCapabilities(backend BackendType, profile PermissionProfile) backend
 	supported := backend == BackendAuto || backend == BackendMacOSSandboxExec
 	managed := supported && profile.enforcement() == enforcementManaged
 	return backendCapabilitiesInfo{
-		OSSandbox:          managed,
-		PTY:                false,
-		Stdin:              true,
-		NetworkIsolation:   managed,
-		DenyReadGlob:       managed,
-		Snapshot:           false,
-		Ports:              false,
-		ExternalPathGrants: managed,
-		ProtectedPathMasks: managed,
-		PerCommandGrants:   true,
+		OSSandbox:                managed,
+		PTY:                      false,
+		Stdin:                    true,
+		NetworkIsolation:         managed,
+		DenyReadGlob:             managed,
+		Snapshot:                 false,
+		Ports:                    false,
+		ExternalPathGrants:       managed,
+		ProtectedPathMasks:       managed,
+		PerCommandGrants:         true,
+		RuntimeDenialDiagnostics: managed,
 	}
 }
 
@@ -49,12 +50,13 @@ func (r *Runtime) osSandboxCommand(
 	cwd string,
 	env []string,
 	spec codeexecutor.RunProgramSpec,
+	diagnostics sandboxDenialRun,
 ) (*exec.Cmd, string, commandCleanup, error) {
 	seatbelt, err := r.macosPreflight()
 	if err != nil {
 		return nil, string(BackendMacOSSandboxExec), nil, err
 	}
-	policy, err := r.macosSeatbeltProfile(profile, ws)
+	policy, err := r.macosSeatbeltProfile(profile, ws, diagnostics)
 	if err != nil {
 		return nil, string(BackendMacOSSandboxExec), nil, err
 	}

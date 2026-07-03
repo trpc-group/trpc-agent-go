@@ -28,6 +28,21 @@ func (r *Runtime) RunProgram(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
+	return r.runProgram(ctx, ws, spec)
+}
+
+func (r *Runtime) runProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	diagnosticsCh := diagnosticsChanFromContext(ctx)
+	runDiagnostics := Diagnostics{}
+	if diagnosticsCh != nil {
+		defer func() {
+			diagnosticsCh <- runDiagnostics
+		}()
+	}
 	prep, err := r.prepareRun(ctx, ws, spec)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
@@ -41,7 +56,17 @@ func (r *Runtime) RunProgram(
 	defer cancel()
 	start := time.Now()
 	env := r.buildEnvironment(ws, spec)
-	cmd, backendName, cleanup, err := r.commandForProfile(runCtx, prep.profile, ws, prep.cwd, env, spec)
+	diagnostics := sandboxDenialRun{}
+	if diagnosticsCh != nil {
+		diagnostics = r.newSandboxDenialRun(prep.profile)
+	}
+	if diagnostics.enabled {
+		_ = r.ensureDenialMonitor()
+		diagnostics = r.newSandboxDenialRun(prep.profile)
+	}
+	cmd, backendName, cleanup, err := r.commandForProfile(
+		runCtx, prep.profile, ws, prep.cwd, env, spec, diagnostics,
+	)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
@@ -82,6 +107,14 @@ func (r *Runtime) RunProgram(
 		ExitCode: exitCode,
 		Duration: duration,
 		TimedOut: timedOut,
+	}
+	if diagnostics.enabled {
+		denials := r.collectSandboxDenials(
+			diagnostics.runTag,
+			spec.Cmd,
+			sandboxDenialSettleTimeout,
+		)
+		runDiagnostics.Denials = denials
 	}
 	if timedOut {
 		return result, &sandboxError{
@@ -181,6 +214,7 @@ func (r *Runtime) commandForProfile(
 	cwd string,
 	env []string,
 	spec codeexecutor.RunProgramSpec,
+	diagnostics sandboxDenialRun,
 ) (*exec.Cmd, string, commandCleanup, error) {
 	switch profile.enforcement() {
 	case enforcementDisabled:
@@ -197,7 +231,7 @@ func (r *Runtime) commandForProfile(
 			errors.New("external sandbox profile cannot be executed by local sandbox runtime"),
 		)
 	default:
-		return r.osSandboxCommand(ctx, profile, ws, cwd, env, spec)
+		return r.osSandboxCommand(ctx, profile, ws, cwd, env, spec, diagnostics)
 	}
 }
 

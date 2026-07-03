@@ -36,4 +36,8 @@ type backendCapabilitiesInfo struct {
 	ExternalPathGrants bool
 	ProtectedPathMasks bool
 	PerCommandGrants   bool
+	// RuntimeDenialDiagnostics reports whether the backend can collect denial
+	// logs. On macOS, correlation precision is determined at runtime via
+	// Runtime.DiagnosticsCapability().
+	RuntimeDenialDiagnostics bool
 }

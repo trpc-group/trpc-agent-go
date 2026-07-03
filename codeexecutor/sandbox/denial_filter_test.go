@@ -1,0 +1,138 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package sandbox
+
+import "testing"
+
+func TestSandboxDenialConfiguredFilters(t *testing.T) {
+	denials := []Denial{{
+		Operation: "file-read-data",
+		Target:    "/dev/dtracehelper",
+		Raw:       "Sandbox: cat deny file-read-data /dev/dtracehelper",
+	}}
+	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+		Ignore: []DenialIgnoreRule{{
+			Scope:   DenialFilterAll,
+			Targets: []DenialTargetMatcher{{Prefix: "/dev/dtracehelper"}},
+		}},
+	})
+	if len(filtered) != 0 {
+		t.Fatalf("configured filter = %#v, want empty", filtered)
+	}
+	if filtered != nil {
+		t.Fatalf("configured filter returned %#v, want nil empty result", filtered)
+	}
+}
+
+func TestSandboxDenialCommandPatternFilter(t *testing.T) {
+	denials := []Denial{{
+		Operation: "file-read-data",
+		Target:    "/private/tmp/foo",
+	}}
+	filtered := applySandboxDenialFilters(denials, "/bin/gh", DenialFilter{
+		Ignore: []DenialIgnoreRule{{
+			Scope:   DenialFilterAll,
+			Command: "gh",
+			Targets: []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
+		}},
+	})
+	if len(filtered) != 0 {
+		t.Fatalf("command-pattern filter = %#v, want empty", filtered)
+	}
+	kept := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+		Ignore: []DenialIgnoreRule{{
+			Scope:   DenialFilterAll,
+			Command: "gh",
+			Targets: []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
+		}},
+	})
+	if len(kept) != 1 {
+		t.Fatalf("command-pattern kept = %#v, want one denial", kept)
+	}
+}
+
+func TestSandboxDenialDisableAutomatic(t *testing.T) {
+	denials := []Denial{{
+		Operation: "mach-lookup",
+		Target:    "com.apple.diagnosticd",
+	}}
+	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+		DisableAutomatic: true,
+	})
+	if len(filtered) != 1 {
+		t.Fatalf("disable automatic = %#v, want diagnosticd denial kept", filtered)
+	}
+}
+
+func TestSandboxDenialDeduplicatesByOperationAndTarget(t *testing.T) {
+	denials := []Denial{
+		{Operation: "file-read-data", Target: "/private/tmp/foo", Raw: "first"},
+		{Operation: "file-read-data", Target: "/private/tmp/foo", Raw: "second"},
+		{Operation: "file-read-metadata", Target: "/private/tmp/foo", Raw: "third"},
+	}
+	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{})
+	if len(filtered) != 2 {
+		t.Fatalf("deduped denials = %#v, want two operation+target pairs", filtered)
+	}
+}
+
+func TestSandboxDenialTargetSuffixGlobAndRawFilters(t *testing.T) {
+	denials := []Denial{
+		{Operation: "file-read-data", Target: "/private/tmp/cache.sock"},
+		{Operation: "file-read-data", Target: "/private/tmp/app.env"},
+		{Operation: "file-read-data", Target: "/private/tmp/report.log", Raw: "duplicate report"},
+	}
+	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+		Ignore: []DenialIgnoreRule{
+			{Targets: []DenialTargetMatcher{{Suffix: ".sock"}}},
+			{Targets: []DenialTargetMatcher{{Glob: "/private/tmp/*.env"}}},
+			{RawContains: []string{"duplicate report"}},
+		},
+	})
+	if filtered != nil {
+		t.Fatalf("suffix/glob/raw filter = %#v, want nil", filtered)
+	}
+}
+
+func TestSandboxDenialFilterScopeMismatchDoesNotApply(t *testing.T) {
+	denials := []Denial{{
+		Operation: "file-read-data",
+		Target:    "/private/tmp/foo",
+	}}
+	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+		Ignore: []DenialIgnoreRule{{
+			Scope:   DenialFilterScope("other"),
+			Targets: []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
+		}},
+	})
+	if len(filtered) != 1 {
+		t.Fatalf("scope mismatch filter = %#v, want original denial", filtered)
+	}
+}
+
+func TestCloneSandboxDenialFilterDeepCopiesSlices(t *testing.T) {
+	filter := DenialFilter{
+		Ignore: []DenialIgnoreRule{{
+			Operations:  []string{"file-read-data"},
+			Targets:     []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
+			RawContains: []string{"deny"},
+		}},
+	}
+	clone := cloneDenialFilter(filter)
+	filter.Ignore[0].Operations[0] = "mach-lookup"
+	filter.Ignore[0].Targets[0].Exact = "/private/tmp/bar"
+	filter.Ignore[0].RawContains[0] = "allow"
+
+	if clone.Ignore[0].Operations[0] != "file-read-data" ||
+		clone.Ignore[0].Targets[0].Exact != "/private/tmp/foo" ||
+		clone.Ignore[0].RawContains[0] != "deny" {
+		t.Fatalf("clone shares nested slices: %#v", clone)
+	}
+}

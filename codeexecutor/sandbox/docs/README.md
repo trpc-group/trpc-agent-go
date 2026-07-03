@@ -18,6 +18,10 @@ On macOS, managed sandbox profiles use `/usr/bin/sandbox-exec`. Managed
 execution fails closed if the tool is unavailable or the host rejects Seatbelt
 profiles.
 
+macOS runs can optionally collect Seatbelt denial diagnostics from the unified
+log. See [`SANDBOX_DENIAL_DIAGNOSTICS.md`](SANDBOX_DENIAL_DIAGNOSTICS.md) for
+the opt-in API and output format.
+
 When the runtime itself runs inside Docker, Kubernetes, or a managed container
 platform, the outer container must allow the namespace and mount operations
 needed by `bwrap`. See

@@ -82,6 +82,14 @@ func WithDefaultTimeout(timeout time.Duration) Option {
 	}
 }
 
+// WithDenialFilter configures user-defined sandbox denial filtering for
+// diagnostics output.
+func WithDenialFilter(filter DenialFilter) Option {
+	return func(r *Runtime) {
+		r.setDenialFilter(filter)
+	}
+}
+
 // WithManifest sets the initial sandbox session manifest. The manifest is
 // applied when a workspace is created or reopened.
 func WithManifest(manifest Manifest) Option {
