@@ -2812,6 +2812,16 @@ func TestOpenClawToolingGuidancePrefersSearchTools(t *testing.T) {
 		openClawToolingGuidance,
 		"stop retrying that blocked path",
 	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"diversify instead of repeating the same constrained query",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"try credible mirrors, metadata, publisher, or press-release pages",
+	)
 }
 
 func TestOpenClawDeferredToolingGuidancePairsBrowserWithSearch(
@@ -2834,6 +2844,59 @@ func TestOpenClawDeferredToolingGuidancePairsBrowserWithSearch(
 		openClawDeferredToolingGuidance,
 		"inspect successful web_fetch results first",
 	)
+	require.Contains(
+		t,
+		openClawDeferredToolingGuidance,
+		"diversify queries and evidence sources",
+	)
+}
+
+func TestDynamicAgentBlockerCallbackReplacesBudgetErrors(t *testing.T) {
+	t.Parallel()
+
+	callbacks := tool.NewCallbacks()
+	registerDynamicAgentBlockerCallback(callbacks)
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolName: agenttool.DefaultDynamicToolName,
+			Error:    errors.New("agent error: max LLM calls (45) exceeded"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, dynamicAgentLLMBudgetBlocker, result.CustomResult)
+}
+
+func TestDynamicAgentBlockerCallbackReplacesTimeoutErrors(t *testing.T) {
+	t.Parallel()
+
+	callbacks := tool.NewCallbacks()
+	registerDynamicAgentBlockerCallback(callbacks)
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolName: agenttool.DefaultDynamicToolName,
+			Error:    context.DeadlineExceeded,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, dynamicAgentTimeoutBlocker, result.CustomResult)
+}
+
+func TestDynamicAgentBlockerCallbackKeepsOtherToolErrors(t *testing.T) {
+	t.Parallel()
+
+	callbacks := tool.NewCallbacks()
+	registerDynamicAgentBlockerCallback(callbacks)
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolName: "web_fetch",
+			Error:    errors.New("max LLM calls (45) exceeded"),
+		},
+	)
+	require.NoError(t, err)
+	require.Nil(t, result.CustomResult)
 }
 
 func TestOpenClawToolingGuidanceAvoidsSystemPackageManagers(t *testing.T) {
