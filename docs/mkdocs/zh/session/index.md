@@ -212,6 +212,7 @@ r := runner.NewRunner(
 - 使用 `WithListSessionOnlyMeta` 的 `ListSessions` 不做 hydrate，因为该模式本身会省略 event payload。
 - 通过 `runner.WithSessionService` 传入 wrapped service 后，runner callback、tool、plugin 都会看到同一份 wrapped service。业务代码如果直接调用 `AppendEvent`，也应使用这份 wrapped service，而不是 raw backend。
 - Artifact 生命周期不会自动继承 Session 生命周期。长期保留、TTL、随 Session 删除清理、孤儿 artifact 清理等，需要业务根据所选 Artifact backend 的能力和自身策略自行配置或处理。
+- 只要仍可能读取已经外存的历史 Session，就需要继续使用 wrapped session service。移除 wrapper 或使用不识别 `ContentRef` 的旧版本读取这些 Session，可能导致内容无法 hydrate；回滚前应先完成迁移、清理，或等待相关 Session 与 artifact 按策略过期。
 
 以下内容不会被该能力默认重托管：
 
@@ -220,7 +221,7 @@ r := runner.NewRunner(
 - 已存在的 internal ref 或业务自有引用
 - 自定义 JSON、metadata、tool result payload 内部的任意 blob
 
-失败语义采用 fail-closed：如果开启能力但 Artifact storage 不可用，或 artifact save/load 失败，操作会返回错误，不会静默丢内容。如果 event append 在 artifact 保存成功后失败，框架会对本次 append 保存的 artifacts 提交 best-effort 删除请求。
+失败语义采用 fail-closed：如果开启能力但 Artifact storage 不可用，或 artifact save/load 失败，操作会返回错误，不会静默丢内容。如果在 event 交给 session backend 前 externalization 失败，框架会对本次尝试已保存的 artifacts 提交 best-effort 删除请求；一旦 append 已交给 backend，遇到结果不确定的错误时会保留 artifacts，避免删除已被持久化 event 引用的内容。
 
 ## 核心概念
 

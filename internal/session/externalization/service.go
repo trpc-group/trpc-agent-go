@@ -267,11 +267,9 @@ func (s *Service) AppendEvent(
 	persistedSess := sess.Clone()
 	beforeEvents := len(persistedSess.Events)
 	if err := s.Service.AppendEvent(ctx, persistedSess, persisted, options...); err != nil {
-		bestEffortDelete(ctx, s.artifactService, info, saved)
 		return err
 	}
 	if !appendObserved(persistedSess, persisted.ID, beforeEvents) {
-		bestEffortDelete(ctx, s.artifactService, info, saved)
 		return nil
 	}
 	sess.UpdateUserSession(evt, options...)
@@ -755,10 +753,9 @@ func shouldPersistEvent(evt *event.Event) bool {
 }
 
 func appendObserved(sess *session.Session, eventID string, beforeEvents int) bool {
-	// This detects hooks that return nil without calling next. It relies on the
-	// session backend contract that a successful append updates the passed
-	// session's Events slice; new backends must preserve that contract or update
-	// this wrapper's persisted-vs-runtime session handoff.
+	// This only controls whether the caller-owned live session should mirror the
+	// runtime event. It is not a persistence signal: backend filtering can hide a
+	// persisted event from the runtime session view.
 	if sess == nil {
 		return false
 	}

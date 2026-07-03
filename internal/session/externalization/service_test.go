@@ -491,12 +491,118 @@ func TestAppendEventHookSkipNextDoesNotUpdateLiveSession(t *testing.T) {
 	if listErr != nil {
 		t.Fatalf("ListArtifactKeys() error = %v", listErr)
 	}
-	if len(keys) != 0 {
-		t.Fatalf("artifact keys = %v, want empty after hook skips next", keys)
+	if len(keys) == 0 {
+		t.Fatal("artifact keys empty, want artifact retained when append result is ambiguous")
 	}
 }
 
-func TestAppendEventFailureDeletesSavedArtifacts(t *testing.T) {
+func TestAppendEventKeepsArtifactsWhenFilteredFromRuntimeView(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	inner := sessionmem.NewSessionService()
+	artifacts := artifactmem.NewService()
+	svc := Wrap(inner, artifacts, Config{Enabled: true})
+	sess, err := svc.CreateSession(ctx, key, nil)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	evt := assistantImageEvent([]byte("assistant-image"))
+	if err := svc.AppendEvent(ctx, sess, evt); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+	if len(sess.Events) != 0 {
+		t.Fatalf("live session events = %d, want 0 for non-user first event", len(sess.Events))
+	}
+	keys, listErr := artifacts.ListArtifactKeys(ctx, artifactSessionInfo(key))
+	if listErr != nil {
+		t.Fatalf("ListArtifactKeys() error = %v", listErr)
+	}
+	if len(keys) == 0 {
+		t.Fatal("artifact keys empty, want artifact kept for persisted event")
+	}
+
+	windowSvc, ok := svc.(session.WindowService)
+	if !ok {
+		t.Fatal("wrapped service does not implement WindowService")
+	}
+	window, err := windowSvc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: evt.ID,
+	})
+	if err != nil {
+		t.Fatalf("GetEventWindow() error = %v", err)
+	}
+	if len(window.Entries) != 1 {
+		t.Fatalf("window entries = %d, want 1", len(window.Entries))
+	}
+	part := window.Entries[0].Event.Response.Choices[0].Message.ContentParts[0]
+	if string(part.Image.Data) != "assistant-image" {
+		t.Fatalf("window hydrated image data = %q, want assistant-image", part.Image.Data)
+	}
+	if part.ContentRef != nil {
+		t.Fatalf("window hydrated ContentRef = %#v, want nil", part.ContentRef)
+	}
+}
+
+func TestAppendEventHookErrorAfterNextKeepsReferencedArtifacts(t *testing.T) {
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
+	hookErr := errors.New("post-append hook failed")
+	inner := sessionmem.NewSessionService(
+		sessionmem.WithAppendEventHook(
+			func(ctx *session.AppendEventContext, next func() error) error {
+				if err := next(); err != nil {
+					return err
+				}
+				return hookErr
+			},
+		),
+	)
+	artifacts := artifactmem.NewService()
+	svc := Wrap(inner, artifacts, Config{Enabled: true})
+	sess, err := svc.CreateSession(ctx, key, nil)
+	if err != nil {
+		t.Fatalf("CreateSession() error = %v", err)
+	}
+
+	evt := imageEvent([]byte("image-after-next"))
+	err = svc.AppendEvent(ctx, sess, evt)
+	if !errors.Is(err, hookErr) {
+		t.Fatalf("AppendEvent() error = %v, want %v", err, hookErr)
+	}
+	keys, listErr := artifacts.ListArtifactKeys(ctx, artifactSessionInfo(key))
+	if listErr != nil {
+		t.Fatalf("ListArtifactKeys() error = %v", listErr)
+	}
+	if len(keys) == 0 {
+		t.Fatal("artifact keys empty, want artifact kept for event persisted before hook error")
+	}
+
+	windowSvc, ok := svc.(session.WindowService)
+	if !ok {
+		t.Fatal("wrapped service does not implement WindowService")
+	}
+	window, err := windowSvc.GetEventWindow(ctx, session.EventWindowRequest{
+		Key:           key,
+		AnchorEventID: evt.ID,
+	})
+	if err != nil {
+		t.Fatalf("GetEventWindow() error = %v", err)
+	}
+	if len(window.Entries) != 1 {
+		t.Fatalf("window entries = %d, want 1", len(window.Entries))
+	}
+	part := window.Entries[0].Event.Response.Choices[0].Message.ContentParts[0]
+	if string(part.Image.Data) != "image-after-next" {
+		t.Fatalf("window hydrated image data = %q, want image-after-next", part.Image.Data)
+	}
+	if part.ContentRef != nil {
+		t.Fatalf("window hydrated ContentRef = %#v, want nil", part.ContentRef)
+	}
+}
+
+func TestAppendEventFailureKeepsSavedArtifactsWhenPersistenceUnknown(t *testing.T) {
 	ctx := context.Background()
 	key := session.Key{AppName: "app", UserID: "user", SessionID: "sess"}
 	base := sessionmem.NewSessionService()
@@ -519,8 +625,8 @@ func TestAppendEventFailureDeletesSavedArtifacts(t *testing.T) {
 	if listErr != nil {
 		t.Fatalf("ListArtifactKeys() error = %v", listErr)
 	}
-	if len(keys) != 0 {
-		t.Fatalf("artifact keys = %v, want empty after cleanup", keys)
+	if len(keys) == 0 {
+		t.Fatal("artifact keys empty, want artifact retained when append persistence is unknown")
 	}
 }
 
@@ -1205,6 +1311,12 @@ func (s *loadArtifactService) LoadArtifact(
 
 func imageEvent(data []byte) *event.Event {
 	msg := model.NewUserMessage("image")
+	msg.AddImageData(data, "high", "png")
+	return responseEvent(msg)
+}
+
+func assistantImageEvent(data []byte) *event.Event {
+	msg := model.NewAssistantMessage("image")
 	msg.AddImageData(data, "high", "png")
 	return responseEvent(msg)
 }

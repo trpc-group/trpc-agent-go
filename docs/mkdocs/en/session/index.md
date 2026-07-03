@@ -211,6 +211,7 @@ When enabled:
 - `ListSessions` with `WithListSessionOnlyMeta` skips hydration because event payloads are intentionally omitted.
 - Runner callbacks, tools, and plugins see the same wrapped service when it is passed through `runner.WithSessionService`. Business code that calls `AppendEvent` directly should also use this wrapped service rather than the raw backend.
 - Artifact lifecycle is not automatically inherited from the session lifecycle. Configure or operate your Artifact backend to handle long-term retention, TTL, deletion with sessions, and orphan cleanup according to your application's policy.
+- Keep using the wrapped session service while any externalized sessions may still be read. Removing the wrapper or reading those sessions with an older library version can leave `ContentRef` payloads unhydrated; migrate, clean up, or let the affected sessions and artifacts expire before rollback.
 
 The following inputs are not re-hosted by this feature:
 
@@ -219,7 +220,7 @@ The following inputs are not re-hosted by this feature:
 - Existing internal or business-owned references
 - Arbitrary blobs embedded inside custom JSON, metadata, or tool result payloads
 
-Failure behavior is fail-closed: if Artifact storage is required but unavailable, or if artifact save/load fails, the operation returns an error instead of silently dropping content. If an event append fails after artifacts were saved, the framework submits best-effort delete requests for artifacts saved by that append.
+Failure behavior is fail-closed: if Artifact storage is required but unavailable, or if artifact save/load fails, the operation returns an error instead of silently dropping content. If externalization fails before the event is handed to the session backend, the framework submits best-effort delete requests for artifacts saved by that attempt. After the append has been handed to the backend, artifacts are retained on ambiguous errors to avoid deleting content that a persisted event may already reference.
 
 ## Core Concepts
 
