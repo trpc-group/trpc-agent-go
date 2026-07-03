@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/chunking"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/ocr"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
@@ -36,6 +37,39 @@ func (m *mockTransformer) Postprocess(docs []*document.Document) ([]*document.Do
 
 func (m *mockTransformer) Name() string {
 	return "MockTransformer"
+}
+
+type mockReader struct {
+	exts []string
+}
+
+func (m *mockReader) ReadFromReader(string, io.Reader) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (m *mockReader) ReadFromFile(string) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (m *mockReader) ReadFromURL(string) ([]*document.Document, error) {
+	return nil, nil
+}
+
+func (m *mockReader) Name() string {
+	return "mock"
+}
+
+func (m *mockReader) SupportedExtensions() []string {
+	return m.exts
+}
+
+func currentFileTypeForTest(ext, fileType string) string {
+	for _, registeredExt := range reader.GetRegisteredExtensions() {
+		if registeredExt == ext {
+			return fileType
+		}
+	}
+	return "text"
 }
 
 func TestWithTransformers(t *testing.T) {
@@ -68,6 +102,8 @@ func (m *mockOCRExtractor) Close() error {
 }
 
 func TestGetFileType(t *testing.T) {
+	goFileType := currentFileTypeForTest(".go", "go")
+	pythonFileType := currentFileTypeForTest(".py", "python")
 	cases := []struct {
 		path string
 		want string
@@ -78,6 +114,8 @@ func TestGetFileType(t *testing.T) {
 		{"info.json", "json"},
 		{"sheet.csv", "csv"},
 		{"doc.docx", "docx"},
+		{"main.go", goFileType},
+		{"service.py", pythonFileType},
 		{"unknown.bin", "text"},
 	}
 
@@ -112,6 +150,8 @@ func TestGetFileTypeUnknownExtension(t *testing.T) {
 }
 
 func TestGetFileTypeAllExtensions(t *testing.T) {
+	goFileType := currentFileTypeForTest(".go", "go")
+	pythonFileType := currentFileTypeForTest(".py", "python")
 	// Test all supported extensions via GetFileType function
 	cases := []struct {
 		ext  string
@@ -128,6 +168,8 @@ func TestGetFileTypeAllExtensions(t *testing.T) {
 		{".csv", "csv"},
 		{".docx", "docx"},
 		{".doc", "docx"},
+		{".go", goFileType},
+		{".py", pythonFileType},
 	}
 
 	for _, c := range cases {
@@ -139,6 +181,8 @@ func TestGetFileTypeAllExtensions(t *testing.T) {
 }
 
 func TestGetFileTypeFromContentType(t *testing.T) {
+	goFileType := currentFileTypeForTest(".go", "go")
+	pythonFileType := currentFileTypeForTest(".py", "python")
 	cases := []struct {
 		contentType string
 		fileName    string
@@ -152,6 +196,8 @@ func TestGetFileTypeFromContentType(t *testing.T) {
 		{"application/json; charset=utf-8", "", "json"},
 		{"text/csv", "", "csv"},
 		{"application/pdf", "", "pdf"},
+		{"text/x-go", "", goFileType},
+		{"application/x-go", "", goFileType},
 		{"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "", "docx"},
 
 		// File extension based detection
@@ -166,6 +212,8 @@ func TestGetFileTypeFromContentType(t *testing.T) {
 		{"", "file.pdf", "pdf"},
 		{"", "file.docx", "docx"},
 		{"", "file.doc", "docx"},
+		{"", "file.go", goFileType},
+		{"", "file.py", pythonFileType},
 		{"", "fallback.unknown", "text"},
 
 		// Content type takes precedence over file extension
@@ -177,6 +225,25 @@ func TestGetFileTypeFromContentType(t *testing.T) {
 		got := GetFileTypeFromContentType(c.contentType, c.fileName)
 		require.Equal(t, c.want, got, "ctype %s fname %s", c.contentType, c.fileName)
 	}
+}
+
+func TestGetFileTypeGoWhenReaderRegistered(t *testing.T) {
+	reader.RegisterReader([]string{".go"}, func(opts ...reader.Option) reader.Reader {
+		return &mockReader{exts: []string{".go"}}
+	})
+
+	require.Equal(t, "go", GetFileType("main.go"))
+	require.Equal(t, "go", GetFileTypeFromContentType("text/x-go", ""))
+	require.Equal(t, "go", GetFileTypeFromContentType("", "main.go"))
+}
+
+func TestGetFileTypePythonWhenReaderRegistered(t *testing.T) {
+	reader.RegisterReader([]string{".py"}, func(opts ...reader.Option) reader.Reader {
+		return &mockReader{exts: []string{".py"}}
+	})
+
+	require.Equal(t, "python", GetFileType("service.py"))
+	require.Equal(t, "python", GetFileTypeFromContentType("", "service.py"))
 }
 
 func TestGetFileTypeFromContentTypeUnknownExtension(t *testing.T) {
@@ -218,7 +285,6 @@ func TestGetReadersDefaultRegistration(t *testing.T) {
 	readers := GetReaders()
 
 	require.Contains(t, readers, "proto")
-	require.NotContains(t, readers, "go")
 }
 
 func TestWithChunkSize(t *testing.T) {

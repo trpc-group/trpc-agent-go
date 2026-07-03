@@ -33,28 +33,54 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// SessionSummaryInjectionMode controls how the session summary is injected
-// into the model request.
+// SessionSummaryInjectionMode controls where session summaries are injected.
 type SessionSummaryInjectionMode string
 
 const (
-	// SessionSummaryInjectionSystem injects the summary as a system message
-	// (default). The summary is merged into the existing system message or
-	// prepended as a new one. This makes the summary part of the preserved
-	// head in token tailoring and is not subject to sliding-window trimming.
+	// SessionSummaryInjectionSystem injects the session summary as system
+	// context (default). This makes the summary part of the preserved head in
+	// token tailoring and is not subject to sliding-window trimming.
 	SessionSummaryInjectionSystem SessionSummaryInjectionMode = "system"
 
-	// SessionSummaryInjectionUser injects the summary as a user message
-	// placed near session history. The processor prefers merging it into the
-	// first user history/current message when possible; if none exists and
-	// the existing prompt prefix already ends with a user message, it falls
-	// back to merging there to avoid introducing an extra adjacent user
-	// block. This mode allows the summary to participate in token-budget
-	// trimming like any other user-anchored round, enabling a true
-	// sliding-window experience.
+	// SessionSummaryInjectionUser injects the session summary near user/history
+	// messages. The processor prefers merging it into the first user
+	// history/current message when possible; if none exists and the existing
+	// prompt prefix already ends with a user message, it falls back to merging
+	// there to avoid introducing an extra adjacent user block. This mode allows
+	// the summary to participate in token-budget trimming like any other
+	// user-anchored round, enabling a true sliding-window experience.
 	SessionSummaryInjectionUser SessionSummaryInjectionMode = "user"
+)
+
+// PreloadMemoryInjectionMode controls where preloaded memories are injected.
+type PreloadMemoryInjectionMode string
+
+const (
+	// PreloadMemoryInjectionSystem injects preloaded memories as system context
+	// (default), keeping them in the preserved head during token tailoring.
+	PreloadMemoryInjectionSystem PreloadMemoryInjectionMode = "system"
+	// PreloadMemoryInjectionUser injects preloaded memories near user/history
+	// messages. This is more prompt-cache friendly, but the memories participate
+	// in token tailoring and can be trimmed.
+	PreloadMemoryInjectionUser PreloadMemoryInjectionMode = "user"
+)
+
+// PreloadSessionRecallInjectionMode controls where recalled session events are
+// injected.
+type PreloadSessionRecallInjectionMode string
+
+const (
+	// PreloadSessionRecallInjectionSystem injects recalled session events as
+	// system context (default), keeping them in the preserved head during token
+	// tailoring.
+	PreloadSessionRecallInjectionSystem PreloadSessionRecallInjectionMode = "system"
+	// PreloadSessionRecallInjectionUser injects recalled session events near
+	// user/history messages. This is more prompt-cache friendly, but recalled
+	// events participate in token tailoring and can be trimmed.
+	PreloadSessionRecallInjectionUser PreloadSessionRecallInjectionMode = "user"
 )
 
 // Content inclusion options.
@@ -106,6 +132,22 @@ const (
 	ReasoningContentModeDiscardAll = "discard_all"
 )
 
+// ToolTranscriptMode controls how historical tool-call/tool-result transcripts
+// are projected into model requests.
+type ToolTranscriptMode string
+
+const (
+	// ToolTranscriptModeKeepAll keeps all historical tool-call/tool-result
+	// transcripts in model requests.
+	ToolTranscriptModeKeepAll ToolTranscriptMode = "keep_all"
+
+	// ToolTranscriptModeOmitPreviousCompleted omits completed historical
+	// tool-call/tool-result pairs from previous requests when projecting session
+	// history into model requests. Current-request and incomplete tool rounds are
+	// preserved to keep active tool loops valid.
+	ToolTranscriptModeOmitPreviousCompleted ToolTranscriptMode = "omit_previous_completed"
+)
+
 // ContentRequestProcessor implements content processing logic for agent requests.
 type ContentRequestProcessor struct {
 	// BranchFilterMode determines how to include content from session events.
@@ -117,8 +159,8 @@ type ContentRequestProcessor struct {
 	// AddSessionSummary controls whether to prepend the current branch summary
 	// to the request if available.
 	AddSessionSummary bool
-	// SessionSummaryInjectionMode controls how the session summary is injected
-	// into the model request. Default is SessionSummaryInjectionSystem.
+	// SessionSummaryInjectionMode controls where session summaries are injected.
+	// Default is SessionSummaryInjectionSystem.
 	SessionSummaryInjectionMode SessionSummaryInjectionMode
 	// MaxHistoryRuns sets the maximum number of history messages when AddSessionSummary is false.
 	// When 0 (default), no limit is applied.
@@ -140,6 +182,10 @@ type ContentRequestProcessor struct {
 	// keeps reasoning needed for tool-call replay while dropping ordinary older
 	// reasoning history.
 	ReasoningContentMode string
+	// ToolTranscriptMode controls how historical tool-call/tool-result
+	// transcripts are projected into model requests. Default is
+	// ToolTranscriptModeKeepAll.
+	ToolTranscriptMode ToolTranscriptMode
 	// PreloadMemory controls framework-side memory preload.
 	// When > 0, it acts as an adaptive preload budget:
 	//   - If total memories <= N, preload all memories.
@@ -150,12 +196,23 @@ type ContentRequestProcessor struct {
 	// When 0 (default), no memories are preloaded (use tools instead).
 	// When < 0, all memories are loaded.
 	PreloadMemory int
+	// PreloadMemoryInjectionMode controls where preloaded memories are injected.
+	// Default is PreloadMemoryInjectionSystem. User mode is prompt-cache
+	// friendly, but memory context participates in token tailoring.
+	PreloadMemoryInjectionMode PreloadMemoryInjectionMode
+	// PreloadMemoryPlaybook overrides the built-in read-path guidance prepended
+	// to preloaded memories. Empty keeps the built-in playbook.
+	PreloadMemoryPlaybook string
 	// PreloadSessionRecall sets the number of recalled
-	// session events to inject into the system prompt.
+	// session events to inject as preload context.
 	// When > 0, query-time search runs across other
 	// sessions for the current user.
 	// When 0 (default), it is disabled.
 	PreloadSessionRecall int
+	// PreloadSessionRecallInjectionMode controls where recalled session events
+	// are injected. Default is PreloadSessionRecallInjectionSystem. User mode is
+	// prompt-cache friendly, but recall context participates in token tailoring.
+	PreloadSessionRecallInjectionMode PreloadSessionRecallInjectionMode
 	// PreloadSessionRecallMinScore filters low-confidence
 	// recall hits before injection.
 	PreloadSessionRecallMinScore float64
@@ -227,13 +284,13 @@ func WithAddSessionSummary(add bool) ContentOption {
 	}
 }
 
-// WithSessionSummaryInjectionMode sets the injection mode for session summaries.
+// WithSessionSummaryInjectionMode sets where session summaries are injected.
 //
 // Available modes:
-//   - SessionSummaryInjectionSystem (default): injects as system message,
-//     merged into existing system message or prepended.
-//   - SessionSummaryInjectionUser: injects as a user message near history.
-//     The processor first tries to merge it into the first user
+//   - SessionSummaryInjectionSystem (default): injects session summary as
+//     system context.
+//   - SessionSummaryInjectionUser: injects session summary near user/history.
+//     The processor first tries to merge the summary into the first user
 //     history/current message; if none exists and the existing prompt prefix
 //     already ends with user, it falls back to merging there.
 func WithSessionSummaryInjectionMode(mode SessionSummaryInjectionMode) ContentOption {
@@ -290,6 +347,19 @@ func WithReasoningContentMode(mode string) ContentOption {
 	}
 }
 
+// WithToolTranscriptMode sets how historical tool-call/tool-result transcripts
+// are projected into model requests.
+func WithToolTranscriptMode(mode ToolTranscriptMode) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		switch mode {
+		case ToolTranscriptModeOmitPreviousCompleted:
+			p.ToolTranscriptMode = mode
+		default:
+			p.ToolTranscriptMode = ToolTranscriptModeKeepAll
+		}
+	}
+}
+
 // WithPreloadMemory sets the framework-side memory preload behavior.
 //   - Set to 0 (default) to disable preloading (use tools instead).
 //   - Set to N (N > 0) to use adaptive preload with budget N.
@@ -306,11 +376,59 @@ func WithPreloadMemory(limit int) ContentOption {
 	}
 }
 
+// WithPreloadMemoryInjectionMode sets where preloaded memories are injected.
+//
+// Available modes:
+//   - PreloadMemoryInjectionSystem (default): injects memories as system context.
+//   - PreloadMemoryInjectionUser: injects memories near user/history. This is
+//     more prompt-cache friendly, but the memory context participates in token
+//     tailoring and can be trimmed.
+func WithPreloadMemoryInjectionMode(mode PreloadMemoryInjectionMode) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		switch mode {
+		case PreloadMemoryInjectionUser:
+			p.PreloadMemoryInjectionMode = PreloadMemoryInjectionUser
+		default:
+			p.PreloadMemoryInjectionMode = PreloadMemoryInjectionSystem
+		}
+	}
+}
+
+// WithPreloadMemoryPlaybook overrides the built-in read-path guidance prepended
+// to preloaded memories. Passing an empty string keeps the built-in playbook.
+func WithPreloadMemoryPlaybook(playbook string) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		p.PreloadMemoryPlaybook = playbook
+	}
+}
+
 // WithPreloadSessionRecall sets the number of recalled
-// session events to preload into the system prompt.
+// session events to preload as context.
 func WithPreloadSessionRecall(limit int) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.PreloadSessionRecall = limit
+	}
+}
+
+// WithPreloadSessionRecallInjectionMode sets where recalled session events are
+// injected.
+//
+// Available modes:
+//   - PreloadSessionRecallInjectionSystem (default): injects recalled session
+//     events as system context.
+//   - PreloadSessionRecallInjectionUser: injects recalled session events near
+//     user/history. This is more prompt-cache friendly, but the recalled
+//     context participates in token tailoring and can be trimmed.
+func WithPreloadSessionRecallInjectionMode(
+	mode PreloadSessionRecallInjectionMode,
+) ContentOption {
+	return func(p *ContentRequestProcessor) {
+		switch mode {
+		case PreloadSessionRecallInjectionUser:
+			p.PreloadSessionRecallInjectionMode = PreloadSessionRecallInjectionUser
+		default:
+			p.PreloadSessionRecallInjectionMode = PreloadSessionRecallInjectionSystem
+		}
 	}
 }
 
@@ -469,7 +587,10 @@ const (
 	// must not set this flag, because downstream processors use it as a
 	// same-turn signal.
 	contentHasCompactedToolResultsStateKey = "processor:content:has_compacted_tool_results"
-	compactedToolResultPlaceholder         = "Tool result omitted from raw history; details are captured in the session summary above."
+	compactedToolResultPlaceholder         = "Tool result omitted from raw history; " +
+		"the previous tool call " +
+		"succeeded, but its payload was compacted to preserve context. " +
+		"Use the available summary or recovery hints before repeating work."
 )
 
 const (
@@ -492,10 +613,14 @@ func NewContentRequestProcessor(opts ...ContentOption) *ContentRequestProcessor 
 		PreserveSameBranch: false,
 		// Default to append history message.
 		TimelineFilterMode: TimelineFilterAll,
+		// Default to preserving the full historical tool transcript.
+		ToolTranscriptMode: ToolTranscriptModeKeepAll,
 		// Default to disable memory preloading (use tools instead).
-		PreloadMemory:                  0,
-		PreloadSessionRecall:           0,
-		PreloadSessionRecallSearchMode: session.SearchModeHybrid,
+		PreloadMemory:                     0,
+		PreloadMemoryInjectionMode:        PreloadMemoryInjectionSystem,
+		PreloadSessionRecall:              0,
+		PreloadSessionRecallInjectionMode: PreloadSessionRecallInjectionSystem,
+		PreloadSessionRecallSearchMode:    session.SearchModeHybrid,
 		ContextCompactionConfig: ContextCompactionConfig{
 			KeepRecentRequests:  DefaultContextCompactionKeepRecentRequests,
 			ToolResultMaxTokens: DefaultContextCompactionToolResultMaxTokens,
@@ -565,6 +690,8 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		)
 	}
 
+	p.injectLateContextMessages(invocation, req)
+
 	// Send a preprocessing event.
 	agent.EmitEvent(ctx, invocation, ch, event.New(
 		invocation.InvocationID,
@@ -616,74 +743,160 @@ func (p *ContentRequestProcessor) appendSessionMessages(
 		return true
 	}
 
-	var messages []model.Message
-	var summaryCutoff summaryHistoryCutoff
-	var summaryText string
-	// Skip session summary when include_contents=none, but still get current
-	// invocation's events (tool calls/results) to maintain ReAct loop context.
-	if !skipHistory && p.AddSessionSummary && p.TimelineFilterMode == TimelineFilterAll {
-		// Fetch session summary early so we can insert it after other
-		// semi-stable system blocks (for example, preloaded memories).
-		summaryText, summaryCutoff = p.getSessionSummaryText(invocation)
-	}
+	var userContextBlocks []string
+	summaryText, summaryCutoff := p.sessionSummaryForRequest(invocation, skipHistory)
+	userContextBlocks = p.appendPreloadMemoryContext(
+		ctx,
+		invocation,
+		req,
+		userContextBlocks,
+	)
+	userContextBlocks = p.appendSummaryContext(
+		invocation,
+		req,
+		summaryText,
+		userContextBlocks,
+	)
+	userContextBlocks = p.appendPreloadSessionRecallContext(
+		ctx,
+		invocation,
+		req,
+		skipHistory,
+		userContextBlocks,
+	)
 
-	// Preload memories into system prompt if configured.
-	// PreloadMemory: 0 = disabled, -1 = all, N > 0 = adaptive preload budget.
-	if p.PreloadMemory != 0 && invocation.MemoryService != nil {
-		if memMsg := p.getPreloadMemoryMessage(ctx, invocation); memMsg != nil {
-			p.injectSystemContextMessage(req, *memMsg)
-		}
-	}
-	if summaryText != "" {
-		invocation.SetState(contentHasSessionSummaryStateKey, true)
-		if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
-			// User-mode injection is deferred until after history messages are
-			// collected, so the summary can be merged with the first user
-			// message in history when applicable.
-		} else {
-			// Default system-mode: inject as system context message.
-			summaryMsg := model.Message{
-				Role:    model.RoleSystem,
-				Content: p.formatSummary(summaryText),
-			}
-			p.injectSystemContextMessage(req, summaryMsg)
-		}
-	}
-	if !skipHistory &&
-		p.PreloadSessionRecall > 0 &&
-		invocation.SessionService != nil {
-		if recallMsg := p.getPreloadSessionRecallMessage(ctx, invocation); recallMsg != nil {
-			p.injectSystemContextMessage(req, *recallMsg)
-		}
-	}
+	messages := p.sessionMessagesAfterCutoff(
+		invocation,
+		req,
+		skipHistory,
+		includeInvocationMessage,
+		summaryCutoff,
+	)
 
-	if skipHistory {
-		// When include_contents=none, only get events from current invocation
-		// to preserve tool call history within the current ReAct loop.
-		// This fixes the infinite loop issue where the agent doesn't see its
-		// own tool calls when running as an isolated subgraph.
-		if includeInvocationMessage {
-			messages = p.getCurrentInvocationMessages(invocation)
-		}
-	} else {
-		messages = p.getIncrementMessagesAfterCutoff(invocation, summaryCutoff)
-		if p.hasCompactedCurrentInvocationToolResultsAfterCutoff(invocation, summaryCutoff) {
-			invocation.SetState(contentHasCompactedToolResultsStateKey, true)
-		}
-	}
-
-	// When user-mode summary injection is active, prepend the summary as a
-	// user message near history. Prefer merging into the first user
-	// history/current message so the summary stays attached to the live user
+	// When user-mode injection is active for summary or preload context, prepend
+	// it as user content near history. Prefer merging into the first user
+	// history/current message so the context stays attached to the live user
 	// turn. If no such message exists, fall back to a trailing user message in
 	// req.Messages (for example, injected context) to avoid creating an extra
 	// adjacent user block.
-	if summaryText != "" && p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
-		messages = p.prependSummaryUserMessage(summaryText, messages, req.Messages)
+	if len(userContextBlocks) > 0 {
+		messages = prependUserContextMessage(
+			strings.Join(userContextBlocks, mergedUserSeparator),
+			messages,
+			req.Messages,
+		)
 	}
 
 	req.Messages = append(req.Messages, messages...)
 	return len(messages) == 0
+}
+
+func (p *ContentRequestProcessor) sessionSummaryForRequest(
+	invocation *agent.Invocation,
+	skipHistory bool,
+) (string, summaryHistoryCutoff) {
+	// Skip session summary when include_contents=none, but still get current
+	// invocation's events (tool calls/results) to maintain ReAct loop context.
+	if skipHistory || !p.AddSessionSummary || p.TimelineFilterMode != TimelineFilterAll {
+		return "", summaryHistoryCutoff{}
+	}
+	// Fetch session summary early so we can insert it after other semi-stable
+	// system blocks (for example, preloaded memories).
+	return p.getSessionSummaryText(invocation)
+}
+
+func (p *ContentRequestProcessor) appendPreloadMemoryContext(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	userContextBlocks []string,
+) []string {
+	// PreloadMemory: 0 = disabled, -1 = all, N > 0 = adaptive preload budget.
+	if p.PreloadMemory == 0 || invocation.MemoryService == nil {
+		return userContextBlocks
+	}
+	memMsg := p.getPreloadMemoryMessage(ctx, invocation)
+	if memMsg == nil {
+		return userContextBlocks
+	}
+	if p.PreloadMemoryInjectionMode == PreloadMemoryInjectionUser {
+		return appendUserContextBlock(userContextBlocks, memMsg.Content)
+	}
+	p.injectSystemContextMessage(req, *memMsg)
+	return userContextBlocks
+}
+
+func (p *ContentRequestProcessor) appendSummaryContext(
+	invocation *agent.Invocation,
+	req *model.Request,
+	summaryText string,
+	userContextBlocks []string,
+) []string {
+	if summaryText == "" {
+		return userContextBlocks
+	}
+	invocation.SetState(contentHasSessionSummaryStateKey, true)
+	if p.SessionSummaryInjectionMode == SessionSummaryInjectionUser {
+		return appendUserContextBlock(
+			userContextBlocks,
+			p.formatSummaryForUser(summaryText),
+		)
+	}
+	summaryMsg := model.Message{
+		Role:    model.RoleSystem,
+		Content: p.formatSummary(summaryText),
+	}
+	p.injectSystemContextMessage(req, summaryMsg)
+	return userContextBlocks
+}
+
+func (p *ContentRequestProcessor) appendPreloadSessionRecallContext(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	skipHistory bool,
+	userContextBlocks []string,
+) []string {
+	if skipHistory || p.PreloadSessionRecall <= 0 || invocation.SessionService == nil {
+		return userContextBlocks
+	}
+	recallMsg := p.getPreloadSessionRecallMessage(ctx, invocation)
+	if recallMsg == nil {
+		return userContextBlocks
+	}
+	if p.PreloadSessionRecallInjectionMode == PreloadSessionRecallInjectionUser {
+		return appendUserContextBlock(userContextBlocks, recallMsg.Content)
+	}
+	p.injectSystemContextMessage(req, *recallMsg)
+	return userContextBlocks
+}
+
+func (p *ContentRequestProcessor) sessionMessagesAfterCutoff(
+	invocation *agent.Invocation,
+	req *model.Request,
+	skipHistory bool,
+	includeInvocationMessage bool,
+	summaryCutoff summaryHistoryCutoff,
+) []model.Message {
+	if skipHistory {
+		// When include_contents=none, only get events from current invocation to
+		// preserve tool call history within the current ReAct loop. This fixes
+		// the infinite loop issue where the agent doesn't see its own tool calls
+		// when running as an isolated subgraph.
+		if includeInvocationMessage {
+			return p.getCurrentInvocationMessages(invocation)
+		}
+		return nil
+	}
+	messages := p.getIncrementMessagesAfterCutoff(
+		invocation,
+		req,
+		summaryCutoff,
+	)
+	if p.hasCompactedCurrentInvocationToolResultsAfterCutoff(invocation, summaryCutoff) {
+		invocation.SetState(contentHasCompactedToolResultsStateKey, true)
+	}
+	return messages
 }
 
 // injectSystemContextMessage injects summary or memory context into request.
@@ -708,6 +921,13 @@ func (p *ContentRequestProcessor) injectSystemContextMessage(
 	req.Messages = append([]model.Message{msg}, req.Messages...)
 }
 
+func appendUserContextBlock(blocks []string, content string) []string {
+	if content == "" {
+		return blocks
+	}
+	return append(blocks, content)
+}
+
 // injectInjectedContextMessages inserts per-run context messages into the request
 // before session-derived history is appended.
 func (p *ContentRequestProcessor) injectInjectedContextMessages(invocation *agent.Invocation, req *model.Request) {
@@ -719,6 +939,38 @@ func (p *ContentRequestProcessor) injectInjectedContextMessages(invocation *agen
 		return
 	}
 	req.Messages = append(req.Messages, messages...)
+}
+
+// injectLateContextMessages inserts per-run context messages close to the
+// latest user turn. It keeps assistant/tool tails intact by inserting before
+// the latest user message rather than appending after tool results.
+func (p *ContentRequestProcessor) injectLateContextMessages(invocation *agent.Invocation, req *model.Request) {
+	if invocation == nil || req == nil {
+		return
+	}
+	messages := invocation.RunOptions.LateContextMessages
+	if len(messages) == 0 {
+		return
+	}
+	insertAt := lateContextInsertIndex(req.Messages)
+	out := make([]model.Message, 0, len(req.Messages)+len(messages))
+	out = append(out, req.Messages[:insertAt]...)
+	out = append(out, messages...)
+	out = append(out, req.Messages[insertAt:]...)
+	req.Messages = out
+}
+
+func lateContextInsertIndex(messages []model.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if userLikeRole(messages[i].Role) {
+			return i
+		}
+	}
+	insertAt := 0
+	for insertAt < len(messages) && messages[insertAt].Role == model.RoleSystem {
+		insertAt++
+	}
+	return insertAt
 }
 
 type summaryHistoryCutoff struct {
@@ -855,10 +1107,20 @@ func (p *ContentRequestProcessor) prependSummaryUserMessage(
 	if formatted == "" {
 		return messages
 	}
+	return prependUserContextMessage(formatted, messages, reqPrefix)
+}
 
+func prependUserContextMessage(
+	formatted string,
+	messages []model.Message,
+	reqPrefix []model.Message,
+) []model.Message {
+	if formatted == "" {
+		return messages
+	}
 	// Case 1: merge into the first available user history/current message.
 	for i := range messages {
-		if messages[i].Role != model.RoleUser {
+		if !userLikeRole(messages[i].Role) {
 			continue
 		}
 		merged := make([]model.Message, len(messages))
@@ -874,7 +1136,7 @@ func (p *ContentRequestProcessor) prependSummaryUserMessage(
 	// Case 2: reqPrefix (existing req.Messages) ends with a user message.
 	// Merge summary into that message only as a fallback when there is no
 	// user history/current message to attach the summary to.
-	if len(reqPrefix) > 0 && reqPrefix[len(reqPrefix)-1].Role == model.RoleUser {
+	if len(reqPrefix) > 0 && userLikeRole(reqPrefix[len(reqPrefix)-1].Role) {
 		last := &reqPrefix[len(reqPrefix)-1]
 		if last.Content == "" {
 			last.Content = formatted
@@ -892,6 +1154,10 @@ func (p *ContentRequestProcessor) prependSummaryUserMessage(
 	})
 	out = append(out, messages...)
 	return out
+}
+
+func userLikeRole(role model.Role) bool {
+	return role == model.RoleUser || role == ""
 }
 
 // formatSummaryForUser returns a user-role-friendly summary text.
@@ -952,11 +1218,16 @@ func (p *ContentRequestProcessor) formatSummary(summary string) string {
 // getHistoryMessages gets history messages for the current filter, potentially truncated by MaxHistoryRuns.
 // This method is used when AddSessionSummary is false to get recent history messages.
 func (p *ContentRequestProcessor) getIncrementMessages(inv *agent.Invocation, since time.Time) []model.Message {
-	return p.getIncrementMessagesAfterCutoff(inv, summaryHistoryCutoffFromTime(since))
+	return p.getIncrementMessagesAfterCutoff(
+		inv,
+		nil,
+		summaryHistoryCutoffFromTime(since),
+	)
 }
 
 func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 	inv *agent.Invocation,
+	req *model.Request,
 	cutoff summaryHistoryCutoff,
 ) []model.Message {
 	if inv.Session == nil {
@@ -979,6 +1250,7 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 			evt,
 			i,
 			inv,
+			req,
 			filter,
 			eventCutoff,
 		); ok {
@@ -1023,18 +1295,20 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 		events = p.insertInvocationMessage(events, inv)
 	}
 
-	resultEvents := p.rearrangeLatestFuncResp(events)
+	resultEvents := p.applyToolTranscriptMode(events, inv)
+	resultEvents = p.rearrangeLatestFuncResp(resultEvents)
 	resultEvents = p.rearrangeAsyncFuncRespHist(resultEvents)
 	// Apply compaction to the already timeline-filtered projection. Tool-result
 	// policy (force-clean/keep) and historical passes must run for scoped modes
 	// such as request/invocation, not only when TimelineFilterAll is selected.
 	var stats ContextCompactionStats
+	compactionCfg := p.contextCompactionConfigForInvocation(inv, req)
 	resultEvents, stats = compactIncrementEvents(
 		context.Background(),
 		resultEvents,
 		inv.RunOptions.RequestID,
 		inv.InvocationID,
-		p.ContextCompactionConfig,
+		compactionCfg,
 	)
 	if stats.ToolResultsCompacted > 0 {
 		log.DebugfContext(
@@ -1219,6 +1493,7 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 	evt event.Event,
 	eventIndex int,
 	inv *agent.Invocation,
+	req *model.Request,
 	filter string,
 	cutoff eventHistoryCutoff,
 ) (event.Event, bool) {
@@ -1239,11 +1514,14 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 		return event.Event{}, false
 	}
 
-	cfg := normalizeContextCompactionConfig(p.ContextCompactionConfig)
+	cfg := normalizeContextCompactionConfig(
+		p.contextCompactionConfigForInvocation(inv, req),
+	)
 	var compactedChoices []model.Choice
 	for _, choice := range evt.Choices {
 		msg, ok := compactedCurrentInvocationMessage(
 			choice.Message,
+			evt,
 			cfg,
 		)
 		if !ok {
@@ -1269,6 +1547,7 @@ func (p *ContentRequestProcessor) compactCurrentInvocationEvent(
 
 func compactedCurrentInvocationMessage(
 	msg model.Message,
+	evt event.Event,
 	cfg ContextCompactionConfig,
 ) (model.Message, bool) {
 	switch {
@@ -1288,14 +1567,65 @@ func compactedCurrentInvocationMessage(
 			return msg, true
 		}
 		return model.Message{
-			Role:     msg.Role,
-			Content:  compactedToolResultPlaceholder,
+			Role: msg.Role,
+			Content: recoverableToolResultPlaceholder(
+				cfg.recoveryRefForMessage(
+					evt,
+					msg,
+					"current_invocation_summary",
+				),
+			),
 			ToolID:   msg.ToolID,
 			ToolName: msg.ToolName,
 		}, true
 	default:
 		return model.Message{}, false
 	}
+}
+
+func (p *ContentRequestProcessor) contextCompactionConfigForInvocation(
+	inv *agent.Invocation,
+	req *model.Request,
+) ContextCompactionConfig {
+	cfg := p.ContextCompactionConfig
+	cfg.SessionLoadRecoveryEnabled = sessionLoadRecoverySupported(inv, req)
+	return cfg
+}
+
+func sessionLoadRecoverySupported(
+	inv *agent.Invocation,
+	req *model.Request,
+) bool {
+	if inv == nil || inv.Session == nil || inv.SessionService == nil {
+		return false
+	}
+	if _, ok := inv.SessionService.(session.WindowService); !ok {
+		return false
+	}
+	return requestHasTool(req, sessionLoadToolName)
+}
+
+func requestHasTool(req *model.Request, name string) bool {
+	if req == nil || len(req.Tools) == 0 || name == "" {
+		return false
+	}
+	if tl := req.Tools[name]; toolHasName(tl, name) {
+		return true
+	}
+	for _, tl := range req.Tools {
+		if toolHasName(tl, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func toolHasName(tl tool.Tool, name string) bool {
+	if tl == nil {
+		return false
+	}
+	decl := tl.Declaration()
+	return decl != nil && decl.Name == name
 }
 
 func shouldCompactCurrentInvocationToolResult(
@@ -1331,7 +1661,7 @@ func annotateUserMessagesWithAttachedFiles(
 func annotateUserMessageWithAttachedFiles(
 	msg model.Message,
 ) model.Message {
-	if msg.Role != model.RoleUser && msg.Role != "" {
+	if !userLikeRole(msg.Role) {
 		return msg
 	}
 	if len(msg.ContentParts) == 0 {
@@ -2084,11 +2414,14 @@ func eventHasCompactedCurrentInvocationToolResult(
 		if msg.Role != model.RoleTool || msg.ToolID == "" {
 			continue
 		}
-		compacted, ok := compactedCurrentInvocationMessage(msg, cfg)
+		compacted, ok := compactedCurrentInvocationMessage(msg, evt, cfg)
 		if !ok {
 			continue
 		}
-		if compacted.Content != compactedToolResultPlaceholder {
+		if !strings.HasPrefix(
+			strings.TrimSpace(compacted.Content),
+			compactedToolResultPlaceholder,
+		) {
 			continue
 		}
 		if msg.Content != compacted.Content || len(msg.ContentParts) > 0 {
@@ -2258,6 +2591,187 @@ func (p *ContentRequestProcessor) convertForeignEvent(evt *event.Event) event.Ev
 		}
 	}
 	return *convertedEvent
+}
+
+func (p *ContentRequestProcessor) applyToolTranscriptMode(
+	events []event.Event,
+	inv *agent.Invocation,
+) []event.Event {
+	if p == nil || p.ToolTranscriptMode != ToolTranscriptModeOmitPreviousCompleted {
+		return events
+	}
+
+	responseMatchesByCallEvent := toolResponseMatchesByCallEvent(events)
+	if len(responseMatchesByCallEvent) == 0 {
+		return events
+	}
+
+	dropCallEvents := make(map[int]struct{})
+	dropResultChoices := make(map[int]map[int]struct{})
+	for callEventIndex, responseMatches := range responseMatchesByCallEvent {
+		if callEventIndex < 0 || callEventIndex >= len(events) {
+			continue
+		}
+		if !isPreviousToolTranscriptEvent(events[callEventIndex], inv) {
+			continue
+		}
+		if !allMatchedToolResultsArePrevious(events, responseMatches, inv) {
+			continue
+		}
+		if !allToolCallIDsMatched(
+			events[callEventIndex].GetToolCallIDs(),
+			events,
+			responseMatches,
+		) {
+			continue
+		}
+		dropCallEvents[callEventIndex] = struct{}{}
+		for _, match := range responseMatches {
+			if dropResultChoices[match.eventIndex] == nil {
+				dropResultChoices[match.eventIndex] = make(map[int]struct{})
+			}
+			for _, choiceIndex := range match.choiceIndices {
+				dropResultChoices[match.eventIndex][choiceIndex] = struct{}{}
+			}
+		}
+	}
+	if len(dropCallEvents) == 0 && len(dropResultChoices) == 0 {
+		return events
+	}
+
+	resultEvents := make([]event.Event, 0, len(events))
+	for i, evt := range events {
+		if _, drop := dropCallEvents[i]; drop {
+			if stripped, keep := stripToolCallsFromEvent(evt); keep {
+				resultEvents = append(resultEvents, stripped)
+			}
+			continue
+		}
+		if choices := dropResultChoices[i]; len(choices) > 0 {
+			if filtered, keep := omitToolResultChoices(evt, choices); keep {
+				resultEvents = append(resultEvents, filtered)
+			}
+			continue
+		}
+		resultEvents = append(resultEvents, evt)
+	}
+	return resultEvents
+}
+
+func isPreviousToolTranscriptEvent(evt event.Event, inv *agent.Invocation) bool {
+	if inv == nil {
+		return false
+	}
+	if inv.RunOptions.RequestID != "" {
+		if evt.RequestID == inv.RunOptions.RequestID {
+			return false
+		}
+		if evt.RequestID != "" {
+			return true
+		}
+	}
+	if inv.InvocationID != "" && evt.InvocationID == inv.InvocationID {
+		return false
+	}
+	return evt.RequestID != "" || evt.InvocationID != ""
+}
+
+func allMatchedToolResultsArePrevious(
+	events []event.Event,
+	matches []matchedToolResponseEvent,
+	inv *agent.Invocation,
+) bool {
+	if len(matches) == 0 {
+		return false
+	}
+	for _, match := range matches {
+		if match.eventIndex < 0 || match.eventIndex >= len(events) {
+			return false
+		}
+		if !isPreviousToolTranscriptEvent(events[match.eventIndex], inv) {
+			return false
+		}
+	}
+	return true
+}
+
+func allToolCallIDsMatched(
+	callIDs []string,
+	events []event.Event,
+	matches []matchedToolResponseEvent,
+) bool {
+	pendingCallIDs := make(map[string]struct{}, len(callIDs))
+	for _, callID := range callIDs {
+		if callID != "" {
+			pendingCallIDs[callID] = struct{}{}
+		}
+	}
+	if len(pendingCallIDs) == 0 {
+		return false
+	}
+	for _, match := range matches {
+		if match.eventIndex < 0 || match.eventIndex >= len(events) {
+			continue
+		}
+		evt := events[match.eventIndex]
+		if evt.Response == nil {
+			continue
+		}
+		for _, choiceIndex := range match.choiceIndices {
+			if choiceIndex < 0 || choiceIndex >= len(evt.Response.Choices) {
+				continue
+			}
+			responseID := toolResponseIDFromChoice(evt.Response.Choices[choiceIndex])
+			delete(pendingCallIDs, responseID)
+		}
+	}
+	return len(pendingCallIDs) == 0
+}
+
+func stripToolCallsFromEvent(evt event.Event) (event.Event, bool) {
+	if evt.Response == nil {
+		return evt, false
+	}
+	response := *evt.Response
+	response.Choices = make([]model.Choice, 0, len(evt.Response.Choices))
+	for _, choice := range evt.Response.Choices {
+		choice.Message.ToolCalls = nil
+		choice.Delta.ToolCalls = nil
+		if hasNonToolPayload(choice.Message) || hasNonToolPayload(choice.Delta) {
+			response.Choices = append(response.Choices, choice)
+		}
+	}
+	if len(response.Choices) == 0 {
+		return evt, false
+	}
+	evt.Response = &response
+	return evt, true
+}
+
+func omitToolResultChoices(
+	evt event.Event,
+	dropChoiceIndices map[int]struct{},
+) (event.Event, bool) {
+	if evt.Response == nil {
+		return evt, false
+	}
+	response := *evt.Response
+	response.Choices = make([]model.Choice, 0, len(evt.Response.Choices))
+	for choiceIndex, choice := range evt.Response.Choices {
+		if _, drop := dropChoiceIndices[choiceIndex]; drop {
+			continue
+		}
+		response.Choices = append(response.Choices, choice)
+	}
+	if len(response.Choices) == 0 {
+		return evt, false
+	}
+	evt.Response = &response
+	return evt, true
+}
+
+func hasNonToolPayload(msg model.Message) bool {
+	return msg.Content != "" || len(msg.ContentParts) > 0
 }
 
 // rearrangeEventsForLatestFunctionResponse rearranges the events for the latest function_response.
@@ -2571,7 +3085,7 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 		return nil
 	}
 	if len(probeEntries) <= budget {
-		return newPreloadMemoryMessage(probeEntries)
+		return newPreloadMemoryMessage(probeEntries, p.PreloadMemoryPlaybook)
 	}
 
 	query := buildPreloadSearchQuery(inv.Message)
@@ -2598,11 +3112,11 @@ func (p *ContentRequestProcessor) getAdaptivePreloadMemoryMessage(
 	if len(memories) == 0 {
 		return p.loadPreloadMemoryMessage(ctx, inv, userKey, budget)
 	}
-	return newPreloadMemoryMessage(memories)
+	return newPreloadMemoryMessage(memories, p.PreloadMemoryPlaybook)
 }
 
-// loadPreloadMemoryMessage loads memories directly and formats them as a
-// system message.
+// loadPreloadMemoryMessage loads memories directly and formats them as preload
+// context.
 func (p *ContentRequestProcessor) loadPreloadMemoryMessage(
 	ctx context.Context,
 	inv *agent.Invocation,
@@ -2614,16 +3128,19 @@ func (p *ContentRequestProcessor) loadPreloadMemoryMessage(
 		log.WarnfContext(ctx, "Failed to preload memories: %v", err)
 		return nil
 	}
-	return newPreloadMemoryMessage(memories)
+	return newPreloadMemoryMessage(memories, p.PreloadMemoryPlaybook)
 }
 
-func newPreloadMemoryMessage(memories []*memory.Entry) *model.Message {
+func newPreloadMemoryMessage(
+	memories []*memory.Entry,
+	playbookOverride string,
+) *model.Message {
 	if len(memories) == 0 {
 		return nil
 	}
 	return &model.Message{
 		Role:    model.RoleSystem,
-		Content: formatMemoryContent(memories),
+		Content: buildPreloadMemoryPrompt(playbookOverride, memories),
 	}
 }
 
@@ -2645,44 +3162,6 @@ func buildPreloadSearchQuery(msg model.Message) string {
 		parts = append(parts, text)
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
-}
-
-// formatMemoryContent formats memories for system prompt injection.
-func formatMemoryContent(memories []*memory.Entry) string {
-	var sb strings.Builder
-	sb.WriteString("## User Memories\n\n")
-	sb.WriteString("The following are stored memories about the user. ")
-	sb.WriteString("Use these to answer questions. Episodic memories include ")
-	sb.WriteString("event details (time, participants, location).\n\n")
-	for _, mem := range memories {
-		if mem == nil || mem.Memory == nil {
-			continue
-		}
-		fmt.Fprintf(&sb, "- [%s] %s", mem.ID, mem.Memory.Memory)
-		// Append metadata inline for richer context.
-		var meta []string
-		if mem.Memory.Kind != "" {
-			meta = append(meta, fmt.Sprintf("kind=%s", mem.Memory.Kind))
-		}
-		if mem.Memory.EventTime != nil {
-			meta = append(meta, fmt.Sprintf("date=%s", mem.Memory.EventTime.Format("2006-01-02")))
-		}
-		if len(mem.Memory.Participants) > 0 {
-			meta = append(meta, fmt.Sprintf("with=%s", strings.Join(mem.Memory.Participants, ", ")))
-		}
-		if mem.Memory.Location != "" {
-			meta = append(meta, fmt.Sprintf("at=%s", mem.Memory.Location))
-		}
-		// Do not render topic labels in the preload prompt. The memory_add
-		// tool expects topics as []string, and showing inline
-		// "topics=foo, bar" text can lead models to copy a scalar value into
-		// tool arguments.
-		if len(meta) > 0 {
-			fmt.Fprintf(&sb, " (%s)", strings.Join(meta, "; "))
-		}
-		sb.WriteString("\n")
-	}
-	return sb.String()
 }
 
 func (p *ContentRequestProcessor) getPreloadSessionRecallMessage(

@@ -36,6 +36,8 @@ const (
 	ObjectTypePreprocessingInstruction = "preprocessing.instruction"
 	// ObjectTypePreprocessingPlanning is the object type for planning preprocessing events.
 	ObjectTypePreprocessingPlanning = "preprocessing.planning"
+	// ObjectTypePreprocessingStatus is the object type for diagnostic preprocessing status events.
+	ObjectTypePreprocessingStatus = "preprocessing.status"
 	// ObjectTypePostprocessingPlanning is the object type for planning postprocessing events.
 	ObjectTypePostprocessingPlanning = "postprocessing.planning"
 	// ObjectTypePostprocessingCodeExecution is the object type for code execution postprocessing events.
@@ -57,16 +59,43 @@ const (
 type Choice struct {
 	// Index is the index of the choice.
 	Index int `json:"index"`
-
 	// Message is the message content.
 	Message Message `json:"message,omitempty"`
-
 	// Delta is the delta message content.
 	Delta Message `json:"delta,omitempty"`
-
 	// FinishReason is the reason the choice was finished.
 	// "stop", "length", "content_filter", etc.
 	FinishReason *string `json:"finish_reason,omitempty"`
+	// Logprobs contains token-level log probability data when the provider returns it.
+	Logprobs *Logprobs `json:"logprobs,omitempty"`
+}
+
+// Logprobs represents token-level log probability information.
+type Logprobs struct {
+	// Content contains log probability data for generated content tokens.
+	Content []TokenLogprob `json:"content,omitempty"`
+}
+
+// TokenLogprob represents the log probability data for one generated token.
+type TokenLogprob struct {
+	// Token is the generated token text.
+	Token string `json:"token"`
+	// Logprob is the natural-log probability for Token.
+	Logprob float64 `json:"logprob"`
+	// Bytes contains the UTF-8 bytes of Token when the provider returns them.
+	Bytes []int `json:"bytes,omitempty"`
+	// TopLogprobs contains alternative tokens and their log probabilities.
+	TopLogprobs []TopLogprob `json:"top_logprobs,omitempty"`
+}
+
+// TopLogprob represents one alternative token and its log probability.
+type TopLogprob struct {
+	// Token is the alternative token text.
+	Token string `json:"token"`
+	// Logprob is the natural-log probability for Token.
+	Logprob float64 `json:"logprob"`
+	// Bytes contains the UTF-8 bytes of Token when the provider returns them.
+	Bytes []int `json:"bytes,omitempty"`
 }
 
 // TimingInfo represents timing information for token generation.
@@ -186,7 +215,10 @@ func (rsp *Response) Clone() *Response {
 	}
 	clone := *rsp
 	clone.Choices = make([]Choice, len(rsp.Choices))
-	copy(clone.Choices, rsp.Choices)
+	for i, choice := range rsp.Choices {
+		clone.Choices[i] = choice
+		clone.Choices[i].Logprobs = cloneLogprobs(choice.Logprobs)
+	}
 	if rsp.Usage != nil {
 		clone.Usage = &Usage{
 			PromptTokens:            rsp.Usage.PromptTokens,
@@ -218,6 +250,34 @@ func (rsp *Response) Clone() *Response {
 		clone.SystemFingerprint = &fp
 	}
 	return &clone
+}
+
+func cloneLogprobs(logprobs *Logprobs) *Logprobs {
+	if logprobs == nil {
+		return nil
+	}
+	cloned := &Logprobs{}
+	if logprobs.Content != nil {
+		cloned.Content = make([]TokenLogprob, len(logprobs.Content))
+		for i, token := range logprobs.Content {
+			cloned.Content[i] = TokenLogprob{
+				Token:   token.Token,
+				Logprob: token.Logprob,
+				Bytes:   append([]int(nil), token.Bytes...),
+			}
+			if token.TopLogprobs != nil {
+				cloned.Content[i].TopLogprobs = make([]TopLogprob, len(token.TopLogprobs))
+				for j, top := range token.TopLogprobs {
+					cloned.Content[i].TopLogprobs[j] = TopLogprob{
+						Token:   top.Token,
+						Logprob: top.Logprob,
+						Bytes:   append([]int(nil), top.Bytes...),
+					}
+				}
+			}
+		}
+	}
+	return cloned
 }
 
 // IsValidContent checks if the response has valid content for message generation.

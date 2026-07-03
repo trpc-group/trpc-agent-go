@@ -57,6 +57,7 @@ func (a *LLMAgent) fewShotForInvocation(
 }
 
 func (a *LLMAgent) skillRepositoryForInvocation(
+	ctx context.Context,
 	inv *agent.Invocation,
 ) skill.Repository {
 	if patch, ok := a.rootSurfacePatch(inv); ok {
@@ -65,8 +66,45 @@ func (a *LLMAgent) skillRepositoryForInvocation(
 		}
 	}
 	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.option.skillsRepository
+	provider := a.option.skillsRepositoryProvider
+	mode := a.option.skillScopeMode
+	staticRepo := a.option.skillsRepository
+	a.mu.RUnlock()
+	if provider == nil {
+		return staticRepo
+	}
+	scope, err := skillScopeForInvocation(mode, inv)
+	if err != nil {
+		if skill.NormalizeSkillScopeMode(mode) == skill.SkillScopeUser {
+			return nil
+		}
+		return staticRepo
+	}
+	if scope.IsZero() {
+		return staticRepo
+	}
+	repo, err := provider.Repository(ctx, scope)
+	if err != nil {
+		if skill.NormalizeSkillScopeMode(mode) == skill.SkillScopeUser {
+			return nil
+		}
+		return staticRepo
+	}
+	return repo
+}
+
+func skillScopeForInvocation(
+	mode skill.SkillScopeMode,
+	inv *agent.Invocation,
+) (skill.SkillScope, error) {
+	if inv == nil || inv.Session == nil {
+		return skill.SkillScope{}, nil
+	}
+	return skill.NewSkillScope(
+		skill.NormalizeSkillScopeMode(mode),
+		inv.Session.AppName,
+		inv.Session.UserID,
+	)
 }
 
 func (a *LLMAgent) modelSurfaceForInvocation(
@@ -94,6 +132,32 @@ func (a *LLMAgent) codeExecutorForInvocation(
 		return a.codeExecutor
 	}
 	return a.option.codeExecutor
+}
+
+// InvocationSkillRepository returns the effective skill repository for the
+// invocation, honoring an invocation-scoped surface patch when present. It
+// implements agent.InvocationSkillRepositoryProvider so helpers such as the
+// dynamic AgentTool can derive a child skill surface from a parent invocation
+// without importing the llmagent package.
+func (a *LLMAgent) InvocationSkillRepository(
+	ctx context.Context,
+	inv *agent.Invocation,
+) skill.Repository {
+	if a == nil {
+		return nil
+	}
+	return a.skillRepositoryForInvocation(ctx, inv)
+}
+
+// InvocationCodeExecutor returns the effective code executor for the
+// invocation, honoring a per-run override when present. It implements
+// agent.InvocationCodeExecutorProvider so callers can check executor
+// availability for a parent invocation without importing the llmagent package.
+func (a *LLMAgent) InvocationCodeExecutor(
+	_ context.Context,
+	inv *agent.Invocation,
+) codeexecutor.CodeExecutor {
+	return a.codeExecutorForInvocation(inv)
 }
 
 func (a *LLMAgent) supportsWorkspaceExecForInvocation(
@@ -162,10 +226,33 @@ func (a *LLMAgent) ExecutionTraceAppliedSurfaceIDs(inv *agent.Invocation) []stri
 	if inv != nil && inv.Model != nil {
 		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeModel))
 	}
-	if hasUserTools, ok := llmflow.InvocationHasFilteredUserTools(inv); ok && hasUserTools {
-		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeTool))
+	if hasUserTools, ok := llmflow.InvocationHasFilteredUserTools(inv); ok {
+		if inv != nil && surfacepatch.ToolSurfaceTracingEnabled(inv.RunOptions.CustomAgentConfigs) {
+			traceableToolNames, _ := llmflow.InvocationFilteredTraceableUserToolNames(inv)
+			if len(traceableToolNames) == 0 && hasUserTools {
+				appliedSurfaceIDs = append(
+					appliedSurfaceIDs,
+					astructure.SurfaceID(nodeID, astructure.SurfaceTypeTool),
+				)
+			}
+			for _, toolName := range traceableToolNames {
+				appliedSurfaceIDs = append(
+					appliedSurfaceIDs,
+					astructure.SurfaceID(
+						nodeID,
+						astructure.SurfaceTypeTool,
+						toolName,
+					),
+				)
+			}
+		} else if hasUserTools {
+			appliedSurfaceIDs = append(
+				appliedSurfaceIDs,
+				astructure.SurfaceID(nodeID, astructure.SurfaceTypeTool),
+			)
+		}
 	}
-	if a.skillRepositoryForInvocation(inv) != nil {
+	if a.skillRepositoryForInvocation(context.Background(), inv) != nil {
 		appliedSurfaceIDs = append(appliedSurfaceIDs, astructure.SurfaceID(nodeID, astructure.SurfaceTypeSkill))
 	}
 	return appliedSurfaceIDs
@@ -185,6 +272,7 @@ func (a *LLMAgent) InvocationToolSurface(
 	options := a.option
 	subAgents := append([]agent.Agent(nil), a.subAgents...)
 	a.mu.RUnlock()
+	userTools = applyToolDeclarationPatch(userTools, patch)
 	userTools, userToolNames = filterInvocationUserTools(
 		ctx,
 		userTools,
@@ -194,7 +282,12 @@ func (a *LLMAgent) InvocationToolSurface(
 
 	allTools := append([]tool.Tool(nil), userTools...)
 	allTools = appendKnowledgeTools(allTools, &options)
-	effectiveSkills := a.skillRepositoryForInvocation(inv)
+	allTools, userToolNames = appendCurrentTimeTool(
+		allTools,
+		userToolNames,
+		&options,
+	)
+	effectiveSkills := a.skillRepositoryForInvocation(ctx, inv)
 	effectiveExec := a.codeExecutorForInvocation(inv)
 	workspaceExecEnabled := workspaceExecSurfaceEnabled(&options) &&
 		codeExecutorSupportsWorkspaceExec(effectiveExec)
@@ -241,7 +334,10 @@ func (a *LLMAgent) InvocationToolSurface(
 	if options.EnableAwaitUserReplyTool {
 		allTools = append(allTools, toolawaitreply.New())
 	}
-	if len(subAgents) == 0 {
+	// A surface patch may suppress framework-managed sub-agent transfer for this
+	// node (the dynamic AgentTool does so for short-lived sub-agents that must
+	// not hand control to another agent). Treat it like having no sub-agents.
+	if len(subAgents) == 0 || patch.SuppressSubAgentTransfer() {
 		allTools = appendExtensionTools(allTools, &options)
 		return allTools, userToolNames
 	}
@@ -261,6 +357,47 @@ func (a *LLMAgent) InvocationToolSurface(
 	// from extension name collisions.
 	allTools = appendExtensionTools(allTools, &options)
 	return allTools, userToolNames
+}
+
+// InvocationKnowledgeOptions returns the options required to reproduce this
+// agent's knowledge-search surface on a derived agent.
+//
+// Built-in presets use it to inherit a parent agent's retrieval capability
+// without copying the parent's materialized (and possibly custom-named)
+// knowledge tools. The invocation argument is accepted for parity with the
+// other invocation-scoped accessors and reserved for future per-invocation
+// knowledge resolution; it is currently unused.
+func (a *LLMAgent) InvocationKnowledgeOptions(
+	_ *agent.Invocation,
+) []Option {
+	if a == nil {
+		return nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.option.Knowledge == nil {
+		return nil
+	}
+	opts := []Option{WithKnowledge(a.option.Knowledge)}
+	if a.option.KnowledgeFilter != nil {
+		opts = append(opts, WithKnowledgeFilter(a.option.KnowledgeFilter))
+	}
+	if a.option.KnowledgeConditionedFilter != nil {
+		opts = append(
+			opts,
+			WithKnowledgeConditionedFilter(a.option.KnowledgeConditionedFilter),
+		)
+	}
+	if a.option.EnableKnowledgeAgenticFilter {
+		opts = append(opts, WithEnableKnowledgeAgenticFilter(true))
+		if a.option.AgenticFilterInfo != nil {
+			opts = append(
+				opts,
+				WithKnowledgeAgenticFilterInfo(a.option.AgenticFilterInfo),
+			)
+		}
+	}
+	return opts
 }
 
 func (a *LLMAgent) userToolsForInvocation(
@@ -312,6 +449,17 @@ func applyUserToolPatch(
 		return userTools, userToolNames
 	}
 	return patchedTools, collectUserToolNames(patchedTools)
+}
+
+func applyToolDeclarationPatch(
+	tools []tool.Tool,
+	patch surfacepatch.Patch,
+) []tool.Tool {
+	declarations, ok := patch.ToolDeclarations()
+	if !ok {
+		return tools
+	}
+	return itool.ApplyDeclarations(tools, declarations)
 }
 
 func filterInvocationUserTools(

@@ -279,6 +279,28 @@ func TestWithMaxLoadedSkills(t *testing.T) {
 	require.Equal(t, 0, c.option.MaxLoadedSkills)
 }
 
+func TestWithMaxOverviewSkills(t *testing.T) {
+	const (
+		agentName = "test-agent"
+		maxSkills = 8
+	)
+
+	a := New(agentName)
+	require.Equal(t, 0, a.option.MaxOverviewSkills,
+		"default must be 0 (no cap) so existing callers see no behavior change")
+
+	b := New(agentName, WithMaxOverviewSkills(maxSkills))
+	require.Equal(t, maxSkills, b.option.MaxOverviewSkills)
+
+	c := New(agentName, WithMaxOverviewSkills(0))
+	require.Equal(t, 0, c.option.MaxOverviewSkills,
+		"explicit 0 must remain a no-op")
+
+	d := New(agentName, WithMaxOverviewSkills(-1))
+	require.Equal(t, -1, d.option.MaxOverviewSkills,
+		"negative values are stored as-is; processor treats them as no-cap")
+}
+
 func TestWithSkillsLoadedContentInToolResults(t *testing.T) {
 	a := New("test-agent")
 	require.False(t, a.option.SkillsLoadedContentInToolResults)
@@ -502,6 +524,15 @@ func TestWithToolCallRetryPolicy_OnOptions(t *testing.T) {
 	require.Same(t, policy, opts.ToolCallRetryPolicy)
 }
 
+func TestWithToolResultAttachmentBudget_OnOptionsAndAgent(t *testing.T) {
+	opts := &Options{}
+	WithToolResultAttachmentBudget(3)(opts)
+	require.Equal(t, 3, opts.ToolResultAttachmentBudget)
+
+	a := New("budget-agent", WithToolResultAttachmentBudget(3))
+	require.Equal(t, 3, a.option.ToolResultAttachmentBudget)
+}
+
 func TestWithPreloadMemory(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -540,6 +571,27 @@ func TestWithPreloadMemory(t *testing.T) {
 	}
 }
 
+func TestWithPreloadMemoryInjectionMode(t *testing.T) {
+	opts := &Options{}
+	WithPreloadMemoryInjectionMode(PreloadMemoryInjectionUser)(opts)
+	require.Equal(t, PreloadMemoryInjectionUser, opts.PreloadMemoryInjectionMode)
+
+	WithPreloadMemoryInjectionMode(PreloadMemoryInjectionSystem)(opts)
+	require.Equal(t, PreloadMemoryInjectionSystem, opts.PreloadMemoryInjectionMode)
+
+	WithPreloadMemoryInjectionMode(processor.PreloadMemoryInjectionMode("invalid"))(opts)
+	require.Equal(t, PreloadMemoryInjectionSystem, opts.PreloadMemoryInjectionMode)
+}
+
+func TestWithPreloadMemoryPlaybook(t *testing.T) {
+	opts := &Options{}
+	WithPreloadMemoryPlaybook("custom playbook")(opts)
+	require.Equal(t, "custom playbook", opts.PreloadMemoryPlaybook)
+
+	WithPreloadMemoryPlaybook("")(opts)
+	require.Empty(t, opts.PreloadMemoryPlaybook)
+}
+
 func TestWithPreloadSessionRecall(t *testing.T) {
 	opts := &Options{}
 	WithPreloadSessionRecall(6)(opts)
@@ -547,6 +599,32 @@ func TestWithPreloadSessionRecall(t *testing.T) {
 
 	WithPreloadSessionRecall(0)(opts)
 	require.Equal(t, 0, opts.PreloadSessionRecall)
+}
+
+func TestWithPreloadSessionRecallInjectionMode(t *testing.T) {
+	opts := &Options{}
+	WithPreloadSessionRecallInjectionMode(PreloadSessionRecallInjectionUser)(opts)
+	require.Equal(
+		t,
+		PreloadSessionRecallInjectionUser,
+		opts.PreloadSessionRecallInjectionMode,
+	)
+
+	WithPreloadSessionRecallInjectionMode(PreloadSessionRecallInjectionSystem)(opts)
+	require.Equal(
+		t,
+		PreloadSessionRecallInjectionSystem,
+		opts.PreloadSessionRecallInjectionMode,
+	)
+
+	WithPreloadSessionRecallInjectionMode(
+		processor.PreloadSessionRecallInjectionMode("invalid"),
+	)(opts)
+	require.Equal(
+		t,
+		PreloadSessionRecallInjectionSystem,
+		opts.PreloadSessionRecallInjectionMode,
+	)
 }
 
 func TestWithPreloadSessionRecallMinScore(t *testing.T) {

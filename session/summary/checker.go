@@ -34,6 +34,8 @@ type Checker func(sess *session.Session) bool
 // current request context.
 type ContextChecker func(context.Context, *session.Session) bool
 
+type checkEvaluator func(context.Context, *session.Session) Check
+
 var (
 	defaultTokenCounterMu sync.RWMutex
 	defaultTokenCounter   model.TokenCounter = model.NewSimpleTokenCounter()
@@ -185,13 +187,28 @@ func filterEventsWithExactKey(events []event.Event, filterKey string) []event.Ev
 // Full-session checks count only primary-agent activity, while branch-scoped
 // checks count the scoped branch and its descendants.
 func CheckEventThreshold(eventCount int) Checker {
+	evaluate := evaluateEventThreshold(eventCount)
 	return func(sess *session.Session) bool {
+		return evaluate(context.Background(), sess).Passed
+	}
+}
+
+func evaluateEventThreshold(eventCount int) checkEvaluator {
+	return func(_ context.Context, sess *session.Session) Check {
+		check := Check{
+			Name:      checkNameEventThreshold,
+			Metric:    metricEvents,
+			Threshold: eventCount,
+			Unit:      unitEvents,
+		}
 		delta := filterDeltaEvents(sess)
 		if len(delta) == 0 {
-			return false
+			return check
 		}
 		thresholdEvents := filterThresholdEventsForSession(delta, sess)
-		return len(thresholdEvents) > eventCount
+		check.Value = len(thresholdEvents)
+		check.Passed = check.Value > eventCount
+		return check
 	}
 }
 
@@ -200,16 +217,32 @@ func CheckEventThreshold(eventCount int) Checker {
 // branch checks use the last event in that branch subtree; full-session checks
 // use the last event in the session.
 func CheckTimeThreshold(interval time.Duration) Checker {
+	evaluate := evaluateTimeThreshold(interval)
 	return func(sess *session.Session) bool {
+		return evaluate(context.Background(), sess).Passed
+	}
+}
+
+func evaluateTimeThreshold(interval time.Duration) checkEvaluator {
+	return func(_ context.Context, sess *session.Session) Check {
+		check := Check{
+			Name:      checkNameTimeThreshold,
+			Metric:    metricDuration,
+			Threshold: int(interval / time.Millisecond),
+			Unit:      unitMilliseconds,
+		}
 		if sess == nil || len(sess.Events) == 0 {
-			return false
+			return check
 		}
 		relevant := filterSummaryInputEventsForSession(sess.Events, sess)
 		if len(relevant) == 0 {
-			return false
+			return check
 		}
 		lastEvent := relevant[len(relevant)-1]
-		return time.Since(lastEvent.Timestamp) > interval
+		elapsed := time.Since(lastEvent.Timestamp)
+		check.Value = int(elapsed / time.Millisecond)
+		check.Passed = elapsed > interval
+		return check
 	}
 }
 
@@ -219,20 +252,31 @@ func checkTokenThresholdFromMessage(
 	tokenCount int,
 	message model.Message,
 ) bool {
+	tokens, ok := countTokenThresholdMessage(ctx, message)
+	return ok && tokens > tokenCount
+}
+
+func countTokenThresholdMessage(
+	ctx context.Context,
+	message model.Message,
+) (int, bool) {
 	if strings.TrimSpace(message.Content) == "" &&
 		strings.TrimSpace(message.ReasoningContent) == "" {
-		return false
+		return 0, false
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	// SimpleTokenCounter.CountTokens currently never returns an error.
-	tokens, _ := getTokenCounter().CountTokens(
+	tokens, err := getTokenCounter().CountTokens(
 		ctx,
 		message,
 	)
-	return tokens > tokenCount
+	if err != nil {
+		log.DebugfContext(ctx, "summary token count failed: %v", err)
+		return 0, false
+	}
+	return tokens, true
 }
 
 // CheckTokenThreshold creates a checker that triggers when the estimated
@@ -260,8 +304,9 @@ func CheckTokenThreshold(tokenCount int) Checker {
 // when the estimated token count of the primary-agent events since the last
 // summary exceeds the given threshold.
 func CheckTokenThresholdContext(tokenCount int) ContextChecker {
+	evaluate := evaluateTokenThreshold(tokenCount)
 	return func(ctx context.Context, sess *session.Session) bool {
-		return checkTokenThreshold(ctx, tokenCount, sess)
+		return evaluate(ctx, sess).Passed
 	}
 }
 
@@ -270,29 +315,39 @@ func checkTokenThreshold(
 	tokenCount int,
 	sess *session.Session,
 ) bool {
-	if message, ok := getInjectedTokenThresholdMessage(sess); ok {
-		return checkTokenThresholdFromMessage(
-			ctx,
-			tokenCount,
-			message,
-		)
+	return evaluateTokenThreshold(tokenCount)(ctx, sess).Passed
+}
+
+func evaluateTokenThreshold(tokenCount int) checkEvaluator {
+	return func(ctx context.Context, sess *session.Session) Check {
+		check := Check{
+			Name:      checkNameTokenThreshold,
+			Metric:    metricTokens,
+			Threshold: tokenCount,
+			Unit:      unitTokens,
+		}
+
+		var message model.Message
+		if message, ok := getInjectedTokenThresholdMessage(sess); ok {
+			tokens, counted := countTokenThresholdMessage(ctx, message)
+			check.Value = tokens
+			check.Passed = counted && tokens > tokenCount
+			return check
+		}
+		delta := filterDeltaEvents(sess)
+		if len(delta) == 0 {
+			return check
+		}
+		thresholdEvents := filterThresholdEventsForSession(delta, sess)
+		if len(thresholdEvents) == 0 {
+			return check
+		}
+		message = extractTokenThresholdMessage(thresholdEvents)
+		tokens, counted := countTokenThresholdMessage(ctx, message)
+		check.Value = tokens
+		check.Passed = counted && tokens > tokenCount
+		return check
 	}
-	delta := filterDeltaEvents(sess)
-	if len(delta) == 0 {
-		return false
-	}
-	thresholdEvents := filterThresholdEventsForSession(delta, sess)
-	if len(thresholdEvents) == 0 {
-		return false
-	}
-	message := extractTokenThresholdMessage(
-		thresholdEvents, nil, nil,
-	)
-	return checkTokenThresholdFromMessage(
-		ctx,
-		tokenCount,
-		message,
-	)
 }
 
 func getInjectedTokenThresholdMessage(sess *session.Session) (model.Message, bool) {
@@ -338,9 +393,23 @@ func ChecksAny(checks []Checker) Checker {
 	}
 }
 
-func wrapChecker(check Checker) ContextChecker {
-	return func(_ context.Context, sess *session.Session) bool {
-		return check(sess)
+func wrapChecker(check Checker) checkEvaluator {
+	return func(_ context.Context, sess *session.Session) Check {
+		return Check{
+			Name:   checkNameCustom,
+			Metric: metricCustom,
+			Passed: check(sess),
+		}
+	}
+}
+
+func wrapContextChecker(check ContextChecker) checkEvaluator {
+	return func(ctx context.Context, sess *session.Session) Check {
+		return Check{
+			Name:   checkNameCustom,
+			Metric: metricCustom,
+			Passed: check(ctx, sess),
+		}
 	}
 }
 
@@ -457,6 +526,13 @@ func WithContextThresholdMinTokens(tokens int) ContextThresholdOption {
 // the summarizer model's context window (when used via WithContextThreshold),
 // then to the configured fallbackContextWindow (default 8192).
 func CheckContextThreshold(opts ...ContextThresholdOption) ContextChecker {
+	evaluate := evaluateContextThreshold(opts...)
+	return func(ctx context.Context, sess *session.Session) bool {
+		return evaluate(ctx, sess).Passed
+	}
+}
+
+func evaluateContextThreshold(opts ...ContextThresholdOption) checkEvaluator {
 	o := contextThresholdOptions{
 		thresholdRatio:        defaultContextThresholdRatio,
 		fallbackContextWindow: defaultContextThresholdFallbackWindow,
@@ -466,7 +542,7 @@ func CheckContextThreshold(opts ...ContextThresholdOption) ContextChecker {
 		opt(&o)
 	}
 
-	return func(ctx context.Context, sess *session.Session) bool {
+	return func(ctx context.Context, sess *session.Session) Check {
 		contextWindow := resolveContextWindowFromCtx(
 			ctx, o.fallbackContextWindow,
 		)
@@ -474,7 +550,11 @@ func CheckContextThreshold(opts ...ContextThresholdOption) ContextChecker {
 		if threshold < o.minTokenThreshold {
 			threshold = o.minTokenThreshold
 		}
-		return checkTokenThreshold(ctx, threshold, sess)
+		check := evaluateTokenThreshold(threshold)(ctx, sess)
+		check.Name = checkNameContextThreshold
+		check.ContextWindow = contextWindow
+		check.ThresholdRatio = o.thresholdRatio
+		return check
 	}
 }
 

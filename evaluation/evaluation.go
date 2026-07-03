@@ -68,6 +68,7 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		evalService:                       opts.evalService,
 		callbacks:                         opts.callbacks,
 		expectedRunner:                    opts.expectedRunner,
+		toolMockRunner:                    opts.toolMockRunner,
 		numRuns:                           opts.numRuns,
 		evalCaseIDs:                       append([]string(nil), opts.evalCaseIDs...),
 		numRunsParallelEnabled:            opts.numRunsParallelEnabled,
@@ -90,6 +91,9 @@ func New(appName string, runner runner.Runner, opt ...Option) (AgentEvaluator, e
 		}
 		if opts.expectedRunner != nil {
 			serviceOpts = append(serviceOpts, service.WithExpectedRunner(opts.expectedRunner))
+		}
+		if opts.toolMockRunner != nil {
+			serviceOpts = append(serviceOpts, service.WithToolMockRunner(opts.toolMockRunner))
 		}
 		if opts.evalCaseParallelism != nil {
 			serviceOpts = append(serviceOpts, service.WithEvalCaseParallelism(*opts.evalCaseParallelism))
@@ -126,6 +130,7 @@ type agentEvaluator struct {
 	evalService                       service.Service
 	callbacks                         *service.Callbacks
 	expectedRunner                    runner.Runner
+	toolMockRunner                    runner.Runner
 	numRuns                           int
 	evalCaseIDs                       []string
 	numRunsParallelEnabled            *bool
@@ -218,6 +223,7 @@ func (a *agentEvaluator) mergeCallOptions(opt ...Option) (*options, error) {
 		evalService:                       a.evalService,
 		callbacks:                         a.callbacks,
 		expectedRunner:                    a.expectedRunner,
+		toolMockRunner:                    a.toolMockRunner,
 		judgeRunner:                       a.judgeRunner,
 		judgeRunnerNumSamples:             a.judgeRunnerNumSamples,
 		numRuns:                           a.numRuns,
@@ -454,6 +460,9 @@ func (a *agentEvaluator) runEvaluationOnce(
 	if opts.expectedRunner != nil {
 		inferenceOpts = append(inferenceOpts, service.WithExpectedRunner(opts.expectedRunner))
 	}
+	if opts.toolMockRunner != nil {
+		inferenceOpts = append(inferenceOpts, service.WithToolMockRunner(opts.toolMockRunner))
+	}
 	if opts.evalCaseParallelism != nil {
 		inferenceOpts = append(inferenceOpts, service.WithEvalCaseParallelism(*opts.evalCaseParallelism))
 	}
@@ -485,6 +494,9 @@ func (a *agentEvaluator) runEvaluationOnce(
 	}
 	if opts.expectedRunner != nil {
 		evaluateOpts = append(evaluateOpts, service.WithExpectedRunner(opts.expectedRunner))
+	}
+	if opts.toolMockRunner != nil {
+		evaluateOpts = append(evaluateOpts, service.WithToolMockRunner(opts.toolMockRunner))
 	}
 	if len(opts.runOptions) != 0 {
 		evaluateOpts = append(evaluateOpts, service.WithRunOptions(opts.runOptions...))

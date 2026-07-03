@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -65,10 +64,6 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := newExecutionContext(r.Context(), s.timeout)
 	defer cancel()
-	if err := s.validateTargetSurfaceIDs(ctx, req.Run.TargetSurfaceIDs); err != nil {
-		s.respondJSON(w, r, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
 	run, err := s.engine.Run(ctx, req.Run)
 	if err != nil {
 		log.Errorf("promptiter server: handle %s %s: %v", r.Method, r.URL.RequestURI(), err)
@@ -94,10 +89,6 @@ func (s *Server) handleAsyncRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := newExecutionContext(r.Context(), s.timeout)
 	defer cancel()
-	if err := s.validateTargetSurfaceIDs(ctx, req.Run.TargetSurfaceIDs); err != nil {
-		s.respondJSON(w, r, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
 	run, err := s.manager.Start(ctx, req.Run)
 	if err != nil {
 		log.Errorf("promptiter server: handle %s %s: %v", r.Method, r.URL.RequestURI(), err)
@@ -226,50 +217,6 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request, runID s
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (s *Server) validateTargetSurfaceIDs(ctx context.Context, targetSurfaceIDs []string) error {
-	if targetSurfaceIDs == nil {
-		return nil
-	}
-	if len(targetSurfaceIDs) == 0 {
-		return errors.New("target surface ids must not be empty")
-	}
-	structure, err := s.engine.Describe(ctx)
-	if err != nil {
-		return fmt.Errorf("describe structure for target surface validation: %w", err)
-	}
-	if structure == nil {
-		return errors.New("structure is nil")
-	}
-	supportedSurfaceIDs := make(map[string]struct{}, len(structure.Surfaces))
-	for _, surface := range structure.Surfaces {
-		if !isSupportedTargetSurfaceType(surface.Type) {
-			continue
-		}
-		supportedSurfaceIDs[surface.SurfaceID] = struct{}{}
-	}
-	for _, surfaceID := range targetSurfaceIDs {
-		if surfaceID == "" {
-			return errors.New("target surface ids must not contain empty values")
-		}
-		if _, ok := supportedSurfaceIDs[surfaceID]; !ok {
-			return fmt.Errorf("target surface id %q is unknown", surfaceID)
-		}
-	}
-	return nil
-}
-
-func isSupportedTargetSurfaceType(surfaceType astructure.SurfaceType) bool {
-	switch surfaceType {
-	case astructure.SurfaceTypeInstruction,
-		astructure.SurfaceTypeGlobalInstruction,
-		astructure.SurfaceTypeFewShot,
-		astructure.SurfaceTypeModel:
-		return true
-	default:
-		return false
-	}
-}
-
 func newExecutionContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
@@ -368,8 +315,10 @@ func validateEngineRunRequest(request *engine.RunRequest) error {
 	switch {
 	case request.MaxRounds <= 0:
 		return errors.New("max rounds must be greater than 0")
-	case request.TargetSurfaceIDs != nil && len(request.TargetSurfaceIDs) == 0:
+	case len(request.TargetSurfaceIDs) == 0:
 		return errors.New("target surface ids must not be empty")
+	case slices.Contains(request.TargetSurfaceIDs, ""):
+		return errors.New("target surface ids must not contain empty values")
 	case request.BackwardOptions.CaseParallelism < 0:
 		return errors.New("backward case parallelism must be non-negative")
 	case request.AggregationOptions.SurfaceParallelism < 0:

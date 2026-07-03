@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -22,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/teamtrace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -40,11 +42,24 @@ type Tool struct {
 	innerTextMode          InnerTextMode
 	structuredStreamErrors bool
 	historyScope           HistoryScope
+	persistentHistory      *persistentHistoryOptions
 	responseMode           ResponseMode
+	pinModel               bool
+	pinStructuredOutput    bool
 	name                   string
 	description            string
 	inputSchema            *tool.Schema
 	outputSchema           *tool.Schema
+
+	// dynamic enables the dynamic AgentTool mode created by NewDynamicTool.
+	// In this mode the tool runs a short-lived sub-agent whose
+	// capability surface (tools / skills / instruction) is selected per call
+	// within a code-defined safety boundary, rather than wrapping one
+	// pre-defined agent.
+	dynamic bool
+	// dynamicCfg holds the dynamic-mode configuration. It is only consulted
+	// when dynamic is true.
+	dynamicCfg *dynamicOptions
 }
 
 // Option is a function that configures an AgentTool.
@@ -57,8 +72,81 @@ type agentToolOptions struct {
 	innerTextMode          InnerTextMode
 	structuredStreamErrors bool
 	historyScope           HistoryScope
+	persistentHistory      *persistentHistoryOptions
 	responseMode           ResponseMode
 	description            *string
+	name                   *string
+	pinModel               bool
+	pinStructuredOutput    bool
+
+	// Dynamic AgentTool options. They are only meaningful for NewDynamicTool;
+	// NewTool ignores them.
+	dynamic *dynamicOptions
+}
+
+// dynamicOptions holds the configuration knobs for the dynamic AgentTool mode.
+type dynamicOptions struct {
+	templateAgent             agent.Agent
+	capabilityProvider        CapabilitySurfaceProvider
+	capabilitySurfaceProvider DetailedCapabilitySurfaceProvider
+	capabilitySkillProvider   CapabilitySkillsProvider
+	capabilityTools           []tool.Tool
+	capabilitySkills          skillRepository
+	capabilityToolsSet        bool
+	exposeToolSelection       bool
+	exposeSkillSelection      bool
+	exposeInstruction         bool
+	requestDescription        *string
+	instructionDescription    *string
+	toolsDescription          *string
+	skillsDescription         *string
+	toolAliases               map[string]string
+	timeout                   time.Duration
+}
+
+func defaultDynamicOptions() *dynamicOptions {
+	return &dynamicOptions{
+		exposeToolSelection:  true,
+		exposeSkillSelection: false,
+		exposeInstruction:    true,
+	}
+}
+
+func (opts *agentToolOptions) ensureDynamicOptions() *dynamicOptions {
+	if opts.dynamic == nil {
+		opts.dynamic = defaultDynamicOptions()
+	}
+	return opts.dynamic
+}
+
+// PersistentHistoryKeyFunc resolves the stable child event-filter key for one
+// AgentTool invocation.
+//
+// Returning an empty string falls back to the default stable key.
+//
+// Note: This is currently supported only for NewTool (wrapped fixed agent), not
+// NewDynamicTool.
+type PersistentHistoryKeyFunc func(
+	ctx context.Context,
+	parentInv *agent.Invocation,
+	jsonArgs []byte,
+) string
+
+// persistentHistoryOptions holds configuration for stable child history.
+//
+// It is a pointer field on Tool/agentToolOptions so those structs remain
+// comparable (see dynamic_tool_test.go).
+type persistentHistoryOptions struct {
+	enabled bool
+	key     string
+	keyFunc PersistentHistoryKeyFunc
+}
+
+func (opts *agentToolOptions) ensurePersistentHistoryOptions() *persistentHistoryOptions {
+	if opts.persistentHistory == nil {
+		opts.persistentHistory = &persistentHistoryOptions{}
+	}
+	return opts.persistentHistory
 }
 
 // InnerTextMode controls whether forwarded inner assistant text is visible
@@ -141,6 +229,25 @@ func WithDescription(description string) Option {
 	}
 }
 
+// WithName overrides the model-facing tool name for NewDynamicTool.
+//
+// It applies ONLY to NewDynamicTool, whose name defaults to
+// DefaultDynamicToolName ("dynamic_agent"); use it to expose a different,
+// code-defined entrypoint name (for example "explore" or "implement").
+//
+// It is intentionally ignored by NewTool: a wrapped agent's tool name is its
+// identity (agent.Info().Name) and is also used for the child event-filter key,
+// team node id, and recursion guards, so renaming only the model-facing name
+// would split that identity. Rename the wrapped agent instead.
+//
+// The name must comply with LLM API requirements (^[a-zA-Z0-9_-]+$).
+func WithName(name string) Option {
+	return func(opts *agentToolOptions) {
+		copiedName := name
+		opts.name = &copiedName
+	}
+}
+
 // HistoryScope controls whether and how AgentTool inherits parent history.
 //   - HistoryScopeIsolated: keep child events isolated; do not inherit parent history.
 //   - HistoryScopeParentBranch: inherit parent branch history by using a hierarchical
@@ -161,6 +268,94 @@ const (
 func WithHistoryScope(scope HistoryScope) Option {
 	return func(opts *agentToolOptions) {
 		opts.historyScope = scope
+	}
+}
+
+// WithPersistentHistory enables stable child history for a wrapped agent tool.
+//
+// When enabled, the child invocation uses a stable event-filter key so that it
+// can see its own past events across multiple AgentTool calls (within the same
+// session). This does not change control-flow semantics (still call-return) and
+// does not make runtime/executor state persistent.
+//
+// This option is currently supported only for NewTool (wrapped fixed agent) and
+// is incompatible with HistoryScopeParentBranch. When HistoryScopeParentBranch
+// is enabled, persistent history is ignored and the legacy UUID-suffixed child
+// filter keys are used.
+func WithPersistentHistory() Option {
+	return func(opts *agentToolOptions) {
+		cfg := opts.ensurePersistentHistoryOptions()
+		cfg.enabled = true
+		cfg.key = ""
+		cfg.keyFunc = nil
+	}
+}
+
+// WithPersistentHistoryKey enables stable child history using a caller-provided
+// stable event-filter key.
+//
+// See WithPersistentHistory for semantics and limitations.
+func WithPersistentHistoryKey(key string) Option {
+	return func(opts *agentToolOptions) {
+		cfg := opts.ensurePersistentHistoryOptions()
+		cfg.enabled = true
+		cfg.keyFunc = nil
+		cfg.key = strings.TrimSpace(key)
+	}
+}
+
+// WithPersistentHistoryKeyFunc enables stable child history using a caller
+// function to compute the stable event-filter key per call.
+//
+// See WithPersistentHistory for semantics and limitations.
+func WithPersistentHistoryKeyFunc(fn PersistentHistoryKeyFunc) Option {
+	return func(opts *agentToolOptions) {
+		cfg := opts.ensurePersistentHistoryOptions()
+		cfg.enabled = true
+		cfg.key = ""
+		cfg.keyFunc = fn
+	}
+}
+
+// WithPinModel pins the sub-agent's model so that it always uses its own
+// configured model (set via llmagent.WithModel) regardless of the caller's
+// runtime model selection propagated through RunOptions.
+//
+// Background: when the caller passes agent.WithModelName(...),
+// agent.WithModel(...) or agent.WithModelSelector(...) at runner.Run time
+// (e.g., AGUI server forwarding the user's model choice), RunOptions
+// propagate to child invocations via Clone(). This causes the sub-agent's
+// own model to be overridden.
+//
+// WithPinModel(true) clears RunOptions.ModelName, RunOptions.Model and
+// RunOptions.ModelSelector for the child invocation so the sub-agent's
+// own model takes effect.
+//
+// If no Model/ModelName/ModelSelector is set in RunOptions, the sub-agent
+// naturally uses its own model regardless of this option.
+func WithPinModel(enabled bool) Option {
+	return func(opts *agentToolOptions) {
+		opts.pinModel = enabled
+	}
+}
+
+// WithPinStructuredOutput pins the sub-agent's structured-output contract so
+// it always uses its own configured structured output (for example,
+// llmagent.WithStructuredOutputJSON or llmagent.WithStructuredOutputJSONSchema)
+// regardless of the caller's runtime structured output propagated through
+// RunOptions.
+//
+// Background: when the caller passes agent.WithStructuredOutputJSON(...) or
+// agent.WithStructuredOutputJSONSchema(...) at runner.Run time, RunOptions
+// propagate to child invocations via Clone(). LLMAgent setup prefers those
+// run-scoped structured-output values over the sub-agent's own configuration.
+//
+// WithPinStructuredOutput(true) clears RunOptions.StructuredOutput and
+// RunOptions.StructuredOutputType for the child invocation so the sub-agent's
+// own structured output takes effect.
+func WithPinStructuredOutput(enabled bool) Option {
+	return func(opts *agentToolOptions) {
+		opts.pinStructuredOutput = enabled
 	}
 }
 
@@ -185,6 +380,13 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		opt(options)
 	}
 	info := agent.Info()
+	if options.name != nil {
+		log.Warnf(
+			"AgentTool: WithName(%q) is ignored by NewTool; "+
+				"rename the wrapped agent or use NewDynamicTool",
+			*options.name,
+		)
+	}
 
 	// Use the agent's input schema if available, otherwise fall back to default.
 	var inputSchema *tool.Schema
@@ -218,6 +420,21 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 	if options.description != nil {
 		description = *options.description
 	}
+	// NewTool's name is the wrapped agent's identity; WithName is intentionally
+	// dynamic-only (see WithName) so the model-facing name never diverges from
+	// the child filter key, team node id, and recursion guards.
+	name := info.Name
+
+	persistent := options.persistentHistory
+	if persistent != nil &&
+		persistent.enabled &&
+		options.historyScope == HistoryScopeParentBranch {
+		log.Warnf(
+			"AgentTool[%s]: persistent history is ignored when HistoryScopeParentBranch is enabled",
+			name,
+		)
+		persistent = nil
+	}
 	return &Tool{
 		agent:                  agent,
 		skipSummarization:      options.skipSummarization,
@@ -225,8 +442,11 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 		innerTextMode:          tool.NormalizeInnerTextMode(options.innerTextMode),
 		structuredStreamErrors: options.structuredStreamErrors,
 		historyScope:           options.historyScope,
+		persistentHistory:      persistent,
 		responseMode:           normalizeResponseMode(options.responseMode),
-		name:                   info.Name,
+		pinModel:               options.pinModel,
+		pinStructuredOutput:    options.pinStructuredOutput,
+		name:                   name,
 		description:            description,
 		inputSchema:            inputSchema,
 		outputSchema:           outputSchema,
@@ -235,12 +455,20 @@ func NewTool(agent agent.Agent, opts ...Option) *Tool {
 
 // Call executes the agent tool with the provided JSON arguments.
 func (at *Tool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	// Dynamic AgentTool mode runs a short-lived sub-agent whose capability
+	// surface is selected per call from the parent invocation.
+	if at.dynamic {
+		return at.callDynamic(ctx, jsonArgs)
+	}
+
 	message := model.NewUserMessage(string(jsonArgs))
 
 	// Prefer to reuse parent invocation + session so the child can see parent
 	// history according to the configured history scope.
-	if parentInv, ok := agent.InvocationFromContext(ctx); ok && parentInv != nil && parentInv.Session != nil {
-		return at.callWithParentInvocation(ctx, parentInv, message)
+	if parentInv, ok := agent.InvocationFromContext(ctx); ok && parentInv != nil {
+		if parentInv.Session != nil {
+			return at.callWithParentInvocation(ctx, parentInv, message, nil)
+		}
 	}
 
 	// Fallback: isolated in-memory run when parent invocation is not available.
@@ -254,18 +482,42 @@ func (at *Tool) callWithParentInvocation(
 	ctx context.Context,
 	parentInv *agent.Invocation,
 	message model.Message,
+	runtime *parentInvocationGraphRuntime,
 ) (string, error) {
+	var runtimeState graph.State
+	var parentNodeID string
+	var toolCallID string
+	var toolCallKey string
+	hasGraphRuntime := runtime != nil
+	if hasGraphRuntime {
+		runtimeState = runtime.state
+		parentNodeID = runtime.parentNodeID
+		toolCallID = runtime.toolCallID
+		toolCallKey = runtime.toolCallKey
+	}
 	// If the parent invocation does not have a session, fall back to isolated mode.
-	if parentInv.Session == nil {
+	if parentInv.Session == nil && !hasGraphRuntime {
 		return at.callWithIsolatedRunner(ctx, message)
 	}
 	// Flush all events emitted before this tool call so that the snapshot sees all events.
-	if err := flush.Invoke(ctx, parentInv); err != nil {
-		return "", fmt.Errorf("flush parent invocation session: %w", err)
+	if parentInv.Session != nil {
+		if err := flush.Invoke(ctx, parentInv); err != nil {
+			return "", fmt.Errorf("flush parent invocation session: %w", err)
+		}
+		parentInv = parentInvocationWithLiveSession(parentInv)
 	}
 	// Build child filter key based on history scope.
-	childKey := at.buildChildFilterKey(parentInv)
-	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey)...)
+	childKey := at.buildChildFilterKey(ctx, parentInv, []byte(message.Content))
+	if hasGraphRuntime && runtime.childKey != "" {
+		childKey = runtime.childKey
+	}
+	if runtimeState != nil {
+		if _, ok := runtimeState[graph.CfgKeyCheckpointID]; ok {
+			// A checkpoint resume is driven by the command in runtime state.
+			message = model.Message{}
+		}
+	}
+	subInv := parentInv.Clone(at.childInvocationOptions(ctx, parentInv, message, childKey, runtimeState)...)
 
 	// Run the agent and collect response.
 	subCtx := agent.NewInvocationContext(ctx, subInv)
@@ -273,7 +525,43 @@ func (at *Tool) callWithParentInvocation(
 	if err != nil {
 		return "", fmt.Errorf("failed to run agent: %w", err)
 	}
-	return at.collectResponse(subInv, at.wrapWithCallSemantics(subCtx, subInv, evCh))
+	capture := at.newGraphToolInterruptCapture(runtimeState, parentNodeID, toolCallID, toolCallKey, childKey, hasGraphRuntime)
+	response, err := at.collectResponse(
+		subInv,
+		at.wrapGraphToolInterruptCapture(
+			at.wrapWithCallSemantics(subCtx, subInv, evCh),
+			capture,
+		),
+	)
+	if err != nil {
+		return "", err
+	}
+	if interruptErr := capture.finish(); interruptErr != nil {
+		return "", interruptErr
+	}
+	return response, nil
+}
+
+// parentInvocationWithLiveSession returns a view of parentInv whose Session
+// references the live session shared with the runner. When no live session
+// pointer was attached or the invocation already targets the live session,
+// the original parentInv is returned unchanged.
+func parentInvocationWithLiveSession(
+	parentInv *agent.Invocation,
+) *agent.Invocation {
+	if parentInv == nil || parentInv.Session == nil {
+		return parentInv
+	}
+	liveSess, ok := livesession.Get(parentInv)
+	if !ok || liveSess == nil || liveSess == parentInv.Session {
+		return parentInv
+	}
+	view := parentInv.View()
+	if view == nil {
+		return parentInv
+	}
+	view.Session = liveSess
+	return view
 }
 
 func (at *Tool) surfaceRootNodeIDForParentInvocation(
@@ -290,17 +578,59 @@ func (at *Tool) surfaceRootNodeIDForParentInvocation(
 }
 
 func (at *Tool) childInvocationOptions(
+	ctx context.Context,
 	parentInv *agent.Invocation,
 	message model.Message,
 	childKey string,
+	runtimeState map[string]any,
 ) []agent.InvocationOptions {
 	invocationOpts := []agent.InvocationOptions{
 		agent.WithInvocationAgent(at.agent),
 		agent.WithInvocationMessage(message),
 		agent.WithInvocationEventFilterKey(childKey),
 	}
+	// Override the inherited ParentMetadata at the AgentTool boundary: the
+	// child invocation is freshly triggered by *this* AgentTool call, so its
+	// ParentMetadata must describe this call — not whatever spawned the
+	// parent invocation. Invocation.Clone copies ParentMetadata by default,
+	// so we must overwrite it unconditionally; otherwise a child spawned
+	// without a toolCallId in ctx would inherit the parent's ParentMetadata
+	// and AG-UI would correlate child events to the wrong parent edge.
+	//
+	// When toolCallId is unavailable in ctx (degraded path), set
+	// ParentMetadata to nil rather than fabricating one or leaving the
+	// inherited value. Critical for parallel AgentTool calls to the same
+	// sub-agent: parentInvocationId alone cannot disambiguate parallel
+	// branches; ParentMetadata.TriggerID can.
+	var childParentMetadata *agent.ParentInvocationMetadata
+	if toolCallID, ok := tool.ToolCallIDFromContext(ctx); ok && toolCallID != "" {
+		childParentMetadata = &agent.ParentInvocationMetadata{
+			TriggerType: agent.TriggerTypeToolCall,
+			TriggerID:   toolCallID,
+			TriggerName: at.name,
+		}
+	}
+	invocationOpts = append(invocationOpts, agent.WithInvocationParentMetadata(childParentMetadata))
+	if runtimeState != nil {
+		invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
+			runOptions := inv.RunOptions
+			agent.WithDisableGraphExecutorEvents(false)(&runOptions)
+			runOptions.RuntimeState = runtimeState
+			inv.RunOptions = runOptions
+			if parentInv != nil && agent.IsGraphExecutorEventsDisabled(parentInv) {
+				inv.SetState(graphRuntimeSuppressSessionEventsStateKey, true)
+			}
+		})
+	}
 	if parentInv == nil {
 		return invocationOpts
+	}
+	if at.hasPinnedRunOptions() {
+		invocationOpts = append(invocationOpts, func(inv *agent.Invocation) {
+			runOptions := inv.RunOptions
+			at.clearPinnedRunOptions(&runOptions)
+			inv.RunOptions = runOptions
+		})
 	}
 	if surfaceRootNodeID := at.surfaceRootNodeIDForParentInvocation(parentInv); surfaceRootNodeID != "" {
 		invocationOpts = append(
@@ -311,6 +641,25 @@ func (at *Tool) childInvocationOptions(
 		)
 	}
 	return invocationOpts
+}
+
+func (at *Tool) hasPinnedRunOptions() bool {
+	return at.pinModel || at.pinStructuredOutput
+}
+
+func (at *Tool) clearPinnedRunOptions(runOptions *agent.RunOptions) {
+	if runOptions == nil {
+		return
+	}
+	if at.pinModel {
+		runOptions.ModelName = ""
+		runOptions.Model = nil
+		runOptions.ModelSelector = nil
+	}
+	if at.pinStructuredOutput {
+		runOptions.StructuredOutput = nil
+		runOptions.StructuredOutputType = nil
+	}
 }
 
 // wrapWithCompletion consumes events, notifies completion when required, and forwards to a new channel.
@@ -376,7 +725,8 @@ func (at *Tool) wrapWithCallSemantics(
 					)
 					continue
 				}
-				if shouldMirrorEventToSession(evt) {
+				if !shouldSuppressGraphRuntimeSessionEvent(inv, evt) &&
+					shouldMirrorEventToSession(evt) {
 					persistedEvent := persistableSessionEvent(evt)
 					if shouldDelayVisibleCompletionSessionMirror(persistedEvent) {
 						pendingVisibleCompletion = at.replacePendingVisibleCompletionForSession(
@@ -429,6 +779,9 @@ func ensureInvocationEventFields(inv *agent.Invocation, evt *event.Event) {
 		if parent := inv.GetParentInvocation(); parent != nil {
 			evt.ParentInvocationID = parent.InvocationID
 		}
+	}
+	if evt.ParentMetadata == nil && inv.ParentMetadata != nil {
+		evt.ParentMetadata = inv.ParentMetadata
 	}
 	if evt.Branch == "" {
 		evt.Branch = inv.Branch
@@ -746,7 +1099,27 @@ func (at *Tool) callWithIsolatedRunner(
 // buildChildFilterKey constructs a child filter key based on the history scope
 // configuration. For HistoryScopeParentBranch, it creates a hierarchical key
 // that allows the child to inherit parent history.
-func (at *Tool) buildChildFilterKey(parentInv *agent.Invocation) string {
+func (at *Tool) buildChildFilterKey(
+	ctx context.Context,
+	parentInv *agent.Invocation,
+	jsonArgs []byte,
+) string {
+	// Persistent history is supported only for isolated history scope. When
+	// HistoryScopeParentBranch is enabled, NewTool clears persistentHistory at
+	// construction time to preserve legacy semantics.
+	if at.persistentHistory != nil &&
+		at.persistentHistory.enabled &&
+		at.historyScope == HistoryScopeIsolated {
+		childKey := strings.TrimSpace(at.persistentHistory.key)
+		if at.persistentHistory.keyFunc != nil {
+			childKey = strings.TrimSpace(at.persistentHistory.keyFunc(ctx, parentInv, jsonArgs))
+		}
+		if childKey == "" {
+			childKey = defaultPersistentHistoryKey(at.name)
+		}
+		return childKey
+	}
+
 	childKey := at.agent.Info().Name + "-" + uuid.NewString()
 	if at.historyScope == HistoryScopeParentBranch {
 		if pk := parentInv.GetEventFilterKey(); pk != "" {
@@ -754,6 +1127,16 @@ func (at *Tool) buildChildFilterKey(parentInv *agent.Invocation) string {
 		}
 	}
 	return childKey
+}
+
+func defaultPersistentHistoryKey(agentName string) string {
+	if agentName == "" {
+		agentName = "child"
+	}
+	// Avoid "/" so the key does not accidentally fall under the parent's
+	// prefix/subtree filters unless the caller explicitly opts into that
+	// relationship via WithPersistentHistoryKey.
+	return "agenttool:" + agentName + ":default"
 }
 
 // collectResponse collects and concatenates assistant messages from the event
@@ -896,6 +1279,10 @@ type streamCompletionState struct {
 	lastAssistantContent       string
 	finalOnlyResult            string
 	overrideResult             string
+	// resultPrefix is prepended to the model-visible result. It carries
+	// dynamic sub-agent warnings so the parent model sees them in stream mode,
+	// matching the Call path. Empty for non-dynamic AgentTool streaming.
+	resultPrefix string
 }
 
 func (at *Tool) streamableCallContext(ctx context.Context) context.Context {
@@ -920,6 +1307,10 @@ func (at *Tool) runStreamableCall(
 	writer *tool.StreamWriter,
 ) {
 	defer writer.Close()
+	if at.dynamic {
+		at.streamDynamic(ctx, jsonArgs, writer)
+		return
+	}
 	parentInv, ok := agent.InvocationFromContext(ctx)
 	message := model.NewUserMessage(string(jsonArgs))
 	if ok && parentInv != nil && parentInv.Session != nil {
@@ -944,8 +1335,14 @@ func (at *Tool) streamFromParentInvocation(
 		)
 		return
 	}
-	childKey := at.buildChildFilterKey(parentInv)
-	subInv := parentInv.Clone(at.childInvocationOptions(parentInv, message, childKey)...)
+	// See the comment in callWithParentInvocation: when AgentTool is invoked
+	// from the parallel function-call path, parentInv.Session is a frozen
+	// snapshot. Without restoring the live pointer the sub-agent loses
+	// visibility of its own tool_call / tool_response events and loops
+	// forever.
+	parentInv = parentInvocationWithLiveSession(parentInv)
+	childKey := at.buildChildFilterKey(ctx, parentInv, []byte(message.Content))
+	subInv := parentInv.Clone(at.childInvocationOptions(ctx, parentInv, message, childKey, nil)...)
 	subCtx := agent.NewInvocationContext(ctx, subInv)
 	evCh, err := agent.RunWithPlugins(subCtx, subInv, at.agent)
 	if err != nil {
@@ -957,6 +1354,7 @@ func (at *Tool) streamFromParentInvocation(
 		subInv,
 		at.wrapWithStreamSemantics(subCtx, subInv, evCh),
 		writer,
+		"",
 	)
 }
 
@@ -965,73 +1363,124 @@ func (at *Tool) forwardSubInvocationStream(
 	subInv *agent.Invocation,
 	wrapped <-chan *event.Event,
 	writer *tool.StreamWriter,
+	resultPrefix string,
 ) {
 	managePendingVisibleCompletion := shouldDeferStreamCompletion(ctx, subInv)
 	emitFinalResultChunk := tool.FinalResultChunksFromContext(ctx)
-	state := streamCompletionState{}
-	for ev := range wrapped {
-		if ev != nil {
-			ensureInvocationEventFields(subInv, ev)
-		}
-		if shouldSuppressGraphExecutorBarrierEvent(subInv, ev) {
-			at.completeSuppressedBarrierStreamEvent(ctx, subInv, ev, &state)
-			continue
-		}
-		at.updateFinalOnlyStreamResult(ev, &state)
-		if agent.IsGraphCompletionEventDisabled(subInv) &&
-			isGraphCompletionSnapshotEvent(ev) {
-			if emitFinalResultChunk {
-				at.capturePendingCompletionChunk(ev, &state)
-				if managePendingVisibleCompletion {
-					at.capturePendingVisibleCompletion(ctx, subInv, ev, &state)
-				}
-				continue
-			}
-			visibleEvent, ok := visibleCompletionStreamEvent(ev, subInv.AgentName)
-			if !ok {
-				continue
-			}
-			if managePendingVisibleCompletion {
-				at.capturePendingVisibleCompletion(ctx, subInv, visibleEvent, &state)
-			}
-			state.pendingStreamVisibleEvent = visibleEvent
-			state.sawGraphCompletionSnapshot = true
-			continue
-		}
-		if managePendingVisibleCompletion {
-			state.pendingVisibleCompletion = at.updatePendingVisibleCompletionForSession(
-				ctx,
-				subInv,
-				state.pendingVisibleCompletion,
-				ev,
-			)
-			if ev != nil &&
-				ev.RequiresCompletion &&
-				state.pendingVisibleCompletion != nil {
-				at.flushPendingVisibleCompletionForSession(
-					ctx,
-					subInv,
-					&state,
-				)
-			}
-		}
-		at.updateStreamCompletionState(ev, &state)
-		if writer.Send(tool.StreamChunk{Content: ev}, nil) {
+	state := streamCompletionState{resultPrefix: resultPrefix}
+	// When the model-visible result is built from merged inner content (no
+	// final-result chunk is emitted), inject the prefix as a leading content
+	// chunk so it is merged into the tool response. For final-result modes the
+	// prefix is folded into the emitted result instead (see the emit helpers).
+	if resultPrefix != "" && !emitFinalResultChunk {
+		if writer.Send(tool.StreamChunk{Content: resultPrefix}, nil) {
 			return
 		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			sendStreamableCallError(ctx, writer, "agent tool run error: %w", ctx.Err())
+			return
+		case ev, ok := <-wrapped:
+			if !ok {
+				if managePendingVisibleCompletion {
+					at.flushPendingVisibleCompletionForSession(ctx, subInv, &state)
+				}
+				if emitFinalResultChunk {
+					if at.responseMode == ResponseModeFinalOnly {
+						at.emitFinalOnlyResultChunk(&state, writer)
+						return
+					}
+					at.emitPendingCompletionChunk(&state, writer)
+					return
+				}
+				at.emitPendingVisibleCompletionEvent(&state, writer)
+				return
+			}
+			if at.handleForwardedStreamEvent(
+				ctx, subInv, ev, writer, &state,
+				managePendingVisibleCompletion, emitFinalResultChunk,
+			) {
+				return
+			}
+		}
+	}
+}
+
+// handleForwardedStreamEvent processes a single forwarded sub-invocation event
+// and reports whether forwarding should stop (the writer signalled completion,
+// so the caller must return). Graph-completion snapshots are captured for
+// deferred emission and never forwarded inline.
+func (at *Tool) handleForwardedStreamEvent(
+	ctx context.Context,
+	subInv *agent.Invocation,
+	ev *event.Event,
+	writer *tool.StreamWriter,
+	state *streamCompletionState,
+	managePendingVisibleCompletion bool,
+	emitFinalResultChunk bool,
+) (stop bool) {
+	if ev != nil {
+		ensureInvocationEventFields(subInv, ev)
+	}
+	if shouldSuppressGraphExecutorBarrierEvent(subInv, ev) {
+		at.completeSuppressedBarrierStreamEvent(ctx, subInv, ev, state)
+		return false
+	}
+	at.updateFinalOnlyStreamResult(ev, state)
+	if agent.IsGraphCompletionEventDisabled(subInv) &&
+		isGraphCompletionSnapshotEvent(ev) {
+		at.handleGraphCompletionSnapshot(
+			ctx, subInv, ev, state,
+			managePendingVisibleCompletion, emitFinalResultChunk,
+		)
+		return false
 	}
 	if managePendingVisibleCompletion {
-		at.flushPendingVisibleCompletionForSession(ctx, subInv, &state)
-	}
-	if emitFinalResultChunk {
-		if at.responseMode == ResponseModeFinalOnly {
-			at.emitFinalOnlyResultChunk(&state, writer)
-			return
+		state.pendingVisibleCompletion = at.updatePendingVisibleCompletionForSession(
+			ctx,
+			subInv,
+			state.pendingVisibleCompletion,
+			ev,
+		)
+		if ev != nil &&
+			ev.RequiresCompletion &&
+			state.pendingVisibleCompletion != nil {
+			at.flushPendingVisibleCompletionForSession(ctx, subInv, state)
 		}
-		at.emitPendingCompletionChunk(&state, writer)
+	}
+	at.updateStreamCompletionState(ev, state)
+	return writer.Send(tool.StreamChunk{Content: ev}, nil)
+}
+
+// handleGraphCompletionSnapshot captures a graph-completion snapshot for
+// deferred emission: final-result modes stash the completion chunk, otherwise a
+// model-visible completion event is captured/queued for end-of-stream flush.
+func (at *Tool) handleGraphCompletionSnapshot(
+	ctx context.Context,
+	subInv *agent.Invocation,
+	ev *event.Event,
+	state *streamCompletionState,
+	managePendingVisibleCompletion bool,
+	emitFinalResultChunk bool,
+) {
+	if emitFinalResultChunk {
+		at.capturePendingCompletionChunk(ev, state)
+		if managePendingVisibleCompletion {
+			at.capturePendingVisibleCompletion(ctx, subInv, ev, state)
+		}
 		return
 	}
-	at.emitPendingVisibleCompletionEvent(&state, writer)
+	visibleEvent, ok := visibleCompletionStreamEvent(ev, subInv.AgentName)
+	if !ok {
+		return
+	}
+	if managePendingVisibleCompletion {
+		at.capturePendingVisibleCompletion(ctx, subInv, visibleEvent, state)
+	}
+	state.pendingStreamVisibleEvent = visibleEvent
+	state.sawGraphCompletionSnapshot = true
 }
 
 func (at *Tool) updateFinalOnlyStreamResult(
@@ -1228,12 +1677,13 @@ func (at *Tool) emitPendingCompletionChunk(
 	if state.overrideResult != "" {
 		state.pendingCompletionChunk.Result = state.overrideResult
 	}
+	result := prefixStreamResult(state.resultPrefix, state.pendingCompletionChunk.Result)
 	var content any = tool.FinalResultChunk{
-		Result: state.pendingCompletionChunk.Result,
+		Result: result,
 	}
 	if len(state.pendingCompletionChunk.StateDelta) > 0 {
 		content = tool.FinalResultStateChunk{
-			Result:     state.pendingCompletionChunk.Result,
+			Result:     result,
 			StateDelta: cloneStateDelta(state.pendingCompletionChunk.StateDelta),
 		}
 	}
@@ -1248,20 +1698,44 @@ func (at *Tool) emitFinalOnlyResultChunk(
 ) {
 	result := ""
 	var stateDelta map[string][]byte
+	prefix := ""
 	if state != nil {
 		result = state.finalOnlyResult
+		prefix = state.resultPrefix
 		if state.pendingCompletionChunk != nil {
 			stateDelta = state.pendingCompletionChunk.StateDelta
 		}
 	}
-	var content any = tool.FinalResultChunk{Result: result}
+	finalResult := prefixStreamResult(prefix, result)
+	var content any = tool.FinalResultChunk{Result: finalResult}
 	if len(stateDelta) > 0 {
 		content = tool.FinalResultStateChunk{
-			Result:     result,
+			Result:     finalResult,
 			StateDelta: cloneStateDelta(stateDelta),
 		}
 	}
 	_ = writer.Send(tool.StreamChunk{Content: content}, nil)
+}
+
+// prefixStreamResult prepends prefix (e.g. dynamic sub-agent warnings) to a
+// streamed final result. It only prefixes string/nil results so non-text tool
+// results are never corrupted; non-dynamic streaming passes an empty prefix and
+// is therefore unaffected.
+func prefixStreamResult(prefix string, result any) any {
+	if prefix == "" {
+		return result
+	}
+	switch v := result.(type) {
+	case nil:
+		return prefix
+	case string:
+		if v == "" {
+			return prefix
+		}
+		return prefix + "\n" + v
+	default:
+		return result
+	}
 }
 
 func (at *Tool) streamFromFallbackRunner(

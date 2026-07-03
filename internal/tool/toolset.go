@@ -71,6 +71,178 @@ type NamedTool struct {
 	name     string
 }
 
+// NewUnprefixedNamedTool wraps a tool as a NamedTool without adding any name
+// prefix. This is useful for ToolSets whose tools should be recognized as user
+// tools (e.g. for filtering) while keeping their original names.
+func NewUnprefixedNamedTool(t tool.Tool) *NamedTool {
+	return &NamedTool{original: t}
+}
+
+type declarationWrapper interface {
+	originalTool() tool.Tool
+}
+
+// ApplyDeclarations overlays model-facing declarations onto matching tools.
+func ApplyDeclarations(base []tool.Tool, declarations []tool.Declaration) []tool.Tool {
+	if len(base) == 0 || len(declarations) == 0 {
+		return base
+	}
+	declarationByName := make(map[string]tool.Declaration, len(declarations))
+	for _, declaration := range declarations {
+		if declaration.Name == "" {
+			continue
+		}
+		declarationByName[declaration.Name] = declaration
+	}
+	if len(declarationByName) == 0 {
+		return base
+	}
+	out := make([]tool.Tool, len(base))
+	for i, candidate := range base {
+		out[i] = candidate
+		name := toolName(candidate)
+		if name == "" {
+			continue
+		}
+		declaration, ok := declarationByName[name]
+		if !ok {
+			continue
+		}
+		out[i] = wrapDeclarationTool(candidate, declaration)
+	}
+	return out
+}
+
+// ResolveDeclaration unwraps framework declaration overlays.
+func ResolveDeclaration(t tool.Tool) tool.Tool {
+	switch current := t.(type) {
+	case nil:
+		return nil
+	case declarationWrapper:
+		return ResolveDeclaration(current.originalTool())
+	default:
+		return t
+	}
+}
+
+// ResolveSemantic unwraps framework wrappers for semantic capability checks.
+func ResolveSemantic(t tool.Tool) tool.Tool {
+	switch current := t.(type) {
+	case nil:
+		return nil
+	case declarationWrapper:
+		return ResolveSemantic(current.originalTool())
+	case *NamedTool:
+		return ResolveSemantic(current.Original())
+	default:
+		return t
+	}
+}
+
+type declarationTool struct {
+	decl tool.Declaration
+	base tool.Tool
+}
+
+func (t *declarationTool) Declaration() *tool.Declaration {
+	return &t.decl
+}
+
+func (t *declarationTool) originalTool() tool.Tool {
+	return t.base
+}
+
+type callableDeclarationTool struct {
+	*declarationTool
+	callable tool.CallableTool
+}
+
+func (t *callableDeclarationTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	return t.callable.Call(ctx, jsonArgs)
+}
+
+type streamableDeclarationTool struct {
+	*declarationTool
+	streamable tool.StreamableTool
+}
+
+func (t *streamableDeclarationTool) StreamableCall(
+	ctx context.Context,
+	jsonArgs []byte,
+) (*tool.StreamReader, error) {
+	return t.streamable.StreamableCall(ctx, jsonArgs)
+}
+
+type callableStreamableDeclarationTool struct {
+	*declarationTool
+	callable   tool.CallableTool
+	streamable tool.StreamableTool
+}
+
+func (t *callableStreamableDeclarationTool) Call(
+	ctx context.Context,
+	jsonArgs []byte,
+) (any, error) {
+	return t.callable.Call(ctx, jsonArgs)
+}
+
+func (t *callableStreamableDeclarationTool) StreamableCall(
+	ctx context.Context,
+	jsonArgs []byte,
+) (*tool.StreamReader, error) {
+	return t.streamable.StreamableCall(ctx, jsonArgs)
+}
+
+func wrapDeclarationTool(base tool.Tool, declaration tool.Declaration) tool.Tool {
+	wrapped := &declarationTool{
+		decl: declaration,
+		base: base,
+	}
+	callable, hasCallable := base.(tool.CallableTool)
+	streamable, hasStreamable := base.(tool.StreamableTool)
+	hasStreamable = hasStreamable && isReallyStreamable(base)
+	switch {
+	case hasCallable && hasStreamable:
+		return &callableStreamableDeclarationTool{
+			declarationTool: wrapped,
+			callable:        callable,
+			streamable:      streamable,
+		}
+	case hasCallable:
+		return &callableDeclarationTool{
+			declarationTool: wrapped,
+			callable:        callable,
+		}
+	case hasStreamable:
+		return &streamableDeclarationTool{
+			declarationTool: wrapped,
+			streamable:      streamable,
+		}
+	default:
+		return wrapped
+	}
+}
+
+func isReallyStreamable(t tool.Tool) bool {
+	candidate := ResolveSemantic(t)
+	if pref, ok := candidate.(interface{ StreamInner() bool }); ok && !pref.StreamInner() {
+		return false
+	}
+	_, ok := candidate.(tool.StreamableTool)
+	return ok
+}
+
+func toolName(tl tool.Tool) string {
+	if tl == nil {
+		return ""
+	}
+	decl := tl.Declaration()
+	if decl == nil {
+		return ""
+	}
+	return decl.Name
+}
+
 // Declaration returns the tool declaration with a prefixed name.
 func (t *NamedTool) Declaration() *tool.Declaration {
 	decl := t.original.Declaration()

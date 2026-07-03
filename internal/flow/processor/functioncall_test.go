@@ -112,6 +112,18 @@ type permissionMockTool struct {
 	skipSummarize    bool
 }
 
+type afterToolMessagesTestPlugin struct {
+	hook plugin.AfterToolMessagesCallback
+}
+
+func (p afterToolMessagesTestPlugin) Name() string {
+	return "after_tool_messages_test"
+}
+
+func (p afterToolMessagesTestPlugin) Register(r *plugin.Registry) {
+	r.AfterToolMessages(p.hook)
+}
+
 func (m *permissionMockTool) ToolMetadata() tool.ToolMetadata {
 	return m.metadata
 }
@@ -1597,9 +1609,40 @@ func TestAttachStateDeltaToToolResults_ReplaysPendingStateDeltas(
 		},
 	}
 
-	events := p.attachStateDeltaToToolResults(inv, results)
+	events := p.attachStateDeltaToToolResults(context.Background(), inv, results)
 	require.Len(t, events, 2)
 	require.Equal(t, []byte("v1"), events[1].StateDelta[writeKey])
+}
+
+func TestPostToolResultHookRunsAfterToolResult(t *testing.T) {
+	const hookKey = "hook"
+	ctx := context.Background()
+	inv := &agent.Invocation{AgentName: "tester"}
+	called := 0
+	p := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithPostToolResultHook(nil),
+		WithPostToolResultHook(func(
+			gotCtx context.Context,
+			gotInv *agent.Invocation,
+			ev *event.Event,
+		) {
+			require.Equal(t, ctx, gotCtx)
+			require.Equal(t, inv, gotInv)
+			called++
+			if ev.StateDelta == nil {
+				ev.StateDelta = map[string][]byte{}
+			}
+			ev.StateDelta[hookKey] = []byte("ran")
+		}),
+	)
+	events := p.attachStateDeltaToToolResults(ctx, inv, []toolResult{
+		{event: &event.Event{}},
+	})
+	require.Len(t, events, 1)
+	require.Equal(t, 1, called)
+	require.Equal(t, []byte("ran"), events[0].StateDelta[hookKey])
 }
 
 func marshalSkillLoadArgs(
@@ -1867,6 +1910,377 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Nil_NoOverride(t *testing.T)
 	assert.Equal(t, string(wantBytes), choices[0].Message.Content)
 }
 
+func TestProcessResponse_ToolResultMessagesNoAttachmentBudgetByDefault(
+	t *testing.T,
+) {
+	ctx := context.Background()
+
+	tools := map[string]tool.Tool{
+		"first": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "first"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		"second": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "second"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	var grants []int
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		ctx context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		grants = append(
+			grants,
+			tool.ReserveToolResultAttachments(ctx, 4),
+		)
+		return nil, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{
+		InvocationID: "inv-1",
+		AgentName:    "echo-agent",
+	}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						ID: "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "first",
+							Arguments: []byte(`{}`),
+						},
+					},
+					{
+						ID: "call-2",
+						Function: model.FunctionDefinitionParam{
+							Name:      "second",
+							Arguments: []byte(`{}`),
+						},
+					},
+				},
+			},
+		}},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	require.Equal(t, []int{4, 4}, grants)
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected merged tool response event")
+	}
+}
+
+func TestProcessResponse_ToolResultMessagesShareAttachmentBudget(
+	t *testing.T,
+) {
+	ctx := context.Background()
+
+	tools := map[string]tool.Tool{
+		"first": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "first"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		"second": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "second"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	var grants []int
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		ctx context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		grants = append(
+			grants,
+			tool.ReserveToolResultAttachments(ctx, 4),
+		)
+		return nil, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(
+		false,
+		callbacks,
+		WithToolResultAttachmentBudget(6),
+	)
+	inv := &agent.Invocation{
+		InvocationID: "inv-1",
+		AgentName:    "echo-agent",
+	}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						ID: "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "first",
+							Arguments: []byte(`{}`),
+						},
+					},
+					{
+						ID: "call-2",
+						Function: model.FunctionDefinitionParam{
+							Name:      "second",
+							Arguments: []byte(`{}`),
+						},
+					},
+				},
+			},
+		}},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	require.Equal(t, []int{4, 2}, grants)
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected merged tool response event")
+	}
+}
+
+func TestProcessResponse_ToolResultMessagesBudgetIsPerPass(
+	t *testing.T,
+) {
+	ctx := tool.WithToolResultAttachmentBudget(context.Background(), 1)
+	require.Equal(t, 1, tool.ReserveToolResultAttachments(ctx, 1))
+
+	tools := map[string]tool.Tool{
+		"first": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "first"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		"second": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "second"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	var grants []int
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		ctx context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		grants = append(
+			grants,
+			tool.ReserveToolResultAttachments(ctx, 4),
+		)
+		return nil, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(
+		false,
+		callbacks,
+		WithToolResultAttachmentBudget(6),
+	)
+	inv := &agent.Invocation{
+		InvocationID: "inv-1",
+		AgentName:    "echo-agent",
+	}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						ID: "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "first",
+							Arguments: []byte(`{}`),
+						},
+					},
+					{
+						ID: "call-2",
+						Function: model.FunctionDefinitionParam{
+							Name:      "second",
+							Arguments: []byte(`{}`),
+						},
+					},
+				},
+			},
+		}},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	require.Equal(t, []int{4, 2}, grants)
+	require.Equal(t, 0, tool.ReserveToolResultAttachments(ctx, 1))
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected merged tool response event")
+	}
+}
+
+func TestProcessResponse_ToolExecutionDoesNotInheritAttachmentBudget(
+	t *testing.T,
+) {
+	ctx := context.Background()
+
+	var callGrant int
+	tools := map[string]tool.Tool{
+		"media": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "media"},
+			callFn: func(ctx context.Context, _ []byte) (any, error) {
+				callGrant = tool.ReserveToolResultAttachments(ctx, 2)
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	var callbackGrant int
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		ctx context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		callbackGrant = tool.ReserveToolResultAttachments(ctx, 2)
+		return nil, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(
+		false,
+		callbacks,
+		WithToolResultAttachmentBudget(1),
+	)
+	inv := &agent.Invocation{
+		InvocationID: "inv-1",
+		AgentName:    "echo-agent",
+	}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID: "call-1",
+					Function: model.FunctionDefinitionParam{
+						Name:      "media",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	require.Equal(t, 2, callGrant)
+	require.Equal(t, 1, callbackGrant)
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected merged tool response event")
+	}
+}
+
+func TestProcessResponse_ParallelToolResultMessagesShareAttachmentBudget(
+	t *testing.T,
+) {
+	ctx := context.Background()
+
+	tools := map[string]tool.Tool{
+		"first": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "first"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+		"second": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "second"},
+			callFn: func(_ context.Context, _ []byte) (any, error) {
+				return map[string]any{"ok": true}, nil
+			},
+		},
+	}
+
+	var total atomic.Int64
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		ctx context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		granted := tool.ReserveToolResultAttachments(ctx, 4)
+		total.Add(int64(granted))
+		return nil, nil
+	})
+
+	p := NewFunctionCallResponseProcessor(
+		true,
+		callbacks,
+		WithToolResultAttachmentBudget(6),
+	)
+	inv := &agent.Invocation{
+		InvocationID: "inv-1",
+		AgentName:    "echo-agent",
+	}
+	req := &model.Request{Tools: tools}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{
+						ID: "call-1",
+						Function: model.FunctionDefinitionParam{
+							Name:      "first",
+							Arguments: []byte(`{}`),
+						},
+					},
+					{
+						ID: "call-2",
+						Function: model.FunctionDefinitionParam{
+							Name:      "second",
+							Arguments: []byte(`{}`),
+						},
+					},
+				},
+			},
+		}},
+	}
+	ch := make(chan *event.Event, 1)
+
+	p.ProcessResponse(ctx, inv, req, rsp, ch)
+
+	require.Equal(t, int64(6), total.Load())
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected merged tool response event")
+	}
+}
+
 func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithSingleMessage(t *testing.T) {
 	ctx := context.Background()
 
@@ -2095,6 +2509,277 @@ func TestExecuteToolCall_ToolResultMessagesCallback_UnsupportedReturnType(t *tes
 	require.NoError(t, err)
 	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
 	assert.Equal(t, string(wantBytes), choices[0].Message.Content)
+}
+
+func TestAfterToolMessagesHook_ReplacesToolResultMessages(t *testing.T) {
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("look up data"),
+	}}
+	toolCalls := []model.ToolCall{{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Name:      "lookup",
+			Arguments: []byte(`{"q":"data"}`),
+		},
+	}}
+	llmResponse := &model.Response{Choices: []model.Choice{{
+		Message: model.Message{
+			Role:      model.RoleAssistant,
+			ToolCalls: toolCalls,
+		},
+	}}}
+	toolEvent := event.NewResponseEvent("inv-1", "agent", &model.Response{
+		Object: model.ObjectTypeToolResponse,
+		Choices: []model.Choice{{
+			Index:   7,
+			Message: model.NewToolMessage("call-1", "lookup", "raw result"),
+		}},
+	})
+
+	var sawMessages []model.Message
+	mgr := plugin.MustNewManager(afterToolMessagesTestPlugin{
+		hook: func(ctx context.Context, args *plugin.AfterToolMessagesArgs) (*plugin.AfterToolMessagesResult, error) {
+			require.Len(t, args.Messages, 3)
+			require.Len(t, args.ToolCalls, 1)
+			require.Equal(t, "lookup", args.ToolCalls[0].Function.Name)
+			require.Equal(t, "raw result", args.ToolResultMessages[0].Content)
+			sawMessages = append([]model.Message(nil), args.Messages...)
+			msg := args.ToolResultMessages[0]
+			msg.Content = "summary result_ref=refs/node.md"
+			return &plugin.AfterToolMessagesResult{
+				ToolResultMessages: []model.Message{msg},
+			}, nil
+		},
+	})
+	inv := &agent.Invocation{InvocationID: "inv-1", AgentName: "agent", Plugins: mgr}
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	err := p.applyAfterToolMessagesHooks(
+		context.Background(),
+		inv,
+		req,
+		llmResponse,
+		toolEvent,
+	)
+	require.NoError(t, err)
+	require.Len(t, sawMessages, 3)
+	require.Len(t, toolEvent.Response.Choices, 1)
+	assert.Equal(t, 7, toolEvent.Response.Choices[0].Index)
+	assert.Equal(t, "call-1", toolEvent.Response.Choices[0].Message.ToolID)
+	assert.Equal(t, "summary result_ref=refs/node.md", toolEvent.Response.Choices[0].Message.Content)
+}
+
+func TestAfterToolMessagesHook_RejectsInvalidReplacement(t *testing.T) {
+	llmResponse := &model.Response{Choices: []model.Choice{{
+		Message: model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:       "call-1",
+				Function: model.FunctionDefinitionParam{Name: "lookup"},
+			}},
+		},
+	}}}
+	toolEvent := event.NewResponseEvent("inv-1", "agent", &model.Response{
+		Object: model.ObjectTypeToolResponse,
+		Choices: []model.Choice{{
+			Message: model.NewToolMessage("call-1", "lookup", "raw result"),
+		}},
+	})
+	mgr := plugin.MustNewManager(afterToolMessagesTestPlugin{
+		hook: func(ctx context.Context, args *plugin.AfterToolMessagesArgs) (*plugin.AfterToolMessagesResult, error) {
+			return &plugin.AfterToolMessagesResult{
+				ToolResultMessages: []model.Message{model.NewAssistantMessage("bad")},
+			}, nil
+		},
+	})
+	inv := &agent.Invocation{InvocationID: "inv-1", AgentName: "agent", Plugins: mgr}
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	err := p.applyAfterToolMessagesHooks(
+		context.Background(),
+		inv,
+		&model.Request{},
+		llmResponse,
+		toolEvent,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing tool id")
+	assert.Equal(t, "raw result", toolEvent.Response.Choices[0].Message.Content)
+}
+
+func TestAfterToolMessagesHook_SkipsMinimalToolPlaceholder(t *testing.T) {
+	toolCall := model.ToolCall{
+		ID: "call-empty",
+		Function: model.FunctionDefinitionParam{
+			Name: "noop",
+		},
+	}
+	llmResponse := &model.Response{Choices: []model.Choice{{
+		Message: model.Message{
+			Role:      model.RoleAssistant,
+			ToolCalls: []model.ToolCall{toolCall},
+		},
+	}}}
+	toolEvent := event.NewResponseEvent("inv-1", "agent", &model.Response{
+		Object:  model.ObjectTypeToolResponse,
+		Choices: []model.Choice{newMinimalToolChoice(toolCall, 0)},
+	})
+	called := false
+	mgr := plugin.MustNewManager(afterToolMessagesTestPlugin{
+		hook: func(context.Context, *plugin.AfterToolMessagesArgs) (*plugin.AfterToolMessagesResult, error) {
+			called = true
+			return nil, nil
+		},
+	})
+	inv := &agent.Invocation{InvocationID: "inv-1", AgentName: "agent", Plugins: mgr}
+	p := NewFunctionCallResponseProcessor(false, nil)
+
+	err := p.applyAfterToolMessagesHooks(
+		context.Background(),
+		inv,
+		&model.Request{},
+		llmResponse,
+		toolEvent,
+	)
+	require.NoError(t, err)
+	assert.False(t, called)
+}
+
+func TestReplacementToolChoices_PreservesOriginalOrder(t *testing.T) {
+	finishReason := "tool_calls"
+	choices, err := replacementToolChoices(
+		[]model.Choice{
+			{Index: 10, Message: model.NewToolMessage("call-1", "lookup", "raw 1"), FinishReason: &finishReason},
+			{Index: 11, Message: model.NewToolMessage("call-2", "lookup", "raw 2"), FinishReason: &finishReason},
+		},
+		[]model.Message{
+			model.NewToolMessage("call-2", "lookup", "summary 2"),
+			model.NewToolMessage("call-1", "lookup", "summary 1"),
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, choices, 2)
+	assert.Equal(t, 10, choices[0].Index)
+	assert.Same(t, &finishReason, choices[0].FinishReason)
+	assert.Equal(t, "call-1", choices[0].Message.ToolID)
+	assert.Equal(t, "summary 1", choices[0].Message.Content)
+	assert.Equal(t, 11, choices[1].Index)
+	assert.Same(t, &finishReason, choices[1].FinishReason)
+	assert.Equal(t, "call-2", choices[1].Message.ToolID)
+	assert.Equal(t, "summary 2", choices[1].Message.Content)
+}
+
+func TestAfterToolMessagesHelpers_EdgeCases(t *testing.T) {
+	assert.Nil(t, toolResultMessagesFromEvent(nil))
+	assert.Nil(t, toolResultMessagesFromEvent(&event.Event{}))
+
+	toolEvent := event.NewResponseEvent("inv", "agent", &model.Response{
+		Object: model.ObjectTypeToolResponse,
+		Choices: []model.Choice{
+			{Message: model.Message{Role: model.RoleTool, ToolID: "empty"}},
+			{Delta: model.NewToolMessage("call-delta", "lookup", "delta payload")},
+			{Message: model.NewToolMessage("call-message", "lookup", "message payload")},
+		},
+	})
+	messages := toolResultMessagesFromEvent(toolEvent)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "call-delta", messages[0].ToolID)
+	assert.Equal(t, "call-message", messages[1].ToolID)
+
+	msg, ok := assistantMessageFromToolCallResponse(nil)
+	assert.False(t, ok)
+	assert.Empty(t, msg)
+	msg, ok = assistantMessageFromToolCallResponse(&model.Response{})
+	assert.False(t, ok)
+	assert.Empty(t, msg)
+	msg, ok = assistantMessageFromToolCallResponse(&model.Response{Choices: []model.Choice{{
+		Message: model.NewAssistantMessage("assistant payload"),
+	}}})
+	assert.True(t, ok)
+	assert.Equal(t, "assistant payload", msg.Content)
+	msg, ok = assistantMessageFromToolCallResponse(&model.Response{Choices: []model.Choice{{
+		Delta: model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				ID:       "call-1",
+				Function: model.FunctionDefinitionParam{Name: "lookup"},
+			}},
+		},
+	}}})
+	assert.True(t, ok)
+	assert.Len(t, msg.ToolCalls, 1)
+	msg, ok = assistantMessageFromToolCallResponse(&model.Response{Choices: []model.Choice{{}}})
+	assert.False(t, ok)
+	assert.Empty(t, msg)
+
+	assert.Nil(t, toolCallsFromResponse(nil))
+	assert.Nil(t, toolCallsFromResponse(&model.Response{}))
+	assert.Nil(t, toolCallsFromResponse(&model.Response{Choices: []model.Choice{{}}}))
+	calls := toolCallsFromResponse(&model.Response{Choices: []model.Choice{{
+		Delta: model.Message{ToolCalls: []model.ToolCall{{
+			ID:       "call-delta",
+			Function: model.FunctionDefinitionParam{Name: "lookup"},
+		}}},
+	}}})
+	require.Len(t, calls, 1)
+	assert.Equal(t, "call-delta", calls[0].ID)
+
+	_, err := replacementToolChoices(nil, []model.Message{model.NewToolMessage("call-1", "lookup", "summary")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "original tool result messages are empty")
+	_, err = replacementToolChoices(
+		[]model.Choice{{Message: model.NewToolMessage("call-1", "lookup", "raw")}},
+		[]model.Message{
+			model.NewToolMessage("call-1", "lookup", "summary"),
+			model.NewToolMessage("call-2", "lookup", "summary"),
+		},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "replacement count")
+	_, err = replacementToolChoices(
+		[]model.Choice{{Message: model.NewToolMessage("call-1", "lookup", "raw")}},
+		[]model.Message{{Role: model.RoleTool, Content: "missing id"}},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing tool id")
+	_, err = replacementToolChoices(
+		[]model.Choice{{Message: model.NewToolMessage("call-1", "lookup", "raw")}},
+		[]model.Message{{Role: model.RoleAssistant, ToolID: "call-1", Content: "summary"}},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must use role")
+	_, err = replacementToolChoices(
+		[]model.Choice{
+			{Message: model.NewToolMessage("call-1", "lookup", "raw")},
+			{Message: model.NewToolMessage("call-2", "lookup", "raw")},
+		},
+		[]model.Message{
+			model.NewToolMessage("call-1", "lookup", "summary"),
+			model.NewToolMessage("call-1", "lookup", "summary again"),
+		},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate tool id")
+	_, err = replacementToolChoices(
+		[]model.Choice{{Message: model.NewToolMessage("call-1", "lookup", "raw")}},
+		[]model.Message{model.NewToolMessage("call-2", "lookup", "summary")},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "replacement missing tool id")
+
+	updated := replaceChoiceToolMessage(model.Choice{}, model.NewToolMessage("call-new", "lookup", "summary"))
+	assert.Equal(t, "call-new", updated.Message.ToolID)
+	assert.Equal(t, "summary", updated.Message.Content)
+	index := toolChoiceIndexByID([]model.Choice{
+		{Index: 4, Delta: model.NewToolMessage("call-delta", "lookup", "raw")},
+		{Index: 5, Message: model.Message{Role: model.RoleAssistant}},
+	})
+	assert.Equal(t, 4, index["call-delta"])
+	assert.Len(t, index, 1)
+	assert.Nil(t, cloneModelMessages(nil))
+	cloned := cloneModelMessages([]model.Message{model.NewUserMessage("hello")})
+	require.Len(t, cloned, 1)
+	assert.Equal(t, "hello", cloned[0].Content)
 }
 
 func TestExecuteToolCallsInParallel(t *testing.T) {
@@ -6738,6 +7423,18 @@ func TestIsStreamable_RespectsPreferenceFalse(t *testing.T) {
 	require.False(t, isStreamable(&noStreamPrefTool{}))
 }
 
+type originalOnlyStreamWrapper struct {
+	original tool.Tool
+}
+
+func (w *originalOnlyStreamWrapper) Declaration() *tool.Declaration {
+	return w.original.Declaration()
+}
+
+func (w *originalOnlyStreamWrapper) Original() tool.Tool {
+	return w.original
+}
+
 // onlyTool implements Tool but neither Callable nor Streamable.
 type onlyTool struct{}
 
@@ -6751,6 +7448,18 @@ func TestExecuteTool_UnsupportedToolType(t *testing.T) {
 	inv := &agent.Invocation{}
 	tc := model.ToolCall{Function: model.FunctionDefinitionParam{Name: "only"}}
 	_, _, _, err := p.executeTool(ctx, inv, tc, &onlyTool{}, nil)
+	require.Error(t, err)
+}
+
+func TestExecuteTool_OriginalOnlyStreamWrapperDoesNotPanic(t *testing.T) {
+	p := NewFunctionCallResponseProcessor(false, nil)
+	ctx := context.Background()
+	inv := &agent.Invocation{}
+	tc := model.ToolCall{Function: model.FunctionDefinitionParam{Name: "stream"}}
+	wrapper := &originalOnlyStreamWrapper{
+		original: &mockStreamTool{name: "stream"},
+	}
+	_, _, _, err := p.executeTool(ctx, inv, tc, wrapper, nil)
 	require.Error(t, err)
 }
 
@@ -8465,6 +9174,14 @@ func TestShouldRequestStructuredStreamErrors_NilAndNamedTool(t *testing.T) {
 	namedStreamTool, ok := namedTools[0].(tool.StreamableTool)
 	require.True(t, ok)
 	require.True(t, shouldRequestStructuredStreamErrors(namedStreamTool))
+	patchedTools := itool.ApplyDeclarations([]tool.Tool{baseTool}, []tool.Declaration{{
+		Name:        "structured",
+		Description: "patched",
+	}})
+	require.Len(t, patchedTools, 1)
+	patchedStreamTool, ok := patchedTools[0].(tool.StreamableTool)
+	require.True(t, ok)
+	require.True(t, shouldRequestStructuredStreamErrors(patchedStreamTool))
 }
 
 func TestHasSyntheticStateOnlyToolChoice_NilContext(t *testing.T) {

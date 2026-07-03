@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	workflowpromptiter "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	enginepkg "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	managerpkg "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/manager"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
@@ -120,6 +121,22 @@ func testEvalSetInputs(evalSetID string) []enginepkg.EvalSetInput {
 	}
 }
 
+func stringPtr(value string) *string {
+	return &value
+}
+
+func testInitialProfile() *workflowpromptiter.Profile {
+	return &workflowpromptiter.Profile{
+		StructureID: "structure_1",
+		Overrides: []workflowpromptiter.SurfaceOverride{
+			{
+				SurfaceID: "candidate#instruction",
+				Value:     astructure.SurfaceValue{Text: stringPtr("instruction")},
+			},
+		},
+	}
+}
+
 func (failingWriter) Header() http.Header {
 	return http.Header{}
 }
@@ -141,15 +158,30 @@ func newTestServer(t *testing.T, opts ...Option) *Server {
 				_ = ctx
 				return &astructure.Snapshot{
 					StructureID: "struct_1",
-					EntryNodeID: "node_1",
+					EntryNodeID: "candidate",
 					Nodes: []astructure.Node{
-						{NodeID: "node_1", Name: "candidate", Kind: astructure.NodeKindLLM},
+						{NodeID: "candidate", Name: "candidate", Kind: astructure.NodeKindLLM},
 					},
 					Surfaces: []astructure.Surface{
 						{
 							SurfaceID: "candidate#instruction",
-							NodeID:    "node_1",
+							NodeID:    "candidate",
 							Type:      astructure.SurfaceTypeInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("instruction")},
+						},
+						{
+							SurfaceID: "candidate#global_instruction",
+							NodeID:    "candidate",
+							Type:      astructure.SurfaceTypeGlobalInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("global")},
+						},
+						{
+							SurfaceID: "candidate#tool.lookup_record",
+							NodeID:    "candidate",
+							Type:      astructure.SurfaceTypeTool,
+							Value: astructure.SurfaceValue{
+								Tools: []astructure.ToolRef{{ID: "lookup_record"}},
+							},
 						},
 					},
 				}, nil
@@ -230,6 +262,7 @@ func TestHandleRunsPassesRequestThrough(t *testing.T) {
 							SurfaceID: "candidate#instruction",
 							NodeID:    "node_1",
 							Type:      astructure.SurfaceTypeInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("instruction")},
 						},
 					},
 				}, nil
@@ -239,8 +272,7 @@ func TestHandleRunsPassesRequestThrough(t *testing.T) {
 				captured = request
 				_ = opts
 				return &enginepkg.RunResult{
-					Structure: &astructure.Snapshot{StructureID: "struct_1", EntryNodeID: "node_1"},
-					Status:    enginepkg.RunStatusSucceeded,
+					Status: enginepkg.RunStatusSucceeded,
 				}, nil
 			},
 		}),
@@ -249,6 +281,7 @@ func TestHandleRunsPassesRequestThrough(t *testing.T) {
 		Run: &enginepkg.RunRequest{
 			Train:            testEvalSetInputs("train"),
 			Validation:       testEvalSetInputs("validation"),
+			InitialProfile:   testInitialProfile(),
 			TargetSurfaceIDs: []string{"candidate#instruction"},
 			MaxRounds:        1,
 		},
@@ -272,7 +305,7 @@ func TestHandleRunsPassesRequestThrough(t *testing.T) {
 
 func TestHandleRunsAppliesResponseResultSlimming(t *testing.T) {
 	srv := newTestServer(t,
-		WithResponseResultSlimming(enginepkg.RunResultSlimming{OmitStructure: true}),
+		WithResponseResultSlimming(enginepkg.RunResultSlimming{OmitProfiles: true}),
 		WithEngine(&fakeEngine{
 			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
 				_ = ctx
@@ -287,6 +320,7 @@ func TestHandleRunsAppliesResponseResultSlimming(t *testing.T) {
 							SurfaceID: "candidate#instruction",
 							NodeID:    "node_1",
 							Type:      astructure.SurfaceTypeInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("instruction")},
 						},
 					},
 				}, nil
@@ -296,8 +330,8 @@ func TestHandleRunsAppliesResponseResultSlimming(t *testing.T) {
 				_ = request
 				_ = opts
 				return &enginepkg.RunResult{
-					Structure: &astructure.Snapshot{StructureID: "struct_1", EntryNodeID: "node_1"},
-					Status:    enginepkg.RunStatusSucceeded,
+					Status:          enginepkg.RunStatusSucceeded,
+					AcceptedProfile: &workflowpromptiter.Profile{StructureID: "struct_1"},
 				}, nil
 			},
 		}),
@@ -306,6 +340,7 @@ func TestHandleRunsAppliesResponseResultSlimming(t *testing.T) {
 		Run: &enginepkg.RunRequest{
 			Train:            testEvalSetInputs("train"),
 			Validation:       testEvalSetInputs("validation"),
+			InitialProfile:   testInitialProfile(),
 			TargetSurfaceIDs: []string{"candidate#instruction"},
 			MaxRounds:        1,
 		},
@@ -318,7 +353,7 @@ func TestHandleRunsAppliesResponseResultSlimming(t *testing.T) {
 	var resp RunResponse
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.NotNil(t, resp.Result)
-	assert.Nil(t, resp.Result.Structure)
+	assert.Nil(t, resp.Result.AcceptedProfile)
 }
 
 func TestHandleRunsDecodesEvalSetInputs(t *testing.T) {
@@ -344,6 +379,7 @@ func TestHandleRunsDecodesEvalSetInputs(t *testing.T) {
 							SurfaceID: "candidate#instruction",
 							NodeID:    "node_1",
 							Type:      astructure.SurfaceTypeInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("instruction")},
 						},
 					},
 				}, nil
@@ -460,12 +496,27 @@ func TestHandleRunsSupportsOptions(t *testing.T) {
 	assert.Equal(t, "*", recorder.Header().Get(headerAccessControlOrigin))
 }
 
-func TestHandleRunsRejectsUnknownTargetSurfaceID(t *testing.T) {
-	srv := newTestServer(t)
+func TestHandleRunsPassesTargetSurfaceIDsWithoutDescribe(t *testing.T) {
+	var captured *enginepkg.RunRequest
+	srv := newTestServer(t,
+		WithEngine(&fakeEngine{
+			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
+				_ = ctx
+				return nil, errors.New("describe should not be called")
+			},
+			run: func(ctx context.Context, request *enginepkg.RunRequest, opts ...enginepkg.Option) (*enginepkg.RunResult, error) {
+				_ = ctx
+				_ = opts
+				captured = request
+				return &enginepkg.RunResult{Status: enginepkg.RunStatusSucceeded}, nil
+			},
+		}),
+	)
 	body, err := json.Marshal(&RunRequest{
 		Run: &enginepkg.RunRequest{
 			Train:            testEvalSetInputs("train"),
 			Validation:       testEvalSetInputs("validation"),
+			InitialProfile:   testInitialProfile(),
 			TargetSurfaceIDs: []string{"unknown#instruction"},
 			MaxRounds:        1,
 		},
@@ -474,9 +525,9 @@ func TestHandleRunsRejectsUnknownTargetSurfaceID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, srv.RunsPath(), bytes.NewReader(body))
 	recorder := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(recorder, req)
-	require.Equal(t, http.StatusBadRequest, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), "target surface id")
-	assert.Contains(t, recorder.Body.String(), "unknown")
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.NotNil(t, captured)
+	assert.Equal(t, []string{"unknown#instruction"}, captured.TargetSurfaceIDs)
 }
 
 func TestHandleAsyncRunsIsNotExposedWithoutManager(t *testing.T) {
@@ -490,15 +541,15 @@ func TestHandleAsyncRunsIsNotExposedWithoutManager(t *testing.T) {
 func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 	var captured *enginepkg.RunRequest
 	srv := newTestServer(t,
-		WithResponseResultSlimming(enginepkg.RunResultSlimming{OmitStructure: true}),
+		WithResponseResultSlimming(enginepkg.RunResultSlimming{OmitProfiles: true}),
 		WithManager(&fakeManager{
 			start: func(ctx context.Context, request *enginepkg.RunRequest) (*enginepkg.RunResult, error) {
 				_ = ctx
 				captured = request
 				return &enginepkg.RunResult{
-					ID:        "run_1",
-					Status:    enginepkg.RunStatusQueued,
-					Structure: &astructure.Snapshot{StructureID: "struct_1", EntryNodeID: "node_1"},
+					ID:              "run_1",
+					Status:          enginepkg.RunStatusQueued,
+					AcceptedProfile: &workflowpromptiter.Profile{StructureID: "struct_1"},
 				}, nil
 			},
 		}),
@@ -507,6 +558,7 @@ func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 		Run: &enginepkg.RunRequest{
 			Train:            testEvalSetInputs("train"),
 			Validation:       testEvalSetInputs("validation"),
+			InitialProfile:   testInitialProfile(),
 			TargetSurfaceIDs: []string{"candidate#instruction"},
 			MaxRounds:        1,
 		},
@@ -525,7 +577,7 @@ func TestHandleAsyncRunsStartsRunWhenManagerIsConfigured(t *testing.T) {
 	assert.Equal(t, "demo-app", resp.Result.AppName)
 	assert.Equal(t, "run_1", resp.Result.ID)
 	assert.Equal(t, enginepkg.RunStatusQueued, resp.Result.Status)
-	assert.Nil(t, resp.Result.Structure)
+	assert.Nil(t, resp.Result.AcceptedProfile)
 }
 
 func TestHandleAsyncRunsRejectsInvalidMethodWhenManagerIsConfigured(t *testing.T) {
@@ -557,6 +609,7 @@ func TestHandleAsyncRunsSupportsOptionsAndMapsStartErrors(t *testing.T) {
 		Run: &enginepkg.RunRequest{
 			Train:            testEvalSetInputs("train"),
 			Validation:       testEvalSetInputs("validation"),
+			InitialProfile:   testInitialProfile(),
 			TargetSurfaceIDs: []string{"candidate#instruction"},
 			MaxRounds:        1,
 		},
@@ -571,15 +624,15 @@ func TestHandleAsyncRunsSupportsOptionsAndMapsStartErrors(t *testing.T) {
 
 func TestHandleGetRunReturnsRun(t *testing.T) {
 	srv := newTestServer(t,
-		WithResponseResultSlimming(enginepkg.RunResultSlimming{OmitStructure: true}),
+		WithResponseResultSlimming(enginepkg.RunResultSlimming{OmitProfiles: true}),
 		WithManager(&fakeManager{
 			get: func(ctx context.Context, runID string) (*enginepkg.RunResult, error) {
 				_ = ctx
 				return &enginepkg.RunResult{
-					ID:           runID,
-					Status:       enginepkg.RunStatusRunning,
-					CurrentRound: 2,
-					Structure:    &astructure.Snapshot{StructureID: "struct_1", EntryNodeID: "node_1"},
+					ID:              runID,
+					Status:          enginepkg.RunStatusRunning,
+					CurrentRound:    2,
+					AcceptedProfile: &workflowpromptiter.Profile{StructureID: "struct_1"},
 				}, nil
 			},
 		}),
@@ -595,7 +648,7 @@ func TestHandleGetRunReturnsRun(t *testing.T) {
 	assert.Equal(t, "run_1", resp.Result.ID)
 	assert.Equal(t, enginepkg.RunStatusRunning, resp.Result.Status)
 	assert.Equal(t, 2, resp.Result.CurrentRound)
-	assert.Nil(t, resp.Result.Structure)
+	assert.Nil(t, resp.Result.AcceptedProfile)
 }
 
 func TestHandleCancelRunCancelsAsyncRun(t *testing.T) {
@@ -674,6 +727,7 @@ func TestHandleRunsMethodAndExecutionErrors(t *testing.T) {
 							SurfaceID: "candidate#instruction",
 							NodeID:    "node_1",
 							Type:      astructure.SurfaceTypeInstruction,
+							Value:     astructure.SurfaceValue{Text: stringPtr("instruction")},
 						},
 					},
 				}, nil
@@ -695,6 +749,7 @@ func TestHandleRunsMethodAndExecutionErrors(t *testing.T) {
 		Run: &enginepkg.RunRequest{
 			Train:            testEvalSetInputs("train"),
 			Validation:       testEvalSetInputs("validation"),
+			InitialProfile:   testInitialProfile(),
 			TargetSurfaceIDs: []string{"candidate#instruction"},
 			MaxRounds:        1,
 		},
@@ -748,58 +803,6 @@ func TestRedirectTrailingSlashToCanonicalPath(t *testing.T) {
 	srv.redirectTrailingSlashToCanonicalPath(recorder, req)
 	require.Equal(t, http.StatusPermanentRedirect, recorder.Code)
 	assert.Equal(t, srv.RunsPath()+"?a=1", recorder.Header().Get("Location"))
-}
-
-func TestValidateTargetSurfaceIDs(t *testing.T) {
-	srv := newTestServer(t)
-	assert.NoError(t, srv.validateTargetSurfaceIDs(context.Background(), nil))
-	assert.EqualError(t, srv.validateTargetSurfaceIDs(context.Background(), []string{}), "target surface ids must not be empty")
-	assert.EqualError(t, srv.validateTargetSurfaceIDs(context.Background(), []string{""}), "target surface ids must not contain empty values")
-	err := srv.validateTargetSurfaceIDs(context.Background(), []string{"unknown#instruction"})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), `target surface id "unknown#instruction" is unknown`)
-	assert.NoError(t, srv.validateTargetSurfaceIDs(context.Background(), []string{"candidate#instruction"}))
-	nilStructureServer := newTestServer(t,
-		WithEngine(&fakeEngine{
-			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
-				_ = ctx
-				return nil, nil
-			},
-		}),
-	)
-	assert.EqualError(t, nilStructureServer.validateTargetSurfaceIDs(context.Background(), []string{"candidate#instruction"}), "structure is nil")
-	describeErrServer := newTestServer(t,
-		WithEngine(&fakeEngine{
-			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
-				_ = ctx
-				return nil, errors.New("boom")
-			},
-		}),
-	)
-	assert.EqualError(t, describeErrServer.validateTargetSurfaceIDs(context.Background(), []string{"candidate#instruction"}), "describe structure for target surface validation: boom")
-	unsupportedSurfaceServer := newTestServer(t,
-		WithEngine(&fakeEngine{
-			describe: func(ctx context.Context) (*astructure.Snapshot, error) {
-				_ = ctx
-				return &astructure.Snapshot{
-					StructureID: "struct_1",
-					EntryNodeID: "node_1",
-					Nodes: []astructure.Node{
-						{NodeID: "node_1", Name: "candidate", Kind: astructure.NodeKindLLM},
-					},
-					Surfaces: []astructure.Surface{
-						{
-							SurfaceID: "candidate#unsupported",
-							NodeID:    "node_1",
-							Type:      astructure.SurfaceType("unsupported"),
-						},
-					},
-				}, nil
-			},
-		}),
-	)
-	err = unsupportedSurfaceServer.validateTargetSurfaceIDs(context.Background(), []string{"candidate#unsupported"})
-	assert.EqualError(t, err, `target surface id "candidate#unsupported" is unknown`)
 }
 
 func TestStatusCodeFromError(t *testing.T) {
@@ -901,8 +904,10 @@ func TestValidateRunRequest(t *testing.T) {
 				EvalSetID: "train",
 			},
 		},
-		Validation: testEvalSetInputs("validation"),
-		MaxRounds:  1,
+		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testInitialProfile(),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
 	}}))
 	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
 		Train: testEvalSetInputs("train"),
@@ -1007,9 +1012,18 @@ func TestValidateRunRequest(t *testing.T) {
 		TargetSurfaceIDs: []string{},
 	}}), "target surface ids must not be empty")
 	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{""},
+	}}), "target surface ids must not contain empty values")
+	assert.EqualError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),
 		MaxRounds:  1,
+		TargetSurfaceIDs: []string{
+			"candidate#instruction",
+		},
 		BackwardOptions: enginepkg.BackwardOptions{
 			CaseParallelism: -1,
 		},
@@ -1018,6 +1032,9 @@ func TestValidateRunRequest(t *testing.T) {
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),
 		MaxRounds:  1,
+		TargetSurfaceIDs: []string{
+			"candidate#instruction",
+		},
 		AggregationOptions: enginepkg.AggregationOptions{
 			SurfaceParallelism: -1,
 		},
@@ -1026,14 +1043,25 @@ func TestValidateRunRequest(t *testing.T) {
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),
 		MaxRounds:  1,
+		TargetSurfaceIDs: []string{
+			"candidate#instruction",
+		},
 		OptimizerOptions: enginepkg.OptimizerOptions{
 			SurfaceParallelism: -1,
 		},
 	}}), "optimizer surface parallelism must be non-negative")
 	assert.NoError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
-		Train:      testEvalSetInputs("train"),
-		Validation: testEvalSetInputs("validation"),
-		MaxRounds:  1,
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
+	}}))
+	assert.NoError(t, validateRunRequest(&RunRequest{Run: &enginepkg.RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		InitialProfile:   testInitialProfile(),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
 	}}))
 }
 

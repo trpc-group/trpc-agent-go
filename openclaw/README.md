@@ -283,6 +283,37 @@ tools:
   # Optional: override the built-in OpenClaw tooling guidance prompt.
   # Leave unset to use the built-in default, or set to "" to disable it.
   openclaw_tooling_guidance: ""
+  # Optional: reduce large parent model requests by exposing compact
+  # tool_search + dynamic_agent entrypoints when the direct tool surface
+  # exceeds the auto threshold. Default mode is auto; set
+  # defer_to_dynamic_agent_mode: on to force it on, or off to disable it.
+  defer_to_dynamic_agent_mode: auto # off|on|auto
+  defer_to_dynamic_agent_threshold_chars: 4000
+  # Optional: cap one dynamic_agent child call; 0 or unset disables it.
+  dynamic_agent_timeout: "180s"
+  # Optional: keep default direct tools on the parent agent.
+  # Set false for token-sensitive profiles that should expose only
+  # tool_search/dynamic_agent plus defer_direct_tools.
+  # defer_default_direct_tools: true
+  # Optional: keep a small set of tools directly callable by the parent agent.
+  # defer_direct_tools: ["exec_command"]
+  # Optional: default timeout for host exec_command calls when timeout_sec is
+  # omitted. Leave unset to keep the built-in host exec default.
+  # host_exec_default_timeout: "60s"
+  # Optional: configure fenced-code execution without exposing workspace_exec.
+  code_executor:
+    type: "sandbox" # sandbox; leave empty/unset to inherit enable_local_exec
+    auto_execute_code_blocks: true
+    sandbox:
+      workspace_root: "" # default: state_dir/sandbox
+      backend: "auto" # auto|linux-bubblewrap|macos-sandbox-exec
+      profile: "workspace_write" # workspace_write|read_only|disabled
+      network: "restricted" # restricted|enabled
+      default_timeout: "30s"
+      output_max_bytes: 1048576
+      shell_env:
+        inherit: "core" # all|core|none
+        apply_default_excludes: true
   providers:
     - type: "browser"
       name: "browser-runtime"
@@ -327,6 +358,23 @@ Notes:
 - Duration fields use Go-style strings like `60s`, `10m`, `1h`.
 - For secrets (model keys, Telegram tokens), keep them out of version control.
   Prefer environment variables when available.
+- `tools.code_executor.type: sandbox` wires `codeexecutor/sandbox` into
+  both fenced-code execution and OpenClaw `exec_command` while keeping the
+  generic `workspace_exec` tool surface disabled. In this mode,
+  `exec_command` only supports foreground non-interactive commands;
+  `write_stdin` and `kill_session` are unavailable.
+- Sandbox decision table:
+
+  | Setting | Fenced code blocks | OpenClaw `exec_command` | Interactive follow-up | Typical reason |
+  | --- | --- | --- | --- | --- |
+  | `tools.code_executor.type: "sandbox"` | Runs in sandbox | Runs in sandbox | Not available (`write_stdin` / `kill_session` are omitted) | Need filesystem, network, timeout, or env isolation |
+  | `tools.code_executor.type: ""` | Runs on host when `enable_local_exec: true`; disabled when `false` | Runs on host | Available for host `exec_command` sessions | Need host shell semantics or interactive shell workflows |
+
+- In sandbox mode, upload and memory variables still expose stable
+  `OPENCLAW_*` metadata, but host paths such as
+  `OPENCLAW_LAST_UPLOAD_PATH`, `OPENCLAW_SESSION_UPLOADS_DIR`,
+  `OPENCLAW_MEMORY_FILE`, `OPENCLAW_USER_MEMORY_FILE`, and
+  `OPENCLAW_CHAT_MEMORY_FILE` are not automatically mounted into the sandbox.
 - `knowledges` currently configures only embedder / vector store wiring.
   Loading documents into a knowledge base is a separate runtime action.
 - Example `pgvector` knowledge config:
@@ -789,6 +837,29 @@ You can override the OpenAI-compatible base URL with:
 - `-openai-base-url` (CLI flag), or
 - `model.base_url` (YAML config).
 
+Some OpenAI-compatible gateways require additional HTTP headers. Set them with
+`OPENAI_HEADERS` as space-, comma-, or newline-separated `KEY=VALUE` pairs:
+
+```bash
+export OPENAI_HEADERS="X-Example-User=alice X-Example-Agent=openclaw"
+```
+
+Quote values that contain spaces or commas:
+
+```bash
+export OPENAI_HEADERS='X-Example-User=alice Authorization="Bearer token"'
+```
+
+You can also configure them in YAML:
+
+```yaml
+model:
+  headers:
+    X-Example-User: "alice"
+    X-Example-Agent: "openclaw"
+    X-Example-Token: "Bearer token-with-space"
+```
+
 ### DeepSeek (OpenAI-compatible)
 
 If you use DeepSeek directly, set `DEEPSEEK_API_KEY` together with the official
@@ -967,6 +1038,17 @@ go run ./cmd/openclaw bootstrap deps \
   -apply
 ```
 
+Some specialized toolchains are intentionally opt-in. For example,
+`chess` checks for a Stockfish-compatible UCI engine and installs Python
+board-analysis helpers for chess-position tasks:
+
+```bash
+cd openclaw
+go run ./cmd/openclaw bootstrap deps \
+  -profile chess \
+  -apply
+```
+
 The bootstrap command never runs automatically on startup. Startup logs may
 print a suggested `bootstrap deps` command when optional file tools are
 missing, but installation is always explicit. The managed Python environment
@@ -979,7 +1061,9 @@ Go, npm, managed-Python, and asset download install actions. Explicit
 default dependency profiles automatically. `bootstrap deps --apply` is
 best-effort: user-space installs and downloads run first, while root-only
 steps are reported as deferred instead of aborting the entire run. Download
-actions store assets under `<state_dir>/tools/<skill>/...`.
+actions store assets under `<state_dir>/tools/<skill>/...` and may link
+selected executables into the managed toolchain `bin` directory when their
+metadata declares `links`.
 
 ### 5) Send a message
 
@@ -1454,6 +1538,9 @@ OpenClaw supports these extension points:
   `registry.RegisterMemoryBackend(type, factory)`.
   Select via `memory.backend` (`-memory-backend`) and optional
   `memory.config`.
+- **Gateway run options**: pass `app.WithGatewayRunOptions(...)` or
+  `app.WithGatewayRunOptionResolver(...)` from a custom binary to inject
+  request-scoped `agent.RunOption` values.
 - **Skills**: no Go code needed; point `skills.extra_dirs` at a folder.
 
 For a step-by-step plugin authoring guide (with copy-paste templates),

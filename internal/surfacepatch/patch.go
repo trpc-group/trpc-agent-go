@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	configsKey           = "__trpc_agent_internal_node_surface_patches__"
-	rootNodeIDConfigsKey = "__trpc_agent_internal_surface_root_node_id__"
+	configsKey                 = "__trpc_agent_internal_node_surface_patches__"
+	rootNodeIDConfigsKey       = "__trpc_agent_internal_surface_root_node_id__"
+	toolSurfaceTraceConfigsKey = "__trpc_agent_internal_promptiter_tool_surface_trace__"
 )
 
 type textSlot struct {
@@ -41,6 +42,11 @@ type toolsSlot struct {
 	append []tool.Tool
 }
 
+type toolDeclarationSlot struct {
+	set   bool
+	value []tool.Declaration
+}
+
 type skillRepoSlot struct {
 	set   bool
 	value skill.Repository
@@ -53,7 +59,15 @@ type Patch struct {
 	fewShot           fewShotSlot
 	model             modelSlot
 	tools             toolsSlot
+	toolDeclarations  toolDeclarationSlot
 	skillRepo         skillRepoSlot
+
+	// suppressSubAgentTransfer, when true, omits framework-managed sub-agent
+	// transfer (the transfer_to_agent tool, auto-added when the node's agent
+	// has sub-agents) from the node's tool surface. Unlike the tool slot it is
+	// not a value override: it only removes the framework tool, never a user
+	// tool, so it composes with SetTools.
+	suppressSubAgentTransfer bool
 }
 
 // SetInstruction sets the instruction surface override.
@@ -98,10 +112,24 @@ func (p *Patch) AppendTools(tools []tool.Tool) {
 	p.tools.append = append(p.tools.append, cloneTools(tools)...)
 }
 
+// SetToolDeclarations sets model-facing tool declaration overrides.
+func (p *Patch) SetToolDeclarations(declarations []tool.Declaration) {
+	p.toolDeclarations.set = true
+	p.toolDeclarations.value = cloneToolDeclarations(declarations)
+}
+
 // SetSkillRepository sets the skill repository surface override.
 func (p *Patch) SetSkillRepository(repo skill.Repository) {
 	p.skillRepo.set = true
 	p.skillRepo.value = repo
+}
+
+// SetSuppressSubAgentTransfer requests that framework-managed sub-agent
+// transfer (transfer_to_agent) be omitted from the node's tool surface even
+// when the node's agent has sub-agents. The dynamic AgentTool uses this so a
+// short-lived sub-agent cannot hand control to another agent.
+func (p *Patch) SetSuppressSubAgentTransfer() {
+	p.suppressSubAgentTransfer = true
 }
 
 // Instruction returns the instruction surface override.
@@ -146,9 +174,23 @@ func (p Patch) ApplyTools(base []tool.Tool) ([]tool.Tool, bool) {
 	return appendTools(base, p.tools.append), true
 }
 
+// ToolDeclarations returns model-facing tool declaration overrides.
+func (p Patch) ToolDeclarations() ([]tool.Declaration, bool) {
+	if !p.toolDeclarations.set {
+		return nil, false
+	}
+	return cloneToolDeclarations(p.toolDeclarations.value), true
+}
+
 // SkillRepository returns the skill repository surface override.
 func (p Patch) SkillRepository() (skill.Repository, bool) {
 	return p.skillRepo.value, p.skillRepo.set
+}
+
+// SuppressSubAgentTransfer reports whether framework-managed sub-agent transfer
+// must be omitted from the node's tool surface.
+func (p Patch) SuppressSubAgentTransfer() bool {
+	return p.suppressSubAgentTransfer
 }
 
 // IsEmpty reports whether the patch carries any surface override.
@@ -159,7 +201,9 @@ func (p Patch) IsEmpty() bool {
 		!p.model.set &&
 		!p.tools.set &&
 		len(p.tools.append) == 0 &&
-		!p.skillRepo.set
+		!p.toolDeclarations.set &&
+		!p.skillRepo.set &&
+		!p.suppressSubAgentTransfer
 }
 
 // Merge returns a copy where values from other override the same surface type.
@@ -192,8 +236,17 @@ func (p Patch) Merge(other Patch) Patch {
 			cloneTools(other.tools.append)...,
 		)
 	}
+	if other.toolDeclarations.set {
+		out.toolDeclarations = toolDeclarationSlot{
+			set:   true,
+			value: cloneToolDeclarations(other.toolDeclarations.value),
+		}
+	}
 	if other.skillRepo.set {
 		out.skillRepo = other.skillRepo
+	}
+	if other.suppressSubAgentTransfer {
+		out.suppressSubAgentTransfer = true
 	}
 	return out
 }
@@ -213,7 +266,12 @@ func (p Patch) Clone() Patch {
 			value:  cloneTools(p.tools.value),
 			append: cloneTools(p.tools.append),
 		},
-		skillRepo: p.skillRepo,
+		toolDeclarations: toolDeclarationSlot{
+			set:   p.toolDeclarations.set,
+			value: cloneToolDeclarations(p.toolDeclarations.value),
+		},
+		skillRepo:                p.skillRepo,
+		suppressSubAgentTransfer: p.suppressSubAgentTransfer,
 	}
 }
 
@@ -278,6 +336,22 @@ func RootNodeID(cfgs map[string]any, fallback string) string {
 	return nodeID
 }
 
+// WithToolSurfaceTracing enables PromptIter per-tool surface tracing.
+func WithToolSurfaceTracing(cfgs map[string]any) map[string]any {
+	out := copyConfigs(cfgs)
+	out[toolSurfaceTraceConfigsKey] = true
+	return out
+}
+
+// ToolSurfaceTracingEnabled reports whether PromptIter per-tool surface tracing is enabled.
+func ToolSurfaceTracingEnabled(cfgs map[string]any) bool {
+	if cfgs == nil {
+		return false
+	}
+	enabled, ok := cfgs[toolSurfaceTraceConfigsKey].(bool)
+	return ok && enabled
+}
+
 type nodePatches map[string]Patch
 
 func nodePatchesFromConfigs(cfgs map[string]any) nodePatches {
@@ -336,6 +410,10 @@ func cloneTools(in []tool.Tool) []tool.Tool {
 		return nil
 	}
 	return append([]tool.Tool(nil), in...)
+}
+
+func cloneToolDeclarations(in []tool.Declaration) []tool.Declaration {
+	return append([]tool.Declaration(nil), in...)
 }
 
 func appendTools(base []tool.Tool, appended []tool.Tool) []tool.Tool {

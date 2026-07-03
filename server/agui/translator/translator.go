@@ -26,7 +26,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/steerext"
 	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
@@ -67,6 +69,10 @@ func New(ctx context.Context, threadID, runID string, opts ...Option) (Translato
 		runID:                                  runID,
 		lastMessageID:                          "",
 		receivingMessage:                       false,
+		textStreams:                            newMessageStreamState(),
+		graphTextAppendTargetID:                "",
+		reasoningStreams:                       newMessageStreamState(),
+		concurrentMessageStreamsEnabled:        options.concurrentMessageStreamsEnabled,
 		seenResponseIDs:                        make(map[string]struct{}),
 		seenToolCallIDs:                        make(map[string]struct{}),
 		toolCallDeltas:                         make(map[toolCallDeltaKey]*toolCallDeltaState),
@@ -88,8 +94,12 @@ type translator struct {
 	runID                                  string
 	lastMessageID                          string
 	receivingMessage                       bool
+	textStreams                            messageStreamState
+	graphTextAppendTargetID                string
 	lastReasoningMessageID                 string
 	receivingReasoning                     bool
+	reasoningStreams                       messageStreamState
+	concurrentMessageStreamsEnabled        bool
 	seenResponseIDs                        map[string]struct{}
 	seenToolCallIDs                        map[string]struct{}
 	toolCallDeltas                         map[toolCallDeltaKey]*toolCallDeltaState
@@ -104,7 +114,10 @@ type translator struct {
 	streamingToolResultContent             map[string]string
 }
 
-const skillRunArtifactsStateKey = skill.StateKeyArtifacts
+const (
+	skillRunArtifactsStateKey = skill.StateKeyArtifacts
+	steerConsumedActivityType = "steer.consumed"
+)
 
 // Translate translates one trpc-agent-go event into zero or more AG-UI events.
 func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]aguievents.Event, error) {
@@ -132,6 +145,14 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 	// Handle node custom events (progress, text, custom).
 	events = append(events, t.graphNodeCustomEvents(event)...)
 	events = append(events, t.toolArtifactsEvents(event)...)
+	queuedUserEvents, handled, err := t.queuedUserMessageEvents(event)
+	if err != nil {
+		return nil, err
+	}
+	if handled {
+		events = append(events, queuedUserEvents...)
+		return t.finalizeEvents(event, events), nil
+	}
 
 	rsp := event.Response
 	if rsp == nil {
@@ -152,13 +173,13 @@ func (t *translator) Translate(ctx context.Context, event *agentevent.Event) ([]
 	}
 	if rsp.Object == model.ObjectTypeChatCompletionChunk || rsp.Object == model.ObjectTypeChatCompletion {
 		if t.reasoningContentEnabled {
-			reasoningEvents, err := t.reasoningEvents(rsp)
+			reasoningEvents, err := t.translateReasoningMessageEvents(rsp)
 			if err != nil {
 				return nil, err
 			}
 			events = append(events, reasoningEvents...)
 		}
-		textMessageEvents, err := t.textMessageEvent(rsp)
+		textMessageEvents, err := t.translateTextMessageEvents(rsp)
 		if err != nil {
 			return nil, err
 		}
@@ -205,24 +226,7 @@ func (t *translator) PostRunFinalizationEvents(context.Context) ([]aguievents.Ev
 	if t == nil {
 		return nil, nil
 	}
-	var events []aguievents.Event
-	if t.receivingReasoning {
-		if t.reasoningContentEnabled {
-			events = append(events,
-				aguievents.NewReasoningMessageEndEvent(t.lastReasoningMessageID),
-				aguievents.NewReasoningEndEvent(t.lastReasoningMessageID),
-			)
-		}
-		t.receivingReasoning = false
-	}
-	if t.receivingMessage {
-		events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
-		t.receivingMessage = false
-	}
-	if t.toolCallDeltaStreamingEnabled {
-		events = append(events, t.closeOpenToolCallDeltas()...)
-	}
-	return events, nil
+	return t.postRunFinalizationEvents(), nil
 }
 
 func (t *translator) finalizeEvents(
@@ -250,6 +254,80 @@ func (t *translator) finalizeEvents(
 		base.RawEvent = metadata
 	}
 	return events
+}
+
+func (t *translator) queuedUserMessageEvents(
+	evt *agentevent.Event,
+) ([]aguievents.Event, bool, error) {
+	meta, ok, err := agentevent.GetExtension[steerext.QueuedUserMessageMetadata](
+		evt,
+		steerext.QueuedUserMessageExtensionKey,
+	)
+	if err != nil {
+		return nil, true, fmt.Errorf("decode queued user message metadata: %w", err)
+	}
+	if !ok || meta.Status != steerext.QueuedUserMessageStatusConsumed {
+		return nil, false, nil
+	}
+	if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
+		return nil, true, errors.New("queued user message event missing message")
+	}
+	message := evt.Response.Choices[0].Message
+	if message.Role != model.RoleUser {
+		return nil, true, fmt.Errorf(
+			"queued user message event role must be user: %s",
+			message.Role,
+		)
+	}
+
+	messageID := evt.Response.ID
+	if messageID == "" {
+		messageID = evt.ID
+	}
+	if messageID == "" {
+		messageID = uuid.NewString()
+	}
+
+	events := make([]aguievents.Event, 0, 4)
+	events = append(events, t.closeTextStreamsBeforeQueuedUserMessage()...)
+	if len(message.ContentParts) > 0 {
+		userMessage, err := queuedUserMessageFromContentParts(messageID, message)
+		if err != nil {
+			return nil, true, err
+		}
+		events = append(
+			events,
+			aguievents.NewCustomEvent(
+				multimodal.CustomEventNameUserMessage,
+				aguievents.WithValue(userMessage),
+			),
+		)
+	} else if message.Content != "" {
+		events = append(
+			events,
+			aguievents.NewTextMessageStartEvent(
+				messageID,
+				aguievents.WithRole(string(aguitypes.RoleUser)),
+			),
+			aguievents.NewTextMessageContentEvent(messageID, message.Content),
+			aguievents.NewTextMessageEndEvent(messageID),
+		)
+		t.recordClosedMessageID(messageID)
+	}
+	events = append(events, aguievents.NewActivitySnapshotEvent(
+		steerConsumedActivityMessageID(messageID),
+		steerConsumedActivityType,
+		map[string]any{
+			"requestId": evt.RequestID,
+			"messageId": messageID,
+			"status":    meta.Status,
+		},
+	))
+	return events, true, nil
+}
+
+func steerConsumedActivityMessageID(messageID string) string {
+	return "activity-steer-consumed-" + messageID
 }
 
 type artifactRef struct {
@@ -597,7 +675,7 @@ func (t *translator) toolCallEvent(rsp *model.Response) ([]aguievents.Event, err
 			events = append(events, t.deltaToolCallEvents(rsp.ID, choice)...)
 		}
 	}
-	t.lastMessageID = rsp.ID
+	t.recordClosedMessageID(rsp.ID)
 	return events, nil
 }
 
@@ -619,7 +697,7 @@ func (t *translator) toolResultEvent(rsp *model.Response, messageID string) ([]a
 				choice.Delta.ToolID, choice.Delta.Content))
 		}
 	}
-	t.lastMessageID = messageID
+	t.recordClosedMessageID(messageID)
 	return events, nil
 }
 
@@ -712,18 +790,13 @@ func (t *translator) graphModelEvents(evt *agentevent.Event) []aguievents.Event 
 	if t.hasSeenResponseID(responseID) {
 		return nil
 	}
-	var events []aguievents.Event
-	if t.receivingMessage && t.lastMessageID != responseID {
-		events = append(events, aguievents.NewTextMessageEndEvent(t.lastMessageID))
-		t.receivingMessage = false
-	}
+	events := t.graphModelBoundaryEvents(responseID)
 	events = append(events,
 		aguievents.NewTextMessageStartEvent(responseID, aguievents.WithRole(model.RoleAssistant.String())),
 		aguievents.NewTextMessageContentEvent(responseID, meta.Output),
 		aguievents.NewTextMessageEndEvent(responseID),
 	)
-	t.lastMessageID = responseID
-	t.recordResponseID(responseID)
+	t.recordGraphModelResponseID(responseID)
 	return events
 }
 
@@ -840,9 +913,10 @@ func (t *translator) handleProgressEvent(meta graph.NodeCustomEventMetadata) []a
 func (t *translator) handleTextEvent(meta graph.NodeCustomEventMetadata) []aguievents.Event {
 	// If we're currently in a message context and the text is from the same
 	// message context, emit as TextMessageContent for seamless streaming.
-	if t.receivingMessage && meta.Message != "" {
+	messageID, ok := t.graphTextAppendMessageID()
+	if ok && meta.Message != "" {
 		return []aguievents.Event{
-			aguievents.NewTextMessageContentEvent(t.lastMessageID, meta.Message),
+			aguievents.NewTextMessageContentEvent(messageID, meta.Message),
 		}
 	}
 

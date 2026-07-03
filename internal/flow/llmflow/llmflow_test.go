@@ -30,6 +30,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -145,11 +146,175 @@ func (s *flowRecordingSpan) SetAttributes(kv ...attribute.KeyValue) {
 
 func flowHasAttr(attrs []attribute.KeyValue, key string, want any) bool {
 	for _, kv := range attrs {
-		if string(kv.Key) == key && kv.Value.AsInterface() == want {
+		if string(kv.Key) == key &&
+			fmt.Sprint(kv.Value.AsInterface()) == fmt.Sprint(want) {
 			return true
 		}
 	}
 	return false
+}
+
+func TestLatencyDiagnosticHelpers(t *testing.T) {
+	ctx := context.Background()
+	_, disabledSpan, disabledStarted := startLatencySpan(ctx, nil, "disabled")
+	require.False(t, disabledStarted)
+	require.Nil(t, disabledSpan)
+	finishLatencySpan(nil, false, errors.New("ignored"))
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{}),
+		agent.WithInvocationSession(session.NewSession("app", "user", "sess")),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			LatencyDiagnosticsEnabled:    true,
+			LatencyDiagnosticsEmitEvents: true,
+			RequestID:                    "req-latency",
+		}),
+	)
+	req := &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+		Tools: map[string]tool.Tool{
+			"slow": &mockLongRunnerTool{name: "slow", long: true},
+		},
+	}
+
+	_, span, started := startLatencySpan(
+		ctx,
+		inv,
+		latencySpanFlowRun,
+		attribute.String("test.attr", "value"),
+	)
+	require.True(t, started)
+	finishLatencySpan(span, started, errors.New("boom"))
+
+	reqAttrs := latencyRequestAttrs(req)
+	require.True(t, flowHasAttr(reqAttrs, "llmflow.request.messages", 1))
+	require.True(t, flowHasAttr(reqAttrs, "llmflow.request.tools", 1))
+	require.True(t, flowHasAttr(reqAttrs, "llmflow.request.stream", true))
+	require.Nil(t, latencyRequestAttrs(nil))
+
+	resp := &model.Response{
+		Done:      true,
+		IsPartial: true,
+		Object:    model.ObjectTypePreprocessingStatus,
+		Error:     &model.ResponseError{Type: model.ErrorTypeRunError},
+		Choices:   []model.Choice{{Index: 1}},
+	}
+	respAttrs := latencyResponseAttrs(resp)
+	require.True(t, flowHasAttr(respAttrs, "llmflow.response.done", true))
+	require.True(t, flowHasAttr(respAttrs, "llmflow.response.partial", true))
+	require.True(t, flowHasAttr(respAttrs, "llmflow.response.choices", 1))
+	require.True(
+		t,
+		flowHasAttr(
+			respAttrs,
+			"llmflow.response.object",
+			model.ObjectTypePreprocessingStatus,
+		),
+	)
+	require.True(
+		t,
+		flowHasAttr(
+			respAttrs,
+			"llmflow.response.error_type",
+			string(model.ErrorTypeRunError),
+		),
+	)
+	require.Nil(t, latencyResponseAttrs(nil))
+	require.True(t, latencyTraceResponseDetails(nil))
+	require.True(t, latencyTraceResponseDetails(resp))
+	require.False(t, latencyTraceResponseDetails(&model.Response{}))
+
+	invAttrs := latencyInvocationAttrs(inv)
+	require.True(t, flowHasAttr(invAttrs, "llmflow.agent", "a"))
+	require.True(t, flowHasAttr(invAttrs, "llmflow.request_id", "req-latency"))
+	require.True(t, flowHasAttr(invAttrs, "llmflow.session.events", 0))
+	require.Nil(t, latencyInvocationAttrs(nil))
+
+	require.Empty(t, latencyProcessorName(nil))
+	require.Equal(
+		t,
+		"mockRequestProcessor",
+		latencyProcessorName(&mockRequestProcessor{}),
+	)
+	require.Equal(t, "stage", latencyProcessorStageSpanName("stage", nil))
+	require.Equal(
+		t,
+		"stage.mockRequestProcessor",
+		latencyProcessorStageSpanName("stage", &mockRequestProcessor{}),
+	)
+}
+
+func TestEmitLatencyDiagnosticEventAndContextAttrs(t *testing.T) {
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{}),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			LatencyDiagnosticsEnabled:    true,
+			LatencyDiagnosticsEmitEvents: true,
+		}),
+	)
+	ch := make(chan *event.Event, 1)
+	emitLatencyDiagnosticEvent(
+		context.Background(),
+		inv,
+		ch,
+		event.LatencyDiagnostic{
+			Stage:  latencyDiagnosticStageCompact,
+			Status: latencyDiagnosticStatusStart,
+		},
+	)
+	evt := <-ch
+	diagnostic, ok, err := event.GetExtension[event.LatencyDiagnostic](
+		evt,
+		event.LatencyDiagnosticExtensionKey,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, latencyDiagnosticStageCompact, diagnostic.Stage)
+	require.Equal(t, latencyDiagnosticStatusStart, diagnostic.Status)
+
+	disabled := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			LatencyDiagnosticsEnabled: true,
+		}),
+	)
+	emitLatencyDiagnosticEvent(
+		context.Background(),
+		disabled,
+		ch,
+		event.LatencyDiagnostic{Status: latencyDiagnosticStatusSkip},
+	)
+	require.Empty(t, ch)
+
+	req := &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{Stream: true},
+	}
+	attrs := contextCompactionAttrs(
+		contextCompactionDecision{
+			shouldCompact: true,
+			tokenCount:    10,
+			threshold:     8,
+			contextWindow: 16,
+		},
+		req,
+	)
+	require.True(
+		t,
+		flowHasAttr(attrs, "llmflow.context_compaction.triggered", true),
+	)
+	require.True(
+		t,
+		flowHasAttr(attrs, "llmflow.context_compaction.token_count", 10),
+	)
+	require.True(
+		t,
+		flowHasAttr(attrs, "llmflow.context_compaction.threshold", 8),
+	)
+	require.True(
+		t,
+		flowHasAttr(attrs, "llmflow.context_compaction.context_window", 16),
+	)
 }
 
 func TestPreprocess_AddsAgentToolsWhenPresent(t *testing.T) {
@@ -270,6 +435,13 @@ func TestMaybeConsumeQueuedUserMessages_DrainsInOrder(t *testing.T) {
 			require.NotNil(t, evt)
 			require.Equal(t, queuedUserAuthor, evt.Author)
 			require.True(t, evt.RequiresCompletion)
+			meta, ok, err := event.GetExtension[steer.QueuedUserMessageMetadata](
+				evt,
+				steer.ExtensionKeyQueuedUserMessage,
+			)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, steer.QueuedUserMessageStatusConsumed, meta.Status)
 			require.Equal(
 				t,
 				[]string{"first", "second"}[i],
@@ -482,6 +654,49 @@ func TestRunOneStep_RecordsExecutionTraceStepOnSuccess(t *testing.T) {
 	require.Contains(t, step.Output.Text, "ok")
 	require.Empty(t, step.PredecessorStepIDs)
 	require.Empty(t, step.Error)
+}
+
+func TestRunOneStep_AttachesCacheSafeSummaryForkRequest(t *testing.T) {
+	f := New(
+		[]flow.RequestProcessor{
+			&seedMessagesRequestProcessor{
+				messages: []model.Message{
+					model.NewSystemMessage("stable system"),
+					model.NewUserMessage("current user"),
+				},
+			},
+		},
+		nil,
+		Options{},
+	)
+	inv := agent.NewInvocation(
+		agent.WithInvocationAgent(&minimalAgent{}),
+		agent.WithInvocationModel(&mockModel{
+			responses: []*model.Response{
+				{
+					Done: true,
+					Choices: []model.Choice{
+						{Message: model.NewAssistantMessage("ok")},
+					},
+				},
+			},
+		}),
+	)
+	eventChan := make(chan *event.Event, 8)
+	_, err := f.runOneStep(context.Background(), inv, eventChan)
+	require.NoError(t, err)
+
+	parent, ok := summaryfork.Request(inv)
+	require.True(t, ok)
+	require.NotNil(t, parent)
+	require.Equal(
+		t,
+		[]model.Message{
+			model.NewSystemMessage("stable system"),
+			model.NewUserMessage("current user"),
+		},
+		parent.Messages,
+	)
 }
 
 func TestRunOneStep_RecordsExecutionTraceStepErrorWhenModelFails(t *testing.T) {
@@ -3659,6 +3874,47 @@ func TestMaybeSyncSummaryIntraRun_ErrorBranch(t *testing.T) {
 
 	// Should not panic; just logs the error internally.
 	f.maybeSyncSummaryIntraRun(ctx, inv)
+}
+
+func TestMaybeSyncSummaryIntraRun_AttachesCacheSafeForkRequest(t *testing.T) {
+	f := &Flow{syncSummaryIntraRun: true}
+	svc := &contextCapturingSummaryService{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(svc),
+		agent.WithInvocationEventFilterKey("branch/fork"),
+	)
+	parent := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("system"),
+			model.NewUserMessage("question"),
+		},
+	}
+	summaryfork.Attach(inv, parent)
+	parent.Messages[1].Content = "mutated"
+
+	f.maybeSyncSummaryIntraRun(context.Background(), inv)
+
+	require.Equal(t, 1, svc.Calls())
+	got := svc.ParentRequest()
+	require.NotNil(t, got)
+	require.Len(t, got.Messages, 2)
+	require.Equal(t, "question", got.Messages[1].Content)
+}
+
+func TestMaybeSyncSummaryIntraRun_FallsBackWithoutForkRequest(t *testing.T) {
+	f := &Flow{syncSummaryIntraRun: true}
+	svc := &contextCapturingSummaryService{}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{}),
+		agent.WithInvocationSessionService(svc),
+		agent.WithInvocationEventFilterKey("branch/fallback"),
+	)
+
+	f.maybeSyncSummaryIntraRun(context.Background(), inv)
+
+	require.Equal(t, 1, svc.Calls())
+	require.Nil(t, svc.ParentRequest())
 }
 
 func TestRun_SyncSummaryIntraRun_NilInvocation(t *testing.T) {

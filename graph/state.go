@@ -23,6 +23,11 @@ const (
 	// StateKeyUserInput is the key of the user input.
 	// It is consumed once and then cleared after successful LLM execution.
 	StateKeyUserInput = "user_input"
+	// StateKeyAgentInputMessage is the key of the AgentNode input message.
+	// It lets an AgentNode pass a typed *model.Message, such as a tool result,
+	// to the child agent invocation. It is consumed once and then cleared after
+	// successful AgentNode execution.
+	StateKeyAgentInputMessage = "agent_input_message"
 	// StateKeyOneShotMessages is the key for one-shot messages that override
 	// the current round input completely. It is consumed once and then cleared.
 	StateKeyOneShotMessages = "one_shot_messages"

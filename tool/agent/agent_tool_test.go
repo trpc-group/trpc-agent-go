@@ -27,13 +27,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	checkpointinmemory "trpc.group/trpc-go/trpc-agent-go/graph/checkpoint/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/barrier"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/flush"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/teamtrace"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 // mockAgent is a simple mock agent for testing.
@@ -64,6 +68,15 @@ type assistantThenVisibleStateOnlyCompletionWithoutResponseIDAgent struct {
 
 type visibleCompletionThenErrorAgent struct {
 	name string
+}
+
+type graphWrapperAgent struct {
+	name             string
+	inner            agent.Agent
+	mu               sync.Mutex
+	runtimeStates    []map[string]any
+	sawPregelEvent   bool
+	sawCompleteEvent bool
 }
 
 func newGraphAgentWithAfterCallback(
@@ -450,6 +463,409 @@ func (m *mockAgent) FindSubAgent(name string) agent.Agent {
 	return nil
 }
 
+func (w *graphWrapperAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	w.mu.Lock()
+	w.runtimeStates = append(w.runtimeStates, invocation.RunOptions.RuntimeState)
+	w.mu.Unlock()
+	events, err := w.inner.Run(ctx, invocation)
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan *event.Event)
+	go func() {
+		defer close(out)
+		for evt := range events {
+			w.recordEvent(evt)
+			out <- evt
+		}
+	}()
+	return out, nil
+}
+
+func (w *graphWrapperAgent) recordEvent(evt *event.Event) {
+	if evt == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if evt.Object == graph.ObjectTypeGraphPregelStep {
+		w.sawPregelEvent = true
+	}
+	if evt.Object == graph.ObjectTypeGraphExecution && evt.Done {
+		w.sawCompleteEvent = true
+	}
+}
+
+func (w *graphWrapperAgent) Tools() []tool.Tool {
+	return w.inner.Tools()
+}
+
+func (w *graphWrapperAgent) Info() agent.Info {
+	info := w.inner.Info()
+	info.Name = w.name
+	return info
+}
+
+func (w *graphWrapperAgent) SubAgents() []agent.Agent {
+	return w.inner.SubAgents()
+}
+
+func (w *graphWrapperAgent) FindSubAgent(name string) agent.Agent {
+	return w.inner.FindSubAgent(name)
+}
+
+type toolSurfaceRecordingModel struct {
+	name    string
+	message model.Message
+
+	mu       sync.Mutex
+	requests int
+	tools    []map[string]bool
+}
+
+func (m *toolSurfaceRecordingModel) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	_ = ctx
+	toolNames := make(map[string]bool, len(request.Tools))
+	for name := range request.Tools {
+		toolNames[name] = true
+	}
+	m.mu.Lock()
+	m.requests++
+	m.tools = append(m.tools, toolNames)
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	go func() {
+		defer close(ch)
+		ch <- &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: m.message,
+			}},
+		}
+	}()
+	return ch, nil
+}
+
+func (m *toolSurfaceRecordingModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *toolSurfaceRecordingModel) sawTool(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, tools := range m.tools {
+		if tools[name] {
+			return true
+		}
+	}
+	return false
+}
+
+type handoffArgs struct {
+	AgentID string `json:"agent_id"`
+	Task    string `json:"task"`
+}
+
+type handoffDispatchTool struct {
+	name    string
+	factory func() map[string]tool.CallableTool
+
+	mu       sync.Mutex
+	calls    int
+	selected []string
+}
+
+func (h *handoffDispatchTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name:        h.name,
+		Description: "Dispatches a task to a selected agent tool.",
+		InputSchema: &tool.Schema{
+			Type:     "object",
+			Required: []string{"agent_id", "task"},
+			Properties: map[string]*tool.Schema{
+				"agent_id": {Type: "string"},
+				"task":     {Type: "string"},
+			},
+		},
+	}
+}
+
+func (h *handoffDispatchTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	var req handoffArgs
+	if err := json.Unmarshal(jsonArgs, &req); err != nil {
+		return nil, err
+	}
+	agents := h.factory()
+	selected, ok := agents[req.AgentID]
+	if !ok {
+		return nil, fmt.Errorf("handoff agent %q not found", req.AgentID)
+	}
+	h.mu.Lock()
+	h.calls++
+	h.selected = append(h.selected, req.AgentID)
+	h.mu.Unlock()
+	childArgs, err := json.Marshal(map[string]string{"request": req.Task})
+	if err != nil {
+		return nil, err
+	}
+	result, err := selected.Call(ctx, childArgs)
+	if err != nil {
+		return nil, err
+	}
+	text, ok := result.(string)
+	if !ok {
+		return nil, fmt.Errorf("handoff child result must be a string, got %T", result)
+	}
+	return text, nil
+}
+
+func (h *handoffDispatchTool) callCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.calls
+}
+
+func (h *handoffDispatchTool) selectedAgentIDs() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.selected...)
+}
+
+type handoffTestCustomAgent struct {
+	name  string
+	inner agent.Agent
+
+	mu            sync.Mutex
+	runs          int
+	externalTools []map[string]bool
+}
+
+func (a *handoffTestCustomAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	tools := make(map[string]bool)
+	if invocation != nil {
+		for _, tl := range invocation.RunOptions.ExternalTools {
+			if decl := tl.Declaration(); decl != nil && decl.Name != "" {
+				tools[decl.Name] = true
+			}
+		}
+	}
+	a.mu.Lock()
+	a.runs++
+	a.externalTools = append(a.externalTools, tools)
+	a.mu.Unlock()
+	return a.inner.Run(ctx, invocation)
+}
+
+func (a *handoffTestCustomAgent) Tools() []tool.Tool {
+	return a.inner.Tools()
+}
+
+func (a *handoffTestCustomAgent) Info() agent.Info {
+	info := a.inner.Info()
+	info.Name = a.name
+	return info
+}
+
+func (a *handoffTestCustomAgent) SubAgents() []agent.Agent {
+	return a.inner.SubAgents()
+}
+
+func (a *handoffTestCustomAgent) FindSubAgent(name string) agent.Agent {
+	return a.inner.FindSubAgent(name)
+}
+
+func (a *handoffTestCustomAgent) ranCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.runs
+}
+
+func (a *handoffTestCustomAgent) sawExternalTool(name string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, tools := range a.externalTools {
+		if tools[name] {
+			return true
+		}
+	}
+	return false
+}
+
+type handoffTestInnerGraphAgent struct {
+	agent.Agent
+	worker *handoffTestCustomAgent
+}
+
+type resumeAwareToolLoopModel struct {
+	name       string
+	toolName   string
+	toolCallID string
+	toolArgs   []byte
+	finalText  string
+
+	mu                 sync.Mutex
+	requests           int
+	sawCompleteHistory bool
+}
+
+func (m *resumeAwareToolLoopModel) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	_ = ctx
+	hasAssistantToolCall := false
+	hasToolResult := false
+	for _, msg := range request.Messages {
+		for _, call := range msg.ToolCalls {
+			if call.ID == m.toolCallID && call.Function.Name == m.toolName {
+				hasAssistantToolCall = true
+			}
+		}
+		if msg.Role == model.RoleTool &&
+			msg.ToolID == m.toolCallID &&
+			msg.ToolName == m.toolName {
+			hasToolResult = true
+		}
+	}
+	m.mu.Lock()
+	m.requests++
+	if hasAssistantToolCall && hasToolResult {
+		m.sawCompleteHistory = true
+	}
+	m.mu.Unlock()
+	if hasToolResult && !hasAssistantToolCall {
+		return nil, fmt.Errorf("tool result for %s is missing its assistant tool call history", m.toolName)
+	}
+	ch := make(chan *model.Response, 1)
+	go func() {
+		defer close(ch)
+		message := model.Message{
+			Role:    model.RoleAssistant,
+			Content: m.finalText,
+		}
+		if !hasToolResult {
+			message.Content = ""
+			message.ToolCalls = []model.ToolCall{{
+				Type: "function",
+				ID:   m.toolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      m.toolName,
+					Arguments: m.toolArgs,
+				},
+			}}
+		}
+		ch <- &model.Response{
+			Object: model.ObjectTypeChatCompletion,
+			Done:   true,
+			Choices: []model.Choice{{
+				Index:   0,
+				Message: message,
+			}},
+		}
+	}()
+	return ch, nil
+}
+
+func (m *resumeAwareToolLoopModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
+func (m *resumeAwareToolLoopModel) requestCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.requests
+}
+
+func (m *resumeAwareToolLoopModel) sawToolResultWithAssistantHistory() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sawCompleteHistory
+}
+
+func (a *handoffTestInnerGraphAgent) ranCount() int {
+	return a.worker.ranCount()
+}
+
+func (a *handoffTestInnerGraphAgent) sawExternalTool(name string) bool {
+	return a.worker.sawExternalTool(name)
+}
+
+func newHandoffTestInnerGraphAgent(
+	t *testing.T,
+	graphName string,
+	workerName string,
+	externalToolName string,
+	m model.Model,
+) *handoffTestInnerGraphAgent {
+	t.Helper()
+	innerLLM := llmagent.New(
+		workerName+"-base",
+		llmagent.WithModel(m),
+	)
+	worker := &handoffTestCustomAgent{
+		name:  workerName,
+		inner: innerLLM,
+	}
+	externalTool := function.NewFunctionTool(
+		func(context.Context, map[string]string) (string, error) {
+			return "", errors.New("inner external tool is caller-executed")
+		},
+		function.WithName(externalToolName),
+		function.WithDescription("Represents a caller-executed inner tool."),
+	)
+	schema := graph.MessagesStateSchema().
+		AddField("inner_tool_name", graph.StateField{Type: reflect.TypeOf("")}).
+		AddField("inner_tool_args", graph.StateField{Type: reflect.TypeOf("")})
+	sg := graph.NewStateGraph(schema)
+	sg.AddAgentNode(
+		workerName,
+		graph.WithAgentNodeRunOptions(agent.WithExternalTools([]tool.Tool{externalTool})),
+		graph.WithSubgraphOutputMapper(func(_ graph.State, result graph.SubgraphResult) graph.State {
+			if len(result.ToolCalls) != 1 {
+				return nil
+			}
+			call := result.ToolCalls[0]
+			return graph.State{
+				"inner_tool_name": call.Function.Name,
+				"inner_tool_args": string(call.Function.Arguments),
+			}
+		}),
+	)
+	sg.AddNode("inner_finish", func(ctx context.Context, state graph.State) (any, error) {
+		_ = ctx
+		toolName, _ := state["inner_tool_name"].(string)
+		toolArgs, _ := state["inner_tool_args"].(string)
+		if toolName == "" {
+			return nil, errors.New("inner tool call is missing")
+		}
+		return graph.State{
+			graph.StateKeyLastResponse: graphName + " selected " + toolName + " with " + toolArgs,
+		}, nil
+	})
+	compiled := sg.AddEdge(workerName, "inner_finish").
+		SetEntryPoint(workerName).
+		SetFinishPoint("inner_finish").
+		MustCompile()
+	ga, err := graphagent.New(
+		graphName,
+		compiled,
+		graphagent.WithSubAgents([]agent.Agent{worker}),
+	)
+	require.NoError(t, err)
+	return &handoffTestInnerGraphAgent{Agent: ga, worker: worker}
+}
+
 func TestNewTool(t *testing.T) {
 	mockAgent := &mockAgent{
 		name:        "test-agent",
@@ -594,6 +1010,1066 @@ func TestTool_Call_DisableGraphCompletionEvent_KeepsFinalText(t *testing.T) {
 	resultText, ok := result.(string)
 	require.True(t, ok)
 	require.Equal(t, "child-final", resultText)
+}
+
+func TestParentInvocationGraphRuntimeFromContext_ValidatesRequiredFields(t *testing.T) {
+	valid := agenttoolgraph.RuntimeContext{
+		ParentInvocation: agent.NewInvocation(),
+		State:            map[string]any{"k": "v"},
+		ParentNodeID:     "tools",
+		ToolCallID:       "call-child",
+		ToolCallKey:      "0:child:call-child",
+		ChildFilterKey:   "parent/child",
+	}
+	runtime, err := parentInvocationGraphRuntimeFromContext(valid)
+	require.NoError(t, err)
+	require.Equal(t, graph.State(valid.State), runtime.state)
+	require.Equal(t, valid.ParentNodeID, runtime.parentNodeID)
+	require.Equal(t, valid.ToolCallID, runtime.toolCallID)
+	require.Equal(t, valid.ToolCallKey, runtime.toolCallKey)
+	require.Equal(t, valid.ChildFilterKey, runtime.childKey)
+
+	tests := []struct {
+		name      string
+		mutate    func(*agenttoolgraph.RuntimeContext)
+		wantError string
+	}{
+		{
+			name: "parent invocation",
+			mutate: func(runtime *agenttoolgraph.RuntimeContext) {
+				runtime.ParentInvocation = nil
+			},
+			wantError: "parent invocation is nil",
+		},
+		{
+			name: "runtime state",
+			mutate: func(runtime *agenttoolgraph.RuntimeContext) {
+				runtime.State = nil
+			},
+			wantError: "runtime state is nil",
+		},
+		{
+			name: "parent node id",
+			mutate: func(runtime *agenttoolgraph.RuntimeContext) {
+				runtime.ParentNodeID = ""
+			},
+			wantError: "parent node id is empty",
+		},
+		{
+			name: "tool call key",
+			mutate: func(runtime *agenttoolgraph.RuntimeContext) {
+				runtime.ToolCallKey = ""
+			},
+			wantError: "tool call key is empty",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := valid
+			tt.mutate(&runtime)
+			_, err := parentInvocationGraphRuntimeFromContext(runtime)
+			require.ErrorContains(t, err, tt.wantError)
+		})
+	}
+}
+
+func TestShouldSuppressGraphRuntimeSessionEvent(t *testing.T) {
+	inv := agent.NewInvocation()
+	graphEvent := event.New("inv", "author", event.WithObject(graph.ObjectTypeGraphPregelStep))
+	require.False(t, shouldSuppressGraphRuntimeSessionEvent(nil, graphEvent))
+	require.False(t, shouldSuppressGraphRuntimeSessionEvent(inv, nil))
+	require.False(t, shouldSuppressGraphRuntimeSessionEvent(inv, graphEvent))
+
+	inv.SetState(graphRuntimeSuppressSessionEventsStateKey, true)
+	require.True(t, shouldSuppressGraphRuntimeSessionEvent(inv, graphEvent))
+	require.False(t, shouldSuppressGraphRuntimeSessionEvent(
+		inv,
+		event.New("inv", "author", event.WithObject("model.response")),
+	))
+}
+
+func TestGraphToolInterruptCapture_ObserveAndFinish(t *testing.T) {
+	capture := &graphToolInterruptCapture{
+		parentNodeID:         "tools",
+		toolCallID:           "call-child",
+		toolCallKey:          "0:child:call-child",
+		childKey:             "parent/child",
+		childAgentName:       "child",
+		expectedLineageID:    "lineage",
+		expectedCheckpointNS: "child",
+	}
+	capture.observe(nil)
+	capture.observe(event.New("inv", "author", event.WithObject("other")))
+	capture.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "other-lineage",
+		CheckpointID:   "checkpoint",
+		CheckpointNS:   "child",
+	}))
+	capture.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointID:   "checkpoint",
+		CheckpointNS:   "other-child",
+	}))
+	capture.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointID:   "checkpoint",
+		CheckpointNS:   "child",
+	}))
+	capture.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointID:   "checkpoint",
+		CheckpointNS:   "child",
+	}))
+
+	err := capture.finish()
+	require.Error(t, err)
+	metadata, ok := agenttoolgraph.InterruptMetadataFromError(err)
+	require.True(t, ok)
+	require.Equal(t, "tools", metadata.ParentNodeID)
+	require.Equal(t, "child", metadata.ChildAgentName)
+	require.Equal(t, "checkpoint", metadata.ChildCheckpointID)
+	require.Equal(t, "child", metadata.ChildCheckpointNS)
+	require.Equal(t, "lineage", metadata.ChildLineageID)
+	require.Equal(t, "approval", metadata.ChildTaskID)
+	require.Equal(t, "call-child", metadata.ToolCallID)
+	require.Equal(t, "0:child:call-child", metadata.ToolCallKey)
+	require.Equal(t, "parent/child", metadata.ChildFilterKey)
+}
+
+func TestGraphToolInterruptCapture_FinishRejectsInvalidCapturedState(t *testing.T) {
+	require.NoError(t, (*graphToolInterruptCapture)(nil).finish())
+	require.NoError(t, (&graphToolInterruptCapture{}).finish())
+
+	conflict := &graphToolInterruptCapture{
+		parentNodeID:   "tools",
+		toolCallID:     "call-child",
+		toolCallKey:    "0:child:call-child",
+		childKey:       "parent/child",
+		childAgentName: "child",
+	}
+	conflict.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointID:   "checkpoint-1",
+		CheckpointNS:   "child",
+	}))
+	conflict.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointID:   "checkpoint-2",
+		CheckpointNS:   "child",
+	}))
+	require.ErrorContains(t, conflict.finish(), "multiple interrupt checkpoints")
+
+	missingCheckpoint := &graphToolInterruptCapture{
+		parentNodeID:   "tools",
+		toolCallID:     "call-child",
+		toolCallKey:    "0:child:call-child",
+		childKey:       "parent/child",
+		childAgentName: "child",
+	}
+	missingCheckpoint.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointNS:   "child",
+	}))
+	require.ErrorContains(t, missingCheckpoint.finish(), "missing checkpoint metadata")
+
+	missingChildKey := &graphToolInterruptCapture{
+		parentNodeID:   "tools",
+		toolCallID:     "call-child",
+		toolCallKey:    "0:child:call-child",
+		childAgentName: "child",
+	}
+	missingChildKey.observe(testPregelStepEvent(t, graph.PregelStepMetadata{
+		NodeID:         "ask",
+		InterruptKey:   "approval",
+		InterruptValue: "approve?",
+		LineageID:      "lineage",
+		CheckpointID:   "checkpoint",
+		CheckpointNS:   "child",
+	}))
+	require.ErrorContains(t, missingChildKey.finish(), "missing child filter key")
+}
+
+func testPregelStepEvent(t *testing.T, metadata graph.PregelStepMetadata) *event.Event {
+	t.Helper()
+	raw, err := json.Marshal(metadata)
+	require.NoError(t, err)
+	return event.New(
+		"inv",
+		"author",
+		event.WithObject(graph.ObjectTypeGraphPregelStep),
+		event.WithStateDelta(map[string][]byte{
+			graph.MetadataKeyPregel: raw,
+		}),
+	)
+}
+
+func TestTool_Call_GraphToolsNodeAgentToolGraphAgentInterruptResume(t *testing.T) {
+	const parentLineageID = "agent-tool-parent-lineage"
+	const parentNamespace = "agent-tool-parent"
+	const toolsNodeID = "tools"
+	const childAgentName = "graph-child-tool"
+	const childPrepareNodeID = "child_prepare"
+	const childAskNodeID = "child_ask"
+	const childInterruptKey = "child_approval"
+	const resumeValue = "approved"
+	saver := checkpointinmemory.NewSaver()
+	var parentBeforeRuns int
+	var siblingToolRuns int
+	var childPrepareRuns int
+	var parentAfterRuns int
+	type siblingInput struct {
+		Request string `json:"request,omitempty"`
+	}
+	siblingTool := function.NewFunctionTool(
+		func(ctx context.Context, input siblingInput) (string, error) {
+			siblingToolRuns++
+			return "sibling:" + input.Request, nil
+		},
+		function.WithName("sibling_tool"),
+		function.WithDescription("Returns a sibling tool response."),
+	)
+	childSchema := graph.NewStateSchema().
+		AddField(graph.StateKeyLastResponse, graph.StateField{Type: reflect.TypeOf("")})
+	childGraph := graph.NewStateGraph(childSchema)
+	childGraph.AddNode(childPrepareNodeID, func(ctx context.Context, state graph.State) (any, error) {
+		childPrepareRuns++
+		return graph.State{"prepared": true}, nil
+	})
+	childGraph.AddNode(childAskNodeID, func(ctx context.Context, state graph.State) (any, error) {
+		value, err := graph.Interrupt(ctx, state, childInterruptKey, "approve child")
+		if err != nil {
+			return nil, err
+		}
+		text, _ := value.(string)
+		return graph.State{graph.StateKeyLastResponse: "child:" + text}, nil
+	})
+	childCompiled := childGraph.AddEdge(childPrepareNodeID, childAskNodeID).
+		SetEntryPoint(childPrepareNodeID).
+		SetFinishPoint(childAskNodeID).
+		MustCompile()
+	childAgent, err := graphagent.New(
+		childAgentName,
+		childCompiled,
+		graphagent.WithCheckpointSaver(saver),
+	)
+	require.NoError(t, err)
+	parentSchema := graph.MessagesStateSchema().
+		AddField("before_runs", graph.StateField{Type: reflect.TypeOf(0)}).
+		AddField("after_out", graph.StateField{Type: reflect.TypeOf("")})
+	parentGraph := graph.NewStateGraph(parentSchema)
+	parentGraph.AddNode("before", func(ctx context.Context, state graph.State) (any, error) {
+		parentBeforeRuns++
+		return graph.State{"before_runs": parentBeforeRuns}, nil
+	})
+	parentGraph.AddToolsNode(
+		toolsNodeID,
+		map[string]tool.Tool{
+			childAgentName: NewTool(childAgent),
+			"sibling_tool": siblingTool,
+		},
+		graph.WithToolCallRetryPolicy(&tool.RetryPolicy{MaxAttempts: 3}),
+	)
+	parentGraph.AddNode("after", func(ctx context.Context, state graph.State) (any, error) {
+		parentAfterRuns++
+		lastToolResponse, _ := state[graph.StateKeyLastToolResponse].(string)
+		var text string
+		if err := json.Unmarshal([]byte(lastToolResponse), &text); err != nil {
+			return nil, err
+		}
+		return graph.State{"after_out": text}, nil
+	})
+	parentCompiled := parentGraph.AddEdge("before", toolsNodeID).
+		AddEdge(toolsNodeID, "after").
+		SetEntryPoint("before").
+		SetFinishPoint("after").
+		MustCompile()
+	parentAgent, err := graphagent.New(
+		"parent-agent-tool",
+		parentCompiled,
+		graphagent.WithCheckpointSaver(saver),
+	)
+	require.NoError(t, err)
+	siblingToolCall := model.ToolCall{
+		Type: "function",
+		ID:   "call-sibling",
+		Function: model.FunctionDefinitionParam{
+			Name:      "sibling_tool",
+			Arguments: []byte(`{"request":"start"}`),
+		},
+	}
+	childToolCall := model.ToolCall{
+		Type: "function",
+		ID:   "call-child",
+		Function: model.FunctionDefinitionParam{
+			Name:      childAgentName,
+			Arguments: []byte(`{"request":"start"}`),
+		},
+	}
+	initialRuntime := map[string]any{
+		graph.CfgKeyLineageID:    parentLineageID,
+		graph.CfgKeyCheckpointNS: parentNamespace,
+		graph.StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: []model.ToolCall{siblingToolCall, childToolCall},
+		}},
+	}
+	initialInvocation := agent.NewInvocation(
+		agent.WithInvocationID("parent-initial"),
+		agent.WithInvocationMessage(model.NewUserMessage("start")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRuntimeState(initialRuntime),
+		)),
+	)
+	initialEvents, err := parentAgent.Run(
+		agent.NewInvocationContext(context.Background(), initialInvocation),
+		initialInvocation,
+	)
+	require.NoError(t, err)
+	for range initialEvents {
+	}
+	require.Equal(t, 1, parentBeforeRuns)
+	require.Equal(t, 1, siblingToolRuns)
+	require.Equal(t, 1, childPrepareRuns)
+	require.Equal(t, 0, parentAfterRuns)
+	manager := parentAgent.Executor().CheckpointManager()
+	require.NotNil(t, manager)
+	parentTuples, err := manager.ListCheckpoints(
+		context.Background(),
+		graph.CreateCheckpointConfig(parentLineageID, "", parentNamespace),
+		nil,
+	)
+	require.NoError(t, err)
+	childTuples, err := manager.ListCheckpoints(
+		context.Background(),
+		graph.CreateCheckpointConfig(parentLineageID, "", childAgentName),
+		nil,
+	)
+	require.NoError(t, err)
+	var parentInterrupt *graph.CheckpointTuple
+	var childInterrupt *graph.CheckpointTuple
+	for _, tuple := range parentTuples {
+		if tuple != nil && tuple.Checkpoint != nil && tuple.Checkpoint.InterruptState != nil && tuple.Checkpoint.InterruptState.NodeID == toolsNodeID {
+			parentInterrupt = tuple
+		}
+	}
+	for _, tuple := range childTuples {
+		if tuple != nil && tuple.Checkpoint != nil && tuple.Checkpoint.InterruptState != nil && tuple.Checkpoint.InterruptState.NodeID == childAskNodeID {
+			childInterrupt = tuple
+		}
+	}
+	require.NotNil(t, parentInterrupt)
+	require.NotNil(t, childInterrupt)
+	resumeRuntime := map[string]any{
+		graph.CfgKeyLineageID:    parentLineageID,
+		graph.CfgKeyCheckpointNS: parentNamespace,
+		graph.CfgKeyCheckpointID: parentInterrupt.Checkpoint.ID,
+		graph.StateKeyCommand: &graph.Command{
+			ResumeMap: map[string]any{
+				childInterruptKey: resumeValue,
+			},
+		},
+	}
+	resumeInvocation := agent.NewInvocation(
+		agent.WithInvocationID("parent-resume"),
+		agent.WithInvocationMessage(model.NewUserMessage("resume")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRuntimeState(resumeRuntime),
+		)),
+	)
+	resumeEvents, err := parentAgent.Run(
+		agent.NewInvocationContext(context.Background(), resumeInvocation),
+		resumeInvocation,
+	)
+	require.NoError(t, err)
+	var done *event.Event
+	for ev := range resumeEvents {
+		if ev != nil && ev.Done && ev.Object == graph.ObjectTypeGraphExecution {
+			done = ev
+		}
+	}
+	require.NotNil(t, done)
+	var afterOut string
+	require.NoError(t, json.Unmarshal(done.StateDelta["after_out"], &afterOut))
+	require.Equal(t, "child:"+resumeValue, afterOut)
+	require.Equal(t, 1, parentBeforeRuns)
+	require.Equal(t, 1, siblingToolRuns)
+	require.Equal(t, 1, childPrepareRuns)
+	require.Equal(t, 1, parentAfterRuns)
+	latestParent, err := manager.Latest(context.Background(), parentLineageID, parentNamespace)
+	require.NoError(t, err)
+	require.NotNil(t, latestParent)
+	_, hasSubgraphInterrupt := latestParent.Checkpoint.ChannelValues[graph.StateKeySubgraphInterrupt]
+	require.False(t, hasSubgraphInterrupt)
+	_, hasResumeMap := latestParent.Checkpoint.ChannelValues[graph.StateKeyResumeMap]
+	require.False(t, hasResumeMap)
+}
+
+func TestTool_Call_GraphToolsNodeAgentToolCustomWrappedGraphAgentInterruptResume(t *testing.T) {
+	const parentLineageID = "agent-tool-wrapper-parent-lineage"
+	const parentNamespace = "agent-tool-wrapper-parent"
+	const toolsNodeID = "tools"
+	const wrapperAgentName = "wrapped-graph-child-tool"
+	const innerAgentName = "inner-graph-child-tool"
+	const childPrepareNodeID = "child_prepare"
+	const childAskNodeID = "child_ask"
+	const childInterruptKey = "child_approval"
+	const resumeValue = "approved"
+	saver := checkpointinmemory.NewSaver()
+	var parentBeforeRuns int
+	var siblingToolRuns int
+	var childPrepareRuns int
+	var parentAfterRuns int
+	type executorAgent interface {
+		Executor() *graph.Executor
+	}
+	type siblingInput struct {
+		Request string `json:"request,omitempty"`
+	}
+	siblingTool := function.NewFunctionTool(
+		func(ctx context.Context, input siblingInput) (string, error) {
+			siblingToolRuns++
+			return "sibling:" + input.Request, nil
+		},
+		function.WithName("sibling_tool"),
+		function.WithDescription("Returns a sibling tool response."),
+	)
+	childSchema := graph.NewStateSchema().
+		AddField(graph.StateKeyLastResponse, graph.StateField{Type: reflect.TypeOf("")})
+	childGraph := graph.NewStateGraph(childSchema)
+	childGraph.AddNode(childPrepareNodeID, func(ctx context.Context, state graph.State) (any, error) {
+		childPrepareRuns++
+		return graph.State{"prepared": true}, nil
+	})
+	childGraph.AddNode(childAskNodeID, func(ctx context.Context, state graph.State) (any, error) {
+		value, err := graph.Interrupt(ctx, state, childInterruptKey, "approve child")
+		if err != nil {
+			return nil, err
+		}
+		text, _ := value.(string)
+		return graph.State{graph.StateKeyLastResponse: "child:" + text}, nil
+	})
+	childCompiled := childGraph.AddEdge(childPrepareNodeID, childAskNodeID).
+		SetEntryPoint(childPrepareNodeID).
+		SetFinishPoint(childAskNodeID).
+		MustCompile()
+	childAgent, err := graphagent.New(
+		innerAgentName,
+		childCompiled,
+		graphagent.WithCheckpointSaver(saver),
+	)
+	require.NoError(t, err)
+	wrapper := &graphWrapperAgent{name: wrapperAgentName, inner: childAgent}
+	_, implementsExecutor := any(wrapper).(executorAgent)
+	require.False(t, implementsExecutor)
+	parentSchema := graph.MessagesStateSchema().
+		AddField("before_runs", graph.StateField{Type: reflect.TypeOf(0)}).
+		AddField("after_out", graph.StateField{Type: reflect.TypeOf("")})
+	parentGraph := graph.NewStateGraph(parentSchema)
+	parentGraph.AddNode("before", func(ctx context.Context, state graph.State) (any, error) {
+		parentBeforeRuns++
+		return graph.State{"before_runs": parentBeforeRuns}, nil
+	})
+	parentGraph.AddToolsNode(
+		toolsNodeID,
+		map[string]tool.Tool{
+			wrapperAgentName: NewTool(wrapper),
+			"sibling_tool":   siblingTool,
+		},
+		graph.WithToolCallRetryPolicy(&tool.RetryPolicy{MaxAttempts: 3}),
+	)
+	parentGraph.AddNode("after", func(ctx context.Context, state graph.State) (any, error) {
+		parentAfterRuns++
+		lastToolResponse, _ := state[graph.StateKeyLastToolResponse].(string)
+		var text string
+		if err := json.Unmarshal([]byte(lastToolResponse), &text); err != nil {
+			return nil, err
+		}
+		return graph.State{"after_out": text}, nil
+	})
+	parentCompiled := parentGraph.AddEdge("before", toolsNodeID).
+		AddEdge(toolsNodeID, "after").
+		SetEntryPoint("before").
+		SetFinishPoint("after").
+		MustCompile()
+	parentAgent, err := graphagent.New(
+		"parent-wrapper-agent-tool",
+		parentCompiled,
+		graphagent.WithCheckpointSaver(saver),
+	)
+	require.NoError(t, err)
+	siblingToolCall := model.ToolCall{
+		Type: "function",
+		ID:   "call-sibling",
+		Function: model.FunctionDefinitionParam{
+			Name:      "sibling_tool",
+			Arguments: []byte(`{"request":"start"}`),
+		},
+	}
+	childToolCall := model.ToolCall{
+		Type: "function",
+		ID:   "call-child",
+		Function: model.FunctionDefinitionParam{
+			Name:      wrapperAgentName,
+			Arguments: []byte(`{"request":"start"}`),
+		},
+	}
+	initialRuntime := map[string]any{
+		graph.CfgKeyLineageID:    parentLineageID,
+		graph.CfgKeyCheckpointNS: parentNamespace,
+		graph.StateKeyMessages: []model.Message{{
+			Role:      model.RoleAssistant,
+			ToolCalls: []model.ToolCall{siblingToolCall, childToolCall},
+		}},
+	}
+	initialInvocation := agent.NewInvocation(
+		agent.WithInvocationID("parent-wrapper-initial"),
+		agent.WithInvocationMessage(model.NewUserMessage("start")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRuntimeState(initialRuntime),
+		)),
+	)
+	initialEvents, err := parentAgent.Run(
+		agent.NewInvocationContext(context.Background(), initialInvocation),
+		initialInvocation,
+	)
+	require.NoError(t, err)
+	for range initialEvents {
+	}
+	require.Equal(t, 1, parentBeforeRuns)
+	require.Equal(t, 1, siblingToolRuns)
+	require.Equal(t, 1, childPrepareRuns)
+	require.Equal(t, 0, parentAfterRuns)
+	wrapper.mu.Lock()
+	initialWrapperStates := append([]map[string]any(nil), wrapper.runtimeStates...)
+	sawInitialPregelEvent := wrapper.sawPregelEvent
+	wrapper.mu.Unlock()
+	require.Len(t, initialWrapperStates, 1)
+	require.Equal(t, parentLineageID, initialWrapperStates[0][graph.CfgKeyLineageID])
+	require.Equal(t, wrapperAgentName, initialWrapperStates[0][graph.CfgKeyCheckpointNS])
+	require.True(t, sawInitialPregelEvent)
+	manager := parentAgent.Executor().CheckpointManager()
+	require.NotNil(t, manager)
+	parentTuples, err := manager.ListCheckpoints(
+		context.Background(),
+		graph.CreateCheckpointConfig(parentLineageID, "", parentNamespace),
+		nil,
+	)
+	require.NoError(t, err)
+	childTuples, err := manager.ListCheckpoints(
+		context.Background(),
+		graph.CreateCheckpointConfig(parentLineageID, "", wrapperAgentName),
+		nil,
+	)
+	require.NoError(t, err)
+	var parentInterrupt *graph.CheckpointTuple
+	var childInterrupt *graph.CheckpointTuple
+	for _, tuple := range parentTuples {
+		if tuple != nil && tuple.Checkpoint != nil && tuple.Checkpoint.InterruptState != nil && tuple.Checkpoint.InterruptState.NodeID == toolsNodeID {
+			parentInterrupt = tuple
+		}
+	}
+	for _, tuple := range childTuples {
+		if tuple != nil && tuple.Checkpoint != nil && tuple.Checkpoint.InterruptState != nil && tuple.Checkpoint.InterruptState.NodeID == childAskNodeID {
+			childInterrupt = tuple
+		}
+	}
+	require.NotNil(t, parentInterrupt)
+	require.NotNil(t, childInterrupt)
+	subgraphInterrupt, ok := parentInterrupt.Checkpoint.ChannelValues[graph.StateKeySubgraphInterrupt].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, toolsNodeID, subgraphInterrupt["parent_node_id"])
+	require.Equal(t, wrapperAgentName, subgraphInterrupt["child_agent_name"])
+	require.Equal(t, childInterrupt.Checkpoint.ID, subgraphInterrupt["child_checkpoint_id"])
+	require.Equal(t, wrapperAgentName, subgraphInterrupt["child_checkpoint_ns"])
+	require.Equal(t, parentLineageID, subgraphInterrupt["child_lineage_id"])
+	require.Equal(t, childInterruptKey, subgraphInterrupt["child_task_id"])
+	require.Equal(t, "call-child", subgraphInterrupt["tool_call_id"])
+	require.Equal(t, "1:"+wrapperAgentName+":call-child", subgraphInterrupt["tool_call_key"])
+	resumeRuntime := map[string]any{
+		graph.CfgKeyLineageID:    parentLineageID,
+		graph.CfgKeyCheckpointNS: parentNamespace,
+		graph.CfgKeyCheckpointID: parentInterrupt.Checkpoint.ID,
+		graph.StateKeyCommand: &graph.Command{
+			ResumeMap: map[string]any{
+				childInterruptKey: resumeValue,
+			},
+		},
+	}
+	resumeInvocation := agent.NewInvocation(
+		agent.WithInvocationID("parent-wrapper-resume"),
+		agent.WithInvocationMessage(model.NewUserMessage("resume")),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRuntimeState(resumeRuntime),
+		)),
+	)
+	resumeEvents, err := parentAgent.Run(
+		agent.NewInvocationContext(context.Background(), resumeInvocation),
+		resumeInvocation,
+	)
+	require.NoError(t, err)
+	var done *event.Event
+	for ev := range resumeEvents {
+		if ev != nil && ev.Done && ev.Object == graph.ObjectTypeGraphExecution {
+			done = ev
+		}
+	}
+	require.NotNil(t, done)
+	var afterOut string
+	require.NoError(t, json.Unmarshal(done.StateDelta["after_out"], &afterOut))
+	require.Equal(t, "child:"+resumeValue, afterOut)
+	require.Equal(t, 1, parentBeforeRuns)
+	require.Equal(t, 1, siblingToolRuns)
+	require.Equal(t, 1, childPrepareRuns)
+	require.Equal(t, 1, parentAfterRuns)
+	wrapper.mu.Lock()
+	resumedWrapperStates := append([]map[string]any(nil), wrapper.runtimeStates...)
+	sawCompleteEvent := wrapper.sawCompleteEvent
+	wrapper.mu.Unlock()
+	require.Len(t, resumedWrapperStates, 2)
+	require.Equal(t, childInterrupt.Checkpoint.ID, resumedWrapperStates[1][graph.CfgKeyCheckpointID])
+	require.True(t, sawCompleteEvent)
+	latestParent, err := manager.Latest(context.Background(), parentLineageID, parentNamespace)
+	require.NoError(t, err)
+	require.NotNil(t, latestParent)
+	_, hasSubgraphInterrupt := latestParent.Checkpoint.ChannelValues[graph.StateKeySubgraphInterrupt]
+	require.False(t, hasSubgraphInterrupt)
+	_, hasResumeMap := latestParent.Checkpoint.ChannelValues[graph.StateKeyResumeMap]
+	require.False(t, hasResumeMap)
+}
+
+func TestTool_Call_HandoffNodeSelectsGraphAgentToolWithNestedExternalAgentNode(t *testing.T) {
+	const (
+		outerAgentName       = "outer_handoff_graph"
+		outerPlannerName     = "handoff_planner"
+		handoffNodeID        = "execute_handoff"
+		handoffToolName      = "handoff_task"
+		handoffAgentID       = "research"
+		innerGraphName       = "dynamic_research_graph"
+		innerWorkerName      = "wrapped_inner_worker"
+		innerExternalTool    = "inner_external"
+		handoffTask          = "summarize the incident"
+		innerToolCallID      = "call-inner-external"
+		expectedInnerToolArg = `{"query":"incident"}`
+	)
+	outerModel := &toolSurfaceRecordingModel{
+		name: "outer-model",
+		message: model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   "call-handoff",
+				Function: model.FunctionDefinitionParam{
+					Name: handoffToolName,
+					Arguments: []byte(
+						`{"agent_id":"` + handoffAgentID + `","task":"` + handoffTask + `"}`,
+					),
+				},
+			}},
+		},
+	}
+	innerModel := &toolSurfaceRecordingModel{
+		name: "inner-model",
+		message: model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{{
+				Type: "function",
+				ID:   innerToolCallID,
+				Function: model.FunctionDefinitionParam{
+					Name:      innerExternalTool,
+					Arguments: []byte(expectedInnerToolArg),
+				},
+			}},
+		},
+	}
+	innerGraphAgent := newHandoffTestInnerGraphAgent(
+		t,
+		innerGraphName,
+		innerWorkerName,
+		innerExternalTool,
+		innerModel,
+	)
+	handoffTool := &handoffDispatchTool{
+		name: handoffToolName,
+		factory: func() map[string]tool.CallableTool {
+			return map[string]tool.CallableTool{
+				handoffAgentID: NewTool(innerGraphAgent),
+			}
+		},
+	}
+	outerPlanner := llmagent.New(
+		outerPlannerName,
+		llmagent.WithModel(outerModel),
+	)
+	outerSchema := graph.MessagesStateSchema().
+		AddField("handoff_request", graph.StateField{Type: reflect.TypeOf(handoffArgs{})}).
+		AddField("handoff_result", graph.StateField{Type: reflect.TypeOf("")})
+	outerGraph := graph.NewStateGraph(outerSchema)
+	outerGraph.AddAgentNode(
+		outerPlannerName,
+		graph.WithAgentNodeRunOptions(agent.WithExternalTools([]tool.Tool{handoffTool})),
+		graph.WithSubgraphOutputMapper(func(_ graph.State, result graph.SubgraphResult) graph.State {
+			if len(result.ToolCalls) != 1 {
+				return nil
+			}
+			call := result.ToolCalls[0]
+			if call.Function.Name != handoffToolName {
+				return nil
+			}
+			var req handoffArgs
+			if err := json.Unmarshal(call.Function.Arguments, &req); err != nil {
+				return nil
+			}
+			return graph.State{"handoff_request": req}
+		}),
+	)
+	outerGraph.AddNode(handoffNodeID, func(ctx context.Context, state graph.State) (any, error) {
+		req, ok := state["handoff_request"].(handoffArgs)
+		if !ok {
+			return nil, errors.New("handoff request is missing")
+		}
+		args, err := json.Marshal(req)
+		if err != nil {
+			return nil, err
+		}
+		result, err := handoffTool.Call(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+		text, ok := result.(string)
+		if !ok {
+			return nil, fmt.Errorf("handoff result must be a string, got %T", result)
+		}
+		return graph.State{
+			"handoff_result":           text,
+			graph.StateKeyLastResponse: text,
+		}, nil
+	})
+	compiledOuter := outerGraph.AddEdge(outerPlannerName, handoffNodeID).
+		SetEntryPoint(outerPlannerName).
+		SetFinishPoint(handoffNodeID).
+		MustCompile()
+	outerAgent, err := graphagent.New(
+		outerAgentName,
+		compiledOuter,
+		graphagent.WithSubAgents([]agent.Agent{outerPlanner}),
+	)
+	require.NoError(t, err)
+	invocation := agent.NewInvocation(
+		agent.WithInvocationID("outer-handoff-invocation"),
+		agent.WithInvocationMessage(model.NewUserMessage("start handoff")),
+		agent.WithInvocationSession(session.NewSession("app", "user", "handoff-session")),
+	)
+	events, err := outerAgent.Run(
+		agent.NewInvocationContext(context.Background(), invocation),
+		invocation,
+	)
+	require.NoError(t, err)
+	var done *event.Event
+	for ev := range events {
+		if ev != nil && ev.Done && ev.Object == graph.ObjectTypeGraphExecution {
+			done = ev
+		}
+	}
+	require.NotNil(t, done)
+	var handoffResult string
+	require.NoError(t, json.Unmarshal(done.StateDelta["handoff_result"], &handoffResult))
+	require.Equal(
+		t,
+		"dynamic_research_graph selected inner_external with "+expectedInnerToolArg,
+		handoffResult,
+	)
+	require.Equal(t, 1, handoffTool.callCount())
+	require.Equal(t, []string{handoffAgentID}, handoffTool.selectedAgentIDs())
+	require.True(t, outerModel.sawTool(handoffToolName))
+	require.True(t, innerModel.sawTool(innerExternalTool))
+	require.Equal(t, 1, innerGraphAgent.ranCount())
+	require.True(t, innerGraphAgent.sawExternalTool(innerExternalTool))
+}
+
+func TestTool_Call_GraphToolsNodeAgentToolGraphAgentAgentNodeResumeKeepsChildHistory(t *testing.T) {
+	const (
+		parentLineageID  = "agent-tool-agentnode-parent-lineage"
+		parentNamespace  = "agent-tool-agentnode-parent"
+		toolsNodeID      = "tools"
+		childGraphName   = "agentnode-child-graph-tool"
+		innerWorkerName  = "agentnode-inner-worker"
+		innerGateNodeID  = "inner_external_gate"
+		innerToolName    = "inner_external_search"
+		innerToolCallID  = "call-inner-search"
+		innerToolArgs    = `{"query":"incident"}`
+		innerResumeValue = "search result"
+		innerFinalText   = "inner final after search result"
+	)
+	type innerToolRequest struct {
+		ToolCallID string `json:"tool_call_id"`
+		Name       string `json:"name"`
+		Args       string `json:"args"`
+	}
+	const (
+		stateKeyInnerToolRequest = "inner_tool_request"
+		stateKeyInnerToolMessage = "inner_tool_message"
+		stateKeyAfterOut         = "after_out"
+	)
+	saver := checkpointinmemory.NewSaver()
+	innerModel := &resumeAwareToolLoopModel{
+		name:       "resume-aware-inner-model",
+		toolName:   innerToolName,
+		toolCallID: innerToolCallID,
+		toolArgs:   []byte(innerToolArgs),
+		finalText:  innerFinalText,
+	}
+	innerLLM := llmagent.New(innerWorkerName+"-llm", llmagent.WithModel(innerModel))
+	worker := &handoffTestCustomAgent{name: innerWorkerName, inner: innerLLM}
+	innerExternalTool := function.NewFunctionTool(
+		func(context.Context, map[string]string) (string, error) {
+			return "", errors.New("inner external tool is caller-executed")
+		},
+		function.WithName(innerToolName),
+		function.WithDescription("Represents a caller-executed inner tool."),
+	)
+	childSchema := graph.MessagesStateSchema().
+		AddField(stateKeyInnerToolRequest, graph.StateField{Type: reflect.TypeOf(innerToolRequest{})}).
+		AddField(stateKeyInnerToolMessage, graph.StateField{Type: reflect.TypeOf(model.Message{})}).
+		AddField(stateKeyAfterOut, graph.StateField{Type: reflect.TypeOf("")})
+	childGraph := graph.NewStateGraph(childSchema)
+	childGraph.AddAgentNode(
+		innerWorkerName,
+		graph.WithAgentNodeRunOptions(agent.WithExternalTools([]tool.Tool{innerExternalTool})),
+		graph.WithAgentNodeInputMapper(func(state graph.State) graph.State {
+			raw, ok := state[stateKeyInnerToolMessage]
+			if !ok || raw == nil {
+				return nil
+			}
+			msg, ok := raw.(model.Message)
+			if !ok || msg.Role != model.RoleTool {
+				return nil
+			}
+			return graph.State{graph.StateKeyAgentInputMessage: &msg}
+		}),
+		graph.WithSubgraphOutputMapper(func(_ graph.State, result graph.SubgraphResult) graph.State {
+			for _, call := range result.ToolCalls {
+				if call.ID == "" || call.Function.Name != innerToolName {
+					continue
+				}
+				return graph.State{
+					stateKeyInnerToolRequest: innerToolRequest{
+						ToolCallID: call.ID,
+						Name:       call.Function.Name,
+						Args:       string(call.Function.Arguments),
+					},
+					stateKeyInnerToolMessage: nil,
+				}
+			}
+			if strings.TrimSpace(result.LastResponse) != "" {
+				return graph.State{
+					stateKeyInnerToolRequest:   nil,
+					stateKeyInnerToolMessage:   nil,
+					graph.StateKeyLastResponse: result.LastResponse,
+				}
+			}
+			return graph.State{stateKeyInnerToolRequest: nil}
+		}),
+	)
+	childGraph.AddNode(innerGateNodeID, func(ctx context.Context, state graph.State) (any, error) {
+		req, ok := state[stateKeyInnerToolRequest].(innerToolRequest)
+		if !ok || req.ToolCallID == "" {
+			return nil, nil
+		}
+		value, err := graph.Interrupt(ctx, state, req.ToolCallID, req)
+		if err != nil {
+			return nil, err
+		}
+		text, ok := value.(string)
+		if !ok || strings.TrimSpace(text) == "" {
+			return nil, fmt.Errorf("resume value for %s must be a non-empty string", req.ToolCallID)
+		}
+		return graph.State{
+			stateKeyInnerToolRequest: nil,
+			stateKeyInnerToolMessage: model.NewToolMessage(req.ToolCallID, req.Name, text),
+		}, nil
+	})
+	childCompiled := childGraph.AddEdge(innerWorkerName, innerGateNodeID).
+		AddConditionalEdges(innerGateNodeID, func(_ context.Context, state graph.State) (string, error) {
+			if state[stateKeyInnerToolMessage] != nil {
+				return innerWorkerName, nil
+			}
+			return graph.End, nil
+		}, map[string]string{
+			innerWorkerName: innerWorkerName,
+			graph.End:       graph.End,
+		}).
+		SetEntryPoint(innerWorkerName).
+		SetFinishPoint(innerWorkerName).
+		MustCompile()
+	childAgent, err := graphagent.New(
+		childGraphName,
+		childCompiled,
+		graphagent.WithCheckpointSaver(saver),
+		graphagent.WithSubAgents([]agent.Agent{worker}),
+	)
+	require.NoError(t, err)
+	parentSchema := graph.MessagesStateSchema().
+		AddField(stateKeyAfterOut, graph.StateField{Type: reflect.TypeOf("")})
+	parentGraph := graph.NewStateGraph(parentSchema)
+	childToolCall := model.ToolCall{
+		Type: "function",
+		ID:   "call-child-graph",
+		Function: model.FunctionDefinitionParam{
+			Name:      childGraphName,
+			Arguments: []byte(`{"request":"start"}`),
+		},
+	}
+	parentGraph.AddNode("before", func(ctx context.Context, state graph.State) (any, error) {
+		_ = ctx
+		_ = state
+		return graph.State{
+			graph.StateKeyMessages: graph.AppendMessages{Items: []model.Message{{
+				Role:      model.RoleAssistant,
+				ToolCalls: []model.ToolCall{childToolCall},
+			}}},
+		}, nil
+	})
+	parentGraph.AddToolsNode(
+		toolsNodeID,
+		map[string]tool.Tool{
+			childGraphName: NewTool(childAgent),
+		},
+	)
+	parentGraph.AddNode("after", func(ctx context.Context, state graph.State) (any, error) {
+		_ = ctx
+		lastToolResponse, _ := state[graph.StateKeyLastToolResponse].(string)
+		var text string
+		if err := json.Unmarshal([]byte(lastToolResponse), &text); err != nil {
+			return nil, err
+		}
+		return graph.State{stateKeyAfterOut: text}, nil
+	})
+	parentCompiled := parentGraph.AddEdge("before", toolsNodeID).
+		AddEdge(toolsNodeID, "after").
+		SetEntryPoint("before").
+		SetFinishPoint("after").
+		MustCompile()
+	parentAgent, err := graphagent.New(
+		"parent-agenttool-agentnode-history",
+		parentCompiled,
+		graphagent.WithCheckpointSaver(saver),
+	)
+	require.NoError(t, err)
+	parentSession := session.NewSession("app", "user", "agenttool-agentnode-history")
+	initialInvocation := agent.NewInvocation(
+		agent.WithInvocationID("parent-agentnode-initial"),
+		agent.WithInvocationMessage(model.NewUserMessage("start")),
+		agent.WithInvocationSession(parentSession),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRuntimeState(map[string]any{
+				graph.CfgKeyLineageID:    parentLineageID,
+				graph.CfgKeyCheckpointNS: parentNamespace,
+			}),
+		)),
+	)
+	initialEvents, err := parentAgent.Run(
+		agent.NewInvocationContext(context.Background(), initialInvocation),
+		initialInvocation,
+	)
+	require.NoError(t, err)
+	for ev := range initialEvents {
+		_ = ev
+	}
+	manager := parentAgent.Executor().CheckpointManager()
+	require.NotNil(t, manager)
+	parentTuples, err := manager.ListCheckpoints(
+		context.Background(),
+		graph.CreateCheckpointConfig(parentLineageID, "", parentNamespace),
+		nil,
+	)
+	require.NoError(t, err)
+	childTuples, err := manager.ListCheckpoints(
+		context.Background(),
+		graph.CreateCheckpointConfig(parentLineageID, "", childGraphName),
+		nil,
+	)
+	require.NoError(t, err)
+	var parentInterrupt *graph.CheckpointTuple
+	var childInterrupt *graph.CheckpointTuple
+	for _, tuple := range parentTuples {
+		if tuple != nil && tuple.Checkpoint != nil && tuple.Checkpoint.InterruptState != nil &&
+			tuple.Checkpoint.InterruptState.NodeID == toolsNodeID {
+			parentInterrupt = tuple
+		}
+	}
+	for _, tuple := range childTuples {
+		if tuple != nil && tuple.Checkpoint != nil && tuple.Checkpoint.InterruptState != nil &&
+			tuple.Checkpoint.InterruptState.NodeID == innerGateNodeID {
+			childInterrupt = tuple
+		}
+	}
+	require.NotNil(t, parentInterrupt)
+	require.NotNil(t, childInterrupt)
+	subgraphInterrupt, ok := parentInterrupt.Checkpoint.ChannelValues[graph.StateKeySubgraphInterrupt].(map[string]any)
+	require.True(t, ok)
+	childFilterKey, ok := subgraphInterrupt["child_filter_key"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, childFilterKey)
+	resumeInvocation := agent.NewInvocation(
+		agent.WithInvocationID("parent-agentnode-resume"),
+		agent.WithInvocationMessage(model.NewUserMessage("resume")),
+		agent.WithInvocationSession(parentSession),
+		agent.WithInvocationRunOptions(agent.NewRunOptions(
+			agent.WithRuntimeState(map[string]any{
+				graph.CfgKeyLineageID:    parentLineageID,
+				graph.CfgKeyCheckpointNS: parentNamespace,
+				graph.CfgKeyCheckpointID: parentInterrupt.Checkpoint.ID,
+				graph.StateKeyCommand: &graph.Command{
+					ResumeMap: map[string]any{
+						innerToolCallID: innerResumeValue,
+					},
+				},
+			}),
+		)),
+	)
+	resumeEvents, err := parentAgent.Run(
+		agent.NewInvocationContext(context.Background(), resumeInvocation),
+		resumeInvocation,
+	)
+	require.NoError(t, err)
+	var done *event.Event
+	var resumeErrs []string
+	for ev := range resumeEvents {
+		if ev != nil && ev.Error != nil {
+			resumeErrs = append(resumeErrs, ev.Error.Error())
+		}
+		if ev != nil && ev.Done && ev.Object == graph.ObjectTypeGraphExecution {
+			done = ev
+		}
+	}
+	require.NotNil(t, done, strings.Join(resumeErrs, "; "))
+	var afterOut string
+	require.NoError(t, json.Unmarshal(done.StateDelta[stateKeyAfterOut], &afterOut))
+	require.Equal(t, innerFinalText, afterOut)
+	require.Equal(t, 2, innerModel.requestCount())
+	require.True(t, innerModel.sawToolResultWithAssistantHistory())
+	require.Equal(t, 2, worker.ranCount())
 }
 
 func TestTool_Call_GraphEmitFinalModelResponses_DedupsGraphCompletionSnapshot(t *testing.T) {
@@ -1095,6 +2571,13 @@ type sessionMirrorAgent struct {
 	inv  string
 }
 
+type liveSessionHistoryAgent struct {
+	name            string
+	liveOnlyContent string
+	seenSession     *session.Session
+	sawLiveOnly     bool
+}
+
 const (
 	graphCompletionMsg   = "graph-done"
 	graphCompletionAgent = "graph-completion"
@@ -1323,6 +2806,44 @@ func (m *sessionMirrorAgent) Info() agent.Info {
 func (m *sessionMirrorAgent) SubAgents() []agent.Agent        { return nil }
 func (m *sessionMirrorAgent) FindSubAgent(string) agent.Agent { return nil }
 
+func (m *liveSessionHistoryAgent) Run(
+	ctx context.Context,
+	inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	_ = ctx
+	invocationID := "live-session-history-agent"
+	author := m.name
+	if inv != nil {
+		invocationID = inv.InvocationID
+		if inv.AgentName != "" {
+			author = inv.AgentName
+		}
+		m.seenSession = inv.Session
+		m.sawLiveOnly = sessionHasAssistantContent(inv.Session, m.liveOnlyContent)
+	}
+
+	ch := make(chan *event.Event, 1)
+	ch <- event.NewResponseEvent(invocationID, author, &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("saw-live-session"),
+		}},
+	})
+	close(ch)
+	return ch, nil
+}
+
+func (m *liveSessionHistoryAgent) Tools() []tool.Tool { return nil }
+func (m *liveSessionHistoryAgent) Info() agent.Info {
+	return agent.Info{Name: m.name, Description: "live session history"}
+}
+func (m *liveSessionHistoryAgent) SubAgents() []agent.Agent {
+	return nil
+}
+func (m *liveSessionHistoryAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
 func sessionHasToolResult(
 	sess *session.Session,
 	invocationID string,
@@ -1461,6 +2982,14 @@ func (m *structuredOutputCaptureModel) Snapshot() (bool, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.seen, m.schemaName
+}
+
+type agentToolParentStructuredOutput struct {
+	Summary string `json:"summary"`
+}
+
+type agentToolChildStructuredOutput struct {
+	Status string `json:"status"`
 }
 
 func TestTool_Call_MirrorsChildEventsToSession(t *testing.T) {
@@ -3650,14 +5179,17 @@ func TestConvertMapToToolSchema(t *testing.T) {
 				"type":        "object",
 				"description": "test schema",
 				"properties": map[string]any{
-					"field1": map[string]any{"type": "string"},
+					"field1": map[string]any{
+						"type":    "string",
+						"pattern": "^[a-z]+$",
+					},
 				},
 			},
 			expected: &tool.Schema{
 				Type:        "object",
 				Description: "test schema",
 				Properties: map[string]*tool.Schema{
-					"field1": {Type: "string"},
+					"field1": {Type: "string", Pattern: "^[a-z]+$"},
 				},
 			},
 		},
@@ -3675,6 +5207,8 @@ func TestConvertMapToToolSchema(t *testing.T) {
 					t.Errorf("Expected non-nil result, got nil")
 				} else if result.Type != tt.expected.Type || result.Description != tt.expected.Description {
 					t.Errorf("Expected %+v, got %+v", tt.expected, result)
+				} else if tt.expected.Properties != nil {
+					require.Equal(t, tt.expected.Properties, result.Properties)
 				}
 			}
 		})
@@ -3703,7 +5237,7 @@ func TestTool_callWithParentInvocation_NoSessionFallback(t *testing.T) {
 	at := NewTool(&mockAgent{name: "test", description: "test"})
 	parent := agent.NewInvocation()
 
-	res, err := at.callWithParentInvocation(context.Background(), parent, model.NewUserMessage("hi"))
+	res, err := at.callWithParentInvocation(context.Background(), parent, model.NewUserMessage("hi"), nil)
 	require.NoError(t, err)
 	require.Equal(t, "Hello from mock agent!", res)
 }
@@ -3734,12 +5268,141 @@ func TestTool_callWithParentInvocation_PreservesRunStructuredOutput(t *testing.T
 		context.Background(),
 		parent,
 		model.NewUserMessage("hi"),
+		nil,
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, res)
 	seen, schemaName := modelImpl.Snapshot()
 	require.True(t, seen)
 	require.Equal(t, "tool_output", schemaName)
+}
+
+func TestTool_callWithParentInvocation_PinStructuredOutputUsesChildContract(t *testing.T) {
+	modelImpl := &structuredOutputCaptureModel{name: "capture-model"}
+	child := llmagent.New(
+		"structured-output-child",
+		llmagent.WithModel(modelImpl),
+		llmagent.WithStructuredOutputJSON(
+			new(agentToolChildStructuredOutput),
+			true,
+			"Child output.",
+		),
+	)
+	at := NewTool(child, WithPinStructuredOutput(true))
+	runOpts := agent.RunOptions{}
+	agent.WithStructuredOutputJSON(
+		new(agentToolParentStructuredOutput),
+		true,
+		"Parent output.",
+	)(&runOpts)
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationRunOptions(runOpts),
+		agent.WithInvocationStructuredOutput(runOpts.StructuredOutput),
+		agent.WithInvocationStructuredOutputType(runOpts.StructuredOutputType),
+		agent.WithInvocationEventFilterKey("parent-agent"),
+	)
+	res, err := at.callWithParentInvocation(
+		context.Background(),
+		parent,
+		model.NewUserMessage("hi"),
+		nil,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, res)
+	seen, schemaName := modelImpl.Snapshot()
+	require.True(t, seen)
+	require.Equal(t, "agentToolChildStructuredOutput", schemaName)
+}
+
+func TestTool_callWithParentInvocation_RestoresLiveSessionFromParallelClone(
+	t *testing.T,
+) {
+	const liveOnlyContent = "live-only-history"
+	liveSess, frozenSess := liveAndFrozenSessionsForTest(t, liveOnlyContent)
+
+	child := &liveSessionHistoryAgent{
+		name:            "live-session-child",
+		liveOnlyContent: liveOnlyContent,
+	}
+	at := NewTool(child, WithHistoryScope(HistoryScopeParentBranch))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(frozenSess),
+		agent.WithInvocationEventFilterKey("parent"),
+	)
+	livesession.Attach(parent, liveSess)
+
+	res, err := at.callWithParentInvocation(
+		context.Background(),
+		parent,
+		model.NewUserMessage("hi"),
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "saw-live-session", res)
+	require.Same(t, liveSess, child.seenSession)
+	require.True(t, child.sawLiveOnly)
+}
+
+func TestTool_StreamableCall_RestoresLiveSessionFromParallelClone(
+	t *testing.T,
+) {
+	const liveOnlyContent = "live-only-stream-history"
+	liveSess, frozenSess := liveAndFrozenSessionsForTest(t, liveOnlyContent)
+
+	child := &liveSessionHistoryAgent{
+		name:            "live-session-stream-child",
+		liveOnlyContent: liveOnlyContent,
+	}
+	at := NewTool(child, WithStreamInner(true), WithHistoryScope(HistoryScopeParentBranch))
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(frozenSess),
+		agent.WithInvocationEventFilterKey("parent"),
+	)
+	livesession.Attach(parent, liveSess)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	reader, err := at.StreamableCall(ctx, []byte(`{"request":"hi"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+	for {
+		_, recvErr := reader.Recv()
+		if recvErr == io.EOF {
+			break
+		}
+		require.NoError(t, recvErr)
+	}
+	require.Same(t, liveSess, child.seenSession)
+	require.True(t, child.sawLiveOnly)
+}
+
+func liveAndFrozenSessionsForTest(
+	t *testing.T,
+	liveOnlyContent string,
+) (*session.Session, *session.Session) {
+	t.Helper()
+	liveSess := session.NewSession("app", "user", "live-session")
+	appendAssistantEventForTest(liveSess, "before-parallel-clone")
+	frozenSess := liveSess.Clone()
+	appendAssistantEventForTest(liveSess, liveOnlyContent)
+	require.False(t, sessionHasAssistantContent(frozenSess, liveOnlyContent))
+	require.True(t, sessionHasAssistantContent(liveSess, liveOnlyContent))
+	return liveSess, frozenSess
+}
+
+func appendAssistantEventForTest(sess *session.Session, content string) {
+	if sess == nil {
+		return
+	}
+	evt := event.NewResponseEvent("parent", "parent", &model.Response{
+		Done: true,
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage(content),
+		}},
+	})
+	sess.EventMu.Lock()
+	defer sess.EventMu.Unlock()
+	sess.Events = append(sess.Events, *evt)
 }
 
 func TestTool_Call_WithParentInvocation_FlushError(t *testing.T) {
@@ -3876,4 +5539,315 @@ func TestTool_StreamableCall_NilEvent(t *testing.T) {
 	if ch.Content == nil {
 		t.Fatalf("expected non-nil content")
 	}
+}
+
+func TestTool_WithPinModel_Default(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent)
+	if agentTool.pinModel {
+		t.Error("Expected pinModel to be false by default")
+	}
+}
+
+func TestTool_WithPinModel_Enabled(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinModel(true))
+	if !agentTool.pinModel {
+		t.Error("Expected pinModel to be true")
+	}
+}
+
+func TestTool_WithPinStructuredOutput_DefaultAndEnabled(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	defaultTool := NewTool(mockAgent)
+	require.False(t, defaultTool.pinStructuredOutput)
+
+	agentTool := NewTool(mockAgent, WithPinStructuredOutput(true))
+	require.True(t, agentTool.pinStructuredOutput)
+}
+
+func TestTool_WithPinModel_ClearsModelName(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinModel(true))
+
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ModelName: "parent-model",
+		}),
+	)
+
+	opts := agentTool.childInvocationOptions(context.Background(), parentInv, model.NewUserMessage("test"), "child-key", nil)
+
+	// Apply options to a new invocation to verify ModelName is cleared
+	childInv := parentInv.Clone(opts...)
+	if childInv.RunOptions.ModelName != "" {
+		t.Errorf("Expected ModelName to be cleared, got %q", childInv.RunOptions.ModelName)
+	}
+	if childInv.RunOptions.Model != nil {
+		t.Error("Expected Model to be nil")
+	}
+}
+
+func TestTool_WithPinModel_ClearsModel(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinModel(true))
+
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			Model: &fixedResponseModel{},
+		}),
+	)
+
+	opts := agentTool.childInvocationOptions(context.Background(), parentInv, model.NewUserMessage("test"), "child-key", nil)
+
+	childInv := parentInv.Clone(opts...)
+	if childInv.RunOptions.Model != nil {
+		t.Error("Expected Model to be nil when WithPinModel is enabled")
+	}
+}
+
+func TestTool_WithPinModel_ClearsModelSelector(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinModel(true))
+
+	selector := func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+		return &fixedResponseModel{}, nil
+	}
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ModelSelector: selector,
+		}),
+	)
+
+	opts := agentTool.childInvocationOptions(context.Background(), parentInv, model.NewUserMessage("test"), "child-key", nil)
+
+	childInv := parentInv.Clone(opts...)
+	if childInv.RunOptions.ModelSelector != nil {
+		t.Error("Expected ModelSelector to be nil when WithPinModel is enabled")
+	}
+}
+
+func TestTool_WithPinStructuredOutput_ClearsRunStructuredOutput(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinStructuredOutput(true))
+
+	runOpts := agent.RunOptions{}
+	agent.WithStructuredOutputJSON(
+		new(agentToolParentStructuredOutput),
+		true,
+		"Parent output.",
+	)(&runOpts)
+	parentInv := agent.NewInvocation(agent.WithInvocationRunOptions(runOpts))
+
+	opts := agentTool.childInvocationOptions(
+		context.Background(),
+		parentInv,
+		model.NewUserMessage("test"),
+		"child-key",
+		nil,
+	)
+
+	childInv := parentInv.Clone(opts...)
+	require.Nil(t, childInv.RunOptions.StructuredOutput)
+	require.Nil(t, childInv.RunOptions.StructuredOutputType)
+}
+
+func TestTool_WithPinRunOptions_PreservesRuntimeState(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinModel(true))
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ModelName: "parent-model",
+		}),
+	)
+	runtimeState := map[string]any{"room_id": "r1"}
+
+	opts := agentTool.childInvocationOptions(
+		context.Background(),
+		parentInv,
+		model.NewUserMessage("test"),
+		"child-key",
+		runtimeState,
+	)
+
+	childInv := parentInv.Clone(opts...)
+	require.Empty(t, childInv.RunOptions.ModelName)
+	require.Equal(t, runtimeState, childInv.RunOptions.RuntimeState)
+}
+
+func TestTool_WithPinModel_Disabled_PreservesModelName(t *testing.T) {
+	mockAgent := &mockAgent{
+		name:        "test-agent",
+		description: "A test agent",
+	}
+	agentTool := NewTool(mockAgent, WithPinModel(false))
+
+	parentModel := &fixedResponseModel{}
+	parentSelector := func(ctx context.Context, inv *agent.Invocation) (model.Model, error) {
+		return &fixedResponseModel{}, nil
+	}
+	parentInv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ModelName:     "parent-model",
+			Model:         parentModel,
+			ModelSelector: parentSelector,
+		}),
+	)
+
+	opts := agentTool.childInvocationOptions(context.Background(), parentInv, model.NewUserMessage("test"), "child-key", nil)
+
+	childInv := parentInv.Clone(opts...)
+	if childInv.RunOptions.ModelName != "parent-model" {
+		t.Errorf("Expected ModelName to be preserved, got %q", childInv.RunOptions.ModelName)
+	}
+	if childInv.RunOptions.Model != parentModel {
+		t.Error("Expected Model to be preserved when WithPinModel is disabled")
+	}
+	if childInv.RunOptions.ModelSelector == nil {
+		t.Error("Expected ModelSelector to be preserved when WithPinModel is disabled")
+	}
+}
+
+// parentMetadataCapturingAgent records the ParentMetadata observed on the
+// invocation it receives. Used to verify AgentTool propagates the parent's
+// toolCallId into the sub-agent's invocation as ParentInvocationMetadata.
+type parentMetadataCapturingAgent struct {
+	name              string
+	gotParentMetadata *agent.ParentInvocationMetadata
+	gotInvocationID   string
+}
+
+func (a *parentMetadataCapturingAgent) Info() agent.Info {
+	return agent.Info{Name: a.name, Description: "capturing"}
+}
+func (a *parentMetadataCapturingAgent) SubAgents() []agent.Agent        { return nil }
+func (a *parentMetadataCapturingAgent) FindSubAgent(string) agent.Agent { return nil }
+func (a *parentMetadataCapturingAgent) Tools() []tool.Tool              { return nil }
+func (a *parentMetadataCapturingAgent) Run(
+	ctx context.Context, inv *agent.Invocation,
+) (<-chan *event.Event, error) {
+	a.gotParentMetadata = inv.ParentMetadata
+	a.gotInvocationID = inv.InvocationID
+	ch := make(chan *event.Event, 1)
+	ch <- &event.Event{
+		InvocationID: inv.InvocationID,
+		Author:       a.name,
+		Response: &model.Response{
+			Done: true,
+			Choices: []model.Choice{
+				{Message: model.NewAssistantMessage("ok")},
+			},
+		},
+	}
+	close(ch)
+	return ch, nil
+}
+
+// TestTool_Call_PropagatesParentMetadataFromToolCallID verifies that when the
+// AgentTool is invoked with a toolCallId in the per-call ctx, the sub-agent's
+// invocation receives a ParentMetadata describing the parent tool call. This
+// is the join key consumed by AG-UI to correlate the sub-agent's events with
+// the parent's TOOL_CALL_START.
+func TestTool_Call_PropagatesParentMetadataFromToolCallID(t *testing.T) {
+	child := &parentMetadataCapturingAgent{name: "captor"}
+	at := NewTool(child)
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+	)
+	invCtx := agent.NewInvocationContext(context.Background(), parent)
+	const toolCallID = "call-pm-001"
+	ctx := context.WithValue(invCtx, tool.ContextKeyToolCallID{}, toolCallID)
+
+	_, err := at.Call(ctx, []byte(`{"request":"hello"}`))
+	require.NoError(t, err)
+	require.NotNil(t, child.gotParentMetadata,
+		"sub-agent invocation should carry ParentMetadata when parent ctx has toolCallId")
+	require.Equal(t, agent.TriggerTypeToolCall, child.gotParentMetadata.TriggerType)
+	require.Equal(t, toolCallID, child.gotParentMetadata.TriggerID)
+	require.Equal(t, child.name, child.gotParentMetadata.TriggerName,
+		"TriggerName should match the AgentTool's name (which is the sub-agent name by default)")
+}
+
+// TestTool_Call_NoParentMetadataWithoutToolCallID verifies the degraded path:
+// when the AgentTool is invoked without a toolCallId in ctx (e.g., direct test
+// invocation), the sub-agent's invocation has no ParentMetadata rather than a
+// fabricated one.
+func TestTool_Call_NoParentMetadataWithoutToolCallID(t *testing.T) {
+	child := &parentMetadataCapturingAgent{name: "captor-no-pm"}
+	at := NewTool(child)
+
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+
+	_, err := at.Call(ctx, []byte(`{"request":"hello"}`))
+	require.NoError(t, err)
+	require.Nil(t, child.gotParentMetadata,
+		"sub-agent should have no ParentMetadata when parent ctx has no toolCallId")
+}
+
+// TestTool_Call_DoesNotInheritParentMetadataFromParentInvocation is a regression
+// test: when the parent invocation itself already carries a ParentMetadata
+// (e.g., the parent was spawned by an upstream AgentTool / transfer), and the
+// AgentTool is invoked without a toolCallId in ctx, the child invocation must
+// NOT inherit the parent's ParentMetadata via Invocation.Clone's default copy
+// behavior. Instead, the child's ParentMetadata must be cleared to nil,
+// because the AgentTool boundary creates a new parent edge — the parent
+// invocation is the immediate parent now, not whatever spawned it.
+//
+// Without the fix at the AgentTool boundary, AG-UI would correlate the
+// child's events to the wrong parent edge (the parent's parent).
+func TestTool_Call_DoesNotInheritParentMetadataFromParentInvocation(t *testing.T) {
+	child := &parentMetadataCapturingAgent{name: "captor-inherit"}
+	at := NewTool(child)
+
+	// Parent invocation already carries ParentMetadata — simulating a parent
+	// that was itself spawned by an upstream AgentTool call.
+	upstreamMeta := &agent.ParentInvocationMetadata{
+		TriggerType: agent.TriggerTypeToolCall,
+		TriggerID:   "upstream-call-id",
+		TriggerName: "upstream-tool",
+	}
+	parent := agent.NewInvocation(
+		agent.WithInvocationSession(session.NewSession("app", "user", "session")),
+		agent.WithInvocationParentMetadata(upstreamMeta),
+	)
+	require.NotNil(t, parent.ParentMetadata,
+		"sanity: parent invocation should carry the upstream ParentMetadata")
+
+	// Invoke the AgentTool without a toolCallId in ctx (degraded path).
+	ctx := agent.NewInvocationContext(context.Background(), parent)
+	_, err := at.Call(ctx, []byte(`{"request":"hello"}`))
+	require.NoError(t, err)
+
+	require.Nil(t, child.gotParentMetadata,
+		"child must NOT inherit parent's ParentMetadata across the AgentTool boundary; "+
+			"the AgentTool call is itself the new parent edge, and absent a toolCallId in ctx, "+
+			"that edge has no representable ParentMetadata (must be nil, not inherited)")
 }

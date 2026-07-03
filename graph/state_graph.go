@@ -21,6 +21,7 @@ import (
 	"maps"
 	"reflect"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
+	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	promptstate "trpc.group/trpc-go/trpc-agent-go/internal/prompt/adapter/state"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
@@ -135,6 +137,16 @@ func withTraceTransparent() Option {
 func WithUserInputKey(key string) Option {
 	return func(node *Node) {
 		node.userInputKey = key
+	}
+}
+
+// WithAgentNodeInputMapper sets a mapper used to build the child invocation
+// message for an AgentNode. The mapper should return StateKeyAgentInputMessage
+// with a *model.Message value. When the mapper is nil or does not return that
+// key, the AgentNode falls back to WithUserInputKey or StateKeyUserInput.
+func WithAgentNodeInputMapper(f AgentNodeInputMapper) Option {
+	return func(node *Node) {
+		node.agentInputMessageMapper = f
 	}
 }
 
@@ -395,7 +407,11 @@ func WithAgentNodeEventCallback(callback AgentEventCallback) Option {
 // kept separate from FinalState/RawStateDelta so callers can distinguish a
 // normal terminal snapshot from fatal fallback state.
 type SubgraphResult struct {
-	LastResponse       string
+	LastResponse string
+	// LastMessage is the latest assistant message observed from the child agent.
+	LastMessage *model.Message
+	// ToolCalls contains the tool calls from LastMessage when present.
+	ToolCalls          []model.ToolCall
 	FinalState         State
 	RawStateDelta      map[string][]byte
 	FallbackState      State
@@ -425,6 +441,12 @@ func (r SubgraphResult) EffectiveStateDelta() map[string][]byte {
 // The returned state replaces the runtime state passed to the child.
 type SubgraphInputMapper func(parent State) State
 
+// AgentNodeInputMapper projects parent state into the AgentNode input state.
+// The returned state is inspected for StateKeyAgentInputMessage. When that key
+// contains a non-nil *model.Message, the AgentNode uses it as the child invocation
+// message instead of building a user message from StateKeyUserInput.
+type AgentNodeInputMapper func(parent State) State
+
 // SubgraphOutputMapper converts subgraph results into parent state updates.
 // Returning nil or an empty State means "no updates" will be applied.
 // Note: Prefer returning nil when there are no updates to write back;
@@ -442,6 +464,13 @@ func WithSubgraphInputMapper(f SubgraphInputMapper) Option {
 func WithSubgraphOutputMapper(f SubgraphOutputMapper) Option {
 	return func(node *Node) {
 		node.agentOutputMapper = f
+	}
+}
+
+// WithAgentNodeRunOptions applies run options only to this agent node's child invocation.
+func WithAgentNodeRunOptions(opts ...agent.RunOption) Option {
+	return func(node *Node) {
+		node.agentRunOptions = append(node.agentRunOptions, append([]agent.RunOption(nil), opts...)...)
 	}
 }
 
@@ -1399,6 +1428,17 @@ func applyInvocationRequestOverrides(
 			request.ExtraFields[key] = value
 		}
 	}
+	if len(invocation.RunOptions.ModelRequestHeaders) > 0 {
+		if request.Headers == nil {
+			request.Headers = make(
+				map[string]string,
+				len(invocation.RunOptions.ModelRequestHeaders),
+			)
+		}
+		for key, value := range invocation.RunOptions.ModelRequestHeaders {
+			request.Headers[key] = value
+		}
+	}
 }
 
 func extractModelResponseSummary(result any) (string, string) {
@@ -1456,7 +1496,7 @@ func runGraphModelSelector(
 ) (selected model.Model, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Errorf("model selector panic: %v\n%s", r, debug.Stack())
+			log.Errorf(log.PanicPrefix+" model selector panic: %v\n%s", r, debug.Stack())
 			err = fmt.Errorf("panic: %v", r)
 		}
 	}()
@@ -1560,7 +1600,7 @@ func (r *llmRunner) executeModel(
 		GenerationConfig: r.generationConfig,
 	}
 	// Sanitize invalid tool calls in history to avoid poisoning future requests.
-	request.Messages = toolcall.SanitizeMessagesWithTools(request.Messages, request.Tools)
+	request.Messages = toolcall.SanitizeMessagesWithTools(ctx, request.Messages, request.Tools)
 	applyInvocationRequestOverrides(request, callInvocation, nodeID)
 	invocationID, sessionID, appName, userID, eventChan := extractExecutionContext(state)
 	modelCallbacks, _ := state[StateKeyModelCallbacks].(*model.Callbacks)
@@ -2362,6 +2402,7 @@ func newToolsNodeRuntime(
 			toolCallbacks, _ = extractToolCallbacks(state)
 		}
 
+		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 		// Process all tool calls and collect results.
 		newMessages, err := processToolCalls(ctx, toolCallsConfig{
 			ToolCalls:      toolCalls,
@@ -2370,6 +2411,7 @@ func newToolsNodeRuntime(
 			EventChan:      eventChan,
 			Span:           span,
 			State:          state,
+			NodeID:         nodeID,
 			EnableParallel: parallel,
 			ToolCallbacks:  toolCallbacks,
 			RetryPolicy:    configuredRetryPolicy,
@@ -2381,13 +2423,13 @@ func newToolsNodeRuntime(
 			return nil, err
 		}
 		upd := State{StateKeyMessages: newMessages}
+		clearAgentToolSubgraphInterruptState(state, nodeID)
 
 		if len(newMessages) > 0 {
 			upd[StateKeyLastToolResponse] =
 				newMessages[len(newMessages)-1].Content
 		}
 
-		nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 		if nodeID != "" {
 			type toolNodeResponse struct {
 				ToolID   string          `json:"tool_id"`
@@ -2468,6 +2510,9 @@ func copyRuntimeStateFiltered(parent State) State {
 		if isInternalStateKey(k) {
 			continue
 		}
+		if k == StateKeyAgentInputMessage {
+			continue
+		}
 		out[k] = v
 	}
 	return out
@@ -2484,6 +2529,9 @@ type subgraphInterruptInfo struct {
 	childCheckpointNS string
 	childLineageID    string
 	childTaskID       string
+	toolCallID        string
+	toolCallKey       string
+	childFilterKey    string
 }
 
 type extractedPregelInterrupt struct {
@@ -2525,6 +2573,15 @@ func subgraphInterruptInfoFromState(
 	}
 	if v, ok := typed[subgraphInterruptKeyChildTaskID].(string); ok {
 		info.childTaskID = v
+	}
+	if v, ok := typed[subgraphInterruptKeyToolCallID].(string); ok {
+		info.toolCallID = v
+	}
+	if v, ok := typed[subgraphInterruptKeyToolCallKey].(string); ok {
+		info.toolCallKey = v
+	}
+	if v, ok := typed[subgraphInterruptKeyChildFilterKey].(string); ok {
+		info.childFilterKey = v
 	}
 	return info, true
 }
@@ -2634,7 +2691,9 @@ const includeContentsNone = "none"
 type agentNodeConfig struct {
 	callbacks           *NodeCallbacks
 	inputMapper         SubgraphInputMapper
+	inputMessageMapper  AgentNodeInputMapper
 	outputMapper        SubgraphOutputMapper
+	runOptions          []agent.RunOption
 	isolated            bool
 	scope               string
 	inputFromLast       bool
@@ -2651,7 +2710,9 @@ func agentNodeConfigFromOptions(opts ...Option) agentNodeConfig {
 	return agentNodeConfig{
 		callbacks:           dummyNode.callbacks,
 		inputMapper:         dummyNode.agentInputMapper,
+		inputMessageMapper:  dummyNode.agentInputMessageMapper,
 		outputMapper:        dummyNode.agentOutputMapper,
+		runOptions:          append([]agent.RunOption(nil), dummyNode.agentRunOptions...),
 		isolated:            dummyNode.agentIsolatedMessages,
 		scope:               dummyNode.agentEventScope,
 		inputFromLast:       dummyNode.agentInputFromLastResponse,
@@ -2801,6 +2862,80 @@ func mapParentInputFromLastResponse(
 	return cloned
 }
 
+func agentNodeInputMessage(
+	parent State,
+	inputMessageMapper AgentNodeInputMapper,
+	userInputKey string,
+) model.Message {
+	if msg, ok := agentNodeInputMessageFromMappedState(
+		parent,
+		inputMessageMapper,
+	); ok {
+		return msg
+	}
+	if msg, ok := agentNodeInputMessageFromState(parent); ok {
+		return msg
+	}
+	if userInputKey == "" {
+		userInputKey = StateKeyUserInput
+	}
+	userInput, _ := GetStateValue[string](parent, userInputKey)
+	return model.NewUserMessage(userInput)
+}
+
+func agentNodeInputMessageFromMappedState(
+	parent State,
+	inputMessageMapper AgentNodeInputMapper,
+) (model.Message, bool) {
+	if inputMessageMapper == nil {
+		return model.Message{}, false
+	}
+	mapped := inputMessageMapper(parent)
+	if len(mapped) == 0 {
+		return model.Message{}, false
+	}
+	return agentNodeInputMessageFromState(mapped)
+}
+
+func agentNodeInputMessageFromState(state State) (model.Message, bool) {
+	raw, ok := state[StateKeyAgentInputMessage]
+	if !ok || raw == nil {
+		return model.Message{}, false
+	}
+	switch msg := raw.(type) {
+	case *model.Message:
+		if msg == nil {
+			return model.Message{}, false
+		}
+		return validAgentNodeInputMessage(*msg)
+	case model.Message:
+		return validAgentNodeInputMessage(msg)
+	case map[string]any:
+		return decodeAgentNodeInputMessage(msg)
+	default:
+		return model.Message{}, false
+	}
+}
+
+func validAgentNodeInputMessage(msg model.Message) (model.Message, bool) {
+	if msg.Role == "" {
+		return model.Message{}, false
+	}
+	return msg, true
+}
+
+func decodeAgentNodeInputMessage(raw any) (model.Message, bool) {
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return model.Message{}, false
+	}
+	var msg model.Message
+	if err := json.Unmarshal(b, &msg); err != nil {
+		return model.Message{}, false
+	}
+	return validAgentNodeInputMessage(msg)
+}
+
 func setSubgraphInterruptState(
 	ctx context.Context,
 	state State,
@@ -2882,6 +3017,8 @@ func finalizeAgentNodeOutput(
 	if outputMapper != nil {
 		mapped := outputMapper(state, SubgraphResult{
 			LastResponse:       streamRes.lastResponse,
+			LastMessage:        streamRes.lastMessage,
+			ToolCalls:          streamRes.toolCalls,
 			FinalState:         streamRes.finalState,
 			RawStateDelta:      streamRes.rawDelta,
 			FallbackState:      streamRes.fallbackState,
@@ -2889,14 +3026,25 @@ func finalizeAgentNodeOutput(
 			StructuredOutput:   streamRes.structuredOutput,
 		})
 		if len(mapped) == 0 {
+			if _, hadInputMessage := agentNodeInputMessageFromState(state); hadInputMessage {
+				return State{StateKeyAgentInputMessage: nil}
+			}
 			return State{}
 		}
-		if _, ok := mapped[userInputKey]; !ok {
-			copied := mapped.Clone()
-			copied[userInputKey] = ""
-			return copied
+		_, hasUserInput := mapped[userInputKey]
+		_, hadInputMessage := agentNodeInputMessageFromState(state)
+		_, hasInputMessage := mapped[StateKeyAgentInputMessage]
+		if hasUserInput && (!hadInputMessage || hasInputMessage) {
+			return mapped
 		}
-		return mapped
+		copied := mapped.Clone()
+		if !hasUserInput {
+			copied[userInputKey] = ""
+		}
+		if hadInputMessage && !hasInputMessage {
+			copied[StateKeyAgentInputMessage] = nil
+		}
+		return copied
 	}
 	upd := State{}
 	upd[StateKeyLastResponse] = streamRes.lastResponse
@@ -2904,6 +3052,9 @@ func finalizeAgentNodeOutput(
 		nodeID: streamRes.lastResponse,
 	}
 	upd[userInputKey] = ""
+	if _, hasInputMessage := agentNodeInputMessageFromState(state); hasInputMessage {
+		upd[StateKeyAgentInputMessage] = nil
+	}
 	return upd
 }
 
@@ -2968,6 +3119,8 @@ func (r *agentNodeRuntime) Run(
 		nodeID,
 		r.config.scope,
 		r.config.userInputKey,
+		r.config.inputMessageMapper,
+		r.config.runOptions,
 		traceTask,
 	)
 	// Emit agent execution start event.
@@ -3103,6 +3256,8 @@ type agentEventStreamResult struct {
 	fallbackState    State
 	fallbackRawDelta map[string][]byte
 	structuredOutput any
+	lastMessage      *model.Message
+	toolCalls        []model.ToolCall
 	interrupt        *InterruptError
 	interruptInfo    *extractedPregelInterrupt
 	terminalErr      error
@@ -3208,6 +3363,7 @@ func updateAgentStreamResultFromEvent(
 ) {
 	captureAgentFallbackState(res, ev)
 	updateAgentLastResponse(res, ev)
+	updateAgentLastMessage(res, ev)
 	updateAgentStructuredOutput(res, ev)
 	updateAgentInterrupt(res, ev)
 	updateAgentFinalState(ctx, res, ev)
@@ -3245,6 +3401,25 @@ func updateAgentLastResponseValue(lastResponse *string, lastResponseID *string, 
 	*lastResponse = msg.Content
 }
 
+func updateAgentLastMessage(res *agentEventStreamResult, ev *event.Event) {
+	if res == nil || ev == nil || ev.Response == nil || len(ev.Response.Choices) == 0 {
+		return
+	}
+	msg := ev.Response.Choices[0].Message
+	if msg.Role != model.RoleAssistant || !agentMessageHasPayload(msg) {
+		return
+	}
+	res.lastMessage = &msg
+	res.toolCalls = msg.ToolCalls
+}
+
+func agentMessageHasPayload(msg model.Message) bool {
+	return msg.Content != "" ||
+		len(msg.ContentParts) > 0 ||
+		msg.ReasoningContent != "" ||
+		len(msg.ToolCalls) > 0
+}
+
 func updateAgentStructuredOutput(res *agentEventStreamResult, ev *event.Event) {
 	if res == nil || ev == nil {
 		return
@@ -3276,6 +3451,8 @@ func clearAgentSuccessResultOnError(res *agentEventStreamResult, ev *event.Event
 		return
 	}
 	res.lastResponse = ""
+	res.lastMessage = nil
+	res.toolCalls = nil
 	res.finalState = nil
 	res.rawDelta = nil
 	res.structuredOutput = nil
@@ -3722,18 +3899,15 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 	nodeID string,
 	scope string,
 	userInputKey string,
+	inputMessageMapper AgentNodeInputMapper,
+	nodeRunOptions []agent.RunOption,
 	traceTask *traceTaskMetadata,
 ) *agent.Invocation {
-	// Extract user input from parent state.
-	var userInput string
-	if userInputKey == "" {
-		userInputKey = StateKeyUserInput
-	}
-	if input, exists := parentState[userInputKey]; exists {
-		if inputStr, ok := input.(string); ok {
-			userInput = inputStr
-		}
-	}
+	inputMessage := agentNodeInputMessage(
+		parentState,
+		inputMessageMapper,
+		userInputKey,
+	)
 	// Extract session from parent state.
 	var sessionData *session.Session
 	if sess, exists := parentState[StateKeySession]; exists {
@@ -3742,14 +3916,18 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 		}
 	}
 
-	// Clone from parent invocation if available to preserve linkage and filtering.
+	// Start from parent invocation options when available to preserve linkage and filtering.
 	if parentInvocation, ok := agent.InvocationFromContext(ctx); ok &&
 		parentInvocation != nil {
-		runOptions := parentInvocation.RunOptions
+		runOptions := detachAgentNodeMutableRunOptions(parentInvocation.RunOptions)
+		runOptions.RuntimeState = nil
+		applyAgentNodeRunOptions(&runOptions, nodeRunOptions)
+		nodeRuntimeState := runOptions.RuntimeState
 		// Preserve the parent's visibility preference.
 		// The agent node captures completion snapshots from either raw
 		// graph.execution events or visible rewritten completion snapshots.
-		runOptions.RuntimeState = runtime
+		runOptions.RuntimeState = mergeAgentNodeRuntimeState(runtime, nodeRuntimeState)
+		injectAgentNodeToolContinuationMessages(&runOptions, runtime, inputMessage)
 		runOptions.CustomAgentConfigs = withScopedGraphCallOptions(
 			runOptions.CustomAgentConfigs,
 			nodeID,
@@ -3765,9 +3943,7 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 		}
 		invocationOpts := []agent.InvocationOptions{
 			agent.WithInvocationAgent(targetAgent),
-			agent.WithInvocationMessage(
-				model.NewUserMessage(userInput),
-			),
+			agent.WithInvocationMessage(inputMessage),
 			agent.WithInvocationRunOptions(runOptions),
 			agent.WithInvocationEventFilterKey(filterKey),
 		}
@@ -3795,15 +3971,84 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 		return inv
 	}
 	// Create standalone invocation.
+	runOptions := agent.RunOptions{}
+	applyAgentNodeRunOptions(&runOptions, nodeRunOptions)
+	nodeRuntimeState := runOptions.RuntimeState
+	runOptions.RuntimeState = mergeAgentNodeRuntimeState(runtime, nodeRuntimeState)
+	injectAgentNodeToolContinuationMessages(&runOptions, runtime, inputMessage)
 	inv := agent.NewInvocation(
 		agent.WithInvocationAgent(targetAgent),
-		agent.WithInvocationRunOptions(agent.RunOptions{RuntimeState: runtime}),
-		agent.WithInvocationMessage(model.NewUserMessage(userInput)),
+		agent.WithInvocationRunOptions(runOptions),
+		agent.WithInvocationMessage(inputMessage),
 		agent.WithInvocationSession(sessionData),
 		// Use stable FilterKey based on agent name only (no UUID).
 		agent.WithInvocationEventFilterKey(targetAgent.Info().Name),
 	)
 	return inv
+}
+
+func applyAgentNodeRunOptions(runOptions *agent.RunOptions, opts []agent.RunOption) {
+	if runOptions == nil || len(opts) == 0 {
+		return
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(runOptions)
+		}
+	}
+}
+
+func detachAgentNodeMutableRunOptions(in agent.RunOptions) agent.RunOptions {
+	out := in
+	// Detach only parent-owned mutable containers.
+	// Standard run options can append to or merge into these containers.
+	out.InjectedContextMessages = slices.Clip(out.InjectedContextMessages)
+	out.TraceStartedCallbacks = slices.Clip(out.TraceStartedCallbacks)
+	out.A2ARequestOptions = slices.Clip(out.A2ARequestOptions)
+	out.CustomAgentConfigs = maps.Clone(in.CustomAgentConfigs)
+	out.ModelRequestExtraFields = maps.Clone(in.ModelRequestExtraFields)
+	out.AdditionalTools = slices.Clip(out.AdditionalTools)
+	out.ExternalTools = slices.Clip(out.ExternalTools)
+	return out
+}
+
+func mergeAgentNodeRuntimeState(runtime State, nodeRuntimeState map[string]any) map[string]any {
+	if runtime == nil && nodeRuntimeState == nil {
+		return nil
+	}
+	merged := make(map[string]any, len(runtime)+len(nodeRuntimeState))
+	for key, value := range nodeRuntimeState {
+		merged[key] = value
+	}
+	for key, value := range runtime {
+		merged[key] = value
+	}
+	return merged
+}
+
+func injectAgentNodeToolContinuationMessages(
+	runOptions *agent.RunOptions,
+	runtime State,
+	inputMessage model.Message,
+) {
+	if runOptions == nil || runtime == nil || inputMessage.Role != model.RoleTool {
+		return
+	}
+	messages, ok := runtime[StateKeyMessages].([]model.Message)
+	if !ok || len(messages) == 0 {
+		return
+	}
+	history := make([]model.Message, 0, len(messages))
+	for _, msg := range messages {
+		if model.MessagesEqual(msg, inputMessage) {
+			continue
+		}
+		history = append(history, msg)
+	}
+	if len(history) == 0 {
+		return
+	}
+	runOptions.InjectedContextMessages = append(runOptions.InjectedContextMessages, history...)
 }
 
 func currentTraceTaskPredecessors(traceTask *traceTaskMetadata) []string {
@@ -3839,6 +4084,8 @@ func buildAgentInvocationWithStateAndScope(
 		nodeID,
 		scope,
 		StateKeyUserInput,
+		nil,
+		nil,
 		nil,
 	)
 }
@@ -4097,6 +4344,7 @@ func runTool(
 		t,
 		state,
 		nil,
+		0,
 	)
 	return finalCtx, result, modifiedArgs, err
 }
@@ -4108,6 +4356,7 @@ func runToolWithEventContexts(
 	t tool.Tool,
 	state State,
 	retryPolicy *tool.RetryPolicy,
+	toolCallIndex int,
 ) (context.Context, *agent.Invocation, context.Context, *agent.Invocation, any, []byte, error) {
 	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, toolCall.ID)
 	if invocation, ok := agent.InvocationFromContext(ctx); ok && jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
@@ -4163,7 +4412,15 @@ func runToolWithEventContexts(
 	if err != nil {
 		return startCtx, startInvocation, ctx, startInvocation, nil, toolCall.Function.Arguments, err
 	}
-	result, toolErr := callToolWithRetry(ctx, toolCall, callableTool, retryPolicy)
+	result, toolErr := callToolWithRetry(
+		ctx,
+		toolCall,
+		callableTool,
+		retryPolicy,
+		startInvocation,
+		state,
+		toolCallIndex,
+	)
 	completeInvocation := startInvocation
 
 	ctx, customResult, err = runAfterToolPluginCallbacks(
@@ -4222,21 +4479,78 @@ func runToolWithEventContexts(
 	return startCtx, startInvocation, ctx, completeInvocation, result, toolCall.Function.Arguments, nil
 }
 
+func agentToolGraphRuntimeContext(
+	invocation *agent.Invocation,
+	state State,
+	toolCall model.ToolCall,
+	toolCallIndex int,
+) (agenttoolgraph.RuntimeContext, error) {
+	if invocation == nil {
+		return agenttoolgraph.RuntimeContext{}, nil
+	}
+	toolCallKey := agentToolCallKey(toolCallIndex, toolCall)
+	currentNodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
+	runtimeState, err := agentToolChildRuntimeState(
+		state,
+		currentNodeID,
+		toolCall.Function.Name,
+		toolCall.ID,
+		toolCallKey,
+	)
+	if err != nil {
+		return agenttoolgraph.RuntimeContext{}, err
+	}
+	return agenttoolgraph.RuntimeContext{
+		ParentInvocation: invocation,
+		State:            runtimeState,
+		ParentNodeID:     currentNodeID,
+		ToolCallID:       toolCall.ID,
+		ToolCallKey:      toolCallKey,
+		ChildFilterKey:   agentToolChildFilterKey(state, currentNodeID, toolCall.Function.Name, toolCall.ID, toolCallKey),
+	}, nil
+}
+
 func callToolWithRetry(
 	ctx context.Context,
 	toolCall model.ToolCall,
 	callableTool tool.CallableTool,
 	retryPolicy *tool.RetryPolicy,
+	invocation *agent.Invocation,
+	state State,
+	toolCallIndex int,
 ) (any, error) {
+	runtimeTool, ok := callableTool.(agenttoolgraph.RuntimeCallable)
+	var graphRuntime agenttoolgraph.RuntimeContext
+	if ok {
+		var err error
+		graphRuntime, err = agentToolGraphRuntimeContext(
+			invocation,
+			state,
+			toolCall,
+			toolCallIndex,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	call := func(ctx context.Context, arguments []byte) (any, error) {
+		if ok && graphRuntime.ParentInvocation != nil &&
+			graphRuntime.State != nil &&
+			graphRuntime.ParentNodeID != "" &&
+			graphRuntime.ToolCallKey != "" {
+			return runtimeTool.CallWithAgentToolGraphRuntime(ctx, arguments, graphRuntime)
+		}
+		return callableTool.Call(ctx, arguments)
+	}
 	if retryPolicy == nil {
-		return callableTool.Call(ctx, toolCall.Function.Arguments)
+		return call(ctx, toolCall.Function.Arguments)
 	}
 	runResult := toolretry.Execute(ctx, toolretry.ExecuteInput{
 		ToolName:   toolCall.Function.Name,
 		ToolCallID: toolCall.ID,
 		Arguments:  toolCall.Function.Arguments,
 		Policy:     retryPolicy,
-		Call:       callableTool.Call,
+		Call:       call,
 		ResultError: func(result any) bool {
 			return extractResultError(result)
 		},
@@ -5190,6 +5504,7 @@ type toolCallsConfig struct {
 	EventChan    chan<- *event.Event
 	Span         oteltrace.Span
 	State        State
+	NodeID       string
 	// EnableParallel controls whether multiple tool calls are executed concurrently.
 	// When false or when there is only one tool call, execution is serial.
 	EnableParallel bool
@@ -5207,12 +5522,20 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	if toolCallbacks == nil {
 		toolCallbacks, _ = extractToolCallbacks(config.State)
 	}
+	completedMessages := completedToolMessagesForNode(config.State, config.NodeID)
 	// Serial path or single tool call.
 	if !config.EnableParallel || len(config.ToolCalls) <= 1 {
 		newMessages := make([]model.Message, 0, len(config.ToolCalls))
-		for _, toolCall := range config.ToolCalls {
+		completedThisRun := make(map[string]model.Message)
+		for i, toolCall := range config.ToolCalls {
+			completedKey := completedToolMessageKey(i, toolCall)
+			if msg, ok := completedMessages[completedKey]; ok {
+				newMessages = append(newMessages, msg)
+				continue
+			}
 			toolMessage, err := executeSingleToolCall(ctx, singleToolCallConfig{
 				ToolCall:      toolCall,
+				ToolCallIndex: i,
 				Tools:         config.Tools,
 				InvocationID:  config.InvocationID,
 				EventChan:     config.EventChan,
@@ -5222,15 +5545,27 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 				RetryPolicy:   config.RetryPolicy,
 			})
 			if err != nil {
+				if IsInterruptError(err) {
+					recordCompletedToolMessages(config.State, config.NodeID, completedThisRun)
+					setAgentToolInterruptStateFromError(config.State, err)
+				} else {
+					clearCompletedToolMessages(config.State, config.NodeID)
+				}
 				return nil, err
 			}
 			newMessages = append(newMessages, toolMessage)
+			completedThisRun[completedKey] = toolMessage
 		}
+		clearCompletedToolMessages(config.State, config.NodeID)
 		return newMessages, nil
 	}
 
 	// Parallel path: execute each tool call in its own goroutine while
 	// preserving the original order in the resulting messages slice.
+	type pendingCall struct {
+		idx int
+		tc  model.ToolCall
+	}
 	type result struct {
 		idx int
 		msg model.Message
@@ -5240,17 +5575,32 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	results := make(chan result, len(config.ToolCalls))
-	var wg sync.WaitGroup
-	wg.Add(len(config.ToolCalls))
-
+	out := make([]model.Message, len(config.ToolCalls))
+	pendingCalls := make([]pendingCall, 0, len(config.ToolCalls))
 	for i, tc := range config.ToolCalls {
-		i, tc := i, tc
+		completedKey := completedToolMessageKey(i, tc)
+		if msg, ok := completedMessages[completedKey]; ok {
+			out[i] = msg
+			continue
+		}
+		pendingCalls = append(pendingCalls, pendingCall{idx: i, tc: tc})
+	}
+	if len(pendingCalls) == 0 {
+		clearCompletedToolMessages(config.State, config.NodeID)
+		return out, nil
+	}
+	results := make(chan result, len(pendingCalls))
+	var wg sync.WaitGroup
+	wg.Add(len(pendingCalls))
+
+	for _, pending := range pendingCalls {
+		i, tc := pending.idx, pending.tc
 		runCtx := agent.CloneContext(ctx)
 		go func(ctx context.Context) {
 			defer wg.Done()
 			msg, err := executeSingleToolCall(ctx, singleToolCallConfig{
 				ToolCall:      tc,
+				ToolCallIndex: i,
 				Tools:         config.Tools,
 				InvocationID:  config.InvocationID,
 				EventChan:     config.EventChan,
@@ -5275,31 +5625,156 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	}()
 
 	// Aggregate while preserving order.
-	out := make([]model.Message, len(config.ToolCalls))
-	var firstErr error
-	received := 0
+	errsByIndex := make([]error, len(config.ToolCalls))
+	completedThisRun := make(map[string]model.Message)
 	for r := range results {
-		received++
-		if r.err != nil && firstErr == nil {
-			firstErr = r.err
+		if r.err != nil {
+			errsByIndex[r.idx] = r.err
 		}
 		// Only set when message exists; zero value is fine otherwise.
 		if r.err == nil {
 			out[r.idx] = r.msg
-		}
-		if received == len(config.ToolCalls) {
-			break
+			completedKey := completedToolMessageKey(r.idx, config.ToolCalls[r.idx])
+			completedThisRun[completedKey] = r.msg
 		}
 	}
-	if firstErr != nil {
-		return nil, firstErr
+	if err := selectToolCallError(errsByIndex); err != nil {
+		if IsInterruptError(err) {
+			recordCompletedToolMessages(config.State, config.NodeID, completedThisRun)
+			setAgentToolInterruptStateFromError(config.State, err)
+		} else {
+			clearCompletedToolMessages(config.State, config.NodeID)
+		}
+		return nil, err
 	}
+	clearCompletedToolMessages(config.State, config.NodeID)
 	return out, nil
+}
+
+func selectToolCallError(errs []error) error {
+	var agentToolInterrupt error
+	var interrupt error
+	var first error
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if first == nil {
+			first = err
+		}
+		if _, ok := agenttoolgraph.InterruptMetadataFromError(err); ok {
+			if agentToolInterrupt != nil {
+				return fmt.Errorf("multiple agent tool graph interrupts in parallel tools node")
+			}
+			agentToolInterrupt = err
+			continue
+		}
+		if IsInterruptError(err) && interrupt == nil {
+			interrupt = err
+		}
+	}
+	if agentToolInterrupt != nil {
+		return agentToolInterrupt
+	}
+	if interrupt != nil {
+		return interrupt
+	}
+	return first
+}
+
+func completedToolMessagesForNode(state State, nodeID string) map[string]model.Message {
+	if state == nil || nodeID == "" {
+		return nil
+	}
+	nodes, ok := state[stateKeyCompletedToolMessages].(map[string]any)
+	if !ok {
+		return nil
+	}
+	rawMessages, ok := nodes[nodeID].(map[string]any)
+	if !ok {
+		return nil
+	}
+	messages := make(map[string]model.Message, len(rawMessages))
+	for key, raw := range rawMessages {
+		msg, ok := modelMessageFromAny(raw)
+		if ok {
+			messages[key] = msg
+		}
+	}
+	return messages
+}
+
+func modelMessageFromAny(raw any) (model.Message, bool) {
+	switch msg := raw.(type) {
+	case model.Message:
+		return msg, true
+	case *model.Message:
+		if msg == nil {
+			return model.Message{}, false
+		}
+		return *msg, true
+	default:
+		data, err := json.Marshal(raw)
+		if err != nil {
+			return model.Message{}, false
+		}
+		var decoded model.Message
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			return model.Message{}, false
+		}
+		return decoded, true
+	}
+}
+
+func recordCompletedToolMessage(state State, nodeID string, key string, msg model.Message) {
+	if state == nil || nodeID == "" || key == "" {
+		return
+	}
+	nodes, ok := state[stateKeyCompletedToolMessages].(map[string]any)
+	if !ok {
+		nodes = make(map[string]any)
+		state[stateKeyCompletedToolMessages] = nodes
+	}
+	rawMessages, ok := nodes[nodeID].(map[string]any)
+	if !ok {
+		rawMessages = make(map[string]any)
+		nodes[nodeID] = rawMessages
+	}
+	rawMessages[key] = msg
+}
+
+func recordCompletedToolMessages(state State, nodeID string, messages map[string]model.Message) {
+	for key, msg := range messages {
+		recordCompletedToolMessage(state, nodeID, key, msg)
+	}
+}
+
+func clearCompletedToolMessages(state State, nodeID string) {
+	if state == nil || nodeID == "" {
+		return
+	}
+	nodes, ok := state[stateKeyCompletedToolMessages].(map[string]any)
+	if !ok {
+		return
+	}
+	delete(nodes, nodeID)
+	if len(nodes) == 0 {
+		delete(state, stateKeyCompletedToolMessages)
+	}
+}
+
+func completedToolMessageKey(index int, toolCall model.ToolCall) string {
+	return fmt.Sprintf("%d:%s:%s", index, toolCall.Function.Name, toolCall.ID)
+}
+
+func agentToolCallKey(index int, toolCall model.ToolCall) string {
+	return fmt.Sprintf("%d:%s:%s", index, toolCall.Function.Name, toolCall.ID)
 }
 
 // singleToolCallConfig contains configuration for executing a single tool call.
 type singleToolCallConfig struct {
 	ToolCall      model.ToolCall
+	ToolCallIndex int
 	Tools         map[string]tool.Tool
 	InvocationID  string
 	EventChan     chan<- *event.Event
@@ -5352,6 +5827,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 		t,
 		config.State,
 		config.RetryPolicy,
+		config.ToolCallIndex,
 	)
 	eventInvocation := invocationFromContextOrFallback(
 		finalCtx,
@@ -5420,7 +5896,7 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 
 	if err != nil {
 		if interruptErr != nil {
-			return model.Message{}, interruptErr
+			return model.Message{}, err
 		}
 		config.Span.RecordError(err)
 		config.Span.SetStatus(codes.Error, err.Error())
@@ -5436,6 +5912,25 @@ func executeSingleToolCall(ctx context.Context, config singleToolCallConfig) (mo
 	}
 
 	return model.NewToolMessage(id, name, string(content)), nil
+}
+
+func setAgentToolInterruptStateFromError(state State, err error) {
+	meta, ok := agenttoolgraph.InterruptMetadataFromError(err)
+	if !ok {
+		return
+	}
+	applyAgentToolInterruptState(
+		state,
+		meta.ParentNodeID,
+		meta.ChildAgentName,
+		meta.ChildCheckpointID,
+		meta.ChildCheckpointNS,
+		meta.ChildLineageID,
+		meta.ChildTaskID,
+		meta.ToolCallID,
+		meta.ToolCallKey,
+		meta.ChildFilterKey,
+	)
 }
 
 func invocationFromContextOrFallback(ctx context.Context, fallback *agent.Invocation) *agent.Invocation {
@@ -5560,6 +6055,10 @@ func MessagesStateSchema() *StateSchema {
 	})
 	schema.AddField(StateKeyUserInput, StateField{
 		Type:    reflect.TypeOf(""),
+		Reducer: DefaultReducer,
+	})
+	schema.AddField(StateKeyAgentInputMessage, StateField{
+		Type:    reflect.TypeOf((*model.Message)(nil)),
 		Reducer: DefaultReducer,
 	})
 	schema.AddField(StateKeyLastResponse, StateField{

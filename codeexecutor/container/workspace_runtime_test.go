@@ -365,6 +365,190 @@ func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {
 	require.Contains(t, joined, ws.Path)
 }
 
+// runProgramCaptureExec runs spec through a fake-docker
+// workspaceRuntime and returns the bash argv and the ExecCreate Env
+// handed to ContainerExecCreate, so CleanEnv tests can assert how
+// RunProgram shapes the shell invocation (and the wrapper exec env)
+// without a real container.
+func runProgramCaptureExec(
+	t *testing.T, spec codeexecutor.RunProgramSpec,
+) (argv []string, execEnv []string) {
+	t.Helper()
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/archive"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			var payload struct {
+				Cmd []string `json:"Cmd"`
+				Env []string `json:"Env"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			argv = payload.Cmd
+			execEnv = payload.Env
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(t, conn, buf, "OUT", "")
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{
+			runHostBase:      t.TempDir(),
+			runContainerBase: testRunBase,
+		},
+	}
+	ws := codeexecutor.Workspace{ID: "wCE",
+		Path: path.Join(testRunBase, "wCE")}
+	_, err := rt.RunProgram(context.Background(), ws, spec)
+	require.NoError(t, err)
+	require.NotEmpty(t, argv)
+	return argv, execEnv
+}
+
+// TestWorkspaceRuntime_RunProgram_CleanEnvLaunchesBashInEmptyEnv
+// guards the container half of issue #1845: when spec.CleanEnv is
+// set the *outer* bash must itself be launched through the trusted
+// absolute path `/usr/bin/env -i PATH=<minimal>` (not merely the
+// inner command), so a container-supplied BASH_ENV / ENV / LD_PRELOAD
+// cannot run code or hijack the shell process at start-up before the
+// command line executes. The exec is created with a minimal,
+// loader-hardened wrapper env so the `env` process itself cannot be
+// hijacked before its `env -i` runs. --noprofile / --norc skip
+// profile/rc files, and the inner `env -i ...` pins the command env.
+func TestWorkspaceRuntime_RunProgram_CleanEnvLaunchesBashInEmptyEnv(
+	t *testing.T,
+) {
+	argv, execEnv := runProgramCaptureExec(t, codeexecutor.RunProgramSpec{
+		Cmd:      "echo",
+		Args:     []string{"hi"},
+		CleanEnv: true,
+		Timeout:  time.Duration(waitShortSec) * time.Second,
+	})
+	require.Equal(t,
+		[]string{
+			"/usr/bin/env", "-i", "PATH=" + minimalCleanPATH,
+			"/bin/bash", "--noprofile", "--norc", "-c",
+		},
+		argv[:len(argv)-1],
+		"clean mode must launch the outer bash from an empty env "+
+			"via the trusted absolute env path",
+	)
+	// The wrapper exec env constrains the `/usr/bin/env` process
+	// itself: PATH is pinned and the glibc loader hooks are blanked
+	// so a container-level LD_PRELOAD cannot inject code before the
+	// wrapper's `env -i` clears the environment (issue #1845).
+	require.Equal(t,
+		[]string{
+			"PATH=" + minimalCleanPATH,
+			"LD_PRELOAD=",
+			"LD_LIBRARY_PATH=",
+			"LD_AUDIT=",
+		},
+		execEnv,
+		"clean mode must hand ContainerExecCreate a minimal, "+
+			"loader-hardened wrapper env",
+	)
+	cmdline := argv[len(argv)-1]
+	require.Contains(t, cmdline, "env -i ",
+		"clean mode must start the command from an empty env")
+	require.Contains(t, cmdline, minimalCleanPATH,
+		"clean mode must inject a minimal PATH for env -i")
+	require.Contains(t, cmdline,
+		codeexecutor.WorkspaceEnvDirKey+"=",
+		"workspace base vars must still be injected in clean mode")
+}
+
+// TestWorkspaceRuntime_RunProgram_CleanEnvKeepsSpecPATH verifies a
+// caller-supplied PATH is honored in clean mode and suppresses the
+// MinimalPATH fallback (so the tool/skill layer, which has already
+// vetted that PATH, stays authoritative).
+func TestWorkspaceRuntime_RunProgram_CleanEnvKeepsSpecPATH(
+	t *testing.T,
+) {
+	argv, _ := runProgramCaptureExec(t, codeexecutor.RunProgramSpec{
+		Cmd:      "echo",
+		CleanEnv: true,
+		Env:      map[string]string{"PATH": "/opt/vetted/bin"},
+		Timeout:  time.Duration(waitShortSec) * time.Second,
+	})
+	cmdline := argv[len(argv)-1]
+	require.Contains(t, cmdline, "/opt/vetted/bin")
+	require.NotContains(t, cmdline, minimalCleanPATH,
+		"caller PATH must suppress the MinimalPATH fallback")
+}
+
+// TestWorkspaceRuntime_RunProgram_NoCleanEnvKeepsLoginShell pins the
+// non-policy contract: without CleanEnv the runtime keeps the
+// historical login shell (`bash -lc`) and a plain `env ...` token,
+// so existing callers keep their profile-sourced environment.
+func TestWorkspaceRuntime_RunProgram_NoCleanEnvKeepsLoginShell(
+	t *testing.T,
+) {
+	argv, execEnv := runProgramCaptureExec(t, codeexecutor.RunProgramSpec{
+		Cmd:     "echo",
+		Env:     map[string]string{"FOO": "bar"},
+		Timeout: time.Duration(waitShortSec) * time.Second,
+	})
+	require.Equal(t,
+		[]string{"/bin/bash", "-lc"}, argv[:len(argv)-1])
+	cmdline := argv[len(argv)-1]
+	require.Contains(t, cmdline, "env ")
+	require.NotContains(t, cmdline, "env -i")
+	require.NotContains(t, cmdline, minimalCleanPATH)
+	require.Empty(t, execEnv,
+		"non-clean mode must inherit the container env "+
+			"(no ExecCreate env override)")
+}
+
+// TestContainer_EngineAdvertisesCleanEnv verifies the container
+// Engine opts into SupportsCleanEnv now that RunProgram honors the
+// flag, so tool/workspaceexec policy mode no longer fails closed on
+// this backend (issue #1845).
+func TestContainer_EngineAdvertisesCleanEnv(t *testing.T) {
+	cli, cleanup := fakeDocker(t,
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+	defer cleanup()
+	c := &CodeExecutor{
+		client:    cli,
+		container: &tcontainer.Summary{ID: testCID},
+	}
+	c.ws = &workspaceRuntime{
+		ce: c,
+		cfg: runtimeConfig{
+			runHostBase:      t.TempDir(),
+			runContainerBase: testRunBase,
+		},
+	}
+	eng := c.Engine()
+	require.NotNil(t, eng)
+	require.True(t, eng.Describe().SupportsCleanEnv,
+		"container Engine must advertise SupportsCleanEnv (#1845)")
+}
+
 func TestWorkspaceRuntime_RunProgram_WithStdin(t *testing.T) {
 	var (
 		capturedStdin string

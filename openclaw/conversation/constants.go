@@ -40,6 +40,8 @@ const (
 		"prefer information from this conversation over the past " +
 		"summary.\n"
 
+	volatileHistoryToolCron = "cron"
+
 	attachmentWordSingular = "attachment"
 	attachmentWordPlural   = "attachments"
 )

@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,7 +24,6 @@ import (
 	evalresultlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator"
@@ -60,8 +60,16 @@ type asyncRunConfig struct {
 	MaxRoundsWithoutAcceptance int
 	TargetScore                float64
 	EvalCaseParallelism        int
+	BackwardCaseParallelism    int
+	AggregationParallelism     int
+	OptimizerParallelism       int
 	ParallelInferenceEnabled   bool
 	ParallelEvaluationEnabled  bool
+	ParallelBackwardEnabled    bool
+	ParallelAggregationEnabled bool
+	ParallelOptimizerEnabled   bool
+	DebugIO                    bool
+	Logger                     *log.Logger
 	PollInterval               time.Duration
 }
 
@@ -129,17 +137,23 @@ func buildPromptIterRuntime(ctx context.Context, cfg asyncRunConfig) (*promptIte
 	backwarderAgent := newBackwarderAgent(workerModel)
 	aggregatorAgent := newAggregatorAgent(workerModel)
 	optimizerAgent := newOptimizerAgent(workerModel)
-	candidateRunner := runner.NewRunner(candidateAppName, candidateAgent)
-	judgeRunner := runner.NewRunner(judgeAppName, judgeAgent)
-	backwarderRunner := runner.NewRunner(backwarderAppName, backwarderAgent)
-	aggregatorRunner := runner.NewRunner(aggregatorAppName, aggregatorAgent)
-	optimizerRunner := runner.NewRunner(optimizerAppName, optimizerAgent)
+	candidateBaseRunner := runner.NewRunner(candidateAppName, candidateAgent)
+	judgeBaseRunner := runner.NewRunner(judgeAppName, judgeAgent)
+	backwarderBaseRunner := runner.NewRunner(backwarderAppName, backwarderAgent)
+	aggregatorBaseRunner := runner.NewRunner(aggregatorAppName, aggregatorAgent)
+	optimizerBaseRunner := runner.NewRunner(optimizerAppName, optimizerAgent)
+	logger := cfg.Logger
+	candidateRunner := newLoggingRunner("candidate", candidateBaseRunner, logger, cfg.DebugIO)
+	judgeRunner := newLoggingRunner("judge", judgeBaseRunner, logger, cfg.DebugIO)
+	backwarderRunner := newLoggingRunner("backwarder", backwarderBaseRunner, logger, cfg.DebugIO)
+	aggregatorRunner := newLoggingRunner("aggregator", aggregatorBaseRunner, logger, cfg.DebugIO)
+	optimizerRunner := newLoggingRunner("optimizer", optimizerBaseRunner, logger, cfg.DebugIO)
 	closeAll := func() {
-		candidateRunner.Close()
-		judgeRunner.Close()
-		backwarderRunner.Close()
-		aggregatorRunner.Close()
-		optimizerRunner.Close()
+		candidateBaseRunner.Close()
+		judgeBaseRunner.Close()
+		backwarderBaseRunner.Close()
+		aggregatorBaseRunner.Close()
+		optimizerBaseRunner.Close()
 	}
 	evalSetManager := evalsetlocal.New(evalset.WithBaseDir(cfg.DataDir))
 	metricManager := metriclocal.New(
@@ -147,18 +161,12 @@ func buildPromptIterRuntime(ctx context.Context, cfg asyncRunConfig) (*promptIte
 		metric.WithLocator(&sharedMetricLocator{metricFileID: sharedMetricFileID}),
 	)
 	evalResultManager := evalresultlocal.New(evalresult.WithBaseDir(cfg.OutputDir))
-	registry := registry.New()
-	if err := registry.Register(commentaryLengthMetricName, newCommentaryLengthEvaluator()); err != nil {
-		closeAll()
-		return nil, fmt.Errorf("register commentary length evaluator: %w", err)
-	}
 	agentEvaluator, err := evaluation.New(
 		appName,
 		candidateRunner,
 		evaluation.WithEvalSetManager(evalSetManager),
 		evaluation.WithMetricManager(metricManager),
 		evaluation.WithEvalResultManager(evalResultManager),
-		evaluation.WithRegistry(registry),
 		evaluation.WithJudgeRunner(judgeRunner),
 		evaluation.WithNumRuns(1),
 	)
@@ -186,11 +194,11 @@ func buildPromptIterRuntime(ctx context.Context, cfg asyncRunConfig) (*promptIte
 	}
 	engineInstance, err := promptiterengine.New(
 		ctx,
-		candidateAgent,
-		agentEvaluator,
-		backwarderInstance,
-		aggregatorInstance,
-		optimizerInstance,
+		promptiterengine.WithAgent(candidateAgent),
+		promptiterengine.WithAgentEvaluator(agentEvaluator),
+		promptiterengine.WithBackwarder(backwarderInstance),
+		promptiterengine.WithAggregator(aggregatorInstance),
+		promptiterengine.WithOptimizer(optimizerInstance),
 	)
 	if err != nil {
 		agentEvaluator.Close()
@@ -213,7 +221,10 @@ func buildPromptIterRuntime(ctx context.Context, cfg asyncRunConfig) (*promptIte
 	}, nil
 }
 
-func buildRunRequest(cfg asyncRunConfig, targetSurfaceID string) *promptiterengine.RunRequest {
+func buildRunRequest(
+	cfg asyncRunConfig,
+	targetSurfaceID string,
+) *promptiterengine.RunRequest {
 	targetScore := cfg.TargetScore
 	return &promptiterengine.RunRequest{
 		Train: []promptiterengine.EvalSetInput{
@@ -230,6 +241,18 @@ func buildRunRequest(cfg asyncRunConfig, targetSurfaceID string) *promptiterengi
 			EvalCaseParallelism:               cfg.EvalCaseParallelism,
 			EvalCaseParallelInferenceEnabled:  cfg.ParallelInferenceEnabled,
 			EvalCaseParallelEvaluationEnabled: cfg.ParallelEvaluationEnabled,
+		},
+		BackwardOptions: promptiterengine.BackwardOptions{
+			CaseParallelismEnabled: cfg.ParallelBackwardEnabled,
+			CaseParallelism:        cfg.BackwardCaseParallelism,
+		},
+		AggregationOptions: promptiterengine.AggregationOptions{
+			SurfaceParallelismEnabled: cfg.ParallelAggregationEnabled,
+			SurfaceParallelism:        cfg.AggregationParallelism,
+		},
+		OptimizerOptions: promptiterengine.OptimizerOptions{
+			SurfaceParallelismEnabled: cfg.ParallelOptimizerEnabled,
+			SurfaceParallelism:        cfg.OptimizerParallelism,
 		},
 		AcceptancePolicy: promptiterengine.AcceptancePolicy{
 			MinScoreGain: cfg.MinScoreGain,

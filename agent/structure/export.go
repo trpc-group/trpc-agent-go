@@ -230,6 +230,7 @@ func cloneToolSchema(schema *tool.Schema) *tool.Schema {
 	return &tool.Schema{
 		Type:                 schema.Type,
 		Description:          schema.Description,
+		Pattern:              schema.Pattern,
 		Required:             append([]string(nil), schema.Required...),
 		Properties:           cloneSchemaMap(schema.Properties),
 		Items:                cloneToolSchema(schema.Items),

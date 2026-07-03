@@ -131,7 +131,9 @@ func WithDockerFilePath(path string) Option {
 	}
 }
 
-// WithHostConfig sets the configuration for the Docker container.
+// WithHostConfig replaces the entire HostConfig for the Docker container.
+// Note: This is a replacement operation. If WithBindMount is also used,
+// make sure it is called after this option to avoid bind mounts being overwritten.
 func WithHostConfig(hostConfig container.HostConfig) Option {
 	return func(c *CodeExecutor) {
 		c.hostConfig = hostConfig
@@ -153,8 +155,9 @@ func WithContainerConfig(containerConfig container.Config) Option {
 }
 
 // WithBindMount appends a bind mount in the form source:dest:mode.
-// Example mode: "ro" or "rw". This option is generic and does not
-// imply any domain-specific semantics.
+// Example mode: "ro" or "rw". If WithHostConfig is also used, make sure
+// WithBindMount is called after it, otherwise the bind mount will be overwritten.
+// This option is generic and does not imply any domain-specific semantics.
 func WithBindMount(src, dest, mode string) Option {
 	return func(c *CodeExecutor) {
 		spec := src + ":" + dest
@@ -280,12 +283,24 @@ func (c *CodeExecutor) ensureWS() (*workspaceRuntime, error) {
 }
 
 // Engine exposes the container runtime as an Engine for skills.
+//
+// The returned Engine advertises Capabilities{SupportsCleanEnv: true}
+// because RunProgram honors spec.CleanEnv: in clean mode the command
+// is spawned via `env -i ...` under a non-login `bash --noprofile
+// --norc`, so it starts from a minimal environment (workspace base
+// vars plus a default PATH) instead of inheriting the container
+// process env or sourcing start-up files. Tool layers that gate
+// policy mode on SupportsCleanEnv (tool/workspaceexec) therefore no
+// longer fail closed on the container backend (issue #1845).
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt, err := c.ensureWS()
 	if err != nil {
 		return nil
 	}
-	return codeexecutor.NewEngine(rt, rt, rt)
+	return codeexecutor.NewEngineWithCapabilities(
+		rt, rt, rt,
+		codeexecutor.Capabilities{SupportsCleanEnv: true},
+	)
 }
 
 // CreateWorkspace creates a workspace using the container runtime.

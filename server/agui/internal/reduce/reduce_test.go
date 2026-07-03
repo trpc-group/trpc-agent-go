@@ -138,6 +138,70 @@ func TestReduceUserMessageCustomEventWithStringContent(t *testing.T) {
 	assert.Equal(t, "hi", content)
 }
 
+func TestReduceAllowsRepeatedIDsAcrossRuns(t *testing.T) {
+	firstUser := types.Message{ID: "user-1", Role: types.RoleUser, Content: "hello"}
+	secondUser := types.Message{ID: "user-2", Role: types.RoleUser, Content: "again"}
+	events := trackEventsFrom(
+		aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage, aguievents.WithValue(firstUser)),
+		aguievents.NewRunStartedEvent("thread", "run-1"),
+		aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")),
+		aguievents.NewTextMessageContentEvent("msg-1", "first"),
+		aguievents.NewTextMessageEndEvent("msg-1"),
+		aguievents.NewRunFinishedEvent("thread", "run-1"),
+		aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage, aguievents.WithValue(secondUser)),
+		aguievents.NewRunStartedEvent("thread", "run-2"),
+		aguievents.NewTextMessageStartEvent("msg-1", aguievents.WithRole("assistant")),
+		aguievents.NewTextMessageContentEvent("msg-1", "second"),
+		aguievents.NewTextMessageEndEvent("msg-1"),
+		aguievents.NewRunFinishedEvent("thread", "run-2"),
+	)
+
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 4)
+	assert.Equal(t, types.RoleUser, msgs[0].Role)
+	assert.Equal(t, types.RoleAssistant, msgs[1].Role)
+	assert.Equal(t, types.RoleUser, msgs[2].Role)
+	assert.Equal(t, types.RoleAssistant, msgs[3].Role)
+	firstContent, ok := msgs[1].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "first", firstContent)
+	secondContent, ok := msgs[3].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "second", secondContent)
+}
+
+func TestReduceAllowsToolResultAfterRunBoundary(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewRunStartedEvent("thread", "run-1"),
+		aguievents.NewTextMessageStartEvent("assistant-1", aguievents.WithRole("assistant")),
+		aguievents.NewToolCallStartEvent("call-1", "search", aguievents.WithParentMessageID("assistant-1")),
+		aguievents.NewToolCallArgsEvent("call-1", "{\"q\":\"hello\"}"),
+		aguievents.NewToolCallEndEvent("call-1"),
+		aguievents.NewTextMessageEndEvent("assistant-1"),
+		aguievents.NewRunFinishedEvent("thread", "run-1"),
+		aguievents.NewRunStartedEvent("thread", "run-2"),
+		aguievents.NewToolCallResultEvent("tool-msg-1", "call-1", "world"),
+		aguievents.NewRunFinishedEvent("thread", "run-2"),
+	)
+
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assistant := msgs[0]
+	assert.Equal(t, types.RoleAssistant, assistant.Role)
+	require.Len(t, assistant.ToolCalls, 1)
+	assert.Equal(t, "call-1", assistant.ToolCalls[0].ID)
+	assert.Equal(t, "{\"q\":\"hello\"}", assistant.ToolCalls[0].Function.Arguments)
+	tool := msgs[1]
+	assert.Equal(t, types.RoleTool, tool.Role)
+	require.NotNil(t, tool.ToolCallID)
+	assert.Equal(t, "call-1", tool.ToolCallID)
+	content, ok := tool.ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "world", content)
+}
+
 func TestHandleUserMessageCustomEventErrors(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -608,6 +672,30 @@ func TestReduceEventDispatchesChunk(t *testing.T) {
 	content, ok := r.messages[0].ContentString()
 	require.True(t, ok)
 	assert.Equal(t, "hi", content)
+}
+
+func TestReduceInterleavedTextMessageEvents(t *testing.T) {
+	events := trackEventsFrom(
+		aguievents.NewTextMessageStartEvent("msg-a", aguievents.WithRole("assistant")),
+		aguievents.NewTextMessageContentEvent("msg-a", "a1"),
+		aguievents.NewTextMessageStartEvent("msg-b", aguievents.WithRole("assistant")),
+		aguievents.NewTextMessageContentEvent("msg-b", "b1"),
+		aguievents.NewTextMessageContentEvent("msg-a", "a2"),
+		aguievents.NewTextMessageContentEvent("msg-b", "b2"),
+		aguievents.NewTextMessageEndEvent("msg-a"),
+		aguievents.NewTextMessageEndEvent("msg-b"),
+	)
+	msgs, err := Reduce(testAppName, testUserID, events)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "msg-a", msgs[0].ID)
+	contentA, ok := msgs[0].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "a1a2", contentA)
+	assert.Equal(t, "msg-b", msgs[1].ID)
+	contentB, ok := msgs[1].ContentString()
+	require.True(t, ok)
+	assert.Equal(t, "b1b2", contentB)
 }
 
 func TestAssistantOnlyToolCall(t *testing.T) {

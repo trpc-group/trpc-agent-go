@@ -37,6 +37,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/internal/modeltailoring"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -70,20 +71,24 @@ const (
 	VariantDeepSeek Variant = "deepseek"
 	// VariantQwen is the Qwen variant with specific base_url handling.
 	VariantQwen Variant = "qwen"
+	// VariantGLM is the GLM OpenAI-compatible variant. Some GLM gateways
+	// return the visible final answer in reasoning_content with empty content.
+	VariantGLM Variant = "glm"
 )
 
 // thinkingValueConvertor converts ThinkingEnabled bool to the variant-specific value.
 type thinkingValueConvertor func(enabled bool) any
+
+const thinkingKey = "thinking"
 
 // defaultThinkingValueConvertor returns the bool value as-is.
 var defaultThinkingValueConvertor = func(enabled bool) any {
 	return enabled
 }
 
-// deepSeekThinkingValueConvertor converts to the DeepSeek thinking-toggle
-// format introduced in v3.2 and reused by v4 (e.g. deepseek-v4-pro /
-// deepseek-v4-flash): {"type": "enabled"/"disabled"}.
-var deepSeekThinkingValueConvertor = func(enabled bool) any {
+// thinkingTypeValueConvertor converts to the nested thinking-toggle format
+// used by providers such as DeepSeek v3.2+, Hunyuan, and GLM.
+var thinkingTypeValueConvertor = func(enabled bool) any {
 	const (
 		thinkingTypeEnabled  = "enabled"
 		thinkingTypeDisabled = "disabled"
@@ -126,6 +131,9 @@ type variantConfig struct {
 	// defaultReasoningContentBackfill controls replay-time empty
 	// reasoning_content backfill for assistant messages.
 	defaultReasoningContentBackfill bool
+	// reasoningContentAsContentFallback copies reasoning_content into
+	// content only when content is empty and the response has no tool calls.
+	reasoningContentAsContentFallback bool
 }
 type fileDeletionBodyConvertor func(body []byte, fileID string) []byte
 
@@ -159,8 +167,8 @@ var variantConfigs = map[Variant]variantConfig{
 		defaultBaseURL:            defaultDeepSeekBaseURL,
 		// DeepSeek v3.2+ (incl. v4-pro / v4-flash) uses
 		// {"thinking": {"type": "enabled"/"disabled"}} format.
-		thinkingEnabledKey:              "thinking",
-		thinkingValueConvertor:          deepSeekThinkingValueConvertor,
+		thinkingEnabledKey:              thinkingKey,
+		thinkingValueConvertor:          thinkingTypeValueConvertor,
 		defaultReasoningContentBackfill: true,
 	},
 	VariantHunyuan: {
@@ -209,8 +217,10 @@ var variantConfigs = map[Variant]variantConfig{
 			r.ContentLength = int64(body.Len())
 			return r, nil
 		},
-		thinkingEnabledKey:     model.ThinkingEnabledKey,
-		thinkingValueConvertor: defaultThinkingValueConvertor,
+		// TokenHub Hunyuan thinking models use
+		// {"thinking": {"type": "enabled"/"disabled"}} format.
+		thinkingEnabledKey:     thinkingKey,
+		thinkingValueConvertor: thinkingTypeValueConvertor,
 	},
 	VariantQwen: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -221,8 +231,18 @@ var variantConfigs = map[Variant]variantConfig{
 		apiKeyName:                qwenAPIKeyName,
 		defaultBaseURL:            defaultQwenBaseURL,
 		// refer:https://help.aliyun.com/zh/model-studio/deep-thinking
-		thinkingEnabledKey:     model.EnabledThinkingKey,
+		thinkingEnabledKey:     model.EnableThinkingKey,
 		thinkingValueConvertor: defaultThinkingValueConvertor,
+	},
+	VariantGLM: {
+		fileUploadPath:                    "/openapi/v1/files",
+		filePurpose:                       openai.FilePurposeUserData,
+		fileDeletionMethod:                http.MethodDelete,
+		skipFileTypeInContent:             false,
+		fileDeletionBodyConvertor:         defaultFileDeletionBodyConvertor,
+		thinkingEnabledKey:                thinkingKey,
+		thinkingValueConvertor:            thinkingTypeValueConvertor,
+		reasoningContentAsContentFallback: true,
 	},
 }
 
@@ -442,6 +462,9 @@ func (m *Model) prepareChatRequest(
 	if request == nil {
 		return nil, nil, errors.New("request cannot be nil")
 	}
+	if err := validateLogprobsConfig(request); err != nil {
+		return nil, nil, err
+	}
 	// Optimize message structure for cache if enabled.
 	if m.optimizeForCache {
 		request.Messages = m.optimizeMessagesForCache(request.Messages)
@@ -450,6 +473,16 @@ func (m *Model) prepareChatRequest(
 	m.applyTokenTailoring(ctx, request)
 	chatRequest, opts := m.buildChatRequest(request)
 	return chatRequest, opts, nil
+}
+
+func validateLogprobsConfig(request *model.Request) error {
+	if request.TopLogprobs == nil {
+		return nil
+	}
+	if request.Logprobs == nil || !*request.Logprobs {
+		return errors.New("openai: top_logprobs requires logprobs to be true")
+	}
+	return nil
 }
 
 // GenerateContent implements the model.Model interface.
@@ -619,7 +652,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 				"token tailoring returned best-effort messages in openai.Model",
 				err,
 			)
-			request.Messages = tailored
+			modeltailoring.ApplyResult(ctx, "openai.Model", request, tailored)
 			return
 		}
 		log.WarnContext(
@@ -630,7 +663,9 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 		return
 	}
 
-	request.Messages = tailored
+	if !modeltailoring.ApplyResult(ctx, "openai.Model", request, tailored) {
+		return
+	}
 
 	// Calculate remaining tokens for output based on context window.
 	usedTokens := 0
@@ -802,6 +837,12 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 	if request.FrequencyPenalty != nil {
 		chatRequest.FrequencyPenalty = openai.Float(*request.FrequencyPenalty)
 	}
+	if request.Logprobs != nil {
+		chatRequest.Logprobs = openai.Bool(*request.Logprobs)
+	}
+	if request.TopLogprobs != nil {
+		chatRequest.TopLogprobs = openai.Int(int64(*request.TopLogprobs))
+	}
 	if request.ReasoningEffort != nil {
 		chatRequest.ReasoningEffort = shared.ReasoningEffort(*request.ReasoningEffort)
 	}
@@ -813,6 +854,10 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 	// Add request-level extra fields after model-level fields so they take precedence.
 	for key, value := range request.ExtraFields {
 		opts = append(opts, openaiopt.WithJSONSet(key, value))
+	}
+	// Add request-level headers after model-level client options so they take precedence.
+	for key, value := range request.Headers {
+		opts = append(opts, openaiopt.WithHeader(key, value))
 	}
 
 	// Add streaming options if needed.
@@ -2360,7 +2405,12 @@ func (m *Model) emitStreamingFinalResponse(
 					{
 						Index: 0,
 						Message: model.Message{
-							Role:             model.RoleAssistant,
+							Role: model.RoleAssistant,
+							Content: m.contentWithReasoningFallback(
+								"",
+								aggregatedReasoning,
+								false,
+							),
 							ReasoningContent: aggregatedReasoning,
 						},
 					},
@@ -2449,10 +2499,16 @@ func (m *Model) createFinalResponse(
 		Created:   acc.Created,
 		Model:     acc.Model,
 		Choices:   make([]model.Choice, len(acc.Choices)),
-		Usage:     &usage,
 		Timestamp: time.Now(),
 		Done:      !hasToolCall,
 		IsPartial: false,
+	}
+	// Only set Usage when there are actual token counts.
+	// This is consistent with the non-streaming createResponseFromCompletion
+	// path and prevents the Langfuse exporter from seeing zero-valued usage
+	// attributes that get filtered out by usageDetails.empty().
+	if usage.PromptTokens > 0 || usage.CompletionTokens > 0 || usage.TotalTokens > 0 {
+		finalResponse.Usage = &usage
 	}
 
 	for i, choice := range acc.Choices {
@@ -2462,12 +2518,19 @@ func (m *Model) createFinalResponse(
 		if reasoningContent == "" && i == 0 && aggregatedReasoning != "" {
 			reasoningContent = aggregatedReasoning
 		}
+		choiceHasToolCalls := hasToolCall && i == 0
+		content := m.contentWithReasoningFallback(
+			choice.Message.Content,
+			reasoningContent,
+			choiceHasToolCalls,
+		)
 
 		finalResponse.Choices[i] = model.Choice{
-			Index: int(choice.Index),
+			Index:    int(choice.Index),
+			Logprobs: convertChatCompletionChoiceLogprobs(choice.Logprobs),
 			Message: model.Message{
 				Role:             model.RoleAssistant,
-				Content:          choice.Message.Content,
+				Content:          content,
 				ReasoningContent: reasoningContent,
 			},
 		}
@@ -2545,12 +2608,18 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 		for i, choice := range chatCompletion.Choices {
 			// Extract reasoning content from the message if available.
 			reasoningContent := extractReasoningContent(choice.Message.JSON.ExtraFields)
+			content := m.contentWithReasoningFallback(
+				choice.Message.Content,
+				reasoningContent,
+				len(choice.Message.ToolCalls) > 0,
+			)
 
 			response.Choices[i] = model.Choice{
-				Index: int(choice.Index),
+				Index:    int(choice.Index),
+				Logprobs: convertChatCompletionChoiceLogprobs(choice.Logprobs),
 				Message: model.Message{
 					Role:             model.RoleAssistant,
-					Content:          choice.Message.Content,
+					Content:          content,
 					ReasoningContent: reasoningContent,
 				},
 			}
@@ -2582,7 +2651,11 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 	}
 
 	// Convert usage information.
-	if chatCompletion.Usage.PromptTokens > 0 || chatCompletion.Usage.CompletionTokens > 0 {
+	// Only set Usage when there are actual token counts, consistent with the
+	// streaming createFinalResponse path. This prevents the Langfuse exporter
+	// from seeing zero-valued usage attributes that get filtered out by
+	// usageDetails.empty().
+	if chatCompletion.Usage.PromptTokens > 0 || chatCompletion.Usage.CompletionTokens > 0 || chatCompletion.Usage.TotalTokens > 0 {
 		usage := completionUsageToModelUsage(chatCompletion.Usage)
 		response.Usage = &usage
 	}
@@ -2593,6 +2666,58 @@ func (m *Model) createResponseFromCompletion(chatCompletion *openai.ChatCompleti
 	}
 
 	return response
+}
+
+func (m *Model) contentWithReasoningFallback(
+	content string,
+	reasoningContent string,
+	hasToolCall bool,
+) string {
+	if content != "" || reasoningContent == "" || hasToolCall {
+		return content
+	}
+	if m == nil || !m.variantConfig.reasoningContentAsContentFallback {
+		return content
+	}
+	return reasoningContent
+}
+
+func convertChatCompletionChoiceLogprobs(
+	logprobs openai.ChatCompletionChoiceLogprobs,
+) *model.Logprobs {
+	if len(logprobs.Content) == 0 {
+		return nil
+	}
+	converted := &model.Logprobs{
+		Content: make([]model.TokenLogprob, len(logprobs.Content)),
+	}
+	for i, token := range logprobs.Content {
+		converted.Content[i] = model.TokenLogprob{
+			Token:       token.Token,
+			Logprob:     token.Logprob,
+			Bytes:       int64SliceToIntSlice(token.Bytes),
+			TopLogprobs: make([]model.TopLogprob, len(token.TopLogprobs)),
+		}
+		for j, top := range token.TopLogprobs {
+			converted.Content[i].TopLogprobs[j] = model.TopLogprob{
+				Token:   top.Token,
+				Logprob: top.Logprob,
+				Bytes:   int64SliceToIntSlice(top.Bytes),
+			}
+		}
+	}
+	return converted
+}
+
+func int64SliceToIntSlice(values []int64) []int {
+	if values == nil {
+		return nil
+	}
+	converted := make([]int, len(values))
+	for i, value := range values {
+		converted[i] = int(value)
+	}
+	return converted
 }
 
 // FileOptions is the options for file operations.

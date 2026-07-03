@@ -1,0 +1,52 @@
+{
+  "evalSetId": "toolmock-weather",
+  "name": "toolmock-weather",
+  "evalCases": [
+    {
+      "evalId": "shenzhen_weather_mock",
+      "conversation": [
+        {
+          "invocationId": "shenzhen_weather_mock-1",
+          "userContent": {
+            "role": "user",
+            "content": "Check the weather in Shenzhen and give one short travel tip."
+          },
+          "toolMock": {
+            "actual": [
+              {
+                "name": "get_weather",
+                "result": {
+                  "city": "Shenzhen",
+                  "condition": "sunny",
+                  "tempC": 28,
+                  "source": "evalset-tool-mock",
+                  "updatedAt": "2026-07-01T09:00:00+08:00"
+                }
+              }
+            ]
+          },
+          "tools": [
+            {
+              "id": "tool_use_weather",
+              "name": "get_weather",
+              "arguments": {
+                "city": "Shenzhen"
+              },
+              "result": {
+                "city": "Shenzhen",
+                "condition": "sunny",
+                "tempC": 28,
+                "source": "evalset-tool-mock",
+                "updatedAt": "2026-07-01T09:00:00+08:00"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "toolmock-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}

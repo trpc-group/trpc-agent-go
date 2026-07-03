@@ -41,7 +41,11 @@ const (
 	ReasoningContentKey = "reasoning_content"
 	// ReasoningContentKeyAlt is the alternative key used by some providers (e.g. Ollama).
 	ReasoningContentKeyAlt = "reasoning"
-	// EnabledThinkingKey is the key used for enabling thinking mode in API requests e.g. Qwen model.
+	// EnableThinkingKey is the key used for enabling thinking mode in API requests e.g. Qwen model.
+	EnableThinkingKey = "enable_thinking"
+	// EnabledThinkingKey is kept for backward compatibility.
+	//
+	// Deprecated: use EnableThinkingKey.
 	EnabledThinkingKey = "enabled_thinking"
 )
 
@@ -270,6 +274,32 @@ type ContentPart struct {
 	Audio *Audio `json:"audio,omitempty"`
 	// File is the file data.
 	File *File `json:"file,omitempty"`
+	// ContentRef is an internal reference to externalized content.
+	ContentRef *ContentRef `json:"content_ref,omitempty"`
+}
+
+// ContentRef records where externalized content is stored and how to restore it.
+//
+// A missing schema version represents the v1 schema.
+type ContentRef struct {
+	// ArtifactRef is the pinned artifact reference, for example artifact://name@0.
+	ArtifactRef string `json:"artifact_ref"`
+	// ArtifactName is the artifact filename.
+	ArtifactName string `json:"artifact_name,omitempty"`
+	// ArtifactVersion is the pinned artifact revision.
+	ArtifactVersion int `json:"artifact_version"`
+	// MimeType is the MIME type used when saving and hydrating the content.
+	MimeType string `json:"mime_type,omitempty"`
+	// SizeBytes is the original content size in bytes.
+	SizeBytes int64 `json:"size_bytes,omitempty"`
+	// SHA256 is the lowercase hex SHA256 of the original bytes.
+	SHA256 string `json:"sha256,omitempty"`
+	// OriginalName is the user-facing filename or display name, if any.
+	OriginalName string `json:"original_name,omitempty"`
+	// EventID identifies the owning event for debugging.
+	EventID string `json:"event_id,omitempty"`
+	// RequestID identifies the owning request for debugging.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // File represents file content for file input models.
@@ -387,6 +417,10 @@ type GenerationConfig struct {
 
 	// FrequencyPenalty penalizes new tokens based on their frequency in the text so far.
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+	// Logprobs controls whether providers should return token log probabilities.
+	Logprobs *bool `json:"logprobs,omitempty"`
+	// TopLogprobs controls how many alternative token log probabilities are returned.
+	TopLogprobs *int `json:"top_logprobs,omitempty"`
 
 	// ReasoningEffort limits the reasoning effort for reasoning models.
 	// The accepted values depend on the provider:
@@ -442,6 +476,8 @@ type GenerationConfigPatch struct {
 	Stop             []string `json:"stop,omitempty"`
 	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
 	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+	Logprobs         *bool    `json:"logprobs,omitempty"`
+	TopLogprobs      *int     `json:"top_logprobs,omitempty"`
 	ReasoningEffort  *string  `json:"reasoning_effort,omitempty"`
 	ThinkingEnabled  *bool    `json:"thinking_enabled,omitempty"`
 	ThinkingTokens   *int     `json:"thinking_tokens,omitempty"`
@@ -474,6 +510,12 @@ func ApplyGenerationConfigPatch(
 	}
 	if patch.FrequencyPenalty != nil {
 		base.FrequencyPenalty = patch.FrequencyPenalty
+	}
+	if patch.Logprobs != nil {
+		base.Logprobs = patch.Logprobs
+	}
+	if patch.TopLogprobs != nil {
+		base.TopLogprobs = patch.TopLogprobs
 	}
 	if patch.ReasoningEffort != nil {
 		base.ReasoningEffort = patch.ReasoningEffort
@@ -508,6 +550,11 @@ type Request struct {
 	// Model adapters merge these with model-level extra fields when supported;
 	// request-level values take precedence.
 	ExtraFields map[string]any `json:"-"`
+
+	// Headers stores provider-specific HTTP headers for this request.
+	// Model adapters merge these with model-level headers when supported;
+	// request-level values take precedence.
+	Headers map[string]string `json:"-"`
 
 	Tools map[string]tool.Tool `json:"-"` // Tools are not serialized, handled separately
 }

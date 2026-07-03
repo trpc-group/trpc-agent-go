@@ -21,6 +21,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/buildinfo"
 )
 
 func TestTopLevelRequestHelpers(t *testing.T) {
@@ -461,10 +463,10 @@ func TestUpgradeToLatestNoOpWhenAlreadyCurrent(t *testing.T) {
 	t.Setenv(releaseAPIBaseURLEnvName, server.URL)
 	t.Setenv(releaseRepoEnvName, "trpc-group/trpc-agent-go")
 
-	oldVersion := releaseVersion
-	releaseVersion = "v1.2.3"
+	oldVersion := buildinfo.ReleaseVersion
+	buildinfo.ReleaseVersion = "v1.2.3"
 	t.Cleanup(func() {
-		releaseVersion = oldVersion
+		buildinfo.ReleaseVersion = oldVersion
 	})
 
 	oldInstall := installReleaseFunc
@@ -509,10 +511,10 @@ func TestUpgradeToLatestReturnsBinaryDirError(t *testing.T) {
 	t.Setenv(releaseAPIBaseURLEnvName, server.URL)
 	t.Setenv(releaseRepoEnvName, "trpc-group/trpc-agent-go")
 
-	oldVersion := releaseVersion
-	releaseVersion = "v1.0.0"
+	oldVersion := buildinfo.ReleaseVersion
+	buildinfo.ReleaseVersion = "v1.0.0"
 	t.Cleanup(func() {
-		releaseVersion = oldVersion
+		buildinfo.ReleaseVersion = oldVersion
 	})
 
 	oldExecutable := executablePathFunc
@@ -546,10 +548,10 @@ func TestUpgradeToLatestInstallsLatestRelease(t *testing.T) {
 	t.Setenv(releaseAPIBaseURLEnvName, server.URL)
 	t.Setenv(releaseRepoEnvName, "trpc-group/trpc-agent-go")
 
-	oldVersion := releaseVersion
-	releaseVersion = "v1.0.0"
+	oldVersion := buildinfo.ReleaseVersion
+	buildinfo.ReleaseVersion = "v1.0.0"
 	t.Cleanup(func() {
-		releaseVersion = oldVersion
+		buildinfo.ReleaseVersion = oldVersion
 	})
 
 	exeDir := t.TempDir()
@@ -613,10 +615,10 @@ func TestRunUpgradeCommand(t *testing.T) {
 	t.Setenv(releaseAPIBaseURLEnvName, server.URL)
 	t.Setenv(releaseRepoEnvName, "trpc-group/trpc-agent-go")
 
-	oldVersion := releaseVersion
-	releaseVersion = "v1.0.0"
+	oldVersion := buildinfo.ReleaseVersion
+	buildinfo.ReleaseVersion = "v1.0.0"
 	t.Cleanup(func() {
-		releaseVersion = oldVersion
+		buildinfo.ReleaseVersion = oldVersion
 	})
 
 	exeDir := t.TempDir()

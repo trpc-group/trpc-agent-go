@@ -299,6 +299,23 @@ func TestBuildRequestProcessors_SessionSummaryInjectionModeWiring(t *testing.T) 
 	require.Equal(t, processor.SessionSummaryInjectionSystem, crp.SessionSummaryInjectionMode)
 }
 
+func TestBuildRequestProcessors_AddCurrentTimeToolGuidanceWiring(t *testing.T) {
+	opts := &Options{}
+	WithAddCurrentTime(true)(opts)
+
+	procs := buildRequestProcessors("test-agent", opts)
+	var timeProc *processor.TimeRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.TimeRequestProcessor); ok {
+			timeProc = v
+		}
+	}
+	require.NotNil(t, timeProc)
+	require.True(t, timeProc.AddCurrentTime)
+	require.Equal(t, "environment_context_current_time", timeProc.CurrentTimeToolName)
+	require.True(t, timeProc.CurrentTimeToolAvailable)
+}
+
 // Test that buildRequestProcessors wires MaxHistoryRuns into
 // ContentRequestProcessor correctly.
 func TestBuildRequestProcessors_MaxHistoryRunsWiring(t *testing.T) {
@@ -327,6 +344,21 @@ func TestBuildRequestProcessors_MaxHistoryRunsWiring(t *testing.T) {
 	}
 	require.NotNil(t, crp)
 	require.Equal(t, 0, crp.MaxHistoryRuns)
+}
+
+func TestBuildRequestProcessors_ToolTranscriptModeWiring(t *testing.T) {
+	opts := &Options{}
+	WithToolTranscriptMode(ToolTranscriptModeOmitPreviousCompleted)(opts)
+
+	procs := buildRequestProcessors("test-agent", opts)
+	var crp *processor.ContentRequestProcessor
+	for _, p := range procs {
+		if v, ok := p.(*processor.ContentRequestProcessor); ok {
+			crp = v
+		}
+	}
+	require.NotNil(t, crp)
+	require.Equal(t, processor.ToolTranscriptModeOmitPreviousCompleted, crp.ToolTranscriptMode)
 }
 
 func TestBuildRequestProcessors_ContextCompactionWiring(t *testing.T) {
@@ -414,7 +446,10 @@ func TestBuildRequestProcessors_PreserveForeignMessagesWiring(t *testing.T) {
 
 func TestBuildRequestProcessors_PreloadSessionRecallWiring(t *testing.T) {
 	opts := &Options{}
+	WithPreloadMemory(3)(opts)
+	WithPreloadMemoryInjectionMode(PreloadMemoryInjectionUser)(opts)
 	WithPreloadSessionRecall(4)(opts)
+	WithPreloadSessionRecallInjectionMode(PreloadSessionRecallInjectionUser)(opts)
 	WithPreloadSessionRecallMinScore(0.6)(opts)
 	WithPreloadSessionRecallSearchMode(session.SearchModeDense)(opts)
 
@@ -426,7 +461,18 @@ func TestBuildRequestProcessors_PreloadSessionRecallWiring(t *testing.T) {
 		}
 	}
 	require.NotNil(t, crp)
+	require.Equal(t, 3, crp.PreloadMemory)
+	require.Equal(
+		t,
+		processor.PreloadMemoryInjectionUser,
+		crp.PreloadMemoryInjectionMode,
+	)
 	require.Equal(t, 4, crp.PreloadSessionRecall)
+	require.Equal(
+		t,
+		processor.PreloadSessionRecallInjectionUser,
+		crp.PreloadSessionRecallInjectionMode,
+	)
 	require.Equal(t, 0.6, crp.PreloadSessionRecallMinScore)
 	require.Equal(
 		t,
@@ -537,6 +583,111 @@ func TestBuildRequestProcessors_PostToolPromptInjection(t *testing.T) {
 		WithEnablePostToolPrompt(false)(opts)
 		require.Nil(t, findPostToolProcessor(t, opts))
 	})
+}
+
+func TestHasPotentialToolSurface(t *testing.T) {
+	baseTool := &mockTool{name: testToolNameA}
+	baseToolSet := &mockToolSet{name: testDummyToolSetName}
+	subAgent := &mockAgent{name: testSimpleSubAgentName}
+
+	tests := []struct {
+		name    string
+		agent   *LLMAgent
+		options *Options
+		want    bool
+	}{
+		{
+			name:    "nil options",
+			options: nil,
+			want:    false,
+		},
+		{
+			name: "agent tools",
+			agent: &LLMAgent{
+				tools: []tool.Tool{baseTool},
+			},
+			options: nil,
+			want:    true,
+		},
+		{
+			name:    "no surface",
+			options: &Options{},
+			want:    false,
+		},
+		{
+			name: "direct tools",
+			options: &Options{
+				Tools: []tool.Tool{baseTool},
+			},
+			want: true,
+		},
+		{
+			name: "tool sets",
+			options: &Options{
+				ToolSets: []tool.ToolSet{baseToolSet},
+			},
+			want: true,
+		},
+		{
+			name: "activatable tool sets",
+			options: &Options{
+				activatableToolSets: []tool.ToolSet{baseToolSet},
+			},
+			want: true,
+		},
+		{
+			name: "tool activation rules",
+			options: &Options{
+				toolActivationRules: []toolActivationRule{{}},
+			},
+			want: true,
+		},
+		{
+			name: "sub agents",
+			options: &Options{
+				SubAgents: []agent.Agent{subAgent},
+			},
+			want: true,
+		},
+		{
+			name: "extension tools",
+			options: &Options{
+				extensionContributedTools: []tool.Tool{baseTool},
+			},
+			want: true,
+		},
+		{
+			name: "await user reply tool",
+			options: &Options{
+				EnableAwaitUserReplyTool: true,
+			},
+			want: true,
+		},
+		{
+			name: "knowledge",
+			options: &Options{
+				Knowledge: &minimalKnowledge{},
+			},
+			want: true,
+		},
+		{
+			name: "skills repository",
+			options: &Options{
+				skillsRepository: &mockSkillRepository{},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(
+				t,
+				tt.want,
+				hasPotentialToolSurface(tt.agent, tt.options),
+			)
+		})
+	}
 }
 
 // Test that WithPreserveSameBranch option sets the corresponding
@@ -1014,6 +1165,28 @@ func TestLLMAgent_New_WithOutputSchema_InvalidCombos(t *testing.T) {
 				_ = New("test",
 					WithOutputSchema(schema),
 					WithExtensions(ext),
+				)
+			},
+		)
+	})
+
+	t.Run("with activatable toolsets", func(t *testing.T) {
+		toolset := dummyToolSet{name: "activatable"}
+		require.NotPanics(t, func() {
+			_ = New("test",
+				WithOutputSchema(schema),
+				WithActivatableToolSets([]tool.ToolSet{toolset}),
+			)
+		})
+	})
+
+	t.Run("with tool activation rules", func(t *testing.T) {
+		require.PanicsWithValue(t,
+			"Invalid LLMAgent configuration: if output_schema is set, tool activation rules must be empty",
+			func() {
+				_ = New("test",
+					WithOutputSchema(schema),
+					WithToolActivationOnSkillLoad("research", []string{"activatable"}),
 				)
 			},
 		)

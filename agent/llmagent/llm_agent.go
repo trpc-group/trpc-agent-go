@@ -37,6 +37,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	toolcurrenttime "trpc.group/trpc-go/trpc-agent-go/internal/tool/currenttime"
+	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	knowledgetool "trpc.group/trpc-go/trpc-agent-go/knowledge/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -144,12 +146,18 @@ func New(name string, opts ...Option) *LLMAgent {
 		if len(options.extensionContributedTools) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, extension-contributed tools (WithExtensions → Registry.Tools) must be empty")
 		}
+		if len(options.toolActivationRules) > 0 {
+			panic("Invalid LLMAgent configuration: if output_schema is set, tool activation rules must be empty")
+		}
 		if options.Knowledge != nil {
 			panic("Invalid LLMAgent configuration: if output_schema is set, knowledge must be empty")
 		}
 		if len(options.SubAgents) > 0 {
 			panic("Invalid LLMAgent configuration: if output_schema is set, sub_agents must be empty to disable agent transfer")
 		}
+	}
+	if err := validateAndNormalizeToolActivationOptions(&options); err != nil {
+		panic(fmt.Sprintf("Invalid LLMAgent configuration: %v", err))
 	}
 
 	// Register tools from both tools and toolsets, including knowledge search tool if provided.
@@ -222,10 +230,29 @@ func New(name string, opts ...Option) *LLMAgent {
 		)
 	}
 
+	toolCallProcessorOptions := []processor.FunctionCallResponseProcessorOption{
+		processor.WithToolCallRetryPolicy(options.ToolCallRetryPolicy),
+	}
+	if options.ToolResultAttachmentBudget > 0 {
+		toolCallProcessorOptions = append(
+			toolCallProcessorOptions,
+			processor.WithToolResultAttachmentBudget(
+				options.ToolResultAttachmentBudget,
+			),
+		)
+	}
+	if len(options.toolActivationRules) > 0 {
+		toolCallProcessorOptions = append(
+			toolCallProcessorOptions,
+			processor.WithPostToolResultHook(
+				a.handleToolActivationPostToolResult,
+			),
+		)
+	}
 	toolcallProcessor := processor.NewFunctionCallResponseProcessor(
 		options.EnableParallelTools,
 		options.ToolCallbacks,
-		processor.WithToolCallRetryPolicy(options.ToolCallRetryPolicy),
+		toolCallProcessorOptions...,
 	)
 	// Configure default transfer message for direct sub-agent calls.
 	// Default behavior (when not configured): enabled with built-in default message.
@@ -251,6 +278,9 @@ func New(name string, opts ...Option) *LLMAgent {
 		SyncSummaryIntraRun:             options.SyncSummaryIntraRun,
 		EnableContextCompaction:         options.EnableContextCompaction,
 		ContextCompactionThresholdRatio: options.ContextCompactionThresholdRatio,
+	}
+	if len(options.toolActivationRules) > 0 {
+		flowOpts.ToolActivationApplier = a.applyToolActivation
 	}
 
 	a.flow = llmflow.New(
@@ -365,6 +395,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 			),
 		)
 	}
+	if options.MaxOverviewSkills > 0 {
+		skillsOpts = append(
+			skillsOpts,
+			processor.WithMaxOverviewSkills(
+				options.MaxOverviewSkills,
+			),
+		)
+	}
 	if options.SkillsLoadedContentInToolResults {
 		skillsOpts = append(
 			skillsOpts,
@@ -401,6 +439,7 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithAddSessionSummary(options.AddSessionSummary),
 		processor.WithSessionSummaryInjectionMode(options.SessionSummaryInjectionMode),
 		processor.WithMaxHistoryRuns(options.MaxHistoryRuns),
+		processor.WithToolTranscriptMode(options.ToolTranscriptMode),
 		processor.WithEnableContextCompaction(options.EnableContextCompaction),
 		processor.WithContextCompactionKeepRecentRequests(
 			options.ContextCompactionKeepRecentRequests,
@@ -419,7 +458,14 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 		processor.WithTimelineFilterMode(options.messageTimelineFilterMode),
 		processor.WithBranchFilterMode(options.messageBranchFilterMode),
 		processor.WithPreloadMemory(options.PreloadMemory),
+		processor.WithPreloadMemoryInjectionMode(
+			options.PreloadMemoryInjectionMode,
+		),
+		processor.WithPreloadMemoryPlaybook(options.PreloadMemoryPlaybook),
 		processor.WithPreloadSessionRecall(options.PreloadSessionRecall),
+		processor.WithPreloadSessionRecallInjectionMode(
+			options.PreloadSessionRecallInjectionMode,
+		),
 		processor.WithPreloadSessionRecallMinScore(
 			options.PreloadSessionRecallMinScore,
 		),
@@ -464,8 +510,8 @@ func buildRequestProcessorsWithAgent(a *LLMAgent, options *Options) []flow.Reque
 	// session_search / session_load when enabled.
 	requestProcessors = appendOnDemandSessionProcessor(options, requestProcessors)
 
-	// 9. Post-tool processor - injects dynamic prompt after tool results.
-	requestProcessors = appendPostToolProcessor(options, requestProcessors)
+	// 9. Post-tool processor - injects stable tool-result guidance.
+	requestProcessors = appendPostToolProcessor(a, options, requestProcessors)
 
 	// 10. Skills tool result processor - materializes loaded skill content
 	// into tool result messages.
@@ -491,13 +537,23 @@ func hasInvocationStructuredOutput(ctx context.Context, invocation *agent.Invoca
 	return invocation.StructuredOutput != nil || invocation.StructuredOutputType != nil
 }
 
-func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
+func appendPostToolProcessor(
+	a *LLMAgent,
+	options *Options,
+	requestProcessors []flow.RequestProcessor,
+) []flow.RequestProcessor {
 	if options.postToolPromptEnabled != nil &&
 		!*options.postToolPromptEnabled {
 		return requestProcessors
 	}
 
 	var postToolOpts []processor.PostToolOption
+	hasToolSurface := hasPotentialToolSurface(a, options)
+	postToolOpts = append(
+		postToolOpts,
+		processor.WithPostToolPromptBeforeResult(hasToolSurface),
+		processor.WithPostToolPromptCreateSystemMessage(hasToolSurface),
+	)
 	if options.PostToolPrompt != "" {
 		postToolOpts = append(
 			postToolOpts,
@@ -506,6 +562,24 @@ func appendPostToolProcessor(options *Options, requestProcessors []flow.RequestP
 	}
 	postToolProcessor := processor.NewPostToolRequestProcessor(postToolOpts...)
 	return append(requestProcessors, postToolProcessor)
+}
+
+func hasPotentialToolSurface(a *LLMAgent, options *Options) bool {
+	if a != nil && len(a.tools) > 0 {
+		return true
+	}
+	if options == nil {
+		return false
+	}
+	return len(options.Tools) > 0 ||
+		len(options.ToolSets) > 0 ||
+		len(options.activatableToolSets) > 0 ||
+		len(options.toolActivationRules) > 0 ||
+		len(options.SubAgents) > 0 ||
+		len(options.extensionContributedTools) > 0 ||
+		options.EnableAwaitUserReplyTool ||
+		options.Knowledge != nil ||
+		options.skillsRepository != nil
 }
 
 func appendOnDemandSessionProcessor(options *Options, requestProcessors []flow.RequestProcessor) []flow.RequestProcessor {
@@ -552,6 +626,10 @@ func appendTimeProcessor(options *Options, requestProcessors []flow.RequestProce
 		processor.WithAddCurrentTime(true),
 		processor.WithTimezone(options.Timezone),
 		processor.WithTimeFormat(options.TimeFormat),
+		processor.WithCurrentTimeTool(
+			toolcurrenttime.ToolName,
+			options.OutputSchema == nil,
+		),
 	)
 	return append(requestProcessors, timeProcessor)
 }
@@ -590,14 +668,28 @@ func cloneTextPromptMap(src map[string]string) map[string]prompt.Text {
 
 func prepareSkillsRepository(options *Options) {
 	if options == nil ||
-		options.skillsRepository == nil ||
 		options.skillFilter == nil {
 		return
 	}
-	options.skillsRepository = skill.NewFilteredRepository(
-		options.skillsRepository,
-		options.skillFilter,
-	)
+	if options.skillsRepository != nil {
+		options.skillsRepository = skill.NewFilteredRepository(
+			options.skillsRepository,
+			options.skillFilter,
+		)
+	}
+	if options.skillsRepositoryProvider != nil {
+		provider := options.skillsRepositoryProvider
+		filter := options.skillFilter
+		options.skillsRepositoryProvider = skill.RepositoryProviderFunc(
+			func(ctx context.Context, scope skill.SkillScope) (skill.Repository, error) {
+				repo, err := provider.Repository(ctx, scope)
+				if err != nil || repo == nil {
+					return repo, err
+				}
+				return skill.NewFilteredRepository(repo, filter), nil
+			},
+		)
+	}
 }
 
 // applySkillsExecutorFallback auto-wires a local code executor when the
@@ -628,7 +720,7 @@ func prepareSkillsRepository(options *Options) {
 // that option (true or false) keep their configured value.
 func applySkillsExecutorFallback(options *Options) {
 	if options == nil ||
-		options.skillsRepository == nil ||
+		(options.skillsRepository == nil && options.skillsRepositoryProvider == nil) ||
 		options.codeExecutor != nil ||
 		options.allowedSkillTools != nil ||
 		skillprofile.IsExplicitKnowledgeOnly(options.skillToolProfile) {
@@ -704,6 +796,11 @@ func registerTools(
 	allTools := append([]tool.Tool(nil), options.Tools...)
 	allTools, userToolNames = appendStaticToolSetTools(allTools, userToolNames, options)
 	allTools = appendKnowledgeTools(allTools, options)
+	allTools, userToolNames = appendCurrentTimeTool(
+		allTools,
+		userToolNames,
+		options,
+	)
 
 	// Step 2: determine workspace registry and skill_run tool based on
 	// which capabilities the caller configured.
@@ -741,6 +838,27 @@ func registerTools(
 	// skill repository is configured.
 	allTools = appendSkillTools(allTools, options, runTool)
 	return allTools, userToolNames, workspaceRegistry
+}
+
+func appendCurrentTimeTool(
+	allTools []tool.Tool,
+	userToolNames map[string]bool,
+	options *Options,
+) ([]tool.Tool, map[string]bool) {
+	if options == nil || !options.AddCurrentTime || options.OutputSchema != nil {
+		return allTools, userToolNames
+	}
+	filtered := make([]tool.Tool, 0, len(allTools)+1)
+	for _, tl := range allTools {
+		if tl == nil || tl.Declaration() == nil ||
+			tl.Declaration().Name != toolcurrenttime.ToolName {
+			filtered = append(filtered, tl)
+		}
+	}
+	if userToolNames != nil {
+		delete(userToolNames, toolcurrenttime.ToolName)
+	}
+	return append(filtered, toolcurrenttime.New(options.Timezone)), userToolNames
 }
 
 func collectUserToolNames(tools []tool.Tool) map[string]bool {
@@ -1062,14 +1180,23 @@ func appendOnDemandSessionTools(
 		options.OutputSchema != nil {
 		return allTools
 	}
-	if inv != nil && !toolsessionrecall.SupportsOnDemandSession(inv) {
+	if inv == nil {
+		return append(
+			allTools,
+			toolsessionrecall.NewSearchTool(),
+			toolsessionrecall.NewLoadTool(),
+		)
+	}
+	if toolsessionrecall.SupportsSearch(inv) {
+		allTools = append(allTools, toolsessionrecall.NewSearchTool())
+	}
+	if toolsessionrecall.SupportsLoad(inv) {
+		allTools = append(allTools, toolsessionrecall.NewLoadTool())
+	}
+	if !toolsessionrecall.SupportsOnDemandSession(inv) {
 		return allTools
 	}
-	return append(
-		allTools,
-		toolsessionrecall.NewSearchTool(),
-		toolsessionrecall.NewLoadTool(),
-	)
+	return allTools
 }
 
 func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {

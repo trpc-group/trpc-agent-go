@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	ocskills "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/skills"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/runtimeprofile"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
 const (
@@ -55,6 +56,26 @@ const (
 	memoryBackendPostgres  = "postgres"
 	memoryBackendPGVector  = "pgvector"
 
+	codeExecutorTypeSandbox = "sandbox"
+
+	sandboxBackendAuto            = "auto"
+	sandboxBackendLinuxBubblewrap = "linux-bubblewrap"
+	sandboxBackendMacOSSandbox    = "macos-sandbox-exec"
+
+	sandboxProfileWorkspaceWrite = "workspace_write"
+	sandboxProfileReadOnly       = "read_only"
+	sandboxProfileDisabled       = "disabled"
+
+	sandboxNetworkRestricted = "restricted"
+	sandboxNetworkEnabled    = "enabled"
+
+	sandboxShellEnvInheritAll  = "all"
+	sandboxShellEnvInheritCore = "core"
+	sandboxShellEnvInheritNone = "none"
+
+	defaultSandboxCodeExecutorTimeout        = 30 * time.Second
+	defaultSandboxCodeExecutorOutputMaxBytes = 1 << 20
+
 	summaryPolicyAny = "any"
 	summaryPolicyAll = "all"
 
@@ -70,6 +91,8 @@ const (
 	flagEnableContextCompaction                       = "enable-context-compaction"
 	flagContextCompactionOversizedToolResultMaxTokens = "context-compaction-oversized-tool-result-max-tokens"
 	flagMaxHistoryRuns                                = "max-history-runs"
+	flagMaxLLMCalls                                   = "max-llm-calls"
+	flagMaxToolIterations                             = "max-tool-iterations"
 	flagPreloadMemory                                 = "preload-memory"
 
 	flagAgentInstruction       = "agent-instruction"
@@ -91,19 +114,32 @@ const (
 
 	flagEnableParallelTools = "enable-parallel-tools"
 
-	flagSkillsAllowBundled  = "skills-allow-bundled"
-	flagSkillsWatch         = "skills-watch"
-	flagSkillsWatchBundled  = "skills-watch-bundled"
-	flagSkillsWatchDebounce = "skills-watch-debounce"
-	flagSkillsToolProfile   = "skills-tool-profile"
-	flagSkillsLoadMode      = "skills-load-mode"
-	flagSkillsMaxLoaded     = "skills-max-loaded"
-	flagSkillsToolResults   = "skills-loaded-content-in-tool-results"
-	flagSkillsSkipFallback  = "skills-skip-fallback-on-session-summary"
+	flagSkillsAllowBundled    = "skills-allow-bundled"
+	flagSkillsWatch           = "skills-watch"
+	flagSkillsWatchBundled    = "skills-watch-bundled"
+	flagSkillsWatchDebounce   = "skills-watch-debounce"
+	flagSkillsSummaryCacheTTL = "skills-summary-cache-ttl"
+	flagSkillsOverviewLimit   = "skills-overview-limit"
+	flagSkillsOverviewPinned  = "skills-overview-pinned"
+	flagSkillsToolProfile     = "skills-tool-profile"
+	flagSkillsLoadMode        = "skills-load-mode"
+	flagSkillsMaxLoaded       = "skills-max-loaded"
+	flagSkillsToolResults     = "skills-loaded-content-in-tool-results"
+	flagSkillsSkipFallback    = "skills-skip-fallback-on-session-summary"
 
 	flagDebugRecorder     = "debug-recorder"
 	flagDebugRecorderDir  = "debug-recorder-dir"
 	flagDebugRecorderMode = "debug-recorder-mode"
+
+	flagLatencyDiagnostics                 = "latency-diagnostics"
+	flagLatencyDiagnosticsEvents           = "latency-diagnostics-events"
+	flagDeferToolSurface                   = "defer-tools-to-dynamic-agent"
+	flagDeferToolSurfaceMode               = "defer-tools-to-dynamic-agent-mode"
+	flagDeferToolSurfaceChars              = "defer-tools-to-dynamic-agent-threshold-chars"
+	flagDeferToolSurfaceDefaultDirectTools = "defer-tools-to-dynamic-agent-default-direct-tools"
+	flagDeferToolSurfaceDirect             = "defer-tools-to-dynamic-agent-direct-tools"
+	flagDynamicAgentTimeout                = "dynamic-agent-timeout"
+	flagHostExecDefaultTimeout             = "host-exec-default-timeout"
 
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
@@ -133,6 +169,8 @@ type runOptions struct {
 	LangfuseUIBaseURL                    string
 	LangfuseTraceURLTemplate             string
 	LangfuseObservationLeafValueMaxBytes *int
+	LatencyDiagnosticsEnabled            bool
+	LatencyDiagnosticsEvents             bool
 
 	A2AEnabled        bool
 	A2AHost           string
@@ -146,7 +184,10 @@ type runOptions struct {
 	EnableContextCompaction                       bool
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
+	MaxLLMCalls                                   int
+	MaxToolIterations                             int
 	PreloadMemory                                 int
+	PostToolPromptEnabled                         *bool
 
 	AgentInstruction       string
 	AgentInstructionFiles  string
@@ -173,28 +214,36 @@ type runOptions struct {
 	ClaudeEnv          string
 	ClaudeWorkDir      string
 
-	ModelMode           string
-	OpenAIModel         string
-	OpenAIVariant       string
-	OpenAIBaseURL       string
-	GenerationConfig    *model.GenerationConfig
-	ModelConfig         *yaml.Node
-	KnowledgesConfig    []knowledgeEntry
-	SkillsRoot          string
-	SkillsExtraDir      string
-	SkillsDebug         bool
-	SkillsAllowBundled  string
-	SkillConfigs        map[string]ocskills.SkillConfig
-	SkillsWatch         bool
-	SkillsWatchBundled  bool
-	SkillsWatchDebounce time.Duration
-	SkillsToolProfile   string
-	SkillsLoadMode      string
-	SkillsMaxLoaded     int
-	SkillsToolResults   bool
-	SkillsSkipFallback  bool
-	SkillsToolingGuide  *string
-	StateDir            string
+	ModelMode             string
+	OpenAIModel           string
+	OpenAIVariant         string
+	OpenAIBaseURL         string
+	OpenAIHeaders         map[string]string
+	GenerationConfig      *model.GenerationConfig
+	ModelConfig           *yaml.Node
+	KnowledgesConfig      []knowledgeEntry
+	SkillsRoot            string
+	SkillsExtraDir        string
+	SkillsDebug           bool
+	SkillsAllowBundled    string
+	SkillConfigs          map[string]ocskills.SkillConfig
+	SkillsWatch           bool
+	SkillsWatchBundled    bool
+	SkillsWatchDebounce   time.Duration
+	SkillsSummaryCacheTTL time.Duration
+	SkillsOverviewLimit   int
+	SkillsOverviewPinned  string
+	SkillsToolProfile     string
+	SkillsLoadMode        string
+	SkillsMaxLoaded       int
+	SkillsToolResults     bool
+	SkillsSkipFallback    bool
+	SkillsToolingGuide    *string
+	StateDir              string
+
+	EvolutionEnabled        bool
+	EvolutionHumanGate      string
+	EvolutionSkillScopeMode skill.SkillScopeMode
 
 	DebugRecorderEnabled bool
 	DebugRecorderDir     string
@@ -234,12 +283,21 @@ type runOptions struct {
 	SessionSummaryMaxWords            int
 	SessionSummaryApproxRunesPerToken float64
 
-	EnableLocalExec      bool
-	EnableOpenClawTools  bool
-	OpenClawToolingGuide *string
-	EnableParallelTools  bool
+	EnableLocalExec                    bool
+	CodeExecutor                       codeExecutorOptions
+	EnableOpenClawTools                bool
+	OpenClawToolingGuide               *string
+	EnableParallelTools                bool
+	DeferToolSurface                   bool
+	DeferToolSurfaceMode               string
+	DeferToolSurfaceChars              int
+	DeferToolSurfaceDefaultDirectTools bool
+	DeferToolSurfaceDirect             string
+	DynamicAgentTimeout                time.Duration
+	HostExecDefaultTimeout             time.Duration
 
-	enableOpenClawToolsExplicit bool
+	enableOpenClawToolsExplicit  bool
+	deferToolSurfaceModeExplicit bool
 
 	ToolProviders []pluginSpec
 	ToolSets      []pluginSpec
@@ -272,12 +330,17 @@ func parseRunOptions(args []string) (runOptions, error) {
 		SkillsToolResults:   true,
 		SkillsSkipFallback:  true,
 
+		EvolutionSkillScopeMode: skill.SkillScopeApp,
+
 		SessionBackend: sessionBackendInMemory,
 		MemoryBackend:  memoryBackendInMemory,
 
 		SessionSummaryPolicy: summaryPolicyAny,
 
 		MemoryAutoPolicy: summaryPolicyAny,
+
+		DeferToolSurfaceMode:               deferToolSurfaceModeAuto,
+		DeferToolSurfaceDefaultDirectTools: true,
 	}
 
 	fs.StringVar(
@@ -389,6 +452,18 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagMaxHistoryRuns,
 		0,
 		"Max history messages when add-session-summary=false (0=unlimited)",
+	)
+	fs.IntVar(
+		&opts.MaxLLMCalls,
+		flagMaxLLMCalls,
+		0,
+		"Max LLM calls per invocation (0=unlimited)",
+	)
+	fs.IntVar(
+		&opts.MaxToolIterations,
+		flagMaxToolIterations,
+		0,
+		"Max tool-call iterations per invocation (0=unlimited)",
 	)
 	fs.IntVar(
 		&opts.PreloadMemory,
@@ -532,7 +607,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 		&opts.OpenAIVariant,
 		"openai-variant",
 		defaultOpenAIVariant,
-		"OpenAI variant: auto, openai, deepseek, qwen, hunyuan (auto uses configured base URL host)",
+		"OpenAI variant: auto, openai, deepseek, qwen, hunyuan, "+
+			"glm (auto uses configured base URL host)",
 	)
 	fs.StringVar(
 		&opts.OpenAIBaseURL,
@@ -600,6 +676,27 @@ func parseRunOptions(args []string) (runOptions, error) {
 		false,
 		"Also watch bundled skills roots for local changes",
 	)
+	fs.DurationVar(
+		&opts.SkillsSummaryCacheTTL,
+		flagSkillsSummaryCacheTTL,
+		0,
+		"How long to reuse the skills summary cache before "+
+			"checking for changes (0 uses the default)",
+	)
+	fs.IntVar(
+		&opts.SkillsOverviewLimit,
+		flagSkillsOverviewLimit,
+		0,
+		"Show at most N skills in the skills overview "+
+			"(0 shows all)",
+	)
+	fs.StringVar(
+		&opts.SkillsOverviewPinned,
+		flagSkillsOverviewPinned,
+		"",
+		"Comma-separated skill names to show first when "+
+			"skills-overview-limit is set",
+	)
 	fs.StringVar(
 		&opts.SkillsToolProfile,
 		flagSkillsToolProfile,
@@ -654,6 +751,18 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagDebugRecorderMode,
 		"",
 		"Debug recorder mode: full|safe (default: full)",
+	)
+	fs.BoolVar(
+		&opts.LatencyDiagnosticsEnabled,
+		flagLatencyDiagnostics,
+		false,
+		"Enable per-request latency diagnostic spans",
+	)
+	fs.BoolVar(
+		&opts.LatencyDiagnosticsEvents,
+		flagLatencyDiagnosticsEvents,
+		false,
+		"Emit latency diagnostic runner events",
 	)
 	fs.StringVar(
 		&opts.SessionBackend,
@@ -809,6 +918,53 @@ func parseRunOptions(args []string) (runOptions, error) {
 		false,
 		"Refresh ToolSets tool list on each run (optional)",
 	)
+	fs.BoolVar(
+		&opts.DeferToolSurface,
+		flagDeferToolSurface,
+		false,
+		"Expose configured tools through dynamic_agent instead of "+
+			"the main agent tool surface",
+	)
+	fs.StringVar(
+		&opts.DeferToolSurfaceMode,
+		flagDeferToolSurfaceMode,
+		deferToolSurfaceModeAuto,
+		"Deferred tool surface mode: off, on, auto",
+	)
+	fs.IntVar(
+		&opts.DeferToolSurfaceChars,
+		flagDeferToolSurfaceChars,
+		0,
+		"Auto-defer when direct tool declarations exceed this "+
+			"many characters (0 uses default)",
+	)
+	fs.BoolVar(
+		&opts.DeferToolSurfaceDefaultDirectTools,
+		flagDeferToolSurfaceDefaultDirectTools,
+		true,
+		"Keep default direct tools on the parent agent when "+
+			"deferred tool surface mode is active",
+	)
+	fs.StringVar(
+		&opts.DeferToolSurfaceDirect,
+		flagDeferToolSurfaceDirect,
+		"",
+		"Comma-separated additional tool names to keep directly on "+
+			"the parent agent when deferred mode is active",
+	)
+	fs.DurationVar(
+		&opts.DynamicAgentTimeout,
+		flagDynamicAgentTimeout,
+		0,
+		"Maximum duration for one dynamic_agent child call (0 disables)",
+	)
+	fs.DurationVar(
+		&opts.HostExecDefaultTimeout,
+		flagHostExecDefaultTimeout,
+		0,
+		"Default timeout for OpenClaw host exec commands when timeout_sec "+
+			"is omitted (0 keeps the built-in default)",
+	)
 
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, &exitError{Code: 2, Err: err}
@@ -828,6 +984,15 @@ func parseRunOptions(args []string) (runOptions, error) {
 		setFlags,
 		"enable-openclaw-tools",
 	)
+	opts.deferToolSurfaceModeExplicit = flagWasSet(
+		setFlags,
+		flagDeferToolSurfaceMode,
+	)
+	if flagWasSet(setFlags, flagDeferToolSurface) &&
+		!opts.DeferToolSurface &&
+		!flagWasSet(setFlags, flagDeferToolSurfaceMode) {
+		opts.DeferToolSurfaceMode = deferToolSurfaceModeOff
+	}
 
 	cfgPath := resolveConfigPath(opts.ConfigPath)
 	if cfgPath == "" {
@@ -939,6 +1104,8 @@ type fileConfig struct {
 
 	Session *sessionConfig `yaml:"session,omitempty"`
 	Memory  *memoryConfig  `yaml:"memory,omitempty"`
+
+	Evolution *evolutionConfig `yaml:"evolution,omitempty"`
 }
 
 type httpConfig struct {
@@ -952,7 +1119,8 @@ type adminConfig struct {
 }
 
 type observabilityConfig struct {
-	Langfuse *langfuseConfig `yaml:"langfuse,omitempty"`
+	Langfuse    *langfuseConfig           `yaml:"langfuse,omitempty"`
+	LatencyDiag *latencyDiagnosticsConfig `yaml:"latency_diagnostics,omitempty"`
 }
 
 type langfuseConfig struct {
@@ -961,6 +1129,11 @@ type langfuseConfig struct {
 	UIBaseURL                    *string `yaml:"ui_base_url,omitempty"`
 	TraceURLTemplate             *string `yaml:"trace_url_template,omitempty"`
 	ObservationLeafValueMaxBytes *int    `yaml:"observation_leaf_value_max_bytes,omitempty"`
+}
+
+type latencyDiagnosticsConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty"`
+	Events  *bool `yaml:"events,omitempty"`
 }
 
 type a2aConfig struct {
@@ -986,7 +1159,11 @@ type agentRunConfig struct {
 	EnableContextCompaction                       *bool `yaml:"enable_context_compaction,omitempty"`
 	ContextCompactionOversizedToolResultMaxTokens *int  `yaml:"context_compaction_oversized_tool_result_max_tokens,omitempty"`
 	MaxHistoryRuns                                *int  `yaml:"max_history_runs,omitempty"`
+	MaxLLMCalls                                   *int  `yaml:"max_llm_calls,omitempty"`
+	MaxToolIterations                             *int  `yaml:"max_tool_iterations,omitempty"`
 	PreloadMemory                                 *int  `yaml:"preload_memory,omitempty"`
+	DisablePostToolPrompt                         *bool `yaml:"disable_post_tool_prompt,omitempty"`
+	DisablePostToolPromptCamel                    *bool `yaml:"disablePostToolPrompt,omitempty"`
 
 	Instruction      *string  `yaml:"instruction,omitempty"`
 	InstructionFiles []string `yaml:"instruction_files,omitempty"`
@@ -1027,6 +1204,7 @@ type modelConfig struct {
 	Name             *string               `yaml:"name,omitempty"`
 	BaseURL          *string               `yaml:"base_url,omitempty"`
 	OpenAIVariant    *string               `yaml:"openai_variant,omitempty"`
+	Headers          map[string]string     `yaml:"headers,omitempty"`
 	GenerationConfig *generationConfigYAML `yaml:"generation_config,omitempty"`
 	Config           *rawYAMLNode          `yaml:"config,omitempty"`
 }
@@ -1055,19 +1233,25 @@ type skillsConfig struct {
 	ExtraDirs []string `yaml:"extra_dirs,omitempty"`
 	Debug     *bool    `yaml:"debug,omitempty"`
 
-	AllowBundled       []string `yaml:"allow_bundled,omitempty"`
-	AllowBundledCamel  []string `yaml:"allowBundled,omitempty"`
-	Watch              *bool    `yaml:"watch,omitempty"`
-	WatchBundled       *bool    `yaml:"watch_bundled,omitempty"`
-	WatchBundledCamel  *bool    `yaml:"watchBundled,omitempty"`
-	WatchDebounceMS    *int     `yaml:"watch_debounce_ms,omitempty"`
-	WatchDebounceCamel *int     `yaml:"watchDebounceMs,omitempty"`
-	ToolProfile        *string  `yaml:"tool_profile,omitempty"`
-	ToolProfileCamel   *string  `yaml:"toolProfile,omitempty"`
-	LoadMode           *string  `yaml:"load_mode,omitempty"`
-	LoadModeCamel      *string  `yaml:"loadMode,omitempty"`
-	MaxLoadedSkills    *int     `yaml:"max_loaded_skills,omitempty"`
-	MaxLoadedCamel     *int     `yaml:"maxLoadedSkills,omitempty"`
+	AllowBundled        []string `yaml:"allow_bundled,omitempty"`
+	AllowBundledCamel   []string `yaml:"allowBundled,omitempty"`
+	Watch               *bool    `yaml:"watch,omitempty"`
+	WatchBundled        *bool    `yaml:"watch_bundled,omitempty"`
+	WatchBundledCamel   *bool    `yaml:"watchBundled,omitempty"`
+	WatchDebounceMS     *int     `yaml:"watch_debounce_ms,omitempty"`
+	WatchDebounceCamel  *int     `yaml:"watchDebounceMs,omitempty"`
+	SummaryCacheTTLMS   *int     `yaml:"summary_cache_ttl_ms,omitempty"`
+	SummaryCacheCamel   *int     `yaml:"summaryCacheTtlMs,omitempty"`
+	OverviewLimit       *int     `yaml:"overview_limit,omitempty"`
+	OverviewLimitCamel  *int     `yaml:"overviewLimit,omitempty"`
+	OverviewPinned      []string `yaml:"overview_pinned,omitempty"`
+	OverviewPinnedCamel []string `yaml:"overviewPinned,omitempty"`
+	ToolProfile         *string  `yaml:"tool_profile,omitempty"`
+	ToolProfileCamel    *string  `yaml:"toolProfile,omitempty"`
+	LoadMode            *string  `yaml:"load_mode,omitempty"`
+	LoadModeCamel       *string  `yaml:"loadMode,omitempty"`
+	MaxLoadedSkills     *int     `yaml:"max_loaded_skills,omitempty"`
+	MaxLoadedCamel      *int     `yaml:"maxLoadedSkills,omitempty"`
 
 	ToolResults          *bool   `yaml:"loaded_content_in_tool_results,omitempty"`
 	ToolResultsCamel     *bool   `yaml:"loadedContentInToolResults,omitempty"`
@@ -1087,15 +1271,78 @@ type skillEntryConfig struct {
 }
 
 type toolsConfig struct {
-	EnableLocalExec           *bool   `yaml:"enable_local_exec,omitempty"`
-	EnableOpenClawTools       *bool   `yaml:"enable_openclaw_tools,omitempty"`
-	OpenClawToolingGuide      *string `yaml:"openclaw_tooling_guidance,omitempty"`
-	OpenClawToolingGuideCamel *string `yaml:"openClawToolingGuidance,omitempty"`
-	EnableParallelTools       *bool   `yaml:"enable_parallel_tools,omitempty"`
-	RefreshToolSetsOnRun      *bool   `yaml:"refresh_toolsets_on_run,omitempty"`
+	EnableLocalExec               *bool               `yaml:"enable_local_exec,omitempty"`
+	CodeExecutor                  *codeExecutorConfig `yaml:"code_executor,omitempty"`
+	EnableOpenClawTools           *bool               `yaml:"enable_openclaw_tools,omitempty"`
+	OpenClawToolingGuide          *string             `yaml:"openclaw_tooling_guidance,omitempty"`
+	OpenClawToolingGuideCamel     *string             `yaml:"openClawToolingGuidance,omitempty"`
+	EnableParallelTools           *bool               `yaml:"enable_parallel_tools,omitempty"`
+	RefreshToolSetsOnRun          *bool               `yaml:"refresh_toolsets_on_run,omitempty"`
+	DeferToDynamicAgent           *bool               `yaml:"defer_to_dynamic_agent,omitempty"`
+	DeferToDynamicAgentCamel      *bool               `yaml:"deferToDynamicAgent,omitempty"`
+	DeferToDynamicAgentMode       *string             `yaml:"defer_to_dynamic_agent_mode,omitempty"`
+	DeferToDynamicAgentModeCamel  *string             `yaml:"deferToDynamicAgentMode,omitempty"`
+	DeferToDynamicAgentChars      *int                `yaml:"defer_to_dynamic_agent_threshold_chars,omitempty"`
+	DeferToDynamicAgentCharsCamel *int                `yaml:"deferToDynamicAgentThresholdChars,omitempty"`
+	DeferDefaultDirectTools       *bool               `yaml:"defer_default_direct_tools,omitempty"`
+	DeferDefaultDirectToolsCamel  *bool               `yaml:"deferDefaultDirectTools,omitempty"`
+	DeferDirectTools              yamlStringList      `yaml:"defer_direct_tools,omitempty"`
+	DeferDirectToolsCamel         yamlStringList      `yaml:"deferDirectTools,omitempty"`
+	DynamicAgentTimeout           *string             `yaml:"dynamic_agent_timeout,omitempty"`
+	DynamicAgentTimeoutCamel      *string             `yaml:"dynamicAgentTimeout,omitempty"`
+	HostExecDefaultTimeout        *string             `yaml:"host_exec_default_timeout,omitempty"`
+	HostExecDefaultTimeoutCamel   *string             `yaml:"hostExecDefaultTimeout,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
+}
+
+type codeExecutorConfig struct {
+	Type                  string                     `yaml:"type,omitempty"`
+	AutoExecuteCodeBlocks *bool                      `yaml:"auto_execute_code_blocks,omitempty"`
+	Sandbox               *sandboxCodeExecutorConfig `yaml:"sandbox,omitempty"`
+}
+
+type sandboxCodeExecutorConfig struct {
+	WorkspaceRoot  string                 `yaml:"workspace_root,omitempty"`
+	Backend        string                 `yaml:"backend,omitempty"`
+	Profile        string                 `yaml:"profile,omitempty"`
+	Network        string                 `yaml:"network,omitempty"`
+	DefaultTimeout string                 `yaml:"default_timeout,omitempty"`
+	OutputMaxBytes *int                   `yaml:"output_max_bytes,omitempty"`
+	ShellEnv       *sandboxShellEnvConfig `yaml:"shell_env,omitempty"`
+}
+
+type sandboxShellEnvConfig struct {
+	Inherit              string            `yaml:"inherit,omitempty"`
+	ApplyDefaultExcludes *bool             `yaml:"apply_default_excludes,omitempty"`
+	Exclude              []string          `yaml:"exclude,omitempty"`
+	IncludeOnly          []string          `yaml:"include_only,omitempty"`
+	Set                  map[string]string `yaml:"set,omitempty"`
+}
+
+type codeExecutorOptions struct {
+	Type                  string
+	AutoExecuteCodeBlocks *bool
+	Sandbox               sandboxCodeExecutorOptions
+}
+
+type sandboxCodeExecutorOptions struct {
+	WorkspaceRoot  string
+	Backend        string
+	Profile        string
+	Network        string
+	DefaultTimeout time.Duration
+	OutputMaxBytes int
+	ShellEnv       sandboxShellEnvOptions
+}
+
+type sandboxShellEnvOptions struct {
+	Inherit              string
+	ApplyDefaultExcludes bool
+	Exclude              []string
+	IncludeOnly          []string
+	Set                  map[string]string
 }
 
 type sessionConfig struct {
@@ -1111,6 +1358,20 @@ type memoryConfig struct {
 	Limit   *int         `yaml:"limit,omitempty"`
 	Auto    *memoryAuto  `yaml:"auto,omitempty"`
 	Config  *rawYAMLNode `yaml:"config,omitempty"`
+}
+
+type evolutionConfig struct {
+	// Enabled explicitly opts the runtime into the async evolution service.
+	Enabled *bool `yaml:"enabled,omitempty"`
+
+	// HumanGate controls the human approval gate for skill revisions.
+	// Values: "always" (hold all), "create" (hold new skills only), "" (disabled).
+	HumanGate  *string                    `yaml:"human_gate,omitempty"`
+	SkillScope *evolutionSkillScopeConfig `yaml:"skill_scope,omitempty"`
+}
+
+type evolutionSkillScopeConfig struct {
+	Mode *string `yaml:"mode,omitempty"`
 }
 
 type knowledgesConfig struct {
@@ -1144,6 +1405,28 @@ type rawYAMLNode struct {
 func (r *rawYAMLNode) UnmarshalYAML(node *yaml.Node) error {
 	r.Node = node
 	return nil
+}
+
+type yamlStringList []string
+
+func (l *yamlStringList) UnmarshalYAML(node *yaml.Node) error {
+	if node == nil {
+		return nil
+	}
+	switch node.Kind {
+	case yaml.SequenceNode:
+		values := make([]string, 0, len(node.Content))
+		for _, item := range node.Content {
+			values = append(values, item.Value)
+		}
+		*l = yamlStringList(values)
+		return nil
+	case yaml.ScalarNode:
+		*l = yamlStringList(splitCSV(node.Value))
+		return nil
+	default:
+		return fmt.Errorf("expected string or list, got %v", node.Kind)
+	}
 }
 
 type filePluginSpec struct {
@@ -1314,12 +1597,20 @@ func (cfg *fileConfig) apply(
 			opts.AdminAutoPort = *cfg.Admin.AutoPort
 		}
 	}
-	if cfg.Observability != nil &&
-		cfg.Observability.Langfuse != nil {
-		applyLangfuseConfig(
-			cfg.Observability.Langfuse,
-			opts,
-		)
+	if cfg.Observability != nil {
+		if cfg.Observability.Langfuse != nil {
+			applyLangfuseConfig(
+				cfg.Observability.Langfuse,
+				opts,
+			)
+		}
+		if cfg.Observability.LatencyDiag != nil {
+			applyLatencyDiagnosticsConfig(
+				cfg.Observability.LatencyDiag,
+				opts,
+				set,
+			)
+		}
 	}
 	if cfg.A2A != nil {
 		if cfg.A2A.Enabled != nil &&
@@ -1373,9 +1664,25 @@ func (cfg *fileConfig) apply(
 			!flagWasSet(set, flagMaxHistoryRuns) {
 			opts.MaxHistoryRuns = *cfg.Agent.MaxHistoryRuns
 		}
+		if cfg.Agent.MaxLLMCalls != nil &&
+			!flagWasSet(set, flagMaxLLMCalls) {
+			opts.MaxLLMCalls = *cfg.Agent.MaxLLMCalls
+		}
+		if cfg.Agent.MaxToolIterations != nil &&
+			!flagWasSet(set, flagMaxToolIterations) {
+			opts.MaxToolIterations = *cfg.Agent.MaxToolIterations
+		}
 		if cfg.Agent.PreloadMemory != nil &&
 			!flagWasSet(set, flagPreloadMemory) {
 			opts.PreloadMemory = *cfg.Agent.PreloadMemory
+		}
+		disablePostToolPrompt := firstBoolPtr(
+			cfg.Agent.DisablePostToolPrompt,
+			cfg.Agent.DisablePostToolPromptCamel,
+		)
+		if disablePostToolPrompt != nil {
+			enabled := !*disablePostToolPrompt
+			opts.PostToolPromptEnabled = &enabled
 		}
 		if cfg.Agent.Instruction != nil &&
 			!flagWasSet(set, flagAgentInstruction) {
@@ -1472,6 +1779,9 @@ func (cfg *fileConfig) apply(
 			opts.OpenAIVariant = strings.TrimSpace(
 				*cfg.Model.OpenAIVariant,
 			)
+		}
+		if len(cfg.Model.Headers) > 0 {
+			opts.OpenAIHeaders = cleanHeaderMap(cfg.Model.Headers)
 		}
 		if cfg.Model.Config != nil {
 			opts.ModelConfig = cfg.Model.Config.Node
@@ -1576,6 +1886,35 @@ func (cfg *fileConfig) apply(
 				*watchDebounceMS,
 			) * time.Millisecond
 		}
+		summaryCacheTTLMS := firstIntPtr(
+			cfg.Skills.SummaryCacheTTLMS,
+			cfg.Skills.SummaryCacheCamel,
+		)
+		if summaryCacheTTLMS != nil &&
+			!flagWasSet(set, flagSkillsSummaryCacheTTL) {
+			opts.SkillsSummaryCacheTTL = time.Duration(
+				*summaryCacheTTLMS,
+			) * time.Millisecond
+		}
+		overviewLimit := firstIntPtr(
+			cfg.Skills.OverviewLimit,
+			cfg.Skills.OverviewLimitCamel,
+		)
+		if overviewLimit != nil &&
+			!flagWasSet(set, flagSkillsOverviewLimit) {
+			opts.SkillsOverviewLimit = *overviewLimit
+		}
+		overviewPinned := cfg.Skills.OverviewPinned
+		if len(overviewPinned) == 0 {
+			overviewPinned = cfg.Skills.OverviewPinnedCamel
+		}
+		if len(overviewPinned) > 0 &&
+			!flagWasSet(set, flagSkillsOverviewPinned) {
+			opts.SkillsOverviewPinned = strings.Join(
+				overviewPinned,
+				csvDelimiter,
+			)
+		}
 		if len(cfg.Skills.Entries) > 0 {
 			opts.SkillConfigs = convertSkillConfigs(
 				cfg.Skills.Entries,
@@ -1629,6 +1968,15 @@ func (cfg *fileConfig) apply(
 			!flagWasSet(set, "enable-local-exec") {
 			opts.EnableLocalExec = *cfg.Tools.EnableLocalExec
 		}
+		if cfg.Tools.CodeExecutor != nil {
+			codeExecutor, err := convertCodeExecutorConfig(
+				cfg.Tools.CodeExecutor,
+			)
+			if err != nil {
+				return fmt.Errorf("tools.code_executor: %w", err)
+			}
+			opts.CodeExecutor = codeExecutor
+		}
 		if cfg.Tools.EnableOpenClawTools != nil {
 			opts.enableOpenClawToolsExplicit = true
 			if !flagWasSet(set, "enable-openclaw-tools") {
@@ -1647,6 +1995,91 @@ func (cfg *fileConfig) apply(
 		if cfg.Tools.RefreshToolSetsOnRun != nil &&
 			!flagWasSet(set, "refresh-toolsets-on-run") {
 			opts.RefreshToolSetsOnRun = *cfg.Tools.RefreshToolSetsOnRun
+		}
+		if !flagWasSet(set, flagDeferToolSurface) {
+			deferConfigured := false
+			if cfg.Tools.DeferToDynamicAgent != nil {
+				deferConfigured = true
+				opts.DeferToolSurface = *cfg.Tools.DeferToDynamicAgent
+			}
+			if cfg.Tools.DeferToDynamicAgentCamel != nil {
+				deferConfigured = true
+				opts.DeferToolSurface =
+					*cfg.Tools.DeferToDynamicAgentCamel
+			}
+			if deferConfigured &&
+				!opts.DeferToolSurface &&
+				!flagWasSet(set, flagDeferToolSurfaceMode) {
+				opts.DeferToolSurfaceMode = deferToolSurfaceModeOff
+			}
+		}
+		deferMode := firstStringPtr(
+			cfg.Tools.DeferToDynamicAgentMode,
+			cfg.Tools.DeferToDynamicAgentModeCamel,
+		)
+		if deferMode != nil &&
+			!flagWasSet(set, flagDeferToolSurface) &&
+			!flagWasSet(set, flagDeferToolSurfaceMode) {
+			opts.DeferToolSurface = false
+			opts.DeferToolSurfaceMode = *deferMode
+			opts.deferToolSurfaceModeExplicit = true
+		}
+		deferChars := firstIntPtr(
+			cfg.Tools.DeferToDynamicAgentChars,
+			cfg.Tools.DeferToDynamicAgentCharsCamel,
+		)
+		if deferChars != nil &&
+			!flagWasSet(set, flagDeferToolSurfaceChars) {
+			opts.DeferToolSurfaceChars = *deferChars
+		}
+		deferDefaults := firstBoolPtr(
+			cfg.Tools.DeferDefaultDirectTools,
+			cfg.Tools.DeferDefaultDirectToolsCamel,
+		)
+		if deferDefaults != nil &&
+			!flagWasSet(set, flagDeferToolSurfaceDefaultDirectTools) {
+			opts.DeferToolSurfaceDefaultDirectTools = *deferDefaults
+		}
+		if !flagWasSet(set, flagDeferToolSurfaceDirect) {
+			if len(cfg.Tools.DeferDirectTools) > 0 {
+				opts.DeferToolSurfaceDirect = strings.Join(
+					[]string(cfg.Tools.DeferDirectTools),
+					",",
+				)
+			}
+			if len(cfg.Tools.DeferDirectToolsCamel) > 0 {
+				opts.DeferToolSurfaceDirect = strings.Join(
+					[]string(cfg.Tools.DeferDirectToolsCamel),
+					",",
+				)
+			}
+		}
+		dynamicTimeout := firstStringPtr(
+			cfg.Tools.DynamicAgentTimeout,
+			cfg.Tools.DynamicAgentTimeoutCamel,
+		)
+		if dynamicTimeout != nil &&
+			!flagWasSet(set, flagDynamicAgentTimeout) {
+			dur, err := parseDuration(*dynamicTimeout)
+			if err != nil {
+				return fmt.Errorf("tools.dynamic_agent_timeout: %w", err)
+			}
+			opts.DynamicAgentTimeout = dur
+		}
+		hostExecTimeout := firstStringPtr(
+			cfg.Tools.HostExecDefaultTimeout,
+			cfg.Tools.HostExecDefaultTimeoutCamel,
+		)
+		if hostExecTimeout != nil &&
+			!flagWasSet(set, flagHostExecDefaultTimeout) {
+			dur, err := parseDuration(*hostExecTimeout)
+			if err != nil {
+				return fmt.Errorf(
+					"tools.host_exec_default_timeout: %w",
+					err,
+				)
+			}
+			opts.HostExecDefaultTimeout = dur
 		}
 		if len(cfg.Tools.Providers) > 0 {
 			opts.ToolProviders = convertPluginSpecs(cfg.Tools.Providers)
@@ -1739,6 +2172,25 @@ func (cfg *fileConfig) apply(
 		}
 	}
 
+	if cfg.Evolution != nil {
+		if cfg.Evolution.Enabled != nil {
+			opts.EvolutionEnabled = *cfg.Evolution.Enabled
+		}
+		if cfg.Evolution.HumanGate != nil {
+			opts.EvolutionHumanGate = strings.TrimSpace(*cfg.Evolution.HumanGate)
+		}
+		if cfg.Evolution.SkillScope != nil &&
+			cfg.Evolution.SkillScope.Mode != nil {
+			mode, err := parseEvolutionSkillScopeMode(
+				*cfg.Evolution.SkillScope.Mode,
+			)
+			if err != nil {
+				return fmt.Errorf("evolution.skill_scope.mode: %w", err)
+			}
+			opts.EvolutionSkillScopeMode = mode
+		}
+	}
+
 	return nil
 }
 
@@ -1767,6 +2219,22 @@ func applyLangfuseConfig(
 	if cfg.ObservationLeafValueMaxBytes != nil {
 		value := *cfg.ObservationLeafValueMaxBytes
 		opts.LangfuseObservationLeafValueMaxBytes = &value
+	}
+}
+
+func applyLatencyDiagnosticsConfig(
+	cfg *latencyDiagnosticsConfig,
+	opts *runOptions,
+	set map[string]struct{},
+) {
+	if cfg == nil || opts == nil {
+		return
+	}
+	if cfg.Enabled != nil && !flagWasSet(set, flagLatencyDiagnostics) {
+		opts.LatencyDiagnosticsEnabled = *cfg.Enabled
+	}
+	if cfg.Events != nil && !flagWasSet(set, flagLatencyDiagnosticsEvents) {
+		opts.LatencyDiagnosticsEvents = *cfg.Events
 	}
 }
 
@@ -1945,6 +2413,192 @@ func convertKnowledgeConfigs(
 	return out, nil
 }
 
+func convertCodeExecutorConfig(
+	cfg *codeExecutorConfig,
+) (codeExecutorOptions, error) {
+	if cfg == nil {
+		return codeExecutorOptions{}, nil
+	}
+	typeName := strings.ToLower(strings.TrimSpace(cfg.Type))
+	out := codeExecutorOptions{
+		Type:                  typeName,
+		AutoExecuteCodeBlocks: cfg.AutoExecuteCodeBlocks,
+	}
+	switch typeName {
+	case "":
+		if cfg.Sandbox != nil {
+			return codeExecutorOptions{}, fmt.Errorf(
+				"sandbox config requires type %q",
+				codeExecutorTypeSandbox,
+			)
+		}
+		return out, nil
+	case codeExecutorTypeSandbox:
+		sandboxCfg, err := convertSandboxCodeExecutorConfig(cfg.Sandbox)
+		if err != nil {
+			return codeExecutorOptions{}, err
+		}
+		out.Sandbox = sandboxCfg
+		return out, nil
+	default:
+		return codeExecutorOptions{}, fmt.Errorf(
+			"invalid type %q: want sandbox or empty",
+			cfg.Type,
+		)
+	}
+}
+
+func convertSandboxCodeExecutorConfig(
+	cfg *sandboxCodeExecutorConfig,
+) (sandboxCodeExecutorOptions, error) {
+	out := sandboxCodeExecutorOptions{
+		Backend:        sandboxBackendAuto,
+		Profile:        sandboxProfileWorkspaceWrite,
+		Network:        sandboxNetworkRestricted,
+		DefaultTimeout: defaultSandboxCodeExecutorTimeout,
+		OutputMaxBytes: defaultSandboxCodeExecutorOutputMaxBytes,
+		ShellEnv: sandboxShellEnvOptions{
+			Inherit:              sandboxShellEnvInheritCore,
+			ApplyDefaultExcludes: true,
+		},
+	}
+	if cfg == nil {
+		return out, nil
+	}
+	out.WorkspaceRoot = strings.TrimSpace(cfg.WorkspaceRoot)
+	backend := strings.ToLower(strings.TrimSpace(cfg.Backend))
+	if backend != "" {
+		switch backend {
+		case sandboxBackendAuto, sandboxBackendLinuxBubblewrap, sandboxBackendMacOSSandbox:
+			out.Backend = backend
+		default:
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.backend %q: want auto|linux-bubblewrap|macos-sandbox-exec",
+				cfg.Backend,
+			)
+		}
+	}
+	profile := strings.ToLower(strings.TrimSpace(cfg.Profile))
+	if profile != "" {
+		switch profile {
+		case sandboxProfileWorkspaceWrite,
+			sandboxProfileReadOnly,
+			sandboxProfileDisabled:
+			out.Profile = profile
+		default:
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.profile %q: want workspace_write|read_only|disabled",
+				cfg.Profile,
+			)
+		}
+	}
+	network := strings.ToLower(strings.TrimSpace(cfg.Network))
+	if network != "" {
+		switch network {
+		case sandboxNetworkRestricted, sandboxNetworkEnabled:
+			out.Network = network
+		default:
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.network %q: want restricted|enabled",
+				cfg.Network,
+			)
+		}
+	}
+	timeout := strings.TrimSpace(cfg.DefaultTimeout)
+	if timeout != "" {
+		dur, err := parseDuration(timeout)
+		if err != nil {
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.default_timeout: %w",
+				err,
+			)
+		}
+		if dur <= 0 {
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.default_timeout must be positive",
+			)
+		}
+		out.DefaultTimeout = dur
+	}
+	if cfg.OutputMaxBytes != nil {
+		if *cfg.OutputMaxBytes <= 0 {
+			return sandboxCodeExecutorOptions{}, fmt.Errorf(
+				"sandbox.output_max_bytes must be positive",
+			)
+		}
+		out.OutputMaxBytes = *cfg.OutputMaxBytes
+	}
+	if cfg.ShellEnv != nil {
+		shellEnv, err := convertSandboxShellEnvConfig(cfg.ShellEnv)
+		if err != nil {
+			return sandboxCodeExecutorOptions{}, err
+		}
+		out.ShellEnv = shellEnv
+	}
+	return out, nil
+}
+
+func convertSandboxShellEnvConfig(
+	cfg *sandboxShellEnvConfig,
+) (sandboxShellEnvOptions, error) {
+	out := sandboxShellEnvOptions{
+		Inherit:              sandboxShellEnvInheritCore,
+		ApplyDefaultExcludes: true,
+	}
+	if cfg == nil {
+		return out, nil
+	}
+	inherit := strings.ToLower(strings.TrimSpace(cfg.Inherit))
+	if inherit != "" {
+		switch inherit {
+		case sandboxShellEnvInheritAll,
+			sandboxShellEnvInheritCore,
+			sandboxShellEnvInheritNone:
+			out.Inherit = inherit
+		default:
+			return sandboxShellEnvOptions{}, fmt.Errorf(
+				"sandbox.shell_env.inherit %q: want all|core|none",
+				cfg.Inherit,
+			)
+		}
+	}
+	if cfg.ApplyDefaultExcludes != nil {
+		out.ApplyDefaultExcludes = *cfg.ApplyDefaultExcludes
+	}
+	out.Exclude = trimStringSlice(cfg.Exclude)
+	out.IncludeOnly = trimStringSlice(cfg.IncludeOnly)
+	if len(cfg.Set) > 0 {
+		out.Set = make(map[string]string, len(cfg.Set))
+		for key, value := range cfg.Set {
+			name := strings.TrimSpace(key)
+			if name == "" {
+				return sandboxShellEnvOptions{}, fmt.Errorf(
+					"sandbox.shell_env.set contains empty key",
+				)
+			}
+			out.Set[name] = value
+		}
+	}
+	return out, nil
+}
+
+func trimStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func applySessionSummary(
 	cfg *summaryConfig,
 	opts *runOptions,
@@ -2026,6 +2680,19 @@ func parseDuration(raw string) (time.Duration, error) {
 	return time.ParseDuration(v)
 }
 
+func parseEvolutionSkillScopeMode(raw string) (skill.SkillScopeMode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return skill.SkillScopeNone, nil
+	case string(skill.SkillScopeApp):
+		return skill.SkillScopeApp, nil
+	case string(skill.SkillScopeUser):
+		return skill.SkillScopeUser, nil
+	default:
+		return skill.SkillScopeNone, fmt.Errorf("unsupported mode %q", raw)
+	}
+}
+
 func flagWasSet(set map[string]struct{}, name string) bool {
 	_, ok := set[name]
 	return ok
@@ -2059,6 +2726,33 @@ func finalizeRunOptions(opts *runOptions) error {
 			opts.SkillsWatchDebounce,
 		)
 	}
+	if opts.SkillsSummaryCacheTTL < 0 {
+		return fmt.Errorf(
+			"invalid skills summary cache ttl: %v",
+			opts.SkillsSummaryCacheTTL,
+		)
+	}
+	if opts.SkillsOverviewLimit < 0 {
+		return fmt.Errorf(
+			"invalid skills overview limit: %d",
+			opts.SkillsOverviewLimit,
+		)
+	}
+	if opts.MaxToolIterations < 0 {
+		return fmt.Errorf(
+			"invalid max tool iterations: %d",
+			opts.MaxToolIterations,
+		)
+	}
+	if opts.MaxLLMCalls < 0 {
+		return fmt.Errorf(
+			"invalid max LLM calls: %d",
+			opts.MaxLLMCalls,
+		)
+	}
+	opts.EvolutionSkillScopeMode = skill.NormalizeSkillScopeMode(
+		opts.EvolutionSkillScopeMode,
+	)
 	opts.MemoryBackend = resolveMemoryBackendType(opts.MemoryBackend)
 	opts.AdminAddr = strings.TrimSpace(opts.AdminAddr)
 	if opts.AdminEnabled && opts.AdminAddr == "" {
@@ -2077,6 +2771,39 @@ func finalizeRunOptions(opts *runOptions) error {
 			"invalid session-summary-approx-runes-per-token: %v", v,
 		)
 	}
+	if opts.DeferToolSurface {
+		opts.DeferToolSurfaceMode = deferToolSurfaceModeOn
+	} else {
+		mode, err := normalizeDeferToolSurfaceMode(
+			opts.DeferToolSurfaceMode,
+		)
+		if err != nil {
+			return err
+		}
+		opts.DeferToolSurfaceMode = mode
+	}
+	if opts.DeferToolSurfaceChars < 0 {
+		return fmt.Errorf(
+			"invalid defer tool surface threshold chars: %d",
+			opts.DeferToolSurfaceChars,
+		)
+	}
+	if opts.DynamicAgentTimeout < 0 {
+		return fmt.Errorf(
+			"invalid dynamic agent timeout: %s",
+			opts.DynamicAgentTimeout,
+		)
+	}
+	if opts.HostExecDefaultTimeout < 0 {
+		return fmt.Errorf(
+			"invalid host exec default timeout: %s",
+			opts.HostExecDefaultTimeout,
+		)
+	}
+	opts.DeferToolSurfaceDirect = strings.Join(
+		normalizeStringList(splitCSV(opts.DeferToolSurfaceDirect)),
+		",",
+	)
 	normalizeA2AOptions(opts)
 	return nil
 }
@@ -2137,6 +2864,10 @@ func firstBoolPtr(primary, fallback *bool) *bool {
 		return primary
 	}
 	return fallback
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func firstIntPtr(primary, fallback *int) *int {
