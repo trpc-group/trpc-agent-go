@@ -90,23 +90,6 @@ func TestNewUsesDefaultHTTPClientBuilder(t *testing.T) {
 	assert.Equal(t, "/trpc-agent/v1/apps/sports-agent/structure", gotRequest.URL.Path)
 }
 
-func TestWithHTTPClientOverridesDefaultBuilder(t *testing.T) {
-	originalBuilder := DefaultNewHTTPClient
-	t.Cleanup(func() { DefaultNewHTTPClient = originalBuilder })
-	explicitClient := &http.Client{}
-	called := false
-	DefaultNewHTTPClient = func(opts ...HTTPClientOption) HTTPClient {
-		called = true
-		return &http.Client{}
-	}
-	options := newOptions(
-		WithHTTPClientOptions(WithHTTPClientName("unused")),
-		WithHTTPClient(explicitClient),
-	)
-	require.Same(t, explicitClient, options.httpClient)
-	assert.False(t, called)
-}
-
 func TestHTTPClientOptionMerge(t *testing.T) {
 	transport := &http.Transport{}
 	options := &HTTPClientOptions{}

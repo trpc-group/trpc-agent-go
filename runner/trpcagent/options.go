@@ -35,14 +35,6 @@ func WithBasePath(basePath string) Option {
 	}
 }
 
-// WithHTTPClient sets the HTTP client used by the runner.
-// Custom transports may resolve non-http targets such as service discovery schemes.
-func WithHTTPClient(client *http.Client) Option {
-	return func(opts *options) {
-		opts.httpClient = client
-	}
-}
-
 // WithHTTPClientOptions sets options for the default HTTP client builder.
 func WithHTTPClientOptions(httpOpts ...HTTPClientOption) Option {
 	return func(opts *options) {
