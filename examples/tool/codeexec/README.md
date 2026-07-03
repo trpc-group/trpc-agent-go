@@ -60,6 +60,25 @@ export SSL_CERT_FILE=<caPATH>/rootCA.pem
 
 > Note: The demo will start a local Jupyter Kernel Gateway subprocess and will call `Close()` on exit to clean it up.
 
+#### OpenSandbox executor
+
+OpenSandbox is a universal sandbox platform open-sourced by Alibaba. The demo reads OpenSandbox connection settings from environment variables:
+
+```bash
+export OPENSANDBOX_ENDPOINT=localhost:8080                          # Server address (host:port)
+export OPENSANDBOX_API_KEY=your-api-key                             # API key
+# Optional overrides (defaults come from the OpenSandbox Go SDK):
+# export OPENSANDBOX_IMAGE=opensandbox/code-interpreter:latest      # Container image
+# export OPENSANDBOX_ENTRYPOINT="/opt/code-interpreter/code-interpreter.sh"  # Entrypoint (space-separated)
+```
+
+Run with OpenSandbox backend:
+
+```bash
+cd tool/codeexec
+./codeexec-demo -model deepseek-v4-flash -executor opensandbox
+```
+
 ### 4. Example Conversation
 
 ```
@@ -204,6 +223,7 @@ tool := codeexec.NewTool(
 | `local.New()` | Local execution (unsafe) | `codeexecutor/local` |
 | `container.New()` | Docker container execution | `codeexecutor/container` |
 | `jupyter.New()` | Jupyter Kernel execution (requires `Close()`) | `codeexecutor/jupyter` |
+| `opensandbox.New()` | Remote OpenSandbox sandbox execution | `codeexecutor/opensandbox` |
 
 ## Notes
 

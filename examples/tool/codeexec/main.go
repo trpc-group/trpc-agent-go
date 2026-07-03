@@ -25,6 +25,7 @@ import (
 	e2bexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/jupyter"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
+	osbexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/opensandbox"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -36,7 +37,7 @@ import (
 func main() {
 	// Parse command line arguments
 	modelName := flag.String("model", "deepseek-v4-flash", "Model name to use")
-	executorKind := flag.String("executor", "local", "Code executor backend: local or jupyter")
+	executorKind := flag.String("executor", "local", "Code executor backend: local, jupyter, e2b, or opensandbox")
 	flag.Parse()
 
 	fmt.Printf("🚀 Code Execution Tool Demo\n")
@@ -92,7 +93,11 @@ func (c *codeExecChat) run() error {
 // setup creates a runner with code execution tool
 func (c *codeExecChat) setup(_ context.Context) error {
 	// Create OpenAI model
-	modelInstance := openai.New(c.modelName)
+	var modelOpts []openai.Option
+	if strings.HasPrefix(strings.ToLower(c.modelName), "deepseek") {
+		modelOpts = append(modelOpts, openai.WithBaseURL("https://api.deepseek.com"))
+	}
+	modelInstance := openai.New(c.modelName, modelOpts...)
 
 	// Create code executor
 	var executor codeexecutor.CodeExecutor
@@ -107,6 +112,26 @@ func (c *codeExecChat) setup(_ context.Context) error {
 			return fmt.Errorf("e2b executor: %w", err)
 		}
 		executor = e2be
+	case "opensandbox":
+		var osbOpts []osbexec.Option
+		if v := os.Getenv("OPENSANDBOX_ENDPOINT"); v != "" {
+			osbOpts = append(osbOpts, osbexec.WithDomain(v))
+		}
+		if v := os.Getenv("OPENSANDBOX_API_KEY"); v != "" {
+			osbOpts = append(osbOpts, osbexec.WithAPIKey(v))
+		}
+		if v := os.Getenv("OPENSANDBOX_IMAGE"); v != "" {
+			osbOpts = append(osbOpts, osbexec.WithImage(v))
+		}
+		if v := os.Getenv("OPENSANDBOX_ENTRYPOINT"); v != "" {
+			osbOpts = append(osbOpts, osbexec.WithEntrypoint(strings.Split(v, " ")))
+		}
+		osbe, err := osbexec.New(osbOpts...)
+		if err != nil {
+			return fmt.Errorf("opensandbox executor: %w", err)
+		}
+		executor = osbe
+		c.cleanup = osbe.Close
 	case "jupyter":
 		je, err := jupyter.New(
 			jupyter.WithStartTimeout(30*time.Second),
@@ -118,7 +143,7 @@ func (c *codeExecChat) setup(_ context.Context) error {
 		executor = je
 		c.cleanup = je.Close
 	default:
-		return fmt.Errorf("unknown -executor=%q (supported: local, jupyter)", c.executorKind)
+		return fmt.Errorf("unknown -executor=%q (supported: local, jupyter, e2b, opensandbox)", c.executorKind)
 	}
 
 	// Create code execution tool
