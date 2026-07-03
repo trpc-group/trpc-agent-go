@@ -39,12 +39,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/livesession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/appid"
 )
 
@@ -2464,6 +2466,10 @@ func (r *runner) handleEventPersistence(
 	}
 	finishRunnerLatencySpan(appendSpan, appendStarted, nil)
 
+	if shouldAppendSummaryForkResponse(agentEvent) {
+		summaryfork.AppendResponse(invocation, agentEvent.Response)
+	}
+
 	// Skip user messages, tool call events, and invalid content.
 	// These should not trigger summarization.
 	if agentEvent.IsUserMessage() ||
@@ -2502,6 +2508,12 @@ func (r *runner) handleEventPersistence(
 		runnerLatencySpanEnqueueSummary,
 		runnerEventAttrs(agentEvent)...,
 	)
+	if parentRequest, ok := summaryfork.Request(invocation); ok {
+		summaryCtx = summary.ContextWithCacheSafeForkRequest(
+			summaryCtx,
+			parentRequest,
+		)
+	}
 	if err := r.sessionService.EnqueueSummaryJob(
 		summaryCtx, persistSession, agentEvent.FilterKey, false,
 	); err != nil {
@@ -2515,6 +2527,17 @@ func (r *runner) handleEventPersistence(
 
 	// Note: Auto memory extraction is triggered once at runner completion,
 	// not here, to avoid redundant extraction calls.
+	return true
+}
+
+func shouldAppendSummaryForkResponse(agentEvent *event.Event) bool {
+	if agentEvent == nil ||
+		agentEvent.Response == nil ||
+		agentEvent.Response.IsPartial ||
+		agentEvent.IsUserMessage() ||
+		!agentEvent.IsValidContent() {
+		return false
+	}
 	return true
 }
 

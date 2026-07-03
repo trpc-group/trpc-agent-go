@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
@@ -42,7 +43,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
-	sessionsummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
+	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -516,8 +517,16 @@ func (f *Flow) maybeSyncSummaryIntraRun(
 		return
 	}
 
+	summaryCtx := ctx
+	if parentRequest, ok := summaryfork.Request(invocation); ok {
+		summaryCtx = summary.ContextWithCacheSafeForkRequest(
+			summaryCtx,
+			parentRequest,
+		)
+	}
+
 	err = invocation.SessionService.CreateSessionSummary(
-		ctx,
+		summaryCtx,
 		invocation.Session,
 		invocation.GetEventFilterKey(),
 		false,
@@ -1518,7 +1527,7 @@ func (f *Flow) runContextCompaction(
 		latencySpanContextSummary,
 		contextCompactionAttrs(decision, req)...,
 	)
-	summaryCtx = sessionsummary.ContextWithCacheSafeForkRequest(summaryCtx, req)
+	summaryCtx = summary.ContextWithCacheSafeForkRequest(summaryCtx, req)
 	err := invocation.SessionService.CreateSessionSummary(
 		summaryCtx,
 		invocation.Session,
@@ -2211,6 +2220,7 @@ func (f *Flow) callLLM(
 			yield(customResp)
 		}, nil
 	}
+	summaryfork.Attach(invocation, llmRequest)
 	seq, err := f.generateContentSeq(ctx, invocation, llmRequest, callModel)
 	if err != nil {
 		return ctx, nil, err

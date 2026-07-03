@@ -13,6 +13,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -41,8 +42,24 @@ func CacheSafeForkRequestFromContext(ctx context.Context) (*model.Request, bool)
 	return req, ok && req != nil
 }
 
-func cacheSafeForkRequestFromContext(ctx context.Context) (*model.Request, bool) {
-	return CacheSafeForkRequestFromContext(ctx)
+type cacheSafeForkingResolver interface {
+	CacheSafeForkingEnabled(context.Context, *session.Session) bool
+}
+
+func cacheSafeForkingEnabled(
+	ctx context.Context,
+	s SessionSummarizer,
+	sess *session.Session,
+) bool {
+	if s == nil {
+		return false
+	}
+	if resolver, ok := s.(cacheSafeForkingResolver); ok {
+		return resolver.CacheSafeForkingEnabled(ctx, sess)
+	}
+	metadata := s.Metadata()
+	enabled, _ := metadata[metadataKeyCacheSafeForking].(bool)
+	return enabled
 }
 
 func cloneRequestForCacheSafeFork(req *model.Request) *model.Request {
