@@ -274,6 +274,32 @@ type ContentPart struct {
 	Audio *Audio `json:"audio,omitempty"`
 	// File is the file data.
 	File *File `json:"file,omitempty"`
+	// ContentRef is an internal reference to externalized content.
+	ContentRef *ContentRef `json:"content_ref,omitempty"`
+}
+
+// ContentRef records where externalized content is stored and how to restore it.
+//
+// A missing schema version represents the v1 schema.
+type ContentRef struct {
+	// ArtifactRef is the pinned artifact reference, for example artifact://name@0.
+	ArtifactRef string `json:"artifact_ref"`
+	// ArtifactName is the artifact filename.
+	ArtifactName string `json:"artifact_name,omitempty"`
+	// ArtifactVersion is the pinned artifact revision.
+	ArtifactVersion int `json:"artifact_version"`
+	// MimeType is the MIME type used when saving and hydrating the content.
+	MimeType string `json:"mime_type,omitempty"`
+	// SizeBytes is the original content size in bytes.
+	SizeBytes int64 `json:"size_bytes,omitempty"`
+	// SHA256 is the lowercase hex SHA256 of the original bytes.
+	SHA256 string `json:"sha256,omitempty"`
+	// OriginalName is the user-facing filename or display name, if any.
+	OriginalName string `json:"original_name,omitempty"`
+	// EventID identifies the owning event for debugging.
+	EventID string `json:"event_id,omitempty"`
+	// RequestID identifies the owning request for debugging.
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // File represents file content for file input models.
