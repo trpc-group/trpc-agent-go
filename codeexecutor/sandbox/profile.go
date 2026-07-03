@@ -43,6 +43,15 @@ type PermissionProfile struct {
 	typ        permissionProfileType
 	fileSystem fileSystemPolicy
 	network    NetworkPolicy
+	macOS      macOSProfilePolicy
+}
+
+// macOSProfilePolicy describes macOS Seatbelt-specific controls. It is kept off
+// the public NetworkPolicy struct so the cross-platform network model stays
+// binary and existing NetworkPolicy literals remain source-compatible.
+type macOSProfilePolicy struct {
+	allowSystemTrustServices bool
+	unixSocketPaths          []string
 }
 
 // enforcement derives the execution mode from the profile.
@@ -113,6 +122,34 @@ func (p PermissionProfile) WithNetworkPolicy(policy NetworkPolicy) PermissionPro
 		policy.Mode = NetworkRestricted
 	}
 	p.network = policy
+	return p
+}
+
+// WithMacOSWeakerNetworkIsolation allows macOS system trust services such as
+// com.apple.trustd.agent inside the Seatbelt sandbox. It is useful for Go-based
+// CLI tools that validate TLS certificates through custom CAs, but weakens
+// network isolation and has no effect on non-macOS backends.
+func (p PermissionProfile) WithMacOSWeakerNetworkIsolation() PermissionProfile {
+	p.macOS.allowSystemTrustServices = true
+	return p
+}
+
+// WithMacOSUnixSocketPaths allows macOS Seatbelt access to exact AF_UNIX socket
+// paths. Linux keeps the existing namespace-level network model and does not
+// claim support for these macOS-specific paths.
+func (p PermissionProfile) WithMacOSUnixSocketPaths(paths ...string) PermissionProfile {
+	var filtered []string
+	for _, path := range paths {
+		if path != "" {
+			filtered = append(filtered, path)
+		}
+	}
+	if len(filtered) == 0 {
+		return p
+	}
+	merged := make([]string, len(p.macOS.unixSocketPaths), len(p.macOS.unixSocketPaths)+len(filtered))
+	copy(merged, p.macOS.unixSocketPaths)
+	p.macOS.unixSocketPaths = append(merged, filtered...)
 	return p
 }
 

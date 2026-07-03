@@ -32,6 +32,24 @@ The command then shares the host network namespace while still using the rest of
 the configured sandbox controls, such as user, PID, mount, environment, and
 filesystem policy.
 
+## macOS Enforcement
+
+The macOS backend keeps the same public binary model but projects it to
+Seatbelt rules instead of a network namespace:
+
+- `NetworkRestricted` does not add broad network allow rules.
+- `NetworkEnabled` adds broad `network-outbound`, `network-inbound`, and system
+  socket allowances, plus the system services needed for ordinary host network
+  use.
+
+macOS has network-adjacent IPC surfaces that Linux namespaces do not model in
+the same way. `WithMacOSWeakerNetworkIsolation` explicitly allows system trust
+services such as `com.apple.trustd.agent`, which can help Go-based CLI tools
+validate TLS certificates through custom CAs but weakens isolation.
+`WithMacOSUnixSocketPaths` allows AF_UNIX socket bind/connect operations for
+exact absolute socket paths. These are macOS backend extensions; the Linux
+backend does not claim support for equivalent path-level Unix socket policy.
+
 ## Scope
 
 This design keeps the first Linux implementation intentionally binary:

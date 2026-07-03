@@ -94,6 +94,51 @@ func TestWorkspaceWriteProfileCanSetNetwork(t *testing.T) {
 	if !containsSpecialRule(profile, accessWrite, specialWork) {
 		t.Fatalf("workspace-write network profile missing work write grant: %#v", profile.fileSystem.Rules)
 	}
+
+	profile = WorkspaceWriteProfile().
+		WithMacOSWeakerNetworkIsolation().
+		WithMacOSUnixSocketPaths("/tmp/trpc-agent.sock")
+	if !profile.macOS.allowSystemTrustServices ||
+		len(profile.macOS.unixSocketPaths) != 1 ||
+		profile.macOS.unixSocketPaths[0] != "/tmp/trpc-agent.sock" {
+		t.Fatalf("macOS network extensions = %#v, want trust services and unix socket", profile.macOS)
+	}
+
+	profile = WorkspaceWriteProfile().
+		WithMacOSWeakerNetworkIsolation().
+		WithMacOSUnixSocketPaths("/tmp/trpc-agent.sock").
+		WithNetworkPolicy(NetworkPolicy{Mode: NetworkEnabled})
+	if profile.network.Mode != NetworkEnabled ||
+		!profile.macOS.allowSystemTrustServices ||
+		len(profile.macOS.unixSocketPaths) != 1 {
+		t.Fatalf("network/macos extension order changed profile: network=%#v macOS=%#v", profile.network, profile.macOS)
+	}
+}
+
+func TestWithMacOSUnixSocketPathsCopyOnWrite(t *testing.T) {
+	base := WorkspaceWriteProfile().WithMacOSUnixSocketPaths("/a.sock", "/b.sock", "/c.sock")
+	p1 := base.WithMacOSUnixSocketPaths("/d.sock")
+	p2 := base.WithMacOSUnixSocketPaths("/e.sock")
+
+	if len(base.macOS.unixSocketPaths) != 3 {
+		t.Fatalf("base socket paths = %#v, want 3 entries", base.macOS.unixSocketPaths)
+	}
+	if len(p1.macOS.unixSocketPaths) != 4 || p1.macOS.unixSocketPaths[3] != "/d.sock" {
+		t.Fatalf("p1 socket paths = %#v, want 4 entries ending with /d.sock", p1.macOS.unixSocketPaths)
+	}
+	if len(p2.macOS.unixSocketPaths) != 4 || p2.macOS.unixSocketPaths[3] != "/e.sock" {
+		t.Fatalf("p2 socket paths = %#v, want 4 entries ending with /e.sock", p2.macOS.unixSocketPaths)
+	}
+	if base.macOS.unixSocketPaths[0] != "/a.sock" || p1.macOS.unixSocketPaths[0] != "/a.sock" {
+		t.Fatalf("branched profiles mutated base socket list: base=%#v p1=%#v", base.macOS.unixSocketPaths, p1.macOS.unixSocketPaths)
+	}
+}
+
+func TestWithMacOSUnixSocketPathsSkipsEmptyPaths(t *testing.T) {
+	profile := WorkspaceWriteProfile().WithMacOSUnixSocketPaths("", "/tmp/x.sock", "")
+	if len(profile.macOS.unixSocketPaths) != 1 || profile.macOS.unixSocketPaths[0] != "/tmp/x.sock" {
+		t.Fatalf("socket paths = %#v, want only /tmp/x.sock", profile.macOS.unixSocketPaths)
+	}
 }
 
 func TestShellEnvironmentPolicyDefaultAllInheritsHostEnv(t *testing.T) {
