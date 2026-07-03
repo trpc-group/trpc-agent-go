@@ -480,20 +480,21 @@ func (r *NetworkAccessRule) Check(input ScanInput) *ScanResult {
 // the policy-aware review on PR #2044.
 //
 // Recognized shapes:
-//   https://user@host:port/path?query
-//   http://host/path
-//   ssh://user@host:port
-//   git@host:user/repo         (scp-style)
-//   user@host:path             (scp-style)
-//   host:port                  (bare host:port, e.g. "nc evil.com 4444")
+//
+//	https://user@host:port/path?query
+//	http://host/path
+//	ssh://user@host:port
+//	git@host:user/repo         (scp-style)
+//	user@host:path             (scp-style)
+//	host:port                  (bare host:port, e.g. "nc evil.com 4444")
 //
 // Anything that does not match one of these shapes is ignored; the caller
 // treats the absence of any parsed host as "no allow-listed target found",
 // which falls through to a deny for the network call.
 func parseHosts(cmd string) []string {
 	lower := strings.ToLower(cmd)
-var hosts []string
-appendHost := func(h string) {
+	var hosts []string
+	appendHost := func(h string) {
 		h = strings.ToLower(strings.TrimSpace(h))
 		if h == "" {
 			return
@@ -519,30 +520,30 @@ appendHost := func(h string) {
 		h = strings.TrimSuffix(h, ".")
 		hosts = append(hosts, h)
 	}
-// (1) http://, https://, ssh://, ftp://, file://, ws://, wss://.
-schemeRe := regexp.MustCompile(`[a-z][a-z0-9+.\-]*://(?:[^/@\s]+@)?([a-z0-9._\-]+)`)
-for _, m := range schemeRe.FindAllStringSubmatch(lower, -1) {
+	// (1) http://, https://, ssh://, ftp://, file://, ws://, wss://.
+	schemeRe := regexp.MustCompile(`[a-z][a-z0-9+.\-]*://(?:[^/@\s]+@)?([a-z0-9._\-]+)`)
+	for _, m := range schemeRe.FindAllStringSubmatch(lower, -1) {
 		if len(m) > 1 {
 			appendHost(m[1])
 		}
 	}
-// (2) scp-style "user@host:path" (no scheme). Bound the user part to
-// non-space, non-@ characters and the host to non-colon, non-space,
-// non-/ characters. We require the trailing ":path" to disambiguate
-// from a bare "user@host" without a path.
-scpRe := regexp.MustCompile(`(?:^|[\s])([a-z0-9._\-]+)@([a-z0-9.\-]+):[^\s]`)
-for _, m := range scpRe.FindAllStringSubmatch(lower, -1) {
+	// (2) scp-style "user@host:path" (no scheme). Bound the user part to
+	// non-space, non-@ characters and the host to non-colon, non-space,
+	// non-/ characters. We require the trailing ":path" to disambiguate
+	// from a bare "user@host" without a path.
+	scpRe := regexp.MustCompile(`(?:^|[\s])([a-z0-9._\-]+)@([a-z0-9.\-]+):[^\s]`)
+	for _, m := range scpRe.FindAllStringSubmatch(lower, -1) {
 		if len(m) > 2 {
 			appendHost(m[2])
 		}
 	}
-// (3) bare "host:port" (e.g. "nc evil.com 4444", "telnet host 23").
-// We require the host to be a valid DNS label and the tail to be a
-// numeric port. The surrounding context is bounded by whitespace or
-// start/end-of-string so that "host:path" scp-style above is not
-// double-counted.
-// "host:port" (e.g. "nc evil.com:4444") AND "host port" with whitespace
-// (e.g. "nc github.com 443"). Both are valid invocations of netcat /
+	// (3) bare "host:port" (e.g. "nc evil.com 4444", "telnet host 23").
+	// We require the host to be a valid DNS label and the tail to be a
+	// numeric port. The surrounding context is bounded by whitespace or
+	// start/end-of-string so that "host:path" scp-style above is not
+	// double-counted.
+	// "host:port" (e.g. "nc evil.com:4444") AND "host port" with whitespace
+	// (e.g. "nc github.com 443"). Both are valid invocations of netcat /
 	// telnet / curl-against-bare-host. We require the host to look like a
 	// DNS label and the port to be numeric so we do not mistake path
 	// segments for ports.
@@ -552,7 +553,7 @@ for _, m := range scpRe.FindAllStringSubmatch(lower, -1) {
 			appendHost(m[1])
 		}
 	}
-return hosts
+	return hosts
 }
 
 // hostMatchesPattern reports whether host is an exact match for pattern,
@@ -591,11 +592,11 @@ func (r *NetworkAccessRule) matchesAllowlist(cmd string) bool {
 	if len(r.allowedDomains) == 0 {
 		return false
 	}
-hosts := parseHosts(cmd)
-if len(hosts) == 0 {
+	hosts := parseHosts(cmd)
+	if len(hosts) == 0 {
 		return false
 	}
-for _, pattern := range r.allowedDomains {
+	for _, pattern := range r.allowedDomains {
 		pattern = strings.ToLower(strings.TrimSpace(pattern))
 		if pattern == "" {
 			continue
