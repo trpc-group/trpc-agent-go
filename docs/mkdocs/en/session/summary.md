@@ -181,8 +181,16 @@ request by:
 
 The request prefix remains the same as the parent request prefix, so providers
 with prompt caching can reuse more cached input. If no parent request is
-available, for example in asynchronous or manual summary calls, the summarizer
+available, for example in manual or external summary calls, the summarizer
 falls back to the standalone request path.
+
+One important branch-summary behavior: after `WithCacheSafeForking(true)` is
+enabled, a non-empty branch trigger may fork the current parent request for the
+branch summary, but it will not also run the cascaded full-session summary in
+that same summary pass. The framework skips that full-session target instead of
+falling back to a standalone full-session prompt or reusing the branch-scoped
+fork request. Trigger a full-session summary separately when you need an
+all-branch summary.
 
 Prompt rules:
 
@@ -1461,6 +1469,12 @@ Behavior notes:
   targets. It does not block `session.SummaryFilterKeyAllContents`.
 - `WithCascadeFullSessionSummary(...)` controls whether a non-empty branch
   trigger also refreshes the full-session summary.
+- With `WithCacheSafeForking(true)`, a branch-triggered summary pass only runs
+  the branch summary target when a parent fork request is available. The
+  full-session cascade target is skipped in that pass; it does not fall back to
+  the standalone full-session prompt and does not reuse the branch-scoped fork
+  request. Request a full-session summary separately when you need one for all
+  branches.
 - To keep only full-session summaries from branch-triggered automatic summary,
   pass an explicit empty allowlist and leave cascade enabled:
 
