@@ -77,6 +77,14 @@ func New(ctx context.Context, name string, opts ...Option) (*Model, error) {
 	if o.tailoringStrategy == nil {
 		o.tailoringStrategy = model.NewMiddleOutStrategy(o.tokenCounter)
 	}
+	if o.geminiClientConfig == nil {
+		o.geminiClientConfig = &genai.ClientConfig{}
+	}
+	existingExtras := o.geminiClientConfig.HTTPOptions.ExtrasRequestProvider
+	o.geminiClientConfig.HTTPOptions.ExtrasRequestProvider = chainExtrasRequestProvider(
+		existingExtras,
+		rewriteBypassThoughtSignatures,
+	)
 	client, err := genai.NewClient(ctx, o.geminiClientConfig)
 	if err != nil {
 		return nil, err
@@ -690,6 +698,19 @@ func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentCo
 		chatRequest.FrequencyPenalty = genai.Ptr(float32(*request.FrequencyPenalty))
 	}
 	chatRequest.ThinkingConfig = m.buildThinkingConfig(request)
+	var requestExtras genai.ExtrasRequestProvider
+	if chatRequest.HTTPOptions != nil {
+		requestExtras = chatRequest.HTTPOptions.ExtrasRequestProvider
+	}
+	if chatRequest.HTTPOptions == nil {
+		chatRequest.HTTPOptions = &genai.HTTPOptions{}
+	}
+	// go-genai applies ExtrasRequestProvider from the per-request HTTPOptions;
+	// set it here so bypass sentinel rewriting runs on every generateContent call.
+	chatRequest.HTTPOptions.ExtrasRequestProvider = chainExtrasRequestProvider(
+		requestExtras,
+		rewriteBypassThoughtSignatures,
+	)
 	return chatRequest
 }
 
@@ -776,17 +797,46 @@ func (m *Model) convertMessageContent(
 		// For non-file or non-skipped file types, add to contentParts.
 		contentParts = append(contentParts, genai.NewContentFromParts([]*genai.Part{contentPart}, genai.Role(role)))
 	}
-	for _, toolCall := range msg.ToolCalls {
-		contentPart := m.convertToolCallPart(toolCall)
-		if contentPart == nil {
-			continue
-		}
-		contentParts = append(contentParts, genai.NewContentFromParts([]*genai.Part{contentPart}, genai.Role(role)))
+	if toolCallParts := m.convertAssistantToolCallParts(msg.ToolCalls); len(toolCallParts) > 0 {
+		contentParts = append(contentParts, genai.NewContentFromParts(toolCallParts, genai.Role(role)))
 	}
 	return contentParts
 }
 
-func (m *Model) convertToolCallPart(toolCall model.ToolCall) *genai.Part {
+// convertAssistantToolCallParts builds function-call parts for one assistant step.
+// Gemini parallel calls belong in a single model content; bypass signatures apply
+// only when the step has no stored Gemini thought signatures (cross-provider replay).
+func (m *Model) convertAssistantToolCallParts(toolCalls []model.ToolCall) []*genai.Part {
+	needsBypass := assistantStepNeedsBypassSignature(toolCalls)
+	parts := make([]*genai.Part, 0, len(toolCalls))
+	firstEmitted := true
+	for _, toolCall := range toolCalls {
+		injectBypass := needsBypass && firstEmitted
+		part := m.convertToolCallPart(toolCall, injectBypass)
+		if part == nil {
+			continue
+		}
+		firstEmitted = false
+		parts = append(parts, part)
+	}
+	return parts
+}
+
+func assistantStepNeedsBypassSignature(toolCalls []model.ToolCall) bool {
+	hasEmitted := false
+	for _, toolCall := range toolCalls {
+		if toolCall.Function.Name == "" {
+			continue
+		}
+		hasEmitted = true
+		if len(thoughtSignatureFromExtraFields(toolCall.ExtraFields)) > 0 {
+			return false
+		}
+	}
+	return hasEmitted
+}
+
+func (m *Model) convertToolCallPart(toolCall model.ToolCall, injectBypass bool) *genai.Part {
 	if toolCall.Function.Name == "" {
 		return nil
 	}
@@ -807,10 +857,11 @@ func (m *Model) convertToolCallPart(toolCall model.ToolCall) *genai.Part {
 		part.ThoughtSignature = signature
 		return part
 	}
-	// Gemini 3 validates thought_signature on the first functionCall of each
-	// content. Each ToolCall is emitted as its own content, so every replayed
-	// cross-provider call without a stored signature needs the bypass token.
-	part.ThoughtSignature = []byte(geminiSkipThoughtSignatureValidator)
+	// Cross-provider replay: Gemini 3 requires a bypass sentinel on the first
+	// functionCall part of each step when no real thought_signature is stored.
+	if injectBypass {
+		part.ThoughtSignature = []byte(geminiSkipThoughtSignatureValidator)
+	}
 	return part
 }
 
