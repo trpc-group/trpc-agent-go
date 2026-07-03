@@ -117,9 +117,9 @@ func TestRewriteBypassThoughtSignatures_RewritesByteSliceBypassSentinel(t *testi
 
 func TestRewriteBypassThoughtSignatures_RewritesMapSliceContents(t *testing.T) {
 	parameterMap := map[string]any{
-		"contents": []map[string]interface{}{
+		"contents": []map[string]any{
 			{
-				"parts": []map[string]interface{}{
+				"parts": []map[string]any{
 					{
 						"thoughtSignature": "c2tpcF90aG91Z2h0X3NpZ25hdHVyZV92YWxpZGF0b3I=",
 					},
@@ -132,7 +132,7 @@ func TestRewriteBypassThoughtSignatures_RewritesMapSliceContents(t *testing.T) {
 	assert.Equal(
 		t,
 		geminiSkipThoughtSignatureValidator,
-		parameterMap["contents"].([]map[string]interface{})[0]["parts"].([]map[string]interface{})[0]["thoughtSignature"],
+		parameterMap["contents"].([]map[string]any)[0]["parts"].([]map[string]any)[0]["thoughtSignature"],
 	)
 }
 
