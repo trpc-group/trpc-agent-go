@@ -969,16 +969,20 @@ func TestCreateSessionSummary_WithFilterKey(t *testing.T) {
 
 	s := createTestService(t, db, WithSummarizer(summarizer))
 	ctx := context.Background()
+	filterKey := "custom-filter"
 
 	sess := &session.Session{
 		ID:        "session-123",
 		AppName:   "test-app",
 		UserID:    "user-456",
 		UpdatedAt: time.Now(),
-		Events:    []event.Event{{Timestamp: time.Now()}}, // Add event to trigger summary.
+		Events: []event.Event{{
+			ID:        "event-1",
+			FilterKey: filterKey,
+			Timestamp: time.Now(),
+			Version:   event.CurrentVersion,
+		}}, // Add event to trigger summary.
 	}
-
-	filterKey := "custom-filter"
 
 	// Mock: INSERT ... ON DUPLICATE KEY UPDATE (atomic upsert) with custom filter key.
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_summaries")).

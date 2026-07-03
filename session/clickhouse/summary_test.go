@@ -180,7 +180,12 @@ func TestService_CreateSessionSummary_NoTTL(t *testing.T) {
 		AppName:   "app1",
 		UserID:    "user1",
 		Summaries: make(map[string]*session.Summary),
-		Events:    []event.Event{{ID: "1", Timestamp: eventTime}},
+		Events: []event.Event{{
+			ID:        "1",
+			FilterKey: "key",
+			Timestamp: eventTime,
+			Version:   event.CurrentVersion,
+		}},
 	}
 
 	mockSum.summarizeFunc = func(ctx context.Context, sess *session.Session) (string, error) {
