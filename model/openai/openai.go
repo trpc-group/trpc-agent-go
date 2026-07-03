@@ -79,13 +79,15 @@ const (
 // thinkingValueConvertor converts ThinkingEnabled bool to the variant-specific value.
 type thinkingValueConvertor func(enabled bool) any
 
+const thinkingKey = "thinking"
+
 // defaultThinkingValueConvertor returns the bool value as-is.
 var defaultThinkingValueConvertor = func(enabled bool) any {
 	return enabled
 }
 
 // thinkingTypeValueConvertor converts to the nested thinking-toggle format
-// used by providers such as DeepSeek v3.2+ and GLM.
+// used by providers such as DeepSeek v3.2+, Hunyuan, and GLM.
 var thinkingTypeValueConvertor = func(enabled bool) any {
 	const (
 		thinkingTypeEnabled  = "enabled"
@@ -165,7 +167,7 @@ var variantConfigs = map[Variant]variantConfig{
 		defaultBaseURL:            defaultDeepSeekBaseURL,
 		// DeepSeek v3.2+ (incl. v4-pro / v4-flash) uses
 		// {"thinking": {"type": "enabled"/"disabled"}} format.
-		thinkingEnabledKey:              "thinking",
+		thinkingEnabledKey:              thinkingKey,
 		thinkingValueConvertor:          thinkingTypeValueConvertor,
 		defaultReasoningContentBackfill: true,
 	},
@@ -215,8 +217,10 @@ var variantConfigs = map[Variant]variantConfig{
 			r.ContentLength = int64(body.Len())
 			return r, nil
 		},
-		thinkingEnabledKey:     model.ThinkingEnabledKey,
-		thinkingValueConvertor: defaultThinkingValueConvertor,
+		// TokenHub Hunyuan thinking models use
+		// {"thinking": {"type": "enabled"/"disabled"}} format.
+		thinkingEnabledKey:     thinkingKey,
+		thinkingValueConvertor: thinkingTypeValueConvertor,
 	},
 	VariantQwen: {
 		fileUploadPath:            "/openapi/v1/files",
@@ -236,7 +240,7 @@ var variantConfigs = map[Variant]variantConfig{
 		fileDeletionMethod:                http.MethodDelete,
 		skipFileTypeInContent:             false,
 		fileDeletionBodyConvertor:         defaultFileDeletionBodyConvertor,
-		thinkingEnabledKey:                "thinking",
+		thinkingEnabledKey:                thinkingKey,
 		thinkingValueConvertor:            thinkingTypeValueConvertor,
 		reasoningContentAsContentFallback: true,
 	},
