@@ -1701,6 +1701,45 @@ func TestCreateSessionSummaryWithCascade_SkipsFullTargetForDynamicCacheSafeFork(
 	require.Nil(t, sess.Summaries[session.SummaryFilterKeyAllContents])
 }
 
+func TestCreateSessionSummaryWithCascade_PreservesFullOnlyTargetForCacheSafeFork(t *testing.T) {
+	now := time.Now()
+	sess := &session.Session{
+		ID:      "test-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+		Events: []event.Event{
+			makeEvent("branch", now.Add(-2*time.Minute), "user-messages"),
+			makeEvent("other", now.Add(-time.Minute), "tool-calls"),
+		},
+	}
+	parent := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("parent request")},
+	}
+	ctx := summary.ContextWithCacheSafeForkRequest(context.Background(), parent)
+
+	summarizer := summary.NewSummarizer(
+		&reportModel{},
+		summary.WithCacheSafeForking(true),
+	)
+	err := CreateSessionSummaryWithCascade(
+		ctx,
+		sess,
+		"user-messages",
+		false,
+		NewSummaryDispatchPolicy([]string{}, true),
+		func(ctx context.Context, _ *session.Session, filterKey string, _ bool) error {
+			_, err := SummarizeSession(ctx, summarizer, sess, filterKey, false)
+			return err
+		},
+	)
+	require.NoError(t, err)
+
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
+	require.Nil(t, sess.Summaries["user-messages"])
+	require.NotNil(t, sess.Summaries[session.SummaryFilterKeyAllContents])
+}
+
 func TestCreateSessionSummaryWithCascade_PreservesFullTargetWithoutCacheSafeFork(t *testing.T) {
 	now := time.Now()
 	sess := &session.Session{

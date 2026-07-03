@@ -380,6 +380,9 @@ func shouldSkipBranchForkFullSessionCascade(
 	tmp *session.Session,
 	filterKey string,
 ) bool {
+	if !skipBranchForkFullSessionCascadeFromContext(ctx) {
+		return false
+	}
 	if filterKey != session.SummaryFilterKeyAllContents {
 		return false
 	}
@@ -473,6 +476,7 @@ func selectSummaryBoundary(
 }
 
 type summaryTriggerFilterKeyContextKey struct{}
+type skipBranchForkFullSessionCascadeContextKey struct{}
 
 // summaryLockKey identifies the summary scope that must be serialized.
 type summaryLockKey struct {
@@ -566,12 +570,27 @@ func contextWithSummaryTriggerFilterKey(ctx context.Context, filterKey string) c
 	return context.WithValue(ctx, summaryTriggerFilterKeyContextKey{}, filterKey)
 }
 
+func contextWithSkipBranchForkFullSessionCascade(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, skipBranchForkFullSessionCascadeContextKey{}, true)
+}
+
 func summaryTriggerFilterKeyFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
 	}
 	filterKey, _ := ctx.Value(summaryTriggerFilterKeyContextKey{}).(string)
 	return filterKey
+}
+
+func skipBranchForkFullSessionCascadeFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	skip, _ := ctx.Value(skipBranchForkFullSessionCascadeContextKey{}).(bool)
+	return skip
 }
 
 func readLastIncludedTimestamp(tmp *session.Session) time.Time {
@@ -804,6 +823,10 @@ func CreateSessionSummaryWithCascade(
 		go func(i int, fk string, callCtx context.Context) {
 			defer summaryWg.Done()
 			callCtx = contextForSummaryTarget(callCtx, filterKey, fk)
+			if fk == session.SummaryFilterKeyAllContents &&
+				filterKey != session.SummaryFilterKeyAllContents {
+				callCtx = contextWithSkipBranchForkFullSessionCascade(callCtx)
+			}
 			err := createSummaryFunc(callCtx, sess, fk, force)
 			if err != nil {
 				result[i] = fmt.Errorf("create session summary for filterKey %q failed: %w", fk, err)
