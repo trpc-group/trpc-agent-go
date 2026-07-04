@@ -16,6 +16,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +29,14 @@ func TestNewToolRequiresFileScope(t *testing.T) {
 	_, err := NewTool(Config{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires allowed_dirs")
+}
+
+func TestNewToolAllowsAllFiles(t *testing.T) {
+	t.Parallel()
+
+	got, err := NewTool(Config{AllowAllFiles: true})
+	require.NoError(t, err)
+	require.NotNil(t, got)
 }
 
 func TestInspectImageMetadataCropAndASCII(t *testing.T) {
@@ -144,6 +153,105 @@ func TestInspectPreprocessesScaleThresholdAndInvert(t *testing.T) {
 	require.NotEmpty(t, got.ASCII)
 }
 
+func TestInspectRunsOCRWithTempImageAndTruncates(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.png")
+	writeTestPNG(t, path, image.Rect(0, 0, 4, 2))
+	cmd := writeShellScript(t, dir, "tesseract-ok", `
+printf 'abcdefghijklmnop'
+`)
+
+	tool, err := newInspector(Config{
+		AllowedDirs:      []string{dir},
+		TesseractCommand: cmd,
+		MaxOCRChars:      10,
+		Timeout:          time.Second,
+	})
+	require.NoError(t, err)
+	threshold := 128
+	got, err := tool.inspect(context.Background(), inspectRequest{
+		Path:      path,
+		MaxChars:  6,
+		Scale:     1.5,
+		Threshold: &threshold,
+		Crop: &cropRequest{
+			X:      -2,
+			Y:      -1,
+			Width:  20,
+			Height: 20,
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, got.TesseractUsed)
+	require.Equal(t, "abcdef\n...[truncated]", got.OCRText)
+	require.Equal(t, &cropResponse{
+		X:      0,
+		Y:      0,
+		Width:  4,
+		Height: 2,
+	}, got.Crop)
+}
+
+func TestInspectReportsOCRErrorFromStderr(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.png")
+	writeTestPNG(t, path, image.Rect(0, 0, 2, 2))
+	cmd := writeShellScript(t, dir, "tesseract-fail", `
+printf 'bad ocr' >&2
+exit 2
+`)
+
+	tool, err := newInspector(Config{
+		AllowedDirs:      []string{dir},
+		TesseractCommand: cmd,
+		Timeout:          time.Second,
+	})
+	require.NoError(t, err)
+	got, err := tool.inspect(context.Background(), inspectRequest{
+		Path: path,
+	})
+	require.NoError(t, err)
+	require.False(t, got.TesseractUsed)
+	require.Contains(t, got.OCRError, "bad ocr")
+}
+
+func TestRunOCRTimeout(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cmd := writeShellScript(t, dir, "tesseract-slow", `
+sleep 1
+`)
+
+	tool, err := newInspector(Config{
+		AllowedDirs:      []string{dir},
+		TesseractCommand: cmd,
+		Timeout:          time.Millisecond,
+	})
+	require.NoError(t, err)
+	_, err = tool.runOCR(context.Background(), "sample.png", inspectRequest{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timed out")
+}
+
+func TestInspectAllowsAllFilesAndReportsDecodeError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "not-an-image.txt")
+	require.NoError(t, os.WriteFile(path, []byte("nope"), 0o644))
+
+	tool, err := newInspector(Config{AllowAllFiles: true})
+	require.NoError(t, err)
+	_, err = tool.inspect(context.Background(), inspectRequest{Path: path})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decode image")
+}
+
 func TestInspectRejectsPathOutsideAllowedDirs(t *testing.T) {
 	t.Parallel()
 
@@ -232,4 +340,65 @@ func TestInspectRejectsSymlinkEscapeFromAllowedDirs(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "outside allowed_dirs")
+}
+
+func TestResolveAllowedRelativePathRejectsDuplicateBasenames(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	first := filepath.Join(dir, "a")
+	second := filepath.Join(dir, "b")
+	require.NoError(t, os.MkdirAll(first, 0o755))
+	require.NoError(t, os.MkdirAll(second, 0o755))
+	writeTestPNG(t, filepath.Join(first, "same.png"), image.Rect(0, 0, 1, 1))
+	writeTestPNG(t, filepath.Join(second, "same.png"), image.Rect(0, 0, 1, 1))
+
+	tool, err := newInspector(Config{AllowedDirs: []string{dir}})
+	require.NoError(t, err)
+	_, err = tool.resolvePath("same.png")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "multiple files")
+}
+
+func TestResolveAllowedRelativePathWithSeparatorFallsBack(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tool, err := newInspector(Config{AllowedDirs: []string{dir}})
+	require.NoError(t, err)
+	_, err = tool.resolvePath("nested/missing.png")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "resolve image path")
+}
+
+func TestASCIIWidthDefaultsAndClamps(t *testing.T) {
+	t.Parallel()
+
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	require.NotEmpty(t, asciiPreview(img, 0))
+	got := asciiPreview(img, maxASCIIWidth+100)
+	require.Len(t, strings.Split(got, "\n")[0], maxASCIIWidth)
+}
+
+func writeTestPNG(t *testing.T, path string, bounds image.Rectangle) {
+	t.Helper()
+
+	file, err := os.Create(path)
+	require.NoError(t, err)
+	require.NoError(t, png.Encode(file, image.NewRGBA(bounds)))
+	require.NoError(t, file.Close())
+}
+
+func writeShellScript(
+	t *testing.T,
+	dir string,
+	name string,
+	body string,
+) string {
+	t.Helper()
+
+	path := filepath.Join(dir, name)
+	content := "#!/bin/sh\n" + body
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o755))
+	return path
 }
