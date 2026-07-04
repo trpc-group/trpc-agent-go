@@ -1,0 +1,11 @@
+diff --git a/config.go b/config.go
+--- a/config.go
++++ b/config.go
+@@ -1,3 +1,6 @@
+ package config
+-var endpoint = "https://api.example.com"
++var (
++    apiKey  = "sk-abc123def456ghi789jkl012mno345pqr678stu901vwx"
++    secret  = "my-super-secret-password"
++    endpoint = "https://api.example.com"
++)

@@ -1,0 +1,12 @@
+diff --git a/file.go b/file.go
+--- a/file.go
++++ b/file.go
+@@ -1,0 +1,7 @@
++package main
++import "os"
++func readConfig() ([]byte, error) {
++    f, err := os.Open("config.yaml")
++    if err != nil { return nil, err }
++    return os.ReadAll(f)
++    // f 没有 defer f.Close()
++}
