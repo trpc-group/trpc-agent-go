@@ -75,7 +75,7 @@ func replayCases() []ReplayCase {
 		case6SummaryUpdate(),
 		case7SummaryTruncation(),
 		case8TrackEvents(),
-		case9ConcurrentWrites(),
+		case9OutOfOrderWrites(),
 		case10ErrorRecovery(),
 	}
 }
@@ -275,7 +275,7 @@ func case8TrackEvents() ReplayCase {
 }
 
 // --- Case 9: Out-of-order writes ---
-func case9ConcurrentWrites() ReplayCase {
+func case9OutOfOrderWrites() ReplayCase {
 	return ReplayCase{
 		Name:      "out_of_order_writes",
 		AppName:   "test-app",
