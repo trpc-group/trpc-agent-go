@@ -1,8 +1,23 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+
+//
+
+
+
+
+
+
 package safety
 
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -157,15 +172,16 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 
 // CheckToolPermission implements tool.PermissionPolicy so that
 // the Scanner can be plugged into the agent's permission framework.
+// It extracts command/script/code fields from req.Arguments for
+// scanning, falling back to the tool name if no command is found.
 func (s *Scanner) CheckToolPermission(
 	ctx context.Context, req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
-	// For now, extract the tool name and delegate to Scan.
-	// A deeper integration would parse req.Arguments for the
-	// actual command string.
+	command := extractCommandFromArgs(req.Arguments, req.ToolName)
+
 	scanReq := ScanRequest{
 		ToolName: req.ToolName,
-		Command:  req.ToolName,
+		Command:  command,
 		Backend:  "permission_check",
 	}
 	report := s.Scan(ctx, scanReq)
@@ -175,6 +191,29 @@ func (s *Scanner) CheckToolPermission(
 		Reason: report.Recommendation,
 	}
 	return decision, nil
+}
+
+// extractCommandFromArgs parses JSON arguments to find a command
+// string. It checks common field names used by exec tools.
+func extractCommandFromArgs(args []byte, fallback string) string {
+	if len(args) == 0 {
+		return fallback
+	}
+
+	var m map[string]interface{}
+	if err := json.Unmarshal(args, &m); err != nil {
+		return fallback
+	}
+
+	// Check common command field names in priority order.
+	cmdKeys := []string{"command", "cmd", "script", "code", "shell_command"}
+	for _, key := range cmdKeys {
+		if val, ok := m[key].(string); ok && val != "" {
+			return val
+		}
+	}
+
+	return fallback
 }
 
 // riskOrder returns an integer ordering for risk levels (higher = worse).
