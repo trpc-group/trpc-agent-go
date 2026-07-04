@@ -13,6 +13,7 @@ import (
 	"context"
 	"strings"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
 )
@@ -60,6 +61,12 @@ func registerDynamicAgentBlockerCallback(callbacks *tool.Callbacks) {
 func dynamicAgentStoppedByLLMBudget(err error) bool {
 	if err == nil {
 		return false
+	}
+	if stopErr, ok := agent.AsStopError(err); ok {
+		return strings.Contains(
+			strings.ToLower(stopErr.Message),
+			"max llm calls",
+		)
 	}
 	return strings.Contains(
 		strings.ToLower(err.Error()),

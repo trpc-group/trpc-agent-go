@@ -2867,6 +2867,29 @@ func TestDynamicAgentBlockerCallbackReplacesBudgetErrors(t *testing.T) {
 	require.Equal(t, dynamicAgentLLMBudgetBlocker, result.CustomResult)
 }
 
+func TestDynamicAgentBlockerCallbackReplacesBudgetStopErrors(t *testing.T) {
+	t.Parallel()
+
+	callbacks := tool.NewCallbacks(tool.WithContinueOnError(true))
+	registerDynamicAgentBlockerCallback(callbacks)
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		t.Fatal("budget blocker should stop later callbacks")
+		return nil, nil
+	})
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolName: agenttool.DefaultDynamicToolName,
+			Error:    agent.NewStopError("max LLM calls (45) exceeded"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, dynamicAgentLLMBudgetBlocker, result.CustomResult)
+}
+
 func TestDynamicAgentBlockerCallbackReplacesTimeoutErrors(t *testing.T) {
 	t.Parallel()
 
@@ -2881,6 +2904,22 @@ func TestDynamicAgentBlockerCallbackReplacesTimeoutErrors(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, dynamicAgentTimeoutBlocker, result.CustomResult)
+}
+
+func TestDynamicAgentBlockerCallbackIgnoresNonBudgetStopErrors(t *testing.T) {
+	t.Parallel()
+
+	callbacks := tool.NewCallbacks()
+	registerDynamicAgentBlockerCallback(callbacks)
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolName: agenttool.DefaultDynamicToolName,
+			Error:    agent.NewStopError("worker stopped by user"),
+		},
+	)
+	require.NoError(t, err)
+	require.Nil(t, result.CustomResult)
 }
 
 func TestDynamicAgentBlockerCallbackKeepsOtherToolErrors(t *testing.T) {
