@@ -1808,6 +1808,21 @@ func TestToolCall_ActDragAcceptsTopLevelElementTargets(t *testing.T) {
 	require.Equal(t, "destination-list", drv.calls[0].Args["endTarget"])
 }
 
+func TestNormalizeActRequestBackfillsNestedDragRefs(t *testing.T) {
+	t.Parallel()
+
+	got := normalizeActRequest(input{
+		StartRef: "source-ref",
+		EndRef:   "destination-ref",
+		Request: &actRequest{
+			Kind: actDrag,
+		},
+	})
+
+	require.Equal(t, "source-ref", got.StartRef)
+	require.Equal(t, "destination-ref", got.EndRef)
+}
+
 func TestToolCall_ActPassesTimeoutToBrowserServer(t *testing.T) {
 	t.Parallel()
 

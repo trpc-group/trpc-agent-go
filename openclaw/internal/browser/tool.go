@@ -2200,8 +2200,14 @@ func normalizeActRequest(in input) actRequest {
 		if strings.TrimSpace(req.StartTarget) == "" {
 			req.StartTarget = in.StartTarget
 		}
+		if strings.TrimSpace(req.StartRef) == "" {
+			req.StartRef = in.StartRef
+		}
 		if strings.TrimSpace(req.EndTarget) == "" {
 			req.EndTarget = in.EndTarget
+		}
+		if strings.TrimSpace(req.EndRef) == "" {
+			req.EndRef = in.EndRef
 		}
 		if strings.TrimSpace(req.URL) == "" {
 			req.URL = browserURL(in.URL, in.TargetURL)
