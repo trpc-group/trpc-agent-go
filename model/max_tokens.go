@@ -44,10 +44,14 @@ func ClampMaxTokensForModel(modelName string, in *int) *int {
 }
 
 // MaxTokensToInt32 converts a max token count for provider APIs that use int32 fields.
-// Values above math.MaxInt32 are clamped to avoid overflow when narrowing.
+// Values outside the int32 range are clamped to avoid overflow when narrowing.
 func MaxTokensToInt32(v int) int32 {
-	if v > math.MaxInt32 {
+	n := int64(v)
+	if n > math.MaxInt32 {
 		return math.MaxInt32
 	}
-	return int32(v)
+	if n < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(n)
 }
