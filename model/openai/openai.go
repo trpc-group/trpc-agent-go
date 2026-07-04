@@ -674,8 +674,10 @@ func (m *Model) effectiveOutputReserveTokens(request *model.Request) int {
 	if request == nil {
 		return reserve
 	}
-	if request.MaxTokens != nil && *request.MaxTokens > reserve {
-		reserve = *request.MaxTokens
+	if request.MaxTokens != nil {
+		if mt := model.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil && *mt > reserve {
+			reserve = *mt
+		}
 	}
 	if request.ThinkingTokens != nil && *request.ThinkingTokens > reserve {
 		reserve = *request.ThinkingTokens
@@ -762,8 +764,8 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 
 	// MaxTokens is deprecated and not compatible with o-series models.
 	// Use MaxCompletionTokens instead.
-	if request.MaxTokens != nil {
-		chatRequest.MaxCompletionTokens = openai.Int(int64(*request.MaxTokens))
+	if mt := model.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
+		chatRequest.MaxCompletionTokens = openai.Int(int64(*mt))
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = openai.Float(*request.Temperature)
