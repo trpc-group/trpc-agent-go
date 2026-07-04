@@ -39,6 +39,16 @@ func TestNewToolAllowsAllFiles(t *testing.T) {
 	require.NotNil(t, got)
 }
 
+func TestNewInspectorRejectsMissingAllowedDir(t *testing.T) {
+	t.Parallel()
+
+	_, err := newInspector(Config{
+		AllowedDirs: []string{filepath.Join(t.TempDir(), "missing")},
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "resolve allowed dir")
+}
+
 func TestInspectImageMetadataCropAndASCII(t *testing.T) {
 	t.Parallel()
 
@@ -238,6 +248,32 @@ sleep 1
 	require.Contains(t, err.Error(), "timed out")
 }
 
+func TestRunOCRAddsLangPSMAndReportsMissingCommand(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cmd := writeShellScript(t, dir, "tesseract-args", `
+printf '%s' "$*"
+`)
+	tool, err := newInspector(Config{
+		AllowedDirs:      []string{dir},
+		TesseractCommand: cmd,
+		Timeout:          time.Second,
+	})
+	require.NoError(t, err)
+	text, err := tool.runOCR(context.Background(), "sample.png", inspectRequest{
+		Lang: "eng",
+		PSM:  6,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "sample.png stdout -l eng --psm 6", text)
+
+	tool.tesseractCommand = filepath.Join(dir, "missing-tesseract")
+	_, err = tool.runOCR(context.Background(), "sample.png", inspectRequest{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tesseract failed")
+}
+
 func TestInspectAllowsAllFilesAndReportsDecodeError(t *testing.T) {
 	t.Parallel()
 
@@ -305,6 +341,16 @@ func TestInspectRejectsRelativeEscapeFromAllowedDirs(t *testing.T) {
 	require.Contains(t, err.Error(), "outside allowed_dirs")
 }
 
+func TestResolvePathRequiresPath(t *testing.T) {
+	t.Parallel()
+
+	tool, err := newInspector(Config{AllowedDirs: []string{t.TempDir()}})
+	require.NoError(t, err)
+	_, err = tool.resolvePath(" ")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "path is required")
+}
+
 func TestInspectRejectsSymlinkEscapeFromAllowedDirs(t *testing.T) {
 	t.Parallel()
 
@@ -360,6 +406,31 @@ func TestResolveAllowedRelativePathRejectsDuplicateBasenames(t *testing.T) {
 	require.Contains(t, err.Error(), "multiple files")
 }
 
+func TestResolveAllowedRelativePathMissesDeletedAllowedDir(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tool, err := newInspector(Config{AllowedDirs: []string{dir}})
+	require.NoError(t, err)
+	require.NoError(t, os.RemoveAll(dir))
+
+	got, ok, err := tool.resolveAllowedRelativePath("missing.png")
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Empty(t, got)
+}
+
+func TestResolveAllowedRelativePathMissingBasenameFallsBack(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tool, err := newInspector(Config{AllowedDirs: []string{dir}})
+	require.NoError(t, err)
+	_, err = tool.resolvePath("missing.png")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "resolve image path")
+}
+
 func TestResolveAllowedRelativePathWithSeparatorFallsBack(t *testing.T) {
 	t.Parallel()
 
@@ -371,6 +442,20 @@ func TestResolveAllowedRelativePathWithSeparatorFallsBack(t *testing.T) {
 	require.Contains(t, err.Error(), "resolve image path")
 }
 
+func TestScaleImageClampsScaleBounds(t *testing.T) {
+	t.Parallel()
+
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	small := scaleImage(img, 0.01)
+	require.Equal(t, image.Rect(0, 0, 1, 1), small.Bounds())
+
+	large := scaleImage(img, 10)
+	require.Equal(t, image.Rect(0, 0, 12, 12), large.Bounds())
+
+	empty := scaleImage(image.NewRGBA(image.Rect(0, 0, 0, 0)), 1)
+	require.Equal(t, image.Rect(0, 0, 1, 1), empty.Bounds())
+}
+
 func TestASCIIWidthDefaultsAndClamps(t *testing.T) {
 	t.Parallel()
 
@@ -378,6 +463,16 @@ func TestASCIIWidthDefaultsAndClamps(t *testing.T) {
 	require.NotEmpty(t, asciiPreview(img, 0))
 	got := asciiPreview(img, maxASCIIWidth+100)
 	require.Len(t, strings.Split(got, "\n")[0], maxASCIIWidth)
+}
+
+func TestASCIIPreviewHandlesEmptyAndTallImages(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, asciiPreview(image.NewRGBA(image.Rect(0, 0, 0, 1)), 10))
+
+	tall := image.NewRGBA(image.Rect(0, 0, 1, 1000))
+	got := asciiPreview(tall, 10)
+	require.Len(t, strings.Split(got, "\n"), maxASCIIHeight)
 }
 
 func writeTestPNG(t *testing.T, path string, bounds image.Rectangle) {
