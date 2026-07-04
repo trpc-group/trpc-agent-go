@@ -441,6 +441,60 @@ func TestToolCall_BrowserBackendCrashGuardIsInvocationScoped(t *testing.T) {
 	require.Len(t, drv.calls, browserCrashThreshold+1)
 }
 
+func TestCrashGuardedDriverDelegatesStatusAndRecordsCallErrors(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		status: driverStatus{
+			State: stateReady,
+		},
+		callErr: errors.New(
+			"### Error\nError: browser has disconnected",
+		),
+	}
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+	guarded := newCrashGuardedDriver(ctx, "", drv)
+	require.NotNil(t, guarded)
+
+	status, err := guarded.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, stateReady, status.State)
+
+	_, err = guarded.Call(ctx, "browser_snapshot", nil)
+	require.Error(t, err)
+	state, ok := browserCrashStateForContext(ctx, defaultProfileName)
+	require.True(t, ok)
+	require.Equal(t, 1, state.Consecutive)
+	require.Equal(t, "browser has disconnected", state.Reason)
+}
+
+func TestNewCrashGuardedDriverSkipsWithoutInvocation(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	require.Nil(t, newCrashGuardedDriver(context.Background(), "", nil))
+	require.Same(
+		t,
+		drv,
+		newCrashGuardedDriver(context.Background(), defaultProfileName, drv),
+	)
+}
+
+func TestBrowserCrashBlockedContentUsesDefaults(t *testing.T) {
+	t.Parallel()
+
+	content := browserCrashBlockedContent("", "")
+	require.Len(t, content, 1)
+	require.Equal(t, "text", content[0]["type"])
+	text, ok := content[0]["text"].(string)
+	require.True(t, ok)
+	require.Contains(t, text, defaultProfileName)
+	require.Contains(t, text, "browser backend crashed repeatedly")
+}
+
 func TestDetectBrowserBackendCrash(t *testing.T) {
 	t.Parallel()
 
@@ -452,6 +506,31 @@ func TestDetectBrowserBackendCrash(t *testing.T) {
 		{
 			name: "target closed",
 			text: "### Error\nError: Target page, context or browser has been closed",
+			want: true,
+		},
+		{
+			name: "browser has been closed",
+			text: "### Error\nError: browser has been closed",
+			want: true,
+		},
+		{
+			name: "browser has disconnected",
+			text: "### Error\nError: browser has disconnected",
+			want: true,
+		},
+		{
+			name: "browser is closed",
+			text: "### Error\nError: browser is closed",
+			want: true,
+		},
+		{
+			name: "process did exit",
+			text: "[pid=123] <process did exit: exitCode=1>",
+			want: true,
+		},
+		{
+			name: "browser connection closed",
+			text: "browser connection closed while reading response",
 			want: true,
 		},
 		{
@@ -477,6 +556,11 @@ func TestDetectBrowserBackendCrash(t *testing.T) {
 		{
 			name: "ordinary page text",
 			text: "A post explaining why a browser has been closed",
+			want: false,
+		},
+		{
+			name: "empty",
+			text: "   ",
 			want: false,
 		},
 	}
