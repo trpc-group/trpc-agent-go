@@ -298,7 +298,12 @@ const (
 		"errors and the user has not provided credentials, stop " +
 		"retrying that blocked path; use search, fetch, metadata, " +
 		"or the evidence already available to complete the task or " +
-		"state the exact blocker. " +
+		"state the exact blocker. When searches return no useful " +
+		"results or a source is blocked, diversify instead of " +
+		"repeating the same constrained query: remove site/date " +
+		"filters, search distinctive entities plus the requested " +
+		"fact, and try credible mirrors, metadata, publisher, " +
+		"or press-release pages. " +
 		artifactCompletionRule + " " +
 		"Use the available tool path to complete the request " +
 		"in this turn. " +
@@ -432,7 +437,10 @@ const (
 		"lookup or static page fetches. Give the sub-agent a " +
 		"clear instruction to inspect successful web_fetch results " +
 		"first and to report when a result is truncated instead " +
-		"of looping through browser snapshots. Give the sub-agent a " +
+		"of looping through browser snapshots. For blocked or empty " +
+		"web research, ask the worker to diversify queries and " +
+		"evidence sources before returning the exact blocker. Give " +
+		"the sub-agent a " +
 		"self-contained request " +
 		"and ask it to complete the concrete action or return the " +
 		"exact blocker. Answer directly only when no tool work is " +
@@ -2865,6 +2873,7 @@ func newAgent(
 		cfg.MemoryFileStore,
 		cfg.StateDir,
 	)
+	registerDynamicAgentBlockerCallback(callbacks)
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 
 	exec := cfg.codeExecutor
