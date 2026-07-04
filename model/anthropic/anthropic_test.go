@@ -2744,8 +2744,8 @@ func TestWithEnableTokenTailoring_ErrorInCountTokens(t *testing.T) {
 	require.NotNil(t, captured, "expected request callback to capture request")
 	// Tailoring succeeds but token counting fails, messages should be tailored.
 	require.Len(t, captured.Messages, 1, "expected tailored messages even when token counting fails, got %d", len(captured.Messages))
-	// MaxTokens should not be set when token counting fails.
-	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to be 0 when token counting fails")
+	// MaxTokens defaults to 4096 when unset (Anthropic requires max_tokens >= 1).
+	require.Equal(t, int64(4096), captured.MaxTokens)
 }
 
 // zeroTokenCounter always returns 0 for testing edge cases.
@@ -2792,8 +2792,7 @@ func TestWithEnableTokenTailoring_RemainingTokensNegative(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	// MaxTokens should not be auto-set by token tailoring.
-	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to remain unset")
+	require.Equal(t, int64(4096), captured.MaxTokens)
 }
 
 // TestWithEnableTokenTailoring_AutoSetMaxTokens tests automatic MaxTokens setting.
@@ -2822,8 +2821,22 @@ func TestWithEnableTokenTailoring_AutoSetMaxTokens(t *testing.T) {
 	}
 
 	require.NotNil(t, captured, "expected request callback to capture request")
-	// MaxTokens should stay unset when not specified by user.
-	require.Equal(t, int64(0), captured.MaxTokens, "expected MaxTokens to remain unset")
+	// Anthropic requires max_tokens >= 1; apply framework default when unset.
+	require.Equal(t, int64(4096), captured.MaxTokens)
+}
+
+func TestBuildChatRequest_ClampsMaxTokensToModelCap(t *testing.T) {
+	m := New("claude-3-5-sonnet-20241022")
+	over := 64000
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &over,
+		},
+	}
+	chatReq, err := m.buildChatRequest(req)
+	require.NoError(t, err)
+	require.Equal(t, int64(8192), chatReq.MaxTokens)
 }
 
 // TestWithEnableTokenTailoring_UserSpecifiedMaxTokens tests user-specified MaxTokens is preserved.

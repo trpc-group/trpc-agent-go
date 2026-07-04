@@ -2405,7 +2405,7 @@ func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
 		WithEnableTokenTailoring(true),
 		WithTailoringStrategy(strategy),
 	)
-	maxCompletionTokens := 65536
+	maxCompletionTokens := 8192
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("hello")},
 		GenerationConfig: model.GenerationConfig{
@@ -2420,6 +2420,36 @@ func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
 		contextWindow,
 		imodel.DefaultProtocolOverheadTokens,
 		maxCompletionTokens,
+		imodel.DefaultInputTokensFloor,
+		imodel.DefaultSafetyMarginRatio,
+		imodel.DefaultMaxInputTokensRatio,
+	)
+	require.Equal(t, want, strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_ClampsRequestMaxTokensToModelCap(t *testing.T) {
+	strategy := &captureMaxTokensStrategy{}
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithTailoringStrategy(strategy),
+	)
+	overCap := 65536
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &overCap,
+		},
+	}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	modelCap := imodel.ResolveMaxOutputTokens("gpt-4o-mini")
+	require.Equal(t, 16384, modelCap)
+	contextWindow := imodel.ResolveContextWindow("gpt-4o-mini")
+	want := imodel.CalculateMaxInputTokensWithParams(
+		contextWindow,
+		imodel.DefaultProtocolOverheadTokens,
+		modelCap,
 		imodel.DefaultInputTokensFloor,
 		imodel.DefaultSafetyMarginRatio,
 		imodel.DefaultMaxInputTokensRatio,
@@ -4676,6 +4706,20 @@ func TestAppendFileID_NilFilePart(t *testing.T) {
 // TestBuildChatRequest_EdgeCases tests edge cases in buildChatRequest.
 func TestBuildChatRequest_EdgeCases(t *testing.T) {
 	m := New("gpt-3.5-turbo", WithAPIKey("test-key"))
+
+	t.Run("clamps max completion tokens to model cap", func(t *testing.T) {
+		m := New("gpt-4o", WithAPIKey("test-key"))
+		over := 114687
+		req := &model.Request{
+			Messages: []model.Message{model.NewUserMessage("hi")},
+			GenerationConfig: model.GenerationConfig{
+				MaxTokens: &over,
+			},
+		}
+		chatReq, _ := m.buildChatRequest(req)
+		require.NotNil(t, chatReq.MaxCompletionTokens)
+		assert.Equal(t, int64(16384), chatReq.MaxCompletionTokens.Value)
+	})
 
 	t.Run("empty messages", func(t *testing.T) {
 		req := &model.Request{
