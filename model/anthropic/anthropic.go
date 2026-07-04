@@ -28,6 +28,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -893,7 +894,9 @@ func (a *streamingMessageAccumulator) Accumulate(event anthropic.MessageStreamEv
 		// Guard against invalid/partial JSON in tool-use Input fields.
 		// Certain Anthropic-compatible APIs send content_block_stop before
 		// all input_json_delta events, leaving accumulated Input as
-		// incomplete JSON.
+		// incomplete JSON. Try jsonrepair first, then normalize any remaining
+		// invalid tool_use Input to {}.
+		repairToolUseInputIfNeeded(block)
 		ensureValidToolInput(block)
 		if err := refreshContentBlockRawJSON(block); err != nil {
 			return fmt.Errorf("error converting content block to JSON: %w", err)
@@ -958,10 +961,37 @@ func finalizeStreamingMessage(message *anthropic.Message) error {
 	return message.UnmarshalJSON(raw)
 }
 
+// repairToolUseInputIfNeeded normalizes streamed tool_use argument JSON before the
+// SDK re-marshals the content block. Truncated streams can leave Input as invalid
+// json.RawMessage (for example "{"), which makes json.Marshal fail with
+// "unexpected end of JSON input" and aborts the whole LLM stream.
+func repairToolUseInputIfNeeded(block *anthropic.ContentBlockUnion) {
+	if block == nil || block.Type != "tool_use" {
+		return
+	}
+	input := bytes.TrimSpace(block.Input)
+	if len(input) == 0 {
+		block.Input = json.RawMessage("{}")
+		return
+	}
+	if json.Valid(input) {
+		return
+	}
+	repaired, err := jsonrepair.Repair(input)
+	if err != nil {
+		return
+	}
+	repaired = bytes.TrimSpace(repaired)
+	if json.Valid(repaired) {
+		block.Input = json.RawMessage(repaired)
+	}
+}
+
 func refreshContentBlockRawJSON(block *anthropic.ContentBlockUnion) error {
 	if block == nil {
 		return nil
 	}
+	repairToolUseInputIfNeeded(block)
 	raw, err := json.Marshal(block)
 	if err != nil {
 		return err
