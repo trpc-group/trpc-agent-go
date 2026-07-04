@@ -37,3 +37,16 @@ func TestLoads_ReturnsValue(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []any{float64(1), float64(2), float64(3)}, value)
 }
+
+// TestLoads_ReturnsErrorWhenRepairFails verifies Loads propagates LoadsRepair errors.
+func TestLoads_ReturnsErrorWhenRepairFails(t *testing.T) {
+	_, err := Loads("")
+	require.Error(t, err)
+}
+
+// TestLoadsRepair_ReturnsErrorWhenRepairFails verifies unrepairable input returns an error.
+func TestLoadsRepair_ReturnsErrorWhenRepairFails(t *testing.T) {
+	_, err := LoadsRepair("{{{{")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "repair JSON")
+}

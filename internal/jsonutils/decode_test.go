@@ -46,6 +46,13 @@ func TestDecodeLeadingJSON(t *testing.T) {
 	})
 }
 
+func TestDecodeFlexibleJSON_EmptyInput(t *testing.T) {
+	var parsed map[string]any
+	err := DecodeFlexibleJSON("   ", &parsed)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "empty JSON input")
+}
+
 func TestDecodeFlexibleJSON(t *testing.T) {
 	t.Run("decodes JSON embedded after leading prose", func(t *testing.T) {
 		var parsed struct {

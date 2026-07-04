@@ -99,6 +99,25 @@ func TestFunctionTool_EmptyArgsRejectedWhenInputHasProperties(t *testing.T) {
 	}
 }
 
+func TestFunctionTool_EmptyArgsRejectedWhenSchemaRequiresFields(t *testing.T) {
+	type emptyOutput struct {
+		OK bool `json:"ok"`
+	}
+	fn := func(_ context.Context, _ struct{}) (emptyOutput, error) {
+		return emptyOutput{OK: true}, nil
+	}
+	fTool := function.NewFunctionTool(fn,
+		function.WithName("RequiredOnlyTool"),
+		function.WithInputSchema(&tool.Schema{
+			Required: []string{"name"},
+		}),
+	)
+	_, err := fTool.Call(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil args when schema has required fields, got nil")
+	}
+}
+
 // Helper function to create Arguments from any struct.
 func toArguments(t *testing.T, v any) json.RawMessage {
 	t.Helper()
