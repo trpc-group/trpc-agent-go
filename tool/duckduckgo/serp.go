@@ -12,6 +12,7 @@ package duckduckgo
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,10 @@ import (
 )
 
 const maxSERPBodyBytes = 512 * 1024
+
+var errSERPChallenge = errors.New(
+	"duckduckgo returned an anti-bot challenge page",
+)
 
 func (t *ddgTool) searchSERPWithFallback(
 	ctx context.Context,
@@ -72,6 +77,17 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 			)
 		}
 		return fallback, nil
+	}
+	if isSERPRouteBlocker(err, fallbackErr) {
+		return searchResponse{
+			Query:   req.Query,
+			Results: []resultItem{},
+			Summary: "DuckDuckGo html and lite search pages are both " +
+				"unavailable for this query due to transport errors " +
+				"or anti-bot challenge pages; use direct URLs with " +
+				"web_fetch/browser or another configured search " +
+				"provider instead of immediately retrying DuckDuckGo",
+		}, nil
 	}
 	result.Summary = fmt.Sprintf(
 		"%s; fallback %s failed: %v",
@@ -180,15 +196,13 @@ func (t *ddgTool) searchSERP(
 	}
 	if isDuckDuckGoChallenge(body) {
 		return searchResponse{
-				Query:   req.Query,
-				Results: []resultItem{},
-				Summary: "DuckDuckGo returned an anti-bot challenge page; " +
-					"use direct URLs with web_fetch/browser or another " +
-					"configured search provider instead of immediately " +
-					"retrying the same query",
-			}, fmt.Errorf(
-				"duckduckgo returned an anti-bot challenge page",
-			)
+			Query:   req.Query,
+			Results: []resultItem{},
+			Summary: "DuckDuckGo returned an anti-bot challenge page; " +
+				"use direct URLs with web_fetch/browser or another " +
+				"configured search provider instead of immediately " +
+				"retrying the same query",
+		}, errSERPChallenge
 	}
 
 	results := parseSERPResults(body)
@@ -203,6 +217,29 @@ func (t *ddgTool) searchSERP(
 		Results: results,
 		Summary: summary,
 	}, nil
+}
+
+func isSERPChallengeError(err error) bool {
+	return errors.Is(err, errSERPChallenge)
+}
+
+func isSERPRouteBlocker(err error, fallbackErr error) bool {
+	return isSERPUnavailableError(err) &&
+		isSERPUnavailableError(fallbackErr) &&
+		(isSERPChallengeError(err) || isSERPChallengeError(fallbackErr))
+}
+
+func isSERPUnavailableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if isSERPChallengeError(err) || shouldRetrySERPWithHTTP(err) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "search returned status 429") ||
+		strings.Contains(msg, "search returned status 502") ||
+		strings.Contains(msg, "search returned status 503")
 }
 
 func fallbackSERPBackend(backend string) string {
