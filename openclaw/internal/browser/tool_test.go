@@ -455,13 +455,18 @@ func TestDetectBrowserBackendCrash(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "sigtrap",
-			text: "<process did exit: exitCode=null, signal=SIGTRAP>",
+			name: "sigtrap with error context",
+			text: "### Error\n<process did exit: exitCode=null, signal=SIGTRAP>",
 			want: true,
 		},
 		{
 			name: "plain sigtrap page text",
 			text: "A public article mentions SIGTRAP in a debugging guide.",
+			want: false,
+		},
+		{
+			name: "plain sigtrap process text",
+			text: "<process did exit: exitCode=null, signal=SIGTRAP>",
 			want: false,
 		},
 		{
