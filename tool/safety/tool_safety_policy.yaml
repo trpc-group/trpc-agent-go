@@ -1,0 +1,194 @@
+# Tool Safety Policy Configuration
+# ==================================
+# This file defines the safety rules for tool command execution.
+# Modify this file to change allowed commands, forbidden paths,
+# network allowlists, and detection rules without code changes.
+
+version: "1.0"
+
+# Commands that are always allowed (even if they match risk patterns).
+allowed_commands:
+  - echo
+  - ls
+  - cat
+  - go
+  - python3
+  - node
+  - grep
+  - find
+  - mkdir
+  - touch
+
+# Commands that are always denied.
+denied_commands:
+  - shutdown
+  - reboot
+  - mkfs
+  - fdisk
+  - dd
+
+# File paths that trigger denial when referenced in a command.
+forbidden_paths:
+  - /etc/passwd
+  - /etc/shadow
+  - ~/.ssh
+  - .env
+  - .env.local
+  - credentials.json
+  - id_rsa
+  - /proc/
+  - /sys/
+  - /boot/
+
+# Hosts that are allowed for network egress (curl, wget, etc.).
+allowlisted_hosts:
+  - api.github.com
+  - pypi.org
+  - registry.npmjs.org
+
+# Maximum execution timeout in seconds.
+max_timeout_sec: 300
+
+# Maximum command output size in bytes (10MB).
+max_output_bytes: 10485760
+
+# Environment variables allowed to be passed to commands.
+env_allowlist:
+  - PATH
+  - HOME
+  - USER
+  - LANG
+  - LC_ALL
+  - GOFLAGS
+  - GOPATH
+  - GOROOT
+  - PYTHONPATH
+  - NODE_PATH
+  - VIRTUAL_ENV
+
+# Safety detection rules. Each rule defines:
+# - id: Unique rule identifier
+# - category: Risk category (see docs for full list)
+# - description: Human-readable description
+# - patterns: Regex patterns to match against commands
+# - risk_level: low | medium | high | critical
+# - action: allow | ask | deny
+rules:
+  # --- Dangerous Commands ---
+  - id: "dangerous_cmd_001"
+    category: "dangerous_commands"
+    description: "Detect rm -rf on sensitive directories"
+    patterns:
+      - "rm\\s+.*-r.*/"
+      - "rm\\s+.*-rf"
+    risk_level: "critical"
+    action: "deny"
+
+  - id: "dangerous_cmd_002"
+    category: "dangerous_commands"
+    description: "Detect writing to block devices"
+    patterns:
+      - "dd\\s+.*of=/dev/"
+      - ">\\s*/dev/"
+    risk_level: "critical"
+    action: "deny"
+
+  # --- Sensitive Information Access ---
+  - id: "secrets_001"
+    category: "sensitive_info"
+    description: "Detect credential file access"
+    patterns:
+      - "~\\.ssh"
+      - "\\.env"
+      - "credentials"
+      - "id_rsa"
+      - "\\.pem"
+    risk_level: "critical"
+    action: "deny"
+
+  # --- Network Egress ---
+  - id: "network_egress_001"
+    category: "network_egress"
+    description: "Detect curl/wget/nc/ssh to external hosts"
+    patterns:
+      - "curl\\s+"
+      - "wget\\s+"
+      - "nc\\s+"
+      - "ssh\\s+"
+    risk_level: "high"
+    action: "ask"
+
+  # --- Shell Bypass ---
+  - id: "shell_bypass_001"
+    category: "shell_bypass"
+    description: "Detect shell wrapper/subshell execution"
+    patterns:
+      - "sh\\s+-c"
+      - "bash\\s+-c"
+      - "eval\\s+"
+      - "\\$\\(.*\\)"
+    risk_level: "critical"
+    action: "deny"
+
+  - id: "shell_bypass_002"
+    category: "shell_bypass"
+    description: "Detect backtick subshell execution"
+    patterns:
+      - "`.+`"
+    risk_level: "critical"
+    action: "deny"
+
+  # --- Host Execution Risks ---
+  - id: "hostexec_risk_001"
+    category: "host_execution"
+    description: "Detect privilege escalation commands"
+    patterns:
+      - "sudo\\s+"
+      - "su\\s+"
+      - "doas\\s+"
+    risk_level: "high"
+    action: "deny"
+
+  - id: "hostexec_risk_002"
+    category: "host_execution"
+    description: "Detect background process and persistence commands"
+    patterns:
+      - "nohup\\s+"
+      - "disown"
+      - "&\\s*$"
+    risk_level: "high"
+    action: "ask"
+
+  # --- Dependency & Environment Changes ---
+  - id: "dependency_install_001"
+    category: "dependency_changes"
+    description: "Detect package installer invocations"
+    patterns:
+      - "pip\\s+install"
+      - "npm\\s+install"
+      - "go\\s+install"
+      - "apt\\s+install"
+      - "yum\\s+install"
+    risk_level: "medium"
+    action: "ask"
+
+  # --- Resource Abuse ---
+  - id: "resource_abuse_001"
+    category: "resource_abuse"
+    description: "Detect long sleeps and infinite loops"
+    patterns:
+      - "sleep\\s+\\d{3,}"
+      - "while\\s+true"
+      - ":\\(\\)\\s*\\{"
+    risk_level: "medium"
+    action: "deny"
+
+  # --- Sensitive Info Leakage ---
+  - id: "sensitive_leak_001"
+    category: "sensitive_leak"
+    description: "Detect API key/token patterns in commands"
+    patterns:
+      - "[A-Za-z0-9_-]{20,}"
+      - "sk-[A-Za-z0-9]{32,}"
+    risk_level: "high"
+    action: "ask"
