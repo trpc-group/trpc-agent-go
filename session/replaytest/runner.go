@@ -73,8 +73,18 @@ func RunCase(
 		}
 	}
 
-	// Execute memory queries and collect results.
+	// Read all memories after writes so that write-only
+	// cases also produce snapshot data.
 	var allMemories []*memory.Entry
+	if len(c.MemoryWrites) > 0 {
+		readEntries, err := memService.ReadMemories(ctx, userKey, 1000)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("read memories: %w", err)
+		}
+		allMemories = append(allMemories, readEntries...)
+	}
+
+	// Execute memory queries and collect results.
 	for _, mq := range c.MemoryQueries {
 		limit := mq.Limit
 		if limit <= 0 {

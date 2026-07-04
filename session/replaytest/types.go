@@ -114,19 +114,24 @@ type Snapshot struct {
 }
 
 // NormalizedEvent is an event with auto-generated fields removed.
+// NormalizedToolCall is a tool call with auto-generated fields removed.
+type NormalizedToolCall struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Args string `json:"args"`
+}
+
 type NormalizedEvent struct {
-	Author        string            `json:"author"`
-	Role          string            `json:"role"`
-	Content       string            `json:"content,omitempty"`
-	ToolCallID    string            `json:"tool_call_id,omitempty"`
-	ToolCallName  string            `json:"tool_call_name,omitempty"`
-	ToolCallArgs  string            `json:"tool_call_args,omitempty"`
-	ToolResponseID   string         `json:"tool_response_id,omitempty"`
-	ToolResponseContent string      `json:"tool_response_content,omitempty"`
-	StateDelta    map[string]string `json:"state_delta,omitempty"`
-	FilterKey     string            `json:"filter_key,omitempty"`
-	Branch        string            `json:"branch,omitempty"`
-	Tag           string            `json:"tag,omitempty"`
+	Author             string               `json:"author"`
+	Role               string               `json:"role"`
+	Content            string               `json:"content,omitempty"`
+	ToolCalls          []NormalizedToolCall `json:"tool_calls,omitempty"`
+	ToolResponseID     string               `json:"tool_response_id,omitempty"`
+	ToolResponseContent string              `json:"tool_response_content,omitempty"`
+	StateDelta         map[string]string    `json:"state_delta,omitempty"`
+	FilterKey          string               `json:"filter_key,omitempty"`
+	Branch             string               `json:"branch,omitempty"`
+	Tag                string               `json:"tag,omitempty"`
 }
 
 // NormalizedMemory is a memory entry with auto-generated fields removed.

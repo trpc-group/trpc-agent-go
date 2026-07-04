@@ -64,12 +64,16 @@ func normalizeEvents(events []event.Event) []NormalizedEvent {
 			ne.Role = string(msg.Role)
 			ne.Content = msg.Content
 
-			// Extract tool calls from message.
+			// Extract all tool calls from message.
 			if len(msg.ToolCalls) > 0 {
-				tc := msg.ToolCalls[0]
-				ne.ToolCallID = tc.ID
-				ne.ToolCallName = tc.Function.Name
-				ne.ToolCallArgs = normalizeJSONBytes(tc.Function.Arguments)
+				ne.ToolCalls = make([]NormalizedToolCall, len(msg.ToolCalls))
+				for i, tc := range msg.ToolCalls {
+					ne.ToolCalls[i] = NormalizedToolCall{
+						ID:   tc.ID,
+						Name: tc.Function.Name,
+						Args: normalizeJSONBytes(tc.Function.Arguments),
+					}
+				}
 			}
 
 			// Extract tool response (role=RoleTool with ToolID).
