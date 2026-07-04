@@ -177,10 +177,14 @@ func (r *workspaceRuntime) PutFiles(
 		if clean == "." || clean == "/" || clean == "" {
 			return fmt.Errorf("invalid file path: %s", f.Path)
 		}
+		finalPath := path.Join(ws.Path, clean)
+		if !pathUnder(finalPath, ws.Path) {
+			return fmt.Errorf("opensandbox: path %q escapes workspace", f.Path)
+		}
 		// Ensure the parent directory exists. The SDK's UploadFiles
 		// creates intermediate directories, but we create them
 		// explicitly to be safe across server versions.
-		parent := path.Dir(path.Join(ws.Path, clean))
+		parent := path.Dir(finalPath)
 		if parent != "." && parent != "/" && parent != ws.Path {
 			if err := sb.CreateDirectory(ctx, parent, osb.OctalMode(0o755)); err != nil {
 				return fmt.Errorf("create directory %s: %w", parent, err)
@@ -195,7 +199,7 @@ func (r *workspaceRuntime) PutFiles(
 			Options: osb.UploadFileOptions{
 				FileName: path.Base(clean),
 				Metadata: osb.FileMetadata{
-					Path: path.Join(ws.Path, clean),
+					Path: finalPath,
 					Mode: osb.OctalMode(os.FileMode(mode)),
 				},
 			},
@@ -232,6 +236,9 @@ func (r *workspaceRuntime) PutDirectory(
 	dest := ws.Path
 	if to != "" {
 		dest = path.Join(ws.Path, filepath.ToSlash(to))
+	}
+	if !pathUnder(dest, ws.Path) {
+		return fmt.Errorf("opensandbox: destination %q escapes workspace", to)
 	}
 
 	sb, err := r.sandbox()
@@ -456,6 +463,8 @@ func (r *workspaceRuntime) RunProgram(
 
 	// mkdir -p the runDir and outDir so the spawned program can write
 	// scratch/output files without having to create them.
+	// Wrap in `bash -c` because stdinRedir uses bash process
+	// substitution (<(...)) which is not available in /bin/sh.
 	command := fmt.Sprintf(
 		"mkdir -p %s %s && cd %s && %s%s%s%s",
 		shellQuote(runDir), shellQuote(outDir),
@@ -463,6 +472,7 @@ func (r *workspaceRuntime) RunProgram(
 		envAssign, quotedCmd, quotedArgs.String(),
 		stdinRedir,
 	)
+	command = "bash -c " + shellQuote(command)
 
 	req := osb.RunCommandRequest{
 		Command: command,
@@ -627,8 +637,9 @@ func (r *workspaceRuntime) readFile(
 	if limit <= 0 {
 		limit = maxReadSizeBytes
 	}
-	// Use HTTP Range to cap the download at limit bytes.
-	rangeHeader := fmt.Sprintf("bytes=0-%d", limit-1)
+	// Request one extra byte to detect truncation: if the server
+	// returns limit+1 bytes, the file exceeds the cap.
+	rangeHeader := fmt.Sprintf("bytes=0-%d", limit)
 	rc, err := sb.DownloadFile(ctx, full, rangeHeader)
 	if err != nil {
 		return nil, 0, err
@@ -638,15 +649,13 @@ func (r *workspaceRuntime) readFile(
 	if err != nil {
 		return nil, 0, err
 	}
-	// Determine the true file size. The Content-Range header would be
-	// authoritative but the SDK's DownloadFile returns a bare
-	// io.ReadCloser; we fall back to the data length when the server
-	// did not send a Content-Range (in which case the body is the
-	// whole file).
-	// For truncation detection, we treat size == len(data) when the
-	// downloaded bytes equal the limit (could be exactly limit or
-	// more). This is a conservative approximation.
 	size := int64(len(data))
+	if size > limit {
+		// File is at least limit+1 bytes; truncate the payload to
+		// limit and keep size > len(data) so callers can detect
+		// truncation via size > len(truncatedData).
+		data = data[:limit]
+	}
 	return data, size, nil
 }
 

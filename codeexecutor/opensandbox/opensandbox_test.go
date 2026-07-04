@@ -383,3 +383,111 @@ func TestExecuteCode_EmptyExecutionID_GeneratesOne(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, res.Output, "ok")
 }
+
+func TestEngine(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// Engine exposes the sandbox-backed runtime; verify it is non-nil
+	// and advertises SupportsCleanEnv.
+	eng := exec.Engine()
+	require.NotNil(t, eng)
+	caps := eng.Describe()
+	assert.True(t, caps.SupportsCleanEnv, "OpenSandbox engine should support CleanEnv")
+	assert.NotNil(t, eng.Manager())
+	assert.NotNil(t, eng.FS())
+	assert.NotNil(t, eng.Runner())
+}
+
+func TestExecuteCode_StderrAggregation(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("ok\n")
+	m.setStderr("warn")
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// ExecuteCode should aggregate stderr into the output with a
+	// "[stderr]" prefix so users can distinguish it from stdout.
+	res, err := exec.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		ExecutionID: "exec-stderr",
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Language: "python", Code: "print('ok')"},
+		},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, res.Output, "ok")
+	assert.Contains(t, res.Output, "[stderr] warn", "stderr should be prefixed and aggregated into output")
+}
+
+// TestNew_RequestTimeout_ClampedToExecutionTimeout verifies that
+// NewWithContext raises requestTimeout so it can cover the streaming
+// /command endpoint used by RunProgram. The SDK applies
+// ConnectionConfig.RequestTimeout to the HTTP client for ALL requests,
+// including streaming ones; if requestTimeout < executionTimeout the
+// HTTP client would kill a RunProgram call before the per-command
+// execution timeout fires.
+func TestNew_RequestTimeout_ClampedToExecutionTimeout(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	// requestTimeout (5s) < executionTimeout (60s) + buffer (10s) =>
+	// NewWithContext must clamp requestTimeout up to 70s.
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithRequestTimeout(5*time.Second),
+		WithExecutionTimeout(60*time.Second),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	want := 60*time.Second + requestTimeoutBuffer
+	assert.Equal(t, want, exec.requestTimeout,
+		"requestTimeout must be clamped to executionTimeout + buffer to cover streaming /command")
+}
+
+// TestNew_RequestTimeout_PreservedWhenLargeEnough verifies that
+// NewWithContext does NOT lower requestTimeout when it is already
+// large enough to cover the execution timeout.
+func TestNew_RequestTimeout_PreservedWhenLargeEnough(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithRequestTimeout(120*time.Second),
+		WithExecutionTimeout(30*time.Second),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	assert.Equal(t, 120*time.Second, exec.requestTimeout,
+		"requestTimeout should be preserved when already >= executionTimeout + buffer")
+}
+
+// TestNew_RequestTimeout_DefaultClamped verifies that the default
+// requestTimeout (SDK DefaultRequestTimeout = 30s) gets clamped above
+// the default executionTimeout (30s) so streaming /command calls are
+// not killed by the HTTP client at the same 30s boundary.
+func TestNew_RequestTimeout_DefaultClamped(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	want := 30*time.Second + requestTimeoutBuffer
+	assert.Equal(t, want, exec.requestTimeout,
+		"default requestTimeout should be clamped to default executionTimeout + buffer")
+}

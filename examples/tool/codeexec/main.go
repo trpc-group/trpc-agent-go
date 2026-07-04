@@ -124,7 +124,7 @@ func (c *codeExecChat) setup(_ context.Context) error {
 			osbOpts = append(osbOpts, osbexec.WithImage(v))
 		}
 		if v := os.Getenv("OPENSANDBOX_ENTRYPOINT"); v != "" {
-			osbOpts = append(osbOpts, osbexec.WithEntrypoint(strings.Split(v, " ")))
+			osbOpts = append(osbOpts, osbexec.WithEntrypoint(strings.Fields(v)))
 		}
 		osbe, err := osbexec.New(osbOpts...)
 		if err != nil {

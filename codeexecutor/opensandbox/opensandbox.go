@@ -72,8 +72,14 @@ func WithSandboxTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.sandboxTimeout = t }
 }
 
-// WithRequestTimeout sets the HTTP request timeout for non-streaming
-// requests to the OpenSandbox server.
+// WithRequestTimeout sets the HTTP request timeout for the OpenSandbox
+// server. The SDK applies this timeout to the underlying HTTP client,
+// which is shared by all requests — including the streaming /command
+// endpoint used by RunProgram. To prevent the HTTP client from killing
+// a long-running streaming /command call before the per-command
+// execution timeout fires, NewWithContext silently raises requestTimeout
+// to at least executionTimeout + requestTimeoutBuffer when the user-
+// supplied value is smaller. Set t to 0 to keep the SDK default.
 func WithRequestTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.requestTimeout = t }
 }
@@ -148,6 +154,12 @@ func WithOutputPatterns(patterns []string) Option {
 }
 
 // CodeExecutor executes code inside an OpenSandbox sandbox.
+//
+// Lifecycle: CodeExecutor is not safe for concurrent use across the
+// Close boundary. ExecuteCode / Sandbox / SandboxID may be called
+// concurrently with each other, but Close must not run concurrently
+// with any other method. This mirrors the e2b adapter's lifecycle
+// contract.
 type CodeExecutor struct {
 	mu sync.Mutex
 
@@ -183,6 +195,13 @@ type CodeExecutor struct {
 	owned bool
 }
 
+// requestTimeoutBuffer is the slack added on top of executionTimeout
+// when clamping requestTimeout in NewWithContext. It absorbs the
+// streaming /command overhead (init event, stdout/stderr framing,
+// execution_complete) so the HTTP client does not kill a RunProgram
+// call that finished just under the per-command execution timeout.
+const requestTimeoutBuffer = 10 * time.Second
+
 // defaultOutputPatterns is the default set of glob patterns used to
 // collect output files after ExecuteCode completes.
 var defaultOutputPatterns = []string{
@@ -209,6 +228,22 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 	}
 	for _, opt := range opts {
 		opt(c)
+	}
+
+	// The OpenSandbox SDK applies ConnectionConfig.RequestTimeout to the
+	// HTTP client used for ALL requests, including the streaming
+	// /command endpoint used by RunProgram. If requestTimeout is shorter
+	// than executionTimeout, a RunProgram call would be killed by the
+	// HTTP client before the per-command execution timeout fires. Clamp
+	// requestTimeout to at least executionTimeout + requestTimeoutBuffer
+	// so streaming /command calls can run for the full execution timeout.
+	effectiveExecTimeout := c.executionTimeout
+	if effectiveExecTimeout <= 0 {
+		effectiveExecTimeout = defaultRunTimeout
+	}
+	minRequestTimeout := effectiveExecTimeout + requestTimeoutBuffer
+	if c.requestTimeout > 0 && c.requestTimeout < minRequestTimeout {
+		c.requestTimeout = minRequestTimeout
 	}
 
 	connCfg := osb.ConnectionConfig{

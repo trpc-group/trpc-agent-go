@@ -59,6 +59,18 @@ type mockOpenSandboxServer struct {
 	// noComplete, when true, omits the execution_complete event so
 	// Execution.ExitCode stays nil (tests the -1 fallback).
 	noComplete bool
+	// runError, when non-nil, makes /command return a 500 error with
+	// "timeout" in the code field so isTimeoutErr returns true. Used to
+	// test RunProgram timeout handling.
+	runError error
+	// forceInfraExit, when true, forces infrastructure commands (mkdir,
+	// rm, chmod — those without `&& cd `) to use the configured exitCode
+	// instead of forcing 0. Used to test runBash error paths.
+	forceInfraExit bool
+	// searchResults, when non-empty, overrides the default single-file
+	// search response with the configured file names (joined under the
+	// searched dir). Used to test Collect multi-file behaviour.
+	searchResults []string
 }
 
 func newMockServer(t *testing.T) *mockOpenSandboxServer {
@@ -86,6 +98,36 @@ func (m *mockOpenSandboxServer) setStdout(s string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stdout = s
+}
+
+func (m *mockOpenSandboxServer) setStderr(s string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stderr = s
+}
+
+func (m *mockOpenSandboxServer) setRunError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.runError = err
+}
+
+func (m *mockOpenSandboxServer) setForceInfraExit(b bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.forceInfraExit = b
+}
+
+func (m *mockOpenSandboxServer) setSearchResults(paths []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.searchResults = paths
+}
+
+func (m *mockOpenSandboxServer) setDownloadData(path string, data []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.files[path] = data
 }
 
 func (m *mockOpenSandboxServer) lastCommand() string {
@@ -175,14 +217,28 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	stdout := m.stdout
 	stderr := m.stderr
 	noComplete := m.noComplete
+	runErr := m.runError
+	forceInfraExit := m.forceInfraExit
 	m.mu.Unlock()
 
+	// runError makes /command return a 500 with "timeout" in the code
+	// field so the SDK produces an APIError whose Error() contains
+	// "timeout" — exercising isTimeoutErr in RunProgram.
+	if runErr != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"code":"timeout","message":%q}`, runErr.Error())
+		return
+	}
+
 	// runBash calls (CreateWorkspace mkdir, Cleanup rm, StageDirectory
-	// chmod) wrap their script as `bash -c '...'`. These infrastructure
-	// commands should always succeed; only apply the configured non-zero
-	// exit code to RunProgram commands (which start with `mkdir -p ... &&
-	// cd ...`).
-	if strings.HasPrefix(req.Command, "bash -c ") && exitCode != nil && *exitCode != 0 {
+	// chmod) and RunProgram calls are both wrapped in `bash -c '...'`.
+	// Infrastructure commands should always succeed; only apply the
+	// configured non-zero exit code to RunProgram commands, which
+	// contain `&& cd ` (from `mkdir -p ... && cd ... && ...`).
+	// forceInfraExit bypasses this guard to test runBash error paths.
+	isRunProgram := strings.Contains(req.Command, "&& cd ")
+	if !isRunProgram && exitCode != nil && *exitCode != 0 && !forceInfraExit {
 		zero := 0
 		exitCode = &zero
 	}
@@ -211,8 +267,10 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	}
 	if !noComplete {
 		// Non-zero exit code must be delivered via an "error" event
-		// because v1.0.2 SDK's execution_complete handler ignores the
-		// exit_code field and only defaults to 0 when no error occurred.
+		// because the SDK's execution_complete handler does not parse
+		// the exit_code field; it only defaults to 0 when no error
+		// occurred. The error event's evalue is parsed as the exit
+		// code by the SDK's error handler.
 		if exitCode != nil && *exitCode != 0 {
 			fmt.Fprintf(w, `{"type":"error","ename":"ExitError","evalue":"%d"}`, *exitCode)
 			fmt.Fprint(w, "\n\n")
@@ -278,12 +336,22 @@ func (m *mockOpenSandboxServer) handleSearchFiles(w http.ResponseWriter, r *http
 	dir := r.URL.Query().Get("path")
 	pattern := r.URL.Query().Get("pattern")
 	_ = pattern
-	// Return one fake file under the searched directory.
+	// Return fake files under the searched directory.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-	// Return a file path that's under the searched dir so pathUnder
-	// passes.
+	if len(m.searchResults) > 0 {
+		// Return configured results joined under the searched dir so
+		// pathUnder passes.
+		entries := make([]string, 0, len(m.searchResults))
+		for _, name := range m.searchResults {
+			p := filepath.ToSlash(filepath.Join(dir, name))
+			entries = append(entries, fmt.Sprintf(`{"path":%q,"size":12}`, p))
+		}
+		fmt.Fprintf(w, "[%s]", strings.Join(entries, ","))
+		return
+	}
+	// Default: return one file so basic Collect tests work.
 	fakePath := filepath.ToSlash(filepath.Join(dir, "output.txt"))
 	fmt.Fprintf(w, `[{"path":%q,"size":12}]`, fakePath)
 }
@@ -359,10 +427,12 @@ func TestWorkspace_RunProgram_CleanEnv(t *testing.T) {
 	})
 	require.NoError(t, err)
 	// The command sent to the mock should contain `env -i` and the
-	// injected FOO='bar'.
+	// injected FOO= variable. The exact quoting depends on the
+	// bash -c wrapping (single-quote escaping), so we check for
+	// the env -i prefix and the FOO= assignment separately.
 	cmd := m.lastCommand()
 	assert.Contains(t, cmd, "env -i")
-	assert.Contains(t, cmd, "FOO='bar'")
+	assert.Contains(t, cmd, "FOO=")
 }
 
 func TestWorkspace_RunProgram_NilExitCode(t *testing.T) {
@@ -517,4 +587,284 @@ func TestWorkspace_Close_KillsOwnedSandbox(t *testing.T) {
 
 	require.NoError(t, exec.Close())
 	assert.Equal(t, 1, m.killCalls, "Close should kill the owned sandbox")
+}
+
+// --- Coverage-focused tests below ---
+
+func TestWorkspace_RunProgram_Timeout(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// CreateWorkspace must succeed first (it uses /command for mkdir);
+	// only afterwards inject the run error so RunProgram sees it.
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	m.setRunError(fmt.Errorf("command timeout exceeded"))
+
+	res, err := exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "sleep",
+		Args:    []string{"100"},
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err, "timeout should be surfaced via RunResult, not error")
+	assert.True(t, res.TimedOut, "RunResult.TimedOut should be true on timeout")
+}
+
+func TestWorkspace_CreateWorkspace_RunBashError(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	// Force infrastructure commands (mkdir) to honour the configured
+	// non-zero exit code so runBash returns an error.
+	nonZero := 1
+	m.setExitCode(nonZero)
+	m.setForceInfraExit(true)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	_, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.Error(t, err, "CreateWorkspace should fail when runBash exits non-zero")
+	assert.Contains(t, err.Error(), "bash exit")
+}
+
+func TestExecuteInline_MultipleBlocks(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("block-out")
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// Multiple blocks should aggregate stdout from each. An unsupported
+	// language block should be recorded in stderr without aborting.
+	res, err := exec.ExecuteInline(context.Background(), "exec-multi", []codeexecutor.CodeBlock{
+		{Language: "python", Code: "print('a')"},
+		{Language: "ruby", Code: "puts 'b'"},
+		{Language: "bash", Code: "echo c"},
+	}, 10*time.Second)
+	require.NoError(t, err)
+	// stdout from python + bash blocks (ruby is skipped).
+	assert.Contains(t, res.Stdout, "block-out")
+	// stderr should record the unsupported language error.
+	assert.Contains(t, res.Stderr, "unsupported language")
+}
+
+func TestWorkspace_PutDirectory_WithSubdirs(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// Create a temp dir with a subdirectory and files at both levels
+	// so PutDirectory exercises the parent-directory creation branch.
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "sub")
+	require.NoError(t, os.Mkdir(subDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "top.txt"), []byte("top"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(subDir, "nested.txt"), []byte("nested"), 0o644))
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	err = exec.PutDirectory(context.Background(), ws, tmpDir, "project")
+	require.NoError(t, err)
+}
+
+func TestWorkspace_PutDirectory_PathEscape(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	tmpDir := t.TempDir()
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// A destination that escapes the workspace should be rejected.
+	err = exec.PutDirectory(context.Background(), ws, tmpDir, "../../../etc")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes workspace")
+}
+
+func TestWorkspace_Collect_MultipleFiles(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// Configure search to return multiple files. The ".metadata.tmp"
+	// entry is a root-level metadata temp file and should be skipped
+	// by IsRootMetadataTempPath.
+	m.setSearchResults([]string{"a.txt", "b.txt", ".metadata.tmp"})
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
+	require.NoError(t, err)
+	// Two real files; ".metadata.tmp" should be filtered out.
+	require.Len(t, files, 2)
+	names := []string{files[0].Name, files[1].Name}
+	assert.Contains(t, names, "a.txt")
+	assert.Contains(t, names, "b.txt")
+	for _, f := range files {
+		assert.Equal(t, "mock-content", f.Content)
+		assert.False(t, f.Truncated)
+	}
+}
+
+func TestWorkspace_Collect_Truncation(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-trunc", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Compute the exact path the mock's handleSearchFiles will return
+	// and seed handleDownloadFile with data exceeding maxReadSizeBytes
+	// so readFile truncates and Collect reports Truncated == true.
+	expectedPath := filepath.ToSlash(filepath.Join(ws.Path, "output.txt"))
+	m.setDownloadData(expectedPath, make([]byte, maxReadSizeBytes+1))
+
+	files, err := exec.Collect(context.Background(), ws, []string{"*.txt"})
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	assert.True(t, files[0].Truncated, "file exceeding maxReadSizeBytes should be truncated")
+	assert.Equal(t, int64(maxReadSizeBytes+1), files[0].SizeBytes)
+}
+
+func TestWorkspace_RunProgram_WithStdin(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.setStdout("ok")
+	zero := 0
+	m.setExitCode(zero)
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "cat",
+		Stdin:   "hello",
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+
+	// The command sent to the mock should pipe stdin via base64 -d.
+	cmd := m.lastCommand()
+	assert.Contains(t, cmd, "base64 -d", "stdin should be piped through base64 -d")
+	assert.Contains(t, cmd, b64encode("hello"), "command should contain base64-encoded stdin")
+}
+
+func TestWorkspace_CreateWorkspace_Persist(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	// PerSession mode: same execID → same deterministic workspace path.
+	ws1, err := exec.CreateWorkspace(context.Background(), "persist-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	ws2, err := exec.CreateWorkspace(context.Background(), "persist-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	assert.Equal(t, ws1.Path, ws2.Path, "PerSession mode should reuse the same workspace path")
+
+	// Empty execID in PerSession mode should be rejected.
+	_, err = exec.CreateWorkspace(context.Background(), "", codeexecutor.WorkspacePolicy{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "execID must not be empty")
+}
+
+func TestWorkspace_PutFiles_InvalidPath(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// A file path that escapes the workspace should be rejected.
+	err = exec.PutFiles(context.Background(), ws, []codeexecutor.PutFile{
+		{Path: "../../etc/passwd", Content: []byte("x"), Mode: 0o644},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes workspace")
+}
+
+func TestWorkspace_PutDirectory_EmptyHostPath(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	err = exec.PutDirectory(context.Background(), ws, "", "subdir")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hostPath is empty")
+}
+
+func TestWorkspace_PutDirectory_NotDir(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// A file (not a directory) should be rejected.
+	tmpFile := filepath.Join(t.TempDir(), "file.txt")
+	require.NoError(t, os.WriteFile(tmpFile, []byte("x"), 0o644))
+
+	err = exec.PutDirectory(context.Background(), ws, tmpFile, "subdir")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a directory")
+}
+
+func TestWorkspace_Cleanup_EmptyPath(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// An empty workspace path should be a no-op (no /command call).
+	err := exec.Cleanup(context.Background(), codeexecutor.Workspace{Path: ""})
+	require.NoError(t, err)
+}
+
+func TestWorkspace_Cleanup_RunError(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// Make the /command endpoint return an HTTP error so runBash
+	// receives a non-nil error with a non-nil exec (covering the
+	// `if exec != nil` branch in runBash).
+	m.setRunError(fmt.Errorf("command timeout"))
+
+	err = exec.Cleanup(context.Background(), ws)
+	require.Error(t, err)
 }

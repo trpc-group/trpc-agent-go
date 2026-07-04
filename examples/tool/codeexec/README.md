@@ -223,7 +223,7 @@ tool := codeexec.NewTool(
 | `local.New()` | Local execution (unsafe) | `codeexecutor/local` |
 | `container.New()` | Docker container execution | `codeexecutor/container` |
 | `jupyter.New()` | Jupyter Kernel execution (requires `Close()`) | `codeexecutor/jupyter` |
-| `opensandbox.New()` | Remote OpenSandbox sandbox execution | `codeexecutor/opensandbox` |
+| `opensandbox.New()` | Remote OpenSandbox sandbox execution (requires `Close()` for owned sandboxes) | `codeexecutor/opensandbox` |
 
 ## Notes
 
