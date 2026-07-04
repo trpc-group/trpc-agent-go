@@ -652,7 +652,7 @@ func TestFileMemoryStoreForBackend_FileOnly(t *testing.T) {
 func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0, 0, 0)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -673,6 +673,8 @@ func TestBuildOpenClawTools_HostExecDefaultTimeout(t *testing.T) {
 		nil,
 		nil,
 		50*time.Millisecond,
+		0,
+		0,
 	)
 	execTool := findTool(bundle.tools, "exec_command")
 	callable, ok := execTool.(tool.CallableTool)
@@ -699,6 +701,84 @@ func TestBuildOpenClawTools_HostExecDefaultTimeout(t *testing.T) {
 	require.NotContains(t, got.Output, "done")
 }
 
+func TestBuildOpenClawTools_HostExecMaxTimeoutAndYield(t *testing.T) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		nil,
+		0,
+		50*time.Millisecond,
+		20*time.Millisecond,
+	)
+	execTool := findTool(bundle.tools, "exec_command")
+	callable, ok := execTool.(tool.CallableTool)
+	require.True(t, ok)
+
+	started := time.Now()
+	out, err := callable.Call(
+		context.Background(),
+		[]byte(
+			`{"command":"sleep 5; printf done",`+
+				`"yield_time_ms":0,"timeout_sec":5}`,
+		),
+	)
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 3*time.Second)
+
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	var got struct {
+		Status   string `json:"status"`
+		Output   string `json:"output"`
+		ExitCode int    `json:"exitCode"`
+	}
+	require.NoError(t, json.Unmarshal(data, &got))
+	require.Equal(t, "exited", got.Status)
+	require.NotEqual(t, 0, got.ExitCode)
+	require.NotContains(t, got.Output, "done")
+
+	writeTool := findTool(bundle.tools, "write_stdin")
+	writeCallable, ok := writeTool.(tool.CallableTool)
+	require.True(t, ok)
+	out, err = callable.Call(
+		context.Background(),
+		[]byte(`{"command":"sleep 1","background":true}`),
+	)
+	require.NoError(t, err)
+	data, err = json.Marshal(out)
+	require.NoError(t, err)
+	var running struct {
+		SessionID string `json:"sessionId"`
+	}
+	require.NoError(t, json.Unmarshal(data, &running))
+	require.NotEmpty(t, running.SessionID)
+	killTool := findTool(bundle.tools, "kill_session")
+	killCallable, ok := killTool.(tool.CallableTool)
+	require.True(t, ok)
+	t.Cleanup(func() {
+		if running.SessionID != "" {
+			_, _ = killCallable.Call(
+				context.Background(),
+				[]byte(
+					`{"session_id":"`+running.SessionID+`"}`,
+				),
+			)
+		}
+	})
+
+	started = time.Now()
+	_, err = writeCallable.Call(
+		context.Background(),
+		[]byte(`{"session_id":"`+running.SessionID+`","yield_time_ms":5000}`),
+	)
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 500*time.Millisecond)
+}
+
 func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	t.Parallel()
 
@@ -707,7 +787,7 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	store, err := memoryfile.NewStore(root)
 	require.NoError(t, err)
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, nil, 0)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, nil, 0, 0, 0)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
@@ -724,7 +804,7 @@ func TestBuildOpenClawTools_UsesSandboxExecCommand(t *testing.T) {
 	t.Parallel()
 
 	engine := codeexecutor.NewEngine(nil, nil, nil)
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, engine, 0)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, engine, 0, 0, 0)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "inside the configured sandbox")
@@ -752,7 +832,7 @@ func TestBuildOpenClawTools_UsesSandboxExecCommandWithMemoryFileStore(
 	require.NoError(t, err)
 
 	engine := codeexecutor.NewEngine(nil, nil, nil)
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, engine, 0)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, engine, 0, 0, 0)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "inside the configured sandbox")
@@ -771,7 +851,7 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 ) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0, 0, 0)
 	decl := findToolDeclaration(bundle.tools, "conversation_history")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -784,7 +864,7 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0, 0, 0)
 	require.NotNil(
 		t,
 		findToolDeclaration(bundle.tools, "subagents_spawn"),

@@ -1201,6 +1201,8 @@ tools:
   defer_direct_tools: ["exec_command", "message", "exec_command"]
   dynamic_agent_timeout: "3m"
   host_exec_default_timeout: "60s"
+  host_exec_max_timeout: "45s"
+  host_exec_max_yield: "2s"
 `)
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
 	require.NoError(t, err)
@@ -1211,6 +1213,8 @@ tools:
 	require.Equal(t, "exec_command,message", opts.DeferToolSurfaceDirect)
 	require.Equal(t, 3*time.Minute, opts.DynamicAgentTimeout)
 	require.Equal(t, time.Minute, opts.HostExecDefaultTimeout)
+	require.Equal(t, 45*time.Second, opts.HostExecMaxTimeout)
+	require.Equal(t, 2*time.Second, opts.HostExecMaxYield)
 }
 
 func TestParseRunOptions_DynamicAgentTimeoutFlagOverridesConfig(t *testing.T) {
@@ -1245,6 +1249,66 @@ tools:
 	require.Equal(t, 45*time.Second, opts.HostExecDefaultTimeout)
 }
 
+func TestParseRunOptions_HostExecMaxTimeoutFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  host_exec_max_timeout: "3m"
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-host-exec-max-timeout", "45s",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Second, opts.HostExecMaxTimeout)
+}
+
+func TestParseRunOptions_HostExecMaxYieldFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  host_exec_max_yield: "3m"
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-host-exec-max-yield", "45s",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Second, opts.HostExecMaxYield)
+}
+
+func TestParseRunOptions_HostExecMaxConfigInvalidDurationFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		key  string
+	}{
+		{name: "timeout", key: "host_exec_max_timeout"},
+		{name: "yield", key: "host_exec_max_yield"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfgPath := writeTempConfig(t, fmt.Sprintf(`
+tools:
+  %s: "not-a-duration"
+`, tc.key))
+			_, err := parseRunOptions([]string{"-config", cfgPath})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "tools."+tc.key)
+		})
+	}
+}
+
 func TestParseRunOptions_DynamicAgentTimeoutNegativeFails(t *testing.T) {
 	t.Parallel()
 
@@ -1262,6 +1326,28 @@ func TestParseRunOptions_HostExecDefaultTimeoutNegativeFails(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "host exec default timeout")
+}
+
+func TestParseRunOptions_HostExecMaxTimeoutNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-host-exec-max-timeout",
+		"-1s",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "host exec max timeout")
+}
+
+func TestParseRunOptions_HostExecMaxYieldNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-host-exec-max-yield",
+		"-1s",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "host exec max yield")
 }
 
 func TestParseRunOptions_DeferToolSurfaceDefaultsToAuto(t *testing.T) {

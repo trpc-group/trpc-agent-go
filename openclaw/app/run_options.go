@@ -140,6 +140,8 @@ const (
 	flagDeferToolSurfaceDirect             = "defer-tools-to-dynamic-agent-direct-tools"
 	flagDynamicAgentTimeout                = "dynamic-agent-timeout"
 	flagHostExecDefaultTimeout             = "host-exec-default-timeout"
+	flagHostExecMaxTimeout                 = "host-exec-max-timeout"
+	flagHostExecMaxYield                   = "host-exec-max-yield"
 
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
@@ -295,6 +297,8 @@ type runOptions struct {
 	DeferToolSurfaceDirect             string
 	DynamicAgentTimeout                time.Duration
 	HostExecDefaultTimeout             time.Duration
+	HostExecMaxTimeout                 time.Duration
+	HostExecMaxYield                   time.Duration
 
 	enableOpenClawToolsExplicit  bool
 	deferToolSurfaceModeExplicit bool
@@ -965,6 +969,20 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"Default timeout for OpenClaw host exec commands when timeout_sec "+
 			"is omitted (0 keeps the built-in default)",
 	)
+	fs.DurationVar(
+		&opts.HostExecMaxTimeout,
+		flagHostExecMaxTimeout,
+		0,
+		"Maximum timeout for OpenClaw host exec commands, including "+
+			"timeout_sec requested by the model (0 disables the cap)",
+	)
+	fs.DurationVar(
+		&opts.HostExecMaxYield,
+		flagHostExecMaxYield,
+		0,
+		"Maximum wait before exec_command or write_stdin returns "+
+			"interim output (0 disables the cap)",
+	)
 
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, &exitError{Code: 2, Err: err}
@@ -1292,6 +1310,10 @@ type toolsConfig struct {
 	DynamicAgentTimeoutCamel      *string             `yaml:"dynamicAgentTimeout,omitempty"`
 	HostExecDefaultTimeout        *string             `yaml:"host_exec_default_timeout,omitempty"`
 	HostExecDefaultTimeoutCamel   *string             `yaml:"hostExecDefaultTimeout,omitempty"`
+	HostExecMaxTimeout            *string             `yaml:"host_exec_max_timeout,omitempty"`
+	HostExecMaxTimeoutCamel       *string             `yaml:"hostExecMaxTimeout,omitempty"`
+	HostExecMaxYield              *string             `yaml:"host_exec_max_yield,omitempty"`
+	HostExecMaxYieldCamel         *string             `yaml:"hostExecMaxYield,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
@@ -2081,6 +2103,36 @@ func (cfg *fileConfig) apply(
 			}
 			opts.HostExecDefaultTimeout = dur
 		}
+		hostExecMaxTimeout := firstStringPtr(
+			cfg.Tools.HostExecMaxTimeout,
+			cfg.Tools.HostExecMaxTimeoutCamel,
+		)
+		if hostExecMaxTimeout != nil &&
+			!flagWasSet(set, flagHostExecMaxTimeout) {
+			dur, err := parseDuration(*hostExecMaxTimeout)
+			if err != nil {
+				return fmt.Errorf(
+					"tools.host_exec_max_timeout: %w",
+					err,
+				)
+			}
+			opts.HostExecMaxTimeout = dur
+		}
+		hostExecMaxYield := firstStringPtr(
+			cfg.Tools.HostExecMaxYield,
+			cfg.Tools.HostExecMaxYieldCamel,
+		)
+		if hostExecMaxYield != nil &&
+			!flagWasSet(set, flagHostExecMaxYield) {
+			dur, err := parseDuration(*hostExecMaxYield)
+			if err != nil {
+				return fmt.Errorf(
+					"tools.host_exec_max_yield: %w",
+					err,
+				)
+			}
+			opts.HostExecMaxYield = dur
+		}
 		if len(cfg.Tools.Providers) > 0 {
 			opts.ToolProviders = convertPluginSpecs(cfg.Tools.Providers)
 		}
@@ -2798,6 +2850,18 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid host exec default timeout: %s",
 			opts.HostExecDefaultTimeout,
+		)
+	}
+	if opts.HostExecMaxTimeout < 0 {
+		return fmt.Errorf(
+			"invalid host exec max timeout: %s",
+			opts.HostExecMaxTimeout,
+		)
+	}
+	if opts.HostExecMaxYield < 0 {
+		return fmt.Errorf(
+			"invalid host exec max yield: %s",
+			opts.HostExecMaxYield,
 		)
 	}
 	opts.DeferToolSurfaceDirect = strings.Join(
