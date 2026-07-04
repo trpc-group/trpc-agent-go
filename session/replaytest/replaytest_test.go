@@ -607,6 +607,268 @@ func TestMatchPathPatternWildcard(t *testing.T) {
 	assert.False(t, matchPathPattern("state.x", "events.x"))
 }
 
+func TestNormalizeSummariesNilEntry(t *testing.T) {
+	// nil summary entries should be skipped.
+	summaries := map[string]*session.Summary{
+		"filter1": nil,
+		"filter2": {Summary: "valid"},
+	}
+	result := normalizeSummaries(summaries)
+	assert.Len(t, result, 1, "nil entries should be skipped")
+	assert.Equal(t, "filter2", result[0].FilterKey)
+}
+
+func TestNormalizeSummariesMultipleSorted(t *testing.T) {
+	// Multiple summaries should be sorted by filter key.
+	summaries := map[string]*session.Summary{
+		"z_filter": {Summary: "last"},
+		"a_filter": {Summary: "first"},
+		"m_filter": {Summary: "middle"},
+	}
+	result := normalizeSummaries(summaries)
+	assert.Len(t, result, 3)
+	assert.Equal(t, "a_filter", result[0].FilterKey)
+	assert.Equal(t, "m_filter", result[1].FilterKey)
+	assert.Equal(t, "z_filter", result[2].FilterKey)
+}
+
+func TestNormalizeSummariesEmptyMap(t *testing.T) {
+	result := normalizeSummaries(nil)
+	assert.Empty(t, result)
+}
+
+func TestMatchAllowedDiffBackendPairMatch(t *testing.T) {
+	// When BackendA/BackendB are set and match, the rule proceeds to check
+	// section and path pattern (which also must match for Allowed=true).
+	rule := AllowedDiffRule{
+		Section:     "events",
+		PathPattern: "events[0].content",
+		BackendA:    "inmemory",
+		BackendB:    "sqlite",
+	}
+	diff := FieldDiff{
+		FieldPath: "events[0].content",
+		ValueA:    "hello",
+		ValueB:    "world",
+	}
+	// Backend pair matches in forward order.
+	assert.True(t, matchAllowedDiff(diff, rule, "inmemory", "sqlite"))
+	// Backend pair matches in reverse order.
+	assert.True(t, matchAllowedDiff(diff, rule, "sqlite", "inmemory"))
+}
+
+func TestMatchAllowedDiffBackendPairMismatch(t *testing.T) {
+	rule := AllowedDiffRule{
+		Section:     "events",
+		PathPattern: "events[0].content",
+		BackendA:    "inmemory",
+		BackendB:    "sqlite",
+	}
+	diff := FieldDiff{
+		FieldPath: "events[0].content",
+		ValueA:    "hello",
+		ValueB:    "world",
+	}
+	// Backend pair does not match.
+	assert.False(t, matchAllowedDiff(diff, rule, "inmemory", "redis"))
+}
+
+func TestMatchAllowedDiffSectionMismatch(t *testing.T) {
+	rule := AllowedDiffRule{
+		Section:     "state",
+		PathPattern: "events[0].content",
+	}
+	diff := FieldDiff{FieldPath: "events[0].content"}
+	assert.False(t, matchAllowedDiff(diff, rule, "a", "b"))
+}
+
+func TestCompareEventsRightExtra(t *testing.T) {
+	// Right has more events than left — extra events should be flagged.
+	left := Snapshot{
+		SessionID: "s1",
+		Events:    []NormalizedEvent{{Author: "user", Role: "user", Content: "A"}},
+	}
+	right := Snapshot{
+		SessionID: "s1",
+		Events: []NormalizedEvent{
+			{Author: "user", Role: "user", Content: "A"},
+			{Author: "assistant", Role: "assistant", Content: "B"},
+		},
+	}
+	diffs := CompareSnapshots(left, right, "a", "b", nil)
+	// Find the diff for events[1] (extra in right).
+	found := false
+	for _, d := range diffs {
+		if d.FieldPath == "events[1]" {
+			found = true
+			assert.Nil(t, d.ValueA)
+			assert.NotNil(t, d.ValueB)
+		}
+	}
+	assert.True(t, found, "extra event in right should be detected")
+}
+
+func TestCompareSummariesRightExtra(t *testing.T) {
+	left := Snapshot{SessionID: "s1"}
+	right := Snapshot{
+		SessionID: "s1",
+		Summaries: []NormalizedSummary{
+			{FilterKey: "k1", Summary: "extra"},
+		},
+	}
+	diffs := CompareSnapshots(left, right, "a", "b", nil)
+	assert.NotEmpty(t, diffs, "extra summary in right should be detected")
+}
+
+func TestCompareSummariesFilterKeyMismatch(t *testing.T) {
+	left := Snapshot{
+		SessionID: "s1",
+		Summaries: []NormalizedSummary{{FilterKey: "k1", Summary: "same"}},
+	}
+	right := Snapshot{
+		SessionID: "s1",
+		Summaries: []NormalizedSummary{{FilterKey: "k2", Summary: "same"}},
+	}
+	diffs := CompareSnapshots(left, right, "a", "b", nil)
+	found := false
+	for _, d := range diffs {
+		if strings.Contains(d.FieldPath, "filter_key") {
+			found = true
+		}
+	}
+	assert.True(t, found, "filter key mismatch should be detected")
+}
+
+func TestNormalizeStateNil(t *testing.T) {
+	result := normalizeState(nil)
+	assert.Nil(t, result)
+}
+
+func TestNormalizeTracksNilEvents(t *testing.T) {
+	// Track with nil events should be skipped.
+	tracks := map[session.Track]*session.TrackEvents{
+		"track1": nil,
+		"track2": {Events: []session.TrackEvent{{Payload: []byte(`"ok"`)}}},
+	}
+	result := normalizeTracks(tracks)
+	assert.Len(t, result, 1, "nil track events should be skipped")
+}
+
+func TestCompareStructsTypeMismatch(t *testing.T) {
+	// Different types should produce a diff.
+	type TypeA struct{ X string }
+	type TypeB struct{ X string }
+	diffs := compareStructs(TypeA{X: "a"}, TypeB{X: "b"}, "root", "s1")
+	assert.NotEmpty(t, diffs)
+	assert.Equal(t, "root", diffs[0].FieldPath)
+}
+
+func TestExtractSectionVariants(t *testing.T) {
+	// Bracket before dot: bracket is the first separator.
+	assert.Equal(t, "events", extractSection("events[0].content"))
+	// Dot found first; bracket after dot is not the first separator.
+	assert.Equal(t, "events", extractSection("events.field[0]"))
+	// No bracket or dot separator.
+	assert.Equal(t, "state", extractSection("state"))
+	// Only with bracket.
+	assert.Equal(t, "events", extractSection("events[0]"))
+	// Only with dot.
+	assert.Equal(t, "events", extractSection("events.field"))
+}
+
+func TestNormalizeJSONBytesEmpty(t *testing.T) {
+	result := normalizeJSONBytes(nil)
+	assert.Equal(t, "", result)
+	result = normalizeJSONBytes([]byte{})
+	assert.Equal(t, "", result)
+}
+
+func TestBuildEventTextMessage(t *testing.T) {
+	es := EventSpec{Role: "user", Content: "hello world"}
+	evt, err := buildEvent(es, 0, "s1", time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	assert.Equal(t, "user", string(evt.Response.Choices[0].Message.Role))
+	assert.Equal(t, "hello world", evt.Response.Choices[0].Message.Content)
+}
+
+func TestNormalizeMemoriesNilEntry(t *testing.T) {
+	// nil memory entries should be skipped.
+	memories := []*memory.Entry{
+		nil,
+		{Memory: &memory.Memory{Memory: "valid", Topics: []string{"test"}}},
+	}
+	result := normalizeMemories(memories)
+	assert.Len(t, result, 1)
+	assert.Equal(t, "valid", result[0].Content)
+}
+
+func TestNormalizeMemoriesNilMemoryField(t *testing.T) {
+	// Entry with nil Memory field should be skipped.
+	memories := []*memory.Entry{
+		{Memory: nil},
+	}
+	result := normalizeMemories(memories)
+	assert.Empty(t, result)
+}
+
+func TestNormalizeMemoriesNilTopics(t *testing.T) {
+	// Nil Topics should be normalized to empty slice.
+	memories := []*memory.Entry{
+		{Memory: &memory.Memory{Memory: "content", Topics: nil}},
+	}
+	result := normalizeMemories(memories)
+	assert.Len(t, result, 1)
+	assert.Equal(t, []string{}, result[0].Topics)
+}
+
+func TestCompareMemoriesTopicsDiff(t *testing.T) {
+	left := Snapshot{
+		SessionID: "s1",
+		Memories: []NormalizedMemory{
+			{Content: "mem1", Topics: []string{"a", "b"}},
+		},
+	}
+	right := Snapshot{
+		SessionID: "s1",
+		Memories: []NormalizedMemory{
+			{Content: "mem1", Topics: []string{"a", "c"}},
+		},
+	}
+	diffs := CompareSnapshots(left, right, "a", "b", nil)
+	found := false
+	for _, d := range diffs {
+		if strings.Contains(d.FieldPath, "topics") {
+			found = true
+		}
+	}
+	assert.True(t, found, "topics difference should be detected")
+}
+
+func TestBuildEventWithStateDelta(t *testing.T) {
+	es := EventSpec{
+		Role: "assistant",
+		StateDelta: map[string]string{
+			"key1": "val1",
+		},
+	}
+	evt, err := buildEvent(es, 0, "s1", time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	assert.Equal(t, "val1", string(evt.StateDelta["key1"]))
+}
+
+func TestBuildEventWithToolCalls(t *testing.T) {
+	es := EventSpec{
+		Role: "assistant",
+		ToolCalls: []ToolCallSpec{
+			{ID: "tc1", Name: "search", Arguments: `{"q":"test"}`},
+		},
+	}
+	evt, err := buildEvent(es, 0, "s1", time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	assert.Len(t, evt.Response.Choices[0].Message.ToolCalls, 1)
+	assert.Equal(t, "search", evt.Response.Choices[0].Message.ToolCalls[0].Function.Name)
+}
+
 // Compile-time interface compliance checks.
 var _ session.Service = (*sessioninmemory.SessionService)(nil)
 var _ memory.Service = (*memoryinmemory.MemoryService)(nil)
