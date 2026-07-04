@@ -50,7 +50,7 @@ func TestUnmarshalContentRejectsInvalidJSON(t *testing.T) {
 		Score float64 `json:"score"`
 	}
 
-	err := UnmarshalContent(makeResponse("{invalid"), &payload)
+	err := UnmarshalContent(makeResponse("definitely not json"), &payload)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshal response json")
 }

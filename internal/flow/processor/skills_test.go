@@ -2202,6 +2202,14 @@ func TestSkillNameFromToolResponse_UnknownTool(t *testing.T) {
 	require.Empty(t, name)
 }
 
+func TestSkillNameFromToolResponse_SelectDocsInvalidJSON(t *testing.T) {
+	name := skillNameFromToolResponse(model.Message{
+		ToolName: skillToolSelectDocs,
+		Content:  "not valid json",
+	})
+	require.Empty(t, name)
+}
+
 func TestSkillsToolResultRequestProcessor_MaterializesIntoLastToolMsg(
 	t *testing.T,
 ) {
