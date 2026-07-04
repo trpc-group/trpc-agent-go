@@ -79,12 +79,19 @@ func WithSandboxTimeout(t time.Duration) Option {
 // a long-running streaming /command call before the per-command
 // execution timeout fires, NewWithContext silently raises requestTimeout
 // to at least executionTimeout + requestTimeoutBuffer when the user-
-// supplied value is smaller. Set t to 0 to keep the SDK default.
+// supplied value is smaller. RunProgram further clamps spec.Timeout to
+// requestTimeout - requestTimeoutBuffer; raise this option (or
+// WithExecutionTimeout) to allow longer individual runs. Set t to 0 to
+// keep the SDK default.
 func WithRequestTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.requestTimeout = t }
 }
 
-// WithExecutionTimeout sets the per-block code execution timeout.
+// WithExecutionTimeout sets the default per-block code execution
+// timeout used by ExecuteCode. It also sets the floor for the request
+// timeout (NewWithContext clamps requestTimeout to at least
+// executionTimeout + requestTimeoutBuffer) so streaming /command
+// calls can run for the full execution timeout.
 func WithExecutionTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.executionTimeout = t }
 }

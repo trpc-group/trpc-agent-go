@@ -45,12 +45,13 @@ type mockOpenSandboxServer struct {
 	server   *httptest.Server
 	endpoint string // execd endpoint URL returned to the SDK
 
-	mu          sync.Mutex
-	commands    []string          // captured /command request bodies
-	files       map[string][]byte // simulated sandbox filesystem
-	dirsCreated []string
-	killCalls   int
-	pauseCalls  int
+	mu              sync.Mutex
+	commands        []string          // captured /command request bodies
+	commandTimeouts []int64           // captured /command timeout field (ms)
+	files           map[string][]byte // simulated sandbox filesystem
+	dirsCreated     []string
+	killCalls       int
+	pauseCalls      int
 	// exitCode controls the exit_code in execution_complete events.
 	// nil means no exit_code field (test the nil → -1 fallback).
 	exitCode *int
@@ -139,6 +140,17 @@ func (m *mockOpenSandboxServer) lastCommand() string {
 	return m.commands[len(m.commands)-1]
 }
 
+// lastCommandTimeoutMs returns the timeout (ms) of the most recent
+// /command request, or 0 if none has been captured.
+func (m *mockOpenSandboxServer) lastCommandTimeoutMs() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.commandTimeouts) == 0 {
+		return 0
+	}
+	return m.commandTimeouts[len(m.commandTimeouts)-1]
+}
+
 func (m *mockOpenSandboxServer) handle(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
@@ -209,10 +221,12 @@ func (m *mockOpenSandboxServer) handleCommand(w http.ResponseWriter, r *http.Req
 	body, _ := io.ReadAll(r.Body)
 	var req struct {
 		Command string `json:"command"`
+		Timeout int64  `json:"timeout"`
 	}
 	_ = json.Unmarshal(body, &req)
 	m.mu.Lock()
 	m.commands = append(m.commands, req.Command)
+	m.commandTimeouts = append(m.commandTimeouts, req.Timeout)
 	exitCode := m.exitCode
 	stdout := m.stdout
 	stderr := m.stderr
@@ -405,6 +419,55 @@ func TestWorkspace_RunProgram(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "hello world", res.Stdout)
 	assert.Equal(t, 0, res.ExitCode)
+}
+
+// TestWorkspace_RunProgram_TimeoutClampedToRequestBudget verifies that
+// RunProgram clamps spec.Timeout to requestTimeout - requestTimeoutBuffer
+// so the HTTP client cannot kill a streaming /command call before the
+// per-command timeout fires. Default executor has executionTimeout=30s,
+// so NewWithContext clamps requestTimeout to 40s; maxRun = 30s.
+func TestWorkspace_RunProgram_TimeoutClampedToRequestBudget(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// spec.Timeout=60s exceeds maxRun=30s (requestTimeout 40s - buffer 10s).
+	// RunProgram must clamp to 30s; mock should receive 30000ms.
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "echo",
+		Args:    []string{"ok"},
+		Timeout: 60 * time.Second,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(30000), m.lastCommandTimeoutMs(),
+		"spec.Timeout 60s should be clamped to 30s (30000ms) when requestTimeout=40s")
+}
+
+// TestWorkspace_RunProgram_TimeoutWithinBudget verifies that
+// RunProgram does NOT clamp spec.Timeout when it fits within
+// requestTimeout - requestTimeoutBuffer.
+func TestWorkspace_RunProgram_TimeoutWithinBudget(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// spec.Timeout=20s fits within maxRun=30s; no clamping.
+	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "echo",
+		Args:    []string{"ok"},
+		Timeout: 20 * time.Second,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(20000), m.lastCommandTimeoutMs(),
+		"spec.Timeout 20s should not be clamped when within budget")
 }
 
 func TestWorkspace_RunProgram_CleanEnv(t *testing.T) {

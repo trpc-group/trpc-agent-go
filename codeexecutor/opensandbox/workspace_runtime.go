@@ -29,6 +29,7 @@ import (
 	osb "github.com/alibaba/OpenSandbox/sdks/sandbox/go"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // Compile-time checks that workspaceRuntime satisfies the workspace
@@ -411,6 +412,14 @@ func (r *workspaceRuntime) CollectOutputs(
 //
 // Timeout is expressed in milliseconds (RunCommandRequest.Timeout is
 // int64 milliseconds per the OpenSandbox SDK).
+//
+// Timeout clamping: the OpenSandbox SDK applies
+// ConnectionConfig.RequestTimeout to ALL HTTP requests including the
+// streaming /command endpoint, so spec.Timeout cannot exceed
+// requestTimeout - requestTimeoutBuffer. If spec.Timeout exceeds this
+// budget it is clamped and a warning is logged; raise
+// WithRequestTimeout (or WithExecutionTimeout, which sets the floor)
+// to allow longer runs.
 func (r *workspaceRuntime) RunProgram(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
@@ -424,6 +433,22 @@ func (r *workspaceRuntime) RunProgram(
 	timeout := spec.Timeout
 	if timeout <= 0 {
 		timeout = defaultRunTimeout
+	}
+
+	// The SDK applies ConnectionConfig.RequestTimeout to ALL HTTP
+	// requests including streaming /command. If spec.Timeout exceeds
+	// the request timeout budget the command would be killed by the
+	// HTTP client before finishing. Clamp and warn so callers know to
+	// raise WithRequestTimeout for longer runs.
+	if r.ce.requestTimeout > 0 {
+		maxRun := r.ce.requestTimeout - requestTimeoutBuffer
+		if maxRun > 0 && timeout > maxRun {
+			log.Warnf(
+				"opensandbox: spec.Timeout %s exceeds request timeout budget %s (HTTP client timeout %s); clamping to %s",
+				timeout, maxRun, r.ce.requestTimeout, maxRun,
+			)
+			timeout = maxRun
+		}
 	}
 
 	cwd := ws.Path
