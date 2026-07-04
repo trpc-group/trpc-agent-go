@@ -1269,6 +1269,8 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 			"  defer_to_dynamic_agent_threshold_chars: 1234\n"+
 			"  dynamic_agent_timeout: 3m\n"+
 			"  host_exec_default_timeout: 60s\n"+
+			"  host_exec_max_timeout: 45s\n"+
+			"  host_exec_max_yield: 2s\n"+
 			"  defer_direct_tools: [exec_command]\n"+
 			"  defer_default_direct_tools: false\n",
 	)
@@ -1279,6 +1281,8 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 	opts.DeferToolSurfaceDefaultDirectTools = false
 	opts.DynamicAgentTimeout = 3 * time.Minute
 	opts.HostExecDefaultTimeout = time.Minute
+	opts.HostExecMaxTimeout = 45 * time.Second
+	opts.HostExecMaxYield = 2 * time.Second
 
 	provider, ok := buildAdminRuntimeConfigProvider(
 		opts,
@@ -1315,6 +1319,20 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 	)
 	require.Equal(t, "1m0s", hostTimeout.RuntimeValue)
 	require.Equal(t, "60s", hostTimeout.ConfiguredValue)
+	hostMaxTimeout := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.host_exec_max_timeout",
+	)
+	require.Equal(t, "45s", hostMaxTimeout.RuntimeValue)
+	require.Equal(t, "45s", hostMaxTimeout.ConfiguredValue)
+	hostMaxYield := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.host_exec_max_yield",
+	)
+	require.Equal(t, "2s", hostMaxYield.RuntimeValue)
+	require.Equal(t, "2s", hostMaxYield.ConfiguredValue)
 	direct := findAdminRuntimeConfigField(
 		t,
 		status,
