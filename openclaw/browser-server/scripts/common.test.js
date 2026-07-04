@@ -20,7 +20,12 @@ test("resolveHeadlessMode prefers headless CLI flag", () => {
 test("resolveHeadlessMode falls back to env value", () => {
   assert.equal(resolveHeadlessMode([], "false"), false);
   assert.equal(resolveHeadlessMode([], "true"), true);
+  assert.equal(resolveHeadlessMode([], "0"), false);
+  assert.equal(resolveHeadlessMode([], "off"), false);
+  assert.equal(resolveHeadlessMode([], "1"), true);
+  assert.equal(resolveHeadlessMode([], "yes"), true);
   assert.equal(resolveHeadlessMode([], ""), true);
+  assert.equal(resolveHeadlessMode([], "maybe"), true);
 });
 
 test("buildRelayLaunchOptions prefers bundled chromium", () => {

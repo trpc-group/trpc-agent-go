@@ -3,11 +3,17 @@ import { createNavigationPolicy } from "./ssrf.js";
 import { BrowserRuntime } from "./runtime.js";
 
 function readBool(value, fallback) {
-  const raw = `${value || ""}`.trim();
+  const raw = `${value || ""}`.trim().toLowerCase();
   if (raw === "") {
     return fallback;
   }
-  return raw === "true";
+  if (["1", "true", "yes", "on"].includes(raw)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(raw)) {
+    return false;
+  }
+  return fallback;
 }
 
 export function readConfig(env = process.env) {

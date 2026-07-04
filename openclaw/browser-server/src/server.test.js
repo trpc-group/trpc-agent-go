@@ -27,3 +27,19 @@ test("readConfig keeps OPENCLAW browser env precedence", () => {
   assert.equal(got.headless, true);
   assert.equal(got.executablePath, "/opt/chrome");
 });
+
+test("readConfig accepts common boolean env values", () => {
+  assert.equal(readConfig({
+    OPENCLAW_BROWSER_HEADLESS: "1"
+  }).headless, true);
+  assert.equal(readConfig({
+    OPENCLAW_BROWSER_HEADLESS: "yes"
+  }).headless, true);
+  assert.equal(readConfig({
+    OPENCLAW_BROWSER_HEADLESS: "0"
+  }).headless, false);
+  assert.equal(readConfig({
+    OPENCLAW_BROWSER_HEADLESS: "maybe",
+    TRPC_CLAW_BROWSER_MODE: "headless"
+  }).headless, true);
+});
