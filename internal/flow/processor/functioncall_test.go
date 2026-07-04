@@ -4652,7 +4652,7 @@ func TestConvertToolArguments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := convertToolArguments(tt.originalName, tt.originalArgs, tt.targetName)
+			result := convertToolArguments(nil, tt.originalName, tt.originalArgs, tt.targetName)
 
 			if tt.expected == nil {
 				assert.Nil(t, result, tt.description)
@@ -4680,7 +4680,7 @@ func TestSetDefaultTransferMessage(t *testing.T) {
 	SetDefaultTransferMessage("delegated")
 	defer func() { SetDefaultTransferMessage("Task delegated from coordinator") }()
 
-	res := convertToolArguments("agent-x", []byte("{}"),
+	res := convertToolArguments(nil, "agent-x", []byte("{}"),
 		transfer.TransferToolName)
 	require.NotNil(t, res)
 	var got transfer.Request
@@ -5103,7 +5103,35 @@ func TestExecuteCallableTool_NoRetryPolicyCallsToolOnCanceledContext(t *testing.
 }
 
 func TestConvertToolArguments_InvalidJSON(t *testing.T) {
-	b := convertToolArguments("child", []byte("{"),
+	b := convertToolArguments(nil, "child", []byte("{"),
+		transfer.TransferToolName)
+	require.Nil(t, b)
+}
+
+func TestConvertToolArguments_RepairsMalformedJSON(t *testing.T) {
+	enabled := true
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			ToolCallArgumentsJSONRepairEnabled: &enabled,
+		},
+	}
+	b := convertToolArguments(inv, "child", []byte("{"),
+		transfer.TransferToolName)
+	require.NotNil(t, b)
+	var req transfer.Request
+	require.NoError(t, json.Unmarshal(b, &req))
+	require.Equal(t, "child", req.AgentName)
+	require.NotEmpty(t, req.Message)
+}
+
+func TestConvertToolArguments_RejectsLeadingProse(t *testing.T) {
+	enabled := true
+	inv := &agent.Invocation{
+		RunOptions: agent.RunOptions{
+			ToolCallArgumentsJSONRepairEnabled: &enabled,
+		},
+	}
+	b := convertToolArguments(inv, "child", []byte(`Summary: {"message":"hi"}`),
 		transfer.TransferToolName)
 	require.Nil(t, b)
 }
@@ -7387,7 +7415,7 @@ func TestConvertToolArguments_DefaultMessageAndSetter(t *testing.T) {
 	SetDefaultTransferMessage("Delegated task")
 	// No message provided in original args should use default.
 	b := convertToolArguments(
-		"weather-agent", []byte("{}"), transfer.TransferToolName,
+		nil, "weather-agent", []byte("{}"), transfer.TransferToolName,
 	)
 	require.NotNil(t, b)
 	var req transfer.Request
