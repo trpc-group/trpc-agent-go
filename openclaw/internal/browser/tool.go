@@ -491,12 +491,22 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 	driverType := t.driverTypeForInput(profileName, in)
 	t.registerCancelCleanup(ctx, profileName, drv)
+	if result, ok := browserCrashBlockedResult(
+		ctx,
+		actionKey,
+		profileName,
+		driverType,
+		t.evaluateEnabled,
+	); ok {
+		return result, nil
+	}
+	drv = newCrashGuardedDriver(ctx, profileName, drv)
 
 	switch actionKey {
 	case strings.ToLower(actionStart):
 		return t.handleStart(ctx, profileName, driverType, drv)
 	case strings.ToLower(actionStop):
-		return t.handleStop(profileName, driverType, drv)
+		return t.handleStop(ctx, profileName, driverType, drv)
 	case strings.ToLower(actionTabs):
 		return t.handleTabs(ctx, profileName, driverType, drv, in)
 	case strings.ToLower(actionOpen):
@@ -1199,6 +1209,7 @@ func (t *Tool) handleStart(
 	if err != nil {
 		return Result{}, err
 	}
+	resetBrowserCrash(ctx, profile)
 
 	result := newBaseResult(
 		actionStart,
@@ -1212,6 +1223,7 @@ func (t *Tool) handleStart(
 }
 
 func (t *Tool) handleStop(
+	ctx context.Context,
 	profile string,
 	driverType string,
 	drv driver,
@@ -1219,6 +1231,7 @@ func (t *Tool) handleStop(
 	if err := drv.Stop(); err != nil {
 		return Result{}, err
 	}
+	resetBrowserCrash(ctx, profile)
 
 	result := newBaseResult(
 		actionStop,
