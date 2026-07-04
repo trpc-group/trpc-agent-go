@@ -9,7 +9,7 @@
 ## 失败归因方法
 
 Agent 采用 **多层归因** 策略：
-1. **规则层** — 18+ 条正则规则明确绑定 rule_id + category，每条 finding
+1. **规则层** — 14 条正则规则明确绑定 rule_id + category，每条 finding
    可追溯到具体规则和匹配的代码行
 2. **沙箱层** — go vet 输出按 file:line:col 格式解析，归因为 specific tool
 3. **敏感信息层** — 10 种模式覆盖 API Key、密码、私钥、信用卡号等
@@ -43,6 +43,6 @@ Agent 采用 **多层归因** 策略：
 ## 技术栈
 
 - Go 1.21+
-- SQLite (mattn/go-sqlite3)
+- SQLite (modernc.org/sqlite)
 - 复用 trpc-agent-go: tool/safety.Scanner
 - 复用 trpc-agent-go: codeexecutor 接口模式

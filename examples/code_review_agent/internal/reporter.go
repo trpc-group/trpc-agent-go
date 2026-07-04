@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package internal
 
 import (
@@ -67,8 +75,8 @@ func GenerateMarkdownReport(path string, task *ReviewTask, cfg ReportConfig) err
 
 	// 基本信息
 	sb.WriteString("## 基本信息\n\n")
-	sb.WriteString(fmt.Sprintf("| 字段 | 值 |\n"))
-	sb.WriteString(fmt.Sprintf("|------|----|\n"))
+	sb.WriteString("| 字段 | 值 |\n")
+	sb.WriteString("|------|----|\n")
 	sb.WriteString(fmt.Sprintf("| Task ID | `%s` |\n", task.ID))
 	if cfg.TaskTitle != "" {
 		sb.WriteString(fmt.Sprintf("| 标题 | %s |\n", cfg.TaskTitle))
@@ -87,8 +95,8 @@ func GenerateMarkdownReport(path string, task *ReviewTask, cfg ReportConfig) err
 
 	// 摘要
 	sb.WriteString("## 审查摘要\n\n")
-	sb.WriteString(fmt.Sprintf("| 严重级别 | 数量 |\n"))
-	sb.WriteString(fmt.Sprintf("|----------|------|\n"))
+	sb.WriteString("| 严重级别 | 数量 |\n")
+	sb.WriteString("|----------|------|\n")
 	sb.WriteString(fmt.Sprintf("| 🔴 Critical | %d |\n", task.Summary.Critical))
 	sb.WriteString(fmt.Sprintf("| 🟠 High | %d |\n", task.Summary.High))
 	sb.WriteString(fmt.Sprintf("| 🟡 Medium | %d |\n", task.Summary.Medium))

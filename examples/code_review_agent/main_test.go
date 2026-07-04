@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package main
 
 import (
@@ -198,7 +206,7 @@ func TestPipeline_DuplicateFindings(t *testing.T) {
 		t.Errorf("JSON 报告未生成: %v", err)
 	} else {
 		data, _ := os.ReadFile(jsonPath)
-		var report map[string]interface{}
+		var report map[string]any
 		if err := json.Unmarshal(data, &report); err != nil {
 			t.Errorf("JSON 报告格式无效: %v", err)
 		}

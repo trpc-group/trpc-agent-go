@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 // Package internal 提供代码评审 Agent 的核心实现。
 package internal
 
@@ -89,6 +97,11 @@ func ParseDiff(input string) ([]DiffFile, error) {
 	}
 
 	lines := strings.Split(input, "\n")
+	// 跳过 Split 在 EOF 产生的末尾空元素
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
 	var files []DiffFile
 	var currentFile *DiffFile
 	var currentHunk *Hunk
@@ -97,7 +110,7 @@ func ParseDiff(input string) ([]DiffFile, error) {
 	newLineNo := 0
 
 	for _, rawLine := range lines {
-		// 跳过末尾空行
+		// 跳过文件开始前的空行
 		if rawLine == "" && currentFile == nil {
 			continue
 		}

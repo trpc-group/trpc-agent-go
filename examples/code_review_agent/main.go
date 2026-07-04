@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 // code_review_agent 是一个自动化的 Go 代码评审工具。
 //
 // 输入 git diff 或 PR patch，通过静态规则扫描、沙箱执行和敏感信息
@@ -21,8 +29,6 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal"
-
-	"github.com/google/uuid"
 )
 
 func main() {
@@ -111,11 +117,9 @@ func runPipeline(
 	var allFindings []internal.Finding
 
 	for _, df := range diffFiles {
-		// 静态规则扫描
 		findings := scanner.ScanFile(df)
 		allFindings = append(allFindings, findings...)
 
-		// 敏感信息检测
 		sensFindings := internal.DetectSensitiveInfo(df)
 		allFindings = append(allFindings, sensFindings...)
 	}
@@ -124,11 +128,13 @@ func runPipeline(
 	sandboxCfg := internal.DefaultSandboxConfig()
 	executor := internal.NewSandboxExecutor(sandboxCfg, dryRun)
 
+	var sandboxDurationMs int64
 	if repoPath != "" {
 		result, err := executor.RunGoVet(ctx, repoPath)
-		// 即使沙箱执行失败也不崩溃，继续处理
-		_ = err
-		// 将 go vet 输出集成到 findings
+		sandboxDurationMs = result.DurationMs
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "沙箱执行警告: %v (exit=%d)\n", err, result.ExitCode)
+		}
 		if result.Stderr != "" || result.ExitCode != 0 {
 			vetLines := parseVetOutput(result.Stderr + result.Stdout)
 			for _, vl := range vetLines {
@@ -146,9 +152,6 @@ func runPipeline(
 				allFindings = append(allFindings, f)
 			}
 		}
-	} else {
-		// 没有 repo 路径时，沙箱执行记录为空
-		_ = executor
 	}
 
 	// --- Stage 4: 去重 ---
@@ -176,7 +179,6 @@ func runPipeline(
 		}
 		defer store.Close()
 
-		// 只插入非重复的 findings
 		var uniqueFindings []internal.Finding
 		for _, f := range allFindings {
 			if !f.IsDuplicate {
@@ -227,7 +229,7 @@ func runPipeline(
 		store.SaveMonitoringSummary(ctx, internal.MonitoringSummary{
 			TaskID:            taskID,
 			TotalDurationMs:   task.DurationMs,
-			SandboxDurationMs: 0,
+			SandboxDurationMs: sandboxDurationMs,
 			ToolCallsCount:    1,
 			FindingCount:      task.TotalFindings,
 		})
@@ -251,7 +253,6 @@ func parseVetOutput(output string) []vetLine {
 		if l == "" {
 			continue
 		}
-		// 尝试解析 "file:line:col: message" 格式
 		parts := strings.SplitN(l, ":", 4)
 		if len(parts) >= 3 {
 			file := parts[0]
@@ -279,6 +280,3 @@ func sha256Hash(s string) string {
 func timestampPrefix() string {
 	return time.Now().Format("20060102150405")
 }
-
-// 确保 uuid 包被引入（用于可能的 task ID 生成）
-var _ = uuid.New

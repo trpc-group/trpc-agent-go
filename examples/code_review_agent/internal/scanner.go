@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package internal
 
 import (
@@ -84,19 +92,12 @@ func (rs *RuleScanner) matchRule(rule Rule, line string) bool {
 	return false
 }
 
-// checkFileLevel 执行文件级别的检查（如缺少测试文件）。
+// checkFileLevel 执行文件级别的检查。
 func (rs *RuleScanner) checkFileLevel(df DiffFile) []Finding {
-	var findings []Finding
-
-	// 检查非测试 .go 文件是否缺少对应的 _test.go
-	if df.GoFile() {
-		testPath := strings.TrimSuffix(df.NewPath, ".go") + "_test.go"
-		// 在真实场景中会检查仓库中是否存在 testPath
-		// 这里只标记为低置信度 warning
-		_ = testPath
-	}
-
-	return findings
+	// 文件级别检查由 CheckMissingTests 处理，
+	// 需要调用方提供仓库文件列表。
+	// 此处不做 inline 检查以保证 ScanFile 的独立可用性。
+	return nil
 }
 
 // CheckMissingTests 检查是否缺少对某些文件的测试覆盖。
