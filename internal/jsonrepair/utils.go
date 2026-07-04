@@ -197,6 +197,33 @@ func removeAtIndex(text []rune, start int, count int) []rune {
 	return append(text[:start], text[start+count:]...)
 }
 
+// lastNonWhitespaceIndex returns the index of the last non-whitespace rune.
+func lastNonWhitespaceIndex(text []rune) int {
+	for i := len(text) - 1; i >= 0; i-- {
+		if !isWhitespace(text[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+// arrayInnerContent returns a repaired array payload without its outer brackets.
+func arrayInnerContent(text []rune) []rune {
+	if len(text) == 0 || text[0] != '[' {
+		return nil
+	}
+	end := lastNonWhitespaceIndex(text)
+	if end <= 0 || text[end] != ']' {
+		return nil
+	}
+	return text[1:end]
+}
+
+// containsNonWhitespace reports whether text has any non-whitespace rune.
+func containsNonWhitespace(text []rune) bool {
+	return lastNonWhitespaceIndex(text) >= 0
+}
+
 // endsWithCommaOrNewline reports whether text ends with a comma or newline, ignoring trailing spaces.
 func endsWithCommaOrNewline(text []rune) bool {
 	i := len(text) - 1

@@ -94,6 +94,7 @@ const (
 	flagMaxLLMCalls                                   = "max-llm-calls"
 	flagMaxToolIterations                             = "max-tool-iterations"
 	flagPreloadMemory                                 = "preload-memory"
+	flagToolCallArgumentsJSONRepair                   = "tool-call-arguments-json-repair"
 
 	flagAgentInstruction       = "agent-instruction"
 	flagAgentInstructionFiles  = "agent-instruction-files"
@@ -189,6 +190,7 @@ type runOptions struct {
 	MaxLLMCalls                                   int
 	MaxToolIterations                             int
 	PreloadMemory                                 int
+	ToolCallArgumentsJSONRepair                   bool
 	PostToolPromptEnabled                         *bool
 
 	AgentInstruction       string
@@ -343,6 +345,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 		MemoryAutoPolicy: summaryPolicyAny,
 
+		ToolCallArgumentsJSONRepair: true,
+
 		DeferToolSurfaceMode:               deferToolSurfaceModeAuto,
 		DeferToolSurfaceDefaultDirectTools: true,
 	}
@@ -474,6 +478,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagPreloadMemory,
 		0,
 		"Preload memories into system prompt (0=off, -1=all, N>0=adaptive budget)",
+	)
+	fs.BoolVar(
+		&opts.ToolCallArgumentsJSONRepair,
+		flagToolCallArgumentsJSONRepair,
+		true,
+		"Best-effort repair malformed JSON in tool call arguments",
 	)
 	fs.StringVar(
 		&opts.AgentInstruction,
@@ -1180,6 +1190,7 @@ type agentRunConfig struct {
 	MaxLLMCalls                                   *int  `yaml:"max_llm_calls,omitempty"`
 	MaxToolIterations                             *int  `yaml:"max_tool_iterations,omitempty"`
 	PreloadMemory                                 *int  `yaml:"preload_memory,omitempty"`
+	ToolCallArgumentsJSONRepair                   *bool `yaml:"tool_call_arguments_json_repair,omitempty"`
 	DisablePostToolPrompt                         *bool `yaml:"disable_post_tool_prompt,omitempty"`
 	DisablePostToolPromptCamel                    *bool `yaml:"disablePostToolPrompt,omitempty"`
 
@@ -1697,6 +1708,10 @@ func (cfg *fileConfig) apply(
 		if cfg.Agent.PreloadMemory != nil &&
 			!flagWasSet(set, flagPreloadMemory) {
 			opts.PreloadMemory = *cfg.Agent.PreloadMemory
+		}
+		if cfg.Agent.ToolCallArgumentsJSONRepair != nil &&
+			!flagWasSet(set, flagToolCallArgumentsJSONRepair) {
+			opts.ToolCallArgumentsJSONRepair = *cfg.Agent.ToolCallArgumentsJSONRepair
 		}
 		disablePostToolPrompt := firstBoolPtr(
 			cfg.Agent.DisablePostToolPrompt,

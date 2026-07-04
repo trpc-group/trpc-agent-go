@@ -1353,11 +1353,12 @@ func TestBuildAdminOptions_ExposesAgentBudgetFields(t *testing.T) {
 
 	cfgPath := writeAdminRuntimeConfigTestFile(
 		t,
-		"agent:\n  max_llm_calls: 7\n  max_tool_iterations: 12\n",
+		"agent:\n  max_llm_calls: 7\n  max_tool_iterations: 12\n  tool_call_arguments_json_repair: false\n",
 	)
 	opts := adminRuntimeConfigTestOptions(cfgPath)
 	opts.MaxLLMCalls = 7
 	opts.MaxToolIterations = 12
+	opts.ToolCallArgumentsJSONRepair = false
 
 	provider, ok := buildAdminRuntimeConfigProvider(
 		opts,
@@ -1380,4 +1381,11 @@ func TestBuildAdminOptions_ExposesAgentBudgetFields(t *testing.T) {
 	)
 	require.Equal(t, "12", field.RuntimeValue)
 	require.Equal(t, "12", field.ConfiguredValue)
+	repair := findAdminRuntimeConfigField(
+		t,
+		status,
+		"agent.tool_call_arguments_json_repair",
+	)
+	require.Equal(t, "false", repair.RuntimeValue)
+	require.Equal(t, "false", repair.ConfiguredValue)
 }

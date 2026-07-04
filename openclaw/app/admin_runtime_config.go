@@ -413,6 +413,18 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 						return strconv.Itoa(opts.MaxToolIterations)
 					},
 				),
+				adminRuntimeBoolField(
+					"agent.tool_call_arguments_json_repair",
+					"Tool Call JSON Repair",
+					"Best-effort repair malformed JSON in tool call arguments.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("agent"),
+						adminRuntimeKey("tool_call_arguments_json_repair"),
+					},
+					func(opts runOptions) string {
+						return strconv.FormatBool(opts.ToolCallArgumentsJSONRepair)
+					},
+				),
 			},
 		},
 		{
