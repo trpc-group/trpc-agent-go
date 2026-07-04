@@ -165,3 +165,17 @@ func TestWithShowToolCallDelta(t *testing.T) {
 	WithShowToolCallDelta(false)(&opt)
 	assert.False(t, opt.showToolCallDelta)
 }
+
+func TestWithStreamRetry_ZeroPreservesDefault(t *testing.T) {
+	opt := defaultOptions
+	WithStreamRetry(0, 0, 0)(&opt)
+	assert.Equal(t, defaultStreamMaxRetries, opt.streamMaxRetries)
+}
+
+func TestWithStreamRetry_NegativeDisablesRetries(t *testing.T) {
+	opt := defaultOptions
+	WithStreamRetry(-1, 0, 0)(&opt)
+	assert.Equal(t, -1, opt.streamMaxRetries)
+	m := New("claude-test", WithStreamRetry(-1, 0, 0))
+	assert.Zero(t, m.effectiveStreamMaxRetries())
+}

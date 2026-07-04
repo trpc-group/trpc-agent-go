@@ -2343,6 +2343,63 @@ func Test_HandleStreamingResponse_DoesNotRetryFatalErrors(t *testing.T) {
 		"a 401 authentication failure must not be retried")
 }
 
+func Test_isStreamRetryableError_HTTPStatusBoundaries(t *testing.T) {
+	require.True(t, isStreamRetryableError(fmt.Errorf("received http status 503")))
+	require.True(t, isStreamRetryableError(fmt.Errorf("status 502 service unavailable")))
+	require.False(t, isStreamRetryableError(fmt.Errorf("port 5031 refused")))
+	require.False(t, isStreamRetryableError(fmt.Errorf("error code 5031")))
+}
+
+// Test_HandleStreamingResponse_RetryInvokesStreamCompleteCallbackOnce verifies
+// intermediate retryable failures do not emit stream-complete callbacks.
+func Test_HandleStreamingResponse_RetryInvokesStreamCompleteCallbackOnce(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			n := atomic.AddInt32(&attempts, 1)
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			if n == 1 {
+				body := &errReadCloser{
+					pre: []byte(ssePrelude),
+					err: fmt.Errorf("read: connection reset by peer"),
+				}
+				return &http.Response{StatusCode: 200, Header: h, Body: body}, nil
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(strings.NewReader(sseFullSuccess)),
+			}, nil
+		})}
+	}
+
+	var callbackCount int32
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
+		WithChatStreamCompleteCallback(func(_ context.Context, _ *anthropic.MessageNewParams,
+			_ *anthropic.Message, err error) {
+			atomic.AddInt32(&callbackCount, 1)
+			require.NoError(t, err)
+		}),
+	)
+
+	ctx := context.Background()
+	responseChan := make(chan *model.Response, 16)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	for range responseChan {
+	}
+	require.Equal(t, int32(1), atomic.LoadInt32(&callbackCount))
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
+}
+
 func Test_HTTPClientOptions_AndAnthropicClientOptions(t *testing.T) {
 	// Use WithHTTPClientOptions to inject custom Transport without overriding DefaultNewHTTPClient.
 	// Also call WithHTTPClientName and WithAnthropicClientOptions to cover these paths.

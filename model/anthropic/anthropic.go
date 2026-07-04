@@ -605,15 +605,13 @@ func (m *Model) handleStreamingResponse(
 	chatRequest anthropic.MessageNewParams,
 	responseChan chan<- *model.Response,
 ) {
-	maxRetries := m.streamMaxRetries
-	if maxRetries < 0 {
-		maxRetries = 0
-	}
+	maxRetries := m.effectiveStreamMaxRetries()
 
 	attempt := 0
 	for {
-		finalResponse, streamErr, sawContent := m.runStreamingAttempt(ctx, chatRequest, responseChan)
+		finalResponse, callbackAcc, streamErr, sawContent := m.runStreamingAttempt(ctx, chatRequest, responseChan)
 		if streamErr == nil {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, nil)
 			if finalResponse != nil {
 				select {
 				case responseChan <- finalResponse:
@@ -625,24 +623,28 @@ func (m *Model) handleStreamingResponse(
 		// Don't retry context cancellation — the run is being torn down.
 		if errors.Is(streamErr, context.Canceled) ||
 			errors.Is(streamErr, context.DeadlineExceeded) {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 			return
 		}
 		// Don't retry after the first chunk reaches the caller; retrying
 		// would corrupt the downstream stream by re-emitting from scratch.
 		if sawContent {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 			return
 		}
 		// Only retry transport-level errors that look transient. Authentic
 		// 4xx-style failures (bad request, invalid api key) should fail fast.
 		if !isStreamRetryableError(streamErr) {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 			return
 		}
 		if attempt >= maxRetries {
-			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError,
-				fmt.Errorf("anthropic stream failed after %d attempts: %w", attempt+1, streamErr))
+			terminalErr := fmt.Errorf("anthropic stream failed after %d attempts: %w", attempt+1, streamErr)
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, terminalErr)
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, terminalErr)
 			return
 		}
 		attempt++
@@ -654,10 +656,23 @@ func (m *Model) handleStreamingResponse(
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, ctx.Err())
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, ctx.Err())
 			return
 		}
 	}
+}
+
+// effectiveStreamMaxRetries resolves the retry budget for handleStreamingResponse.
+// Zero uses the package default; negative disables retries.
+func (m *Model) effectiveStreamMaxRetries() int {
+	if m.streamMaxRetries < 0 {
+		return 0
+	}
+	if m.streamMaxRetries == 0 {
+		return defaultStreamMaxRetries
+	}
+	return m.streamMaxRetries
 }
 
 // runStreamingAttempt performs a single streaming attempt and returns:
@@ -671,7 +686,7 @@ func (m *Model) runStreamingAttempt(
 	ctx context.Context,
 	chatRequest anthropic.MessageNewParams,
 	responseChan chan<- *model.Response,
-) (finalResponse *model.Response, streamErr error, sawContent bool) {
+) (finalResponse *model.Response, callbackAcc *anthropic.Message, streamErr error, sawContent bool) {
 	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.anthropicRequestOptions...)
 	defer stream.Close()
 	acc := newStreamingMessageAccumulator()
@@ -710,13 +725,11 @@ loop:
 			finalResponse = buildStreamingFinalResponse(acc.Message())
 		}
 	}
-	var callbackAcc *anthropic.Message
 	if streamErr == nil {
 		finalAcc := acc.Message()
 		callbackAcc = &finalAcc
 	}
-	m.runChatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, streamErr)
-	return finalResponse, streamErr, sawContent
+	return finalResponse, callbackAcc, streamErr, sawContent
 }
 
 // streamRetryBackoff returns the sleep duration before retry attempt n
@@ -761,10 +774,15 @@ var streamRetryableErrorPatterns = []string{
 	"server misbehaving",
 	"no such host",
 	"overloaded",
-	"529", // anthropic-specific "overloaded" status code
-	"503",
+}
+
+// streamRetryableHTTPStatusCodes are HTTP status codes worth retrying when they
+// appear as isolated tokens in error text (not substrings of longer numbers).
+var streamRetryableHTTPStatusCodes = []string{
 	"502",
+	"503",
 	"504",
+	"529", // anthropic-specific "overloaded" status code
 }
 
 // isStreamRetryableError returns true when the given streaming-attempt error
@@ -776,6 +794,31 @@ func isStreamRetryableError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	for _, p := range streamRetryableErrorPatterns {
 		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	for _, code := range streamRetryableHTTPStatusCodes {
+		if containsIsolatedToken(msg, code) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsIsolatedToken reports whether token appears in msg without being
+// embedded in a longer digit sequence (e.g. match "503" but not "5031").
+func containsIsolatedToken(msg, token string) bool {
+	if token == "" {
+		return false
+	}
+	for i := 0; i+len(token) <= len(msg); i++ {
+		if msg[i:i+len(token)] != token {
+			continue
+		}
+		beforeDigit := i > 0 && msg[i-1] >= '0' && msg[i-1] <= '9'
+		after := i + len(token)
+		afterDigit := after < len(msg) && msg[after] >= '0' && msg[after] <= '9'
+		if !beforeDigit && !afterDigit {
 			return true
 		}
 	}
