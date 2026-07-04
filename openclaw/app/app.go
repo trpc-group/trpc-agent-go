@@ -1133,6 +1133,8 @@ func NewRuntimeWithOptions(
 		fileMemoryStore,
 		sandboxExecEngine,
 		opts.HostExecDefaultTimeout,
+		opts.HostExecMaxTimeout,
+		opts.HostExecMaxYield,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1744,6 +1746,8 @@ func run(
 		fileMemoryStore,
 		sandboxExecEngine,
 		opts.HostExecDefaultTimeout,
+		opts.HostExecMaxTimeout,
+		opts.HostExecMaxYield,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -3439,6 +3443,8 @@ func buildOpenClawTools(
 	memoryFileStore *memoryfile.Store,
 	sandboxExecEngine codeexecutor.Engine,
 	hostExecDefaultTimeout time.Duration,
+	hostExecMaxTimeout time.Duration,
+	hostExecMaxYield time.Duration,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
@@ -3481,6 +3487,18 @@ func buildOpenClawTools(
 			mgrOpts = append(
 				mgrOpts,
 				octool.WithDefaultTimeout(hostExecDefaultTimeout),
+			)
+		}
+		if hostExecMaxTimeout > 0 {
+			mgrOpts = append(
+				mgrOpts,
+				octool.WithMaxTimeout(hostExecMaxTimeout),
+			)
+		}
+		if hostExecMaxYield > 0 {
+			mgrOpts = append(
+				mgrOpts,
+				octool.WithMaxYield(hostExecMaxYield),
 			)
 		}
 		mgr = octool.NewManager(mgrOpts...)

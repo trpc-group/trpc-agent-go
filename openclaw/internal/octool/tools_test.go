@@ -347,6 +347,84 @@ func TestExecTool_UsesManagerDefaultTimeout(t *testing.T) {
 	require.NotContains(t, res.Output, "done")
 }
 
+func TestExecTool_MaxTimeoutCapsRequestedTimeout(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(WithMaxTimeout(50 * time.Millisecond))
+	tool := newExecCommandTool(mgr)
+
+	started := time.Now()
+	out, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
+		"command":     "sleep 1; printf done",
+		"yieldMs":     0,
+		"timeout_sec": 5,
+	}))
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 900*time.Millisecond)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.NotEqual(t, 0, res.ExitCode)
+	require.NotContains(t, res.Output, "done")
+}
+
+func TestManagerTimeoutAndYieldBranches(t *testing.T) {
+	t.Parallel()
+
+	defaultMgr := NewManager()
+	require.Equal(
+		t,
+		time.Duration(defaultTimeoutS)*time.Second,
+		defaultMgr.commandTimeout(nil),
+	)
+	zeroMgr := &Manager{}
+	require.Equal(
+		t,
+		time.Duration(defaultTimeoutS)*time.Second,
+		zeroMgr.commandTimeout(nil),
+	)
+
+	requested := 1
+	cappedMgr := NewManager(WithMaxTimeout(5 * time.Second))
+	require.Equal(t, time.Second, cappedMgr.commandTimeout(&requested))
+
+	yieldMgr := NewManager(WithMaxYield(2 * time.Second))
+	require.Equal(t, 1000, yieldMgr.clampYieldMs(1000))
+
+	tinyYieldMgr := NewManager(WithMaxYield(time.Nanosecond))
+	require.Equal(t, 1, tinyYieldMgr.clampYieldMs(5000))
+
+	var nilMgr *Manager
+	require.Equal(t, 10, nilMgr.clampYieldMs(10))
+}
+
+func TestManagerStartBackgroundUsesBackgroundForNilParentContext(
+	t *testing.T,
+) {
+	if _, err := exec.LookPath(shellProgram); err != nil {
+		t.Skip("shell is not available")
+	}
+
+	mgr := NewManager()
+	sess, err := mgr.startBackground(
+		nil,
+		execParams{Command: "printf ok"},
+		time.Second,
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = mgr.kill(sess.id)
+	})
+
+	require.Eventually(t, func() bool {
+		poll, err := mgr.poll(sess.id, nil)
+		return err == nil && poll.Status == "exited"
+	}, 3*time.Second, 20*time.Millisecond)
+}
+
 func TestExecTool_RuntimeProfileWorkspacePolicy(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
@@ -608,8 +686,11 @@ func TestExecTool_RedactsSensitiveKeyValueOutput(t *testing.T) {
 
 	args := mustJSON(t, map[string]any{
 		"command": `printf 'OPENAI_API_KEY=sk-test-secret
+WECOM_ENCODING_AES_KEY=wecom-aes-secret
+SERVICE_CREDENTIAL=service-credential-secret
 SAFE_NAME=ok
 "OPENAI_API_KEY": "sk-test-secret",
+"WECOM_ENCODING_AES_KEY": "wecom-aes-secret",
 '`,
 		"yieldMs": 0,
 	})
@@ -618,9 +699,14 @@ SAFE_NAME=ok
 
 	res := out.(execResult)
 	require.Contains(t, res.Output, "OPENAI_API_KEY=[REDACTED]")
+	require.Contains(t, res.Output, "WECOM_ENCODING_AES_KEY=[REDACTED]")
+	require.Contains(t, res.Output, "SERVICE_CREDENTIAL=[REDACTED]")
 	require.Contains(t, res.Output, `OPENAI_API_KEY": "[REDACTED]"`)
+	require.Contains(t, res.Output, `WECOM_ENCODING_AES_KEY": "[REDACTED]"`)
 	require.Contains(t, res.Output, "SAFE_NAME=ok")
 	require.NotContains(t, res.Output, "sk-test-secret")
+	require.NotContains(t, res.Output, "wecom-aes-secret")
+	require.NotContains(t, res.Output, "service-credential-secret")
 }
 
 func TestExecTool_UsesMemoryFileEnvFromContext(t *testing.T) {
@@ -953,6 +1039,50 @@ func TestExecTool_DefaultTimeoutKillsProcessGroup(t *testing.T) {
 	}, 900*time.Millisecond, 20*time.Millisecond)
 }
 
+func TestExecTool_ContextCancelKillsYieldSessionProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group signaling is unix-specific")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	dir := t.TempDir()
+	ready := filepath.Join(dir, "ready")
+	marker := filepath.Join(dir, "orphan-marker")
+	mgr := NewManager(WithJobTTL(10 * time.Second))
+	yieldMs := 10
+	timeoutS := 30
+	ctx, cancel := context.WithCancel(context.Background())
+
+	res, err := mgr.Exec(ctx, execParams{
+		Command: "(sleep 0.7; echo orphan > " +
+			strconv.Quote(marker) + ") & echo ready > " +
+			strconv.Quote(ready) + "; wait",
+		YieldMs:  &yieldMs,
+		TimeoutS: &timeoutS,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "running", res.Status)
+	require.NotEmpty(t, res.SessionID)
+
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(ready)
+		return err == nil
+	}, time.Second, 20*time.Millisecond)
+
+	cancel()
+	pollUntilExited(t, mgr, res.SessionID)
+	require.Never(t, func() bool {
+		_, err = os.Stat(marker)
+		if err == nil {
+			return true
+		}
+		require.ErrorIs(t, err, os.ErrNotExist)
+		return false
+	}, time.Second, 20*time.Millisecond)
+}
+
 func TestProcessTool_Submit(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
@@ -1007,6 +1137,38 @@ func TestProcessTool_Submit(t *testing.T) {
 		t.Fatalf("process exited; output: %s", all)
 	}
 	t.Fatalf("process did not exit; output: %s", all)
+}
+
+func TestWriteStdinTool_MaxYieldCapsRequestedWait(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithJobTTL(10*time.Second),
+		WithMaxYield(20*time.Millisecond),
+	)
+	execTool := newExecCommandTool(mgr)
+	writeTool := newWriteStdinTool(mgr)
+
+	out, err := execTool.Call(context.Background(), mustJSON(t, map[string]any{
+		"command":    "sleep 1",
+		"background": true,
+	}))
+	require.NoError(t, err)
+	res := out.(execResult)
+	t.Cleanup(func() {
+		_ = mgr.kill(res.SessionID)
+	})
+
+	started := time.Now()
+	_, err = writeTool.Call(context.Background(), mustJSON(t, map[string]any{
+		"session_id":     res.SessionID,
+		"yield_time_ms":  5_000,
+		"append_newline": false,
+	}))
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
 func TestExecTool_PTYForeground(t *testing.T) {
@@ -1954,6 +2116,145 @@ func TestUploadEnvFromContext_UsesUploadStore(t *testing.T) {
 	require.Equal(t, derived.Path, recent[0].Path)
 	require.Equal(t, uploadKindPDF, recent[0].Kind)
 	require.Equal(t, uploads.SourceDerived, recent[0].Source)
+}
+
+func TestUploadEnvFromContext_UsesUploadStoreWithoutChannelPrefix(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	scope := uploads.Scope{
+		Channel:   "admin",
+		UserID:    "u1",
+		SessionID: "eval-session-1",
+	}
+	saved, err := store.SaveWithInfo(
+		context.Background(),
+		scope,
+		"board.png",
+		uploads.FileMetadata{
+			MimeType: "image/png",
+			Source:   uploads.SourceInbound,
+		},
+		[]byte("png"),
+	)
+	require.NoError(t, err)
+
+	_, err = store.SaveWithInfo(
+		context.Background(),
+		uploads.Scope{
+			Channel:   "admin",
+			UserID:    "other-user",
+			SessionID: "eval-session-1",
+		},
+		"other.png",
+		uploads.FileMetadata{MimeType: "image/png"},
+		[]byte("other"),
+	)
+	require.NoError(t, err)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(
+			sessionpkg.NewSession("app", "u1", "eval-session-1"),
+		),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	env := uploadEnvFromContext(ctx, store)
+	require.Equal(t, saved.Path, env[envLastUploadPath])
+	require.Equal(t, saved.HostRef, env[envLastUploadHostRef])
+	require.Equal(t, saved.Path, env[envLastImagePath])
+	require.Equal(t, saved.HostRef, env[envLastImageHostRef])
+	require.Equal(t, filepath.Dir(saved.Path), env[envSessionUploadsDir])
+
+	var recent []execUploadMeta
+	require.NoError(
+		t,
+		json.Unmarshal([]byte(env[envRecentUploadsJSON]), &recent),
+	)
+	require.Len(t, recent, 1)
+	require.Equal(t, saved.Path, recent[0].Path)
+	require.Equal(t, uploads.SourceInbound, recent[0].Source)
+}
+
+func TestListUploadsForScopeWithoutChannelFiltersAndLimits(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	store, err := uploads.NewStore(stateDir)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		scope uploads.Scope
+		name  string
+	}{
+		{
+			scope: uploads.Scope{
+				Channel:   "admin",
+				UserID:    "u1",
+				SessionID: "eval-session-1",
+			},
+			name: "first.png",
+		},
+		{
+			scope: uploads.Scope{
+				Channel:   "admin",
+				UserID:    "u1",
+				SessionID: "other-session",
+			},
+			name: "skip.png",
+		},
+		{
+			scope: uploads.Scope{
+				Channel:   "wecom",
+				UserID:    "u1",
+				SessionID: "eval-session-1",
+			},
+			name: "second.png",
+		},
+	} {
+		_, err := store.SaveWithInfo(
+			context.Background(),
+			tc.scope,
+			tc.name,
+			uploads.FileMetadata{MimeType: "image/png"},
+			[]byte(tc.name),
+		)
+		require.NoError(t, err)
+	}
+
+	scope := uploads.Scope{UserID: "u1", SessionID: "eval-session-1"}
+	files, err := listUploadsForScope(store, scope, 0)
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+	for _, file := range files {
+		require.Equal(t, "u1", file.Scope.UserID)
+		require.Equal(t, "eval-session-1", file.Scope.SessionID)
+	}
+
+	limited, err := listUploadsForScope(store, scope, 1)
+	require.NoError(t, err)
+	require.Len(t, limited, 1)
+}
+
+func TestListUploadsForScopeWithoutChannelPropagatesListAllError(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	store, err := uploads.NewStore("/dev/null")
+	require.NoError(t, err)
+
+	_, err = listUploadsForScope(
+		store,
+		uploads.Scope{UserID: "u1", SessionID: "eval-session-1"},
+		0,
+	)
+	require.Error(t, err)
 }
 
 func TestUploadEnvFromContext_RewritesGeneratedUploadNames(t *testing.T) {
