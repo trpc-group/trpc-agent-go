@@ -14,6 +14,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -490,4 +491,80 @@ func TestNew_RequestTimeout_DefaultClamped(t *testing.T) {
 	want := 30*time.Second + requestTimeoutBuffer
 	assert.Equal(t, want, exec.requestTimeout,
 		"default requestTimeout should be clamped to default executionTimeout + buffer")
+}
+
+// TestAppendStderr_EdgeCases verifies appendStderr handles empty and
+// multi-line input.
+func TestAppendStderr_EdgeCases(t *testing.T) {
+	var out strings.Builder
+	appendStderr(&out, "")
+	assert.Equal(t, "", out.String())
+
+	var out2 strings.Builder
+	appendStderr(&out2, "line1\nline2\n")
+	assert.Equal(t, "[stderr] line1\n[stderr] line2\n", out2.String())
+}
+
+// TestAppendError_Nil verifies appendError skips nil errors.
+func TestAppendError_Nil(t *testing.T) {
+	var out strings.Builder
+	appendError(&out, nil)
+	assert.Equal(t, "", out.String())
+}
+
+// TestEnsureRuntime_LazyInit verifies ensureRuntime creates the runtime
+// on first call and reuses it on subsequent calls.
+func TestEnsureRuntime_LazyInit(t *testing.T) {
+	c := &CodeExecutor{}
+	rt := c.ensureRuntime()
+	require.NotNil(t, rt)
+	rt2 := c.ensureRuntime()
+	assert.Same(t, rt, rt2)
+}
+
+// TestExecuteCode_NilSandbox verifies ExecuteCode returns an error when
+// the sandbox is not initialized.
+func TestExecuteCode_NilSandbox(t *testing.T) {
+	c := &CodeExecutor{}
+	_, err := c.ExecuteCode(context.Background(), codeexecutor.CodeExecutionInput{
+		ExecutionID: "exec-1",
+		CodeBlocks: []codeexecutor.CodeBlock{
+			{Language: "python", Code: "print(1)"},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sandbox not initialized")
+}
+
+// TestNew_ExecutionTimeoutZero_ClampsToDefault verifies that
+// NewWithContext uses defaultRunTimeout as the floor when
+// executionTimeout is set to 0.
+func TestNew_ExecutionTimeoutZero_ClampsToDefault(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithExecutionTimeout(0),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+	want := defaultRunTimeout + requestTimeoutBuffer
+	assert.Equal(t, want, exec.requestTimeout)
+}
+
+// TestNew_ConnectError verifies NewWithContext returns an error when
+// ConnectSandbox fails (server unreachable).
+func TestNew_ConnectError(t *testing.T) {
+	_, err := New(
+		WithDomain("127.0.0.1:1"),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithSandboxID("sbx-nonexistent"),
+		WithRequestTimeout(1*time.Second),
+	)
+	assert.Error(t, err)
 }

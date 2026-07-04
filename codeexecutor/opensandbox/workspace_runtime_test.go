@@ -72,6 +72,9 @@ type mockOpenSandboxServer struct {
 	// search response with the configured file names (joined under the
 	// searched dir). Used to test Collect multi-file behaviour.
 	searchResults []string
+	// killShouldFail, when true, makes DELETE /v1/sandboxes/{id} return
+	// 500 so the SDK's Kill call fails. Used to test Close error path.
+	killShouldFail bool
 }
 
 func newMockServer(t *testing.T) *mockOpenSandboxServer {
@@ -177,7 +180,12 @@ func (m *mockOpenSandboxServer) handle(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/v1/sandboxes/"):
 		m.mu.Lock()
 		m.killCalls++
+		shouldFail := m.killShouldFail
 		m.mu.Unlock()
+		if shouldFail {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/pause"):
@@ -930,4 +938,137 @@ func TestWorkspace_Cleanup_RunError(t *testing.T) {
 
 	err = exec.Cleanup(context.Background(), ws)
 	require.Error(t, err)
+}
+
+// TestWorkspace_NilSandbox_ErrorPaths verifies that workspaceRuntime
+// methods return the "sandbox not initialized" error when the
+// underlying sandbox is nil. This covers the sandbox() error branches
+// in CreateWorkspace, Cleanup, PutFiles, RunProgram, Collect, runBash,
+// listFilesByGlob, and ExecuteInline.
+func TestWorkspace_NilSandbox_ErrorPaths(t *testing.T) {
+	rt := &workspaceRuntime{ce: &CodeExecutor{}}
+	ctx := context.Background()
+	ws := codeexecutor.Workspace{ID: "x", Path: "/tmp/ws"}
+
+	_, err := rt.CreateWorkspace(ctx, "exec-1", codeexecutor.WorkspacePolicy{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sandbox not initialized")
+
+	assert.Error(t, rt.Cleanup(ctx, ws))
+
+	err = rt.PutFiles(ctx, ws, []codeexecutor.PutFile{{Path: "a.txt", Content: []byte("x")}})
+	assert.Error(t, err)
+
+	_, err = rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{Cmd: "echo", Timeout: 5 * time.Second})
+	assert.Error(t, err)
+
+	_, err = rt.Collect(ctx, ws, []string{"*.txt"})
+	assert.Error(t, err)
+
+	_, err = rt.runBash(ctx, "ls", 0)
+	assert.Error(t, err)
+
+	_, err = rt.listFilesByGlob(ctx, ws.Path, []string{"*.txt"})
+	assert.Error(t, err)
+
+	// ExecuteInline should also fail when CreateWorkspace fails.
+	_, err = rt.ExecuteInline(ctx, "exec-1", []codeexecutor.CodeBlock{
+		{Language: "python", Code: "print(1)"},
+	}, 5*time.Second)
+	assert.Error(t, err)
+}
+
+// TestWorkspace_PutFiles_EmptySlice verifies PutFiles returns nil for
+// an empty file slice without touching the sandbox.
+func TestWorkspace_PutFiles_EmptySlice(t *testing.T) {
+	rt := &workspaceRuntime{ce: &CodeExecutor{}}
+	err := rt.PutFiles(context.Background(), codeexecutor.Workspace{Path: "/tmp/ws"}, nil)
+	assert.NoError(t, err)
+}
+
+// TestWorkspace_PutFiles_InvalidPath_DotAndRoot verifies PutFiles
+// rejects paths that clean to ".", "/", or "".
+func TestWorkspace_PutFiles_InvalidPath_DotAndRoot(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	for _, p := range []string{".", "/", ""} {
+		err := exec.PutFiles(context.Background(), ws, []codeexecutor.PutFile{
+			{Path: p, Content: []byte("x"), Mode: 0o644},
+		})
+		require.Error(t, err, "path %q should be rejected", p)
+		assert.Contains(t, err.Error(), "invalid file path")
+	}
+}
+
+// TestWorkspace_Collect_EmptyPatterns verifies Collect returns nil for
+// empty patterns without touching the sandbox.
+func TestWorkspace_Collect_EmptyPatterns(t *testing.T) {
+	rt := &workspaceRuntime{ce: &CodeExecutor{}}
+	files, err := rt.Collect(context.Background(), codeexecutor.Workspace{Path: "/tmp/ws"}, nil)
+	assert.NoError(t, err)
+	assert.Nil(t, files)
+}
+
+// TestWorkspace_ListFilesByGlob_EmptyPatterns verifies listFilesByGlob
+// returns nil for empty patterns.
+func TestWorkspace_ListFilesByGlob_EmptyPatterns(t *testing.T) {
+	rt := &workspaceRuntime{ce: &CodeExecutor{}}
+	out, err := rt.listFilesByGlob(context.Background(), "/tmp/ws", nil)
+	assert.NoError(t, err)
+	assert.Nil(t, out)
+}
+
+// TestWorkspace_CreateWorkspace_PerSession_EmptyExecID verifies that
+// PerSession mode rejects an empty execID.
+func TestWorkspace_CreateWorkspace_PerSession_EmptyExecID(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	_, err = exec.CreateWorkspace(context.Background(), "", codeexecutor.WorkspacePolicy{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "execID must not be empty")
+}
+
+// TestWorkspace_PutDirectory_NilSandbox verifies PutDirectory returns
+// the sandbox-not-initialized error after passing filesystem checks.
+func TestWorkspace_PutDirectory_NilSandbox(t *testing.T) {
+	rt := &workspaceRuntime{ce: &CodeExecutor{}}
+	tmpDir := t.TempDir()
+	err := rt.PutDirectory(context.Background(), codeexecutor.Workspace{Path: "/tmp/ws"}, tmpDir, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sandbox not initialized")
+}
+
+// TestIsTimeoutErr_Nil verifies isTimeoutErr returns false for nil.
+func TestIsTimeoutErr_Nil(t *testing.T) {
+	assert.False(t, isTimeoutErr(nil))
+}
+
+// TestWorkspace_Close_KillError verifies Close returns the error when
+// Kill fails.
+func TestWorkspace_Close_KillError(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	m.killShouldFail = true
+	exec := newTestExecutor(t, m)
+
+	err := exec.Close()
+	require.Error(t, err)
+	assert.Equal(t, 1, m.killCalls)
 }
