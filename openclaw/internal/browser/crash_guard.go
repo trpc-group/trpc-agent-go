@@ -245,7 +245,7 @@ func detectBrowserBackendCrash(text string) (bool, string) {
 		strings.Contains(lower, "process did exit") &&
 		!hasSIGTRAP:
 		return true, "browser process exited"
-	case hasErrorContext && hasSIGTRAP:
+	case (hasErrorContext || hasProcessExitLog) && hasSIGTRAP:
 		return true, "browser process exited with SIGTRAP"
 	case strings.Contains(lower, "connection closed") &&
 		strings.Contains(lower, "browser"):
