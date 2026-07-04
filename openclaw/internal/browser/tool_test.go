@@ -158,6 +158,447 @@ func TestToolCall_SnapshotWrapsUntrustedText(t *testing.T) {
 	require.Equal(t, mcpToolSnapshot, drv.calls[0].Tool)
 }
 
+func TestToolCall_BrowserBackendCrashGuardBlocksRepeatedCrashes(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	crashText := "### Error\nError: async initializeServer: " +
+		"Target page, context or browser has been closed\n" +
+		"[pid=123] <process did exit: signal=SIGTRAP>"
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: []map[string]any{{
+				"type": "text",
+				"text": crashText,
+			}},
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+
+	for i := 0; i < browserCrashThreshold; i++ {
+		raw, err := tool.Call(
+			ctx,
+			mustJSON(t, map[string]any{
+				"action": actionNavigate,
+				"url":    "https://example.com",
+			}),
+		)
+		require.NoError(t, err)
+		got := raw.(Result)
+		require.Contains(t, got.Text, "Target page")
+		require.NotEqual(t, stateDegraded, got.State)
+	}
+
+	raw, err := tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	got := raw.(Result)
+	require.Equal(t, stateDegraded, got.State)
+	require.Contains(t, got.Text, "Browser backend is degraded")
+	require.Contains(t, got.Text, "browser automation blocker")
+	require.Contains(t, got.Text, "web_fetch")
+	require.Len(t, drv.calls, browserCrashThreshold)
+}
+
+func TestToolCall_BrowserBackendCrashGuardResetsAfterSuccessfulCall(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: []map[string]any{{
+				"type": "text",
+				"text": "Error: Target page, context or browser has been closed",
+			}},
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+
+	_, err := tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://example.com",
+		}),
+	)
+	require.NoError(t, err)
+	raw, err := tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	got := raw.(Result)
+	require.NotEqual(t, stateDegraded, got.State)
+
+	_, err = tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://example.com",
+		}),
+	)
+	require.NoError(t, err)
+	raw, err = tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	got = raw.(Result)
+	require.NotEqual(t, stateDegraded, got.State)
+	require.Len(t, drv.calls, 4)
+}
+
+func TestToolCall_BrowserBackendCrashGuardStartStopResetBlockedState(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: []map[string]any{{
+				"type": "text",
+				"text": "Error: Target page, context or browser has been closed",
+			}},
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+
+	for i := 0; i < browserCrashThreshold; i++ {
+		_, err := tool.Call(
+			ctx,
+			mustJSON(t, map[string]any{
+				"action": actionNavigate,
+				"url":    "https://example.com",
+			}),
+		)
+		require.NoError(t, err)
+	}
+	_, err := tool.Call(ctx, mustJSON(t, map[string]any{"action": actionStatus}))
+	require.NoError(t, err)
+	raw, err := tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, stateDegraded, raw.(Result).State)
+	require.Len(t, drv.calls, browserCrashThreshold)
+
+	raw, err = tool.Call(ctx, mustJSON(t, map[string]any{"action": actionStart}))
+	require.NoError(t, err)
+	require.NotEqual(t, stateDegraded, raw.(Result).State)
+	raw, err = tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	require.NotEqual(t, stateDegraded, raw.(Result).State)
+	require.Len(t, drv.calls, browserCrashThreshold+1)
+
+	for i := 0; i < browserCrashThreshold; i++ {
+		_, err = tool.Call(
+			ctx,
+			mustJSON(t, map[string]any{
+				"action": actionNavigate,
+				"url":    "https://example.com",
+			}),
+		)
+		require.NoError(t, err)
+	}
+	_, err = tool.Call(ctx, mustJSON(t, map[string]any{"action": actionProfiles}))
+	require.NoError(t, err)
+	raw, err = tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	require.Equal(t, stateDegraded, raw.(Result).State)
+
+	raw, err = tool.Call(ctx, mustJSON(t, map[string]any{"action": actionStop}))
+	require.NoError(t, err)
+	require.Equal(t, stateStopped, raw.(Result).State)
+	require.Equal(t, 1, drv.StopCount())
+	raw, err = tool.Call(
+		ctx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	require.NotEqual(t, stateDegraded, raw.(Result).State)
+}
+
+func TestToolCall_BrowserBackendCrashGuardIsInvocationScoped(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: []map[string]any{{
+				"type": "text",
+				"text": "Error: Target page, context or browser has been closed",
+			}},
+		},
+	}
+	tool := newToolWithDrivers(
+		defaultProfileName,
+		false,
+		navigationPolicy{},
+		nil,
+		nil,
+		nil,
+		map[string]ProfileConfig{
+			defaultProfileName: {Name: defaultProfileName},
+		},
+		map[string]driver{
+			defaultProfileName: drv,
+		},
+	)
+	firstCtx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+	secondCtx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+
+	for i := 0; i < browserCrashThreshold; i++ {
+		_, err := tool.Call(
+			firstCtx,
+			mustJSON(t, map[string]any{
+				"action": actionNavigate,
+				"url":    "https://example.com",
+			}),
+		)
+		require.NoError(t, err)
+	}
+	_, err := tool.Call(
+		firstCtx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, browserCrashThreshold)
+
+	raw, err := tool.Call(
+		secondCtx,
+		mustJSON(t, map[string]any{"action": actionSnapshot}),
+	)
+	require.NoError(t, err)
+	got := raw.(Result)
+	require.NotEqual(t, stateDegraded, got.State)
+	require.Len(t, drv.calls, browserCrashThreshold+1)
+}
+
+func TestCrashGuardedDriverDelegatesStatusAndRecordsCallErrors(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		status: driverStatus{
+			State: stateReady,
+		},
+		callErr: errors.New(
+			"### Error\nError: browser has disconnected",
+		),
+	}
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+	guarded := newCrashGuardedDriver(ctx, "", drv)
+	require.NotNil(t, guarded)
+
+	status, err := guarded.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, stateReady, status.State)
+
+	_, err = guarded.Call(ctx, "browser_snapshot", nil)
+	require.Error(t, err)
+	state, ok := browserCrashStateForContext(ctx, defaultProfileName)
+	require.True(t, ok)
+	require.Equal(t, 1, state.Consecutive)
+	require.Equal(t, "browser has disconnected", state.Reason)
+}
+
+func TestNewCrashGuardedDriverSkipsWithoutInvocation(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{}
+	require.Nil(t, newCrashGuardedDriver(context.Background(), "", nil))
+	require.Same(
+		t,
+		drv,
+		newCrashGuardedDriver(context.Background(), defaultProfileName, drv),
+	)
+}
+
+func TestBrowserCrashBlockedContentUsesDefaults(t *testing.T) {
+	t.Parallel()
+
+	content := browserCrashBlockedContent("", "")
+	require.Len(t, content, 1)
+	require.Equal(t, "text", content[0]["type"])
+	text, ok := content[0]["text"].(string)
+	require.True(t, ok)
+	require.Contains(t, text, defaultProfileName)
+	require.Contains(t, text, "browser backend crashed repeatedly")
+}
+
+func TestDetectBrowserBackendCrash(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{
+			name: "target closed",
+			text: "### Error\nError: Target page, context or browser has been closed",
+			want: true,
+		},
+		{
+			name: "browser has been closed",
+			text: "### Error\nError: browser has been closed",
+			want: true,
+		},
+		{
+			name: "browser has disconnected",
+			text: "### Error\nError: browser has disconnected",
+			want: true,
+		},
+		{
+			name: "browser is closed",
+			text: "### Error\nError: browser is closed",
+			want: true,
+		},
+		{
+			name: "process did exit",
+			text: "[pid=123] <process did exit: exitCode=1>",
+			want: true,
+		},
+		{
+			name: "browser connection closed",
+			text: "browser connection closed while reading response",
+			want: true,
+		},
+		{
+			name: "sigtrap with error context",
+			text: "### Error\n<process did exit: exitCode=null, signal=SIGTRAP>",
+			want: true,
+		},
+		{
+			name: "plain sigtrap page text",
+			text: "A public article mentions SIGTRAP in a debugging guide.",
+			want: false,
+		},
+		{
+			name: "sigtrap process log",
+			text: "<process did exit: exitCode=null, signal=SIGTRAP>",
+			want: true,
+		},
+		{
+			name: "plain process exit page text",
+			text: "The tutorial says the process did exit after cleanup.",
+			want: false,
+		},
+		{
+			name: "ordinary page text",
+			text: "A post explaining why a browser has been closed",
+			want: false,
+		},
+		{
+			name: "empty",
+			text: "   ",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, _ := detectBrowserBackendCrash(tt.text)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestBrowserCrashGuardFromContextConcurrentCreate(t *testing.T) {
+	t.Parallel()
+
+	ctx := agent.NewInvocationContext(
+		context.Background(),
+		agent.NewInvocation(),
+	)
+	const workers = 16
+	start := make(chan struct{})
+	results := make(chan *browserCrashGuard, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			<-start
+			results <- browserCrashGuardFromContext(ctx, true)
+		}()
+	}
+	close(start)
+
+	first := <-results
+	require.NotNil(t, first)
+	for i := 1; i < workers; i++ {
+		require.Same(t, first, <-results)
+	}
+}
+
 func TestToolCall_ActClickSelectsRequestedTab(t *testing.T) {
 	t.Parallel()
 
