@@ -42,7 +42,7 @@ const tracerName = "trpc-agent-go/tool/safety"
 // on the current span in the context.
 func AddSafetySpanAttributes(ctx context.Context, report ScanReport) {
 	span := trace.SpanFromContext(ctx)
-	if span == nil || !span.IsRecording() {
+	if !span.IsRecording() {
 		return
 	}
 	span.SetAttributes(

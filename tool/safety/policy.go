@@ -7,11 +7,6 @@
 
 //
 
-
-
-
-
-
 package safety
 
 import (
@@ -25,9 +20,9 @@ import (
 // It is used when no policy file is configured.
 func DefaultPolicy() *Policy {
 	return &Policy{
-		Version:          "1.0",
-		AllowedCommands:  []string{"echo", "ls", "cat", "go", "python3", "node"},
-		DeniedCommands:   []string{},
+		Version:         "1.0",
+		AllowedCommands: []string{"echo", "ls", "cat", "go", "python3", "node"},
+		DeniedCommands:  []string{},
 		ForbiddenPaths: []string{
 			"/etc/passwd", "/etc/shadow", "~/.ssh",
 			".env", ".env.local", "credentials.json",
@@ -45,16 +40,22 @@ func DefaultPolicy() *Policy {
 			{
 				ID:          "dangerous_cmd_001",
 				Category:    "dangerous_commands",
-				Description: "Detect rm -rf on sensitive directories",
-				Patterns:    []string{`rm\s+.*-r.*/`, `rm\s+.*-rf`},
-				RiskLevel:   RiskCritical,
-				Action:      DecisionDeny,
+				Description: "Detect rm with recursive/force on sensitive directories",
+				Patterns: []string{
+					`rm\s+.*-[A-Za-z]*[rR][A-Za-z]*\s+/`,
+					`rm\s+.*-[A-Za-z]*[rR][A-Za-z]*[fF][A-Za-z]*`,
+					`rm\s+.*-[A-Za-z]*[fF][A-Za-z]*[rR][A-Za-z]*`,
+					`rm\s+.*--recursive.*--force`,
+					`rm\s+.*--force.*--recursive`,
+				},
+				RiskLevel: RiskCritical,
+				Action:    DecisionDeny,
 			},
 			{
 				ID:          "secrets_001",
 				Category:    "sensitive_info",
 				Description: "Detect credential file access",
-				Patterns:    []string{`~/.ssh`, `\.env`, `credentials`, `id_rsa`, `\.pem`},
+				Patterns:    []string{`~/\.ssh`, `\.env`, `credentials`, `id_rsa`, `\.pem`},
 				RiskLevel:   RiskCritical,
 				Action:      DecisionDeny,
 			},
@@ -110,14 +111,17 @@ func DefaultPolicy() *Policy {
 	}
 }
 
-// LoadPolicy reads a safety policy from a YAML file.
+// LoadPolicy reads a safety policy from a YAML file and merges it
+// with DefaultPolicy().  Fields present in the file override
+// defaults; omitted fields keep their safe default values.
 func LoadPolicy(path string) (*Policy, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read policy file: %w", err)
 	}
 
-	var policy Policy
+	// Start from safe defaults, then overlay file values.
+	policy := *DefaultPolicy()
 	if err := yaml.Unmarshal(data, &policy); err != nil {
 		return nil, fmt.Errorf("parse policy yaml: %w", err)
 	}

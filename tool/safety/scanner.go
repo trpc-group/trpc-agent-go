@@ -7,11 +7,6 @@
 
 //
 
-
-
-
-
-
 package safety
 
 import (
@@ -19,6 +14,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -40,7 +36,11 @@ type compiledRule struct {
 }
 
 // NewScanner creates a new Scanner with the given policy.
+// A nil policy defaults to DefaultPolicy() for safety.
 func NewScanner(policy *Policy) *Scanner {
+	if policy == nil {
+		policy = DefaultPolicy()
+	}
 	s := &Scanner{
 		policy:  policy,
 		auditor: NewAuditor(),
@@ -50,6 +50,8 @@ func NewScanner(policy *Policy) *Scanner {
 }
 
 // compileRules pre-compiles all regex patterns for performance.
+// Invalid patterns are skipped with a warning to stderr so that
+// operators are aware of misconfigured rules.
 func (s *Scanner) compileRules() {
 	s.compiledRe = make([]compiledRule, 0, len(s.policy.Rules))
 	for _, rule := range s.policy.Rules {
@@ -57,12 +59,18 @@ func (s *Scanner) compileRules() {
 		for _, pattern := range rule.Patterns {
 			re, err := regexp.Compile(pattern)
 			if err != nil {
-				// Skip invalid patterns; they are logged at policy-load time.
+				fmt.Fprintf(os.Stderr,
+					"tool/safety: invalid regex pattern in rule %q: %v (skipping)\n",
+					rule.ID, err,
+				)
 				continue
 			}
 			cr.Patterns = append(cr.Patterns, re)
 		}
-		s.compiledRe = append(s.compiledRe, cr)
+		// Only add the rule if at least one pattern compiled.
+		if len(cr.Patterns) > 0 {
+			s.compiledRe = append(s.compiledRe, cr)
+		}
 	}
 }
 
@@ -95,33 +103,63 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 		Intercepted: false,
 	}
 
-	// Check against all rules. Worst risk level and most restrictive
-	// action win.
+	// 1. Check DeniedCommands (blacklist — highest priority).
+	cmdName := extractCommandName(fullCommand)
+	for _, denied := range s.policy.DeniedCommands {
+		if cmdName == denied {
+			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
+				report.RiskLevel = RiskCritical
+			}
+			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+				report.Decision = DecisionDeny
+			}
+			report.RuleID = "denied_command"
+			report.Evidence = cmdName
+			report.Category = "dangerous_commands"
+			report.Recommendation = fmt.Sprintf(
+				"Command %q is explicitly denied by policy", cmdName,
+			)
+		}
+	}
+
+	// 2. Check against all regex rules. Worst risk level and most
+	// restrictive action win. Rule metadata (RuleID, Evidence,
+	// Category, Recommendation) is only updated when the risk or
+	// action is worse, so the report always points at the most
+	// important rule that matched.
 	for _, cr := range s.compiledRe {
 		for _, re := range cr.Patterns {
 			if matches := re.FindStringSubmatch(fullCommand); matches != nil {
+				matchedRisk := riskOrder(cr.Rule.RiskLevel)
+				currentRisk := riskOrder(report.RiskLevel)
+				matchedAction := actionOrder(cr.Rule.Action)
+				currentAction := actionOrder(report.Decision)
+
+				// Update metadata only when this match is worse or equal.
+				if matchedRisk > currentRisk ||
+					(matchedRisk == currentRisk && matchedAction >= currentAction) {
+					report.RuleID = cr.Rule.ID
+					report.Evidence = matches[0]
+					report.Category = cr.Rule.Category
+					report.Recommendation = fmt.Sprintf(
+						"Rule %s (%s): %s",
+						cr.Rule.ID, cr.Rule.Category, cr.Rule.Description,
+					)
+				}
+
 				// Upgrade risk level if this rule is worse.
-				if riskOrder(cr.Rule.RiskLevel) > riskOrder(report.RiskLevel) {
+				if matchedRisk > currentRisk {
 					report.RiskLevel = cr.Rule.RiskLevel
 				}
 				// Upgrade action if this rule is more restrictive.
-				if actionOrder(cr.Rule.Action) > actionOrder(report.Decision) {
+				if matchedAction > currentAction {
 					report.Decision = cr.Rule.Action
 				}
-				report.RuleID = cr.Rule.ID
-				report.Evidence = matches[0]
-				report.Category = cr.Rule.Category
-				report.Recommendation = fmt.Sprintf(
-					"Rule %s (%s): %s",
-					cr.Rule.ID, cr.Rule.Category, cr.Rule.Description,
-				)
 			}
 		}
 	}
 
-	// Additional checks beyond regex patterns.
-
-	// Check for dangerous paths in command.
+	// 4. Check for dangerous paths in command.
 	for _, forbidden := range s.policy.ForbiddenPaths {
 		if strings.Contains(fullCommand, forbidden) {
 			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
@@ -139,15 +177,84 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 		}
 	}
 
-	// Check excessive command length (potential abuse).
+	// 5. Check AllowedCommands whitelist — if configured, commands
+	// not in the allowlist are denied, but only when no regex rule
+	// has already made a more nuanced decision (ask/deny from regex
+	// takes priority over the allowlist gate).
+	if len(s.policy.AllowedCommands) > 0 && report.Decision == DecisionAllow && cmdName != "" {
+		if !isAllowed(cmdName, s.policy.AllowedCommands) {
+			if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+				report.RiskLevel = RiskHigh
+			}
+			if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
+				report.Decision = DecisionAsk
+			}
+			report.RuleID = "not_allowed_command"
+			report.Evidence = cmdName
+			report.Category = "dangerous_commands"
+			report.Recommendation = fmt.Sprintf(
+				"Command %q is not in the allowed commands list", cmdName,
+			)
+		}
+	}
+
+	// 6. Check allowlisted hosts for network egress commands.
+	if cmdName == "curl" || cmdName == "wget" || cmdName == "nc" || cmdName == "ssh" {
+		if len(s.policy.AllowlistedHosts) > 0 {
+			target := extractHostTarget(fullCommand)
+			if target != "" && !isAllowed(target, s.policy.AllowlistedHosts) {
+				if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+					report.RiskLevel = RiskHigh
+				}
+				if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+					report.Decision = DecisionDeny
+				}
+				report.RuleID = "non_allowlisted_host"
+				report.Evidence = target
+				report.Category = "network_egress"
+				report.Recommendation = fmt.Sprintf(
+					"Target host %q is not in the allowlisted hosts", target,
+				)
+			}
+		}
+	}
+
+	// 7. Check environment variable allowlist.
+	if len(s.policy.EnvAllowlist) > 0 && len(req.EnvVars) > 0 {
+		for _, ev := range req.EnvVars {
+			name := extractEnvVarName(ev)
+			if name != "" && !isAllowed(name, s.policy.EnvAllowlist) {
+				if riskOrder(RiskHigh) > riskOrder(report.RiskLevel) {
+					report.RiskLevel = RiskHigh
+				}
+				if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
+					report.Decision = DecisionDeny
+				}
+				report.RuleID = "env_not_allowlisted"
+				report.Evidence = name
+				report.Category = "dangerous_commands"
+				report.Recommendation = fmt.Sprintf(
+					"Environment variable %q is not in the allowlist", name,
+				)
+			}
+		}
+	}
+
+	// 8. Check excessive command length (potential abuse).
+	// Only upgrade — never downgrade a more severe finding.
 	if len(fullCommand) > 10000 {
-		report.RiskLevel = RiskMedium
+		if riskOrder(RiskMedium) > riskOrder(report.RiskLevel) {
+			report.RiskLevel = RiskMedium
+		}
 		if actionOrder(DecisionAsk) > actionOrder(report.Decision) {
 			report.Decision = DecisionAsk
 		}
-		report.RuleID = "excessive_length"
-		report.Category = "resource_abuse"
-		report.Recommendation = "Command exceeds 10000 characters; review required."
+		// Only set metadata if this is the worst finding.
+		if riskOrder(report.RiskLevel) <= riskOrder(RiskMedium) {
+			report.RuleID = "excessive_length"
+			report.Category = "resource_abuse"
+			report.Recommendation = "Command exceeds 10000 characters; review required."
+		}
 	}
 
 	// Record decision.
@@ -172,8 +279,6 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 
 // CheckToolPermission implements tool.PermissionPolicy so that
 // the Scanner can be plugged into the agent's permission framework.
-// It extracts command/script/code fields from req.Arguments for
-// scanning, falling back to the tool name if no command is found.
 func (s *Scanner) CheckToolPermission(
 	ctx context.Context, req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
@@ -193,19 +298,83 @@ func (s *Scanner) CheckToolPermission(
 	return decision, nil
 }
 
-// extractCommandFromArgs parses JSON arguments to find a command
-// string. It checks common field names used by exec tools.
+// extractCommandName returns the first token (command name) from
+// a full command string, stripping any leading path.
+func extractCommandName(fullCommand string) string {
+	if fullCommand == "" {
+		return ""
+	}
+	// Strip leading whitespace.
+	cmd := strings.TrimSpace(fullCommand)
+	// Take everything before the first space or line break.
+	if idx := strings.IndexAny(cmd, " \t\n\r"); idx >= 0 {
+		cmd = cmd[:idx]
+	}
+	// Strip path prefix (e.g. "/usr/bin/rm" → "rm").
+	if idx := strings.LastIndex(cmd, "/"); idx >= 0 {
+		cmd = cmd[idx+1:]
+	}
+	return cmd
+}
+
+// extractHostTarget extracts a hostname or IP from a curl/wget/nc/ssh
+// command arguments for allowlist checking.
+func extractHostTarget(fullCommand string) string {
+	// Look for common URL/host patterns: https://host/path, host:port
+	// Simple heuristic: find the first token after curl/wget that
+	// looks like a URL or hostname.
+	parts := strings.Fields(fullCommand)
+	for i, p := range parts {
+		if i == 0 {
+			continue // skip the command itself.
+		}
+		// Skip flags.
+		if strings.HasPrefix(p, "-") {
+			continue
+		}
+		// Strip URL scheme.
+		p = strings.TrimPrefix(p, "https://")
+		p = strings.TrimPrefix(p, "http://")
+		// Extract host (before first / or :).
+		if idx := strings.IndexAny(p, "/:"); idx >= 0 {
+			p = p[:idx]
+		}
+		if p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+// extractEnvVarName extracts the variable name from "KEY=value" format.
+func extractEnvVarName(envVar string) string {
+	if idx := strings.Index(envVar, "="); idx >= 0 {
+		return envVar[:idx]
+	}
+	return envVar
+}
+
+// isAllowed checks if a value is in the allowlist.
+func isAllowed(val string, allowlist []string) bool {
+	for _, a := range allowlist {
+		if a == val {
+			return true
+		}
+	}
+	return false
+}
+
+// extractCommandFromArgs parses JSON arguments to find a command string.
 func extractCommandFromArgs(args []byte, fallback string) string {
 	if len(args) == 0 {
 		return fallback
 	}
 
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(args, &m); err != nil {
 		return fallback
 	}
 
-	// Check common command field names in priority order.
 	cmdKeys := []string{"command", "cmd", "script", "code", "shell_command"}
 	for _, key := range cmdKeys {
 		if val, ok := m[key].(string); ok && val != "" {

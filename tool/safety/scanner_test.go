@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,18 +104,18 @@ func TestScan_ShellWrapperBypass(t *testing.T) {
 	assert.Equal(t, DecisionDeny, report.Decision, "sh -c must be denied")
 }
 
-// Case 6: Piped commands (echo hello | bash).
+// Case 6: Piped commands with shell bypass (echo hello | bash -c ...).
 func TestScan_PipedCommands(t *testing.T) {
 	s := newTestScanner()
 	req := ScanRequest{
 		ToolName: "workspace_exec",
-		Command:  "echo 'hello' | bash",
+		Command:  "echo 'hello' | bash -c 'cat /etc/passwd'",
 		Backend:  "workspaceexec",
 	}
 	report := s.Scan(context.Background(), req)
-	// Piped commands may or may not match specific rules, but
-	// we verify the scan completes without panic.
-	t.Logf("Piped command decision: %s, risk: %s", report.Decision, report.RiskLevel)
+	// Pipe into bash -c should be denied by shell_bypass rule.
+	assert.NotEqual(t, DecisionAllow, report.Decision,
+		"pipe into bash -c must not be auto-allowed, got %s", report.Decision)
 }
 
 // Case 7: Dependency installation (pip install) — should be ask.
@@ -201,10 +202,15 @@ func TestScan_LargeScript(t *testing.T) {
 	}
 
 	// Time the scan; it must complete within 1 second.
+	start := time.Now()
 	report := s.Scan(context.Background(), req)
+	elapsed := time.Since(start)
+
 	assert.NotNil(t, &report)
 	// Even a 500-line safe script should be allowed.
 	assert.Equal(t, DecisionAllow, report.Decision)
+	assert.Less(t, elapsed, time.Second,
+		"500-line script scan took %v, expected <1s", elapsed)
 }
 
 // =============================================================================
@@ -308,12 +314,17 @@ func TestScanner_ImplementsPermissionPolicy(t *testing.T) {
 	// Compile-time check: Scanner should implement tool.PermissionPolicy.
 	var _ tool.PermissionPolicy = s
 
+	// Test with a dangerous command in Arguments.
 	req := &tool.PermissionRequest{
-		ToolName: "workspace_exec",
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"rm -rf /"}`),
 	}
 	decision, err := s.CheckToolPermission(context.Background(), req)
 	require.NoError(t, err)
 	assert.NotEmpty(t, decision.Action)
+	// Dangerous command must be denied.
+	assert.Equal(t, tool.PermissionAction(DecisionDeny), decision.Action,
+		"dangerous command in Arguments must be denied, got %s", decision.Action)
 }
 
 // =============================================================================

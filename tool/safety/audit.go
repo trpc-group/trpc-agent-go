@@ -7,11 +7,6 @@
 
 //
 
-
-
-
-
-
 package safety
 
 import (
@@ -51,6 +46,9 @@ func (a *Auditor) Events() []AuditEvent {
 
 // Flush writes all recorded audit events to the specified file
 // in JSONL format (one JSON object per line), then clears the buffer.
+// The audit file is created with 0600 permissions to limit access.
+// If a write error occurs mid-flush, successfully written entries
+// are removed from the buffer and only the remaining entries are kept.
 func (a *Auditor) Flush(path string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -59,20 +57,27 @@ func (a *Auditor) Flush(path string) error {
 		return nil
 	}
 
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("open audit file: %w", err)
 	}
 	defer f.Close()
 
+	written := 0
 	for _, evt := range a.events {
 		data, err := json.Marshal(evt)
 		if err != nil {
+			// On marshal failure, keep remaining events in buffer.
+			a.events = a.events[written:]
 			return fmt.Errorf("marshal audit event: %w", err)
 		}
 		if _, err := fmt.Fprintln(f, string(data)); err != nil {
+			// On write failure, keep the failed and subsequent
+			// events for retry.
+			a.events = a.events[written:]
 			return fmt.Errorf("write audit event: %w", err)
 		}
+		written++
 	}
 
 	a.events = a.events[:0]

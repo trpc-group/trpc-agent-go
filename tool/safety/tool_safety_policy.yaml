@@ -6,7 +6,10 @@
 
 version: "1.0"
 
-# Commands that are always allowed (even if they match risk patterns).
+# Commands that pass the allowlist check. Non-allowlisted commands
+# are denied unless already matched by other rules.
+# NOTE: allowlisted commands are still subject to deny rules and
+# forbidden-path checks — being here does not grant unconditional bypass.
 allowed_commands:
   - echo
   - ls
@@ -77,10 +80,13 @@ rules:
   # --- Dangerous Commands ---
   - id: "dangerous_cmd_001"
     category: "dangerous_commands"
-    description: "Detect rm -rf on sensitive directories"
+    description: "Detect rm with recursive/force on sensitive directories"
     patterns:
-      - "rm\\s+.*-r.*/"
-      - "rm\\s+.*-rf"
+      - "rm\\s+.*-[A-Za-z]*[rR][A-Za-z]*\\s+/"
+      - "rm\\s+.*-[A-Za-z]*[rR][A-Za-z]*[fF][A-Za-z]*"
+      - "rm\\s+.*-[A-Za-z]*[fF][A-Za-z]*[rR][A-Za-z]*"
+      - "rm\\s+.*--recursive.*--force"
+      - "rm\\s+.*--force.*--recursive"
     risk_level: "critical"
     action: "deny"
 
@@ -98,7 +104,7 @@ rules:
     category: "sensitive_info"
     description: "Detect credential file access"
     patterns:
-      - "~\\.ssh"
+      - "~/\\.ssh"
       - "\\.env"
       - "credentials"
       - "id_rsa"
