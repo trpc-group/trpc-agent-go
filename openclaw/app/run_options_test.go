@@ -474,6 +474,7 @@ agent:
   max_llm_calls: 22
   max_tool_iterations: 123
   preload_memory: 2
+  tool_call_arguments_json_repair: false
 `)
 
 	opts, err := parseRunOptions([]string{
@@ -499,6 +500,7 @@ agent:
 		"-max-llm-calls", "4",
 		"-max-tool-iterations", "6",
 		"-preload-memory", "-1",
+		"-tool-call-arguments-json-repair=true",
 	})
 	require.NoError(t, err)
 	require.Equal(t, ":7777", opts.HTTPAddr)
@@ -522,6 +524,28 @@ agent:
 	require.Equal(t, 4, opts.MaxLLMCalls)
 	require.Equal(t, 6, opts.MaxToolIterations)
 	require.Equal(t, -1, opts.PreloadMemory)
+	require.True(t, opts.ToolCallArgumentsJSONRepair)
+}
+
+func TestParseRunOptions_ToolCallArgumentsJSONRepairDefault(t *testing.T) {
+	t.Parallel()
+
+	opts, err := parseRunOptions(nil)
+	require.NoError(t, err)
+	require.True(t, opts.ToolCallArgumentsJSONRepair)
+}
+
+func TestParseRunOptions_ToolCallArgumentsJSONRepairConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  tool_call_arguments_json_repair: false
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.False(t, opts.ToolCallArgumentsJSONRepair)
 }
 
 func TestParseRunOptions_MaxToolIterationsNegativeFails(t *testing.T) {
@@ -781,6 +805,7 @@ agent:
   max_llm_calls: 13
   max_tool_iterations: 11
   preload_memory: 10
+  tool_call_arguments_json_repair: false
   instruction: "instruction"
   instruction_files: ["i1.md","i2.md"]
   instruction_dir: "/instruction_dir"
@@ -950,6 +975,7 @@ memory:
 	require.Equal(t, 13, opts.MaxLLMCalls)
 	require.Equal(t, 11, opts.MaxToolIterations)
 	require.Equal(t, 10, opts.PreloadMemory)
+	require.False(t, opts.ToolCallArgumentsJSONRepair)
 	require.Equal(t, "instruction", opts.AgentInstruction)
 	require.Equal(t, "i1.md,i2.md", opts.AgentInstructionFiles)
 	require.Equal(t, "/instruction_dir", opts.AgentInstructionDir)
