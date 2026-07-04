@@ -11,7 +11,9 @@ package replaytest
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -506,6 +508,103 @@ func filterUnallowedDiffs(diffs []FieldDiff) []FieldDiff {
 		}
 	}
 	return result
+}
+
+func TestCompareMemoriesScoreDiff(t *testing.T) {
+	left := Snapshot{
+		SessionID: "s1",
+		Memories: []NormalizedMemory{
+			{Content: "mem1", Score: 0.9},
+		},
+	}
+	right := Snapshot{
+		SessionID: "s1",
+		Memories: []NormalizedMemory{
+			{Content: "mem1", Score: 0.5},
+		},
+	}
+	diffs := CompareSnapshots(left, right, "a", "b", nil)
+	found := false
+	for _, d := range diffs {
+		if strings.Contains(d.FieldPath, "score") {
+			found = true
+		}
+	}
+	assert.True(t, found, "score difference must be detected")
+}
+
+func TestCompareMemoriesExtraRight(t *testing.T) {
+	left := Snapshot{SessionID: "s1"}
+	right := Snapshot{
+		SessionID: "s1",
+		Memories: []NormalizedMemory{
+			{Content: "extra", Topics: []string{"test"}},
+		},
+	}
+	diffs := CompareSnapshots(left, right, "a", "b", nil)
+	assert.NotEmpty(t, diffs, "extra memory in right should be detected")
+}
+
+func TestCompareEventsLengthMismatch(t *testing.T) {
+	left := Snapshot{
+		SessionID: "s1",
+		Events:    []NormalizedEvent{{Author: "user", Role: "user", Content: "A"}, {Author: "assistant", Role: "assistant", Content: "B"}},
+	}
+	right := Snapshot{
+		SessionID: "s1",
+		Events:    []NormalizedEvent{{Author: "user", Role: "user", Content: "A"}},
+	}
+	diffs := CompareSnapshots(left, right, "a", "b", nil)
+	assert.NotEmpty(t, diffs)
+}
+
+func TestCompareSummariesMismatch(t *testing.T) {
+	left := Snapshot{
+		SessionID: "s1",
+		Summaries: []NormalizedSummary{{FilterKey: "k1", Summary: "s1"}},
+	}
+	right := Snapshot{
+		SessionID: "s1",
+		Summaries: []NormalizedSummary{{FilterKey: "k1", Summary: "different"}},
+	}
+	diffs := CompareSnapshots(left, right, "a", "b", nil)
+	assert.NotEmpty(t, diffs)
+}
+
+func TestCompareTracksExtraInRight(t *testing.T) {
+	left := Snapshot{SessionID: "s1"}
+	right := Snapshot{
+		SessionID: "s1",
+		Tracks:    []NormalizedTrack{{Track: "t1", Payload: "p1"}},
+	}
+	diffs := CompareSnapshots(left, right, "a", "b", nil)
+	assert.NotEmpty(t, diffs)
+}
+
+func TestNormalizeJSONBytesInvalid(t *testing.T) {
+	result := normalizeJSONBytes([]byte("{invalid}"))
+	assert.Equal(t, "{invalid}", result)
+}
+
+func TestGenerateReportDefaultPath(t *testing.T) {
+	err := GenerateReport(nil, ReportConfig{})
+	// Default path goes to os.TempDir() — should succeed.
+	assert.NoError(t, err)
+}
+
+func TestEventSpecToolResponseNilCheck(t *testing.T) {
+	// Verify that a tool-role event with nil ToolResponse
+	// produces an error from buildEvent instead of panicking.
+	es := EventSpec{Role: "tool"}
+	_, err := buildEvent(es, 0, "s1", time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "tool response is nil")
+}
+
+func TestMatchPathPatternWildcard(t *testing.T) {
+	assert.True(t, matchPathPattern("events[0].tool_calls[1].args.city", "events[*].tool_calls[*].args.*"))
+	assert.False(t, matchPathPattern("events[0].content", "events[0].content.extra"))
+	assert.False(t, matchPathPattern("state.x", "events.x"))
 }
 
 // Compile-time interface compliance checks.
