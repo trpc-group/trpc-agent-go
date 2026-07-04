@@ -72,3 +72,11 @@ func TestCalculateMaxOutputTokens(t *testing.T) {
 		t.Fatalf("expected 0 when input exceeds context, got %d", zero)
 	}
 }
+
+func TestCalculateMaxOutputTokensWithParams_FloorCappedByRemaining(t *testing.T) {
+	// remaining=100, floor=4096 -> capped floor 100
+	out := CalculateMaxOutputTokensWithParams(1000, 900, 0, 4096, 0)
+	if out != 100 {
+		t.Fatalf("expected floor capped to remaining (100), got %d", out)
+	}
+}

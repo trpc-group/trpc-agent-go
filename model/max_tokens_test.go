@@ -10,6 +10,7 @@
 package model
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -57,4 +58,11 @@ func TestClampMaxTokensForModel(t *testing.T) {
 	out3 := ClampMaxTokensForModel("unknown-model-xyz", &unknown)
 	require.NotNil(t, out3)
 	require.Equal(t, 50000, *out3)
+}
+
+func TestMaxTokensToInt32(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, int32(4096), MaxTokensToInt32(4096))
+	require.Equal(t, int32(math.MaxInt32), MaxTokensToInt32(math.MaxInt32))
+	require.Equal(t, int32(math.MaxInt32), MaxTokensToInt32(math.MaxInt32+1))
 }

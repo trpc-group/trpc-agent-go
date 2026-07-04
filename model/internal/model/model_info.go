@@ -649,7 +649,7 @@ var ModelMaxOutputTokens = map[string]int{
 	"claude-opus-4":     64000,
 	"claude-sonnet-4":   64000,
 	"claude-4-sonnet":   64000,
-	"claude-3-7-sonnet": 16384,
+	"claude-3-7-sonnet": 64000,
 	"claude-3-5-sonnet": 8192,
 	"claude-3-5-haiku":  8192,
 	"claude-3-opus":     4096,
@@ -684,11 +684,21 @@ func ResolveMaxOutputTokens(modelName string) int {
 	if w, ok := ModelMaxOutputTokens[key]; ok {
 		return w
 	}
-	// Simple prefix heuristic.
+	// Prefer the longest matching prefix so specific snapshots/variants win.
+	bestWindow := 0
+	bestPrefixLen := 0
 	for k, w := range ModelMaxOutputTokens {
-		if strings.HasPrefix(key, k) {
-			return w
+		if !isModelPrefixMatch(key, k) {
+			continue
 		}
+		if len(k) <= bestPrefixLen {
+			continue
+		}
+		bestWindow = w
+		bestPrefixLen = len(k)
+	}
+	if bestPrefixLen > 0 {
+		return bestWindow
 	}
 	return 0
 }

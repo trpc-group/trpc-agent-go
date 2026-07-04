@@ -117,7 +117,11 @@ func CalculateMaxOutputTokensWithParams(
 		maxOut = 0
 	}
 	if outputTokensFloor > 0 {
-		return max(maxOut, outputTokensFloor)
+		floor := outputTokensFloor
+		if floor > remaining {
+			floor = remaining
+		}
+		return max(maxOut, floor)
 	}
 	return maxOut
 }

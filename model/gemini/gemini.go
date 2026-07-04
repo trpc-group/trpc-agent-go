@@ -681,7 +681,7 @@ func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentCo
 	}
 
 	if mt := model.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
-		chatRequest.MaxOutputTokens = int32(*mt)
+		chatRequest.MaxOutputTokens = model.MaxTokensToInt32(*mt)
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = genai.Ptr(float32(*request.Temperature))

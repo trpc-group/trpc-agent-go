@@ -9,7 +9,11 @@
 
 package model
 
-import imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+import (
+	"math"
+
+	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
+)
 
 // MinValidCompletionTokens is the minimum max-completion value accepted by APIs
 // that validate this field (e.g. Anthropic requires max_tokens >= 1).
@@ -37,4 +41,13 @@ func ClampMaxTokensForModel(modelName string, in *int) *int {
 		return &capped
 	}
 	return mt
+}
+
+// MaxTokensToInt32 converts a max token count for provider APIs that use int32 fields.
+// Values above math.MaxInt32 are clamped to avoid overflow when narrowing.
+func MaxTokensToInt32(v int) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(v)
 }

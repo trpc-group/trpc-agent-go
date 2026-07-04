@@ -675,12 +675,8 @@ func (m *Model) effectiveOutputReserveTokens(request *model.Request) int {
 		return reserve
 	}
 	if request.MaxTokens != nil {
-		capped := *request.MaxTokens
-		if modelCap := imodel.ResolveMaxOutputTokens(m.name); modelCap > 0 && capped > modelCap {
-			capped = modelCap
-		}
-		if capped > reserve {
-			reserve = capped
+		if mt := model.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil && *mt > reserve {
+			reserve = *mt
 		}
 	}
 	if request.ThinkingTokens != nil && *request.ThinkingTokens > reserve {
