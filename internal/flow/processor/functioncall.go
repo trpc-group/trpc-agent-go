@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
@@ -1872,6 +1873,7 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 		if mapped := findCompatibleTool(toolCall.Function.Name, tools, invocation); mapped != nil {
 			tl = mapped
 			if newArgs := convertToolArguments(
+				invocation,
 				toolCall.Function.Name, toolCall.Function.Arguments,
 				mapped.Declaration().Name,
 			); newArgs != nil {
@@ -3105,14 +3107,25 @@ func findCompatibleTool(requested string, tools map[string]tool.Tool, invocation
 
 // convertToolArguments converts original args to the mapped tool args when needed.
 // When mapping sub-agent name -> transfer_to_agent, wrap message and set agent_name.
-func convertToolArguments(originalName string, originalArgs []byte, targetName string) []byte {
+func convertToolArguments(
+	invocation *agent.Invocation,
+	originalName string,
+	originalArgs []byte,
+	targetName string,
+) []byte {
 	if targetName != transfer.TransferToolName {
 		return nil
 	}
 
 	var input subAgentCall
 	if len(originalArgs) > 0 {
-		if err := json.Unmarshal(originalArgs, &input); err != nil {
+		var err error
+		if jsonrepair.IsToolCallArgumentsJSONRepairEnabled(invocation) {
+			err = jsonutils.DecodeLeadingJSON(string(originalArgs), &input)
+		} else {
+			err = json.Unmarshal(originalArgs, &input)
+		}
+		if err != nil {
 			log.Warnf("Failed to unmarshal sub-agent call arguments for %s: %v", originalName, err)
 			return nil
 		}
