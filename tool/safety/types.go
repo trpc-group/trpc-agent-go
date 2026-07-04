@@ -7,11 +7,6 @@
 
 //
 
-
-
-
-
-
 //
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
@@ -48,10 +43,10 @@ const (
 
 // Rule defines a single detection rule in the safety policy.
 type Rule struct {
-	ID          string   `yaml:"id" json:"id"`
-	Category    string   `yaml:"category" json:"category"`
-	Description string   `yaml:"description" json:"description"`
-	Patterns    []string `yaml:"patterns" json:"patterns"`
+	ID          string    `yaml:"id" json:"id"`
+	Category    string    `yaml:"category" json:"category"`
+	Description string    `yaml:"description" json:"description"`
+	Patterns    []string  `yaml:"patterns" json:"patterns"`
 	RiskLevel   RiskLevel `yaml:"risk_level" json:"risk_level"`
 	Action      Decision  `yaml:"action" json:"action"`
 }
@@ -85,12 +80,12 @@ type ScanReport struct {
 
 // AuditEvent is a single entry in the tool_safety_audit.jsonl log.
 type AuditEvent struct {
-	ToolName      string   `json:"tool_name"`
-	Decision      Decision `json:"decision"`
-	RiskLevel     RiskLevel `json:"risk_level"`
-	RuleID        string   `json:"rule_id"`
-	DurationMs    int64    `json:"duration_ms"`
-	Desensitized  bool     `json:"desensitized"`
-	Intercepted   bool     `json:"intercepted"`
-	CommandHash   string   `json:"command_hash"` // SHA256 prefix (not raw command)
+	ToolName     string    `json:"tool_name"`
+	Decision     Decision  `json:"decision"`
+	RiskLevel    RiskLevel `json:"risk_level"`
+	RuleID       string    `json:"rule_id"`
+	DurationMs   int64     `json:"duration_ms"`
+	Desensitized bool      `json:"desensitized"`
+	Intercepted  bool      `json:"intercepted"`
+	CommandHash  string    `json:"command_hash"` // SHA256 prefix (not raw command)
 }

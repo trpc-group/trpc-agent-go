@@ -7,11 +7,6 @@
 
 //
 
-
-
-
-
-
 package safety
 
 import (
