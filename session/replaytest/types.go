@@ -172,8 +172,8 @@ type FieldDiff struct {
 	SummaryID  string      `json:"summary_id,omitempty"`
 	TrackName  string      `json:"track_name,omitempty"`
 	FieldPath  string      `json:"field_path"`
-	ValueA     interface{} `json:"value_a"`
-	ValueB     interface{} `json:"value_b"`
+	ValueA     any `json:"value_a"`
+	ValueB     any `json:"value_b"`
 	Allowed    bool        `json:"allowed"`
 	Reason     string      `json:"reason,omitempty"`
 }

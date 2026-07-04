@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package replaytest
 
 import (
@@ -44,7 +52,10 @@ func RunCase(
 	// Append events with deterministic timestamps.
 	baseTime := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i, es := range c.Events {
-		evt := buildEvent(es, i, c.SessionID, baseTime)
+		evt, err := buildEvent(es, i, c.SessionID, baseTime)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("build event %d: %w", i, err)
+		}
 		if err := sessService.AppendEvent(ctx, sess, evt); err != nil {
 			return Snapshot{}, fmt.Errorf("append event %d: %w", i, err)
 		}
@@ -93,7 +104,6 @@ func RunCase(
 		entries, err := memService.SearchMemories(
 			ctx, userKey, mq.Query,
 			memory.WithSearchOptions(memory.SearchOptions{
-				Query:      mq.Query,
 				MaxResults: limit,
 			}),
 		)
@@ -128,7 +138,7 @@ func RunCase(
 
 // buildEvent constructs an event.Event from an EventSpec with
 // deterministic IDs and timestamps.
-func buildEvent(es EventSpec, index int, sessionID string, baseTime time.Time) *event.Event {
+func buildEvent(es EventSpec, index int, sessionID string, baseTime time.Time) (*event.Event, error) {
 	invocationID := es.InvocationID
 	if invocationID == "" {
 		invocationID = fmt.Sprintf("inv-%s-%d", sessionID, index)
@@ -146,6 +156,9 @@ func buildEvent(es EventSpec, index int, sessionID string, baseTime time.Time) *
 
 	if es.Role == string(model.RoleTool) {
 		// Tool response.
+		if es.ToolResponse == nil {
+			return nil, fmt.Errorf("tool response is nil for role=tool at event index %d", index)
+		}
 		msg.ToolID = es.ToolResponse.ID
 		msg.Content = es.ToolResponse.Content
 	} else if len(es.ToolCalls) > 0 {
@@ -182,7 +195,7 @@ func buildEvent(es EventSpec, index int, sessionID string, baseTime time.Time) *
 	}
 
 	evt.Response = resp
-	return evt
+	return evt, nil
 }
 
 // RunReplayMatrix executes all replay cases across all provided

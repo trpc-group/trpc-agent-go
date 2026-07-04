@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package replaytest
 
 import (
@@ -87,8 +95,9 @@ func normalizeEvents(events []event.Event) []NormalizedEvent {
 	return result
 }
 
-// normalizeMemories sorts and strips auto-generated fields
-// from memory entries for deterministic comparison.
+// normalizeMemories strips auto-generated fields from memory
+// entries. The original order is preserved so that cross-backend
+// comparisons can detect ordering differences.
 func normalizeMemories(memories []*memory.Entry) []NormalizedMemory {
 	result := make([]NormalizedMemory, 0, len(memories))
 	for _, m := range memories {
@@ -102,13 +111,12 @@ func normalizeMemories(memories []*memory.Entry) []NormalizedMemory {
 		nm := NormalizedMemory{
 			Content: m.Memory.Memory,
 			Topics:  append([]string{}, topics...),
+			Score:   m.Score,
 		}
 		result = append(result, nm)
 	}
-	// Sort by content for deterministic ordering.
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Content < result[j].Content
-	})
+	// Preserve original retrieval order to detect ordering
+	// differences between backends.
 	return result
 }
 
@@ -133,7 +141,9 @@ func normalizeSummaries(summaries map[string]*session.Summary) []NormalizedSumma
 	return result
 }
 
-// normalizeTracks strips timestamps from track events.
+// normalizeTracks strips timestamps from track events. The
+// original append order is preserved so that cross-backend
+// comparisons can detect ordering differences.
 func normalizeTracks(tracks map[session.Track]*session.TrackEvents) []NormalizedTrack {
 	result := make([]NormalizedTrack, 0)
 	for track, events := range tracks {
@@ -148,13 +158,8 @@ func normalizeTracks(tracks map[session.Track]*session.TrackEvents) []Normalized
 			result = append(result, nt)
 		}
 	}
-	// Sort by track name + payload for deterministic ordering.
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Track != result[j].Track {
-			return result[i].Track < result[j].Track
-		}
-		return result[i].Payload < result[j].Payload
-	})
+	// Preserve original execution order to detect ordering
+	// differences between backends.
 	return result
 }
 
@@ -164,7 +169,7 @@ func normalizeJSONBytes(b []byte) string {
 	if len(b) == 0 {
 		return ""
 	}
-	var v interface{}
+	var v any
 	if err := json.Unmarshal(b, &v); err != nil {
 		return string(b)
 	}

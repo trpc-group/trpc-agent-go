@@ -1,7 +1,16 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package replaytest
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -263,10 +272,10 @@ func case8TrackEvents() ReplayCase {
 	}
 }
 
-// --- Case 9: Concurrent or out-of-order writes ---
+// --- Case 9: Out-of-order writes ---
 func case9ConcurrentWrites() ReplayCase {
 	return ReplayCase{
-		Name:      "concurrent_out_of_order_writes",
+		Name:      "out_of_order_writes",
 		AppName:   "test-app",
 		UserID:    "user-3",
 		SessionID: "session-009",
@@ -480,7 +489,7 @@ func TestReportGeneration(t *testing.T) {
 	require.NoError(t, err)
 
 	err = GenerateReport(reports, ReportConfig{
-		OutputPath: "session_memory_summary_track_diff_report.json",
+		OutputPath: filepath.Join(t.TempDir(), "session_memory_summary_track_diff_report.json"),
 	})
 	require.NoError(t, err, "report generation should succeed")
 }

@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package replaytest
 
 import (
@@ -10,11 +18,11 @@ import (
 // differences as acceptable between backends. Each rule specifies
 // which section, path pattern, and backend pair it applies to.
 type AllowedDiffRule struct {
-	Section    string `json:"section"`     // "events", "state", "memory", "summary", "tracks"
+	Section     string `json:"section"`      // "events", "state", "memory", "summary", "tracks"
 	PathPattern string `json:"path_pattern"` // dotted path, e.g. "events[0].content"
-	BackendA   string `json:"backend_a,omitempty"`
-	BackendB   string `json:"backend_b,omitempty"`
-	Reason     string `json:"reason"`
+	BackendA    string `json:"backend_a,omitempty"`
+	BackendB    string `json:"backend_b,omitempty"`
+	Reason      string `json:"reason"`
 }
 
 // CompareSnapshots performs a deep comparison between two snapshots
@@ -26,11 +34,11 @@ func CompareSnapshots(
 	allowedDiffs []AllowedDiffRule,
 ) []FieldDiff {
 	var diffs []FieldDiff
-	diffs = append(diffs, compareState(left, right, backendA, backendB)...)
-	diffs = append(diffs, compareEvents(left, right, backendA, backendB)...)
-	diffs = append(diffs, compareMemories(left, right, backendA, backendB)...)
-	diffs = append(diffs, compareSummaries(left, right, backendA, backendB)...)
-	diffs = append(diffs, compareTracks(left, right, backendA, backendB)...)
+	diffs = append(diffs, compareState(left, right)...)
+	diffs = append(diffs, compareEvents(left, right)...)
+	diffs = append(diffs, compareMemories(left, right)...)
+	diffs = append(diffs, compareSummaries(left, right)...)
+	diffs = append(diffs, compareTracks(left, right)...)
 
 	// Apply allowed diff rules.
 	for i := range diffs {
@@ -64,15 +72,7 @@ func matchAllowedDiff(d FieldDiff, rule AllowedDiffRule, backendA, backendB stri
 }
 
 // extractSection returns the top-level section from a field path.
-// Examples:
-//
-//	"state.key1"        → "state"
-//	"events[0].content" → "events"
-//	"memories[1]"       → "memories"
-//	"summaries"         → "summaries"
-//	"tracks[0].payload" → "tracks"
 func extractSection(path string) string {
-	// Strip array index suffix first: "events[0]" → "events".
 	bracketIdx := strings.Index(path, "[")
 	dotIdx := strings.Index(path, ".")
 	if dotIdx < 0 {
@@ -89,10 +89,7 @@ func extractSection(path string) string {
 
 // matchPathPattern checks if a field path matches a dotted path pattern.
 // The pattern supports "*" as a wildcard for a single segment.
-// Array indices (e.g., "[0]") are normalized away before comparison
-// so "events[0].content" matches "events[1].content".
 func matchPathPattern(path, pattern string) bool {
-	// Normalize both path and pattern: remove array indices.
 	normalizedPath := normalizeArrayIndices(path)
 	normalizedPattern := normalizeArrayIndices(pattern)
 
@@ -131,7 +128,7 @@ func normalizeArrayIndices(path string) string {
 	return result
 }
 
-func compareState(left, right Snapshot, backendA, backendB string) []FieldDiff {
+func compareState(left, right Snapshot) []FieldDiff {
 	var diffs []FieldDiff
 	allKeys := mergeKeys(left.State, right.State)
 	for _, k := range allKeys {
@@ -149,10 +146,8 @@ func compareState(left, right Snapshot, backendA, backendB string) []FieldDiff {
 	return diffs
 }
 
-func compareEvents(left, right Snapshot, backendA, backendB string) []FieldDiff {
+func compareEvents(left, right Snapshot) []FieldDiff {
 	var diffs []FieldDiff
-	// Compare by index for now; more sophisticated ordering handled
-	// by normalizer's deterministic output.
 	maxLen := len(left.Events)
 	if len(right.Events) > maxLen {
 		maxLen = len(right.Events)
@@ -186,58 +181,73 @@ func compareEvents(left, right Snapshot, backendA, backendB string) []FieldDiff 
 	return diffs
 }
 
-func compareMemories(left, right Snapshot, backendA, backendB string) []FieldDiff {
+// compareMemories matches memory entries by content identity rather
+// than positional index, so that different backends returning the
+// same entries in a different order are not falsely reported as
+// different. Unmatched entries (missing or extra) are flagged.
+func compareMemories(left, right Snapshot) []FieldDiff {
 	var diffs []FieldDiff
-	maxLen := len(left.Memories)
-	if len(right.Memories) > maxLen {
-		maxLen = len(right.Memories)
+
+	// Build index by content for right side.
+	rightByContent := make(map[string]int)
+	for i, m := range right.Memories {
+		rightByContent[m.Content] = i
 	}
-	for i := 0; i < maxLen; i++ {
-		if i >= len(left.Memories) {
+
+	matchedRight := make([]bool, len(right.Memories))
+	for i, lm := range left.Memories {
+		rIdx, ok := rightByContent[lm.Content]
+		if !ok {
 			diffs = append(diffs, FieldDiff{
 				SessionID: left.SessionID,
-				MemoryID:  fmt.Sprintf("mem[%d]", i),
+				MemoryID:  lm.Content,
 				FieldPath: fmt.Sprintf("memories[%d]", i),
-				ValueA:    nil,
-				ValueB:    right.Memories[i],
-			})
-			continue
-		}
-		if i >= len(right.Memories) {
-			diffs = append(diffs, FieldDiff{
-				SessionID: left.SessionID,
-				MemoryID:  fmt.Sprintf("mem[%d]", i),
-				FieldPath: fmt.Sprintf("memories[%d]", i),
-				ValueA:    left.Memories[i],
+				ValueA:    lm,
 				ValueB:    nil,
 			})
 			continue
 		}
-		lm := left.Memories[i]
-		rm := right.Memories[i]
-		if lm.Content != rm.Content {
-			diffs = append(diffs, FieldDiff{
-				SessionID: left.SessionID,
-				MemoryID:  lm.Content,
-				FieldPath: fmt.Sprintf("memories[%d].content", i),
-				ValueA:    lm.Content,
-				ValueB:    rm.Content,
-			})
-		}
+		matchedRight[rIdx] = true
+		rm := right.Memories[rIdx]
+
 		if !reflect.DeepEqual(lm.Topics, rm.Topics) {
 			diffs = append(diffs, FieldDiff{
 				SessionID: left.SessionID,
 				MemoryID:  lm.Content,
-				FieldPath: fmt.Sprintf("memories[%d].topics", i),
+				FieldPath: fmt.Sprintf("memories[%s].topics", lm.Content),
 				ValueA:    lm.Topics,
 				ValueB:    rm.Topics,
 			})
 		}
+		if lm.Score != rm.Score {
+			diffs = append(diffs, FieldDiff{
+				SessionID: left.SessionID,
+				MemoryID:  lm.Content,
+				FieldPath: fmt.Sprintf("memories[%s].score", lm.Content),
+				ValueA:    lm.Score,
+				ValueB:    rm.Score,
+			})
+		}
 	}
+
+	// Extra memories in right that weren't matched.
+	for i, matched := range matchedRight {
+		if !matched {
+			rm := right.Memories[i]
+			diffs = append(diffs, FieldDiff{
+				SessionID: left.SessionID,
+				MemoryID:  rm.Content,
+				FieldPath: fmt.Sprintf("memories[%d]", i),
+				ValueA:    nil,
+				ValueB:    rm,
+			})
+		}
+	}
+
 	return diffs
 }
 
-func compareSummaries(left, right Snapshot, backendA, backendB string) []FieldDiff {
+func compareSummaries(left, right Snapshot) []FieldDiff {
 	var diffs []FieldDiff
 	maxLen := len(left.Summaries)
 	if len(right.Summaries) > maxLen {
@@ -286,52 +296,59 @@ func compareSummaries(left, right Snapshot, backendA, backendB string) []FieldDi
 	return diffs
 }
 
-func compareTracks(left, right Snapshot, backendA, backendB string) []FieldDiff {
+// compareTracks matches track events by track name + payload
+// identity rather than positional index, so that different backends
+// returning the same events in a different order are not falsely
+// reported as different.
+func compareTracks(left, right Snapshot) []FieldDiff {
 	var diffs []FieldDiff
-	maxLen := len(left.Tracks)
-	if len(right.Tracks) > maxLen {
-		maxLen = len(right.Tracks)
+
+	// Build index by track+payload for right side.
+	type trackKey struct {
+		track   string
+		payload string
 	}
-	for i := 0; i < maxLen; i++ {
-		if i >= len(left.Tracks) {
+	rightByKey := make(map[trackKey]int)
+	for i, t := range right.Tracks {
+		rightByKey[trackKey{t.Track, t.Payload}] = i
+	}
+
+	matchedRight := make([]bool, len(right.Tracks))
+	for i, lt := range left.Tracks {
+		tk := trackKey{lt.Track, lt.Payload}
+		rIdx, ok := rightByKey[tk]
+		if !ok {
 			diffs = append(diffs, FieldDiff{
 				SessionID: left.SessionID,
+				TrackName: lt.Track,
 				FieldPath: fmt.Sprintf("tracks[%d]", i),
-				ValueA:    nil,
-				ValueB:    right.Tracks[i],
-			})
-			continue
-		}
-		if i >= len(right.Tracks) {
-			diffs = append(diffs, FieldDiff{
-				SessionID: left.SessionID,
-				FieldPath: fmt.Sprintf("tracks[%d]", i),
-				ValueA:    left.Tracks[i],
+				ValueA:    lt,
 				ValueB:    nil,
 			})
 			continue
 		}
-		lt := left.Tracks[i]
-		rt := right.Tracks[i]
-		if lt.Track != rt.Track {
+		matchedRight[rIdx] = true
+		// Track matched by identity; compare remaining fields
+		// (currently Track and Payload already matched by key).
+		// If new fields are added to NormalizedTrack in the future,
+		// this is where they would be compared.
+		_ = right.Tracks[rIdx]
+	}
+
+	// Extra tracks in right that weren't matched.
+	for i, matched := range matchedRight {
+		if !matched {
+			rt := right.Tracks[i]
 			diffs = append(diffs, FieldDiff{
 				SessionID: left.SessionID,
-				TrackName: lt.Track,
-				FieldPath: fmt.Sprintf("tracks[%d].track", i),
-				ValueA:    lt.Track,
-				ValueB:    rt.Track,
-			})
-		}
-		if lt.Payload != rt.Payload {
-			diffs = append(diffs, FieldDiff{
-				SessionID: left.SessionID,
-				TrackName: lt.Track,
-				FieldPath: fmt.Sprintf("tracks[%d].payload", i),
-				ValueA:    lt.Payload,
-				ValueB:    rt.Payload,
+				TrackName: rt.Track,
+				FieldPath: fmt.Sprintf("tracks[%d]", i),
+				ValueA:    nil,
+				ValueB:    rt,
 			})
 		}
 	}
+
 	return diffs
 }
 
@@ -352,7 +369,7 @@ func mergeKeys(a, b map[string]string) []string {
 }
 
 // compareStructs uses reflection to compare two structs field by field.
-func compareStructs(a, b interface{}, prefix, sessionID string) []FieldDiff {
+func compareStructs(a, b any, prefix, sessionID string) []FieldDiff {
 	var diffs []FieldDiff
 	va := reflect.ValueOf(a)
 	vb := reflect.ValueOf(b)
