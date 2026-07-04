@@ -493,6 +493,28 @@ func TestApprovalService_Decide_WaitsForFileStoreSkillLock(t *testing.T) {
 	assert.Equal(t, 1, pub.upsertCount())
 }
 
+func TestApprovalService_LockSkill_FallsBackToProcessLock(t *testing.T) {
+	svc := NewApprovalService(scanCandidateStore{}, nil, nil)
+	unlock, err := svc.lockSkill(context.Background(), "fallback-skill")
+	require.NoError(t, err)
+	require.NotNil(t, unlock)
+	unlock()
+}
+
+func TestApprovalService_Decide_ReturnsSkillLockError(t *testing.T) {
+	svc := NewApprovalService(lockErrorStore{
+		err: fmt.Errorf("lock unavailable"),
+	}, nil, nil)
+	err := svc.Decide(context.Background(), ApprovalDecision{
+		RevisionID: "rev-lock",
+		SkillID:    "locked-skill",
+		Approved:   true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `lock skill "locked-skill"`)
+	assert.Contains(t, err.Error(), "lock unavailable")
+}
+
 func TestApprovalService_ListPending_WithLimit(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileCandidateStore(dir)
@@ -556,6 +578,15 @@ func (m *mockPublisher) upsertCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.skills)
+}
+
+type lockErrorStore struct {
+	CandidateStore
+	err error
+}
+
+func (s lockErrorStore) lockSkill(context.Context, string) (func(), error) {
+	return nil, s.err
 }
 
 func TestApprovalService_ListPending_NilStore(t *testing.T) {

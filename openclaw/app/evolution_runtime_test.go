@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -116,6 +117,23 @@ func TestMaybeCreateEvolutionService_WithBaseURL(t *testing.T) {
 	}
 	svc := maybeCreateEvolutionService(opts, repo)
 	assert.NotNil(t, svc, "should create service with custom base URL")
+	t.Cleanup(func() { _ = svc.Close() })
+}
+
+func TestMaybeCreateEvolutionService_WithApprovalTimeout(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := skill.NewFSRepository(dir)
+	require.NoError(t, err)
+
+	opts := runOptions{
+		EvolutionEnabled:               true,
+		StateDir:                       dir,
+		ModelMode:                      modeMock,
+		EvolutionApprovalTimeout:       time.Hour,
+		EvolutionApprovalSweepInterval: time.Minute,
+	}
+	svc := maybeCreateEvolutionService(opts, repo)
+	assert.NotNil(t, svc, "should create service with approval auto-expire config")
 	t.Cleanup(func() { _ = svc.Close() })
 }
 

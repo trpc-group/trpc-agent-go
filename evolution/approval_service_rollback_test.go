@@ -691,6 +691,128 @@ func TestApprovalService_Rollback_RequiresStoreAndPointer(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestApprovalService_ReadRevisionForRollbackRestore_Branches(t *testing.T) {
+	ctx := context.Background()
+	skillID := "restore-skill"
+	original := &Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-current",
+		Status:     RevisionActive,
+	}
+	svc := NewApprovalService(scanCandidateStore{
+		revs: map[string]*Revision{
+			original.RevisionID: original,
+		},
+		errs: map[string]error{
+			"rev-bad": fmt.Errorf("read unavailable"),
+		},
+	}, nil, nil)
+
+	empty, err := svc.readRevisionForRollbackRestore(ctx, skillID, " ")
+	require.NoError(t, err)
+	assert.Nil(t, empty)
+
+	missing, err := svc.readRevisionForRollbackRestore(ctx, skillID, "rev-missing")
+	require.NoError(t, err)
+	assert.Nil(t, missing)
+
+	got, err := svc.readRevisionForRollbackRestore(ctx, skillID, original.RevisionID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.NotSame(t, original, got)
+	assert.Equal(t, original.RevisionID, got.RevisionID)
+
+	_, err = svc.readRevisionForRollbackRestore(ctx, skillID, "rev-bad")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read rollback restore revision")
+}
+
+func TestApprovalService_RestoreRollbackRevisions_JoinsWriteErrors(t *testing.T) {
+	svc := NewApprovalService(writeErrorStore{
+		err: fmt.Errorf("write unavailable"),
+	}, nil, nil)
+	err := svc.restoreRollbackRevisions(context.Background(), nil, &Revision{
+		SkillID:    "restore-skill",
+		RevisionID: "rev-restore",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `restore revision "rev-restore"`)
+	assert.Contains(t, err.Error(), "write unavailable")
+}
+
+func TestCloneRevision_DeepCopiesNestedFields(t *testing.T) {
+	promotedAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	decidedAt := time.Date(2026, 1, 3, 3, 4, 5, 0, time.UTC)
+	approved := true
+	rev := &Revision{
+		SkillID:    "clone-skill",
+		RevisionID: "rev-clone",
+		Spec: &SkillSpec{
+			Name:        "Clone Skill",
+			Description: "copy me",
+			WhenToUse:   "when cloning",
+			Steps:       []string{"first", "second"},
+			Pitfalls:    []string{"avoid aliasing"},
+		},
+		PromotedAt: &promotedAt,
+		SpecReport: &SpecReport{
+			Passed:  true,
+			Reasons: []string{"valid"},
+		},
+		SafetyReport: &SafetyReport{
+			Passed:  true,
+			Reasons: []string{"safe"},
+		},
+		EffectivenessReport: &EffectivenessReport{
+			Passed:  true,
+			Reasons: []string{"useful"},
+		},
+		HumanReport: &HumanReport{
+			Held:      true,
+			Approved:  &approved,
+			Reviewer:  "alice",
+			Comment:   "looks good",
+			DecidedAt: &decidedAt,
+			Reasons:   []string{"manual approval required"},
+		},
+	}
+
+	assert.Nil(t, cloneRevision(nil))
+	got := cloneRevision(rev)
+	require.NotNil(t, got)
+	assert.NotSame(t, rev, got)
+	assert.NotSame(t, rev.Spec, got.Spec)
+	assert.NotSame(t, rev.PromotedAt, got.PromotedAt)
+	assert.NotSame(t, rev.SpecReport, got.SpecReport)
+	assert.NotSame(t, rev.SafetyReport, got.SafetyReport)
+	assert.NotSame(t, rev.EffectivenessReport, got.EffectivenessReport)
+	assert.NotSame(t, rev.HumanReport, got.HumanReport)
+	assert.NotSame(t, rev.HumanReport.Approved, got.HumanReport.Approved)
+	assert.NotSame(t, rev.HumanReport.DecidedAt, got.HumanReport.DecidedAt)
+
+	wantPromotedAt := promotedAt
+	wantDecidedAt := decidedAt
+	rev.Spec.Steps[0] = "mutated"
+	rev.Spec.Pitfalls[0] = "mutated"
+	rev.SpecReport.Reasons[0] = "mutated"
+	rev.SafetyReport.Reasons[0] = "mutated"
+	rev.EffectivenessReport.Reasons[0] = "mutated"
+	rev.HumanReport.Reasons[0] = "mutated"
+	*rev.HumanReport.Approved = false
+	*rev.PromotedAt = promotedAt.Add(time.Hour)
+	*rev.HumanReport.DecidedAt = decidedAt.Add(time.Hour)
+
+	assert.Equal(t, []string{"first", "second"}, got.Spec.Steps)
+	assert.Equal(t, []string{"avoid aliasing"}, got.Spec.Pitfalls)
+	assert.Equal(t, []string{"valid"}, got.SpecReport.Reasons)
+	assert.Equal(t, []string{"safe"}, got.SafetyReport.Reasons)
+	assert.Equal(t, []string{"useful"}, got.EffectivenessReport.Reasons)
+	assert.Equal(t, []string{"manual approval required"}, got.HumanReport.Reasons)
+	assert.True(t, *got.HumanReport.Approved)
+	assert.True(t, wantPromotedAt.Equal(*got.PromotedAt))
+	assert.True(t, wantDecidedAt.Equal(*got.HumanReport.DecidedAt))
+}
+
 type errActivePointer struct {
 	err error
 }
