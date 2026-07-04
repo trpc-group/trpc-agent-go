@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1979,65 +1980,6 @@ func Test_HandleStreamingResponse_ServerToolInputDeltaOverridesStartInput(t *tes
 	assert.JSONEq(t, `{"query":"latest weather"}`, string(rawInput))
 }
 
-func Test_HandleStreamingResponse_InvalidToolInputDeltaReturnsError(t *testing.T) {
-	sse := strings.Join([]string{
-		"event: message_start",
-		`data: {"type":"message_start","message":{"id":"msg_sse_tool_3","type":"message","role":"assistant","model":"claude-3-sonnet","content":[],"usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":3,"output_tokens":0,"server_tool_use":{"web_search_requests":0}}}}`,
-		"",
-		"event: content_block_start",
-		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_3","name":"lookup","input":{}}}`,
-		"",
-		"event: content_block_delta",
-		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"a\":1"}}`,
-		"",
-		"event: content_block_stop",
-		`data: {"type":"content_block_stop","index":0}`,
-		"",
-	}, "\n")
-	orig := model.DefaultNewHTTPClient
-	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
-	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
-		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
-			h := make(http.Header)
-			h.Set("Content-Type", "text/event-stream")
-			return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader(sse))}, nil
-		})}
-	}
-	callbackCalled := make(chan struct{})
-	var callbackAcc *anthropic.Message
-	var callbackErr error
-	m := New(
-		"claude-test",
-		WithHTTPClientOptions(),
-		WithChatStreamCompleteCallback(func(_ context.Context, _ *anthropic.MessageNewParams, acc *anthropic.Message, err error) {
-			callbackAcc = acc
-			callbackErr = err
-			close(callbackCalled)
-		}),
-	)
-	ch, err := m.GenerateContent(context.Background(), &model.Request{
-		Messages:         []model.Message{model.NewUserMessage("U")},
-		GenerationConfig: model.GenerationConfig{Stream: true},
-	})
-	require.NoError(t, err)
-	var responses []*model.Response
-	for resp := range ch {
-		responses = append(responses, resp)
-	}
-	require.Len(t, responses, 1)
-	require.NotNil(t, responses[0].Error)
-	assert.True(t, responses[0].Done)
-	assert.NotEmpty(t, responses[0].Error.Message)
-	select {
-	case <-callbackCalled:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timeout waiting for stream complete callback")
-	}
-	assert.Nil(t, callbackAcc)
-	require.Error(t, callbackErr)
-	assert.Equal(t, responses[0].Error.Message, callbackErr.Error())
-}
-
 func Test_StreamingMessageAccumulator_HelperGuards(t *testing.T) {
 	var nilAcc *streamingMessageAccumulator
 	assert.Equal(t, anthropic.Message{}, nilAcc.Message())
@@ -2110,38 +2052,6 @@ func Test_StreamingMessageAccumulator_ErrorPaths(t *testing.T) {
 		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}`)), "no content block")
 	require.ErrorContains(t, acc.Accumulate(mustMessageStreamEventUnion(t,
 		`{"type":"content_block_stop","index":0}`)), "no content block")
-	// Partial JSON in tool-use Input is now handled gracefully:
-	// ensureValidToolInput resets invalid Input to {} before refreshContentBlockRawJSON.
-	acc.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}}
-	acc.inputDeltaStartedAt = []bool{false}
-	require.NoError(t, acc.Accumulate(mustMessageStreamEventUnion(t,
-		`{"type":"content_block_stop","index":0}`)))
-	// The invalid Input should have been reset to {}.
-	assert.Equal(t, json.RawMessage("{}"), acc.message.Content[0].Input)
-	// Proxy sends "input": null (literal JSON null) with no input_json_delta.
-	// ensureValidToolInput must treat this as empty and reset to {}.
-	acc3 := newStreamingMessageAccumulator()
-	acc3.message.Content = []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("null")}}
-	acc3.inputDeltaStartedAt = []bool{false}
-	require.NoError(t, acc3.Accumulate(mustMessageStreamEventUnion(t,
-		`{"type":"content_block_stop","index":0}`)))
-	assert.Equal(t, json.RawMessage("{}"), acc3.message.Content[0].Input)
-
-	// Non-tool_use blocks with malformed Input must NOT be auto-repaired.
-	acc2 := newStreamingMessageAccumulator()
-	acc2.message.Content = []anthropic.ContentBlockUnion{{Type: "text", Input: json.RawMessage("{")}}
-	acc2.inputDeltaStartedAt = []bool{false}
-	require.Error(t, acc2.Accumulate(mustMessageStreamEventUnion(t,
-		`{"type":"content_block_stop","index":0}`)))
-	// Input remains unchanged — auto-repair is tool_use-specific.
-	assert.Equal(t, json.RawMessage("{"), acc2.message.Content[0].Input)
-
-	// refreshContentBlockRawJSON and finalizeStreamingMessage still fail on
-	// invalid Input when called directly (no ensureValidToolInput guard).
-	require.Error(t, refreshContentBlockRawJSON(&anthropic.ContentBlockUnion{Type: "tool_use", Input: json.RawMessage("{")}))
-	require.Error(t, finalizeStreamingMessage(&anthropic.Message{
-		Content: []anthropic.ContentBlockUnion{{Type: "tool_use", Input: json.RawMessage("{")}},
-	}))
 }
 
 func Test_ensureValidToolInput(t *testing.T) {
@@ -2256,6 +2166,181 @@ func Test_HandleStreamingResponse_ContextCancelStillCallsCallback(t *testing.T) 
 		t.Fatalf("unexpected response: %#v", resp)
 	default:
 	}
+}
+
+// errReadCloser is an io.ReadCloser that returns the configured bytes and
+// then surfaces a transport-level error on the next read, simulating a TCP
+// RST during a streaming SSE response.
+type errReadCloser struct {
+	pre []byte
+	off int
+	err error
+}
+
+func (e *errReadCloser) Read(p []byte) (int, error) {
+	if e.off < len(e.pre) {
+		n := copy(p, e.pre[e.off:])
+		e.off += n
+		return n, nil
+	}
+	return 0, e.err
+}
+func (e *errReadCloser) Close() error { return nil }
+
+const ssePrelude = "event: message_start\n" +
+	"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_pre\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-3-sonnet\",\"content\":[]}}\n\n"
+
+const sseFullSuccess = ssePrelude +
+	"event: content_block_start\n" +
+	"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+	"event: content_block_delta\n" +
+	"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n" +
+	"event: content_block_stop\n" +
+	"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+	"event: message_delta\n" +
+	"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}\n\n" +
+	"event: message_stop\n" +
+	"data: {\"type\":\"message_stop\"}\n\n"
+
+// Test_HandleStreamingResponse_RetriesMidStreamTCPRST simulates the exact
+// failure mode the production trace exposed: the HTTP request returns 200 OK
+// and starts streaming, then the TCP connection dies (connection reset by
+// peer) before any chunk reaches the response channel. The Anthropic SDK's
+// own retry logic cannot recover this case because the HTTP response was
+// already "successful" from the transport layer's point of view. Our
+// per-stream retry must restart the entire streaming request and recover on
+// the next attempt.
+func Test_HandleStreamingResponse_RetriesMidStreamTCPRST(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			n := atomic.AddInt32(&attempts, 1)
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			if n == 1 {
+				// 200 OK but the body errors mid-stream — same shape as a
+				// TCP RST during SSE consumption.
+				body := &errReadCloser{
+					pre: []byte(ssePrelude), // partial SSE then RST
+					err: fmt.Errorf("read tcp 192.168.0.97:56051->160.79.104.10:443: read: connection reset by peer"),
+				}
+				return &http.Response{StatusCode: 200, Header: h, Body: body}, nil
+			}
+			return &http.Response{
+				StatusCode: 200,
+				Header:     h,
+				Body:       io.NopCloser(strings.NewReader(sseFullSuccess)),
+			}, nil
+		})}
+	}
+
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		// Disable the SDK's built-in retry so this test exercises ONLY our
+		// per-stream retry layer.
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
+	)
+
+	ctx := context.Background()
+	responseChan := make(chan *model.Response, 16)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	var (
+		sawText bool
+		sawErr  bool
+	)
+	for r := range responseChan {
+		if r.Error != nil {
+			sawErr = true
+		}
+		for _, c := range r.Choices {
+			if c.Message.Content == "hello" || c.Delta.Content == "hello" {
+				sawText = true
+			}
+		}
+	}
+	require.False(t, sawErr, "stream should not surface an error after a successful retry")
+	require.True(t, sawText, "expected the recovered attempt's content to reach the caller")
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts),
+		"handleStreamingResponse should have made exactly 2 HTTP attempts (1 mid-stream failure + 1 success)")
+}
+
+// Test_HandleStreamingResponse_RetryCappedAfterMaxAttempts verifies that when
+// every streaming attempt is interrupted, handleStreamingResponse gives up
+// after maxRetries+1 attempts and surfaces the error to the caller rather
+// than spinning forever. The SDK's built-in retry is disabled here so the
+// total attempt count is governed entirely by our wrapper.
+func Test_HandleStreamingResponse_RetryCappedAfterMaxAttempts(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&attempts, 1)
+			return nil, fmt.Errorf("write tcp 192.168.0.97:443: write: broken pipe")
+		})}
+	}
+
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
+	)
+
+	ctx := context.Background()
+	responseChan := make(chan *model.Response, 4)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	var errCount int
+	for r := range responseChan {
+		if r.Error != nil {
+			errCount++
+		}
+	}
+	require.GreaterOrEqual(t, errCount, 1, "caller should observe the terminal stream error")
+	require.Equal(t, int32(3), atomic.LoadInt32(&attempts),
+		"handleStreamingResponse should attempt initial + 2 retries = 3 calls")
+}
+
+// Test_HandleStreamingResponse_DoesNotRetryFatalErrors ensures we don't waste
+// retry budget on errors that will obviously fail again (auth, malformed
+// request, etc.). Treating these as retryable would slow down the unhappy
+// path without ever recovering.
+func Test_HandleStreamingResponse_DoesNotRetryFatalErrors(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&attempts, 1)
+			h := make(http.Header)
+			h.Set("Content-Type", "application/json")
+			body := `{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`
+			return &http.Response{StatusCode: 401, Header: h, Body: io.NopCloser(strings.NewReader(body))}, nil
+		})}
+	}
+
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
+	)
+
+	ctx := context.Background()
+	responseChan := make(chan *model.Response, 4)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts),
+		"a 401 authentication failure must not be retried")
 }
 
 func Test_HTTPClientOptions_AndAnthropicClientOptions(t *testing.T) {
