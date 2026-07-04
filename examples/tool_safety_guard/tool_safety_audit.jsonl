@@ -1,0 +1,1 @@
+{"timestamp":"2026-07-04T00:00:00Z","tool_name":"workspace_exec","decision":"deny","risk_level":"high","rule_id":"network.non_whitelisted_domain","duration_ms":0,"redacted":false,"blocked":true,"backend":"workspaceexec"}

@@ -1,0 +1,77 @@
+allowed_commands:
+  - go
+  - curl
+  - cat
+  - wc
+  - npm
+  - sleep
+  - yes
+  - head
+  - tail
+  - python
+denied_commands:
+  - dd
+  - mkfs
+  - mount
+  - umount
+  - shutdown
+  - reboot
+  - halt
+  - poweroff
+  - sudo
+  - su
+  - doas
+denied_paths:
+  - /
+  - /bin
+  - /boot
+  - /dev
+  - /etc
+  - /root
+  - /sbin
+  - /sys
+  - /usr
+  - /var
+  - ~/.ssh
+  - .ssh
+  - .env
+  - .npmrc
+  - .pypirc
+  - id_rsa
+  - id_ed25519
+  - credentials
+  - secrets
+network_allowlist:
+  - api.github.com
+  - github.com
+  - proxy.golang.org
+  - sum.golang.org
+  - registry.npmjs.org
+  - pypi.org
+  - files.pythonhosted.org
+max_timeout_seconds: 300
+max_output_bytes: 4194304
+env_allowlist:
+  - PATH
+  - HOME
+  - TMPDIR
+  - TEMP
+  - TMP
+  - LANG
+  - LC_ALL
+  - CGO_ENABLED
+  - GOCACHE
+  - GOMODCACHE
+  - GOPATH
+review_commands:
+  - go install
+  - npm install
+  - npm ci
+  - pip install
+  - pip3 install
+  - apt install
+  - apt-get install
+  - brew install
+  - cargo install
+review_shell_pipelines: true
+deny_on_parse_error: true
