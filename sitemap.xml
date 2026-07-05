@@ -568,6 +568,13 @@
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/session/redis/"/>
     </url>
     <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/session/replay_consistency/</loc>
+        <lastmod>2026-07-05</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/session/replay_consistency/"/>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/session/replay_consistency/"/>
+    </url>
+    <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/session/sqlite/</loc>
         <lastmod>2026-07-05</lastmod>
         <changefreq>daily</changefreq>
@@ -1154,6 +1161,13 @@
         <changefreq>daily</changefreq>
         <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/session/redis/"/>
         <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/session/redis/"/>
+    </url>
+    <url>
+        <loc>https://trpc-group.github.io/trpc-agent-go/zh/session/replay_consistency/</loc>
+        <lastmod>2026-07-05</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="zh" href="https://trpc-group.github.io/trpc-agent-go/zh/session/replay_consistency/"/>
+        <xhtml:link rel="alternate" hreflang="en" href="https://trpc-group.github.io/trpc-agent-go/session/replay_consistency/"/>
     </url>
     <url>
         <loc>https://trpc-group.github.io/trpc-agent-go/zh/session/sqlite/</loc>

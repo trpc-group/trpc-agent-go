@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/blog/observability/">
+        <link rel="canonical" href="https://trpc-group.github.io/trpc-agent-go/session/replay_consistency/">
       
       
         <link rel="prev" href="../summary/">
       
       
-        <link rel="next" href="../promptcache/">
+        <link rel="next" href="../inmemory/">
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
@@ -22,7 +22,7 @@
     
     
       
-        <title>Seeing the Agent Runtime: Observability Design in tRPC-Agent-Go - tRPC-Agent-Go</title>
+        <title>Replay Consistency - tRPC-Agent-Go</title>
       
     
     
@@ -86,7 +86,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#seeing-the-agent-runtime-observability-design-in-trpc-agent-go" class="md-skip">
+        <a href="#replay-consistency" class="md-skip">
           Skip to content
         </a>
       
@@ -119,7 +119,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Seeing the Agent Runtime: Observability Design in tRPC-Agent-Go
+              Replay Consistency
             
           </span>
         </div>
@@ -172,7 +172,7 @@
           </li>
         
           <li class="md-select__item">
-            <a href="../../zh/blog/observability/" hreflang="zh" class="md-select__link">
+            <a href="../../zh/session/replay_consistency/" hreflang="zh" class="md-select__link">
               中文
             </a>
           </li>
@@ -280,6 +280,8 @@
   
   
   
+    
+  
   
     
     
@@ -287,10 +289,12 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
+      <li class="md-tabs__item md-tabs__item--active">
         <a href="../../agent/" class="md-tabs__link">
           
   
@@ -369,13 +373,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../trpcagentgo/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../blog/trpcagentgo/" class="md-tabs__link">
           
   
   
@@ -457,24 +459,29 @@
       
   
   
+    
   
   
+  
     
     
     
     
-      
-      
-    
-    
-    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
             
   
   
@@ -487,7 +494,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Components
@@ -1076,6 +1083,8 @@
                 
   
   
+    
+  
   
   
     
@@ -1086,11 +1095,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2_15" checked>
         
           
           <label class="md-nav__link" for="__nav_2_15" id="__nav_2_15_label" tabindex="0">
@@ -1106,7 +1115,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_2_15">
             <span class="md-nav__icon md-icon"></span>
             Session
@@ -1120,7 +1129,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -1143,7 +1152,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/summary/" class="md-nav__link">
+      <a href="../summary/" class="md-nav__link">
         
   
   
@@ -1163,10 +1172,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../session/replay_consistency/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Replay Consistency
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1177,6 +1208,89 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#running" class="md-nav__link">
+    <span class="md-ellipsis">
+      Running
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#report" class="md-nav__link">
+    <span class="md-ellipsis">
+      Report
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#compared-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Compared Data
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#summary-and-track-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Summary And Track Strategy
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#anomaly-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Anomaly Detection
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#allowed_diff" class="md-nav__link">
+    <span class="md-ellipsis">
+      allowed_diff
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#extending-backends" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extending Backends
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1189,7 +1303,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/inmemory/" class="md-nav__link">
+      <a href="../inmemory/" class="md-nav__link">
         
   
   
@@ -1212,7 +1326,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/sqlite/" class="md-nav__link">
+      <a href="../sqlite/" class="md-nav__link">
         
   
   
@@ -1235,7 +1349,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/redis/" class="md-nav__link">
+      <a href="../redis/" class="md-nav__link">
         
   
   
@@ -1258,7 +1372,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/mysql/" class="md-nav__link">
+      <a href="../mysql/" class="md-nav__link">
         
   
   
@@ -1281,7 +1395,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/tdsql/" class="md-nav__link">
+      <a href="../tdsql/" class="md-nav__link">
         
   
   
@@ -1304,7 +1418,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/postgres/" class="md-nav__link">
+      <a href="../postgres/" class="md-nav__link">
         
   
   
@@ -1327,7 +1441,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/pgvector/" class="md-nav__link">
+      <a href="../pgvector/" class="md-nav__link">
         
   
   
@@ -1350,7 +1464,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/clickhouse/" class="md-nav__link">
+      <a href="../clickhouse/" class="md-nav__link">
         
   
   
@@ -1373,7 +1487,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session/mongodb/" class="md-nav__link">
+      <a href="../mongodb/" class="md-nav__link">
         
   
   
@@ -2432,29 +2546,24 @@
       
   
   
-    
   
   
-  
     
     
     
     
       
-        
-        
-      
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
         
           
-          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
             
   
   
@@ -2467,7 +2576,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             Blog
@@ -2481,7 +2590,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../trpcagentgo/" class="md-nav__link">
+      <a href="../../blog/trpcagentgo/" class="md-nav__link">
         
   
   
@@ -2504,7 +2613,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../summary/" class="md-nav__link">
+      <a href="../../blog/summary/" class="md-nav__link">
         
   
   
@@ -2524,32 +2633,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Seeing the Agent Runtime: Observability Design in tRPC-Agent-Go
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../blog/observability/" class="md-nav__link">
         
   
   
@@ -2560,140 +2647,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#1-why-traditional-service-observability-is-not-enough" class="md-nav__link">
-    <span class="md-ellipsis">
-      1. Why Traditional Service Observability Is Not Enough
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#2-runtime-observability-design-in-trpc-agent-go" class="md-nav__link">
-    <span class="md-ellipsis">
-      2. Runtime Observability Design in tRPC-Agent-Go
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#3-core-data-model-traces-metrics-and-semantic-attributes" class="md-nav__link">
-    <span class="md-ellipsis">
-      3. Core Data Model: Traces, Metrics, and Semantic Attributes
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="3. Core Data Model: Traces, Metrics, and Semantic Attributes">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#traces-turning-runtime-execution-into-a-tree" class="md-nav__link">
-    <span class="md-ellipsis">
-      Traces: Turning Runtime Execution into a Tree
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#metrics-turning-runtime-execution-into-governance-signals" class="md-nav__link">
-    <span class="md-ellipsis">
-      Metrics: Turning Runtime Execution into Governance Signals
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#semantic-attributes-one-data-model-for-different-backends" class="md-nav__link">
-    <span class="md-ellipsis">
-      Semantic Attributes: One Data Model for Different Backends
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#4-debugging-example-slow-time-to-first-token" class="md-nav__link">
-    <span class="md-ellipsis">
-      4. Debugging Example: Slow Time to First Token
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#5-data-pipeline-from-runtime-to-observability-backend" class="md-nav__link">
-    <span class="md-ellipsis">
-      5. Data Pipeline: From Runtime to Observability Backend
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#6-engineering-practices-for-stable-agent-telemetry" class="md-nav__link">
-    <span class="md-ellipsis">
-      6. Engineering Practices for Stable Agent Telemetry
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#7-tradeoffs-and-evolution" class="md-nav__link">
-    <span class="md-ellipsis">
-      7. Tradeoffs and Evolution
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#conclusion" class="md-nav__link">
-    <span class="md-ellipsis">
-      Conclusion
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#references" class="md-nav__link">
-    <span class="md-ellipsis">
-      References
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -2706,7 +2659,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../promptcache/" class="md-nav__link">
+      <a href="../../blog/promptcache/" class="md-nav__link">
         
   
   
@@ -2729,7 +2682,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../graphagent/" class="md-nav__link">
+      <a href="../../blog/graphagent/" class="md-nav__link">
         
   
   
@@ -2752,7 +2705,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../agui/" class="md-nav__link">
+      <a href="../../blog/agui/" class="md-nav__link">
         
   
   
@@ -2775,7 +2728,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../skill/" class="md-nav__link">
+      <a href="../../blog/skill/" class="md-nav__link">
         
   
   
@@ -2798,7 +2751,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../evaluation/" class="md-nav__link">
+      <a href="../../blog/evaluation/" class="md-nav__link">
         
   
   
@@ -2821,7 +2774,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../llmverifier/" class="md-nav__link">
+      <a href="../../blog/llmverifier/" class="md-nav__link">
         
   
   
@@ -2844,7 +2797,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../openclaw/" class="md-nav__link">
+      <a href="../../blog/openclaw/" class="md-nav__link">
         
   
   
@@ -2867,7 +2820,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../promptiter/" class="md-nav__link">
+      <a href="../../blog/promptiter/" class="md-nav__link">
         
   
   
@@ -2890,7 +2843,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../multiagent-boundaries/" class="md-nav__link">
+      <a href="../../blog/multiagent-boundaries/" class="md-nav__link">
         
   
   
@@ -2940,114 +2893,63 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#1-why-traditional-service-observability-is-not-enough" class="md-nav__link">
+  <a href="#running" class="md-nav__link">
     <span class="md-ellipsis">
-      1. Why Traditional Service Observability Is Not Enough
+      Running
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#2-runtime-observability-design-in-trpc-agent-go" class="md-nav__link">
+  <a href="#report" class="md-nav__link">
     <span class="md-ellipsis">
-      2. Runtime Observability Design in tRPC-Agent-Go
+      Report
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#3-core-data-model-traces-metrics-and-semantic-attributes" class="md-nav__link">
+  <a href="#compared-data" class="md-nav__link">
     <span class="md-ellipsis">
-      3. Core Data Model: Traces, Metrics, and Semantic Attributes
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="3. Core Data Model: Traces, Metrics, and Semantic Attributes">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#traces-turning-runtime-execution-into-a-tree" class="md-nav__link">
-    <span class="md-ellipsis">
-      Traces: Turning Runtime Execution into a Tree
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#metrics-turning-runtime-execution-into-governance-signals" class="md-nav__link">
-    <span class="md-ellipsis">
-      Metrics: Turning Runtime Execution into Governance Signals
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#semantic-attributes-one-data-model-for-different-backends" class="md-nav__link">
-    <span class="md-ellipsis">
-      Semantic Attributes: One Data Model for Different Backends
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#4-debugging-example-slow-time-to-first-token" class="md-nav__link">
-    <span class="md-ellipsis">
-      4. Debugging Example: Slow Time to First Token
+      Compared Data
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#5-data-pipeline-from-runtime-to-observability-backend" class="md-nav__link">
+  <a href="#summary-and-track-strategy" class="md-nav__link">
     <span class="md-ellipsis">
-      5. Data Pipeline: From Runtime to Observability Backend
+      Summary And Track Strategy
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#6-engineering-practices-for-stable-agent-telemetry" class="md-nav__link">
+  <a href="#anomaly-detection" class="md-nav__link">
     <span class="md-ellipsis">
-      6. Engineering Practices for Stable Agent Telemetry
+      Anomaly Detection
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#7-tradeoffs-and-evolution" class="md-nav__link">
+  <a href="#allowed_diff" class="md-nav__link">
     <span class="md-ellipsis">
-      7. Tradeoffs and Evolution
+      allowed_diff
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#conclusion" class="md-nav__link">
+  <a href="#extending-backends" class="md-nav__link">
     <span class="md-ellipsis">
-      Conclusion
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#references" class="md-nav__link">
-    <span class="md-ellipsis">
-      References
+      Extending Backends
     </span>
   </a>
   
@@ -3069,7 +2971,7 @@
 
 
   
-    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/blog/observability.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/trpc-group/trpc-agent-go/edit/main/docs/mkdocs/en/session/replay_consistency.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -3078,353 +2980,141 @@
     
       
     
-    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/blog/observability.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/trpc-group/trpc-agent-go/raw/main/docs/mkdocs/en/session/replay_consistency.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="seeing-the-agent-runtime-observability-design-in-trpc-agent-go">Seeing the Agent Runtime: Observability Design in tRPC-Agent-Go</h1>
-<blockquote>
-<p>This article focuses on observability in tRPC-Agent-Go. The framework does not try to build another observability platform. Instead, it maps important Agent runtime semantics to OpenTelemetry, so traces, metrics, and GenAI semantic attributes can be consumed by different backends.</p>
-</blockquote>
-<p>When LLM applications move from Chat to Agent, observability changes in a fundamental way.</p>
-<p>In a Chat application, one user request can often be approximated as "one entry request, one model call, and one model response." Traditional service observability can still answer many questions: request rate, latency, error rate, and whether the downstream model call failed.</p>
-<p>An Agent request is different. A single user-visible answer may contain multiple model calls, tool calls, multi-Agent handoffs, Graph or Workflow execution, streaming output, token usage, prompt cache effects, and additional reasoning after a tool result is returned. From the user's point of view, there is one answer. At runtime, there is an execution tree.</p>
-<p>Agent observability therefore needs to answer more than "was the API slow or failed?" It should answer:</p>
-<ul>
-<li>Which Agents, LLM calls, tools, and workflows did this request go through?</li>
-<li>Why did the model trigger a tool? What were the arguments and result?</li>
-<li>Which model call consumed most of the tokens?</li>
-<li>If the first token was slow, was the model slow, was a tool slow, or was orchestration slow?</li>
-<li>Did the error happen in the model, a tool, a workflow node, or the Agent boundary?</li>
-<li>If applications use different observability backends, does the Agent core need to change?</li>
-</ul>
-<p>tRPC-Agent-Go telemetry is designed around these questions. Its core decision is to turn Agent runtime semantics into stable OpenTelemetry data rather than to couple the framework to one monitoring product.</p>
-<p>A typical Agent trace can be understood as:</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
-<span class="normal"><a href="#__codelineno-0-2">2</a></span>
-<span class="normal"><a href="#__codelineno-0-3">3</a></span>
-<span class="normal"><a href="#__codelineno-0-4">4</a></span>
-<span class="normal"><a href="#__codelineno-0-5">5</a></span>
-<span class="normal"><a href="#__codelineno-0-6">6</a></span>
-<span class="normal"><a href="#__codelineno-0-7">7</a></span>
-<span class="normal"><a href="#__codelineno-0-8">8</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>invoke_agent customer_assistant
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>├── chat gpt-4o-mini
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3"></a>│   └── response with tool call
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4"></a>├── execute_tool search_order
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5"></a>│   └── tool result
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6"></a>├── chat gpt-4o-mini
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7"></a>│   └── final answer
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8"></a>└── workflow after_reply_summary
+<h1 id="replay-consistency">Replay Consistency</h1>
+<p>Replay consistency tests verify that the same session, memory, summary, and track operations produce equivalent persisted results across backends. The current lightweight matrix only covers <code>InMemory</code> and <code>SQLite</code>, so it does not require external services and is suitable for local development and PR checks.</p>
+<h2 id="running">Running</h2>
+<p>Run the targeted tests from the repository root:</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-0-1">1</a></span>
+<span class="normal"><a href="#__codelineno-0-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a><span class="nb">cd</span><span class="w"> </span><span class="nb">test</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a><span class="nv">CGO_ENABLED</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>./...<span class="w"> </span>-run<span class="w"> </span>ReplayConsistency<span class="w"> </span>-count<span class="o">=</span><span class="m">1</span>
 </span></code></pre></div></td></tr></table></div>
-<p>This tree decomposes one user request into runtime events that can be inspected, attributed, and aggregated.</p>
-<h2 id="1-why-traditional-service-observability-is-not-enough">1. Why Traditional Service Observability Is Not Enough</h2>
-<p>Traditional service observability usually looks at processes, endpoints, RPC methods, database access, and message queue consumers. These systems often have explicit inputs, outputs, and relatively stable call graphs. Agent runtimes add a layer of probabilistic decision-making.</p>
-<p>An Agent path is often not statically written in code. The model may decide whether to call a tool based on user input. The tool result may affect the next model call. A multi-Agent system may delegate work to another Agent or a subgraph. Graphs and workflows make parts of the path controllable, but each node may still contain model calls, tool calls, or streaming output.</p>
-<p>This creates three observability challenges.</p>
-<p>First, call chains are longer and more dynamic. One entry request may contain multiple LLM round trips, tool calls, and workflow node execution. If you only look at entry latency, you cannot tell where the time went.</p>
-<p>Second, cost and quality live inside the request. Token usage, prompt cache hits, completion tokens, finish reason, tool arguments, and tool results are not ordinary RPC metrics, but they directly affect cost, quality, and stability.</p>
-<p>Third, debugging needs semantic attribution. A failure may come from a model provider, a tool execution error, invalid tool arguments, a workflow node, or a framework-level cancellation or timeout. Without Agent semantics, a trace becomes a sequence of generic spans that cannot explain what the Agent actually did.</p>
-<p>Agent telemetry must therefore make Agent runtime objects first-class observability objects.</p>
-<h2 id="2-runtime-observability-design-in-trpc-agent-go">2. Runtime Observability Design in tRPC-Agent-Go</h2>
-<p>tRPC-Agent-Go telemetry does not introduce a separate observability platform. It turns runtime boundaries that the framework already understands into stable telemetry data.</p>
-<p>For long and dynamic call chains, the framework automatically instruments key Agent runtime boundaries. Applications do not need to manually create spans around every Agent, model, tool, or workflow call. tRPC-Agent-Go creates spans such as <code>invoke_agent</code>, <code>chat</code>, <code>execute_tool</code>, and <code>workflow</code> during the Agent lifecycle, so the dynamic path inside one entry request can be reconstructed as a readable tree.</p>
-<p>For cost and quality, the framework records both traces and metrics. Traces can show model name, streaming mode, input and output messages, finish reason, tool arguments, and tool results. Metrics can aggregate token usage, time to first token, operation duration, and output token speed.</p>
-<p>For semantic attribution, the telemetry model is organized around Agent concepts rather than only HTTP or RPC concepts. tRPC-Agent-Go uses attributes such as <code>gen_ai.operation.name</code>, <code>gen_ai.agent.name</code>, <code>gen_ai.tool.name</code>, and <code>gen_ai.workflow.name</code> to describe runtime context. When reading a trace, the operator can immediately tell whether a problem happened in a model call, tool execution, workflow node, or Agent invocation.</p>
-<p>For backend flexibility, the framework is based on OpenTelemetry. Traces, metrics, resources, exporters, and collectors reuse the OTel ecosystem. The core framework generates standardized telemetry data; applications decide whether to send it to Jaeger, Prometheus, Langfuse, or another OTel-compatible backend.</p>
-<p>In short, tRPC-Agent-Go telemetry is an Agent runtime semantic layer, not an observability product.</p>
-<h2 id="3-core-data-model-traces-metrics-and-semantic-attributes">3. Core Data Model: Traces, Metrics, and Semantic Attributes</h2>
-<p>This article focuses on two categories of telemetry data: traces and metrics.</p>
-<p>Traces describe what happened inside one request. Metrics aggregate many requests into data that can be monitored, alerted on, and analyzed over time.</p>
-<h3 id="traces-turning-runtime-execution-into-a-tree">Traces: Turning Runtime Execution into a Tree</h3>
-<p>Several span names are central in tRPC-Agent-Go:</p>
-<table>
-<thead>
-<tr>
-<th>Span</th>
-<th>Meaning</th>
-<th>Typical question</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>invoke_agent &lt;agent&gt;</code></td>
-<td>Lifecycle of one Agent invocation</td>
-<td>Which Agent was slow, failed, or consumed tokens?</td>
-</tr>
-<tr>
-<td><code>chat &lt;model&gt;</code></td>
-<td>One LLM call</td>
-<td>Which model was slow? What was TTFT? How many tokens were used?</td>
-</tr>
-<tr>
-<td><code>execute_tool &lt;tool&gt;</code></td>
-<td>One tool execution</td>
-<td>Which tool was called? What were the arguments and result? Did it fail?</td>
-</tr>
-<tr>
-<td><code>workflow &lt;name&gt;</code></td>
-<td>One Graph node or Workflow observable object</td>
-<td>Where did the workflow stall? What was the node latency or error?</td>
-</tr>
-</tbody>
-</table>
-<p>These spans are valuable because they come from Agent runtime semantics, not from infrastructure alone. A trace no longer shows only that an HTTP request called a downstream service. It shows that an Agent called a model, the model requested a tool, the tool returned data, and the model continued to generate the final answer.</p>
-<p>For a tool call, the <code>execute_tool</code> span records context such as tool name, description, arguments, result, and error type. For a model call, the <code>chat</code> span records model name, streaming mode, input and output messages, finish reason, token usage, and time to first token. For a workflow, a Graph node is adapted as a <code>workflow</code> observable object with workflow name, id, type, request, response, and error status.</p>
-<h3 id="metrics-turning-runtime-execution-into-governance-signals">Metrics: Turning Runtime Execution into Governance Signals</h3>
-<p>Traces are useful for single-request debugging. Production governance also needs aggregate metrics.</p>
-<table>
-<thead>
-<tr>
-<th>Metric</th>
-<th>Focus</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>trpc_agent_go.client.request_cnt</code></td>
-<td>Request count</td>
-</tr>
-<tr>
-<td><code>gen_ai.client.operation.duration</code></td>
-<td>Operation duration for LLM, Tool, Agent, Workflow, and related runtime objects</td>
-</tr>
-<tr>
-<td><code>gen_ai.client.token.usage</code></td>
-<td>Input, output, and cache-related token counts</td>
-</tr>
-<tr>
-<td><code>gen_ai.server.time_to_first_token</code></td>
-<td>Standard GenAI time to first token</td>
-</tr>
-<tr>
-<td><code>trpc_agent_go.client.time_to_first_token</code></td>
-<td>Framework-compatible TTFT, currently reported with the same value as the standard metric</td>
-</tr>
-<tr>
-<td><code>trpc_agent_go.client.time_per_output_token</code></td>
-<td>Average generation time per output token</td>
-</tr>
-<tr>
-<td><code>trpc_agent_go.client.output_token_per_time</code></td>
-<td>Output token throughput</td>
-</tr>
-<tr>
-<td><code>gen_ai.workflow.elapsed_time</code></td>
-<td>Relative elapsed time from <code>root_workflow.start</code> to <code>current_workflow.end</code></td>
-</tr>
-</tbody>
-</table>
-<p>There are three important details.</p>
-<p>First, tRPC-Agent-Go cares about both total duration and streaming experience. For a streaming Agent, user experience depends not only on final completion time but also on time to first token and subsequent token stability.</p>
-<p>Second, token usage is a cost signal, a performance signal, and a quality signal. A growing input token count may indicate poor context management. An unexpectedly long output may indicate prompt or tool-result drift. Cache-related tokens help evaluate whether prompt cache optimization is actually working.</p>
-<p>Third, workflow metrics distinguish node duration from relative elapsed time. <code>gen_ai.client.operation.duration</code> describes how long the current workflow or node ran. <code>gen_ai.workflow.elapsed_time</code> describes where the current observable object ended relative to the root workflow start. It is not the sum of all node durations.</p>
-<h3 id="semantic-attributes-one-data-model-for-different-backends">Semantic Attributes: One Data Model for Different Backends</h3>
-<p>Span and metric names are only part of the data model. Attributes are equally important. tRPC-Agent-Go uses OpenTelemetry GenAI semantic conventions and framework extension fields to describe context:</p>
-<table>
-<thead>
-<tr>
-<th>Attribute</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>gen_ai.operation.name</code></td>
-<td>Operation type such as <code>chat</code>, <code>execute_tool</code>, <code>invoke_agent</code>, or <code>workflow</code></td>
-</tr>
-<tr>
-<td><code>gen_ai.agent.name</code> / <code>gen_ai.agent.id</code></td>
-<td>Agent name and identifier</td>
-</tr>
-<tr>
-<td><code>gen_ai.conversation.id</code></td>
-<td>Conversation or session identifier</td>
-</tr>
-<tr>
-<td><code>gen_ai.request.model</code> / <code>gen_ai.response.model</code></td>
-<td>Requested and returned model</td>
-</tr>
-<tr>
-<td><code>gen_ai.input.messages.otel</code> / <code>gen_ai.output.messages.otel</code></td>
-<td>OTel-aligned input and output messages</td>
-</tr>
-<tr>
-<td><code>gen_ai.usage.input_tokens</code> / <code>gen_ai.usage.output_tokens</code></td>
-<td>Input and output token counts</td>
-</tr>
-<tr>
-<td><code>gen_ai.tool.name</code></td>
-<td>Tool name</td>
-</tr>
-<tr>
-<td><code>gen_ai.tool.call.arguments</code> / <code>gen_ai.tool.call.result</code></td>
-<td>Tool arguments and result</td>
-</tr>
-<tr>
-<td><code>gen_ai.workflow.name</code> / <code>gen_ai.workflow.type</code></td>
-<td>Workflow name and type</td>
-</tr>
-<tr>
-<td><code>error.type</code> / <code>error.message</code></td>
-<td>Error type and message</td>
-</tr>
-<tr>
-<td><code>trpc.go.agent.invocation_id</code></td>
-<td>Invocation identifier inside the framework</td>
-</tr>
-<tr>
-<td><code>trpc.go.agent.llm_request</code> / <code>trpc.go.agent.llm_response</code></td>
-<td>Framework-retained LLM request and response payloads</td>
-</tr>
-</tbody>
-</table>
-<p>These attributes make telemetry portable. Different backends may visualize them differently, but they can build views around the same runtime facts as long as they understand OTel/GenAI semantics or map these fields.</p>
-<p>This table also raises a production question: which payloads should be reported, and which should be redacted, truncated, or disabled? Prompts, responses, tool arguments, tool results, user identifiers, <code>llm_request</code>, and <code>llm_response</code> may contain sensitive data. Long attributes increase storage cost, and high-cardinality fields can harm metric aggregation. A production integration should define payload switches, redaction rules, attribute size limits, sampling, and cardinality governance together.</p>
-<h2 id="4-debugging-example-slow-time-to-first-token">4. Debugging Example: Slow Time to First Token</h2>
-<p>Suppose a user reports that a streaming answer takes a long time to start. The entry request can tell us that the request was slow, but Agent telemetry can break it down further.</p>
-<p>First, check the total duration and TTFT on <code>invoke_agent</code>. If <code>invoke_agent</code> is slow but the first <code>chat</code> span starts late, the issue is likely in Agent orchestration, a pre-processing workflow, or tool preparation.</p>
-<p>Second, expand the trace. If <code>execute_tool</code> or a <code>workflow</code> span takes most of the time, inspect tool arguments, tool results, workflow type, and error status. If the slow part is concentrated in <code>chat &lt;model&gt;</code>, inspect model name, input tokens, streaming mode, TTFT, and finish reason.</p>
-<p>Third, combine the trace with aggregate metrics. If only one request is slow, the trace is the primary tool. If one model's <code>gen_ai.server.time_to_first_token</code> rises across many requests, or <code>gen_ai.client.token.usage</code> shows growing input tokens, the issue may be a provider, context-management, or prompt-design problem.</p>
-<h2 id="5-data-pipeline-from-runtime-to-observability-backend">5. Data Pipeline: From Runtime to Observability Backend</h2>
-<p>tRPC-Agent-Go telemetry can be described in four layers:</p>
-<pre class="mermaid"><code>flowchart LR
-    AgentRuntime["Agent Runtime: Agent / LLM / Tool / Workflow"] --&gt; OpenTelemetryAPI["OpenTelemetry API: Tracer / Meter"]
-    OpenTelemetryAPI --&gt; Provider["Provider and Processor: Resource / SpanProcessor / MetricReader"]
-    Provider --&gt; Exporter["Exporter or Collector: OTLP HTTP / OTLP gRPC"]
-    Exporter --&gt; Backend["Backend: Langfuse / Jaeger / Prometheus / OTel-compatible systems"]</code></pre>
-<p>From an application point of view, integration usually starts by initializing a tracer provider and a meter provider. Tracing can be configured with endpoint, protocol, service name, resource attributes, headers, and related options. Metrics can be initialized through the tRPC-Agent-Go metric provider helpers. If no provider is initialized, OpenTelemetry's noop behavior avoids export overhead.</p>
-<p>From the framework point of view, the Agent runtime automatically creates spans, records attributes, and reports metrics at lifecycle boundaries. It creates <code>invoke_agent</code> when an Agent invocation starts, <code>chat</code> for model requests, <code>execute_tool</code> for tool execution, and <code>workflow</code> for Graph or Workflow nodes. These are natural boundaries known by the framework, so application code does not need to duplicate the instrumentation.</p>
-<p>From the platform point of view, the destination is not decided by the Agent core. Data can go through OTLP HTTP/gRPC to an OpenTelemetry Collector and fan out to several backends. It can also be exported directly through a backend-specific exporter or plugin. This layering keeps the tRPC-Agent-Go core stable while allowing observability deployment to evolve.</p>
-<h2 id="6-engineering-practices-for-stable-agent-telemetry">6. Engineering Practices for Stable Agent Telemetry</h2>
-<p>Many telemetry problems do not happen at the "can we create a span?" layer. They happen at the boundaries of large payloads, context propagation, metric definitions, backend limits, and adapter behavior. LLM requests, responses, tool arguments, workflow requests, and workflow responses can cause repeated <code>json.Marshal</code> work, memory spikes, or backend-side attribute truncation.</p>
-<table>
-<thead>
-<tr>
-<th>Engineering issue</th>
-<th>Practical direction</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Trace context may break across context clone or concurrent tool calls</td>
-<td>Preserve OpenTelemetry span context and cover TraceID, SpanID, and parent-child relationships in tests</td>
-</tr>
-<tr>
-<td>Large payload collection can cause repeated <code>json.Marshal</code> and heap spikes</td>
-<td>Use opt-in <code>SpanAttributePolicy</code> to control attributes by operation/key; prefer <code>Drop()</code> or unconditional <code>Omit()</code> when reducing memory is the goal</td>
-</tr>
-<tr>
-<td>OTel or backend attribute length limits may truncate large structured attributes</td>
-<td>Record truncation diagnostics at the exporter layer and detect signals such as value length, configured limit, and <code>unexpected EOF</code></td>
-</tr>
-<tr>
-<td>OTel GenAI semantics continue to evolve</td>
-<td>Keep stable semantics in the core and move backend differences into adapters</td>
-</tr>
-<tr>
-<td>TTFT, workflow elapsed time, and token usage can drift in definition</td>
-<td>Define from/to, success/failure/cache/retry semantics clearly and apply them consistently across <code>chat</code>, <code>invoke_agent</code>, and <code>workflow</code></td>
-</tr>
-<tr>
-<td>Deep Graph or Agent nesting can make traces hard to read</td>
-<td>Shape span topology around debugging needs</td>
-</tr>
-<tr>
-<td>Tool, error, or application dimensions can harm aggregation if unstable</td>
-<td>Stabilize tool ordering and tool call IDs, normalize error labels, and use controlled dimensions for application scenarios</td>
-</tr>
-</tbody>
-</table>
-<p>One subtle point is that "limiting attribute size" and "reducing memory" are different goals. <code>Drop()</code> and unconditional <code>Omit()</code> can short-circuit before <code>json.Marshal</code>, reducing heap pressure. <code>MaxBytes</code> plus <code>Omit()</code> or <code>Truncate()</code> controls the final attribute size written to spans, but JSON serialization may already have happened.</p>
-<p>The practical rule is: do not rely only on increasing backend attribute limits. First decide which attributes are worth collecting. Then handle backend limits, truncation diagnostics, and field mapping at the export or adapter layer.</p>
-<h2 id="7-tradeoffs-and-evolution">7. Tradeoffs and Evolution</h2>
-<p>Looking at other Agent systems helps explain the tRPC-Agent-Go choice. This is not a ranking. It is a comparison of who records runtime facts and who consumes the data.</p>
-<table>
-<thead>
-<tr>
-<th>Type</th>
-<th>Examples</th>
-<th>Observability focus</th>
-<th>Reference point for tRPC-Agent-Go</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Platform-closed Agent framework</td>
-<td>LangChain / LangGraph</td>
-<td>LangSmith provides trace, debug, evaluation, monitoring, and feedback loop</td>
-<td>Strong platform experience, but framework semantics and platform are more tightly coupled</td>
-</tr>
-<tr>
-<td>Standard-semantics Agent framework</td>
-<td>Google ADK</td>
-<td>Built-in logs, metrics, traces, and OpenTelemetry GenAI semantics</td>
-<td>Shows that Agent span standardization is becoming important</td>
-</tr>
-<tr>
-<td>Data-sovereignty Agent framework</td>
-<td>Agno</td>
-<td>Run history, audit logs, and tracing can be stored in user-owned databases or sent through OTel</td>
-<td>Local storage and external backend export are different tradeoffs</td>
-</tr>
-<tr>
-<td>Go ecosystem component framework</td>
-<td>CloudWeGo / Eino</td>
-<td>Callback, Handler, and RunInfo expose component and Graph lifecycle</td>
-<td>Flexible callbacks need a shared semantic model from users or platform adapters</td>
-</tr>
-<tr>
-<td>Code Agent product</td>
-<td>OpenAI Codex / Claude Code</td>
-<td>Tool approval, command execution, organization cost, audit, and human-Agent collaboration events</td>
-<td>Product event streams are different from business Agent service runtime telemetry</td>
-</tr>
-</tbody>
-</table>
-<p>tRPC-Agent-Go is closer to "standard semantics plus server-side framework instrumentation." It does not try to provide a monitoring UI, and it does not only expose callbacks. Instead, it records stable spans, metrics, and attributes directly in the Agent runtime.</p>
-<p>This keeps the framework lightweight and backend-agnostic, but it also means applications must define sensitive-data governance for production. Prompts, responses, tool arguments, tool results, and user identifiers may contain sensitive information. Whether to report them, how to redact them, and how to control attribute size and metric cardinality should be explicit deployment decisions.</p>
-<p>Future evolution can continue in several directions:</p>
+<p>You can also run the whole e2e module:</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nb">cd</span><span class="w"> </span><span class="nb">test</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="nv">CGO_ENABLED</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>./...<span class="w"> </span>-count<span class="o">=</span><span class="m">1</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The SQLite backend uses <code>github.com/mattn/go-sqlite3</code>, so CGO and a C compiler are required.</p>
+<h2 id="report">Report</h2>
+<p>The default report path is the repository root:</p>
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a>session_memory_summary_track_diff_report.json
+</span></code></pre></div></td></tr></table></div>
+<p>Override it with:</p>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nv">TRPC_AGENT_REPLAY_REPORT_PATH</span><span class="o">=</span>../replay-report.json<span class="w"> </span>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>./...<span class="w"> </span>-run<span class="w"> </span>ReplayConsistency<span class="w"> </span>-count<span class="o">=</span><span class="m">1</span>
+</span></code></pre></div></td></tr></table></div>
+<p>A healthy matrix should write:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="p">[]</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Each diff report entry contains:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-5-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-5-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-5-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-5-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-5-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-5-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-5-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-5-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-5-10">10</a></span>
+<span class="normal"><a href="#__codelineno-5-11">11</a></span>
+<span class="normal"><a href="#__codelineno-5-12">12</a></span>
+<span class="normal"><a href="#__codelineno-5-13">13</a></span>
+<span class="normal"><a href="#__codelineno-5-14">14</a></span>
+<span class="normal"><a href="#__codelineno-5-15">15</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="p">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">  </span><span class="nt">&quot;case&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;case_name&quot;</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="w">  </span><span class="nt">&quot;session_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;session-case_name&quot;</span><span class="p">,</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4"></a><span class="w">  </span><span class="nt">&quot;backend_a&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;in_memory&quot;</span><span class="p">,</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5"></a><span class="w">  </span><span class="nt">&quot;backend_b&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sqlite&quot;</span><span class="p">,</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6"></a><span class="w">  </span><span class="nt">&quot;section&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;summary&quot;</span><span class="p">,</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7"></a><span class="w">  </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;$.summary[\&quot;root/tools/weather\&quot;].summary&quot;</span><span class="p">,</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8"></a><span class="w">  </span><span class="nt">&quot;left&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;left value&quot;</span><span class="p">,</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9"></a><span class="w">  </span><span class="nt">&quot;right&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;right value&quot;</span><span class="p">,</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10"></a><span class="w">  </span><span class="nt">&quot;allowed&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11"></a><span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span><span class="p">,</span>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12"></a><span class="w">  </span><span class="nt">&quot;context&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13"></a><span class="w">    </span><span class="nt">&quot;summary_filter_key&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;root/tools/weather&quot;</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>The <code>context</code> object carries section-specific location data such as <code>event_index</code>, <code>summary_filter_key</code>, <code>memory_key</code>, <code>left_memory_id</code>, <code>right_memory_id</code>, <code>track_name</code>, and <code>track_event_index</code>.</p>
+<h2 id="compared-data">Compared Data</h2>
+<p>Snapshots include these sections:</p>
 <ul>
-<li>Track OpenTelemetry GenAI semantic convention changes and reduce drift between custom and standard fields.</li>
-<li>Add more Agent-level metrics, such as tool success rate, Agent step count, Graph node retry count, and recovery metrics.</li>
-<li>Refine streaming statistics around reasoning, first token, useful content token, and final completion time.</li>
-<li>Strengthen sensitive-data governance through payload switches, redaction, attribute size limits, and cardinality controls.</li>
-<li>Support multi-backend routing through collectors or plugins so the same telemetry can feed both LLMOps and general APM backends.</li>
+<li><code>session</code>: session ID, app, and user ID</li>
+<li><code>events</code>: messages, tool calls, tool responses, branch, filter key, tag, state delta, extensions, and actions</li>
+<li><code>state</code>: visible merged session/app/user/temp state</li>
+<li><code>memory</code>: content, topics, and metadata; raw memory IDs are only used for report context</li>
+<li><code>summary</code>: <code>Session.Summaries[filterKey]</code>, summary text, topics, boundary metadata, and <code>GetSessionSummaryText</code></li>
+<li><code>tracks</code>: track name, event order, payload, and timestamp</li>
 </ul>
-<h2 id="conclusion">Conclusion</h2>
-<p>Agent observability is not just about adding more logs or wrapping a model request in a span.</p>
-<p>The important part is to make the Agent runtime visible: how one request enters an Agent, calls a model, triggers tools, moves through Graph or Workflow nodes, consumes tokens, waits for the first token, fails, and finally gets consumed by different observability backends.</p>
-<p>tRPC-Agent-Go first records these runtime semantics and then connects them to different backends through OpenTelemetry. It does not put an observability platform into the framework core, and it does not leave the entire Agent execution process for applications to instrument manually.</p>
-<p>That is the meaning of seeing the Agent runtime: not a prettier trace page, but Agent services that are explainable, debuggable, measurable, and governable in production.</p>
-<h2 id="references">References</h2>
+<p>Generated fields such as event IDs, response IDs, timestamps, and backend-generated memory IDs are normalized. Business-field differences are not allowed by default.</p>
+<h2 id="summary-and-track-strategy">Summary And Track Strategy</h2>
+<p>The Go version uses native session summary semantics. It does not create Python-style summary events and does not compare historical summary events.</p>
+<p>Summary comparison covers:</p>
 <ul>
-<li><a href="https://github.com/trpc-group/trpc-agent-go">tRPC-Agent-Go GitHub</a></li>
-<li><a href="https://trpc-group.github.io/trpc-agent-go/">tRPC-Agent-Go documentation site</a></li>
-<li><a href="https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/en/observability.md">tRPC-Agent-Go Observability documentation</a></li>
-<li><a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/telemetry/langfuse">tRPC-Agent-Go Langfuse example</a></li>
-<li><a href="https://opentelemetry.io/docs/">OpenTelemetry Documentation</a></li>
-<li><a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">OpenTelemetry GenAI Semantic Conventions</a></li>
-<li><a href="https://docs.langchain.com/langsmith/observability">LangSmith Observability</a></li>
-<li><a href="https://docs.langchain.com/oss/python/langgraph/observability">LangGraph Observability</a></li>
-<li><a href="https://docs.langchain.com/langsmith/trace-with-opentelemetry">LangSmith Trace with OpenTelemetry</a></li>
-<li><a href="https://adk.dev/observability/">Google ADK Observability</a></li>
-<li><a href="https://adk.dev/observability/traces/">Google ADK Traces</a></li>
-<li><a href="https://adk.dev/observability/metrics/">Google ADK Metrics</a></li>
-<li><a href="https://docs.cloud.google.com/stackdriver/docs/instrumentation/ai-agent-adk">Google Cloud: Instrument ADK applications with OpenTelemetry</a></li>
-<li><a href="https://docs.agno.com/tracing/overview">Agno Tracing</a></li>
-<li><a href="https://docs.agno.com/features/observability">Agno Agent Observability</a></li>
-<li><a href="https://docs.agno.com/observability/overview">Agno OpenTelemetry Observability</a></li>
-<li><a href="https://www.cloudwego.io/docs/eino/core_modules/chain_and_graph_orchestration/callback_manual/">CloudWeGo Eino Callback Manual</a></li>
-<li><a href="https://www.cloudwego.io/docs/eino/quick_start/chapter_06_callback_and_trace/">CloudWeGo Eino Callback and Trace</a></li>
-<li><a href="https://www.cloudwego.io/docs/eino/overview/eino_open_source/">CloudWeGo Eino Open Source Overview</a></li>
-<li><a href="https://developers.openai.com/codex/config-advanced">OpenAI Codex Advanced Configuration: Observability and Telemetry</a></li>
-<li><a href="https://code.claude.com/docs/en/monitoring-usage">Claude Code Monitoring</a></li>
-<li><a href="https://code.claude.com/docs/en/agent-sdk/observability">Claude Code Agent SDK Observability</a></li>
-<li><a href="https://langfuse.com/integrations/native/opentelemetry">Langfuse OpenTelemetry Integration</a></li>
-<li><a href="https://langfuse.com/self-hosting">Langfuse Self Hosting</a></li>
+<li>full summary: <code>session.SummaryFilterKeyAllContents</code></li>
+<li>filter-key summaries such as <code>root/tools/weather</code></li>
+<li>summary overwrite/update</li>
+<li><code>SummaryBoundary</code> version, filter key, and cutoff</li>
+<li><code>GetSessionSummaryText</code> results</li>
+</ul>
+<p>Track comparison covers:</p>
+<ul>
+<li>track name</li>
+<li>event order within each track</li>
+<li>canonical JSON payload</li>
+<li>fixed timestamp</li>
+</ul>
+<p>Note that <code>AppendTrackEvent</code> maintains <code>state["tracks"]</code>. When debugging track diffs, also check the track index in the state section.</p>
+<h2 id="anomaly-detection">Anomaly Detection</h2>
+<p>The test harness includes three kinds of anomaly injection:</p>
+<ul>
+<li>snapshot mutation: partial event loss, summary loss, wrong session attribution, wrong summary filter key, track payload drift, and track order drift</li>
+<li>SQLite/public API injection: duplicate event, state pollution, memory pollution, and summary overwrite</li>
+<li>SQLite/storage injection: a duplicate memory row that simulates a backend retry bug or duplicate retry effect and verifies that it is reported as an unallowed memory diff</li>
+</ul>
+<p>Injected anomalies must produce unallowed diffs by default. The normal replay matrix must have zero false positives.</p>
+<h2 id="allowed_diff">allowed_diff</h2>
+<p><code>allowed_diff</code> is only for explicitly recorded known acceptable differences. Business-field differences are not allowed by default.</p>
+<p>Example:</p>
+<div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span>
+<span class="normal"><a href="#__codelineno-6-2">2</a></span>
+<span class="normal"><a href="#__codelineno-6-3">3</a></span>
+<span class="normal"><a href="#__codelineno-6-4">4</a></span>
+<span class="normal"><a href="#__codelineno-6-5">5</a></span>
+<span class="normal"><a href="#__codelineno-6-6">6</a></span>
+<span class="normal"><a href="#__codelineno-6-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;section&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;memory&quot;</span><span class="p">,</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="w">  </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;$.memory[*].content&quot;</span><span class="p">,</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a><span class="w">  </span><span class="nt">&quot;backend_a&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;in_memory&quot;</span><span class="p">,</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="w">  </span><span class="nt">&quot;backend_b&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;sqlite&quot;</span><span class="p">,</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;known backend-specific normalization gap&quot;</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>Rules:</p>
+<ul>
+<li><code>section</code> is required and cannot be empty or <code>*</code></li>
+<li><code>path</code> is required and cannot be empty or a single <code>*</code></li>
+<li><code>backend_a</code> and <code>backend_b</code> are required and cannot be empty or <code>*</code></li>
+<li><code>reason</code> is required and cannot be blank</li>
+<li>backend pairs match in either order</li>
+<li><code>path</code> supports partial globs such as <code>$.memory[*].content</code></li>
+</ul>
+<p>ID and timestamp differences should be fixed through normalization or runner changes, not allowed with <code>allowed_diff</code>.</p>
+<h2 id="extending-backends">Extending Backends</h2>
+<p>The current runnable matrix only includes <code>InMemory</code> and <code>SQLite</code>. External backends such as Redis, PostgreSQL, MySQL, and ClickHouse are deferred and unsupported in the lightweight matrix. Future integrations should use an env-gated backend factory so default tests do not depend on external services.</p>
+<p>When adding a backend:</p>
+<ul>
+<li>keep default local tests free of external-service dependencies</li>
+<li>normalize generated ID and timestamp fields</li>
+<li>preserve summary and track semantics across backends</li>
+<li>prove new backend differences are precisely locatable through anomaly tests before considering <code>allowed_diff</code></li>
 </ul>
 
 
@@ -3448,7 +3138,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 29, 2026 07:35:06 UTC">2026-06-29 07:35:06</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 5, 2026 16:46:31 UTC">2026-07-05 16:46:31</span>
   </span>
 
     
@@ -3458,7 +3148,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 29, 2026 07:35:06 UTC">2026-06-29 07:35:06</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 5, 2026 16:46:31 UTC">2026-07-05 16:46:31</span>
   </span>
 
     
@@ -3539,7 +3229,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../summary/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Context Management Design and Evaluation for Long-Running Agents">
+          <a href="../summary/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Session Summary">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -3549,20 +3239,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Context Management Design and Evaluation for Long-Running Agents
+                Session Summary
               </div>
             </div>
           </a>
         
         
           
-          <a href="../promptcache/" class="md-footer__link md-footer__link--next" aria-label="Next: Reducing Agent Token Cost: Prompt Cache Engineering in tRPC-Agent-Go">
+          <a href="../inmemory/" class="md-footer__link md-footer__link--next" aria-label="Next: Memory Session">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Reducing Agent Token Cost: Prompt Cache Engineering in tRPC-Agent-Go
+                Memory Session
               </div>
             </div>
             <div class="md-footer__button md-icon">
