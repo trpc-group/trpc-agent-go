@@ -1366,14 +1366,10 @@ func sessionEventsSnapshot(sess *session.Session) []event.Event {
 	if sess == nil {
 		return nil
 	}
-	sess.EventMu.RLock()
-	defer sess.EventMu.RUnlock()
-	events := make([]event.Event, 0, len(sess.Events))
-	for _, evt := range sess.Events {
-		if sess.IsEventMasked(evt.ID) {
-			continue
-		}
-		events = append(events, cloneEventForContentSnapshot(evt))
+	visible := sess.GetVisibleEvents()
+	events := make([]event.Event, len(visible))
+	for i, evt := range visible {
+		events[i] = cloneEventForContentSnapshot(evt)
 	}
 	return events
 }

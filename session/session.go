@@ -92,6 +92,8 @@ type Session struct {
 	// paradigm's deleteContext: the model can prune processed information
 	// from its visible context while retaining notes and summaries.
 	maskedEventIDs map[string]bool `json:"-"`
+	// maskedEventsHydrated tracks whether maskedEventIDs was loaded from State.
+	maskedEventsHydrated bool `json:"-"`
 
 	stateMu sync.RWMutex `json:"-"` // stateMu is the read-write mutex for State.
 }
@@ -119,6 +121,7 @@ func (sess *Session) Clone() *Session {
 			copiedSess.maskedEventIDs[id] = v
 		}
 	}
+	copiedSess.maskedEventsHydrated = sess.maskedEventsHydrated
 	sess.EventMu.RUnlock()
 
 	// Copy track events.

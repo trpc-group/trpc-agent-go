@@ -219,9 +219,6 @@ func TestIsEventMasked(t *testing.T) {
 	}
 	sess.MaskEvents("e1", "e3")
 
-	sess.EventMu.RLock()
-	defer sess.EventMu.RUnlock()
-
 	tests := []struct {
 		id   string
 		want bool
@@ -239,5 +236,27 @@ func TestIsEventMasked(t *testing.T) {
 				t.Fatalf("IsEventMasked(%q) = %v, want %v", tt.id, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestHydrateMaskedEventsFromState(t *testing.T) {
+	sess := NewSession("app", "user", "sess-hydrate")
+	sess.Events = []event.Event{
+		newTestEvent("e1"),
+		newTestEvent("e2"),
+	}
+	payload, err := marshalMaskedEventIDs([]string{"e1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.SetState(MaskedEventsStateKey, payload)
+
+	fresh := NewSession("app", "user", "sess-hydrate-fresh")
+	fresh.Events = sess.Events
+	fresh.SetState(MaskedEventsStateKey, payload)
+
+	visible := fresh.GetVisibleEvents()
+	if len(visible) != 1 || visible[0].ID != "e2" {
+		t.Fatalf("expected only e2 visible after hydration, got %v", visible)
 	}
 }

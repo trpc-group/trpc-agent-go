@@ -58,14 +58,23 @@ func sessionFromContext(ctx context.Context) *session.Session {
 func NewDeleteContextTool() tool.CallableTool {
 	return function.NewFunctionTool(
 		func(ctx context.Context, input DeleteContextInput) (DeleteContextOutput, error) {
-			sess := sessionFromContext(ctx)
-			if sess == nil {
+			inv, ok := agent.InvocationFromContext(ctx)
+			if !ok || inv == nil || inv.Session == nil {
 				return DeleteContextOutput{
 					Message: "no session available",
 				}, nil
 			}
 
-			masked := sess.MaskEvents(input.EventIDs...)
+			masked := inv.Session.MaskEvents(input.EventIDs...)
+			key := session.Key{
+				AppName:   inv.Session.AppName,
+				UserID:    inv.Session.UserID,
+				SessionID: inv.Session.ID,
+			}
+			if err := inv.Session.PersistMaskedEvents(ctx, inv.SessionService, key); err != nil {
+				return DeleteContextOutput{}, fmt.Errorf("persist masked events: %w", err)
+			}
+
 			return DeleteContextOutput{
 				Masked:  masked,
 				Message: fmt.Sprintf("masked %d events from context", masked),
@@ -152,8 +161,6 @@ func NewNoteTool() tool.CallableTool {
 			keyStr := noteKeyPrefix + input.Key
 			byteContent := []byte(input.Content)
 
-			inv.Session.SetState(keyStr, byteContent)
-
 			if inv.SessionService != nil {
 				key := session.Key{
 					AppName:   inv.Session.AppName,
@@ -164,9 +171,11 @@ func NewNoteTool() tool.CallableTool {
 					keyStr: byteContent,
 				})
 				if err != nil {
-					return NoteOutput{Message: fmt.Sprintf("failed to persist note: %v", err)}, nil
+					return NoteOutput{}, fmt.Errorf("persist note: %w", err)
 				}
 			}
+
+			inv.Session.SetState(keyStr, byteContent)
 
 			return NoteOutput{
 				Message: fmt.Sprintf("note '%s' saved (%d bytes)", input.Key, len(input.Content)),
@@ -284,10 +293,11 @@ func notesIndexPreview(content string) string {
 		return ""
 	}
 	flat := strings.Join(strings.Fields(trimmed), " ")
-	if len(flat) <= notesIndexPreviewMaxChars {
+	runes := []rune(flat)
+	if len(runes) <= notesIndexPreviewMaxChars {
 		return flat
 	}
-	return flat[:notesIndexPreviewMaxChars] + "…"
+	return string(runes[:notesIndexPreviewMaxChars]) + "…"
 }
 
 // NewNotesIndexTool creates a tool that returns a lightweight index of all

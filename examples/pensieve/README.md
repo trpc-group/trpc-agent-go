@@ -36,7 +36,7 @@ go run . -model deepseek-v4-flash
 
 ## Architecture
 
-```
+```text
 User → Runner → LLMAgent → tool/context (Pensieve tools) → Session (masking + note state)
 ```
 
