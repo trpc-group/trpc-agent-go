@@ -78,7 +78,8 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 		}
 		return fallback, nil
 	}
-	if isSERPRouteBlocker(err, fallbackErr) {
+	if isSERPRouteBlocker(err, fallbackErr) &&
+		!isDefaultSERPBaseURL(backend, baseURL) {
 		return searchResponse{
 			Query:   req.Query,
 			Results: []resultItem{},
@@ -89,17 +90,35 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 				"provider instead of immediately retrying DuckDuckGo",
 		}, nil
 	}
+	apiFallback, apiFallbackErr := t.searchAPIFallbackAfterSERPFailure(
+		ctx,
+		req,
+		backend,
+		baseURL,
+	)
+	if apiFallbackErr == nil {
+		if strings.TrimSpace(apiFallback.Summary) != "" {
+			apiFallback.Summary += fmt.Sprintf(
+				" (fallback from %s/%s after SERP failure)",
+				backend,
+				fallbackBackend,
+			)
+		}
+		return apiFallback, nil
+	}
 	result.Summary = fmt.Sprintf(
-		"%s; fallback %s failed: %v",
+		"%s; fallback %s failed: %v; api fallback failed: %v",
 		result.Summary,
 		fallbackBackend,
 		fallbackErr,
+		apiFallbackErr,
 	)
 	return result, fmt.Errorf(
-		"%w; fallback %s failed: %w",
+		"%w; fallback %s failed: %w; api fallback failed: %w",
 		err,
 		fallbackBackend,
 		fallbackErr,
+		apiFallbackErr,
 	)
 }
 
@@ -253,6 +272,32 @@ func fallbackSERPBackend(backend string) string {
 	}
 }
 
+func (t *ddgTool) searchAPIFallbackAfterSERPFailure(
+	ctx context.Context,
+	req searchRequest,
+	backend string,
+	baseURL string,
+) (searchResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return searchResponse{}, err
+	}
+	if !isDefaultSERPBaseURL(backend, baseURL) {
+		return searchResponse{}, fmt.Errorf(
+			"api fallback is disabled for non-default %s base URL %q",
+			backend,
+			baseURL,
+		)
+	}
+	result, err := t.searchAPIWithDefaultBaseURL(req)
+	if err != nil {
+		return searchResponse{}, err
+	}
+	if len(result.Results) == 0 {
+		return searchResponse{}, fmt.Errorf("api fallback returned no results")
+	}
+	return result, nil
+}
+
 func fallbackSERPBaseURL(backend string, baseURL string) string {
 	fallbackBackend := fallbackSERPBackend(backend)
 	if fallbackBackend == "" {
@@ -279,6 +324,11 @@ func fallbackSERPBaseURL(backend string, baseURL string) string {
 		return u.String()
 	}
 	return ""
+}
+
+func isDefaultSERPBaseURL(backend string, baseURL string) bool {
+	baseURL = strings.TrimSpace(baseURL)
+	return baseURL == "" || baseURL == defaultBaseURLForBackend(backend)
 }
 
 func apiFallbackSERPBaseURL(apiBaseURL string) string {

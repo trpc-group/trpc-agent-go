@@ -334,6 +334,15 @@ func (t *ddgTool) searchAPIWithSERPFallback(
 	)
 }
 
+func (t *ddgTool) searchAPIWithDefaultBaseURL(req searchRequest) (searchResponse, error) {
+	apiTool := *t
+	apiTool.baseURL = defaultBaseURL
+	apiTool.backend = backendAPI
+	apiTool.userAgent = defaultUserAgent
+	apiTool.client = client.New(defaultBaseURL, apiTool.userAgent, apiTool.httpClient)
+	return apiTool.searchAPI(req)
+}
+
 func (t *ddgTool) searchAPI(req searchRequest) (searchResponse, error) {
 	// Perform the search.
 	response, err := t.client.Search(req.Query)

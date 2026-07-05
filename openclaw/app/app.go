@@ -262,6 +262,28 @@ const (
 		"prior knowledge, or partial memory when a matching " +
 		"skill exists. Load `SKILL.md` first, then load " +
 		"only the extra docs you still need."
+	openClawShellSharedGuidance = "Do not use exec_command for public web search " +
+		"or static page fetches when duckduckgo_search or web_fetch is " +
+		"present; reserve shell network commands for installed media " +
+		"tools, deterministic data processing, or sites not covered by " +
+		"a dedicated web tool. Do not use host system package managers " +
+		"such as apt, yum, dnf, apk, pacman, zypper, or brew from chat; " +
+		"use preconfigured dependencies or ask for an explicit setup " +
+		"flow. "
+	openClawHostShellGuidance = "For other general local shell work, " +
+		"use exec_command. " +
+		openClawShellSharedGuidance +
+		"For interactive follow-up input, use write_stdin and " +
+		"kill_session when needed. Use message to send to the current " +
+		"chat or an explicit target. "
+	openClawSandboxShellGuidance = "For other general local shell work, " +
+		"use exec_command. In sandbox mode, exec_command only supports " +
+		"foreground non-interactive commands; write_stdin, kill_session, " +
+		"background execution, TTY allocation, and session continuation " +
+		"are unavailable. " +
+		openClawShellSharedGuidance +
+		"Use message to send to the current chat or an explicit " +
+		"target. "
 	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
 		"and spreadsheet uploads already in the chat, prefer " +
 		"read_document or read_spreadsheet before falling back " +
@@ -273,14 +295,8 @@ const (
 		"available in the current session. " +
 		"Do not call exec_command just to print OPENCLAW_* upload " +
 		"vars or inspect recent upload metadata when a matching " +
-		"chat file is already available. For other general local " +
-		"shell work, use exec_command. Do not use host system package " +
-		"managers such as apt, yum, dnf, apk, pacman, zypper, or brew " +
-		"from chat; use preconfigured dependencies or ask for an " +
-		"explicit setup flow. For interactive follow-up " +
-		"input, use " +
-		"write_stdin and kill_session when needed. Use message " +
-		"to send to the current chat or an explicit target. " +
+		"chat file is already available. " +
+		openClawHostShellGuidance +
 		"When a web search tool such as duckduckgo_search is " +
 		"present, use it for general web search before using " +
 		"browser automation or web_fetch against search engine " +
@@ -1388,6 +1404,7 @@ func NewRuntimeWithOptions(
 			),
 		),
 	)
+	gwOpts = appendModelCompatibilityGatewayRunOptions(gwOpts, opts)
 	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
@@ -2011,6 +2028,7 @@ func run(
 			),
 		),
 	)
+	gwOpts = appendModelCompatibilityGatewayRunOptions(gwOpts, opts)
 	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
@@ -2885,6 +2903,10 @@ func newAgent(
 		cfg.StateDir,
 	)
 	registerDynamicAgentBlockerCallback(callbacks)
+	registerToolArgumentGuardCallback(
+		callbacks,
+		os.Getenv(envBlockedToolArgumentSubstrings),
+	)
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 
 	exec := cfg.codeExecutor
@@ -3115,20 +3137,8 @@ func buildOpenClawToolingGuidance(cfg agentConfig) string {
 	}
 	guidance = strings.Replace(
 		guidance,
-		"For other general local shell work, use exec_command. "+
-			"Do not use host system package managers such as apt, yum, dnf, "+
-			"apk, pacman, zypper, or brew from chat; use preconfigured "+
-			"dependencies or ask for an explicit setup flow. For interactive "+
-			"follow-up input, use write_stdin and kill_session when needed. Use message "+
-			"to send to the current chat or an explicit target. ",
-		"For other general local shell work, use exec_command. In sandbox mode, "+
-			"exec_command only supports foreground non-interactive commands; "+
-			"write_stdin, kill_session, background execution, TTY allocation, "+
-			"and session continuation are unavailable. Do not use host system "+
-			"package managers such as apt, yum, dnf, apk, pacman, zypper, "+
-			"or brew from chat; use preconfigured dependencies or ask for an "+
-			"explicit setup flow. Use message to send to "+
-			"the current chat or an explicit target. ",
+		openClawHostShellGuidance,
+		openClawSandboxShellGuidance,
 		1,
 	)
 	guidance = strings.Replace(
@@ -3965,6 +3975,40 @@ func parseOpenAIVariant(
 		return variant, nil
 	default:
 		return "", fmt.Errorf("unsupported openai variant: %s", raw)
+	}
+}
+
+func appendModelCompatibilityGatewayRunOptions(
+	opts []gateway.Option,
+	runOpts runOptions,
+) []gateway.Option {
+	staticRunOpts := modelCompatibilityRunOptions(runOpts)
+	if len(staticRunOpts) == 0 {
+		return opts
+	}
+	return append(
+		opts,
+		gateway.WithRunOptionResolver(func(
+			ctx context.Context,
+			_ gateway.RunOptionInput,
+		) (context.Context, []agent.RunOption, error) {
+			return ctx, append([]agent.RunOption(nil), staticRunOpts...), nil
+		}),
+	)
+}
+
+func modelCompatibilityRunOptions(
+	opts runOptions,
+) []agent.RunOption {
+	if strings.TrimSpace(opts.ModelMode) != modeOpenAI {
+		return nil
+	}
+	variant, err := parseOpenAIVariant(opts.OpenAIVariant, opts.OpenAIBaseURL)
+	if err != nil || variant != openai.VariantGLM {
+		return nil
+	}
+	return []agent.RunOption{
+		agent.WithToolCallArgumentsJSONRepairEnabled(true),
 	}
 }
 

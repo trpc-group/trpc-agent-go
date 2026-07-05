@@ -12,6 +12,9 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -115,6 +118,61 @@ func TestNewDuckDuckGoTools_InvalidBackend(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "backend must be api, html, or lite")
+}
+
+func TestNewImageInspectTools_RequiresFileScope(t *testing.T) {
+	t.Parallel()
+
+	_, err := newImageInspectTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{},
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires allowed_dirs")
+}
+
+func TestNewImageInspectTools_InspectImage(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.png")
+	img := image.NewRGBA(image.Rect(0, 0, 12, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 12; x++ {
+			img.Set(x, y, color.White)
+		}
+	}
+	file, err := os.Create(path)
+	require.NoError(t, err)
+	require.NoError(t, png.Encode(file, img))
+	require.NoError(t, file.Close())
+
+	cfg := yamlNode(t, strings.Join([]string{
+		`allowed_dirs:`,
+		`  - "` + dir + `"`,
+		`timeout: "100ms"`,
+		"",
+	}, "\n"))
+	tools, err := newImageInspectTools(
+		registry.ToolProviderDeps{},
+		registry.PluginSpec{Config: cfg},
+	)
+	require.NoError(t, err)
+	require.Len(t, tools, 1)
+	require.Equal(t, "image_inspect", tools[0].Declaration().Name)
+
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+	raw, err := callable.Call(
+		context.Background(),
+		[]byte(`{"path":`+strconv.Quote(path)+`,"ocr":false}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"format":"png"`)
+	require.Contains(t, string(data), `"width":12`)
+	require.Contains(t, string(data), `"height":8`)
 }
 
 func TestNewBrowserTools_Succeeds(t *testing.T) {
