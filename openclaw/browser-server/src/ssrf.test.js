@@ -14,6 +14,18 @@ test("validateNavigationURL blocks loopback by default", async () => {
   );
 });
 
+test("createNavigationPolicy accepts common boolean env values", () => {
+  const policy = createNavigationPolicy({
+    OPENCLAW_BROWSER_ALLOW_LOOPBACK: "1",
+    OPENCLAW_BROWSER_ALLOW_PRIVATE_NETWORKS: "yes",
+    OPENCLAW_BROWSER_ALLOW_FILE_URLS: "on"
+  });
+
+  assert.equal(policy.allowLoopback, true);
+  assert.equal(policy.allowPrivateNetworks, true);
+  assert.equal(policy.allowFileURLs, true);
+});
+
 test("validateNavigationURL allows allowed domain", async () => {
   const policy = createNavigationPolicy({
     OPENCLAW_BROWSER_ALLOWED_DOMAINS: "example.com"
