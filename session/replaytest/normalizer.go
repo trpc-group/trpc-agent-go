@@ -10,11 +10,11 @@ package replaytest
 
 import (
 	"encoding/json"
+	"math"
 	"sort"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -111,7 +111,7 @@ func normalizeMemories(memories []*memory.Entry) []NormalizedMemory {
 		nm := NormalizedMemory{
 			Content: m.Memory.Memory,
 			Topics:  append([]string{}, topics...),
-			Score:   m.Score,
+			Score:   math.Round(m.Score*1e6) / 1e6,
 		}
 		result = append(result, nm)
 	}
@@ -179,6 +179,3 @@ func normalizeJSONBytes(b []byte) string {
 	}
 	return string(out)
 }
-
-// unused model import is intentional — used in doc references.
-var _ = model.RoleUser

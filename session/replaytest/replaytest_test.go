@@ -869,6 +869,50 @@ func TestBuildEventWithToolCalls(t *testing.T) {
 	assert.Equal(t, "search", evt.Response.Choices[0].Message.ToolCalls[0].Function.Name)
 }
 
+func TestCompareMemoriesDuplicateContentMismatch(t *testing.T) {
+	// Left has two memories with the same content "dupe" but right has
+	// only one. The comparator should flag the extra left entry.
+	left := Snapshot{
+		SessionID: "s1",
+		Memories: []NormalizedMemory{
+			{Content: "dupe", Topics: []string{"a"}},
+			{Content: "dupe", Topics: []string{"a"}},
+			{Content: "unique_left", Topics: []string{"b"}},
+		},
+	}
+	right := Snapshot{
+		SessionID: "s1",
+		Memories: []NormalizedMemory{
+			{Content: "dupe", Topics: []string{"a"}},
+			{Content: "unique_right", Topics: []string{"c"}},
+		},
+	}
+	diffs := CompareSnapshots(left, right, "a", "b", nil)
+
+	// Should detect: one unmatched left "dupe", one missing
+	// "unique_left", and one extra right "unique_right".
+	foundUnmatchedDupe := false
+	foundMissingUniqueLeft := false
+	foundExtraUniqueRight := false
+	for _, d := range diffs {
+		if d.FieldPath == "memories[1]" && d.MemoryID == "dupe" && d.ValueB == nil {
+			foundUnmatchedDupe = true
+		}
+		if d.MemoryID == "unique_left" && d.ValueB == nil {
+			foundMissingUniqueLeft = true
+		}
+		if d.MemoryID == "unique_right" && d.ValueA == nil {
+			foundExtraUniqueRight = true
+		}
+	}
+	assert.True(t, foundUnmatchedDupe,
+		"second duplicate 'dupe' in left must be flagged as unmatched")
+	assert.True(t, foundMissingUniqueLeft,
+		"unique_left missing from right must be detected")
+	assert.True(t, foundExtraUniqueRight,
+		"unique_right extra in right must be detected")
+}
+
 // Compile-time interface compliance checks.
 var _ session.Service = (*sessioninmemory.SessionService)(nil)
 var _ memory.Service = (*memoryinmemory.MemoryService)(nil)

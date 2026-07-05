@@ -10,6 +10,7 @@ package replaytest
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 )
@@ -184,20 +185,46 @@ func compareEvents(left, right Snapshot) []FieldDiff {
 // compareMemories matches memory entries by content identity rather
 // than positional index, so that different backends returning the
 // same entries in a different order are not falsely reported as
-// different. Unmatched entries (missing or extra) are flagged.
+// different. Matching is one-to-one: when left contains duplicate
+// entries with the same content, each entry is matched against a
+// distinct right-side entry with that content. Unmatched entries
+// (missing or extra) are flagged.
 func compareMemories(left, right Snapshot) []FieldDiff {
 	var diffs []FieldDiff
 
-	// Build index by content for right side.
-	rightByContent := make(map[string]int)
+	// Build index by content for right side, allowing multiple
+	// entries with the same content (one-to-one matching).
+	rightByContent := make(map[string][]int)
 	for i, m := range right.Memories {
-		rightByContent[m.Content] = i
+		rightByContent[m.Content] = append(rightByContent[m.Content], i)
 	}
 
 	matchedRight := make([]bool, len(right.Memories))
 	for i, lm := range left.Memories {
-		rIdx, ok := rightByContent[lm.Content]
+		indices, ok := rightByContent[lm.Content]
 		if !ok {
+			diffs = append(diffs, FieldDiff{
+				SessionID: left.SessionID,
+				MemoryID:  lm.Content,
+				FieldPath: fmt.Sprintf("memories[%d]", i),
+				ValueA:    lm,
+				ValueB:    nil,
+			})
+			continue
+		}
+		// Find first unmatched right entry with matching content.
+		var rIdx int
+		found := false
+		for _, idx := range indices {
+			if !matchedRight[idx] {
+				rIdx = idx
+				found = true
+				break
+			}
+		}
+		if !found {
+			// All right-side entries with this content are already
+			// matched; flag this as an extra left entry.
 			diffs = append(diffs, FieldDiff{
 				SessionID: left.SessionID,
 				MemoryID:  lm.Content,
@@ -219,7 +246,7 @@ func compareMemories(left, right Snapshot) []FieldDiff {
 				ValueB:    rm.Topics,
 			})
 		}
-		if lm.Score != rm.Score {
+		if math.Abs(lm.Score-rm.Score) > 1e-9 {
 			diffs = append(diffs, FieldDiff{
 				SessionID: left.SessionID,
 				MemoryID:  lm.Content,
@@ -368,6 +395,18 @@ func mergeKeys(a, b map[string]string) []string {
 	return keys
 }
 
+// isNilOrEmptyMap returns true when both values are maps and one is
+// nil while the other has zero length. This prevents false-positive
+// diffs for nil-vs-empty-map comparisons (e.g. StateDelta).
+func isNilOrEmptyMap(va, vb reflect.Value) bool {
+	if va.Kind() != reflect.Map || vb.Kind() != reflect.Map {
+		return false
+	}
+	aNil := va.IsNil()
+	bNil := vb.IsNil()
+	return (aNil && vb.Len() == 0) || (bNil && va.Len() == 0)
+}
+
 // compareStructs uses reflection to compare two structs field by field.
 func compareStructs(a, b any, prefix, sessionID string) []FieldDiff {
 	var diffs []FieldDiff
@@ -406,6 +445,10 @@ func compareStructs(a, b any, prefix, sessionID string) []FieldDiff {
 		}
 
 		path := prefix + "." + fieldName
+		// Normalize: nil map and empty map should be treated as equal.
+		if isNilOrEmptyMap(fa, fb) {
+			continue
+		}
 		if !reflect.DeepEqual(fa.Interface(), fb.Interface()) {
 			diffs = append(diffs, FieldDiff{
 				SessionID: sessionID,
