@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,6 +83,35 @@ func TestFileCandidateStoreReadMissingRevision(t *testing.T) {
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("want os.ErrNotExist, got %v", err)
 	}
+}
+
+func TestFileCandidateStoreLockSkillRejectsEmptySkillID(t *testing.T) {
+	store := newFileCandidateStore(t.TempDir())
+	unlock, err := store.lockSkill(context.Background(), "  ")
+	require.Error(t, err)
+	assert.Nil(t, unlock)
+}
+
+func TestFileCandidateStoreLockSkillWaitsUntilReleased(t *testing.T) {
+	store := newFileCandidateStore(t.TempDir())
+	const skillID = "lockable-skill"
+
+	unlock, err := store.lockSkill(nil, skillID)
+	require.NoError(t, err)
+	require.NotNil(t, unlock)
+	defer unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	blockedUnlock, err := store.lockSkill(ctx, skillID)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Nil(t, blockedUnlock)
+
+	unlock()
+	reacquired, err := store.lockSkill(context.Background(), skillID)
+	require.NoError(t, err)
+	require.NotNil(t, reacquired)
+	reacquired()
 }
 
 func TestFileActivePointerSetClearGet(t *testing.T) {

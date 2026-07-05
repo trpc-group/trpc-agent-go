@@ -2274,8 +2274,17 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
-		"For lightweight facts, preferences, or simple "+
-			"standing rules, use memory instead.",
+		"For lightweight facts, stable persona or tone preferences, "+
+			"and simple non-procedural standing facts, use memory "+
+			"instead.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Do not use memory for reusable task workflows, output "+
+			"formats, tool procedures, or post-task feedback "+
+			"unless the user explicitly asks to save that content "+
+			"as memory.",
 	)
 	require.Contains(
 		t,
@@ -3306,18 +3315,38 @@ func TestNewAgent_DeferToolSurfaceUsesDynamicAgent(t *testing.T) {
 		),
 	)
 	require.NotNil(t, findToolDeclaration(parentTools, "exec_command"))
-	require.Nil(t, findToolDeclaration(parentTools, skillprofile.ToolLoad))
+	require.NotNil(t, findToolDeclaration(parentTools, skillprofile.ToolLoad))
+	require.Nil(t, findToolDeclaration(parentTools, skillprofile.ToolListDocs))
+	require.Nil(t, findToolDeclaration(parentTools, skillprofile.ToolSelectDocs))
+	require.Nil(t, findToolDeclaration(parentTools, skillprofile.ToolRun))
 
 	req := runAgentAndCapture(t, agt, mdl, &session.Session{})
 	require.NotNil(t, req.Tools[agenttool.DefaultDynamicToolName])
 	require.NotNil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
 	require.NotNil(t, req.Tools["exec_command"])
-	require.Nil(t, req.Tools[skillprofile.ToolLoad])
+	require.NotNil(t, req.Tools[skillprofile.ToolLoad])
+	require.Nil(t, req.Tools[skillprofile.ToolListDocs])
+	require.Nil(t, req.Tools[skillprofile.ToolSelectDocs])
+	require.Nil(t, req.Tools[skillprofile.ToolRun])
 	system := joinSystemMessages(req)
+	require.Contains(t, system, "Available skills:")
+	require.Contains(t, system, "- echoer: simple echo skill")
 	require.Contains(t, system, "dynamic_agent")
 	require.Contains(t, system, "tool_search")
 	require.Contains(t, system, "Tool-backed work is available")
 	require.Contains(t, system, "pass exact tool names")
+	require.Contains(t, system, "Skill-backed work is tool-backed work.")
+	require.Contains(t, system, "call `skill_load` first")
+	require.Contains(
+		t,
+		system,
+		"then call `dynamic_agent` with that skill name.",
+	)
+	require.Contains(
+		t,
+		system,
+		"before the skill has been loaded or delegated",
+	)
 	require.NotContains(t, system, "OPENCLAW_LAST_UPLOAD_PATH")
 
 	searchTool := findTool(
