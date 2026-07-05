@@ -1,3 +1,11 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
 package session
 
 import (
@@ -62,6 +70,24 @@ func TestMaskEvents(t *testing.T) {
 		n := sess.MaskEvents()
 		if n != 0 {
 			t.Fatalf("expected 0, got %d", n)
+		}
+	})
+
+	t.Run("ignores non-existent event IDs", func(t *testing.T) {
+		sess := NewSession("app", "user", "sess-nonexist")
+		sess.Events = []event.Event{
+			newTestEvent("e1"),
+			newTestEvent("e2"),
+		}
+
+		n := sess.MaskEvents("e1", "e3")
+		if n != 1 {
+			t.Fatalf("expected 1 masked (only e1), got %d", n)
+		}
+
+		visible := sess.GetVisibleEvents()
+		if len(visible) != 1 || visible[0].ID != "e2" {
+			t.Fatalf("expected only e2 visible, got %v", visible)
 		}
 	})
 }
@@ -135,6 +161,10 @@ func TestGetVisibleEvents(t *testing.T) {
 
 func TestMaskedEventCount(t *testing.T) {
 	sess := NewSession("app", "user", "sess-8")
+	sess.Events = []event.Event{
+		newTestEvent("e1"),
+		newTestEvent("e2"),
+	}
 	if sess.MaskedEventCount() != 0 {
 		t.Fatal("expected 0 initially")
 	}
@@ -142,6 +172,14 @@ func TestMaskedEventCount(t *testing.T) {
 	sess.MaskEvents("e1", "e2")
 	if sess.MaskedEventCount() != 2 {
 		t.Fatalf("expected 2, got %d", sess.MaskedEventCount())
+	}
+
+	// Ghost IDs must not inflate the masked count.
+	if n := sess.MaskEvents("missing-id"); n != 0 {
+		t.Fatalf("expected 0 for non-existent id, got %d", n)
+	}
+	if sess.MaskedEventCount() != 2 {
+		t.Fatalf("expected masked count to stay 2, got %d", sess.MaskedEventCount())
 	}
 }
 
@@ -169,5 +207,37 @@ func TestClonePreservesMaskedEvents(t *testing.T) {
 	cloned.MaskEvents("e3")
 	if sess.MaskedEventCount() != 1 {
 		t.Fatal("original mask should be unaffected by clone mutation")
+	}
+}
+
+func TestIsEventMasked(t *testing.T) {
+	sess := NewSession("app", "user", "sess-masked")
+	sess.Events = []event.Event{
+		newTestEvent("e1"),
+		newTestEvent("e2"),
+		newTestEvent("e3"),
+	}
+	sess.MaskEvents("e1", "e3")
+
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	tests := []struct {
+		id   string
+		want bool
+	}{
+		{id: "e1", want: true},
+		{id: "e3", want: true},
+		{id: "e2", want: false},
+		{id: "e999", want: false},
+		{id: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			if got := sess.IsEventMasked(tt.id); got != tt.want {
+				t.Fatalf("IsEventMasked(%q) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
 	}
 }

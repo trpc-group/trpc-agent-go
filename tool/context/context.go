@@ -105,17 +105,18 @@ func NewCheckBudgetTool() tool.CallableTool {
 
 			total := sess.GetEventCount()
 			masked := sess.MaskedEventCount()
+			visible := len(sess.GetVisibleEvents())
 
 			return CheckBudgetOutput{
 				TotalEvents:   total,
-				VisibleEvents: total - masked,
+				VisibleEvents: visible,
 				MaskedEvents:  masked,
 			}, nil
 		},
 		function.WithName("check_budget"),
 		function.WithDescription(
-			"Check how much context budget remains. Returns the total number of events, "+
-				"visible events (sent to LLM), and masked events (hidden). "+
+			"Check how much context budget remains. Returns total, visible, and "+
+				"masked event counts (visible uses len(GetVisibleEvents())). "+
 				"Use this proactively to decide when to prune context via delete_context.",
 		),
 	)
@@ -215,9 +216,14 @@ func NewReadNotesTool() tool.CallableTool {
 			}
 			sort.Strings(keys)
 
+			ordered := make(map[string]string, len(keys))
+			for _, k := range keys {
+				ordered[k] = notes[k]
+			}
+
 			return ReadNotesOutput{
-				Notes: notes,
-				Count: len(notes),
+				Notes: ordered,
+				Count: len(ordered),
 			}, nil
 		},
 		function.WithName("read_notes"),
