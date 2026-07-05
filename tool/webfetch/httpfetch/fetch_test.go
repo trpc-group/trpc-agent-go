@@ -99,6 +99,38 @@ func TestWebFetch_NoURLs(t *testing.T) {
 	assert.Equal(t, "No URLs provided", resp.Summary)
 }
 
+func TestWebFetch_HTTPErrorIncludesStatusTextAndBodySnippet(
+	t *testing.T,
+) {
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprint(
+				w,
+				`<html><body><h1>Too Many Requests</h1></body></html>`,
+			)
+		},
+	))
+	defer ts.Close()
+
+	tool := NewTool()
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp := res.(fetchResponse)
+	require.Len(t, resp.Results, 1)
+	require.Empty(t, resp.Results[0].Content)
+	require.Contains(
+		t,
+		resp.Results[0].Error,
+		"HTTP status 429 Too Many Requests",
+	)
+	require.Contains(t, resp.Results[0].Error, "Too Many Requests")
+}
+
 func TestWebFetch_PlainText(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8") // With params to test cleaning
