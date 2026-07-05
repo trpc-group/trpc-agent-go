@@ -55,7 +55,7 @@ func baseLLMAgentOptions(
 	genConfig model.GenerationConfig,
 	repo *ocskills.Repository,
 ) []llmagent.Option {
-	return []llmagent.Option{
+	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
 		llmagent.WithInstruction(instruction),
 		llmagent.WithGlobalInstruction(systemPrompt),
@@ -85,6 +85,12 @@ func baseLLMAgentOptions(
 			runtimeprofile.SkillVisibilityFilterForRepository(repo),
 		),
 	}
+	if cfg.MaxLLMCalls > 0 {
+		opts = append(opts, llmagent.WithModelCallbacks(
+			modelCallBudgetCallbacks(),
+		))
+	}
+	return opts
 }
 
 func appendDeferredSkillOverviewOptions(
