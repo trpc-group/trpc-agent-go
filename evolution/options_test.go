@@ -12,6 +12,7 @@ package evolution
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -164,4 +165,16 @@ func TestWithSkillRepositoryProvider(t *testing.T) {
 	var opts serviceOpts
 	WithSkillRepositoryProvider(provider)(&opts)
 	assert.NotNil(t, opts.skillRepoProvider)
+}
+
+func TestWithApprovalTimeout(t *testing.T) {
+	var opts serviceOpts
+	WithApprovalTimeout(2 * time.Hour)(&opts)
+	assert.Equal(t, 2*time.Hour, opts.approvalTimeout)
+}
+
+func TestWithApprovalSweepInterval(t *testing.T) {
+	var opts serviceOpts
+	WithApprovalSweepInterval(15 * time.Minute)(&opts)
+	assert.Equal(t, 15*time.Minute, opts.approvalSweepInterval)
 }

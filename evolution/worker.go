@@ -73,6 +73,20 @@ type worker struct {
 	candidateStoreRoot string
 	activePointerRoot  string
 
+	// approvalTimeout, approvalSweepInterval drive the optional
+	// pending_approval auto-expiration sweeper. When approvalTimeout
+	// > 0, Start launches a background goroutine that scans the
+	// candidate store and auto-promotes revisions whose
+	// pending_approval age exceeds approvalTimeout. sweepCancel is the
+	// cancel func for the sweeper's root context; closing it both
+	// stops the ticker loop and cancels any in-flight sweep so Stop
+	// does not block on slow stores.
+	approvalTimeout       time.Duration
+	approvalSweepInterval time.Duration
+	sweepCtx              context.Context
+	sweepCancel           context.CancelFunc
+	sweepDone             chan struct{}
+
 	scopedMu       sync.Mutex
 	scopedPubs     map[string]Publisher
 	scopedStores   map[string]CandidateStore
@@ -156,6 +170,15 @@ type workerConfig struct {
 	// targeting skills whose on-disk path is outside this directory are
 	// skipped to protect bundled and user-authored skills.
 	ManagedSkillsDir string
+
+	// ApprovalTimeout enables the pending_approval auto-expiration
+	// sweeper. Revisions that have been in pending_approval state for
+	// longer than ApprovalTimeout are auto-promoted to active. Zero
+	// disables the sweeper (default).
+	ApprovalTimeout time.Duration
+	// ApprovalSweepInterval overrides the sweep period; zero falls
+	// back to min(ApprovalTimeout/4, 1h).
+	ApprovalSweepInterval time.Duration
 }
 
 // newWorker creates a new worker.
@@ -196,6 +219,8 @@ func newWorker(cfg workerConfig) *worker {
 		humanGate:                 cfg.HumanGate,
 		approvalGateShadow:        cfg.ApprovalGateShadow,
 		managedSkillsDir:          cfg.ManagedSkillsDir,
+		approvalTimeout:           cfg.ApprovalTimeout,
+		approvalSweepInterval:     cfg.ApprovalSweepInterval,
 	}
 	if store, ok := cfg.CandidateStore.(*fileCandidateStore); ok && store != nil {
 		w.candidateStoreRoot = store.root
@@ -226,6 +251,7 @@ func (w *worker) Start() {
 			}
 		}(ch)
 	}
+	w.startApprovalSweeperLocked()
 	w.started = true
 }
 
@@ -236,6 +262,7 @@ func (w *worker) Stop() {
 	if !w.started || len(w.jobChans) == 0 {
 		return
 	}
+	w.stopApprovalSweeperLocked()
 	for _, ch := range w.jobChans {
 		close(ch)
 	}
@@ -371,7 +398,13 @@ func (w *worker) processJob(item *pendingJob) {
 		log.WarnfContext(ctx, "evolution: review failed for session %s: %v", sess.ID, err)
 		return
 	}
-	if decision == nil || decision.SkipReason != "" {
+	if decision == nil {
+		log.InfofContext(ctx, "evolution: review skipped for session %s: empty decision", sess.ID)
+		writeLastReviewAt(sess, latestTs)
+		return
+	}
+	if decision.SkipReason != "" {
+		log.InfofContext(ctx, "evolution: review skipped for session %s: %s", sess.ID, decision.SkipReason)
 		writeLastReviewAt(sess, latestTs)
 		return
 	}
@@ -1273,8 +1306,42 @@ func looksLikeCorrection(content string) bool {
 	markers := []string{
 		"no,", "wrong", "actually", "instead", "not what i",
 		"that's incorrect", "please fix", "try again",
+		"不对", "错了", "不是", "而是", "请修正",
+		"请修改", "改成", "重新来", "重来",
 	}
 	for _, m := range markers {
+		if strings.Contains(lower, m) {
+			return true
+		}
+	}
+	return looksLikeFutureWorkflowFeedback(lower)
+}
+
+func looksLikeFutureWorkflowFeedback(lower string) bool {
+	futureMarkers := []string{
+		"next time", "going forward", "in the future", "future",
+		"default to", "by default", "reuse", "keep using",
+		"以后", "今后", "后续", "下次", "未来", "默认",
+	}
+	workflowMarkers := []string{
+		"workflow", "procedure", "process", "steps", "checklist",
+		"template", "format", "structure", "schema", "fields",
+		"category", "classification", "output", "rule",
+		"工作流", "流程", "步骤", "清单", "模板", "格式",
+		"结构", "字段", "分类", "输出", "规则", "按这套",
+		"照这个", "保持这个", "固定",
+	}
+	hasFuture := false
+	for _, m := range futureMarkers {
+		if strings.Contains(lower, m) {
+			hasFuture = true
+			break
+		}
+	}
+	if !hasFuture {
+		return false
+	}
+	for _, m := range workflowMarkers {
 		if strings.Contains(lower, m) {
 			return true
 		}
