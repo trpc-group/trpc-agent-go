@@ -1371,6 +1371,42 @@ description: "Probe weather prerequisites"
 	require.Equal(t, "weather-probe", summaries[0].Name)
 }
 
+func TestRepositorySummaries_PrioritizesEvolutionManagedSkills(t *testing.T) {
+	t.Parallel()
+
+	stateSkills := filepath.Join(t.TempDir(), "skills")
+	localRoot := filepath.Join(stateSkills, "local")
+	evolutionRoot := filepath.Join(
+		stateSkills,
+		"evolution",
+		"apps",
+		"openclaw",
+	)
+
+	writeSkill(t, localRoot, "alpha-local", `---
+name: alpha-local
+description: Local helper
+---
+
+# alpha-local
+`)
+	writeSkill(t, evolutionRoot, "zeta-evolved", `---
+name: zeta-evolved
+description: Evolved workflow
+---
+
+# zeta-evolved
+`)
+
+	repo, err := NewRepository([]string{localRoot, evolutionRoot})
+	require.NoError(t, err)
+
+	summaries := repo.Summaries()
+	require.Len(t, summaries, 2)
+	require.Equal(t, "zeta-evolved", summaries[0].Name)
+	require.Equal(t, "alpha-local", summaries[1].Name)
+}
+
 func TestRepositorySummaries_RefreshesAfterDirtyCheckTTL(t *testing.T) {
 	t.Parallel()
 

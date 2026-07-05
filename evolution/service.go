@@ -64,6 +64,8 @@ func NewService(reviewModel model.Model, opts ...Option) Service {
 		HumanGate:                 o.humanGate,
 		ApprovalGateShadow:        o.approvalGateShadow,
 		ManagedSkillsDir:          o.managedSkillsDir,
+		ApprovalTimeout:           o.approvalTimeout,
+		ApprovalSweepInterval:     o.approvalSweepInterval,
 	})
 	w.Start()
 

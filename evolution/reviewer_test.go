@@ -14,6 +14,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,6 +44,31 @@ func (m *recordingReviewModel) GenerateContent(_ context.Context, req *model.Req
 
 func (m *recordingReviewModel) Info() model.Info { return model.Info{Name: "recording-review-model"} }
 
+type blockingReviewModel struct{}
+
+func (m blockingReviewModel) GenerateContent(_ context.Context, _ *model.Request) (<-chan *model.Response, error) {
+	return make(chan *model.Response), nil
+}
+
+func (m blockingReviewModel) Info() model.Info { return model.Info{Name: "blocking-review-model"} }
+
+type blockingGenerateReviewModel struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (m blockingGenerateReviewModel) GenerateContent(_ context.Context, _ *model.Request) (<-chan *model.Response, error) {
+	close(m.started)
+	<-m.release
+	ch := make(chan *model.Response)
+	close(ch)
+	return ch, nil
+}
+
+func (m blockingGenerateReviewModel) Info() model.Info {
+	return model.Info{Name: "blocking-generate-review-model"}
+}
+
 func TestLLMReviewer_Review_StripsCodeFenceAndNormalizes(t *testing.T) {
 	reviewModel := &recordingReviewModel{
 		responses: []*model.Response{{
@@ -66,6 +92,42 @@ func TestLLMReviewer_Review_StripsCodeFenceAndNormalizes(t *testing.T) {
 	assert.Equal(t, "Before shipping", decision.Skills[0].WhenToUse)
 	assert.Equal(t, []string{"draft notes", "publish"}, decision.Skills[0].Steps)
 	assert.Equal(t, []string{"forget tests"}, decision.Skills[0].Pitfalls)
+}
+
+func TestLLMReviewer_Review_ReturnsWhenContextExpiresDuringResponse(t *testing.T) {
+	reviewer := NewLLMReviewer(blockingReviewModel{})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := reviewer.Review(ctx, &ReviewInput{
+		AppName:    "bench-app",
+		UserID:     "user-1",
+		SessionID:  "sess-1",
+		Transcript: []ReviewMessage{{Role: model.RoleUser, Content: "please make this repeatable"}},
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestLLMReviewer_Review_ReturnsWhenContextExpiresDuringGenerate(t *testing.T) {
+	mdl := blockingGenerateReviewModel{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	defer close(mdl.release)
+	reviewer := NewLLMReviewer(mdl)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	_, err := reviewer.Review(ctx, &ReviewInput{
+		AppName:    "bench-app",
+		UserID:     "user-1",
+		SessionID:  "sess-1",
+		Transcript: []ReviewMessage{{Role: model.RoleUser, Content: "please make this repeatable"}},
+	})
+	<-mdl.started
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestLLMReviewer_Review_IncludesTranscriptAndToolCalls(t *testing.T) {
@@ -456,6 +518,28 @@ func TestLLMReviewer_Review_SystemPromptHasAntiProliferationRules(t *testing.T) 
 		"name-suffix duplication should be called out")
 	assert.Contains(t, system, "skip_reason",
 		"reviewer must be reminded that skipping is the right answer when the library already covers the workflow")
+}
+
+func TestLLMReviewer_Review_SystemPromptCoversFutureWorkflowFeedback(t *testing.T) {
+	reviewModel := &recordingReviewModel{
+		responses: []*model.Response{{
+			Choices: []model.Choice{{Message: model.Message{Content: `{"skip_reason":"x"}`}}},
+		}},
+	}
+	reviewer := NewLLMReviewer(reviewModel)
+
+	_, err := reviewer.Review(context.Background(), &ReviewInput{
+		Transcript: []ReviewMessage{{
+			Role:    model.RoleUser,
+			Content: "以后遇到周报默认按这个字段输出",
+		}},
+	})
+	require.NoError(t, err)
+	system := reviewModel.request.Messages[0].Content
+
+	assert.Contains(t, system, "future/default workflow feedback")
+	assert.Contains(t, system, "reusable procedural knowledge")
+	assert.Contains(t, system, "Do not emit it as durable memory")
 }
 
 func TestTruncateBodyExcerpt(t *testing.T) {
