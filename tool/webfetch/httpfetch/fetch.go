@@ -455,14 +455,49 @@ func convertHTMLToMarkdownWithOptions(
 			commonmark.NewCommonmarkPlugin(),
 		),
 	)
-	markdown, err := conv.ConvertString(
-		markdownSourceHTML(bodyBytes, mainContentOnly),
-	)
+	source := markdownSourceHTML(bodyBytes, mainContentOnly)
+	markdown, err := conv.ConvertString(source)
 	if err != nil {
 		return "", err
 	}
+	if strings.TrimSpace(markdown) == "" {
+		return htmlVisibleTextFallback([]byte(source))
+	}
 
 	return markdown, nil
+}
+
+func htmlVisibleTextFallback(raw []byte) (string, error) {
+	return htmlVisibleTextFallbackFromReader(bytes.NewReader(raw), raw)
+}
+
+func htmlVisibleTextFallbackFromReader(
+	r io.Reader,
+	raw []byte,
+) (string, error) {
+	doc, err := html.Parse(r)
+	if err != nil {
+		text := strings.TrimSpace(string(raw))
+		if text == "" {
+			return "", fmt.Errorf("HTML response contained no visible text")
+		}
+		return text, nil
+	}
+
+	var chunks []string
+	walkHTML(doc, func(n *html.Node) {
+		if n.Type != html.TextNode || hasInvisibleHTMLAncestor(n.Parent) {
+			return
+		}
+		text := strings.Join(strings.Fields(n.Data), " ")
+		if text != "" {
+			chunks = append(chunks, text)
+		}
+	})
+	if len(chunks) == 0 {
+		return "", fmt.Errorf("HTML response contained no visible text")
+	}
+	return strings.Join(chunks, "\n"), nil
 }
 
 func markdownSourceHTML(raw []byte, mainContentOnly bool) string {
@@ -592,9 +627,32 @@ func isNoisyHTMLNode(n *html.Node) bool {
 	if n.Type != html.ElementNode {
 		return false
 	}
+	if isInvisibleHTMLNode(n) {
+		return true
+	}
 	switch strings.ToLower(n.Data) {
-	case "script", "style", "noscript", "template", "svg",
-		"nav", "header", "footer", "form":
+	case "nav", "header", "footer", "form":
+		return true
+	}
+	return false
+}
+
+func hasInvisibleHTMLAncestor(n *html.Node) bool {
+	for n != nil {
+		if isInvisibleHTMLNode(n) {
+			return true
+		}
+		n = n.Parent
+	}
+	return false
+}
+
+func isInvisibleHTMLNode(n *html.Node) bool {
+	if n == nil || n.Type != html.ElementNode {
+		return false
+	}
+	switch strings.ToLower(n.Data) {
+	case "script", "style", "noscript", "template", "svg":
 		return true
 	}
 	if hasHTMLAttr(n, "hidden") {
