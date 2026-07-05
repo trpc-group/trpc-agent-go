@@ -11,8 +11,10 @@ cd examples/tool_safety_guard
 go run . -policy tool_safety_policy.yaml -audit tool_safety_audit.jsonl
 ```
 
-The example prints structured scan reports and appends one monitoring-friendly
-JSONL event per scan.
+The example prints structured scan reports, writes the same JSON array to
+`tool_safety_report.json`, and writes one monitoring-friendly JSONL event per
+scan to `tool_safety_audit.jsonl`. The checked-in artifacts are the complete
+output from these bundled samples.
 
 ## How It Fits
 

