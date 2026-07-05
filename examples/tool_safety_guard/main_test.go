@@ -44,7 +44,11 @@ func TestCheckedInArtifactsMatchSamples(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(audit) error = %v", err)
 	}
-	if !bytes.Equal(gotAudit.Bytes(), wantAudit) {
+	if !bytes.Equal(normalizeNewlines(gotAudit.Bytes()), normalizeNewlines(wantAudit)) {
 		t.Fatalf("tool_safety_audit.jsonl does not match generated samples")
 	}
+}
+
+func normalizeNewlines(in []byte) []byte {
+	return bytes.ReplaceAll(in, []byte("\r\n"), []byte("\n"))
 }

@@ -459,8 +459,33 @@ func TestPermissionPolicyAllowsNullCodeBlocksNoop(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyAllowsCodeExecBlocksAndDeniesBadBlocks(t *testing.T) {
+	policy := NewPermissionPolicy(DefaultPolicy())
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "execute_code",
+		Arguments: []byte(`{"code_blocks":[{"language":"python","code":"print(1)"}]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		t.Fatalf("valid code block action = %q, want allow", decision.Action)
+	}
+
+	decision, err = policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "execute_code",
+		Arguments: []byte(`{"code_blocks":42}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionDeny ||
+		!strings.Contains(decision.Reason, "code_blocks") {
+		t.Fatalf("bad code block decision = %+v, want deny with code_blocks reason", decision)
+	}
+}
+
 func TestRequestFromPermissionRequestParsesExecMetadata(t *testing.T) {
-	pty := true
 	req, ok, err := RequestFromPermissionRequest(&tool.PermissionRequest{
 		ToolName: "exec_command",
 		Arguments: []byte(`{
@@ -468,18 +493,37 @@ func TestRequestFromPermissionRequestParsesExecMetadata(t *testing.T) {
 			"workdir":"/tmp/work",
 			"env":{"PATH":"/bin"},
 			"background":true,
-			"timeoutSec":12
+			"timeoutSec":12,
+			"pty":true
 		}`),
 		Metadata: tool.ToolMetadata{Destructive: true},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.TTY = boolValue(&pty)
 	if !ok || req.Backend != BackendHostExec || req.Cwd != "/tmp/work" ||
-		req.TimeoutSeconds != 12 || !req.Background ||
+		req.TimeoutSeconds != 12 || !req.Background || !req.TTY ||
 		!req.Metadata.Destructive || req.Env["PATH"] != "/bin" {
 		t.Fatalf("unexpected request: %+v", req)
+	}
+}
+
+func TestRequestFromPermissionRequestParsesTTYAndTimeoutSec(t *testing.T) {
+	req, ok, err := RequestFromPermissionRequest(&tool.PermissionRequest{
+		ToolName: "workspace_exec",
+		Arguments: []byte(`{
+			"command":"go test ./...",
+			"cwd":".",
+			"timeout_sec":7,
+			"tty":true
+		}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || req.Backend != BackendWorkspaceExec || req.Cwd != "." ||
+		req.TimeoutSeconds != 7 || !req.TTY {
+		t.Fatalf("unexpected request: %+v ok=%v", req, ok)
 	}
 }
 
@@ -571,6 +615,61 @@ func TestScanMetadataEnvAndTelemetry(t *testing.T) {
 	}
 }
 
+func TestValidateReportMissingFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		report Report
+		want   string
+	}{
+		{
+			name:   "decision",
+			report: Report{},
+			want:   "missing decision",
+		},
+		{
+			name:   "risk",
+			report: Report{Decision: DecisionAllow},
+			want:   "missing risk_level",
+		},
+		{
+			name: "rule",
+			report: Report{
+				Decision:       DecisionDeny,
+				RiskLevel:      RiskHigh,
+				Recommendation: "fix it",
+			},
+			want: "missing rule_id",
+		},
+		{
+			name: "evidence",
+			report: Report{
+				Decision:       DecisionDeny,
+				RiskLevel:      RiskHigh,
+				RuleID:         "rule",
+				Recommendation: "fix it",
+			},
+			want: "missing evidence",
+		},
+		{
+			name: "recommendation",
+			report: Report{
+				Decision:  DecisionAllow,
+				RiskLevel: RiskLow,
+			},
+			want: "missing recommendation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateReport(tt.report)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ValidateReport() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestScanDeniedCWD(t *testing.T) {
 	report := Scan(Request{
 		ToolName: "workspace_exec",
@@ -601,6 +700,59 @@ func TestScanDeniedRootPath(t *testing.T) {
 	}, DefaultPolicy())
 	if report.Decision != DecisionDeny || report.RuleID != "sensitive.path_access" {
 		t.Fatalf("root path argument should be denied: %+v", report)
+	}
+}
+
+func TestScanAdditionalRuleBranches(t *testing.T) {
+	tests := []struct {
+		name   string
+		cmd    string
+		ruleID string
+	}{
+		{
+			name:   "recursive chmod",
+			cmd:    "chmod -R 777 .",
+			ruleID: "dangerous.recursive_chmod",
+		},
+		{
+			name:   "network command without target",
+			cmd:    "curl --head",
+			ruleID: "network.unresolved_target",
+		},
+		{
+			name:   "python large output",
+			cmd:    "python -c 'print(\"x\" * 9999999)'",
+			ruleID: "resource.large_output",
+		},
+		{
+			name:   "parallel high concurrency",
+			cmd:    "parallel -j 64 echo ::: a b c",
+			ruleID: "resource.high_concurrency",
+		},
+		{
+			name:   "infinite loop",
+			cmd:    "for ;; do echo x; done",
+			ruleID: "resource.infinite_loop",
+		},
+		{
+			name:   "windows system path delete",
+			cmd:    "rm -r C:/Windows",
+			ruleID: "dangerous.rm_rf",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  tt.cmd,
+			}, DefaultPolicy())
+			if report.RuleID != tt.ruleID {
+				t.Fatalf("rule id = %q, want %q; report: %+v",
+					report.RuleID, tt.ruleID, report)
+			}
+		})
 	}
 }
 
@@ -679,6 +831,33 @@ func TestScanCodeExecAppliesRequestEnvelope(t *testing.T) {
 	}
 }
 
+func TestScanCodeExecShellAndNonShellBranches(t *testing.T) {
+	report := Scan(Request{
+		ToolName: "execute_code",
+		Backend:  BackendCodeExec,
+		CodeBlocks: []CodeBlock{{
+			Language: "bash",
+			Code:     "go test ./...",
+		}},
+	}, DefaultPolicy())
+	if report.Decision != DecisionAllow {
+		t.Fatalf("bash code block should be allowed: %+v", report)
+	}
+
+	report = Scan(Request{
+		ToolName: "execute_code",
+		Backend:  BackendCodeExec,
+		CodeBlocks: []CodeBlock{{
+			Language: "python",
+			Code:     "import urllib.request; urllib.request.urlopen('https://evil.example')",
+		}},
+	}, DefaultPolicy())
+	if report.Decision != DecisionDeny ||
+		report.RuleID != "network.non_whitelisted_domain" {
+		t.Fatalf("python network code block should be denied: %+v", report)
+	}
+}
+
 func TestScanHighConcurrencyNeedsReview(t *testing.T) {
 	report := Scan(Request{
 		ToolName: "workspace_exec",
@@ -708,6 +887,47 @@ func TestScanFiveHundredCommandsUnderOneSecond(t *testing.T) {
 	}
 	if report.Decision != DecisionAllow {
 		t.Fatalf("unexpected report: %+v", report)
+	}
+}
+
+func TestAuditHelpersHandleNoopAndErrors(t *testing.T) {
+	report := Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "go test ./...",
+	}, DefaultPolicy())
+	if err := WriteAuditJSONL(nil, report); err != nil {
+		t.Fatalf("WriteAuditJSONL(nil) error = %v", err)
+	}
+	if err := AppendAuditFile("", report); err != nil {
+		t.Fatalf("AppendAuditFile(empty) error = %v", err)
+	}
+	missingParent := filepath.Join(t.TempDir(), "missing", "audit.jsonl")
+	if err := AppendAuditFile(missingParent, report); err == nil {
+		t.Fatal("AppendAuditFile missing parent error = nil")
+	}
+}
+
+func TestPermissionReasonWithoutEvidence(t *testing.T) {
+	reason := permissionReason(Report{
+		Decision:       DecisionDeny,
+		Recommendation: "provide a command",
+	})
+	if !strings.Contains(reason, "tool safety guard deny") ||
+		!strings.Contains(reason, "provide a command") {
+		t.Fatalf("unexpected reason: %q", reason)
+	}
+}
+
+func TestContainsPipelineIgnoresQuotedSeparators(t *testing.T) {
+	if containsPipeline(`echo "a|b"`) {
+		t.Fatal("double-quoted pipe should not count as pipeline")
+	}
+	if containsPipeline(`echo 'a;b'`) {
+		t.Fatal("single-quoted semicolon should not count as pipeline")
+	}
+	if !containsPipeline("go test ./... && go vet ./...") {
+		t.Fatal("&& should count as a command chain")
 	}
 }
 
