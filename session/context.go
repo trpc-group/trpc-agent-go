@@ -165,19 +165,9 @@ func (sess *Session) IsEventMasked(id string) bool {
 // SyncMaskedEventsToState serializes the current masked-event set into session
 // state so it survives session reloads from a session service.
 func (sess *Session) SyncMaskedEventsToState() ([]byte, error) {
-	if sess == nil {
-		return nil, nil
-	}
-
-	sess.ensureMaskedEventsFromState()
-
-	sess.EventMu.RLock()
-	ids := sess.maskedEventIDListLocked()
-	sess.EventMu.RUnlock()
-
-	payload, err := marshalMaskedEventIDs(ids)
-	if err != nil {
-		return nil, err
+	payload, err := sess.maskedEventsPayload()
+	if err != nil || sess == nil {
+		return payload, err
 	}
 	sess.SetState(MaskedEventsStateKey, payload)
 	return payload, nil
@@ -190,11 +180,14 @@ func (sess *Session) PersistMaskedEvents(
 	svc Service,
 	key Key,
 ) error {
-	payload, err := sess.SyncMaskedEventsToState()
+	payload, err := sess.maskedEventsPayload()
 	if err != nil {
 		return err
 	}
 	if svc == nil {
+		if sess != nil {
+			sess.SetState(MaskedEventsStateKey, payload)
+		}
 		return nil
 	}
 	if err := svc.UpdateSessionState(ctx, key, StateMap{
@@ -202,7 +195,22 @@ func (sess *Session) PersistMaskedEvents(
 	}); err != nil {
 		return fmt.Errorf("update session state for masked events: %w", err)
 	}
+	sess.SetState(MaskedEventsStateKey, payload)
 	return nil
+}
+
+func (sess *Session) maskedEventsPayload() ([]byte, error) {
+	if sess == nil {
+		return nil, nil
+	}
+
+	sess.ensureMaskedEventsFromState()
+
+	sess.EventMu.RLock()
+	ids := sess.maskedEventIDListLocked()
+	sess.EventMu.RUnlock()
+
+	return marshalMaskedEventIDs(ids)
 }
 
 func (sess *Session) ensureMaskedEventsFromState() {

@@ -134,6 +134,29 @@ func TestDeleteContextTool(t *testing.T) {
 			t.Fatalf("expected hydrated mask after reload, got %v", visible)
 		}
 	})
+
+	t.Run("returns error and skips state key when session service persist fails", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "dc-fail")
+		sess.Events = []event.Event{
+			newTestEvent("e1"),
+			newTestEvent("e2"),
+		}
+		invCtx := ctxWithSessionService(sess, newFailingNotePersistService())
+
+		tool := NewDeleteContextTool()
+		_, err := tool.Call(invCtx, []byte(`{"event_ids":["e1"]}`))
+		if err == nil {
+			t.Fatal("expected persist error")
+		}
+		if _, ok := sess.GetState(session.MaskedEventsStateKey); ok {
+			t.Fatal("masked events state should not be written when persist fails")
+		}
+		// In-memory mask still applies for the current session instance.
+		visible := sess.GetVisibleEvents()
+		if len(visible) != 1 || visible[0].ID != "e2" {
+			t.Fatalf("expected in-memory mask to remain, got %v", visible)
+		}
+	})
 }
 
 // --- check_budget tests ---
