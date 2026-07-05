@@ -562,6 +562,23 @@ func TestDefaultFileReadOnlyDirsAbsolutizesRelativeStateDir(t *testing.T) {
 	require.Contains(t, roots, wantScratch)
 }
 
+func TestAbsPathOrOriginalFallbacks(t *testing.T) {
+	require.Equal(t, "  ", absPathOrOriginal("  "))
+
+	oldwd, err := os.Getwd()
+	require.NoError(t, err)
+	tmp := t.TempDir()
+	deletedWD := filepath.Join(tmp, "deleted")
+	require.NoError(t, os.MkdirAll(deletedWD, 0o755))
+	require.NoError(t, os.Chdir(deletedWD))
+	require.NoError(t, os.RemoveAll(deletedWD))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(oldwd))
+	})
+
+	require.Equal(t, "relative-state", absPathOrOriginal("relative-state"))
+}
+
 func TestOverrideToolSetName_NoOpWhenEmpty(t *testing.T) {
 	t.Parallel()
 
