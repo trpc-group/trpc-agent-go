@@ -10,6 +10,8 @@
 package evolution
 
 import (
+	"time"
+
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -40,6 +42,13 @@ type serviceOpts struct {
 	effectivenessGate  EffectivenessGate
 	humanGate          HumanGate
 	approvalGateShadow bool
+
+	// approvalTimeout enables auto-expiration of pending_approval
+	// revisions older than this duration. Zero disables the sweeper.
+	approvalTimeout time.Duration
+	// approvalSweepInterval overrides the sweep period; zero falls back
+	// to min(approvalTimeout/4, 1h).
+	approvalSweepInterval time.Duration
 
 	hasReviewerOptions bool
 }
@@ -179,4 +188,25 @@ func WithHumanGate(g HumanGate) Option {
 // any historical reviewer behavior.
 func WithApprovalGateShadow(enable bool) Option {
 	return func(o *serviceOpts) { o.approvalGateShadow = enable }
+}
+
+// WithApprovalTimeout enables auto-expiration of pending_approval
+// revisions: revisions that have been sitting in pending_approval state
+// for longer than d are automatically promoted to active. A
+// non-positive value disables the sweeper (default).
+//
+// Auto-promotion runs only when the service is configured with a
+// CandidateStore + ActivePointer + Publisher (i.e. the full revision
+// pipeline). The audit log records the auto-promotion with reviewer
+// "auto-expire" and reason "pending_approval timeout: <duration>".
+func WithApprovalTimeout(d time.Duration) Option {
+	return func(o *serviceOpts) { o.approvalTimeout = d }
+}
+
+// WithApprovalSweepInterval overrides the period at which the
+// auto-expiration sweeper scans for stale pending_approval revisions.
+// Defaults to min(approvalTimeout/4, 1h). Ignored when
+// WithApprovalTimeout is not set.
+func WithApprovalSweepInterval(d time.Duration) Option {
+	return func(o *serviceOpts) { o.approvalSweepInterval = d }
 }
