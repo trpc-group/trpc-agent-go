@@ -714,7 +714,9 @@ func TestDDGTool_SERPFallbackUsesAPIForDefaultDuckDuckGoURLs(t *testing.T) {
 	require.Equal(t, 1, calls["api.duckduckgo.com"])
 }
 
-func TestDDGTool_SERPFallbackReportsAPIFallbackFailure(t *testing.T) {
+func TestDDGTool_SERPFallbackReportsUnavailableWhenAPIFallbackFails(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	ddgTool := &ddgTool{
@@ -754,12 +756,11 @@ func TestDDGTool_SERPFallbackReportsAPIFallbackFailure(t *testing.T) {
 		context.Background(),
 		searchRequest{Query: "GAIA benchmark"},
 	)
-	require.Error(t, err)
+	require.NoError(t, err)
 	require.Empty(t, result.Results)
-	require.Contains(t, result.Summary, "fallback lite failed")
-	require.Contains(t, result.Summary, "api fallback failed")
-	require.Contains(t, err.Error(), "api fallback failed")
-	require.Contains(t, err.Error(), "status 503")
+	require.Contains(t, result.Summary, "html and lite")
+	require.Contains(t, result.Summary, "Instant Answer API fallback")
+	require.Contains(t, result.Summary, "instead of immediately retrying")
 }
 
 func TestDDGTool_SERPHTTPFailures(t *testing.T) {
