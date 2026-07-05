@@ -475,6 +475,46 @@ func TestNewFileToolSet_RuntimeReadDirsDefault(t *testing.T) {
 	require.Contains(t, string(data), `"contents":"derived"`)
 }
 
+func TestNewFileToolSet_RuntimeReadDirsRelativeStateDir(t *testing.T) {
+	cwd := t.TempDir()
+	oldwd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(cwd))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(oldwd))
+	})
+
+	baseDir := filepath.Join(cwd, "base")
+	require.NoError(t, os.MkdirAll(baseDir, 0o755))
+	scratchFile := filepath.Join(
+		cwd,
+		"state",
+		"workspaces",
+		"scratch",
+		"out",
+		"derived.txt",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(scratchFile), 0o755))
+	require.NoError(t, os.WriteFile(scratchFile, []byte("derived"), 0o644))
+
+	cfg := yamlNode(t, "base_dir: "+baseDir+"\n")
+	ts, err := newFileToolSet(
+		registry.ToolSetProviderDeps{StateDir: "state"},
+		registry.PluginSpec{Name: "fs", Config: cfg},
+	)
+	require.NoError(t, err)
+	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
+
+	raw, err := readFile.Call(
+		context.Background(),
+		[]byte(`{"file_name":`+strconv.Quote(scratchFile)+`}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"contents":"derived"`)
+}
+
 func TestNewFileToolSet_RuntimeReadDirsCanDisable(t *testing.T) {
 	dir := t.TempDir()
 	tmpFile := filepath.Join(t.TempDir(), "derived.txt")
@@ -509,6 +549,17 @@ func TestDefaultFileReadOnlyDirsIncludesPlatformTmp(t *testing.T) {
 	roots := defaultFileReadOnlyDirs("")
 	require.Contains(t, roots, tmp)
 	require.Contains(t, roots, "/tmp")
+}
+
+func TestDefaultFileReadOnlyDirsAbsolutizesRelativeStateDir(t *testing.T) {
+	stateRoot := filepath.Join(".", "state")
+	wantScratch, err := filepath.Abs(
+		filepath.Join(stateRoot, "workspaces", "scratch"),
+	)
+	require.NoError(t, err)
+
+	roots := defaultFileReadOnlyDirs(stateRoot)
+	require.Contains(t, roots, wantScratch)
 }
 
 func TestOverrideToolSetName_NoOpWhenEmpty(t *testing.T) {
