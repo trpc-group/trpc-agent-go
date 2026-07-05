@@ -5,12 +5,15 @@ go 1.24.4
 require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260305114736-115a967b66a9
 	github.com/alicebob/miniredis/v2 v2.35.0
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/r3labs/sse/v2 v2.10.0
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-agent-go v0.2.0
+	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
+	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/server/agui v0.0.0-20260108131845-87b14951638b
 	trpc.group/trpc-go/trpc-agent-go/session/mongodb v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0
+	trpc.group/trpc-go/trpc-agent-go/session/sqlite v0.0.0
 )
 
 require (
@@ -41,6 +44,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/go-ego/gse v1.0.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
@@ -48,6 +52,7 @@ require (
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
+	github.com/vcaesar/cedar v0.20.2 // indirect
 	go.opentelemetry.io/otel v1.41.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.29.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.29.0 // indirect
@@ -76,6 +81,10 @@ replace trpc.group/trpc-go/trpc-agent-go => ../
 replace github.com/ag-ui-protocol/ag-ui/sdks/community/go => github.com/Flash-LHR/ag-ui/sdks/community/go v0.0.0-20260226100332-50dd0f7a7764
 
 replace trpc.group/trpc-go/trpc-agent-go/server/agui => ../server/agui
+
+replace trpc.group/trpc-go/trpc-agent-go/memory/sqlite => ../memory/sqlite
+
+replace trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../session/sqlite
 
 replace trpc.group/trpc-go/trpc-agent-go/session/redis => ../session/redis
 
