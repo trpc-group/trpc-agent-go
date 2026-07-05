@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -233,6 +234,42 @@ allowed_commands:
 	}
 }
 
+func TestLoadPolicyCanDisableParseErrorDeny(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tool_safety_policy.json")
+	content := []byte(`{
+  "deny_on_parse_error": false,
+  "allowed_commands": ["echo"]
+}`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := LoadPolicy(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "echo 'unterminated",
+	}, policy)
+	if report.Decision != DecisionAsk || report.RuleID != "shellsafe.parse_error" {
+		t.Fatalf("unexpected report: %+v", report)
+	}
+}
+
+func TestPolicyZeroValueKeepsConservativeDefaults(t *testing.T) {
+	report := Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "cat README.md | wc -l",
+	}, Policy{})
+	if report.Decision != DecisionNeedsHumanReview ||
+		report.RuleID != "shell.pipeline_review" {
+		t.Fatalf("zero-value policy should inherit pipeline review: %+v", report)
+	}
+}
+
 func TestDefaultPolicyPreservesProgrammaticFalseOverrides(t *testing.T) {
 	policy := DefaultPolicy()
 	policy.ReviewShellPipelines = false
@@ -254,6 +291,28 @@ func TestDefaultPolicyPreservesProgrammaticFalseOverrides(t *testing.T) {
 	}, policy)
 	if report.Decision != DecisionAsk {
 		t.Fatalf("parse decision = %q, want ask; report: %+v", report.Decision, report)
+	}
+}
+
+func TestLoadPolicyErrors(t *testing.T) {
+	if _, err := LoadPolicy(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
+		t.Fatal("LoadPolicy missing file error = nil")
+	}
+
+	badJSON := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(badJSON, []byte(`{`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPolicy(badJSON); err == nil {
+		t.Fatal("LoadPolicy bad JSON error = nil")
+	}
+
+	badExt := filepath.Join(t.TempDir(), "policy.toml")
+	if err := os.WriteFile(badExt, []byte(`allowed_commands = []`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadPolicy(badExt); err == nil {
+		t.Fatal("LoadPolicy unsupported extension error = nil")
 	}
 }
 
@@ -298,6 +357,80 @@ func TestPermissionPolicyMapsReviewToAsk(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyAllowsUnknownToolAndNilRequest(t *testing.T) {
+	policy := NewPermissionPolicy(DefaultPolicy())
+	decision, err := policy.CheckToolPermission(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		t.Fatalf("nil request action = %q, want allow", decision.Action)
+	}
+
+	decision, err = policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "unknown_tool",
+		Arguments: []byte(`{}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		t.Fatalf("unknown tool action = %q, want allow", decision.Action)
+	}
+}
+
+func TestPermissionPolicyInvalidArgsDeny(t *testing.T) {
+	policy := NewPermissionPolicy(DefaultPolicy())
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionDeny ||
+		!strings.Contains(decision.Reason, "invalid args") {
+		t.Fatalf("unexpected decision: %+v", decision)
+	}
+}
+
+func TestPermissionPolicyAuditPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.jsonl")
+	policy := NewPermissionPolicy(DefaultPolicy(), WithAuditPath(path))
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"cat .env"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionDeny {
+		t.Fatalf("action = %q, want deny", decision.Action)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var event AuditEvent
+	if err := json.Unmarshal(bytes.TrimSpace(b), &event); err != nil {
+		t.Fatalf("audit file was not json: %v\n%s", err, string(b))
+	}
+	if event.RuleID != "sensitive.path_access" {
+		t.Fatalf("unexpected audit event: %+v", event)
+	}
+}
+
+func TestPermissionPolicyAuditWriterError(t *testing.T) {
+	policy := NewPermissionPolicy(DefaultPolicy(), WithAuditWriter(errorWriter{}))
+	_, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+	})
+	if err == nil {
+		t.Fatal("CheckToolPermission audit writer error = nil")
+	}
+}
+
 func TestNilPermissionPolicyFailsClosed(t *testing.T) {
 	var policy *PermissionPolicy
 	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
@@ -326,6 +459,73 @@ func TestPermissionPolicyAllowsNullCodeBlocksNoop(t *testing.T) {
 	}
 }
 
+func TestRequestFromPermissionRequestParsesExecMetadata(t *testing.T) {
+	pty := true
+	req, ok, err := RequestFromPermissionRequest(&tool.PermissionRequest{
+		ToolName: "exec_command",
+		Arguments: []byte(`{
+			"command":"go test ./...",
+			"workdir":"/tmp/work",
+			"env":{"PATH":"/bin"},
+			"background":true,
+			"timeoutSec":12
+		}`),
+		Metadata: tool.ToolMetadata{Destructive: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.TTY = boolValue(&pty)
+	if !ok || req.Backend != BackendHostExec || req.Cwd != "/tmp/work" ||
+		req.TimeoutSeconds != 12 || !req.Background ||
+		!req.Metadata.Destructive || req.Env["PATH"] != "/bin" {
+		t.Fatalf("unexpected request: %+v", req)
+	}
+}
+
+func TestRequestFromPermissionRequestUsesDeclarationName(t *testing.T) {
+	req, ok, err := RequestFromPermissionRequest(&tool.PermissionRequest{
+		Declaration: &tool.Declaration{Name: "workspace_exec"},
+		Arguments:   []byte(`{"command":"go test ./...","cwd":"."}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || req.ToolName != "workspace_exec" || req.Command != "go test ./..." ||
+		req.Cwd != "." || req.Backend != BackendWorkspaceExec {
+		t.Fatalf("unexpected request: %+v ok=%v", req, ok)
+	}
+}
+
+func TestParseCodeBlocksVariants(t *testing.T) {
+	blocks, err := parseCodeBlocks(json.RawMessage(`{"language":"python","code":"print(1)"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocks) != 1 || blocks[0].Language != "python" {
+		t.Fatalf("unexpected object blocks: %+v", blocks)
+	}
+
+	inner := `[{"language":"bash","code":"echo ok"}]`
+	blocks, err = parseCodeBlocks(json.RawMessage(strconvQuote(inner)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(blocks) != 1 || blocks[0].Language != "bash" {
+		t.Fatalf("unexpected string blocks: %+v", blocks)
+	}
+
+	if _, err := parseCodeBlocks(json.RawMessage(`"not-json"`)); err == nil {
+		t.Fatal("parseCodeBlocks invalid string error = nil")
+	}
+	if _, err := parseCodeBlocks(json.RawMessage(`42`)); err == nil {
+		t.Fatal("parseCodeBlocks scalar error = nil")
+	}
+	if _, err := parseCodeBlocks(json.RawMessage(`[{"language":42}]`)); err == nil {
+		t.Fatal("parseCodeBlocks malformed array error = nil")
+	}
+}
+
 func TestScanRedactsSecrets(t *testing.T) {
 	report := Scan(Request{
 		ToolName: "workspace_exec",
@@ -344,6 +544,33 @@ func TestScanRedactsSecrets(t *testing.T) {
 	}
 }
 
+func TestScanMetadataEnvAndTelemetry(t *testing.T) {
+	report := Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "go test ./...",
+		Metadata: ToolMetadata{Destructive: true},
+		Env: map[string]string{
+			"PATH":    "/bin",
+			"BAD_ENV": "1",
+		},
+	}, DefaultPolicy())
+	if report.Decision != DecisionNeedsHumanReview ||
+		report.RuleID != "tool.metadata_destructive" {
+		t.Fatalf("unexpected report: %+v", report)
+	}
+	attrs := report.SpanAttributes()
+	if attrs["tool.safety.decision"] != string(report.Decision) ||
+		attrs["tool.safety.risk_level"] != string(report.RiskLevel) ||
+		attrs["tool.safety.rule_id"] != report.RuleID ||
+		attrs["tool.safety.backend"] != report.Backend {
+		t.Fatalf("unexpected span attrs: %+v", attrs)
+	}
+	if len(report.Findings) < 2 {
+		t.Fatalf("expected metadata and env findings: %+v", report.Findings)
+	}
+}
+
 func TestScanDeniedCWD(t *testing.T) {
 	report := Scan(Request{
 		ToolName: "workspace_exec",
@@ -353,6 +580,102 @@ func TestScanDeniedCWD(t *testing.T) {
 	}, DefaultPolicy())
 	if report.Decision != DecisionDeny || report.RuleID != "sensitive.cwd_access" {
 		t.Fatalf("unexpected report: %+v", report)
+	}
+}
+
+func TestScanDeniedRootPath(t *testing.T) {
+	report := Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "go test ./...",
+		Cwd:      "/",
+	}, DefaultPolicy())
+	if report.Decision != DecisionDeny || report.RuleID != "sensitive.cwd_access" {
+		t.Fatalf("root cwd should be denied: %+v", report)
+	}
+
+	report = Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "cat /",
+	}, DefaultPolicy())
+	if report.Decision != DecisionDeny || report.RuleID != "sensitive.path_access" {
+		t.Fatalf("root path argument should be denied: %+v", report)
+	}
+}
+
+func TestScanCodeExecAppliesRequestEnvelope(t *testing.T) {
+	tests := []struct {
+		name     string
+		req      Request
+		decision Decision
+		ruleID   string
+	}{
+		{
+			name: "denied cwd",
+			req: Request{
+				ToolName: "execute_code",
+				Backend:  BackendCodeExec,
+				Cwd:      "/",
+				CodeBlocks: []CodeBlock{{
+					Language: "python",
+					Code:     "print(1)",
+				}},
+			},
+			decision: DecisionDeny,
+			ruleID:   "sensitive.cwd_access",
+		},
+		{
+			name: "timeout exceeded",
+			req: Request{
+				ToolName:       "execute_code",
+				Backend:        BackendCodeExec,
+				TimeoutSeconds: DefaultPolicy().MaxTimeoutSeconds + 1,
+				CodeBlocks: []CodeBlock{{
+					Language: "python",
+					Code:     "print(1)",
+				}},
+			},
+			decision: DecisionDeny,
+			ruleID:   "resource.timeout_exceeded",
+		},
+		{
+			name: "output exceeded",
+			req: Request{
+				ToolName:       "execute_code",
+				Backend:        BackendCodeExec,
+				MaxOutputBytes: DefaultPolicy().MaxOutputBytes + 1,
+				CodeBlocks: []CodeBlock{{
+					Language: "python",
+					Code:     "print(1)",
+				}},
+			},
+			decision: DecisionDeny,
+			ruleID:   "resource.output_limit_exceeded",
+		},
+		{
+			name: "background",
+			req: Request{
+				ToolName:   "execute_code",
+				Backend:    BackendCodeExec,
+				Background: true,
+				CodeBlocks: []CodeBlock{{
+					Language: "python",
+					Code:     "print(1)",
+				}},
+			},
+			decision: DecisionNeedsHumanReview,
+			ruleID:   "process.background",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := Scan(tt.req, DefaultPolicy())
+			if report.Decision != tt.decision || report.RuleID != tt.ruleID {
+				t.Fatalf("unexpected report: %+v", report)
+			}
+		})
 	}
 }
 
@@ -386,4 +709,51 @@ func TestScanFiveHundredCommandsUnderOneSecond(t *testing.T) {
 	if report.Decision != DecisionAllow {
 		t.Fatalf("unexpected report: %+v", report)
 	}
+}
+
+func TestWriteAuditJSONLWritesOneRecord(t *testing.T) {
+	var w countingWriter
+	report := Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "go test ./...",
+	}, DefaultPolicy())
+	if err := WriteAuditJSONL(&w, report); err != nil {
+		t.Fatal(err)
+	}
+	if w.calls != 1 {
+		t.Fatalf("Write calls = %d, want 1", w.calls)
+	}
+	if !bytes.HasSuffix(w.data, []byte("\n")) {
+		t.Fatalf("audit record should end with newline: %q", w.data)
+	}
+	var event AuditEvent
+	if err := json.Unmarshal(bytes.TrimSpace(w.data), &event); err != nil {
+		t.Fatalf("audit record was not json: %v\n%s", err, string(w.data))
+	}
+	if event.Decision != DecisionAllow || event.ToolName != "workspace_exec" {
+		t.Fatalf("unexpected audit event: %+v", event)
+	}
+}
+
+type countingWriter struct {
+	calls int
+	data  []byte
+}
+
+type errorWriter struct{}
+
+func (errorWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
+func strconvQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.calls++
+	w.data = append(w.data, p...)
+	return len(p), nil
 }

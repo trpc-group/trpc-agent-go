@@ -43,6 +43,15 @@
           "rm -rf /"
         ],
         "recommendation": "Do not run recursive forced deletion through tool execution."
+      },
+      {
+        "decision": "deny",
+        "risk_level": "critical",
+        "rule_id": "sensitive.path_access",
+        "evidence": [
+          "argument references denied path \"/\""
+        ],
+        "recommendation": "Do not access SSH keys, .env files, credential stores, or system directories from tool execution."
       }
     ]
   },

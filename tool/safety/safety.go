@@ -11,7 +11,6 @@
 package safety
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,7 +75,8 @@ type Policy struct {
 	ReviewShellPipelines bool     `json:"review_shell_pipelines,omitempty" yaml:"review_shell_pipelines,omitempty"`
 	DenyOnParseError     bool     `json:"deny_on_parse_error,omitempty" yaml:"deny_on_parse_error,omitempty"`
 
-	defaultsSet bool
+	reviewShellPipelinesSet bool
+	denyOnParseErrorSet     bool
 }
 
 // DefaultPolicy returns a conservative policy suitable for workspaceexec,
@@ -112,7 +112,8 @@ func DefaultPolicy() Policy {
 			"PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL",
 			"CGO_ENABLED", "GOCACHE", "GOMODCACHE", "GOPATH",
 		},
-		defaultsSet: true,
+		reviewShellPipelinesSet: true,
+		denyOnParseErrorSet:     true,
 	}
 }
 
@@ -123,19 +124,34 @@ func LoadPolicy(path string) (Policy, error) {
 	if err != nil {
 		return Policy{}, err
 	}
-	p := DefaultPolicy()
+	var raw map[string]any
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".json":
-		err = json.Unmarshal(b, &p)
+		err = json.Unmarshal(b, &raw)
 	case ".yaml", ".yml", "":
-		err = yaml.Unmarshal(b, &p)
+		err = yaml.Unmarshal(b, &raw)
 	default:
 		err = fmt.Errorf("unsupported policy extension %q", filepath.Ext(path))
 	}
 	if err != nil {
 		return Policy{}, err
 	}
-	p.defaultsSet = true
+	p := DefaultPolicy()
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".json":
+		err = json.Unmarshal(b, &p)
+	default:
+		err = yaml.Unmarshal(b, &p)
+	}
+	if err != nil {
+		return Policy{}, err
+	}
+	if _, ok := raw["review_shell_pipelines"]; ok {
+		p.reviewShellPipelinesSet = true
+	}
+	if _, ok := raw["deny_on_parse_error"]; ok {
+		p.denyOnParseErrorSet = true
+	}
 	return p, nil
 }
 
@@ -162,10 +178,10 @@ func (p Policy) withDefaults() Policy {
 	if p.ReviewCommands == nil {
 		p.ReviewCommands = d.ReviewCommands
 	}
-	if !p.defaultsSet && !p.ReviewShellPipelines {
+	if !p.reviewShellPipelinesSet && !p.ReviewShellPipelines {
 		p.ReviewShellPipelines = d.ReviewShellPipelines
 	}
-	if !p.defaultsSet && !p.DenyOnParseError {
+	if !p.denyOnParseErrorSet && !p.DenyOnParseError {
 		p.DenyOnParseError = d.DenyOnParseError
 	}
 	return p
@@ -277,14 +293,11 @@ func WriteAuditJSONL(w io.Writer, report Report) error {
 	if err != nil {
 		return err
 	}
-	bw := bufio.NewWriter(w)
-	if _, err := bw.Write(b); err != nil {
+	b = append(b, '\n')
+	if _, err := w.Write(b); err != nil {
 		return err
 	}
-	if err := bw.WriteByte('\n'); err != nil {
-		return err
-	}
-	return bw.Flush()
+	return nil
 }
 
 // AppendAuditFile appends one report event to a JSONL audit file.
@@ -320,9 +333,10 @@ func (s scanner) scan(req Request) Report {
 	findings := make([]Finding, 0, 4)
 	findings = append(findings, s.scanMetadata(req)...)
 	findings = append(findings, s.scanEnv(req.Env)...)
+	findings = append(findings, s.scanRequestEnvelope(req)...)
 	if len(req.CodeBlocks) > 0 {
 		for _, block := range req.CodeBlocks {
-			findings = append(findings, s.scanCodeBlock(block)...)
+			findings = append(findings, s.scanCodeBlock(req, block)...)
 		}
 	} else {
 		findings = append(findings, s.scanShell(req, cmd)...)
@@ -338,6 +352,61 @@ func (s scanner) scan(req Request) Report {
 	}
 	report.Redacted = redactor.changed
 	return report
+}
+
+func (s scanner) scanRequestEnvelope(req Request) []Finding {
+	var findings []Finding
+	if s.pathDenied(req.Cwd) {
+		findings = append(findings, newFinding(
+			DecisionDeny,
+			RiskCritical,
+			"sensitive.cwd_access",
+			[]string{fmt.Sprintf("working directory %q is denied", req.Cwd)},
+			"Choose a workspace-relative working directory that does not "+
+				"point at system paths, SSH material, credentials, or secrets.",
+		))
+	}
+	if req.Backend == BackendHostExec && (req.Background || req.TTY) {
+		findings = append(findings, newFinding(
+			DecisionNeedsHumanReview,
+			RiskHigh,
+			"hostexec.long_session",
+			[]string{"hostexec requested background or PTY execution"},
+			"Require human approval for host PTY/background sessions and "+
+				"ensure timeout, process-group cleanup, and output caps are enforced.",
+		))
+	}
+	if req.Background {
+		findings = append(findings, newFinding(
+			DecisionNeedsHumanReview,
+			RiskMedium,
+			"process.background",
+			[]string{"command may leave a background process behind"},
+			"Run foreground commands with a bounded timeout, or record the "+
+				"session id and cleanup plan.",
+		))
+	}
+	if req.TimeoutSeconds > s.policy.MaxTimeoutSeconds {
+		findings = append(findings, newFinding(
+			DecisionDeny,
+			RiskHigh,
+			"resource.timeout_exceeded",
+			[]string{fmt.Sprintf("timeout %ds exceeds policy max %ds",
+				req.TimeoutSeconds, s.policy.MaxTimeoutSeconds)},
+			"Use a shorter timeout or update the safety policy after review.",
+		))
+	}
+	if req.MaxOutputBytes > s.policy.MaxOutputBytes {
+		findings = append(findings, newFinding(
+			DecisionDeny,
+			RiskHigh,
+			"resource.output_limit_exceeded",
+			[]string{fmt.Sprintf("requested output cap %d exceeds policy max %d",
+				req.MaxOutputBytes, s.policy.MaxOutputBytes)},
+			"Lower the output cap or collect a bounded artifact instead.",
+		))
+	}
+	return findings
 }
 
 func (s scanner) reportFromFindings(
@@ -475,16 +544,6 @@ func (s scanner) scanRawCommand(req Request, command string) []Finding {
 	var findings []Finding
 	lower := strings.ToLower(command)
 	findings = append(findings, s.scanSecretText(command, "command")...)
-	if s.pathDenied(req.Cwd) {
-		findings = append(findings, newFinding(
-			DecisionDeny,
-			RiskCritical,
-			"sensitive.cwd_access",
-			[]string{fmt.Sprintf("working directory %q is denied", req.Cwd)},
-			"Choose a workspace-relative working directory that does not "+
-				"point at system paths, SSH material, credentials, or secrets.",
-		))
-	}
 	if hasShellBypass(lower) {
 		findings = append(findings, newFinding(
 			DecisionDeny,
@@ -506,17 +565,7 @@ func (s scanner) scanRawCommand(req Request, command string) []Finding {
 				"a small audited script.",
 		))
 	}
-	if req.Backend == BackendHostExec && (req.Background || req.TTY) {
-		findings = append(findings, newFinding(
-			DecisionNeedsHumanReview,
-			RiskHigh,
-			"hostexec.long_session",
-			[]string{"hostexec requested background or PTY execution"},
-			"Require human approval for host PTY/background sessions and "+
-				"ensure timeout, process-group cleanup, and output caps are enforced.",
-		))
-	}
-	if req.Background || strings.Contains(lower, " &") || strings.HasSuffix(lower, "&") {
+	if strings.Contains(lower, " &") || strings.HasSuffix(lower, "&") {
 		findings = append(findings, newFinding(
 			DecisionNeedsHumanReview,
 			RiskMedium,
@@ -524,26 +573,6 @@ func (s scanner) scanRawCommand(req Request, command string) []Finding {
 			[]string{"command may leave a background process behind"},
 			"Run foreground commands with a bounded timeout, or record the "+
 				"session id and cleanup plan.",
-		))
-	}
-	if req.TimeoutSeconds > s.policy.MaxTimeoutSeconds {
-		findings = append(findings, newFinding(
-			DecisionDeny,
-			RiskHigh,
-			"resource.timeout_exceeded",
-			[]string{fmt.Sprintf("timeout %ds exceeds policy max %ds",
-				req.TimeoutSeconds, s.policy.MaxTimeoutSeconds)},
-			"Use a shorter timeout or update the safety policy after review.",
-		))
-	}
-	if req.MaxOutputBytes > s.policy.MaxOutputBytes {
-		findings = append(findings, newFinding(
-			DecisionDeny,
-			RiskHigh,
-			"resource.output_limit_exceeded",
-			[]string{fmt.Sprintf("requested output cap %d exceeds policy max %d",
-				req.MaxOutputBytes, s.policy.MaxOutputBytes)},
-			"Lower the output cap or collect a bounded artifact instead.",
 		))
 	}
 	findings = append(findings, s.scanResourcePatterns(lower)...)
@@ -709,6 +738,9 @@ func normalizePathForMatch(path string) string {
 	p = strings.TrimPrefix(p, "~/")
 	p = strings.TrimPrefix(p, "./")
 	p = strings.ToLower(p)
+	if p == "/" {
+		return p
+	}
 	return strings.Trim(p, "/")
 }
 
@@ -918,18 +950,18 @@ func (s scanner) scanSecretText(text, source string) []Finding {
 	)}
 }
 
-func (s scanner) scanCodeBlock(block CodeBlock) []Finding {
+func (s scanner) scanCodeBlock(req Request, block CodeBlock) []Finding {
 	lang := strings.ToLower(strings.TrimSpace(block.Language))
 	code := strings.TrimSpace(block.Code)
 	var findings []Finding
 	findings = append(findings, s.scanSecretText(code, "code block")...)
 	if lang == "bash" || lang == "sh" || lang == "shell" || lang == "" {
-		req := Request{
-			ToolName: "code_block",
-			Command:  code,
-			Backend:  BackendCodeExec,
-		}
-		findings = append(findings, s.scanShell(req, code)...)
+		shellReq := req
+		shellReq.ToolName = "code_block"
+		shellReq.Command = code
+		shellReq.Backend = BackendCodeExec
+		shellReq.CodeBlocks = nil
+		findings = append(findings, s.scanShell(shellReq, code)...)
 		return findings
 	}
 	lower := strings.ToLower(code)
