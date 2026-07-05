@@ -431,7 +431,7 @@ func browserDescription(evaluateEnabled bool) string {
 		"direct inspection of local or generated files. Do not " +
 		"navigate to file://, data:, or ad hoc localhost/127.0.0.1 " +
 		"URLs unless the runtime configuration explicitly exposes " +
-		"that server; normal browser policy may block those paths. " +
+		"that file root or server; normal browser policy may block those paths. " +
 		"For local images, PDFs, audio, video, or generated " +
 		"artifacts, use file/document/exec tools and MEDIA or " +
 		"MEDIA_DIR outputs instead. Prefer snapshot + act for UI " +

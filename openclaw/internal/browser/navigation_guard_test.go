@@ -10,6 +10,9 @@
 package browser
 
 import (
+	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -65,6 +68,131 @@ func TestNavigationPolicy_AllowsFileURLWhenEnabled(t *testing.T) {
 		AllowFileURLs: true,
 	}.Validate("file:///tmp/test.html")
 	require.NoError(t, err)
+}
+
+func TestNavigationPolicy_AllowsFileURLUnderAllowedRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	target := filepath.Join(root, "image.png")
+	err := navigationPolicy{
+		AllowedFileRoots: normalizeFileRoots([]string{root}),
+	}.Validate("file://" + filepath.ToSlash(target))
+	require.NoError(t, err)
+}
+
+func TestNavigationPolicy_AllowsLocalhostFileURLUnderAllowedRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	target := filepath.Join(root, "image with space.png")
+	u := url.URL{Scheme: "file", Host: "localhost", Path: filepath.ToSlash(target)}
+	err := navigationPolicy{
+		AllowedFileRoots: normalizeFileRoots([]string{root}),
+	}.Validate(u.String())
+	require.NoError(t, err)
+}
+
+func TestNavigationPolicy_AllowsFileURLUnderSymlinkedAllowedRoot(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real")
+	require.NoError(t, os.Mkdir(realRoot, 0o700))
+	linkRoot := filepath.Join(base, "link")
+	require.NoError(t, os.Symlink(realRoot, linkRoot))
+	target := filepath.Join(linkRoot, "nested", "image.png")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o700))
+	require.NoError(t, os.WriteFile(target, []byte("png"), 0o600))
+
+	err := navigationPolicy{
+		AllowedFileRoots: normalizeFileRoots([]string{linkRoot}),
+	}.Validate("file://" + filepath.ToSlash(target))
+	require.NoError(t, err)
+}
+
+func TestNavigationPolicy_AllowsMissingFileURLUnderSymlinkedRoot(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real")
+	require.NoError(t, os.Mkdir(realRoot, 0o700))
+	linkRoot := filepath.Join(base, "link")
+	require.NoError(t, os.Symlink(realRoot, linkRoot))
+	target := filepath.Join(linkRoot, "nested", "missing.png")
+
+	err := navigationPolicy{
+		AllowedFileRoots: normalizeFileRoots([]string{linkRoot}),
+	}.Validate("file://" + filepath.ToSlash(target))
+	require.NoError(t, err)
+}
+
+func TestNavigationPolicy_BlocksFileURLTraversalOutOfAllowedRoot(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	outside := filepath.Join(base, "outside")
+	require.NoError(t, os.MkdirAll(root, 0o700))
+	require.NoError(t, os.MkdirAll(outside, 0o700))
+	raw := "file://" + filepath.ToSlash(root) + "/../outside/image.png"
+
+	err := navigationPolicy{
+		AllowedFileRoots: normalizeFileRoots([]string{root}),
+	}.Validate(raw)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "file URLs")
+}
+
+func TestNavigationPolicy_BlocksFileURLOutsideAllowedRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	other := filepath.Join(t.TempDir(), "image.png")
+	err := navigationPolicy{
+		AllowedFileRoots: normalizeFileRoots([]string{root}),
+	}.Validate("file://" + filepath.ToSlash(other))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "file URLs")
+}
+
+func TestNavigationPolicy_BlocksMalformedFileURLPath(t *testing.T) {
+	t.Parallel()
+
+	err := navigationPolicy{
+		AllowedFileRoots: normalizeFileRoots([]string{t.TempDir()}),
+	}.Validate("file:///%zz")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid browser url")
+}
+
+func TestNavigationPolicy_BlocksRemoteHostFileURL(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	target := filepath.Join(root, "image.png")
+	u := url.URL{Scheme: "file", Host: "example.com", Path: filepath.ToSlash(target)}
+	err := navigationPolicy{
+		AllowedFileRoots: normalizeFileRoots([]string{root}),
+	}.Validate(u.String())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "file URLs")
+}
+
+func TestNavigationPolicy_BlocksEmptyFileURLPath(t *testing.T) {
+	t.Parallel()
+
+	err := navigationPolicy{
+		AllowedFileRoots: normalizeFileRoots([]string{t.TempDir()}),
+	}.Validate("file://localhost")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "file URLs")
 }
 
 func TestNormalizeDomains_DedupesAndTrims(t *testing.T) {
@@ -151,4 +279,38 @@ func TestNavigationPolicy_AdditionalBranches(t *testing.T) {
 	}
 
 	require.True(t, isLoopbackHost("api.localhost"))
+}
+
+func TestCleanFilePathRejectsRelativePath(t *testing.T) {
+	t.Parallel()
+
+	_, err := cleanFilePath("relative/file.html")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "absolute")
+}
+
+func TestFilePathWithinRoot(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	require.False(t, filePathWithinRoot(filepath.Join(root, "file.txt"), ""))
+	require.True(t, filePathWithinRoot(root, root))
+	require.True(t, filePathWithinRoot(filepath.Join(root, "nested", "file.txt"), root))
+	require.False(t, filePathWithinRoot(filepath.Join(t.TempDir(), "file.txt"), root))
+}
+
+func TestNormalizeFileRoots(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, normalizeFileRoots(nil))
+	require.Nil(t, normalizeFileRoots([]string{"", " \t"}))
+
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real")
+	require.NoError(t, os.Mkdir(realRoot, 0o700))
+	linkRoot := filepath.Join(base, "link")
+	require.NoError(t, os.Symlink(realRoot, linkRoot))
+
+	roots := normalizeFileRoots([]string{realRoot, linkRoot, realRoot})
+	require.Equal(t, []string{realRoot}, roots)
 }
