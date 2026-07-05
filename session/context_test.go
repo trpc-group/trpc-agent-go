@@ -123,6 +123,17 @@ func TestUnmaskEvents(t *testing.T) {
 			t.Fatalf("expected 0, got %d", n)
 		}
 	})
+
+	t.Run("nil session and empty ids are no-op", func(t *testing.T) {
+		var sess *Session
+		if n := sess.UnmaskEvents("e1"); n != 0 {
+			t.Fatalf("expected 0 for nil session, got %d", n)
+		}
+		sess = NewSession("app", "user", "sess-unmask-empty")
+		if n := sess.UnmaskEvents(); n != 0 {
+			t.Fatalf("expected 0 for empty ids, got %d", n)
+		}
+	})
 }
 
 func TestGetVisibleEvents(t *testing.T) {
@@ -181,6 +192,11 @@ func TestMaskedEventCount(t *testing.T) {
 	if sess.MaskedEventCount() != 2 {
 		t.Fatalf("expected masked count to stay 2, got %d", sess.MaskedEventCount())
 	}
+
+	var nilSess *Session
+	if nilSess.MaskedEventCount() != 0 {
+		t.Fatal("expected 0 for nil session")
+	}
 }
 
 func TestClonePreservesMaskedEvents(t *testing.T) {
@@ -237,6 +253,19 @@ func TestIsEventMasked(t *testing.T) {
 			}
 		})
 	}
+
+	var nilSess *Session
+	if nilSess.IsEventMasked("e1") {
+		t.Fatal("expected false for nil session")
+	}
+
+	t.Run("returns false when no events are masked", func(t *testing.T) {
+		fresh := NewSession("app", "user", "sess-unmasked")
+		fresh.Events = []event.Event{newTestEvent("e1")}
+		if fresh.IsEventMasked("e1") {
+			t.Fatal("expected false before any masks are applied")
+		}
+	})
 }
 
 func TestHydrateMaskedEventsFromState(t *testing.T) {
@@ -258,5 +287,76 @@ func TestHydrateMaskedEventsFromState(t *testing.T) {
 	visible := fresh.GetVisibleEvents()
 	if len(visible) != 1 || visible[0].ID != "e2" {
 		t.Fatalf("expected only e2 visible after hydration, got %v", visible)
+	}
+}
+
+func TestHydrateIgnoresCorruptMaskedState(t *testing.T) {
+	sess := NewSession("app", "user", "sess-corrupt")
+	sess.Events = []event.Event{newTestEvent("e1"), newTestEvent("e2")}
+	sess.SetState(MaskedEventsStateKey, []byte("not-json"))
+
+	visible := sess.GetVisibleEvents()
+	if len(visible) != 2 {
+		t.Fatalf("expected corrupt state to be ignored, got %d visible", len(visible))
+	}
+}
+
+func TestSyncMaskedEventsToState(t *testing.T) {
+	t.Run("writes empty array when no masks", func(t *testing.T) {
+		sess := NewSession("app", "user", "sync-empty")
+		payload, err := sess.SyncMaskedEventsToState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(payload) != "[]" {
+			t.Fatalf("expected [], got %s", payload)
+		}
+		stored, ok := sess.GetState(MaskedEventsStateKey)
+		if !ok || string(stored) != "[]" {
+			t.Fatalf("expected empty array in state, got %q ok=%v", stored, ok)
+		}
+	})
+
+	t.Run("nil session", func(t *testing.T) {
+		var sess *Session
+		payload, err := sess.SyncMaskedEventsToState()
+		if err != nil || payload != nil {
+			t.Fatalf("expected nil,nil got payload=%v err=%v", payload, err)
+		}
+	})
+
+	t.Run("writes masked ids to state", func(t *testing.T) {
+		sess := NewSession("app", "user", "sync-masked")
+		sess.Events = []event.Event{newTestEvent("e1"), newTestEvent("e2")}
+		sess.MaskEvents("e1")
+
+		payload, err := sess.SyncMaskedEventsToState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(payload) != `["e1"]` {
+			t.Fatalf("unexpected payload: %s", payload)
+		}
+	})
+}
+
+func TestHydrateEmptyMaskedStateList(t *testing.T) {
+	sess := NewSession("app", "user", "sess-empty-mask-list")
+	sess.Events = []event.Event{newTestEvent("e1"), newTestEvent("e2")}
+	sess.SetState(MaskedEventsStateKey, []byte("[]"))
+
+	if len(sess.GetVisibleEvents()) != 2 {
+		t.Fatal("expected empty persisted mask list to leave all events visible")
+	}
+}
+
+func TestHydrateSkipsEmptyMaskedIDs(t *testing.T) {
+	sess := NewSession("app", "user", "sess-skip-empty-id")
+	sess.Events = []event.Event{newTestEvent("e1"), newTestEvent("e2")}
+	sess.SetState(MaskedEventsStateKey, []byte(`["","e1"]`))
+
+	visible := sess.GetVisibleEvents()
+	if len(visible) != 1 || visible[0].ID != "e2" {
+		t.Fatalf("expected only e2 visible, got %v", visible)
 	}
 }

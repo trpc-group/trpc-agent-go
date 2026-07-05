@@ -331,9 +331,33 @@ func TestReadNotesTool(t *testing.T) {
 			t.Fatalf("expected 0, got %d", out.Count)
 		}
 	})
+
+	t.Run("no session returns empty notes", func(t *testing.T) {
+		tool := NewReadNotesTool()
+		result, err := tool.Call(context.Background(), []byte(`{}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := result.(ReadNotesOutput)
+		if out.Count != 0 || len(out.Notes) != 0 {
+			t.Fatalf("expected empty output, got %+v", out)
+		}
+	})
 }
 
 // --- notes_index tests ---
+
+func TestNotesIndexPreview(t *testing.T) {
+	if got := notesIndexPreview(""); got != "" {
+		t.Fatalf("expected empty for empty input, got %q", got)
+	}
+	if got := notesIndexPreview("   \n\t  "); got != "" {
+		t.Fatalf("expected empty for whitespace-only input, got %q", got)
+	}
+	if got := notesIndexPreview("short"); got != "short" {
+		t.Fatalf("expected unchanged short preview, got %q", got)
+	}
+}
 
 func TestNotesIndexTool(t *testing.T) {
 	t.Run("returns keys, sizes, and previews in deterministic order", func(t *testing.T) {
