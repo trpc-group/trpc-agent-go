@@ -10,6 +10,7 @@ package context
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -17,6 +18,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/session/noop"
 )
 
 // ctxWithSession creates a context containing an Invocation with a real Session.
@@ -24,6 +27,29 @@ func ctxWithSession(sess *session.Session) context.Context {
 	inv := agent.NewInvocation()
 	inv.Session = sess
 	return agent.NewInvocationContext(context.Background(), inv)
+}
+
+func ctxWithSessionService(sess *session.Session, svc session.Service) context.Context {
+	inv := agent.NewInvocation()
+	inv.Session = sess
+	inv.SessionService = svc
+	return agent.NewInvocationContext(context.Background(), inv)
+}
+
+type failingNotePersistService struct {
+	*noop.Service
+}
+
+func newFailingNotePersistService() session.Service {
+	return &failingNotePersistService{Service: noop.NewService()}
+}
+
+func (s *failingNotePersistService) UpdateSessionState(
+	context.Context,
+	session.Key,
+	session.StateMap,
+) error {
+	return errors.New("persist failed")
 }
 
 func newTestEvent(id string) event.Event {
@@ -73,6 +99,39 @@ func TestDeleteContextTool(t *testing.T) {
 		out := result.(DeleteContextOutput)
 		if out.Masked != 0 {
 			t.Fatal("expected 0 masked without session")
+		}
+	})
+
+	t.Run("persists masks to session state", func(t *testing.T) {
+		ctx := context.Background()
+		svc := inmemory.NewSessionService()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "dc-persist"}
+		sess, err := svc.CreateSession(ctx, key, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sess.Events = []event.Event{
+			newTestEvent("e1"),
+			newTestEvent("e2"),
+		}
+		invCtx := ctxWithSessionService(sess, svc)
+
+		tool := NewDeleteContextTool()
+		_, err = tool.Call(invCtx, []byte(`{"event_ids":["e1"]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		raw, ok := sess.GetState(session.MaskedEventsStateKey)
+		if !ok {
+			t.Fatal("expected masked events persisted in session state")
+		}
+		reloaded := session.NewSession(key.AppName, key.UserID, key.SessionID)
+		reloaded.Events = sess.Events
+		reloaded.SetState(session.MaskedEventsStateKey, raw)
+		visible := reloaded.GetVisibleEvents()
+		if len(visible) != 1 || visible[0].ID != "e2" {
+			t.Fatalf("expected hydrated mask after reload, got %v", visible)
 		}
 	})
 }
@@ -154,6 +213,57 @@ func TestNoteTool(t *testing.T) {
 		val, _ := sess.GetState("note:plan")
 		if string(val) != "v2" {
 			t.Fatalf("expected v2, got %s", val)
+		}
+	})
+
+	t.Run("no session returns graceful message", func(t *testing.T) {
+		tool := NewNoteTool()
+		out, err := tool.Call(context.Background(), []byte(`{"key":"k","content":"v"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.(NoteOutput).Message != "no session available" {
+			t.Fatalf("unexpected message: %v", out)
+		}
+	})
+
+	t.Run("persists through session service", func(t *testing.T) {
+		ctx := context.Background()
+		svc := inmemory.NewSessionService()
+		key := session.Key{AppName: "app", UserID: "user", SessionID: "note-persist"}
+		sess, err := svc.CreateSession(ctx, key, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		invCtx := ctxWithSessionService(sess, svc)
+
+		tool := NewNoteTool()
+		_, err = tool.Call(invCtx, []byte(`{"key":"plan","content":"saved"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		reloaded, err := svc.GetSession(ctx, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		val, ok := reloaded.GetState("note:plan")
+		if !ok || string(val) != "saved" {
+			t.Fatalf("expected persisted note, got %q ok=%v", val, ok)
+		}
+	})
+
+	t.Run("returns error when session service persist fails", func(t *testing.T) {
+		sess := session.NewSession("app", "user", "s-note-fail")
+		invCtx := ctxWithSessionService(sess, newFailingNotePersistService())
+
+		tool := NewNoteTool()
+		_, err := tool.Call(invCtx, []byte(`{"key":"k","content":"v"}`))
+		if err == nil {
+			t.Fatal("expected persist error")
+		}
+		if _, ok := sess.GetState("note:k"); ok {
+			t.Fatal("note should not be stored when persist fails")
 		}
 	})
 }
@@ -262,6 +372,22 @@ func TestNotesIndexTool(t *testing.T) {
 		// 80 chars of payload + the ellipsis rune.
 		if entry.Preview != strings.Repeat("a", notesIndexPreviewMaxChars)+"…" {
 			t.Fatalf("preview not truncated as expected: %q", entry.Preview)
+		}
+	})
+
+	t.Run("truncates multi-byte runes without splitting", func(t *testing.T) {
+		content := strings.Repeat("你", 100)
+		sess := session.NewSession("app", "user", "ni-cjk")
+		sess.SetState("note:cjk", []byte(content))
+		ctx := ctxWithSession(sess)
+
+		out := mustCallNotesIndex(t, ctx)
+		if out.Count != 1 {
+			t.Fatalf("expected 1 entry, got %d", out.Count)
+		}
+		want := strings.Repeat("你", notesIndexPreviewMaxChars) + "…"
+		if out.Notes[0].Preview != want {
+			t.Fatalf("preview split runes: got len=%d want len=%d", len([]rune(out.Notes[0].Preview)), len([]rune(want)))
 		}
 	})
 

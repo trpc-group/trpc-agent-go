@@ -9,6 +9,11 @@
 package session
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+
 	"trpc.group/trpc-go/trpc-agent-go/event"
 )
 
@@ -26,6 +31,8 @@ func (sess *Session) MaskEvents(ids ...string) int {
 
 	sess.EventMu.Lock()
 	defer sess.EventMu.Unlock()
+
+	sess.ensureMaskedEventsFromStateLocked()
 
 	if sess.maskedEventIDs == nil {
 		sess.maskedEventIDs = make(map[string]bool, len(ids))
@@ -59,6 +66,8 @@ func (sess *Session) UnmaskEvents(ids ...string) int {
 	sess.EventMu.Lock()
 	defer sess.EventMu.Unlock()
 
+	sess.ensureMaskedEventsFromStateLocked()
+
 	if len(sess.maskedEventIDs) == 0 {
 		return 0
 	}
@@ -83,6 +92,8 @@ func (sess *Session) GetVisibleEvents() []event.Event {
 	if sess == nil {
 		return nil
 	}
+
+	sess.ensureMaskedEventsFromState()
 
 	sess.EventMu.RLock()
 	defer sess.EventMu.RUnlock()
@@ -113,6 +124,8 @@ func (sess *Session) MaskedEventCount() int {
 		return 0
 	}
 
+	sess.ensureMaskedEventsFromState()
+
 	sess.EventMu.RLock()
 	defer sess.EventMu.RUnlock()
 
@@ -131,14 +144,130 @@ func (sess *Session) MaskedEventCount() int {
 
 // IsEventMasked returns whether a given event ID is currently masked.
 //
-// IMPORTANT: This method does NOT acquire EventMu. The caller MUST hold
-// EventMu (at least RLock) before calling this method. This design allows
-// ContentRequestProcessor (which already locks EventMu when iterating
-// sess.Events) to check mask status without a nested lock.
+// Thread-safe: protected by EventMu.
 func (sess *Session) IsEventMasked(id string) bool {
-	if sess == nil || len(sess.maskedEventIDs) == 0 {
+	if sess == nil || id == "" {
+		return false
+	}
+
+	sess.ensureMaskedEventsFromState()
+
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+
+	if len(sess.maskedEventIDs) == 0 {
 		return false
 	}
 
 	return sess.maskedEventIDs[id]
+}
+
+// SyncMaskedEventsToState serializes the current masked-event set into session
+// state so it survives session reloads from a session service.
+func (sess *Session) SyncMaskedEventsToState() ([]byte, error) {
+	if sess == nil {
+		return nil, nil
+	}
+
+	sess.ensureMaskedEventsFromState()
+
+	sess.EventMu.RLock()
+	ids := sess.maskedEventIDListLocked()
+	sess.EventMu.RUnlock()
+
+	payload, err := marshalMaskedEventIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	sess.SetState(MaskedEventsStateKey, payload)
+	return payload, nil
+}
+
+// PersistMaskedEvents writes the masked-event set to session state and, when
+// svc is non-nil, persists it through the session service.
+func (sess *Session) PersistMaskedEvents(
+	ctx context.Context,
+	svc Service,
+	key Key,
+) error {
+	payload, err := sess.SyncMaskedEventsToState()
+	if err != nil {
+		return err
+	}
+	if svc == nil {
+		return nil
+	}
+	if err := svc.UpdateSessionState(ctx, key, StateMap{
+		MaskedEventsStateKey: payload,
+	}); err != nil {
+		return fmt.Errorf("update session state for masked events: %w", err)
+	}
+	return nil
+}
+
+func (sess *Session) ensureMaskedEventsFromState() {
+	if sess == nil {
+		return
+	}
+
+	sess.EventMu.Lock()
+	defer sess.EventMu.Unlock()
+	sess.ensureMaskedEventsFromStateLocked()
+}
+
+func (sess *Session) ensureMaskedEventsFromStateLocked() {
+	if sess.maskedEventsHydrated {
+		return
+	}
+	sess.maskedEventsHydrated = true
+
+	raw, ok := sess.GetState(MaskedEventsStateKey)
+	if !ok || len(raw) == 0 {
+		return
+	}
+
+	ids, err := unmarshalMaskedEventIDs(raw)
+	if err != nil || len(ids) == 0 {
+		return
+	}
+
+	if sess.maskedEventIDs == nil {
+		sess.maskedEventIDs = make(map[string]bool, len(ids))
+	}
+	for _, id := range ids {
+		if id != "" {
+			sess.maskedEventIDs[id] = true
+		}
+	}
+}
+
+func (sess *Session) maskedEventIDListLocked() []string {
+	if len(sess.maskedEventIDs) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(sess.maskedEventIDs))
+	for id := range sess.maskedEventIDs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func marshalMaskedEventIDs(ids []string) ([]byte, error) {
+	if len(ids) == 0 {
+		return []byte("[]"), nil
+	}
+	payload, err := json.Marshal(ids)
+	if err != nil {
+		return nil, fmt.Errorf("marshal masked event ids: %w", err)
+	}
+	return payload, nil
+}
+
+func unmarshalMaskedEventIDs(raw []byte) ([]string, error) {
+	var ids []string
+	if err := json.Unmarshal(raw, &ids); err != nil {
+		return nil, fmt.Errorf("unmarshal masked event ids: %w", err)
+	}
+	return ids, nil
 }
