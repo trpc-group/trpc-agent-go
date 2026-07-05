@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/memoryutils"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -165,8 +166,8 @@ func (s *Service) AddMemory(
 		Topics:      topics,
 		LastUpdated: &now,
 	}
-	imemory.ApplyMetadata(mem, ep)
-	memoryID := imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID)
+	memoryutils.ApplyMetadata(mem, ep)
+	memoryID := memoryutils.GenerateMemoryID(mem, userKey.AppName, userKey.UserID)
 
 	topicsJSON, err := json.Marshal(topics)
 	if err != nil {
@@ -413,7 +414,7 @@ FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 
 	now := time.Now()
 	updatedAtNs := now.UTC().UnixNano()
-	newID := imemory.ApplyMemoryUpdate(
+	newID := memoryutils.ApplyMemoryUpdate(
 		entry,
 		memoryKey.AppName,
 		memoryKey.UserID,

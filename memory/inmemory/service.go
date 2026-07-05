@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/memoryutils"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -139,10 +140,10 @@ func createMemoryEntry(
 		Topics:      topics,
 		LastUpdated: &now,
 	}
-	imemory.ApplyMetadata(memoryObj, ep)
+	memoryutils.ApplyMetadata(memoryObj, ep)
 
 	return &memory.Entry{
-		ID:        imemory.GenerateMemoryID(memoryObj, appName, userID), // Generate ID.
+		ID:        memoryutils.GenerateMemoryID(memoryObj, appName, userID), // Generate ID.
 		AppName:   appName,
 		UserID:    userID,
 		Memory:    memoryObj,
@@ -206,7 +207,7 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, 
 
 	now := time.Now()
 	ep := memory.ResolveUpdateOptions(opts)
-	newID := imemory.ApplyMemoryUpdate(
+	newID := memoryutils.ApplyMemoryUpdate(
 		memoryEntry,
 		memoryKey.AppName,
 		memoryKey.UserID,

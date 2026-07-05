@@ -21,6 +21,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/memoryutils"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
@@ -147,9 +148,9 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 		LastUpdated: &now,
 	}
 	ep := memory.ResolveAddOptions(opts)
-	imemory.ApplyMetadata(mem, ep)
+	memoryutils.ApplyMetadata(mem, ep)
 	entry := &memory.Entry{
-		ID:        imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
+		ID:        memoryutils.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
 		AppName:   userKey.AppName,
 		Memory:    mem,
 		UserID:    userKey.UserID,
@@ -189,7 +190,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 	imemory.NormalizeEntry(entry)
 	now := time.Now()
 	ep := memory.ResolveUpdateOptions(opts)
-	newID := imemory.ApplyMemoryUpdate(
+	newID := memoryutils.ApplyMemoryUpdate(
 		entry,
 		memoryKey.AppName,
 		memoryKey.UserID,

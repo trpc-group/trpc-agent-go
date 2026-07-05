@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/memoryutils"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
@@ -152,9 +153,9 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey,
 		Topics:      topics,
 		LastUpdated: &now,
 	}
-	imemory.ApplyMetadata(mem, ep)
+	memoryutils.ApplyMetadata(mem, ep)
 	entry := &memory.Entry{
-		ID:        imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
+		ID:        memoryutils.GenerateMemoryID(mem, userKey.AppName, userKey.UserID),
 		AppName:   userKey.AppName,
 		Memory:    mem,
 		UserID:    userKey.UserID,
@@ -212,7 +213,7 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key,
 	imemory.NormalizeEntry(entry)
 
 	now := time.Now()
-	newID := imemory.ApplyMemoryUpdate(
+	newID := memoryutils.ApplyMemoryUpdate(
 		entry,
 		memoryKey.AppName,
 		memoryKey.UserID,
