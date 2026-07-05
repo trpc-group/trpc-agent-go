@@ -124,9 +124,9 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 
 	// 2. Check against all regex rules. Worst risk level and most
 	// restrictive action win. Rule metadata (RuleID, Evidence,
-	// Category, Recommendation) is only updated when the risk or
-	// action is worse, so the report always points at the most
-	// important rule that matched.
+	// Category, Recommendation) is updated when the risk or action
+	// is escalated, so the report always points at the rule that
+	// drove the most restrictive decision.
 	for _, cr := range s.compiledRe {
 		for _, re := range cr.Patterns {
 			if matches := re.FindStringSubmatch(fullCommand); matches != nil {
@@ -135,9 +135,20 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 				matchedAction := actionOrder(cr.Rule.Action)
 				currentAction := actionOrder(report.Decision)
 
-				// Update metadata only when this match is worse or equal.
-				if matchedRisk > currentRisk ||
-					(matchedRisk == currentRisk && matchedAction >= currentAction) {
+				riskUpgraded := matchedRisk > currentRisk
+				actionUpgraded := matchedAction > currentAction
+
+				// Update metadata when:
+				// 1. This match has worse risk, OR
+				// 2. This match has equal risk and >= action, OR
+				// 3. This match caused an action escalation (even
+				//    with lower risk).  Case 3 is important: if a
+				//    lower-risk rule pushes the action from Ask to
+				//    Deny, the metadata must reference that rule to
+				//    explain the Deny.
+				if riskUpgraded ||
+					(matchedRisk == currentRisk && matchedAction >= currentAction) ||
+					actionUpgraded {
 					report.RuleID = cr.Rule.ID
 					report.Evidence = matches[0]
 					report.Category = cr.Rule.Category
@@ -148,32 +159,39 @@ func (s *Scanner) Scan(ctx context.Context, req ScanRequest) ScanReport {
 				}
 
 				// Upgrade risk level if this rule is worse.
-				if matchedRisk > currentRisk {
+				if riskUpgraded {
 					report.RiskLevel = cr.Rule.RiskLevel
 				}
 				// Upgrade action if this rule is more restrictive.
-				if matchedAction > currentAction {
+				if actionUpgraded {
 					report.Decision = cr.Rule.Action
 				}
 			}
 		}
 	}
 
-	// 4. Check for dangerous paths in command.
+	// 4. Check for dangerous paths in command and WorkDir.
 	for _, forbidden := range s.policy.ForbiddenPaths {
-		if strings.Contains(fullCommand, forbidden) {
+		if strings.Contains(fullCommand, forbidden) || strings.Contains(req.WorkDir, forbidden) {
+			// Apply the same guard as regex rules: only update
+			// metadata when the finding is worse than or equal
+			// to the current report state.
+			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) ||
+				(riskOrder(RiskCritical) == riskOrder(report.RiskLevel) &&
+					actionOrder(DecisionDeny) >= actionOrder(report.Decision)) {
+				report.RuleID = "forbidden_path"
+				report.Evidence = forbidden
+				report.Category = "dangerous_commands"
+				report.Recommendation = fmt.Sprintf(
+					"Command references forbidden path: %s", forbidden,
+				)
+			}
 			if riskOrder(RiskCritical) > riskOrder(report.RiskLevel) {
 				report.RiskLevel = RiskCritical
 			}
 			if actionOrder(DecisionDeny) > actionOrder(report.Decision) {
 				report.Decision = DecisionDeny
 			}
-			report.RuleID = "forbidden_path"
-			report.Evidence = forbidden
-			report.Category = "dangerous_commands"
-			report.Recommendation = fmt.Sprintf(
-				"Command references forbidden path: %s", forbidden,
-			)
 		}
 	}
 
@@ -365,6 +383,9 @@ func isAllowed(val string, allowlist []string) bool {
 }
 
 // extractCommandFromArgs parses JSON arguments to find a command string.
+// When the JSON contains separate "args" or "arguments" arrays, those
+// are appended so that the full command+args string can be scanned by
+// the regex rules (e.g. {"command":"rm","args":["-rf","/"]} → "rm -rf /").
 func extractCommandFromArgs(args []byte, fallback string) string {
 	if len(args) == 0 {
 		return fallback
@@ -376,13 +397,38 @@ func extractCommandFromArgs(args []byte, fallback string) string {
 	}
 
 	cmdKeys := []string{"command", "cmd", "script", "code", "shell_command"}
+	var command string
 	for _, key := range cmdKeys {
 		if val, ok := m[key].(string); ok && val != "" {
-			return val
+			command = val
+			break
 		}
 	}
+	if command == "" {
+		return fallback
+	}
 
-	return fallback
+	// Also extract args/arguments arrays and append for full
+	// command analysis by the scanner.
+	for _, argKey := range []string{"args", "arguments"} {
+		if argsVal, ok := m[argKey]; ok {
+			var argList []string
+			switch v := argsVal.(type) {
+			case []interface{}:
+				for _, a := range v {
+					if s, ok := a.(string); ok {
+						argList = append(argList, s)
+					}
+				}
+			case []string:
+				argList = v
+			}
+			if len(argList) > 0 {
+				command += " " + strings.Join(argList, " ")
+			}
+		}
+	}
+	return command
 }
 
 // riskOrder returns an integer ordering for risk levels (higher = worse).
