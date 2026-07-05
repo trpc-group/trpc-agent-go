@@ -93,6 +93,8 @@ const (
 	flagMaxHistoryRuns                                = "max-history-runs"
 	flagMaxLLMCalls                                   = "max-llm-calls"
 	flagMaxToolIterations                             = "max-tool-iterations"
+	flagOpenAIMaxRetries                              = "openai-max-retries"
+	flagOpenAITimeout                                 = "openai-timeout"
 	flagPreloadMemory                                 = "preload-memory"
 	flagToolCallArgumentsJSONRepair                   = "tool-call-arguments-json-repair"
 
@@ -224,6 +226,9 @@ type runOptions struct {
 	OpenAIVariant                string
 	OpenAIBaseURL                string
 	OpenAITextOnlyMessageContent bool
+	OpenAITimeout                time.Duration
+	OpenAIMaxRetries             int
+	OpenAIMaxRetriesSet          bool
 	OpenAIHeaders                map[string]string
 	GenerationConfig             *model.GenerationConfig
 	ModelConfig                  *yaml.Node
@@ -330,9 +335,10 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 		AgentType: agentTypeLLM,
 
-		ModelMode:     modeOpenAI,
-		OpenAIModel:   defaultOpenAIModelName(),
-		OpenAIVariant: defaultOpenAIVariant,
+		ModelMode:        modeOpenAI,
+		OpenAIModel:      defaultOpenAIModelName(),
+		OpenAIVariant:    defaultOpenAIVariant,
+		OpenAIMaxRetries: -1,
 
 		SkillsWatch:         true,
 		SkillsWatchDebounce: defaultSkillsWatchDebounce,
@@ -640,6 +646,18 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagOpenAITextOnlyMessageContent,
 		false,
 		"Reduce OpenAI-compatible user message content parts to text-only",
+	)
+	fs.DurationVar(
+		&opts.OpenAITimeout,
+		flagOpenAITimeout,
+		0,
+		"OpenAI HTTP request timeout (0 disables)",
+	)
+	fs.IntVar(
+		&opts.OpenAIMaxRetries,
+		flagOpenAIMaxRetries,
+		-1,
+		"OpenAI max retries (-1 uses SDK default)",
 	)
 	fs.StringVar(
 		&opts.AllowUsers,
@@ -1033,6 +1051,7 @@ func parseRunOptions(args []string) (runOptions, error) {
 		setFlags,
 		flagDeferToolSurfaceMode,
 	)
+	opts.OpenAIMaxRetriesSet = flagWasSet(setFlags, flagOpenAIMaxRetries)
 	if flagWasSet(setFlags, flagDeferToolSurface) &&
 		!opts.DeferToolSurface &&
 		!flagWasSet(setFlags, flagDeferToolSurfaceMode) {
@@ -1251,6 +1270,8 @@ type modelConfig struct {
 	BaseURL          *string               `yaml:"base_url,omitempty"`
 	OpenAIVariant    *string               `yaml:"openai_variant,omitempty"`
 	TextOnlyContent  *bool                 `yaml:"text_only_content,omitempty"`
+	Timeout          *string               `yaml:"timeout,omitempty"`
+	MaxRetries       *int                  `yaml:"max_retries,omitempty"`
 	Headers          map[string]string     `yaml:"headers,omitempty"`
 	GenerationConfig *generationConfigYAML `yaml:"generation_config,omitempty"`
 	Config           *rawYAMLNode          `yaml:"config,omitempty"`
@@ -1846,6 +1867,24 @@ func (cfg *fileConfig) apply(
 		if textOnly != nil &&
 			!flagWasSet(set, flagOpenAITextOnlyMessageContent) {
 			opts.OpenAITextOnlyMessageContent = *textOnly
+		}
+		if cfg.Model.Timeout != nil && !flagWasSet(set, flagOpenAITimeout) {
+			dur, err := parseDuration(*cfg.Model.Timeout)
+			if err != nil {
+				return fmt.Errorf("model.timeout: %w", err)
+			}
+			if dur < 0 {
+				return fmt.Errorf("model.timeout must be >= 0")
+			}
+			opts.OpenAITimeout = dur
+		}
+		if cfg.Model.MaxRetries != nil &&
+			!flagWasSet(set, flagOpenAIMaxRetries) {
+			if *cfg.Model.MaxRetries < 0 {
+				return fmt.Errorf("model.max_retries must be >= 0")
+			}
+			opts.OpenAIMaxRetries = *cfg.Model.MaxRetries
+			opts.OpenAIMaxRetriesSet = true
 		}
 		if len(cfg.Model.Headers) > 0 {
 			opts.OpenAIHeaders = cleanHeaderMap(cfg.Model.Headers)
@@ -2916,6 +2955,15 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid dynamic agent timeout: %s",
 			opts.DynamicAgentTimeout,
+		)
+	}
+	if opts.OpenAITimeout < 0 {
+		return fmt.Errorf("invalid OpenAI timeout: %s", opts.OpenAITimeout)
+	}
+	if opts.OpenAIMaxRetries < -1 {
+		return fmt.Errorf(
+			"invalid OpenAI max retries: %d",
+			opts.OpenAIMaxRetries,
 		)
 	}
 	if opts.HostExecDefaultTimeout < 0 {
