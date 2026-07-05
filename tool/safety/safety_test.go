@@ -10,6 +10,7 @@ package safety
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -232,11 +233,35 @@ allowed_commands:
 	}
 }
 
+func TestDefaultPolicyPreservesProgrammaticFalseOverrides(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.ReviewShellPipelines = false
+	policy.DenyOnParseError = false
+
+	report := Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "cat README.md | wc -l",
+	}, policy)
+	if report.Decision != DecisionAllow {
+		t.Fatalf("pipeline decision = %q, want allow; report: %+v", report.Decision, report)
+	}
+
+	report = Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "echo 'unterminated",
+	}, policy)
+	if report.Decision != DecisionAsk {
+		t.Fatalf("parse decision = %q, want ask; report: %+v", report.Decision, report)
+	}
+}
+
 func TestPermissionPolicyBlocksAndAudits(t *testing.T) {
 	args := []byte(`{"command":"cat .env","timeout_sec":10}`)
 	var audit bytes.Buffer
 	policy := NewPermissionPolicy(DefaultPolicy(), WithAuditWriter(&audit))
-	decision, err := policy.CheckToolPermission(nil, &tool.PermissionRequest{
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName:  "workspace_exec",
 		Arguments: args,
 	})
@@ -261,7 +286,7 @@ func TestPermissionPolicyBlocksAndAudits(t *testing.T) {
 func TestPermissionPolicyMapsReviewToAsk(t *testing.T) {
 	args := []byte(`{"command":"npm install left-pad"}`)
 	policy := NewPermissionPolicy(DefaultPolicy())
-	decision, err := policy.CheckToolPermission(nil, &tool.PermissionRequest{
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
 		ToolName:  "workspace_exec",
 		Arguments: args,
 	})
@@ -270,6 +295,34 @@ func TestPermissionPolicyMapsReviewToAsk(t *testing.T) {
 	}
 	if decision.Action != tool.PermissionActionAsk {
 		t.Fatalf("action = %q, want ask", decision.Action)
+	}
+}
+
+func TestNilPermissionPolicyFailsClosed(t *testing.T) {
+	var policy *PermissionPolicy
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionDeny {
+		t.Fatalf("action = %q, want deny", decision.Action)
+	}
+}
+
+func TestPermissionPolicyAllowsNullCodeBlocksNoop(t *testing.T) {
+	policy := NewPermissionPolicy(DefaultPolicy())
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "execute_code",
+		Arguments: []byte(`{"code_blocks":null}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		t.Fatalf("action = %q, want allow", decision.Action)
 	}
 }
 

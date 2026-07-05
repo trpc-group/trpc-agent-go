@@ -57,7 +57,7 @@ func (p *PermissionPolicy) CheckToolPermission(
 ) (tool.PermissionDecision, error) {
 	_ = ctx
 	if p == nil {
-		return tool.AllowPermission(), nil
+		return tool.DenyPermission("tool safety guard permission policy is nil"), nil
 	}
 	scanReq, ok, err := RequestFromPermissionRequest(req)
 	if err != nil {
@@ -199,13 +199,16 @@ func parseCodeExecArgs(base Request, args []byte) (Request, bool, error) {
 	if err != nil {
 		return Request{}, false, err
 	}
+	if len(blocks) == 0 {
+		return Request{}, false, nil
+	}
 	base.Backend = BackendCodeExec
 	base.CodeBlocks = blocks
 	return base, true, nil
 }
 
 func parseCodeBlocks(raw json.RawMessage) ([]CodeBlock, error) {
-	if len(raw) == 0 {
+	if len(raw) == 0 || strings.EqualFold(strings.TrimSpace(string(raw)), "null") {
 		return nil, nil
 	}
 	var val any

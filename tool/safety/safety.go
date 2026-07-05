@@ -76,7 +76,7 @@ type Policy struct {
 	ReviewShellPipelines bool     `json:"review_shell_pipelines,omitempty" yaml:"review_shell_pipelines,omitempty"`
 	DenyOnParseError     bool     `json:"deny_on_parse_error,omitempty" yaml:"deny_on_parse_error,omitempty"`
 
-	loaded bool
+	defaultsSet bool
 }
 
 // DefaultPolicy returns a conservative policy suitable for workspaceexec,
@@ -112,6 +112,7 @@ func DefaultPolicy() Policy {
 			"PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL",
 			"CGO_ENABLED", "GOCACHE", "GOMODCACHE", "GOPATH",
 		},
+		defaultsSet: true,
 	}
 }
 
@@ -134,7 +135,7 @@ func LoadPolicy(path string) (Policy, error) {
 	if err != nil {
 		return Policy{}, err
 	}
-	p.loaded = true
+	p.defaultsSet = true
 	return p, nil
 }
 
@@ -161,10 +162,10 @@ func (p Policy) withDefaults() Policy {
 	if p.ReviewCommands == nil {
 		p.ReviewCommands = d.ReviewCommands
 	}
-	if !p.loaded && !p.ReviewShellPipelines {
+	if !p.defaultsSet && !p.ReviewShellPipelines {
 		p.ReviewShellPipelines = d.ReviewShellPipelines
 	}
-	if !p.loaded && !p.DenyOnParseError {
+	if !p.defaultsSet && !p.DenyOnParseError {
 		p.DenyOnParseError = d.DenyOnParseError
 	}
 	return p
