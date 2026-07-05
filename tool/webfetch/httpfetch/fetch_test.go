@@ -452,14 +452,15 @@ func TestHTMLVisibleTextFallbackReportsEmptyContent(t *testing.T) {
 	assert.Contains(t, err.Error(), "no visible text")
 }
 
-func TestHTMLVisibleTextFallbackReturnsRawTextWhenParseFails(t *testing.T) {
+func TestHTMLVisibleTextFallbackReportsParseFailure(t *testing.T) {
 	result, err := htmlVisibleTextFallbackFromReader(
 		errReader{},
 		[]byte("  visible fallback text  "),
 	)
 
-	require.NoError(t, err)
-	assert.Equal(t, "visible fallback text", result)
+	require.Error(t, err)
+	assert.Empty(t, result)
+	assert.Contains(t, err.Error(), "parse HTML for visible-text fallback")
 }
 
 func TestHTMLVisibleTextFallbackReportsParseFailureWithEmptyRawText(
@@ -469,10 +470,10 @@ func TestHTMLVisibleTextFallbackReportsParseFailureWithEmptyRawText(
 
 	require.Error(t, err)
 	assert.Empty(t, result)
-	assert.Contains(t, err.Error(), "no visible text")
+	assert.Contains(t, err.Error(), "parse HTML for visible-text fallback")
 }
 
-func TestConvertHTMLToMarkdownReportsEmptyVisibleHTML(t *testing.T) {
+func TestConvertHTMLToMarkdownKeepsEmptyVisibleHTMLSuccessful(t *testing.T) {
 	result, err := convertHTMLToMarkdown(strings.NewReader(`
 		<html>
 		<body>
@@ -481,9 +482,8 @@ func TestConvertHTMLToMarkdownReportsEmptyVisibleHTML(t *testing.T) {
 		</body>
 		</html>`))
 
-	require.Error(t, err)
+	require.NoError(t, err)
 	assert.Empty(t, result)
-	assert.Contains(t, err.Error(), "no visible text")
 }
 
 func TestWebFetch_MainContentExtractionOption(t *testing.T) {

@@ -13,6 +13,7 @@ package httpfetch
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,6 +36,8 @@ const (
 
 	maxHTTPErrorBodyLength = 512
 )
+
+var errNoVisibleHTMLText = errors.New("HTML response contained no visible text")
 
 // Option configures the WebFetch tool.
 type Option func(*config)
@@ -461,7 +464,14 @@ func convertHTMLToMarkdownWithOptions(
 		return "", err
 	}
 	if strings.TrimSpace(markdown) == "" {
-		return htmlVisibleTextFallback([]byte(source))
+		text, fallbackErr := htmlVisibleTextFallback([]byte(source))
+		if errors.Is(fallbackErr, errNoVisibleHTMLText) {
+			return markdown, nil
+		}
+		if fallbackErr != nil {
+			return "", fallbackErr
+		}
+		return text, nil
 	}
 
 	return markdown, nil
@@ -473,15 +483,11 @@ func htmlVisibleTextFallback(raw []byte) (string, error) {
 
 func htmlVisibleTextFallbackFromReader(
 	r io.Reader,
-	raw []byte,
+	_ []byte,
 ) (string, error) {
 	doc, err := html.Parse(r)
 	if err != nil {
-		text := strings.TrimSpace(string(raw))
-		if text == "" {
-			return "", fmt.Errorf("HTML response contained no visible text")
-		}
-		return text, nil
+		return "", fmt.Errorf("parse HTML for visible-text fallback: %w", err)
 	}
 
 	var chunks []string
@@ -495,7 +501,7 @@ func htmlVisibleTextFallbackFromReader(
 		}
 	})
 	if len(chunks) == 0 {
-		return "", fmt.Errorf("HTML response contained no visible text")
+		return "", errNoVisibleHTMLText
 	}
 	return strings.Join(chunks, "\n"), nil
 }
