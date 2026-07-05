@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -29,7 +30,6 @@ import (
 	osb "github.com/alibaba/OpenSandbox/sdks/sandbox/go"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
-	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // Compile-time checks that workspaceRuntime satisfies the workspace
@@ -212,7 +212,8 @@ func (r *workspaceRuntime) PutFiles(
 // PutDirectory packs a host directory into tar.gz then uploads and
 // extracts it in the sandbox under ws.Path/to. We use the SDK's
 // UploadFiles API with one entry per file, walking the host tree with
-// filepath.Walk.
+// filepath.WalkDir and skipping non-regular entries (symlinks,
+// devices, etc.) to prevent following symlinks outside hostPath.
 func (r *workspaceRuntime) PutDirectory(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
@@ -250,27 +251,66 @@ func (r *workspaceRuntime) PutDirectory(
 		return fmt.Errorf("create directory %s: %w", dest, err)
 	}
 
+	entries, err := r.collectUploadEntries(ctx, sb, abs, dest)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	return sb.UploadFiles(ctx, entries)
+}
+
+// collectUploadEntries walks hostRoot with filepath.WalkDir and
+// returns one UploadFileEntry per regular file. Empty subdirectories
+// are created explicitly via sb.CreateDirectory so they survive in the
+// sandbox even when they contain no files (matches the e2b adapter's
+// tar TypeDir behaviour).
+//
+// Non-regular entries (symlinks, devices, sockets, fifos) are skipped:
+// d.Info() reports Lstat semantics (it does not follow symlinks), so
+// a symlink inside hostRoot cannot cause files outside hostRoot to be
+// uploaded. This matches the e2b adapter's behaviour.
+func (r *workspaceRuntime) collectUploadEntries(
+	ctx context.Context,
+	sb *osb.Sandbox,
+	hostRoot, destRoot string,
+) ([]osb.UploadFileEntry, error) {
 	var entries []osb.UploadFileEntry
-	walkErr := filepath.Walk(abs, func(p string, fi os.FileInfo, err error) error {
+	walkErr := filepath.WalkDir(hostRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if fi.IsDir() {
+		rel, err := filepath.Rel(hostRoot, p)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
 			return nil
 		}
-		rel, err := filepath.Rel(abs, p)
+		remotePath := path.Join(destRoot, filepath.ToSlash(rel))
+
+		if d.IsDir() {
+			if err := sb.CreateDirectory(ctx, remotePath, osb.OctalMode(0o755)); err != nil {
+				return fmt.Errorf("create directory %s: %w", remotePath, err)
+			}
+			return nil
+		}
+
+		info, err := d.Info()
 		if err != nil {
 			return err
 		}
-		remotePath := path.Join(dest, filepath.ToSlash(rel))
-		// Ensure parent directory exists.
+		if !shouldUploadFile(info) {
+			return nil
+		}
 		parent := path.Dir(remotePath)
-		if parent != "." && parent != "/" && parent != dest {
+		if parent != "." && parent != "/" && parent != destRoot {
 			if err := sb.CreateDirectory(ctx, parent, osb.OctalMode(0o755)); err != nil {
 				return fmt.Errorf("create directory %s: %w", parent, err)
 			}
 		}
-		mode := fi.Mode().Perm()
+		mode := info.Mode().Perm()
 		if mode == 0 {
 			mode = 0o644
 		}
@@ -291,12 +331,9 @@ func (r *workspaceRuntime) PutDirectory(
 		return nil
 	})
 	if walkErr != nil {
-		return walkErr
+		return nil, walkErr
 	}
-	if len(entries) == 0 {
-		return nil
-	}
-	return sb.UploadFiles(ctx, entries)
+	return entries, nil
 }
 
 // StageDirectory stages a directory with options (ReadOnly).
@@ -413,13 +450,14 @@ func (r *workspaceRuntime) CollectOutputs(
 // Timeout is expressed in milliseconds (RunCommandRequest.Timeout is
 // int64 milliseconds per the OpenSandbox SDK).
 //
-// Timeout clamping: the OpenSandbox SDK applies
+// Timeout budget: the OpenSandbox SDK applies
 // ConnectionConfig.RequestTimeout to ALL HTTP requests including the
 // streaming /command endpoint, so spec.Timeout cannot exceed
 // requestTimeout - requestTimeoutBuffer. If spec.Timeout exceeds this
-// budget it is clamped and a warning is logged; raise
-// WithRequestTimeout (or WithExecutionTimeout, which sets the floor)
-// to allow longer runs.
+// budget RunProgram returns an error (rather than silently clamping,
+// which would violate the ProgramRunner contract that other runtimes
+// honor spec.Timeout verbatim); raise WithRequestTimeout (or
+// WithExecutionTimeout, which sets the floor) to allow longer runs.
 func (r *workspaceRuntime) RunProgram(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
@@ -438,16 +476,19 @@ func (r *workspaceRuntime) RunProgram(
 	// The SDK applies ConnectionConfig.RequestTimeout to ALL HTTP
 	// requests including streaming /command. If spec.Timeout exceeds
 	// the request timeout budget the command would be killed by the
-	// HTTP client before finishing. Clamp and warn so callers know to
-	// raise WithRequestTimeout for longer runs.
+	// HTTP client before finishing. Rather than silently clamping
+	// (which would violate the ProgramRunner contract that other
+	// runtimes honor spec.Timeout verbatim), return an error so the
+	// caller can raise WithRequestTimeout or lower spec.Timeout.
 	if r.ce.requestTimeout > 0 {
 		maxRun := r.ce.requestTimeout - requestTimeoutBuffer
 		if maxRun > 0 && timeout > maxRun {
-			log.Warnf(
-				"opensandbox: spec.Timeout %s exceeds request timeout budget %s (HTTP client timeout %s); clamping to %s",
-				timeout, maxRun, r.ce.requestTimeout, maxRun,
+			return codeexecutor.RunResult{}, fmt.Errorf(
+				"opensandbox: spec.Timeout %s exceeds the request timeout budget %s "+
+					"(HTTP client timeout %s - %s buffer); raise WithRequestTimeout "+
+					"(or WithExecutionTimeout, which sets the floor) to allow longer runs",
+				timeout, maxRun, r.ce.requestTimeout, requestTimeoutBuffer,
 			)
-			timeout = maxRun
 		}
 	}
 
@@ -707,14 +748,13 @@ func (r *workspaceRuntime) listFilesByGlob(
 		}
 		infos, err := sb.SearchFiles(ctx, wsPath, p)
 		if err != nil {
-			// SearchFiles may error on unsupported glob syntax;
-			// skip the pattern rather than failing the whole call.
-			continue
+			return nil, fmt.Errorf("opensandbox: search files %q: %w", p, err)
 		}
 		for _, fi := range infos {
-			// Directories returned by SearchFiles are rare for glob
-			// patterns; we accept the slight over-inclusion rather
-			// than miss files.
+			// Skip directories — only collect regular files.
+			if fi.Type == "dir" || fi.Type == "directory" {
+				continue
+			}
 			clean := path.Clean(fi.Path)
 			if !pathUnder(clean, wsPath) {
 				continue
@@ -727,6 +767,14 @@ func (r *workspaceRuntime) listFilesByGlob(
 		}
 	}
 	return out, nil
+}
+
+// shouldUploadFile returns true if the directory entry should be
+// uploaded to the sandbox. Non-regular files (symlinks, devices,
+// sockets, fifos) are skipped to prevent following symlinks outside
+// hostPath, matching the e2b adapter's behaviour.
+func shouldUploadFile(info os.FileInfo) bool {
+	return info.Mode().IsRegular()
 }
 
 // pathUnder reports whether p is equal to base or nested below it.

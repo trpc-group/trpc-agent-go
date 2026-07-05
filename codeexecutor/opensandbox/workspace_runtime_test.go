@@ -364,11 +364,23 @@ func (m *mockOpenSandboxServer) handleSearchFiles(w http.ResponseWriter, r *http
 	w.Header().Set("Content-Type", "application/json")
 	if len(m.searchResults) > 0 {
 		// Return configured results joined under the searched dir so
-		// pathUnder passes.
+		// pathUnder passes. Entries may use "name:type" syntax to
+		// set the Type field (e.g. "subdir:dir" to simulate a
+		// directory result).
 		entries := make([]string, 0, len(m.searchResults))
-		for _, name := range m.searchResults {
+		for _, spec := range m.searchResults {
+			name := spec
+			fileType := ""
+			if idx := strings.Index(spec, ":"); idx >= 0 {
+				name = spec[:idx]
+				fileType = spec[idx+1:]
+			}
 			p := filepath.ToSlash(filepath.Join(dir, name))
-			entries = append(entries, fmt.Sprintf(`{"path":%q,"size":12}`, p))
+			if fileType != "" {
+				entries = append(entries, fmt.Sprintf(`{"path":%q,"size":12,"type":%q}`, p, fileType))
+			} else {
+				entries = append(entries, fmt.Sprintf(`{"path":%q,"size":12}`, p))
+			}
 		}
 		fmt.Fprintf(w, "[%s]", strings.Join(entries, ","))
 		return
@@ -429,12 +441,12 @@ func TestWorkspace_RunProgram(t *testing.T) {
 	assert.Equal(t, 0, res.ExitCode)
 }
 
-// TestWorkspace_RunProgram_TimeoutClampedToRequestBudget verifies that
-// RunProgram clamps spec.Timeout to requestTimeout - requestTimeoutBuffer
-// so the HTTP client cannot kill a streaming /command call before the
-// per-command timeout fires. Default executor has executionTimeout=30s,
-// so NewWithContext clamps requestTimeout to 40s; maxRun = 30s.
-func TestWorkspace_RunProgram_TimeoutClampedToRequestBudget(t *testing.T) {
+// TestWorkspace_RunProgram_TimeoutExceedsBudgetReturnsError verifies
+// that RunProgram returns an error when spec.Timeout exceeds
+// requestTimeout - requestTimeoutBuffer, instead of silently clamping.
+// Default executor has executionTimeout=30s, so NewWithContext clamps
+// requestTimeout to 40s; maxRun = 30s.
+func TestWorkspace_RunProgram_TimeoutExceedsBudgetReturnsError(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)
@@ -443,16 +455,23 @@ func TestWorkspace_RunProgram_TimeoutClampedToRequestBudget(t *testing.T) {
 	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
 	require.NoError(t, err)
 
+	// Record the command count after CreateWorkspace; RunProgram should
+	// not add any new /command calls when it rejects the timeout.
+	cmdCountBefore := len(m.commands)
+
 	// spec.Timeout=60s exceeds maxRun=30s (requestTimeout 40s - buffer 10s).
-	// RunProgram must clamp to 30s; mock should receive 30000ms.
+	// RunProgram must return an error, not silently clamp.
 	_, err = exec.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
 		Cmd:     "echo",
 		Args:    []string{"ok"},
 		Timeout: 60 * time.Second,
 	})
-	require.NoError(t, err)
-	assert.Equal(t, int64(30000), m.lastCommandTimeoutMs(),
-		"spec.Timeout 60s should be clamped to 30s (30000ms) when requestTimeout=40s")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds the request timeout budget")
+	assert.Contains(t, err.Error(), "WithRequestTimeout")
+	// No /command should have been issued by RunProgram.
+	assert.Equal(t, cmdCountBefore, len(m.commands),
+		"no /command request should be sent when spec.Timeout exceeds budget")
 }
 
 // TestWorkspace_RunProgram_TimeoutWithinBudget verifies that
@@ -909,6 +928,122 @@ func TestWorkspace_PutDirectory_NotDir(t *testing.T) {
 	err = exec.PutDirectory(context.Background(), ws, tmpFile, "subdir")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not a directory")
+}
+
+// mockFileInfo implements os.FileInfo for testing shouldUploadFile
+// without touching the real filesystem, so tests are cross-platform
+// and don't depend on symlink support (which needs admin/developer
+// mode on Windows).
+type mockFileInfo struct {
+	mode os.FileMode
+}
+
+func (m mockFileInfo) Name() string       { return "test" }
+func (m mockFileInfo) Size() int64        { return 0 }
+func (m mockFileInfo) Mode() os.FileMode  { return m.mode }
+func (m mockFileInfo) ModTime() time.Time { return time.Time{} }
+func (m mockFileInfo) IsDir() bool        { return m.mode.IsDir() }
+func (m mockFileInfo) Sys() any           { return nil }
+
+// TestShouldUploadFile verifies that shouldUploadFile accepts regular
+// files and rejects symlinks, devices, sockets, named pipes, and other
+// non-regular entries. Complements TestWorkspace_PutDirectory_SkipsSymlinks
+// by covering file types that are hard to create portably on real FS.
+func TestShouldUploadFile(t *testing.T) {
+	tests := []struct {
+		name string
+		mode os.FileMode
+		want bool
+	}{
+		{"regular file 0644", 0o644, true},
+		{"regular file 0755", 0o755, true},
+		{"regular file 0600", 0o600, true},
+		{"symlink", os.ModeSymlink | 0o777, false},
+		{"named pipe", os.ModeNamedPipe | 0o644, false},
+		{"character device", os.ModeDevice | os.ModeCharDevice | 0o644, false},
+		{"block device", os.ModeDevice | 0o644, false},
+		{"socket", os.ModeSocket | 0o644, false},
+		{"irregular", os.ModeIrregular | 0o644, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			info := mockFileInfo{mode: tt.mode}
+			assert.Equal(t, tt.want, shouldUploadFile(info),
+				"mode %s should upload=%v", tt.mode, tt.want)
+		})
+	}
+}
+
+// TestWorkspace_PutDirectory_SkipsSymlinks is the end-to-end regression
+// test requested by WineChord: a symlink inside the staged directory
+// pointing to a file outside hostPath must NOT cause the outside file
+// to be uploaded into the sandbox.
+//
+// This test requires symlink support, which on Windows needs admin or
+// developer mode. When symlink creation fails the test is skipped —
+// Linux/macOS CI covers the regression path.
+func TestWorkspace_PutDirectory_SkipsSymlinks(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	// hostPath contains a regular file and a symlink pointing OUTSIDE
+	// hostPath to a file with different content.
+	tmpDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "real.txt"), []byte("inside"), 0o644))
+
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "outside.txt")
+	require.NoError(t, os.WriteFile(outsideFile, []byte("outside-content"), 0o644))
+
+	linkPath := filepath.Join(tmpDir, "link.txt")
+	if err := os.Symlink(outsideFile, linkPath); err != nil {
+		t.Skipf("symlink creation failed (Windows needs admin/developer mode): %v", err)
+	}
+	// Some Windows configs report success without creating a real symlink.
+	fi, err := os.Lstat(linkPath)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Skipf("symlink not supported on this platform (lstat err: %v, mode: %v)", err, fi)
+	}
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	err = exec.PutDirectory(context.Background(), ws, tmpDir, "subdir")
+	require.NoError(t, err)
+
+	// Only real.txt should be uploaded; link.txt (symlink) must be skipped.
+	// The SDK may upload an internal "metadata" file alongside user
+	// files, so we check presence/absence of specific keys rather than
+	// asserting an exact file count.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	assert.Contains(t, m.files, "real.txt", "regular file should be uploaded")
+	assert.NotContains(t, m.files, "link.txt", "symlink should be skipped")
+	assert.NotContains(t, m.files, "outside.txt", "outside file must NOT be uploaded via symlink")
+}
+
+// TestWorkspace_ListFilesByGlob_SkipsDirectories verifies that
+// listFilesByGlob skips entries with Type "dir" returned by
+// SearchFiles, only collecting regular files.
+func TestWorkspace_ListFilesByGlob_SkipsDirectories(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+
+	ws, err := exec.CreateWorkspace(context.Background(), "exec-1", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+
+	// searchResults uses "name:type" syntax; "subdir:dir" simulates a
+	// directory entry, "real.txt" is a regular file (no type).
+	m.setSearchResults([]string{"subdir:dir", "real.txt"})
+
+	out, err := exec.rt.listFilesByGlob(context.Background(), ws.Path, []string{"*"})
+	require.NoError(t, err)
+	require.Len(t, out, 1, "only the regular file should be collected")
+	assert.Contains(t, out[0], "real.txt")
 }
 
 func TestWorkspace_Cleanup_EmptyPath(t *testing.T) {

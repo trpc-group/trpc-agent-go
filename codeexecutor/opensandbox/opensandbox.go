@@ -79,10 +79,11 @@ func WithSandboxTimeout(t time.Duration) Option {
 // a long-running streaming /command call before the per-command
 // execution timeout fires, NewWithContext silently raises requestTimeout
 // to at least executionTimeout + requestTimeoutBuffer when the user-
-// supplied value is smaller. RunProgram further clamps spec.Timeout to
-// requestTimeout - requestTimeoutBuffer; raise this option (or
-// WithExecutionTimeout) to allow longer individual runs. Set t to 0 to
-// keep the SDK default.
+// supplied value is smaller. If a caller passes RunProgramSpec.Timeout
+// greater than requestTimeout - requestTimeoutBuffer, RunProgram
+// returns an error instead of silently shortening the timeout; raise
+// this option (or WithExecutionTimeout) to allow longer individual
+// runs. Set t to 0 to keep the SDK default.
 func WithRequestTimeout(t time.Duration) Option {
 	return func(c *CodeExecutor) { c.requestTimeout = t }
 }
@@ -533,6 +534,17 @@ func (c *CodeExecutor) ExecuteInline(
 // `env -i` with only the workspace base variables, the (already
 // scrubbed) spec.Env and a minimal PATH, so the program does not
 // inherit the sandbox process environment.
+//
+// Scope note: RunProgram wraps the user command in `bash -c` for
+// stdin process substitution and stdout/stderr framing. That framing
+// shell still inherits the sandbox environment because `env -i` is
+// spliced into the inner command, not the outer `bash -c`. This is
+// not a model-injection vector: the sandbox environment is fixed by
+// the image / WithEnvVars at sandbox creation (operator-controlled),
+// and model-supplied env (spec.Env) is confined to the `env -i`
+// invocation rather than the framing shell. The SupportsCleanEnv
+// contract is about the spawned program's environment, which `env -i`
+// satisfies.
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := c.ensureRuntime()
 	return codeexecutor.NewEngineWithCapabilities(
