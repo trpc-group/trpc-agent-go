@@ -321,11 +321,24 @@ func (f *fileToolSet) matchBaseDir(absPath string) bool {
 	}
 	candidate := filepath.Clean(absPath)
 	base := filepath.Clean(f.baseDir)
-	candidateInBase := isPathWithinRoot(candidate, base)
 	evaluatedCandidate, resolvedPath := evalPathWithExistingParent(candidate)
-	evaluatedInBase := resolvedPath &&
-		isPathWithinRoot(evaluatedCandidate, base)
-	return candidateInBase && (!resolvedPath || evaluatedInBase)
+	evaluatedBase, resolvedBase := evalPathWithExistingParent(base)
+	roots := []string{base}
+	if resolvedBase && evaluatedBase != base {
+		roots = append(roots, evaluatedBase)
+	}
+	for _, root := range roots {
+		candidateInBase := isPathWithinRoot(candidate, root)
+		evaluatedInBase := resolvedPath &&
+			isPathWithinRoot(evaluatedCandidate, root)
+		if candidateInBase && (!resolvedPath || evaluatedInBase) {
+			return true
+		}
+		if !candidateInBase && evaluatedInBase {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fileToolSet) matchExtraReadRoot(absPath string) (string, bool) {

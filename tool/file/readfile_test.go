@@ -67,6 +67,29 @@ func TestFileTool_ReadFile_AbsolutePathUnderBaseDir(t *testing.T) {
 	assert.Equal(t, "derived", rsp.Contents)
 }
 
+func TestFileTool_ReadFile_AbsolutePathUnderSymlinkedBaseDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink permissions vary on windows")
+	}
+	realBase := t.TempDir()
+	parent := t.TempDir()
+	baseLink := filepath.Join(parent, "base")
+	assert.NoError(t, os.Symlink(realBase, baseLink))
+	fileName := filepath.Join(baseLink, "derived.txt")
+	assert.NoError(t, os.WriteFile(fileName, []byte("derived"), 0o644))
+
+	toolSet, err := NewToolSet(WithBaseDir(baseLink))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	rsp, err := fileToolSet.readFile(
+		context.Background(),
+		&readFileRequest{FileName: fileName},
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, "derived", rsp.Contents)
+}
+
 func TestFileTool_ReadFile_BlocksSymlinkEscapeFromBaseDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink permissions vary on windows")
