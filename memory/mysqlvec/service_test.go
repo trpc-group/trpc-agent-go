@@ -21,8 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/memoryutils"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
-	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -700,7 +700,7 @@ func TestService_UpdateMemory_SameID_UpdateInPlace(t *testing.T) {
 
 	// Pre-compute the ID that GenerateMemoryID will produce for this content+topics+app+user.
 	mem := &memory.Memory{Memory: "same content", Topics: []string{"same"}}
-	correctID := imemory.GenerateMemoryID(mem, "app", "u1")
+	correctID := memoryutils.GenerateMemoryID(mem, "app", "u1")
 
 	now := time.Now()
 	key := memory.Key{AppName: "app", UserID: "u1", MemoryID: correctID}
@@ -892,7 +892,7 @@ func TestService_UpdateMemory_InPlace_SQLError(t *testing.T) {
 	defer svc.Close()
 
 	mem := &memory.Memory{Memory: "same", Topics: []string{"s"}}
-	correctID := imemory.GenerateMemoryID(mem, "app", "u1")
+	correctID := memoryutils.GenerateMemoryID(mem, "app", "u1")
 	key := memory.Key{AppName: "app", UserID: "u1", MemoryID: correctID}
 	now := time.Now()
 	mock.ExpectQuery("SELECT memory_id").
@@ -914,7 +914,7 @@ func TestService_UpdateMemory_InPlace_RowsAffectedError(t *testing.T) {
 	defer svc.Close()
 
 	mem := &memory.Memory{Memory: "same", Topics: []string{"s"}}
-	correctID := imemory.GenerateMemoryID(mem, "app", "u1")
+	correctID := memoryutils.GenerateMemoryID(mem, "app", "u1")
 	key := memory.Key{AppName: "app", UserID: "u1", MemoryID: correctID}
 	now := time.Now()
 	mock.ExpectQuery("SELECT memory_id").
@@ -936,7 +936,7 @@ func TestService_UpdateMemory_InPlace_ZeroRowsAffected(t *testing.T) {
 	defer svc.Close()
 
 	mem := &memory.Memory{Memory: "same", Topics: []string{"s"}}
-	correctID := imemory.GenerateMemoryID(mem, "app", "u1")
+	correctID := memoryutils.GenerateMemoryID(mem, "app", "u1")
 	key := memory.Key{AppName: "app", UserID: "u1", MemoryID: correctID}
 	now := time.Now()
 	mock.ExpectQuery("SELECT memory_id").

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/memoryutils"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -122,8 +123,8 @@ func (s *Service) AddMemory(
 		Topics:      topics,
 		LastUpdated: &now,
 	}
-	imemory.ApplyMetadata(mem, ep)
-	memoryID := imemory.GenerateMemoryID(mem, userKey.AppName, userKey.UserID)
+	memoryutils.ApplyMetadata(mem, ep)
+	memoryID := memoryutils.GenerateMemoryID(mem, userKey.AppName, userKey.UserID)
 
 	if s.opts.memoryLimit > 0 {
 		deletedAt, exists, err := s.getDeletedAt(ctx, userKey, memoryID)
@@ -260,7 +261,7 @@ func (s *Service) UpdateMemory(
 	}
 
 	now := time.Now()
-	newID := imemory.ApplyMemoryUpdate(
+	newID := memoryutils.ApplyMemoryUpdate(
 		entry,
 		memoryKey.AppName,
 		memoryKey.UserID,
