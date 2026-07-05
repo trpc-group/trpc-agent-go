@@ -272,10 +272,10 @@ tools:
   # 可选：覆盖内置的 OpenClaw tooling guidance 提示词。
   # 不设置时使用内置默认值，设为 "" 可禁用它。
   openclaw_tooling_guidance: ""
-  # 可选：当直接工具面超过 auto 阈值时，先只向父模型暴露轻量
-  # tool_search + dynamic_agent 入口。默认模式为 auto；设置
-  # defer_to_dynamic_agent_mode: on 可强制开启，设置 off 可关闭。
-  defer_to_dynamic_agent_mode: auto # off|on|auto
+  # 可选：先只向父模型暴露轻量 tool_search + dynamic_agent 入口。
+  # 默认模式为 off，会把配置的工具直接暴露给父 agent。设置 auto 时
+  # 仅当直接工具面超过阈值才 defer，设置 on 可强制开启。
+  defer_to_dynamic_agent_mode: off # off|on|auto
   defer_to_dynamic_agent_threshold_chars: 4000
   # 可选：是否保留默认的父 agent 直连工具。对 token 敏感的 profile 可
   # 设为 false，仅暴露 tool_search/dynamic_agent 和 defer_direct_tools。

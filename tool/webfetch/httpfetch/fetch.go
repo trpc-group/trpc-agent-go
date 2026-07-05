@@ -32,6 +32,8 @@ import (
 const (
 	defaultTimeout = 30 * time.Second
 	maxURLs        = 20
+
+	maxHTTPErrorBodyLength = 512
 )
 
 // Option configures the WebFetch tool.
@@ -291,7 +293,7 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 	item.StatusCode = resp.StatusCode
 
 	if item.StatusCode < 200 || item.StatusCode >= 300 {
-		item.Error = fmt.Sprintf("HTTP status %d", item.StatusCode)
+		item.Error = httpStatusError(resp)
 		return item
 	}
 
@@ -322,6 +324,47 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 
 	item.Content = content
 	return item
+}
+
+func httpStatusError(resp *http.Response) string {
+	msg := fmt.Sprintf("HTTP status %s", resp.Status)
+	if snippet := httpErrorBodySnippet(resp); snippet != "" {
+		msg += "; body: " + snippet
+	}
+	return msg
+}
+
+func httpErrorBodySnippet(resp *http.Response) string {
+	data, err := io.ReadAll(io.LimitReader(
+		resp.Body,
+		maxHTTPErrorBodyLength+1,
+	))
+	if err != nil {
+		return ""
+	}
+	truncated := len(data) > maxHTTPErrorBodyLength
+	if truncated {
+		data = data[:maxHTTPErrorBodyLength]
+	}
+	text := string(data)
+	contentType := strings.Split(resp.Header.Get("Content-Type"), ";")[0]
+	if strings.TrimSpace(contentType) == "text/html" {
+		if converted, err := convertHTMLToMarkdownWithOptions(
+			bytes.NewReader(data),
+			true,
+		); err == nil {
+			text = converted
+		}
+	}
+	text = strings.ToValidUTF8(text, "")
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" {
+		return ""
+	}
+	if truncated {
+		text += "..."
+	}
+	return text
 }
 
 func unsupportedContentTypeError(contentType string) string {

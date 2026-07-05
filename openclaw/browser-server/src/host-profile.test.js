@@ -12,6 +12,23 @@ function profileForPage(page) {
   return profile;
 }
 
+test("HostProfile navigate opens a tab when none exists", async () => {
+  const profile = new HostProfile({
+    headless: true,
+    policy: {}
+  });
+  profile.currentPage = () => null;
+  profile.openTab = async (url) => {
+    assert.equal(url, "about:blank");
+    return { targetId: "tab-1", tabs: [] };
+  };
+
+  const result = await profile.navigate("", "about:blank");
+
+  assert.equal(result.targetId, "tab-1");
+  assert.match(result.content[0].text, /Navigated to about:blank/);
+});
+
 test("HostProfile screenshot supports CSS element selectors", async () => {
   const calls = [];
   const locator = {

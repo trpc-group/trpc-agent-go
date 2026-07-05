@@ -1676,6 +1676,32 @@ func TestToolCall_NavigateAcceptsTargetURL(t *testing.T) {
 	require.Equal(t, "https://example.com", drv.calls[0].Args["url"])
 }
 
+func TestToolCall_NavigateCompactsBrowserCrashOutput(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolNavigate: browserCrashPayload(),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionNavigate,
+			"url":    "https://example.com",
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	require.Contains(t, got.Text, browserCrashSummary)
+	require.NotContains(t, got.Text, "--disable-field-trial-config")
+	require.NotContains(t, got.Text, browserLaunchMarker)
+	require.Less(t, len(got.Text), 800)
+}
+
 func TestToolCall_ActWithURLDefaultsToNavigate(t *testing.T) {
 	t.Parallel()
 
@@ -2036,6 +2062,19 @@ func TestToolCall_ActRoutesLegacyFields(t *testing.T) {
 			input: map[string]any{
 				"action": actionAct,
 				"kind":   actKey,
+				"key":    "End",
+			},
+			wantTool: mcpToolPressKey,
+			assertArg: func(t *testing.T, call fakeCall) {
+				t.Helper()
+				require.Equal(t, "End", call.Args["key"])
+			},
+		},
+		{
+			name: "press key schema alias",
+			input: map[string]any{
+				"action": actionAct,
+				"kind":   "press/key",
 				"key":    "End",
 			},
 			wantTool: mcpToolPressKey,
@@ -2686,6 +2725,32 @@ func TestToolCall_ScreenshotPassesOptions(t *testing.T) {
 	require.Equal(t, "e1", drv.calls[1].Args["ref"])
 	require.Equal(t, "hero", drv.calls[1].Args["element"])
 	require.Equal(t, "png", drv.calls[1].Args["type"])
+}
+
+func TestToolCall_ScreenshotCompactsBrowserCrashContent(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolScreenshot: browserCrashPayload(),
+		},
+	}
+	tool := newTestTool(drv)
+
+	raw, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionScreenshot,
+		}),
+	)
+	require.NoError(t, err)
+
+	got := raw.(Result)
+	text := extractText(got.Content)
+	require.Contains(t, text, browserCrashSummary)
+	require.NotContains(t, text, "--disable-field-trial-config")
+	require.NotContains(t, text, browserLaunchMarker)
+	require.Less(t, len(text), 600)
 }
 
 func TestToolCall_SnapshotPassesBrowserServerOptions(t *testing.T) {
@@ -4424,6 +4489,21 @@ func textPayload(text string) []map[string]any {
 		"type": "text",
 		"text": text,
 	}}
+}
+
+func browserCrashPayload() []map[string]any {
+	return textPayload(browserCrashPayloadText())
+}
+
+func browserCrashPayloadText() string {
+	return "### Error\n" +
+		"Error: async createBrowserWithInfo: Target page, context or " +
+		"browser has been closed\n" +
+		"Browser logs:\n\n" +
+		"<launching> /usr/bin/chromium-browser " +
+		"--disable-field-trial-config --disable-background-networking " +
+		"--headless --remote-debugging-pipe\n" +
+		"[pid=1] <process did exit: exitCode=null, signal=SIGTRAP>"
 }
 
 func tabsPayload() []map[string]any {

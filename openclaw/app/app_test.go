@@ -2896,6 +2896,11 @@ func TestOpenClawToolingGuidancePrefersSearchTools(t *testing.T) {
 	require.Contains(
 		t,
 		openClawToolingGuidance,
+		"Do not use exec_command for public web search or static page fetches",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
 		"When a web search tool such as duckduckgo_search is present",
 	)
 	require.Contains(
@@ -3467,6 +3472,46 @@ func TestNewAgent_ContextCompactionKeepsDynamicAgentResults(t *testing.T) {
 	all := joinAllMessageContent(req)
 	require.Contains(t, all, dynamicContent)
 	require.NotContains(t, all, "tool_name: dynamic_agent")
+}
+
+func TestNewAgent_DefaultKeepsToolSurfaceDirect(t *testing.T) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:  "demo",
+		StateDir: t.TempDir(),
+	}, []tool.Tool{
+		stubTool{name: "exec_command"},
+		stubTool{name: "message"},
+	}, nil)
+	require.NoError(t, err)
+
+	parentTools := agt.Tools()
+	require.NotNil(t, findToolDeclaration(parentTools, "exec_command"))
+	require.NotNil(t, findToolDeclaration(parentTools, "message"))
+	require.Nil(
+		t,
+		findToolDeclaration(parentTools, agenttool.DefaultDynamicToolName),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(
+			parentTools,
+			agenttool.DefaultCapabilitySearchToolName,
+		),
+	)
+
+	req := runAgentAndCapture(t, agt, mdl, &session.Session{})
+	require.NotNil(t, req.Tools["exec_command"])
+	require.NotNil(t, req.Tools["message"])
+	require.Nil(t, req.Tools[agenttool.DefaultDynamicToolName])
+	require.Nil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
+	require.NotContains(
+		t,
+		joinSystemMessages(req),
+		"Tool-backed work is available",
+	)
 }
 
 func TestNewAgent_DeferToolSurfaceAutoKeepsSmallToolSurface(t *testing.T) {
@@ -4087,7 +4132,7 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			agentType: agentTypeClaudeCode,
 		},
 		{
-			name:      "claude default defer auto ok",
+			name:      "claude implicit defer auto ok",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{
 				DeferToolSurfaceMode: deferToolSurfaceModeAuto,
@@ -4418,6 +4463,46 @@ func TestParseOpenAIVariant_Auto(t *testing.T) {
 func TestParseOpenAIVariant_Unknown(t *testing.T) {
 	_, err := parseOpenAIVariant("nope", "")
 	require.Error(t, err)
+}
+
+func TestModelCompatibilityRunOptions_GLMEnablesJSONRepair(t *testing.T) {
+	t.Parallel()
+
+	runOpts := modelCompatibilityRunOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantGLM),
+	})
+	require.NotEmpty(t, runOpts)
+	agentOpts := agent.NewRunOptions(runOpts...)
+	require.NotNil(t, agentOpts.ToolCallArgumentsJSONRepairEnabled)
+	require.True(t, *agentOpts.ToolCallArgumentsJSONRepairEnabled)
+}
+
+func TestModelCompatibilityRunOptions_GLMCanBeInferred(t *testing.T) {
+	t.Parallel()
+
+	runOpts := modelCompatibilityRunOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: openAIVariantAuto,
+		OpenAIBaseURL: "https://open.bigmodel.cn/api/paas/v4",
+	})
+	require.NotEmpty(t, runOpts)
+	agentOpts := agent.NewRunOptions(runOpts...)
+	require.NotNil(t, agentOpts.ToolCallArgumentsJSONRepairEnabled)
+	require.True(t, *agentOpts.ToolCallArgumentsJSONRepairEnabled)
+}
+
+func TestModelCompatibilityRunOptions_NonGLMUnaffected(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, modelCompatibilityRunOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantOpenAI),
+	}))
+	require.Empty(t, modelCompatibilityRunOptions(runOptions{
+		ModelMode:     modeMock,
+		OpenAIVariant: string(openai.VariantGLM),
+	}))
 }
 
 func TestInferOpenAIVariant(t *testing.T) {

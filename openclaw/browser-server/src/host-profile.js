@@ -295,6 +295,12 @@ export class HostProfile {
 
   async navigate(targetId, url) {
     await validateNavigationURL(url, this.config.policy);
+    if (!targetId && !this.currentPage()) {
+      const opened = await this.openTab(url);
+      return textContent(`Navigated to ${url}`, {
+        targetId: opened.targetId
+      });
+    }
     const page = this.requirePageOrCurrent(targetId);
     await page.goto(url, { waitUntil: "domcontentloaded" });
     this.activeTargetId = this.pageIds.get(page);

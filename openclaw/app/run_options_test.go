@@ -1411,7 +1411,7 @@ func TestParseRunOptions_HostExecMaxYieldNegativeFails(t *testing.T) {
 	require.Contains(t, err.Error(), "host exec max yield")
 }
 
-func TestParseRunOptions_DeferToolSurfaceDefaultsToAuto(t *testing.T) {
+func TestParseRunOptions_DeferToolSurfaceDefaultsToOff(t *testing.T) {
 	t.Parallel()
 
 	cfgPath := writeTempConfig(t, `
@@ -1421,7 +1421,7 @@ tools:
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
 	require.NoError(t, err)
 	require.False(t, opts.DeferToolSurface)
-	require.Equal(t, deferToolSurfaceModeAuto, opts.DeferToolSurfaceMode)
+	require.Equal(t, deferToolSurfaceModeOff, opts.DeferToolSurfaceMode)
 	require.False(t, opts.deferToolSurfaceModeExplicit)
 }
 
