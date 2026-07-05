@@ -9761,3 +9761,42 @@ func TestModel_GenerateContentIter_EmbeddedErrorHTTP200(t *testing.T) {
 	assert.Equal(t, model.ErrorTypeAPIError, resp.Error.Type)
 	assert.True(t, resp.Done)
 }
+
+func TestImageToURLOrBase64(t *testing.T) {
+	tests := []struct {
+		name  string
+		image *model.Image
+		want  string
+	}{
+		{
+			name: "with URL",
+			image: &model.Image{
+				URL: "http://example.com/image.jpg",
+			},
+			want: "http://example.com/image.jpg",
+		},
+		{
+			name: "with extension format",
+			image: &model.Image{
+				Format: "png",
+				Data:   []byte("test"),
+			},
+			want: "data:image/png;base64,dGVzdA==",
+		},
+		{
+			name: "with full MIME format",
+			image: &model.Image{
+				Format: "image/png",
+				Data:   []byte("test"),
+			},
+			want: "data:image/png;base64,dGVzdA==",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := imageToURLOrBase64(tt.image)
+			assert.Equal(t, tt.want, result)
+		})
+	}
+}

@@ -1462,6 +1462,14 @@ func TestImageToURLOrBase64(t *testing.T) {
 			},
 			want: "data:image/png;base64,dGVzdA==",
 		},
+		{
+			name: "with full MIME format",
+			image: &model.Image{
+				Format: "image/png",
+				Data:   []byte("test"),
+			},
+			want: "data:image/png;base64,dGVzdA==",
+		},
 	}
 
 	for _, tt := range tests {
