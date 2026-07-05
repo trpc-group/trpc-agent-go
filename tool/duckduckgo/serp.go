@@ -106,6 +106,12 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 		}
 		return apiFallback, nil
 	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if errors.Is(apiFallbackErr, ctxErr) {
+			return apiFallback, apiFallbackErr
+		}
+		return apiFallback, ctxErr
+	}
 	if isSERPRouteBlocker(err, fallbackErr) {
 		return searchResponse{
 			Query:   req.Query,
