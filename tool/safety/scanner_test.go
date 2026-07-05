@@ -109,8 +109,8 @@ func TestScan_PipedCommands(t *testing.T) {
 	}
 	report := s.Scan(context.Background(), req)
 	// Pipe into bash -c should be denied by shell_bypass rule.
-	assert.NotEqual(t, DecisionAllow, report.Decision,
-		"pipe into bash -c must not be auto-allowed, got %s", report.Decision)
+	assert.Equal(t, DecisionDeny, report.Decision,
+		"pipe into bash -c must be denied, got %s", report.Decision)
 }
 
 // Case 7: Dependency installation (pip install) — should be ask.
