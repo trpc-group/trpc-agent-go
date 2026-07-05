@@ -50,6 +50,47 @@ func TestFileTool_ReadFile(t *testing.T) {
 	assert.Equal(t, testContent, rsp.Contents)
 }
 
+func TestFileTool_ReadFile_AbsolutePathUnderBaseDir(t *testing.T) {
+	base := t.TempDir()
+	fileName := filepath.Join(base, "derived.txt")
+	assert.NoError(t, os.WriteFile(fileName, []byte("derived"), 0o644))
+
+	toolSet, err := NewToolSet(WithBaseDir(base))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	rsp, err := fileToolSet.readFile(
+		context.Background(),
+		&readFileRequest{FileName: fileName},
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, "derived", rsp.Contents)
+}
+
+func TestFileTool_ReadFile_BlocksSymlinkEscapeFromBaseDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink permissions vary on windows")
+	}
+	base := t.TempDir()
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	assert.NoError(t, os.WriteFile(secret, []byte("secret"), 0o644))
+	link := filepath.Join(base, "link.txt")
+	assert.NoError(t, os.Symlink(secret, link))
+
+	toolSet, err := NewToolSet(WithBaseDir(base))
+	assert.NoError(t, err)
+	fileToolSet := toolSet.(*fileToolSet)
+
+	rsp, err := fileToolSet.readFile(
+		context.Background(),
+		&readFileRequest{FileName: link},
+	)
+	assert.Error(t, err)
+	assert.Empty(t, rsp.Contents)
+	assert.Contains(t, err.Error(), "outside configured read-only roots")
+}
+
 func TestFileTool_ReadFile_AbsolutePathUnderExtraReadRoot(t *testing.T) {
 	base := t.TempDir()
 	extra := t.TempDir()

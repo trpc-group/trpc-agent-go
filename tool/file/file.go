@@ -300,6 +300,9 @@ func (f *fileToolSet) resolveReadPath(requestPath string) (string, error) {
 		return f.resolvePath(requestPath)
 	}
 	clean := filepath.Clean(raw)
+	if f.matchBaseDir(clean) {
+		return clean, nil
+	}
 	if _, ok := f.matchExtraReadRoot(clean); ok {
 		return clean, nil
 	}
@@ -310,6 +313,19 @@ func (f *fileToolSet) resolveReadPath(requestPath string) (string, error) {
 		extraReadRootGuidance,
 		relativePathGuidance,
 	)
+}
+
+func (f *fileToolSet) matchBaseDir(absPath string) bool {
+	if f == nil || strings.TrimSpace(f.baseDir) == "" {
+		return false
+	}
+	candidate := filepath.Clean(absPath)
+	base := filepath.Clean(f.baseDir)
+	candidateInBase := isPathWithinRoot(candidate, base)
+	evaluatedCandidate, resolvedPath := evalPathWithExistingParent(candidate)
+	evaluatedInBase := resolvedPath &&
+		isPathWithinRoot(evaluatedCandidate, base)
+	return candidateInBase && (!resolvedPath || evaluatedInBase)
 }
 
 func (f *fileToolSet) matchExtraReadRoot(absPath string) (string, bool) {

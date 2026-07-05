@@ -230,6 +230,24 @@ func TestResolveReadPath_ExtraReadRoot(t *testing.T) {
 	assert.Contains(t, err.Error(), relativePathGuidance)
 }
 
+func TestResolveReadPath_BaseDirAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	set, err := NewToolSet(WithBaseDir(dir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	allowed := filepath.Join(dir, "a.txt")
+	p, err := fts.resolveReadPath(allowed)
+	assert.NoError(t, err)
+	assert.Equal(t, allowed, p)
+}
+
+func TestMatchBaseDir_Empty(t *testing.T) {
+	var nilSet *fileToolSet
+	assert.False(t, nilSet.matchBaseDir("/tmp/a.txt"))
+	assert.False(t, (&fileToolSet{}).matchBaseDir("/tmp/a.txt"))
+}
+
 func TestResolvePath_Empty(t *testing.T) {
 	dir := t.TempDir()
 	set, err := NewToolSet(WithBaseDir(dir))
