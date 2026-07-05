@@ -16,6 +16,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,6 +50,12 @@ const (
 	ErrorStreamableToolExecution = "Error: streamable tool execution failed"
 	// ErrorMarshalResult is the error message for failed to marshal result.
 	ErrorMarshalResult = "Error: failed to marshal result"
+)
+
+const (
+	maxToolNameSuggestions    = 3
+	maxToolNameDistance       = 3
+	maxToolNameErrorNameRunes = 160
 )
 
 // funcRespCompletionTimeout is the default wait duration for ensuring a
@@ -114,15 +122,21 @@ type subAgentCall struct {
 
 // FunctionCallResponseProcessor handles agent transfer operations after LLM responses.
 type FunctionCallResponseProcessor struct {
-	enableParallelTools bool
-	toolCallbacks       *tool.Callbacks
-	toolRetryPolicy     *tool.RetryPolicy
-	postToolResultHooks []PostToolResultHook
-	attachmentBudget    int
+	enableParallelTools       bool
+	toolCallbacks             *tool.Callbacks
+	toolRetryPolicy           *tool.RetryPolicy
+	postToolResultHooks       []PostToolResultHook
+	attachmentBudget          int
+	toolNameSuggestionOptions toolNameSuggestionOptions
 }
 
 // FunctionCallResponseProcessorOption configures a function-call response processor.
 type FunctionCallResponseProcessorOption func(*FunctionCallResponseProcessor)
+
+type toolNameSuggestionOptions struct {
+	maxSuggestions int
+	maxDistance    int
+}
 
 // PostToolResultHook observes and may mutate a completed tool result event.
 type PostToolResultHook func(
@@ -165,6 +179,24 @@ func WithToolResultAttachmentBudget(
 	}
 }
 
+// WithToolNameSuggestions configures tool-not-found suggestion generation.
+// Non-positive maxSuggestions or negative maxDistance disables suggestions.
+func WithToolNameSuggestions(
+	maxSuggestions int,
+	maxDistance int,
+) FunctionCallResponseProcessorOption {
+	return func(p *FunctionCallResponseProcessor) {
+		if maxSuggestions <= 0 || maxDistance < 0 {
+			p.toolNameSuggestionOptions = toolNameSuggestionOptions{}
+			return
+		}
+		p.toolNameSuggestionOptions = toolNameSuggestionOptions{
+			maxSuggestions: maxSuggestions,
+			maxDistance:    maxDistance,
+		}
+	}
+}
+
 // NewFunctionCallResponseProcessor creates a new transfer response processor.
 func NewFunctionCallResponseProcessor(
 	enableParallelTools bool,
@@ -172,8 +204,9 @@ func NewFunctionCallResponseProcessor(
 	opts ...FunctionCallResponseProcessorOption,
 ) *FunctionCallResponseProcessor {
 	processor := &FunctionCallResponseProcessor{
-		enableParallelTools: enableParallelTools,
-		toolCallbacks:       toolCallbacks,
+		enableParallelTools:       enableParallelTools,
+		toolCallbacks:             toolCallbacks,
+		toolNameSuggestionOptions: defaultToolNameSuggestionOptions(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -1881,6 +1914,11 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 				toolCall.Function.Arguments = newArgs
 			}
 		} else {
+			toolNotFoundErr := toolNotFoundError(
+				toolCall.Function.Name,
+				tools,
+				p.toolNameSuggestionOptions,
+			)
 			log.ErrorfContext(
 				ctx,
 				"CallableTool %s not found (agent=%s, model=%s)",
@@ -1888,7 +1926,10 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 				invocation.AgentName,
 				invocation.Model.Info().Name,
 			)
-			return toolCall, nil, true, fmt.Errorf("executeToolCall: %s", ErrorToolNotFound)
+			return toolCall, nil, true, fmt.Errorf(
+				"executeToolCall: %s",
+				toolNotFoundErr,
+			)
 		}
 	}
 	if invocation != nil &&
@@ -1896,6 +1937,153 @@ func (p *FunctionCallResponseProcessor) resolveToolCallTarget(
 		return toolCall, nil, true, nil
 	}
 	return toolCall, tl, false, nil
+}
+
+func defaultToolNameSuggestionOptions() toolNameSuggestionOptions {
+	return toolNameSuggestionOptions{
+		maxSuggestions: maxToolNameSuggestions,
+		maxDistance:    maxToolNameDistance,
+	}
+}
+
+func toolNotFoundError(
+	name string,
+	tools map[string]tool.Tool,
+	options toolNameSuggestionOptions,
+) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ErrorToolNotFound
+	}
+	suggestions := similarToolNames(name, tools, options)
+	displayName := displayToolName(name)
+	if len(suggestions) == 0 {
+		return fmt.Sprintf("%s: %s", ErrorToolNotFound, displayName)
+	}
+	if len(suggestions) == 1 {
+		return fmt.Sprintf(
+			"%s: %s; did you mean %q?",
+			ErrorToolNotFound,
+			displayName,
+			suggestions[0],
+		)
+	}
+	return fmt.Sprintf(
+		"%s: %s; did you mean one of %s?",
+		ErrorToolNotFound,
+		displayName,
+		quotedToolNames(suggestions),
+	)
+}
+
+func similarToolNames(
+	name string,
+	tools map[string]tool.Tool,
+	options toolNameSuggestionOptions,
+) []string {
+	if options.maxSuggestions <= 0 || options.maxDistance < 0 {
+		return nil
+	}
+	type candidate struct {
+		name     string
+		distance int
+	}
+	needle := strings.ToLower(strings.TrimSpace(name))
+	candidates := make([]candidate, 0, len(tools))
+	for toolName := range tools {
+		trimmed := strings.TrimSpace(toolName)
+		if trimmed == "" {
+			continue
+		}
+		distance := toolNameEditDistance(
+			needle,
+			strings.ToLower(trimmed),
+		)
+		if distance <= options.maxDistance {
+			candidates = append(candidates, candidate{
+				name:     trimmed,
+				distance: distance,
+			})
+			continue
+		}
+		if strings.Contains(needle, strings.ToLower(trimmed)) {
+			candidates = append(candidates, candidate{
+				name:     trimmed,
+				distance: options.maxDistance + 1,
+			})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].distance != candidates[j].distance {
+			return candidates[i].distance < candidates[j].distance
+		}
+		return candidates[i].name < candidates[j].name
+	})
+	limit := len(candidates)
+	if limit > options.maxSuggestions {
+		limit = options.maxSuggestions
+	}
+	out := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		out = append(out, candidates[i].name)
+	}
+	return out
+}
+
+func displayToolName(name string) string {
+	name = collapseToolNameWhitespace(name)
+	runes := []rune(name)
+	if len(runes) <= maxToolNameErrorNameRunes {
+		return name
+	}
+	return string(runes[:maxToolNameErrorNameRunes]) + "..."
+}
+
+func collapseToolNameWhitespace(name string) string {
+	return strings.Join(strings.Fields(name), " ")
+}
+
+func quotedToolNames(names []string) string {
+	quoted := make([]string, 0, len(names))
+	for _, name := range names {
+		quoted = append(quoted, fmt.Sprintf("%q", name))
+	}
+	return strings.Join(quoted, ", ")
+}
+
+func toolNameEditDistance(a string, b string) int {
+	if a == b {
+		return 0
+	}
+	ar := []rune(a)
+	br := []rune(b)
+	if len(ar) == 0 {
+		return len(br)
+	}
+	if len(br) == 0 {
+		return len(ar)
+	}
+	prev := make([]int, len(br)+1)
+	curr := make([]int, len(br)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i, ca := range ar {
+		curr[0] = i + 1
+		for j, cb := range br {
+			cost := 1
+			if ca == cb {
+				cost = 0
+			}
+			curr[j+1] = min(
+				curr[j]+1,
+				prev[j+1]+1,
+				prev[j]+cost,
+			)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(br)]
 }
 
 // applyToolResultMessagesCallback invokes the optional ToolResultMessages callback and
