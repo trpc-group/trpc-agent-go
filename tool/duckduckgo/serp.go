@@ -78,6 +78,18 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 		}
 		return fallback, nil
 	}
+	if isSERPRouteBlocker(err, fallbackErr) &&
+		!isDefaultSERPBaseURL(backend, baseURL) {
+		return searchResponse{
+			Query:   req.Query,
+			Results: []resultItem{},
+			Summary: "DuckDuckGo html and lite search pages are both " +
+				"unavailable for this query due to transport errors " +
+				"or anti-bot challenge pages; use direct URLs with " +
+				"web_fetch/browser or another configured search " +
+				"provider instead of immediately retrying DuckDuckGo",
+		}, nil
+	}
 	apiFallback, apiFallbackErr := t.searchAPIFallbackAfterSERPFailure(
 		ctx,
 		req,
@@ -93,17 +105,6 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 			)
 		}
 		return apiFallback, nil
-	}
-	if isSERPRouteBlocker(err, fallbackErr) {
-		return searchResponse{
-			Query:   req.Query,
-			Results: []resultItem{},
-			Summary: "DuckDuckGo html and lite search pages are both " +
-				"unavailable for this query due to transport errors " +
-				"or anti-bot challenge pages; use direct URLs with " +
-				"web_fetch/browser or another configured search " +
-				"provider instead of immediately retrying DuckDuckGo",
-		}, nil
 	}
 	result.Summary = fmt.Sprintf(
 		"%s; fallback %s failed: %v; api fallback failed: %v",
