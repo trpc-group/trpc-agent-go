@@ -10,7 +10,7 @@ replace (
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/stretchr/testify v1.11.1
-	trpc.group/trpc-go/trpc-agent-go v1.8.1
+	trpc.group/trpc-go/trpc-agent-go v0.0.0-20260706012906-95036319224b
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql v1.8.0
 )
 
