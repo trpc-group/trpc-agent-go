@@ -4,6 +4,7 @@ go 1.24.4
 
 replace (
 	trpc.group/trpc-go/trpc-agent-go => ../../
+	trpc.group/trpc-go/trpc-agent-go/memory/gorm => ../../memory/gorm
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../../memory/mysql
 	trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec => ../../memory/mysqlvec
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector => ../../memory/pgvector
@@ -19,7 +20,12 @@ require (
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/ncruces/go-sqlite3 v0.32.0
+	github.com/stretchr/testify v1.11.1
+	gorm.io/driver/postgres v1.5.7
+	gorm.io/driver/sqlite v1.5.7
+	gorm.io/gorm v1.25.12
 	trpc.group/trpc-go/trpc-agent-go v1.8.1
+	trpc.group/trpc-go/trpc-agent-go/memory/gorm v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/memory/mysql v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/mysqlvec v1.1.1
 	trpc.group/trpc-go/trpc-agent-go/memory/pgvector v1.1.1
@@ -35,6 +41,7 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/creack/pty v1.1.24 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/go-ego/gse v1.0.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -46,11 +53,14 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.7.2 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/pgvector/pgvector-go v0.2.3 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/redis/go-redis/v9 v9.11.0 // indirect
 	github.com/tetratelabs/wazero v1.11.0 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect

@@ -60,3 +60,7 @@ By default no memory tools are registered (empty `Tools()`), which suits hosts t
 ## Development / tests
 
 When `WithSkipDBInit` is false (default), the service runs GORM `AutoMigrate` on the memories table. SQLite is supported for unit tests.
+
+## Example
+
+See [`examples/memory/gorm`](../../examples/memory/gorm) for an interactive chat demo and a minimal shared-DB wiring pattern.

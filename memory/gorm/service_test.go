@@ -132,7 +132,10 @@ func TestService_ReadMemories_limit(t *testing.T) {
 	}
 	all, err := svc.ReadMemories(ctx, uk, 3)
 	require.NoError(t, err)
-	assert.Len(t, all, 3)
+	require.Len(t, all, 3)
+	assert.Equal(t, "e content token", all[0].Memory.Memory)
+	assert.Equal(t, "d content token", all[1].Memory.Memory)
+	assert.Equal(t, "c content token", all[2].Memory.Memory)
 }
 
 func TestService_UpdateMemory_notFound(t *testing.T) {
@@ -175,7 +178,7 @@ func TestService_Tools_emptyByDefault(t *testing.T) {
 
 func TestService_WithSkipDBInit(t *testing.T) {
 	db := testDB(t)
-	require.NoError(t, db.Table("memories").AutoMigrate(&memoryRow{}))
+	require.NoError(t, db.Table(defaultTableName).AutoMigrate(&memoryRow{}))
 
 	svc, err := NewService(db, WithSkipDBInit(true))
 	require.NoError(t, err)
@@ -210,6 +213,34 @@ func TestService_SoftDelete(t *testing.T) {
 	assert.Empty(t, after)
 
 	var count int64
-	require.NoError(t, db.Table("memories").Unscoped().Count(&count).Error)
+	require.NoError(t, db.Table(defaultTableName).Unscoped().Count(&count).Error)
 	assert.Equal(t, int64(1), count)
+}
+
+func TestService_SoftDelete_reAddRestores(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	svc, err := NewService(db, WithSoftDelete(true))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	uk := memory.UserKey{AppName: "app", UserID: "restore"}
+	require.NoError(t, svc.AddMemory(ctx, uk, "favorite color is teal", nil))
+
+	read, err := svc.ReadMemories(ctx, uk, 1)
+	require.NoError(t, err)
+	require.Len(t, read, 1)
+
+	require.NoError(t, svc.DeleteMemory(ctx, memory.Key{
+		AppName: uk.AppName, UserID: uk.UserID, MemoryID: read[0].ID,
+	}))
+	afterDelete, err := svc.ReadMemories(ctx, uk, 0)
+	require.NoError(t, err)
+	assert.Empty(t, afterDelete)
+
+	require.NoError(t, svc.AddMemory(ctx, uk, "favorite color is teal", nil))
+	restored, err := svc.ReadMemories(ctx, uk, 0)
+	require.NoError(t, err)
+	require.Len(t, restored, 1)
+	assert.Equal(t, "favorite color is teal", restored[0].Memory.Memory)
 }
