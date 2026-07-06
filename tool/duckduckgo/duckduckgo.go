@@ -357,7 +357,7 @@ func (t *ddgTool) searchAPI(
 			Query:   req.Query,
 			Results: []resultItem{},
 			Summary: fmt.Sprintf("Error performing search: %v", err),
-		}, fmt.Errorf("error performing search: %v", err)
+		}, fmt.Errorf("error performing search: %w", err)
 	}
 
 	// Convert the response to our format.
