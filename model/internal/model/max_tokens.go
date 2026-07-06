@@ -9,19 +9,11 @@
 
 package model
 
-import (
-	"math"
-
-	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
-)
-
 // MinValidCompletionTokens is the minimum max-completion value accepted by APIs
 // that validate this field (e.g. Anthropic requires max_tokens >= 1).
 const MinValidCompletionTokens = 1
 
-// SanitizeMaxTokensPtr returns in if it points to a value >= MinValidCompletionTokens.
-// Otherwise it returns nil so callers can omit the field and let the provider apply defaults.
-func SanitizeMaxTokensPtr(in *int) *int {
+func sanitizeMaxTokensPtr(in *int) *int {
 	if in == nil || *in < MinValidCompletionTokens {
 		return nil
 	}
@@ -32,26 +24,13 @@ func SanitizeMaxTokensPtr(in *int) *int {
 // tokens when ResolveMaxOutputTokens knows the limit. Returns nil when the value is
 // invalid or unset.
 func ClampMaxTokensForModel(modelName string, in *int) *int {
-	mt := SanitizeMaxTokensPtr(in)
+	mt := sanitizeMaxTokensPtr(in)
 	if mt == nil {
 		return nil
 	}
-	if modelCap := imodel.ResolveMaxOutputTokens(modelName); modelCap > 0 && *mt > modelCap {
+	if modelCap := ResolveMaxOutputTokens(modelName); modelCap > 0 && *mt > modelCap {
 		capped := modelCap
 		return &capped
 	}
 	return mt
-}
-
-// MaxTokensToInt32 converts a max token count for provider APIs that use int32 fields.
-// Values outside the int32 range are clamped to avoid overflow when narrowing.
-func MaxTokensToInt32(v int) int32 {
-	n := int64(v)
-	if n > math.MaxInt32 {
-		return math.MaxInt32
-	}
-	if n < math.MinInt32 {
-		return math.MinInt32
-	}
-	return int32(n)
 }
