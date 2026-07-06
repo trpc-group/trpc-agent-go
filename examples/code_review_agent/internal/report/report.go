@@ -117,36 +117,63 @@ func Write(outDir string, r review.Report, now time.Time) ([]review.ArtifactReco
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output directory: %w", err)
 	}
+	records := []review.ArtifactRecord{
+		{
+			ID:        "json_report-" + r.Task.ID,
+			TaskID:    r.Task.ID,
+			Kind:      "json_report",
+			Path:      filepath.Join(outDir, "review_report.json"),
+			MimeType:  "application/json",
+			CreatedAt: now.UTC(),
+		},
+		{
+			ID:        "markdown_report-" + r.Task.ID,
+			TaskID:    r.Task.ID,
+			Kind:      "markdown_report",
+			Path:      filepath.Join(outDir, "review_report.md"),
+			MimeType:  "text/markdown",
+			CreatedAt: now.UTC(),
+		},
+	}
+	if len(r.Artifacts) == 0 {
+		r.Artifacts = []review.ArtifactRecord{
+			{
+				ID:        records[0].ID,
+				TaskID:    records[0].TaskID,
+				Kind:      records[0].Kind,
+				Path:      filepath.Base(records[0].Path),
+				MimeType:  records[0].MimeType,
+				CreatedAt: records[0].CreatedAt,
+			},
+			{
+				ID:        records[1].ID,
+				TaskID:    records[1].TaskID,
+				Kind:      records[1].Kind,
+				Path:      filepath.Base(records[1].Path),
+				MimeType:  records[1].MimeType,
+				CreatedAt: records[1].CreatedAt,
+			},
+		}
+	}
 	jsonBytes, err := JSON(r)
 	if err != nil {
 		return nil, err
 	}
 	mdBytes := Markdown(r)
 	artifacts := []struct {
-		kind string
-		name string
-		mime string
-		data []byte
+		index int
+		data  []byte
 	}{
-		{"json_report", "review_report.json", "application/json", jsonBytes},
-		{"markdown_report", "review_report.md", "text/markdown", mdBytes},
+		{0, jsonBytes},
+		{1, mdBytes},
 	}
-	records := make([]review.ArtifactRecord, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		path := filepath.Join(outDir, artifact.name)
-		if err := os.WriteFile(path, artifact.data, 0o600); err != nil {
-			return nil, fmt.Errorf("write %s: %w", artifact.name, err)
+		record := &records[artifact.index]
+		if err := os.WriteFile(record.Path, artifact.data, 0o600); err != nil {
+			return nil, fmt.Errorf("write %s: %w", filepath.Base(record.Path), err)
 		}
 		sum := sha256.Sum256(artifact.data)
-		records = append(records, review.ArtifactRecord{
-			ID:        artifact.kind + "-" + r.Task.ID,
-			TaskID:    r.Task.ID,
-			Kind:      artifact.kind,
-			Path:      path,
-			MimeType:  artifact.mime,
-			SHA256:    hex.EncodeToString(sum[:]),
-			CreatedAt: now.UTC(),
-		})
+		record.SHA256 = hex.EncodeToString(sum[:])
 	}
 	return records, nil
 }

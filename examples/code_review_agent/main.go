@@ -13,6 +13,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/orchestrator"
 )
 
 func main() {
@@ -25,16 +28,28 @@ func main() {
 	)
 	flag.Parse()
 
-	_ = context.Background()
-	fmt.Printf("Code review agent prototype\n")
-	fmt.Printf("- fixture dir: %s\n", *fixtureDir)
-	fmt.Printf("- out dir:     %s\n", *outDir)
-	if *dbPath != "" {
-		fmt.Printf("- db path:     %s\n", *dbPath)
+	if *dbPath == "" {
+		*dbPath = filepath.Join(*outDir, "review_agent.db")
 	}
-	if *modelName != "" {
-		fmt.Printf("- model:       %s\n", *modelName)
+	if *modelName == "" {
+		fmt.Fprintln(os.Stderr, "warning: no model configured; deterministic fixture review will run without model calls")
 	}
-	fmt.Printf("- runtime:     %s\n", *runtime)
-	fmt.Println("Implementation is wired in subsequent packages.")
+	result, err := orchestrator.Run(context.Background(), orchestrator.Options{
+		FixtureDir: *fixtureDir,
+		OutDir:     *outDir,
+		DBPath:     *dbPath,
+		Model:      *modelName,
+		Runtime:    *runtime,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "run review: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Code review completed\n")
+	fmt.Printf("- task:        %s\n", result.TaskID)
+	fmt.Printf("- conclusion:  %s\n", result.Report.Conclusion)
+	fmt.Printf("- findings:    %d\n", len(result.Report.Findings))
+	fmt.Printf("- json report: %s\n", result.JSONPath)
+	fmt.Printf("- md report:   %s\n", result.MarkdownPath)
+	fmt.Printf("- store:       %s\n", result.DBPath)
 }

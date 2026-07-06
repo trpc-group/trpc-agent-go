@@ -15,9 +15,11 @@ internal packages:
   command.
 - `internal/sandboxrun` provides a fake-testable sandbox execution seam with
   timeout, truncation, failure, and unavailable-runtime records.
-- `internal/store` defines a storage interface and SQLite implementation for
-  tasks, inputs, sandbox runs, permission decisions, findings, artifacts, and
-  reports.
+- `internal/store` defines a storage interface and dependency-free durable
+  implementation for tasks, inputs, sandbox runs, permission decisions,
+  findings, artifacts, and reports. The entrypoint keeps the `NewSQLite` name
+  for the example default while using an equivalent JSON-backed `.db` file to
+  avoid CGO and high-Go-version driver dependencies in examples.
 - `internal/report` renders JSON and Markdown reports from the persisted review
   result.
 - `internal/review` coordinates Skill loading, model planning, rules, sandbox

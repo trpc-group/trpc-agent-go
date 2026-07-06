@@ -1,0 +1,813 @@
+{
+  "task": {
+    "id": "review-7ed8cd6d5ee2",
+    "status": "failed",
+    "input_type": "fixture",
+    "diff_hash": "8136cf57777c1facd24ed813acb4329aea6b6c6c246a22ec27126b598299a939",
+    "started_at": "2026-07-06T00:00:00Z",
+    "finished_at": "2026-07-06T00:00:00Z"
+  },
+  "summary": "Reviewed 9 changed files, produced 18 findings, and recorded 1 sandbox runs.",
+  "changed_files": [
+    {
+      "old_path": "",
+      "new_path": "pkg/hello.go",
+      "is_new": true,
+      "is_deleted": false,
+      "package_dir": "pkg",
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_lines": 0,
+          "new_start": 1,
+          "new_lines": 7,
+          "lines": [
+            {
+              "kind": "add",
+              "new_line": 1,
+              "content": "package pkg"
+            },
+            {
+              "kind": "add",
+              "new_line": 2,
+              "content": ""
+            },
+            {
+              "kind": "add",
+              "new_line": 3,
+              "content": "import \"context\""
+            },
+            {
+              "kind": "add",
+              "new_line": 4,
+              "content": ""
+            },
+            {
+              "kind": "add",
+              "new_line": 5,
+              "content": "func Hello(ctx context.Context) string {"
+            },
+            {
+              "kind": "add",
+              "new_line": 6,
+              "content": "\treturn \"hello\""
+            },
+            {
+              "kind": "add",
+              "new_line": 7,
+              "content": "}"
+            },
+            {
+              "kind": "context",
+              "new_line": 8,
+              "content": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "old_path": "",
+      "new_path": "pkg/db.go",
+      "is_new": true,
+      "is_deleted": false,
+      "package_dir": "pkg",
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_lines": 0,
+          "new_start": 1,
+          "new_lines": 9,
+          "lines": [
+            {
+              "kind": "add",
+              "new_line": 1,
+              "content": "package pkg"
+            },
+            {
+              "kind": "add",
+              "new_line": 2,
+              "content": ""
+            },
+            {
+              "kind": "add",
+              "new_line": 3,
+              "content": "import \"database/sql\""
+            },
+            {
+              "kind": "add",
+              "new_line": 4,
+              "content": ""
+            },
+            {
+              "kind": "add",
+              "new_line": 5,
+              "content": "func Save(db *sql.DB) error {"
+            },
+            {
+              "kind": "add",
+              "new_line": 6,
+              "content": "\ttx, err := db.Begin()"
+            },
+            {
+              "kind": "add",
+              "new_line": 7,
+              "content": "\t_ = tx"
+            },
+            {
+              "kind": "add",
+              "new_line": 8,
+              "content": "\treturn err"
+            },
+            {
+              "kind": "add",
+              "new_line": 9,
+              "content": "}"
+            },
+            {
+              "kind": "context",
+              "new_line": 10,
+              "content": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "old_path": "",
+      "new_path": "pkg/dup.go",
+      "is_new": true,
+      "is_deleted": false,
+      "package_dir": "pkg",
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_lines": 0,
+          "new_start": 1,
+          "new_lines": 6,
+          "lines": [
+            {
+              "kind": "add",
+              "new_line": 1,
+              "content": "package pkg"
+            },
+            {
+              "kind": "add",
+              "new_line": 2,
+              "content": ""
+            },
+            {
+              "kind": "add",
+              "new_line": 3,
+              "content": "func Bad() {"
+            },
+            {
+              "kind": "add",
+              "new_line": 4,
+              "content": "\t_ = err"
+            },
+            {
+              "kind": "add",
+              "new_line": 5,
+              "content": "\t_ = err"
+            },
+            {
+              "kind": "add",
+              "new_line": 6,
+              "content": "}"
+            },
+            {
+              "kind": "context",
+              "new_line": 7,
+              "content": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "old_path": "",
+      "new_path": "pkg/worker.go",
+      "is_new": true,
+      "is_deleted": false,
+      "package_dir": "pkg",
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_lines": 0,
+          "new_start": 1,
+          "new_lines": 8,
+          "lines": [
+            {
+              "kind": "add",
+              "new_line": 1,
+              "content": "package pkg"
+            },
+            {
+              "kind": "add",
+              "new_line": 2,
+              "content": ""
+            },
+            {
+              "kind": "add",
+              "new_line": 3,
+              "content": "func Start() {"
+            },
+            {
+              "kind": "add",
+              "new_line": 4,
+              "content": "\tgo func() {"
+            },
+            {
+              "kind": "add",
+              "new_line": 5,
+              "content": "\t\tfor {"
+            },
+            {
+              "kind": "add",
+              "new_line": 6,
+              "content": "\t\t}"
+            },
+            {
+              "kind": "add",
+              "new_line": 7,
+              "content": "\t}()"
+            },
+            {
+              "kind": "add",
+              "new_line": 8,
+              "content": "}"
+            },
+            {
+              "kind": "context",
+              "new_line": 9,
+              "content": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "old_path": "",
+      "new_path": "pkg/new_logic.go",
+      "is_new": true,
+      "is_deleted": false,
+      "package_dir": "pkg",
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_lines": 0,
+          "new_start": 1,
+          "new_lines": 5,
+          "lines": [
+            {
+              "kind": "add",
+              "new_line": 1,
+              "content": "package pkg"
+            },
+            {
+              "kind": "add",
+              "new_line": 2,
+              "content": ""
+            },
+            {
+              "kind": "add",
+              "new_line": 3,
+              "content": "func Add(a, b int) int {"
+            },
+            {
+              "kind": "add",
+              "new_line": 4,
+              "content": "\treturn a + b"
+            },
+            {
+              "kind": "add",
+              "new_line": 5,
+              "content": "}"
+            },
+            {
+              "kind": "context",
+              "new_line": 6,
+              "content": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "old_path": "",
+      "new_path": "pkg/file.go",
+      "is_new": true,
+      "is_deleted": false,
+      "package_dir": "pkg",
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_lines": 0,
+          "new_start": 1,
+          "new_lines": 8,
+          "lines": [
+            {
+              "kind": "add",
+              "new_line": 1,
+              "content": "package pkg"
+            },
+            {
+              "kind": "add",
+              "new_line": 2,
+              "content": ""
+            },
+            {
+              "kind": "add",
+              "new_line": 3,
+              "content": "import \"os\""
+            },
+            {
+              "kind": "add",
+              "new_line": 4,
+              "content": ""
+            },
+            {
+              "kind": "add",
+              "new_line": 5,
+              "content": "func Load() error {"
+            },
+            {
+              "kind": "add",
+              "new_line": 6,
+              "content": "\tf, err := os.Open(\"data.txt\")"
+            },
+            {
+              "kind": "add",
+              "new_line": 7,
+              "content": "\treturn err"
+            },
+            {
+              "kind": "add",
+              "new_line": 8,
+              "content": "}"
+            },
+            {
+              "kind": "context",
+              "new_line": 9,
+              "content": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "old_path": "",
+      "new_path": "pkg/fail.go",
+      "is_new": true,
+      "is_deleted": false,
+      "package_dir": "pkg",
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_lines": 0,
+          "new_start": 1,
+          "new_lines": 5,
+          "lines": [
+            {
+              "kind": "add",
+              "new_line": 1,
+              "content": "package pkg"
+            },
+            {
+              "kind": "add",
+              "new_line": 2,
+              "content": ""
+            },
+            {
+              "kind": "add",
+              "new_line": 3,
+              "content": "func Broken() {"
+            },
+            {
+              "kind": "add",
+              "new_line": 4,
+              "content": "\tpanic(\"sandbox failure fixture\")"
+            },
+            {
+              "kind": "add",
+              "new_line": 5,
+              "content": "}"
+            },
+            {
+              "kind": "context",
+              "new_line": 6,
+              "content": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "old_path": "",
+      "new_path": "pkg/redact.go",
+      "is_new": true,
+      "is_deleted": false,
+      "package_dir": "pkg",
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_lines": 0,
+          "new_start": 1,
+          "new_lines": 5,
+          "lines": [
+            {
+              "kind": "add",
+              "new_line": 1,
+              "content": "package pkg"
+            },
+            {
+              "kind": "add",
+              "new_line": 2,
+              "content": ""
+            },
+            {
+              "kind": "add",
+              "new_line": 3,
+              "content": "func Secret() string {"
+            },
+            {
+              "kind": "add",
+              "new_line": 4,
+              "content": "\treturn \"[REDACTED_SECRET]\""
+            },
+            {
+              "kind": "add",
+              "new_line": 5,
+              "content": "}"
+            },
+            {
+              "kind": "context",
+              "new_line": 6,
+              "content": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "old_path": "",
+      "new_path": "pkg/config.go",
+      "is_new": true,
+      "is_deleted": false,
+      "package_dir": "pkg",
+      "hunks": [
+        {
+          "old_start": 0,
+          "old_lines": 0,
+          "new_start": 1,
+          "new_lines": 5,
+          "lines": [
+            {
+              "kind": "add",
+              "new_line": 1,
+              "content": "package pkg"
+            },
+            {
+              "kind": "add",
+              "new_line": 2,
+              "content": ""
+            },
+            {
+              "kind": "add",
+              "new_line": 3,
+              "content": "func token() string {"
+            },
+            {
+              "kind": "add",
+              "new_line": 4,
+              "content": "\treturn \"[REDACTED_SECRET]\""
+            },
+            {
+              "kind": "add",
+              "new_line": 5,
+              "content": "}"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "test",
+      "file": "pkg/config.go",
+      "line": 1,
+      "title": "New Go file has no related test change",
+      "evidence": "config.go",
+      "recommendation": "Add or update tests covering the new behavior.",
+      "confidence": 0.72,
+      "source": "deterministic_rules",
+      "rule_id": "test.missing_coverage",
+      "status": "warning",
+      "fingerprint": "ae36c3b850dc2c3ee8ffe84ee2b5c8e416db929d11e5c728e809c4de20916943"
+    },
+    {
+      "severity": "low",
+      "category": "security",
+      "file": "pkg/config.go",
+      "line": 4,
+      "title": "Secret-like value was redacted",
+      "evidence": "\treturn \"[REDACTED_SECRET]\"",
+      "recommendation": "Verify all persisted reports and audit records contain only redacted values.",
+      "confidence": 0.99,
+      "source": "deterministic_rules",
+      "rule_id": "security.redaction_required",
+      "status": "finding",
+      "fingerprint": "b979c7f9d27ec7d0fd6f26deb3b3cc1f88ee5586eb1762cf2205a9381b160ecb"
+    },
+    {
+      "severity": "critical",
+      "category": "security",
+      "file": "pkg/config.go",
+      "line": 4,
+      "title": "Potential secret committed in diff",
+      "evidence": "\treturn \"[REDACTED_SECRET]\"",
+      "recommendation": "Move secrets to a managed secret store and rotate the exposed credential.",
+      "confidence": 0.98,
+      "source": "deterministic_rules",
+      "rule_id": "security.secret_leak",
+      "status": "finding",
+      "fingerprint": "9517e898d4a1ec6460d77c3090e2941767d58bac4a242522787aafd09b4ad2db"
+    },
+    {
+      "severity": "medium",
+      "category": "test",
+      "file": "pkg/db.go",
+      "line": 1,
+      "title": "New Go file has no related test change",
+      "evidence": "db.go",
+      "recommendation": "Add or update tests covering the new behavior.",
+      "confidence": 0.72,
+      "source": "deterministic_rules",
+      "rule_id": "test.missing_coverage",
+      "status": "warning",
+      "fingerprint": "3120621610d1fb0631a1b18408e845ecd9547044e3042024d651aa48fde63910"
+    },
+    {
+      "severity": "high",
+      "category": "database",
+      "file": "pkg/db.go",
+      "line": 6,
+      "title": "Transaction lacks commit or rollback handling",
+      "evidence": "\ttx, err := db.Begin()",
+      "recommendation": "Ensure every successful transaction commits and every failed path rolls back.",
+      "confidence": 0.88,
+      "source": "deterministic_rules",
+      "rule_id": "db.lifecycle",
+      "status": "finding",
+      "fingerprint": "397824198d378bf1536da70c7134a3e4b8f215852982426bd2e31d619a6d21c7"
+    },
+    {
+      "severity": "medium",
+      "category": "test",
+      "file": "pkg/dup.go",
+      "line": 1,
+      "title": "New Go file has no related test change",
+      "evidence": "dup.go",
+      "recommendation": "Add or update tests covering the new behavior.",
+      "confidence": 0.72,
+      "source": "deterministic_rules",
+      "rule_id": "test.missing_coverage",
+      "status": "warning",
+      "fingerprint": "d78d314b228019e1b46048bda171251007704d7ecdae8500ccb4a8cbb3521c8b"
+    },
+    {
+      "severity": "medium",
+      "category": "error",
+      "file": "pkg/dup.go",
+      "line": 4,
+      "title": "Error value is ignored",
+      "evidence": "\t_ = err",
+      "recommendation": "Handle, return, or explicitly document why the error is safe to ignore.",
+      "confidence": 0.9,
+      "source": "deterministic_rules",
+      "rule_id": "error.ignored_error",
+      "status": "finding",
+      "fingerprint": "b64ad9111f0142ee13bc996ab096c61b5a904a95129678df1ea6bf7dbc801c0f"
+    },
+    {
+      "severity": "medium",
+      "category": "error",
+      "file": "pkg/dup.go",
+      "line": 5,
+      "title": "Error value is ignored",
+      "evidence": "\t_ = err",
+      "recommendation": "Handle, return, or explicitly document why the error is safe to ignore.",
+      "confidence": 0.9,
+      "source": "deterministic_rules",
+      "rule_id": "error.ignored_error",
+      "status": "finding",
+      "fingerprint": "5b355055f04bf8b46d1c18c3537b2d0cfe99c2f2e8c0de722f014d742017f810"
+    },
+    {
+      "severity": "medium",
+      "category": "test",
+      "file": "pkg/fail.go",
+      "line": 1,
+      "title": "New Go file has no related test change",
+      "evidence": "fail.go",
+      "recommendation": "Add or update tests covering the new behavior.",
+      "confidence": 0.72,
+      "source": "deterministic_rules",
+      "rule_id": "test.missing_coverage",
+      "status": "warning",
+      "fingerprint": "b74cd2b8891f61ae4a1e7d6d12400479c8d008049b4cf6438743a786a1dc89da"
+    },
+    {
+      "severity": "medium",
+      "category": "test",
+      "file": "pkg/file.go",
+      "line": 1,
+      "title": "New Go file has no related test change",
+      "evidence": "file.go",
+      "recommendation": "Add or update tests covering the new behavior.",
+      "confidence": 0.72,
+      "source": "deterministic_rules",
+      "rule_id": "test.missing_coverage",
+      "status": "warning",
+      "fingerprint": "37ff3b39e6c6691160933a869e263ed1beef87231f117cf0a5b45a4acb23845b"
+    },
+    {
+      "severity": "high",
+      "category": "resource",
+      "file": "pkg/file.go",
+      "line": 6,
+      "title": "Opened resource is not closed nearby",
+      "evidence": "\tf, err := os.Open(\"data.txt\")",
+      "recommendation": "Defer Close after checking the open/query error.",
+      "confidence": 0.87,
+      "source": "deterministic_rules",
+      "rule_id": "resource.close_missing",
+      "status": "finding",
+      "fingerprint": "ae41534a09909be4c34e1ac165ddf1f20ac168c1b3d49e8c11bbaec5b2cedc88"
+    },
+    {
+      "severity": "medium",
+      "category": "test",
+      "file": "pkg/hello.go",
+      "line": 1,
+      "title": "New Go file has no related test change",
+      "evidence": "hello.go",
+      "recommendation": "Add or update tests covering the new behavior.",
+      "confidence": 0.72,
+      "source": "deterministic_rules",
+      "rule_id": "test.missing_coverage",
+      "status": "warning",
+      "fingerprint": "a554779a687e33414aac20093ce8e18e209992aa37b6937ca965463c637cd24b"
+    },
+    {
+      "severity": "medium",
+      "category": "test",
+      "file": "pkg/new_logic.go",
+      "line": 1,
+      "title": "New Go file has no related test change",
+      "evidence": "new_logic.go",
+      "recommendation": "Add or update tests covering the new behavior.",
+      "confidence": 0.72,
+      "source": "deterministic_rules",
+      "rule_id": "test.missing_coverage",
+      "status": "warning",
+      "fingerprint": "a1c1d7310ed6b9bc3b61f1b00a06ac6ec76229b3727cb86156e151ae519b0c06"
+    },
+    {
+      "severity": "medium",
+      "category": "test",
+      "file": "pkg/redact.go",
+      "line": 1,
+      "title": "New Go file has no related test change",
+      "evidence": "redact.go",
+      "recommendation": "Add or update tests covering the new behavior.",
+      "confidence": 0.72,
+      "source": "deterministic_rules",
+      "rule_id": "test.missing_coverage",
+      "status": "warning",
+      "fingerprint": "9fb827e75343bb1da694c0d9aee36821506f55e512d098cf4397c99d9f54abcc"
+    },
+    {
+      "severity": "low",
+      "category": "security",
+      "file": "pkg/redact.go",
+      "line": 4,
+      "title": "Secret-like value was redacted",
+      "evidence": "\treturn \"[REDACTED_SECRET]\"",
+      "recommendation": "Verify all persisted reports and audit records contain only redacted values.",
+      "confidence": 0.99,
+      "source": "deterministic_rules",
+      "rule_id": "security.redaction_required",
+      "status": "finding",
+      "fingerprint": "a464fa16a3313c882ff561d86e90a9dab37d6a9ac961173ec01d473bb317a3b6"
+    },
+    {
+      "severity": "critical",
+      "category": "security",
+      "file": "pkg/redact.go",
+      "line": 4,
+      "title": "Potential secret committed in diff",
+      "evidence": "\treturn \"[REDACTED_SECRET]\"",
+      "recommendation": "Move secrets to a managed secret store and rotate the exposed credential.",
+      "confidence": 0.98,
+      "source": "deterministic_rules",
+      "rule_id": "security.secret_leak",
+      "status": "finding",
+      "fingerprint": "72bdfc3b15d60f52cedb016c4f2b361dbf2272b9058cb110abf5a68447646556"
+    },
+    {
+      "severity": "medium",
+      "category": "test",
+      "file": "pkg/worker.go",
+      "line": 1,
+      "title": "New Go file has no related test change",
+      "evidence": "worker.go",
+      "recommendation": "Add or update tests covering the new behavior.",
+      "confidence": 0.72,
+      "source": "deterministic_rules",
+      "rule_id": "test.missing_coverage",
+      "status": "warning",
+      "fingerprint": "17427b97a9157f2a14aa239be7b2554881cee8e59fd8a83708e0e0dccf37e439"
+    },
+    {
+      "severity": "high",
+      "category": "concurrency",
+      "file": "pkg/worker.go",
+      "line": 4,
+      "title": "Goroutine lacks visible context cancellation",
+      "evidence": "\tgo func() {",
+      "recommendation": "Thread context into the goroutine and exit on cancellation.",
+      "confidence": 0.78,
+      "source": "deterministic_rules",
+      "rule_id": "concurrency.goroutine_context_leak",
+      "status": "needs_human_review",
+      "fingerprint": "7faaadbead0c0af6c4701334d195d5008452c6524013b4892355b19d4b2cf9ba"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "id": "review-7ed8cd6d5ee2-sandbox-001",
+      "task_id": "review-7ed8cd6d5ee2",
+      "runtime": "fake",
+      "command": "go test ./...",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "stdout": "ok\n",
+      "output_truncated": false
+    }
+  ],
+  "permission_decisions": [
+    {
+      "id": "review-7ed8cd6d5ee2-permission-001",
+      "task_id": "review-7ed8cd6d5ee2",
+      "tool_name": "workspace_exec",
+      "command": "go test ./...",
+      "framework_action": "allow",
+      "safety_decision": "allow",
+      "risk_level": "low",
+      "rule_id": "sandbox.command_allowed",
+      "reason": "Command is allowed by the example policy.",
+      "blocked": false,
+      "created_at": "2026-07-06T00:00:00Z"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "json_report-review-7ed8cd6d5ee2",
+      "task_id": "review-7ed8cd6d5ee2",
+      "kind": "json_report",
+      "path": "review_report.json",
+      "mime_type": "application/json",
+      "created_at": "2026-07-06T00:00:00Z"
+    },
+    {
+      "id": "markdown_report-review-7ed8cd6d5ee2",
+      "task_id": "review-7ed8cd6d5ee2",
+      "kind": "markdown_report",
+      "path": "review_report.md",
+      "mime_type": "text/markdown",
+      "created_at": "2026-07-06T00:00:00Z"
+    }
+  ],
+  "metrics": {
+    "task_id": "review-7ed8cd6d5ee2",
+    "total_duration_ms": 0,
+    "sandbox_duration_ms": 0,
+    "tool_call_count": 1,
+    "permission_blocked_count": 0,
+    "finding_count": 18,
+    "severity_distribution": {
+      "critical": 2,
+      "high": 3,
+      "low": 2,
+      "medium": 11
+    },
+    "error_distribution": {},
+    "redaction_count": 2
+  },
+  "conclusion": "needs_human_review"
+}

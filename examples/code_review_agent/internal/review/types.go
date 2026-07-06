@@ -121,7 +121,7 @@ type ArtifactRecord struct {
 	Kind      string    `json:"kind"`
 	Path      string    `json:"path"`
 	MimeType  string    `json:"mime_type"`
-	SHA256    string    `json:"sha256"`
+	SHA256    string    `json:"sha256,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
