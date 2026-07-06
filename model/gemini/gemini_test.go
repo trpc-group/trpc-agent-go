@@ -15,8 +15,10 @@ import (
 	"encoding/json"
 	"errors"
 	"iter"
+	"math"
 	"net/http"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -594,6 +596,63 @@ func TestModel_buildChatConfig(t *testing.T) {
 			assert.Equal(t, c.ThinkingConfig, tt.want.ThinkingConfig)
 		})
 	}
+}
+
+func TestModel_buildChatConfig_MaxOutputTokens(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelName string
+		maxTokens int
+		want      int32
+	}{
+		{
+			name:      "keeps requested tokens under model cap",
+			modelName: "gemini-2.5-flash",
+			maxTokens: 1024,
+			want:      1024,
+		},
+		{
+			name:      "caps requested tokens at known model limit",
+			modelName: "gemini-2.5-flash",
+			maxTokens: 70000,
+			want:      65536,
+		},
+		{
+			name:      "ignores invalid token count",
+			modelName: "gemini-2.5-flash",
+			maxTokens: 0,
+			want:      0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &model.Request{
+				GenerationConfig: model.GenerationConfig{
+					MaxTokens: &tt.maxTokens,
+				},
+			}
+
+			cfg := (&Model{name: tt.modelName}).buildChatConfig(req)
+
+			require.Equal(t, tt.want, cfg.MaxOutputTokens)
+		})
+	}
+
+	t.Run("caps int overflow at int32 maximum", func(t *testing.T) {
+		if strconv.IntSize == 32 {
+			t.Skip("cannot construct a max token value above int32 on 32-bit platforms")
+		}
+		maxTokens := int(int64(math.MaxInt32) + 1)
+		req := &model.Request{
+			GenerationConfig: model.GenerationConfig{
+				MaxTokens: &maxTokens,
+			},
+		}
+
+		cfg := (&Model{name: "unknown-gemini-model"}).buildChatConfig(req)
+
+		require.Equal(t, int32(math.MaxInt32), cfg.MaxOutputTokens)
+	})
 }
 
 func TestModel_Info(t *testing.T) {

@@ -313,10 +313,10 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	if len(systemPrompts) > 0 {
 		chatRequest.System = systemPrompts
 	}
-	if mt := model.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
+	if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
 		chatRequest.MaxTokens = int64(*mt)
 	}
-	if chatRequest.MaxTokens < int64(model.MinValidCompletionTokens) {
+	if chatRequest.MaxTokens < int64(imodel.MinValidCompletionTokens) {
 		chatRequest.MaxTokens = 4096
 	}
 	if request.Temperature != nil {
