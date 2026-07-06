@@ -7,7 +7,7 @@
     "started_at": "2026-07-06T00:00:00Z",
     "finished_at": "2026-07-06T00:00:00Z"
   },
-  "summary": "Model plan \"mock-model\" coordinated skill \"code-review\" for 9 changed files, produced 18 findings, and recorded 1 sandbox runs.",
+  "summary": "Model plan \"mock-model\" coordinated skill \"code-review\" for 9 changed files, produced 18 findings, and recorded 4 sandbox runs.",
   "plan": {
     "model": "mock-model",
     "provider": "mock",
@@ -15,7 +15,10 @@
     "skill": "code-review",
     "runtime": "fake",
     "commands": [
-      "go test ./..."
+      "go test ./...",
+      "go vet ./...",
+      "go test ./skills/code-review/scripts",
+      "go test ./internal/rules"
     ],
     "rule_sources": [
       "skills/code-review/SKILL.md",
@@ -772,6 +775,39 @@
       "duration_ms": 0,
       "stdout": "ok\n",
       "output_truncated": false
+    },
+    {
+      "id": "review-7ed8cd6d5ee2-sandbox-002",
+      "task_id": "review-7ed8cd6d5ee2",
+      "runtime": "fake",
+      "command": "go vet ./...",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "stdout": "ok\n",
+      "output_truncated": false
+    },
+    {
+      "id": "review-7ed8cd6d5ee2-sandbox-003",
+      "task_id": "review-7ed8cd6d5ee2",
+      "runtime": "fake",
+      "command": "go test ./skills/code-review/scripts",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "stdout": "ok\n",
+      "output_truncated": false
+    },
+    {
+      "id": "review-7ed8cd6d5ee2-sandbox-004",
+      "task_id": "review-7ed8cd6d5ee2",
+      "runtime": "fake",
+      "command": "go test ./internal/rules",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "stdout": "ok\n",
+      "output_truncated": false
     }
   ],
   "permission_decisions": [
@@ -780,6 +816,45 @@
       "task_id": "review-7ed8cd6d5ee2",
       "tool_name": "workspace_exec",
       "command": "go test ./...",
+      "framework_action": "allow",
+      "safety_decision": "allow",
+      "risk_level": "low",
+      "rule_id": "sandbox.command_allowed",
+      "reason": "Command is allowed by the example policy.",
+      "blocked": false,
+      "created_at": "2026-07-06T00:00:00Z"
+    },
+    {
+      "id": "review-7ed8cd6d5ee2-permission-002",
+      "task_id": "review-7ed8cd6d5ee2",
+      "tool_name": "workspace_exec",
+      "command": "go vet ./...",
+      "framework_action": "allow",
+      "safety_decision": "allow",
+      "risk_level": "low",
+      "rule_id": "sandbox.command_allowed",
+      "reason": "Command is allowed by the example policy.",
+      "blocked": false,
+      "created_at": "2026-07-06T00:00:00Z"
+    },
+    {
+      "id": "review-7ed8cd6d5ee2-permission-003",
+      "task_id": "review-7ed8cd6d5ee2",
+      "tool_name": "workspace_exec",
+      "command": "go test ./skills/code-review/scripts",
+      "framework_action": "allow",
+      "safety_decision": "allow",
+      "risk_level": "low",
+      "rule_id": "sandbox.command_allowed",
+      "reason": "Command is allowed by the example policy.",
+      "blocked": false,
+      "created_at": "2026-07-06T00:00:00Z"
+    },
+    {
+      "id": "review-7ed8cd6d5ee2-permission-004",
+      "task_id": "review-7ed8cd6d5ee2",
+      "tool_name": "workspace_exec",
+      "command": "go test ./internal/rules",
       "framework_action": "allow",
       "safety_decision": "allow",
       "risk_level": "low",
@@ -811,7 +886,7 @@
     "task_id": "review-7ed8cd6d5ee2",
     "total_duration_ms": 0,
     "sandbox_duration_ms": 0,
-    "tool_call_count": 1,
+    "tool_call_count": 4,
     "permission_blocked_count": 0,
     "finding_count": 18,
     "severity_distribution": {

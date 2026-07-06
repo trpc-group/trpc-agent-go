@@ -4,7 +4,7 @@ Task `review-7ed8cd6d5ee2` finished with status `failed`.
 
 ## Summary
 
-Model plan "mock-model" coordinated skill "code-review" for 9 changed files, produced 18 findings, and recorded 1 sandbox runs.
+Model plan "mock-model" coordinated skill "code-review" for 9 changed files, produced 18 findings, and recorded 4 sandbox runs.
 
 ## Model Plan
 
@@ -13,7 +13,7 @@ Model plan "mock-model" coordinated skill "code-review" for 9 changed files, pro
 - source: mock_planner
 - skill: code-review
 - runtime: fake
-- commands: go test ./...
+- commands: go test ./..., go vet ./..., go test ./skills/code-review/scripts, go test ./internal/rules
 - rules: skills/code-review/SKILL.md, skills/code-review/docs/rules.md
 
 ## Findings
@@ -76,10 +76,16 @@ Model plan "mock-model" coordinated skill "code-review" for 9 changed files, pro
 ## Governance
 
 - `workspace_exec` action=allow safety=allow risk=low blocked=false reason=Command is allowed by the example policy.
+- `workspace_exec` action=allow safety=allow risk=low blocked=false reason=Command is allowed by the example policy.
+- `workspace_exec` action=allow safety=allow risk=low blocked=false reason=Command is allowed by the example policy.
+- `workspace_exec` action=allow safety=allow risk=low blocked=false reason=Command is allowed by the example policy.
 
 ## Sandbox
 
 - `go test ./...` runtime=fake status=passed exit=0 error=
+- `go vet ./...` runtime=fake status=passed exit=0 error=
+- `go test ./skills/code-review/scripts` runtime=fake status=passed exit=0 error=
+- `go test ./internal/rules` runtime=fake status=passed exit=0 error=
 
 ## Metrics
 

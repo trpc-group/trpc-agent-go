@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/inputsource"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sandboxrun"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
@@ -151,11 +152,13 @@ func assertFailedTaskStored(t *testing.T, dbPath string) {
 		t.Fatalf("NewSQLite() error = %v", err)
 	}
 	defer st.Close()
-	rawDiff, _, err := readFixtures(filepath.Join("..", "..", "testdata", "fixtures"))
+	input, err := inputsource.Read(context.Background(), inputsource.Options{
+		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
+	})
 	if err != nil {
-		t.Fatalf("readFixtures() error = %v", err)
+		t.Fatalf("inputsource.Read() error = %v", err)
 	}
-	report, err := st.LoadTaskReport(context.Background(), stableTaskID(rawDiff, fixedTestTime()))
+	report, err := st.LoadTaskReport(context.Background(), stableTaskID(input.Diff, fixedTestTime()))
 	if err != nil {
 		t.Fatalf("LoadTaskReport() error = %v", err)
 	}

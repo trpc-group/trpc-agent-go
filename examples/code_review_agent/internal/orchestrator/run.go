@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/diffparse"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/inputsource"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/report"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
@@ -35,20 +36,30 @@ import (
 
 const (
 	defaultMaxSandboxOutput = 4096
-	defaultSandboxCommand   = "go test ./..."
 	defaultSkillName        = "code-review"
+	defaultSandboxTimeout   = 30 * time.Second
 )
+
+var defaultSandboxCommands = []string{
+	"go test ./...",
+	"go vet ./...",
+	"go test ./skills/code-review/scripts",
+	"go test ./internal/rules",
+}
 
 // Options configures one review run.
 type Options struct {
-	FixtureDir string
-	OutDir     string
-	DBPath     string
-	Model      string
-	Runtime    string
-	RepoPath   string
-	Now        time.Time
-	Planner    Planner
+	FixtureDir     string
+	DiffFile       string
+	FileList       string
+	OutDir         string
+	DBPath         string
+	Model          string
+	Runtime        string
+	RepoPath       string
+	SandboxTimeout time.Duration
+	Now            time.Time
+	Planner        Planner
 }
 
 // Result is returned by the orchestrator after reports are written.
@@ -149,9 +160,7 @@ func reviewPlan(modelName string, provider string, source string, skill string, 
 		Source:   source,
 		Skill:    skill,
 		Runtime:  runtimeName,
-		Commands: []string{
-			defaultSandboxCommand,
-		},
+		Commands: append([]string(nil), defaultSandboxCommands...),
 		RuleSources: []string{
 			"skills/code-review/SKILL.md",
 			"skills/code-review/docs/rules.md",
@@ -227,14 +236,17 @@ func buildPlanningPrompt(req PlanRequest) string {
 		"runtime":       req.Runtime,
 		"changed_files": files,
 		"allowed_commands": []string{
-			defaultSandboxCommand,
+			"go test ./...",
+			"go vet ./...",
+			"go test ./skills/code-review/scripts",
+			"go test ./internal/rules",
 		},
 		"rule_sources": []string{
 			"skills/code-review/SKILL.md",
 			"skills/code-review/docs/rules.md",
 		},
 		"response_schema": map[string]any{
-			"commands":     []string{"go test ./..."},
+			"commands":     []string{"go test ./...", "go vet ./..."},
 			"rule_sources": []string{"skills/code-review/SKILL.md"},
 		},
 	}
@@ -275,22 +287,31 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	if opts.Runtime == "" {
 		opts.Runtime = "container"
 	}
+	if opts.SandboxTimeout == 0 {
+		opts.SandboxTimeout = defaultSandboxTimeout
+	}
 	fixedNow := !opts.Now.IsZero()
 	now := opts.Now
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
 
-	rawDiff, fixtureNames, err := readFixtures(opts.FixtureDir)
+	input, err := inputsource.Read(ctx, inputsource.Options{
+		FixtureDir: opts.FixtureDir,
+		DiffFile:   opts.DiffFile,
+		RepoPath:   opts.RepoPath,
+		FileList:   opts.FileList,
+	})
 	if err != nil {
 		return Result{}, err
 	}
+	rawDiff := input.Diff
 	taskID := stableTaskID(rawDiff, now)
 	task := review.ReviewTask{
 		ID:        taskID,
 		Status:    review.TaskStatusRunning,
-		InputType: review.InputTypeFixture,
-		RepoPath:  opts.RepoPath,
+		InputType: input.Type,
+		RepoPath:  input.RepoPath,
 		DiffHash:  hashText(rawDiff),
 		StartedAt: now.UTC(),
 	}
@@ -304,7 +325,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	files, err := diffparse.Parse(rawDiff)
+	files, err := parseInputFiles(rawDiff, input.FileList)
 	if err != nil {
 		_ = st.FinishTask(ctx, task.ID, review.TaskStatusFailed, err.Error())
 		return Result{}, err
@@ -317,7 +338,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	redactedDiff := redact.Text(rawDiff)
 	if err := st.RecordInput(ctx, store.InputRecord{
 		TaskID:           task.ID,
-		DiffSummary:      summarizeDiff(files, fixtureNames),
+		DiffSummary:      summarizeDiff(input, files),
 		ChangedFilesJSON: string(changedFilesJSON),
 		RedactedDiff:     redactedDiff.Text,
 	}); err != nil {
@@ -344,7 +365,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	decisions, runs, err := executePlannedCommands(ctx, st, task.ID, opts.Runtime, plan.Commands, now)
+	decisions, runs, err := executePlannedCommands(ctx, st, task.ID, opts.Runtime, plan.Commands, now, opts.SandboxTimeout)
 	if err != nil {
 		return Result{}, err
 	}
@@ -404,35 +425,6 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	}, nil
 }
 
-func readFixtures(dir string) (string, []string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", nil, fmt.Errorf("read fixture dir: %w", err)
-	}
-	var names []string
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".diff") {
-			names = append(names, entry.Name())
-		}
-	}
-	sort.Strings(names)
-	var b strings.Builder
-	for _, name := range names {
-		raw, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			return "", nil, fmt.Errorf("read fixture %s: %w", name, err)
-		}
-		if b.Len() > 0 {
-			b.WriteString("\n")
-		}
-		b.Write(raw)
-		if !strings.HasSuffix(string(raw), "\n") {
-			b.WriteString("\n")
-		}
-	}
-	return b.String(), names, nil
-}
-
 func stableTaskID(diff string, now time.Time) string {
 	sum := sha256.Sum256([]byte(diff + now.UTC().Format("20060102")))
 	return "review-" + hex.EncodeToString(sum[:])[:12]
@@ -443,17 +435,47 @@ func hashText(text string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func summarizeDiff(files []review.DiffFile, fixtureNames []string) string {
-	return fmt.Sprintf("Reviewed %d diff fixtures across %d changed files.", len(fixtureNames), len(files))
+func parseInputFiles(rawDiff string, fileList []string) ([]review.DiffFile, error) {
+	if strings.TrimSpace(rawDiff) != "" {
+		return diffparse.Parse(rawDiff)
+	}
+	files := make([]review.DiffFile, 0, len(fileList))
+	for _, file := range fileList {
+		files = append(files, review.DiffFile{
+			OldPath:    file,
+			NewPath:    file,
+			PackageDir: inferPackageDir(file),
+		})
+	}
+	return files, nil
+}
+
+func inferPackageDir(path string) string {
+	path = filepath.ToSlash(path)
+	if path == "" || !strings.HasSuffix(path, ".go") {
+		return ""
+	}
+	dir := filepath.ToSlash(filepath.Dir(path))
+	if dir == "." {
+		return ""
+	}
+	return dir
+}
+
+func summarizeDiff(input inputsource.Source, files []review.DiffFile) string {
+	if input.Summary != "" {
+		return fmt.Sprintf("%s Parsed %d changed files.", input.Summary, len(files))
+	}
+	return fmt.Sprintf("Reviewed %d changed files.", len(files))
 }
 
 func summarizeOutcome(files []review.DiffFile, findings []review.Finding, runs []review.SandboxRun, plan review.ReviewPlan) string {
 	return fmt.Sprintf("Model plan %q coordinated skill %q for %d changed files, produced %d findings, and recorded %d sandbox runs.", plan.Model, plan.Skill, len(files), len(findings), len(runs))
 }
 
-func executePlannedCommands(ctx context.Context, st store.Store, taskID string, runtimeName string, commands []string, now time.Time) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
+func executePlannedCommands(ctx context.Context, st store.Store, taskID string, runtimeName string, commands []string, now time.Time, timeout time.Duration) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
 	if len(commands) == 0 {
-		commands = []string{defaultSandboxCommand}
+		commands = defaultSandboxCommands
 	}
 	var decisions []review.PermissionDecisionRecord
 	var runs []review.SandboxRun
@@ -484,7 +506,13 @@ func executePlannedCommands(ctx context.Context, st store.Store, taskID string, 
 			})
 			continue
 		}
-		runs = append(runs, sandboxrun.Run(ctx, runtime, taskID, runID, command, defaultMaxSandboxOutput))
+		runCtx := ctx
+		cancel := func() {}
+		if timeout > 0 {
+			runCtx, cancel = context.WithTimeout(ctx, timeout)
+		}
+		runs = append(runs, sandboxrun.Run(runCtx, runtime, taskID, runID, command, defaultMaxSandboxOutput))
+		cancel()
 	}
 	return decisions, runs, nil
 }

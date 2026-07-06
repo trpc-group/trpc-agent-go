@@ -24,8 +24,11 @@ const (
 	SeverityMedium   = "medium"
 	SeverityLow      = "low"
 
-	InputTypeFixture = "fixture"
-	InputTypeDiff    = "diff"
+	InputTypeFixture  = "fixture"
+	InputTypeDiff     = "diff"
+	InputTypeDiffFile = "diff_file"
+	InputTypeRepo     = "repo"
+	InputTypeFileList = "file_list"
 )
 
 // ReviewTask is the durable unit of work for a code review.
