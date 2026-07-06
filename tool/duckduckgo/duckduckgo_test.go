@@ -856,6 +856,53 @@ func TestDDGTool_SERPFallbackReturnsContextCancelFromAPIFallback(
 	require.Equal(t, 1, calls["api.duckduckgo.com"])
 }
 
+func TestDDGTool_SERPFallbackWrapsContextCancelAfterAPIFallbackError(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ddgTool := &ddgTool{
+		httpClient: &http.Client{Transport: roundTripFunc(
+			func(r *http.Request) (*http.Response, error) {
+				switch r.URL.Host {
+				case "html.duckduckgo.com", "lite.duckduckgo.com":
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body: io.NopCloser(strings.NewReader(`
+<html><body>
+  <div class="anomaly-modal__title">
+    Unfortunately, bots use DuckDuckGo too.
+  </div>
+</body></html>`)),
+						Header: make(http.Header),
+					}, nil
+				case "api.duckduckgo.com":
+					cancel()
+					return &http.Response{
+						StatusCode: http.StatusServiceUnavailable,
+						Body:       io.NopCloser(strings.NewReader("down")),
+						Header:     make(http.Header),
+					}, nil
+				default:
+					t.Fatalf("unexpected host %s", r.URL.Host)
+					return nil, nil
+				}
+			},
+		)},
+		baseURL:   defaultHTMLBaseURL,
+		backend:   backendHTML,
+		userAgent: defaultSERPUserAgent,
+	}
+
+	result, err := ddgTool.search(ctx, searchRequest{Query: "example search topic"})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, result.Results)
+	require.Contains(t, err.Error(), "api fallback failed")
+	require.Contains(t, err.Error(), "status 503")
+}
+
 func TestDDGTool_SearchAPIWrapsContextCancellation(t *testing.T) {
 	t.Parallel()
 
