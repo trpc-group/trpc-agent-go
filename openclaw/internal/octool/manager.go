@@ -232,7 +232,7 @@ func (m *Manager) Exec(
 		return execResult{
 			Status:    "running",
 			SessionID: sess.id,
-			Output:    sess.tail(defaultLogTail),
+			Output:    m.limitTailResultOutput(sess.tail(defaultLogTail)),
 		}, nil
 	}
 
@@ -274,7 +274,7 @@ func (m *Manager) Exec(
 		return execResult{
 			Status:    "running",
 			SessionID: sess.id,
-			Output:    sess.tail(defaultLogTail),
+			Output:    m.limitTailResultOutput(sess.tail(defaultLogTail)),
 		}, nil
 	}
 }
@@ -540,6 +540,13 @@ func (m *Manager) limitResultOutput(output string) string {
 	return truncateResultOutput(output, m.maxResultOutputChars)
 }
 
+func (m *Manager) limitTailResultOutput(output string) string {
+	if m == nil || m.maxResultOutputChars <= 0 {
+		return output
+	}
+	return truncateTailResultOutput(output, m.maxResultOutputChars)
+}
+
 func (m *Manager) commandTimeout(timeoutS *int) time.Duration {
 	timeout := m.timeout
 	if timeoutS != nil && *timeoutS > 0 {
@@ -577,13 +584,111 @@ func truncateResultOutput(output string, maxChars int) string {
 	if charCount <= maxChars {
 		return output
 	}
-	return firstRunes(output, maxChars) + fmt.Sprintf(
-		"\n\n[OpenClaw truncated command output to %d of %d chars. "+
-			"Write large outputs to a file and read only the needed "+
-			"chunks with file tools or shell commands.]",
+	return appendTruncationNotice(
+		firstRunes(output, maxChars),
 		maxChars,
 		charCount,
 	)
+}
+
+func truncateLineWindowOutput(
+	output string,
+	maxChars int,
+	offset int,
+	nextOffset int,
+) (string, int, bool) {
+	if maxChars <= 0 {
+		return output, nextOffset, false
+	}
+	output = strings.ToValidUTF8(output, "\uFFFD")
+	charCount := utf8.RuneCountInString(output)
+	if charCount <= maxChars {
+		return output, nextOffset, false
+	}
+	if output == "" {
+		return output, nextOffset, false
+	}
+
+	lines := strings.Split(output, "\n")
+	parts := make([]string, 0, len(lines))
+	keptChars := 0
+	for _, line := range lines {
+		addChars := utf8.RuneCountInString(line)
+		if len(parts) > 0 {
+			addChars++
+		}
+		if keptChars+addChars > maxChars {
+			if len(parts) == 0 {
+				prefix := firstRunes(line, maxChars)
+				return appendTruncationNotice(
+					prefix,
+					utf8.RuneCountInString(prefix),
+					charCount,
+				), clampNextOffset(offset+1, offset, nextOffset), true
+			}
+			break
+		}
+		parts = append(parts, line)
+		keptChars += addChars
+	}
+
+	consumed := len(parts)
+	if consumed == 0 {
+		prefix := firstRunes(output, maxChars)
+		return appendTruncationNotice(
+			prefix,
+			utf8.RuneCountInString(prefix),
+			charCount,
+		), clampNextOffset(offset+1, offset, nextOffset), true
+	}
+	return appendTruncationNotice(
+		strings.Join(parts, "\n"),
+		keptChars,
+		charCount,
+	), clampNextOffset(offset+consumed, offset, nextOffset), true
+}
+
+func truncateTailResultOutput(output string, maxChars int) string {
+	if maxChars <= 0 {
+		return output
+	}
+	output = strings.ToValidUTF8(output, "\uFFFD")
+	charCount := utf8.RuneCountInString(output)
+	if charCount <= maxChars {
+		return output
+	}
+	return fmt.Sprintf(
+		"[OpenClaw truncated command output to the last %d of %d "+
+			"chars. Write large outputs to a file and read only "+
+			"the needed chunks with file tools or shell commands.]\n\n%s",
+		maxChars,
+		charCount,
+		lastRunes(output, maxChars),
+	)
+}
+
+func appendTruncationNotice(
+	prefix string,
+	keptChars int,
+	totalChars int,
+) string {
+	return prefix + fmt.Sprintf(
+		"\n\n[OpenClaw truncated command output to %d of %d chars. "+
+			"Write large outputs to a file and read only the needed "+
+			"chunks with file tools or shell commands.]",
+		keptChars,
+		totalChars,
+	)
+}
+
+func clampNextOffset(next int, offset int, end int) int {
+	if next <= offset && end > offset {
+		next = offset + 1
+	}
+	if next > end {
+		return end
+	}
+	return next
 }
 
 func firstRunes(value string, n int) string {
@@ -594,6 +699,24 @@ func firstRunes(value string, n int) string {
 	for idx := range value {
 		if count == n {
 			return value[:idx]
+		}
+		count++
+	}
+	return value
+}
+
+func lastRunes(value string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	start := utf8.RuneCountInString(value) - n
+	if start <= 0 {
+		return value
+	}
+	count := 0
+	for idx := range value {
+		if count == start {
+			return value[idx:]
 		}
 		count++
 	}
@@ -726,7 +849,7 @@ func (m *Manager) poll(id string, limit *int) (processPoll, error) {
 	if err != nil {
 		return processPoll{}, err
 	}
-	return s.poll(limit), nil
+	return s.poll(limit, m.maxResultOutputChars), nil
 }
 
 func (m *Manager) log(
@@ -738,7 +861,7 @@ func (m *Manager) log(
 	if err != nil {
 		return processLog{}, err
 	}
-	return s.log(offset, limit), nil
+	return s.log(offset, limit, m.maxResultOutputChars), nil
 }
 
 func (m *Manager) write(

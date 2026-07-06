@@ -1354,6 +1354,143 @@ func TestManager_MaxResultOutputCharsTruncatesSessionCompletion(
 	requireTruncatedExecOutput(t, res.Output)
 }
 
+func TestManager_MaxResultOutputCharsTruncatesRunningTail(
+	t *testing.T,
+) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithMaxResultOutputChars(80),
+		WithMaxYield(2*time.Second),
+	)
+	execTool := newExecCommandTool(mgr)
+
+	out, err := execTool.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "printf 'old%.0s' {1..80}; " +
+			"printf '\\nLATEST\\n'; sleep 3",
+		"yield_time_ms": 1500,
+	}))
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "running", res.Status)
+	require.NotEmpty(t, res.SessionID)
+	t.Cleanup(func() {
+		_ = mgr.kill(res.SessionID)
+	})
+	requireTruncatedExecOutput(t, res.Output)
+	require.Contains(t, res.Output, "LATEST")
+}
+
+func TestManager_MaxResultOutputCharsTruncatesPollAndLog(
+	t *testing.T,
+) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	mgr := NewManager(
+		WithMaxResultOutputChars(80),
+		WithMaxYield(2*time.Second),
+	)
+	execTool := newExecCommandTool(mgr)
+	writeTool := newWriteStdinTool(mgr)
+
+	out, err := execTool.Call(context.Background(), mustJSON(t, map[string]any{
+		"command": "printf 'abcdefghijklmnopqrstuvwxyz%.0s' {1..8}; " +
+			"printf '\\n'; sleep 3",
+		"yield_time_ms": 1500,
+	}))
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "running", res.Status)
+	require.NotEmpty(t, res.SessionID)
+	t.Cleanup(func() {
+		_ = mgr.kill(res.SessionID)
+	})
+
+	writeAny, err := writeTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"session_id":    res.SessionID,
+			"yield_time_ms": 0,
+		}),
+	)
+	require.NoError(t, err)
+	requireTruncatedExecOutput(t, outputField(writeAny.(map[string]any)))
+
+	log, err := mgr.log(res.SessionID, nil, nil)
+	require.NoError(t, err)
+	requireTruncatedExecOutput(t, log.Output)
+}
+
+func TestManager_MaxResultOutputCharsPollKeepsNextOffset(
+	t *testing.T,
+) {
+	mgr := NewManager(WithMaxResultOutputChars(12))
+	sess := newSession("session-id", "cmd", 0)
+	sess.appendOutput("alpha\nbravo\ncharlie\ndelta\n")
+	sess.markDone(0)
+
+	mgr.mu.Lock()
+	mgr.sessions[sess.id] = sess
+	mgr.mu.Unlock()
+
+	poll, err := mgr.poll(sess.id, nil)
+	require.NoError(t, err)
+	require.Equal(t, 0, poll.Offset)
+	require.Equal(t, 2, poll.NextOffset)
+	require.Contains(t, poll.Output, "alpha\nbravo")
+	require.NotContains(t, poll.Output, "charlie")
+	requireTruncatedExecOutput(t, poll.Output)
+
+	poll, err = mgr.poll(sess.id, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, poll.Offset)
+	require.Equal(t, 3, poll.NextOffset)
+	require.Contains(t, poll.Output, "charlie")
+	require.NotContains(t, poll.Output, "delta")
+	requireTruncatedExecOutput(t, poll.Output)
+
+	log, err := mgr.log(sess.id, &poll.NextOffset, nil)
+	require.NoError(t, err)
+	require.Equal(t, 3, log.Offset)
+	require.Equal(t, 4, log.NextOffset)
+	require.Contains(t, log.Output, "delta")
+}
+
+func TestManager_MaxResultOutputCharsPollUsesRawLineOffsets(
+	t *testing.T,
+) {
+	mgr := NewManager(WithMaxResultOutputChars(12))
+	sess := newSession("session-id", "cmd", 0)
+	sess.redact = func(output string) string {
+		return strings.ReplaceAll(output, "bravo", "bravo\ninserted")
+	}
+	sess.appendOutput("alpha\nbravo\ncharlie\ndelta\n")
+	sess.markDone(0)
+
+	mgr.mu.Lock()
+	mgr.sessions[sess.id] = sess
+	mgr.mu.Unlock()
+
+	poll, err := mgr.poll(sess.id, nil)
+	require.NoError(t, err)
+	require.Equal(t, 0, poll.Offset)
+	require.Equal(t, 2, poll.NextOffset)
+	require.Contains(t, poll.Output, "inserted")
+	require.NotContains(t, poll.Output, "charlie")
+
+	poll, err = mgr.poll(sess.id, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, poll.Offset)
+	require.Equal(t, 3, poll.NextOffset)
+	require.Contains(t, poll.Output, "charlie")
+}
+
 func requireTruncatedExecOutput(t *testing.T, output string) {
 	t.Helper()
 
@@ -1755,20 +1892,20 @@ func TestSession_Log(t *testing.T) {
 		s.appendOutput("x\n")
 	}
 
-	got := s.log(nil, nil)
+	got := s.log(nil, nil, 0)
 	require.Equal(t, 50, got.Offset)
 	require.Equal(t, total, got.NextOffset)
 	require.Len(t, strings.Split(got.Output, "\n"), defaultLogLimit)
 
 	offset := 999
-	got = s.log(&offset, nil)
+	got = s.log(&offset, nil, 0)
 	require.Empty(t, got.Output)
 	require.Equal(t, total, got.Offset)
 	require.Equal(t, total, got.NextOffset)
 
 	offset = 20
 	limit := 2
-	got = s.log(&offset, &limit)
+	got = s.log(&offset, &limit, 0)
 	require.Len(t, strings.Split(got.Output, "\n"), 2)
 	require.Equal(t, offset, got.Offset)
 	require.Equal(t, offset+limit, got.NextOffset)
