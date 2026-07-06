@@ -2270,6 +2270,57 @@ func Test_HandleStreamingResponse_RetriesMidStreamTCPRST(t *testing.T) {
 		"handleStreamingResponse should have made exactly 2 HTTP attempts (1 mid-stream failure + 1 success)")
 }
 
+// Test_HandleStreamingResponse_DoesNotRetryAfterChunkCallback verifies that
+// WithChatChunkCallback delivery counts as caller-visible output: a transport
+// failure after prelude SSE events must not retry and leak raw chunks from a
+// second attempt.
+func Test_HandleStreamingResponse_DoesNotRetryAfterChunkCallback(t *testing.T) {
+	var attempts int32
+	orig := model.DefaultNewHTTPClient
+	t.Cleanup(func() { model.DefaultNewHTTPClient = orig })
+	model.DefaultNewHTTPClient = func(_ ...HTTPClientOption) model.HTTPClient {
+		return &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			atomic.AddInt32(&attempts, 1)
+			h := make(http.Header)
+			h.Set("Content-Type", "text/event-stream")
+			body := &errReadCloser{
+				pre: []byte(ssePrelude),
+				err: fmt.Errorf("read: connection reset by peer"),
+			}
+			return &http.Response{StatusCode: 200, Header: h, Body: body}, nil
+		})}
+	}
+
+	var chunkCallbacks int32
+	m := New(
+		"claude-test",
+		WithHTTPClientOptions(),
+		WithAnthropicClientOptions(anthropicopt.WithMaxRetries(0)),
+		WithStreamRetry(2, 1*time.Millisecond, 5*time.Millisecond),
+		WithChatChunkCallback(func(_ context.Context, _ *anthropic.MessageNewParams,
+			_ *anthropic.MessageStreamEventUnion) {
+			atomic.AddInt32(&chunkCallbacks, 1)
+		}),
+	)
+
+	ctx := context.Background()
+	responseChan := make(chan *model.Response, 8)
+	m.handleStreamingResponse(ctx, anthropic.MessageNewParams{}, responseChan)
+	close(responseChan)
+
+	var sawErr bool
+	for r := range responseChan {
+		if r.Error != nil {
+			sawErr = true
+		}
+	}
+	require.True(t, sawErr, "stream should surface the terminal error")
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts),
+		"must not retry after chunk callback delivery from a failed attempt")
+	require.Greater(t, atomic.LoadInt32(&chunkCallbacks), int32(0),
+		"chunk callback should have observed prelude events from the failed attempt")
+}
+
 // Test_HandleStreamingResponse_RetryCappedAfterMaxAttempts verifies that when
 // every streaming attempt is interrupted, handleStreamingResponse gives up
 // after maxRetries+1 attempts and surfaces the error to the caller rather
