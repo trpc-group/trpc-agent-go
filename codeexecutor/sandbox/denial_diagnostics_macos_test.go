@@ -1,3 +1,5 @@
+//go:build darwin
+
 //
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
@@ -9,7 +11,32 @@
 
 package sandbox
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+func TestMacOSSandboxDenialAutoNoiseFilter(t *testing.T) {
+	for _, denial := range []Denial{
+		{Operation: "mach-lookup", Target: "mDNSResponder"},
+		{Operation: "mach-lookup", Target: "com.apple.diagnosticd"},
+		{Operation: "mach-lookup", Target: "com.apple.analyticsd"},
+	} {
+		if !macosSandboxDenialAutoNoise(denial) {
+			t.Fatalf("auto noise filter did not match %#v", denial)
+		}
+	}
+	for _, denial := range []Denial{
+		{Operation: "file-read-data", Target: "/private/tmp/user-file"},
+		{Operation: "file-read-data", Target: "/Users/me/my-analyticsd-project/foo"},
+		{Operation: "mach-lookup", Target: "com.apple.trustd.agent"},
+		{Operation: "file-read-data", Target: "/dev/dtracehelper"},
+	} {
+		if macosSandboxDenialAutoNoise(denial) {
+			t.Fatalf("auto noise filter matched user-relevant denial %#v", denial)
+		}
+	}
+}
 
 func TestSandboxDenialConfiguredFilters(t *testing.T) {
 	denials := []Denial{{
@@ -17,7 +44,7 @@ func TestSandboxDenialConfiguredFilters(t *testing.T) {
 		Target:    "/dev/dtracehelper",
 		Raw:       "Sandbox: cat deny file-read-data /dev/dtracehelper",
 	}}
-	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
 		Ignore: []DenialIgnoreRule{{
 			Scope:   DenialFilterAll,
 			Targets: []DenialTargetMatcher{{Prefix: "/dev/dtracehelper"}},
@@ -36,7 +63,7 @@ func TestSandboxDenialCommandPatternFilter(t *testing.T) {
 		Operation: "file-read-data",
 		Target:    "/private/tmp/foo",
 	}}
-	filtered := applySandboxDenialFilters(denials, "/bin/gh", DenialFilter{
+	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/gh", DenialFilter{
 		Ignore: []DenialIgnoreRule{{
 			Scope:   DenialFilterAll,
 			Command: "gh",
@@ -46,7 +73,7 @@ func TestSandboxDenialCommandPatternFilter(t *testing.T) {
 	if len(filtered) != 0 {
 		t.Fatalf("command-pattern filter = %#v, want empty", filtered)
 	}
-	kept := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+	kept := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
 		Ignore: []DenialIgnoreRule{{
 			Scope:   DenialFilterAll,
 			Command: "gh",
@@ -63,7 +90,7 @@ func TestSandboxDenialDisableAutomatic(t *testing.T) {
 		Operation: "mach-lookup",
 		Target:    "com.apple.diagnosticd",
 	}}
-	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
 		DisableAutomatic: true,
 	})
 	if len(filtered) != 1 {
@@ -77,7 +104,7 @@ func TestSandboxDenialDeduplicatesByOperationAndTarget(t *testing.T) {
 		{Operation: "file-read-data", Target: "/private/tmp/foo", Raw: "second"},
 		{Operation: "file-read-metadata", Target: "/private/tmp/foo", Raw: "third"},
 	}
-	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{})
+	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{})
 	if len(filtered) != 2 {
 		t.Fatalf("deduped denials = %#v, want two operation+target pairs", filtered)
 	}
@@ -89,7 +116,7 @@ func TestSandboxDenialTargetSuffixGlobAndRawFilters(t *testing.T) {
 		{Operation: "file-read-data", Target: "/private/tmp/app.env"},
 		{Operation: "file-read-data", Target: "/private/tmp/report.log", Raw: "duplicate report"},
 	}
-	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
 		Ignore: []DenialIgnoreRule{
 			{Targets: []DenialTargetMatcher{{Suffix: ".sock"}}},
 			{Targets: []DenialTargetMatcher{{Glob: "/private/tmp/*.env"}}},
@@ -106,7 +133,7 @@ func TestSandboxDenialFilterScopeMismatchDoesNotApply(t *testing.T) {
 		Operation: "file-read-data",
 		Target:    "/private/tmp/foo",
 	}}
-	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
 		Ignore: []DenialIgnoreRule{{
 			Scope:   DenialFilterScope("other"),
 			Targets: []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
@@ -138,7 +165,7 @@ func TestCloneSandboxDenialFilterDeepCopiesSlices(t *testing.T) {
 }
 
 func TestSandboxDenialEmptyInputReturnsNil(t *testing.T) {
-	if got := applySandboxDenialFilters(nil, "/bin/cat", DenialFilter{}); got != nil {
+	if got := applyMacOSSandboxDenialFilters(nil, "/bin/cat", DenialFilter{}); got != nil {
 		t.Fatalf("nil input = %#v, want nil", got)
 	}
 }
@@ -148,7 +175,7 @@ func TestSandboxDenialOperationFilter(t *testing.T) {
 		Operation: "file-read-data",
 		Target:    "/private/tmp/foo",
 	}}
-	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
 		Ignore: []DenialIgnoreRule{{
 			Operations: []string{"file-read-data"},
 		}},
@@ -156,7 +183,7 @@ func TestSandboxDenialOperationFilter(t *testing.T) {
 	if filtered != nil {
 		t.Fatalf("operation filter = %#v, want nil", filtered)
 	}
-	kept := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+	kept := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
 		Ignore: []DenialIgnoreRule{{
 			Operations: []string{"mach-lookup"},
 		}},
@@ -171,7 +198,7 @@ func TestSandboxDenialEmptyIgnoreRuleDoesNotMatch(t *testing.T) {
 		Operation: "file-read-data",
 		Target:    "/private/tmp/foo",
 	}}
-	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
 		Ignore: []DenialIgnoreRule{{Scope: DenialFilterDenials}},
 	})
 	if len(filtered) != 1 {
@@ -184,16 +211,16 @@ func TestSandboxDenialFilterDenialsScope(t *testing.T) {
 		Operation: "file-read-data",
 		Target:    "/private/tmp/foo",
 	}}
-	if !sandboxDenialFilterScopeMatches(DenialFilterDenials, DenialFilterDenials) {
+	if !macosDenialFilterScopeMatches(DenialFilterDenials, DenialFilterDenials) {
 		t.Fatal("denials scope should match denials output")
 	}
-	if !sandboxDenialFilterScopeMatches("", DenialFilterDenials) {
+	if !macosDenialFilterScopeMatches("", DenialFilterDenials) {
 		t.Fatal("empty scope should match denials output")
 	}
-	if sandboxDenialFilterScopeMatches(DenialFilterScope("other"), DenialFilterDenials) {
+	if macosDenialFilterScopeMatches(DenialFilterScope("other"), DenialFilterDenials) {
 		t.Fatal("unknown scope should not match denials output")
 	}
-	filtered := applySandboxDenialFilters(denials, "/bin/cat", DenialFilter{
+	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
 		Ignore: []DenialIgnoreRule{{
 			Scope:   DenialFilterDenials,
 			Targets: []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
@@ -205,7 +232,7 @@ func TestSandboxDenialFilterDenialsScope(t *testing.T) {
 }
 
 func TestSandboxDenialInvalidGlobDoesNotMatch(t *testing.T) {
-	if sandboxDenialTargetMatches("/private/tmp/foo", []DenialTargetMatcher{{Glob: "[invalid"}}) {
+	if macosDenialTargetMatches("/private/tmp/foo", []DenialTargetMatcher{{Glob: "[invalid"}}) {
 		t.Fatal("invalid glob should not match target")
 	}
 }
@@ -215,5 +242,96 @@ func TestCloneSandboxDenialFilterWithoutIgnoreRules(t *testing.T) {
 	clone := cloneDenialFilter(filter)
 	if clone.DisableAutomatic != filter.DisableAutomatic || len(clone.Ignore) != 0 {
 		t.Fatalf("clone without ignore rules = %#v, want %#v", clone, filter)
+	}
+}
+
+func TestCollectSandboxDenialsAppliesRuntimeDenialFilter(t *testing.T) {
+	runTag := "TRPC_RUN_filter_END_0123456789abcdef_SBX"
+	rt := NewRuntime(WithDenialFilter(DenialFilter{
+		Ignore: []DenialIgnoreRule{{
+			Targets: []DenialTargetMatcher{{Prefix: "/dev/dtracehelper"}},
+		}},
+	}))
+	ring := &macosDenialRing{
+		events: []macosSandboxDenialEvent{
+			{
+				denial: Denial{
+					Operation: "file-read-data",
+					Target:    "/dev/dtracehelper",
+					Raw:       "Sandbox: cat deny file-read-data /dev/dtracehelper\n" + runTag,
+				},
+				tagged: true,
+			},
+			{
+				denial: Denial{
+					Operation: "file-read-data",
+					Target:    "/private/tmp/keep",
+					Raw:       "Sandbox: cat deny file-read-data /private/tmp/keep\n" + runTag,
+				},
+				tagged: true,
+			},
+		},
+	}
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = &macosLogStreamMonitor{ring: ring}
+	d.caps = DiagnosticsCapability{
+		EventStreamAvailable: true,
+		StrongCorrelation:    true,
+		ProbeCompleted:       true,
+	}
+	d.mu.Unlock()
+
+	denials := rt.collectSandboxDenials(runTag, "/bin/cat", time.Millisecond)
+	if len(denials) != 1 || denials[0].Target != "/private/tmp/keep" {
+		t.Fatalf("filtered denials = %#v, want only /private/tmp/keep", denials)
+	}
+}
+
+func TestCollectSandboxDenialsFiltersAutomaticNoise(t *testing.T) {
+	runTag := "TRPC_RUN_noise_END_0123456789abcdef_SBX"
+	rt := NewRuntime()
+	ring := &macosDenialRing{
+		events: []macosSandboxDenialEvent{
+			{
+				denial: Denial{
+					Operation: "mach-lookup",
+					Target:    "com.apple.diagnosticd",
+					Raw:       "Sandbox: cat deny mach-lookup com.apple.diagnosticd\n" + runTag,
+				},
+				tagged: true,
+			},
+			{
+				denial: Denial{
+					Operation: "file-read-data",
+					Target:    "/private/tmp/keep",
+					Raw:       "Sandbox: cat deny file-read-data /private/tmp/keep\n" + runTag,
+				},
+				tagged: true,
+			},
+		},
+	}
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = &macosLogStreamMonitor{ring: ring}
+	d.caps = DiagnosticsCapability{
+		EventStreamAvailable: true,
+		StrongCorrelation:    true,
+		ProbeCompleted:       true,
+	}
+	d.mu.Unlock()
+
+	denials := rt.collectSandboxDenials(runTag, "/bin/cat", time.Millisecond)
+	if len(denials) != 1 || denials[0].Target != "/private/tmp/keep" {
+		t.Fatalf("auto-filtered denials = %#v, want only user-relevant denial", denials)
+	}
+}
+
+func TestRandomHexProducesExpectedLength(t *testing.T) {
+	if got := randomHex(8); len(got) != 16 {
+		t.Fatalf("randomHex(8) = %q, want 16 hex chars", got)
+	}
+	if got := randomHex(4); len(got) != 8 {
+		t.Fatalf("randomHex(4) = %q, want 8 hex chars", got)
 	}
 }

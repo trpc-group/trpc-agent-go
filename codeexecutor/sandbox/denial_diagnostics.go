@@ -60,6 +60,42 @@ type Diagnostics struct {
 	Denials []Denial
 }
 
+// DenialFilterScope selects which diagnostic outputs a filter rule applies to.
+type DenialFilterScope string
+
+const (
+	// DenialFilterDenials applies only to Diagnostics.Denials.
+	DenialFilterDenials DenialFilterScope = "denials"
+	// DenialFilterAll applies to all diagnostic outputs.
+	DenialFilterAll DenialFilterScope = "all"
+)
+
+// DenialTargetMatcher matches denial targets using structured fields.
+type DenialTargetMatcher struct {
+	Exact  string
+	Prefix string
+	Suffix string
+	Glob   string
+}
+
+// DenialIgnoreRule ignores matching sandbox denials from diagnostic output.
+type DenialIgnoreRule struct {
+	Scope DenialFilterScope
+	// Command, when non-empty, must be a substring of RunProgramSpec.Cmd. It
+	// intentionally does not match Args because arguments may contain secrets.
+	Command     string
+	Operations  []string
+	Targets     []DenialTargetMatcher
+	RawContains []string
+}
+
+// DenialFilter configures user-defined sandbox denial filtering for diagnostic
+// output. Automatic noise filtering is backend-specific.
+type DenialFilter struct {
+	DisableAutomatic bool
+	Ignore           []DenialIgnoreRule
+}
+
 type diagnosticsKey struct{}
 
 // WithDiagnostics asks RunProgram to collect sandbox diagnostics for this call.

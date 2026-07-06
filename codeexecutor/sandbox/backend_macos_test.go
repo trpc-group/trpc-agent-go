@@ -178,28 +178,6 @@ func TestMacOSDenialDiagnosticsProfileMessages(t *testing.T) {
 	}
 }
 
-func TestMacOSSandboxDenialAutoNoiseFilter(t *testing.T) {
-	for _, denial := range []Denial{
-		{Operation: "mach-lookup", Target: "mDNSResponder"},
-		{Operation: "mach-lookup", Target: "com.apple.diagnosticd"},
-		{Operation: "mach-lookup", Target: "com.apple.analyticsd"},
-	} {
-		if !macosSandboxDenialAutoNoise(denial) {
-			t.Fatalf("auto noise filter did not match %#v", denial)
-		}
-	}
-	for _, denial := range []Denial{
-		{Operation: "file-read-data", Target: "/private/tmp/user-file"},
-		{Operation: "file-read-data", Target: "/Users/me/my-analyticsd-project/foo"},
-		{Operation: "mach-lookup", Target: "com.apple.trustd.agent"},
-		{Operation: "file-read-data", Target: "/dev/dtracehelper"},
-	} {
-		if macosSandboxDenialAutoNoise(denial) {
-			t.Fatalf("auto noise filter matched user-relevant denial %#v", denial)
-		}
-	}
-}
-
 func TestMacOSNetworkExtensionPolicies(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	ws, err := rt.CreateWorkspace(context.Background(), "macos/network-policy", codeexecutor.WorkspacePolicy{})
@@ -572,6 +550,52 @@ func TestCollectSandboxDenialsWaitsForCurrentRunTag(t *testing.T) {
 	denials := rt.collectSandboxDenials(runTag, "/bin/cat", 2*time.Second)
 	if len(denials) != 1 || denials[0].Target != "/private/tmp/current" {
 		t.Fatalf("denials=%#v, want current run denial after stale ring event", denials)
+	}
+}
+
+func TestRunProgramWithDiagnosticsDegradesWhenMonitorUnavailable(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/diagnostics-degraded", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.ensureDenialMonitor(); err != nil {
+		t.Fatalf("ensureDenialMonitor: %v", err)
+	}
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = nil
+	d.caps = DiagnosticsCapability{
+		Supported:            true,
+		ProbeCompleted:       true,
+		EventStreamAvailable: false,
+		StrongCorrelation:    false,
+	}
+	d.mu.Unlock()
+
+	ctx, diagnosticsCh := WithDiagnostics(context.Background())
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:  "bash",
+		Args: []string{"-c", "echo ok"},
+	})
+	diagnostics := <-diagnosticsCh
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if res.ExitCode != 0 || strings.TrimSpace(res.Stdout) != "ok" {
+		t.Fatalf("run result = %#v, want successful echo ok", res)
+	}
+	if diagnostics.Denials != nil {
+		t.Fatalf("diagnostics = %#v, want nil denials when monitor unavailable", diagnostics)
+	}
+	if rt.sandboxDenialCollectingReady() {
+		t.Fatalf("sandboxDenialCollectingReady = true, want false after simulated monitor loss")
 	}
 }
 
