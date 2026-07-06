@@ -30,7 +30,7 @@ const (
 	httpHeaderAuthorization = "Authorization"
 	httpHeaderAccept        = "Accept"
 	httpHeaderContentType   = "Content-Type"
-	httpHeaderXAPIKey       = "X-API-Key"
+	httpHeaderXAPIKey       = "X-API-Key" // #nosec G101 -- HTTP header name, not a credential.
 
 	httpContentTypeJSON = "application/json"
 
