@@ -677,6 +677,7 @@ func TestToolCall_ActEvaluateDisabled(t *testing.T) {
 func TestToolCall_ProfilesAreSorted(t *testing.T) {
 	t.Parallel()
 
+	root := t.TempDir()
 	openclawDriver := &fakeDriver{
 		status: driverStatus{State: stateReady, ToolCount: 3},
 	}
@@ -687,7 +688,12 @@ func TestToolCall_ProfilesAreSorted(t *testing.T) {
 	tool := newToolWithDrivers(
 		defaultProfileName,
 		false,
-		navigationPolicy{},
+		navigationPolicy{
+			AllowedDomains:   []string{"example.com"},
+			BlockedDomains:   []string{"blocked.example"},
+			AllowLoopback:    true,
+			AllowedFileRoots: []string{root},
+		},
 		nil,
 		nil,
 		nil,
@@ -718,6 +724,17 @@ func TestToolCall_ProfilesAreSorted(t *testing.T) {
 	require.Equal(t, defaultProfileName, got.Profiles[1].Name)
 	require.Equal(t, driverTypePlaywrightMCP, got.Profiles[0].Driver)
 	require.Equal(t, driverTypePlaywrightMCP, got.Profiles[1].Driver)
+	require.NotNil(t, got.NavigationPolicy)
+	require.Equal(t, []string{"example.com"}, got.NavigationPolicy.AllowedDomains)
+	require.Equal(
+		t,
+		[]string{"blocked.example"},
+		got.NavigationPolicy.BlockedDomains,
+	)
+	require.True(t, got.NavigationPolicy.AllowLoopback)
+	require.Equal(t, []string{root}, got.NavigationPolicy.AllowedFileRoots)
+	require.Equal(t, got.NavigationPolicy, got.Profiles[0].NavigationPolicy)
+	require.Equal(t, got.NavigationPolicy, got.Profiles[1].NavigationPolicy)
 }
 
 func TestToolCall_ScreenshotPreservesContent(t *testing.T) {

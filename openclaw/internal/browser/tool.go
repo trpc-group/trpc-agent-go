@@ -1080,10 +1080,11 @@ func (t *Tool) handleProfiles(
 	sort.Strings(names)
 
 	out := Result{
-		Action:          actionProfiles,
-		DefaultProfile:  t.defaultProfile,
-		Driver:          ToolName,
-		EvaluateEnabled: t.evaluateEnabled,
+		Action:           actionProfiles,
+		DefaultProfile:   t.defaultProfile,
+		Driver:           ToolName,
+		EvaluateEnabled:  t.evaluateEnabled,
+		NavigationPolicy: navigationPolicyInfo(t.navigation),
 		Supported: visibleActionsForDriver(
 			t.driverTypeForProfile(t.defaultProfile),
 			t.evaluateEnabled,
@@ -1095,11 +1096,12 @@ func (t *Tool) handleProfiles(
 		cfg := t.profiles[name]
 		driverType := t.driverTypeForProfile(name)
 		info := ProfileInfo{
-			Name:        name,
-			Description: cfg.Description,
-			Default:     name == t.defaultProfile,
-			Driver:      driverType,
-			Supported:   visibleActionsForDriver(driverType, t.evaluateEnabled),
+			Name:             name,
+			Description:      cfg.Description,
+			Default:          name == t.defaultProfile,
+			Driver:           driverType,
+			Supported:        visibleActionsForDriver(driverType, t.evaluateEnabled),
+			NavigationPolicy: out.NavigationPolicy,
 		}
 		drv := t.statusDriver(name, cfg)
 		if drv != nil {
@@ -1114,6 +1116,25 @@ func (t *Tool) handleProfiles(
 		out.Profiles = append(out.Profiles, info)
 	}
 	return out
+}
+
+func navigationPolicyInfo(policy navigationPolicy) *NavigationPolicyInfo {
+	if len(policy.AllowedDomains) == 0 &&
+		len(policy.BlockedDomains) == 0 &&
+		!policy.AllowLoopback &&
+		!policy.AllowPrivateNet &&
+		!policy.AllowFileURLs &&
+		len(policy.AllowedFileRoots) == 0 {
+		return nil
+	}
+	return &NavigationPolicyInfo{
+		AllowedDomains:       append([]string(nil), policy.AllowedDomains...),
+		BlockedDomains:       append([]string(nil), policy.BlockedDomains...),
+		AllowLoopback:        policy.AllowLoopback,
+		AllowPrivateNetworks: policy.AllowPrivateNet,
+		AllowFileURLs:        policy.AllowFileURLs,
+		AllowedFileRoots:     append([]string(nil), policy.AllowedFileRoots...),
+	}
 }
 
 func (t *Tool) statusDriver(

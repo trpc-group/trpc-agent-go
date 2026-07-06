@@ -310,7 +310,9 @@ func TestNormalizeFileRoots(t *testing.T) {
 	require.NoError(t, os.Mkdir(realRoot, 0o700))
 	linkRoot := filepath.Join(base, "link")
 	require.NoError(t, os.Symlink(realRoot, linkRoot))
+	resolvedRoot, err := filepath.EvalSymlinks(realRoot)
+	require.NoError(t, err)
 
 	roots := normalizeFileRoots([]string{realRoot, linkRoot, realRoot})
-	require.Equal(t, []string{realRoot}, roots)
+	require.Equal(t, []string{resolvedRoot}, roots)
 }
