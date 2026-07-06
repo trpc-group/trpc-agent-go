@@ -1832,7 +1832,6 @@ func testLLMRequest() *model.Request {
 	}
 }
 
-
 func newRunFlow(respProcessors []flow.ResponseProcessor, opts ...Options) *Flow {
 	opt := Options{}
 	if len(opts) > 0 {
