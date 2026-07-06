@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1429,6 +1430,33 @@ func TestServer_ProcessMessage_LargeInlineData(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)
 	require.Contains(t, rr.Body.String(), "request body exceeds max_body_bytes")
+}
+
+func TestServer_ProcessMessage_LargeBodyWithoutContentLength(t *testing.T) {
+	t.Parallel()
+
+	r := &recordingRunner{}
+	srv, err := New(r, WithMaxBodyBytes(64))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(gwproto.MessageRequest{
+		From: "u1",
+		Text: strings.Repeat("x", 128),
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesPath(),
+		bytes.NewReader(body),
+	)
+	req.ContentLength = -1
+	srv.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "request body exceeds max_body_bytes")
+	require.Zero(t, r.Calls())
 }
 
 func TestServer_ProcessMessage_FileUploadStorePersistsHostRef(
