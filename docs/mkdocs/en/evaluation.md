@@ -1567,8 +1567,14 @@ type TemplateVariableBinding struct {
 
 // TemplateVariableSource represents a template variable source.
 type TemplateVariableSource struct {
-	Scope TemplateVariableScope // Scope is the source scope.
-	Field TemplateVariableField // Field is the source field.
+	Scope    TemplateVariableScope     // Scope is the source scope.
+	Field    TemplateVariableField     // Field is the source field.
+	Selector *TemplateVariableSelector // Selector is the trace step selector.
+}
+
+// TemplateVariableSelector represents a template variable selector.
+type TemplateVariableSelector struct {
+	NodeID string // NodeID is the trace step node ID to read.
 }
 
 // TemplateVariableScope represents the template variable source scope.
@@ -1583,8 +1589,10 @@ const (
 type TemplateVariableField string
 
 const (
-	TemplateVariableFieldUserContent   TemplateVariableField = "userContent"
-	TemplateVariableFieldFinalResponse TemplateVariableField = "finalResponse"
+	TemplateVariableFieldUserContent     TemplateVariableField = "userContent"
+	TemplateVariableFieldFinalResponse   TemplateVariableField = "finalResponse"
+	TemplateVariableFieldTraceStepInput  TemplateVariableField = "traceStepInput"
+	TemplateVariableFieldTraceStepOutput TemplateVariableField = "traceStepOutput"
 )
 
 // Rubric represents one evaluation rubric.
@@ -1669,13 +1677,15 @@ The target metric uses `criterion.llmJudge` to carry the rubric list. Built-in r
 
 `template.prompt` uses double-brace template syntax such as `{{question}}` and `{{answer}}`. Every placeholder must be explicitly bound in `variableBindings`. Unbound variables, unknown variables, or binding resolution failures all result in errors.
 
-`template.variableBindings` currently supports values from the current scoring turn only:
+`template.variableBindings` supports values from `actual` and `expected` in the current scoring turn:
 
 - `actual.userContent`
 - `actual.finalResponse`
+- `actual.traceStepInput`
+- `actual.traceStepOutput`
 - `expected.finalResponse`
 
-`expected.finalResponse` requires the current expected turn to contain `finalResponse`. If the template binds that field but the expected turn has only placeholder `userContent` and no `finalResponse`, evaluation fails directly.
+`actual.userContent`, `actual.finalResponse`, and `expected.finalResponse` render the current scoring turn's user input, actual final response, and expected final response respectively. `actual.traceStepInput` and `actual.traceStepOutput` require `source.selector.nodeID` to specify the trace step `NodeID`; the resolver selects the last matching step from the current invocation's `executionTrace.steps` and reads `Input.Text` or `Output.Text`. When using a trace source, the evaluation call must pass `agent.WithExecutionTraceEnabled(true)`. If the current actual invocation has no `ExecutionTrace`, evaluation fails. `expected.finalResponse` requires the current expected turn to contain `finalResponse`. If the template binds that field but the expected turn has only placeholder `userContent` and no `finalResponse`, evaluation fails directly.
 
 `template.responseScorerName` specifies how judge output is parsed. The current supported values are:
 
@@ -2435,13 +2445,15 @@ The template evaluator runs as follows:
 3. `responsescorer/singlescore` or `responsescorer/rubricscores` parses the judge output.
 4. Sample aggregation defaults to `majority_vote`, and multi-turn aggregation defaults to `average`. You can override them through `template.sampleAggregatorName` and `template.invocationAggregatorName`.
 
-Variable bindings currently support only:
+Variable bindings support the following sources:
 
 - `actual.userContent`
 - `actual.finalResponse`
+- `actual.traceStepInput`
+- `actual.traceStepOutput`
 - `expected.finalResponse`
 
-Every placeholder in the template must be explicitly bound in `variableBindings`. Binding `expected.finalResponse` requires the current expected turn to contain `finalResponse`; if the template uses that field but the expected turn does not contain a final response, evaluation fails directly.
+Every placeholder in the template must be explicitly bound in `variableBindings`. `actual.traceStepInput` and `actual.traceStepOutput` require `source.selector.nodeID`; the resolver selects the last step whose `NodeID` matches in the current invocation execution trace. When using a trace source, the evaluation caller must enable `agent.WithExecutionTraceEnabled(true)`. Binding `expected.finalResponse` requires the current expected turn to contain `finalResponse`; if the template uses that field but the expected turn does not contain a final response, evaluation fails directly.
 
 The template evaluator currently supports two response parsing modes:
 
@@ -2504,6 +2516,83 @@ Example template metric configuration:
 ```
 
 See [examples/evaluation/llm/template](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/template) for the full example. It includes both `single_score` and `rubric_scores` template metrics.
+
+If the judge prompt needs to reference the output of a trace step from agent execution, bind variables as shown below. This kind of metric depends on execution trace, so the evaluation call must pass `agent.WithExecutionTraceEnabled(true)`.
+
+```json
+[
+  {
+    "metricName": "weather_trace_grounded_template",
+    "evaluatorName": "llm_judge_template",
+    "threshold": 1.0,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "gpt-5.2",
+          "baseURL": "${OPENAI_BASE_URL}",
+          "apiKey": "${OPENAI_API_KEY}",
+          "numSamples": 1,
+          "generationConfig": {
+            "max_tokens": 256,
+            "temperature": 0,
+            "stream": false
+          }
+        },
+        "template": {
+          "prompt": "You are the judge. Decide whether the candidate answer is grounded in the selected ToolNode trace step and matches the reference answer.\\n\\nUser question:\\n{{question}}\\n\\nWeather ToolNode input snapshot:\\n{{tool_input}}\\n\\nWeather ToolNode output snapshot:\\n{{tool_output}}\\n\\nReference answer:\\n{{reference}}\\n\\nCandidate answer:\\n{{answer}}\\n\\nReturn JSON:\\n- score: return 1 if the candidate answer is supported by the weather ToolNode input and output snapshots, and is factually equivalent to the reference answer.\\n- score: otherwise return 0.\\n- reason: one concise sentence.\\n\\nTreat minor wording and punctuation differences as equivalent.",
+          "responseScorerName": "single_score",
+          "variableBindings": [
+            {
+              "templateVariable": "question",
+              "source": {
+                "scope": "actual",
+                "field": "userContent"
+              }
+            },
+            {
+              "templateVariable": "answer",
+              "source": {
+                "scope": "actual",
+                "field": "finalResponse"
+              }
+            },
+            {
+              "templateVariable": "reference",
+              "source": {
+                "scope": "expected",
+                "field": "finalResponse"
+              }
+            },
+            {
+              "templateVariable": "tool_input",
+              "source": {
+                "scope": "actual",
+                "field": "traceStepInput",
+                "selector": {
+                  "nodeID": "template-trace-agent/weather_lookup"
+                }
+              }
+            },
+            {
+              "templateVariable": "tool_output",
+              "source": {
+                "scope": "actual",
+                "field": "traceStepOutput",
+                "selector": {
+                  "nodeID": "template-trace-agent/weather_lookup"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+]
+```
+
+See [examples/evaluation/llm/templatetrace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/templatetrace) for the full trace template example. It shows how to enable execution trace and bind template variables to the input or output of a selected trace step through `source.selector.nodeID`.
 
 ##### LLM Rubric Critic Evaluator
 

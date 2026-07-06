@@ -1570,8 +1570,14 @@ type TemplateVariableBinding struct {
 
 // TemplateVariableSource 表示模板变量来源
 type TemplateVariableSource struct {
-	Scope TemplateVariableScope // Scope 是来源作用域
-	Field TemplateVariableField // Field 是来源字段
+	Scope    TemplateVariableScope     // Scope 是来源作用域
+	Field    TemplateVariableField     // Field 是来源字段
+	Selector *TemplateVariableSelector // Selector 是 trace step 选择器，可选
+}
+
+// TemplateVariableSelector 表示模板变量选择器
+type TemplateVariableSelector struct {
+	NodeID string // NodeID 是要读取的 trace step 节点 ID
 }
 
 // TemplateVariableScope 表示模板变量来源作用域
@@ -1586,8 +1592,10 @@ const (
 type TemplateVariableField string
 
 const (
-	TemplateVariableFieldUserContent   TemplateVariableField = "userContent"
-	TemplateVariableFieldFinalResponse TemplateVariableField = "finalResponse"
+	TemplateVariableFieldUserContent     TemplateVariableField = "userContent"
+	TemplateVariableFieldFinalResponse   TemplateVariableField = "finalResponse"
+	TemplateVariableFieldTraceStepInput  TemplateVariableField = "traceStepInput"
+	TemplateVariableFieldTraceStepOutput TemplateVariableField = "traceStepOutput"
 )
 
 // Rubric 表示一条评估细则
@@ -1667,13 +1675,15 @@ type RubricContent struct {
 
 `template.prompt` 使用双大括号模板语法，例如 `{{question}}`、`{{answer}}`。每个占位符都必须在 `variableBindings` 中显式绑定；未绑定变量、未知变量或绑定解析失败都会直接报错，不存在“可选变量”或空字符串兜底。
 
-`template.variableBindings` 当前只支持从当前评分轮的 `actual` 与 `expected` 中取值：
+`template.variableBindings` 支持从当前评分轮的 `actual` 和 `expected` 中取值：
 
 - `actual.userContent`
 - `actual.finalResponse`
+- `actual.traceStepInput`
+- `actual.traceStepOutput`
 - `expected.finalResponse`
 
-其中 `expected.finalResponse` 要求当前预期轮必须存在 `finalResponse`；如果模板绑定了该字段，但预期轮只有占位 `userContent`、没有 `finalResponse`，评估会直接报错。
+其中 `actual.userContent`、`actual.finalResponse`、`expected.finalResponse` 分别渲染当前评分轮的用户输入、实际最终回答和预期最终回答；`actual.traceStepInput` 与 `actual.traceStepOutput` 需要在 `source.selector.nodeID` 中指定 trace step 的 `NodeID`，解析器会在当前 invocation 的 `executionTrace.steps` 中选择最后一个匹配 step，并分别读取 `Input.Text` 或 `Output.Text`。使用 trace source 时，发起评估需要传入 `agent.WithExecutionTraceEnabled(true)`；如果当前 actual invocation 没有 `ExecutionTrace`，评估会报错。`expected.finalResponse` 要求当前预期轮必须存在 `finalResponse`；如果模板绑定了该字段，但预期轮只有占位 `userContent`、没有 `finalResponse`，评估会直接报错。
 
 `template.responseScorerName` 用于指定如何解析裁判输出，当前支持：
 
@@ -2432,13 +2442,15 @@ LLM 模板评估器对应的评估器名称为 `llm_judge_template`，属于 LLM
 3. `responsescorer/singlescore` 或 `responsescorer/rubricscores` 解析裁判输出。
 4. 样本聚合默认使用 `majority_vote`，多轮聚合默认使用 `average`，也可以分别通过 `template.sampleAggregatorName` 和 `template.invocationAggregatorName` 显式指定。
 
-变量绑定当前只支持以下来源：
+变量绑定支持以下来源：
 
 - `actual.userContent`
 - `actual.finalResponse`
+- `actual.traceStepInput`
+- `actual.traceStepOutput`
 - `expected.finalResponse`
 
-模板中的每个占位符都必须在 `variableBindings` 中显式绑定。`expected.finalResponse` 绑定要求当前预期轮存在 `finalResponse`；如果模板使用了该字段但预期轮没有最终回答，评估会直接报错。
+模板中的每个占位符都必须在 `variableBindings` 中显式绑定。`actual.traceStepInput` 与 `actual.traceStepOutput` 需要配置 `source.selector.nodeID`，解析器会选择当前 invocation execution trace 中最后一个 `NodeID` 匹配的 step。使用 trace source 时，评估调用方需要开启 `agent.WithExecutionTraceEnabled(true)`；`expected.finalResponse` 绑定要求当前预期轮存在 `finalResponse`，如果模板使用了该字段但预期轮没有最终回答，评估会直接报错。
 
 模板评估器当前支持两种响应解析模式：
 
@@ -2501,6 +2513,83 @@ LLM 模板评估器对应的评估器名称为 `llm_judge_template`，属于 LLM
 ```
 
 完整示例参见 [examples/evaluation/llm/template](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/template)。该示例同时演示了 `single_score` 与 `rubric_scores` 两种模板评估指标。
+
+如果裁判 prompt 需要引用 agent 执行过程中的某个 trace step 输出，可以按下面方式绑定变量。该类 metric 依赖 execution trace，评估时需要传入 `agent.WithExecutionTraceEnabled(true)`。
+
+```json
+[
+  {
+    "metricName": "weather_trace_grounded_template",
+    "evaluatorName": "llm_judge_template",
+    "threshold": 1.0,
+    "criterion": {
+      "llmJudge": {
+        "judgeModel": {
+          "providerName": "openai",
+          "modelName": "gpt-5.2",
+          "baseURL": "${OPENAI_BASE_URL}",
+          "apiKey": "${OPENAI_API_KEY}",
+          "numSamples": 1,
+          "generationConfig": {
+            "max_tokens": 256,
+            "temperature": 0,
+            "stream": false
+          }
+        },
+        "template": {
+          "prompt": "你是裁判，需要判断候选回答是否基于指定的 ToolNode trace step，并且是否与参考答案一致。\\n\\n用户问题：\\n{{question}}\\n\\n天气 ToolNode 输入快照：\\n{{tool_input}}\\n\\n天气 ToolNode 输出快照：\\n{{tool_output}}\\n\\n参考答案：\\n{{reference}}\\n\\n候选回答：\\n{{answer}}\\n\\n请返回 JSON：\\n- score: 如果候选回答由天气 ToolNode 的输入和输出快照支持，并且与参考答案事实等价，则返回 1。\\n- score: 否则返回 0。\\n- reason: 用一句简洁的话说明原因。\\n\\n轻微措辞和标点差异可以视为等价。",
+          "responseScorerName": "single_score",
+          "variableBindings": [
+            {
+              "templateVariable": "question",
+              "source": {
+                "scope": "actual",
+                "field": "userContent"
+              }
+            },
+            {
+              "templateVariable": "answer",
+              "source": {
+                "scope": "actual",
+                "field": "finalResponse"
+              }
+            },
+            {
+              "templateVariable": "reference",
+              "source": {
+                "scope": "expected",
+                "field": "finalResponse"
+              }
+            },
+            {
+              "templateVariable": "tool_input",
+              "source": {
+                "scope": "actual",
+                "field": "traceStepInput",
+                "selector": {
+                  "nodeID": "template-trace-agent/weather_lookup"
+                }
+              }
+            },
+            {
+              "templateVariable": "tool_output",
+              "source": {
+                "scope": "actual",
+                "field": "traceStepOutput",
+                "selector": {
+                  "nodeID": "template-trace-agent/weather_lookup"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+]
+```
+
+完整 trace 模板示例参见 [examples/evaluation/llm/templatetrace](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/llm/templatetrace)。该示例演示了如何开启 execution trace，并通过 `source.selector.nodeID` 将模板变量绑定到指定 trace step 的输入或输出。
 
 ##### LLM 细则批判评估器
 
