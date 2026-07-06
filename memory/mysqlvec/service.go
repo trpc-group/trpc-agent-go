@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
-	"trpc.group/trpc-go/trpc-agent-go/memory/memoryutils"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/memoryutils"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 	"trpc.group/trpc-go/trpc-agent-go/tool"

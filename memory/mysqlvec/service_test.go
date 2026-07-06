@@ -21,8 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
-	"trpc.group/trpc-go/trpc-agent-go/memory/memoryutils"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
+	"trpc.group/trpc-go/trpc-agent-go/memory/memoryutils"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
 	"trpc.group/trpc-go/trpc-agent-go/tool"

@@ -11,7 +11,8 @@ Use `memory/memoryutils` on add and update paths so external backends share the 
 | Helper | Use on |
 | ------ | ------ |
 | `ApplyMetadata` | `AddMemory` — merge episodic metadata from `WithMetadata` options |
-| `GenerateMemoryID` | `AddMemory` — derive the stable row key from content + metadata |
+| `ApplyMetadataPatch` | `UpdateMemory` — merge metadata fields; zero values mean "leave unchanged" |
+| `GenerateMemoryID` | `AddMemory` — derive stable row key from content, metadata, `appName`, and `userID` |
 | `ApplyMemoryUpdate` | `UpdateMemory` — apply content/topics/metadata and return the new ID |
 | `EffectiveKind` | `SearchMemories` / reads — interpret legacy records without persisted kind |
 | `NormalizeMemory` | Before persisting denormalized rows |
