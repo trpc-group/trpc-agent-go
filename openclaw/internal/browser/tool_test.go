@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -2725,6 +2726,112 @@ func TestToolCall_ScreenshotPassesOptions(t *testing.T) {
 	require.Equal(t, "e1", drv.calls[1].Args["ref"])
 	require.Equal(t, "hero", drv.calls[1].Args["element"])
 	require.Equal(t, "png", drv.calls[1].Args["type"])
+}
+
+func TestToolCall_ScreenshotDirRewritesRelativeFilename(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolScreenshot: textPayload("ok"),
+		},
+	}
+	dir := t.TempDir()
+	tool := newTestTool(drv)
+	tool.screenshotDir = dir
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":   actionScreenshot,
+			"filename": "captures/page.png",
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	require.Equal(
+		t,
+		filepath.Join(dir, "captures", "page.png"),
+		drv.calls[0].Args["filename"],
+	)
+}
+
+func TestToolCall_ScreenshotDirRejectsEscapingFilename(t *testing.T) {
+	t.Parallel()
+
+	tool := newTestTool(&fakeDriver{})
+	tool.screenshotDir = t.TempDir()
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action":   actionScreenshot,
+			"filename": "../page.png",
+		}),
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "escapes screenshot_dir")
+}
+
+func TestToolCall_ScreenshotDirProvidesDefaultFilename(t *testing.T) {
+	t.Parallel()
+
+	drv := &fakeDriver{
+		callResult: map[string]any{
+			mcpToolScreenshot: textPayload("ok"),
+		},
+	}
+	dir := t.TempDir()
+	tool := newTestTool(drv)
+	tool.screenshotDir = dir
+
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"action": actionScreenshot,
+			"type":   "jpeg",
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, drv.calls, 1)
+	filename, _ := drv.calls[0].Args["filename"].(string)
+	require.NotEmpty(t, filename)
+	require.DirExists(t, filepath.Dir(filename))
+	require.Equal(t, dir, filepath.Dir(filename))
+	require.Contains(t, filepath.Base(filename), "screenshot-")
+	require.Equal(t, ".jpg", filepath.Ext(filename))
+}
+
+func TestResolveScreenshotFilenameCompatibilityBranches(t *testing.T) {
+	t.Parallel()
+
+	withoutDir := newTestTool(&fakeDriver{})
+	got, err := withoutDir.resolveScreenshotFilename("page.png", "")
+	require.NoError(t, err)
+	require.Equal(t, "page.png", got)
+
+	dir := t.TempDir()
+	tool := newTestTool(&fakeDriver{})
+	tool.screenshotDir = dir
+
+	abs := filepath.Join(dir, "absolute.png")
+	got, err = tool.resolveScreenshotFilename(abs, "png")
+	require.NoError(t, err)
+	require.Equal(t, abs, got)
+
+	got, err = tool.resolveScreenshotFilename(".", "png")
+	require.NoError(t, err)
+	require.Empty(t, got)
+}
+
+func TestScreenshotExtension(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, "png", screenshotExtension(""))
+	require.Equal(t, "jpg", screenshotExtension("jpeg"))
+	require.Equal(t, "jpg", screenshotExtension("JPG"))
+	require.Equal(t, "webp", screenshotExtension("webp"))
+	require.Equal(t, "png", screenshotExtension("gif"))
 }
 
 func TestToolCall_ScreenshotCompactsBrowserCrashContent(t *testing.T) {

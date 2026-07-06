@@ -527,6 +527,9 @@ func (m *Manager) startBackground(
 		// "It is thus incorrect to call Wait before all reads from the
 		// pipe have completed."
 		ps, _ := cmd.Process.Wait()
+		if !params.Background {
+			_ = cleanupCommandProcessGroup(cmd)
+		}
 		waitDone(sess.ioDone, defaultIODrain)
 		code := -1
 		if ps != nil {
@@ -686,63 +689,6 @@ func truncateResultOutput(output string, maxChars int) string {
 		maxChars,
 		charCount,
 	)
-}
-
-func truncateLineWindowOutput(
-	output string,
-	maxChars int,
-	offset int,
-	nextOffset int,
-) (string, int, bool) {
-	if maxChars <= 0 {
-		return output, nextOffset, false
-	}
-	output = strings.ToValidUTF8(output, "\uFFFD")
-	charCount := utf8.RuneCountInString(output)
-	if charCount <= maxChars {
-		return output, nextOffset, false
-	}
-	if output == "" {
-		return output, nextOffset, false
-	}
-
-	lines := strings.Split(output, "\n")
-	parts := make([]string, 0, len(lines))
-	keptChars := 0
-	for _, line := range lines {
-		addChars := utf8.RuneCountInString(line)
-		if len(parts) > 0 {
-			addChars++
-		}
-		if keptChars+addChars > maxChars {
-			if len(parts) == 0 {
-				prefix := firstRunes(line, maxChars)
-				return appendTruncationNotice(
-					prefix,
-					utf8.RuneCountInString(prefix),
-					charCount,
-				), clampNextOffset(offset+1, offset, nextOffset), true
-			}
-			break
-		}
-		parts = append(parts, line)
-		keptChars += addChars
-	}
-
-	consumed := len(parts)
-	if consumed == 0 {
-		prefix := firstRunes(output, maxChars)
-		return appendTruncationNotice(
-			prefix,
-			utf8.RuneCountInString(prefix),
-			charCount,
-		), clampNextOffset(offset+1, offset, nextOffset), true
-	}
-	return appendTruncationNotice(
-		strings.Join(parts, "\n"),
-		keptChars,
-		charCount,
-	), clampNextOffset(offset+consumed, offset, nextOffset), true
 }
 
 func truncateTailResultOutput(output string, maxChars int) string {

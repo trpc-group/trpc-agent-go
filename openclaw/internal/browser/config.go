@@ -61,6 +61,7 @@ type ProfileConfig struct {
 type Config struct {
 	DefaultProfile   string          `yaml:"default_profile,omitempty"`
 	EvaluateEnabled  *bool           `yaml:"evaluate_enabled,omitempty"`
+	ScreenshotDir    string          `yaml:"screenshot_dir,omitempty"`
 	ServerURL        string          `yaml:"server_url,omitempty"`
 	AuthToken        string          `yaml:"auth_token,omitempty"`
 	SandboxServerURL string          `yaml:"sandbox_server_url,omitempty"`
@@ -77,6 +78,7 @@ type Config struct {
 type resolvedConfig struct {
 	DefaultProfile  string
 	EvaluateEnabled bool
+	ScreenshotDir   string
 	Navigation      navigationPolicy
 	HostServer      *serverTargetConfig
 	SandboxServer   *serverTargetConfig
@@ -108,6 +110,7 @@ func resolveConfig(cfg Config) (resolvedConfig, error) {
 
 	out := resolvedConfig{
 		DefaultProfile: strings.TrimSpace(cfg.DefaultProfile),
+		ScreenshotDir:  strings.TrimSpace(cfg.ScreenshotDir),
 	}
 	if cfg.EvaluateEnabled != nil {
 		out.EvaluateEnabled = *cfg.EvaluateEnabled
