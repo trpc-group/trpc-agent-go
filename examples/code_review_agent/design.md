@@ -123,6 +123,8 @@ The wrapper is intended to protect the boundary between review planning and comm
 English:
 The example uses a durable JSON-backed store for portability and ships a SQLite-compatible schema so the storage layer can be migrated to SQL backends. The storage interface keeps the implementation replaceable: SQLite is the default target for a small local deployment, while the schema design avoids coupling review logic to a single persistence engine.
 
+In the current example implementation, `review_agent.db` is a JSON-backed equivalent persistent store, not a physical SQLite database file. It can be loaded by the example store implementation and queried by task through the Go store API, but it is not expected to work with `sqlite3 review_agent.db ".tables"` or direct SQL queries. `internal/store/schema.sql` documents the SQL-compatible target schema for teams that want to replace the portable JSON store with a strict SQLite or other SQL backend.
+
 The schema stores these entities:
 
 - `review_tasks`: task id, status, conclusion, timestamps, input mode, and overall summary.
@@ -138,6 +140,8 @@ This data model supports querying every review by task id and reconstructing the
 
 中文：
 示例当前使用 JSON-backed durable store 来保证可移植性，同时提供 SQLite-compatible schema，便于后续切换到 SQL 后端。存储层通过接口隔离，SQLite 可以作为小型本地部署的默认目标，但审查逻辑不会绑定到单一持久化实现。
+
+当前示例实现里的 `review_agent.db` 是 JSON-backed 的等价持久化文件，不是物理 SQLite 数据库文件。它可以被示例里的 store 实现加载，并通过 Go store API 按 task 查询，但不适合用 `sqlite3 review_agent.db ".tables"` 或直接 SQL 查询打开。`internal/store/schema.sql` 记录的是 SQL-compatible 目标 schema，方便后续把便携 JSON store 替换成真正 SQLite 或其他 SQL 后端。
 
 Schema 保存以下实体：
 
