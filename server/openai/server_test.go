@@ -1909,7 +1909,7 @@ func TestServer_handleChatCompletions_InvalidToolMessageMissingID_Streaming(t *t
 	require.NoError(t, err)
 
 	body, err := json.Marshal(openAIRequest{
-		Model: "gpt-3.5-turbo",
+		Model:  "gpt-3.5-turbo",
 		Stream: true,
 		Messages: []openAIMessage{
 			{Role: "assistant", Content: "calling tools"},

@@ -127,8 +127,8 @@ func TestRunInputFromMessages_RejectsMultimodalToolResult(t *testing.T) {
 	messages := []model.Message{
 		{Role: model.RoleAssistant, Content: "calling tools"},
 		{
-			Role:     model.RoleTool,
-			ToolID:   "call-1",
+			Role:   model.RoleTool,
+			ToolID: "call-1",
 			ContentParts: []model.ContentPart{
 				{Type: model.ContentTypeText, Text: &text},
 			},
