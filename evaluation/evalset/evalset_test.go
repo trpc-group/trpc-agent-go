@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -165,6 +166,38 @@ func TestEvalSetJSONRoundTrip(t *testing.T) {
 	encoded, err = json.Marshal(evalSet)
 	assert.NoError(t, err)
 	assert.JSONEq(t, jsonData, string(encoded))
+}
+
+func TestInvocationExecutionTraceJSON(t *testing.T) {
+	encoded, err := json.Marshal(&Invocation{})
+	assert.NoError(t, err)
+	assert.NotContains(t, string(encoded), "executionTrace")
+	invocation := &Invocation{
+		InvocationID: "inv-1",
+		ExecutionTrace: &agenttrace.Trace{
+			RootInvocationID: "root-1",
+			SessionID:        "session-1",
+			Status:           agenttrace.TraceStatusCompleted,
+			Steps: []agenttrace.Step{{
+				NodeID: "fetch_match",
+				Input:  &agenttrace.Snapshot{Text: "input text"},
+				Output: &agenttrace.Snapshot{Text: "output text"},
+			}},
+		},
+	}
+	encoded, err = json.Marshal(invocation)
+	assert.NoError(t, err)
+	assert.Contains(t, string(encoded), "executionTrace")
+	var decoded Invocation
+	assert.NoError(t, json.Unmarshal(encoded, &decoded))
+	assert.Equal(t, "root-1", decoded.ExecutionTrace.RootInvocationID)
+	assert.Equal(t, "session-1", decoded.ExecutionTrace.SessionID)
+	assert.Equal(t, agenttrace.TraceStatusCompleted, decoded.ExecutionTrace.Status)
+	if assert.Len(t, decoded.ExecutionTrace.Steps, 1) {
+		assert.Equal(t, "fetch_match", decoded.ExecutionTrace.Steps[0].NodeID)
+		assert.Equal(t, "input text", decoded.ExecutionTrace.Steps[0].Input.Text)
+		assert.Equal(t, "output text", decoded.ExecutionTrace.Steps[0].Output.Text)
+	}
 }
 
 func TestEvalSetJSONRoundTripWithActualConversation(t *testing.T) {
