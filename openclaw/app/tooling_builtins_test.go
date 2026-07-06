@@ -515,6 +515,44 @@ func TestNewFileToolSet_RuntimeReadDirsRelativeStateDir(t *testing.T) {
 	require.Contains(t, string(data), `"contents":"derived"`)
 }
 
+func TestNewFileToolSet_RuntimeReadDirsAllowBrowserArtifacts(
+	t *testing.T,
+) {
+	workdir := t.TempDir()
+	oldWorkdir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(workdir))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(oldWorkdir))
+	})
+
+	artifactDir := filepath.Join(workdir, browserArtifactDirName)
+	require.NoError(t, os.MkdirAll(artifactDir, 0o755))
+	artifactFile := filepath.Join(artifactDir, "page.yml")
+	require.NoError(t, os.WriteFile(
+		artifactFile,
+		[]byte("title: Example\n"),
+		0o644,
+	))
+
+	cfg := yamlNode(t, "base_dir: "+t.TempDir()+"\n")
+	ts, err := newFileToolSet(
+		registry.ToolSetProviderDeps{StateDir: t.TempDir()},
+		registry.PluginSpec{Name: "fs", Config: cfg},
+	)
+	require.NoError(t, err)
+	readFile := findCallableTool(t, ts.Tools(context.Background()), "read_file")
+
+	raw, err := readFile.Call(
+		context.Background(),
+		[]byte(`{"file_name":`+strconv.Quote(artifactFile)+`}`),
+	)
+	require.NoError(t, err)
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"contents":"title: Example`)
+}
+
 func TestNewFileToolSet_RuntimeReadDirsCanDisable(t *testing.T) {
 	dir := t.TempDir()
 	tmpFile := filepath.Join(t.TempDir(), "derived.txt")

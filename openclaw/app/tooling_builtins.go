@@ -59,6 +59,8 @@ const (
 	mcpTransportStdio      = "stdio"
 	mcpTransportSSE        = "sse"
 	mcpTransportStreamable = "streamable"
+
+	browserArtifactDirName = ".playwright-mcp"
 )
 
 func init() {
@@ -465,6 +467,11 @@ func defaultFileReadOnlyDirs(stateDir string) []string {
 	roots := []string{absPathOrOriginal(os.TempDir())}
 	if runtime.GOOS != "windows" {
 		roots = append(roots, absPathOrOriginal("/tmp"))
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		if cwd = strings.TrimSpace(cwd); cwd != "" {
+			roots = append(roots, filepath.Join(cwd, browserArtifactDirName))
+		}
 	}
 	if stateDir := strings.TrimSpace(stateDir); stateDir != "" {
 		roots = append(
