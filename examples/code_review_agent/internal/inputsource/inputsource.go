@@ -22,6 +22,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
 
+const emptyTreeHash = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
 // Options describes all supported review input sources.
 type Options struct {
 	FixtureDir string
@@ -131,19 +133,137 @@ func readRepoDiff(ctx context.Context, repoPath string) (Source, error) {
 	if err != nil {
 		return Source{}, fmt.Errorf("resolve repo path: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", abs, "diff", "--no-ext-diff", "--binary")
+	baseRef, err := repoDiffBase(ctx, abs)
+	if err != nil {
+		return Source{}, fmt.Errorf("resolve git diff base: %w", err)
+	}
+	raw, err := gitOutput(ctx, abs, "diff", "--no-ext-diff", "--binary", "--no-color", baseRef)
+	if err != nil {
+		return Source{}, fmt.Errorf("read git diff: %w", err)
+	}
+	untracked, err := gitOutput(ctx, abs, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return Source{}, fmt.Errorf("read untracked files: %w", err)
+	}
+	diff := string(raw)
+	untrackedDiff, err := untrackedFileDiffs(abs, untracked)
+	if err != nil {
+		return Source{}, err
+	}
+	if diff != "" && untrackedDiff != "" && !strings.HasSuffix(diff, "\n") {
+		diff += "\n"
+	}
+	diff += untrackedDiff
+	return Source{
+		Type:     review.InputTypeRepo,
+		Diff:     diff,
+		RepoPath: abs,
+		Summary:  fmt.Sprintf("Reviewed git workspace diff from %s.", abs),
+	}, nil
+}
+
+func repoDiffBase(ctx context.Context, repoPath string) (string, error) {
+	if _, err := gitOutput(ctx, repoPath, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
+		return emptyTreeHash, nil
+	}
+	return "HEAD", nil
+}
+
+func gitOutput(ctx context.Context, repoPath string, args ...string) ([]byte, error) {
+	cmdArgs := append([]string{"-C", repoPath}, args...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	raw, err := cmd.Output()
 	if err != nil {
-		return Source{}, fmt.Errorf("read git diff: %w: %s", err, strings.TrimSpace(stderr.String()))
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return nil, fmt.Errorf("%w: %s", err, msg)
+		}
+		return nil, err
 	}
-	return Source{
-		Type:     review.InputTypeRepo,
-		Diff:     string(raw),
-		RepoPath: abs,
-		Summary:  fmt.Sprintf("Reviewed git workspace diff from %s.", abs),
-	}, nil
+	return raw, nil
+}
+
+func untrackedFileDiffs(repoPath string, raw []byte) (string, error) {
+	files := splitNUL(raw)
+	sort.Strings(files)
+	var b strings.Builder
+	for _, file := range files {
+		diff, err := untrackedFileDiff(repoPath, file)
+		if err != nil {
+			return "", err
+		}
+		if diff == "" {
+			continue
+		}
+		if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString(diff)
+	}
+	return b.String(), nil
+}
+
+func splitNUL(raw []byte) []string {
+	parts := bytes.Split(raw, []byte{0})
+	files := make([]string, 0, len(parts))
+	for _, part := range parts {
+		file := filepath.ToSlash(strings.TrimSpace(string(part)))
+		if file != "" {
+			files = append(files, file)
+		}
+	}
+	return files
+}
+
+func untrackedFileDiff(repoPath string, file string) (string, error) {
+	abs := filepath.Join(repoPath, filepath.FromSlash(file))
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("stat untracked file %s: %w", file, err)
+	}
+	if info.IsDir() {
+		return "", nil
+	}
+	raw, err := os.ReadFile(abs)
+	if err != nil {
+		return "", fmt.Errorf("read untracked file %s: %w", file, err)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "diff --git a/%s b/%s\n", file, file)
+	fmt.Fprintf(&b, "new file mode 100644\n")
+	fmt.Fprintf(&b, "--- /dev/null\n")
+	fmt.Fprintf(&b, "+++ b/%s\n", file)
+	if bytes.Contains(raw, []byte{0}) {
+		fmt.Fprintf(&b, "Binary files /dev/null and b/%s differ\n", file)
+		return b.String(), nil
+	}
+	lines, noNewline := diffLines(string(raw))
+	if len(lines) == 0 {
+		return b.String(), nil
+	}
+	fmt.Fprintf(&b, "@@ -0,0 +1,%d @@\n", len(lines))
+	for _, line := range lines {
+		fmt.Fprintf(&b, "+%s\n", line)
+	}
+	if noNewline {
+		b.WriteString(`\ No newline at end of file`)
+		b.WriteString("\n")
+	}
+	return b.String(), nil
+}
+
+func diffLines(text string) ([]string, bool) {
+	if text == "" {
+		return nil, false
+	}
+	noNewline := !strings.HasSuffix(text, "\n")
+	text = strings.TrimSuffix(text, "\n")
+	if text == "" {
+		return nil, noNewline
+	}
+	return strings.Split(text, "\n"), noNewline
 }
 
 func readFileList(path string) (Source, error) {

@@ -96,7 +96,8 @@ func (s *DurableStore) FinishTask(ctx context.Context, taskID string, status str
 		return fmt.Errorf("finish task: task %q not found", taskID)
 	}
 	task.Status = status
-	task.FinishedAt = time.Now().UTC()
+	finishedAt := time.Now().UTC()
+	task.FinishedAt = &finishedAt
 	task.Error = redact.Text(errText).Text
 	s.data.Tasks[taskID] = task
 	return s.flush()
@@ -151,6 +152,9 @@ func (s *DurableStore) SaveFindings(ctx context.Context, taskID string, findings
 		existing[finding.Fingerprint] = true
 	}
 	for index, finding := range findings {
+		if finding.Fingerprint == "" {
+			finding.Fingerprint = review.Fingerprint(finding)
+		}
 		if finding.ID == "" {
 			finding.ID = fmt.Sprintf("%s-finding-%03d", taskID, index+1)
 		}
@@ -235,7 +239,32 @@ func (s *DurableStore) flush() error {
 	if err != nil {
 		return fmt.Errorf("encode store: %w", err)
 	}
-	return os.WriteFile(s.path, b, 0o600)
+	dir := filepath.Dir(s.path)
+	tmp, err := os.CreateTemp(dir, ".review-agent-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp store: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp store: %w", err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temp store: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temp store: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp store: %w", err)
+	}
+	if err := os.Rename(tmpPath, s.path); err != nil {
+		return fmt.Errorf("replace store: %w", err)
+	}
+	return nil
 }
 
 func newDurableData() durableData {

@@ -14,10 +14,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -44,6 +46,9 @@ const (
 	defaultMaxSandboxOutput = 4096
 	defaultSkillName        = "code-review"
 	defaultSandboxTimeout   = 30 * time.Second
+	containerSandboxImage   = "golang:1.24"
+	containerGoBuildCache   = "/tmp/go-build"
+	containerGoModCache     = "/go/pkg/mod"
 	reviewAgentModuleDir    = "examples/code_review_agent"
 	rootModuleDecl          = "module trpc.group/trpc-go/trpc-agent-go"
 )
@@ -77,6 +82,12 @@ type Result struct {
 	JSONPath     string
 	MarkdownPath string
 	DBPath       string
+}
+
+type bindMount struct {
+	HostPath      string
+	ContainerPath string
+	Mode          string
 }
 
 // Planner produces the model-coordinated review plan.
@@ -150,7 +161,9 @@ func (p EnvPlanner) PlanReview(ctx context.Context, req PlanRequest) (review.Rev
 	}
 	plan := reviewPlan(modelName, "openai_compatible", "model_response", req.Skill, runtimeName)
 	if len(modelPlan.Commands) > 0 {
-		plan.Commands = redactStrings(modelPlan.Commands)
+		if allowedCommands := allowlistedModelCommands(modelPlan.Commands); len(allowedCommands) > 0 {
+			plan.Commands = redactStrings(allowedCommands)
+		}
 	}
 	if len(modelPlan.RuleSources) > 0 {
 		plan.RuleSources = redactStrings(modelPlan.RuleSources)
@@ -273,6 +286,32 @@ func redactStrings(in []string) []string {
 	return out
 }
 
+func allowlistedModelCommands(commands []string) []string {
+	allowed := make(map[string]string, len(defaultSandboxCommands))
+	for _, command := range defaultSandboxCommands {
+		allowed[canonicalCommand(command)] = command
+	}
+	seen := make(map[string]struct{}, len(commands))
+	out := make([]string, 0, len(commands))
+	for _, command := range commands {
+		canonical := canonicalCommand(command)
+		allowedCommand, ok := allowed[canonical]
+		if !ok {
+			continue
+		}
+		if _, ok := seen[canonical]; ok {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		out = append(out, allowedCommand)
+	}
+	return out
+}
+
+func canonicalCommand(command string) string {
+	return strings.Join(strings.Fields(command), " ")
+}
+
 func defaultPlanner() Planner {
 	return EnvPlanner{
 		APIKey:     os.Getenv("OPENAI_API_KEY"),
@@ -282,7 +321,7 @@ func defaultPlanner() Planner {
 }
 
 // Run executes a model-planned review over fixture diffs.
-func Run(ctx context.Context, opts Options) (Result, error) {
+func Run(ctx context.Context, opts Options) (result Result, err error) {
 	if opts.FixtureDir == "" {
 		opts.FixtureDir = "testdata/fixtures"
 	}
@@ -328,20 +367,35 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	defer st.Close()
+	defer func() {
+		if closeErr := st.Close(); closeErr != nil {
+			if err != nil {
+				err = errors.Join(err, fmt.Errorf("close store: %w", closeErr))
+				return
+			}
+			err = fmt.Errorf("close store: %w", closeErr)
+		}
+	}()
 	if err := st.CreateTask(ctx, task); err != nil {
 		return Result{}, err
+	}
+	failTask := func(runErr error) error {
+		if runErr == nil {
+			return nil
+		}
+		if finishErr := st.FinishTask(ctx, task.ID, review.TaskStatusFailed, runErr.Error()); finishErr != nil {
+			return errors.Join(runErr, fmt.Errorf("finish failed task: %w", finishErr))
+		}
+		return runErr
 	}
 
 	files, err := parseInputFiles(rawDiff, input.FileList)
 	if err != nil {
-		_ = st.FinishTask(ctx, task.ID, review.TaskStatusFailed, err.Error())
-		return Result{}, err
+		return Result{}, failTask(err)
 	}
 	changedFilesJSON, err := json.Marshal(files)
 	if err != nil {
-		_ = st.FinishTask(ctx, task.ID, review.TaskStatusFailed, err.Error())
-		return Result{}, fmt.Errorf("marshal changed files: %w", err)
+		return Result{}, failTask(fmt.Errorf("marshal changed files: %w", err))
 	}
 	redactedDiff := redact.Text(rawDiff)
 	if err := st.RecordInput(ctx, store.InputRecord{
@@ -350,7 +404,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		ChangedFilesJSON: string(changedFilesJSON),
 		RedactedDiff:     redactedDiff.Text,
 	}); err != nil {
-		return Result{}, err
+		return Result{}, failTask(err)
 	}
 
 	planner := opts.Planner
@@ -364,22 +418,21 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		Files:   files,
 	})
 	if err != nil {
-		_ = st.FinishTask(ctx, task.ID, review.TaskStatusFailed, err.Error())
-		return Result{}, err
+		return Result{}, failTask(err)
 	}
 
 	findings := rules.Evaluate(files)
 	if err := st.SaveFindings(ctx, task.ID, findings); err != nil {
-		return Result{}, err
+		return Result{}, failTask(err)
 	}
 
 	decisions, runs, err := executePlannedCommands(ctx, st, task.ID, opts.Runtime, plan.Commands, now, opts.SandboxTimeout)
 	if err != nil {
-		return Result{}, err
+		return Result{}, failTask(err)
 	}
 	for _, run := range runs {
 		if err := st.RecordSandboxRun(ctx, run); err != nil {
-			return Result{}, err
+			return Result{}, failTask(err)
 		}
 	}
 
@@ -388,7 +441,8 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		metrics.TotalDurationMillis = 0
 	}
 	task.Status = statusFor(findings, runs)
-	task.FinishedAt = now.UTC()
+	finishedAt := now.UTC()
+	task.FinishedAt = &finishedAt
 	conclusion := conclusionFor(task.Status, findings, runs)
 	r := review.Report{
 		Task:                task,
@@ -403,12 +457,11 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	}
 	artifacts, err := report.Write(opts.OutDir, r, now)
 	if err != nil {
-		_ = st.FinishTask(ctx, task.ID, review.TaskStatusFailed, err.Error())
-		return Result{}, err
+		return Result{}, failTask(err)
 	}
 	r.Artifacts = artifacts
 	if err := st.SaveArtifacts(ctx, artifacts); err != nil {
-		return Result{}, err
+		return Result{}, failTask(err)
 	}
 	jsonPath, mdPath := artifactPaths(artifacts)
 	metricsJSON, _ := json.Marshal(metrics)
@@ -419,7 +472,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		Conclusion:   conclusion,
 		MetricsJSON:  string(metricsJSON),
 	}); err != nil {
-		return Result{}, err
+		return Result{}, failTask(err)
 	}
 	if err := st.FinishTask(ctx, task.ID, task.Status, ""); err != nil {
 		return Result{}, err
@@ -522,7 +575,7 @@ func executePlannedCommands(ctx context.Context, st store.Store, taskID string, 
 		}
 		if runtime == nil {
 			var initRun *review.SandboxRun
-			runtime, cleanup, initRun = runtimeForName(ctx, runtimeName, taskID, timeout)
+			runtime, cleanup, initRun = runtimeForName(ctx, runtimeName, taskID, suffix, timeout)
 			if initRun != nil {
 				runs = append(runs, *initRun)
 			}
@@ -547,7 +600,7 @@ func countFindingRedactions(findings []review.Finding) int {
 	return count
 }
 
-func runtimeForName(ctx context.Context, name string, taskID string, timeout time.Duration) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+func runtimeForName(ctx context.Context, name string, taskID string, suffix string, timeout time.Duration) (sandboxrun.Runtime, func(), *review.SandboxRun) {
 	normalized := strings.ToLower(strings.TrimSpace(name))
 	if normalized == "" {
 		normalized = "container"
@@ -558,7 +611,7 @@ func runtimeForName(ctx context.Context, name string, taskID string, timeout tim
 	rt, cleanup, err := newWorkspaceRuntime(ctx, normalized, taskID, timeout)
 	if err != nil {
 		run := review.SandboxRun{
-			ID:             taskID + "-sandbox-init",
+			ID:             taskID + "-sandbox-init-" + suffix,
 			TaskID:         taskID,
 			Runtime:        normalized,
 			Command:        "initialize workspace runtime",
@@ -587,16 +640,15 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		)
 		eng = exec.Engine()
 	case "container":
-		exec, err := containerexec.New(
-			containerexec.WithContainerConfig(tcontainer.Config{
-				Image:      "golang:1.23",
-				WorkingDir: "/",
-				Cmd:        []string{"tail", "-f", "/dev/null"},
-				Tty:        true,
-				OpenStdin:  true,
-			}),
+		opts := []containerexec.Option{
+			containerexec.WithContainerConfig(containerConfig()),
 			containerexec.WithHostConfig(containerHostConfig()),
-			containerexec.WithBindMount(repoRoot, "/workspace", "rw"),
+		}
+		for _, mount := range containerBindMounts(repoRoot) {
+			opts = append(opts, containerexec.WithBindMount(mount.HostPath, mount.ContainerPath, mount.Mode))
+		}
+		exec, err := containerexec.New(
+			opts...,
 		)
 		if err != nil {
 			return nil, nil, err
@@ -651,12 +703,38 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 	}, cleanup, nil
 }
 
+func containerConfig() tcontainer.Config {
+	return tcontainer.Config{
+		Image:      containerSandboxImage,
+		WorkingDir: "/",
+		Cmd:        []string{"tail", "-f", "/dev/null"},
+		Tty:        true,
+		OpenStdin:  true,
+	}
+}
+
 func containerHostConfig() tcontainer.HostConfig {
 	return tcontainer.HostConfig{
 		AutoRemove:  true,
 		Privileged:  false,
-		NetworkMode: "bridge",
+		NetworkMode: "none",
 	}
+}
+
+func containerBindMounts(repoRoot string) []bindMount {
+	mounts := []bindMount{{
+		HostPath:      repoRoot,
+		ContainerPath: "/workspace",
+		Mode:          "ro",
+	}}
+	if hostModCache := hostGoEnv("GOMODCACHE"); hostModCache != "" {
+		mounts = append(mounts, bindMount{
+			HostPath:      hostModCache,
+			ContainerPath: containerGoModCache,
+			Mode:          "ro",
+		})
+	}
+	return mounts
 }
 
 func workspaceRuntimeCwd(runtimeName string) string {
@@ -682,11 +760,22 @@ func workspaceRuntimeEnv(runtimeName string) map[string]string {
 	} else {
 		env["HOME"] = "/tmp"
 		env["GOPATH"] = "/go"
-		env["GOMODCACHE"] = "/go/pkg/mod"
-		env["GOCACHE"] = "/tmp/go-build"
+		env["GOMODCACHE"] = containerGoModCache
+		env["GOCACHE"] = containerGoBuildCache
 		setDefaultEnv(env, "GOTOOLCHAIN", "local")
 	}
 	return env
+}
+
+func hostGoEnv(key string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	output, err := exec.Command("go", "env", key).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func setDefaultEnv(env map[string]string, key string, value string) {

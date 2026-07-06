@@ -165,9 +165,6 @@ func Run(ctx context.Context, runtime Runtime, taskID string, id string, command
 }
 
 func shellCommand(command string) string {
-	if command == "" {
-		return "go"
-	}
 	return "sh"
 }
 

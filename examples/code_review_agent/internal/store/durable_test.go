@@ -10,6 +10,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,5 +139,82 @@ func TestDurableStorePersistsReviewRecords(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "supersecretvalue") {
 		t.Fatalf("store file leaked secret: %s", raw)
+	}
+}
+
+func TestDurableStoreSaveFindingsComputesMissingFingerprints(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "review_agent.db")
+	s, err := NewSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	defer s.Close()
+
+	task := review.ReviewTask{
+		ID:        "task-1",
+		Status:    review.TaskStatusRunning,
+		InputType: review.InputTypeFixture,
+		DiffHash:  "hash",
+		StartedAt: time.Unix(1, 0),
+	}
+	if err := s.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask() error = %v", err)
+	}
+	findings := []review.Finding{
+		{
+			Severity:   review.SeverityHigh,
+			Category:   "security",
+			File:       "pkg/a.go",
+			Line:       10,
+			Title:      "first",
+			Confidence: 0.9,
+			Source:     "test",
+			RuleID:     "rule.one",
+			Status:     review.FindingStatusFinding,
+		},
+		{
+			Severity:   review.SeverityHigh,
+			Category:   "security",
+			File:       "pkg/b.go",
+			Line:       20,
+			Title:      "second",
+			Confidence: 0.9,
+			Source:     "test",
+			RuleID:     "rule.two",
+			Status:     review.FindingStatusFinding,
+		},
+	}
+	if err := s.SaveFindings(ctx, task.ID, findings); err != nil {
+		t.Fatalf("SaveFindings() error = %v", err)
+	}
+	loaded, err := s.LoadTaskReport(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("LoadTaskReport() error = %v", err)
+	}
+	if len(loaded.Findings) != 2 {
+		t.Fatalf("loaded findings = %d, want 2: %#v", len(loaded.Findings), loaded.Findings)
+	}
+	for _, finding := range loaded.Findings {
+		if finding.Fingerprint == "" {
+			t.Fatalf("finding has empty fingerprint: %#v", finding)
+		}
+	}
+}
+
+func TestReviewTaskOmitsZeroFinishedAt(t *testing.T) {
+	task := review.ReviewTask{
+		ID:        "task-1",
+		Status:    review.TaskStatusRunning,
+		InputType: review.InputTypeFixture,
+		DiffHash:  "hash",
+		StartedAt: time.Unix(1, 0),
+	}
+	raw, err := json.Marshal(task)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if strings.Contains(string(raw), "finished_at") {
+		t.Fatalf("unfinished task serialized finished_at: %s", raw)
 	}
 }

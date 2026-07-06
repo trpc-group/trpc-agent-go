@@ -22,7 +22,7 @@ import (
 func main() {
 	var (
 		fixtureDir = flag.String("fixture-dir", "testdata/fixtures", "directory containing diff fixtures")
-		diffFile   = flag.String("diff-file", "", "unified diff file to review")
+		diffFile   = flag.String("diff-file", "", "git or raw unified diff file to review")
 		repoPath   = flag.String("repo-path", "", "repository path whose git workspace diff should be reviewed")
 		fileList   = flag.String("file-list", "", "newline-delimited changed file path list")
 		outDir     = flag.String("out-dir", "./out", "directory for reports and the default SQLite database")

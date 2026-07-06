@@ -33,14 +33,14 @@ const (
 
 // ReviewTask is the durable unit of work for a code review.
 type ReviewTask struct {
-	ID         string    `json:"id"`
-	Status     string    `json:"status"`
-	InputType  string    `json:"input_type"`
-	RepoPath   string    `json:"repo_path,omitempty"`
-	DiffHash   string    `json:"diff_hash"`
-	StartedAt  time.Time `json:"started_at"`
-	FinishedAt time.Time `json:"finished_at,omitempty"`
-	Error      string    `json:"error,omitempty"`
+	ID         string     `json:"id"`
+	Status     string     `json:"status"`
+	InputType  string     `json:"input_type"`
+	RepoPath   string     `json:"repo_path,omitempty"`
+	DiffHash   string     `json:"diff_hash"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+	Error      string     `json:"error,omitempty"`
 }
 
 // DiffFile is a parsed file entry from a unified diff.

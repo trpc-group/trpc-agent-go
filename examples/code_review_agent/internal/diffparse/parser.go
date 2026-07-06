@@ -39,18 +39,35 @@ func Parse(diff string) ([]review.DiffFile, error) {
 			current = &files[len(files)-1]
 			parseDiffGitLine(current, line)
 			currentHunk = nil
-		case current == nil:
-			continue
 		case strings.HasPrefix(line, "new file mode "):
+			if current == nil {
+				continue
+			}
 			current.IsNew = true
 		case strings.HasPrefix(line, "deleted file mode "):
+			if current == nil {
+				continue
+			}
 			current.IsDeleted = true
 		case strings.HasPrefix(line, "--- "):
+			if current == nil || len(current.Hunks) > 0 {
+				files = append(files, review.DiffFile{})
+				current = &files[len(files)-1]
+				currentHunk = nil
+			}
 			current.OldPath = cleanDiffPath(strings.TrimPrefix(line, "--- "))
+			current.IsNew = current.OldPath == ""
 		case strings.HasPrefix(line, "+++ "):
+			if current == nil {
+				continue
+			}
 			current.NewPath = cleanDiffPath(strings.TrimPrefix(line, "+++ "))
-			current.PackageDir = inferPackageDir(current.NewPath)
+			current.IsDeleted = current.NewPath == ""
+			current.PackageDir = inferPackageDir(firstNonEmpty(current.NewPath, current.OldPath))
 		case strings.HasPrefix(line, "@@ "):
+			if current == nil {
+				continue
+			}
 			hunk, parsedOldLine, parsedNewLine, err := parseHunkHeader(line)
 			if err != nil {
 				return nil, err
@@ -68,6 +85,9 @@ func Parse(diff string) ([]review.DiffFile, error) {
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scan diff: %w", err)
+	}
+	if len(files) == 0 && strings.TrimSpace(diff) != "" {
+		return nil, fmt.Errorf("no diff files found")
 	}
 	return files, nil
 }
@@ -134,12 +154,25 @@ func parseDiffLine(line string, oldLine int, newLine int) (review.DiffLine, int,
 
 func cleanDiffPath(path string) string {
 	path = strings.TrimSpace(path)
+	if index := strings.IndexAny(path, "\t"); index >= 0 {
+		path = path[:index]
+	}
+	if fields := strings.Fields(path); len(fields) > 0 {
+		path = fields[0]
+	}
 	if path == "/dev/null" {
 		return ""
 	}
 	path = strings.TrimPrefix(path, "a/")
 	path = strings.TrimPrefix(path, "b/")
 	return filepath.ToSlash(path)
+}
+
+func firstNonEmpty(first string, second string) string {
+	if first != "" {
+		return first
+	}
+	return second
 }
 
 func inferPackageDir(path string) string {

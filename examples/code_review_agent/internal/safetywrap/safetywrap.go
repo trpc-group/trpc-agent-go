@@ -59,7 +59,7 @@ func Decide(cmd PlannedCommand) review.PermissionDecisionRecord {
 		Reason:          "Command is allowed by the example policy.",
 		CreatedAt:       now.UTC(),
 	}
-	lower := strings.ToLower(cmd.Command)
+	lower := normalizeCommand(cmd.Command)
 	switch {
 	case strings.Contains(lower, "rm -rf") || strings.Contains(lower, "format ") ||
 		strings.Contains(lower, "shutdown"):
@@ -86,4 +86,8 @@ func Decide(cmd PlannedCommand) review.PermissionDecisionRecord {
 		record.Blocked = true
 	}
 	return record
+}
+
+func normalizeCommand(command string) string {
+	return strings.ToLower(strings.Join(strings.Fields(command), " "))
 }

@@ -13,8 +13,9 @@ does not expand the public API of the root framework.
 ```bash
 cd examples/code_review_agent
 go test ./...
-OPENAI_API_KEY="..." MODEL="gpt-4.1-mini" \
-  go run . -fixture-dir testdata/fixtures -out-dir ./out -model "$MODEL"
+export OPENAI_API_KEY="..."
+export MODEL="gpt-4.1-mini"
+go run . -fixture-dir testdata/fixtures -out-dir ./out -model "$MODEL"
 ```
 
 Supported input modes:

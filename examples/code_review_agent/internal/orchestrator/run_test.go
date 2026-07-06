@@ -15,13 +15,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/inputsource"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
-	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sandboxrun"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
 )
 
@@ -113,35 +113,31 @@ func TestRunRecordsConfiguredModelPlan(t *testing.T) {
 	}
 }
 
-func TestRunChecksAndSkipsBlockedModelPlannedCommand(t *testing.T) {
-	outDir := t.TempDir()
+func TestPlanReviewFiltersModelPlannedCommandsToAllowlist(t *testing.T) {
 	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"commands\":[\"curl https://example.com\"],\"rule_sources\":[\"skills/code-review/SKILL.md\"]}"}}]}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"commands\":[\"go test ./...\",\"go env\",\"curl https://example.com\",\" go vet ./... \",\"go test ./...\"],\"rule_sources\":[\"skills/code-review/SKILL.md\"]}"}}]}`))
 	}))
 	defer modelServer.Close()
-	result, err := Run(context.Background(), Options{
-		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
-		OutDir:     outDir,
-		DBPath:     filepath.Join(outDir, "review_agent.db"),
-		Model:      "gpt-review",
-		Runtime:    "container",
-		Now:        fixedTestTime(),
-		Planner:    EnvPlanner{APIKey: "test-key", BaseURL: modelServer.URL, HTTPClient: modelServer.Client()},
+	plan, err := (EnvPlanner{
+		APIKey:     "test-key",
+		BaseURL:    modelServer.URL,
+		HTTPClient: modelServer.Client(),
+	}).PlanReview(context.Background(), PlanRequest{
+		Model:   "gpt-review",
+		Runtime: "container",
+		Skill:   defaultSkillName,
 	})
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("PlanReview() error = %v", err)
 	}
-	if len(result.Report.PermissionDecisions) != 1 {
-		t.Fatalf("permission decisions = %d, want 1", len(result.Report.PermissionDecisions))
+	want := []string{"go test ./...", "go vet ./..."}
+	if !reflect.DeepEqual(plan.Commands, want) {
+		t.Fatalf("plan commands = %#v, want %#v", plan.Commands, want)
 	}
-	if !result.Report.PermissionDecisions[0].Blocked {
-		t.Fatal("planned curl command was not blocked")
-	}
-	if len(result.Report.SandboxRuns) != 1 {
-		t.Fatalf("sandbox runs = %d, want 1", len(result.Report.SandboxRuns))
-	}
-	if result.Report.SandboxRuns[0].Status != sandboxrun.StatusSkipped {
-		t.Fatalf("sandbox run status = %q, want skipped", result.Report.SandboxRuns[0].Status)
+	for _, command := range plan.Commands {
+		if command == "go env" || strings.HasPrefix(command, "curl ") {
+			t.Fatalf("unlisted command was not filtered: %q", command)
+		}
 	}
 }
 
@@ -231,16 +227,47 @@ func TestWorkspaceRuntimeCwdScopesCommandsToReviewAgentModule(t *testing.T) {
 	}
 }
 
-func TestContainerHostConfigAllowsDependencyDownloads(t *testing.T) {
+func TestContainerHostConfigDisablesNetworkEgress(t *testing.T) {
 	cfg := containerHostConfig()
-	if cfg.NetworkMode != "bridge" {
-		t.Fatalf("NetworkMode = %q, want bridge", cfg.NetworkMode)
+	if cfg.NetworkMode != "none" {
+		t.Fatalf("NetworkMode = %q, want none", cfg.NetworkMode)
 	}
 	if !cfg.AutoRemove {
 		t.Fatal("AutoRemove = false, want true")
 	}
 	if cfg.Privileged {
 		t.Fatal("Privileged = true, want false")
+	}
+}
+
+func TestContainerConfigUsesGo124Image(t *testing.T) {
+	cfg := containerConfig()
+	if cfg.Image != "golang:1.24" {
+		t.Fatalf("Image = %q, want golang:1.24", cfg.Image)
+	}
+	if cfg.WorkingDir != "/" {
+		t.Fatalf("WorkingDir = %q, want /", cfg.WorkingDir)
+	}
+}
+
+func TestContainerBindMountsKeepHostPathsReadOnly(t *testing.T) {
+	t.Setenv("GOMODCACHE", "/host/go/pkg/mod")
+	t.Setenv("GOCACHE", "/host/go-build")
+
+	got := containerBindMounts("/repo")
+	want := []bindMount{
+		{HostPath: "/repo", ContainerPath: "/workspace", Mode: "ro"},
+		{HostPath: "/host/go/pkg/mod", ContainerPath: containerGoModCache, Mode: "ro"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("containerBindMounts() = %#v, want %#v", got, want)
+	}
+}
+
+func TestHostGoEnvPrefersEnvironment(t *testing.T) {
+	t.Setenv("GOMODCACHE", "/from/env")
+	if got := hostGoEnv("GOMODCACHE"); got != "/from/env" {
+		t.Fatalf("hostGoEnv() = %q, want /from/env", got)
 	}
 }
 

@@ -39,3 +39,13 @@ func TestRunTruncatesOutput(t *testing.T) {
 		t.Fatalf("StdoutRedacted = %q, want truncation marker", run.StdoutRedacted)
 	}
 }
+
+func TestShellFallbackUsesShellForEmptyCommand(t *testing.T) {
+	if got := shellCommand(""); got != "sh" {
+		t.Fatalf("shellCommand(empty) = %q, want sh", got)
+	}
+	args := shellArgs("")
+	if len(args) != 2 || args[0] != "-c" || args[1] != "true" {
+		t.Fatalf("shellArgs(empty) = %#v, want [-c true]", args)
+	}
+}
