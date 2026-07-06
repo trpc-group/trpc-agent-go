@@ -23,6 +23,11 @@ import (
 	"strings"
 	"time"
 
+	tcontainer "github.com/docker/docker/api/types/container"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	containerexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/e2b"
+	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/diffparse"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/inputsource"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
@@ -479,7 +484,13 @@ func executePlannedCommands(ctx context.Context, st store.Store, taskID string, 
 	}
 	var decisions []review.PermissionDecisionRecord
 	var runs []review.SandboxRun
-	runtime := runtimeForName(runtimeName)
+	var runtime sandboxrun.Runtime
+	var cleanup func()
+	defer func() {
+		if cleanup != nil {
+			cleanup()
+		}
+	}()
 	for index, command := range commands {
 		suffix := fmt.Sprintf("%03d", index+1)
 		decision := safetywrap.Decide(safetywrap.PlannedCommand{
@@ -506,6 +517,13 @@ func executePlannedCommands(ctx context.Context, st store.Store, taskID string, 
 			})
 			continue
 		}
+		if runtime == nil {
+			var initRun *review.SandboxRun
+			runtime, cleanup, initRun = runtimeForName(ctx, runtimeName, taskID, timeout)
+			if initRun != nil {
+				runs = append(runs, *initRun)
+			}
+		}
 		runCtx := ctx
 		cancel := func() {}
 		if timeout > 0 {
@@ -526,8 +544,135 @@ func countFindingRedactions(findings []review.Finding) int {
 	return count
 }
 
-func runtimeForName(name string) sandboxrun.Runtime {
-	return sandboxrun.FakeRuntime{RuntimeName: name}
+func runtimeForName(ctx context.Context, name string, taskID string, timeout time.Duration) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if normalized == "" {
+		normalized = "container"
+	}
+	if normalized == "fake" {
+		return sandboxrun.FakeRuntime{RuntimeName: normalized}, nil, nil
+	}
+	rt, cleanup, err := newWorkspaceRuntime(ctx, normalized, taskID, timeout)
+	if err != nil {
+		run := review.SandboxRun{
+			ID:             taskID + "-sandbox-init",
+			TaskID:         taskID,
+			Runtime:        normalized,
+			Command:        "initialize workspace runtime",
+			Status:         sandboxrun.StatusUnavailable,
+			ErrorType:      sandboxrun.ErrorRuntimeUnavailable,
+			StderrRedacted: redact.Text(err.Error()).Text,
+		}
+		return nil, cleanup, &run
+	}
+	return rt, cleanup, nil
+}
+
+func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string, timeout time.Duration) (sandboxrun.Runtime, func(), error) {
+	repoRoot, err := repositoryRoot()
+	if err != nil {
+		return nil, nil, err
+	}
+	var eng codeexecutor.Engine
+	var closeFn func() error
+	switch runtimeName {
+	case "local":
+		exec := localexec.New(
+			localexec.WithWorkDir(repoRoot),
+			localexec.WithTimeout(timeout),
+			localexec.WithWorkspaceMode(localexec.WorkspaceModeTrustedLocal),
+		)
+		eng = exec.Engine()
+	case "container":
+		exec, err := containerexec.New(
+			containerexec.WithContainerConfig(tcontainer.Config{
+				Image:      "golang:1.23",
+				WorkingDir: "/",
+				Cmd:        []string{"tail", "-f", "/dev/null"},
+				Tty:        true,
+				OpenStdin:  true,
+			}),
+			containerexec.WithBindMount(repoRoot, "/workspace", "rw"),
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		eng = exec.Engine()
+		closeFn = exec.Close
+	case "e2b":
+		exec, err := e2b.NewWithContext(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		eng = exec.Engine()
+		closeFn = exec.Close
+	default:
+		return nil, nil, fmt.Errorf("unsupported runtime %q", runtimeName)
+	}
+	if eng == nil || eng.Manager() == nil || eng.Runner() == nil {
+		if closeFn != nil {
+			_ = closeFn()
+		}
+		return nil, nil, fmt.Errorf("runtime %q did not expose a workspace engine", runtimeName)
+	}
+	ws, err := eng.Manager().CreateWorkspace(ctx, taskID, codeexecutor.WorkspacePolicy{
+		Isolated:     runtimeName != "local",
+		MaxDiskBytes: 512 << 20,
+	})
+	if err != nil {
+		if closeFn != nil {
+			_ = closeFn()
+		}
+		return nil, nil, err
+	}
+	cleanup := func() {
+		_ = eng.Manager().Cleanup(context.Background(), ws)
+		if closeFn != nil {
+			_ = closeFn()
+		}
+	}
+	if runtimeName != "local" {
+		if err := eng.FS().StageDirectory(ctx, ws, repoRoot, ".", codeexecutor.StageOptions{AllowMount: true}); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+	}
+	return sandboxrun.WorkspaceRuntime{
+		RuntimeName: runtimeName,
+		Engine:      eng,
+		Workspace:   ws,
+		Timeout:     timeout,
+		Env: map[string]string{
+			"GOPROXY":     os.Getenv("GOPROXY"),
+			"GOSUMDB":     os.Getenv("GOSUMDB"),
+			"GOFLAGS":     os.Getenv("GOFLAGS"),
+			"CGO_ENABLED": os.Getenv("CGO_ENABLED"),
+		},
+	}, cleanup, nil
+}
+
+func repositoryRoot() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(wd, "go.mod")); err == nil {
+			raw, err := os.ReadFile(filepath.Join(wd, "go.mod"))
+			if err != nil {
+				return "", err
+			}
+			if strings.Contains(string(raw), "module trpc.group/trpc-go/trpc-agent-go") &&
+				!strings.Contains(string(raw), "examples/code_review_agent") {
+				return wd, nil
+			}
+		}
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			return "", fmt.Errorf("repository root not found from %s", wd)
+		}
+		wd = parent
+	}
 }
 
 func statusFor(findings []review.Finding, runs []review.SandboxRun) string {

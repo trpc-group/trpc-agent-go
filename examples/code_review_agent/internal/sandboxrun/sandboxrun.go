@@ -11,8 +11,11 @@ package sandboxrun
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
@@ -26,6 +29,7 @@ const (
 	ErrorRuntimeUnavailable = "runtime_unavailable"
 	ErrorCommandFailed      = "command_failed"
 	ErrorPermissionBlocked  = "permission_blocked"
+	ErrorTimeout            = "timeout"
 )
 
 // Result is the raw outcome from a runtime.
@@ -39,6 +43,49 @@ type Result struct {
 type Runtime interface {
 	Name() string
 	Run(ctx context.Context, command string) (Result, error)
+}
+
+// WorkspaceRuntime executes shell commands through a codeexecutor workspace
+// engine. The workspace is created once and reused for every planned command in
+// a review task, so go test/go vet/script commands share the same staged tree.
+type WorkspaceRuntime struct {
+	RuntimeName string
+	Engine      codeexecutor.Engine
+	Workspace   codeexecutor.Workspace
+	Cwd         string
+	Env         map[string]string
+	Timeout     time.Duration
+}
+
+func (r WorkspaceRuntime) Name() string {
+	if r.RuntimeName == "" {
+		return "workspace"
+	}
+	return r.RuntimeName
+}
+
+func (r WorkspaceRuntime) Run(ctx context.Context, command string) (Result, error) {
+	if r.Engine == nil || r.Engine.Runner() == nil {
+		return Result{}, fmt.Errorf("workspace runtime %q is unavailable", r.Name())
+	}
+	spec := codeexecutor.RunProgramSpec{
+		Cmd:      shellCommand(command),
+		Args:     shellArgs(command),
+		Env:      allowEnv(r.Env),
+		CleanEnv: true,
+		Cwd:      r.Cwd,
+		Timeout:  r.Timeout,
+	}
+	res, err := r.Engine.Runner().RunProgram(ctx, r.Workspace, spec)
+	out := Result{
+		ExitCode: res.ExitCode,
+		Stdout:   res.Stdout,
+		Stderr:   res.Stderr,
+	}
+	if res.TimedOut && err == nil {
+		err = context.DeadlineExceeded
+	}
+	return out, err
 }
 
 // FakeRuntime is a deterministic test/runtime seam.
@@ -106,7 +153,7 @@ func Run(ctx context.Context, runtime Runtime, taskID string, id string, command
 		record.ErrorType = ErrorCommandFailed
 		record.StderrRedacted = truncate(redact.Text(err.Error()).Text, maxOutput).Text
 		if errors.Is(err, context.DeadlineExceeded) {
-			record.ErrorType = "timeout"
+			record.ErrorType = ErrorTimeout
 		}
 		return record
 	}
@@ -115,6 +162,37 @@ func Run(ctx context.Context, runtime Runtime, taskID string, id string, command
 		record.ErrorType = ErrorCommandFailed
 	}
 	return record
+}
+
+func shellCommand(command string) string {
+	if command == "" {
+		return "go"
+	}
+	return "sh"
+}
+
+func shellArgs(command string) []string {
+	if strings.TrimSpace(command) == "" {
+		return []string{"-c", "true"}
+	}
+	return []string{"-c", command}
+}
+
+func allowEnv(env map[string]string) map[string]string {
+	if len(env) == 0 {
+		return map[string]string{"PATH": defaultPath()}
+	}
+	out := map[string]string{"PATH": defaultPath()}
+	for _, key := range []string{"HOME", "GOCACHE", "GOMODCACHE", "GOPATH", "GOPROXY", "GOSUMDB", "GOFLAGS", "CGO_ENABLED"} {
+		if value := env[key]; value != "" {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func defaultPath() string {
+	return "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
 }
 
 type truncatedText struct {
