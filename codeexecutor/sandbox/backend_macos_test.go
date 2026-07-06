@@ -13,6 +13,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -596,6 +597,40 @@ func TestRunProgramWithDiagnosticsDegradesWhenMonitorUnavailable(t *testing.T) {
 	}
 	if rt.sandboxDenialCollectingReady() {
 		t.Fatalf("sandboxDenialCollectingReady = true, want false after simulated monitor loss")
+	}
+}
+
+func TestRunProgramWithDiagnosticsProbeFailureDisablesCollection(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/diagnostics-probe-failure", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := rt.macosDenialDiagnostics()
+	d.monitorOnce.Do(func() {
+		d.monitorErr = errors.New("simulated probe failure")
+	})
+
+	ctx, diagnosticsCh := WithDiagnostics(context.Background())
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:  "bash",
+		Args: []string{"-c", "echo ok"},
+	})
+	diagnostics := <-diagnosticsCh
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if res.ExitCode != 0 || strings.TrimSpace(res.Stdout) != "ok" {
+		t.Fatalf("run result = %#v, want successful echo ok", res)
+	}
+	if diagnostics.Denials != nil {
+		t.Fatalf("diagnostics = %#v, want nil denials when probe fails", diagnostics)
 	}
 }
 
