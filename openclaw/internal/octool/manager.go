@@ -295,7 +295,7 @@ func runForeground(
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := shellCmd(ctx, params.Command)
+	cmd := shellCmd(ctx, params.Command, true)
 	prepareCommandProcess(cmd)
 	cmd.Dir = params.Workdir
 	cmd.Env = mergedEnv(baseEnv, params.Env)
@@ -308,12 +308,19 @@ func runForeground(
 	return string(out), code, nil
 }
 
-func shellCmd(ctx context.Context, command string) *exec.Cmd {
+func shellCmd(
+	ctx context.Context,
+	command string,
+	cleanupShellJobs bool,
+) *exec.Cmd {
+	if cleanupShellJobs {
+		command = shellCommandWithExitCleanup(command)
+	}
 	cmd := exec.CommandContext(
 		ctx,
 		shellProgram,
 		shellLoginFlag,
-		shellCommandWithExitCleanup(command),
+		command,
 	)
 	cmd.Cancel = func() error {
 		return forceKillCommandProcess(cmd)
@@ -378,7 +385,7 @@ func (m *Manager) startBackground(
 		parentCtx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
-	cmd := shellCmd(ctx, params.Command)
+	cmd := shellCmd(ctx, params.Command, !params.Background)
 	cmd.Dir = params.Workdir
 	cmd.Env = mergedEnv(m.baseEnv, params.Env)
 
@@ -788,7 +795,7 @@ func snapshotLoginShellEnv(
 	ctx, cancel := context.WithTimeout(ctx, defaultShellEnvTimeout)
 	defer cancel()
 
-	cmd := shellCmd(ctx, shellEnvDumpCommand)
+	cmd := shellCmd(ctx, shellEnvDumpCommand, false)
 	cmd.Dir = workdir
 
 	out, err := cmd.Output()
