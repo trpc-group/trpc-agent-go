@@ -45,7 +45,8 @@ type serviceOpts struct {
 	timeout time.Duration
 	client  *http.Client
 
-	loadToolEnabled bool
+	loadToolEnabled                      bool
+	includeUnscopedSelfHostedOSSMemories bool
 
 	asyncMemoryNum   int
 	memoryQueueSize  int
@@ -98,6 +99,17 @@ func WithSelfHostedOSS() ServiceOpt {
 		if opts.host == defaultHost {
 			opts.host = defaultSelfHostedOSSHost
 		}
+	}
+}
+
+// WithSelfHostedOSSIncludeUnscopedMemories allows self-hosted OSS reads and
+// searches to include legacy memories that do not carry trpc_app_name metadata.
+//
+// This is intended for migrations from an existing Mem0 OSS store. It does not
+// include memories explicitly tagged for a different app.
+func WithSelfHostedOSSIncludeUnscopedMemories() ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.includeUnscopedSelfHostedOSSMemories = true
 	}
 }
 

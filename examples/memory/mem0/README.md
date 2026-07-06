@@ -107,6 +107,19 @@ is unset, the adapter defaults to `http://localhost:8888` and refuses to use
 the hosted-platform default host. It does not support hosted-platform
 `MEM0_ORG_ID` / `MEM0_PROJECT_ID` scoping.
 
+The adapter writes the tRPC app name to `metadata.trpc_app_name` because the
+OSS REST API does not have a top-level `app_id`. By default, reads and searches
+only return memories with matching `trpc_app_name` to preserve app isolation.
+Existing OSS memories without that metadata are hidden until they are reingested
+or backfilled. For migrations, opt in with
+`WithSelfHostedOSSIncludeUnscopedMemories()` to also include records with no
+`trpc_app_name`; records tagged for another app remain hidden.
+
+The OSS `GET /memories` endpoint is capped at 1000 results and is not pageable
+in the current server API. `ReadMemories` therefore requires a positive limit no
+larger than 1000 and fetches up to that server cap before applying the app
+metadata filter locally.
+
 When running the official Mem0 OSS server, configure the server-side LLM and
 embedder separately if your deployment uses different endpoints or API keys.
 For example, start the server with `AUTH_DISABLED=true` for local development,
@@ -213,6 +226,7 @@ The mem0 service accepts the following options:
 | `WithAPIKey(key)`         | mem0 API key                                   | (required)             |
 | `WithHost(url)`           | mem0 API base URL                              | `https://api.mem0.ai`  |
 | `WithSelfHostedOSS()`    | Use the self-hosted Mem0 OSS REST API          | disabled; host defaults to `http://localhost:8888` when enabled |
+| `WithSelfHostedOSSIncludeUnscopedMemories()` | Include legacy OSS records that lack `metadata.trpc_app_name` | disabled |
 | `WithOrgProject(o, p)`   | Organization and project IDs                   |                        |
 | `WithAsyncMode(bool)`    | Send ingest requests in async mode             | `true`                 |
 | `WithVersion(v)`         | mem0 ingest API version                        | `v2`                   |

@@ -92,11 +92,14 @@ func cloudSearchFilters(userKey memory.UserKey, opts serviceOpts) map[string]any
 	return filters
 }
 
-func ossSearchFilters(userKey memory.UserKey) map[string]any {
-	return map[string]any{
-		queryKeyUserID:         userKey.UserID,
-		metadataKeyTRPCAppName: userKey.AppName,
+func ossSearchFilters(userKey memory.UserKey, includeUnscoped bool) map[string]any {
+	filters := map[string]any{
+		queryKeyUserID: userKey.UserID,
 	}
+	if !includeUnscoped {
+		filters[metadataKeyTRPCAppName] = userKey.AppName
+	}
+	return filters
 }
 
 func withTRPCAppMetadata(meta map[string]any, appName string) map[string]any {
@@ -108,12 +111,22 @@ func withTRPCAppMetadata(meta map[string]any, appName string) map[string]any {
 	return out
 }
 
-func recordMatchesTRPCApp(rec *memoryRecord, appName string) bool {
-	if rec == nil || rec.Metadata == nil {
+func recordMatchesTRPCApp(rec *memoryRecord, appName string, includeUnscoped bool) bool {
+	if rec == nil {
 		return false
 	}
-	v, ok := rec.Metadata[metadataKeyTRPCAppName].(string)
-	return ok && strings.TrimSpace(v) == appName
+	if rec.Metadata == nil {
+		return includeUnscoped
+	}
+	v, ok := rec.Metadata[metadataKeyTRPCAppName]
+	if !ok || v == nil {
+		return includeUnscoped
+	}
+	app, ok := v.(string)
+	if !ok {
+		return includeUnscoped
+	}
+	return strings.TrimSpace(app) == appName
 }
 
 func parseMem0Times(rec *memoryRecord) parsedTimes {

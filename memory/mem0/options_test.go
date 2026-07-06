@@ -46,6 +46,11 @@ func TestWithSelfHostedOSS(t *testing.T) {
 	assert.Equal(t, customHost, apply(WithSelfHostedOSS(), WithHost(customHost)).host)
 }
 
+func TestWithSelfHostedOSSIncludeUnscopedMemories(t *testing.T) {
+	assert.False(t, apply().includeUnscopedSelfHostedOSSMemories)
+	assert.True(t, apply(WithSelfHostedOSSIncludeUnscopedMemories()).includeUnscopedSelfHostedOSSMemories)
+}
+
 func TestWithOrgProject(t *testing.T) {
 	got := apply(WithOrgProject("o", "p"))
 	assert.Equal(t, "o", got.orgID)

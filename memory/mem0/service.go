@@ -12,6 +12,7 @@ package mem0
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"sort"
 	"strings"
@@ -179,6 +180,12 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 }
 
 func (s *Service) readOSSMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
+	if limit <= 0 {
+		return nil, errors.New("mem0: self-hosted OSS ReadMemories requires a positive limit")
+	}
+	if limit > maxOSSListTopK {
+		return nil, fmt.Errorf("mem0: self-hosted OSS ReadMemories limit %d exceeds maximum %d", limit, maxOSSListTopK)
+	}
 	q := url.Values{}
 	q.Set(queryKeyUserID, userKey.UserID)
 	q.Set(queryKeyTopK, itoa(maxOSSListTopK))
@@ -190,7 +197,7 @@ func (s *Service) readOSSMemories(ctx context.Context, userKey memory.UserKey, l
 	entries := make([]*memory.Entry, 0, len(batch.Results))
 	for i := range batch.Results {
 		rec := &batch.Results[i]
-		if !recordMatchesTRPCApp(rec, userKey.AppName) {
+		if !recordMatchesTRPCApp(rec, userKey.AppName, s.opts.includeUnscopedSelfHostedOSSMemories) {
 			continue
 		}
 		if entry := toEntry(userKey.AppName, userKey.UserID, rec); entry != nil {
@@ -227,7 +234,7 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 	filters := cloudSearchFilters(userKey, s.opts)
 	if s.opts.apiMode == apiModeSelfHostedOSS {
 		path = pathOSSSearch
-		filters = ossSearchFilters(userKey)
+		filters = ossSearchFilters(userKey, s.opts.includeUnscopedSelfHostedOSSMemories)
 	}
 	req := searchV2Request{
 		Query:   searchOpts.Query,
@@ -251,7 +258,8 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		if m.UpdatedAt != nil {
 			rec.UpdatedAt = *m.UpdatedAt
 		}
-		if s.opts.apiMode == apiModeSelfHostedOSS && !recordMatchesTRPCApp(&rec, userKey.AppName) {
+		if s.opts.apiMode == apiModeSelfHostedOSS &&
+			!recordMatchesTRPCApp(&rec, userKey.AppName, s.opts.includeUnscopedSelfHostedOSSMemories) {
 			continue
 		}
 		entry := toEntry(userKey.AppName, userKey.UserID, &rec)
