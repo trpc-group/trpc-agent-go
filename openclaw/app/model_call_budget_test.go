@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/gateway"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 func TestModelCallBudgetModel_EnforcesPerContextLimit(t *testing.T) {
@@ -164,7 +165,8 @@ func TestModelCallBudget_Guards(t *testing.T) {
 
 	require.Nil(t, newModelCallBudget(0))
 	require.Nil(t, newModelCallBudget(-1))
-	require.NoError(t, (*modelCallBudget)(nil).use())
+	_, err := (*modelCallBudget)(nil).use()
+	require.NoError(t, err)
 
 	ctx := withModelCallBudget(nil, 1)
 	require.NotNil(t, ctx)
@@ -220,15 +222,45 @@ func TestBaseLLMAgentOptions_AddsModelCallBudgetCallbacks(t *testing.T) {
 func TestAppendModelCallBudgetGatewayOption_Disabled(t *testing.T) {
 	t.Parallel()
 
-	opts := appendModelCallBudgetGatewayOption(nil, 0)
+	opts := appendModelCallBudgetGatewayOption(nil, 0, false)
 	require.Empty(t, opts)
 }
 
 func TestAppendModelCallBudgetGatewayOption_AddsRunBudget(t *testing.T) {
 	t.Parallel()
 
-	opts := appendModelCallBudgetGatewayOption(nil, 1)
+	opts := appendModelCallBudgetGatewayOption(nil, 1, false)
 	require.Len(t, opts, 1)
+}
+
+func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
+	t.Parallel()
+
+	underlying := &capturingBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	ctx := withModelCallBudgetValue(
+		context.Background(),
+		newModelCallBudget(1, true),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+		Tools:    map[string]tool.Tool{"search": nil},
+	}
+
+	_, err := wrapped.GenerateContent(ctx, req)
+	require.NoError(t, err)
+
+	got := underlying.lastRequest()
+	require.NotNil(t, got)
+	require.Nil(t, got.Tools)
+	require.Len(t, got.Messages, 2)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"final allowed model call",
+	)
+	require.Len(t, req.Tools, 1)
+	require.Len(t, req.Messages, 1)
 }
 
 type countingBudgetModel struct {
@@ -252,6 +284,34 @@ func (m *countingBudgetModel) Info() model.Info {
 
 func (m *countingBudgetModel) callCount() int64 {
 	return m.calls.Load()
+}
+
+type capturingBudgetModel struct {
+	mu   sync.Mutex
+	last *model.Request
+}
+
+func (m *capturingBudgetModel) GenerateContent(
+	_ context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	m.mu.Lock()
+	m.last = req
+	m.mu.Unlock()
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{}
+	close(ch)
+	return ch, nil
+}
+
+func (m *capturingBudgetModel) Info() model.Info {
+	return model.Info{Name: "capturing"}
+}
+
+func (m *capturingBudgetModel) lastRequest() *model.Request {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.last
 }
 
 type countingBudgetIterModel struct {
@@ -278,7 +338,7 @@ func TestBuildModelCallBudgetRunOptionResolverInjectsBudget(
 ) {
 	t.Parallel()
 
-	resolver := buildModelCallBudgetRunOptionResolver(1)
+	resolver := buildModelCallBudgetRunOptionResolver(1, false)
 	ctx, runOpts, err := resolver(context.Background(), gateway.RunOptionInput{})
 	require.NoError(t, err)
 	require.Len(t, runOpts, 1)

@@ -92,6 +92,7 @@ const (
 	flagContextCompactionOversizedToolResultMaxTokens = "context-compaction-oversized-tool-result-max-tokens"
 	flagMaxHistoryRuns                                = "max-history-runs"
 	flagMaxLLMCalls                                   = "max-llm-calls"
+	flagFinalizeBeforeMaxLLMCalls                     = "finalize-before-max-llm-calls"
 	flagMaxToolIterations                             = "max-tool-iterations"
 	flagPreloadMemory                                 = "preload-memory"
 	flagToolCallArgumentsJSONRepair                   = "tool-call-arguments-json-repair"
@@ -189,6 +190,7 @@ type runOptions struct {
 	ContextCompactionOversizedToolResultMaxTokens int
 	MaxHistoryRuns                                int
 	MaxLLMCalls                                   int
+	FinalizeBeforeMaxLLMCalls                     bool
 	MaxToolIterations                             int
 	PreloadMemory                                 int
 	ToolCallArgumentsJSONRepair                   bool
@@ -471,6 +473,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagMaxLLMCalls,
 		0,
 		"Max LLM calls per invocation (0=unlimited)",
+	)
+	fs.BoolVar(
+		&opts.FinalizeBeforeMaxLLMCalls,
+		flagFinalizeBeforeMaxLLMCalls,
+		false,
+		"On the last allowed LLM call, disable tools and ask the model to finalize",
 	)
 	fs.IntVar(
 		&opts.MaxToolIterations,
@@ -1205,6 +1213,7 @@ type agentRunConfig struct {
 	ContextCompactionOversizedToolResultMaxTokens *int  `yaml:"context_compaction_oversized_tool_result_max_tokens,omitempty"`
 	MaxHistoryRuns                                *int  `yaml:"max_history_runs,omitempty"`
 	MaxLLMCalls                                   *int  `yaml:"max_llm_calls,omitempty"`
+	FinalizeBeforeMaxLLMCalls                     *bool `yaml:"finalize_before_max_llm_calls,omitempty"`
 	MaxToolIterations                             *int  `yaml:"max_tool_iterations,omitempty"`
 	PreloadMemory                                 *int  `yaml:"preload_memory,omitempty"`
 	ToolCallArgumentsJSONRepair                   *bool `yaml:"tool_call_arguments_json_repair,omitempty"`
@@ -1725,6 +1734,10 @@ func (cfg *fileConfig) apply(
 		if cfg.Agent.MaxLLMCalls != nil &&
 			!flagWasSet(set, flagMaxLLMCalls) {
 			opts.MaxLLMCalls = *cfg.Agent.MaxLLMCalls
+		}
+		if cfg.Agent.FinalizeBeforeMaxLLMCalls != nil &&
+			!flagWasSet(set, flagFinalizeBeforeMaxLLMCalls) {
+			opts.FinalizeBeforeMaxLLMCalls = *cfg.Agent.FinalizeBeforeMaxLLMCalls
 		}
 		if cfg.Agent.MaxToolIterations != nil &&
 			!flagWasSet(set, flagMaxToolIterations) {

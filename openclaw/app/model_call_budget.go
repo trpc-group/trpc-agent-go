@@ -24,17 +24,26 @@ type modelCallBudgetKey struct{}
 const modelCallBudgetRuntimeStateKey = "openclaw.model_call_budget"
 
 type modelCallBudget struct {
-	mu    sync.Mutex
-	limit int
-	count int
+	mu             sync.Mutex
+	limit          int
+	count          int
+	finalizeOnLast bool
 }
 
-func newModelCallBudget(limit int) *modelCallBudget {
+func newModelCallBudget(
+	limit int,
+	finalizeOnLast ...bool,
+) *modelCallBudget {
 	if limit <= 0 {
 		return nil
 	}
+	finalize := false
+	if len(finalizeOnLast) > 0 {
+		finalize = finalizeOnLast[0]
+	}
 	return &modelCallBudget{
-		limit: limit,
+		limit:          limit,
+		finalizeOnLast: finalize,
 	}
 }
 
@@ -69,19 +78,19 @@ func modelCallBudgetFromContext(ctx context.Context) *modelCallBudget {
 	return budget
 }
 
-func (b *modelCallBudget) use() error {
+func (b *modelCallBudget) use() (bool, error) {
 	if b == nil || b.limit <= 0 {
-		return nil
+		return false, nil
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.count++
-	if b.count <= b.limit {
-		return nil
+	if b.count > b.limit {
+		return false, agent.NewStopError(
+			fmt.Sprintf("max LLM calls (%d) exceeded", b.limit),
+		)
 	}
-	return agent.NewStopError(
-		fmt.Sprintf("max LLM calls (%d) exceeded", b.limit),
-	)
+	return b.finalizeOnLast && b.count == b.limit, nil
 }
 
 func newModelCallBudgetModel(m model.Model) model.Model {
@@ -117,8 +126,12 @@ func (m *modelCallBudgetModel) GenerateContent(
 	ctx context.Context,
 	req *model.Request,
 ) (<-chan *model.Response, error) {
-	if err := modelCallBudgetFromContext(ctx).use(); err != nil {
+	finalize, err := modelCallBudgetFromContext(ctx).use()
+	if err != nil {
 		return nil, err
+	}
+	if finalize {
+		req = finalModelCallRequest(req)
 	}
 	return m.model.GenerateContent(ctx, req)
 }
@@ -136,8 +149,12 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 	ctx context.Context,
 	req *model.Request,
 ) (model.Seq[*model.Response], error) {
-	if err := modelCallBudgetFromContext(ctx).use(); err != nil {
+	finalize, err := modelCallBudgetFromContext(ctx).use()
+	if err != nil {
 		return nil, err
+	}
+	if finalize {
+		req = finalModelCallRequest(req)
 	}
 	return m.iter.GenerateContentIter(ctx, req)
 }
@@ -145,24 +162,26 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 func appendModelCallBudgetGatewayOption(
 	opts []gateway.Option,
 	limit int,
+	finalizeOnLast bool,
 ) []gateway.Option {
 	if limit <= 0 {
 		return opts
 	}
 	return append(opts, gateway.WithRunOptionResolver(
-		buildModelCallBudgetRunOptionResolver(limit),
+		buildModelCallBudgetRunOptionResolver(limit, finalizeOnLast),
 	))
 }
 
 func buildModelCallBudgetRunOptionResolver(
 	limit int,
+	finalizeOnLast bool,
 ) gateway.RunOptionResolver {
 	return func(ctx context.Context, _ gateway.RunOptionInput) (
 		context.Context,
 		[]agent.RunOption,
 		error,
 	) {
-		budget := newModelCallBudget(limit)
+		budget := newModelCallBudget(limit, finalizeOnLast)
 		return withModelCallBudgetValue(ctx, budget),
 			[]agent.RunOption{
 				agent.MergeRuntimeState(map[string]any{
@@ -171,4 +190,22 @@ func buildModelCallBudgetRunOptionResolver(
 			},
 			nil
 	}
+}
+
+func finalModelCallRequest(req *model.Request) *model.Request {
+	if req == nil {
+		req = &model.Request{}
+	}
+	clone := *req
+	clone.Tools = nil
+	clone.Messages = append([]model.Message(nil), req.Messages...)
+	clone.Messages = append(clone.Messages, model.NewUserMessage(
+		"[OpenClaw Budget Notice] This is the final allowed model call "+
+			"for this run. No further tools are available now. Use only "+
+			"the existing conversation and tool results, then produce "+
+			"the final user-facing answer immediately. Do not describe "+
+			"future tool use or ask to continue. If the original task "+
+			"requires a final-answer format, follow it exactly.",
+	))
+	return &clone
 }
