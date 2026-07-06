@@ -110,7 +110,11 @@ func (t *ddgTool) searchSERPWithFallbackForBackend(
 		if errors.Is(apiFallbackErr, ctxErr) {
 			return apiFallback, apiFallbackErr
 		}
-		return apiFallback, ctxErr
+		return apiFallback, fmt.Errorf(
+			"%w: api fallback failed: %w",
+			ctxErr,
+			apiFallbackErr,
+		)
 	}
 	if isSERPRouteBlocker(err, fallbackErr) {
 		return searchResponse{
@@ -307,7 +311,7 @@ func (t *ddgTool) searchAPIFallbackAfterSERPFailure(
 			baseURL,
 		)
 	}
-	result, err := t.searchAPIWithDefaultBaseURL(req)
+	result, err := t.searchAPIWithDefaultBaseURL(ctx, req)
 	if err != nil {
 		return searchResponse{}, err
 	}

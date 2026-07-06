@@ -769,9 +769,11 @@ func TestDDGTool_SERPFallbackReturnsContextCancelFromAPIFallback(
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	calls := make(map[string]int)
 	ddgTool := &ddgTool{
 		httpClient: &http.Client{Transport: roundTripFunc(
 			func(r *http.Request) (*http.Response, error) {
+				calls[r.URL.Host]++
 				switch r.URL.Host {
 				case "html.duckduckgo.com", "lite.duckduckgo.com":
 					return &http.Response{
@@ -801,6 +803,7 @@ func TestDDGTool_SERPFallbackReturnsContextCancelFromAPIFallback(
 	result, err := ddgTool.search(ctx, searchRequest{Query: "example search topic"})
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, result.Results)
+	require.Equal(t, 1, calls["api.duckduckgo.com"])
 }
 
 func TestDDGTool_SERPHTTPFailures(t *testing.T) {
