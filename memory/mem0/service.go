@@ -11,6 +11,7 @@ package mem0
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"sort"
 	"strings"
@@ -36,6 +37,9 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	opts := defaultOptions.clone()
 	for _, opt := range options {
 		opt(&opts)
+	}
+	if opts.apiMode == apiModeSelfHostedOSS && (opts.orgID != "" || opts.projectID != "") {
+		return nil, errors.New("mem0: org/project identifiers are not supported by self-hosted OSS")
 	}
 	c, err := newClient(opts)
 	if err != nil {
@@ -119,6 +123,9 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
+	if s.opts.apiMode == apiModeSelfHostedOSS {
+		return s.readOSSMemories(ctx, userKey, limit)
+	}
 	pageSize := defaultListPageSize
 	if limit > 0 && limit < pageSize {
 		pageSize = limit
@@ -162,6 +169,37 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 	return entries, nil
 }
 
+func (s *Service) readOSSMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
+	q := url.Values{}
+	q.Set(queryKeyUserID, userKey.UserID)
+	q.Set(queryKeyTopK, itoa(maxOSSListTopK))
+
+	var batch listMemoriesResponse
+	if err := s.c.doJSON(ctx, httpMethodGet, pathOSSMemories, q, nil, &batch); err != nil {
+		return nil, err
+	}
+	entries := make([]*memory.Entry, 0, len(batch.Results))
+	for i := range batch.Results {
+		rec := &batch.Results[i]
+		if !recordMatchesTRPCApp(rec, userKey.AppName) {
+			continue
+		}
+		if entry := toEntry(userKey.AppName, userKey.UserID, rec); entry != nil {
+			entries = append(entries, entry)
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].UpdatedAt.Equal(entries[j].UpdatedAt) {
+			return entries[i].CreatedAt.After(entries[j].CreatedAt)
+		}
+		return entries[i].UpdatedAt.After(entries[j].UpdatedAt)
+	})
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
+	}
+	return entries, nil
+}
+
 // SearchMemories searches memories for a user.
 func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
@@ -176,20 +214,19 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 	if searchOpts.MaxResults > 0 {
 		maxResults = searchOpts.MaxResults
 	}
-	filters := map[string]any{
-		"AND": []any{
-			map[string]any{queryKeyUserID: userKey.UserID},
-			map[string]any{queryKeyAppID: userKey.AppName},
-		},
+	path := pathV2Search
+	filters := cloudSearchFilters(userKey, s.opts)
+	if s.opts.apiMode == apiModeSelfHostedOSS {
+		path = pathOSSSearch
+		filters = ossSearchFilters(userKey)
 	}
-	addOrgProjectFilter(filters, s.opts)
 	req := searchV2Request{
 		Query:   searchOpts.Query,
 		Filters: filters,
 		TopK:    searchCandidateLimit(searchOpts, maxResults),
 	}
 	var resp searchV2Response
-	if err := s.c.doJSON(ctx, httpMethodPost, pathV2Search, nil, req, &resp); err != nil {
+	if err := s.c.doJSON(ctx, httpMethodPost, path, nil, req, &resp); err != nil {
 		return nil, err
 	}
 	results := make([]*memory.Entry, 0, len(resp.Memories))
@@ -204,6 +241,9 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		}
 		if m.UpdatedAt != nil {
 			rec.UpdatedAt = *m.UpdatedAt
+		}
+		if s.opts.apiMode == apiModeSelfHostedOSS && !recordMatchesTRPCApp(&rec, userKey.AppName) {
+			continue
 		}
 		entry := toEntry(userKey.AppName, userKey.UserID, &rec)
 		if entry == nil {

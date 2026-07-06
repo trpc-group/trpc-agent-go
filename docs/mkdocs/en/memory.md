@@ -1713,16 +1713,24 @@ In short, `MemoryService` means "the framework manages memories directly", while
 
 | Option | Purpose | Default |
 | ------ | ------- | ------- |
-| `WithAPIKey(key)` | mem0 API key. Required for all requests. | required |
+| `WithAPIKey(key)` | mem0 API key. Required for hosted platform requests; optional for self-hosted OSS when auth is disabled. | required |
 | `WithHost(url)` | Override the mem0 API host/base URL. | `https://api.mem0.ai` |
-| `WithOrgProject(orgID, projectID)` | Add mem0 `org_id` / `project_id` to ingest and retrieval requests. | empty |
-| `WithAsyncMode(bool)` | Controls mem0's `async_mode` flag on ingest requests. | `true` |
-| `WithVersion(v)` | Sets the mem0 ingestion API version field. | `v2` |
+| `WithSelfHostedOSS()` | Use the self-hosted Mem0 OSS REST API (`/memories`, `/search`, `X-API-Key`). | disabled |
+| `WithOrgProject(orgID, projectID)` | Add hosted-platform `org_id` / `project_id`; unsupported with self-hosted OSS. | empty |
+| `WithAsyncMode(bool)` | Controls hosted-platform `async_mode`; self-hosted OSS writes are synchronous at the REST layer. | `true` |
+| `WithVersion(v)` | Sets the hosted-platform ingestion API version field. | `v2` |
 | `WithTimeout(d)` | HTTP timeout used by the client. | `10s` |
 | `WithLoadToolEnabled(bool)` | Expose `memory_load` from `Tools()`. | `false` |
 | `WithAsyncMemoryNum(n)` | Number of background ingest workers. | `1` |
 | `WithMemoryQueueSize(n)` | Queue size per ingest worker. | `10` |
 | `WithMemoryJobTimeout(d)` | Timeout for queued jobs and synchronous fallback ingest. | `30s` |
+
+For the official self-hosted OSS server, configure the server-side LLM and
+embedder independently when they use different endpoints or API keys. The OSS
+server exposes `POST /configure`; set `llm.provider=openai` with the LLM model,
+base URL, and API key, and set `embedder.provider=openai` with the embedding
+model, base URL, and API key. The Go adapter only uses the REST API and does not
+access the OSS server's internal vector store directly.
 
 ### Notes
 

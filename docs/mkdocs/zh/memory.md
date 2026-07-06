@@ -1746,16 +1746,23 @@ defer r.Close()
 
 | 选项 | 作用 | 默认值 |
 | ---- | ---- | ------ |
-| `WithAPIKey(key)` | mem0 API Key，所有请求必需。 | 必填 |
+| `WithAPIKey(key)` | mem0 API Key；托管平台必填，本地 OSS 且关闭鉴权时可为空。 | 必填 |
 | `WithHost(url)` | 覆盖 mem0 API Host / Base URL。 | `https://api.mem0.ai` |
-| `WithOrgProject(orgID, projectID)` | 为 ingest 与读取请求追加 mem0 的 `org_id` / `project_id`。 | 空 |
-| `WithAsyncMode(bool)` | 控制 ingest 请求里的 `async_mode`。 | `true` |
-| `WithVersion(v)` | 设置 mem0 ingest 请求里的版本字段。 | `v2` |
+| `WithSelfHostedOSS()` | 使用本地 Mem0 OSS REST API（`/memories`、`/search`、`X-API-Key`）。 | 关闭 |
+| `WithOrgProject(orgID, projectID)` | 追加托管平台的 `org_id` / `project_id`；本地 OSS 不支持。 | 空 |
+| `WithAsyncMode(bool)` | 控制托管平台 ingest 请求里的 `async_mode`；本地 OSS 在 REST 层同步写入。 | `true` |
+| `WithVersion(v)` | 设置托管平台 mem0 ingest 请求里的版本字段。 | `v2` |
 | `WithTimeout(d)` | HTTP 客户端超时时间。 | `10s` |
 | `WithLoadToolEnabled(bool)` | 是否在 `Tools()` 里暴露 `memory_load`。 | `false` |
 | `WithAsyncMemoryNum(n)` | 后台 ingest worker 数量。 | `1` |
 | `WithMemoryQueueSize(n)` | 每个 worker 的队列长度。 | `10` |
 | `WithMemoryJobTimeout(d)` | 队列任务与同步 fallback ingest 的超时时间。 | `30s` |
+
+如果使用官方本地 Mem0 OSS server，并且 LLM 与 embedding 使用不同 endpoint 或
+API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`：
+`llm.provider=openai` 配置 LLM 的模型、base URL 和 API key，
+`embedder.provider=openai` 配置 embedding 的模型、base URL 和 API key。Go
+适配层只访问 Mem0 REST API，不直接读写 OSS server 内部的向量库。
 
 ### 注意事项
 

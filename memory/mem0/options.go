@@ -23,9 +23,17 @@ const (
 	defaultMemoryJobTimeout = 30 * time.Second
 )
 
+type apiMode int
+
+const (
+	apiModeCloud apiMode = iota
+	apiModeSelfHostedOSS
+)
+
 type serviceOpts struct {
-	host   string
-	apiKey string
+	host    string
+	apiKey  string
+	apiMode apiMode
 
 	orgID     string
 	projectID string
@@ -49,6 +57,7 @@ func (o serviceOpts) clone() serviceOpts {
 
 var defaultOptions = serviceOpts{
 	host:             defaultHost,
+	apiMode:          apiModeCloud,
 	asyncMode:        true,
 	version:          "v2",
 	timeout:          defaultTimeout,
@@ -75,6 +84,16 @@ func WithAPIKey(apiKey string) ServiceOpt {
 		if apiKey != "" {
 			opts.apiKey = apiKey
 		}
+	}
+}
+
+// WithSelfHostedOSS switches the service to the self-hosted Mem0 OSS REST API.
+//
+// The option is explicit by design: WithHost alone may point to a cloud proxy,
+// a private gateway, or a test server and must not change API semantics.
+func WithSelfHostedOSS() ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.apiMode = apiModeSelfHostedOSS
 	}
 }
 

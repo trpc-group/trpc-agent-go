@@ -34,6 +34,11 @@ func TestWithAPIKey(t *testing.T) {
 	assert.Equal(t, "k", apply(WithAPIKey("k")).apiKey)
 }
 
+func TestWithSelfHostedOSS(t *testing.T) {
+	assert.Equal(t, apiModeCloud, apply().apiMode)
+	assert.Equal(t, apiModeSelfHostedOSS, apply(WithSelfHostedOSS()).apiMode)
+}
+
 func TestWithOrgProject(t *testing.T) {
 	got := apply(WithOrgProject("o", "p"))
 	assert.Equal(t, "o", got.orgID)

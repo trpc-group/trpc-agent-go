@@ -46,17 +46,19 @@ ingest → mem0 extraction → memory retrieval.
 ## Prerequisites
 
 - Go 1.21 or later
-- A valid [mem0 API key](https://app.mem0.ai/)
+- A valid [mem0 API key](https://app.mem0.ai/) for the hosted platform, or a
+  self-hosted Mem0 OSS server
 - A valid OpenAI-compatible API key (for the chat model)
 
 ## Environment Variables
 
 | Variable          | Required | Description                            | Default                 |
 | ----------------- | -------- | -------------------------------------- | ----------------------- |
-| `MEM0_API_KEY`    | Yes      | API key for mem0                       |                         |
+| `MEM0_API_KEY`    | Yes*     | API key for mem0. Optional only when `MEM0_SELF_HOSTED_OSS=true` and the server disables auth | |
 | `OPENAI_API_KEY`  | Yes      | API key for the chat model             |                         |
 | `MEM0_HOST`       | No       | mem0 API base URL                      | `https://api.mem0.ai`   |
 | `MEM0_BASE_URL`   | No       | Alias for `MEM0_HOST`                  |                         |
+| `MEM0_SELF_HOSTED_OSS` | No   | Set to `true` for the self-hosted OSS REST API | `false` |
 | `MEM0_ORG_ID`     | No       | mem0 organization ID                   |                         |
 | `MEM0_PROJECT_ID` | No       | mem0 project ID                        |                         |
 | `OPENAI_BASE_URL` | No       | Base URL for the model API endpoint    | `https://api.openai.com/v1` |
@@ -89,12 +91,30 @@ go run .
 go run . -model gpt-4o-mini
 ```
 
-### Self-hosted mem0
+### Self-hosted Mem0 OSS
 
 ```bash
-export MEM0_HOST="https://your-mem0-instance.example.com"
+export MEM0_SELF_HOSTED_OSS=true
+export MEM0_HOST="http://localhost:8888"
+# Optional when the OSS server runs with AUTH_DISABLED=true.
+export MEM0_API_KEY="your-oss-api-key"
 go run .
 ```
+
+Self-hosted OSS uses the OSS REST API paths (`/memories`, `/search`) and
+`X-API-Key` authentication. It does not support hosted-platform
+`MEM0_ORG_ID` / `MEM0_PROJECT_ID` scoping.
+
+When running the official Mem0 OSS server, configure the server-side LLM and
+embedder separately if your deployment uses different endpoints or API keys.
+For example, start the server with `AUTH_DISABLED=true` for local development,
+then call `POST /configure` on the OSS server and set:
+
+- `llm.provider=openai` with the LLM model, base URL, and API key.
+- `embedder.provider=openai` with the embedding model, base URL, and API key.
+
+The Go adapter only talks to the Mem0 REST API. It does not read or write the
+server's internal vector database directly.
 
 ### Expected Output
 
@@ -190,6 +210,7 @@ The mem0 service accepts the following options:
 | ------------------------- | ---------------------------------------------- | ---------------------- |
 | `WithAPIKey(key)`         | mem0 API key                                   | (required)             |
 | `WithHost(url)`           | mem0 API base URL                              | `https://api.mem0.ai`  |
+| `WithSelfHostedOSS()`    | Use the self-hosted Mem0 OSS REST API          | disabled               |
 | `WithOrgProject(o, p)`   | Organization and project IDs                   |                        |
 | `WithAsyncMode(bool)`    | Send ingest requests in async mode             | `true`                 |
 | `WithVersion(v)`         | mem0 ingest API version                        | `v2`                   |
