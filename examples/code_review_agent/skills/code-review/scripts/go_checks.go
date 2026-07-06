@@ -8,8 +8,18 @@
 
 package scripts
 
-// GoChecks returns the script entrypoint description used by the example
-// Skill. The actual checks live in internal/rules so they can be tested.
-func GoChecks() string {
-	return "go_checks is implemented by the example Go packages."
+import (
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/diffparse"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/rules"
+)
+
+// GoChecks parses a unified diff and returns deterministic review findings.
+// It is the Skill script helper for Go-specific checks.
+func GoChecks(diff string) ([]review.Finding, error) {
+	files, err := diffparse.Parse(diff)
+	if err != nil {
+		return nil, err
+	}
+	return rules.Evaluate(files), nil
 }
