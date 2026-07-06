@@ -648,21 +648,22 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 
 func workspaceRuntimeEnv(runtimeName string) map[string]string {
 	env := map[string]string{
-		"HOME":        os.Getenv("HOME"),
-		"GOCACHE":     os.Getenv("GOCACHE"),
-		"GOMODCACHE":  os.Getenv("GOMODCACHE"),
-		"GOPATH":      os.Getenv("GOPATH"),
 		"GOPROXY":     os.Getenv("GOPROXY"),
 		"GOSUMDB":     os.Getenv("GOSUMDB"),
 		"GOTOOLCHAIN": os.Getenv("GOTOOLCHAIN"),
 		"GOFLAGS":     os.Getenv("GOFLAGS"),
 		"CGO_ENABLED": os.Getenv("CGO_ENABLED"),
 	}
-	if runtimeName != "local" {
-		setDefaultEnv(env, "HOME", "/tmp")
-		setDefaultEnv(env, "GOPATH", "/go")
-		setDefaultEnv(env, "GOMODCACHE", "/go/pkg/mod")
-		setDefaultEnv(env, "GOCACHE", "/tmp/go-build")
+	if runtimeName == "local" {
+		env["HOME"] = os.Getenv("HOME")
+		env["GOCACHE"] = os.Getenv("GOCACHE")
+		env["GOMODCACHE"] = os.Getenv("GOMODCACHE")
+		env["GOPATH"] = os.Getenv("GOPATH")
+	} else {
+		env["HOME"] = "/tmp"
+		env["GOPATH"] = "/go"
+		env["GOMODCACHE"] = "/go/pkg/mod"
+		env["GOCACHE"] = "/tmp/go-build"
 		setDefaultEnv(env, "GOTOOLCHAIN", "local")
 	}
 	return env

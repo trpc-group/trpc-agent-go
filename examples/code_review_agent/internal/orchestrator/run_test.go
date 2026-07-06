@@ -175,7 +175,7 @@ func TestWorkspaceRuntimeEnvProvidesContainerGoCacheDefaults(t *testing.T) {
 	}
 }
 
-func TestWorkspaceRuntimeEnvKeepsExplicitGoCacheValues(t *testing.T) {
+func TestWorkspaceRuntimeEnvUsesContainerPathsForNonLocalRuntime(t *testing.T) {
 	t.Setenv("HOME", "/custom-home")
 	t.Setenv("GOCACHE", "/custom-cache")
 	t.Setenv("GOMODCACHE", "/custom-mod-cache")
@@ -185,11 +185,32 @@ func TestWorkspaceRuntimeEnvKeepsExplicitGoCacheValues(t *testing.T) {
 	env := workspaceRuntimeEnv("container")
 
 	want := map[string]string{
-		"HOME":        "/custom-home",
-		"GOCACHE":     "/custom-cache",
-		"GOMODCACHE":  "/custom-mod-cache",
-		"GOPATH":      "/custom-go",
+		"HOME":        "/tmp",
+		"GOCACHE":     "/tmp/go-build",
+		"GOMODCACHE":  "/go/pkg/mod",
+		"GOPATH":      "/go",
 		"GOTOOLCHAIN": "auto",
+	}
+	for key, value := range want {
+		if env[key] != value {
+			t.Fatalf("%s = %q, want %q", key, env[key], value)
+		}
+	}
+}
+
+func TestWorkspaceRuntimeEnvKeepsLocalGoCacheValues(t *testing.T) {
+	t.Setenv("HOME", "/custom-home")
+	t.Setenv("GOCACHE", "/custom-cache")
+	t.Setenv("GOMODCACHE", "/custom-mod-cache")
+	t.Setenv("GOPATH", "/custom-go")
+
+	env := workspaceRuntimeEnv("local")
+
+	want := map[string]string{
+		"HOME":       "/custom-home",
+		"GOCACHE":    "/custom-cache",
+		"GOMODCACHE": "/custom-mod-cache",
+		"GOPATH":     "/custom-go",
 	}
 	for key, value := range want {
 		if env[key] != value {
