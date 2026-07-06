@@ -140,6 +140,24 @@ go run .
 
 [Read full documentation →](./compare/README.md)
 
+### 📁 customservice/
+
+**Custom `memory.Service` — map-backed adapter with `memoryutils`**
+
+A minimal in-repo example for building your own persistence adapter without
+importing `memory/internal/memory`. Shows idempotent add, update ID rotation,
+and kind-filtered search using exported `memory/memoryutils` helpers.
+
+**Getting Started:**
+
+```bash
+cd examples/memory/customservice
+go run ./demo
+go test .
+```
+
+[Read full documentation →](./customservice/README.md)
+
 ## Common Features
 
 The chat examples (`simple/` and `auto/`) share the following capabilities:

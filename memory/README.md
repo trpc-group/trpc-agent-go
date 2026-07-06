@@ -38,4 +38,7 @@ All first-party backends call `memoryutils` (or the same internal helpers) so cu
 
 ## Examples
 
-Runnable memory examples (simple, auto, mem0, tencentdb) live under [`examples/memory`](../examples/memory/README.md).
+Runnable memory examples (simple, auto, mem0, tencentdb, compare) live under [`examples/memory`](../examples/memory/README.md).
+
+For a minimal custom `memory.Service` adapter that uses `memoryutils` without
+importing `memory/internal/memory`, see [`examples/memory/customservice`](../examples/memory/customservice/README.md).
