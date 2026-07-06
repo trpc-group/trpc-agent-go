@@ -36,10 +36,21 @@ func TestNewService_FailsWithoutAPIKey(t *testing.T) {
 }
 
 func TestNewService_SelfHostedOSSAllowsEmptyAPIKey(t *testing.T) {
-	svc, err := NewService(WithSelfHostedOSS(), WithHost("http://localhost:8888"))
+	svc, err := NewService(WithSelfHostedOSS())
 	require.NoError(t, err)
 	defer svc.Close()
 	assert.Equal(t, apiModeSelfHostedOSS, svc.opts.apiMode)
+	assert.Equal(t, defaultSelfHostedOSSHost, svc.opts.host)
+}
+
+func TestNewService_SelfHostedOSSRejectsCloudDefaultHost(t *testing.T) {
+	_, err := NewService(WithSelfHostedOSS(), WithHost(defaultHost))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default host")
+
+	_, err = NewService(WithSelfHostedOSS(), WithHost(defaultHost+"/"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default host")
 }
 
 func TestNewService_SelfHostedOSSRejectsOrgProject(t *testing.T) {

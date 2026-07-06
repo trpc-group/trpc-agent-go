@@ -16,11 +16,12 @@ import (
 )
 
 const (
-	defaultHost             = "https://api.mem0.ai"
-	defaultTimeout          = 10 * time.Second
-	defaultAsyncMemoryNum   = 1
-	defaultMemoryQueueSize  = 10
-	defaultMemoryJobTimeout = 30 * time.Second
+	defaultHost              = "https://api.mem0.ai"
+	defaultSelfHostedOSSHost = "http://localhost:8888"
+	defaultTimeout           = 10 * time.Second
+	defaultAsyncMemoryNum    = 1
+	defaultMemoryQueueSize   = 10
+	defaultMemoryJobTimeout  = 30 * time.Second
 )
 
 type apiMode int
@@ -94,6 +95,9 @@ func WithAPIKey(apiKey string) ServiceOpt {
 func WithSelfHostedOSS() ServiceOpt {
 	return func(opts *serviceOpts) {
 		opts.apiMode = apiModeSelfHostedOSS
+		if opts.host == defaultHost {
+			opts.host = defaultSelfHostedOSSHost
+		}
 	}
 }
 

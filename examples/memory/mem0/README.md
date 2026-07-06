@@ -95,14 +95,16 @@ go run . -model gpt-4o-mini
 
 ```bash
 export MEM0_SELF_HOSTED_OSS=true
-export MEM0_HOST="http://localhost:8888"
+export MEM0_HOST="http://localhost:8888" # Optional; this is the OSS default.
 # Optional when the OSS server runs with AUTH_DISABLED=true.
 export MEM0_API_KEY="your-oss-api-key"
 go run .
 ```
 
 Self-hosted OSS uses the OSS REST API paths (`/memories`, `/search`) and
-`X-API-Key` authentication. It does not support hosted-platform
+`X-API-Key` authentication. When `MEM0_SELF_HOSTED_OSS=true` and `MEM0_HOST`
+is unset, the adapter defaults to `http://localhost:8888` and refuses to use
+the hosted-platform default host. It does not support hosted-platform
 `MEM0_ORG_ID` / `MEM0_PROJECT_ID` scoping.
 
 When running the official Mem0 OSS server, configure the server-side LLM and
@@ -210,7 +212,7 @@ The mem0 service accepts the following options:
 | ------------------------- | ---------------------------------------------- | ---------------------- |
 | `WithAPIKey(key)`         | mem0 API key                                   | (required)             |
 | `WithHost(url)`           | mem0 API base URL                              | `https://api.mem0.ai`  |
-| `WithSelfHostedOSS()`    | Use the self-hosted Mem0 OSS REST API          | disabled               |
+| `WithSelfHostedOSS()`    | Use the self-hosted Mem0 OSS REST API          | disabled; host defaults to `http://localhost:8888` when enabled |
 | `WithOrgProject(o, p)`   | Organization and project IDs                   |                        |
 | `WithAsyncMode(bool)`    | Send ingest requests in async mode             | `true`                 |
 | `WithVersion(v)`         | mem0 ingest API version                        | `v2`                   |

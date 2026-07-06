@@ -36,7 +36,14 @@ func TestWithAPIKey(t *testing.T) {
 
 func TestWithSelfHostedOSS(t *testing.T) {
 	assert.Equal(t, apiModeCloud, apply().apiMode)
-	assert.Equal(t, apiModeSelfHostedOSS, apply(WithSelfHostedOSS()).apiMode)
+
+	got := apply(WithSelfHostedOSS())
+	assert.Equal(t, apiModeSelfHostedOSS, got.apiMode)
+	assert.Equal(t, defaultSelfHostedOSSHost, got.host)
+
+	customHost := "http://mem0.internal:8888"
+	assert.Equal(t, customHost, apply(WithHost(customHost), WithSelfHostedOSS()).host)
+	assert.Equal(t, customHost, apply(WithSelfHostedOSS(), WithHost(customHost)).host)
 }
 
 func TestWithOrgProject(t *testing.T) {

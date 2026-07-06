@@ -38,8 +38,13 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	for _, opt := range options {
 		opt(&opts)
 	}
-	if opts.apiMode == apiModeSelfHostedOSS && (opts.orgID != "" || opts.projectID != "") {
-		return nil, errors.New("mem0: org/project identifiers are not supported by self-hosted OSS")
+	if opts.apiMode == apiModeSelfHostedOSS {
+		if isCloudDefaultHost(opts.host) {
+			return nil, errors.New("mem0: self-hosted OSS cannot use the hosted platform default host")
+		}
+		if opts.orgID != "" || opts.projectID != "" {
+			return nil, errors.New("mem0: org/project identifiers are not supported by self-hosted OSS")
+		}
 	}
 	c, err := newClient(opts)
 	if err != nil {
@@ -49,6 +54,10 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	svc.ingestWorker = newIngestWorker(c, opts)
 	svc.precomputedTools = buildReadOnlyTools(svc)
 	return svc, nil
+}
+
+func isCloudDefaultHost(host string) bool {
+	return strings.TrimRight(host, "/") == strings.TrimRight(defaultHost, "/")
 }
 
 // Tools returns the mem0 read-only tools exposed to the agent.

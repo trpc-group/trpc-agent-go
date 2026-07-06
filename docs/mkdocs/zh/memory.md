@@ -1748,7 +1748,7 @@ defer r.Close()
 | ---- | ---- | ------ |
 | `WithAPIKey(key)` | mem0 API Key；托管平台必填，本地 OSS 且关闭鉴权时可为空。 | 必填 |
 | `WithHost(url)` | 覆盖 mem0 API Host / Base URL。 | `https://api.mem0.ai` |
-| `WithSelfHostedOSS()` | 使用本地 Mem0 OSS REST API（`/memories`、`/search`、`X-API-Key`）。 | 关闭 |
+| `WithSelfHostedOSS()` | 使用本地 Mem0 OSS REST API（`/memories`、`/search`、`X-API-Key`）。开启后如果没有设置 `WithHost`，host 默认 `http://localhost:8888`；OSS 模式会拒绝托管平台默认 host。 | 关闭 |
 | `WithOrgProject(orgID, projectID)` | 追加托管平台的 `org_id` / `project_id`；本地 OSS 不支持。 | 空 |
 | `WithAsyncMode(bool)` | 控制托管平台 ingest 请求里的 `async_mode`；本地 OSS 在 REST 层同步写入。 | `true` |
 | `WithVersion(v)` | 设置托管平台 mem0 ingest 请求里的版本字段。 | `v2` |

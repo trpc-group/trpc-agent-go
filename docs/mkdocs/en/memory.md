@@ -1715,7 +1715,7 @@ In short, `MemoryService` means "the framework manages memories directly", while
 | ------ | ------- | ------- |
 | `WithAPIKey(key)` | mem0 API key. Required for hosted platform requests; optional for self-hosted OSS when auth is disabled. | required |
 | `WithHost(url)` | Override the mem0 API host/base URL. | `https://api.mem0.ai` |
-| `WithSelfHostedOSS()` | Use the self-hosted Mem0 OSS REST API (`/memories`, `/search`, `X-API-Key`). | disabled |
+| `WithSelfHostedOSS()` | Use the self-hosted Mem0 OSS REST API (`/memories`, `/search`, `X-API-Key`). When enabled without `WithHost`, the host defaults to `http://localhost:8888`; the hosted-platform default host is rejected in OSS mode. | disabled |
 | `WithOrgProject(orgID, projectID)` | Add hosted-platform `org_id` / `project_id`; unsupported with self-hosted OSS. | empty |
 | `WithAsyncMode(bool)` | Controls hosted-platform `async_mode`; self-hosted OSS writes are synchronous at the REST layer. | `true` |
 | `WithVersion(v)` | Sets the hosted-platform ingestion API version field. | `v2` |
