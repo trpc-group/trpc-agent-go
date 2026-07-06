@@ -125,6 +125,34 @@ func TestWithDenialFilterOption(t *testing.T) {
 	}
 }
 
+func TestRunProgramWithDiagnosticsTimeoutStillDeliversResult(t *testing.T) {
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(DangerFullAccessProfile()),
+		WithDefaultTimeout(50*time.Millisecond),
+	)
+	ws, err := rt.CreateWorkspace(context.Background(), "run/diagnostics-timeout", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, diagnosticsCh := WithDiagnostics(context.Background())
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:  "bash",
+		Args: []string{"-c", "sleep 1"},
+	})
+	diagnostics := readDiagnostics(t, diagnosticsCh)
+	if !isKind(err, ErrTimeout) {
+		t.Fatalf("timeout error = %v, want ErrTimeout", err)
+	}
+	if !res.TimedOut || res.ExitCode != -1 {
+		t.Fatalf("timeout result = %#v, want timed out exit -1", res)
+	}
+	if diagnostics.Denials != nil {
+		t.Fatalf("diagnostics = %#v, want nil denials on disabled profile timeout", diagnostics)
+	}
+}
+
 func readDiagnostics(t *testing.T, ch <-chan Diagnostics) Diagnostics {
 	t.Helper()
 	select {
