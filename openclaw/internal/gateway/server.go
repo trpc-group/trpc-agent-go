@@ -20,6 +20,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -431,8 +432,28 @@ func (s *Server) decodeJSON(r *http.Request, target any) error {
 	if r == nil {
 		return errors.New("nil request")
 	}
-	reader := io.LimitReader(r.Body, s.maxBodyBytes)
-	decoder := json.NewDecoder(reader)
+	maxBytes := s.maxBodyBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxBodyBytes
+	}
+	if r.ContentLength > maxBytes {
+		return fmt.Errorf(
+			"request body exceeds max_body_bytes (%d bytes)",
+			maxBytes,
+		)
+	}
+	reader := &io.LimitedReader{R: r.Body, N: maxBytes + 1}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("read request body: %w", err)
+	}
+	if int64(len(data)) > maxBytes {
+		return fmt.Errorf(
+			"request body exceeds max_body_bytes (%d bytes)",
+			maxBytes,
+		)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(target); err != nil {
 		return fmt.Errorf("decode json: %w", err)
 	}

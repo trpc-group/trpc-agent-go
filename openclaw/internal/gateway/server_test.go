@@ -1428,6 +1428,7 @@ func TestServer_ProcessMessage_LargeInlineData(t *testing.T) {
 	srv.Handler().ServeHTTP(rr, httpReq)
 
 	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "request body exceeds max_body_bytes")
 }
 
 func TestServer_ProcessMessage_FileUploadStorePersistsHostRef(

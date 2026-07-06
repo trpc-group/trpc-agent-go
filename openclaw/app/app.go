@@ -1347,6 +1347,7 @@ func NewRuntimeWithOptions(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
 		mentionPatterns,
+		opts.GatewayMaxBodyBytes,
 	)
 	gwOpts = append(gwOpts, gateway.WithAppName(opts.AppName))
 	gwOpts = append(gwOpts, gateway.WithUploadStore(stores.uploads))
@@ -1971,6 +1972,7 @@ func run(
 		splitCSV(opts.AllowUsers),
 		opts.RequireMention,
 		mentionPatterns,
+		opts.GatewayMaxBodyBytes,
 	)
 	gwOpts = append(gwOpts, gateway.WithAppName(opts.AppName))
 	gwOpts = append(gwOpts, gateway.WithUploadStore(stores.uploads))
@@ -2514,8 +2516,12 @@ func makeGatewayOptions(
 	users []string,
 	requireMention bool,
 	mentionPatterns []string,
+	maxBodyBytes int64,
 ) []gateway.Option {
 	opts := make([]gateway.Option, 0, 4)
+	if maxBodyBytes > 0 {
+		opts = append(opts, gateway.WithMaxBodyBytes(maxBodyBytes))
+	}
 	if len(users) > 0 {
 		opts = append(opts, gateway.WithAllowUsers(users...))
 	}

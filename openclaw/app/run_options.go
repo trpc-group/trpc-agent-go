@@ -255,10 +255,11 @@ type runOptions struct {
 	DebugRecorderDir     string
 	DebugRecorderMode    string
 
-	AllowUsers      string
-	RequireMention  bool
-	Mention         string
-	RuntimeProfiles *runtimeprofile.Config
+	AllowUsers          string
+	RequireMention      bool
+	Mention             string
+	GatewayMaxBodyBytes int64
+	RuntimeProfiles     *runtimeprofile.Config
 
 	Channels []pluginSpec
 
@@ -649,6 +650,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		"mention",
 		"",
 		"Comma-separated mention patterns",
+	)
+	fs.Int64Var(
+		&opts.GatewayMaxBodyBytes,
+		"gateway-max-body-bytes",
+		0,
+		"Maximum JSON request body bytes for gateway endpoints (0 uses default)",
 	)
 	fs.StringVar(
 		&opts.SkillsRoot,
@@ -1257,6 +1264,7 @@ type gatewayConfig struct {
 	AllowUsers      []string `yaml:"allow_users,omitempty"`
 	RequireMention  *bool    `yaml:"require_mention,omitempty"`
 	MentionPatterns []string `yaml:"mention_patterns,omitempty"`
+	MaxBodyBytes    *int64   `yaml:"max_body_bytes,omitempty"`
 }
 
 type skillsConfig struct {
@@ -1871,6 +1879,10 @@ func (cfg *fileConfig) apply(
 				cfg.Gateway.MentionPatterns,
 				csvDelimiter,
 			)
+		}
+		if cfg.Gateway.MaxBodyBytes != nil &&
+			!flagWasSet(set, "gateway-max-body-bytes") {
+			opts.GatewayMaxBodyBytes = *cfg.Gateway.MaxBodyBytes
 		}
 	}
 	if cfg.RuntimeProfiles != nil {
