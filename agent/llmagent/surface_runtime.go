@@ -293,7 +293,7 @@ func (a *LLMAgent) InvocationToolSurface(
 		codeExecutorSupportsWorkspaceExec(effectiveExec)
 	workspaceExecSessions := workspaceExecEnabled &&
 		codeExecutorSupportsWorkspaceExecSessions(effectiveExec)
-	var workspaceRegistry *codeexecutor.WorkspaceRegistry
+	var workspaceRegistry codeexecutor.WorkspaceAcquirer
 	if effectiveSkills != nil && effectiveExec != nil {
 		workspaceRegistry = a.workspaceRegistryForInvocation(inv, effectiveExec)
 	} else if workspaceExecEnabled {

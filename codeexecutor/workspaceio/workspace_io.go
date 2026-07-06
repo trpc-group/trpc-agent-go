@@ -132,7 +132,7 @@ type Workspace struct {
 // configured" without a panic.
 func New(
 	exec codeexecutor.CodeExecutor,
-	reg *codeexecutor.WorkspaceRegistry,
+	reg codeexecutor.WorkspaceAcquirer,
 ) *Workspace {
 	if exec == nil {
 		return nil

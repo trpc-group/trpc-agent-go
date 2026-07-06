@@ -49,7 +49,7 @@ import (
 type RunTool struct {
 	repo skill.Repository
 	exec codeexecutor.CodeExecutor
-	reg  *codeexecutor.WorkspaceRegistry
+	reg  codeexecutor.WorkspaceAcquirer
 	wsr  *workspacesession.Resolver
 	sst  *skillstage.Stager
 
@@ -221,7 +221,7 @@ func WithRequireSkillLoaded(enable bool) func(*RunTool) {
 // WithWorkspaceRegistry reuses a caller-provided workspace registry so
 // skill_run can share the same invocation workspace with other tools.
 func WithWorkspaceRegistry(
-	reg *codeexecutor.WorkspaceRegistry,
+	reg codeexecutor.WorkspaceAcquirer,
 ) func(*RunTool) {
 	return func(t *RunTool) {
 		t.reg = reg

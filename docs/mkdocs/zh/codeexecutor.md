@@ -891,6 +891,39 @@ deny 里。
 上对应的 `WithSkillRunAllowedCommands` / `WithSkillRunDeniedCommands`，
 参考 [skill](skill.md)。
 
+## 跨实例共享 workspace 注册表
+
+`skill_run` 和 `workspace_exec` 通过 workspace 注册表来解析会话对应的 workspace。
+默认情况下 Agent 使用进程内的内存注册表（`codeexecutor.WorkspaceRegistry`），
+单实例部署用它就够了。
+
+当你在负载均衡后面运行多个 Agent 实例时，内存注册表无法跨进程协调：如果同一会话的
+两个请求落到不同实例上，每个实例都会各自创建一个 workspace。此时可以传入一个共享的
+`codeexecutor.WorkspaceAcquirer` 实现，让每个实例都把同一个会话 id 解析到同一个
+workspace：
+
+```go
+// WorkspaceAcquirer 是注入点；默认的 WorkspaceRegistry 已经实现了它。
+type WorkspaceAcquirer interface {
+    Acquire(ctx context.Context, m WorkspaceManager, id string) (Workspace, error)
+}
+
+agent := llmagent.New(
+    "demo",
+    llmagent.WithModel(m),
+    llmagent.WithCodeExecutor(container.New()),
+    // shared 实现了 codeexecutor.WorkspaceAcquirer，其后端存储由你的应用维护。
+    llmagent.WithWorkspaceRegistry(shared),
+)
+```
+
+框架仍以 `WorkspaceRegistry` 作为默认实现，也是唯一的具体类型；分布式实现放在你的
+应用里，因此框架不会引入任何共享存储依赖。
+
+共享注册表只解决“会话 -> workspace”这层逻辑映射。执行后端仍然需要保证解析出来的
+workspace 能被处理该请求的实例访问到——例如通过会话粘连（sticky routing）或远端
+sandbox 后端。
+
 ## 环境变量与执行环境
 
 如果你的执行器运行在容器、远端或隔离环境里，通常需要显式注入环境变量。

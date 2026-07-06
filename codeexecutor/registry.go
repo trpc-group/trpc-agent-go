@@ -14,8 +14,26 @@ import (
 	"sync"
 )
 
+// WorkspaceAcquirer resolves a logical id to a workspace, creating it on
+// first use and returning the same workspace for later calls with that id.
+//
+// WorkspaceRegistry is the default, process-local in-memory implementation.
+// Applications that run several agent instances behind a load balancer can
+// supply their own implementation (for example one backed by a shared store)
+// so that every instance resolves the same session id to the same workspace;
+// such an implementation owns its cross-instance coordination.
+//
+// A shared acquirer only settles the logical id -> workspace mapping. The
+// executor backend must still make the returned workspace usable from the
+// instance handling the request, for example via sticky routing or a remote
+// sandbox backend.
+type WorkspaceAcquirer interface {
+	Acquire(ctx context.Context, m WorkspaceManager, id string) (Workspace, error)
+}
+
 // WorkspaceRegistry keeps a process-level mapping of logical IDs to
-// created workspaces for reuse within a session.
+// created workspaces for reuse within a session. It is the default
+// implementation of WorkspaceAcquirer.
 type WorkspaceRegistry struct {
 	mu       sync.Mutex
 	byID     map[string]Workspace
@@ -27,6 +45,9 @@ type workspaceCreateCall struct {
 	ws   Workspace
 	err  error
 }
+
+// WorkspaceRegistry is the default WorkspaceAcquirer implementation.
+var _ WorkspaceAcquirer = (*WorkspaceRegistry)(nil)
 
 // NewWorkspaceRegistry creates a new in-memory registry.
 func NewWorkspaceRegistry() *WorkspaceRegistry {

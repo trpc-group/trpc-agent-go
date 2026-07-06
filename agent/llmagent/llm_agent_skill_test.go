@@ -495,7 +495,7 @@ func TestLLMAgent_RefreshToolsLocked_ReusesExecutorRegistry(t *testing.T) {
 	a.refreshToolsLocked()
 	key, ok := workspaceRegistryKeyForExecutor(exec)
 	refreshedReg := a.workspaceRegistry
-	var cachedReg *codeexecutor.WorkspaceRegistry
+	var cachedReg codeexecutor.WorkspaceAcquirer
 	if ok {
 		cachedReg = a.workspaceRegistries[key]
 	}
@@ -505,6 +505,57 @@ func TestLLMAgent_RefreshToolsLocked_ReusesExecutorRegistry(t *testing.T) {
 	require.Same(t, initialReg, refreshedReg)
 	require.Same(t, initialReg, cachedReg)
 	require.NotNil(t, findTool(a.Tools(), "workspace_exec"))
+}
+
+// fakeAcquirer is a WorkspaceAcquirer that records the ids it resolves and
+// delegates to an in-memory registry, used to verify WithWorkspaceRegistry
+// wiring.
+type fakeAcquirer struct {
+	inner *codeexecutor.WorkspaceRegistry
+	ids   []string
+}
+
+func (f *fakeAcquirer) Acquire(
+	ctx context.Context,
+	m codeexecutor.WorkspaceManager,
+	id string,
+) (codeexecutor.Workspace, error) {
+	f.ids = append(f.ids, id)
+	return f.inner.Acquire(ctx, m, id)
+}
+
+func TestWithWorkspaceRegistry_UsesSuppliedAcquirer(t *testing.T) {
+	exec := &stubExec{}
+	custom := &fakeAcquirer{inner: codeexecutor.NewWorkspaceRegistry()}
+
+	a := New("tester", WithCodeExecutor(exec), WithWorkspaceRegistry(custom))
+
+	// The supplied acquirer replaces the default in-memory registry both at
+	// construction and on the invocation-scoped resolution path.
+	require.Same(t, custom, a.workspaceRegistry)
+	require.Same(t, custom, a.workspaceRegistryForInvocation(nil, exec))
+}
+
+func TestWithWorkspaceRegistry_AcquireInvokedDuringRun(t *testing.T) {
+	custom := &fakeAcquirer{inner: codeexecutor.NewWorkspaceRegistry()}
+	a := New(
+		"tester",
+		WithCodeExecutor(localexec.New()),
+		WithWorkspaceRegistry(custom),
+	)
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("write")),
+		agent.WithInvocationSession(&session.Session{ID: "sess-custom"}),
+	)
+	out := callInvocationWorkspaceExec(
+		t, a, inv, "mkdir -p out && printf hi > out/x.txt",
+	)
+
+	// The supplied acquirer is the one that actually resolved the workspace,
+	// keyed by the invocation session.
+	require.Equal(t, float64(0), out["exit_code"])
+	require.Contains(t, custom.ids, "sess-custom")
 }
 
 func callInvocationWorkspaceExec(

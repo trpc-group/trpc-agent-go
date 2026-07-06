@@ -23,14 +23,14 @@ import (
 // that should operate on the same invocation workspace.
 type Resolver struct {
 	exec codeexecutor.CodeExecutor
-	reg  *codeexecutor.WorkspaceRegistry
+	reg  codeexecutor.WorkspaceAcquirer
 }
 
 // NewResolver creates a workspace-session resolver backed by a single
 // registry so multiple tools can share the same session workspace.
 func NewResolver(
 	exec codeexecutor.CodeExecutor,
-	reg *codeexecutor.WorkspaceRegistry,
+	reg codeexecutor.WorkspaceAcquirer,
 ) *Resolver {
 	if reg == nil {
 		reg = codeexecutor.NewWorkspaceRegistry()

@@ -52,7 +52,7 @@ const (
 // ExecTool executes shell commands in the shared executor workspace.
 type ExecTool struct {
 	exec      codeexecutor.CodeExecutor
-	reg       *codeexecutor.WorkspaceRegistry
+	reg       codeexecutor.WorkspaceAcquirer
 	resolver  *workspacesession.Resolver
 	sessional bool
 
@@ -192,7 +192,7 @@ func NewKillSessionTool(exec *ExecTool) *KillSessionTool {
 // WithWorkspaceRegistry reuses a caller-provided workspace registry so
 // workspace_exec can share the same invocation workspace with other tools.
 func WithWorkspaceRegistry(
-	reg *codeexecutor.WorkspaceRegistry,
+	reg codeexecutor.WorkspaceAcquirer,
 ) func(*ExecTool) {
 	return func(t *ExecTool) {
 		t.reg = reg

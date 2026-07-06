@@ -972,6 +972,45 @@ For lower-level (non-shell) skill execution, the equivalent knobs on
 `skill_run` are `WithSkillRunAllowedCommands` /
 `WithSkillRunDeniedCommands`; see [skill](skill.md).
 
+## Sharing a Workspace Registry Across Instances
+
+`skill_run` and `workspace_exec` resolve a session's workspace through a
+workspace registry. By default the agent uses a process-local, in-memory
+registry (`codeexecutor.WorkspaceRegistry`), which is all a single instance
+needs.
+
+When you run several agent instances behind a load balancer, an in-memory
+registry cannot coordinate across processes: if two requests for the same
+session land on different instances, each creates its own workspace. Supply a
+shared implementation of `codeexecutor.WorkspaceAcquirer` so every instance
+resolves the same session id to the same workspace:
+
+```go
+// WorkspaceAcquirer is the injection point; the default WorkspaceRegistry
+// already implements it.
+type WorkspaceAcquirer interface {
+    Acquire(ctx context.Context, m WorkspaceManager, id string) (Workspace, error)
+}
+
+agent := llmagent.New(
+    "demo",
+    llmagent.WithModel(m),
+    llmagent.WithCodeExecutor(container.New()),
+    // shared implements codeexecutor.WorkspaceAcquirer, backed by a store
+    // your application owns.
+    llmagent.WithWorkspaceRegistry(shared),
+)
+```
+
+The framework keeps `WorkspaceRegistry` as the default implementation and the
+only concrete type; the distributed implementation lives in your application,
+so no shared-store dependency is pulled into the framework.
+
+A shared registry only settles the logical session -> workspace mapping. The
+executor backend must still make the resolved workspace reachable from the
+instance handling the request — for example via sticky routing or a remote
+sandbox backend.
+
 ## Environment Variables
 
 When the executor runs in a container, on a remote worker, or in another
