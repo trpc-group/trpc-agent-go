@@ -9360,6 +9360,59 @@ func TestAppendUserContentParts_FileURLWithDataSkippedForTextOnlyVariant(t *test
 	require.Empty(t, dst)
 }
 
+func TestAppendUserContentParts_GLMVariantOmitsNonTextAttachments(t *testing.T) {
+	t.Parallel()
+
+	m := New("glm50", WithVariant(VariantGLM))
+	text := "use the attached files via tools"
+	dst := []openai.ChatCompletionContentPartUnionParam{}
+	fields := m.appendUserContentParts(&dst, []model.ContentPart{
+		{
+			Type: model.ContentTypeText,
+			Text: &text,
+		},
+		{
+			Type: model.ContentTypeImage,
+			Image: &model.Image{
+				Data:   []byte("png"),
+				Format: "png",
+			},
+		},
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "photo.jpg",
+				Data:     []byte("jpg"),
+				MimeType: "image/jpeg",
+			},
+		},
+	})
+
+	require.Nil(t, fields)
+	require.Len(t, dst, 1)
+	require.NotNil(t, dst[0].OfText)
+	require.Equal(t, text, dst[0].OfText.Text)
+	require.Equal(t,
+		"Omitted non-text attachments for this provider: 1 image, 1 file.",
+		m.omittedContentHint([]model.ContentPart{
+			{
+				Type: model.ContentTypeImage,
+				Image: &model.Image{
+					Data:   []byte("png"),
+					Format: "png",
+				},
+			},
+			{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "photo.jpg",
+					Data:     []byte("jpg"),
+					MimeType: "image/jpeg",
+				},
+			},
+		}))
+}
+
 func TestAppendUserContentParts_FileURLPreservedForSkipFileTypeVariant(t *testing.T) {
 	m := &Model{variantConfig: variantConfig{skipFileTypeInContent: true}}
 	dst := []openai.ChatCompletionContentPartUnionParam{}

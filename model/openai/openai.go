@@ -239,6 +239,7 @@ var variantConfigs = map[Variant]variantConfig{
 		filePurpose:                       openai.FilePurposeUserData,
 		fileDeletionMethod:                http.MethodDelete,
 		skipFileTypeInContent:             false,
+		textOnlyMessageContent:            true,
 		fileDeletionBodyConvertor:         defaultFileDeletionBodyConvertor,
 		thinkingEnabledKey:                thinkingKey,
 		thinkingValueConvertor:            thinkingTypeValueConvertor,
