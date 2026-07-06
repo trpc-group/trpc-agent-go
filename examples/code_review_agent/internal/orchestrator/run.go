@@ -595,6 +595,7 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 				Tty:        true,
 				OpenStdin:  true,
 			}),
+			containerexec.WithHostConfig(containerHostConfig()),
 			containerexec.WithBindMount(repoRoot, "/workspace", "rw"),
 		)
 		if err != nil {
@@ -648,6 +649,14 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		Timeout:     timeout,
 		Env:         workspaceRuntimeEnv(runtimeName),
 	}, cleanup, nil
+}
+
+func containerHostConfig() tcontainer.HostConfig {
+	return tcontainer.HostConfig{
+		AutoRemove:  true,
+		Privileged:  false,
+		NetworkMode: "bridge",
+	}
 }
 
 func workspaceRuntimeCwd(runtimeName string) string {

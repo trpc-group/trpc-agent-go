@@ -231,6 +231,19 @@ func TestWorkspaceRuntimeCwdScopesCommandsToReviewAgentModule(t *testing.T) {
 	}
 }
 
+func TestContainerHostConfigAllowsDependencyDownloads(t *testing.T) {
+	cfg := containerHostConfig()
+	if cfg.NetworkMode != "bridge" {
+		t.Fatalf("NetworkMode = %q, want bridge", cfg.NetworkMode)
+	}
+	if !cfg.AutoRemove {
+		t.Fatal("AutoRemove = false, want true")
+	}
+	if cfg.Privileged {
+		t.Fatal("Privileged = true, want false")
+	}
+}
+
 func TestHasExactModuleDeclRejectsNestedModulePrefixes(t *testing.T) {
 	if !hasExactModuleDecl("module trpc.group/trpc-go/trpc-agent-go\n\ngo 1.21\n", rootModuleDecl) {
 		t.Fatal("root module declaration was not matched")
