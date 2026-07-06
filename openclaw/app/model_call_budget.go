@@ -210,9 +210,12 @@ func finalModelCallRequest(req *model.Request) *model.Request {
 		"[OpenClaw Budget Notice] This is the final allowed model call "+
 			"for this run. No further tools are available now. Use only "+
 			"the existing conversation and tool results, then produce "+
-			"the final user-facing answer immediately. Do not describe "+
-			"future tool use or ask to continue. If the original task "+
-			"requires a final-answer format, follow it exactly.",
+			"the final user-facing answer immediately. Do not emit tool "+
+			"calls, function calls, JSON tool requests, XML-style tool "+
+			"markup such as <tool_call>, code blocks that ask to run "+
+			"tools, or descriptions of future tool use. Do not ask to "+
+			"continue. If the original task requires a final-answer "+
+			"format, follow it exactly.",
 	))
 	return &clone
 }

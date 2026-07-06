@@ -259,6 +259,16 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 		got.Messages[1].Content,
 		"final allowed model call",
 	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"Do not emit tool calls",
+	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"<tool_call>",
+	)
 	require.Len(t, req.Tools, 1)
 	require.Len(t, req.Messages, 1)
 }
