@@ -660,6 +660,18 @@ func (s *local) prepareCaseEvaluationInputs(
 		return nil, fmt.Errorf("inference count %d does not match expected conversation length %d",
 			len(actuals), len(expecteds))
 	}
+	if len(inferenceResult.ExecutionTraces) > 0 {
+		if len(actuals) != len(inferenceResult.ExecutionTraces) {
+			return nil, fmt.Errorf("execution trace count %d does not match inference count %d",
+				len(inferenceResult.ExecutionTraces), len(actuals))
+		}
+		for i, actual := range actuals {
+			if actual == nil {
+				continue
+			}
+			actual.ExecutionTrace = inferenceResult.ExecutionTraces[i]
+		}
+	}
 	attachContextMessages(actuals, evalCase.ContextMessages)
 	attachContextMessages(expecteds, evalCase.ContextMessages)
 	return &caseEvaluationInputs{

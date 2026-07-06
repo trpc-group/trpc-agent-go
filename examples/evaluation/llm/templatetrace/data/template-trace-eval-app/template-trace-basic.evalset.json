@@ -1,0 +1,26 @@
+{
+  "evalSetId": "template-trace-basic",
+  "name": "template-trace-basic",
+  "evalCases": [
+    {
+      "evalId": "weather_grounded_answer",
+      "conversation": [
+        {
+          "invocationId": "weather_grounded_answer-1",
+          "userContent": {
+            "role": "user",
+            "content": "What is the weather in Seattle? Answer in one short sentence."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Seattle weather is sunny and 72 F."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "template-trace-eval-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}

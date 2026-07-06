@@ -116,15 +116,15 @@ func resolveBindingValue(actuals, expecteds []*evalset.Invocation,
 	}
 	switch source.Scope {
 	case metricllm.TemplateVariableScopeActual:
-		return resolveActualValue(actuals, source.Field)
+		return resolveActualValue(actuals, source)
 	case metricllm.TemplateVariableScopeExpected:
-		return resolveExpectedValue(expecteds, source.Field)
+		return resolveExpectedValue(expecteds, source)
 	default:
 		return "", fmt.Errorf("unsupported source %s.%s", source.Scope, source.Field)
 	}
 }
 
-func resolveActualValue(actuals []*evalset.Invocation, field metricllm.TemplateVariableField) (string, error) {
+func resolveActualValue(actuals []*evalset.Invocation, source *metricllm.TemplateVariableSource) (string, error) {
 	if len(actuals) == 0 {
 		return "", fmt.Errorf("actuals is empty")
 	}
@@ -132,18 +132,22 @@ func resolveActualValue(actuals []*evalset.Invocation, field metricllm.TemplateV
 	if actual == nil {
 		return "", fmt.Errorf("actual invocation is nil")
 	}
-	switch field {
+	switch source.Field {
 	case metricllm.TemplateVariableFieldUserContent:
 		return content.ExtractTextFromContent(actual.UserContent), nil
 	case metricllm.TemplateVariableFieldFinalResponse:
 		return content.ExtractTextFromContent(actual.FinalResponse), nil
+	case metricllm.TemplateVariableFieldTraceStepInput:
+		return resolveTraceStepSnapshot(actuals, source, true)
+	case metricllm.TemplateVariableFieldTraceStepOutput:
+		return resolveTraceStepSnapshot(actuals, source, false)
 	default:
 		return "", fmt.Errorf("unsupported source %s.%s",
-			metricllm.TemplateVariableScopeActual, field)
+			metricllm.TemplateVariableScopeActual, source.Field)
 	}
 }
 
-func resolveExpectedValue(expecteds []*evalset.Invocation, field metricllm.TemplateVariableField) (string, error) {
+func resolveExpectedValue(expecteds []*evalset.Invocation, source *metricllm.TemplateVariableSource) (string, error) {
 	if len(expecteds) == 0 {
 		return "", fmt.Errorf("expecteds is empty")
 	}
@@ -151,7 +155,7 @@ func resolveExpectedValue(expecteds []*evalset.Invocation, field metricllm.Templ
 	if expected == nil {
 		return "", fmt.Errorf("expected invocation is nil")
 	}
-	switch field {
+	switch source.Field {
 	case metricllm.TemplateVariableFieldFinalResponse:
 		if expected.FinalResponse == nil {
 			return "", fmt.Errorf("expected finalResponse is empty")
@@ -159,6 +163,42 @@ func resolveExpectedValue(expecteds []*evalset.Invocation, field metricllm.Templ
 		return content.ExtractTextFromContent(expected.FinalResponse), nil
 	default:
 		return "", fmt.Errorf("unsupported source %s.%s",
-			metricllm.TemplateVariableScopeExpected, field)
+			metricllm.TemplateVariableScopeExpected, source.Field)
 	}
+}
+
+func resolveTraceStepSnapshot(actuals []*evalset.Invocation, source *metricllm.TemplateVariableSource, input bool) (string, error) {
+	nodeID := ""
+	if source.Selector != nil {
+		nodeID = strings.TrimSpace(source.Selector.NodeID)
+	}
+	if nodeID == "" {
+		return "", fmt.Errorf("trace selector nodeID is required")
+	}
+	index := len(actuals) - 1
+	actual := actuals[index]
+	if actual.ExecutionTrace == nil {
+		return "", fmt.Errorf("executionTrace is empty for %s.%s at invocation index %d",
+			source.Scope, source.Field, index)
+	}
+	stepIndex := -1
+	for i := range actual.ExecutionTrace.Steps {
+		if actual.ExecutionTrace.Steps[i].NodeID == nodeID {
+			stepIndex = i
+		}
+	}
+	if stepIndex < 0 {
+		return "", fmt.Errorf("trace step not found for %s.%s nodeID %q at invocation index %d",
+			source.Scope, source.Field, nodeID, index)
+	}
+	step := actual.ExecutionTrace.Steps[stepIndex]
+	snapshot := step.Output
+	if input {
+		snapshot = step.Input
+	}
+	if snapshot == nil || strings.TrimSpace(snapshot.Text) == "" {
+		return "", fmt.Errorf("trace snapshot is empty for %s.%s nodeID %q at invocation index %d",
+			source.Scope, source.Field, nodeID, index)
+	}
+	return snapshot.Text, nil
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	agenttrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -93,6 +94,9 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 							Source: &criterionllm.TemplateVariableSource{
 								Scope: criterionllm.TemplateVariableScopeActual,
 								Field: criterionllm.TemplateVariableFieldUserContent,
+								Selector: &criterionllm.TemplateVariableSelector{
+									NodeID: "ignored",
+								},
 							},
 						},
 					},
@@ -113,6 +117,8 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 	assert.Equal(t, "question", src.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope = criterionllm.TemplateVariableScopeExpected
 	assert.Equal(t, criterionllm.TemplateVariableScopeActual, src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope)
+	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID = "changed"
+	assert.Equal(t, "ignored", src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID)
 }
 
 func TestCloneTemplateVariableHelpersHandleNil(t *testing.T) {
@@ -257,6 +263,34 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 					},
 				},
 				CreationTimestamp: &epochtime.EpochTime{Time: time.Unix(1, 0).UTC()},
+				ExecutionTrace: &agenttrace.Trace{
+					RootAgentName:    "agent",
+					RootInvocationID: "root-inv",
+					SessionID:        "session",
+					Status:           agenttrace.TraceStatusCompleted,
+					Usage: &model.Usage{
+						TotalTokens: 10,
+						TimingInfo: &model.TimingInfo{
+							FirstTokenDuration: time.Second,
+						},
+					},
+					Steps: []agenttrace.Step{
+						{
+							StepID:             "step-1",
+							NodeID:             "fetch",
+							PredecessorStepIDs: []string{"entry"},
+							AppliedSurfaceIDs:  []string{"agent#instruction"},
+							Input:              &agenttrace.Snapshot{Text: "input"},
+							Output:             &agenttrace.Snapshot{Text: "output"},
+							Usage: &model.Usage{
+								TotalTokens: 5,
+								TimingInfo: &model.TimingInfo{
+									ReasoningDuration: time.Second,
+								},
+							},
+						},
+					},
+				},
 			},
 		},
 		ActualConversation: []*evalset.Invocation{
@@ -336,6 +370,18 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 
 	dst.Conversation[0].IntermediateResponses[0].ContentParts[0].Audio.Data[0] = 0
 	assert.Equal(t, byte(9), src.Conversation[0].IntermediateResponses[0].ContentParts[0].Audio.Data[0])
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].PredecessorStepIDs[0] = "changed"
+	assert.Equal(t, "entry", src.Conversation[0].ExecutionTrace.Steps[0].PredecessorStepIDs[0])
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Input.Text = "changed"
+	assert.Equal(t, "input", src.Conversation[0].ExecutionTrace.Steps[0].Input.Text)
+
+	dst.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration = 2 * time.Second
+	assert.Equal(t, time.Second, src.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration)
+
+	dst.Conversation[0].ExecutionTrace.Usage.TimingInfo.FirstTokenDuration = 2 * time.Second
+	assert.Equal(t, time.Second, src.Conversation[0].ExecutionTrace.Usage.TimingInfo.FirstTokenDuration)
 
 	dst.SessionInput.State["bytes"].([]byte)[0] = 0
 	assert.Equal(t, byte(9), src.SessionInput.State["bytes"].([]byte)[0])

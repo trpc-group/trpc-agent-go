@@ -84,8 +84,14 @@ type TemplateVariableBinding struct {
 
 // TemplateVariableSource identifies which evaluation artifact feeds a template variable.
 type TemplateVariableSource struct {
-	Scope TemplateVariableScope `json:"scope,omitempty"`
-	Field TemplateVariableField `json:"field,omitempty"`
+	Scope    TemplateVariableScope     `json:"scope,omitempty"`
+	Field    TemplateVariableField     `json:"field,omitempty"`
+	Selector *TemplateVariableSelector `json:"selector,omitempty"`
+}
+
+// TemplateVariableSelector selects one execution trace step.
+type TemplateVariableSelector struct {
+	NodeID string `json:"nodeID,omitempty"`
 }
 
 // TemplateVariableScope identifies the source object visible to template rendering.
@@ -106,6 +112,10 @@ const (
 	TemplateVariableFieldUserContent TemplateVariableField = "userContent"
 	// TemplateVariableFieldFinalResponse extracts the current final response text.
 	TemplateVariableFieldFinalResponse TemplateVariableField = "finalResponse"
+	// TemplateVariableFieldTraceStepInput extracts the selected trace step input text.
+	TemplateVariableFieldTraceStepInput TemplateVariableField = "traceStepInput"
+	// TemplateVariableFieldTraceStepOutput extracts the selected trace step output text.
+	TemplateVariableFieldTraceStepOutput TemplateVariableField = "traceStepOutput"
 )
 
 // MarshalJSON omits APIKey from JSON output while still allowing JSON input to populate it.
