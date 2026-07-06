@@ -533,10 +533,15 @@ func TestResolveMaxOutputTokens(t *testing.T) {
 		{name: "prefix gpt-4o-mini", modelName: "gpt-4o-mini", expected: 16384},
 		{name: "prefix o1-mini snapshot", modelName: "o1-mini-2024-09-12", expected: 65536},
 		{name: "exact gpt-5.2", modelName: "gpt-5.2", expected: 128000},
+		{name: "exact gpt-5.2 chat latest", modelName: "gpt-5.2-chat-latest", expected: 16384},
+		{name: "gpt-5.4 mini", modelName: "gpt-5.4-mini", expected: 128000},
+		{name: "claude opus 4.8", modelName: "claude-opus-4-8", expected: 128000},
+		{name: "claude sonnet 4.6", modelName: "claude-sonnet-4-6", expected: 128000},
 		{name: "claude 3.7 sonnet", modelName: "claude-3-7-sonnet-20250219", expected: 64000},
 		{name: "claude prefix", modelName: "claude-3-5-sonnet-20241022", expected: 8192},
 		{name: "gemini flash", modelName: "gemini-2.5-flash", expected: 65536},
-		{name: "deepseek reasoner", modelName: "deepseek-reasoner", expected: 65536},
+		{name: "deepseek reasoner", modelName: "deepseek-reasoner", expected: 393216},
+		{name: "deepseek v4 pro", modelName: "deepseek-v4-pro", expected: 393216},
 		{name: "unknown model", modelName: "not-a-real-model", expected: 0},
 	}
 
