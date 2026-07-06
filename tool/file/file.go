@@ -320,14 +320,8 @@ func (f *fileToolSet) matchBaseDir(absPath string) bool {
 		return false
 	}
 	candidate := filepath.Clean(absPath)
-	base := filepath.Clean(f.baseDir)
 	evaluatedCandidate, resolvedPath := evalPathWithExistingParent(candidate)
-	evaluatedBase, resolvedBase := evalPathWithExistingParent(base)
-	roots := []string{base}
-	if resolvedBase && evaluatedBase != base {
-		roots = append(roots, evaluatedBase)
-	}
-	for _, root := range roots {
+	for _, root := range rootPathCandidates(f.baseDir) {
 		candidateInBase := isPathWithinRoot(candidate, root)
 		evaluatedInBase := resolvedPath &&
 			isPathWithinRoot(evaluatedCandidate, root)
@@ -339,6 +333,33 @@ func (f *fileToolSet) matchBaseDir(absPath string) bool {
 		}
 	}
 	return false
+}
+
+func rootPathCandidates(root string) []string {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil
+	}
+	seen := make(map[string]struct{}, 3)
+	var roots []string
+	add := func(candidate string) {
+		candidate = filepath.Clean(candidate)
+		if _, ok := seen[candidate]; ok {
+			return
+		}
+		seen[candidate] = struct{}{}
+		roots = append(roots, candidate)
+	}
+	add(root)
+	if abs, err := filepath.Abs(root); err == nil {
+		add(abs)
+	}
+	for _, candidate := range append([]string(nil), roots...) {
+		if resolved, ok := evalPathWithExistingParent(candidate); ok {
+			add(resolved)
+		}
+	}
+	return roots
 }
 
 func (f *fileToolSet) matchExtraReadRoot(absPath string) (string, bool) {

@@ -242,6 +242,22 @@ func TestResolveReadPath_BaseDirAbsolute(t *testing.T) {
 	assert.Equal(t, allowed, p)
 }
 
+func TestResolveReadPath_RelativeBaseDirAbsolute(t *testing.T) {
+	cwd, err := os.Getwd()
+	assert.NoError(t, err)
+	dir := t.TempDir()
+	relDir, err := filepath.Rel(cwd, dir)
+	assert.NoError(t, err)
+	set, err := NewToolSet(WithBaseDir(relDir))
+	assert.NoError(t, err)
+	fts := set.(*fileToolSet)
+
+	allowed := filepath.Join(dir, "a.txt")
+	p, err := fts.resolveReadPath(allowed)
+	assert.NoError(t, err)
+	assert.Equal(t, allowed, p)
+}
+
 func TestMatchBaseDir_Empty(t *testing.T) {
 	var nilSet *fileToolSet
 	assert.False(t, nilSet.matchBaseDir("/tmp/a.txt"))
