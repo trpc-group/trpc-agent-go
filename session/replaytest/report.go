@@ -50,6 +50,8 @@ func BuildReport(results []CaseResult, backends []string, reference string) *Rep
 			report.SkippedCases++
 		case StatusFailed:
 			report.FailedCases++
+		case StatusMixed:
+			// Mixed is produced only for pass+skip combinations; failed wins earlier.
 		default:
 			report.FailedCases++
 		}

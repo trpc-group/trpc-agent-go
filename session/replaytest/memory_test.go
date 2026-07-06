@@ -77,6 +77,24 @@ func TestMemoryFaultDetection(t *testing.T) {
 				s.Memories[0].ID = "other"
 			},
 		},
+		{
+			name: "app_name_wrong",
+			mut: func(s *SessionSnapshot) {
+				s.Memories[0].AppName = "other-app"
+			},
+		},
+		{
+			name: "user_id_wrong",
+			mut: func(s *SessionSnapshot) {
+				s.Memories[0].UserID = "other-user"
+			},
+		},
+		{
+			name: "memory_payload_nil",
+			mut: func(s *SessionSnapshot) {
+				s.Memories[0].Memory = nil
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -124,7 +142,7 @@ func TestMemoryCrossProfileSentinel(t *testing.T) {
 		testMemoryEntry("target", "User likes Go", []string{"go"}, 0.9),
 	})
 	b := memorySnapshot("b", []*memory.Entry{
-		testMemoryEntry("other", "other", nil, 0.2),
+		testMemoryEntry("target", "User likes Go", []string{"go"}, 0.2),
 	}, []*memory.Entry{
 		testMemoryEntry("target", "User likes Go", []string{"go"}, 0.3),
 	})
@@ -133,6 +151,26 @@ func TestMemoryCrossProfileSentinel(t *testing.T) {
 	vector.RetrievalProfile.DistanceMetric = "cosine"
 
 	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), vector)
+	require.Equal(t, StatusPassed, result.Status)
+
+	b = memorySnapshot("b", []*memory.Entry{
+		testMemoryEntry("target", "User likes Go", []string{"go"}, 0.3),
+		testMemoryEntry("extra", "extra write", nil, 0.1),
+	}, []*memory.Entry{
+		testMemoryEntry("target", "User likes Go", []string{"go"}, 0.3),
+		testMemoryEntry("extra-search", "extra search result", nil, 0.1),
+	})
+	result = NewComparator().Compare(a, b, nil, InMemoryProfile(), vector)
+	require.Equal(t, StatusFailed, result.Status)
+	requireDiff(t, result.Diffs, "memories[extra]", "target missing", "target present")
+
+	b = memorySnapshot("b", []*memory.Entry{
+		testMemoryEntry("target", "User likes Go", []string{"go"}, 0.3),
+	}, []*memory.Entry{
+		testMemoryEntry("target", "User likes Go", []string{"go"}, 0.3),
+		testMemoryEntry("extra-search", "extra search result", nil, 0.1),
+	})
+	result = NewComparator().Compare(a, b, nil, InMemoryProfile(), vector)
 	require.Equal(t, StatusPassed, result.Status)
 }
 

@@ -87,6 +87,20 @@ var CaseStateScopes = ReplayCase{
 	},
 }
 
+// CaseAppUserStateDelete covers app and user scoped state deletion.
+var CaseAppUserStateDelete = ReplayCase{
+	Name:        "app_user_state_delete",
+	Description: "app and user scoped state set then delete key",
+	Steps: []ReplayStep{
+		UpdateStateStep{Key: "c15.app.set", Scope: ScopeApp, AppName: defaultSessionKey.AppName, State: session.StateMap{"del_key": []byte("app")}},
+		UpdateStateStep{Key: "c15.app.delete", Scope: ScopeApp, AppName: defaultSessionKey.AppName, DeleteKey: "del_key"},
+		ListAppStatesStep{Key: "c15.app.list", AppName: defaultSessionKey.AppName},
+		UpdateStateStep{Key: "c15.user.set", Scope: ScopeUser, UserKey: defaultUserKey, State: session.StateMap{"del_key": []byte("user")}},
+		UpdateStateStep{Key: "c15.user.delete", Scope: ScopeUser, UserKey: defaultUserKey, DeleteKey: "del_key"},
+		ListUserStatesStep{Key: "c15.user.list", UserKey: defaultUserKey},
+	},
+}
+
 // CaseMemoryWriteAndRead covers memory add, read, and search.
 var CaseMemoryWriteAndRead = ReplayCase{
 	Name:         "memory_write_and_read",
@@ -205,6 +219,7 @@ func AllCases() []ReplayCase {
 		CaseToolCallConversation,
 		CaseStateCRUD,
 		CaseStateScopes,
+		CaseAppUserStateDelete,
 		CaseMemoryWriteAndRead,
 		CaseSummaryGeneration,
 		CaseSummaryWithTruncation,

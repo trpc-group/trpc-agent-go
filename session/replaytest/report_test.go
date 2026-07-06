@@ -46,7 +46,7 @@ func TestReporterJSON(t *testing.T) {
 
 func TestBuildReportWithFailedAndDefaultStatus(t *testing.T) {
 	report := BuildReport([]CaseResult{
-		{CaseName: "mixed", OverallStatus: "unknown"},
+		{CaseName: "unknown", OverallStatus: "unknown"},
 		{CaseName: "explicit-fail", OverallStatus: StatusFailed, Comparisons: []ComparisonResult{{
 			Diffs: []DiffResult{
 				{Severity: SeverityAllowed, Path: "events[1]", ValueA: "a", ValueB: "b"},
@@ -60,4 +60,16 @@ func TestBuildReportWithFailedAndDefaultStatus(t *testing.T) {
 	require.Equal(t, 2, report.TotalDiffs)
 	require.Equal(t, 1, report.AllowedDiffs)
 	require.Equal(t, 1, report.ErrorDiffs)
+}
+
+func TestBuildReportMixedStatusIsNotFailed(t *testing.T) {
+	report := BuildReport([]CaseResult{
+		{CaseName: "mixed", OverallStatus: StatusMixed},
+		{CaseName: "failed", OverallStatus: StatusFailed},
+	}, []string{"a", "b"}, "a")
+
+	require.Equal(t, 2, report.TotalCases)
+	require.Equal(t, 1, report.FailedCases)
+	require.Equal(t, 0, report.PassedCases)
+	require.Equal(t, 0, report.SkippedCases)
 }

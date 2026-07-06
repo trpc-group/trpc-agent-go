@@ -79,6 +79,15 @@ func TestConcurrentPartialOrderFaults(t *testing.T) {
 				*testEvent("c10.agent_x.step_2", "agent_x", "x2"),
 			},
 		},
+		{
+			name: "extra_branch",
+			events: []event.Event{
+				*testEvent("c10.agent_x.step_1", "agent_x", "x1"),
+				*testEvent("c10.agent_y.step_1", "agent_y", "y1"),
+				*testEvent("c10.agent_x.step_2", "agent_x", "x2"),
+				*testEvent("c10.agent_z.step_1", "agent_z", "z1"),
+			},
+		},
 	}
 
 	for _, tc := range tests {

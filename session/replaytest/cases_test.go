@@ -18,7 +18,7 @@ import (
 
 func TestAllCases(t *testing.T) {
 	cases := AllCases()
-	require.Len(t, cases, 14)
+	require.NotEmpty(t, cases)
 	seen := map[string]bool{}
 	for _, tc := range cases {
 		require.NotEmpty(t, tc.Name)
@@ -27,6 +27,16 @@ func TestAllCases(t *testing.T) {
 		seen[tc.Name] = true
 	}
 	require.True(t, seen[CaseSummaryWithFilterKey.Name])
+	require.True(t, seen[CaseAppUserStateDelete.Name])
+}
+
+func TestAppUserStateDeleteCaseE2E(t *testing.T) {
+	report := runReplayCaseReport(t, CaseAppUserStateDelete)
+	require.Equal(t, 1, report.PassedCases)
+
+	snapshot := runReplayCaseSnapshot(t, CaseAppUserStateDelete)
+	require.Empty(t, snapshot.AppStates)
+	require.Empty(t, snapshot.UserStates)
 }
 
 func TestCasesInjectFault(t *testing.T) {

@@ -175,6 +175,15 @@ func TestComparatorDetectsScopedStateDiffs(t *testing.T) {
 	requireDiffPathPrefix(t, result.Diffs, "user_states")
 }
 
+func TestComparatorDetectsNilSessionMismatch(t *testing.T) {
+	a := &SessionSnapshot{BackendName: "a", Session: session.NewSession("app", "user", "id")}
+	b := &SessionSnapshot{BackendName: "b"}
+
+	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), InMemoryProfile())
+	require.Equal(t, StatusFailed, result.Status)
+	requireDiffPathPrefix(t, result.Diffs, "session")
+}
+
 func TestComparatorMemoryProfile(t *testing.T) {
 	a := &SessionSnapshot{BackendName: "a", Memories: []*memory.Entry{
 		{ID: "target", Score: 0.80, Memory: &memory.Memory{Memory: "likes Go"}},
@@ -190,7 +199,8 @@ func TestComparatorMemoryProfile(t *testing.T) {
 	b.Memories = []*memory.Entry{{ID: "other", Memory: &memory.Memory{Memory: "other"}}}
 	b.MemSearchResults = []*memory.Entry{{ID: "target", Memory: &memory.Memory{Memory: "likes Go"}}}
 	result = NewComparator().Compare(a, b, nil, InMemoryProfile(), vector)
-	require.Equal(t, StatusPassed, result.Status)
+	require.Equal(t, StatusFailed, result.Status)
+	requireDiff(t, result.Diffs, "memories[other]", "target missing", "target present")
 }
 
 func TestComparatorNonStrictMemoryReportsMissingTarget(t *testing.T) {
@@ -203,7 +213,7 @@ func TestComparatorNonStrictMemoryReportsMissingTarget(t *testing.T) {
 
 	result := NewComparator().Compare(a, b, nil, InMemoryProfile(), vector)
 	require.Equal(t, StatusFailed, result.Status)
-	requireDiff(t, result.Diffs, "memory_search[target]", "target present", "target missing")
+	requireDiff(t, result.Diffs, "memories[target]", "target present", "target missing")
 	require.False(t, containsMemoryID([]*memory.Entry{nil, &memory.Entry{ID: "other"}}, "target"))
 }
 

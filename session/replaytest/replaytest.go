@@ -268,9 +268,9 @@ type SessionSnapshot struct {
 	AppStates session.StateMap
 	// UserStates contains user-scoped state captured by list steps.
 	UserStates session.StateMap
-	// TrackEvents contains track events keyed by track name.
+	// TrackEvents contains debug/report track events keyed by track name; comparisons use Session.Tracks.
 	TrackEvents map[string]*session.TrackEvents
-	// SummaryMap contains summaries keyed by filter key.
+	// SummaryMap contains debug/report summaries keyed by filter key; comparisons use Session.Summaries.
 	SummaryMap map[string]*session.Summary
 	// Errors records backend-specific non-fatal collection errors.
 	Errors []string

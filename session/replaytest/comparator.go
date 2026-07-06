@@ -82,6 +82,22 @@ func (c *Comparator) Compare(
 			Severity: SeverityError,
 		})
 	}
+	if (a == nil) != (b == nil) {
+		add("snapshot", a, b)
+		result.Diffs = filterAllowedDiffs(diffs, allowedDiffs)
+		if hasErrorDiff(result.Diffs) {
+			result.Status = StatusFailed
+		}
+		return result
+	}
+	if a != nil && b != nil && (a.Session == nil) != (b.Session == nil) {
+		add("session", a.Session, b.Session)
+		result.Diffs = filterAllowedDiffs(diffs, allowedDiffs)
+		if hasErrorDiff(result.Diffs) {
+			result.Status = StatusFailed
+		}
+		return result
+	}
 	compareSessions(a, b, add)
 	compareScopedStates(a, b, add)
 	compareMemories(a, b, profileA, profileB, add)
@@ -248,7 +264,15 @@ func eventsByID(events []event.Event) map[string]event.Event {
 func compareEventOrder(a, b []event.Event, add func(string, any, any)) {
 	branchOrderA := branchEventIDs(a)
 	branchOrderB := branchEventIDs(b)
-	for branch, orderA := range branchOrderA {
+	branches := map[string]struct{}{}
+	for branch := range branchOrderA {
+		branches[branch] = struct{}{}
+	}
+	for branch := range branchOrderB {
+		branches[branch] = struct{}{}
+	}
+	for branch := range branches {
+		orderA := branchOrderA[branch]
 		orderB := branchOrderB[branch]
 		if !sameStringSlice(orderA, orderB) {
 			add("events["+branch+"].order", orderA, orderB)
@@ -293,8 +317,16 @@ func compareMemories(a, b *SessionSnapshot, pa, pb BackendProfile, add func(stri
 		if target == nil {
 			continue
 		}
-		if !containsMemoryID(b.MemSearchResults, target.ID) && !containsMemoryID(b.Memories, target.ID) {
-			add("memory_search["+target.ID+"]", "target present", "target missing")
+		if !containsMemoryID(b.Memories, target.ID) {
+			add("memories["+target.ID+"]", "target present", "target missing")
+		}
+	}
+	for _, target := range b.Memories {
+		if target == nil {
+			continue
+		}
+		if !containsMemoryID(a.Memories, target.ID) {
+			add("memories["+target.ID+"]", "target missing", "target present")
 		}
 	}
 }
@@ -314,7 +346,15 @@ func compareMemoryEntries(a, b []*memory.Entry, path string, add func(string, an
 		if a[i].ID != b[i].ID {
 			add(fmt.Sprintf("%s[%d].id", path, i), a[i].ID, b[i].ID)
 		}
-		if a[i].Memory != nil && b[i].Memory != nil && !reflect.DeepEqual(a[i].Memory, b[i].Memory) {
+		if a[i].AppName != b[i].AppName {
+			add(fmt.Sprintf("%s[%s].app_name", path, a[i].ID), a[i].AppName, b[i].AppName)
+		}
+		if a[i].UserID != b[i].UserID {
+			add(fmt.Sprintf("%s[%s].user_id", path, a[i].ID), a[i].UserID, b[i].UserID)
+		}
+		if (a[i].Memory == nil) != (b[i].Memory == nil) {
+			add(fmt.Sprintf("%s[%s].memory", path, a[i].ID), a[i].Memory, b[i].Memory)
+		} else if a[i].Memory != nil && !reflect.DeepEqual(a[i].Memory, b[i].Memory) {
 			add(fmt.Sprintf("%s[%s].memory", path, a[i].ID), a[i].Memory, b[i].Memory)
 		}
 		if math.Abs(a[i].Score-b[i].Score) > 0.01 {
