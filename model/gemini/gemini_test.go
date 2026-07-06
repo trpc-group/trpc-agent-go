@@ -1394,6 +1394,20 @@ func (mr *MockModelsMockRecorder) GenerateContentStream(ctx, model, contents, co
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GenerateContentStream", reflect.TypeOf((*MockModels)(nil).GenerateContentStream), ctx, model, contents, config)
 }
 
+func TestModel_GenerateContent_NoContentAfterConversion(t *testing.T) {
+	m := &Model{name: "gemini-test"}
+	req := &model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleAssistant},
+		},
+	}
+
+	ch, err := m.GenerateContent(context.Background(), req)
+	require.Error(t, err)
+	require.EqualError(t, err, "gemini: no content after message conversion")
+	require.Nil(t, ch)
+}
+
 func TestModel_GenerateContentError(t *testing.T) {
 	subText := "subText"
 	req := &model.Request{

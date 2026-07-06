@@ -106,8 +106,10 @@ func (p *endOnFirstChunkProcessor) ProcessResponse(ctx context.Context, inv *age
 func TestStreaming_BreaksWhenEndInvocationSet(t *testing.T) {
 	// Arrange: model returns two chunks; response processor ends invocation on first chunk.
 	respProcs := []flow.ResponseProcessor{&endOnFirstChunkProcessor{}}
-	f := New(nil, respProcs, Options{})
-	inv := &agent.Invocation{InvocationID: "inv-stream", AgentName: "agent-stream", Model: &twoChunkModel{}}
+	f := newRunFlow(respProcs)
+	inv := runInvocationWithUserMessage(&twoChunkModel{})
+	inv.InvocationID = "inv-stream"
+	inv.AgentName = "agent-stream"
 
 	// Act
 	ch, err := f.Run(context.Background(), inv)
