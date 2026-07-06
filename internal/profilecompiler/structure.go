@@ -160,12 +160,21 @@ func toolSurfacePatchNodeIDs(
 			continue
 		}
 		node, ok := nodeIndex[surface.NodeID]
-		if !ok || node.Kind != astructure.NodeKindLLM {
+		if !ok || !isToolSurfacePatchNodeKind(node.Kind) {
 			continue
 		}
 		out[surface.NodeID] = struct{}{}
 	}
 	return out
+}
+
+func isToolSurfacePatchNodeKind(kind astructure.NodeKind) bool {
+	switch kind {
+	case astructure.NodeKindLLM, astructure.NodeKindAgent:
+		return true
+	default:
+		return false
+	}
 }
 
 func expandToolSurface(surface astructure.Surface) ([]astructure.Surface, error) {
@@ -214,7 +223,7 @@ func addAggregateToolSurfaceIDs(
 			continue
 		}
 		node, ok := nodeIndex[surface.NodeID]
-		if !ok || node.Kind != astructure.NodeKindLLM {
+		if !ok || !isToolSurfacePatchNodeKind(node.Kind) {
 			continue
 		}
 		known[astructure.SurfaceID(surface.NodeID, astructure.SurfaceTypeTool)] = struct{}{}
