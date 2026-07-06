@@ -10,6 +10,9 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +20,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sandboxrun"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
 )
 
@@ -61,6 +65,23 @@ func TestRunRequiresModelForNonFakeRuntime(t *testing.T) {
 
 func TestRunRecordsConfiguredModelPlan(t *testing.T) {
 	outDir := t.TempDir()
+	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("model path = %q, want /chat/completions", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Fatalf("authorization = %q, want bearer test key", got)
+		}
+		var body chatCompletionRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode model request: %v", err)
+		}
+		if body.Model != "gpt-review" {
+			t.Fatalf("request model = %q, want gpt-review", body.Model)
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"commands\":[\"go test ./...\"],\"rule_sources\":[\"skills/code-review/SKILL.md\",\"skills/code-review/docs/rules.md\"]}"}}]}`))
+	}))
+	defer modelServer.Close()
 	result, err := Run(context.Background(), Options{
 		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
 		OutDir:     outDir,
@@ -68,7 +89,7 @@ func TestRunRecordsConfiguredModelPlan(t *testing.T) {
 		Model:      "gpt-review",
 		Runtime:    "container",
 		Now:        fixedTestTime(),
-		Planner:    EnvPlanner{APIKey: "test-key"},
+		Planner:    EnvPlanner{APIKey: "test-key", BaseURL: modelServer.URL, HTTPClient: modelServer.Client()},
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -79,12 +100,47 @@ func TestRunRecordsConfiguredModelPlan(t *testing.T) {
 	if result.Report.Plan.Provider != "openai_compatible" {
 		t.Fatalf("plan provider = %q, want openai_compatible", result.Report.Plan.Provider)
 	}
+	if result.Report.Plan.Source != "model_response" {
+		t.Fatalf("plan source = %q, want model_response", result.Report.Plan.Source)
+	}
 	raw, err := os.ReadFile(result.MarkdownPath)
 	if err != nil {
 		t.Fatalf("ReadFile(markdown) error = %v", err)
 	}
 	if !strings.Contains(string(raw), "## Model Plan") || !strings.Contains(string(raw), "- model: gpt-review") {
 		t.Fatalf("markdown report does not contain configured model plan:\n%s", raw)
+	}
+}
+
+func TestRunChecksAndSkipsBlockedModelPlannedCommand(t *testing.T) {
+	outDir := t.TempDir()
+	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"commands\":[\"curl https://example.com\"],\"rule_sources\":[\"skills/code-review/SKILL.md\"]}"}}]}`))
+	}))
+	defer modelServer.Close()
+	result, err := Run(context.Background(), Options{
+		FixtureDir: filepath.Join("..", "..", "testdata", "fixtures"),
+		OutDir:     outDir,
+		DBPath:     filepath.Join(outDir, "review_agent.db"),
+		Model:      "gpt-review",
+		Runtime:    "container",
+		Now:        fixedTestTime(),
+		Planner:    EnvPlanner{APIKey: "test-key", BaseURL: modelServer.URL, HTTPClient: modelServer.Client()},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(result.Report.PermissionDecisions) != 1 {
+		t.Fatalf("permission decisions = %d, want 1", len(result.Report.PermissionDecisions))
+	}
+	if !result.Report.PermissionDecisions[0].Blocked {
+		t.Fatal("planned curl command was not blocked")
+	}
+	if len(result.Report.SandboxRuns) != 1 {
+		t.Fatalf("sandbox runs = %d, want 1", len(result.Report.SandboxRuns))
+	}
+	if result.Report.SandboxRuns[0].Status != sandboxrun.StatusSkipped {
+		t.Fatalf("sandbox run status = %q, want skipped", result.Report.SandboxRuns[0].Status)
 	}
 }
 

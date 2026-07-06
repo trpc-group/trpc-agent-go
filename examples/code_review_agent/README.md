@@ -17,11 +17,11 @@ OPENAI_API_KEY="..." MODEL="gpt-4.1-mini" \
   go run . -fixture-dir testdata/fixtures -out-dir ./out -model "$MODEL"
 ```
 
-The CLI reads diff fixtures, records a review task, writes `review_report.json`
-and `review_report.md`, and prints an English summary. Unit tests use mock
-model and sandbox seams with `--runtime fake`; non-fake CLI runs validate
-OpenAI-compatible model configuration through `OPENAI_API_KEY`,
-`OPENAI_BASE_URL`, and `MODEL` or `--model`.
+The CLI reads diff fixtures, asks an OpenAI-compatible model for the execution
+plan, records a review task, writes `review_report.json` and
+`review_report.md`, and prints an English summary. Unit tests use mock model
+and sandbox seams with `--runtime fake`; non-fake CLI runs require
+`OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, and `MODEL` or `--model`.
 
 ## Runtime Policy
 
@@ -29,8 +29,9 @@ OpenAI-compatible model configuration through `OPENAI_API_KEY`,
 - `local` is an explicit development fallback only.
 - Tests use `fake` or dry-run execution to avoid Docker, E2B, and API-key
   dependencies.
-- Non-fake runtimes require model orchestration configuration and fail fast in
-  English when `MODEL` / `--model` or `OPENAI_API_KEY` is missing.
+- Non-fake runtimes call an OpenAI-compatible chat completions endpoint to plan
+  Skill rules and sandbox commands, and fail fast in English when model
+  configuration is missing or the planner call fails.
 - Runtime initialization failure is recorded as a sandbox failure and should
   not silently fall back to `local`.
 

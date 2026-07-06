@@ -9,11 +9,14 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -72,12 +75,35 @@ type PlanRequest struct {
 
 // EnvPlanner validates OpenAI-compatible model configuration for real runs.
 type EnvPlanner struct {
-	APIKey  string
-	BaseURL string
+	APIKey     string
+	BaseURL    string
+	HTTPClient *http.Client
 }
 
-// PlanReview records the model orchestration plan without making external calls
-// from the example. Unit tests can use the fake runtime without model keys.
+type chatCompletionRequest struct {
+	Model       string        `json:"model"`
+	Messages    []chatMessage `json:"messages"`
+	Temperature float64       `json:"temperature"`
+}
+
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type chatCompletionResponse struct {
+	Choices []struct {
+		Message chatMessage `json:"message"`
+	} `json:"choices"`
+}
+
+type modelPlanEnvelope struct {
+	Commands    []string `json:"commands"`
+	RuleSources []string `json:"rule_sources"`
+}
+
+// PlanReview asks an OpenAI-compatible model for the orchestration plan. Unit
+// tests can use the fake runtime without model keys.
 func (p EnvPlanner) PlanReview(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
 	if err := ctx.Err(); err != nil {
 		return review.ReviewPlan{}, err
@@ -99,7 +125,18 @@ func (p EnvPlanner) PlanReview(ctx context.Context, req PlanRequest) (review.Rev
 	if strings.TrimSpace(p.APIKey) == "" {
 		return review.ReviewPlan{}, fmt.Errorf("model orchestration requires OPENAI_API_KEY for runtime %q; use --runtime fake for unit tests", runtimeName)
 	}
-	return reviewPlan(modelName, "openai_compatible", "configured_model", req.Skill, runtimeName), nil
+	modelPlan, err := p.requestModelPlan(ctx, modelName, req)
+	if err != nil {
+		return review.ReviewPlan{}, err
+	}
+	plan := reviewPlan(modelName, "openai_compatible", "model_response", req.Skill, runtimeName)
+	if len(modelPlan.Commands) > 0 {
+		plan.Commands = redactStrings(modelPlan.Commands)
+	}
+	if len(modelPlan.RuleSources) > 0 {
+		plan.RuleSources = redactStrings(modelPlan.RuleSources)
+	}
+	return plan, nil
 }
 
 func reviewPlan(modelName string, provider string, source string, skill string, runtimeName string) review.ReviewPlan {
@@ -122,10 +159,105 @@ func reviewPlan(modelName string, provider string, source string, skill string, 
 	}
 }
 
+func (p EnvPlanner) requestModelPlan(ctx context.Context, modelName string, req PlanRequest) (modelPlanEnvelope, error) {
+	body, err := json.Marshal(chatCompletionRequest{
+		Model:       modelName,
+		Temperature: 0,
+		Messages: []chatMessage{
+			{Role: "system", Content: "You plan safe code-review agent execution. Return compact JSON only."},
+			{Role: "user", Content: buildPlanningPrompt(req)},
+		},
+	})
+	if err != nil {
+		return modelPlanEnvelope{}, fmt.Errorf("encode model request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, chatCompletionsURL(p.BaseURL), bytes.NewReader(body))
+	if err != nil {
+		return modelPlanEnvelope{}, fmt.Errorf("build model request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	client := p.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	res, err := client.Do(httpReq)
+	if err != nil {
+		return modelPlanEnvelope{}, fmt.Errorf("call model planner: %w", err)
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return modelPlanEnvelope{}, fmt.Errorf("read model planner response: %w", err)
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return modelPlanEnvelope{}, fmt.Errorf("model planner returned status %d: %s", res.StatusCode, redact.Text(string(raw)).Text)
+	}
+	var completion chatCompletionResponse
+	if err := json.Unmarshal(raw, &completion); err != nil {
+		return modelPlanEnvelope{}, fmt.Errorf("decode model planner response: %w", err)
+	}
+	if len(completion.Choices) == 0 {
+		return modelPlanEnvelope{}, fmt.Errorf("model planner returned no choices")
+	}
+	var plan modelPlanEnvelope
+	content := strings.TrimSpace(completion.Choices[0].Message.Content)
+	if err := json.Unmarshal([]byte(content), &plan); err != nil {
+		return modelPlanEnvelope{}, fmt.Errorf("decode model planner content: %w", err)
+	}
+	return plan, nil
+}
+
+func chatCompletionsURL(baseURL string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if base == "" {
+		base = "https://api.openai.com/v1"
+	}
+	return base + "/chat/completions"
+}
+
+func buildPlanningPrompt(req PlanRequest) string {
+	var files []string
+	for _, file := range req.Files {
+		files = append(files, file.NewPath)
+	}
+	sort.Strings(files)
+	payload := map[string]any{
+		"skill":         req.Skill,
+		"runtime":       req.Runtime,
+		"changed_files": files,
+		"allowed_commands": []string{
+			defaultSandboxCommand,
+		},
+		"rule_sources": []string{
+			"skills/code-review/SKILL.md",
+			"skills/code-review/docs/rules.md",
+		},
+		"response_schema": map[string]any{
+			"commands":     []string{"go test ./..."},
+			"rule_sources": []string{"skills/code-review/SKILL.md"},
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func redactStrings(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, item := range in {
+		out = append(out, redact.Text(item).Text)
+	}
+	return out
+}
+
 func defaultPlanner() Planner {
 	return EnvPlanner{
-		APIKey:  os.Getenv("OPENAI_API_KEY"),
-		BaseURL: os.Getenv("OPENAI_BASE_URL"),
+		APIKey:     os.Getenv("OPENAI_API_KEY"),
+		BaseURL:    os.Getenv("OPENAI_BASE_URL"),
+		HTTPClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -212,30 +344,9 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	decision := safetywrap.Decide(safetywrap.PlannedCommand{
-		ID:       task.ID + "-permission-001",
-		TaskID:   task.ID,
-		ToolName: "workspace_exec",
-		Command:  defaultSandboxCommand,
-		Now:      now,
-	})
-	if err := st.RecordPermissionDecision(ctx, decision); err != nil {
+	decisions, runs, err := executePlannedCommands(ctx, st, task.ID, opts.Runtime, plan.Commands, now)
+	if err != nil {
 		return Result{}, err
-	}
-
-	var runs []review.SandboxRun
-	if decision.Blocked {
-		runs = append(runs, review.SandboxRun{
-			ID:             task.ID + "-sandbox-001",
-			TaskID:         task.ID,
-			Runtime:        opts.Runtime,
-			Command:        defaultSandboxCommand,
-			Status:         sandboxrun.StatusSkipped,
-			DurationMillis: 0,
-			ErrorType:      sandboxrun.ErrorPermissionBlocked,
-		})
-	} else {
-		runs = append(runs, sandboxrun.Run(ctx, runtimeForName(opts.Runtime), task.ID, task.ID+"-sandbox-001", defaultSandboxCommand, defaultMaxSandboxOutput))
 	}
 	for _, run := range runs {
 		if err := st.RecordSandboxRun(ctx, run); err != nil {
@@ -243,7 +354,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		}
 	}
 
-	metrics := report.BuildMetrics(task.ID, task.StartedAt, findings, runs, []review.PermissionDecisionRecord{decision}, redactedDiff.Count+countFindingRedactions(findings))
+	metrics := report.BuildMetrics(task.ID, task.StartedAt, findings, runs, decisions, redactedDiff.Count+countFindingRedactions(findings))
 	if fixedNow {
 		metrics.TotalDurationMillis = 0
 	}
@@ -257,7 +368,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		ChangedFiles:        files,
 		Findings:            findings,
 		SandboxRuns:         runs,
-		PermissionDecisions: []review.PermissionDecisionRecord{decision},
+		PermissionDecisions: decisions,
 		Metrics:             metrics,
 		Conclusion:          conclusion,
 	}
@@ -338,6 +449,44 @@ func summarizeDiff(files []review.DiffFile, fixtureNames []string) string {
 
 func summarizeOutcome(files []review.DiffFile, findings []review.Finding, runs []review.SandboxRun, plan review.ReviewPlan) string {
 	return fmt.Sprintf("Model plan %q coordinated skill %q for %d changed files, produced %d findings, and recorded %d sandbox runs.", plan.Model, plan.Skill, len(files), len(findings), len(runs))
+}
+
+func executePlannedCommands(ctx context.Context, st store.Store, taskID string, runtimeName string, commands []string, now time.Time) ([]review.PermissionDecisionRecord, []review.SandboxRun, error) {
+	if len(commands) == 0 {
+		commands = []string{defaultSandboxCommand}
+	}
+	var decisions []review.PermissionDecisionRecord
+	var runs []review.SandboxRun
+	runtime := runtimeForName(runtimeName)
+	for index, command := range commands {
+		suffix := fmt.Sprintf("%03d", index+1)
+		decision := safetywrap.Decide(safetywrap.PlannedCommand{
+			ID:       taskID + "-permission-" + suffix,
+			TaskID:   taskID,
+			ToolName: "workspace_exec",
+			Command:  command,
+			Now:      now,
+		})
+		if err := st.RecordPermissionDecision(ctx, decision); err != nil {
+			return nil, nil, err
+		}
+		decisions = append(decisions, decision)
+		runID := taskID + "-sandbox-" + suffix
+		if decision.Blocked {
+			runs = append(runs, review.SandboxRun{
+				ID:             runID,
+				TaskID:         taskID,
+				Runtime:        runtimeName,
+				Command:        command,
+				Status:         sandboxrun.StatusSkipped,
+				DurationMillis: 0,
+				ErrorType:      sandboxrun.ErrorPermissionBlocked,
+			})
+			continue
+		}
+		runs = append(runs, sandboxrun.Run(ctx, runtime, taskID, runID, command, defaultMaxSandboxOutput))
+	}
+	return decisions, runs, nil
 }
 
 func countFindingRedactions(findings []review.Finding) int {

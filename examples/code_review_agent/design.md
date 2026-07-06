@@ -17,8 +17,8 @@ internal packages:
   timeout, truncation, failure, and unavailable-runtime records.
 - `internal/orchestrator` coordinates model planning, Skill rules, safety
   decisions, sandbox runs, persistence, and report rendering. The default
-  planner validates OpenAI-compatible model configuration for non-fake runtimes
-  while keeping unit tests deterministic through the fake runtime.
+  planner calls an OpenAI-compatible chat completions endpoint for non-fake
+  runtimes while keeping unit tests deterministic through the fake runtime.
 - `internal/store` defines a storage interface and dependency-free durable
   implementation for tasks, inputs, sandbox runs, permission decisions,
   findings, artifacts, and reports. The entrypoint keeps the `NewSQLite` name
