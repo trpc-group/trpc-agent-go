@@ -224,6 +224,7 @@ func TestWebFetch_PDF(t *testing.T) {
 	assert.Empty(t, resp.Results[0].Error)
 	assert.Contains(t, resp.Results[0].Content, "Quarterly reference")
 	assert.Contains(t, resp.Results[0].Content, "Life sciences")
+	assert.Contains(t, resp.Results[0].Content, "works flyer\nLife")
 }
 
 func TestWebFetch_InvalidPDFReportsParseError(t *testing.T) {

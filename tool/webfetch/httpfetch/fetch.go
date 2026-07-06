@@ -15,7 +15,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +25,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
-	pdfpkg "github.com/ledongthuc/pdf"
+	pdfpkg "github.com/dslipak/pdf"
 	"golang.org/x/net/html"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -433,6 +435,8 @@ func readBodyAsString(r io.Reader) (string, error) {
 	return buf.String(), nil
 }
 
+const pdfLineYTolerance = 2.0
+
 func readPDFAsText(r io.Reader) (string, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -446,10 +450,7 @@ func readPDFAsText(r io.Reader) (string, error) {
 	var text strings.Builder
 	pageCount := reader.NumPage()
 	for pageIndex := 1; pageIndex <= pageCount; pageIndex++ {
-		pageText, err := reader.Page(pageIndex).GetPlainText(nil)
-		if err != nil {
-			return "", fmt.Errorf("read pdf page %d: %w", pageIndex, err)
-		}
+		pageText := pdfPageText(reader.Page(pageIndex).Content().Text)
 		pageText = strings.TrimSpace(pageText)
 		if pageText == "" {
 			continue
@@ -460,6 +461,60 @@ func readPDFAsText(r io.Reader) (string, error) {
 		text.WriteString(pageText)
 	}
 	return strings.ToValidUTF8(text.String(), ""), nil
+}
+
+func pdfPageText(text []pdfpkg.Text) string {
+	if len(text) == 0 {
+		return ""
+	}
+	fragments := append([]pdfpkg.Text(nil), text...)
+	sort.Sort(pdfpkg.TextVertical(fragments))
+
+	var b strings.Builder
+	var last pdfpkg.Text
+	haveLast := false
+	for _, fragment := range fragments {
+		if fragment.S == "" {
+			continue
+		}
+		if haveLast {
+			if math.Abs(fragment.Y-last.Y) > pdfLineYTolerance {
+				trimTrailingSpaces(&b)
+				b.WriteByte('\n')
+			} else if shouldSeparatePDFText(last, fragment) {
+				b.WriteByte(' ')
+			}
+		}
+		b.WriteString(fragment.S)
+		last = fragment
+		haveLast = true
+	}
+	return b.String()
+}
+
+func shouldSeparatePDFText(prev, next pdfpkg.Text) bool {
+	if strings.HasSuffix(prev.S, " ") || strings.HasPrefix(next.S, " ") {
+		return false
+	}
+	gap := next.X - (prev.X + prev.W)
+	if gap <= 0 {
+		return false
+	}
+	size := math.Max(prev.FontSize, next.FontSize)
+	if size <= 0 {
+		size = 12
+	}
+	return gap > size*0.25
+}
+
+func trimTrailingSpaces(b *strings.Builder) {
+	s := b.String()
+	trimmed := strings.TrimRight(s, " \t")
+	if len(trimmed) == len(s) {
+		return
+	}
+	b.Reset()
+	b.WriteString(trimmed)
 }
 
 func convertHTMLToMarkdown(r io.Reader) (string, error) {
