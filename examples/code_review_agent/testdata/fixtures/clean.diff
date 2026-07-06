@@ -1,0 +1,13 @@
+diff --git a/pkg/hello.go b/pkg/hello.go
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/pkg/hello.go
+@@ -0,0 +1,7 @@
++package pkg
++
++import "context"
++
++func Hello(ctx context.Context) string {
++	return "hello"
++}
