@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	pdfpkg "github.com/dslipak/pdf"
 	"github.com/go-pdf/fpdf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -246,6 +247,12 @@ func TestWebFetch_InvalidPDFReportsParseError(t *testing.T) {
 	assert.Equal(t, "application/pdf", resp.Results[0].ContentType)
 	assert.Empty(t, resp.Results[0].Content)
 	assert.Contains(t, resp.Results[0].Error, "read pdf")
+}
+
+func TestReadPDFPageText_NullPage(t *testing.T) {
+	text, err := readPDFPageText(pdfpkg.Page{})
+	require.NoError(t, err)
+	assert.Empty(t, text)
 }
 
 func TestWebFetch_PerUrlLimit(t *testing.T) {

@@ -450,7 +450,10 @@ func readPDFAsText(r io.Reader) (string, error) {
 	var text strings.Builder
 	pageCount := reader.NumPage()
 	for pageIndex := 1; pageIndex <= pageCount; pageIndex++ {
-		pageText := pdfPageText(reader.Page(pageIndex).Content().Text)
+		pageText, err := readPDFPageText(reader.Page(pageIndex))
+		if err != nil {
+			return "", fmt.Errorf("read pdf page %d: %w", pageIndex, err)
+		}
 		pageText = strings.TrimSpace(pageText)
 		if pageText == "" {
 			continue
@@ -461,6 +464,18 @@ func readPDFAsText(r io.Reader) (string, error) {
 		text.WriteString(pageText)
 	}
 	return strings.ToValidUTF8(text.String(), ""), nil
+}
+
+func readPDFPageText(page pdfpkg.Page) (text string, err error) {
+	if page.V.IsNull() {
+		return "", nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("read pdf page content: %v", recovered)
+		}
+	}()
+	return pdfPageText(page.Content().Text), nil
 }
 
 func pdfPageText(text []pdfpkg.Text) string {
