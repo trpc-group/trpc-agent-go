@@ -6,6 +6,24 @@ Task `review-7ed8cd6d5ee2` finished with status `failed`.
 
 Model plan "mock-model" coordinated skill "code-review" for 9 changed files, produced 18 findings, and recorded 4 sandbox runs.
 
+## Findings Summary
+
+| Severity | Count |
+| --- | ---: |
+| critical | 2 |
+| high | 3 |
+| medium | 11 |
+| low | 2 |
+
+| Category | Count |
+| --- | ---: |
+| concurrency | 1 |
+| database | 1 |
+| error | 2 |
+| resource | 1 |
+| security | 4 |
+| test | 9 |
+
 ## Model Plan
 
 - model: mock-model
@@ -73,7 +91,32 @@ Model plan "mock-model" coordinated skill "code-review" for 9 changed files, pro
   Evidence: `go func() {`
   Recommendation: Thread context into the goroutine and exit on cancellation.
 
+## Fix Recommendations
+
+- `test.missing_coverage`: Add or update tests covering the new behavior.
+- `security.redaction_required`: Verify all persisted reports and audit records contain only redacted values.
+- `security.secret_leak`: Move secrets to a managed secret store and rotate the exposed credential.
+- `db.lifecycle`: Ensure every successful transaction commits and every failed path rolls back.
+- `error.ignored_error`: Handle, return, or explicitly document why the error is safe to ignore.
+- `resource.close_missing`: Defer Close after checking the open/query error.
+- `concurrency.goroutine_context_leak`: Thread context into the goroutine and exit on cancellation.
+
+## Human Review
+
+- `test.missing_coverage` pkg/config.go:1 status=warning confidence=0.72 title=New Go file has no related test change
+- `test.missing_coverage` pkg/db.go:1 status=warning confidence=0.72 title=New Go file has no related test change
+- `test.missing_coverage` pkg/dup.go:1 status=warning confidence=0.72 title=New Go file has no related test change
+- `test.missing_coverage` pkg/fail.go:1 status=warning confidence=0.72 title=New Go file has no related test change
+- `test.missing_coverage` pkg/file.go:1 status=warning confidence=0.72 title=New Go file has no related test change
+- `test.missing_coverage` pkg/hello.go:1 status=warning confidence=0.72 title=New Go file has no related test change
+- `test.missing_coverage` pkg/new_logic.go:1 status=warning confidence=0.72 title=New Go file has no related test change
+- `test.missing_coverage` pkg/redact.go:1 status=warning confidence=0.72 title=New Go file has no related test change
+- `test.missing_coverage` pkg/worker.go:1 status=warning confidence=0.72 title=New Go file has no related test change
+- `concurrency.goroutine_context_leak` pkg/worker.go:4 status=needs_human_review confidence=0.78 title=Goroutine lacks visible context cancellation
+
 ## Governance
+
+Blocked or escalated decisions: 0.
 
 - `workspace_exec` action=allow safety=allow risk=low blocked=false reason=Command is allowed by the example policy.
 - `workspace_exec` action=allow safety=allow risk=low blocked=false reason=Command is allowed by the example policy.
@@ -82,15 +125,22 @@ Model plan "mock-model" coordinated skill "code-review" for 9 changed files, pro
 
 ## Sandbox
 
-- `go test ./...` runtime=fake status=passed exit=0 error=
-- `go vet ./...` runtime=fake status=passed exit=0 error=
-- `go test ./skills/code-review/scripts` runtime=fake status=passed exit=0 error=
-- `go test ./internal/rules` runtime=fake status=passed exit=0 error=
+Sandbox duration: 0 ms. Output is redacted and capped.
+
+- `go test ./...` runtime=fake status=passed exit=0 error= truncated=false
+- `go vet ./...` runtime=fake status=passed exit=0 error= truncated=false
+- `go test ./skills/code-review/scripts` runtime=fake status=passed exit=0 error= truncated=false
+- `go test ./internal/rules` runtime=fake status=passed exit=0 error= truncated=false
 
 ## Metrics
 
 - findings: 18
 - permission blocks: 0
 - redactions: 2
+- total duration ms: 0
+- sandbox duration ms: 0
+- tool calls: 4
+- severity distribution: {"critical":2,"high":3,"low":2,"medium":11}
+- error distribution: {}
 
 Conclusion: needs_human_review

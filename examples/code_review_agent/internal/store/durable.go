@@ -27,7 +27,9 @@ import (
 //
 // The issue allows SQLite or equivalent persistence. This implementation keeps
 // the same task/report schema as records in a single JSON file at the configured
-// .db path, avoiding CGO and high-Go-version driver dependencies in examples.
+// .db path, avoiding CGO in examples. The SQL shape is documented in
+// schema.sql so callers can swap this Store implementation for a strict SQL
+// backend without changing orchestration code.
 type DurableStore struct {
 	mu   sync.Mutex
 	path string

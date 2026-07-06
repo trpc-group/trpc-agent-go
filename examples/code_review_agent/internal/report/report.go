@@ -74,6 +74,7 @@ func Markdown(r review.Report) []byte {
 	fmt.Fprintf(&b, "# Code Review Report\n\n")
 	fmt.Fprintf(&b, "Task `%s` finished with status `%s`.\n\n", r.Task.ID, r.Task.Status)
 	fmt.Fprintf(&b, "## Summary\n\n%s\n\n", r.Summary)
+	writeFindingsSummary(&b, r)
 	fmt.Fprintf(&b, "## Model Plan\n\n")
 	if r.Plan.Model == "" {
 		fmt.Fprintf(&b, "No model plan recorded.\n\n")
@@ -97,10 +98,13 @@ func Markdown(r review.Report) []byte {
 		}
 		fmt.Fprintf(&b, "\n")
 	}
+	writeFixRecommendations(&b, r.Findings)
+	writeHumanReview(&b, r.Findings)
 	fmt.Fprintf(&b, "## Governance\n\n")
 	if len(r.PermissionDecisions) == 0 {
 		fmt.Fprintf(&b, "No permission decisions recorded.\n\n")
 	} else {
+		fmt.Fprintf(&b, "Blocked or escalated decisions: %d.\n\n", blockedDecisionCount(r.PermissionDecisions))
 		for _, decision := range r.PermissionDecisions {
 			fmt.Fprintf(&b, "- `%s` action=%s safety=%s risk=%s blocked=%t reason=%s\n",
 				decision.ToolName, decision.FrameworkAction, decision.SafetyDecision, decision.RiskLevel, decision.Blocked, decision.Reason)
@@ -111,8 +115,10 @@ func Markdown(r review.Report) []byte {
 	if len(r.SandboxRuns) == 0 {
 		fmt.Fprintf(&b, "No sandbox runs recorded.\n\n")
 	} else {
+		fmt.Fprintf(&b, "Sandbox duration: %d ms. Output is redacted and capped.\n\n", r.Metrics.SandboxDurationMillis)
 		for _, run := range r.SandboxRuns {
-			fmt.Fprintf(&b, "- `%s` runtime=%s status=%s exit=%d error=%s\n", run.Command, run.Runtime, run.Status, run.ExitCode, run.ErrorType)
+			fmt.Fprintf(&b, "- `%s` runtime=%s status=%s exit=%d error=%s truncated=%t\n",
+				run.Command, run.Runtime, run.Status, run.ExitCode, run.ErrorType, run.OutputTruncated)
 		}
 		fmt.Fprintf(&b, "\n")
 	}
@@ -120,8 +126,97 @@ func Markdown(r review.Report) []byte {
 	fmt.Fprintf(&b, "- findings: %d\n", r.Metrics.FindingCount)
 	fmt.Fprintf(&b, "- permission blocks: %d\n", r.Metrics.PermissionBlockedCount)
 	fmt.Fprintf(&b, "- redactions: %d\n", r.Metrics.RedactionCount)
+	fmt.Fprintf(&b, "- total duration ms: %d\n", r.Metrics.TotalDurationMillis)
+	fmt.Fprintf(&b, "- sandbox duration ms: %d\n", r.Metrics.SandboxDurationMillis)
+	fmt.Fprintf(&b, "- tool calls: %d\n", r.Metrics.ToolCallCount)
+	fmt.Fprintf(&b, "- severity distribution: %s\n", r.Metrics.SeverityDistributionJSON)
+	fmt.Fprintf(&b, "- error distribution: %s\n", r.Metrics.ErrorDistributionJSON)
 	fmt.Fprintf(&b, "\nConclusion: %s\n", r.Conclusion)
 	return []byte(redact.Text(b.String()).Text)
+}
+
+func writeFindingsSummary(b *strings.Builder, r review.Report) {
+	fmt.Fprintf(b, "## Findings Summary\n\n")
+	fmt.Fprintf(b, "| Severity | Count |\n")
+	fmt.Fprintf(b, "| --- | ---: |\n")
+	for _, severity := range []string{review.SeverityCritical, review.SeverityHigh, review.SeverityMedium, review.SeverityLow} {
+		fmt.Fprintf(b, "| %s | %d |\n", severity, r.Metrics.SeverityDistribution[severity])
+	}
+	fmt.Fprintf(b, "\n")
+
+	categoryCounts := map[string]int{}
+	for _, finding := range r.Findings {
+		categoryCounts[finding.Category]++
+	}
+	if len(categoryCounts) == 0 {
+		fmt.Fprintf(b, "No finding categories recorded.\n\n")
+		return
+	}
+	fmt.Fprintf(b, "| Category | Count |\n")
+	fmt.Fprintf(b, "| --- | ---: |\n")
+	for _, category := range sortedIntKeys(categoryCounts) {
+		fmt.Fprintf(b, "| %s | %d |\n", category, categoryCounts[category])
+	}
+	fmt.Fprintf(b, "\n")
+}
+
+func writeFixRecommendations(b *strings.Builder, findings []review.Finding) {
+	fmt.Fprintf(b, "## Fix Recommendations\n\n")
+	if len(findings) == 0 {
+		fmt.Fprintf(b, "No fixes required.\n\n")
+		return
+	}
+	seen := map[string]bool{}
+	for _, finding := range findings {
+		key := finding.RuleID + ":" + finding.Recommendation
+		if finding.Recommendation == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		fmt.Fprintf(b, "- `%s`: %s\n", finding.RuleID, finding.Recommendation)
+	}
+	if len(seen) == 0 {
+		fmt.Fprintf(b, "No executable recommendations recorded.\n")
+	}
+	fmt.Fprintf(b, "\n")
+}
+
+func writeHumanReview(b *strings.Builder, findings []review.Finding) {
+	fmt.Fprintf(b, "## Human Review\n\n")
+	var items []review.Finding
+	for _, finding := range findings {
+		if finding.Status == review.FindingStatusNeedsHumanReview || finding.Status == review.FindingStatusWarning {
+			items = append(items, finding)
+		}
+	}
+	if len(items) == 0 {
+		fmt.Fprintf(b, "No warnings or needs-human-review findings.\n\n")
+		return
+	}
+	for _, finding := range items {
+		fmt.Fprintf(b, "- `%s` %s:%d status=%s confidence=%.2f title=%s\n",
+			finding.RuleID, finding.File, finding.Line, finding.Status, finding.Confidence, finding.Title)
+	}
+	fmt.Fprintf(b, "\n")
+}
+
+func blockedDecisionCount(decisions []review.PermissionDecisionRecord) int {
+	count := 0
+	for _, decision := range decisions {
+		if decision.Blocked || decision.FrameworkAction == "ask" || decision.SafetyDecision == "needs_human_review" {
+			count++
+		}
+	}
+	return count
+}
+
+func sortedIntKeys(m map[string]int) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // Write writes JSON and Markdown reports and returns artifact records.

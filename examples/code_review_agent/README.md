@@ -17,6 +17,13 @@ OPENAI_API_KEY="..." MODEL="gpt-4.1-mini" \
   go run . -fixture-dir testdata/fixtures -out-dir ./out -model "$MODEL"
 ```
 
+Supported input modes:
+
+- `--fixture-dir testdata/fixtures` for deterministic public samples.
+- `--diff-file path/to/change.diff` for a unified diff.
+- `--repo-path path/to/repo` for `git diff --no-ext-diff --binary`.
+- `--file-list path/to/files.txt` for a newline-delimited changed-file list.
+
 The CLI reads diff fixtures, asks an OpenAI-compatible model for the execution
 plan, records a review task, writes `review_report.json` and
 `review_report.md`, and prints an English summary. Unit tests use mock model
@@ -43,3 +50,4 @@ and sandbox seams with `--runtime fake`; non-fake CLI runs require
 - `review_agent.db`: dependency-free durable task, input, sandbox run,
   permission decision, finding, artifact, and report records. The generated
   `.db` file is not checked in.
+- `internal/store/schema.sql`: SQLite-compatible schema for strict SQL storage.

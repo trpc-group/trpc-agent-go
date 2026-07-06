@@ -32,6 +32,12 @@ func TestRenderReportsRedactSecrets(t *testing.T) {
 			Evidence:       "password=supersecretvalue",
 			Recommendation: "rotate",
 		}},
+		Metrics: review.ReviewMetrics{
+			SeverityDistribution:     map[string]int{review.SeverityCritical: 1},
+			ErrorDistribution:        map[string]int{},
+			SeverityDistributionJSON: `{"critical":1}`,
+			ErrorDistributionJSON:    "{}",
+		},
 	}
 	jsonBytes, err := JSON(r)
 	if err != nil {
@@ -41,6 +47,52 @@ func TestRenderReportsRedactSecrets(t *testing.T) {
 	for _, data := range [][]byte{jsonBytes, mdBytes} {
 		if strings.Contains(string(data), "supersecretvalue") {
 			t.Fatalf("report leaked secret: %s", data)
+		}
+	}
+}
+
+func TestMarkdownIncludesAcceptanceSections(t *testing.T) {
+	r := review.Report{
+		Task:    review.ReviewTask{ID: "task-1", Status: review.TaskStatusFailed},
+		Summary: "summary",
+		Findings: []review.Finding{{
+			Severity:       review.SeverityHigh,
+			Category:       "concurrency",
+			File:           "pkg/worker.go",
+			Line:           10,
+			Title:          "Goroutine lacks cancellation",
+			Recommendation: "Thread context into the goroutine.",
+			Confidence:     0.78,
+			RuleID:         "concurrency.goroutine_context_leak",
+			Status:         review.FindingStatusNeedsHumanReview,
+		}},
+		PermissionDecisions: []review.PermissionDecisionRecord{{
+			ToolName:        "workspace_exec",
+			FrameworkAction: "ask",
+			SafetyDecision:  "needs_human_review",
+			Blocked:         true,
+			Reason:          "network command",
+		}},
+		Metrics: review.ReviewMetrics{
+			FindingCount:             1,
+			PermissionBlockedCount:   1,
+			SeverityDistribution:     map[string]int{review.SeverityHigh: 1},
+			ErrorDistribution:        map[string]int{"permission_blocked": 1},
+			SeverityDistributionJSON: `{"high":1}`,
+			ErrorDistributionJSON:    `{"permission_blocked":1}`,
+		},
+	}
+	md := string(Markdown(r))
+	for _, want := range []string{
+		"## Findings Summary",
+		"## Fix Recommendations",
+		"## Human Review",
+		"Blocked or escalated decisions: 1",
+		"severity distribution",
+		"error distribution",
+	} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("Markdown() missing %q:\n%s", want, md)
 		}
 	}
 }
