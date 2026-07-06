@@ -10,7 +10,6 @@
 package model
 
 import (
-	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -18,22 +17,22 @@ import (
 
 func TestSanitizeMaxTokensPtr(t *testing.T) {
 	t.Parallel()
-	require.Nil(t, SanitizeMaxTokensPtr(nil))
+	require.Nil(t, sanitizeMaxTokensPtr(nil))
 
 	z := 0
-	require.Nil(t, SanitizeMaxTokensPtr(&z))
+	require.Nil(t, sanitizeMaxTokensPtr(&z))
 
 	neg := -1
-	require.Nil(t, SanitizeMaxTokensPtr(&neg))
+	require.Nil(t, sanitizeMaxTokensPtr(&neg))
 
 	one := 1
-	out := SanitizeMaxTokensPtr(&one)
+	out := sanitizeMaxTokensPtr(&one)
 	require.NotNil(t, out)
 	require.Equal(t, 1, *out)
 	require.Same(t, &one, out)
 
 	many := 2048
-	out2 := SanitizeMaxTokensPtr(&many)
+	out2 := sanitizeMaxTokensPtr(&many)
 	require.NotNil(t, out2)
 	require.Equal(t, 2048, *out2)
 	require.Same(t, &many, out2)
@@ -58,11 +57,5 @@ func TestClampMaxTokensForModel(t *testing.T) {
 	out3 := ClampMaxTokensForModel("unknown-model-xyz", &unknown)
 	require.NotNil(t, out3)
 	require.Equal(t, 50000, *out3)
-}
-
-func TestMaxTokensToInt32(t *testing.T) {
-	t.Parallel()
-	require.Equal(t, int32(4096), MaxTokensToInt32(4096))
-	require.Equal(t, int32(math.MaxInt32), MaxTokensToInt32(math.MaxInt32))
-	require.Equal(t, int32(math.MaxInt32), MaxTokensToInt32(math.MaxInt32+1))
+	require.Same(t, &unknown, out3)
 }
