@@ -37,6 +37,7 @@ func TestWorkspaceRuntimeBuildsCleanShellSpec(t *testing.T) {
 		Env: map[string]string{
 			"PATH":           "/custom/bin",
 			"GOPROXY":        "https://proxy.example",
+			"GOTOOLCHAIN":    "local",
 			"OPENAI_API_KEY": "should-not-pass",
 		},
 	}
@@ -62,6 +63,12 @@ func TestWorkspaceRuntimeBuildsCleanShellSpec(t *testing.T) {
 	}
 	if got := runner.spec.Env["GOPROXY"]; got != "https://proxy.example" {
 		t.Fatalf("GOPROXY = %q, want allowlisted value", got)
+	}
+	if got := runner.spec.Env["GOTOOLCHAIN"]; got != "local" {
+		t.Fatalf("GOTOOLCHAIN = %q, want local", got)
+	}
+	if got := runner.spec.Env["PATH"]; got != defaultPath() {
+		t.Fatalf("PATH = %q, want default path", got)
 	}
 	if _, ok := runner.spec.Env["OPENAI_API_KEY"]; ok {
 		t.Fatalf("OPENAI_API_KEY unexpectedly passed through env: %#v", runner.spec.Env)

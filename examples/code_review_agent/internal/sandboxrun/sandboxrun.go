@@ -183,7 +183,7 @@ func allowEnv(env map[string]string) map[string]string {
 		return map[string]string{"PATH": defaultPath()}
 	}
 	out := map[string]string{"PATH": defaultPath()}
-	for _, key := range []string{"HOME", "GOCACHE", "GOMODCACHE", "GOPATH", "GOPROXY", "GOSUMDB", "GOFLAGS", "CGO_ENABLED"} {
+	for _, key := range []string{"HOME", "GOCACHE", "GOMODCACHE", "GOPATH", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN", "GOFLAGS", "CGO_ENABLED"} {
 		if value := env[key]; value != "" {
 			out[key] = value
 		}
@@ -192,7 +192,7 @@ func allowEnv(env map[string]string) map[string]string {
 }
 
 func defaultPath() string {
-	return "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
+	return "/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 }
 
 type truncatedText struct {

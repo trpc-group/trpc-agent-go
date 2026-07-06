@@ -654,6 +654,7 @@ func workspaceRuntimeEnv(runtimeName string) map[string]string {
 		"GOPATH":      os.Getenv("GOPATH"),
 		"GOPROXY":     os.Getenv("GOPROXY"),
 		"GOSUMDB":     os.Getenv("GOSUMDB"),
+		"GOTOOLCHAIN": os.Getenv("GOTOOLCHAIN"),
 		"GOFLAGS":     os.Getenv("GOFLAGS"),
 		"CGO_ENABLED": os.Getenv("CGO_ENABLED"),
 	}
@@ -662,6 +663,7 @@ func workspaceRuntimeEnv(runtimeName string) map[string]string {
 		setDefaultEnv(env, "GOPATH", "/go")
 		setDefaultEnv(env, "GOMODCACHE", "/go/pkg/mod")
 		setDefaultEnv(env, "GOCACHE", "/tmp/go-build")
+		setDefaultEnv(env, "GOTOOLCHAIN", "local")
 	}
 	return env
 }

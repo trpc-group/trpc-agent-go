@@ -151,6 +151,7 @@ func TestWorkspaceRuntimeEnvProvidesContainerGoCacheDefaults(t *testing.T) {
 	}
 	t.Setenv("GOPROXY", "https://proxy.example,direct")
 	t.Setenv("GOSUMDB", "sum.example")
+	t.Setenv("GOTOOLCHAIN", "")
 	t.Setenv("GOFLAGS", "-mod=mod")
 	t.Setenv("CGO_ENABLED", "0")
 
@@ -163,6 +164,7 @@ func TestWorkspaceRuntimeEnvProvidesContainerGoCacheDefaults(t *testing.T) {
 		"GOPATH":      "/go",
 		"GOPROXY":     "https://proxy.example,direct",
 		"GOSUMDB":     "sum.example",
+		"GOTOOLCHAIN": "local",
 		"GOFLAGS":     "-mod=mod",
 		"CGO_ENABLED": "0",
 	}
@@ -178,14 +180,16 @@ func TestWorkspaceRuntimeEnvKeepsExplicitGoCacheValues(t *testing.T) {
 	t.Setenv("GOCACHE", "/custom-cache")
 	t.Setenv("GOMODCACHE", "/custom-mod-cache")
 	t.Setenv("GOPATH", "/custom-go")
+	t.Setenv("GOTOOLCHAIN", "auto")
 
 	env := workspaceRuntimeEnv("container")
 
 	want := map[string]string{
-		"HOME":       "/custom-home",
-		"GOCACHE":    "/custom-cache",
-		"GOMODCACHE": "/custom-mod-cache",
-		"GOPATH":     "/custom-go",
+		"HOME":        "/custom-home",
+		"GOCACHE":     "/custom-cache",
+		"GOMODCACHE":  "/custom-mod-cache",
+		"GOPATH":      "/custom-go",
+		"GOTOOLCHAIN": "auto",
 	}
 	for key, value := range want {
 		if env[key] != value {
