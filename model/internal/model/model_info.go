@@ -611,63 +611,151 @@ func GetAllModelContextWindows() map[string]int {
 	return result
 }
 
-// ModelMaxOutputTokens maps model names to their maximum output (completion) token limits.
+// ModelMaxOutputTokens holds known model name -> maximum output token limit.
 // These are the provider-documented caps on response length, distinct from context window size.
-// Where all variants share the same value, only the base name is listed — the prefix
-// heuristic in ResolveMaxOutputTokens handles matching (e.g. "gpt-5.2" matches "gpt-5.2-mini").
 var ModelMaxOutputTokens = map[string]int{
-	// OpenAI GPT-5.x family: all variants share 128K max output.
-	"gpt-5":   128000,
-	"gpt-5.1": 128000,
-	"gpt-5.2": 128000,
+	// OpenAI.
+	// Provider page: https://developers.openai.com/api/docs/models
+	// Per-model pages: https://developers.openai.com/api/docs/models/<slug>
 
-	// OpenAI GPT-4.1: all variants share 32K max output.
-	"gpt-4.1": 32768,
+	// OpenAI O-series
+	"o1-preview": 32768,  // https://developers.openai.com/api/docs/models/o1-preview
+	"o1-mini":    65536,  // https://developers.openai.com/api/docs/models/o1-mini
+	"o1":         100000, // https://developers.openai.com/api/docs/models/o1
+	"o3-mini":    100000, // https://developers.openai.com/api/docs/models/o3-mini
+	"o3":         100000, // https://developers.openai.com/api/docs/models/o3
+	"o4-mini":    100000, // https://developers.openai.com/api/docs/models/o4-mini
+
+	// OpenAI GPT-5.5
+	"gpt-5.5":     128000, // https://developers.openai.com/api/docs/models/gpt-5.5
+	"gpt-5.5-pro": 128000, // https://developers.openai.com/api/docs/models/gpt-5.5-pro
+
+	// OpenAI GPT-5.4
+	"gpt-5.4":      128000, // https://developers.openai.com/api/docs/models/gpt-5.4
+	"gpt-5.4-pro":  128000, // https://developers.openai.com/api/docs/models/gpt-5.4-pro
+	"gpt-5.4-mini": 128000, // https://developers.openai.com/api/docs/models/gpt-5.4-mini
+	"gpt-5.4-nano": 128000, // https://developers.openai.com/api/docs/models/gpt-5.4-nano
+
+	// OpenAI GPT-5.2
+	"gpt-5.2":             128000, // https://developers.openai.com/api/docs/models/gpt-5.2
+	"gpt-5.2-codex":       128000, // https://developers.openai.com/api/docs/models/gpt-5.2-codex
+	"gpt-5.2-chat-latest": 16384,  // https://developers.openai.com/api/docs/models/gpt-5.2-chat-latest
+
+	// OpenAI GPT-5.1
+	"gpt-5.1":             128000, // https://developers.openai.com/api/docs/models/gpt-5.1
+	"gpt-5.1-codex-max":   128000, // https://developers.openai.com/api/docs/models/gpt-5.1-codex-max
+	"gpt-5.1-codex":       128000, // https://developers.openai.com/api/docs/models/gpt-5.1-codex
+	"gpt-5.1-codex-mini":  128000, // https://developers.openai.com/api/docs/models/gpt-5.1-codex-mini
+	"gpt-5.1-chat-latest": 16384,  // https://developers.openai.com/api/docs/models/gpt-5.1-chat-latest
+
+	// OpenAI GPT-5
+	"gpt-5":             128000, // https://developers.openai.com/api/docs/models/gpt-5
+	"gpt-5-pro":         128000, // https://developers.openai.com/api/docs/models/gpt-5-pro
+	"gpt-5-codex":       128000, // https://developers.openai.com/api/docs/models/gpt-5-codex
+	"gpt-5-mini":        128000, // https://developers.openai.com/api/docs/models/gpt-5-mini
+	"gpt-5-nano":        128000, // https://developers.openai.com/api/docs/models/gpt-5-nano
+	"gpt-5-chat-latest": 16384,  // https://developers.openai.com/api/docs/models/gpt-5-chat-latest
 
 	// OpenAI GPT-4.5
-	"gpt-4.5-preview": 16384,
+	"gpt-4.5-preview": 16384, // https://developers.openai.com/api/docs/models/gpt-4.5-preview
 
-	// OpenAI GPT-4o family: 128K/200K context but 16K max completion tokens.
-	"gpt-4o":      16384,
-	"gpt-4o-mini": 16384,
+	// OpenAI GPT-4.1
+	"gpt-4.1":      32768, // https://developers.openai.com/api/docs/models/gpt-4.1
+	"gpt-4.1-mini": 32768, // https://developers.openai.com/api/docs/models/gpt-4.1-mini
+	"gpt-4.1-nano": 32768, // https://developers.openai.com/api/docs/models/gpt-4.1-nano
 
-	// OpenAI GPT-4 Turbo: 128K context but 4K max output.
-	"gpt-4-turbo": 4096,
+	// OpenAI GPT-4o
+	"gpt-4o":      16384, // https://developers.openai.com/api/docs/models/gpt-4o
+	"gpt-4o-mini": 16384, // https://developers.openai.com/api/docs/models/gpt-4o-mini
 
-	// OpenAI O-series: 200K context but 100K max output.
-	"o1":      100000,
-	"o1-mini": 65536,
-	"o3":      100000,
-	"o3-mini": 100000,
-	"o4-mini": 100000,
+	// OpenAI GPT-4
+	"gpt-4-turbo": 4096, // https://developers.openai.com/api/docs/models/gpt-4-turbo
 
-	// Claude models: 200K context but 64K max output.
+	// Anthropic Claude.
+	// Provider page: https://docs.anthropic.com/en/docs/about-claude/models/overview
+	// Migration guide: https://docs.anthropic.com/en/docs/about-claude/models/migration-guide
+	// The values below are synchronous Messages API limits. Some Batch API
+	// requests can opt into larger beta output caps.
+
+	// Anthropic Claude 5
+	"claude-fable-5":  128000,
+	"claude-mythos-5": 128000,
+	"claude-sonnet-5": 128000,
+
+	// Anthropic Claude 4.8
+	"claude-4.8-opus": 128000,
+	"claude-opus-4-8": 128000,
+
+	// Anthropic Claude 4.7
+	"claude-4.7-opus": 128000,
+	"claude-opus-4-7": 128000,
+
+	// Anthropic Claude 4.6
+	"claude-4.6-opus":   128000,
+	"claude-opus-4-6":   128000,
+	"claude-4.6-sonnet": 128000,
+	"claude-sonnet-4-6": 128000,
+
+	// Anthropic Claude 4.5
 	"claude-4.5-opus":   64000,
+	"claude-opus-4-5":   64000,
 	"claude-4.5-sonnet": 64000,
+	"claude-sonnet-4-5": 64000,
 	"claude-4.5-haiku":  64000,
+	"claude-haiku-4-5":  64000,
+
+	// Anthropic Claude 4
 	"claude-4-opus":     64000,
 	"claude-opus-4":     64000,
 	"claude-sonnet-4":   64000,
 	"claude-4-sonnet":   64000,
 	"claude-3-7-sonnet": 64000,
+
+	// Anthropic Claude 3.5
 	"claude-3-5-sonnet": 8192,
 	"claude-3-5-haiku":  8192,
-	"claude-3-opus":     4096,
-	"claude-3-sonnet":   4096,
-	"claude-3-haiku":    4096,
 
-	// Google Gemini: variable output limits.
-	"gemini-3.0-pro":   65536,
-	"gemini-3.0-flash": 65536,
-	"gemini-2.5-pro":   65536,
-	"gemini-2.5-flash": 65536,
+	// Anthropic Claude 3
+	"claude-3-opus":   4096,
+	"claude-3-sonnet": 4096,
+	"claude-3-haiku":  4096,
+
+	// Google Gemini.
+	// Provider page: https://ai.google.dev/gemini-api/docs/models
+	// Per-model pages: https://ai.google.dev/gemini-api/docs/models/<slug>
+
+	// Google Gemini 3.x
+	"gemini-3.5-flash":       65536,
+	"gemini-3.1-pro-preview": 65536,
+	"gemini-3-pro-preview":   65536,
+	"gemini-3-flash-preview": 65536,
+	"gemini-3.0-pro":         65536,
+	"gemini-3.0-flash":       65536,
+
+	// Google Gemini 2.5
+	"gemini-2.5-pro":        65536,
+	"gemini-2.5-flash":      65536,
+	"gemini-2.5-flash-lite": 65536,
+
+	// Google Gemini 2.0
 	"gemini-2.0-flash": 8192,
-	"gemini-1.5-pro":   8192,
-	"gemini-1.5-flash": 8192,
 
-	// DeepSeek
-	"deepseek-chat":     8192,
-	"deepseek-reasoner": 65536,
+	// Google Gemini 1.5 (retired from Vertex docs; using Gemini API model cards)
+	"gemini-1.5-pro":      8192,
+	"gemini-1.5-flash":    8192,
+	"gemini-1.5-flash-8b": 8192,
+
+	// DeepSeek.
+	// Provider page: https://api-docs.deepseek.com/quick_start/pricing
+	// Thinking-mode details: https://api-docs.deepseek.com/guides/thinking_mode
+	// `deepseek-chat` and `deepseek-reasoner` are deprecated aliases that route
+	// to `deepseek-v4-flash` (non-thinking and thinking mode respectively),
+	// per the provider pricing page.
+
+	"deepseek-chat":     393216,
+	"deepseek-reasoner": 393216,
+	"deepseek-v4-pro":   393216,
+	"deepseek-v4-flash": 393216,
 }
 
 // ResolveMaxOutputTokens returns the max output tokens for a given model name.

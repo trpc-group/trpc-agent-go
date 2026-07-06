@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -683,8 +684,12 @@ func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentCo
 		chatRequest.ResponseJsonSchema = request.StructuredOutput.JSONSchema
 	}
 
-	if mt := model.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
-		chatRequest.MaxOutputTokens = model.MaxTokensToInt32(*mt)
+	if mt := imodel.ClampMaxTokensForModel(m.name, request.MaxTokens); mt != nil {
+		if *mt > math.MaxInt32 {
+			chatRequest.MaxOutputTokens = math.MaxInt32
+		} else {
+			chatRequest.MaxOutputTokens = int32(*mt)
+		}
 	}
 	if request.Temperature != nil {
 		chatRequest.Temperature = genai.Ptr(float32(*request.Temperature))
