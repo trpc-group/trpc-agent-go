@@ -1880,6 +1880,54 @@ func TestServer_handleChatCompletions_InvalidToolUnsupportedType(t *testing.T) {
 	assert.Contains(t, errResp.Error.Message, "code_interpreter")
 }
 
+func TestServer_handleChatCompletions_InvalidToolMessageMissingID(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{Role: "assistant", Content: "calling tools"},
+			{Role: "tool", Content: "result without id"},
+		},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var errResp openAIError
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&errResp))
+	assert.Equal(t, errorTypeInvalidRequest, errResp.Error.Type)
+	assert.Contains(t, errResp.Error.Message, errToolMessageMissingID)
+}
+
+func TestServer_handleChatCompletions_InvalidToolMessageMissingID_Streaming(t *testing.T) {
+	s, err := New(WithAgent(&mockAgent{name: "test-agent"}))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Stream: true,
+		Messages: []openAIMessage{
+			{Role: "assistant", Content: "calling tools"},
+			{Role: "tool", Content: "result without id"},
+		},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var errResp openAIError
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&errResp))
+	assert.Contains(t, errResp.Error.Message, errToolMessageMissingID)
+}
+
 func TestServer_handleNonStreaming_ParallelToolResultResume(t *testing.T) {
 	ch := make(chan *event.Event, 1)
 	finishReason := finishReasonStop

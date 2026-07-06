@@ -11,6 +11,7 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,6 +35,14 @@ func TestRunInputFromMessages_UserMessage(t *testing.T) {
 	require.Len(t, got.history, 1)
 	assert.Equal(t, model.RoleSystem, got.history[0].Role)
 	assert.Empty(t, got.toolMessages)
+}
+
+func TestRunInputFromMessages_RejectsEmptyMessages(t *testing.T) {
+	got, err := runInputFromMessages(nil)
+
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.ErrorContains(t, err, "messages cannot be empty")
 }
 
 func TestRunInputFromMessages_AllowsAssistantLast(t *testing.T) {
@@ -113,6 +122,26 @@ func TestRunInputFromMessages_RejectsToolMessageMissingID(t *testing.T) {
 	assert.ErrorContains(t, err, errToolMessageMissingID)
 }
 
+func TestRunInputFromMessages_RejectsMultimodalToolResult(t *testing.T) {
+	text := "result"
+	messages := []model.Message{
+		{Role: model.RoleAssistant, Content: "calling tools"},
+		{
+			Role:     model.RoleTool,
+			ToolID:   "call-1",
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentTypeText, Text: &text},
+			},
+		},
+	}
+
+	got, err := runInputFromMessages(messages)
+
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.ErrorContains(t, err, errToolMessageNotString)
+}
+
 func TestWithToolResultMessageRewriter_MergesParallelResults(t *testing.T) {
 	toolMessages := []model.Message{
 		{Role: model.RoleTool, ToolID: "call-1", ToolName: "search", Content: "result 1"},
@@ -144,6 +173,106 @@ func TestWithToolResultMessageRewriter_SkipsSingleToolResult(t *testing.T) {
 	assert.Nil(t, opts.UserMessageRewriter)
 }
 
+func TestWithToolResultMessageRewriter_WrapsExistingRewriter(t *testing.T) {
+	toolMessages := []model.Message{
+		{Role: model.RoleTool, ToolID: "call-1", ToolName: "search", Content: "result 1"},
+		{Role: model.RoleTool, ToolID: "call-2", ToolName: "lookup", Content: "result 2"},
+	}
+	var customRewriterCalled bool
+	opts := agent.NewRunOptions(
+		agent.WithUserMessageRewriter(func(
+			context.Context,
+			*agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			customRewriterCalled = true
+			return []model.Message{
+				model.NewUserMessage("custom"),
+				model.NewToolMessage("call-2", "lookup", "rewritten duplicate"),
+			}, nil
+		}),
+		withToolResultMessageRewriter(toolMessages),
+	)
+
+	require.NotNil(t, opts.UserMessageRewriter)
+	currentTurn, err := opts.UserMessageRewriter(
+		context.Background(),
+		&agent.UserMessageRewriteArgs{
+			OriginalMessage: toolMessages[1],
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, currentTurn, 3)
+	assert.Equal(t, model.RoleUser, currentTurn[0].Role)
+	assert.Equal(t, "custom", currentTurn[0].Content)
+	assert.Equal(t, "call-1", currentTurn[1].ToolID)
+	assert.Equal(t, "result 1", currentTurn[1].Content)
+	assert.Equal(t, "call-2", currentTurn[2].ToolID)
+	assert.Equal(t, "rewritten duplicate", currentTurn[2].Content)
+	assert.True(t, customRewriterCalled)
+}
+
+func TestWithToolResultMessageRewriter_PropagatesRewriterError(t *testing.T) {
+	toolMessages := []model.Message{
+		{Role: model.RoleTool, ToolID: "call-1", Content: "result 1"},
+		{Role: model.RoleTool, ToolID: "call-2", Content: "result 2"},
+	}
+	opts := agent.NewRunOptions(
+		agent.WithUserMessageRewriter(func(
+			context.Context,
+			*agent.UserMessageRewriteArgs,
+		) ([]model.Message, error) {
+			return nil, errors.New("rewrite failed")
+		}),
+		withToolResultMessageRewriter(toolMessages),
+	)
+
+	_, err := opts.UserMessageRewriter(
+		context.Background(),
+		&agent.UserMessageRewriteArgs{OriginalMessage: toolMessages[1]},
+	)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "rewrite failed")
+}
+
+func TestMergeToolResultRewriteMessages_KeepsNonToolMessagesWithToolID(t *testing.T) {
+	rewritten := []model.Message{
+		{Role: model.RoleUser, Content: "context", ToolID: "call-1"},
+		model.NewToolMessage("call-1", "search", "rewritten duplicate"),
+	}
+	toolResults := []model.Message{
+		model.NewToolMessage("call-1", "search", "authoritative result"),
+	}
+
+	got := mergeToolResultRewriteMessages(rewritten, toolResults)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, model.RoleUser, got[0].Role)
+	assert.Equal(t, "context", got[0].Content)
+	assert.Equal(t, "call-1", got[0].ToolID)
+	assert.Equal(t, model.RoleTool, got[1].Role)
+	assert.Equal(t, "rewritten duplicate", got[1].Content)
+	assert.Equal(t, "call-1", got[1].ToolID)
+}
+
+func TestMergeToolResultRewriteMessages_AppendsUnmatchedToolResults(t *testing.T) {
+	rewritten := []model.Message{
+		model.NewUserMessage("context"),
+	}
+	toolResults := []model.Message{
+		model.NewToolMessage("call-1", "search", "result 1"),
+		model.NewToolMessage("call-2", "lookup", "result 2"),
+	}
+
+	got := mergeToolResultRewriteMessages(rewritten, toolResults)
+
+	require.Len(t, got, 3)
+	assert.Equal(t, "context", got[0].Content)
+	assert.Equal(t, "call-1", got[1].ToolID)
+	assert.Equal(t, "result 1", got[1].Content)
+	assert.Equal(t, "call-2", got[2].ToolID)
+	assert.Equal(t, "result 2", got[2].Content)
+}
+
 func TestBuildRunOptions_IncludesToolResultRewriter(t *testing.T) {
 	input := &runInputMessages{
 		inputMessage: model.Message{Role: model.RoleTool, ToolID: "call-2", Content: "result 2"},
@@ -163,4 +292,48 @@ func TestBuildRunOptions_IncludesToolResultRewriter(t *testing.T) {
 	require.NotNil(t, opts.UserMessageRewriter)
 	require.Len(t, opts.Messages, 1)
 	assert.Equal(t, model.RoleAssistant, opts.Messages[0].Role)
+}
+
+func TestBuildRunOptions_IncludesExternalTools(t *testing.T) {
+	input := &runInputMessages{
+		inputMessage: model.Message{Role: model.RoleUser, Content: "search"},
+	}
+	req := &openAIRequest{
+		Tools: []openAITool{
+			{
+				Type: "function",
+				Function: openAIFunction{
+					Name: "client_search",
+				},
+			},
+		},
+	}
+
+	runOpts, err := buildRunOptions(req, input)
+
+	require.NoError(t, err)
+	opts := agent.NewRunOptions(runOpts...)
+	require.Len(t, opts.ExternalTools, 1)
+	assert.Equal(t, "client_search", opts.ExternalTools[0].Declaration().Name)
+}
+
+func TestBuildRunOptions_SkipsExternalToolsWhenToolChoiceNone(t *testing.T) {
+	input := &runInputMessages{
+		inputMessage: model.Message{Role: model.RoleUser, Content: "search"},
+	}
+	req := &openAIRequest{
+		ToolChoice: openAIToolChoiceNone,
+		Tools: []openAITool{
+			{
+				Type:     "function",
+				Function: openAIFunction{Name: "client_search"},
+			},
+		},
+	}
+
+	runOpts, err := buildRunOptions(req, input)
+
+	require.NoError(t, err)
+	opts := agent.NewRunOptions(runOpts...)
+	assert.Empty(t, opts.ExternalTools)
 }
