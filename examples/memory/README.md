@@ -72,6 +72,22 @@ go run main.go
 
 [Read full documentation →](./auto/README.md)
 
+### 📁 gorm/
+
+**GORM Memory — Shared Database Connection**
+
+Demonstrates episodic memory via [`memory/gorm`](../../memory/gorm) using an injected `*gorm.DB`. Matches the Guild/Genie pattern: shared GORM connection, optional `WithSkipDBInit(true)` when the host owns DDL.
+
+**Getting Started:**
+
+```bash
+cd examples/memory/gorm
+export OPENAI_API_KEY="your-api-key"
+go run .
+```
+
+[Read full documentation →](./gorm/README.md)
+
 ### 📁 mem0/
 
 **Mem0 Integration - External Long-Term Memory Platform**
@@ -158,6 +174,8 @@ All examples support multiple storage backends:
 | `mysqlvec` | MySQL + vector search (embeddings)          | `-memory=mysqlvec` |
 | `postgres` | PostgreSQL-based storage                    | `-memory=postgres` |
 | `pgvector` | pgvector PostgreSQL storage with embeddings | `-memory=pgvector` |
+
+See also [`gorm/`](./gorm/) for a **shared `*gorm.DB`** example (not a `simple/` backend flag).
 
 ### Session Management
 

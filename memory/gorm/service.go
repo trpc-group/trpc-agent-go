@@ -154,8 +154,10 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 
 	err = s.memoryTable(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "memory_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"memory_data", "updated_at",
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"memory_data": row.MemoryData,
+			"updated_at":  row.UpdatedAt,
+			"deleted_at":  nil,
 		}),
 	}).Create(&row).Error
 	if err != nil {
