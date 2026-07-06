@@ -10,6 +10,7 @@
 package httpfetch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-pdf/fpdf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -198,7 +200,33 @@ func TestWebFetch_UnsupportedType(t *testing.T) {
 	assert.Contains(t, resp.Results[0].Error, "unsupported content type: application/octet-stream")
 }
 
-func TestWebFetch_UnsupportedPDFSuggestsDocumentReader(t *testing.T) {
+func TestWebFetch_PDF(t *testing.T) {
+	pdfBytes := createPDFBytes(t, []string{
+		"Quarterly reference works flyer",
+		"Life sciences collection",
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write(pdfBytes)
+	}))
+	defer ts.Close()
+
+	tool := NewTool()
+	args := fmt.Sprintf(`{"urls": ["%s"]}`, ts.URL)
+
+	res, err := tool.Call(context.Background(), []byte(args))
+	require.NoError(t, err)
+
+	resp, ok := res.(fetchResponse)
+	require.True(t, ok, "Response should be of type fetchResponse")
+	assert.Len(t, resp.Results, 1)
+	assert.Equal(t, "application/pdf", resp.Results[0].ContentType)
+	assert.Empty(t, resp.Results[0].Error)
+	assert.Contains(t, resp.Results[0].Content, "Quarterly reference")
+	assert.Contains(t, resp.Results[0].Content, "Life sciences")
+}
+
+func TestWebFetch_InvalidPDFReportsParseError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/pdf")
 		fmt.Fprint(w, `%PDF-1.7`)
@@ -216,11 +244,7 @@ func TestWebFetch_UnsupportedPDFSuggestsDocumentReader(t *testing.T) {
 	assert.Len(t, resp.Results, 1)
 	assert.Equal(t, "application/pdf", resp.Results[0].ContentType)
 	assert.Empty(t, resp.Results[0].Content)
-	assert.Contains(
-		t,
-		resp.Results[0].Error,
-		"Download the PDF and use a document-reading tool",
-	)
+	assert.Contains(t, resp.Results[0].Error, "read pdf")
 }
 
 func TestWebFetch_PerUrlLimit(t *testing.T) {
@@ -782,6 +806,21 @@ func TestIsSupportedTextType(t *testing.T) {
 	assert.False(t, isSupportedTextType("image/png"))
 	assert.False(t, isSupportedTextType("video/mp4"))
 	assert.False(t, isSupportedTextType(""))
+}
+
+func createPDFBytes(t *testing.T, lines []string) []byte {
+	t.Helper()
+
+	pdf := fpdf.New("P", "mm", "A4", "")
+	pdf.AddPage()
+	pdf.SetFont("Arial", "", 12)
+	for _, line := range lines {
+		pdf.Cell(40, 10, line)
+		pdf.Ln(10)
+	}
+	var buf bytes.Buffer
+	require.NoError(t, pdf.Output(&buf))
+	return buf.Bytes()
 }
 
 func TestWebFetch_TotalLimitWithError(t *testing.T) {

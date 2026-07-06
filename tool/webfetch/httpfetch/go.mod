@@ -1,11 +1,13 @@
 module trpc.group/trpc-go/trpc-agent-go/tool/webfetch/httpfetch
 
-go 1.23.0
+go 1.24.1
 
 replace trpc.group/trpc-go/trpc-agent-go => ../../../
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.4.0
+	github.com/go-pdf/fpdf v0.9.0
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/stretchr/testify v1.10.0
 	golang.org/x/net v0.43.0
 	trpc.group/trpc-go/trpc-agent-go v0.8.1-0.20251222024650-ea147adf3d21

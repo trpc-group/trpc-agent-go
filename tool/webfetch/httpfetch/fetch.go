@@ -23,6 +23,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	pdfpkg "github.com/ledongthuc/pdf"
 	"golang.org/x/net/html"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -188,7 +189,7 @@ func NewTool(opts ...Option) tool.CallableTool {
 		function.WithName("web_fetch"),
 		function.WithDescription("Fetches and extracts text content from a list of URLs. "+
 			"Supports up to 20 URLs. Useful for summarizing, comparing, or extracting information from web pages. "+
-			"For PDFs or binary documents, download the file and use a document-reading tool instead."),
+			"Supports HTML, text-like responses, JSON, and PDFs."),
 	)
 }
 
@@ -305,6 +306,8 @@ func (t *webFetchTool) fetchOne(ctx context.Context, urlStr string) resultItem {
 			resp.Body,
 			t.mainContentOnly,
 		)
+	} else if item.ContentType == "application/pdf" {
+		content, processErr = readPDFAsText(resp.Body)
 	} else if isSupportedTextType(item.ContentType) {
 		content, processErr = readBodyAsString(resp.Body)
 	} else {
@@ -373,15 +376,9 @@ func unsupportedContentTypeError(contentType string) string {
 		contentType = "unknown"
 	}
 	msg := fmt.Sprintf("unsupported content type: %s", contentType)
-	switch contentType {
-	case "application/pdf":
-		return msg + "; web_fetch extracts text and HTML pages only. " +
-			"Download the PDF and use a document-reading tool instead."
-	default:
-		return msg + "; web_fetch extracts text and HTML pages only. " +
-			"For binary documents, download the file and use an " +
-			"appropriate document-reading tool instead."
-	}
+	return msg + "; web_fetch extracts HTML, text-like responses, JSON, " +
+		"and PDFs. For other binary documents, download the file and " +
+		"use an appropriate document-reading tool instead."
 }
 
 // truncateString truncates a string to n bytes, ensuring valid UTF-8.
@@ -434,6 +431,35 @@ func readBodyAsString(r io.Reader) (string, error) {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
 	return buf.String(), nil
+}
+
+func readPDFAsText(r io.Reader) (string, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+	reader, err := pdfpkg.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", fmt.Errorf("read pdf: %w", err)
+	}
+
+	var text strings.Builder
+	pageCount := reader.NumPage()
+	for pageIndex := 1; pageIndex <= pageCount; pageIndex++ {
+		pageText, err := reader.Page(pageIndex).GetPlainText(nil)
+		if err != nil {
+			return "", fmt.Errorf("read pdf page %d: %w", pageIndex, err)
+		}
+		pageText = strings.TrimSpace(pageText)
+		if pageText == "" {
+			continue
+		}
+		if text.Len() > 0 {
+			text.WriteString("\n\n")
+		}
+		text.WriteString(pageText)
+	}
+	return strings.ToValidUTF8(text.String(), ""), nil
 }
 
 func convertHTMLToMarkdown(r io.Reader) (string, error) {
