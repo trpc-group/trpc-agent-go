@@ -493,7 +493,7 @@ func documentKindFromPath(path string) string {
 		return docKindPDF
 	case ".docx", ".doc":
 		return docKindDOCX
-	case ".txt", ".md", ".markdown", ".json", ".csv",
+	case ".txt", ".md", ".markdown", ".json", ".jsonld", ".csv",
 		".yaml", ".yml", ".log":
 		return docKindText
 	case ".png", ".jpg", ".jpeg", ".webp", ".gif":

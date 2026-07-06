@@ -207,6 +207,12 @@ func TestReadDocumentTool_TextDocxAndErrors(t *testing.T) {
 		[]byte("alpha\nbeta\ngamma"),
 		0o600,
 	))
+	jsonldPath := filepath.Join(t.TempDir(), "metadata.jsonld")
+	require.NoError(t, os.WriteFile(
+		jsonldPath,
+		[]byte(`{"@context":"https://schema.org","name":"example"}`),
+		0o600,
+	))
 
 	docxPath := createSampleDOCX(t, "hello docx")
 	tool := newReadDocumentTool()
@@ -221,6 +227,16 @@ func TestReadDocumentTool_TextDocxAndErrors(t *testing.T) {
 	require.Equal(t, docKindText, textRes.Kind)
 	require.True(t, textRes.Truncated)
 	require.Equal(t, "alpha", textRes.Text)
+
+	jsonldOut, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
+		"path": jsonldPath,
+	}))
+	require.NoError(t, err)
+
+	jsonldRes := jsonldOut.(readDocumentResult)
+	require.Equal(t, docKindText, jsonldRes.Kind)
+	require.Contains(t, jsonldRes.Text, `"@context"`)
+	require.Contains(t, jsonldRes.Text, `"name":"example"`)
 
 	docxOut, err := tool.Call(context.Background(), mustJSON(t, map[string]any{
 		"path": docxPath,
@@ -300,6 +316,7 @@ func TestReadDocumentHelpers(t *testing.T) {
 
 	require.Equal(t, docKindDOCX, documentKindFromPath(docxPath))
 	require.Equal(t, docKindText, documentKindFromPath(logPath))
+	require.Equal(t, docKindText, documentKindFromPath("metadata.jsonld"))
 	require.Equal(t, docKindImage, documentKindFromPath("chart.png"))
 	require.Equal(t, docKindImage, documentKindFromPath("photo.jpeg"))
 	require.Equal(t, "", documentKindFromPath("bad.bin"))
