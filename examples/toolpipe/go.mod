@@ -1,6 +1,6 @@
 module trpc.group/trpc-go/trpc-agent-go/examples/toolpipe
 
-go 1.23.0
+go 1.24.1
 
 toolchain go1.24.4
 
@@ -29,6 +29,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/itchyny/gojq v0.12.16 // indirect
 	github.com/itchyny/timefmt-go v0.1.6 // indirect
+	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728 // indirect
 	github.com/panjf2000/ants/v2 v2.10.0 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
