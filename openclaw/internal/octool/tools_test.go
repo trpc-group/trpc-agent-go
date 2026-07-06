@@ -1073,6 +1073,35 @@ func TestExecTool_DefaultTimeoutKillsProcessGroup(t *testing.T) {
 	}, 900*time.Millisecond, 20*time.Millisecond)
 }
 
+func TestExecTool_NormalExitCleansBackgroundProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process group signaling is unix-specific")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	marker := filepath.Join(t.TempDir(), "orphan-marker")
+	mgr := NewManager()
+
+	res, err := mgr.Exec(context.Background(), execParams{
+		Command: "(sleep 0.4; echo orphan > " +
+			strconv.Quote(marker) + ") >/dev/null 2>&1 & echo done",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, res.ExitCode)
+	require.Contains(t, res.Output, "done")
+
+	require.Never(t, func() bool {
+		_, err = os.Stat(marker)
+		if err == nil {
+			return true
+		}
+		require.ErrorIs(t, err, os.ErrNotExist)
+		return false
+	}, 800*time.Millisecond, 20*time.Millisecond)
+}
+
 func TestExecTool_ContextCancelKillsYieldSessionProcessGroup(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process group signaling is unix-specific")

@@ -35,8 +35,15 @@ const (
 	defaultIODrain         = 1 * time.Second
 	defaultShellEnvTimeout = 5 * time.Second
 
-	shellProgram        = "bash"
-	shellLoginFlag      = "-lc"
+	shellProgram     = "bash"
+	shellLoginFlag   = "-lc"
+	shellExitCleanup = `__trpc_claw_cleanup_jobs(){ ` +
+		`local pids; pids="$(jobs -pr)"; ` +
+		`if [ -n "$pids" ]; then ` +
+		`kill $pids 2>/dev/null || true; ` +
+		`sleep 0.05; ` +
+		`kill -KILL $pids 2>/dev/null || true; ` +
+		`fi; }; trap __trpc_claw_cleanup_jobs EXIT`
 	shellEnvDumpCommand = "env -0"
 )
 
@@ -292,6 +299,9 @@ func runForeground(
 	prepareCommandProcess(cmd)
 	cmd.Dir = params.Workdir
 	cmd.Env = mergedEnv(baseEnv, params.Env)
+	defer func() {
+		_ = cleanupCommandProcessGroup(cmd)
+	}()
 
 	out, err := cmd.CombinedOutput()
 	code := exitCode(err)
@@ -303,13 +313,17 @@ func shellCmd(ctx context.Context, command string) *exec.Cmd {
 		ctx,
 		shellProgram,
 		shellLoginFlag,
-		command,
+		shellCommandWithExitCleanup(command),
 	)
 	cmd.Cancel = func() error {
 		return forceKillCommandProcess(cmd)
 	}
 	cmd.WaitDelay = defaultIODrain
 	return cmd
+}
+
+func shellCommandWithExitCleanup(command string) string {
+	return shellExitCleanup + "\n" + command
 }
 
 func mergedEnv(
