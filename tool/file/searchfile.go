@@ -49,9 +49,14 @@ func (f *fileToolSet) searchFile(
 ) (*searchFileResponse, error) {
 	rsp := &searchFileResponse{
 		BaseDirectory: f.baseDir,
-		Path:          req.Path,
-		Pattern:       req.Pattern,
 	}
+	if req == nil {
+		err := fmt.Errorf("request cannot be nil")
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+	rsp.Path = req.Path
+	rsp.Pattern = req.Pattern
 	// Validate pattern
 	if req.Pattern == "" {
 		rsp.Message = "Error: pattern cannot be empty"
