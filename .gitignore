@@ -50,3 +50,4 @@ __pycache__
 examples/knowledge/evaluation/dataset/*
 !examples/claudecode/.claude
 !examples/evaluation/claudecode/.claude
+examples/tool_safety_guard.exe

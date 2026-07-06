@@ -1,0 +1,116 @@
+version: "1.0"
+
+# --- Command Rules ---
+# Commands whose basename or full path is always denied before content
+# inspection. shellsafe's implicit deny set (sh, bash, eval, sudo,
+# xargs, ...) is additionally enforced by the scanner.
+denied_commands:
+  - rm
+  - mkfs
+  - dd
+  - shutdown
+  - reboot
+  - chmod
+  - chown
+  - kill
+
+# When allowlist is non-empty, only these commands may execute. This
+# is a content-level check separate from shellsafe's command-name
+# policy. Leave empty to skip the allowlist check.
+allowed_commands:
+  - echo
+  - ls
+  - cat
+  - head
+  - tail
+  - grep
+  - find
+  - wc
+  - sort
+  - uniq
+  - git
+  - go
+  - python3
+  - node
+
+# --- Path Rules ---
+# Regex patterns matched against command arguments. A match indicates
+# the command tries to access a sensitive file or directory.
+denied_path_patterns:
+  - "~/\\.ssh"
+  - "~/\\.aws"
+  - "~/\\.gcloud"
+  - "/etc/(shadow|passwd)"
+  - "\\.env$"
+  - "\\.pem$"
+  - "id_rsa"
+  - "credentials(\\.json|\\.yaml|\\.yml)?"
+
+# --- Network Rules ---
+# Domains that network tools are permitted to contact. When non-empty,
+# any domain not in this list triggers R2-NON-WHITELIST-DOMAIN.
+allowed_domains:
+  - api.github.com
+  - pkg.go.dev
+  - proxy.golang.org
+  - "*.github.com"
+  - "*.googleapis.com"
+
+# Commands that are blocked from making any network connection.
+blocked_network_tools:
+  - curl
+  - wget
+  - nc
+  - ncat
+  - ssh
+  - telnet
+  - ftp
+  - scp
+
+# --- Resource Limits ---
+max_timeout_sec: 300       # 5 minutes
+max_output_bytes: 10485760 # 10 MiB
+
+# --- Auto-Deny Threshold ---
+# Risk levels that trigger an automatic deny. Other non-none risks
+# trigger "ask" (human review required).
+auto_deny_risk_levels:
+  - critical
+  - high
+
+# --- Sensitive Output Patterns ---
+# Regex patterns applied to detect secrets leaked in command output or
+# arguments.
+sensitive_patterns:
+  - name: aws_access_key
+    pattern: "(?:AKIA|ASIA)[0-9A-Z]{16}"
+  - name: github_token
+    pattern: "gh[pousr]_[A-Za-z0-9_]{36}"
+  - name: private_key_header
+    pattern: "-----BEGIN (?:RSA|EC|DSA|OPENSSH|PGP) PRIVATE KEY-----"
+  - name: jwt_token
+    pattern: "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"
+  - name: password_assignment
+    pattern: "(?i)password\\s*[=:]\\s*\\S+"
+  - name: api_key_assignment
+    pattern: "(?i)(?:api[_-]?key|api[_-]?token|auth[_-]?token|secret[_-]?key)\\s*[=:]\\s*\\S+"
+
+# --- Per-Backend Overrides ---
+# Stricter settings for hostexec (bare-metal shell, no workspace
+# isolation).
+backend_overrides:
+  hostexec:
+    auto_deny_risk_levels:
+      - critical
+      - high
+      - medium
+    max_timeout_sec: 60
+    max_output_bytes: 5242880  # 5 MiB
+  workspaceexec:
+    auto_deny_risk_levels:
+      - critical
+      - high
+  codeexec:
+    auto_deny_risk_levels:
+      - critical
+      - high
