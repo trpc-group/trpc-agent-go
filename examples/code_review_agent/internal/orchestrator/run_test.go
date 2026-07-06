@@ -145,6 +145,55 @@ func TestRunChecksAndSkipsBlockedModelPlannedCommand(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRuntimeEnvProvidesContainerGoCacheDefaults(t *testing.T) {
+	for _, key := range []string{"HOME", "GOCACHE", "GOMODCACHE", "GOPATH"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("GOPROXY", "https://proxy.example,direct")
+	t.Setenv("GOSUMDB", "sum.example")
+	t.Setenv("GOFLAGS", "-mod=mod")
+	t.Setenv("CGO_ENABLED", "0")
+
+	env := workspaceRuntimeEnv("container")
+
+	want := map[string]string{
+		"HOME":        "/tmp",
+		"GOCACHE":     "/tmp/go-build",
+		"GOMODCACHE":  "/go/pkg/mod",
+		"GOPATH":      "/go",
+		"GOPROXY":     "https://proxy.example,direct",
+		"GOSUMDB":     "sum.example",
+		"GOFLAGS":     "-mod=mod",
+		"CGO_ENABLED": "0",
+	}
+	for key, value := range want {
+		if env[key] != value {
+			t.Fatalf("%s = %q, want %q", key, env[key], value)
+		}
+	}
+}
+
+func TestWorkspaceRuntimeEnvKeepsExplicitGoCacheValues(t *testing.T) {
+	t.Setenv("HOME", "/custom-home")
+	t.Setenv("GOCACHE", "/custom-cache")
+	t.Setenv("GOMODCACHE", "/custom-mod-cache")
+	t.Setenv("GOPATH", "/custom-go")
+
+	env := workspaceRuntimeEnv("container")
+
+	want := map[string]string{
+		"HOME":       "/custom-home",
+		"GOCACHE":    "/custom-cache",
+		"GOMODCACHE": "/custom-mod-cache",
+		"GOPATH":     "/custom-go",
+	}
+	for key, value := range want {
+		if env[key] != value {
+			t.Fatalf("%s = %q, want %q", key, env[key], value)
+		}
+	}
+}
+
 func assertFailedTaskStored(t *testing.T, dbPath string) {
 	t.Helper()
 	st, err := store.NewSQLite(context.Background(), dbPath)

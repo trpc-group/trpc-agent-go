@@ -642,13 +642,34 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		Engine:      eng,
 		Workspace:   ws,
 		Timeout:     timeout,
-		Env: map[string]string{
-			"GOPROXY":     os.Getenv("GOPROXY"),
-			"GOSUMDB":     os.Getenv("GOSUMDB"),
-			"GOFLAGS":     os.Getenv("GOFLAGS"),
-			"CGO_ENABLED": os.Getenv("CGO_ENABLED"),
-		},
+		Env:         workspaceRuntimeEnv(runtimeName),
 	}, cleanup, nil
+}
+
+func workspaceRuntimeEnv(runtimeName string) map[string]string {
+	env := map[string]string{
+		"HOME":        os.Getenv("HOME"),
+		"GOCACHE":     os.Getenv("GOCACHE"),
+		"GOMODCACHE":  os.Getenv("GOMODCACHE"),
+		"GOPATH":      os.Getenv("GOPATH"),
+		"GOPROXY":     os.Getenv("GOPROXY"),
+		"GOSUMDB":     os.Getenv("GOSUMDB"),
+		"GOFLAGS":     os.Getenv("GOFLAGS"),
+		"CGO_ENABLED": os.Getenv("CGO_ENABLED"),
+	}
+	if runtimeName != "local" {
+		setDefaultEnv(env, "HOME", "/tmp")
+		setDefaultEnv(env, "GOPATH", "/go")
+		setDefaultEnv(env, "GOMODCACHE", "/go/pkg/mod")
+		setDefaultEnv(env, "GOCACHE", "/tmp/go-build")
+	}
+	return env
+}
+
+func setDefaultEnv(env map[string]string, key string, value string) {
+	if env[key] == "" {
+		env[key] = value
+	}
 }
 
 func repositoryRoot() (string, error) {
