@@ -335,3 +335,69 @@ func TestRandomHexProducesExpectedLength(t *testing.T) {
 		t.Fatalf("randomHex(4) = %q, want 8 hex chars", got)
 	}
 }
+
+func TestInitDenialMonitorHonorsCachedCapsWithoutEventStream(t *testing.T) {
+	resetDiagnosticsCapsCacheForTest()
+	t.Cleanup(resetDiagnosticsCapsCacheForTest)
+	storeCachedDiagnosticsCaps(DiagnosticsCapability{
+		Supported:            true,
+		ProbeCompleted:       true,
+		EventStreamAvailable: false,
+	})
+
+	rt := NewRuntime()
+	if err := rt.ensureDenialMonitor(); err != nil {
+		t.Fatalf("ensureDenialMonitor: %v", err)
+	}
+	if rt.sandboxDenialCollectingReady() {
+		t.Fatal("sandboxDenialCollectingReady = true, want false for cached unavailable stream")
+	}
+	caps := rt.DiagnosticsCapability()
+	if caps.EventStreamAvailable || !caps.ProbeCompleted || !caps.Supported {
+		t.Fatalf("caps = %#v, want supported probed cache without event stream", caps)
+	}
+}
+
+func TestDiagnosticsCapabilityNonMacOSBackendReturnsZero(t *testing.T) {
+	rt := NewRuntime(
+		WithBackend(BackendLinuxBubblewrap),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	caps := rt.DiagnosticsCapability()
+	if caps != (DiagnosticsCapability{}) {
+		t.Fatalf("non-macOS backend caps = %#v, want zero value", caps)
+	}
+}
+
+func TestContainsExactSandboxTagRejectsPartialEmbeddedMatch(t *testing.T) {
+	tag := "TRPC_RUN_abcd_END_0123456789abcdef_SBX"
+	raw := "prefix TRPC_RUN_abcdXEND_0123456789abcdef_SBX suffix"
+	if containsExactSandboxTag(raw, tag) {
+		t.Fatalf("containsExactSandboxTag matched embedded partial tag in %q", raw)
+	}
+	if !containsExactSandboxTag("deny\n"+tag, tag) {
+		t.Fatal("containsExactSandboxTag did not match exact boundary tag")
+	}
+}
+
+func TestStringSliceContainsSubstring(t *testing.T) {
+	if !stringSliceContainsSubstring([]string{"needle", "other"}, "hay needle hay") {
+		t.Fatal("stringSliceContainsSubstring did not find needle")
+	}
+	if stringSliceContainsSubstring([]string{"missing", "absent"}, "hay stack") {
+		t.Fatal("stringSliceContainsSubstring matched unexpectedly")
+	}
+}
+
+func TestShouldFilterMacOSSandboxDenialSkipsNonMatchingOperations(t *testing.T) {
+	denial := Denial{Operation: "file-read-data", Target: "/private/tmp/foo", Raw: "deny"}
+	filter := DenialFilter{
+		Ignore: []DenialIgnoreRule{{
+			Operations: []string{"mach-lookup"},
+			Targets:    []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
+		}},
+	}
+	if shouldFilterMacOSSandboxDenial(denial, "/bin/cat", filter, DenialFilterDenials) {
+		t.Fatal("operation mismatch should not filter denial")
+	}
+}
