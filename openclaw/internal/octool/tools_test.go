@@ -485,6 +485,35 @@ func TestExecTool_UsesManagerBaseEnv(t *testing.T) {
 	require.Contains(t, strings.TrimSpace(res.Output), "ok")
 }
 
+func TestExecTool_CleanShellStartupSkipsBashEnv(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash is not available")
+	}
+
+	dir := t.TempDir()
+	bashEnv := filepath.Join(dir, "bash-env.sh")
+	require.NoError(t, os.WriteFile(
+		bashEnv,
+		[]byte("printf 'startup-noise\\n'\n"),
+		0o600,
+	))
+	t.Setenv("BASH_ENV", bashEnv)
+
+	mgr := NewManager(WithCleanShellStartup(true))
+	tool := newExecCommandTool(mgr)
+
+	args := mustJSON(t, map[string]any{
+		"command": "printf clean",
+		"yieldMs": 0,
+	})
+	out, err := tool.Call(context.Background(), args)
+	require.NoError(t, err)
+
+	res := out.(execResult)
+	require.Equal(t, "exited", res.Status)
+	require.Equal(t, "clean", res.Output)
+}
+
 func TestExecTool_UsesIdentityEnvFromContext(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is not available")
@@ -2083,6 +2112,24 @@ func TestManager_ExecSkipsShellSnapshotWithoutHooks(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "exited", out.Status)
 	require.Contains(t, out.Output, "ok")
+}
+
+func TestManager_CleanShellCommandEnvSkipsLoginSnapshot(t *testing.T) {
+	mgr := NewManager(WithCleanShellStartup(true))
+	mgr.shellEnvSnapshot = func(
+		context.Context,
+		string,
+	) map[string]string {
+		t.Fatal("unexpected shell env snapshot")
+		return nil
+	}
+
+	env := mgr.commandEnv(
+		context.Background(),
+		"/tmp/work",
+		map[string]string{"EXTRA_ONLY": "extra"},
+	)
+	require.Equal(t, "extra", env["EXTRA_ONLY"])
 }
 
 func TestManager_CommandEnvUsesWorkdirSnapshot(t *testing.T) {

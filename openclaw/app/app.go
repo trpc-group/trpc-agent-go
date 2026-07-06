@@ -3523,6 +3523,7 @@ func buildOpenClawTools(
 			octool.WithBaseEnv(deps.ToolEnv(stateDir)),
 			octool.WithCommandPolicy(commandPolicy),
 			octool.WithOutputRedactor(outputRedactor),
+			octool.WithCleanShellStartup(true),
 			octool.WithMaxResultOutputChars(
 				defaultExecResultOutputChars,
 			),

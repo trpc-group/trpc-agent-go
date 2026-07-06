@@ -35,9 +35,12 @@ const (
 	defaultIODrain         = 1 * time.Second
 	defaultShellEnvTimeout = 5 * time.Second
 
-	shellProgram     = "bash"
-	shellLoginFlag   = "-lc"
-	shellExitCleanup = `__trpc_claw_cleanup_jobs(){ ` +
+	shellProgram       = "bash"
+	shellLoginFlag     = "-lc"
+	shellNoProfileFlag = "--noprofile"
+	shellNoRcFlag      = "--norc"
+	shellCommandFlag   = "-c"
+	shellExitCleanup   = `__trpc_claw_cleanup_jobs(){ ` +
 		`local pids; pids="$(jobs -pr)"; ` +
 		`if [ -n "$pids" ]; then ` +
 		`kill $pids 2>/dev/null || true; ` +
@@ -60,6 +63,7 @@ type Manager struct {
 	policy               CommandPolicy
 	redactor             OutputRedactor
 	maxResultOutputChars int
+	cleanShellStartup    bool
 
 	clock func() time.Time
 
@@ -143,6 +147,15 @@ func WithMaxResultOutputChars(n int) Option {
 	}
 }
 
+// WithCleanShellStartup runs shell commands without profile/rc startup files
+// and removes shell-startup env hooks such as BASH_ENV. The default is false
+// for compatibility with callers that rely on login shell setup.
+func WithCleanShellStartup(enabled bool) Option {
+	return func(m *Manager) {
+		m.cleanShellStartup = enabled
+	}
+}
+
 func NewManager(opts ...Option) *Manager {
 	m := &Manager{
 		sessions:         map[string]*session{},
@@ -217,6 +230,7 @@ func (m *Manager) Exec(
 			params,
 			timeout,
 			m.baseEnv,
+			m.cleanShellStartup,
 		)
 		if err != nil {
 			return execResult{}, err
@@ -291,14 +305,18 @@ func runForeground(
 	params execParams,
 	timeout time.Duration,
 	baseEnv map[string]string,
+	cleanStartup bool,
 ) (string, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := shellCmd(ctx, params.Command, true)
+	cmd := shellCmdWithStartup(ctx, params.Command, true, cleanStartup)
 	prepareCommandProcess(cmd)
 	cmd.Dir = params.Workdir
 	cmd.Env = mergedEnv(baseEnv, params.Env)
+	if cleanStartup {
+		cmd.Env = cleanCommandEnv(cmd.Env)
+	}
 	defer func() {
 		_ = cleanupCommandProcessGroup(cmd)
 	}()
@@ -313,20 +331,35 @@ func shellCmd(
 	command string,
 	cleanupShellJobs bool,
 ) *exec.Cmd {
+	return shellCmdWithStartup(ctx, command, cleanupShellJobs, false)
+}
+
+func shellCmdWithStartup(
+	ctx context.Context,
+	command string,
+	cleanupShellJobs bool,
+	cleanStartup bool,
+) *exec.Cmd {
 	if cleanupShellJobs {
 		command = shellCommandWithExitCleanup(command)
 	}
 	cmd := exec.CommandContext(
 		ctx,
 		shellProgram,
-		shellLoginFlag,
-		command,
+		append(shellArgs(cleanStartup), command)...,
 	)
 	cmd.Cancel = func() error {
 		return forceKillCommandProcess(cmd)
 	}
 	cmd.WaitDelay = defaultIODrain
 	return cmd
+}
+
+func shellArgs(cleanStartup bool) []string {
+	if cleanStartup {
+		return []string{shellNoProfileFlag, shellNoRcFlag, shellCommandFlag}
+	}
+	return []string{shellLoginFlag}
 }
 
 func shellCommandWithExitCleanup(command string) string {
@@ -364,6 +397,38 @@ func setEnv(env []string, k, v string) []string {
 	return append(env, prefix+v)
 }
 
+func cleanShellStartupEnv(env []string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := env[:0]
+	for _, pair := range env {
+		key, _, ok := splitEnvPair(pair)
+		if !ok || isShellStartupEnvKey(key) {
+			continue
+		}
+		out = append(out, pair)
+	}
+	return out
+}
+
+func cleanCommandEnv(env []string) []string {
+	if len(env) == 0 {
+		env = os.Environ()
+	}
+	return cleanShellStartupEnv(env)
+}
+
+func isShellStartupEnvKey(key string) bool {
+	switch strings.ToUpper(key) {
+	case "BASH_ENV", "ENV", "PROMPT_COMMAND", "PS4",
+		"SHELLOPTS", "BASHOPTS":
+		return true
+	default:
+		return strings.HasPrefix(strings.ToUpper(key), "BASH_FUNC_")
+	}
+}
+
 func exitCode(err error) int {
 	if err == nil {
 		return 0
@@ -385,9 +450,17 @@ func (m *Manager) startBackground(
 		parentCtx = context.Background()
 	}
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
-	cmd := shellCmd(ctx, params.Command, !params.Background)
+	cmd := shellCmdWithStartup(
+		ctx,
+		params.Command,
+		!params.Background,
+		m.cleanShellStartup,
+	)
 	cmd.Dir = params.Workdir
 	cmd.Env = mergedEnv(m.baseEnv, params.Env)
+	if m.cleanShellStartup {
+		cmd.Env = cleanCommandEnv(cmd.Env)
+	}
 
 	sess := newSession(newSessionID(), params.Command, m.maxLines)
 	sess.cancel = cancel
@@ -499,7 +572,10 @@ func (m *Manager) commandEnv(
 	workdir string,
 	extra map[string]string,
 ) map[string]string {
-	out := m.loginShellEnv(ctx, workdir)
+	var out map[string]string
+	if !m.cleanShellStartup {
+		out = m.loginShellEnv(ctx, workdir)
+	}
 	if len(out) == 0 {
 		out = currentProcessEnvMap()
 	}
