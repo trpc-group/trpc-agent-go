@@ -20,7 +20,9 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func testDB(t *testing.T) *gorm.DB {
@@ -243,4 +245,278 @@ func TestService_SoftDelete_reAddRestores(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, restored, 1)
 	assert.Equal(t, "favorite color is teal", restored[0].Memory.Memory)
+}
+
+type fakeExtractor struct{}
+
+func (f *fakeExtractor) Extract(
+	_ context.Context,
+	_ []model.Message,
+	_ []*memory.Entry,
+) ([]*extractor.Operation, error) {
+	return nil, nil
+}
+
+func (f *fakeExtractor) ShouldExtract(_ *extractor.ExtractionContext) bool { return false }
+
+func (f *fakeExtractor) SetPrompt(_ string) {}
+
+func (f *fakeExtractor) SetModel(_ model.Model) {}
+
+func (f *fakeExtractor) SetEnabledTools(_ map[string]struct{}) {}
+
+func (f *fakeExtractor) Metadata() map[string]any { return nil }
+
+func TestService_validationErrors(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, testDB(t))
+	invalidUser := memory.UserKey{AppName: "", UserID: "u"}
+
+	_, err := svc.ReadMemories(ctx, invalidUser, 0)
+	assert.ErrorIs(t, err, memory.ErrAppNameRequired)
+
+	err = svc.AddMemory(ctx, invalidUser, "x", nil)
+	assert.ErrorIs(t, err, memory.ErrAppNameRequired)
+
+	_, err = svc.SearchMemories(ctx, invalidUser, "q")
+	assert.ErrorIs(t, err, memory.ErrAppNameRequired)
+
+	err = svc.ClearMemories(ctx, invalidUser)
+	assert.ErrorIs(t, err, memory.ErrAppNameRequired)
+
+	err = svc.DeleteMemory(ctx, memory.Key{AppName: "app", UserID: "", MemoryID: "id"})
+	assert.ErrorIs(t, err, memory.ErrUserIDRequired)
+}
+
+func TestService_AddMemory_memoryLimit(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	svc, err := NewService(db, WithMemoryLimit(2))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	uk := memory.UserKey{AppName: "app", UserID: "limited"}
+	require.NoError(t, svc.AddMemory(ctx, uk, "first memory", nil))
+	require.NoError(t, svc.AddMemory(ctx, uk, "second memory", nil))
+
+	err = svc.AddMemory(ctx, uk, "third memory", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "memory limit exceeded")
+}
+
+func TestService_WithCustomTableName(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	const table = "guild_memories"
+
+	svc, err := NewService(db, WithTableName(table))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	uk := memory.UserKey{AppName: "app", UserID: "custom-table"}
+	require.NoError(t, svc.AddMemory(ctx, uk, "stored in custom table", nil))
+
+	var count int64
+	require.NoError(t, db.Table(table).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+}
+
+func TestService_Tools_enabledAndHidden(t *testing.T) {
+	db := testDB(t)
+	svc, err := NewService(db,
+		WithToolEnabled(memory.AddToolName, true),
+		WithToolEnabled(memory.SearchToolName, true),
+		WithToolEnabled(memory.LoadToolName, true),
+		WithToolHidden(memory.LoadToolName, true),
+	)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	tools := svc.Tools()
+	require.Len(t, tools, 2)
+}
+
+func TestService_SearchMemories_maxResults(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	svc, err := NewService(db, WithMaxSearchResults(1))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	uk := memory.UserKey{AppName: "app", UserID: "search"}
+	require.NoError(t, svc.AddMemory(ctx, uk, "running shoes", nil))
+	require.NoError(t, svc.AddMemory(ctx, uk, "running marathon", nil))
+
+	res, err := svc.SearchMemories(ctx, uk, "running")
+	require.NoError(t, err)
+	assert.Len(t, res, 1)
+}
+
+func TestService_ReadMemories_returnsAllWhenLimitZero(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t, testDB(t))
+	uk := memory.UserKey{AppName: "app", UserID: "all"}
+
+	require.NoError(t, svc.AddMemory(ctx, uk, "one", nil))
+	require.NoError(t, svc.AddMemory(ctx, uk, "two", nil))
+
+	all, err := svc.ReadMemories(ctx, uk, 0)
+	require.NoError(t, err)
+	assert.Len(t, all, 2)
+}
+
+func TestService_HardDelete_removesRow(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	svc, err := NewService(db, WithSoftDelete(false))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	uk := memory.UserKey{AppName: "app", UserID: "hard-delete"}
+	require.NoError(t, svc.AddMemory(ctx, uk, "ephemeral", nil))
+
+	read, err := svc.ReadMemories(ctx, uk, 1)
+	require.NoError(t, err)
+	require.Len(t, read, 1)
+
+	require.NoError(t, svc.DeleteMemory(ctx, memory.Key{
+		AppName: uk.AppName, UserID: uk.UserID, MemoryID: read[0].ID,
+	}))
+
+	var count int64
+	require.NoError(t, db.Table(defaultTableName).Unscoped().Count(&count).Error)
+	assert.Equal(t, int64(0), count)
+}
+
+func TestService_rowsToEntries_invalidJSON(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	uk := memory.UserKey{AppName: "app", UserID: "bad-json"}
+	now := time.Now()
+	require.NoError(t, db.Table(defaultTableName).Create(&memoryRow{
+		MemoryID:   "corrupt-id",
+		AppName:    uk.AppName,
+		UserID:     uk.UserID,
+		MemoryData: []byte("not-valid-json"),
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}).Error)
+
+	_, err = svc.ReadMemories(ctx, uk, 0)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal memory entry failed")
+}
+
+func TestService_WithExtractor_startsWorker(t *testing.T) {
+	db := testDB(t)
+	svc, err := NewService(db,
+		WithExtractor(&fakeExtractor{}),
+		WithAsyncMemoryNum(1),
+		WithMemoryQueueSize(2),
+		WithMemoryJobTimeout(time.Millisecond),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, svc.autoMemoryWorker)
+
+	require.NoError(t, svc.EnqueueAutoMemoryJob(context.Background(), nil))
+	require.NoError(t, svc.Close())
+
+	noop := &Service{}
+	require.NoError(t, noop.Close())
+}
+
+func TestRowsToEntries(t *testing.T) {
+	now := time.Now()
+	valid, err := rowsToEntries([]memoryRow{{
+		MemoryData: []byte(`{"id":"1","app_name":"app","user_id":"u","memory":{"memory":"hello"},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`),
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}})
+	require.NoError(t, err)
+	require.Len(t, valid, 1)
+	assert.Equal(t, "hello", valid[0].Memory.Memory)
+
+	_, err = rowsToEntries([]memoryRow{{MemoryData: []byte("{")}})
+	require.Error(t, err)
+
+	empty, err := rowsToEntries(nil)
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}
+
+func TestService_closedDB_wrapsErrors(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	svc, err := NewService(db, WithMemoryLimit(10))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	uk := memory.UserKey{AppName: "app", UserID: "closed-db"}
+	require.NoError(t, svc.AddMemory(ctx, uk, "seed", nil))
+	read, err := svc.ReadMemories(ctx, uk, 1)
+	require.NoError(t, err)
+	require.Len(t, read, 1)
+	memKey := memory.Key{AppName: uk.AppName, UserID: uk.UserID, MemoryID: read[0].ID}
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	assert.Error(t, svc.AddMemory(ctx, uk, "after close", nil))
+	_, err = svc.ReadMemories(ctx, uk, 0)
+	assert.Error(t, err)
+	_, err = svc.SearchMemories(ctx, uk, "seed")
+	assert.Error(t, err)
+	assert.Error(t, svc.DeleteMemory(ctx, memKey))
+	assert.Error(t, svc.ClearMemories(ctx, uk))
+	assert.Error(t, svc.UpdateMemory(ctx, memKey, "updated", nil))
+}
+
+func TestService_UpdateMemory_corruptStoredJSON(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	svc, err := NewService(db)
+	require.NoError(t, err)
+	defer svc.Close()
+
+	uk := memory.UserKey{AppName: "app", UserID: "corrupt-update"}
+	require.NoError(t, svc.AddMemory(ctx, uk, "valid", nil))
+	read, err := svc.ReadMemories(ctx, uk, 1)
+	require.NoError(t, err)
+	require.Len(t, read, 1)
+
+	require.NoError(t, db.Table(defaultTableName).
+		Where("memory_id = ?", read[0].ID).
+		Update("memory_data", []byte("not-json")).Error)
+
+	err = svc.UpdateMemory(ctx, memory.Key{
+		AppName: uk.AppName, UserID: uk.UserID, MemoryID: read[0].ID,
+	}, "updated", nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal memory entry failed")
+}
+
+func TestService_SoftDelete_ClearMemories(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	svc, err := NewService(db, WithSoftDelete(true))
+	require.NoError(t, err)
+	defer svc.Close()
+
+	uk := memory.UserKey{AppName: "app", UserID: "soft-clear"}
+	require.NoError(t, svc.AddMemory(ctx, uk, "one", nil))
+	require.NoError(t, svc.AddMemory(ctx, uk, "two", nil))
+	require.NoError(t, svc.ClearMemories(ctx, uk))
+
+	after, err := svc.ReadMemories(ctx, uk, 0)
+	require.NoError(t, err)
+	assert.Empty(t, after)
+
+	var count int64
+	require.NoError(t, db.Table(defaultTableName).Unscoped().Count(&count).Error)
+	assert.Equal(t, int64(2), count)
 }
