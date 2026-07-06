@@ -300,6 +300,7 @@ func TestReadDocumentHelpers(t *testing.T) {
 
 	require.Equal(t, docKindDOCX, documentKindFromPath(docxPath))
 	require.Equal(t, docKindText, documentKindFromPath(logPath))
+	require.Equal(t, docKindText, documentKindFromPath("data.jsonld"))
 	require.Equal(t, docKindImage, documentKindFromPath("chart.png"))
 	require.Equal(t, docKindImage, documentKindFromPath("photo.jpeg"))
 	require.Equal(t, "", documentKindFromPath("bad.bin"))
