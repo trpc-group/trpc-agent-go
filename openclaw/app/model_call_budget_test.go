@@ -263,6 +263,26 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 	require.Len(t, req.Messages, 1)
 }
 
+func TestModelCallBudgetModel_SkipsSummaryRequests(t *testing.T) {
+	t.Parallel()
+
+	underlying := &countingBudgetModel{}
+	wrapped := newModelCallBudgetModel(underlying)
+	ctx := withModelCallBudget(context.Background(), 1)
+	req := &model.Request{Messages: []model.Message{model.NewUserMessage(
+		"Analyze the following conversation between a user and an assistant, " +
+			"and provide a concise summary.",
+	)}}
+
+	_, err := wrapped.GenerateContent(ctx, req)
+	require.NoError(t, err)
+	_, err = wrapped.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+	_, err = wrapped.GenerateContent(ctx, &model.Request{})
+	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
+	require.EqualValues(t, 2, underlying.callCount())
+}
+
 type countingBudgetModel struct {
 	calls atomic.Int64
 }
