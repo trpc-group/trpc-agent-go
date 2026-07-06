@@ -219,6 +219,32 @@ func TestWorkspaceRuntimeEnvKeepsLocalGoCacheValues(t *testing.T) {
 	}
 }
 
+func TestWorkspaceRuntimeCwdScopesCommandsToReviewAgentModule(t *testing.T) {
+	if got := workspaceRuntimeCwd("container"); got != "work/examples/code_review_agent" {
+		t.Fatalf("container cwd = %q, want work/examples/code_review_agent", got)
+	}
+	if got := workspaceRuntimeCwd("e2b"); got != "work/examples/code_review_agent" {
+		t.Fatalf("e2b cwd = %q, want work/examples/code_review_agent", got)
+	}
+	if got := workspaceRuntimeCwd("local"); got != "examples/code_review_agent" {
+		t.Fatalf("local cwd = %q, want examples/code_review_agent", got)
+	}
+}
+
+func TestHasExactModuleDeclRejectsNestedModulePrefixes(t *testing.T) {
+	if !hasExactModuleDecl("module trpc.group/trpc-go/trpc-agent-go\n\ngo 1.21\n", rootModuleDecl) {
+		t.Fatal("root module declaration was not matched")
+	}
+	for _, raw := range []string{
+		"module trpc.group/trpc-go/trpc-agent-go/examples\n\ngo 1.24.4\n",
+		"module trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent\n\ngo 1.23.0\n",
+	} {
+		if hasExactModuleDecl(raw, rootModuleDecl) {
+			t.Fatalf("nested module was incorrectly matched:\n%s", raw)
+		}
+	}
+}
+
 func assertFailedTaskStored(t *testing.T, dbPath string) {
 	t.Helper()
 	st, err := store.NewSQLite(context.Background(), dbPath)

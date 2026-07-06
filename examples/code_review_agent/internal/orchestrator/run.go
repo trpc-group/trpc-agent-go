@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -43,6 +44,8 @@ const (
 	defaultMaxSandboxOutput = 4096
 	defaultSkillName        = "code-review"
 	defaultSandboxTimeout   = 30 * time.Second
+	reviewAgentModuleDir    = "examples/code_review_agent"
+	rootModuleDecl          = "module trpc.group/trpc-go/trpc-agent-go"
 )
 
 var defaultSandboxCommands = []string{
@@ -632,7 +635,7 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		}
 	}
 	if runtimeName != "local" {
-		if err := eng.FS().StageDirectory(ctx, ws, repoRoot, ".", codeexecutor.StageOptions{AllowMount: true}); err != nil {
+		if err := eng.FS().StageDirectory(ctx, ws, repoRoot, codeexecutor.DirWork, codeexecutor.StageOptions{AllowMount: true}); err != nil {
 			cleanup()
 			return nil, nil, err
 		}
@@ -641,9 +644,17 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		RuntimeName: runtimeName,
 		Engine:      eng,
 		Workspace:   ws,
+		Cwd:         workspaceRuntimeCwd(runtimeName),
 		Timeout:     timeout,
 		Env:         workspaceRuntimeEnv(runtimeName),
 	}, cleanup, nil
+}
+
+func workspaceRuntimeCwd(runtimeName string) string {
+	if runtimeName == "local" {
+		return filepath.ToSlash(reviewAgentModuleDir)
+	}
+	return path.Join(codeexecutor.DirWork, reviewAgentModuleDir)
 }
 
 func workspaceRuntimeEnv(runtimeName string) map[string]string {
@@ -686,8 +697,7 @@ func repositoryRoot() (string, error) {
 			if err != nil {
 				return "", err
 			}
-			if strings.Contains(string(raw), "module trpc.group/trpc-go/trpc-agent-go") &&
-				!strings.Contains(string(raw), "examples/code_review_agent") {
+			if hasExactModuleDecl(string(raw), rootModuleDecl) {
 				return wd, nil
 			}
 		}
@@ -697,6 +707,15 @@ func repositoryRoot() (string, error) {
 		}
 		wd = parent
 	}
+}
+
+func hasExactModuleDecl(raw string, moduleDecl string) bool {
+	for _, line := range strings.Split(raw, "\n") {
+		if strings.TrimSpace(line) == moduleDecl {
+			return true
+		}
+	}
+	return false
 }
 
 func statusFor(findings []review.Finding, runs []review.SandboxRun) string {
