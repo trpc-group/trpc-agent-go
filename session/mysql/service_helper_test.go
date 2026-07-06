@@ -12,6 +12,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -1455,6 +1456,107 @@ func TestAddEvent_ExpiredSession(t *testing.T) {
 	err = s.addEvent(ctx, key, evt)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// stringArg matches a SQL argument only when it is bound as a string.
+// JSON columns must receive a string, not a raw []byte: go-sql-driver sends
+// []byte with the binary charset, which MySQL/TDSQL rejects for JSON columns
+// with error 3144 (ER_INVALID_JSON_CHARSET, "Cannot create a JSON value from a
+// string with CHARACTER SET 'binary'").
+type stringArg struct{}
+
+func (stringArg) Match(v driver.Value) bool {
+	_, ok := v.(string)
+	return ok
+}
+
+// TestAddEvent_BindsJSONColumnsAsString guards the JSON columns (state, event)
+// against being bound as []byte, which fails on real MySQL/TDSQL with error
+// 3144. sqlmock does not validate charset, so we assert the argument Go type.
+func TestAddEvent_BindsJSONColumnsAsString(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "user-123",
+		SessionID: "session-456",
+	}
+
+	evt := event.New("inv-1", "author")
+	evt.Response = &model.Response{
+		Object:  model.ObjectTypeChatCompletion,
+		Done:    true,
+		Choices: []model.Choice{{Index: 0, Message: model.Message{Content: "test"}}},
+	}
+	evt.IsPartial = false
+
+	sessState := SessionState{ID: key.SessionID, State: session.StateMap{}}
+	stateBytes, _ := json.Marshal(sessState)
+
+	expectLoadSessionStateForUpdate(mock, key).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
+			AddRow(stateBytes, nil))
+	// state (arg 1) must be bound as a string, not []byte.
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, updated_at = ?, expires_at = ?")).
+		WithArgs(stringArg{}, sqlmock.AnyArg(), sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// event (arg 4) must be bound as a string, not []byte.
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_events")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, stringArg{}, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err = s.addEvent(ctx, key, evt)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestAddTrackEvent_BindsJSONColumnsAsString is the addTrackEvent counterpart of
+// TestAddEvent_BindsJSONColumnsAsString.
+func TestAddTrackEvent_BindsJSONColumnsAsString(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	s := createTestService(t, db)
+	ctx := context.Background()
+
+	key := session.Key{
+		AppName:   "test-app",
+		UserID:    "test-user",
+		SessionID: "session-1",
+	}
+	trackEvent := &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}
+
+	sessState := SessionState{ID: key.SessionID, State: session.StateMap{}}
+	stateBytes, _ := json.Marshal(sessState)
+
+	expectLoadSessionStateForUpdate(mock, key).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "expires_at"}).
+			AddRow(stateBytes, nil))
+	// state (arg 1) must be bound as a string, not []byte.
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET state = ?, updated_at = ?, expires_at = ?")).
+		WithArgs(stringArg{}, sqlmock.AnyArg(), sqlmock.AnyArg(), key.AppName, key.UserID, key.SessionID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// event (arg 5) must be bound as a string, not []byte.
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO session_track_events")).
+		WithArgs(key.AppName, key.UserID, key.SessionID, "alpha",
+			stringArg{}, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err = s.addTrackEvent(ctx, key, trackEvent)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestAddEvent_PartialEvent(t *testing.T) {
