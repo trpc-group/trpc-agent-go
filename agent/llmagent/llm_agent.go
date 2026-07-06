@@ -1273,11 +1273,11 @@ func (a *LLMAgent) workspaceRegistryForInvocation(
 	inv *agent.Invocation,
 	exec codeexecutor.CodeExecutor,
 ) codeexecutor.WorkspaceAcquirer {
-	if a.option.workspaceRegistry != nil {
-		return a.option.workspaceRegistry
-	}
 	if inv == nil || inv.Session == nil || inv.Session.ID == "" {
 		return buildWorkspaceRegistry()
+	}
+	if a.option.workspaceRegistry != nil {
+		return a.option.workspaceRegistry
 	}
 	if reg, ok := a.ensureWorkspaceRegistryForExecutor(exec); ok {
 		return reg

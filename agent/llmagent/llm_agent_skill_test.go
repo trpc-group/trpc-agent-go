@@ -529,11 +529,13 @@ func TestWithWorkspaceRegistry_UsesSuppliedAcquirer(t *testing.T) {
 	custom := &fakeAcquirer{inner: codeexecutor.NewWorkspaceRegistry()}
 
 	a := New("tester", WithCodeExecutor(exec), WithWorkspaceRegistry(custom))
-
-	// The supplied acquirer replaces the default in-memory registry both at
-	// construction and on the invocation-scoped resolution path.
 	require.Same(t, custom, a.workspaceRegistry)
-	require.Same(t, custom, a.workspaceRegistryForInvocation(nil, exec))
+
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(&session.Session{ID: "s1"}),
+	)
+	require.Same(t, custom, a.workspaceRegistryForInvocation(inv, exec))
+	require.NotSame(t, custom, a.workspaceRegistryForInvocation(nil, exec))
 }
 
 func TestWithWorkspaceRegistry_AcquireInvokedDuringRun(t *testing.T) {
@@ -556,6 +558,30 @@ func TestWithWorkspaceRegistry_AcquireInvokedDuringRun(t *testing.T) {
 	// keyed by the invocation session.
 	require.Equal(t, float64(0), out["exit_code"])
 	require.Contains(t, custom.ids, "sess-custom")
+}
+
+func TestWithWorkspaceRegistry_NoSessionRunsStayIsolated(t *testing.T) {
+	custom := &fakeAcquirer{inner: codeexecutor.NewWorkspaceRegistry()}
+	a := New(
+		"tester",
+		WithCodeExecutor(localexec.New()),
+		WithWorkspaceRegistry(custom),
+	)
+
+	inv1 := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("write")),
+	)
+	out := callInvocationWorkspaceExec(
+		t, a, inv1, "mkdir -p out && printf leaked > out/leak.txt",
+	)
+	require.Equal(t, float64(0), out["exit_code"])
+
+	inv2 := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("read")),
+	)
+	out = callInvocationWorkspaceExec(t, a, inv2, "cat out/leak.txt")
+	require.NotEqual(t, float64(0), out["exit_code"])
+	require.NotContains(t, out["output"], "leaked")
 }
 
 func callInvocationWorkspaceExec(
