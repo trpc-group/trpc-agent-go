@@ -672,7 +672,7 @@ func (m *Model) handleStreamingResponse(
 
 	attempt := 0
 	for {
-		finalResponse, callbackAcc, streamErr, sawContent := m.runStreamingAttempt(ctx, chatRequest, responseChan)
+		finalResponse, callbackAcc, streamErr, sawCallerOutput := m.runStreamingAttempt(ctx, chatRequest, responseChan)
 		if streamErr == nil {
 			m.runChatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, nil)
 			if finalResponse != nil {
@@ -690,9 +690,11 @@ func (m *Model) handleStreamingResponse(
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 			return
 		}
-		// Don't retry after the first chunk reaches the caller; retrying
-		// would corrupt the downstream stream by re-emitting from scratch.
-		if sawContent {
+		// Don't retry after any caller-visible output: partial responses on
+		// responseChan or raw chunk callbacks via WithChatChunkCallback.
+		// Retrying would leak chunks from the failed attempt or restart the
+		// stream from scratch after the caller already observed events.
+		if sawCallerOutput {
 			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
 			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
 			return
@@ -742,14 +744,15 @@ func (m *Model) effectiveStreamMaxRetries() int {
 //   - finalResponse: the terminal response when streaming completed cleanly
 //     (caller is responsible for delivering it to responseChan).
 //   - streamErr: a non-nil error if the stream failed at any point.
-//   - sawContent: true if at least one partial response was delivered to
-//     responseChan during this attempt. When true the caller MUST NOT retry
-//     because the caller-visible stream has already been partially consumed.
+//   - sawCallerOutput: true if this attempt delivered caller-visible output
+//     (a partial/final response on responseChan, or a WithChatChunkCallback
+//     invocation). When true the caller MUST NOT retry because downstream
+//     consumers have already observed stream state from this attempt.
 func (m *Model) runStreamingAttempt(
 	ctx context.Context,
 	chatRequest anthropic.MessageNewParams,
 	responseChan chan<- *model.Response,
-) (finalResponse *model.Response, callbackAcc *anthropic.Message, streamErr error, sawContent bool) {
+) (finalResponse *model.Response, callbackAcc *anthropic.Message, streamErr error, sawCallerOutput bool) {
 	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.anthropicRequestOptions...)
 	defer stream.Close()
 	acc := newStreamingMessageAccumulator()
@@ -761,7 +764,10 @@ loop:
 			streamErr = err
 			break
 		}
-		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
+		if m.chatChunkCallback != nil {
+			m.runChatChunkCallback(ctx, &chatRequest, &chunk)
+			sawCallerOutput = true
+		}
 		response, err := buildStreamingPartialResponse(acc.Message(), chunk, m.showToolCallDelta)
 		if err != nil {
 			streamErr = err
@@ -772,7 +778,7 @@ loop:
 		}
 		select {
 		case responseChan <- response:
-			sawContent = true
+			sawCallerOutput = true
 		case <-ctx.Done():
 			streamErr = ctx.Err()
 			break loop
@@ -792,7 +798,7 @@ loop:
 		finalAcc := acc.Message()
 		callbackAcc = &finalAcc
 	}
-	return finalResponse, callbackAcc, streamErr, sawContent
+	return finalResponse, callbackAcc, streamErr, sawCallerOutput
 }
 
 // streamRetryBackoff returns the sleep duration before retry attempt n
