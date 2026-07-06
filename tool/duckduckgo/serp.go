@@ -267,8 +267,7 @@ func isSERPChallengeError(err error) bool {
 
 func isSERPRouteBlocker(err error, fallbackErr error) bool {
 	return isSERPUnavailableError(err) &&
-		isSERPUnavailableError(fallbackErr) &&
-		(isSERPChallengeError(err) || isSERPChallengeError(fallbackErr))
+		isSERPUnavailableError(fallbackErr)
 }
 
 func isSERPUnavailableError(err error) bool {

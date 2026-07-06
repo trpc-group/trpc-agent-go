@@ -763,6 +763,56 @@ func TestDDGTool_SERPFallbackReportsUnavailableWhenAPIFallbackFails(
 	require.Contains(t, result.Summary, "instead of immediately retrying")
 }
 
+func TestDDGTool_SERPFallbackReportsTransportUnavailable(t *testing.T) {
+	t.Parallel()
+
+	calls := make(map[string]int)
+	ddgTool := &ddgTool{
+		httpClient: &http.Client{Transport: roundTripFunc(
+			func(r *http.Request) (*http.Response, error) {
+				calls[r.URL.Host]++
+				switch r.URL.Host {
+				case "html.duckduckgo.com":
+					return nil, errors.New(
+						"server gave HTTP response to HTTPS client",
+					)
+				case "lite.duckduckgo.com":
+					return nil, errors.New(
+						"tls: first record does not look like " +
+							"a TLS handshake",
+					)
+				case "api.duckduckgo.com":
+					return &http.Response{
+						StatusCode: http.StatusServiceUnavailable,
+						Body:       io.NopCloser(strings.NewReader("down")),
+						Header:     make(http.Header),
+					}, nil
+				default:
+					t.Fatalf("unexpected host %s", r.URL.Host)
+					return nil, nil
+				}
+			},
+		)},
+		baseURL:   defaultHTMLBaseURL,
+		backend:   backendHTML,
+		userAgent: defaultSERPUserAgent,
+	}
+
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "example search topic"},
+	)
+	require.NoError(t, err)
+	require.Empty(t, result.Results)
+	require.Contains(t, result.Summary, "html and lite")
+	require.Contains(t, result.Summary, "unavailable")
+	require.GreaterOrEqual(t, calls["html.duckduckgo.com"], 1)
+	require.LessOrEqual(t, calls["html.duckduckgo.com"], 2)
+	require.GreaterOrEqual(t, calls["lite.duckduckgo.com"], 1)
+	require.LessOrEqual(t, calls["lite.duckduckgo.com"], 2)
+	require.Equal(t, 1, calls["api.duckduckgo.com"])
+}
+
 func TestDDGTool_SERPFallbackReturnsContextCancelFromAPIFallback(
 	t *testing.T,
 ) {
