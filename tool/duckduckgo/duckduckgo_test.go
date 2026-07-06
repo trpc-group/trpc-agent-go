@@ -856,6 +856,28 @@ func TestDDGTool_SERPFallbackReturnsContextCancelFromAPIFallback(
 	require.Equal(t, 1, calls["api.duckduckgo.com"])
 }
 
+func TestDDGTool_SearchAPIWrapsContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ddgTool := &ddgTool{
+		client: client.New(
+			defaultBaseURL,
+			defaultUserAgent,
+			http.DefaultClient,
+		),
+	}
+
+	result, err := ddgTool.searchAPI(
+		ctx,
+		searchRequest{Query: "example search topic"},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, result.Results)
+	require.Contains(t, result.Summary, "Error performing search")
+}
+
 func TestDDGTool_SERPHTTPFailures(t *testing.T) {
 	t.Parallel()
 
