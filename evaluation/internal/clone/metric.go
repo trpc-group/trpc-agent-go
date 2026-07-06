@@ -219,6 +219,10 @@ func cloneTemplateVariableBinding(src *criterionllm.TemplateVariableBinding) *cr
 	copied := *src
 	if src.Source != nil {
 		source := *src.Source
+		if src.Source.Selector != nil {
+			selector := *src.Source.Selector
+			source.Selector = &selector
+		}
 		copied.Source = &source
 	}
 	return &copied
