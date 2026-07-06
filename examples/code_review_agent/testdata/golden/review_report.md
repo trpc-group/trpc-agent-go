@@ -4,7 +4,17 @@ Task `review-7ed8cd6d5ee2` finished with status `failed`.
 
 ## Summary
 
-Reviewed 9 changed files, produced 18 findings, and recorded 1 sandbox runs.
+Model plan "mock-model" coordinated skill "code-review" for 9 changed files, produced 18 findings, and recorded 1 sandbox runs.
+
+## Model Plan
+
+- model: mock-model
+- provider: mock
+- source: mock_planner
+- skill: code-review
+- runtime: fake
+- commands: go test ./...
+- rules: skills/code-review/SKILL.md, skills/code-review/docs/rules.md
 
 ## Findings
 

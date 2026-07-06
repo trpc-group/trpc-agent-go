@@ -15,15 +15,17 @@ internal packages:
   command.
 - `internal/sandboxrun` provides a fake-testable sandbox execution seam with
   timeout, truncation, failure, and unavailable-runtime records.
+- `internal/orchestrator` coordinates model planning, Skill rules, safety
+  decisions, sandbox runs, persistence, and report rendering. The default
+  planner validates OpenAI-compatible model configuration for non-fake runtimes
+  while keeping unit tests deterministic through the fake runtime.
 - `internal/store` defines a storage interface and dependency-free durable
   implementation for tasks, inputs, sandbox runs, permission decisions,
   findings, artifacts, and reports. The entrypoint keeps the `NewSQLite` name
   for the example default while using an equivalent JSON-backed `.db` file to
   avoid CGO and high-Go-version driver dependencies in examples.
 - `internal/report` renders JSON and Markdown reports from the persisted review
-  result.
-- `internal/review` coordinates Skill loading, model planning, rules, sandbox
-  runs, persistence, and report rendering.
+  result, including the non-secret model plan used for the run.
 
 The Skill under `skills/code-review` owns the audit policy and rule guidance.
 The Go implementation keeps deterministic parsing, redaction, deduplication,

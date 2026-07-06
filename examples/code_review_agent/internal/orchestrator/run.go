@@ -33,6 +33,7 @@ import (
 const (
 	defaultMaxSandboxOutput = 4096
 	defaultSandboxCommand   = "go test ./..."
+	defaultSkillName        = "code-review"
 )
 
 // Options configures one review run.
@@ -44,6 +45,7 @@ type Options struct {
 	Runtime    string
 	RepoPath   string
 	Now        time.Time
+	Planner    Planner
 }
 
 // Result is returned by the orchestrator after reports are written.
@@ -55,7 +57,79 @@ type Result struct {
 	DBPath       string
 }
 
-// Run executes a deterministic review over fixture diffs.
+// Planner produces the model-coordinated review plan.
+type Planner interface {
+	PlanReview(ctx context.Context, req PlanRequest) (review.ReviewPlan, error)
+}
+
+// PlanRequest contains non-secret context for model planning.
+type PlanRequest struct {
+	Model   string
+	Runtime string
+	Skill   string
+	Files   []review.DiffFile
+}
+
+// EnvPlanner validates OpenAI-compatible model configuration for real runs.
+type EnvPlanner struct {
+	APIKey  string
+	BaseURL string
+}
+
+// PlanReview records the model orchestration plan without making external calls
+// from the example. Unit tests can use the fake runtime without model keys.
+func (p EnvPlanner) PlanReview(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+	if err := ctx.Err(); err != nil {
+		return review.ReviewPlan{}, err
+	}
+	runtimeName := strings.TrimSpace(req.Runtime)
+	if runtimeName == "" {
+		runtimeName = "container"
+	}
+	modelName := strings.TrimSpace(req.Model)
+	if strings.EqualFold(runtimeName, "fake") {
+		if modelName == "" {
+			modelName = "mock-model"
+		}
+		return reviewPlan(modelName, "mock", "mock_planner", req.Skill, runtimeName), nil
+	}
+	if modelName == "" {
+		return review.ReviewPlan{}, fmt.Errorf("model orchestration requires --model or MODEL for runtime %q; use --runtime fake for unit tests", runtimeName)
+	}
+	if strings.TrimSpace(p.APIKey) == "" {
+		return review.ReviewPlan{}, fmt.Errorf("model orchestration requires OPENAI_API_KEY for runtime %q; use --runtime fake for unit tests", runtimeName)
+	}
+	return reviewPlan(modelName, "openai_compatible", "configured_model", req.Skill, runtimeName), nil
+}
+
+func reviewPlan(modelName string, provider string, source string, skill string, runtimeName string) review.ReviewPlan {
+	if skill == "" {
+		skill = defaultSkillName
+	}
+	return review.ReviewPlan{
+		Model:    redact.Text(modelName).Text,
+		Provider: provider,
+		Source:   source,
+		Skill:    skill,
+		Runtime:  runtimeName,
+		Commands: []string{
+			defaultSandboxCommand,
+		},
+		RuleSources: []string{
+			"skills/code-review/SKILL.md",
+			"skills/code-review/docs/rules.md",
+		},
+	}
+}
+
+func defaultPlanner() Planner {
+	return EnvPlanner{
+		APIKey:  os.Getenv("OPENAI_API_KEY"),
+		BaseURL: os.Getenv("OPENAI_BASE_URL"),
+	}
+}
+
+// Run executes a model-planned review over fixture diffs.
 func Run(ctx context.Context, opts Options) (Result, error) {
 	if opts.FixtureDir == "" {
 		opts.FixtureDir = "testdata/fixtures"
@@ -118,6 +192,21 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
+	planner := opts.Planner
+	if planner == nil {
+		planner = defaultPlanner()
+	}
+	plan, err := planner.PlanReview(ctx, PlanRequest{
+		Model:   opts.Model,
+		Runtime: opts.Runtime,
+		Skill:   defaultSkillName,
+		Files:   files,
+	})
+	if err != nil {
+		_ = st.FinishTask(ctx, task.ID, review.TaskStatusFailed, err.Error())
+		return Result{}, err
+	}
+
 	findings := rules.Evaluate(files)
 	if err := st.SaveFindings(ctx, task.ID, findings); err != nil {
 		return Result{}, err
@@ -163,7 +252,8 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	conclusion := conclusionFor(task.Status, findings, runs)
 	r := review.Report{
 		Task:                task,
-		Summary:             summarizeOutcome(files, findings, runs),
+		Summary:             summarizeOutcome(files, findings, runs, plan),
+		Plan:                plan,
 		ChangedFiles:        files,
 		Findings:            findings,
 		SandboxRuns:         runs,
@@ -246,8 +336,8 @@ func summarizeDiff(files []review.DiffFile, fixtureNames []string) string {
 	return fmt.Sprintf("Reviewed %d diff fixtures across %d changed files.", len(fixtureNames), len(files))
 }
 
-func summarizeOutcome(files []review.DiffFile, findings []review.Finding, runs []review.SandboxRun) string {
-	return fmt.Sprintf("Reviewed %d changed files, produced %d findings, and recorded %d sandbox runs.", len(files), len(findings), len(runs))
+func summarizeOutcome(files []review.DiffFile, findings []review.Finding, runs []review.SandboxRun, plan review.ReviewPlan) string {
+	return fmt.Sprintf("Model plan %q coordinated skill %q for %d changed files, produced %d findings, and recorded %d sandbox runs.", plan.Model, plan.Skill, len(files), len(findings), len(runs))
 }
 
 func countFindingRedactions(findings []review.Finding) int {

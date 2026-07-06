@@ -31,9 +31,6 @@ func main() {
 	if *dbPath == "" {
 		*dbPath = filepath.Join(*outDir, "review_agent.db")
 	}
-	if *modelName == "" {
-		fmt.Fprintln(os.Stderr, "warning: no model configured; deterministic fixture review will run without model calls")
-	}
 	result, err := orchestrator.Run(context.Background(), orchestrator.Options{
 		FixtureDir: *fixtureDir,
 		OutDir:     *outDir,

@@ -13,13 +13,15 @@ does not expand the public API of the root framework.
 ```bash
 cd examples/code_review_agent
 go test ./...
-go run . -fixture-dir testdata/fixtures -out-dir ./out -model "$MODEL"
+OPENAI_API_KEY="..." MODEL="gpt-4.1-mini" \
+  go run . -fixture-dir testdata/fixtures -out-dir ./out -model "$MODEL"
 ```
 
 The CLI reads diff fixtures, records a review task, writes `review_report.json`
-and `review_report.md`, and prints an English summary. Unit tests use fake
-model and sandbox seams; real CLI usage can pass an OpenAI-compatible model
-through `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `MODEL` or `--model`.
+and `review_report.md`, and prints an English summary. Unit tests use mock
+model and sandbox seams with `--runtime fake`; non-fake CLI runs validate
+OpenAI-compatible model configuration through `OPENAI_API_KEY`,
+`OPENAI_BASE_URL`, and `MODEL` or `--model`.
 
 ## Runtime Policy
 
@@ -27,6 +29,8 @@ through `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and `MODEL` or `--model`.
 - `local` is an explicit development fallback only.
 - Tests use `fake` or dry-run execution to avoid Docker, E2B, and API-key
   dependencies.
+- Non-fake runtimes require model orchestration configuration and fail fast in
+  English when `MODEL` / `--model` or `OPENAI_API_KEY` is missing.
 - Runtime initialization failure is recorded as a sandbox failure and should
   not silently fall back to `local`.
 

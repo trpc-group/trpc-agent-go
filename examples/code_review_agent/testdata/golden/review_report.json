@@ -7,7 +7,21 @@
     "started_at": "2026-07-06T00:00:00Z",
     "finished_at": "2026-07-06T00:00:00Z"
   },
-  "summary": "Reviewed 9 changed files, produced 18 findings, and recorded 1 sandbox runs.",
+  "summary": "Model plan \"mock-model\" coordinated skill \"code-review\" for 9 changed files, produced 18 findings, and recorded 1 sandbox runs.",
+  "plan": {
+    "model": "mock-model",
+    "provider": "mock",
+    "source": "mock_planner",
+    "skill": "code-review",
+    "runtime": "fake",
+    "commands": [
+      "go test ./..."
+    ],
+    "rule_sources": [
+      "skills/code-review/SKILL.md",
+      "skills/code-review/docs/rules.md"
+    ]
+  },
   "changed_files": [
     {
       "old_path": "",

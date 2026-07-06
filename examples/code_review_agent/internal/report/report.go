@@ -74,6 +74,18 @@ func Markdown(r review.Report) []byte {
 	fmt.Fprintf(&b, "# Code Review Report\n\n")
 	fmt.Fprintf(&b, "Task `%s` finished with status `%s`.\n\n", r.Task.ID, r.Task.Status)
 	fmt.Fprintf(&b, "## Summary\n\n%s\n\n", r.Summary)
+	fmt.Fprintf(&b, "## Model Plan\n\n")
+	if r.Plan.Model == "" {
+		fmt.Fprintf(&b, "No model plan recorded.\n\n")
+	} else {
+		fmt.Fprintf(&b, "- model: %s\n", r.Plan.Model)
+		fmt.Fprintf(&b, "- provider: %s\n", r.Plan.Provider)
+		fmt.Fprintf(&b, "- source: %s\n", r.Plan.Source)
+		fmt.Fprintf(&b, "- skill: %s\n", r.Plan.Skill)
+		fmt.Fprintf(&b, "- runtime: %s\n", r.Plan.Runtime)
+		fmt.Fprintf(&b, "- commands: %s\n", strings.Join(r.Plan.Commands, ", "))
+		fmt.Fprintf(&b, "- rules: %s\n\n", strings.Join(r.Plan.RuleSources, ", "))
+	}
 	fmt.Fprintf(&b, "## Findings\n\n")
 	if len(r.Findings) == 0 {
 		fmt.Fprintf(&b, "No findings.\n\n")

@@ -114,6 +114,17 @@ type PermissionDecisionRecord struct {
 	CreatedAt       time.Time `json:"created_at"`
 }
 
+// ReviewPlan records the model-produced orchestration plan without secrets.
+type ReviewPlan struct {
+	Model       string   `json:"model"`
+	Provider    string   `json:"provider"`
+	Source      string   `json:"source"`
+	Skill       string   `json:"skill"`
+	Runtime     string   `json:"runtime"`
+	Commands    []string `json:"commands"`
+	RuleSources []string `json:"rule_sources"`
+}
+
 // ArtifactRecord stores generated report metadata.
 type ArtifactRecord struct {
 	ID        string    `json:"id"`
@@ -144,6 +155,7 @@ type ReviewMetrics struct {
 type Report struct {
 	Task                ReviewTask                 `json:"task"`
 	Summary             string                     `json:"summary"`
+	Plan                ReviewPlan                 `json:"plan"`
 	ChangedFiles        []DiffFile                 `json:"changed_files"`
 	Findings            []Finding                  `json:"findings"`
 	SandboxRuns         []SandboxRun               `json:"sandbox_runs"`
