@@ -37,10 +37,13 @@ const (
 )
 
 var (
-	macosDenyRe          = regexp.MustCompile(`deny\([^)]+\)\s+([^\s]+)(?:\s+(.+))?`)
-	denialCapsCacheMu    sync.Mutex
-	denialCapsByMacOSVer = map[string]DiagnosticsCapability{}
-	randomHexFallbackSeq atomic.Uint64
+	macosDenyRe           = regexp.MustCompile(`deny\([^)]+\)\s+([^\s]+)(?:\s+(.+))?`)
+	denialCapsCacheMu     sync.Mutex
+	denialCapsByMacOSVer  = map[string]DiagnosticsCapability{}
+	randomHexFallbackSeq  atomic.Uint64
+	macosLogStreamCommand = macosLogPath
+	cryptoRandRead        = rand.Read
+	macOSVersionCommand   = "/usr/bin/sw_vers"
 )
 
 type macosLogEntry struct {
@@ -443,7 +446,7 @@ func startMacOSLogStreamMonitorWithPredicate(predicate string) (*macosLogStreamM
 	}
 	cmd := exec.CommandContext(
 		monitorCtx,
-		macosLogPath,
+		macosLogStreamCommand,
 		"stream",
 		"--style", "ndjson",
 		"--predicate", predicate,
@@ -847,7 +850,7 @@ func isSandboxTagChar(ch byte) bool {
 
 func randomHex(n int) string {
 	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := cryptoRandRead(b); err != nil {
 		seed := fmt.Sprintf("%d:%d", time.Now().UnixNano(), randomHexFallbackSeq.Add(1))
 		sum := sha256.Sum256([]byte(seed))
 		return hex.EncodeToString(sum[:])[:n*2]
@@ -856,7 +859,7 @@ func randomHex(n int) string {
 }
 
 func macOSVersionKey() string {
-	out, err := exec.Command("/usr/bin/sw_vers", "-productVersion").Output()
+	out, err := exec.Command(macOSVersionCommand, "-productVersion").Output()
 	if err != nil {
 		return "unknown"
 	}
