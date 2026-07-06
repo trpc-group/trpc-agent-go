@@ -40,7 +40,10 @@ func (r *Runtime) runProgram(
 	runDiagnostics := Diagnostics{}
 	if diagnosticsCh != nil {
 		defer func() {
-			diagnosticsCh <- runDiagnostics
+			select {
+			case diagnosticsCh <- runDiagnostics:
+			default:
+			}
 		}()
 	}
 	prep, err := r.prepareRun(ctx, ws, spec)
@@ -57,12 +60,8 @@ func (r *Runtime) runProgram(
 	start := time.Now()
 	env := r.buildEnvironment(ws, spec)
 	diagnostics := sandboxDenialRun{}
-	if diagnosticsCh != nil {
-		if err := r.ensureDenialMonitor(); err != nil {
-			diagnostics = sandboxDenialRun{}
-		} else {
-			diagnostics = r.sandboxDenialRunForCollecting(prep.profile)
-		}
+	if diagnosticsCh != nil && r.ensureDenialMonitor() == nil {
+		diagnostics = r.sandboxDenialRunForCollecting(prep.profile)
 	}
 	cmd, backendName, cleanup, err := r.commandForProfile(
 		runCtx, prep.profile, ws, prep.cwd, env, spec, diagnostics,

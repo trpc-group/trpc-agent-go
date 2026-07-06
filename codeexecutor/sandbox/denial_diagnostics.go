@@ -100,7 +100,10 @@ type diagnosticsKey struct{}
 
 // WithDiagnostics asks RunProgram to collect sandbox diagnostics for this call.
 // Without this context value, RunProgram keeps its normal zero-overhead
-// execution path. The returned channel receives exactly one Diagnostics value.
+// execution path. The returned channel is buffered for one Diagnostics value;
+// callers should create a fresh diagnostics context for each RunProgram call.
+// If the channel is already full, later diagnostics are dropped so RunProgram
+// cannot block on diagnostic delivery.
 func WithDiagnostics(ctx context.Context) (context.Context, <-chan Diagnostics) {
 	ch := make(chan Diagnostics, 1)
 	return context.WithValue(ctx, diagnosticsKey{}, ch), ch

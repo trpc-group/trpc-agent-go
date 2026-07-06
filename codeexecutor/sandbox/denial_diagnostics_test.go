@@ -11,6 +11,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -61,6 +62,62 @@ func TestRunProgramWithDiagnosticsDisabledProfile(t *testing.T) {
 	}
 	if res.ExitCode != 0 || diagnostics.Denials != nil {
 		t.Fatalf("result=%#v diagnostics=%#v, want success with nil denials", res, diagnostics)
+	}
+}
+
+func TestRunProgramWithDiagnosticsContextReuseDoesNotBlock(t *testing.T) {
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(DangerFullAccessProfile()),
+	)
+	ws, err := rt.CreateWorkspace(context.Background(), "run/diagnostics-reused-context", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, diagnosticsCh := WithDiagnostics(context.Background())
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:  "bash",
+		Args: []string{"-c", "echo first"},
+	})
+	if err != nil {
+		t.Fatalf("first run error: %v", err)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("first run result = %#v, want success", res)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+			Cmd:  "bash",
+			Args: []string{"-c", "echo second"},
+		})
+		if err != nil {
+			done <- err
+			return
+		}
+		if res.ExitCode != 0 {
+			done <- errors.New("second run returned non-zero exit code")
+			return
+		}
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("second run error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second run blocked while diagnostics channel was full")
+	}
+
+	_ = readDiagnostics(t, diagnosticsCh)
+	select {
+	case diagnostics := <-diagnosticsCh:
+		t.Fatalf("reused diagnostics channel received extra value: %#v", diagnostics)
+	default:
 	}
 }
 
