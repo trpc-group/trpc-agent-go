@@ -63,6 +63,9 @@ func TestRunProgramWithDiagnosticsDisabledProfile(t *testing.T) {
 	if res.ExitCode != 0 || diagnostics.Denials != nil {
 		t.Fatalf("result=%#v diagnostics=%#v, want success with nil denials", res, diagnostics)
 	}
+	if rt.sandboxDenialCollectingReady() {
+		t.Fatalf("sandboxDenialCollectingReady = true after disabled profile run, want false")
+	}
 }
 
 func TestRunProgramWithDiagnosticsContextReuseDoesNotBlock(t *testing.T) {
