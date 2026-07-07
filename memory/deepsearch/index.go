@@ -29,11 +29,11 @@ type EntryRow struct {
 
 type attachedEntry struct {
 	*memory.Entry
-	DeepSearchIndex       *Index    `json:"deepsearch_index,omitempty"`
-	DeepSearchText        string    `json:"deepsearch_text,omitempty"`
-	DeepSearchFingerprint string    `json:"deepsearch_fingerprint,omitempty"`
-	DeepSearchVersion     int       `json:"deepsearch_version,omitempty"`
-	DeepSearchIndexedAt   time.Time `json:"deepsearch_indexed_at,omitempty"`
+	DeepSearchIndex       *Index     `json:"deepsearch_index,omitempty"`
+	DeepSearchText        string     `json:"deepsearch_text,omitempty"`
+	DeepSearchFingerprint string     `json:"deepsearch_fingerprint,omitempty"`
+	DeepSearchVersion     int        `json:"deepsearch_version,omitempty"`
+	DeepSearchIndexedAt   *time.Time `json:"deepsearch_indexed_at,omitempty"`
 }
 
 // MarshalAttachedEntry marshals a memory entry with optional hidden DeepSearch
@@ -49,7 +49,8 @@ func MarshalAttachedEntry(entry *memory.Entry, index *Index) ([]byte, error) {
 		row.DeepSearchText = IndexText(index)
 		row.DeepSearchFingerprint = index.SourceFingerprint
 		row.DeepSearchVersion = index.Version
-		row.DeepSearchIndexedAt = index.IndexedAt
+		indexedAt := index.IndexedAt
+		row.DeepSearchIndexedAt = &indexedAt
 	}
 	return json.Marshal(row)
 }

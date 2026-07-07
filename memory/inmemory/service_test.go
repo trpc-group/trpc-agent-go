@@ -12,6 +12,7 @@ package inmemory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -22,6 +23,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -29,9 +31,212 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+type deepSearchTestModel struct {
+	calls int
+}
+
+func (m *deepSearchTestModel) GenerateContent(
+	_ context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	m.calls++
+	var inputs []struct {
+		ID     string   `json:"id"`
+		Text   string   `json:"text"`
+		Topics []string `json:"topics"`
+	}
+	if len(request.Messages) >= 2 {
+		_ = json.Unmarshal([]byte(request.Messages[1].Content), &inputs)
+	}
+	output := struct {
+		Memories []struct {
+			ID   string   `json:"id"`
+			Cues []string `json:"cues"`
+			Tags []string `json:"tags"`
+		} `json:"memories"`
+	}{}
+	for _, input := range inputs {
+		tags := input.Topics
+		if len(tags) == 0 {
+			tags = []string{"memory"}
+		}
+		output.Memories = append(output.Memories, struct {
+			ID   string   `json:"id"`
+			Cues []string `json:"cues"`
+			Tags []string `json:"tags"`
+		}{
+			ID:   input.ID,
+			Cues: []string{input.Text},
+			Tags: tags,
+		})
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		return nil, err
+	}
+	ch := make(chan *model.Response, 1)
+	ch <- &model.Response{
+		Choices: []model.Choice{
+			{Message: model.NewAssistantMessage(string(raw))},
+		},
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *deepSearchTestModel) Info() model.Info {
+	return model.Info{Name: "deepsearch-test"}
+}
+
+func findToolByName(t *testing.T, tools []tool.Tool, name string) tool.Tool {
+	t.Helper()
+	for _, tl := range tools {
+		if tl.Declaration().Name == name {
+			return tl
+		}
+	}
+	t.Fatalf("tool %s not found", name)
+	return nil
+}
+
 func TestNewMemoryService(t *testing.T) {
 	service := NewMemoryService()
 	require.NotNil(t, service, "NewMemoryService should not return nil")
+}
+
+func TestMemoryService_DeepSearchDisabled(t *testing.T) {
+	service := NewMemoryService()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+
+	err := service.EnsureIndex(context.Background(), userKey)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "deepsearch is not enabled")
+
+	searchTool := findToolByName(t, service.Tools(), memory.SearchToolName)
+	require.NotNil(t, searchTool.Declaration().InputSchema)
+	assert.NotContains(t, searchTool.Declaration().InputSchema.Properties, "search_mode")
+
+	nilModelService := NewMemoryService(WithDeepSearch(nil))
+	searchTool = findToolByName(t, nilModelService.Tools(), memory.SearchToolName)
+	require.NotNil(t, searchTool.Declaration().InputSchema)
+	assert.NotContains(t, searchTool.Declaration().InputSchema.Properties, "search_mode")
+}
+
+func TestMemoryService_DeepSearchIndexLifecycle(t *testing.T) {
+	model := &deepSearchTestModel{}
+	service := NewMemoryService(WithDeepSearch(model))
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+
+	require.NoError(t, service.AddMemory(ctx, userKey, "User likes espresso.", []string{"coffee"}))
+	result, err := service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey: userKey,
+		Query:   "espresso",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, model.calls)
+	require.Len(t, result.Cues, 1)
+	require.Equal(t, "User likes espresso.", result.Cues[0].Text)
+
+	result, err = service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey: userKey,
+		Query:   "coffee",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, model.calls)
+	require.Len(t, result.Cues, 1)
+
+	memories, err := service.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, memories, 1)
+	oldID := memories[0].ID
+	updateResult := &memory.UpdateResult{}
+	require.NoError(t, service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: oldID},
+		"User likes green tea.",
+		[]string{"tea"},
+		memory.WithUpdateResult(updateResult),
+	))
+	require.NotEqual(t, oldID, updateResult.MemoryID)
+
+	result, err = service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey: userKey,
+		Query:   "tea",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, model.calls)
+	require.Len(t, result.Cues, 1)
+	require.Equal(t, "User likes green tea.", result.Cues[0].Text)
+
+	expanded, err := service.ExpandTags(ctx, deepsearch.TagExpandRequest{
+		UserKey:       userKey,
+		CueIDs:        []string{result.Cues[0].ID},
+		MaxTagsPerCue: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, expanded.Tags, 1)
+	require.Equal(t, "tea", expanded.Tags[0].Text)
+
+	contents, err := service.LoadContents(ctx, deepsearch.ContentLoadRequest{
+		UserKey:    userKey,
+		ContentIDs: []string{updateResult.MemoryID},
+	})
+	require.NoError(t, err)
+	require.Len(t, contents.Contents, 1)
+	require.Equal(t, "User likes green tea.", contents.Contents[0].Text)
+
+	require.NoError(t, service.DeleteMemory(ctx, memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: updateResult.MemoryID,
+	}))
+	result, err = service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey: userKey,
+		Query:   "tea",
+	})
+	require.NoError(t, err)
+	require.Empty(t, result.Cues)
+}
+
+func TestMemoryService_DeepSearchClearAndUserIsolation(t *testing.T) {
+	model := &deepSearchTestModel{}
+	service := NewMemoryService(WithDeepSearch(model))
+	ctx := context.Background()
+	userA := memory.UserKey{AppName: "test-app", UserID: "user-a"}
+	userB := memory.UserKey{AppName: "test-app", UserID: "user-b"}
+
+	require.NoError(t, service.AddMemory(ctx, userA, "User A likes espresso.", []string{"coffee"}))
+	require.NoError(t, service.AddMemory(ctx, userB, "User B likes matcha.", []string{"tea"}))
+
+	resultA, err := service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey: userA,
+		Query:   "espresso",
+	})
+	require.NoError(t, err)
+	require.Len(t, resultA.Cues, 1)
+
+	resultB, err := service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey: userB,
+		Query:   "espresso",
+	})
+	require.NoError(t, err)
+	require.Empty(t, resultB.Cues)
+
+	require.NoError(t, service.ClearMemories(ctx, userA))
+	resultA, err = service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey: userA,
+		Query:   "espresso",
+	})
+	require.NoError(t, err)
+	require.Empty(t, resultA.Cues)
+
+	resultB, err = service.SearchCues(ctx, deepsearch.CueSearchRequest{
+		UserKey: userB,
+		Query:   "matcha",
+	})
+	require.NoError(t, err)
+	require.Len(t, resultB.Cues, 1)
 }
 
 func TestMemoryService_AddMemory(t *testing.T) {

@@ -21,6 +21,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/toolsnapshot"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -195,6 +197,87 @@ func TestToolActivationPostToolResultIgnoresUnmatchedSkill(t *testing.T) {
 	}
 	agt.handleToolActivationPostToolResult(context.Background(), inv, ev)
 	require.Empty(t, invocationToolActivationRecords(inv))
+}
+
+func TestToolActivationOnDeepSearchResultBool(t *testing.T) {
+	agt := New(
+		"agent",
+		WithActivatableToolSets([]tool.ToolSet{
+			activationToolSet{
+				name:  deepsearch.ToolSetName,
+				tools: []tool.Tool{activationTool{name: deepsearch.CueSearchToolName}},
+			},
+		}),
+		WithToolActivationOnToolResult(
+			memory.SearchToolName,
+			[]string{deepsearch.ToolSetName},
+			WithToolActivationResultJSONBool("deepsearch_activated", true),
+			WithToolActivationMode(ToolActivationModeOnly),
+			WithToolActivationLifetime(ToolActivationLifetimeInvocation),
+		),
+	)
+	ev := toolResultEvent(
+		memory.SearchToolName,
+		`{"deepsearch_activated":true}`,
+	)
+	records := agt.activationRecordsForToolResult(ev)
+	require.Equal(t, []toolActivationRecord{
+		{
+			Mode:        ToolActivationModeOnly,
+			Lifetime:    ToolActivationLifetimeInvocation,
+			ToolSetName: deepsearch.ToolSetName,
+		},
+	}, records)
+
+	for _, content := range []string{
+		`{"deepsearch_activated":false}`,
+		`{"other":true}`,
+		`not-json`,
+		``,
+	} {
+		t.Run(content, func(t *testing.T) {
+			require.Empty(t, agt.activationRecordsForToolResult(
+				toolResultEvent(memory.SearchToolName, content),
+			))
+		})
+	}
+	require.Empty(t, agt.activationRecordsForToolResult(
+		toolResultEvent("other_tool", `{"deepsearch_activated":true}`),
+	))
+}
+
+func TestToolActivationOnToolResultSessionLifetime(t *testing.T) {
+	agt := New(
+		"agent",
+		WithActivatableToolSets([]tool.ToolSet{
+			activationToolSet{name: "browser", tools: []tool.Tool{activationTool{name: "open"}}},
+		}),
+		WithToolActivationOnToolResult(
+			"memory_search",
+			[]string{"browser"},
+			WithToolActivationLifetime(ToolActivationLifetimeSession),
+		),
+	)
+	inv := &agent.Invocation{
+		AgentName: "agent",
+		Session:   session.NewSession("app", "user", "session"),
+	}
+	ev := toolResultEvent("memory_search", `{"count":1}`)
+	agt.handleToolActivationPostToolResult(context.Background(), inv, ev)
+	require.Equal(t, []toolActivationRecord{
+		{
+			Mode:        ToolActivationModeInclude,
+			Lifetime:    ToolActivationLifetimeSession,
+			ToolSetName: "browser",
+		},
+	}, invocationToolActivationRecords(inv))
+
+	sessionKey := toolActivationSessionKey("agent", toolActivationRecord{
+		Mode:        ToolActivationModeInclude,
+		Lifetime:    ToolActivationLifetimeSession,
+		ToolSetName: "browser",
+	})
+	require.NotEmpty(t, ev.StateDelta[sessionKey])
 }
 
 func TestToolActivationSkillLoadUpdatesNextModelRequestTools(t *testing.T) {
@@ -921,6 +1004,21 @@ func activationFinalResponse(content string) *model.Response {
 				Content: content,
 			},
 		}},
+	}
+}
+
+func toolResultEvent(toolName, content string) *event.Event {
+	return &event.Event{
+		StateDelta: map[string][]byte{},
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:     model.RoleTool,
+					ToolName: toolName,
+					Content:  content,
+				},
+			}},
+		},
 	}
 }
 

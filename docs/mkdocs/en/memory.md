@@ -43,6 +43,101 @@ Auto Mode is available when an Extractor is configured and is recommended as the
 - **Agentic Mode**: Agent automatically decides when to call memory tools based on conversation content (e.g., when user mentions personal information or preferences), user sees tool calls, suitable for scenarios requiring precise control over memory content
 - **Auto Mode (recommended)**: Natural conversation flow, system passively learns about users, simplified UX
 
+### DeepSearch
+
+DeepSearch is an optional second-stage retrieval capability for Memory. It does
+not replace `memory.Entry` and does not create another authoritative memory
+source. Instead, it derives hidden cue/tag indexes from existing memory entries
+and attaches those derived fields to the same memory row.
+
+DeepSearch keeps the normal memory model intact:
+
+- `memory.Entry.Memory.Memory` remains the only authoritative content that the
+  Agent should cite as remembered evidence.
+- Cue and tag fields are derived retrieval metadata. They help the Agent find a
+  memory when the first semantic or keyword search is incomplete, but they are
+  not exposed when reading public memory entries.
+- The default behavior is unchanged. If DeepSearch is not configured, Memory
+  does not call an index model, does not create derived DeepSearch fields, and
+  `memory_search` does not expose `search_mode`.
+
+#### How DeepSearch works
+
+When a memory backend is configured with `WithDeepSearch(indexModel)`, the
+backend can build a hidden row-attached index for each current memory entry. The
+index contains:
+
+| Field | Purpose |
+| ----- | ------- |
+| `content` | A reference back to the original `memory.Entry` text and metadata. |
+| `cues` | Short phrases that a future user question may contain. |
+| `tags` | Stable entities, topics, relations, dates, people, places, or aspects used for expansion. |
+| `source_fingerprint` | A digest of the source memory ID, update time, and topics. It marks stale indexes. |
+| `version` / `indexed_at` | Index format and creation metadata. |
+
+The backend checks the fingerprint before using the index. If a memory is
+added, updated, deleted, or cleared, the derived index is invalidated or rebuilt
+from the current memory entries. DeepSearch failures are returned explicitly;
+there is no deterministic keyword fallback that silently writes partial indexes.
+
+#### Enabling DeepSearch
+
+DeepSearch is opt-in at the memory backend:
+
+```go
+indexModel := openai.New("deepseek-v4-flash")
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithDeepSearch(indexModel),
+)
+```
+
+After this option is enabled, `memoryService.Tools()` returns a DeepSearch-aware
+`memory_search` declaration. The tool keeps normal search as the default mode,
+and only then exposes the optional `search_mode` parameter:
+
+```json
+{"query": "Alice hiking trip"}
+{"query": "Alice hiking trip", "search_mode": "deepsearch"}
+```
+
+To let an LLMAgent use the second-stage cue/tag/content tools, register the
+DeepSearch tools as an activatable tool set and activate them from the
+`deepsearch_activated=true` field returned by `memory_search`:
+
+```go
+llmAgent := llmagent.New(
+    "memory-assistant",
+    llmagent.WithTools(memoryService.Tools()),
+    llmagent.WithActivatableToolSets([]tool.ToolSet{
+        memorytool.NewDeepSearchToolSet(),
+    }),
+    llmagent.WithToolActivationOnToolResult(
+        memory.SearchToolName,
+        []string{deepsearch.ToolSetName},
+        llmagent.WithToolActivationResultJSONBool("deepsearch_activated", true),
+    ),
+)
+```
+
+Use the standard search first. If the result is missing, conflicting, or not
+enough to answer with confidence, call `memory_search` again with
+`search_mode="deepsearch"`. A successful DeepSearch call returns the ordinary
+search results and `deepsearch_activated=true`; the Agent can then use the
+activated cue/tag/content tools for the current invocation. Without the
+LLMAgent activation configuration above, `memory_search` still performs the
+DeepSearch index check, but no extra tools are added to the visible tool set.
+
+#### Compatibility
+
+DeepSearch is designed to be safe for existing users:
+
+- Without `WithDeepSearch`, the tool schema and runtime behavior are unchanged.
+- Public `memory.Entry` JSON does not include hidden DeepSearch fields.
+- Normal `ReadMemories` and standard `SearchMemories` do not concatenate cue/tag
+  text into the authoritative memory content.
+- DeepSearch indexes are derived data and can be rebuilt from existing memory
+  entries.
+
 ## Core Values
 
 - **Context Continuity**: Maintain user history across sessions, avoiding

@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
@@ -35,6 +36,15 @@ type mockMemoryService struct {
 	counter          int
 	ensureIndexCalls int
 	ensureIndexErr   error
+	cueResult        *deepsearch.CueSearchResult
+	cueErr           error
+	tagResult        *deepsearch.TagExpandResult
+	tagErr           error
+	contentResult    *deepsearch.ContentLoadResult
+	contentErr       error
+	cueCalls         int
+	tagCalls         int
+	contentCalls     int
 }
 
 func newMockMemoryService() *mockMemoryService {
@@ -127,6 +137,48 @@ func (m *mockMemoryService) EnsureIndex(ctx context.Context, userKey memory.User
 	return m.ensureIndexErr
 }
 
+func (m *mockMemoryService) SearchCues(
+	ctx context.Context,
+	req deepsearch.CueSearchRequest,
+) (*deepsearch.CueSearchResult, error) {
+	m.cueCalls++
+	if m.cueErr != nil {
+		return nil, m.cueErr
+	}
+	if m.cueResult != nil {
+		return m.cueResult, nil
+	}
+	return &deepsearch.CueSearchResult{Query: req.Query}, nil
+}
+
+func (m *mockMemoryService) ExpandTags(
+	ctx context.Context,
+	req deepsearch.TagExpandRequest,
+) (*deepsearch.TagExpandResult, error) {
+	m.tagCalls++
+	if m.tagErr != nil {
+		return nil, m.tagErr
+	}
+	if m.tagResult != nil {
+		return m.tagResult, nil
+	}
+	return &deepsearch.TagExpandResult{}, nil
+}
+
+func (m *mockMemoryService) LoadContents(
+	ctx context.Context,
+	req deepsearch.ContentLoadRequest,
+) (*deepsearch.ContentLoadResult, error) {
+	m.contentCalls++
+	if m.contentErr != nil {
+		return nil, m.contentErr
+	}
+	if m.contentResult != nil {
+		return m.contentResult, nil
+	}
+	return &deepsearch.ContentLoadResult{}, nil
+}
+
 func (m *mockMemoryService) Tools() []tool.Tool {
 	return []tool.Tool{}
 }
@@ -140,6 +192,71 @@ func (m *mockMemoryService) Close() error {
 }
 
 func (m *mockMemoryService) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
+	return "", false
+}
+
+type standardOnlyMemoryService struct {
+	service *mockMemoryService
+}
+
+func (s standardOnlyMemoryService) AddMemory(
+	ctx context.Context,
+	userKey memory.UserKey,
+	memoryStr string,
+	topics []string,
+	opts ...memory.AddOption,
+) error {
+	return s.service.AddMemory(ctx, userKey, memoryStr, topics, opts...)
+}
+
+func (s standardOnlyMemoryService) UpdateMemory(
+	ctx context.Context,
+	memoryKey memory.Key,
+	mem string,
+	topics []string,
+	opts ...memory.UpdateOption,
+) error {
+	return s.service.UpdateMemory(ctx, memoryKey, mem, topics, opts...)
+}
+
+func (s standardOnlyMemoryService) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
+	return s.service.DeleteMemory(ctx, memoryKey)
+}
+
+func (s standardOnlyMemoryService) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
+	return s.service.ClearMemories(ctx, userKey)
+}
+
+func (s standardOnlyMemoryService) ReadMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	limit int,
+) ([]*memory.Entry, error) {
+	return s.service.ReadMemories(ctx, userKey, limit)
+}
+
+func (s standardOnlyMemoryService) SearchMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	query string,
+	opts ...memory.SearchOption,
+) ([]*memory.Entry, error) {
+	return s.service.SearchMemories(ctx, userKey, query, opts...)
+}
+
+func (s standardOnlyMemoryService) Tools() []tool.Tool {
+	return nil
+}
+
+func (s standardOnlyMemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
+	return nil
+}
+
+func (s standardOnlyMemoryService) Close() error {
+	return nil
+}
+
+func (s standardOnlyMemoryService) BuildInstruction(enabledTools []string, defaultPrompt string) (string, bool) {
 	return "", false
 }
 
@@ -301,6 +418,63 @@ func TestMemoryTool_SearchMemory_DeepSearchMode(t *testing.T) {
 	assert.Equal(t, "User likes coffee", response.Results[0].Memory)
 }
 
+func TestMemoryTool_SearchMemory_DeepSearchStandardModeDoesNotEnsureIndex(t *testing.T) {
+	service := newMockMemoryService()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	err := service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
+	require.NoError(t, err)
+
+	tool := NewDeepSearchSearchTool()
+	ctx := createMockContext("test-app", "test-user", service)
+	args := map[string]any{
+		"query":       "coffee",
+		"search_mode": "standard",
+	}
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.NoError(t, err)
+	response, ok := result.(*SearchMemoryResponse)
+	require.True(t, ok)
+
+	assert.Equal(t, 0, service.ensureIndexCalls)
+	assert.Empty(t, response.SearchMode)
+	assert.False(t, response.DeepSearchActivated)
+	assert.Len(t, response.Results, 1)
+}
+
+func TestMemoryTool_SearchMemory_DeepSearchErrors(t *testing.T) {
+	tool := NewDeepSearchSearchTool()
+	service := newMockMemoryService()
+	service.ensureIndexErr = fmt.Errorf("index failed")
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	require.NoError(t, service.AddMemory(context.Background(), userKey, "User likes coffee", nil))
+
+	ctx := createMockContext("test-app", "test-user", service)
+	jsonArgs, err := json.Marshal(map[string]any{
+		"query":       "coffee",
+		"search_mode": "deepsearch",
+	})
+	require.NoError(t, err)
+	_, err = tool.Call(ctx, jsonArgs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "index failed")
+
+	standardOnly := standardOnlyMemoryService{service: service}
+	ctx = createMockContext("test-app", "test-user", standardOnly)
+	_, err = tool.Call(ctx, jsonArgs)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "deepsearch is not enabled")
+
+	result, err := tool.Call(ctx, []byte(`{}`))
+	require.NoError(t, err)
+	response, ok := result.(*SearchMemoryResponse)
+	require.True(t, ok)
+	assert.Empty(t, response.Results)
+	assert.False(t, response.DeepSearchActivated)
+}
+
 func TestMemoryTool_SearchMemory_DefaultIgnoresDeepSearchMode(t *testing.T) {
 	service := newMockMemoryService()
 	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
@@ -325,6 +499,117 @@ func TestMemoryTool_SearchMemory_DefaultIgnoresDeepSearchMode(t *testing.T) {
 	assert.Empty(t, response.SearchMode)
 	assert.False(t, response.DeepSearchActivated)
 	assert.Len(t, response.Results, 1)
+}
+
+func TestMemoryTool_DeepSearchCueTagContentTools(t *testing.T) {
+	service := newMockMemoryService()
+	service.cueResult = &deepsearch.CueSearchResult{
+		Query: "coffee",
+		Cues:  []deepsearch.Cue{{ID: "cue:m1:0", Text: "coffee preference", Score: 1}},
+	}
+	service.tagResult = &deepsearch.TagExpandResult{
+		Tags: []deepsearch.Tag{{ID: "tag:m1:0:0", Text: "coffee", CueID: "cue:m1:0", ContentID: "m1"}},
+		Paths: []deepsearch.Path{{
+			Cue:   deepsearch.Cue{ID: "cue:m1:0", Text: "coffee preference"},
+			Tag:   deepsearch.Tag{ID: "tag:m1:0:0", Text: "coffee"},
+			Score: 1,
+		}},
+	}
+	service.contentResult = &deepsearch.ContentLoadResult{
+		Contents: []deepsearch.Content{{ID: "m1", Text: "User likes coffee."}},
+	}
+	ctx := createMockContext("test-app", "test-user", service)
+
+	cueTool := NewCueSearchTool()
+	result, err := cueTool.Call(ctx, mustJSON(t, map[string]any{"query": "coffee"}))
+	require.NoError(t, err)
+	cueResponse, ok := result.(*CueSearchResponse)
+	require.True(t, ok)
+	assert.Equal(t, 1, service.cueCalls)
+	assert.Equal(t, 1, cueResponse.Count)
+	assert.Equal(t, "coffee preference", cueResponse.Cues[0].Text)
+
+	tagTool := NewTagExpandTool()
+	result, err = tagTool.Call(ctx, mustJSON(t, map[string]any{"cue_ids": []string{"cue:m1:0"}}))
+	require.NoError(t, err)
+	tagResponse, ok := result.(*TagExpandResponse)
+	require.True(t, ok)
+	assert.Equal(t, 1, service.tagCalls)
+	assert.Equal(t, 1, tagResponse.Count)
+	assert.Equal(t, "coffee", tagResponse.Tags[0].Text)
+
+	contentTool := NewContentLoadTool()
+	result, err = contentTool.Call(ctx, mustJSON(t, map[string]any{"content_ids": []string{"m1"}}))
+	require.NoError(t, err)
+	contentResponse, ok := result.(*ContentLoadResponse)
+	require.True(t, ok)
+	assert.Equal(t, 1, service.contentCalls)
+	assert.Equal(t, 1, contentResponse.Count)
+	assert.Equal(t, "User likes coffee.", contentResponse.Contents[0].Text)
+}
+
+func TestMemoryTool_DeepSearchToolsErrorsAndDeclarations(t *testing.T) {
+	cueTool := NewCueSearchTool()
+	_, err := cueTool.Call(context.Background(), mustJSON(t, map[string]any{"query": "coffee"}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no invocation context found")
+
+	service := newMockMemoryService()
+	standardOnly := standardOnlyMemoryService{service: service}
+	ctx := createMockContext("test-app", "test-user", standardOnly)
+	_, err = cueTool.Call(ctx, mustJSON(t, map[string]any{"query": "coffee"}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "deepsearch is not enabled")
+
+	ctx = createMockContext("test-app", "test-user", service)
+	_, err = cueTool.Call(ctx, mustJSON(t, map[string]any{}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "query is required")
+
+	service.cueErr = fmt.Errorf("cue backend failed")
+	_, err = cueTool.Call(ctx, mustJSON(t, map[string]any{"query": "coffee"}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cue backend failed")
+
+	_, err = NewTagExpandTool().Call(ctx, mustJSON(t, map[string]any{}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cue_ids or cues are required")
+
+	_, err = NewContentLoadTool().Call(ctx, mustJSON(t, map[string]any{}))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "content_ids or refs are required")
+
+	for _, tl := range []tool.CallableTool{NewCueSearchTool(), NewTagExpandTool(), NewContentLoadTool()} {
+		decl := tl.Declaration()
+		require.NotNil(t, decl)
+		assert.Contains(t, decl.Name, "memory_deepsearch")
+		require.NotNil(t, decl.InputSchema)
+	}
+}
+
+func TestMemoryTool_DeepSearchToolSet(t *testing.T) {
+	toolSet := NewDeepSearchToolSet()
+	assert.Equal(t, "memory_deepsearch", toolSet.Name())
+	assert.NoError(t, toolSet.Close())
+
+	tools := toolSet.Tools(context.Background())
+	require.Len(t, tools, 3)
+	names := make([]string, 0, len(tools))
+	for _, tl := range tools {
+		names = append(names, tl.Declaration().Name)
+	}
+	assert.ElementsMatch(t, []string{
+		deepsearch.CueSearchToolName,
+		deepsearch.TagExpandToolName,
+		deepsearch.ContentLoadToolName,
+	}, names)
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	require.NoError(t, err)
+	return raw
 }
 
 func TestMemoryTool_LoadMemory(t *testing.T) {
