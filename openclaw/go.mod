@@ -36,6 +36,7 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/creack/pty v1.1.24
+	github.com/extrame/xls v0.0.1
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/google/uuid v1.6.0
@@ -98,6 +99,7 @@ require (
 	github.com/elastic/go-elasticsearch/v7 v7.17.10 // indirect
 	github.com/elastic/go-elasticsearch/v8 v8.19.0 // indirect
 	github.com/elastic/go-elasticsearch/v9 v9.1.0 // indirect
+	github.com/extrame/ole2 v0.0.0-20160812065207-d69429661ad7 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/getkin/kin-openapi v0.133.0 // indirect
 	github.com/go-ego/gse v1.0.0 // indirect
