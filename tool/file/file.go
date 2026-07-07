@@ -336,13 +336,7 @@ func (f *fileToolSet) matchBaseReadRoot(absPath string) (string, bool) {
 	}
 	candidate := filepath.Clean(absPath)
 	evaluatedCandidate, resolvedPath := evalPathWithExistingParent(candidate)
-	candidateInRoot := isPathWithinRoot(candidate, root)
-	evaluatedInRoot := resolvedPath &&
-		isPathWithinRoot(evaluatedCandidate, root)
-	if candidateInRoot && (!resolvedPath || evaluatedInRoot) {
-		return root, true
-	}
-	if !candidateInRoot && evaluatedInRoot {
+	if readRootContains(candidate, evaluatedCandidate, root, resolvedPath) {
 		return root, true
 	}
 	return "", false
@@ -355,17 +349,31 @@ func (f *fileToolSet) matchExtraReadRoot(absPath string) (string, bool) {
 	candidate := filepath.Clean(absPath)
 	evaluatedCandidate, resolvedPath := evalPathWithExistingParent(candidate)
 	for _, root := range f.extraReadRoots {
-		candidateInRoot := isPathWithinRoot(candidate, root)
-		evaluatedInRoot := resolvedPath &&
-			isPathWithinRoot(evaluatedCandidate, root)
-		if candidateInRoot && (!resolvedPath || evaluatedInRoot) {
-			return root, true
-		}
-		if !candidateInRoot && evaluatedInRoot {
+		if readRootContains(
+			candidate,
+			evaluatedCandidate,
+			root,
+			resolvedPath,
+		) {
 			return root, true
 		}
 	}
 	return "", false
+}
+
+func readRootContains(
+	candidate string,
+	evaluatedCandidate string,
+	root string,
+	resolvedPath bool,
+) bool {
+	candidateInRoot := isPathWithinRoot(candidate, root)
+	evaluatedInRoot := resolvedPath &&
+		isPathWithinRoot(evaluatedCandidate, root)
+	if candidateInRoot && (!resolvedPath || evaluatedInRoot) {
+		return true
+	}
+	return !candidateInRoot && evaluatedInRoot
 }
 
 func evalPathWithExistingParent(path string) (string, bool) {
