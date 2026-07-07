@@ -12,7 +12,6 @@ package a2a
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -66,11 +65,15 @@ type TaskManagerBuilder func(processor taskmanager.MessageProcessor) taskmanager
 // ResponseRewriter rewrites outbound A2A responses before they are returned or
 // sent to the remote peer.
 //
-// RewriteUnary receives the request context and final unary result after
-// server-side aggregation of converted events. It rewrites what the caller will
-// actually receive, rather than every intermediate converter output.
+// RewriteStreaming rewrites each outbound event immediately before it is sent;
+// returning nil drops that event.
 //
-// Returning nil drops the outbound result.
+// RewriteUnary is retained for API compatibility but is no longer invoked: under
+// the event-stream MessageProcessor contract the framework derives the unary
+// (message/send) result from the emitted event stream after ProcessMessage
+// returns, so there is no server-side aggregation point to hook. Rewrite via
+// RewriteStreaming instead — it also runs on the events the unary result is
+// derived from.
 type ResponseRewriter interface {
 	RewriteUnary(ctx context.Context, result protocol.SendMessageResult) protocol.SendMessageResult
 	RewriteStreaming(ctx context.Context, result protocol.StreamEvent) protocol.StreamEvent
@@ -350,22 +353,20 @@ func WithGraphEventObjectAllowlist(objectTypes ...string) Option {
 	}
 }
 
-// WithResponseRewriter rewrites outbound A2A results before they are returned
-// or sent to the remote peer.
+// WithResponseRewriter rewrites outbound A2A events before they are emitted.
 //
-// This option affects:
-//   - unary Message / Task results returned to the caller
-//   - streaming Message / TaskArtifactUpdateEvent / TaskStatusUpdateEvent results
-//   - server-generated final streaming completion events
+// RewriteStreaming is applied to every event the processor emits:
+//   - Message / TaskArtifactUpdateEvent / TaskStatusUpdateEvent results
+//   - server-generated submitted / final artifact / completed lifecycle events
 //   - server-generated structured task error results
 //   - messages returned by ErrorHandler
 //
-// For unary responses, the rewriter sees the final result returned by the A2A
-// server after it aggregates converted events. For streaming responses, it sees
-// each outbound streaming event immediately before send. The request context is
-// passed through so rewriters can use request-scoped values for logging.
+// Because message/send derives its result from these same events, this also
+// covers unary responses; RewriteUnary is no longer invoked (see
+// ResponseRewriter). The rewriter sees each event immediately before send, with
+// the request context passed through for request-scoped logging.
 //
-// Returning nil drops the outbound result.
+// Returning nil drops the outbound event.
 func WithResponseRewriter(rewriter ResponseRewriter) Option {
 	return func(opts *options) {
 		opts.responseRewriter = rewriter
@@ -454,37 +455,6 @@ func defaultErrorHandler(ctx context.Context, msg *protocol.Message, err error) 
 	return &outputMsg, nil
 }
 
-type singleMsgSubscriber struct {
-	ch chan protocol.StreamResponse
-}
-
-func newSingleResultSubscriber(result protocol.StreamEvent) *singleMsgSubscriber {
-	ch := make(chan protocol.StreamResponse, 1)
-	if result != nil {
-		ch <- protocol.StreamResponse{
-			Result: result,
-		}
-	}
-	close(ch)
-	return &singleMsgSubscriber{
-		ch: ch,
-	}
-}
-
-func (e *singleMsgSubscriber) Send(event protocol.StreamResponse) error {
-	return fmt.Errorf("send msg is not allowed for singleMsgSubscriber")
-}
-
-// Channel returns the channel of the task subscriber
-func (e *singleMsgSubscriber) Channel() <-chan protocol.StreamResponse {
-	return e.ch
-}
-
-// Closed returns true if the task subscriber is closed
-func (e *singleMsgSubscriber) Closed() bool {
-	return true
-}
-
-// Close close the task subscriber
-func (e *singleMsgSubscriber) Close() {
-}
+// singleMsgSubscriber and its constructor were removed: the event-stream
+// MessageProcessor contract returns a channel directly, so setup-time replies
+// are emitted on a short-lived channel (see messageProcessor.replyError).
