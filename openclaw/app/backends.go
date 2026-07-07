@@ -368,7 +368,10 @@ func newSessionSummarizer(
 		)
 	}
 
-	return summary.NewSummarizer(mdl, options...), nil
+	return summary.NewSummarizer(
+		newModelCallBudgetBypassModel(mdl),
+		options...,
+	), nil
 }
 
 func parseSummaryPolicy(raw string) (string, error) {

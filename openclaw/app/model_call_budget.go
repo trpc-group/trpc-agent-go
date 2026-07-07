@@ -12,7 +12,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -208,9 +207,6 @@ func (m *modelCallBudgetModel) GenerateContent(
 	ctx context.Context,
 	req *model.Request,
 ) (<-chan *model.Response, error) {
-	if modelCallBudgetShouldSkip(req) {
-		return m.model.GenerateContent(ctx, req)
-	}
 	finalize, err := modelCallBudgetFromContext(ctx).use()
 	if err != nil {
 		return nil, err
@@ -249,9 +245,6 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 	ctx context.Context,
 	req *model.Request,
 ) (model.Seq[*model.Response], error) {
-	if modelCallBudgetShouldSkip(req) {
-		return m.iter.GenerateContentIter(ctx, req)
-	}
 	finalize, err := modelCallBudgetFromContext(ctx).use()
 	if err != nil {
 		return nil, err
@@ -326,15 +319,4 @@ func finalModelCallRequest(req *model.Request) *model.Request {
 			"format, follow it exactly.",
 	))
 	return &clone
-}
-
-func modelCallBudgetShouldSkip(req *model.Request) bool {
-	if req == nil || len(req.Messages) == 0 {
-		return false
-	}
-	first := strings.TrimSpace(req.Messages[0].Content)
-	return strings.HasPrefix(
-		first,
-		"Analyze the following conversation between a user and an assistant",
-	)
 }

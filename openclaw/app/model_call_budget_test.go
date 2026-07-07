@@ -275,7 +275,7 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 	require.Len(t, req.Messages, 1)
 }
 
-func TestModelCallBudgetModel_SkipsSummaryRequests(t *testing.T) {
+func TestModelCallBudgetModel_UserPromptPrefixConsumesBudget(t *testing.T) {
 	t.Parallel()
 
 	underlying := &countingBudgetModel{}
@@ -289,10 +289,8 @@ func TestModelCallBudgetModel_SkipsSummaryRequests(t *testing.T) {
 	_, err := wrapped.GenerateContent(ctx, req)
 	require.NoError(t, err)
 	_, err = wrapped.GenerateContent(ctx, &model.Request{})
-	require.NoError(t, err)
-	_, err = wrapped.GenerateContent(ctx, &model.Request{})
 	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
-	require.EqualValues(t, 2, underlying.callCount())
+	require.EqualValues(t, 1, underlying.callCount())
 }
 
 func TestModelCallBudgetBypassModel_DoesNotConsumeContextBudget(
@@ -381,7 +379,9 @@ func (m *countingBudgetModel) GenerateContent(
 ) (<-chan *model.Response, error) {
 	m.calls.Add(1)
 	ch := make(chan *model.Response, 1)
-	ch <- &model.Response{}
+	ch <- &model.Response{Choices: []model.Choice{{
+		Message: model.NewAssistantMessage("ok"),
+	}}}
 	close(ch)
 	return ch, nil
 }
