@@ -30,6 +30,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -102,7 +103,7 @@ func openGormDB() (*gorm.DB, string, error) {
 	if dsn := strings.TrimSpace(os.Getenv("GORM_DSN")); dsn != "" {
 		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 			db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-			return db, dsn, err
+			return db, redactDSN(dsn), err
 		}
 		db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 		return db, "sqlite:" + dsn, err
@@ -110,6 +111,15 @@ func openGormDB() (*gorm.DB, string, error) {
 
 	db, err := gorm.Open(sqlite.Open(*sqliteFile), &gorm.Config{})
 	return db, "sqlite:" + *sqliteFile, err
+}
+
+func redactDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil || u.User == nil {
+		return dsn
+	}
+	u.User = url.UserPassword(u.User.Username(), "****")
+	return u.String()
 }
 
 func newGormMemoryService(db *gorm.DB) (memory.Service, error) {

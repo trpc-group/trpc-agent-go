@@ -245,6 +245,10 @@ func TestService_SoftDelete_reAddRestores(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, restored, 1)
 	assert.Equal(t, "favorite color is teal", restored[0].Memory.Memory)
+
+	var count int64
+	require.NoError(t, db.Table(defaultTableName).Unscoped().Count(&count).Error)
+	assert.Equal(t, int64(1), count, "restore should reuse the existing row, not insert a duplicate")
 }
 
 type fakeExtractor struct{}
@@ -417,7 +421,7 @@ func TestService_WithExtractor_startsWorker(t *testing.T) {
 		WithExtractor(&fakeExtractor{}),
 		WithAsyncMemoryNum(1),
 		WithMemoryQueueSize(2),
-		WithMemoryJobTimeout(time.Millisecond),
+		WithMemoryJobTimeout(50 * time.Millisecond),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, svc.autoMemoryWorker)
