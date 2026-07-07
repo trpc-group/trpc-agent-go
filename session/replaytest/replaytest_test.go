@@ -157,6 +157,55 @@ func TestMarshalReportIncludesDiffLocation(t *testing.T) {
 	}
 }
 
+func TestCompareSnapshotsDetectsSessionOwnerMismatch(t *testing.T) {
+	base := &Snapshot{
+		Case:      "case",
+		Backend:   "base",
+		SessionID: "sess",
+		AppName:   "app-a",
+		UserID:    "user-a",
+	}
+	compare := cloneSnapshot(base)
+	compare.Backend = "other"
+	compare.AppName = "app-b"
+	compare.UserID = "user-b"
+
+	diffs := CompareSnapshots(base, compare)
+	if !containsField(diffs, "$.app_name") {
+		t.Fatalf("app_name mismatch was not detected: %+v", diffs)
+	}
+	if !containsField(diffs, "$.user_id") {
+		t.Fatalf("user_id mismatch was not detected: %+v", diffs)
+	}
+}
+
+func TestCompareSnapshotsStateDiffsAreSorted(t *testing.T) {
+	base := &Snapshot{
+		Case:      "case",
+		Backend:   "base",
+		SessionID: "sess",
+		State: map[string]NormalizedValue{
+			"b": {Kind: "value", Value: "1"},
+			"a": {Kind: "value", Value: "1"},
+		},
+	}
+	compare := cloneSnapshot(base)
+	compare.Backend = "other"
+	compare.State["b"] = NormalizedValue{Kind: "value", Value: "2"}
+	compare.State["a"] = NormalizedValue{Kind: "value", Value: "2"}
+
+	diffs := CompareSnapshots(base, compare)
+	if len(diffs) != 2 {
+		t.Fatalf("diff count = %d, want 2: %+v", len(diffs), diffs)
+	}
+	if diffs[0].FieldPath != "$.state[\"a\"].value" {
+		t.Fatalf("first state diff = %s, want a before b", diffs[0].FieldPath)
+	}
+	if diffs[1].FieldPath != "$.state[\"b\"].value" {
+		t.Fatalf("second state diff = %s, want b after a", diffs[1].FieldPath)
+	}
+}
+
 func cloneSnapshot(s *Snapshot) *Snapshot {
 	data, _ := json.Marshal(s)
 	var out Snapshot

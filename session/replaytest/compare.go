@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sort"
 	"time"
 )
 
@@ -81,6 +82,8 @@ func CompareSnapshots(base, compare *Snapshot) []Difference {
 		})
 	}
 	add("$.session_id", "session", base.SessionID, compare.SessionID, "session ownership changed")
+	add("$.app_name", "session", base.AppName, compare.AppName, "session ownership changed")
+	add("$.user_id", "session", base.UserID, compare.UserID, "session ownership changed")
 	compareSlices("$.events", base.Events, compare.Events, func(i int, field string, b, c any) {
 		add(fmt.Sprintf("$.events[%d].%s", i, field), fmt.Sprintf("event[%d]", i), b, c, "event replay mismatch")
 	})
@@ -124,14 +127,19 @@ func compareSlices[T any](path string, base, compare []T, add func(int, string, 
 }
 
 func compareMaps[T any](path string, base, compare map[string]T, add func(string, string, any, any)) {
-	keys := map[string]struct{}{}
+	seen := map[string]struct{}{}
 	for k := range base {
-		keys[k] = struct{}{}
+		seen[k] = struct{}{}
 	}
 	for k := range compare {
-		keys[k] = struct{}{}
+		seen[k] = struct{}{}
 	}
-	for k := range keys {
+	keys := make([]string, 0, len(seen))
+	for k := range seen {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
 		b, bok := base[k]
 		c, cok := compare[k]
 		if !bok || !cok {
