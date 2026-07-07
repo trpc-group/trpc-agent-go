@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	storagegorm "trpc.group/trpc-go/trpc-agent-go/storage/gorm"
 )
 
 func testDB(t *testing.T) *gorm.DB {
@@ -42,7 +43,7 @@ func testDB(t *testing.T) *gorm.DB {
 
 func newTestService(t *testing.T, db *gorm.DB) *Service {
 	t.Helper()
-	svc, err := NewService(db)
+	svc, err := NewService(WithDB(db))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = svc.Close() })
 	return svc
@@ -57,8 +58,23 @@ func TestServiceOpts_WithSkipDBInit(t *testing.T) {
 }
 
 func TestNewService_requiresDB(t *testing.T) {
-	_, err := NewService(nil)
+	_, err := NewService()
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires WithDB")
+}
+
+func TestNewService_WithGormInstance(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "instance_test.db")
+	instanceName := "test-gorm-instance"
+
+	storagegorm.RegisterGormInstance(instanceName, storagegorm.WithDialector(sqlite.Open(path)))
+
+	svc, err := NewService(WithGormInstance(instanceName))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = svc.Close() })
+
+	require.NoError(t, svc.AddMemory(ctx, memory.UserKey{AppName: "app", UserID: "user"}, "hello", nil))
 }
 
 func TestService_AddMemory_idempotent(t *testing.T) {
@@ -183,7 +199,7 @@ func TestService_WithSkipDBInit(t *testing.T) {
 	db := testDB(t)
 	require.NoError(t, db.Table(defaultTableName).AutoMigrate(&memoryRow{}))
 
-	svc, err := NewService(db, WithSkipDBInit(true))
+	svc, err := NewService(WithDB(db), WithSkipDBInit(true))
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -198,7 +214,7 @@ func TestService_WithSkipDBInit(t *testing.T) {
 func TestService_SoftDelete(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	svc, err := NewService(db, WithSoftDelete(true))
+	svc, err := NewService(WithDB(db), WithSoftDelete(true))
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -223,7 +239,7 @@ func TestService_SoftDelete(t *testing.T) {
 func TestService_SoftDelete_reAddRestores(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	svc, err := NewService(db, WithSoftDelete(true))
+	svc, err := NewService(WithDB(db), WithSoftDelete(true))
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -296,7 +312,7 @@ func TestService_validationErrors(t *testing.T) {
 func TestService_AddMemory_memoryLimit(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	svc, err := NewService(db, WithMemoryLimit(2))
+	svc, err := NewService(WithDB(db), WithMemoryLimit(2))
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -314,7 +330,7 @@ func TestService_WithCustomTableName(t *testing.T) {
 	db := testDB(t)
 	const table = "guild_memories"
 
-	svc, err := NewService(db, WithTableName(table))
+	svc, err := NewService(WithDB(db), WithTableName(table))
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -328,7 +344,7 @@ func TestService_WithCustomTableName(t *testing.T) {
 
 func TestService_Tools_enabledAndHidden(t *testing.T) {
 	db := testDB(t)
-	svc, err := NewService(db,
+	svc, err := NewService(WithDB(db),
 		WithToolEnabled(memory.AddToolName, true),
 		WithToolEnabled(memory.SearchToolName, true),
 		WithToolEnabled(memory.LoadToolName, true),
@@ -344,7 +360,7 @@ func TestService_Tools_enabledAndHidden(t *testing.T) {
 func TestService_SearchMemories_maxResults(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	svc, err := NewService(db, WithMaxResults(1))
+	svc, err := NewService(WithDB(db), WithMaxResults(1))
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -373,7 +389,7 @@ func TestService_ReadMemories_returnsAllWhenLimitZero(t *testing.T) {
 func TestService_HardDelete_removesRow(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	svc, err := NewService(db, WithSoftDelete(false))
+	svc, err := NewService(WithDB(db), WithSoftDelete(false))
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -396,7 +412,7 @@ func TestService_HardDelete_removesRow(t *testing.T) {
 func TestService_rowsToEntries_invalidJSON(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	svc, err := NewService(db)
+	svc, err := NewService(WithDB(db))
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -418,7 +434,7 @@ func TestService_rowsToEntries_invalidJSON(t *testing.T) {
 
 func TestService_WithExtractor_startsWorker(t *testing.T) {
 	db := testDB(t)
-	svc, err := NewService(db,
+	svc, err := NewService(WithDB(db),
 		WithExtractor(&fakeExtractor{}),
 		WithAsyncMemoryNum(1),
 		WithMemoryQueueSize(2),
@@ -456,7 +472,7 @@ func TestRowsToEntries(t *testing.T) {
 func TestService_closedDB_wrapsErrors(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	svc, err := NewService(db, WithMemoryLimit(10))
+	svc, err := NewService(WithDB(db), WithMemoryLimit(10))
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -484,7 +500,7 @@ func TestService_closedDB_wrapsErrors(t *testing.T) {
 func TestService_UpdateMemory_corruptStoredJSON(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	svc, err := NewService(db)
+	svc, err := NewService(WithDB(db))
 	require.NoError(t, err)
 	defer svc.Close()
 
@@ -508,7 +524,7 @@ func TestService_UpdateMemory_corruptStoredJSON(t *testing.T) {
 func TestService_SoftDelete_ClearMemories(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
-	svc, err := NewService(db, WithSoftDelete(true))
+	svc, err := NewService(WithDB(db), WithSoftDelete(true))
 	require.NoError(t, err)
 	defer svc.Close()
 
