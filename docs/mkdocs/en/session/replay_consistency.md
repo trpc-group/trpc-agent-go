@@ -31,7 +31,7 @@ session_memory_summary_track_diff_report.json
 Override it with:
 
 ```bash
-TRPC_AGENT_REPLAY_REPORT_PATH=../replay-report.json go test ./... -run ReplayConsistency -count=1
+CGO_ENABLED=1 TRPC_AGENT_REPLAY_REPORT_PATH=replay-report.json go test ./... -run ReplayConsistency -count=1
 ```
 
 A healthy matrix should write:

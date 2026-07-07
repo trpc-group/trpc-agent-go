@@ -31,7 +31,7 @@ session_memory_summary_track_diff_report.json
 可以通过环境变量覆盖：
 
 ```bash
-TRPC_AGENT_REPLAY_REPORT_PATH=../replay-report.json go test ./... -run ReplayConsistency -count=1
+CGO_ENABLED=1 TRPC_AGENT_REPLAY_REPORT_PATH=replay-report.json go test ./... -run ReplayConsistency -count=1
 ```
 
 正常矩阵期望报告内容为：

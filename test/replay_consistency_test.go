@@ -41,12 +41,13 @@ import (
 )
 
 type backendBundle struct {
-	name           string
-	sessionService session.Service
-	trackService   session.TrackService
-	memoryService  memory.Service
-	sqliteMemoryDB *sql.DB
-	summarizer     *deterministicSummarizer
+	name              string
+	sessionService    session.Service
+	trackService      session.TrackService
+	memoryService     memory.Service
+	sqliteMemoryDB    *sql.DB
+	sqliteMemoryTable string
+	summarizer        *deterministicSummarizer
 }
 
 type replaySnapshot struct {
@@ -193,6 +194,8 @@ type replayBackendInjection func(t *testing.T, ctx context.Context, backend back
 
 var replayBaseTime = time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
 
+const replaySQLiteMemoryTableName = "memories"
+
 var _ sessionsummary.SessionSummarizer = (*deterministicSummarizer)(nil)
 
 type deterministicSummarizer struct {
@@ -251,6 +254,7 @@ func makeReplayBackends(t *testing.T) []backendBundle {
 	sqliteMemoryDB := openSQLiteDB(t, "replay-memory")
 	sqliteMemoryService, err := memsqlite.NewService(
 		sqliteMemoryDB,
+		memsqlite.WithTableName(replaySQLiteMemoryTableName),
 		memsqlite.WithMinSearchScore(0),
 		memsqlite.WithMaxResults(0),
 	)
@@ -265,12 +269,13 @@ func makeReplayBackends(t *testing.T) []backendBundle {
 			summarizer:     inMemorySummarizer,
 		},
 		{
-			name:           "sqlite",
-			sessionService: sqliteSessionService,
-			trackService:   sqliteSessionService,
-			memoryService:  sqliteMemoryService,
-			sqliteMemoryDB: sqliteMemoryDB,
-			summarizer:     sqliteSummarizer,
+			name:              "sqlite",
+			sessionService:    sqliteSessionService,
+			trackService:      sqliteSessionService,
+			memoryService:     sqliteMemoryService,
+			sqliteMemoryDB:    sqliteMemoryDB,
+			sqliteMemoryTable: replaySQLiteMemoryTableName,
+			summarizer:        sqliteSummarizer,
 		},
 	}
 	t.Cleanup(func() {
@@ -1080,6 +1085,16 @@ func injectSQLiteReplayMemoryRow(
 ) {
 	t.Helper()
 	require.NotNil(t, backend.sqliteMemoryDB)
+	require.NotEmpty(t, backend.sqliteMemoryTable)
+
+	var tableName string
+	err := backend.sqliteMemoryDB.QueryRowContext(
+		ctx,
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
+		backend.sqliteMemoryTable,
+	).Scan(&tableName)
+	require.NoError(t, err)
+	require.Equal(t, backend.sqliteMemoryTable, tableName)
 
 	now := replayBaseTime.Add(100 * time.Second)
 	entry := &memory.Entry{
@@ -1098,13 +1113,13 @@ func injectSQLiteReplayMemoryRow(
 	require.NoError(t, err)
 
 	const insertSQL = `
-INSERT INTO memories (
+INSERT INTO %s (
   memory_id, app_name, user_id, memory_data, created_at, updated_at,
   deleted_at
 ) VALUES (?, ?, ?, ?, ?, ?, NULL)`
 	_, err = backend.sqliteMemoryDB.ExecContext(
 		ctx,
-		insertSQL,
+		fmt.Sprintf(insertSQL, backend.sqliteMemoryTable),
 		memoryID,
 		key.AppName,
 		key.UserID,
@@ -1709,8 +1724,7 @@ func TestReplayConsistencyMatrix_BasicCases(t *testing.T) {
 	ctx := context.Background()
 	backends := makeReplayBackends(t)
 	cases := basicReplayCases()
-	reportPath := filepath.Join(t.TempDir(), "session_memory_summary_track_diff_report.json")
-	t.Setenv("TRPC_AGENT_REPLAY_REPORT_PATH", reportPath)
+	reportPath := replayDiffReportPath()
 
 	var allDiffs []diffEntry
 	for _, tc := range cases {
