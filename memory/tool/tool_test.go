@@ -31,8 +31,10 @@ import (
 
 // mockMemoryService is a mock implementation of memory.Service for testing.
 type mockMemoryService struct {
-	memories map[string]*memory.Entry
-	counter  int
+	memories         map[string]*memory.Entry
+	counter          int
+	ensureIndexCalls int
+	ensureIndexErr   error
 }
 
 func newMockMemoryService() *mockMemoryService {
@@ -118,6 +120,11 @@ func (m *mockMemoryService) SearchMemories(ctx context.Context, userKey memory.U
 		}
 	}
 	return results, nil
+}
+
+func (m *mockMemoryService) EnsureIndex(ctx context.Context, userKey memory.UserKey) error {
+	m.ensureIndexCalls++
+	return m.ensureIndexErr
 }
 
 func (m *mockMemoryService) Tools() []tool.Tool {
@@ -264,6 +271,60 @@ func TestMemoryTool_SearchMemory(t *testing.T) {
 	assert.Equal(t, 1, response.Count, "Expected 1 result, got %d", response.Count)
 	assert.Len(t, response.Results, 1, "Expected 1 result, got %d", len(response.Results))
 	assert.Equal(t, "User likes coffee", response.Results[0].Memory, "Expected memory 'User likes coffee', got '%s'", response.Results[0].Memory)
+}
+
+func TestMemoryTool_SearchMemory_DeepSearchMode(t *testing.T) {
+	service := newMockMemoryService()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	err := service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
+	require.NoError(t, err)
+
+	tool := NewDeepSearchSearchTool()
+	ctx := createMockContext("test-app", "test-user", service)
+	args := map[string]any{
+		"query":       "coffee",
+		"search_mode": "deepsearch",
+	}
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.NoError(t, err)
+	response, ok := result.(*SearchMemoryResponse)
+	require.True(t, ok)
+
+	assert.Equal(t, 1, service.ensureIndexCalls)
+	assert.Equal(t, "deepsearch", response.SearchMode)
+	assert.True(t, response.DeepSearchActivated)
+	assert.Contains(t, response.Message, "DeepSearch")
+	assert.Len(t, response.Results, 1)
+	assert.Equal(t, "User likes coffee", response.Results[0].Memory)
+}
+
+func TestMemoryTool_SearchMemory_DefaultIgnoresDeepSearchMode(t *testing.T) {
+	service := newMockMemoryService()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "test-user"}
+	err := service.AddMemory(context.Background(), userKey, "User likes coffee", []string{"preferences"})
+	require.NoError(t, err)
+
+	tool := NewSearchTool()
+	ctx := createMockContext("test-app", "test-user", service)
+	args := map[string]any{
+		"query":       "coffee",
+		"search_mode": "deepsearch",
+	}
+	jsonArgs, err := json.Marshal(args)
+	require.NoError(t, err)
+
+	result, err := tool.Call(ctx, jsonArgs)
+	require.NoError(t, err)
+	response, ok := result.(*SearchMemoryResponse)
+	require.True(t, ok)
+
+	assert.Equal(t, 0, service.ensureIndexCalls)
+	assert.Empty(t, response.SearchMode)
+	assert.False(t, response.DeepSearchActivated)
+	assert.Len(t, response.Results, 1)
 }
 
 func TestMemoryTool_LoadMemory(t *testing.T) {
@@ -768,10 +829,28 @@ func TestMemoryTool_SearchDeclaration_EncouragesDirectLookup(t *testing.T) {
 
 	assert.Contains(t, decl.Description, memoryToolScopeNote)
 	assert.Contains(t, decl.Description, memoryReadDirectUseNote)
+	assert.NotContains(t, decl.Description, "deepsearch")
 
 	querySchema := decl.InputSchema.Properties["query"]
 	require.NotNil(t, querySchema)
 	assert.Equal(t, searchMemoryQueryDescription, querySchema.Description)
+	_, hasSearchMode := decl.InputSchema.Properties["search_mode"]
+	assert.False(t, hasSearchMode)
+}
+
+func TestMemoryTool_DeepSearchSearchDeclaration_ExposesSearchMode(t *testing.T) {
+	tool := NewDeepSearchSearchTool()
+	decl := tool.Declaration()
+	require.NotNil(t, decl)
+	require.NotNil(t, decl.InputSchema)
+	require.NotNil(t, decl.InputSchema.Properties)
+
+	assert.Contains(t, decl.Description, "search_mode='deepsearch'")
+
+	modeSchema := decl.InputSchema.Properties["search_mode"]
+	require.NotNil(t, modeSchema)
+	assert.Equal(t, searchMemoryModeDescription, modeSchema.Description)
+	assert.Equal(t, []any{searchModeStandard, searchModeDeepSearch}, modeSchema.Enum)
 }
 
 func TestMemoryTool_LoadDeclaration_EncouragesDirectLookup(t *testing.T) {

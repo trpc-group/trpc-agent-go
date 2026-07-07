@@ -60,6 +60,12 @@ $$ LANGUAGE plpgsql`
 
 	sqlCreateHNSWIndexPattern = "CREATE INDEX IF NOT EXISTS %s ON %s USING hnsw " +
 		"(embedding vector_cosine_ops) WITH (m = %d, ef_construction = %d)"
+
+	sqlAddDeepSearchIndexColumn       = "ALTER TABLE %s ADD COLUMN IF NOT EXISTS deepsearch_index JSONB NULL"
+	sqlAddDeepSearchTextColumn        = "ALTER TABLE %s ADD COLUMN IF NOT EXISTS deepsearch_text TEXT NULL"
+	sqlAddDeepSearchFingerprintColumn = "ALTER TABLE %s ADD COLUMN IF NOT EXISTS deepsearch_fingerprint TEXT NULL"
+	sqlAddDeepSearchVersionColumn     = "ALTER TABLE %s ADD COLUMN IF NOT EXISTS deepsearch_version INTEGER NULL"
+	sqlAddDeepSearchIndexedAtColumn   = "ALTER TABLE %s ADD COLUMN IF NOT EXISTS deepsearch_indexed_at TIMESTAMP NULL"
 )
 
 // buildFullTableName builds the full table name with optional schema prefix.
@@ -246,6 +252,21 @@ func (s *Service) initDB(ctx context.Context) error {
 			fullTableName, err)
 	}
 	log.InfofContext(ctx, "created search_vector GIN index on table %s", fullTableName)
+
+	if s.opts.deepSearchModel != nil {
+		deepSearchColumns := []string{
+			fmt.Sprintf(sqlAddDeepSearchIndexColumn, fullTableName),
+			fmt.Sprintf(sqlAddDeepSearchTextColumn, fullTableName),
+			fmt.Sprintf(sqlAddDeepSearchFingerprintColumn, fullTableName),
+			fmt.Sprintf(sqlAddDeepSearchVersionColumn, fullTableName),
+			fmt.Sprintf(sqlAddDeepSearchIndexedAtColumn, fullTableName),
+		}
+		for _, ddl := range deepSearchColumns {
+			if _, err := s.db.ExecContext(ctx, ddl); err != nil {
+				return fmt.Errorf("add deepsearch column on table %s failed: %w", fullTableName, err)
+			}
+		}
+	}
 
 	// Backfill search_vector for existing rows that lack it.
 	backfillSQL := fmt.Sprintf(sqlBackfillSearchVector, fullTableName)

@@ -18,8 +18,10 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 // Default settings.
@@ -77,6 +79,10 @@ type ServiceOpts struct {
 
 	// Memory extractor for auto memory mode.
 	extractor extractor.MemoryExtractor
+
+	// DeepSearch indexing configuration.
+	deepSearchModel   model.Model
+	deepSearchOptions []deepsearch.Option
 
 	// Async memory worker configuration.
 	asyncMemoryNum   int
@@ -279,6 +285,18 @@ func WithEmbedder(e embedder.Embedder) ServiceOpt {
 func WithExtractor(e extractor.MemoryExtractor) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.extractor = e
+	}
+}
+
+// WithDeepSearch enables row-attached DeepSearch derived indexes.
+// It also exposes the DeepSearch search mode on memory_search.
+func WithDeepSearch(indexModel model.Model, deepSearchOptions ...deepsearch.Option) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.deepSearchModel = indexModel
+		opts.deepSearchOptions = append([]deepsearch.Option(nil), deepSearchOptions...)
+		if indexModel != nil {
+			imemory.EnableDeepSearchSearchTool(opts.toolCreators)
+		}
 	}
 }
 

@@ -975,6 +975,35 @@ func WithToolActivationOnSkillLoad(
 	}
 }
 
+// WithToolActivationOnToolResult activates tool sets after a named tool
+// returns a successful result. Use WithToolActivationResultJSONBool when the
+// activation should only fire for a specific result payload state.
+func WithToolActivationOnToolResult(
+	toolName string,
+	toolSetNames []string,
+	opts ...ToolActivationOption,
+) Option {
+	return func(options *Options) {
+		ruleOptions := newToolActivationRuleOptions(opts...)
+		trigger := toolActivationTrigger{
+			kind:            toolActivationTriggerToolResult,
+			toolName:        toolName,
+			resultBoolField: ruleOptions.resultBoolField,
+			resultBoolValue: ruleOptions.resultBoolValue,
+			hasResultBool:   ruleOptions.hasResultBool,
+		}
+		options.toolActivationRules = append(
+			options.toolActivationRules,
+			toolActivationRule{
+				trigger:      trigger,
+				toolSetNames: append([]string(nil), toolSetNames...),
+				mode:         ruleOptions.mode,
+				lifetime:     ruleOptions.lifetime,
+			},
+		)
+	}
+}
+
 // WithSkillToolProfile selects which built-in skill tools are registered when
 // skills are enabled via WithSkills.
 //

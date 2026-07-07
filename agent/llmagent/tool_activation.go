@@ -54,12 +54,17 @@ type ToolActivationOption func(*toolActivationRuleOptions)
 type toolActivationTriggerKind string
 
 const (
-	toolActivationTriggerSkillLoad toolActivationTriggerKind = "skill_load"
+	toolActivationTriggerSkillLoad  toolActivationTriggerKind = "skill_load"
+	toolActivationTriggerToolResult toolActivationTriggerKind = "tool_result"
 )
 
 type toolActivationTrigger struct {
-	kind  toolActivationTriggerKind
-	skill string
+	kind            toolActivationTriggerKind
+	skill           string
+	toolName        string
+	resultBoolField string
+	resultBoolValue bool
+	hasResultBool   bool
 }
 
 type toolActivationRule struct {
@@ -70,8 +75,11 @@ type toolActivationRule struct {
 }
 
 type toolActivationRuleOptions struct {
-	mode     ToolActivationMode
-	lifetime ToolActivationLifetime
+	mode            ToolActivationMode
+	lifetime        ToolActivationLifetime
+	resultBoolField string
+	resultBoolValue bool
+	hasResultBool   bool
 }
 
 func newToolActivationRuleOptions(
@@ -102,6 +110,19 @@ func WithToolActivationLifetime(
 ) ToolActivationOption {
 	return func(opts *toolActivationRuleOptions) {
 		opts.lifetime = lifetime
+	}
+}
+
+// WithToolActivationResultJSONBool requires a boolean field in the tool
+// result JSON to match before a tool-result activation fires.
+func WithToolActivationResultJSONBool(
+	field string,
+	value bool,
+) ToolActivationOption {
+	return func(opts *toolActivationRuleOptions) {
+		opts.resultBoolField = field
+		opts.resultBoolValue = value
+		opts.hasResultBool = true
 	}
 }
 
@@ -226,6 +247,22 @@ func normalizeToolActivationTrigger(
 			kind:  toolActivationTriggerSkillLoad,
 			skill: skillName,
 		}, nil
+	case toolActivationTriggerToolResult:
+		toolName := strings.TrimSpace(trigger.toolName)
+		if toolName == "" {
+			return toolActivationTrigger{}, fmt.Errorf("tool activation tool name must not be empty")
+		}
+		resultBoolField := strings.TrimSpace(trigger.resultBoolField)
+		if trigger.hasResultBool && resultBoolField == "" {
+			return toolActivationTrigger{}, fmt.Errorf("tool activation result bool field must not be empty")
+		}
+		return toolActivationTrigger{
+			kind:            toolActivationTriggerToolResult,
+			toolName:        toolName,
+			resultBoolField: resultBoolField,
+			resultBoolValue: trigger.resultBoolValue,
+			hasResultBool:   trigger.hasResultBool,
+		}, nil
 	default:
 		return toolActivationTrigger{}, fmt.Errorf(
 			"unsupported tool activation trigger %q",
@@ -238,6 +275,17 @@ func (trigger toolActivationTrigger) describe() string {
 	switch trigger.kind {
 	case toolActivationTriggerSkillLoad:
 		return fmt.Sprintf("%s:%s", trigger.kind, trigger.skill)
+	case toolActivationTriggerToolResult:
+		if trigger.hasResultBool {
+			return fmt.Sprintf(
+				"%s:%s:%s=%t",
+				trigger.kind,
+				trigger.toolName,
+				trigger.resultBoolField,
+				trigger.resultBoolValue,
+			)
+		}
+		return fmt.Sprintf("%s:%s", trigger.kind, trigger.toolName)
 	default:
 		return string(trigger.kind)
 	}
@@ -349,14 +397,15 @@ func (a *LLMAgent) handleToolActivationPostToolResult(
 	inv *agent.Invocation,
 	ev *event.Event,
 ) {
-	if inv == nil || ev == nil || len(ev.StateDelta) == 0 {
+	if inv == nil || ev == nil {
 		return
 	}
-	loaded := loadedSkillsFromStateDelta(inv.AgentName, ev.StateDelta)
-	if len(loaded) == 0 {
-		return
+	var records []toolActivationRecord
+	if len(ev.StateDelta) > 0 {
+		loaded := loadedSkillsFromStateDelta(inv.AgentName, ev.StateDelta)
+		records = append(records, a.activationRecordsForLoadedSkills(loaded)...)
 	}
-	records := a.activationRecordsForLoadedSkills(loaded)
+	records = append(records, a.activationRecordsForToolResult(ev)...)
 	if len(records) == 0 {
 		return
 	}
@@ -415,6 +464,69 @@ func (rule toolActivationRule) matchesLoadedSkills(loaded map[string]bool) bool 
 	default:
 		return false
 	}
+}
+
+func (a *LLMAgent) activationRecordsForToolResult(
+	ev *event.Event,
+) []toolActivationRecord {
+	a.mu.RLock()
+	rules := append([]toolActivationRule(nil), a.option.toolActivationRules...)
+	a.mu.RUnlock()
+	records := make([]toolActivationRecord, 0, len(rules))
+	for _, rule := range rules {
+		if !rule.matchesToolResult(ev) {
+			continue
+		}
+		for _, toolSetName := range rule.toolSetNames {
+			record, ok := newToolActivationRecord(rule.mode, rule.lifetime, toolSetName)
+			if ok {
+				records = append(records, record)
+			}
+		}
+	}
+	return records
+}
+
+func (rule toolActivationRule) matchesToolResult(ev *event.Event) bool {
+	if rule.trigger.kind != toolActivationTriggerToolResult ||
+		ev == nil || ev.Response == nil {
+		return false
+	}
+	for _, choice := range ev.Response.Choices {
+		msg := choice.Message
+		if strings.TrimSpace(msg.ToolName) != rule.trigger.toolName {
+			continue
+		}
+		if !rule.trigger.hasResultBool {
+			return true
+		}
+		if toolResultBoolFieldMatches(
+			msg.Content,
+			rule.trigger.resultBoolField,
+			rule.trigger.resultBoolValue,
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func toolResultBoolFieldMatches(content, field string, want bool) bool {
+	content = strings.TrimSpace(content)
+	field = strings.TrimSpace(field)
+	if content == "" || field == "" {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return false
+	}
+	value, ok := payload[field]
+	if !ok {
+		return false
+	}
+	got, ok := value.(bool)
+	return ok && got == want
 }
 
 func appendSessionActivationStateDelta(

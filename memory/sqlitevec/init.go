@@ -37,7 +37,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS {{TABLE_NAME}} USING vec0(
   +memory_kind text,
   +event_time integer,
   +participants text,
-  +location text
+  +location text{{DEEPSEARCH_COLUMNS}}
 );`
 
 	sqlCreateSchemaBackupTable = `
@@ -54,11 +54,25 @@ CREATE TABLE %s (
   memory_kind text,
   event_time integer,
   participants text,
-  location text
+  location text%s
 );`
+
+	sqlDeepSearchVirtualColumns = `,
+  +deepsearch_index text,
+  +deepsearch_text text,
+  +deepsearch_fingerprint text,
+  +deepsearch_version integer,
+  +deepsearch_indexed_at integer`
+
+	sqlDeepSearchBackupColumns = `,
+  deepsearch_index text,
+  deepsearch_text text,
+  deepsearch_fingerprint text,
+  deepsearch_version integer,
+  deepsearch_indexed_at integer`
 )
 
-var requiredSchemaColumns = []string{
+var baseRequiredSchemaColumns = []string{
 	"memory_id",
 	"embedding",
 	"app_name",
@@ -72,6 +86,14 @@ var requiredSchemaColumns = []string{
 	"event_time",
 	"participants",
 	"location",
+}
+
+var deepSearchSchemaColumns = []string{
+	"deepsearch_index",
+	"deepsearch_text",
+	"deepsearch_fingerprint",
+	"deepsearch_version",
+	"deepsearch_indexed_at",
 }
 
 var legacySchemaColumns = []string{
@@ -150,7 +172,7 @@ func (s *Service) recoverSchemaBackup(ctx context.Context) error {
 	); err != nil {
 		return fmt.Errorf("recreate table %s: %w", s.tableName, err)
 	}
-	if err := s.restoreSchemaBackup(ctx, backupTable); err != nil {
+	if err := s.restoreSchemaBackup(ctx, backupTable, nil); err != nil {
 		return err
 	}
 	return s.dropTable(ctx, backupTable)
@@ -161,7 +183,7 @@ func (s *Service) migrateLegacySchema(
 	found map[string]struct{},
 ) error {
 	if !hasSchemaColumns(found, legacySchemaColumns) {
-		missing := missingColumns(found, requiredSchemaColumns)
+		missing := missingColumns(found, s.requiredSchemaColumns())
 		return s.outdatedSchemaError(missing)
 	}
 
@@ -178,7 +200,7 @@ func (s *Service) migrateLegacySchema(
 	); err != nil {
 		return fmt.Errorf("recreate table %s: %w", s.tableName, err)
 	}
-	if err := s.restoreSchemaBackup(ctx, backupTable); err != nil {
+	if err := s.restoreSchemaBackup(ctx, backupTable, nil); err != nil {
 		return err
 	}
 	return s.dropTable(ctx, backupTable)
@@ -197,28 +219,43 @@ func (s *Service) createSchemaBackup(
 
 	if _, err := tx.ExecContext(
 		ctx,
-		fmt.Sprintf(sqlCreateSchemaBackupTable, backupTable),
+		fmt.Sprintf(
+			sqlCreateSchemaBackupTable,
+			backupTable,
+			s.deepSearchBackupColumns(),
+		),
 	); err != nil {
 		return fmt.Errorf("create schema backup %s: %w", backupTable, err)
 	}
 
-	query := fmt.Sprintf(
-		`INSERT INTO %s (
-memory_id, embedding, app_name, user_id,
+	insertColumns := `memory_id, embedding, app_name, user_id,
 created_at, updated_at, deleted_at,
 memory_content, topics, memory_kind,
-event_time, participants, location
-)
-SELECT
-memory_id, embedding, app_name, user_id,
+event_time, participants, location`
+	selectColumns := fmt.Sprintf(`memory_id, embedding, app_name, user_id,
 created_at, updated_at, deleted_at,
-memory_content, topics, %s, %s, %s, %s
-FROM %s`,
-		backupTable,
+memory_content, topics, %s, %s, %s, %s`,
 		optionalColumnExpr(found, "memory_kind"),
 		optionalColumnExpr(found, "event_time"),
 		optionalColumnExpr(found, "participants"),
 		optionalColumnExpr(found, "location"),
+	)
+	if s.deepSearchEnabled() {
+		insertColumns += `, deepsearch_index, deepsearch_text,
+deepsearch_fingerprint, deepsearch_version, deepsearch_indexed_at`
+		selectColumns += fmt.Sprintf(`, %s, %s, %s, %s, %s`,
+			optionalColumnExpr(found, "deepsearch_index"),
+			optionalColumnExpr(found, "deepsearch_text"),
+			optionalColumnExpr(found, "deepsearch_fingerprint"),
+			optionalColumnExpr(found, "deepsearch_version"),
+			optionalColumnExpr(found, "deepsearch_indexed_at"),
+		)
+	}
+	query := fmt.Sprintf(
+		"INSERT INTO %s (%s)\nSELECT\n%s\nFROM %s",
+		backupTable,
+		insertColumns,
+		selectColumns,
 		s.tableName,
 	)
 	if _, err := tx.ExecContext(ctx, query); err != nil {
@@ -233,21 +270,39 @@ FROM %s`,
 func (s *Service) restoreSchemaBackup(
 	ctx context.Context,
 	backupTable string,
+	found map[string]struct{},
 ) error {
+	if found == nil {
+		var err error
+		_, found, err = s.schemaMissingColumns(ctx, backupTable)
+		if err != nil {
+			return err
+		}
+	}
+	insertColumns := `memory_id, embedding, app_name, user_id,
+created_at, updated_at, deleted_at,
+memory_content, topics, memory_kind,
+event_time, participants, location`
+	selectColumns := `memory_id, vec_f32(embedding), app_name, user_id,
+created_at, updated_at, deleted_at,
+memory_content, topics, memory_kind,
+event_time, participants, location`
+	if s.deepSearchEnabled() {
+		insertColumns += `, deepsearch_index, deepsearch_text,
+deepsearch_fingerprint, deepsearch_version, deepsearch_indexed_at`
+		selectColumns += fmt.Sprintf(`, %s, %s, %s, %s, %s`,
+			optionalColumnExpr(found, "deepsearch_index"),
+			optionalColumnExpr(found, "deepsearch_text"),
+			optionalColumnExpr(found, "deepsearch_fingerprint"),
+			optionalColumnExpr(found, "deepsearch_version"),
+			optionalColumnExpr(found, "deepsearch_indexed_at"),
+		)
+	}
 	query := fmt.Sprintf(
-		`INSERT INTO %s (
-memory_id, embedding, app_name, user_id,
-created_at, updated_at, deleted_at,
-memory_content, topics, memory_kind,
-event_time, participants, location
-)
-SELECT
-memory_id, vec_f32(embedding), app_name, user_id,
-created_at, updated_at, deleted_at,
-memory_content, topics, memory_kind,
-event_time, participants, location
-FROM %s`,
+		"INSERT INTO %s (%s)\nSELECT\n%s\nFROM %s",
 		s.tableName,
+		insertColumns,
+		selectColumns,
 		backupTable,
 	)
 	if _, err := s.db.ExecContext(ctx, query); err != nil {
@@ -285,7 +340,8 @@ func (s *Service) schemaMissingColumns(
 	}
 	defer rows.Close()
 
-	found := make(map[string]struct{}, len(requiredSchemaColumns))
+	requiredColumns := s.requiredSchemaColumns()
+	found := make(map[string]struct{}, len(requiredColumns))
 
 	for rows.Next() {
 		var (
@@ -319,20 +375,50 @@ func (s *Service) schemaMissingColumns(
 			err,
 		)
 	}
-	return missingColumns(found, requiredSchemaColumns), found, nil
+	return missingColumns(found, requiredColumns), found, nil
 }
 
 func (s *Service) createMemoriesTableSQL() string {
+	deepSearchColumns := ""
+	if s.deepSearchEnabled() {
+		deepSearchColumns = sqlDeepSearchVirtualColumns
+	}
 	tableSQL := strings.ReplaceAll(
 		sqlCreateMemoriesTable,
 		"{{TABLE_NAME}}",
 		s.tableName,
+	)
+	tableSQL = strings.ReplaceAll(
+		tableSQL,
+		"{{DEEPSEARCH_COLUMNS}}",
+		deepSearchColumns,
 	)
 	return strings.ReplaceAll(
 		tableSQL,
 		"{{DIMENSION}}",
 		fmt.Sprintf("%d", s.opts.indexDimension),
 	)
+}
+
+func (s *Service) requiredSchemaColumns() []string {
+	if !s.deepSearchEnabled() {
+		return baseRequiredSchemaColumns
+	}
+	columns := make(
+		[]string,
+		0,
+		len(baseRequiredSchemaColumns)+len(deepSearchSchemaColumns),
+	)
+	columns = append(columns, baseRequiredSchemaColumns...)
+	columns = append(columns, deepSearchSchemaColumns...)
+	return columns
+}
+
+func (s *Service) deepSearchBackupColumns() string {
+	if s.deepSearchEnabled() {
+		return sqlDeepSearchBackupColumns
+	}
+	return ""
 }
 
 func (s *Service) schemaBackupTableName() string {

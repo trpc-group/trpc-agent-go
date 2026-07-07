@@ -21,6 +21,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/redis"
@@ -32,7 +33,10 @@ const (
 	defaultConnectionTimeout = 5 * time.Second
 )
 
-var _ memory.Service = (*Service)(nil)
+var (
+	_ memory.Service     = (*Service)(nil)
+	_ deepsearch.Service = (*Service)(nil)
+)
 
 // Service is the redis memory service.
 // Storage structure:

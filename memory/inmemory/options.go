@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 var (
@@ -53,10 +55,26 @@ type serviceOpts struct {
 	// When set, write tools are hidden from agent by default unless exposed explicitly.
 	extractor extractor.MemoryExtractor
 
+	// DeepSearch row-attached index configuration.
+	deepSearchModel   model.Model
+	deepSearchOptions []deepsearch.Option
+
 	// Async memory worker configuration.
 	asyncMemoryNum   int           // Number of async workers, default 3.
 	memoryQueueSize  int           // Queue size per worker, default 100.
 	memoryJobTimeout time.Duration // Timeout per job, default 30s.
+}
+
+// WithDeepSearch enables row-attached DeepSearch indexing for the service.
+// It also exposes the DeepSearch search mode on memory_search.
+func WithDeepSearch(indexModel model.Model, opts ...deepsearch.Option) ServiceOpt {
+	return func(options *serviceOpts) {
+		options.deepSearchModel = indexModel
+		options.deepSearchOptions = append([]deepsearch.Option(nil), opts...)
+		if indexModel != nil {
+			imemory.EnableDeepSearchSearchTool(options.toolCreators)
+		}
+	}
 }
 
 func (o serviceOpts) clone() serviceOpts {

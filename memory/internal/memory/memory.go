@@ -198,6 +198,18 @@ var AllToolCreators = map[string]memory.ToolCreator{
 	memory.ClearToolName:  func() tool.Tool { return memorytool.NewClearTool() },
 }
 
+// EnableDeepSearchSearchTool replaces the default memory search tool creator
+// with the DeepSearch-aware search tool. It does not enable or expose any new
+// tool names by itself.
+func EnableDeepSearchSearchTool(toolCreators map[string]memory.ToolCreator) {
+	if toolCreators == nil {
+		return
+	}
+	toolCreators[memory.SearchToolName] = func() tool.Tool {
+		return memorytool.NewDeepSearchSearchTool()
+	}
+}
+
 // DefaultEnabledTools are the tool names that are enabled by default.
 // This is shared between different memory service implementations.
 var DefaultEnabledTools = map[string]struct{}{

@@ -95,11 +95,21 @@ type SearchMemoryRequest struct {
 	OrderByEventTime bool   `json:"order_by_event_time,omitempty" description:"When true, use event_time ascending as a tie-breaker after relevance ranking. Useful for temporal sequence questions (what happened first/next/after)."`
 }
 
+// DeepSearchMemoryRequest represents the input for the DeepSearch-enabled
+// search memory tool.
+type DeepSearchMemoryRequest struct {
+	SearchMemoryRequest
+	SearchMode string `json:"search_mode,omitempty" jsonschema:"enum=standard,enum=deepsearch" description:"Search mode. Empty or 'standard' returns normal memory search. Use 'deepsearch' to prepare row-attached cue/tag recall tools after the normal search result is available."`
+}
+
 // SearchMemoryResponse represents the response from memory_search tool.
 type SearchMemoryResponse struct {
-	Query   string   `json:"query"`   // Query is the search query that was used.
-	Results []Result `json:"results"` // Results is the search results.
-	Count   int      `json:"count"`   // Count is the number of results found.
+	Query               string   `json:"query"`                          // Query is the search query that was used.
+	Results             []Result `json:"results"`                        // Results is the search results.
+	Count               int      `json:"count"`                          // Count is the number of results found.
+	SearchMode          string   `json:"search_mode,omitempty"`          // SearchMode is present for deepsearch activation attempts.
+	DeepSearchActivated bool     `json:"deepsearch_activated,omitempty"` // DeepSearchActivated indicates whether DeepSearch tools may be activated.
+	Message             string   `json:"message,omitempty"`              // Message describes DeepSearch activation status.
 }
 
 // LoadMemoryRequest represents the input for the load memory tool.

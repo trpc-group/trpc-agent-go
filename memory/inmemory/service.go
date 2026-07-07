@@ -19,23 +19,29 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-var _ memory.Service = (*MemoryService)(nil)
+var (
+	_ memory.Service     = (*MemoryService)(nil)
+	_ deepsearch.Service = (*MemoryService)(nil)
+)
 
 // appMemories represents memories for a specific app.
 type appMemories struct {
-	mu       sync.RWMutex
-	memories map[string]map[string]*memory.Entry // userID -> memoryID -> MemoryEntry.
+	mu         sync.RWMutex
+	memories   map[string]map[string]*memory.Entry     // userID -> memoryID -> MemoryEntry.
+	deepSearch map[string]map[string]*deepsearch.Index // userID -> memoryID -> hidden index.
 }
 
 // newAppMemories creates a new app memories instance.
 func newAppMemories() *appMemories {
 	return &appMemories{
-		memories: make(map[string]map[string]*memory.Entry),
+		memories:   make(map[string]map[string]*memory.Entry),
+		deepSearch: make(map[string]map[string]*deepsearch.Index),
 	}
 }
 
@@ -181,6 +187,7 @@ func (s *MemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, m
 	}
 
 	app.memories[userKey.UserID][memoryEntry.ID] = memoryEntry
+	delete(app.deepSearch, userKey.UserID)
 	return nil
 }
 
@@ -222,6 +229,7 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, 
 		delete(userMemories, memoryKey.MemoryID)
 	}
 	userMemories[newID] = memoryEntry
+	delete(app.deepSearch, memoryKey.UserID)
 	if result := memory.ResolveUpdateResult(opts); result != nil {
 		result.MemoryID = newID
 	}
@@ -249,6 +257,7 @@ func (s *MemoryService) DeleteMemory(ctx context.Context, memoryKey memory.Key) 
 	}
 
 	delete(app.memories[memoryKey.UserID], memoryKey.MemoryID)
+	delete(app.deepSearch, memoryKey.UserID)
 	return nil
 }
 
@@ -265,6 +274,7 @@ func (s *MemoryService) ClearMemories(ctx context.Context, userKey memory.UserKe
 
 	// Remove all memories for the specific user.
 	delete(app.memories, userKey.UserID)
+	delete(app.deepSearch, userKey.UserID)
 	return nil
 }
 

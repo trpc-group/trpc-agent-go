@@ -96,6 +96,13 @@ const (
 	// SearchMemories so the backend can stop scanning once candidates
 	// drop below a clearly irrelevant band.
 	reconcileMinProbeScore = 0.30
+
+	// reconcileMinRewriteJaccard is a conservative guard for destructive
+	// Add->Update rewrites. Vector similarity can occasionally surface a
+	// semantically distant row, especially when the embedding provider or
+	// domain is noisy. Requiring some token overlap before rewriting keeps
+	// those false positives from inheriting unrelated topics / metadata.
+	reconcileMinRewriteJaccard = 0.05
 )
 
 // Reconcile decision tiers. A higher tier is always preferred when
@@ -841,6 +848,15 @@ func (w *AutoMemoryWorker) decideAddOp(
 	switch bestTier {
 	case reconcileTierSkip:
 		if hasNewTopics(best.Memory.Topics, op.Topics) {
+			if bestJaccard < reconcileMinRewriteJaccard {
+				log.DebugfContext(ctx,
+					"auto_memory: reconcile keep add despite score-based "+
+						"topic update for user %s/%s "+
+						"(best=%s score=%.3f jaccard=%.3f)",
+					userKey.AppName, userKey.UserID,
+					best.ID, best.Score, bestJaccard)
+				return op
+			}
 			log.DebugfContext(ctx,
 				"auto_memory: reconcile merge topics for user %s/%s "+
 					"(best=%s score=%.3f jaccard=%.3f)",
@@ -856,6 +872,15 @@ func (w *AutoMemoryWorker) decideAddOp(
 		return nil
 
 	case reconcileTierUpdate:
+		if bestJaccard < reconcileMinRewriteJaccard {
+			log.DebugfContext(ctx,
+				"auto_memory: reconcile keep add despite score-based "+
+					"update for user %s/%s "+
+					"(best=%s score=%.3f jaccard=%.3f)",
+				userKey.AppName, userKey.UserID,
+				best.ID, best.Score, bestJaccard)
+			return op
+		}
 		log.DebugfContext(ctx,
 			"auto_memory: reconcile rewrite add as update for user "+
 				"%s/%s (best=%s score=%.3f jaccard=%.3f)",

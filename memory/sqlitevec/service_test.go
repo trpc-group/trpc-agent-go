@@ -1232,7 +1232,7 @@ func createSchemaBackupTable(
 ) {
 	t.Helper()
 
-	_, err := db.Exec(fmt.Sprintf(sqlCreateSchemaBackupTable, tableName))
+	_, err := db.Exec(fmt.Sprintf(sqlCreateSchemaBackupTable, tableName, ""))
 	require.NoError(t, err)
 }
 

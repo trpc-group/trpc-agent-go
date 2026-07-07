@@ -2005,6 +2005,35 @@ func TestReconcileOps_KeepsOpWhenNotSimilar(t *testing.T) {
 	assert.Empty(t, out[0].MemoryID)
 }
 
+// TestReconcileOps_KeepsAddOnScoreOnlyUpdate verifies that a high vector
+// score alone cannot rewrite an unrelated Add into an Update when the texts
+// share no lexical anchors. This prevents unrelated topics / metadata from
+// being carried over to a new memory.
+func TestReconcileOps_KeepsAddOnScoreOnlyUpdate(t *testing.T) {
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:      "mem-podcast",
+		AppName: "app", UserID: "u1",
+		Memory: &memory.Memory{
+			Memory: "User listens to true crime podcasts with their sister",
+			Topics: []string{"podcasts", "true crime", "sister"},
+		},
+		Score: 0.70,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+
+	ops := []*extractor.Operation{{
+		Type:   extractor.OperationAdd,
+		Memory: "Graduated with a degree in Business Administration",
+		Topics: []string{"education", "Business Administration"},
+	}}
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(), ops)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+	assert.Equal(t, []string{"education", "Business Administration"}, out[0].Topics)
+}
+
 // TestReconcileOps_PreservesNonAddOps ensures Update / Delete / Clear
 // ops are passed through untouched by reconcile.
 func TestReconcileOps_PreservesNonAddOps(t *testing.T) {

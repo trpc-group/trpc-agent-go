@@ -117,6 +117,22 @@ func (s *Service) initDB(ctx context.Context) error {
 			}
 		}
 	}
+	if s.opts.deepSearchModel != nil {
+		deepSearchColumns := []string{
+			fmt.Sprintf("ALTER TABLE %s ADD COLUMN deepsearch_index JSON", s.tableName),
+			fmt.Sprintf("ALTER TABLE %s ADD COLUMN deepsearch_text TEXT", s.tableName),
+			fmt.Sprintf("ALTER TABLE %s ADD COLUMN deepsearch_fingerprint VARCHAR(128)", s.tableName),
+			fmt.Sprintf("ALTER TABLE %s ADD COLUMN deepsearch_version INT", s.tableName),
+			fmt.Sprintf("ALTER TABLE %s ADD COLUMN deepsearch_indexed_at TIMESTAMP(6) NULL", s.tableName),
+		}
+		for _, ddl := range deepSearchColumns {
+			if _, err := s.db.Exec(ctx, ddl); err != nil {
+				if !isDuplicateColumnError(err) {
+					return fmt.Errorf("add deepsearch column on table %s failed: %w", s.tableName, err)
+				}
+			}
+		}
+	}
 
 	log.InfoContext(ctx, "mysqlvec memory database schema initialized successfully")
 	return nil

@@ -57,6 +57,24 @@ func TestAllToolCreators(t *testing.T) {
 	assert.Len(t, AllToolCreators, len(expectedTools), "AllToolCreators should contain exactly the expected tools")
 }
 
+func TestEnableDeepSearchSearchTool(t *testing.T) {
+	creators := make(map[string]memory.ToolCreator, len(AllToolCreators))
+	for name, creator := range AllToolCreators {
+		creators[name] = creator
+	}
+
+	standardSearch := creators[memory.SearchToolName]()
+	standardSchema := standardSearch.Declaration().InputSchema
+	require.NotNil(t, standardSchema)
+	assert.NotContains(t, standardSchema.Properties, "search_mode")
+
+	EnableDeepSearchSearchTool(creators)
+	deepSearch := creators[memory.SearchToolName]()
+	deepSearchSchema := deepSearch.Declaration().InputSchema
+	require.NotNil(t, deepSearchSchema)
+	assert.Contains(t, deepSearchSchema.Properties, "search_mode")
+}
+
 func TestDefaultEnabledTools(t *testing.T) {
 	// Verify that DefaultEnabledTools contains expected tools.
 	expectedTools := []string{

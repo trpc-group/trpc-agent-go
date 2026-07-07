@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/deepsearch"
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/mysql"
@@ -29,6 +30,7 @@ import (
 )
 
 var _ memory.Service = (*Service)(nil)
+var _ deepsearch.Service = (*Service)(nil)
 
 // Service is the mysqlvec memory service.
 // Storage structure:

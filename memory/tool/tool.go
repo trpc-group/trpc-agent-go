@@ -42,6 +42,7 @@ const (
 	clearReasonDescription       = "Optional short reason for clearing all saved memory."
 	searchMemoryQueryDescription = "Search query for remembered profile preferences history or prior conversation context. Use short keyword style queries and call the tool directly when the current request depends on stored memory."
 	searchMemoryKindDescription  = "Optional memory kind preference. Use 'fact' for stable profile style memories and 'episode' for dated events. Leave empty when unsure."
+	searchMemoryModeDescription  = "Search mode. Use 'standard' for normal memory search. Use 'deepsearch' only after normal search is insufficient or uncertain; it keeps the normal search results and prepares cue/tag DeepSearch tools for the next tool round."
 	timeAfterDescription         = "Optional lower bound for episode event_time in ISO 8601 date format."
 	timeBeforeDescription        = "Optional upper bound for episode event_time in ISO 8601 date format."
 	orderByEventTimeDescription  = "When true order results by event time instead of relevance. Useful for sequence or timeline questions."
@@ -249,65 +250,98 @@ func NewClearTool() tool.CallableTool {
 // NewSearchTool creates a function tool for searching memories.
 func NewSearchTool() tool.CallableTool {
 	searchFunc := func(ctx context.Context, req *SearchMemoryRequest) (*SearchMemoryResponse, error) {
-		// Get MemoryService from context.
-		memoryService, err := GetMemoryServiceFromContext(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("memory search tool: failed to get memory service from context: %v", err)
-		}
-
-		// Get appName and userID from context.
-		appName, userID, err := GetAppAndUserFromContext(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("memory search tool: failed to get app and user from context: %v", err)
-		}
-
-		// Validate input.
-		if req == nil || req.Query == "" {
-			return &SearchMemoryResponse{
-				Query:   "",
-				Results: []Result{},
-				Count:   0,
-			}, nil
-		}
-
-		userKey := memory.UserKey{AppName: appName, UserID: userID}
-		opts := buildSearchOptions(req)
-		memories, err := memoryService.SearchMemories(ctx, userKey,
-			opts.Query, memory.WithSearchOptions(opts))
-		if err != nil {
-			return nil, fmt.Errorf("failed to search memories: %v", err)
-		}
-
-		// Convert MemoryEntry to MemoryResult.
-		results := make([]Result, len(memories))
-		for i, m := range memories {
-			results[i] = entryToResult(m)
-		}
-
-		return &SearchMemoryResponse{
-			Query:   req.Query,
-			Results: results,
-			Count:   len(results),
-		}, nil
+		return runSearchTool(ctx, req, searchModeStandard, false)
 	}
+	return newSearchFunctionTool(searchFunc, false)
+}
 
+// NewDeepSearchSearchTool creates a memory search tool that can activate
+// DeepSearch after a normal memory search.
+func NewDeepSearchSearchTool() tool.CallableTool {
+	searchFunc := func(ctx context.Context, req *DeepSearchMemoryRequest) (*SearchMemoryResponse, error) {
+		if req == nil {
+			return runSearchTool(ctx, nil, searchModeStandard, true)
+		}
+		return runSearchTool(ctx, &req.SearchMemoryRequest, req.SearchMode, true)
+	}
+	return newSearchFunctionTool(searchFunc, true)
+}
+
+func newSearchFunctionTool[I any](
+	fn func(context.Context, I) (*SearchMemoryResponse, error),
+	enableDeepSearch bool,
+) tool.CallableTool {
 	return function.NewFunctionTool(
-		searchFunc,
+		fn,
 		function.WithName(memory.SearchToolName),
 		function.WithDescription("Search for relevant memories about the user. "+
 			memoryToolScopeNote+" "+
 			memoryReadDirectUseNote+" "+
-			"Returns memories ranked by semantic similarity, each with: id, memory text, topics, kind (fact/episode), "+
-			"event_time, participants, location, and similarity score (0-1, higher = more relevant). "+
-			"IMPORTANT: Check the 'participants' field to verify the memory is about the correct person before using it as evidence. "+
-			"Use short keyword-style queries for best results (e.g. 'Alice hiking trip' instead of 'When did Alice go hiking?'). "+
-			"For multi-part questions, search for each sub-question separately and combine the results. "+
-			"For temporal questions (e.g. 'when did X happen', 'what did user do in May 2023'), "+
-			"use time_after/time_before filters and consider setting order_by_event_time=true. "+
-			"The 'kind' filter is optional and acts as a preference with automatic fallback; "+
-			"omit it when uncertain whether the answer is stored as a fact or episode."),
-		function.WithInputSchema(searchMemoryInputSchema()),
+			searchMemoryDescription(enableDeepSearch)),
+		function.WithInputSchema(searchMemoryInputSchema(enableDeepSearch)),
 	)
+}
+
+func runSearchTool(
+	ctx context.Context,
+	req *SearchMemoryRequest,
+	searchMode string,
+	enableDeepSearch bool,
+) (*SearchMemoryResponse, error) {
+	// Get MemoryService from context.
+	memoryService, err := GetMemoryServiceFromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("memory search tool: failed to get memory service from context: %v", err)
+	}
+
+	// Get appName and userID from context.
+	appName, userID, err := GetAppAndUserFromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("memory search tool: failed to get app and user from context: %v", err)
+	}
+
+	// Validate input.
+	if req == nil || req.Query == "" {
+		return &SearchMemoryResponse{
+			Query:   "",
+			Results: []Result{},
+			Count:   0,
+		}, nil
+	}
+
+	userKey := memory.UserKey{AppName: appName, UserID: userID}
+	opts := buildSearchOptions(req)
+	memories, err := memoryService.SearchMemories(ctx, userKey,
+		opts.Query, memory.WithSearchOptions(opts))
+	if err != nil {
+		return nil, fmt.Errorf("failed to search memories: %v", err)
+	}
+
+	// Convert MemoryEntry to MemoryResult.
+	results := make([]Result, len(memories))
+	for i, m := range memories {
+		results[i] = entryToResult(m)
+	}
+
+	rsp := &SearchMemoryResponse{
+		Query:   req.Query,
+		Results: results,
+		Count:   len(results),
+	}
+	mode := normalizeSearchMode(searchMode)
+	if enableDeepSearch && mode == searchModeDeepSearch {
+		ds, ok := memoryService.(deepSearchService)
+		if !ok {
+			return nil, fmt.Errorf("memory search tool: deepsearch is not enabled for this memory service")
+		}
+		if err := ds.EnsureIndex(ctx, userKey); err != nil {
+			return nil, fmt.Errorf("memory search tool: prepare deepsearch index: %w", err)
+		}
+		rsp.SearchMode = searchModeDeepSearch
+		rsp.DeepSearchActivated = true
+		rsp.Message = "DeepSearch index is ready. Cue/tag/content tools can be activated for this invocation."
+	}
+	return rsp, nil
 }
 
 // NewLoadTool creates a function tool for loading memories.
@@ -402,14 +436,18 @@ func clearMemoryInputSchema() *tool.Schema {
 	})
 }
 
-func searchMemoryInputSchema() *tool.Schema {
-	return objectSchema(map[string]*tool.Schema{
+func searchMemoryInputSchema(enableDeepSearch bool) *tool.Schema {
+	properties := map[string]*tool.Schema{
 		"query":               stringSchema(searchMemoryQueryDescription),
 		"kind":                stringEnumSchema(searchMemoryKindDescription, "fact", "episode"),
 		"time_after":          stringSchema(timeAfterDescription),
 		"time_before":         stringSchema(timeBeforeDescription),
 		"order_by_event_time": boolSchema(orderByEventTimeDescription),
-	}, "query")
+	}
+	if enableDeepSearch {
+		properties["search_mode"] = stringEnumSchema(searchMemoryModeDescription, searchModeStandard, searchModeDeepSearch)
+	}
+	return objectSchema(properties, "query")
 }
 
 func loadMemoryInputSchema() *tool.Schema {
@@ -568,6 +606,40 @@ func buildSearchOptions(req *SearchMemoryRequest) memory.SearchOptions {
 	}
 	opts.OrderByEventTime = req.OrderByEventTime
 	return opts
+}
+
+const (
+	searchModeStandard   = "standard"
+	searchModeDeepSearch = "deepsearch"
+)
+
+type deepSearchService interface {
+	EnsureIndex(ctx context.Context, userKey memory.UserKey) error
+}
+
+func searchMemoryDescription(enableDeepSearch bool) string {
+	description := "Returns memories ranked by semantic similarity, each with: id, memory text, topics, kind (fact/episode), " +
+		"event_time, participants, location, and similarity score (0-1, higher = more relevant). " +
+		"IMPORTANT: Check the 'participants' field to verify the memory is about the correct person before using it as evidence. " +
+		"Use short keyword-style queries for best results (e.g. 'Alice hiking trip' instead of 'When did Alice go hiking?'). " +
+		"For multi-part questions, search for each sub-question separately and combine the results. " +
+		"For temporal questions (e.g. 'when did X happen', 'what did user do in May 2023'), " +
+		"use time_after/time_before filters and consider setting order_by_event_time=true. " +
+		"The 'kind' filter is optional and acts as a preference with automatic fallback; " +
+		"omit it when uncertain whether the answer is stored as a fact or episode."
+	if !enableDeepSearch {
+		return description
+	}
+	return description + " When normal search is insufficient or uncertain, call this same tool again with search_mode='deepsearch' " +
+		"to prepare additional cue/tag retrieval tools while preserving standard search behavior."
+}
+
+func normalizeSearchMode(mode string) string {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if mode == "" {
+		return searchModeStandard
+	}
+	return mode
 }
 
 // ParseFlexibleTime tries multiple date/time formats including natural language dates
