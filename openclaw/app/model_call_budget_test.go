@@ -295,6 +295,82 @@ func TestModelCallBudgetModel_SkipsSummaryRequests(t *testing.T) {
 	require.EqualValues(t, 2, underlying.callCount())
 }
 
+func TestModelCallBudgetBypassModel_DoesNotConsumeContextBudget(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	underlying := &countingBudgetModel{}
+	budgeted := newModelCallBudgetModel(underlying)
+	bypassed := newModelCallBudgetBypassModel(budgeted)
+	ctx := withModelCallBudget(context.Background(), 1)
+
+	_, err := bypassed.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+	_, err = bypassed.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+
+	_, err = budgeted.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+	_, err = budgeted.GenerateContent(ctx, &model.Request{})
+	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
+	require.EqualValues(t, 3, underlying.callCount())
+}
+
+func TestModelCallBudgetBypassModel_DoesNotConsumeInvocationBudget(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	underlying := &countingBudgetModel{}
+	budgeted := newModelCallBudgetModel(underlying)
+	bypassed := newModelCallBudgetBypassModel(budgeted)
+	factory := newModelCallBudgetFactory(1, false)
+	inv := agent.NewInvocation(agent.WithInvocationRunOptions(
+		agent.NewRunOptions(agent.MergeRuntimeState(map[string]any{
+			modelCallBudgetRuntimeStateKey: factory,
+		})),
+	))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	_, err := bypassed.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+	_, err = bypassed.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+
+	_, err = budgeted.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+	_, err = budgeted.GenerateContent(ctx, &model.Request{})
+	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
+	require.EqualValues(t, 3, underlying.callCount())
+}
+
+func TestModelCallBudgetBypassIterModel_DoesNotConsumeContextBudget(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	underlying := &countingBudgetIterModel{}
+	budgeted := newModelCallBudgetModel(underlying)
+	bypassed := newModelCallBudgetBypassModel(budgeted)
+	bypassIter, ok := bypassed.(model.IterModel)
+	require.True(t, ok)
+	budgetedIter, ok := budgeted.(model.IterModel)
+	require.True(t, ok)
+	ctx := withModelCallBudget(context.Background(), 1)
+
+	_, err := bypassIter.GenerateContentIter(ctx, &model.Request{})
+	require.NoError(t, err)
+	_, err = bypassIter.GenerateContentIter(ctx, &model.Request{})
+	require.NoError(t, err)
+
+	_, err = budgetedIter.GenerateContentIter(ctx, &model.Request{})
+	require.NoError(t, err)
+	_, err = budgetedIter.GenerateContentIter(ctx, &model.Request{})
+	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
+	require.EqualValues(t, 3, underlying.iterCallCount())
+}
+
 type countingBudgetModel struct {
 	calls atomic.Int64
 }

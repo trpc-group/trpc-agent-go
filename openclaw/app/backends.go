@@ -439,7 +439,10 @@ func newAutoMemoryExtractor(
 		}
 	}
 
-	return memextractor.NewExtractor(mdl, extOpts...), nil
+	return memextractor.NewExtractor(
+		newModelCallBudgetBypassModel(mdl),
+		extOpts...,
+	), nil
 }
 
 const summaryToolResultMaxRunes = 2000

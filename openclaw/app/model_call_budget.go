@@ -22,6 +22,8 @@ import (
 
 type modelCallBudgetKey struct{}
 
+type modelCallBudgetBypassKey struct{}
+
 const modelCallBudgetRuntimeStateKey = "openclaw.model_call_budget"
 
 type modelCallBudget struct {
@@ -85,8 +87,18 @@ func withModelCallBudgetValue(
 	return context.WithValue(ctx, modelCallBudgetKey{}, budget)
 }
 
+func withoutModelCallBudget(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, modelCallBudgetBypassKey{}, true)
+}
+
 func modelCallBudgetFromContext(ctx context.Context) *modelCallBudget {
 	if ctx == nil {
+		return nil
+	}
+	if bypass, _ := ctx.Value(modelCallBudgetBypassKey{}).(bool); bypass {
 		return nil
 	}
 	budget, _ := ctx.Value(modelCallBudgetKey{}).(*modelCallBudget)
@@ -174,6 +186,20 @@ func modelCallBudgetCallbacks() *model.Callbacks {
 	)
 }
 
+func newModelCallBudgetBypassModel(m model.Model) model.Model {
+	if m == nil {
+		return nil
+	}
+	wrapped := &modelCallBudgetBypassModel{model: m}
+	if iter, ok := m.(model.IterModel); ok {
+		return &modelCallBudgetBypassIterModel{
+			modelCallBudgetBypassModel: wrapped,
+			iter:                       iter,
+		}
+	}
+	return wrapped
+}
+
 type modelCallBudgetModel struct {
 	model model.Model
 }
@@ -199,6 +225,21 @@ func (m *modelCallBudgetModel) Info() model.Info {
 	return m.model.Info()
 }
 
+type modelCallBudgetBypassModel struct {
+	model model.Model
+}
+
+func (m *modelCallBudgetBypassModel) GenerateContent(
+	ctx context.Context,
+	req *model.Request,
+) (<-chan *model.Response, error) {
+	return m.model.GenerateContent(withoutModelCallBudget(ctx), req)
+}
+
+func (m *modelCallBudgetBypassModel) Info() model.Info {
+	return m.model.Info()
+}
+
 type modelCallBudgetIterModel struct {
 	*modelCallBudgetModel
 	iter model.IterModel
@@ -219,6 +260,18 @@ func (m *modelCallBudgetIterModel) GenerateContentIter(
 		req = finalModelCallRequest(req)
 	}
 	return m.iter.GenerateContentIter(ctx, req)
+}
+
+type modelCallBudgetBypassIterModel struct {
+	*modelCallBudgetBypassModel
+	iter model.IterModel
+}
+
+func (m *modelCallBudgetBypassIterModel) GenerateContentIter(
+	ctx context.Context,
+	req *model.Request,
+) (model.Seq[*model.Response], error) {
+	return m.iter.GenerateContentIter(withoutModelCallBudget(ctx), req)
 }
 
 func appendModelCallBudgetGatewayOption(
