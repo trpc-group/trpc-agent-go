@@ -3431,7 +3431,18 @@ func TestFlow_RunOneStep_MarksImageURLOnModelError(t *testing.T) {
 	const imageURL = "https://example.invalid/image.png"
 	msg := model.NewUserMessage("look at this")
 	msg.AddImageURL(imageURL, "auto")
-	sess := &session.Session{ID: "sess", AppName: "app", UserID: "user"}
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{*event.NewResponseEvent(
+			"inv",
+			"user",
+			&model.Response{
+				Choices: []model.Choice{{Message: msg}},
+			},
+		)},
+	}
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(msg),
@@ -3460,7 +3471,18 @@ func TestFlow_RunOneStep_MarksImageURLOnResponseError(t *testing.T) {
 	const imageURL = "https://example.invalid/image.png"
 	msg := model.NewUserMessage("look at this")
 	msg.AddImageURL(imageURL, "auto")
-	sess := &session.Session{ID: "sess", AppName: "app", UserID: "user"}
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{*event.NewResponseEvent(
+			"inv",
+			"user",
+			&model.Response{
+				Choices: []model.Choice{{Message: msg}},
+			},
+		)},
+	}
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(msg),

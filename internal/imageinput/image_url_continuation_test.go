@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessionnoop "trpc.group/trpc-go/trpc-agent-go/session/noop"
@@ -104,6 +106,10 @@ func TestMarkUnavailableImageURLsFromRequestPrefersMentionedURL(t *testing.T) {
 		ID:      "sess",
 		AppName: "app",
 		UserID:  "user",
+		Events: []event.Event{
+			*imageMessageEvent("other-inv", otherMsg),
+			*imageMessageEvent("inv", currentMsg),
+		},
 	}
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
@@ -118,6 +124,7 @@ func TestMarkUnavailableImageURLsFromRequestPrefersMentionedURL(t *testing.T) {
 		inv,
 		req,
 		errors.New("failed to fetch image url "+otherURL),
+		nil,
 	)
 
 	require.NoError(t, err)
@@ -137,7 +144,15 @@ func TestMarkUnavailableImageURLsFromRequestMatchesWholeURLToken(t *testing.T) {
 	longMsg := model.NewUserMessage("long")
 	longMsg.AddImageURL(longURL, "auto")
 
-	sess := &session.Session{ID: "sess", AppName: "app", UserID: "user"}
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			*imageMessageEvent("short-inv", shortMsg),
+			*imageMessageEvent("long-inv", longMsg),
+		},
+	}
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(longMsg),
@@ -149,6 +164,7 @@ func TestMarkUnavailableImageURLsFromRequestMatchesWholeURLToken(t *testing.T) {
 		inv,
 		req,
 		errors.New("failed to fetch image url "+longURL),
+		nil,
 	)
 
 	require.NoError(t, err)
@@ -168,11 +184,20 @@ func TestMarkUnavailableImageURLsFromRequestFallsBackToCurrentMessage(t *testing
 	otherMsg := model.NewUserMessage("other")
 	otherMsg.AddImageURL(otherURL, "auto")
 
-	sess := &session.Session{ID: "sess", AppName: "app", UserID: "user"}
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			*imageMessageEvent("other-inv", otherMsg),
+			*imageMessageEvent("current-inv", currentMsg),
+		},
+	}
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(currentMsg),
 	)
+	inv.InvocationID = "current-inv"
 	req := &model.Request{Messages: []model.Message{otherMsg, currentMsg}}
 
 	count, err := MarkUnavailableImageURLsFromRequest(
@@ -180,6 +205,7 @@ func TestMarkUnavailableImageURLsFromRequestFallsBackToCurrentMessage(t *testing
 		inv,
 		req,
 		errors.New("failed to fetch image"),
+		nil,
 	)
 
 	require.NoError(t, err)
@@ -201,7 +227,15 @@ func TestMarkUnavailableImageURLsFromRequestFallsBackToAllRequestURLsWithoutCurr
 	secondMsg := model.NewUserMessage("second")
 	secondMsg.AddImageURL(secondURL, "auto")
 
-	sess := &session.Session{ID: "sess", AppName: "app", UserID: "user"}
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			*imageMessageEvent("first-inv", firstMsg),
+			*imageMessageEvent("second-inv", secondMsg),
+		},
+	}
 	inv := agent.NewInvocation(agent.WithInvocationSession(sess))
 	req := &model.Request{Messages: []model.Message{firstMsg, secondMsg}}
 
@@ -210,6 +244,7 @@ func TestMarkUnavailableImageURLsFromRequestFallsBackToAllRequestURLsWithoutCurr
 		inv,
 		req,
 		errors.New("failed to fetch image"),
+		nil,
 	)
 
 	require.NoError(t, err)
@@ -226,7 +261,14 @@ func TestMarkUnavailableImageURLsFromRequestDoesNotSetLocalStateOnPersistFailure
 	persistErr := errors.New("persist failed")
 	msg := model.NewUserMessage("current")
 	msg.AddImageURL(imageURL, "auto")
-	sess := &session.Session{ID: "sess", AppName: "app", UserID: "user"}
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			*imageMessageEvent("current-inv", msg),
+		},
+	}
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(msg),
@@ -235,12 +277,14 @@ func TestMarkUnavailableImageURLsFromRequestDoesNotSetLocalStateOnPersistFailure
 			err:     persistErr,
 		}),
 	)
+	inv.InvocationID = "current-inv"
 
 	count, err := MarkUnavailableImageURLsFromRequest(
 		context.Background(),
 		inv,
 		&model.Request{Messages: []model.Message{msg}},
 		errors.New("failed to fetch image"),
+		nil,
 	)
 
 	require.ErrorIs(t, err, persistErr)
@@ -249,31 +293,229 @@ func TestMarkUnavailableImageURLsFromRequestDoesNotSetLocalStateOnPersistFailure
 	require.False(t, ok)
 }
 
+func TestMarkUnavailableImageURLsFromRequestUsesPersistedSessionEvent(
+	t *testing.T,
+) {
+	const imageURL = "https://example.invalid/current.png"
+	msg := model.NewUserMessage("current")
+	msg.AddImageURL(imageURL, "auto")
+	liveSess := &session.Session{ID: "sess", AppName: "app", UserID: "user"}
+	persistedSess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			*imageMessageEvent("current-inv", msg),
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(liveSess),
+		agent.WithInvocationMessage(msg),
+		agent.WithInvocationSessionService(&persistedSessionService{
+			Service: sessionnoop.NewService(),
+			sess:    persistedSess,
+		}),
+	)
+	inv.InvocationID = "current-inv"
+
+	count, err := MarkUnavailableImageURLsFromRequest(
+		context.Background(),
+		inv,
+		&model.Request{Messages: []model.Message{msg}},
+		errors.New("Unable to download image from "+imageURL),
+		nil,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.Empty(t, UnavailableImageURLSet(liveSess))
+	require.Contains(t, UnavailableImageURLSet(persistedSess), imageURL)
+}
+
+func TestMarkUnavailableImageURLsFromRequestUsesRoutedSession(t *testing.T) {
+	const imageURL = "https://example.invalid/current.png"
+	msg := model.NewUserMessage("current")
+	msg.AddImageURL(imageURL, "auto")
+	rootSess := &session.Session{ID: "root", AppName: "app", UserID: "user"}
+	routedSess := &session.Session{
+		ID:      "root/team/member",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			*imageMessageEvent("current-inv", msg),
+		},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(rootSess),
+		agent.WithInvocationMessage(msg),
+	)
+	inv.InvocationID = "current-inv"
+	sessionroute.AttachEventRouter(inv, routedSessionRouter{sess: routedSess})
+
+	count, err := MarkUnavailableImageURLsFromRequest(
+		context.Background(),
+		inv,
+		&model.Request{Messages: []model.Message{msg}},
+		errors.New("Unable to download image from "+imageURL),
+		nil,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.Empty(t, UnavailableImageURLSet(rootSess))
+	require.Contains(t, UnavailableImageURLSet(routedSess), imageURL)
+}
+
 func TestProjectUnavailableImageURLs(t *testing.T) {
 	const imageURL = "https://example.invalid/current.png"
 	msg := model.NewUserMessage("current")
 	msg.AddImageURL(imageURL, "auto")
-	sess := &session.Session{}
+	evt := imageMessageEvent("current-inv", msg)
+	sess := &session.Session{Events: []event.Event{*evt}}
 	inv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
 		agent.WithInvocationMessage(msg),
 	)
+	inv.InvocationID = "current-inv"
 
 	_, err := MarkUnavailableImageURLsFromRequest(
 		context.Background(),
 		inv,
 		&model.Request{Messages: []model.Message{msg}},
 		errors.New("failed to fetch image"),
+		nil,
 	)
 	require.NoError(t, err)
 
-	projected := ProjectUnavailableImageURLs(sess, msg, "[missing image]")
+	projected := ProjectUnavailableImageURLs(sess, *evt, 0, msg, "[missing image]")
 	require.Len(t, projected.ContentParts, 1)
 	require.Equal(t, model.ContentTypeText, projected.ContentParts[0].Type)
 	require.NotNil(t, projected.ContentParts[0].Text)
 	require.Equal(t, "[missing image]", *projected.ContentParts[0].Text)
 
 	require.Equal(t, model.ContentTypeImage, msg.ContentParts[0].Type)
+}
+
+func TestProjectUnavailableImageURLsScopesToEventPart(t *testing.T) {
+	const imageURL = "https://example.invalid/shared.png"
+	first := model.NewUserMessage("first")
+	first.AddImageURL(imageURL, "auto")
+	second := model.NewUserMessage("second")
+	second.AddImageURL(imageURL, "auto")
+	firstEvent := imageMessageEvent("first-inv", first)
+	secondEvent := imageMessageEvent("second-inv", second)
+	sess := &session.Session{Events: []event.Event{*firstEvent, *secondEvent}}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(first),
+	)
+	inv.InvocationID = "first-inv"
+
+	_, err := MarkUnavailableImageURLsFromRequest(
+		context.Background(),
+		inv,
+		&model.Request{Messages: []model.Message{first}},
+		errors.New("failed to fetch image"),
+		nil,
+	)
+	require.NoError(t, err)
+
+	projectedFirst := ProjectUnavailableImageURLs(
+		sess,
+		*firstEvent,
+		0,
+		first,
+		"[missing image]",
+	)
+	require.Equal(t, model.ContentTypeText, projectedFirst.ContentParts[0].Type)
+
+	projectedSecond := ProjectUnavailableImageURLs(
+		sess,
+		*secondEvent,
+		0,
+		second,
+		"[missing image]",
+	)
+	require.Equal(t, model.ContentTypeImage, projectedSecond.ContentParts[0].Type)
+	require.Equal(t, imageURL, projectedSecond.ContentParts[0].Image.URL)
+}
+
+func TestMarkUnavailableImageURLsFromRequestUsesResponseParam(t *testing.T) {
+	const (
+		firstURL  = "https://example.invalid/first.png"
+		secondURL = "https://example.invalid/second.png"
+	)
+	first := model.NewUserMessage("first")
+	first.AddImageURL(firstURL, "auto")
+	second := model.NewUserMessage("second")
+	second.AddImageURL(secondURL, "auto")
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			*imageMessageEvent("first-inv", first),
+			*imageMessageEvent("second-inv", second),
+		},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationSession(sess))
+	param := "messages[1].content[0].image_url.url"
+
+	count, err := MarkUnavailableImageURLsFromRequest(
+		context.Background(),
+		inv,
+		&model.Request{Messages: []model.Message{first, second}},
+		errors.New("invalid request"),
+		&model.ResponseError{Message: "invalid image url", Param: &param},
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	unavailable := UnavailableImageURLSet(sess)
+	require.NotContains(t, unavailable, firstURL)
+	require.Contains(t, unavailable, secondURL)
+}
+
+func TestMarkUnavailableImageURLsFromRequestSkipsAmbiguousDuplicateURL(
+	t *testing.T,
+) {
+	const imageURL = "https://example.invalid/shared.png"
+	first := model.NewUserMessage("first")
+	first.AddImageURL(imageURL, "auto")
+	second := model.NewUserMessage("second")
+	second.AddImageURL(imageURL, "auto")
+	sess := &session.Session{
+		ID:      "sess",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			*imageMessageEvent("first-inv", first),
+			*imageMessageEvent("second-inv", second),
+		},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationSession(sess))
+
+	count, err := MarkUnavailableImageURLsFromRequest(
+		context.Background(),
+		inv,
+		&model.Request{Messages: []model.Message{first, second}},
+		errors.New("failed to fetch image url "+imageURL),
+		nil,
+	)
+
+	require.NoError(t, err)
+	require.Zero(t, count)
+	require.Empty(t, UnavailableImageURLSet(sess))
+}
+
+func imageMessageEvent(invocationID string, msg model.Message) *event.Event {
+	return event.NewResponseEvent(
+		invocationID,
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{Message: msg}},
+		},
+	)
 }
 
 type failingUpdateSessionService struct {
@@ -287,4 +529,28 @@ func (s *failingUpdateSessionService) UpdateSessionState(
 	state session.StateMap,
 ) error {
 	return s.err
+}
+
+type persistedSessionService struct {
+	*sessionnoop.Service
+	sess *session.Session
+}
+
+func (s *persistedSessionService) GetSession(
+	context.Context,
+	session.Key,
+	...session.Option,
+) (*session.Session, error) {
+	return s.sess, nil
+}
+
+type routedSessionRouter struct {
+	sess *session.Session
+}
+
+func (r routedSessionRouter) RouteEvent(
+	*agent.Invocation,
+	*event.Event,
+) (*session.Session, bool) {
+	return r.sess, r.sess != nil
 }

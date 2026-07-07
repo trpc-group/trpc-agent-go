@@ -1011,6 +1011,7 @@ func (f *Flow) maybeMarkUnavailableImageURLs(
 		invocation,
 		llmRequest,
 		err,
+		respErr,
 	)
 	if markErr != nil {
 		log.WarnfContext(

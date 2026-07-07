@@ -795,6 +795,7 @@ func TestContentRequestProcessor_getIncrementMessages_ProjectsFailedImageURL(
 		inv,
 		&model.Request{Messages: []model.Message{msg}},
 		assert.AnError,
+		nil,
 	)
 	require.NoError(t, err)
 
@@ -815,18 +816,29 @@ func TestContentRequestProcessor_ImageURLFailureContinuationKeepsCurrentInput(
 	t *testing.T,
 ) {
 	const imageURL = "https://example.invalid/image.png"
+	previous := model.NewUserMessage("look at this")
+	previous.AddImageURL(imageURL, "auto")
+	previousEvent := event.NewResponseEvent(
+		"previous-invocation-id",
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{Message: previous}},
+		},
+	)
 	current := model.NewUserMessage("look at this again")
 	current.AddImageURL(imageURL, "auto")
-	sess := &session.Session{}
+	sess := &session.Session{Events: []event.Event{*previousEvent}}
 	markingInv := agent.NewInvocation(
 		agent.WithInvocationSession(sess),
-		agent.WithInvocationMessage(current),
+		agent.WithInvocationMessage(previous),
 	)
+	markingInv.InvocationID = "previous-invocation-id"
 	_, err := imageinput.MarkUnavailableImageURLsFromRequest(
 		context.Background(),
 		markingInv,
-		&model.Request{Messages: []model.Message{current}},
+		&model.Request{Messages: []model.Message{previous}},
 		assert.AnError,
+		nil,
 	)
 	require.NoError(t, err)
 
@@ -837,10 +849,12 @@ func TestContentRequestProcessor_ImageURLFailureContinuationKeepsCurrentInput(
 	p := NewContentRequestProcessor(WithImageURLFailureContinuation(true))
 	messages := p.getIncrementMessages(inv, time.Time{})
 
-	require.Len(t, messages, 1)
+	require.Len(t, messages, 2)
 	require.Len(t, messages[0].ContentParts, 1)
-	assert.Equal(t, model.ContentTypeImage, messages[0].ContentParts[0].Type)
-	assert.Equal(t, imageURL, messages[0].ContentParts[0].Image.URL)
+	require.NotNil(t, messages[0].ContentParts[0].Text)
+	require.Len(t, messages[1].ContentParts, 1)
+	assert.Equal(t, model.ContentTypeImage, messages[1].ContentParts[0].Type)
+	assert.Equal(t, imageURL, messages[1].ContentParts[0].Image.URL)
 }
 
 func TestContentRequestProcessor_ImageURLFailureContinuationCanBeDisabled(
@@ -862,11 +876,13 @@ func TestContentRequestProcessor_ImageURLFailureContinuationCanBeDisabled(
 		agent.WithInvocationMessage(msg),
 		agent.WithInvocationEventFilterKey("test-filter"),
 	)
+	inv.InvocationID = "invocation-id"
 	_, err := imageinput.MarkUnavailableImageURLsFromRequest(
 		context.Background(),
 		inv,
 		&model.Request{Messages: []model.Message{msg}},
 		assert.AnError,
+		nil,
 	)
 	require.NoError(t, err)
 

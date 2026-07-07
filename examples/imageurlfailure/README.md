@@ -2,9 +2,10 @@
 
 This example sends a URL-backed image in the first turn, then continues in the
 same session. If the model service cannot fetch or decode the image URL, the
-framework records that URL in session state. Later turns replace the failed
-image part with a text placeholder before sending the model request, so the
-session is not repeatedly blocked by the same historical image URL.
+framework records that historical image part location in session state. Later
+turns replace only that failed image part with a text placeholder before
+sending the model request, so the session is not repeatedly blocked by the same
+historical image input.
 
 The framework does not download, validate, proxy, or store the image. It only
 records model-side failures and changes later model-facing request views. It

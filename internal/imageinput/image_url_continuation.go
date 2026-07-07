@@ -14,19 +14,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 const (
-	// UnavailableImageURLsStateKey stores URL-backed image inputs that should
-	// no longer be sent to the model service for this session.
+	// UnavailableImageURLsStateKey stores URL-backed image input locations that
+	// should no longer be sent to the model service for this session.
 	UnavailableImageURLsStateKey = "__trpc_agent_unavailable_image_urls_v1"
 
 	// DefaultUnavailableImageURLPlaceholder is used when a URL-backed image is
@@ -75,9 +80,12 @@ var (
 	}
 )
 
-// UnavailableImageURLRecord describes one URL-backed image that should be
-// projected out of later model requests.
+// UnavailableImageURLRecord describes one event-scoped URL-backed image part
+// that should be projected out of later model requests.
 type UnavailableImageURLRecord struct {
+	EventID      string    `json:"event_id,omitempty"`
+	ChoiceIndex  int       `json:"choice_index"`
+	PartIndex    int       `json:"part_index"`
 	URL          string    `json:"url"`
 	RequestID    string    `json:"request_id,omitempty"`
 	InvocationID string    `json:"invocation_id,omitempty"`
@@ -89,6 +97,39 @@ type unavailableImageURLState struct {
 	Version int                         `json:"version"`
 	URLs    []UnavailableImageURLRecord `json:"urls"`
 }
+
+type unavailableImageURLLocation struct {
+	EventID     string
+	ChoiceIndex int
+	PartIndex   int
+	URL         string
+}
+
+type imageURLMark struct {
+	EventID     string
+	ChoiceIndex int
+	PartIndex   int
+	URL         string
+}
+
+type imageURLRef struct {
+	EventID      string
+	RequestID    string
+	InvocationID string
+	ChoiceIndex  int
+	PartIndex    int
+	URL          string
+	Message      model.Message
+}
+
+var (
+	imageURLParamBracketPattern = regexp.MustCompile(
+		`messages\[(\d+)\]\.content\[(\d+)\]`,
+	)
+	imageURLParamDotPattern = regexp.MustCompile(
+		`messages\.(\d+)\.content\.(\d+)`,
+	)
+)
 
 // IsImageURLFailure reports whether err/respErr looks like a provider-side
 // image URL fetch, access, validation, or decode failure.
@@ -120,55 +161,98 @@ func IsImageURLFailureForRequest(
 	return hasURLSignal(text) && containsAny(text, urlFailureSignals)
 }
 
-// MarkUnavailableImageURLsFromRequest records image URLs from req that should
-// be replaced in later model-facing request views.
+// MarkUnavailableImageURLsFromRequest records event-scoped image URL locations
+// from req that should be replaced in later model-facing request views.
 func MarkUnavailableImageURLsFromRequest(
 	ctx context.Context,
 	inv *agent.Invocation,
 	req *model.Request,
 	cause error,
+	respErr *model.ResponseError,
 ) (int, error) {
 	if inv == nil || inv.Session == nil || req == nil {
 		return 0, nil
 	}
-	urls := imageURLsToMark(inv, req, cause)
-	if len(urls) == 0 {
+	markSession, marks := imageURLMarksToMarkFromRoutedSession(
+		inv,
+		req,
+		cause,
+		respErr,
+	)
+	if len(marks) == 0 {
+		markSession = inv.Session
+		marks = imageURLMarksToMark(inv, req, cause, respErr)
+	}
+	if len(marks) == 0 {
+		var sessionForMarks *session.Session
+		var err error
+		sessionForMarks, marks, err = imageURLMarksToMarkFromPersistedSession(
+			ctx,
+			inv,
+			req,
+			cause,
+			respErr,
+		)
+		if err != nil {
+			return 0, err
+		}
+		if len(marks) > 0 {
+			markSession = sessionForMarks
+		}
+	}
+	if len(marks) == 0 || markSession == nil {
 		return 0, nil
 	}
-	state := readUnavailableImageURLState(inv.Session)
+	state := readUnavailableImageURLState(markSession)
 	now := time.Now()
-	seen := make(map[string]int, len(state.URLs))
+	seen := make(map[unavailableImageURLLocation]int, len(state.URLs))
 	for i, record := range state.URLs {
-		seen[record.URL] = i
+		if !record.hasLocation() {
+			continue
+		}
+		seen[record.location()] = i
 	}
-	for _, imageURL := range urls {
+	written := 0
+	for _, mark := range marks {
+		if !mark.hasLocation() {
+			continue
+		}
 		record := UnavailableImageURLRecord{
-			URL:          imageURL,
+			EventID:      mark.EventID,
+			ChoiceIndex:  mark.ChoiceIndex,
+			PartIndex:    mark.PartIndex,
+			URL:          mark.URL,
 			RequestID:    inv.RunOptions.RequestID,
 			InvocationID: inv.InvocationID,
 			Error:        errorString(cause),
 			MarkedAt:     now,
 		}
-		if i, ok := seen[imageURL]; ok {
+		location := mark.location()
+		if i, ok := seen[location]; ok {
 			state.URLs[i] = record
+			written++
 			continue
 		}
-		seen[imageURL] = len(state.URLs)
+		seen[location] = len(state.URLs)
 		state.URLs = append(state.URLs, record)
+		written++
+	}
+	if written == 0 {
+		return 0, nil
 	}
 	if len(state.URLs) > maxUnavailableImageURLRecords {
 		state.URLs = state.URLs[len(state.URLs)-maxUnavailableImageURLRecords:]
 	}
-	state.Version = 1
+	state.Version = 2
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return 0, err
 	}
 	if inv.SessionService != nil {
 		key := session.Key{
-			AppName:   inv.Session.AppName,
-			UserID:    inv.Session.UserID,
-			SessionID: inv.Session.ID,
+			AppName:   markSession.AppName,
+			UserID:    markSession.UserID,
+			SessionID: markSession.ID,
 		}
 		if err := inv.SessionService.UpdateSessionState(
 			ctx,
@@ -178,19 +262,82 @@ func MarkUnavailableImageURLsFromRequest(
 			return 0, err
 		}
 	}
-	inv.Session.SetState(UnavailableImageURLsStateKey, raw)
-	return len(urls), nil
+	markSession.SetState(UnavailableImageURLsStateKey, raw)
+	return written, nil
 }
 
-// ProjectUnavailableImageURLs replaces session-marked URL-backed image parts
-// with a text placeholder in the supplied message.
+func imageURLMarksToMarkFromRoutedSession(
+	inv *agent.Invocation,
+	req *model.Request,
+	cause error,
+	respErr *model.ResponseError,
+) (*session.Session, []imageURLMark) {
+	routedSession, ok := routedImageURLFailureSession(inv)
+	if !ok || sameSession(routedSession, inv.Session) {
+		return nil, nil
+	}
+	routedInv := *inv
+	routedInv.Session = routedSession
+	return routedSession, imageURLMarksToMark(&routedInv, req, cause, respErr)
+}
+
+func imageURLMarksToMarkFromPersistedSession(
+	ctx context.Context,
+	inv *agent.Invocation,
+	req *model.Request,
+	cause error,
+	respErr *model.ResponseError,
+) (*session.Session, []imageURLMark, error) {
+	if inv == nil || inv.Session == nil || inv.SessionService == nil {
+		return nil, nil, nil
+	}
+	sess, err := inv.SessionService.GetSession(ctx, session.Key{
+		AppName:   inv.Session.AppName,
+		UserID:    inv.Session.UserID,
+		SessionID: inv.Session.ID,
+	})
+	if err != nil || sess == nil {
+		return nil, nil, err
+	}
+	refreshed := *inv
+	refreshed.Session = sess
+	return sess, imageURLMarksToMark(&refreshed, req, cause, respErr), nil
+}
+
+func routedImageURLFailureSession(inv *agent.Invocation) (*session.Session, bool) {
+	if inv == nil {
+		return nil, false
+	}
+	routeEvt := &event.Event{
+		RequestID:    inv.RunOptions.RequestID,
+		InvocationID: inv.InvocationID,
+		Branch:       inv.Branch,
+		FilterKey:    inv.GetEventFilterKey(),
+	}
+	if parent := inv.GetParentInvocation(); parent != nil {
+		routeEvt.ParentInvocationID = parent.InvocationID
+	}
+	return sessionroute.RouteEvent(inv, routeEvt)
+}
+
+func sameSession(a, b *session.Session) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.AppName == b.AppName && a.UserID == b.UserID && a.ID == b.ID
+}
+
+// ProjectUnavailableImageURLs replaces session-marked event-scoped URL-backed
+// image parts with a text placeholder in the supplied message.
 func ProjectUnavailableImageURLs(
 	sess *session.Session,
+	evt event.Event,
+	choiceIndex int,
 	msg model.Message,
 	placeholder string,
 ) model.Message {
-	unavailable := UnavailableImageURLSet(sess)
-	if len(unavailable) == 0 || len(msg.ContentParts) == 0 {
+	unavailable := unavailableImageURLLocationSet(sess)
+	if evt.ID == "" || len(unavailable) == 0 || len(msg.ContentParts) == 0 {
 		return msg
 	}
 	var projected []model.ContentPart
@@ -202,7 +349,13 @@ func ProjectUnavailableImageURLs(
 		if imageURL == "" {
 			continue
 		}
-		if _, ok := unavailable[imageURL]; !ok {
+		location := unavailableImageURLLocation{
+			EventID:     evt.ID,
+			ChoiceIndex: choiceIndex,
+			PartIndex:   i,
+			URL:         imageURL,
+		}
+		if _, ok := unavailable[location]; !ok {
 			continue
 		}
 		if projected == nil {
@@ -245,26 +398,286 @@ func UnavailableImageURLSet(sess *session.Session) map[string]struct{} {
 	return out
 }
 
-func imageURLsToMark(
+func unavailableImageURLLocationSet(
+	sess *session.Session,
+) map[unavailableImageURLLocation]struct{} {
+	state := readUnavailableImageURLState(sess)
+	if len(state.URLs) == 0 {
+		return nil
+	}
+	out := make(map[unavailableImageURLLocation]struct{}, len(state.URLs))
+	for _, record := range state.URLs {
+		if !record.hasLocation() {
+			continue
+		}
+		out[record.location()] = struct{}{}
+	}
+	return out
+}
+
+func (r UnavailableImageURLRecord) hasLocation() bool {
+	return r.EventID != "" && r.URL != "" && r.PartIndex >= 0
+}
+
+func (r UnavailableImageURLRecord) location() unavailableImageURLLocation {
+	return unavailableImageURLLocation{
+		EventID:     r.EventID,
+		ChoiceIndex: r.ChoiceIndex,
+		PartIndex:   r.PartIndex,
+		URL:         r.URL,
+	}
+}
+
+func (m imageURLMark) hasLocation() bool {
+	return m.EventID != "" && m.URL != "" && m.PartIndex >= 0
+}
+
+func (m imageURLMark) location() unavailableImageURLLocation {
+	return unavailableImageURLLocation{
+		EventID:     m.EventID,
+		ChoiceIndex: m.ChoiceIndex,
+		PartIndex:   m.PartIndex,
+		URL:         m.URL,
+	}
+}
+
+func imageURLMarksToMark(
 	inv *agent.Invocation,
 	req *model.Request,
 	cause error,
-) []string {
+	respErr *model.ResponseError,
+) []imageURLMark {
+	if marks := imageURLMarksFromResponseParam(
+		inv,
+		req,
+		cause,
+		respErr,
+	); len(marks) > 0 {
+		return marks
+	}
 	reqURLs := requestImageURLs(req)
 	if len(reqURLs) == 0 {
 		return nil
 	}
 	if mentioned := mentionedURLs(
 		reqURLs,
-		strings.ToLower(errorString(cause)),
+		imageFailureText(cause, respErr),
 	); len(mentioned) > 0 {
-		return mentioned
+		return uniqueSessionImageURLMarks(inv, req, mentioned)
 	}
 	current := messageImageURLs(inv.Message)
 	if len(current) > 0 {
-		return intersectOrdered(current, reqURLs)
+		return currentInvocationImageURLMarks(
+			inv,
+			intersectOrdered(current, reqURLs),
+		)
 	}
-	return reqURLs
+	return uniqueSessionImageURLMarks(inv, req, reqURLs)
+}
+
+func imageURLMarksFromResponseParam(
+	inv *agent.Invocation,
+	req *model.Request,
+	cause error,
+	respErr *model.ResponseError,
+) []imageURLMark {
+	respErr = responseError(cause, respErr)
+	if respErr == nil || respErr.Param == nil {
+		return nil
+	}
+	messageIndex, partIndex, ok := parseImageURLParam(*respErr.Param)
+	if !ok || req == nil || messageIndex < 0 || messageIndex >= len(req.Messages) {
+		return nil
+	}
+	msg := req.Messages[messageIndex]
+	if partIndex < 0 || partIndex >= len(msg.ContentParts) {
+		return nil
+	}
+	part := msg.ContentParts[partIndex]
+	if part.Type != model.ContentTypeImage || part.Image == nil {
+		return nil
+	}
+	imageURL := strings.TrimSpace(part.Image.URL)
+	if imageURL == "" {
+		return nil
+	}
+	var matches []imageURLMark
+	for _, ref := range sessionImageURLRefs(inv.Session) {
+		if ref.URL != imageURL || ref.PartIndex != partIndex {
+			continue
+		}
+		if !messageContentEqual(ref.Message, msg) {
+			continue
+		}
+		matches = append(matches, markFromRef(ref))
+	}
+	if len(matches) != 1 {
+		return nil
+	}
+	return matches
+}
+
+func currentInvocationImageURLMarks(
+	inv *agent.Invocation,
+	urls []string,
+) []imageURLMark {
+	if inv == nil || inv.Session == nil || len(urls) == 0 {
+		return nil
+	}
+	allowed := urlSet(urls)
+	var out []imageURLMark
+	for _, ref := range sessionImageURLRefs(inv.Session) {
+		if _, ok := allowed[ref.URL]; !ok {
+			continue
+		}
+		if inv.InvocationID != "" && ref.InvocationID != inv.InvocationID {
+			continue
+		}
+		if !messageContentEqual(ref.Message, inv.Message) {
+			continue
+		}
+		out = append(out, markFromRef(ref))
+	}
+	return dedupeImageURLMarks(out)
+}
+
+func uniqueSessionImageURLMarks(
+	inv *agent.Invocation,
+	req *model.Request,
+	urls []string,
+) []imageURLMark {
+	if inv == nil || inv.Session == nil || req == nil || len(urls) == 0 {
+		return nil
+	}
+	allowed := urlSet(urls)
+	byURL := make(map[string][]imageURLMark, len(urls))
+	for _, ref := range sessionImageURLRefs(inv.Session) {
+		if _, ok := allowed[ref.URL]; !ok {
+			continue
+		}
+		if !requestContainsMessage(req, ref.Message) {
+			continue
+		}
+		byURL[ref.URL] = append(byURL[ref.URL], markFromRef(ref))
+	}
+	var out []imageURLMark
+	for _, imageURL := range urls {
+		matches := dedupeImageURLMarks(byURL[imageURL])
+		if len(matches) != 1 {
+			continue
+		}
+		out = append(out, matches[0])
+	}
+	return out
+}
+
+func sessionImageURLRefs(sess *session.Session) []imageURLRef {
+	if sess == nil {
+		return nil
+	}
+	sess.EventMu.RLock()
+	defer sess.EventMu.RUnlock()
+	var refs []imageURLRef
+	for _, evt := range sess.Events {
+		if evt.ID == "" || evt.Response == nil {
+			continue
+		}
+		for choiceIndex, choice := range evt.Response.Choices {
+			msg := choice.Message
+			for partIndex, part := range msg.ContentParts {
+				if part.Type != model.ContentTypeImage || part.Image == nil {
+					continue
+				}
+				imageURL := strings.TrimSpace(part.Image.URL)
+				if imageURL == "" {
+					continue
+				}
+				refs = append(refs, imageURLRef{
+					EventID:      evt.ID,
+					RequestID:    evt.RequestID,
+					InvocationID: evt.InvocationID,
+					ChoiceIndex:  choiceIndex,
+					PartIndex:    partIndex,
+					URL:          imageURL,
+					Message:      msg,
+				})
+			}
+		}
+	}
+	return refs
+}
+
+func markFromRef(ref imageURLRef) imageURLMark {
+	return imageURLMark{
+		EventID:     ref.EventID,
+		ChoiceIndex: ref.ChoiceIndex,
+		PartIndex:   ref.PartIndex,
+		URL:         ref.URL,
+	}
+}
+
+func requestContainsMessage(req *model.Request, msg model.Message) bool {
+	if req == nil {
+		return false
+	}
+	for _, reqMsg := range req.Messages {
+		if messageContentEqual(reqMsg, msg) {
+			return true
+		}
+	}
+	return false
+}
+
+func messageContentEqual(a, b model.Message) bool {
+	return a.Role == b.Role &&
+		a.Content == b.Content &&
+		a.ToolID == b.ToolID &&
+		a.ToolName == b.ToolName &&
+		reflect.DeepEqual(a.ContentParts, b.ContentParts) &&
+		reflect.DeepEqual(a.ToolCalls, b.ToolCalls)
+}
+
+func responseError(
+	err error,
+	respErr *model.ResponseError,
+) *model.ResponseError {
+	var nested *model.ResponseError
+	if errors.As(err, &nested) && nested != nil {
+		return nested
+	}
+	return respErr
+}
+
+func parseImageURLParam(param string) (int, int, bool) {
+	if param == "" {
+		return 0, 0, false
+	}
+	if messageIndex, partIndex, ok := parseImageURLParamWithPattern(
+		imageURLParamBracketPattern,
+		param,
+	); ok {
+		return messageIndex, partIndex, true
+	}
+	return parseImageURLParamWithPattern(imageURLParamDotPattern, param)
+}
+
+func parseImageURLParamWithPattern(
+	pattern *regexp.Regexp,
+	param string,
+) (int, int, bool) {
+	matches := pattern.FindStringSubmatch(param)
+	if len(matches) != 3 {
+		return 0, 0, false
+	}
+	messageIndex, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return 0, 0, false
+	}
+	partIndex, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return 0, 0, false
+	}
+	return messageIndex, partIndex, true
 }
 
 func requestImageURLs(req *model.Request) []string {
@@ -321,6 +734,37 @@ func dedupeOrdered(urls []string) []string {
 		}
 		seen[imageURL] = struct{}{}
 		out = append(out, imageURL)
+	}
+	return out
+}
+
+func urlSet(urls []string) map[string]struct{} {
+	seen := make(map[string]struct{}, len(urls))
+	for _, imageURL := range urls {
+		if imageURL == "" {
+			continue
+		}
+		seen[imageURL] = struct{}{}
+	}
+	return seen
+}
+
+func dedupeImageURLMarks(marks []imageURLMark) []imageURLMark {
+	if len(marks) == 0 {
+		return nil
+	}
+	seen := make(map[unavailableImageURLLocation]struct{}, len(marks))
+	out := make([]imageURLMark, 0, len(marks))
+	for _, mark := range marks {
+		if !mark.hasLocation() {
+			continue
+		}
+		location := mark.location()
+		if _, ok := seen[location]; ok {
+			continue
+		}
+		seen[location] = struct{}{}
+		out = append(out, mark)
 	}
 	return out
 }

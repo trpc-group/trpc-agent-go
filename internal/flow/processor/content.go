@@ -227,10 +227,10 @@ type ContentRequestProcessor struct {
 	// EventMessageProjector rewrites one event-derived message before it
 	// is appended to the model request.
 	EventMessageProjector EventMessageProjector
-	// ImageURLFailureContinuation replaces session-marked unavailable image URLs
-	// with a text placeholder in later model-facing request views.
+	// ImageURLFailureContinuation replaces session-marked unavailable historical
+	// image parts with a text placeholder in later model-facing request views.
 	ImageURLFailureContinuation bool
-	// ImageURLFailureContinuationPlaceholder overrides the unavailable image URL
+	// ImageURLFailureContinuationPlaceholder overrides the unavailable image part
 	// placeholder when ImageURLFailureContinuation is enabled.
 	ImageURLFailureContinuationPlaceholder string
 	// ContextCompactionConfig controls request-side historical tool-result
@@ -483,7 +483,8 @@ func WithEventMessageProjector(
 }
 
 // WithImageURLFailureContinuation controls whether session-marked unavailable
-// image URLs are replaced before messages are appended to later requests.
+// historical image parts are replaced before messages are appended to later
+// requests.
 func WithImageURLFailureContinuation(enabled bool) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.ImageURLFailureContinuation = enabled
@@ -491,7 +492,7 @@ func WithImageURLFailureContinuation(enabled bool) ContentOption {
 }
 
 // WithImageURLFailureContinuationPlaceholder sets the placeholder used for
-// session-marked unavailable image URLs. Empty keeps the default placeholder.
+// session-marked unavailable image parts. Empty keeps the default placeholder.
 func WithImageURLFailureContinuationPlaceholder(placeholder string) ContentOption {
 	return func(p *ContentRequestProcessor) {
 		p.ImageURLFailureContinuationPlaceholder = placeholder
@@ -701,6 +702,7 @@ func (p *ContentRequestProcessor) ProcessRequest(
 		msg := p.projectEventMessage(
 			invocation,
 			event.Event{},
+			0,
 			invocation.Message,
 		)
 		msg = annotateUserMessageWithAttachedFiles(msg)
@@ -1357,7 +1359,7 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 			ev = p.convertForeignEvent(&ev)
 		}
 		if len(ev.Choices) > 0 {
-			for _, choice := range ev.Choices {
+			for choiceIndex, choice := range ev.Choices {
 				msg := choice.Message
 				// Apply reasoning content stripping based on mode.
 				msg = p.processReasoningContent(
@@ -1366,7 +1368,7 @@ func (p *ContentRequestProcessor) getIncrementMessagesAfterCutoff(
 					currentRequestID,
 					requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
 				)
-				msg = p.projectEventMessage(inv, evt, msg)
+				msg = p.projectEventMessage(inv, evt, choiceIndex, msg)
 				if message.IsEmptyAssistantMessage(msg) {
 					continue
 				}
@@ -1924,6 +1926,7 @@ func (p *ContentRequestProcessor) processReasoningContent(
 func (p *ContentRequestProcessor) projectEventMessage(
 	inv *agent.Invocation,
 	evt event.Event,
+	choiceIndex int,
 	msg model.Message,
 ) model.Message {
 	if p == nil {
@@ -1937,6 +1940,8 @@ func (p *ContentRequestProcessor) projectEventMessage(
 		!isCurrentInvocationMessageProjection(evt, inv, msg) {
 		msg = imageinput.ProjectUnavailableImageURLs(
 			inv.Session,
+			evt,
+			choiceIndex,
 			msg,
 			p.ImageURLFailureContinuationPlaceholder,
 		)
@@ -2072,7 +2077,7 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 	}
 
 	var messages []model.Message
-	for _, choice := range ev.Choices {
+	for choiceIndex, choice := range ev.Choices {
 		msg := choice.Message
 		msg = p.processReasoningContent(
 			msg,
@@ -2080,7 +2085,7 @@ func (p *ContentRequestProcessor) projectMessagesForEvent(
 			currentRequestID,
 			requestHasToolCalls(toolCallRequestIDs, evt.RequestID),
 		)
-		msg = p.projectEventMessage(inv, evt, msg)
+		msg = p.projectEventMessage(inv, evt, choiceIndex, msg)
 		if message.IsEmptyAssistantMessage(msg) {
 			continue
 		}

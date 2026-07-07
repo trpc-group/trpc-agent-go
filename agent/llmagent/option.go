@@ -446,11 +446,11 @@ type Options struct {
 	// is appended to the model request.
 	EventMessageProjector EventMessageProjector
 	// ImageURLFailureContinuation records model-side image URL failures in
-	// session state so later turns can continue without re-sending failed image
-	// URLs.
+	// session state so later turns can continue without re-sending failed
+	// historical image parts.
 	ImageURLFailureContinuation bool
 	// ImageURLFailureContinuationPlaceholder overrides the text used when a
-	// failed image URL is projected into later model requests.
+	// failed image part is projected into later model requests.
 	ImageURLFailureContinuationPlaceholder string
 	// StructuredOutput defines how the model should produce structured output in normal runs.
 	StructuredOutput *model.StructuredOutput
@@ -1823,7 +1823,7 @@ func WithEventMessageProjector(
 
 // WithImageURLFailureContinuation records model-side image URL access/decode
 // failures so later turns in the same session can continue without re-sending
-// failed image URLs. It does not retry the failed model call. Disabled by
+// failed historical image parts. It does not retry the failed model call. Disabled by
 // default.
 func WithImageURLFailureContinuation(enabled bool) Option {
 	return func(opts *Options) {
@@ -1832,7 +1832,7 @@ func WithImageURLFailureContinuation(enabled bool) Option {
 }
 
 // WithImageURLFailureContinuationPlaceholder sets the placeholder used in later
-// model request views for image URLs that previously failed at the model
+// model request views for image parts that previously failed at the model
 // service. Empty keeps DefaultImageURLFailureContinuationPlaceholder.
 func WithImageURLFailureContinuationPlaceholder(placeholder string) Option {
 	return func(opts *Options) {
