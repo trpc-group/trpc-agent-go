@@ -2405,7 +2405,7 @@ func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
 		WithEnableTokenTailoring(true),
 		WithTailoringStrategy(strategy),
 	)
-	maxCompletionTokens := 65536
+	maxCompletionTokens := 8192
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("hello")},
 		GenerationConfig: model.GenerationConfig{
@@ -2420,6 +2420,36 @@ func TestWithTokenTailoring_ReservesRequestMaxTokens(t *testing.T) {
 		contextWindow,
 		imodel.DefaultProtocolOverheadTokens,
 		maxCompletionTokens,
+		imodel.DefaultInputTokensFloor,
+		imodel.DefaultSafetyMarginRatio,
+		imodel.DefaultMaxInputTokensRatio,
+	)
+	require.Equal(t, want, strategy.maxTokens)
+}
+
+func TestWithTokenTailoring_ClampsRequestMaxTokensToModelCap(t *testing.T) {
+	strategy := &captureMaxTokensStrategy{}
+	m := New("gpt-4o-mini",
+		WithEnableTokenTailoring(true),
+		WithTailoringStrategy(strategy),
+	)
+	overCap := 65536
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hello")},
+		GenerationConfig: model.GenerationConfig{
+			MaxTokens: &overCap,
+		},
+	}
+
+	m.applyTokenTailoring(context.Background(), req)
+
+	modelCap := imodel.ResolveMaxOutputTokens("gpt-4o-mini")
+	require.Equal(t, 16384, modelCap)
+	contextWindow := imodel.ResolveContextWindow("gpt-4o-mini")
+	want := imodel.CalculateMaxInputTokensWithParams(
+		contextWindow,
+		imodel.DefaultProtocolOverheadTokens,
+		modelCap,
 		imodel.DefaultInputTokensFloor,
 		imodel.DefaultSafetyMarginRatio,
 		imodel.DefaultMaxInputTokensRatio,
@@ -4676,6 +4706,20 @@ func TestAppendFileID_NilFilePart(t *testing.T) {
 // TestBuildChatRequest_EdgeCases tests edge cases in buildChatRequest.
 func TestBuildChatRequest_EdgeCases(t *testing.T) {
 	m := New("gpt-3.5-turbo", WithAPIKey("test-key"))
+
+	t.Run("clamps max completion tokens to model cap", func(t *testing.T) {
+		m := New("gpt-4o", WithAPIKey("test-key"))
+		over := 114687
+		req := &model.Request{
+			Messages: []model.Message{model.NewUserMessage("hi")},
+			GenerationConfig: model.GenerationConfig{
+				MaxTokens: &over,
+			},
+		}
+		chatReq, _ := m.buildChatRequest(req)
+		require.NotNil(t, chatReq.MaxCompletionTokens)
+		assert.Equal(t, int64(16384), chatReq.MaxCompletionTokens.Value)
+	})
 
 	t.Run("empty messages", func(t *testing.T) {
 		req := &model.Request{
@@ -9716,4 +9760,43 @@ func TestModel_GenerateContentIter_EmbeddedErrorHTTP200(t *testing.T) {
 	assert.Equal(t, "rate limit exceeded", resp.Error.Message)
 	assert.Equal(t, model.ErrorTypeAPIError, resp.Error.Type)
 	assert.True(t, resp.Done)
+}
+
+func TestImageToURLOrBase64(t *testing.T) {
+	tests := []struct {
+		name  string
+		image *model.Image
+		want  string
+	}{
+		{
+			name: "with URL",
+			image: &model.Image{
+				URL: "http://example.com/image.jpg",
+			},
+			want: "http://example.com/image.jpg",
+		},
+		{
+			name: "with extension format",
+			image: &model.Image{
+				Format: "png",
+				Data:   []byte("test"),
+			},
+			want: "data:image/png;base64,dGVzdA==",
+		},
+		{
+			name: "with full MIME format",
+			image: &model.Image{
+				Format: "image/png",
+				Data:   []byte("test"),
+			},
+			want: "data:image/png;base64,dGVzdA==",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := imageToURLOrBase64(tt.image)
+			assert.Equal(t, tt.want, result)
+		})
+	}
 }

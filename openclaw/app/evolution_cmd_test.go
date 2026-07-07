@@ -330,3 +330,153 @@ func TestFindSkillForRevision_EmptyStore(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
+
+// writeRollbackTestRevisions seeds a candidate store with two revisions
+// for the same skill: one archived (the "previous" version) and one
+// active (the "current" version), plus the active pointer.
+func writeRollbackTestRevisions(t *testing.T, revisionsDir string) {
+	t.Helper()
+	store := evolution.NewFileCandidateStore(revisionsDir)
+	pointer := evolution.NewFileActivePointer(revisionsDir)
+	ctx := context.Background()
+
+	skillID := "weather-monitor"
+	old := &evolution.Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-old",
+		Action:     evolution.RevisionActionCreate,
+		Status:     evolution.RevisionArchived,
+		Spec: &evolution.SkillSpec{
+			Name:        "Weather Monitor",
+			Description: "old version",
+			WhenToUse:   "w",
+			Steps:       []string{"a", "b"},
+		},
+		CreatedAt: time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, store.WriteRevision(ctx, old))
+
+	cur := &evolution.Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-current",
+		Action:     evolution.RevisionActionUpdate,
+		Status:     evolution.RevisionActive,
+		Spec: &evolution.SkillSpec{
+			Name:        "Weather Monitor",
+			Description: "current version",
+			WhenToUse:   "w",
+			Steps:       []string{"a", "b", "c"},
+		},
+		CreatedAt: time.Date(2026, 5, 2, 9, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, store.WriteRevision(ctx, cur))
+	require.NoError(t, pointer.Set(ctx, skillID, cur.RevisionID))
+}
+
+func TestEvolution_Rollback_AutoSelectsArchived(t *testing.T) {
+	stateDir := t.TempDir()
+	revDir := filepath.Join(stateDir, "evolution", "revisions")
+	managedDir := filepath.Join(stateDir, defaultSkillsDir, "evolution")
+	writeRollbackTestRevisions(t, revDir)
+
+	stdout, _, code := runEvo(t, []string{
+		evoCmdRollback, "--dir", revDir, "weather-monitor",
+		"--reviewer", "alice", "--comment", "regressed quality",
+	})
+	require.Equal(t, 0, code, "stdout=%s", stdout)
+	assert.Contains(t, stdout, "rev-current")
+	assert.Contains(t, stdout, "rev-old")
+
+	// Restored skill body is republished into the managed dir.
+	skillPath := filepath.Join(managedDir, "weather-monitor", "SKILL.md")
+	require.FileExists(t, skillPath)
+	body, err := os.ReadFile(skillPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "old version")
+
+	// The active pointer now points to the restored revision.
+	pointer := evolution.NewFileActivePointer(revDir)
+	active, err := pointer.Get(context.Background(), "weather-monitor")
+	require.NoError(t, err)
+	assert.Equal(t, "rev-old", active)
+}
+
+func TestEvolution_Rollback_MissingSkillID(t *testing.T) {
+	dir := t.TempDir()
+	_, stderr, code := runEvo(t, []string{evoCmdRollback, "--dir", dir})
+	assert.Equal(t, 2, code)
+	assert.Contains(t, stderr, "skill ID required")
+}
+
+func TestEvolution_Rollback_NoArchivedRevision(t *testing.T) {
+	stateDir := t.TempDir()
+	revDir := filepath.Join(stateDir, "evolution", "revisions")
+	store := evolution.NewFileCandidateStore(revDir)
+	pointer := evolution.NewFileActivePointer(revDir)
+	ctx := context.Background()
+	rev := &evolution.Revision{
+		SkillID:    "lonely",
+		RevisionID: "rev-001",
+		Action:     evolution.RevisionActionCreate,
+		Status:     evolution.RevisionActive,
+		CreatedAt:  time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		Spec:       &evolution.SkillSpec{Name: "Lonely", Description: "d", WhenToUse: "w", Steps: []string{"s"}},
+	}
+	require.NoError(t, store.WriteRevision(ctx, rev))
+	require.NoError(t, pointer.Set(ctx, "lonely", "rev-001"))
+
+	_, stderr, code := runEvo(t, []string{evoCmdRollback, "--dir", revDir, "lonely"})
+	assert.Equal(t, 1, code)
+	assert.Contains(t, strings.ToLower(stderr), "no archived revision")
+}
+
+func TestEvolution_Rollback_ExplicitRevision(t *testing.T) {
+	stateDir := t.TempDir()
+	revDir := filepath.Join(stateDir, "evolution", "revisions")
+	managedDir := filepath.Join(stateDir, defaultSkillsDir, "evolution")
+	writeRollbackTestRevisions(t, revDir)
+
+	// Seed a second archived revision newer than rev-old so the
+	// auto-select path would pick rev-older-archived if --revision
+	// were ignored. The test then asserts that the explicitly named
+	// revision is the one restored.
+	store := evolution.NewFileCandidateStore(revDir)
+	ctx := context.Background()
+	skillID := "weather-monitor"
+	newerArchived := &evolution.Revision{
+		SkillID:    skillID,
+		RevisionID: "rev-newer-archived",
+		Action:     evolution.RevisionActionUpdate,
+		Status:     evolution.RevisionArchived,
+		Spec: &evolution.SkillSpec{
+			Name:        "Weather Monitor",
+			Description: "newer archived",
+			WhenToUse:   "w",
+			Steps:       []string{"a", "b"},
+		},
+		CreatedAt: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
+	}
+	require.NoError(t, store.WriteRevision(ctx, newerArchived))
+
+	stdout, _, code := runEvo(t, []string{
+		evoCmdRollback, "--dir", revDir, "weather-monitor",
+		"--revision", "rev-old", "--reviewer", "bob",
+	})
+	require.Equal(t, 0, code, "stdout=%s", stdout)
+	assert.Contains(t, stdout, "rev-old")
+	assert.NotContains(t, stdout, "rev-newer-archived",
+		"newer archived revision must not be promoted when --revision picks an older one")
+
+	// Active pointer must now reference the explicitly requested
+	// revision, not the latest archived one in store order.
+	pointer := evolution.NewFileActivePointer(revDir)
+	active, err := pointer.Get(ctx, skillID)
+	require.NoError(t, err)
+	assert.Equal(t, "rev-old", active)
+
+	// Republished SKILL.md must reflect the explicit revision body.
+	body, err := os.ReadFile(filepath.Join(managedDir, skillID, "SKILL.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(body), "old version")
+	assert.NotContains(t, string(body), "newer archived")
+}

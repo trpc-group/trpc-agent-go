@@ -413,6 +413,18 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 						return strconv.Itoa(opts.MaxToolIterations)
 					},
 				),
+				adminRuntimeBoolField(
+					"agent.tool_call_arguments_json_repair",
+					"Tool Call JSON Repair",
+					"Best-effort repair malformed JSON in tool call arguments.",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("agent"),
+						adminRuntimeKey("tool_call_arguments_json_repair"),
+					},
+					func(opts runOptions) string {
+						return strconv.FormatBool(opts.ToolCallArgumentsJSONRepair)
+					},
+				),
 			},
 		},
 		{
@@ -604,9 +616,10 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 				adminRuntimeSelectField(
 					"tools.defer_to_dynamic_agent_mode",
 					"Deferred Tool Surface Mode",
-					"Control whether broad tool surfaces are loaded "+
-						"directly or through tool_search and "+
-						"dynamic_agent.",
+					"Control whether broad tool surfaces stay "+
+						"direct on the parent agent or move behind "+
+						"tool_search and dynamic_agent. Default "+
+						"is off.",
 					[]adminRuntimeConfigKeyRef{
 						adminRuntimeKey("tools"),
 						adminRuntimeKey(
@@ -686,6 +699,48 @@ func adminRuntimeConfigSectionSpecs() []adminRuntimeConfigSectionSpec {
 							return ""
 						}
 						return opts.HostExecDefaultTimeout.String()
+					},
+				),
+				adminRuntimeTextField(
+					"tools.host_exec_max_timeout",
+					"Host Exec Max Timeout",
+					"Maximum timeout for host exec_command calls, "+
+						"including timeout_sec requested by the model. "+
+						"Empty or 0 disables this cap.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"host_exec_max_timeout",
+							"hostExecMaxTimeout",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.HostExecMaxTimeout <= 0 {
+							return ""
+						}
+						return opts.HostExecMaxTimeout.String()
+					},
+				),
+				adminRuntimeTextField(
+					"tools.host_exec_max_yield",
+					"Host Exec Max Yield",
+					"Maximum wait before exec_command or write_stdin "+
+						"returns interim output. Empty or 0 disables "+
+						"this cap.",
+					"",
+					[]adminRuntimeConfigKeyRef{
+						adminRuntimeKey("tools"),
+						adminRuntimeKey(
+							"host_exec_max_yield",
+							"hostExecMaxYield",
+						),
+					},
+					func(opts runOptions) string {
+						if opts.HostExecMaxYield <= 0 {
+							return ""
+						}
+						return opts.HostExecMaxYield.String()
 					},
 				),
 				adminRuntimeTextField(

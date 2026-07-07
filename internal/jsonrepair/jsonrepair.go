@@ -262,8 +262,12 @@ func (p *regularParser) skipLeadingObjectComma() {
 
 // parseObjectMember parses a single object member and repairs missing separators when possible.
 func (p *regularParser) parseObjectMember(initial *bool) bool {
+	wasInitial := *initial
 	p.parseObjectMemberSeparator(initial)
 	p.skipEllipsis()
+	if !wasInitial && p.mergeBareArrayIntoPreviousArray() {
+		return true
+	}
 
 	processedKey := p.parseString(false, -1) || p.parseUnquotedString(true)
 	if p.err != nil {
@@ -289,6 +293,44 @@ func (p *regularParser) parseObjectMember(initial *bool) bool {
 	}
 
 	return p.err == nil
+}
+
+// mergeBareArrayIntoPreviousArray repairs object payloads that accidentally
+// continue an array-valued member with a bare array value:
+//
+//	{"items":["a"], ["b"]}
+//
+// becomes:
+//
+//	{"items":["a","b"]}
+func (p *regularParser) mergeBareArrayIntoPreviousArray() bool {
+	if p.i >= len(p.text) || p.text[p.i] != '[' {
+		return false
+	}
+	withoutSeparator := stripLastOccurrence(p.output, ',', false)
+	previousArrayEnd := lastNonWhitespaceIndex(withoutSeparator)
+	if previousArrayEnd < 0 || withoutSeparator[previousArrayEnd] != ']' {
+		return false
+	}
+
+	child := &regularParser{text: p.text[p.i:]}
+	if !child.parseArray() || child.err != nil || child.i == 0 {
+		return false
+	}
+	inner := arrayInnerContent(child.output)
+	if !containsNonWhitespace(inner) {
+		p.output = withoutSeparator
+		p.i += child.i
+		return true
+	}
+
+	merged := removeAtIndex(withoutSeparator, previousArrayEnd, 1)
+	merged = insertBeforeLastWhitespace(merged, []rune{','})
+	merged = append(merged, inner...)
+	merged = insertBeforeLastWhitespace(merged, []rune{']'})
+	p.output = merged
+	p.i += child.i
+	return true
 }
 
 // parseObjectMemberSeparator parses or repairs the comma between object members.

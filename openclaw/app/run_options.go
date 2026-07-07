@@ -94,6 +94,7 @@ const (
 	flagMaxLLMCalls                                   = "max-llm-calls"
 	flagMaxToolIterations                             = "max-tool-iterations"
 	flagPreloadMemory                                 = "preload-memory"
+	flagToolCallArgumentsJSONRepair                   = "tool-call-arguments-json-repair"
 
 	flagAgentInstruction       = "agent-instruction"
 	flagAgentInstructionFiles  = "agent-instruction-files"
@@ -140,6 +141,8 @@ const (
 	flagDeferToolSurfaceDirect             = "defer-tools-to-dynamic-agent-direct-tools"
 	flagDynamicAgentTimeout                = "dynamic-agent-timeout"
 	flagHostExecDefaultTimeout             = "host-exec-default-timeout"
+	flagHostExecMaxTimeout                 = "host-exec-max-timeout"
+	flagHostExecMaxYield                   = "host-exec-max-yield"
 
 	flagAdminEnabled  = "admin-enabled"
 	flagAdminAddr     = "admin-addr"
@@ -187,6 +190,7 @@ type runOptions struct {
 	MaxLLMCalls                                   int
 	MaxToolIterations                             int
 	PreloadMemory                                 int
+	ToolCallArgumentsJSONRepair                   bool
 	PostToolPromptEnabled                         *bool
 
 	AgentInstruction       string
@@ -241,9 +245,11 @@ type runOptions struct {
 	SkillsToolingGuide    *string
 	StateDir              string
 
-	EvolutionEnabled        bool
-	EvolutionHumanGate      string
-	EvolutionSkillScopeMode skill.SkillScopeMode
+	EvolutionEnabled               bool
+	EvolutionHumanGate             string
+	EvolutionSkillScopeMode        skill.SkillScopeMode
+	EvolutionApprovalTimeout       time.Duration
+	EvolutionApprovalSweepInterval time.Duration
 
 	DebugRecorderEnabled bool
 	DebugRecorderDir     string
@@ -295,6 +301,8 @@ type runOptions struct {
 	DeferToolSurfaceDirect             string
 	DynamicAgentTimeout                time.Duration
 	HostExecDefaultTimeout             time.Duration
+	HostExecMaxTimeout                 time.Duration
+	HostExecMaxYield                   time.Duration
 
 	enableOpenClawToolsExplicit  bool
 	deferToolSurfaceModeExplicit bool
@@ -339,7 +347,9 @@ func parseRunOptions(args []string) (runOptions, error) {
 
 		MemoryAutoPolicy: summaryPolicyAny,
 
-		DeferToolSurfaceMode:               deferToolSurfaceModeAuto,
+		ToolCallArgumentsJSONRepair: true,
+
+		DeferToolSurfaceMode:               deferToolSurfaceModeOff,
 		DeferToolSurfaceDefaultDirectTools: true,
 	}
 
@@ -470,6 +480,12 @@ func parseRunOptions(args []string) (runOptions, error) {
 		flagPreloadMemory,
 		0,
 		"Preload memories into system prompt (0=off, -1=all, N>0=adaptive budget)",
+	)
+	fs.BoolVar(
+		&opts.ToolCallArgumentsJSONRepair,
+		flagToolCallArgumentsJSONRepair,
+		true,
+		"Best-effort repair malformed JSON in tool call arguments",
 	)
 	fs.StringVar(
 		&opts.AgentInstruction,
@@ -928,8 +944,8 @@ func parseRunOptions(args []string) (runOptions, error) {
 	fs.StringVar(
 		&opts.DeferToolSurfaceMode,
 		flagDeferToolSurfaceMode,
-		deferToolSurfaceModeAuto,
-		"Deferred tool surface mode: off, on, auto",
+		deferToolSurfaceModeOff,
+		"Deferred tool surface mode: off, on, auto (default off)",
 	)
 	fs.IntVar(
 		&opts.DeferToolSurfaceChars,
@@ -964,6 +980,20 @@ func parseRunOptions(args []string) (runOptions, error) {
 		0,
 		"Default timeout for OpenClaw host exec commands when timeout_sec "+
 			"is omitted (0 keeps the built-in default)",
+	)
+	fs.DurationVar(
+		&opts.HostExecMaxTimeout,
+		flagHostExecMaxTimeout,
+		0,
+		"Maximum timeout for OpenClaw host exec commands, including "+
+			"timeout_sec requested by the model (0 disables the cap)",
+	)
+	fs.DurationVar(
+		&opts.HostExecMaxYield,
+		flagHostExecMaxYield,
+		0,
+		"Maximum wait before exec_command or write_stdin returns "+
+			"interim output (0 disables the cap)",
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -1162,6 +1192,7 @@ type agentRunConfig struct {
 	MaxLLMCalls                                   *int  `yaml:"max_llm_calls,omitempty"`
 	MaxToolIterations                             *int  `yaml:"max_tool_iterations,omitempty"`
 	PreloadMemory                                 *int  `yaml:"preload_memory,omitempty"`
+	ToolCallArgumentsJSONRepair                   *bool `yaml:"tool_call_arguments_json_repair,omitempty"`
 	DisablePostToolPrompt                         *bool `yaml:"disable_post_tool_prompt,omitempty"`
 	DisablePostToolPromptCamel                    *bool `yaml:"disablePostToolPrompt,omitempty"`
 
@@ -1292,6 +1323,10 @@ type toolsConfig struct {
 	DynamicAgentTimeoutCamel      *string             `yaml:"dynamicAgentTimeout,omitempty"`
 	HostExecDefaultTimeout        *string             `yaml:"host_exec_default_timeout,omitempty"`
 	HostExecDefaultTimeoutCamel   *string             `yaml:"hostExecDefaultTimeout,omitempty"`
+	HostExecMaxTimeout            *string             `yaml:"host_exec_max_timeout,omitempty"`
+	HostExecMaxTimeoutCamel       *string             `yaml:"hostExecMaxTimeout,omitempty"`
+	HostExecMaxYield              *string             `yaml:"host_exec_max_yield,omitempty"`
+	HostExecMaxYieldCamel         *string             `yaml:"hostExecMaxYield,omitempty"`
 
 	Providers []filePluginSpec `yaml:"providers,omitempty"`
 	ToolSets  []filePluginSpec `yaml:"toolsets,omitempty"`
@@ -1366,8 +1401,14 @@ type evolutionConfig struct {
 
 	// HumanGate controls the human approval gate for skill revisions.
 	// Values: "always" (hold all), "create" (hold new skills only), "" (disabled).
-	HumanGate  *string                    `yaml:"human_gate,omitempty"`
-	SkillScope *evolutionSkillScopeConfig `yaml:"skill_scope,omitempty"`
+	HumanGate *string `yaml:"human_gate,omitempty"`
+	// ApprovalTimeout auto-promotes pending_approval revisions older than
+	// the duration. Empty or "0" disables auto-expiration.
+	ApprovalTimeout *string `yaml:"approval_timeout,omitempty"`
+	// ApprovalSweepInterval overrides the auto-expiration scan interval.
+	// Empty or "0" keeps the service default.
+	ApprovalSweepInterval *string                    `yaml:"approval_sweep_interval,omitempty"`
+	SkillScope            *evolutionSkillScopeConfig `yaml:"skill_scope,omitempty"`
 }
 
 type evolutionSkillScopeConfig struct {
@@ -1675,6 +1716,10 @@ func (cfg *fileConfig) apply(
 		if cfg.Agent.PreloadMemory != nil &&
 			!flagWasSet(set, flagPreloadMemory) {
 			opts.PreloadMemory = *cfg.Agent.PreloadMemory
+		}
+		if cfg.Agent.ToolCallArgumentsJSONRepair != nil &&
+			!flagWasSet(set, flagToolCallArgumentsJSONRepair) {
+			opts.ToolCallArgumentsJSONRepair = *cfg.Agent.ToolCallArgumentsJSONRepair
 		}
 		disablePostToolPrompt := firstBoolPtr(
 			cfg.Agent.DisablePostToolPrompt,
@@ -2064,6 +2109,9 @@ func (cfg *fileConfig) apply(
 			if err != nil {
 				return fmt.Errorf("tools.dynamic_agent_timeout: %w", err)
 			}
+			if dur < 0 {
+				return fmt.Errorf("tools.dynamic_agent_timeout must be >= 0")
+			}
 			opts.DynamicAgentTimeout = dur
 		}
 		hostExecTimeout := firstStringPtr(
@@ -2080,6 +2128,36 @@ func (cfg *fileConfig) apply(
 				)
 			}
 			opts.HostExecDefaultTimeout = dur
+		}
+		hostExecMaxTimeout := firstStringPtr(
+			cfg.Tools.HostExecMaxTimeout,
+			cfg.Tools.HostExecMaxTimeoutCamel,
+		)
+		if hostExecMaxTimeout != nil &&
+			!flagWasSet(set, flagHostExecMaxTimeout) {
+			dur, err := parseDuration(*hostExecMaxTimeout)
+			if err != nil {
+				return fmt.Errorf(
+					"tools.host_exec_max_timeout: %w",
+					err,
+				)
+			}
+			opts.HostExecMaxTimeout = dur
+		}
+		hostExecMaxYield := firstStringPtr(
+			cfg.Tools.HostExecMaxYield,
+			cfg.Tools.HostExecMaxYieldCamel,
+		)
+		if hostExecMaxYield != nil &&
+			!flagWasSet(set, flagHostExecMaxYield) {
+			dur, err := parseDuration(*hostExecMaxYield)
+			if err != nil {
+				return fmt.Errorf(
+					"tools.host_exec_max_yield: %w",
+					err,
+				)
+			}
+			opts.HostExecMaxYield = dur
 		}
 		if len(cfg.Tools.Providers) > 0 {
 			opts.ToolProviders = convertPluginSpecs(cfg.Tools.Providers)
@@ -2178,6 +2256,26 @@ func (cfg *fileConfig) apply(
 		}
 		if cfg.Evolution.HumanGate != nil {
 			opts.EvolutionHumanGate = strings.TrimSpace(*cfg.Evolution.HumanGate)
+		}
+		if cfg.Evolution.ApprovalTimeout != nil {
+			dur, err := parseDuration(*cfg.Evolution.ApprovalTimeout)
+			if err != nil {
+				return fmt.Errorf("evolution.approval_timeout: %w", err)
+			}
+			if dur < 0 {
+				return fmt.Errorf("evolution.approval_timeout must be >= 0")
+			}
+			opts.EvolutionApprovalTimeout = dur
+		}
+		if cfg.Evolution.ApprovalSweepInterval != nil {
+			dur, err := parseDuration(*cfg.Evolution.ApprovalSweepInterval)
+			if err != nil {
+				return fmt.Errorf("evolution.approval_sweep_interval: %w", err)
+			}
+			if dur < 0 {
+				return fmt.Errorf("evolution.approval_sweep_interval must be >= 0")
+			}
+			opts.EvolutionApprovalSweepInterval = dur
 		}
 		if cfg.Evolution.SkillScope != nil &&
 			cfg.Evolution.SkillScope.Mode != nil {
@@ -2798,6 +2896,18 @@ func finalizeRunOptions(opts *runOptions) error {
 		return fmt.Errorf(
 			"invalid host exec default timeout: %s",
 			opts.HostExecDefaultTimeout,
+		)
+	}
+	if opts.HostExecMaxTimeout < 0 {
+		return fmt.Errorf(
+			"invalid host exec max timeout: %s",
+			opts.HostExecMaxTimeout,
+		)
+	}
+	if opts.HostExecMaxYield < 0 {
+		return fmt.Errorf(
+			"invalid host exec max yield: %s",
+			opts.HostExecMaxYield,
 		)
 	}
 	opts.DeferToolSurfaceDirect = strings.Join(

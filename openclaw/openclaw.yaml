@@ -44,11 +44,11 @@ model:
 
 tools:
   enable_parallel_tools: true
-  # Optional: expose compact tool_search + dynamic_agent entrypoints
-  # when direct tool declarations exceed the auto threshold.
-  # Default mode is auto. Set defer_to_dynamic_agent_mode: on to force
-  # it on, or defer_to_dynamic_agent_mode: off to disable it.
-  # defer_to_dynamic_agent_mode: auto # off|on|auto
+  # Optional: expose compact tool_search + dynamic_agent entrypoints.
+  # Default mode is off, which keeps configured tools directly available
+  # on the parent agent. Set auto to defer only when direct tool
+  # declarations exceed the threshold, or on to force it.
+  # defer_to_dynamic_agent_mode: off # off|on|auto
   # defer_to_dynamic_agent_threshold_chars: 4000
   # dynamic_agent_timeout: "180s"
   # Set false to expose only tool_search/dynamic_agent plus

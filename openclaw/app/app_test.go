@@ -652,7 +652,7 @@ func TestFileMemoryStoreForBackend_FileOnly(t *testing.T) {
 func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0, 0, 0)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -673,6 +673,8 @@ func TestBuildOpenClawTools_HostExecDefaultTimeout(t *testing.T) {
 		nil,
 		nil,
 		50*time.Millisecond,
+		0,
+		0,
 	)
 	execTool := findTool(bundle.tools, "exec_command")
 	callable, ok := execTool.(tool.CallableTool)
@@ -699,6 +701,84 @@ func TestBuildOpenClawTools_HostExecDefaultTimeout(t *testing.T) {
 	require.NotContains(t, got.Output, "done")
 }
 
+func TestBuildOpenClawTools_HostExecMaxTimeoutAndYield(t *testing.T) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		nil,
+		0,
+		50*time.Millisecond,
+		20*time.Millisecond,
+	)
+	execTool := findTool(bundle.tools, "exec_command")
+	callable, ok := execTool.(tool.CallableTool)
+	require.True(t, ok)
+
+	started := time.Now()
+	out, err := callable.Call(
+		context.Background(),
+		[]byte(
+			`{"command":"sleep 5; printf done",`+
+				`"yield_time_ms":0,"timeout_sec":5}`,
+		),
+	)
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 3*time.Second)
+
+	data, err := json.Marshal(out)
+	require.NoError(t, err)
+	var got struct {
+		Status   string `json:"status"`
+		Output   string `json:"output"`
+		ExitCode int    `json:"exitCode"`
+	}
+	require.NoError(t, json.Unmarshal(data, &got))
+	require.Equal(t, "exited", got.Status)
+	require.NotEqual(t, 0, got.ExitCode)
+	require.NotContains(t, got.Output, "done")
+
+	writeTool := findTool(bundle.tools, "write_stdin")
+	writeCallable, ok := writeTool.(tool.CallableTool)
+	require.True(t, ok)
+	out, err = callable.Call(
+		context.Background(),
+		[]byte(`{"command":"sleep 1","background":true}`),
+	)
+	require.NoError(t, err)
+	data, err = json.Marshal(out)
+	require.NoError(t, err)
+	var running struct {
+		SessionID string `json:"sessionId"`
+	}
+	require.NoError(t, json.Unmarshal(data, &running))
+	require.NotEmpty(t, running.SessionID)
+	killTool := findTool(bundle.tools, "kill_session")
+	killCallable, ok := killTool.(tool.CallableTool)
+	require.True(t, ok)
+	t.Cleanup(func() {
+		if running.SessionID != "" {
+			_, _ = killCallable.Call(
+				context.Background(),
+				[]byte(
+					`{"session_id":"`+running.SessionID+`"}`,
+				),
+			)
+		}
+	})
+
+	started = time.Now()
+	_, err = writeCallable.Call(
+		context.Background(),
+		[]byte(`{"session_id":"`+running.SessionID+`","yield_time_ms":5000}`),
+	)
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 500*time.Millisecond)
+}
+
 func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	t.Parallel()
 
@@ -707,7 +787,7 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	store, err := memoryfile.NewStore(root)
 	require.NoError(t, err)
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, nil, 0)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, nil, 0, 0, 0)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
@@ -724,7 +804,7 @@ func TestBuildOpenClawTools_UsesSandboxExecCommand(t *testing.T) {
 	t.Parallel()
 
 	engine := codeexecutor.NewEngine(nil, nil, nil)
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, engine, 0)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, engine, 0, 0, 0)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "inside the configured sandbox")
@@ -752,7 +832,7 @@ func TestBuildOpenClawTools_UsesSandboxExecCommandWithMemoryFileStore(
 	require.NoError(t, err)
 
 	engine := codeexecutor.NewEngine(nil, nil, nil)
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, engine, 0)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, engine, 0, 0, 0)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "inside the configured sandbox")
@@ -771,7 +851,7 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 ) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0, 0, 0)
 	decl := findToolDeclaration(bundle.tools, "conversation_history")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -784,7 +864,7 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0)
+	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0, 0, 0)
 	require.NotNil(
 		t,
 		findToolDeclaration(bundle.tools, "subagents_spawn"),
@@ -1565,6 +1645,28 @@ func TestRuntimeGatewayRunOptionsEdgeCases(t *testing.T) {
 	require.Nil(t, input.Extensions)
 }
 
+func TestToolCallArgumentsJSONRepairRunOptionResolver(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "enabled", enabled: true},
+		{name: "disabled", enabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, runOpts, err := buildToolCallArgumentsJSONRepairRunOptionResolver(
+				tc.enabled,
+			)(context.Background(), gateway.RunOptionInput{})
+			require.NoError(t, err)
+			opts := agent.NewRunOptions(runOpts...)
+			require.NotNil(t, opts.ToolCallArgumentsJSONRepairEnabled)
+			require.Equal(t, tc.enabled, *opts.ToolCallArgumentsJSONRepairEnabled)
+		})
+	}
+}
+
 func TestRuntimePostToolPromptOption(t *testing.T) {
 	t.Parallel()
 
@@ -2172,8 +2274,17 @@ func TestNewAgent_SkillsPrompt_DefaultsApplied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
-		"For lightweight facts, preferences, or simple "+
-			"standing rules, use memory instead.",
+		"For lightweight facts, stable persona or tone preferences, "+
+			"and simple non-procedural standing facts, use memory "+
+			"instead.",
+	)
+	require.Contains(
+		t,
+		sys,
+		"Do not use memory for reusable task workflows, output "+
+			"formats, tool procedures, or post-task feedback "+
+			"unless the user explicitly asks to save that content "+
+			"as memory.",
 	)
 	require.Contains(
 		t,
@@ -2785,6 +2896,11 @@ func TestOpenClawToolingGuidancePrefersSearchTools(t *testing.T) {
 	require.Contains(
 		t,
 		openClawToolingGuidance,
+		"Do not use exec_command for public web search or static page fetches",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
 		"When a web search tool such as duckduckgo_search is present",
 	)
 	require.Contains(
@@ -2812,6 +2928,16 @@ func TestOpenClawToolingGuidancePrefersSearchTools(t *testing.T) {
 		openClawToolingGuidance,
 		"stop retrying that blocked path",
 	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"diversify instead of repeating the same constrained query",
+	)
+	require.Contains(
+		t,
+		openClawToolingGuidance,
+		"try credible mirrors, metadata, publisher, or press-release pages",
+	)
 }
 
 func TestOpenClawDeferredToolingGuidancePairsBrowserWithSearch(
@@ -2834,6 +2960,98 @@ func TestOpenClawDeferredToolingGuidancePairsBrowserWithSearch(
 		openClawDeferredToolingGuidance,
 		"inspect successful web_fetch results first",
 	)
+	require.Contains(
+		t,
+		openClawDeferredToolingGuidance,
+		"diversify queries and evidence sources",
+	)
+}
+
+func TestDynamicAgentBlockerCallbackReplacesBudgetErrors(t *testing.T) {
+	t.Parallel()
+
+	callbacks := tool.NewCallbacks()
+	registerDynamicAgentBlockerCallback(callbacks)
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolName: agenttool.DefaultDynamicToolName,
+			Error:    errors.New("agent error: max LLM calls (45) exceeded"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, dynamicAgentLLMBudgetBlocker, result.CustomResult)
+}
+
+func TestDynamicAgentBlockerCallbackReplacesBudgetStopErrors(t *testing.T) {
+	t.Parallel()
+
+	callbacks := tool.NewCallbacks(tool.WithContinueOnError(true))
+	registerDynamicAgentBlockerCallback(callbacks)
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		t.Fatal("budget blocker should stop later callbacks")
+		return nil, nil
+	})
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolName: agenttool.DefaultDynamicToolName,
+			Error:    agent.NewStopError("max LLM calls (45) exceeded"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, dynamicAgentLLMBudgetBlocker, result.CustomResult)
+}
+
+func TestDynamicAgentBlockerCallbackReplacesTimeoutErrors(t *testing.T) {
+	t.Parallel()
+
+	callbacks := tool.NewCallbacks()
+	registerDynamicAgentBlockerCallback(callbacks)
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolName: agenttool.DefaultDynamicToolName,
+			Error:    context.DeadlineExceeded,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, dynamicAgentTimeoutBlocker, result.CustomResult)
+}
+
+func TestDynamicAgentBlockerCallbackIgnoresNonBudgetStopErrors(t *testing.T) {
+	t.Parallel()
+
+	callbacks := tool.NewCallbacks()
+	registerDynamicAgentBlockerCallback(callbacks)
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolName: agenttool.DefaultDynamicToolName,
+			Error:    agent.NewStopError("worker stopped by user"),
+		},
+	)
+	require.NoError(t, err)
+	require.Nil(t, result.CustomResult)
+}
+
+func TestDynamicAgentBlockerCallbackKeepsOtherToolErrors(t *testing.T) {
+	t.Parallel()
+
+	callbacks := tool.NewCallbacks()
+	registerDynamicAgentBlockerCallback(callbacks)
+	result, err := callbacks.RunAfterTool(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolName: "web_fetch",
+			Error:    errors.New("max LLM calls (45) exceeded"),
+		},
+	)
+	require.NoError(t, err)
+	require.Nil(t, result.CustomResult)
 }
 
 func TestOpenClawToolingGuidanceAvoidsSystemPackageManagers(t *testing.T) {
@@ -3102,18 +3320,38 @@ func TestNewAgent_DeferToolSurfaceUsesDynamicAgent(t *testing.T) {
 		),
 	)
 	require.NotNil(t, findToolDeclaration(parentTools, "exec_command"))
-	require.Nil(t, findToolDeclaration(parentTools, skillprofile.ToolLoad))
+	require.NotNil(t, findToolDeclaration(parentTools, skillprofile.ToolLoad))
+	require.Nil(t, findToolDeclaration(parentTools, skillprofile.ToolListDocs))
+	require.Nil(t, findToolDeclaration(parentTools, skillprofile.ToolSelectDocs))
+	require.Nil(t, findToolDeclaration(parentTools, skillprofile.ToolRun))
 
 	req := runAgentAndCapture(t, agt, mdl, &session.Session{})
 	require.NotNil(t, req.Tools[agenttool.DefaultDynamicToolName])
 	require.NotNil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
 	require.NotNil(t, req.Tools["exec_command"])
-	require.Nil(t, req.Tools[skillprofile.ToolLoad])
+	require.NotNil(t, req.Tools[skillprofile.ToolLoad])
+	require.Nil(t, req.Tools[skillprofile.ToolListDocs])
+	require.Nil(t, req.Tools[skillprofile.ToolSelectDocs])
+	require.Nil(t, req.Tools[skillprofile.ToolRun])
 	system := joinSystemMessages(req)
+	require.Contains(t, system, "Available skills:")
+	require.Contains(t, system, "- echoer: simple echo skill")
 	require.Contains(t, system, "dynamic_agent")
 	require.Contains(t, system, "tool_search")
 	require.Contains(t, system, "Tool-backed work is available")
 	require.Contains(t, system, "pass exact tool names")
+	require.Contains(t, system, "Skill-backed work is tool-backed work.")
+	require.Contains(t, system, "call `skill_load` first")
+	require.Contains(
+		t,
+		system,
+		"then call `dynamic_agent` with that skill name.",
+	)
+	require.Contains(
+		t,
+		system,
+		"before the skill has been loaded or delegated",
+	)
 	require.NotContains(t, system, "OPENCLAW_LAST_UPLOAD_PATH")
 
 	searchTool := findTool(
@@ -3234,6 +3472,46 @@ func TestNewAgent_ContextCompactionKeepsDynamicAgentResults(t *testing.T) {
 	all := joinAllMessageContent(req)
 	require.Contains(t, all, dynamicContent)
 	require.NotContains(t, all, "tool_name: dynamic_agent")
+}
+
+func TestNewAgent_DefaultKeepsToolSurfaceDirect(t *testing.T) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:  "demo",
+		StateDir: t.TempDir(),
+	}, []tool.Tool{
+		stubTool{name: "exec_command"},
+		stubTool{name: "message"},
+	}, nil)
+	require.NoError(t, err)
+
+	parentTools := agt.Tools()
+	require.NotNil(t, findToolDeclaration(parentTools, "exec_command"))
+	require.NotNil(t, findToolDeclaration(parentTools, "message"))
+	require.Nil(
+		t,
+		findToolDeclaration(parentTools, agenttool.DefaultDynamicToolName),
+	)
+	require.Nil(
+		t,
+		findToolDeclaration(
+			parentTools,
+			agenttool.DefaultCapabilitySearchToolName,
+		),
+	)
+
+	req := runAgentAndCapture(t, agt, mdl, &session.Session{})
+	require.NotNil(t, req.Tools["exec_command"])
+	require.NotNil(t, req.Tools["message"])
+	require.Nil(t, req.Tools[agenttool.DefaultDynamicToolName])
+	require.Nil(t, req.Tools[agenttool.DefaultCapabilitySearchToolName])
+	require.NotContains(
+		t,
+		joinSystemMessages(req),
+		"Tool-backed work is available",
+	)
 }
 
 func TestNewAgent_DeferToolSurfaceAutoKeepsSmallToolSurface(t *testing.T) {
@@ -3854,7 +4132,7 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			agentType: agentTypeClaudeCode,
 		},
 		{
-			name:      "claude default defer auto ok",
+			name:      "claude implicit defer auto ok",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{
 				DeferToolSurfaceMode: deferToolSurfaceModeAuto,
@@ -4185,6 +4463,46 @@ func TestParseOpenAIVariant_Auto(t *testing.T) {
 func TestParseOpenAIVariant_Unknown(t *testing.T) {
 	_, err := parseOpenAIVariant("nope", "")
 	require.Error(t, err)
+}
+
+func TestModelCompatibilityRunOptions_GLMEnablesJSONRepair(t *testing.T) {
+	t.Parallel()
+
+	runOpts := modelCompatibilityRunOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantGLM),
+	})
+	require.NotEmpty(t, runOpts)
+	agentOpts := agent.NewRunOptions(runOpts...)
+	require.NotNil(t, agentOpts.ToolCallArgumentsJSONRepairEnabled)
+	require.True(t, *agentOpts.ToolCallArgumentsJSONRepairEnabled)
+}
+
+func TestModelCompatibilityRunOptions_GLMCanBeInferred(t *testing.T) {
+	t.Parallel()
+
+	runOpts := modelCompatibilityRunOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: openAIVariantAuto,
+		OpenAIBaseURL: "https://open.bigmodel.cn/api/paas/v4",
+	})
+	require.NotEmpty(t, runOpts)
+	agentOpts := agent.NewRunOptions(runOpts...)
+	require.NotNil(t, agentOpts.ToolCallArgumentsJSONRepairEnabled)
+	require.True(t, *agentOpts.ToolCallArgumentsJSONRepairEnabled)
+}
+
+func TestModelCompatibilityRunOptions_NonGLMUnaffected(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, modelCompatibilityRunOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantOpenAI),
+	}))
+	require.Empty(t, modelCompatibilityRunOptions(runOptions{
+		ModelMode:     modeMock,
+		OpenAIVariant: string(openai.VariantGLM),
+	}))
 }
 
 func TestInferOpenAIVariant(t *testing.T) {

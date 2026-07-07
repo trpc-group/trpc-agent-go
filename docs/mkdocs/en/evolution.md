@@ -252,6 +252,65 @@ The decision is stored on `HumanReport` (`Approved`, `Reviewer`, `Comment`,
 `HumanGate` do not mutate the live skill until approval; approving the delete
 calls `Publisher.DeleteSkill` and clears the active pointer.
 
+#### Auto-expire
+
+To prevent revisions sitting in `pending_approval` forever, configure an
+expiration timeout. Revisions older than the timeout are auto-promoted to
+`active` (Reviewer = `auto-expire`, recorded in the audit log):
+
+```go
+evoSvc := evolution.NewService(reviewerModel,
+    evolution.WithManagedSkillsDir(skillsDir),
+    evolution.WithSkillRepository(repo),
+    evolution.WithCandidateStore(evolution.NewFileCandidateStore(revisionsDir)),
+    evolution.WithActivePointer(evolution.NewFileActivePointer(revisionsDir)),
+    evolution.WithHumanGate(evolution.NewCreateOnlyHoldGate()),
+    evolution.WithApprovalTimeout(72*time.Hour), // auto-promote after 3 days
+    // Optional: override the sweep period (default min(timeout/4, 1h))
+    // evolution.WithApprovalSweepInterval(15*time.Minute),
+)
+```
+
+The sweeper runs as a background goroutine inside the worker; it stops on
+`Service.Close()`. Setting the timeout to `0` (default) disables the sweeper.
+
+In `openclaw` YAML, use duration strings:
+
+```yaml
+evolution:
+  enabled: true
+  human_gate: "create"
+  approval_timeout: "72h"
+  # Optional: defaults to min(approval_timeout/4, 1h)
+  approval_sweep_interval: "15m"
+```
+
+#### Rollback
+
+Restore the previous active revision when a new one regresses quality. The
+current active revision is demoted to `archived` and the chosen archived
+revision is promoted back to `active`. The publisher is updated immediately
+so agents pick up the restored skill on their next read:
+
+```go
+res, err := approvalSvc.Rollback(ctx, "weather-monitor", evolution.RollbackOpts{
+    Reviewer: "alice@example.com",
+    Comment:  "regressed quality",
+    // TargetRevisionID: "20260601T120000.000-abc123", // optional: pick a specific archived revision
+})
+fmt.Printf("rolled back %s → %s\n", res.PreviousActiveID, res.RestoredID)
+```
+
+When `TargetRevisionID` is empty, the latest archived revision in the
+revision store's ordering wins.
+`ErrNoArchivedRevision` is returned when no archived revision is available.
+
+The `openclaw` CLI exposes the same workflow:
+
+```bash
+openclaw evolution rollback <skill-id> --dir <revisions-dir> [--revision <rev-id>] [--reviewer <id>] [--comment <text>]
+```
+
 ### Custom Gates
 
 Implement the interface to plug in custom logic:
@@ -323,6 +382,8 @@ revisions/
 | `WithEffectivenessGate(gate)` | Effectiveness check | nil |
 | `WithHumanGate(gate)` | Human approval | nil (disabled) |
 | `WithApprovalGateShadow(bool)` | Shadow mode — evaluate but don't enforce | false |
+| `WithApprovalTimeout(d)` | Auto-promote `pending_approval` revisions older than `d` | 0 (disabled) |
+| `WithApprovalSweepInterval(d)` | Sweep period for the auto-expire goroutine | min(timeout/4, 1h) |
 | `WithWorkerNum(n)` | Async worker count | 1 |
 | `WithQueueSize(n)` | Per-worker job queue buffer | 10 |
 | `WithExistingSkillBodyMaxChars(n)` | Body excerpt length for reviewer context | 600 |

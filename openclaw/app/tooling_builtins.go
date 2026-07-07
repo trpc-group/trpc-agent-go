@@ -33,12 +33,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/wikipedia"
 
 	ocbrowser "trpc.group/trpc-go/trpc-agent-go/openclaw/internal/browser"
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/imageinspect"
 	"trpc.group/trpc-go/trpc-agent-go/openclaw/registry"
 )
 
 const (
 	toolProviderBrowser    = "browser"
 	toolProviderDuckDuckGo = "duckduckgo"
+	toolProviderImage      = "image_inspect"
 	toolProviderWebFetch   = "webfetch_http"
 
 	toolSetProviderMCP     = "mcp"
@@ -67,6 +69,10 @@ func init() {
 	must(registry.RegisterToolProvider(
 		toolProviderDuckDuckGo,
 		newDuckDuckGoTools,
+	))
+	must(registry.RegisterToolProvider(
+		toolProviderImage,
+		newImageInspectTools,
 	))
 	must(registry.RegisterToolProvider(
 		toolProviderWebFetch,
@@ -156,6 +162,22 @@ func newDuckDuckGoTools(
 	}
 
 	return []tool.Tool{duckduckgo.NewTool(opts...)}, nil
+}
+
+func newImageInspectTools(
+	_ registry.ToolProviderDeps,
+	spec registry.PluginSpec,
+) ([]tool.Tool, error) {
+	var cfg imageinspect.Config
+	if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
+		return nil, err
+	}
+
+	imageTool, err := imageinspect.NewTool(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return []tool.Tool{imageTool}, nil
 }
 
 func isSupportedDuckDuckGoBackend(backend string) bool {

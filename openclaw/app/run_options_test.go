@@ -474,6 +474,7 @@ agent:
   max_llm_calls: 22
   max_tool_iterations: 123
   preload_memory: 2
+  tool_call_arguments_json_repair: false
 `)
 
 	opts, err := parseRunOptions([]string{
@@ -499,6 +500,7 @@ agent:
 		"-max-llm-calls", "4",
 		"-max-tool-iterations", "6",
 		"-preload-memory", "-1",
+		"-tool-call-arguments-json-repair=true",
 	})
 	require.NoError(t, err)
 	require.Equal(t, ":7777", opts.HTTPAddr)
@@ -522,6 +524,28 @@ agent:
 	require.Equal(t, 4, opts.MaxLLMCalls)
 	require.Equal(t, 6, opts.MaxToolIterations)
 	require.Equal(t, -1, opts.PreloadMemory)
+	require.True(t, opts.ToolCallArgumentsJSONRepair)
+}
+
+func TestParseRunOptions_ToolCallArgumentsJSONRepairDefault(t *testing.T) {
+	t.Parallel()
+
+	opts, err := parseRunOptions(nil)
+	require.NoError(t, err)
+	require.True(t, opts.ToolCallArgumentsJSONRepair)
+}
+
+func TestParseRunOptions_ToolCallArgumentsJSONRepairConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  tool_call_arguments_json_repair: false
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.False(t, opts.ToolCallArgumentsJSONRepair)
 }
 
 func TestParseRunOptions_MaxToolIterationsNegativeFails(t *testing.T) {
@@ -781,6 +805,7 @@ agent:
   max_llm_calls: 13
   max_tool_iterations: 11
   preload_memory: 10
+  tool_call_arguments_json_repair: false
   instruction: "instruction"
   instruction_files: ["i1.md","i2.md"]
   instruction_dir: "/instruction_dir"
@@ -950,6 +975,7 @@ memory:
 	require.Equal(t, 13, opts.MaxLLMCalls)
 	require.Equal(t, 11, opts.MaxToolIterations)
 	require.Equal(t, 10, opts.PreloadMemory)
+	require.False(t, opts.ToolCallArgumentsJSONRepair)
 	require.Equal(t, "instruction", opts.AgentInstruction)
 	require.Equal(t, "i1.md,i2.md", opts.AgentInstructionFiles)
 	require.Equal(t, "/instruction_dir", opts.AgentInstructionDir)
@@ -1201,6 +1227,8 @@ tools:
   defer_direct_tools: ["exec_command", "message", "exec_command"]
   dynamic_agent_timeout: "3m"
   host_exec_default_timeout: "60s"
+  host_exec_max_timeout: "45s"
+  host_exec_max_yield: "2s"
 `)
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
 	require.NoError(t, err)
@@ -1211,6 +1239,8 @@ tools:
 	require.Equal(t, "exec_command,message", opts.DeferToolSurfaceDirect)
 	require.Equal(t, 3*time.Minute, opts.DynamicAgentTimeout)
 	require.Equal(t, time.Minute, opts.HostExecDefaultTimeout)
+	require.Equal(t, 45*time.Second, opts.HostExecMaxTimeout)
+	require.Equal(t, 2*time.Second, opts.HostExecMaxYield)
 }
 
 func TestParseRunOptions_DynamicAgentTimeoutFlagOverridesConfig(t *testing.T) {
@@ -1245,12 +1275,107 @@ tools:
 	require.Equal(t, 45*time.Second, opts.HostExecDefaultTimeout)
 }
 
+func TestParseRunOptions_HostExecMaxTimeoutFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  host_exec_max_timeout: "3m"
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-host-exec-max-timeout", "45s",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Second, opts.HostExecMaxTimeout)
+}
+
+func TestParseRunOptions_HostExecMaxYieldFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  host_exec_max_yield: "3m"
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-host-exec-max-yield", "45s",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Second, opts.HostExecMaxYield)
+}
+
+func TestParseRunOptions_HostExecMaxConfigInvalidDurationFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		key  string
+	}{
+		{name: "timeout", key: "host_exec_max_timeout"},
+		{name: "yield", key: "host_exec_max_yield"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfgPath := writeTempConfig(t, fmt.Sprintf(`
+tools:
+  %s: "not-a-duration"
+`, tc.key))
+			_, err := parseRunOptions([]string{"-config", cfgPath})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "tools."+tc.key)
+		})
+	}
+}
+
 func TestParseRunOptions_DynamicAgentTimeoutNegativeFails(t *testing.T) {
 	t.Parallel()
 
 	_, err := parseRunOptions([]string{"-dynamic-agent-timeout", "-1s"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "dynamic agent timeout")
+}
+
+func TestParseRunOptions_DynamicAgentTimeoutInvalidFails(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "parse",
+			raw:  "bad",
+			want: "tools.dynamic_agent_timeout",
+		},
+		{
+			name: "negative",
+			raw:  "-1s",
+			want: "tools.dynamic_agent_timeout must be >= 0",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfgPath := writeTempConfig(t, fmt.Sprintf(`
+tools:
+  dynamic_agent_timeout: %q
+`, tt.raw))
+			_, err := parseRunOptions([]string{"-config", cfgPath})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
 }
 
 func TestParseRunOptions_HostExecDefaultTimeoutNegativeFails(t *testing.T) {
@@ -1264,7 +1389,29 @@ func TestParseRunOptions_HostExecDefaultTimeoutNegativeFails(t *testing.T) {
 	require.Contains(t, err.Error(), "host exec default timeout")
 }
 
-func TestParseRunOptions_DeferToolSurfaceDefaultsToAuto(t *testing.T) {
+func TestParseRunOptions_HostExecMaxTimeoutNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-host-exec-max-timeout",
+		"-1s",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "host exec max timeout")
+}
+
+func TestParseRunOptions_HostExecMaxYieldNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-host-exec-max-yield",
+		"-1s",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "host exec max yield")
+}
+
+func TestParseRunOptions_DeferToolSurfaceDefaultsToOff(t *testing.T) {
 	t.Parallel()
 
 	cfgPath := writeTempConfig(t, `
@@ -1274,7 +1421,7 @@ tools:
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
 	require.NoError(t, err)
 	require.False(t, opts.DeferToolSurface)
-	require.Equal(t, deferToolSurfaceModeAuto, opts.DeferToolSurfaceMode)
+	require.Equal(t, deferToolSurfaceModeOff, opts.DeferToolSurfaceMode)
 	require.False(t, opts.deferToolSurfaceModeExplicit)
 }
 
@@ -1933,6 +2080,61 @@ evolution:
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
 	require.NoError(t, err)
 	require.True(t, opts.EvolutionEnabled)
+}
+
+func TestParseRunOptions_EvolutionApprovalAutoExpireConfig(t *testing.T) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+evolution:
+  approval_timeout: "72h"
+  approval_sweep_interval: "30m"
+`)
+
+	opts, err := parseRunOptions([]string{"-config", cfgPath})
+	require.NoError(t, err)
+	require.Equal(t, 72*time.Hour, opts.EvolutionApprovalTimeout)
+	require.Equal(t, 30*time.Minute, opts.EvolutionApprovalSweepInterval)
+}
+
+func TestParseRunOptions_EvolutionApprovalAutoExpireInvalidFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "timeout",
+			body: `
+evolution:
+  approval_timeout: "bad"
+`,
+			want: "evolution.approval_timeout",
+		},
+		{
+			name: "sweep interval",
+			body: `
+evolution:
+  approval_sweep_interval: "-1s"
+`,
+			want: "evolution.approval_sweep_interval must be >= 0",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfgPath := writeTempConfig(t, tt.body)
+			_, err := parseRunOptions([]string{"-config", cfgPath})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
 }
 
 func TestParseRunOptions_EvolutionSkillScopeModeConfigInvalidFails(

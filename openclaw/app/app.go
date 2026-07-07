@@ -204,8 +204,12 @@ const (
 		"pattern, or to remember an executable workflow or " +
 		"integration, prefer creating or updating a local " +
 		"skill over treating it as a one-off answer. For " +
-		"lightweight facts, preferences, or simple standing " +
-		"rules, use memory instead. " +
+		"lightweight facts, stable persona or tone preferences, " +
+		"and simple non-procedural standing facts, use memory " +
+		"instead. Do not use memory for reusable task workflows, " +
+		"output formats, tool procedures, or post-task feedback " +
+		"unless the user explicitly asks to save that content as " +
+		"memory. " +
 		"Use platform code and tools for stable safety " +
 		"boundaries, secrets, permissions, file paths, " +
 		"validation, and execution guarantees; use skill " +
@@ -258,6 +262,28 @@ const (
 		"prior knowledge, or partial memory when a matching " +
 		"skill exists. Load `SKILL.md` first, then load " +
 		"only the extra docs you still need."
+	openClawShellSharedGuidance = "Do not use exec_command for public web search " +
+		"or static page fetches when duckduckgo_search or web_fetch is " +
+		"present; reserve shell network commands for installed media " +
+		"tools, deterministic data processing, or sites not covered by " +
+		"a dedicated web tool. Do not use host system package managers " +
+		"such as apt, yum, dnf, apk, pacman, zypper, or brew from chat; " +
+		"use preconfigured dependencies or ask for an explicit setup " +
+		"flow. "
+	openClawHostShellGuidance = "For other general local shell work, " +
+		"use exec_command. " +
+		openClawShellSharedGuidance +
+		"For interactive follow-up input, use write_stdin and " +
+		"kill_session when needed. Use message to send to the current " +
+		"chat or an explicit target. "
+	openClawSandboxShellGuidance = "For other general local shell work, " +
+		"use exec_command. In sandbox mode, exec_command only supports " +
+		"foreground non-interactive commands; write_stdin, kill_session, " +
+		"background execution, TTY allocation, and session continuation " +
+		"are unavailable. " +
+		openClawShellSharedGuidance +
+		"Use message to send to the current chat or an explicit " +
+		"target. "
 	openClawToolingGuidance = "For common PDF, DOCX, text, CSV, " +
 		"and spreadsheet uploads already in the chat, prefer " +
 		"read_document or read_spreadsheet before falling back " +
@@ -269,14 +295,8 @@ const (
 		"available in the current session. " +
 		"Do not call exec_command just to print OPENCLAW_* upload " +
 		"vars or inspect recent upload metadata when a matching " +
-		"chat file is already available. For other general local " +
-		"shell work, use exec_command. Do not use host system package " +
-		"managers such as apt, yum, dnf, apk, pacman, zypper, or brew " +
-		"from chat; use preconfigured dependencies or ask for an " +
-		"explicit setup flow. For interactive follow-up " +
-		"input, use " +
-		"write_stdin and kill_session when needed. Use message " +
-		"to send to the current chat or an explicit target. " +
+		"chat file is already available. " +
+		openClawHostShellGuidance +
 		"When a web search tool such as duckduckgo_search is " +
 		"present, use it for general web search before using " +
 		"browser automation or web_fetch against search engine " +
@@ -298,7 +318,12 @@ const (
 		"errors and the user has not provided credentials, stop " +
 		"retrying that blocked path; use search, fetch, metadata, " +
 		"or the evidence already available to complete the task or " +
-		"state the exact blocker. " +
+		"state the exact blocker. When searches return no useful " +
+		"results or a source is blocked, diversify instead of " +
+		"repeating the same constrained query: remove site/date " +
+		"filters, search distinctive entities plus the requested " +
+		"fact, and try credible mirrors, metadata, publisher, " +
+		"or press-release pages. " +
 		artifactCompletionRule + " " +
 		"Use the available tool path to complete the request " +
 		"in this turn. " +
@@ -423,7 +448,14 @@ const (
 		"tool or skill names, then call `dynamic_agent`; pass exact " +
 		"tool names such as web_fetch or browser in its `tools` " +
 		"field, and pass only real skill names in its `skills` " +
-		"field. Use `dynamic_agent` for broader " +
+		"field. Skill-backed work is tool-backed work. If a direct " +
+		"`skill_load` tool is available and the user names a skill or " +
+		"the task clearly matches a listed skill description, call " +
+		"`skill_load` first. If direct `skill_load` is unavailable, " +
+		"use `tool_search` to find the matching skill, then call " +
+		"`dynamic_agent` with that skill name. Do not answer a " +
+		"matching skill task directly from prior knowledge before the " +
+		"skill has been loaded or delegated. Use `dynamic_agent` for broader " +
 		"files, uploads, browser automation, shell work, messaging, " +
 		"cron, memory, skills, knowledge, external tools, or " +
 		"verification. For public web research, include search and " +
@@ -432,7 +464,10 @@ const (
 		"lookup or static page fetches. Give the sub-agent a " +
 		"clear instruction to inspect successful web_fetch results " +
 		"first and to report when a result is truncated instead " +
-		"of looping through browser snapshots. Give the sub-agent a " +
+		"of looping through browser snapshots. For blocked or empty " +
+		"web research, ask the worker to diversify queries and " +
+		"evidence sources before returning the exact blocker. Give " +
+		"the sub-agent a " +
 		"self-contained request " +
 		"and ask it to complete the concrete action or return the " +
 		"exact blocker. Answer directly only when no tool work is " +
@@ -1133,6 +1168,8 @@ func NewRuntimeWithOptions(
 		fileMemoryStore,
 		sandboxExecEngine,
 		opts.HostExecDefaultTimeout,
+		opts.HostExecMaxTimeout,
+		opts.HostExecMaxYield,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1347,6 +1384,10 @@ func NewRuntimeWithOptions(
 		opts.SkillsOverviewLimit,
 		splitCSV(opts.SkillsOverviewPinned),
 	)
+	gwOpts = appendToolCallArgumentsJSONRepairGatewayOption(
+		gwOpts,
+		opts.ToolCallArgumentsJSONRepair,
+	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -1363,6 +1404,7 @@ func NewRuntimeWithOptions(
 			),
 		),
 	)
+	gwOpts = appendModelCompatibilityGatewayRunOptions(gwOpts, opts)
 	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
@@ -1744,6 +1786,8 @@ func run(
 		fileMemoryStore,
 		sandboxExecEngine,
 		opts.HostExecDefaultTimeout,
+		opts.HostExecMaxTimeout,
+		opts.HostExecMaxYield,
 	)
 	extraTools := memoryServiceTools(memSvc)
 	extraTools = append(extraTools, openClawTools.tools...)
@@ -1964,6 +2008,10 @@ func run(
 		opts.SkillsOverviewLimit,
 		splitCSV(opts.SkillsOverviewPinned),
 	)
+	gwOpts = appendToolCallArgumentsJSONRepairGatewayOption(
+		gwOpts,
+		opts.ToolCallArgumentsJSONRepair,
+	)
 	gwOpts = append(
 		gwOpts,
 		gateway.WithRunOptionResolver(
@@ -1980,6 +2028,7 @@ func run(
 			),
 		),
 	)
+	gwOpts = appendModelCompatibilityGatewayRunOptions(gwOpts, opts)
 	gwOpts = appendRuntimeGatewayRunOptions(gwOpts, runtimeOpts)
 	gwSrv, err := gateway.New(r, gwOpts...)
 	if err != nil {
@@ -2853,6 +2902,11 @@ func newAgent(
 		cfg.MemoryFileStore,
 		cfg.StateDir,
 	)
+	registerDynamicAgentBlockerCallback(callbacks)
+	registerToolArgumentGuardCallback(
+		callbacks,
+		os.Getenv(envBlockedToolArgumentSubstrings),
+	)
 	callbacks.RegisterToolResultMessages(openClawToolResultMessages)
 
 	exec := cfg.codeExecutor
@@ -2885,6 +2939,12 @@ func newAgent(
 		)
 	}
 	if deferToolSurface {
+		opts = appendDeferredSkillOverviewOptions(
+			opts,
+			cfg,
+			repo,
+			repoProvider,
+		)
 		searchTool := newDeferredCapabilitySearchTool(
 			deferredToolSurfaceConfig{
 				Model:         mdl,
@@ -3077,20 +3137,8 @@ func buildOpenClawToolingGuidance(cfg agentConfig) string {
 	}
 	guidance = strings.Replace(
 		guidance,
-		"For other general local shell work, use exec_command. "+
-			"Do not use host system package managers such as apt, yum, dnf, "+
-			"apk, pacman, zypper, or brew from chat; use preconfigured "+
-			"dependencies or ask for an explicit setup flow. For interactive "+
-			"follow-up input, use write_stdin and kill_session when needed. Use message "+
-			"to send to the current chat or an explicit target. ",
-		"For other general local shell work, use exec_command. In sandbox mode, "+
-			"exec_command only supports foreground non-interactive commands; "+
-			"write_stdin, kill_session, background execution, TTY allocation, "+
-			"and session continuation are unavailable. Do not use host system "+
-			"package managers such as apt, yum, dnf, apk, pacman, zypper, "+
-			"or brew from chat; use preconfigured dependencies or ask for an "+
-			"explicit setup flow. Use message to send to "+
-			"the current chat or an explicit target. ",
+		openClawHostShellGuidance,
+		openClawSandboxShellGuidance,
 		1,
 	)
 	guidance = strings.Replace(
@@ -3439,6 +3487,8 @@ func buildOpenClawTools(
 	memoryFileStore *memoryfile.Store,
 	sandboxExecEngine codeexecutor.Engine,
 	hostExecDefaultTimeout time.Duration,
+	hostExecMaxTimeout time.Duration,
+	hostExecMaxYield time.Duration,
 ) openClawToolsBundle {
 	if !enabled {
 		return openClawToolsBundle{}
@@ -3481,6 +3531,18 @@ func buildOpenClawTools(
 			mgrOpts = append(
 				mgrOpts,
 				octool.WithDefaultTimeout(hostExecDefaultTimeout),
+			)
+		}
+		if hostExecMaxTimeout > 0 {
+			mgrOpts = append(
+				mgrOpts,
+				octool.WithMaxTimeout(hostExecMaxTimeout),
+			)
+		}
+		if hostExecMaxYield > 0 {
+			mgrOpts = append(
+				mgrOpts,
+				octool.WithMaxYield(hostExecMaxYield),
 			)
 		}
 		mgr = octool.NewManager(mgrOpts...)
@@ -3913,6 +3975,40 @@ func parseOpenAIVariant(
 		return variant, nil
 	default:
 		return "", fmt.Errorf("unsupported openai variant: %s", raw)
+	}
+}
+
+func appendModelCompatibilityGatewayRunOptions(
+	opts []gateway.Option,
+	runOpts runOptions,
+) []gateway.Option {
+	staticRunOpts := modelCompatibilityRunOptions(runOpts)
+	if len(staticRunOpts) == 0 {
+		return opts
+	}
+	return append(
+		opts,
+		gateway.WithRunOptionResolver(func(
+			ctx context.Context,
+			_ gateway.RunOptionInput,
+		) (context.Context, []agent.RunOption, error) {
+			return ctx, append([]agent.RunOption(nil), staticRunOpts...), nil
+		}),
+	)
+}
+
+func modelCompatibilityRunOptions(
+	opts runOptions,
+) []agent.RunOption {
+	if strings.TrimSpace(opts.ModelMode) != modeOpenAI {
+		return nil
+	}
+	variant, err := parseOpenAIVariant(opts.OpenAIVariant, opts.OpenAIBaseURL)
+	if err != nil || variant != openai.VariantGLM {
+		return nil
+	}
+	return []agent.RunOption{
+		agent.WithToolCallArgumentsJSONRepairEnabled(true),
 	}
 }
 
