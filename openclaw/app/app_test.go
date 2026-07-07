@@ -4651,6 +4651,98 @@ func TestNewModel_OpenAIHeadersFromConfigAndEnv(t *testing.T) {
 	require.Equal(t, "Bearer config-token", tokenHeader)
 }
 
+func TestNewModel_OpenAIGLMUsesTextOnlyContent(t *testing.T) {
+	var requestBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.True(t, strings.HasSuffix(r.URL.Path, "/chat/completions"))
+		var err error
+		requestBody, err = io.ReadAll(r.Body)
+		require.NoError(t, err)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"glm50",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":"ok"},
+				"finish_reason":"stop"
+			}]
+		}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	mdl, err := modelFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIModel:   "glm50",
+		OpenAIVariant: string(openai.VariantGLM),
+		OpenAIBaseURL: server.URL,
+	})
+	require.NoError(t, err)
+
+	textPart := "visible text"
+	msg := model.NewUserMessage("inspect attachments")
+	msg.ContentParts = []model.ContentPart{
+		{
+			Type: model.ContentTypeText,
+			Text: &textPart,
+		},
+		{
+			Type: model.ContentTypeImage,
+			Image: &model.Image{
+				Data:   []byte("png"),
+				Format: "png",
+			},
+		},
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "photo.jpg",
+				Data:     []byte("jpg"),
+				MimeType: "image/jpeg",
+			},
+		},
+	}
+	ch, err := mdl.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{msg},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	})
+	require.NoError(t, err)
+	for rsp := range ch {
+		require.Nil(t, rsp.Error)
+	}
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(requestBody, &payload))
+	messages, ok := payload["messages"].([]any)
+	require.True(t, ok)
+	require.Len(t, messages, 1)
+	message, ok := messages[0].(map[string]any)
+	require.True(t, ok)
+	parts, ok := message["content"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, parts)
+	for _, raw := range parts {
+		part, ok := raw.(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "text", part["type"])
+		require.NotContains(t, part, "image_url")
+		require.NotContains(t, part, "file")
+	}
+	body := string(requestBody)
+	require.Contains(t, body, "visible text")
+	require.Contains(t, body, "Omitted non-text attachments")
+	require.NotContains(t, body, "data:image")
+	require.NotContains(t, body, "photo.jpg")
+}
+
 func TestResolveOpenAIHeaders_EnvOnlyAndConfigOnly(t *testing.T) {
 	t.Setenv(
 		openAIHeadersEnvName,

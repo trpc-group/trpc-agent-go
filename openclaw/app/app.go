@@ -3774,6 +3774,9 @@ func newOpenAIModel(spec registry.ModelSpec) (model.Model, error) {
 		openai.WithVariant(variant),
 		openai.WithOmitFileContentParts(true),
 	}
+	if variant == openai.VariantGLM {
+		opts = append(opts, openai.WithTextOnlyMessageContent(true))
+	}
 	if spec.DebugRecorderEnabled {
 		opts = append(
 			opts,
