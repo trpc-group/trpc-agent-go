@@ -16,16 +16,25 @@ import (
 )
 
 const (
-	defaultHost             = "https://api.mem0.ai"
-	defaultTimeout          = 10 * time.Second
-	defaultAsyncMemoryNum   = 1
-	defaultMemoryQueueSize  = 10
-	defaultMemoryJobTimeout = 30 * time.Second
+	defaultHost              = "https://api.mem0.ai"
+	defaultSelfHostedOSSHost = "http://localhost:8888"
+	defaultTimeout           = 10 * time.Second
+	defaultAsyncMemoryNum    = 1
+	defaultMemoryQueueSize   = 10
+	defaultMemoryJobTimeout  = 30 * time.Second
+)
+
+type apiMode int
+
+const (
+	apiModeCloud apiMode = iota
+	apiModeSelfHostedOSS
 )
 
 type serviceOpts struct {
-	host   string
-	apiKey string
+	host    string
+	apiKey  string
+	apiMode apiMode
 
 	orgID     string
 	projectID string
@@ -36,7 +45,8 @@ type serviceOpts struct {
 	timeout time.Duration
 	client  *http.Client
 
-	loadToolEnabled bool
+	loadToolEnabled                      bool
+	includeUnscopedSelfHostedOSSMemories bool
 
 	asyncMemoryNum   int
 	memoryQueueSize  int
@@ -49,6 +59,7 @@ func (o serviceOpts) clone() serviceOpts {
 
 var defaultOptions = serviceOpts{
 	host:             defaultHost,
+	apiMode:          apiModeCloud,
 	asyncMode:        true,
 	version:          "v2",
 	timeout:          defaultTimeout,
@@ -75,6 +86,30 @@ func WithAPIKey(apiKey string) ServiceOpt {
 		if apiKey != "" {
 			opts.apiKey = apiKey
 		}
+	}
+}
+
+// WithSelfHostedOSS switches the service to the self-hosted Mem0 OSS REST API.
+//
+// The option is explicit by design: WithHost alone may point to a cloud proxy,
+// a private gateway, or a test server and must not change API semantics.
+func WithSelfHostedOSS() ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.apiMode = apiModeSelfHostedOSS
+		if opts.host == defaultHost {
+			opts.host = defaultSelfHostedOSSHost
+		}
+	}
+}
+
+// WithSelfHostedOSSIncludeUnscopedMemories allows self-hosted OSS reads and
+// searches to include legacy memories that do not carry trpc_app_name metadata.
+//
+// This is intended for migrations from an existing Mem0 OSS store. It does not
+// include memories explicitly tagged for a different app.
+func WithSelfHostedOSSIncludeUnscopedMemories() ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.includeUnscopedSelfHostedOSSMemories = true
 	}
 }
 

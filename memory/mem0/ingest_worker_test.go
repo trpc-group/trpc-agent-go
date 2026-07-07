@@ -10,6 +10,8 @@ package mem0
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -179,6 +181,42 @@ func TestIngestWorker_Ingest_CreatesAndTerminalStatus(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&createCalls))
+}
+
+func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[{"id":"x","memory":"hi"}]}`))
+	})
+	w, _ := newWorkerWithServer(t, handler, serviceOpts{
+		apiMode:          apiModeSelfHostedOSS,
+		memoryJobTimeout: time.Second,
+	})
+
+	err := w.ingest(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u"},
+		nil,
+		[]model.Message{{Role: model.RoleUser, Content: "hi"}},
+		session.IngestOptions{Metadata: map[string]any{"k": "v"}},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "/memories", gotPath)
+	assert.Equal(t, "u", gotBody["user_id"])
+	assert.Equal(t, true, gotBody["infer"])
+	assert.NotContains(t, gotBody, "app_id")
+	assert.NotContains(t, gotBody, "async_mode")
+	assert.NotContains(t, gotBody, "version")
+
+	meta, ok := gotBody["metadata"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "v", meta["k"])
+	assert.Equal(t, "app", meta[metadataKeyTRPCAppName])
 }
 
 func TestIngestWorker_AwaitIngestEvent_PollsUntilSuccess(t *testing.T) {

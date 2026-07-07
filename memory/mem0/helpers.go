@@ -30,18 +30,22 @@ const (
 	metadataKeyTRPCParticipants = "trpc_participants"
 	metadataKeyTRPCLocation     = "trpc_location"
 
-	pathV1Memories = "/v1/memories/"
-	pathV2Search   = "/v2/memories/search/"
+	pathV1Memories  = "/v1/memories/"
+	pathV2Search    = "/v2/memories/search/"
+	pathOSSMemories = "/memories"
+	pathOSSSearch   = "/search"
 
 	queryKeyUserID   = "user_id"
 	queryKeyAppID    = "app_id"
 	queryKeyPage     = "page"
 	queryKeyPageSize = "page_size"
+	queryKeyTopK     = "top_k"
 
 	memoryUserRole = "user"
 
 	defaultListPageSize = 100
 	defaultSearchTopK   = 20
+	maxOSSListTopK      = 1000
 )
 
 func addOrgProjectQuery(q url.Values, opts serviceOpts) {
@@ -75,6 +79,54 @@ func addOrgProjectFilter(filters map[string]any, opts serviceOpts) {
 		andList = append(andList, map[string]any{"project_id": opts.projectID})
 	}
 	filters["AND"] = andList
+}
+
+func cloudSearchFilters(userKey memory.UserKey, opts serviceOpts) map[string]any {
+	filters := map[string]any{
+		"AND": []any{
+			map[string]any{queryKeyUserID: userKey.UserID},
+			map[string]any{queryKeyAppID: userKey.AppName},
+		},
+	}
+	addOrgProjectFilter(filters, opts)
+	return filters
+}
+
+func ossSearchFilters(userKey memory.UserKey, includeUnscoped bool) map[string]any {
+	filters := map[string]any{
+		queryKeyUserID: userKey.UserID,
+	}
+	if !includeUnscoped {
+		filters[metadataKeyTRPCAppName] = userKey.AppName
+	}
+	return filters
+}
+
+func withTRPCAppMetadata(meta map[string]any, appName string) map[string]any {
+	out := cloneMetadata(meta)
+	if out == nil {
+		out = make(map[string]any, 1)
+	}
+	out[metadataKeyTRPCAppName] = appName
+	return out
+}
+
+func recordMatchesTRPCApp(rec *memoryRecord, appName string, includeUnscoped bool) bool {
+	if rec == nil {
+		return false
+	}
+	if rec.Metadata == nil {
+		return includeUnscoped
+	}
+	v, ok := rec.Metadata[metadataKeyTRPCAppName]
+	if !ok || v == nil {
+		return includeUnscoped
+	}
+	app, ok := v.(string)
+	if !ok {
+		return includeUnscoped
+	}
+	return strings.TrimSpace(app) == appName
 }
 
 func parseMem0Times(rec *memoryRecord) parsedTimes {

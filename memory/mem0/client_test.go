@@ -37,6 +37,12 @@ func TestNewClient_RequiresAPIKey(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestNewClient_SelfHostedOSSAllowsEmptyAPIKey(t *testing.T) {
+	c, err := newClient(serviceOpts{apiMode: apiModeSelfHostedOSS, host: "http://localhost:8888"})
+	require.NoError(t, err)
+	assert.Equal(t, apiModeSelfHostedOSS, c.apiMode)
+}
+
 func TestNewClient_TrimsHostTrailingSlash(t *testing.T) {
 	c, err := newClient(serviceOpts{apiKey: "k", host: "https://api.example.com///"})
 	require.NoError(t, err)
@@ -74,6 +80,32 @@ func TestDoJSON_GetSuccess(t *testing.T) {
 	q := url.Values{"x": {"1"}}
 	require.NoError(t, c.doJSON(context.Background(), httpMethodGet, "/ping", q, nil, &out))
 	assert.True(t, out.Ok)
+}
+
+func TestDoJSON_SelfHostedOSSAuthHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("Authorization"))
+		assert.Equal(t, "k", r.Header.Get("X-API-Key"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c, err := newClient(serviceOpts{apiKey: "k", apiMode: apiModeSelfHostedOSS, host: srv.URL})
+	require.NoError(t, err)
+	require.NoError(t, c.doJSON(context.Background(), httpMethodGet, "/ping", nil, nil, nil))
+}
+
+func TestDoJSON_SelfHostedOSSEmptyAPIKeySendsNoAuth(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("Authorization"))
+		assert.Empty(t, r.Header.Get("X-API-Key"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c, err := newClient(serviceOpts{apiMode: apiModeSelfHostedOSS, host: srv.URL})
+	require.NoError(t, err)
+	require.NoError(t, c.doJSON(context.Background(), httpMethodGet, "/ping", nil, nil, nil))
 }
 
 func TestDoJSON_PostMarshalsBodyAndSetsContentType(t *testing.T) {
