@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strings"
@@ -442,7 +443,11 @@ func (s *Server) decodeJSON(r *http.Request, target any) error {
 			maxBytes,
 		)
 	}
-	reader := &io.LimitedReader{R: r.Body, N: maxBytes + 1}
+	limit := maxBytes
+	if maxBytes < math.MaxInt64 {
+		limit = maxBytes + 1
+	}
+	reader := &io.LimitedReader{R: r.Body, N: limit}
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return fmt.Errorf("read request body: %w", err)
