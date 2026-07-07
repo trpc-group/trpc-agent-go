@@ -832,6 +832,96 @@ eventChan, err := r.Run(
 
 A complete example is available at [examples/usermessagerewriter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/usermessagerewriter).
 
+#### Persist Context Messages Before the Current User
+
+Use these options when the extra context should become part of the canonical
+session transcript, instead of being injected only into one model request.
+Runner persists the returned messages immediately before the current user
+message.
+
+- `agent.WithSessionContextMessages(...)`: pass a static message list.
+- `agent.WithSessionContextMessagesFunc(...)`: build a message list for this run.
+- `agent.WithSessionContextSource(...)`: declare a named durable context
+  producer. Runner stores that source's compact opaque state and passes it back
+  on the next run so the source can emit a complete snapshot, an incremental
+  update, or no messages.
+
+Choose the first two when the caller already knows the exact messages to write:
+
+```go
+eventCh, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithSessionContextMessages([]model.Message{
+        model.NewUserMessage("Project rule: prefer SQL migrations over ad-hoc DDL."),
+    }),
+)
+```
+
+Choose `WithSessionContextSource` when the context has a stable identity and
+evolves over time, such as project rules, workspace policy, selected persona,
+tenant metadata, or channel runtime context. The source owns the domain schema;
+Runner only knows its name, previous version/state, and the messages it
+materialized into history.
+
+```go
+agent.WithSessionContextSource("workspace_policy", func(
+    ctx context.Context,
+    args *agent.SessionContextSourceArgs,
+) (*agent.SessionContextSourceResult, error) {
+    current := loadCurrentPolicy()
+    state := marshalPolicy(current)
+
+    if args.NeedsSnapshot() {
+        return &agent.SessionContextSourceResult{
+            Version:  current.Revision,
+            State:    state,
+            Messages: []model.Message{model.NewUserMessage(renderPolicySnapshot(current))},
+        }, nil
+    }
+    previous := unmarshalPolicy(args.PreviousState)
+    if previous == current {
+        return &agent.SessionContextSourceResult{Version: current.Revision, State: state}, nil
+    }
+    return &agent.SessionContextSourceResult{
+        Version:  current.Revision,
+        State:    state,
+        Messages: []model.Message{model.NewUserMessage(renderPolicyUpdate(previous, current))},
+    }, nil
+})
+```
+
+For an append-only diff source, the persisted transcript looks like this:
+
+```text
+[workspace_policy snapshot v1]
+User 1
+Assistant 1
+User 2
+Assistant 2
+[workspace_policy update v1 -> v2]
+User 3
+Assistant 3
+```
+
+The model sees ordinary session history messages; it does not see
+`SessionContextSourceResult`, `Version`, or `State`. Those fields are Runner
+bookkeeping for deciding what to pass back to the source on the next run.
+
+`args.NeedsSnapshot()` is true when Runner cannot rely on the previous
+materialized messages still being visible in restored history. This happens for
+the first run of a source, or when the event that anchored the previous source
+messages was trimmed or covered by a session summary. It does **not** mean the
+business state changed. The source should still compare `PreviousState` with
+the current state to decide whether to emit an update.
+
+These messages do not change `invocation.Message`; the current user input
+remains intact.
+
+Runnable example: `examples/prompt/append_only_diff`.
+
 #### Inject Per-run Context Messages (non-persistent)
 
 If you need to provide extra context for **this turn only** (for example:

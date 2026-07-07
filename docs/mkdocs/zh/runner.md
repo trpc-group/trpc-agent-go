@@ -790,6 +790,89 @@ eventChan, err := r.Run(
 
 完整示例可参考 [examples/usermessagerewriter](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/usermessagerewriter)。
 
+#### 持久化当前回合上下文
+
+当额外上下文应该进入 canonical session transcript，而不是只影响单次模型请求时，
+使用下面这些选项。Runner 会把返回的消息持久化到当前用户消息之前。
+
+- `agent.WithSessionContextMessages(...)`：传入静态消息列表。
+- `agent.WithSessionContextMessagesFunc(...)`：为本次 run 动态构造消息列表。
+- `agent.WithSessionContextSource(...)`：声明一个带名字的持久上下文 producer。
+  Runner 保存这个 source 的紧凑 opaque state，并在下一次 run 时传回给它；
+  source 自己决定本轮追加完整快照、增量更新，或不追加消息。
+
+如果调用方已经知道本轮要写入的具体消息，用前两种即可：
+
+```go
+eventCh, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    userMessage,
+    agent.WithSessionContextMessages([]model.Message{
+        model.NewUserMessage("项目规则：优先使用 SQL migration，不要直接执行临时 DDL。"),
+    }),
+)
+```
+
+如果这段上下文有稳定身份，并且会随着时间变化，例如项目规则、workspace policy、
+选中的 persona、租户元信息、channel runtime context，则使用
+`WithSessionContextSource`。source 拥有业务 schema；Runner 只认识它的名字、
+上一次保存的 version/state，以及它 materialize 到历史中的 messages。
+
+```go
+agent.WithSessionContextSource("workspace_policy", func(
+    ctx context.Context,
+    args *agent.SessionContextSourceArgs,
+) (*agent.SessionContextSourceResult, error) {
+    current := loadCurrentPolicy()
+    state := marshalPolicy(current)
+
+    if args.NeedsSnapshot() {
+        return &agent.SessionContextSourceResult{
+            Version:  current.Revision,
+            State:    state,
+            Messages: []model.Message{model.NewUserMessage(renderPolicySnapshot(current))},
+        }, nil
+    }
+    previous := unmarshalPolicy(args.PreviousState)
+    if previous == current {
+        return &agent.SessionContextSourceResult{Version: current.Revision, State: state}, nil
+    }
+    return &agent.SessionContextSourceResult{
+        Version:  current.Revision,
+        State:    state,
+        Messages: []model.Message{model.NewUserMessage(renderPolicyUpdate(previous, current))},
+    }, nil
+})
+```
+
+一个 append-only diff source 对应的持久化 transcript 大致如下：
+
+```text
+[workspace_policy snapshot v1]
+User 1
+Assistant 1
+User 2
+Assistant 2
+[workspace_policy update v1 -> v2]
+User 3
+Assistant 3
+```
+
+模型看到的仍然只是普通 session history messages；它看不到
+`SessionContextSourceResult`、`Version` 或 `State`。这些字段是 Runner 的账本，
+用于下一轮把必要信息传回给 source。
+
+`args.NeedsSnapshot()` 表示 Runner 不能再确信这个 source 上一次 materialize 出来的
+messages 仍然存在于恢复后的可见历史中。首次运行某个 source、上次锚定的 event 被
+trim 掉、或被 session summary 覆盖时，它会是 true。它**不表示业务状态发生了变化**。
+source 仍然应该比较 `PreviousState` 和当前状态，自己决定是否输出增量更新。
+
+这些消息不会改变 `invocation.Message`；当前用户输入仍然保持原样。
+
+可运行示例：`examples/prompt/append_only_diff`。
+
 #### 注入单次请求上下文（非持久化）
 
 如果你需要为**本轮**提供额外上下文（例如“rules”、动态约束、检索结果、背景知识），但又不希望把它写入 session transcript，可以使用这些 RunOption：

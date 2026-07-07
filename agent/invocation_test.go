@@ -1478,6 +1478,115 @@ func TestWithLateContextMessages(t *testing.T) {
 	}, opts.LateContextMessages)
 }
 
+func TestWithSessionContextMessages(t *testing.T) {
+	opts := &RunOptions{}
+	WithSessionContextMessages([]model.Message{
+		{Role: model.RoleUser, Content: "Context A"},
+	})(opts)
+	WithSessionContextMessages([]model.Message{
+		{Role: model.RoleUser, Content: "Context B"},
+	})(opts)
+
+	require.Equal(t, []model.Message{
+		{Role: model.RoleUser, Content: "Context A"},
+		{Role: model.RoleUser, Content: "Context B"},
+	}, opts.SessionContextMessages)
+}
+
+func TestSessionContextMessageFuncsInOrder(t *testing.T) {
+	opts := &RunOptions{}
+	WithSessionContextMessages([]model.Message{
+		model.NewUserMessage("Context A"),
+	})(opts)
+	WithSessionContextMessagesFunc(func(
+		context.Context,
+		*SessionContextMessagesArgs,
+	) ([]model.Message, error) {
+		return []model.Message{model.NewUserMessage("Context F")}, nil
+	})(opts)
+	WithSessionContextMessages([]model.Message{
+		model.NewUserMessage("Context B"),
+	})(opts)
+
+	var got []model.Message
+	for _, fn := range opts.SessionContextMessageFuncsInOrder() {
+		msgs, err := fn(context.Background(), &SessionContextMessagesArgs{})
+		require.NoError(t, err)
+		got = append(got, msgs...)
+	}
+	require.Equal(t, []model.Message{
+		model.NewUserMessage("Context A"),
+		model.NewUserMessage("Context F"),
+		model.NewUserMessage("Context B"),
+	}, got)
+}
+
+func TestSessionContextMessageFuncsInOrderIncludesDirectFieldMessages(t *testing.T) {
+	opts := &RunOptions{
+		SessionContextMessages: []model.Message{model.NewUserMessage("Direct A")},
+	}
+	WithSessionContextMessages([]model.Message{
+		model.NewUserMessage("Option A"),
+	})(opts)
+	WithSessionContextMessagesFunc(func(
+		context.Context,
+		*SessionContextMessagesArgs,
+	) ([]model.Message, error) {
+		return []model.Message{model.NewUserMessage("Func")}, nil
+	})(opts)
+	opts.SessionContextMessages = append(
+		opts.SessionContextMessages,
+		model.NewUserMessage("Direct B"),
+	)
+
+	var got []model.Message
+	for _, fn := range opts.SessionContextMessageFuncsInOrder() {
+		msgs, err := fn(context.Background(), &SessionContextMessagesArgs{})
+		require.NoError(t, err)
+		got = append(got, msgs...)
+	}
+	require.Equal(t, []model.Message{
+		model.NewUserMessage("Direct A"),
+		model.NewUserMessage("Option A"),
+		model.NewUserMessage("Direct B"),
+		model.NewUserMessage("Func"),
+	}, got)
+}
+
+func TestSessionContextSourceArgsNeedsSnapshot(t *testing.T) {
+	require.True(t, (&SessionContextSourceArgs{SnapshotRequired: true}).NeedsSnapshot())
+	require.False(t, (&SessionContextSourceArgs{}).NeedsSnapshot())
+}
+
+func TestWithSessionContextSource(t *testing.T) {
+	opts := &RunOptions{}
+	fn := func(
+		ctx context.Context,
+		args *SessionContextSourceArgs,
+	) (*SessionContextSourceResult, error) {
+		require.Equal(t, "raw", args.OriginalMessage.Content)
+		return &SessionContextSourceResult{
+			Version:  "v1",
+			State:    []byte(`{"revision":"v1"}`),
+			Messages: []model.Message{model.NewUserMessage("ctx")},
+		}, nil
+	}
+	WithSessionContextSource("rules", fn)(opts)
+	WithSessionContextSource("ignored", nil)(opts)
+	require.Len(t, opts.SessionContextSources, 1)
+	require.Equal(t, "rules", opts.SessionContextSources[0].Name)
+	update, err := opts.SessionContextSources[0].Func(
+		context.Background(),
+		&SessionContextSourceArgs{
+			OriginalMessage: model.NewUserMessage("raw"),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "v1", update.Version)
+	require.Equal(t, []byte(`{"revision":"v1"}`), update.State)
+	require.Equal(t, []model.Message{model.NewUserMessage("ctx")}, update.Messages)
+}
+
 func TestWithUserMessageRewriter(t *testing.T) {
 	opts := &RunOptions{}
 	rewriter := func(

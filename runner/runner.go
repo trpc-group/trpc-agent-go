@@ -612,16 +612,27 @@ func (r *runner) Run(
 		execCancel()
 		return nil, fmt.Errorf("select agent: %w", err)
 	}
+	currentTurnSession, err := sessionroute.ResolveCurrentTurnSession(
+		execCtx,
+		r.sessionService,
+		sess,
+		ag,
+	)
+	if err != nil {
+		execCancel()
+		return nil, err
+	}
 	resolveCtx, resolveSpan, resolveStarted := startRunnerRunOptionsLatencySpan(
 		execCtx,
 		ro,
 		runnerLatencySpanResolveMessages,
 	)
-	invocationMessage, persistedCurrentTurnMessages, err := r.resolveCurrentTurnMessages(
+	invocationMessage, persistedCurrentTurnMessages, useResolvedCurrentTurnMessages, sourceContextCommits, err := r.resolveCurrentTurnMessages(
 		resolveCtx,
 		effectiveAppName,
 		userID,
 		sessionID,
+		currentTurnSession,
 		message,
 		ro,
 	)
@@ -648,16 +659,6 @@ func (r *runner) Run(
 		awaitUserReplyRootName,
 		awaitUserReplyLookupPath,
 	)
-	currentTurnSession, err := sessionroute.ResolveCurrentTurnSession(
-		execCtx,
-		r.sessionService,
-		sess,
-		ag,
-	)
-	if err != nil {
-		execCancel()
-		return nil, err
-	}
 
 	queuedUserMessages := steer.NewQueue()
 	steer.Attach(invocation, queuedUserMessages)
@@ -700,6 +701,8 @@ func (r *runner) Run(
 		ag,
 		message,
 		persistedCurrentTurnMessages,
+		useResolvedCurrentTurnMessages,
+		sourceContextCommits,
 		ro,
 	); err != nil {
 		finishRunnerLatencySpan(persistSpan, persistStarted, err)
@@ -876,7 +879,7 @@ func (r *runner) seedSessionHistory(
 	if len(ro.Messages) == 0 || sess.GetEventCount() != 0 {
 		return false, nil
 	}
-	if err := r.appendMessagesAsSessionEvents(ctx, sess, invocation, ag, ro.Messages); err != nil {
+	if _, err := r.appendMessagesAsSessionEvents(ctx, sess, invocation, ag, ro.Messages); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -890,7 +893,7 @@ func (r *runner) appendSessionMessages(
 	invocation *agent.Invocation,
 	ag agent.Agent,
 	messages []model.Message,
-) error {
+) ([]event.Event, error) {
 	return r.appendMessagesAsSessionEvents(ctx, sess, invocation, ag, messages)
 }
 
@@ -902,7 +905,8 @@ func (r *runner) appendMessagesAsSessionEvents(
 	invocation *agent.Invocation,
 	ag agent.Agent,
 	messages []model.Message,
-) error {
+) ([]event.Event, error) {
+	var appended []event.Event
 	for _, msg := range messages {
 		author := ag.Info().Name
 		if msg.Role == model.RoleUser {
@@ -917,10 +921,11 @@ func (r *runner) appendMessagesAsSessionEvents(
 		agent.InjectIntoEvent(invocation, evt)
 		evt = r.applyEventPlugins(ctx, invocation, evt)
 		if err := r.sessionService.AppendEvent(ctx, sess, evt); err != nil {
-			return err
+			return appended, err
 		}
+		appended = append(appended, *evt)
 	}
-	return nil
+	return appended, nil
 }
 
 // appendIncomingMessage appends the user's incoming message to the session
@@ -3676,11 +3681,50 @@ func (r *runner) resolveCurrentTurnMessages(
 	appName string,
 	userID string,
 	sessionID string,
+	sess *session.Session,
 	message model.Message,
 	ro agent.RunOptions,
-) (model.Message, []model.Message, error) {
+) (model.Message, []model.Message, bool, []sessionContextSourceCommit, error) {
+	sourceContextMessages, sourceContextCommits, err := r.resolveSessionContextSourceMessages(
+		ctx,
+		appName,
+		userID,
+		sessionID,
+		sess,
+		message,
+		ro,
+	)
+	if err != nil {
+		return model.Message{}, nil, false, nil, err
+	}
+	sessionContextMessages, err := r.resolveSessionContextMessages(
+		ctx,
+		appName,
+		userID,
+		sessionID,
+		message,
+		ro,
+	)
+	if err != nil {
+		return model.Message{}, nil, false, nil, err
+	}
+	contextMessages := append(
+		append([]model.Message(nil), sourceContextMessages...),
+		sessionContextMessages...,
+	)
 	if ro.UserMessageRewriter == nil {
-		return message, nil, nil
+		if len(contextMessages) == 0 {
+			return message, nil, false, sourceContextCommits, nil
+		}
+		currentTurnMessages := append(
+			append([]model.Message(nil), contextMessages...),
+			message,
+		)
+		return message,
+			filterPayloadMessages(currentTurnMessages),
+			true,
+			sourceContextCommits,
+			nil
 	}
 	currentTurnMessages, err := r.rewriteUserMessage(
 		ctx,
@@ -3691,9 +3735,17 @@ func (r *runner) resolveCurrentTurnMessages(
 		ro,
 	)
 	if err != nil {
-		return model.Message{}, nil, err
+		return model.Message{}, nil, false, nil, err
 	}
-	return currentTurnMessages[len(currentTurnMessages)-1], filterPayloadMessages(currentTurnMessages), nil
+	persistedCurrentTurnMessages := append(
+		append([]model.Message(nil), contextMessages...),
+		currentTurnMessages...,
+	)
+	return currentTurnMessages[len(currentTurnMessages)-1],
+		filterPayloadMessages(persistedCurrentTurnMessages),
+		true,
+		sourceContextCommits,
+		nil
 }
 
 func (r *runner) persistCurrentTurnMessages(
@@ -3703,24 +3755,56 @@ func (r *runner) persistCurrentTurnMessages(
 	ag agent.Agent,
 	message model.Message,
 	persistedCurrentTurnMessages []model.Message,
+	useResolvedCurrentTurnMessages bool,
+	sourceContextCommits []sessionContextSourceCommit,
 	ro agent.RunOptions,
 ) error {
-	if ro.UserMessageRewriter == nil {
+	if !useResolvedCurrentTurnMessages {
 		historySeeded, err := r.seedSessionHistory(ctx, sess, invocation, ag, ro)
 		if err != nil {
 			return err
 		}
-		return r.appendIncomingMessage(ctx, sess, invocation, message, ro, historySeeded)
+		if err := r.appendIncomingMessage(ctx, sess, invocation, message, ro, historySeeded); err != nil {
+			return err
+		}
+		r.commitSessionContextSourceLedger(ctx, sess, sourceContextCommits, nil)
+		return nil
 	}
 	if sess.GetEventCount() == 0 {
-		initialMessages := mergeCurrentTurnMessagesIntoSeed(
+		initialMessages, currentTurnStart := mergeCurrentTurnMessagesIntoSeed(
 			ro.Messages,
 			message,
 			persistedCurrentTurnMessages,
 		)
-		return r.appendSessionMessages(ctx, sess, invocation, ag, initialMessages)
+		appendedEvents, err := r.appendSessionMessages(ctx, sess, invocation, ag, initialMessages)
+		if err != nil {
+			return err
+		}
+		sourceEvents := sourceContextEventsForCurrentTurn(
+			appendedEvents,
+			currentTurnStart,
+			sourceContextMessageCount(sourceContextCommits),
+		)
+		r.commitSessionContextSourceLedger(ctx, sess, sourceContextCommits, sourceEvents)
+		return nil
 	}
-	return r.appendSessionMessages(ctx, sess, invocation, ag, persistedCurrentTurnMessages)
+	appendedEvents, err := r.appendSessionMessages(
+		ctx,
+		sess,
+		invocation,
+		ag,
+		persistedCurrentTurnMessages,
+	)
+	if err != nil {
+		return err
+	}
+	sourceEvents := sourceContextEventsForCurrentTurn(
+		appendedEvents,
+		0,
+		sourceContextMessageCount(sourceContextCommits),
+	)
+	r.commitSessionContextSourceLedger(ctx, sess, sourceContextCommits, sourceEvents)
+	return nil
 }
 
 // shouldAppendUserMessage checks if the incoming user message should be
@@ -3749,12 +3833,12 @@ func mergeCurrentTurnMessagesIntoSeed(
 	seed []model.Message,
 	original model.Message,
 	currentTurn []model.Message,
-) []model.Message {
+) ([]model.Message, int) {
 	if len(currentTurn) == 0 {
-		return append([]model.Message(nil), seed...)
+		return append([]model.Message(nil), seed...), -1
 	}
 	if len(seed) == 0 {
-		return append([]model.Message(nil), currentTurn...)
+		return append([]model.Message(nil), currentTurn...), 0
 	}
 	insertIndex := -1
 	for i := len(seed) - 1; i >= 0; i-- {
@@ -3770,13 +3854,13 @@ func mergeCurrentTurnMessagesIntoSeed(
 		merged := make([]model.Message, 0, len(seed)+len(currentTurn))
 		merged = append(merged, seed...)
 		merged = append(merged, currentTurn...)
-		return merged
+		return merged, len(seed)
 	}
 	merged := make([]model.Message, 0, len(seed)-1+len(currentTurn))
 	merged = append(merged, seed[:insertIndex]...)
 	merged = append(merged, currentTurn...)
 	merged = append(merged, seed[insertIndex+1:]...)
-	return merged
+	return merged, insertIndex
 }
 
 func filterPayloadMessages(messages []model.Message) []model.Message {

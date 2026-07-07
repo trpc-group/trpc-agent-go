@@ -457,6 +457,175 @@ func WithLateContextMessages(messages []model.Message) RunOption {
 	}
 }
 
+// SessionContextMessagesArgs contains stable metadata for one session context
+// message build.
+type SessionContextMessagesArgs struct {
+	// AppName is the effective runner app name for this run.
+	AppName string
+	// UserID is the user id for the current session.
+	UserID string
+	// SessionID is the current session id.
+	SessionID string
+	// RequestID is the runner request id when provided.
+	RequestID string
+	// OriginalMessage is the current user message before any rewrite.
+	OriginalMessage model.Message
+}
+
+// SessionContextMessagesFunc builds messages that are persisted immediately
+// before the current-turn user input in the session transcript. Runner stores
+// payload-bearing messages from this hook as user-role context messages.
+type SessionContextMessagesFunc func(
+	ctx context.Context,
+	args *SessionContextMessagesArgs,
+) ([]model.Message, error)
+
+func staticSessionContextMessagesFunc(
+	messages []model.Message,
+) SessionContextMessagesFunc {
+	copied := append([]model.Message(nil), messages...)
+	return func(
+		context.Context,
+		*SessionContextMessagesArgs,
+	) ([]model.Message, error) {
+		return append([]model.Message(nil), copied...), nil
+	}
+}
+
+// SessionContextSourceArgs contains metadata and the previous durable state for
+// one session context source build.
+type SessionContextSourceArgs struct {
+	// AppName is the effective runner app name for this run.
+	AppName string
+	// UserID is the user id for the current session.
+	UserID string
+	// SessionID is the current session id.
+	SessionID string
+	// RequestID is the runner request id when provided.
+	RequestID string
+	// OriginalMessage is the current user message before any rewrite.
+	OriginalMessage model.Message
+	// Name is the source name registered with WithSessionContextSource.
+	Name string
+	// PreviousVersion is the version returned by this source on the previous run.
+	PreviousVersion string
+	// PreviousState is the compact opaque state returned by this source on the
+	// previous run.
+	PreviousState []byte
+	// SnapshotRequired is set by Runner when this source's previous materialized
+	// messages are no longer guaranteed to be visible in the restored session
+	// history. Prefer NeedsSnapshot in source implementations.
+	SnapshotRequired bool
+}
+
+// NeedsSnapshot reports whether this source should materialize a complete
+// current context snapshot instead of relying on a diff from previous messages.
+func (args *SessionContextSourceArgs) NeedsSnapshot() bool {
+	return args == nil || args.SnapshotRequired
+}
+
+// SessionContextSourceResult is returned by a session context source.
+type SessionContextSourceResult struct {
+	// Version identifies the current source state. Use a semantic business
+	// revision when available. When empty, Runner derives one from State or
+	// Messages.
+	Version string
+	// State is compact, opaque source-owned state, typically a revisioned
+	// snapshot or cursor needed to compute the next result. Runner persists it
+	// and passes it back as PreviousState on the next run. Nil preserves the
+	// previous state when one exists; pass a non-nil empty slice to clear it.
+	State []byte
+	// Messages are persisted immediately before the current-turn user input.
+	// Runner stores payload-bearing messages as user-role context messages.
+	Messages []model.Message
+}
+
+// SessionContextSourceFunc builds durable session context. Returning
+// nil means this source has no update for this run.
+type SessionContextSourceFunc func(
+	ctx context.Context,
+	args *SessionContextSourceArgs,
+) (*SessionContextSourceResult, error)
+
+// SessionContextSource stores a named durable session context source.
+type SessionContextSource struct {
+	// Name identifies one durable context source within a session.
+	Name string
+	// Func builds the source result for one run.
+	Func SessionContextSourceFunc
+}
+
+// WithSessionContextMessages appends per-run messages that are persisted into
+// the session transcript immediately before the current-turn user input. Runner
+// stores payload-bearing messages as user-role context messages.
+func WithSessionContextMessages(messages []model.Message) RunOption {
+	return func(opts *RunOptions) {
+		opts.SessionContextMessages = append(opts.SessionContextMessages, messages...)
+		if len(messages) > 0 {
+			opts.sessionContextMessageFuncsInOrder = append(
+				opts.sessionContextMessageFuncsInOrder,
+				staticSessionContextMessagesFunc(messages),
+			)
+			opts.trackedSessionContextMessages += len(messages)
+		}
+	}
+}
+
+// WithSessionContextMessagesFunc appends a per-run function that builds
+// messages to persist into the session transcript immediately before the
+// current-turn user input.
+func WithSessionContextMessagesFunc(fn SessionContextMessagesFunc) RunOption {
+	return func(opts *RunOptions) {
+		if fn == nil {
+			return
+		}
+		opts.SessionContextMessageFuncs = append(opts.SessionContextMessageFuncs, fn)
+		opts.sessionContextMessageFuncsInOrder = append(
+			opts.sessionContextMessageFuncsInOrder,
+			fn,
+		)
+	}
+}
+
+// SessionContextMessageFuncsInOrder returns session-context builders in caller
+// registration order. Direct RunOptions field assignments fall back to the
+// historical static-before-func ordering because no cross-field registration
+// order is available.
+func (opts RunOptions) SessionContextMessageFuncsInOrder() []SessionContextMessagesFunc {
+	if len(opts.sessionContextMessageFuncsInOrder) > 0 &&
+		opts.trackedSessionContextMessages == len(opts.SessionContextMessages) {
+		return append(
+			[]SessionContextMessagesFunc(nil),
+			opts.sessionContextMessageFuncsInOrder...,
+		)
+	}
+	var fns []SessionContextMessagesFunc
+	if len(opts.SessionContextMessages) > 0 {
+		fns = append(fns, staticSessionContextMessagesFunc(opts.SessionContextMessages))
+	}
+	fns = append(fns, opts.SessionContextMessageFuncs...)
+	return fns
+}
+
+// WithSessionContextSource declares a named durable context producer. Runner
+// calls the source before persisting the current-turn user input and passes back
+// the source's previously persisted opaque state so the source can choose a
+// complete snapshot, an incremental update, or no messages for this run.
+func WithSessionContextSource(
+	name string,
+	fn SessionContextSourceFunc,
+) RunOption {
+	return func(opts *RunOptions) {
+		if fn == nil {
+			return
+		}
+		opts.SessionContextSources = append(
+			opts.SessionContextSources,
+			SessionContextSource{Name: name, Func: fn},
+		)
+	}
+}
+
 // UserMessageRewriteArgs contains stable metadata for one user message rewrite.
 type UserMessageRewriteArgs struct {
 	AppName         string
@@ -1140,6 +1309,25 @@ type RunOptions struct {
 	// near the latest user turn for this run. These messages are not persisted
 	// into session events and therefore must be provided on every run if needed.
 	LateContextMessages []model.Message
+
+	// SessionContextMessages allows callers to persist additional context
+	// messages immediately before the current-turn user input.
+	SessionContextMessages []model.Message
+
+	// SessionContextMessageFuncs build additional context messages that are
+	// persisted immediately before the current-turn user input.
+	SessionContextMessageFuncs []SessionContextMessagesFunc
+	// sessionContextMessageFuncsInOrder preserves RunOption registration order
+	// across static session-context messages and function builders.
+	sessionContextMessageFuncsInOrder []SessionContextMessagesFunc
+	// trackedSessionContextMessages counts SessionContextMessages already
+	// represented in sessionContextMessageFuncsInOrder.
+	trackedSessionContextMessages int
+
+	// SessionContextSources build durable context updates from source-owned
+	// previous state and persist any returned messages before the current-turn
+	// user input.
+	SessionContextSources []SessionContextSource
 
 	// UserMessageRewriter rewrites the current-turn input into an ordered
 	// message sequence before runner persists it into the session transcript.
