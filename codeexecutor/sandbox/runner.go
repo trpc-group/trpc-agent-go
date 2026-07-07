@@ -60,7 +60,8 @@ func (r *Runtime) runProgram(
 	start := time.Now()
 	env := r.buildEnvironment(ws, spec)
 	diagnostics := sandboxDenialRun{}
-	if diagnosticsCh != nil && r.ensureDenialMonitor() == nil {
+	if diagnosticsCh != nil && prep.profile.enforcement() == enforcementManaged &&
+		r.ensureDenialMonitor() == nil {
 		diagnostics = r.sandboxDenialRunForCollecting(prep.profile)
 	}
 	cmd, backendName, cleanup, err := r.commandForProfile(
