@@ -67,7 +67,7 @@ func toolResultRunInputFromMessages(messages []model.Message) (*runInputMessages
 		if msg.ToolID == "" {
 			return nil, errors.New(errToolMessageMissingID)
 		}
-		if msg.Content == "" && len(msg.ContentParts) > 0 {
+		if len(msg.ContentParts) > 0 {
 			return nil, fmt.Errorf("%s: multimodal tool results are not supported", errToolMessageNotString)
 		}
 		toolMessages = append(toolMessages, msg)

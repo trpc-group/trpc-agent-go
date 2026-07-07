@@ -142,6 +142,28 @@ func TestRunInputFromMessages_RejectsMultimodalToolResult(t *testing.T) {
 	assert.ErrorContains(t, err, errToolMessageNotString)
 }
 
+func TestRunInputFromMessages_RejectsMixedTextAndContentPartsToolResult(t *testing.T) {
+	text := "image caption"
+	messages := []model.Message{
+		{Role: model.RoleAssistant, Content: "calling tools"},
+		{
+			Role:    model.RoleTool,
+			ToolID:  "call-1",
+			Content: "result text",
+			ContentParts: []model.ContentPart{
+				{Type: model.ContentTypeImage, Image: &model.Image{URL: "https://example.com/a.png"}},
+				{Type: model.ContentTypeText, Text: &text},
+			},
+		},
+	}
+
+	got, err := runInputFromMessages(messages)
+
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.ErrorContains(t, err, errToolMessageNotString)
+}
+
 func TestWithToolResultMessageRewriter_MergesParallelResults(t *testing.T) {
 	toolMessages := []model.Message{
 		{Role: model.RoleTool, ToolID: "call-1", ToolName: "search", Content: "result 1"},
