@@ -70,15 +70,17 @@ func TestModelCallBudgetIterModel_NoBudgetPassesThrough(t *testing.T) {
 	require.EqualValues(t, 1, underlying.iterCallCount())
 }
 
-func TestModelCallBudgetModel_UsesInvocationRuntimeState(t *testing.T) {
+func TestModelCallBudgetModel_UsesInvocationRuntimeStateFactory(
+	t *testing.T,
+) {
 	t.Parallel()
 
 	underlying := &countingBudgetModel{}
 	wrapped := newModelCallBudgetModel(underlying)
-	budget := newModelCallBudget(1)
+	factory := newModelCallBudgetFactory(1, false)
 	inv := agent.NewInvocation(agent.WithInvocationRunOptions(
 		agent.NewRunOptions(agent.MergeRuntimeState(map[string]any{
-			modelCallBudgetRuntimeStateKey: budget,
+			modelCallBudgetRuntimeStateKey: factory,
 		})),
 	))
 	ctx := agent.NewInvocationContext(context.Background(), inv)
@@ -373,19 +375,32 @@ func TestBuildModelCallBudgetRunOptionResolverInjectsBudget(
 	require.NoError(t, err)
 	require.Len(t, runOpts, 1)
 
-	budget := modelCallBudgetFromContext(ctx)
-	require.NotNil(t, budget)
+	require.Nil(t, modelCallBudgetFromContext(ctx))
 
 	opts := agent.NewRunOptions(runOpts...)
-	stateBudget, ok := opts.RuntimeState[modelCallBudgetRuntimeStateKey].(*modelCallBudget)
+	rawFactory := opts.RuntimeState[modelCallBudgetRuntimeStateKey]
+	factory, ok := rawFactory.(*modelCallBudgetFactory)
 	require.True(t, ok)
-	require.Same(t, budget, stateBudget)
+	require.NotNil(t, factory)
 
 	underlying := &countingBudgetModel{}
 	wrapped := newModelCallBudgetModel(underlying)
-	_, err = wrapped.GenerateContent(ctx, &model.Request{})
+	parent := agent.NewInvocation(
+		agent.WithInvocationID("parent"),
+		agent.WithInvocationRunOptions(opts),
+	)
+	parentCtx := agent.NewInvocationContext(context.Background(), parent)
+	child := parent.Clone(agent.WithInvocationID("child"))
+	childCtx := agent.NewInvocationContext(context.Background(), child)
+
+	_, err = wrapped.GenerateContent(parentCtx, &model.Request{})
 	require.NoError(t, err)
-	_, err = wrapped.GenerateContent(ctx, &model.Request{})
+	_, err = wrapped.GenerateContent(parentCtx, &model.Request{})
 	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
-	require.EqualValues(t, 1, underlying.callCount())
+
+	_, err = wrapped.GenerateContent(childCtx, &model.Request{})
+	require.NoError(t, err)
+	_, err = wrapped.GenerateContent(childCtx, &model.Request{})
+	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
+	require.EqualValues(t, 2, underlying.callCount())
 }
