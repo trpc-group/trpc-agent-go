@@ -4863,12 +4863,15 @@ func TestNewModel_OpenAIGLMPreservesNonTextContentByDefault(t *testing.T) {
 }
 
 func TestNewModel_OpenAITimeout(t *testing.T) {
+	release := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-release:
 			return
 		case <-time.After(5 * time.Second):
 		}
@@ -4885,7 +4888,11 @@ func TestNewModel_OpenAITimeout(t *testing.T) {
 			}]
 		}`))
 	}))
-	defer server.Close()
+	defer func() {
+		server.CloseClientConnections()
+		server.Close()
+	}()
+	defer close(release)
 
 	t.Setenv("OPENAI_API_KEY", "test-key")
 	mdl, err := modelFromOptions(runOptions{

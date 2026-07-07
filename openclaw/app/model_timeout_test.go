@@ -115,6 +115,28 @@ func TestModelTimeoutModel_StopsBlockedStream(t *testing.T) {
 	require.Contains(t, resp.Error.Message, "model request timeout")
 }
 
+func TestModelTimeoutModel_DeliversTimeoutAfterQueuedResponses(t *testing.T) {
+	t.Parallel()
+
+	underlying := newQueuedThenBlockingStreamModel()
+	wrapped := newModelTimeoutModel(underlying, 10*time.Millisecond)
+	defer close(underlying.release)
+
+	ch, err := wrapped.GenerateContent(context.Background(), &model.Request{})
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+	resp := readResponse(t, ch)
+	require.Equal(t, "partial-1", resp.Choices[0].Message.Content)
+
+	resp = readResponse(t, ch)
+	require.Equal(t, "partial-2", resp.Choices[0].Message.Content)
+
+	timeout := readTimeoutResponse(t, ch)
+	require.Equal(t, model.ErrorTypeCancelled, timeout.Error.Type)
+	require.Contains(t, timeout.Error.Message, "model request timeout")
+}
+
 func TestModelTimeoutIterModel_StopsBlockedCreation(t *testing.T) {
 	t.Parallel()
 
@@ -329,6 +351,37 @@ func (m *blockingStreamModel) GenerateContent(
 	*model.Request,
 ) (<-chan *model.Response, error) {
 	ch := make(chan *model.Response)
+	go func() {
+		defer close(ch)
+		<-m.release
+	}()
+	return ch, nil
+}
+
+type queuedThenBlockingStreamModel struct {
+	timeoutImmediateModel
+	release chan struct{}
+}
+
+func newQueuedThenBlockingStreamModel() *queuedThenBlockingStreamModel {
+	return &queuedThenBlockingStreamModel{release: make(chan struct{})}
+}
+
+func (m *queuedThenBlockingStreamModel) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	ch := make(chan *model.Response, 2)
+	ch <- &model.Response{
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("partial-1"),
+		}},
+	}
+	ch <- &model.Response{
+		Choices: []model.Choice{{
+			Message: model.NewAssistantMessage("partial-2"),
+		}},
+	}
 	go func() {
 		defer close(ch)
 		<-m.release

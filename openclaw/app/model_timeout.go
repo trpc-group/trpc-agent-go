@@ -84,7 +84,7 @@ func (m *modelTimeoutModel) forwardResponses(
 	cancel context.CancelFunc,
 	ch <-chan *model.Response,
 ) <-chan *model.Response {
-	out := make(chan *model.Response, 1)
+	out := make(chan *model.Response, 2)
 	go func() {
 		defer close(out)
 		defer cancel()
@@ -205,10 +205,7 @@ func sendTimeoutResponse(
 	timeout time.Duration,
 	err error,
 ) {
-	select {
-	case ch <- timeoutResponse(timeout, err):
-	default:
-	}
+	ch <- timeoutResponse(timeout, err)
 }
 
 func timeoutResponse(
