@@ -119,6 +119,13 @@ func WithInvocationMemoryService(memoryService memory.Service) InvocationOptions
 	}
 }
 
+// WithInvocationMemoryReader set memoryReader for the Invocation.
+func WithInvocationMemoryReader(memoryReader memory.Reader) InvocationOptions {
+	return func(inv *Invocation) {
+		inv.MemoryReader = memoryReader
+	}
+}
+
 // WithInvocationArtifactService set artifactService for the Invocation.
 func WithInvocationArtifactService(artifactService artifact.Service) InvocationOptions {
 	return func(inv *Invocation) {

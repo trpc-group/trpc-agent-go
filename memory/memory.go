@@ -152,8 +152,23 @@ func ResolveSearchOptions(
 	return o
 }
 
+// Reader defines read-only memory operations.
+type Reader interface {
+	// ReadMemories reads memories for a user.
+	ReadMemories(ctx context.Context, userKey UserKey,
+		limit int) ([]*Entry, error)
+
+	// SearchMemories searches memories for a user.
+	// Options may include WithSearchOptions for advanced
+	// filtering (kind, time range, hybrid search, etc.).
+	SearchMemories(ctx context.Context, userKey UserKey,
+		query string, opts ...SearchOption) ([]*Entry, error)
+}
+
 // Service defines the interface for memory service operations.
 type Service interface {
+	Reader
+
 	// AddMemory adds or updates a memory for a user (idempotent).
 	// Options may include WithMetadata for episodic metadata.
 	AddMemory(ctx context.Context, userKey UserKey, memory string,
@@ -170,16 +185,6 @@ type Service interface {
 
 	// ClearMemories clears all memories for a user.
 	ClearMemories(ctx context.Context, userKey UserKey) error
-
-	// ReadMemories reads memories for a user.
-	ReadMemories(ctx context.Context, userKey UserKey,
-		limit int) ([]*Entry, error)
-
-	// SearchMemories searches memories for a user.
-	// Options may include WithSearchOptions for advanced
-	// filtering (kind, time range, hybrid search, etc.).
-	SearchMemories(ctx context.Context, userKey UserKey,
-		query string, opts ...SearchOption) ([]*Entry, error)
 
 	// Tools returns the list of available memory tools.
 	Tools() []tool.Tool

@@ -378,6 +378,11 @@ func (a *candidateSelectorAgent) newAttemptInvocation(
 	attemptSession *session.Session,
 	attemptService session.Service,
 ) *agent.Invocation {
+	readOnlyMemoryService := newReadOnlyMemoryService(base.MemoryService)
+	memoryReader := base.MemoryReader
+	if readOnlyMemoryService != nil {
+		memoryReader = readOnlyMemoryService
+	}
 	opts := []agent.InvocationOptions{
 		agent.WithInvocationAgent(a.inner),
 		agent.WithInvocationBranch(base.Branch),
@@ -388,7 +393,8 @@ func (a *candidateSelectorAgent) newAttemptInvocation(
 		agent.WithInvocationModel(base.Model),
 		agent.WithInvocationStructuredOutput(base.StructuredOutput),
 		agent.WithInvocationStructuredOutputType(base.StructuredOutputType),
-		agent.WithInvocationMemoryService(newReadOnlyMemoryService(base.MemoryService)),
+		agent.WithInvocationMemoryService(readOnlyMemoryService),
+		agent.WithInvocationMemoryReader(memoryReader),
 		agent.WithInvocationArtifactService(newReadOnlyArtifactService(base.ArtifactService)),
 		agent.WithInvocationPlugins(base.Plugins),
 		agent.WithInvocationEventFilterKey(base.GetEventFilterKey()),

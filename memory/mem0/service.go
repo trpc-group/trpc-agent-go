@@ -23,6 +23,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+var (
+	_ session.Ingestor = (*Service)(nil)
+	_ memory.Reader    = (*Service)(nil)
+)
+
 // Service provides an ingest-first integration with mem0.
 type Service struct {
 	opts serviceOpts

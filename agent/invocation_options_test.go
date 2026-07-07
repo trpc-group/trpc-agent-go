@@ -402,6 +402,16 @@ func TestWithInvocationMemoryService(t *testing.T) {
 	assert.Equal(t, mockMemoryService, inv.MemoryService)
 }
 
+func TestWithInvocationMemoryReader(t *testing.T) {
+	mockMemoryReader := &mockMemoryService{}
+
+	inv := NewInvocation(
+		WithInvocationMemoryReader(mockMemoryReader),
+	)
+	require.NotNil(t, inv)
+	assert.Equal(t, mockMemoryReader, inv.MemoryReader)
+}
+
 func TestWithInvocationArtifactService(t *testing.T) {
 	mockArtifactService := &mockArtifactService{}
 
