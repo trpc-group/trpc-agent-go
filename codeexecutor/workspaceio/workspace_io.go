@@ -134,9 +134,6 @@ func New(
 	exec codeexecutor.CodeExecutor,
 	reg *codeexecutor.WorkspaceRegistry,
 ) *Workspace {
-	if reg == nil {
-		return NewWithAcquirer(exec, nil)
-	}
 	return NewWithAcquirer(exec, reg)
 }
 

@@ -194,21 +194,20 @@ func NewKillSessionTool(exec *ExecTool) *KillSessionTool {
 func WithWorkspaceRegistry(
 	reg *codeexecutor.WorkspaceRegistry,
 ) func(*ExecTool) {
-	if reg == nil {
-		return WithWorkspaceAcquirer(nil)
-	}
 	return WithWorkspaceAcquirer(reg)
 }
 
 // WithWorkspaceAcquirer is the interface-based form of WithWorkspaceRegistry.
 // Pass a custom codeexecutor.WorkspaceAcquirer (for example a shared,
 // distributed registry) so workspace_exec resolves session workspaces through
-// it instead of the default in-memory registry.
+// it instead of the default in-memory registry. A typed-nil acquirer is
+// normalized to a true nil so the default registry is used instead of
+// panicking.
 func WithWorkspaceAcquirer(
 	reg codeexecutor.WorkspaceAcquirer,
 ) func(*ExecTool) {
 	return func(t *ExecTool) {
-		t.reg = reg
+		t.reg = workspacesession.NormalizeAcquirer(reg)
 	}
 }
 

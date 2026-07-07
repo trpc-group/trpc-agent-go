@@ -217,3 +217,10 @@ func TestWithWorkspaceRegistry_TypedNilStaysNil(t *testing.T) {
 	// which would also accept a typed-nil wrapper).
 	require.True(t, tl.reg == nil)
 }
+
+func TestWithWorkspaceAcquirer_TypedNilStaysNil(t *testing.T) {
+	var reg *codeexecutor.WorkspaceRegistry
+	tl := &ExecTool{}
+	WithWorkspaceAcquirer(reg)(tl)
+	require.True(t, tl.reg == nil)
+}

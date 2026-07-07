@@ -32,7 +32,7 @@ func NewResolver(
 	exec codeexecutor.CodeExecutor,
 	reg codeexecutor.WorkspaceAcquirer,
 ) *Resolver {
-	if reg == nil {
+	if reg = NormalizeAcquirer(reg); reg == nil {
 		reg = codeexecutor.NewWorkspaceRegistry()
 	}
 	return &Resolver{
