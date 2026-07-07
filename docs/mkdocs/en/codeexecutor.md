@@ -998,7 +998,7 @@ agent := llmagent.New(
     llmagent.WithCodeExecutor(container.New()),
     // shared implements codeexecutor.WorkspaceAcquirer, backed by a store
     // your application owns.
-    llmagent.WithWorkspaceRegistry(shared),
+    llmagent.WithWorkspaceAcquirer(shared),
 )
 ```
 

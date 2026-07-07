@@ -221,6 +221,19 @@ func WithRequireSkillLoaded(enable bool) func(*RunTool) {
 // WithWorkspaceRegistry reuses a caller-provided workspace registry so
 // skill_run can share the same invocation workspace with other tools.
 func WithWorkspaceRegistry(
+	reg *codeexecutor.WorkspaceRegistry,
+) func(*RunTool) {
+	if reg == nil {
+		return WithWorkspaceAcquirer(nil)
+	}
+	return WithWorkspaceAcquirer(reg)
+}
+
+// WithWorkspaceAcquirer is the interface-based form of WithWorkspaceRegistry.
+// Pass a custom codeexecutor.WorkspaceAcquirer (for example a shared,
+// distributed registry) so skill_run resolves session workspaces through it
+// instead of the default in-memory registry.
+func WithWorkspaceAcquirer(
 	reg codeexecutor.WorkspaceAcquirer,
 ) func(*RunTool) {
 	return func(t *RunTool) {

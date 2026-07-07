@@ -132,6 +132,20 @@ type Workspace struct {
 // configured" without a panic.
 func New(
 	exec codeexecutor.CodeExecutor,
+	reg *codeexecutor.WorkspaceRegistry,
+) *Workspace {
+	if reg == nil {
+		return NewWithAcquirer(exec, nil)
+	}
+	return NewWithAcquirer(exec, reg)
+}
+
+// NewWithAcquirer is the interface-based form of New. Pass a custom
+// codeexecutor.WorkspaceAcquirer to resolve session workspaces through it
+// instead of the default in-memory registry. Like New, it returns nil when
+// exec is nil.
+func NewWithAcquirer(
+	exec codeexecutor.CodeExecutor,
 	reg codeexecutor.WorkspaceAcquirer,
 ) *Workspace {
 	if exec == nil {

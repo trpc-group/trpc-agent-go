@@ -913,7 +913,7 @@ agent := llmagent.New(
     llmagent.WithModel(m),
     llmagent.WithCodeExecutor(container.New()),
     // shared 实现了 codeexecutor.WorkspaceAcquirer，其后端存储由你的应用维护。
-    llmagent.WithWorkspaceRegistry(shared),
+    llmagent.WithWorkspaceAcquirer(shared),
 )
 ```
 

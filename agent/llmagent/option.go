@@ -574,11 +574,11 @@ type Options struct {
 	// commands run. When non-empty it is converted into a Provider
 	// and attached to workspace_exec.
 	workspaceBootstrap codeexecutor.WorkspaceBootstrapSpec
-	// workspaceRegistry, when set, resolves session workspaces for
+	// workspaceAcquirer, when set, resolves session workspaces for
 	// skill_run and workspace_exec instead of the default in-memory
 	// registry. Supply a shared implementation to make several agent
 	// instances resolve the same session id to the same workspace.
-	workspaceRegistry codeexecutor.WorkspaceAcquirer
+	workspaceAcquirer codeexecutor.WorkspaceAcquirer
 	// disableWorkspacePreparers keeps workspace_exec on the legacy
 	// StageConversationFiles-only path even when a skills repo or
 	// bootstrap spec is configured. Useful for tests and for users
@@ -1386,7 +1386,7 @@ func WithWorkspaceBootstrap(
 	}
 }
 
-// WithWorkspaceRegistry supplies the registry used to resolve session
+// WithWorkspaceAcquirer supplies the registry used to resolve session
 // workspaces for skill_run and workspace_exec. By default the agent uses a
 // process-local in-memory registry, which is enough for a single instance.
 //
@@ -1396,11 +1396,11 @@ func WithWorkspaceBootstrap(
 // handles them. The supplied registry owns its cross-instance coordination;
 // the executor backend must still make the resolved workspace reachable from
 // the handling instance.
-func WithWorkspaceRegistry(
+func WithWorkspaceAcquirer(
 	reg codeexecutor.WorkspaceAcquirer,
 ) Option {
 	return func(opts *Options) {
-		opts.workspaceRegistry = reg
+		opts.workspaceAcquirer = reg
 	}
 }
 

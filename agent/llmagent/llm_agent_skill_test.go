@@ -524,11 +524,11 @@ func (f *fakeAcquirer) Acquire(
 	return f.inner.Acquire(ctx, m, id)
 }
 
-func TestWithWorkspaceRegistry_UsesSuppliedAcquirer(t *testing.T) {
+func TestWithWorkspaceAcquirer_UsesSuppliedAcquirer(t *testing.T) {
 	exec := &stubExec{}
 	custom := &fakeAcquirer{inner: codeexecutor.NewWorkspaceRegistry()}
 
-	a := New("tester", WithCodeExecutor(exec), WithWorkspaceRegistry(custom))
+	a := New("tester", WithCodeExecutor(exec), WithWorkspaceAcquirer(custom))
 	require.Same(t, custom, a.workspaceRegistry)
 
 	inv := agent.NewInvocation(
@@ -542,12 +542,12 @@ func TestWithWorkspaceRegistry_UsesSuppliedAcquirer(t *testing.T) {
 	require.NotSame(t, noSession1, noSession2)
 }
 
-func TestWithWorkspaceRegistry_AcquireInvokedDuringRun(t *testing.T) {
+func TestWithWorkspaceAcquirer_AcquireInvokedDuringRun(t *testing.T) {
 	custom := &fakeAcquirer{inner: codeexecutor.NewWorkspaceRegistry()}
 	a := New(
 		"tester",
 		WithCodeExecutor(localexec.New()),
-		WithWorkspaceRegistry(custom),
+		WithWorkspaceAcquirer(custom),
 	)
 
 	inv := agent.NewInvocation(

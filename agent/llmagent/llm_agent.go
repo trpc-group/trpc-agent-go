@@ -812,7 +812,7 @@ func registerTools(
 	var runTool *toolskill.RunTool
 	workspaceRegistry := existingReg
 	if workspaceRegistry == nil {
-		workspaceRegistry = options.workspaceRegistry
+		workspaceRegistry = options.workspaceAcquirer
 	}
 	if options.skillsRepository != nil {
 		if options.codeExecutor != nil && workspaceRegistry == nil {
@@ -1128,7 +1128,7 @@ func appendWorkspaceExecToolWithExecutor(
 		return allTools
 	}
 	toolOpts := []func(*toolworkspaceexec.ExecTool){
-		toolworkspaceexec.WithWorkspaceRegistry(reg),
+		toolworkspaceexec.WithWorkspaceAcquirer(reg),
 	}
 	toolOpts = append(
 		toolOpts,
@@ -1276,8 +1276,8 @@ func (a *LLMAgent) workspaceRegistryForInvocation(
 	if inv == nil || inv.Session == nil || inv.Session.ID == "" {
 		return buildWorkspaceRegistry()
 	}
-	if a.option.workspaceRegistry != nil {
-		return a.option.workspaceRegistry
+	if a.option.workspaceAcquirer != nil {
+		return a.option.workspaceAcquirer
 	}
 	if reg, ok := a.ensureWorkspaceRegistryForExecutor(exec); ok {
 		return reg
@@ -1384,7 +1384,7 @@ func buildSkillRunToolWithRepo(
 		)
 	}
 	if reg != nil {
-		runOpts = append(runOpts, toolskill.WithWorkspaceRegistry(reg))
+		runOpts = append(runOpts, toolskill.WithWorkspaceAcquirer(reg))
 	}
 
 	return toolskill.NewRunTool(
@@ -1712,7 +1712,7 @@ func (a *LLMAgent) withWorkspace(
 		return ctx
 	}
 	reg := a.workspaceRegistryForInvocation(inv, exec)
-	ws := workspaceio.New(exec, reg)
+	ws := workspaceio.NewWithAcquirer(exec, reg)
 	return workspaceio.WithWorkspace(ctx, ws)
 }
 
