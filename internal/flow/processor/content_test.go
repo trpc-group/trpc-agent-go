@@ -857,6 +857,67 @@ func TestContentRequestProcessor_ImageURLFailureContinuationKeepsCurrentInput(
 	assert.Equal(t, imageURL, messages[1].ContentParts[0].Image.URL)
 }
 
+func TestContentRequestProcessor_ImageURLFailureContinuationKeepsProjectedCurrentInput(
+	t *testing.T,
+) {
+	const (
+		imageURL     = "https://example.invalid/image.png"
+		invocationID = "current-invocation-id"
+		requestID    = "current-request-id"
+	)
+	current := model.NewUserMessage("look at this")
+	current.AddImageURL(imageURL, "auto")
+	currentEvent := event.NewResponseEvent(
+		invocationID,
+		"user",
+		&model.Response{
+			Choices: []model.Choice{{Message: current}},
+		},
+	)
+	currentEvent.RequestID = requestID
+	sess := &session.Session{Events: []event.Event{*currentEvent}}
+	markingInv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(current),
+	)
+	markingInv.InvocationID = invocationID
+	markingInv.RunOptions.RequestID = requestID
+	_, err := imageinput.MarkUnavailableImageURLsFromRequest(
+		context.Background(),
+		markingInv,
+		&model.Request{Messages: []model.Message{current}},
+		assert.AnError,
+		nil,
+	)
+	require.NoError(t, err)
+
+	projector := func(
+		_ *agent.Invocation,
+		_ event.Event,
+		msg model.Message,
+	) model.Message {
+		msg.Content = "Projected: " + msg.Content
+		return msg
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationSession(sess),
+		agent.WithInvocationMessage(current),
+	)
+	inv.InvocationID = invocationID
+	inv.RunOptions.RequestID = requestID
+	p := NewContentRequestProcessor(
+		WithImageURLFailureContinuation(true),
+		WithEventMessageProjector(projector),
+	)
+	messages := p.getIncrementMessages(inv, time.Time{})
+
+	require.Len(t, messages, 1)
+	assert.Equal(t, "Projected: look at this", messages[0].Content)
+	require.Len(t, messages[0].ContentParts, 1)
+	assert.Equal(t, model.ContentTypeImage, messages[0].ContentParts[0].Type)
+	assert.Equal(t, imageURL, messages[0].ContentParts[0].Image.URL)
+}
+
 func TestContentRequestProcessor_ImageURLFailureContinuationCanBeDisabled(
 	t *testing.T,
 ) {

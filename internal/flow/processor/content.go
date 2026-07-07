@@ -1932,12 +1932,17 @@ func (p *ContentRequestProcessor) projectEventMessage(
 	if p == nil {
 		return msg
 	}
+	isCurrentInvocationMessage := isCurrentInvocationMessageProjection(
+		evt,
+		inv,
+		msg,
+	)
 	if p.EventMessageProjector != nil {
 		msg = p.EventMessageProjector(inv, evt, msg)
 	}
 	if p.ImageURLFailureContinuation &&
 		inv != nil &&
-		!isCurrentInvocationMessageProjection(evt, inv, msg) {
+		!isCurrentInvocationMessage {
 		msg = imageinput.ProjectUnavailableImageURLs(
 			inv.Session,
 			evt,
