@@ -14,15 +14,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	gormio "gorm.io/gorm"
+)
+
+var (
+	registryMu   sync.RWMutex
+	gormRegistry map[string][]ClientBuilderOpt
+
+	builderMu     sync.RWMutex
+	globalBuilder clientBuilder = defaultClientBuilder
 )
 
 func init() {
 	gormRegistry = make(map[string][]ClientBuilderOpt)
 }
-
-var gormRegistry map[string][]ClientBuilderOpt
 
 // Client exposes a shared *gorm.DB handle and lifecycle management.
 type Client interface {
@@ -56,15 +63,17 @@ func (c *gormClient) Close() error {
 
 type clientBuilder func(ctx context.Context, builderOpts ...ClientBuilderOpt) (Client, error)
 
-var globalBuilder clientBuilder = defaultClientBuilder
-
 // SetClientBuilder sets the GORM client builder.
 func SetClientBuilder(builder clientBuilder) {
+	builderMu.Lock()
+	defer builderMu.Unlock()
 	globalBuilder = builder
 }
 
 // GetClientBuilder gets the GORM client builder.
 func GetClientBuilder() clientBuilder {
+	builderMu.RLock()
+	defer builderMu.RUnlock()
 	return globalBuilder
 }
 
@@ -153,11 +162,20 @@ func WithExtraOptions(extraOptions ...any) ClientBuilderOpt {
 
 // RegisterGormInstance registers a named GORM instance.
 func RegisterGormInstance(name string, opts ...ClientBuilderOpt) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	gormRegistry[name] = append(gormRegistry[name], opts...)
 }
 
 // GetGormInstance returns builder options for a registered instance.
 func GetGormInstance(name string) ([]ClientBuilderOpt, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	opts, ok := gormRegistry[name]
-	return opts, ok
+	if !ok {
+		return nil, false
+	}
+	copyOpts := make([]ClientBuilderOpt, len(opts))
+	copy(copyOpts, opts)
+	return copyOpts, true
 }
