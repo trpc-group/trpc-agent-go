@@ -53,10 +53,10 @@ const (
 	relativePathGuidance        = "Use a relative path under " +
 		"base_directory. If exec_command wrote an absolute temp " +
 		"path, fs_read_file can read it only when that path is " +
-		"under a configured read-only root; otherwise have " +
-		"exec_command print the needed data directly."
+		"under base_directory or a configured read-only root; " +
+		"otherwise have exec_command print the needed data directly."
 	extraReadRootGuidance = "Absolute paths are readable only when " +
-		"they are under a configured read-only root."
+		"they are under base_directory or a configured read-only root."
 	missingFileRecoveryGuidance = "Use " +
 		missingFileListToolName + " or " +
 		missingFileSearchToolName +
@@ -304,8 +304,8 @@ func (f *fileToolSet) resolveReadPath(requestPath string) (string, error) {
 		return clean, nil
 	}
 	return "", fmt.Errorf(
-		"invalid path - absolute path is outside configured "+
-			"read-only roots: %s. %s %s",
+		"invalid path - absolute path is outside base_directory "+
+			"and configured read-only roots: %s. %s %s",
 		requestPath,
 		extraReadRootGuidance,
 		relativePathGuidance,

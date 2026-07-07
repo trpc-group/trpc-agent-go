@@ -245,7 +245,7 @@ func TestReadMultipleFiles_BlocksSymlinkEscapeFromExtraReadRoot(t *testing.T) {
 	assert.Contains(
 		t,
 		rsp.Files[0].Message,
-		"outside configured read-only roots",
+		"outside base_directory and configured read-only roots",
 	)
 }
 

@@ -75,7 +75,7 @@ func TestFileTool_ReadFile_AbsolutePathUnderExtraReadRoot(t *testing.T) {
 		&readFileRequest{FileName: filepath.Join(t.TempDir(), "x.txt")},
 	)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "outside configured read-only roots")
+	assert.Contains(t, err.Error(), "outside base_directory and configured read-only roots")
 }
 
 func TestFileTool_ReadFile_AbsolutePathUnderBaseDir(t *testing.T) {
@@ -120,7 +120,7 @@ func TestFileTool_ReadFile_BlocksSymlinkEscapeFromExtraReadRoot(t *testing.T) {
 	)
 	assert.Error(t, err)
 	assert.Empty(t, rsp.Contents)
-	assert.Contains(t, err.Error(), "outside configured read-only roots")
+	assert.Contains(t, err.Error(), "outside base_directory and configured read-only roots")
 }
 
 func TestFileTool_ReadFile_BlocksSymlinkEscapeFromBaseDir(t *testing.T) {
@@ -144,7 +144,7 @@ func TestFileTool_ReadFile_BlocksSymlinkEscapeFromBaseDir(t *testing.T) {
 	)
 	assert.Error(t, err)
 	assert.Empty(t, rsp.Contents)
-	assert.Contains(t, err.Error(), "outside configured read-only roots")
+	assert.Contains(t, err.Error(), "outside base_directory and configured read-only roots")
 }
 
 func TestFileTool_ReadFile_NilRequest(t *testing.T) {
