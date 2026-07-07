@@ -2295,6 +2295,14 @@ existing tool wins; the external declaration does not override or intercept it.
 This includes tools registered on the Agent and tools added with
 `WithAdditionalTools`.
 
+The `server/openai` adapter only implements `tool_choice: "none"` (skip
+exposing tools to the model) and `tool_choice: "auto"` or an omitted value
+(let the model decide, which is the only behavior the adapter can offer since
+it never executes tools itself). `tool_choice: "required"` and forced-function
+tool choice (`{"type":"function","function":{"name":"..."}}`) are rejected
+with an HTTP 400 when the request also includes `tools`, instead of being
+silently treated as `"auto"`.
+
 **Complete example:** `examples/toolinterrupt/`
 
 ```go

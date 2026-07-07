@@ -1710,6 +1710,77 @@ func TestServer_handleNonStreaming_SkipsExternalToolsWhenToolChoiceNone(t *testi
 	assert.Empty(t, runner.gotOpts.ExternalTools)
 }
 
+func TestServer_handleNonStreaming_RejectsRequiredToolChoice(t *testing.T) {
+	runner := &mockRunnerCapturing{events: newToolCallEventsNonStreaming(t)}
+	s, err := New(WithRunner(runner))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{Role: "user", Content: "search for go"},
+		},
+		ToolChoice: "required",
+		Tools: []openAITool{
+			{
+				Type: "function",
+				Function: openAIFunction{
+					Name: "client_search",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewReader(body),
+	)
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestServer_handleNonStreaming_RejectsForcedFunctionToolChoice(t *testing.T) {
+	runner := &mockRunnerCapturing{events: newToolCallEventsNonStreaming(t)}
+	s, err := New(WithRunner(runner))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(openAIRequest{
+		Model: "gpt-3.5-turbo",
+		Messages: []openAIMessage{
+			{Role: "user", Content: "search for go"},
+		},
+		ToolChoice: map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": "client_search"},
+		},
+		Tools: []openAITool{
+			{
+				Type: "function",
+				Function: openAIFunction{
+					Name: "client_search",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewReader(body),
+	)
+	w := httptest.NewRecorder()
+
+	s.handleChatCompletions(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestServer_handleNonStreaming_ToolCallResponse(t *testing.T) {
 	runner := &mockRunnerCapturing{events: newToolCallEventsNonStreaming(t)}
 	s, err := New(WithRunner(runner))

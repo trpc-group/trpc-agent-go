@@ -27,14 +27,29 @@ const (
 	// Completions API even when tools are present in the request.
 	openAIToolChoiceNone = "none"
 
+	// openAIToolChoiceAuto lets the model decide whether to call a tool.
+	// This is the only non-"none" tool_choice semantics this adapter
+	// implements; it is also the default OpenAI behavior when tools are
+	// present and tool_choice is omitted.
+	openAIToolChoiceAuto = "auto"
+
+	// openAIToolChoiceRequired forces the model to call at least one tool.
+	// This adapter does not implement that constraint (see
+	// openAIToolChoiceRequiresUnsupportedSemantics) and rejects it instead
+	// of silently degrading to "auto".
+	openAIToolChoiceRequired = "required"
+
 	// jsonSchemaTypeObject is the default JSON Schema type used when the
 	// caller omits function.parameters.
 	jsonSchemaTypeObject = "object"
 
-	errOpenAIToolAt              = "openai tool[%d]: %s"
-	errOpenAIToolWithNameAt      = "openai tool[%d] %q: parse function.parameters: %w"
-	errOpenAIToolFunctionName    = "function.name is required"
-	errOpenAIToolUnsupportedType = "unsupported tool type %q"
+	errOpenAIToolAt                = "openai tool[%d]: %s"
+	errOpenAIToolWithNameAt        = "openai tool[%d] %q: parse function.parameters: %w"
+	errOpenAIToolFunctionName      = "function.name is required"
+	errOpenAIToolUnsupportedType   = "unsupported tool type %q"
+	errOpenAIToolChoiceUnsupported = "unsupported tool_choice %v: this server only " +
+		"supports \"none\" or \"auto\" (omitted defaults to \"auto\"); " +
+		"\"required\" and forced-function tool_choice are not implemented"
 )
 
 // appendExternalToolRunOption converts req.Tools into caller-executed tools
@@ -50,6 +65,9 @@ func appendExternalToolRunOption(
 ) ([]agent.RunOption, error) {
 	if openAIToolChoiceDisablesTools(req) {
 		return opts, nil
+	}
+	if openAIToolChoiceRequiresUnsupportedSemantics(req) {
+		return nil, fmt.Errorf(errOpenAIToolChoiceUnsupported, req.ToolChoice)
 	}
 	externalTools, err := externalToolsFromOpenAIRequest(req)
 	if err != nil {
@@ -70,6 +88,40 @@ func openAIToolChoiceDisablesTools(req *openAIRequest) bool {
 	}
 	choice, ok := req.ToolChoice.(string)
 	return ok && choice == openAIToolChoiceNone
+}
+
+// openAIToolChoiceRequiresUnsupportedSemantics reports whether req.ToolChoice
+// requests OpenAI-compatible behavior that this adapter does not implement:
+// "required" (must call at least one tool) or a forced-function object
+// (e.g. {"type":"function","function":{"name":"foo"}}). Only checked when
+// req.Tools is non-empty, since tool_choice is meaningless without tools.
+//
+// The adapter exposes request tools to the model via WithExternalTools and
+// always lets the model freely decide whether to call one, which matches
+// "auto" but not "required" or a forced function. Rather than silently
+// treating those unsupported values as "auto" — which could make a caller
+// relying on forced tool selection believe its request succeeded while
+// receiving a plain assistant reply instead — appendExternalToolRunOption
+// rejects them with an error that the server surfaces as HTTP 400.
+func openAIToolChoiceRequiresUnsupportedSemantics(req *openAIRequest) bool {
+	if req == nil || req.ToolChoice == nil || len(req.Tools) == 0 {
+		return false
+	}
+	choice, ok := req.ToolChoice.(string)
+	if !ok {
+		// A non-string tool_choice is a forced-function selection object.
+		return true
+	}
+	switch choice {
+	case openAIToolChoiceNone, openAIToolChoiceAuto:
+		return false
+	case openAIToolChoiceRequired:
+		return true
+	default:
+		// Unrecognized string values are rejected the same as "required"
+		// rather than silently falling back to "auto".
+		return true
+	}
 }
 
 // externalToolsFromOpenAIRequest converts req.Tools into framework tools.

@@ -2171,6 +2171,8 @@ ch, err = r.Run(ctx, userID, sessionID, toolMsg,
 工具的场景。AG-UI runner 默认会把请求里的 `input.Tools` 映射为
 `WithExternalTools`；OpenAI Chat Completions adapter（`server/openai`）同样会把请求里的 `tools` 映射为 `WithExternalTools`，服务端不执行这些工具，由调用方在收到 `tool_calls` 后外部执行并用 `role=tool` 消息续聊。外部工具与已有工具同名时，已有工具优先，外部声明不会覆盖或拦截它。这里的已有工具包括 Agent 上注册的工具，以及通过 `WithAdditionalTools` 追加的工具。
 
+`server/openai` adapter 目前只实现了 `tool_choice: "none"`（不把 tools 暴露给模型）和 `tool_choice: "auto"` 或省略该字段（由模型自行决定，这也是该 adapter 能提供的唯一行为，因为它自身从不执行工具）。当请求同时带有 `tools` 时，`tool_choice: "required"` 以及强制指定函数的写法（`{"type":"function","function":{"name":"..."}}`）会被拒绝并返回 HTTP 400，而不会被静默当作 `"auto"` 处理。
+
 **完整示例：** `examples/toolinterrupt/`
 
 ```go

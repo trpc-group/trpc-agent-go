@@ -279,3 +279,101 @@ func TestOpenAIToolChoiceDisablesTools(t *testing.T) {
 	assert.True(t, openAIToolChoiceDisablesTools(&openAIRequest{ToolChoice: openAIToolChoiceNone}))
 	assert.False(t, openAIToolChoiceDisablesTools(&openAIRequest{ToolChoice: 0}))
 }
+
+func oneOpenAITool() []openAITool {
+	return []openAITool{
+		{Type: "function", Function: openAIFunction{Name: "client_search"}},
+	}
+}
+
+func TestOpenAIToolChoiceRequiresUnsupportedSemantics(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *openAIRequest
+		want bool
+	}{
+		{"nil request", nil, false},
+		{"no tool_choice, no tools", &openAIRequest{}, false},
+		{"no tool_choice, with tools", &openAIRequest{Tools: oneOpenAITool()}, false},
+		{
+			"none with no tools",
+			&openAIRequest{ToolChoice: openAIToolChoiceNone},
+			false,
+		},
+		{
+			"none with tools",
+			&openAIRequest{ToolChoice: openAIToolChoiceNone, Tools: oneOpenAITool()},
+			false,
+		},
+		{
+			"auto with tools",
+			&openAIRequest{ToolChoice: openAIToolChoiceAuto, Tools: oneOpenAITool()},
+			false,
+		},
+		{
+			"required with no tools",
+			&openAIRequest{ToolChoice: openAIToolChoiceRequired},
+			false,
+		},
+		{
+			"required with tools",
+			&openAIRequest{ToolChoice: openAIToolChoiceRequired, Tools: oneOpenAITool()},
+			true,
+		},
+		{
+			"unrecognized string with tools",
+			&openAIRequest{ToolChoice: "bogus", Tools: oneOpenAITool()},
+			true,
+		},
+		{
+			"forced-function object with tools",
+			&openAIRequest{
+				ToolChoice: map[string]any{
+					"type":     "function",
+					"function": map[string]any{"name": "client_search"},
+				},
+				Tools: oneOpenAITool(),
+			},
+			true,
+		},
+		{
+			"forced-function object with no tools",
+			&openAIRequest{
+				ToolChoice: map[string]any{
+					"type":     "function",
+					"function": map[string]any{"name": "client_search"},
+				},
+			},
+			false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, openAIToolChoiceRequiresUnsupportedSemantics(tt.req))
+		})
+	}
+}
+
+func TestAppendExternalToolRunOption_RejectsRequiredToolChoice(t *testing.T) {
+	req := &openAIRequest{
+		ToolChoice: openAIToolChoiceRequired,
+		Tools:      oneOpenAITool(),
+	}
+	got, err := appendExternalToolRunOption(nil, req)
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.ErrorContains(t, err, "required")
+}
+
+func TestAppendExternalToolRunOption_RejectsForcedFunctionToolChoice(t *testing.T) {
+	req := &openAIRequest{
+		ToolChoice: map[string]any{
+			"type":     "function",
+			"function": map[string]any{"name": "client_search"},
+		},
+		Tools: oneOpenAITool(),
+	}
+	got, err := appendExternalToolRunOption(nil, req)
+	require.Error(t, err)
+	assert.Nil(t, got)
+}
