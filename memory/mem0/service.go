@@ -188,6 +188,9 @@ func (s *Service) readOSSMemories(ctx context.Context, userKey memory.UserKey, l
 	}
 	q := url.Values{}
 	q.Set(queryKeyUserID, userKey.UserID)
+	// The current OSS GET /memories API can only scope by user_id, run_id, or
+	// agent_id, not by metadata.trpc_app_name. Fetch the server-side cap and
+	// enforce app isolation locally as a best-effort view over those candidates.
 	q.Set(queryKeyTopK, itoa(maxOSSListTopK))
 
 	var batch listMemoriesResponse

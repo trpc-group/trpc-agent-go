@@ -115,10 +115,11 @@ or backfilled. For migrations, opt in with
 `WithSelfHostedOSSIncludeUnscopedMemories()` to also include records with no
 `trpc_app_name`; records tagged for another app remain hidden.
 
-The OSS `GET /memories` endpoint is capped at 1000 results and is not pageable
-in the current server API. `ReadMemories` therefore requires a positive limit no
-larger than 1000 and fetches up to that server cap before applying the app
-metadata filter locally.
+The OSS `GET /memories` endpoint is capped at 1000 user-level results and is
+not pageable in the current server API. It also cannot express
+`metadata.trpc_app_name` as a server-side filter. `ReadMemories` therefore
+requires a positive limit no larger than 1000 and applies app isolation as a
+best-effort local filter over the first 1000 OSS records returned for the user.
 
 When running the official Mem0 OSS server, configure the server-side LLM and
 embedder separately if your deployment uses different endpoints or API keys.
