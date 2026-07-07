@@ -380,9 +380,6 @@ func (a *candidateSelectorAgent) newAttemptInvocation(
 ) *agent.Invocation {
 	readOnlyMemoryService := newReadOnlyMemoryService(base.MemoryService)
 	memoryReader := base.MemoryReader
-	if readOnlyMemoryService != nil {
-		memoryReader = readOnlyMemoryService
-	}
 	opts := []agent.InvocationOptions{
 		agent.WithInvocationAgent(a.inner),
 		agent.WithInvocationBranch(base.Branch),

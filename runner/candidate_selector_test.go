@@ -74,7 +74,7 @@ func TestCandidateSelectorAgent_NewAttemptInvocationMemoryReader(t *testing.T) {
 		inner: &candidateScriptAgent{name: "candidate"},
 	}
 
-	t.Run("wraps memory service reader", func(t *testing.T) {
+	t.Run("wraps memory service and leaves reader fallback", func(t *testing.T) {
 		memSvc := &mockMemoryServiceForAutoMemory{}
 		base := agent.NewInvocation(
 			agent.WithInvocationAgent(&candidateScriptAgent{name: "base"}),
@@ -88,10 +88,10 @@ func TestCandidateSelectorAgent_NewAttemptInvocationMemoryReader(t *testing.T) {
 			sessioninmemory.NewSessionService(),
 		)
 
-		reader, ok := attempt.MemoryReader.(*readOnlyMemoryService)
+		reader, ok := attempt.MemoryService.(*readOnlyMemoryService)
 		require.True(t, ok)
 		require.Same(t, memSvc, reader.base)
-		require.Same(t, attempt.MemoryService, attempt.MemoryReader)
+		require.Nil(t, attempt.MemoryReader)
 	})
 
 	t.Run("falls back to base memory reader", func(t *testing.T) {
@@ -112,7 +112,7 @@ func TestCandidateSelectorAgent_NewAttemptInvocationMemoryReader(t *testing.T) {
 		require.Same(t, reader, attempt.MemoryReader)
 	})
 
-	t.Run("prefers wrapped memory service over explicit reader", func(t *testing.T) {
+	t.Run("preserves explicit reader with wrapped memory service", func(t *testing.T) {
 		memSvc := &mockMemoryServiceForAutoMemory{}
 		explicitReader := &mockMemoryReaderIngestor{}
 		base := agent.NewInvocation(
@@ -128,11 +128,10 @@ func TestCandidateSelectorAgent_NewAttemptInvocationMemoryReader(t *testing.T) {
 			sessioninmemory.NewSessionService(),
 		)
 
-		reader, ok := attempt.MemoryReader.(*readOnlyMemoryService)
+		reader, ok := attempt.MemoryService.(*readOnlyMemoryService)
 		require.True(t, ok)
 		require.Same(t, memSvc, reader.base)
-		require.Same(t, attempt.MemoryService, attempt.MemoryReader)
-		require.NotSame(t, explicitReader, attempt.MemoryReader)
+		require.Same(t, explicitReader, attempt.MemoryReader)
 	})
 }
 

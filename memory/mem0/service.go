@@ -170,6 +170,9 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 				entries = append(entries, entry)
 			}
 		}
+		if limit > 0 && len(entries) >= limit {
+			break
+		}
 		page++
 	}
 	sort.Slice(entries, func(i, j int) bool {
