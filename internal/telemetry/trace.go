@@ -147,6 +147,305 @@ func marshalTelemetryChoices(choices []model.Choice) ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// ChatTraceState keeps per-chat-span trace state for repeated streaming chunks.
+//
+// The state is internal to framework call paths. It reuses message-derived
+// request attributes because they dominate streaming allocations and can be
+// fingerprinted without re-marshaling the whole request.
+//
+// ChatTraceState is not goroutine-safe and must not be shared across chat spans.
+type ChatTraceState struct {
+	requestAttrs chatRequestAttributes
+}
+
+// TraceChat traces the invocation of an LLM call using reusable per-span state.
+func (s *ChatTraceState) TraceChat(span trace.Span, attributes *TraceChatAttributes) {
+	if s == nil {
+		traceChat(span, attributes, nil)
+		return
+	}
+	traceChat(span, attributes, &s.requestAttrs)
+}
+
+type chatRequestAttributes struct {
+	inputMessages     reusableAttribute
+	inputMessagesOTel reusableAttribute
+}
+
+type reusableAttribute struct {
+	valid       bool
+	fingerprint uint64
+	rule        AttributeRule
+	attrs       []attribute.KeyValue
+}
+
+func (r *chatRequestAttributes) appendTo(attrs []attribute.KeyValue, req *model.Request) []attribute.KeyValue {
+	if r == nil {
+		var requestAttrs chatRequestAttributes
+		return requestAttrs.appendTo(attrs, req)
+	}
+
+	if req == nil {
+		return attrs
+	}
+
+	attrs = append(attrs,
+		attribute.StringSlice(semconvtrace.KeyGenAIRequestStopSequences, req.GenerationConfig.Stop),
+		attribute.Int(semconvtrace.KeyGenAIRequestChoiceCount, 1),
+	)
+
+	// Add generation config attributes
+	genConfig := req.GenerationConfig
+	// Add stream attribute only when it's true
+	if genConfig.Stream {
+		attrs = append(attrs, attribute.Bool(semconvtrace.KeyGenAIRequestIsStream, true))
+	}
+	if fp := genConfig.FrequencyPenalty; fp != nil {
+		attrs = append(attrs, attribute.Float64(semconvtrace.KeyGenAIRequestFrequencyPenalty, *fp))
+	}
+	if mt := genConfig.MaxTokens; mt != nil {
+		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIRequestMaxTokens, *mt))
+	}
+	if pp := genConfig.PresencePenalty; pp != nil {
+		attrs = append(attrs, attribute.Float64(semconvtrace.KeyGenAIRequestPresencePenalty, *pp))
+	}
+	if tp := genConfig.Temperature; tp != nil {
+		attrs = append(attrs, attribute.Float64(semconvtrace.KeyGenAIRequestTemperature, *tp))
+	}
+	if tp := genConfig.TopP; tp != nil {
+		attrs = append(attrs, attribute.Float64(semconvtrace.KeyGenAIRequestTopP, *tp))
+	}
+	if te := genConfig.ThinkingEnabled; te != nil {
+		attrs = append(attrs, attribute.Bool(semconvtrace.KeyGenAIRequestThinkingEnabled, *te))
+	}
+
+	// Add request body
+	attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyLLMRequest, "<not json serializable>", func() ([]byte, error) {
+		return json.Marshal(req)
+	})
+
+	// Add tool definitions as best-effort structured array (JSON string fallback)
+	if len(req.Tools) > 0 {
+		definitions := make([]*tool.Declaration, 0, len(req.Tools))
+		for _, t := range toolorder.SortedTools(req.Tools) {
+			definitions = append(definitions, t.Declaration())
+		}
+		if len(definitions) > 0 {
+			attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIRequestToolDefinitions, "", func() ([]byte, error) {
+				return json.Marshal(definitions)
+			})
+		}
+	}
+
+	// Add messages
+	messageFingerprint := requestMessagesFingerprint(req.Messages)
+	attrs = r.appendStringAttribute(
+		attrs,
+		&r.inputMessages,
+		messageFingerprint,
+		OperationChat,
+		semconvtrace.KeyGenAIInputMessages,
+		"<not json serializable>",
+		func() ([]byte, error) {
+			return marshalTelemetryMessages(req.Messages)
+		},
+	)
+	attrs = r.appendStringAttribute(
+		attrs,
+		&r.inputMessagesOTel,
+		messageFingerprint,
+		OperationChat,
+		semconvtrace.KeyGenAIInputMessagesOTel,
+		"<not json serializable>",
+		func() ([]byte, error) {
+			return marshalOTelTelemetryMessages(req.Messages)
+		},
+	)
+
+	return attrs
+}
+
+func (r *chatRequestAttributes) appendStringAttribute(
+	attrs []attribute.KeyValue,
+	slot *reusableAttribute,
+	fingerprint uint64,
+	operation, key, notSerializable string,
+	marshal func() ([]byte, error),
+) []attribute.KeyValue {
+	rule := Resolve(operation, key)
+	if slot.valid && slot.fingerprint == fingerprint && slot.rule == rule {
+		return append(attrs, slot.attrs...)
+	}
+	before := len(attrs)
+	attrs = appendStringAttribute(attrs, operation, key, notSerializable, marshal)
+	slot.valid = true
+	slot.fingerprint = fingerprint
+	slot.rule = rule
+	slot.attrs = append(slot.attrs[:0], attrs[before:]...)
+	return attrs
+}
+
+const (
+	fnvOffset64 = 14695981039346656037
+	fnvPrime64  = 1099511628211
+)
+
+// requestMessagesFingerprint is a performance fingerprint for detecting whether
+// cached message attributes can be reused. It is not a security checksum and is
+// only valid within a single ChatTraceState lifetime.
+func requestMessagesFingerprint(messages []model.Message) uint64 {
+	h := uint64(fnvOffset64)
+	h = hashInt(h, len(messages))
+	for _, msg := range messages {
+		h = hashString(h, string(msg.Role))
+		h = hashString(h, msg.Content)
+		h = hashContentParts(h, msg.ContentParts)
+		h = hashString(h, msg.ToolID)
+		h = hashString(h, msg.ToolName)
+		h = hashToolCalls(h, msg.ToolCalls)
+		h = hashString(h, msg.ReasoningContent)
+	}
+	return h
+}
+
+func hashString(h uint64, s string) uint64 {
+	h = hashInt(h, len(s))
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= fnvPrime64
+	}
+	return h
+}
+
+func hashBytes(h uint64, b []byte) uint64 {
+	h = hashInt(h, len(b))
+	for _, c := range b {
+		h ^= uint64(c)
+		h *= fnvPrime64
+	}
+	return h
+}
+
+func hashBool(h uint64, b bool) uint64 {
+	if b {
+		return hashInt(h, 1)
+	}
+	return hashInt(h, 0)
+}
+
+func hashInt(h uint64, n int) uint64 {
+	u := uint64(n)
+	for i := 0; i < 8; i++ {
+		h ^= uint64(byte(u >> (i * 8)))
+		h *= fnvPrime64
+	}
+	return h
+}
+
+func hashInt64(h uint64, n int64) uint64 {
+	u := uint64(n)
+	for i := 0; i < 8; i++ {
+		h ^= uint64(byte(u >> (i * 8)))
+		h *= fnvPrime64
+	}
+	return h
+}
+
+func hashContentParts(h uint64, parts []model.ContentPart) uint64 {
+	h = hashInt(h, len(parts))
+	for _, part := range parts {
+		h = hashString(h, string(part.Type))
+		if part.Text != nil {
+			h = hashBool(h, true)
+			h = hashString(h, *part.Text)
+		} else {
+			h = hashBool(h, false)
+		}
+		h = hashImage(h, part.Image)
+		h = hashAudio(h, part.Audio)
+		h = hashFile(h, part.File)
+		h = hashContentRef(h, part.ContentRef)
+	}
+	return h
+}
+
+func hashImage(h uint64, image *model.Image) uint64 {
+	if image == nil {
+		return hashBool(h, false)
+	}
+	h = hashBool(h, true)
+	h = hashString(h, image.URL)
+	h = hashBytes(h, image.Data)
+	h = hashString(h, image.Detail)
+	h = hashString(h, image.Format)
+	return h
+}
+
+func hashAudio(h uint64, audio *model.Audio) uint64 {
+	if audio == nil {
+		return hashBool(h, false)
+	}
+	h = hashBool(h, true)
+	h = hashBytes(h, audio.Data)
+	h = hashString(h, audio.Format)
+	return h
+}
+
+func hashFile(h uint64, file *model.File) uint64 {
+	if file == nil {
+		return hashBool(h, false)
+	}
+	h = hashBool(h, true)
+	h = hashString(h, file.Name)
+	h = hashString(h, file.URL)
+	h = hashBytes(h, file.Data)
+	h = hashString(h, file.FileID)
+	h = hashString(h, file.MimeType)
+	return h
+}
+
+func hashContentRef(h uint64, ref *model.ContentRef) uint64 {
+	if ref == nil {
+		return hashBool(h, false)
+	}
+	h = hashBool(h, true)
+	h = hashString(h, ref.ArtifactRef)
+	h = hashString(h, ref.ArtifactName)
+	h = hashInt(h, ref.ArtifactVersion)
+	h = hashString(h, ref.MimeType)
+	h = hashInt64(h, ref.SizeBytes)
+	h = hashString(h, ref.SHA256)
+	h = hashString(h, ref.OriginalName)
+	h = hashString(h, ref.EventID)
+	h = hashString(h, ref.RequestID)
+	return h
+}
+
+func hashToolCalls(h uint64, calls []model.ToolCall) uint64 {
+	h = hashInt(h, len(calls))
+	for _, call := range calls {
+		h = hashString(h, call.Type)
+		h = hashString(h, call.Function.Name)
+		h = hashBool(h, call.Function.Strict)
+		h = hashString(h, call.Function.Description)
+		h = hashBytes(h, call.Function.Arguments)
+		h = hashString(h, call.ID)
+		if call.Index != nil {
+			h = hashBool(h, true)
+			h = hashInt(h, *call.Index)
+		} else {
+			h = hashBool(h, false)
+		}
+		if len(call.ExtraFields) > 0 {
+			b, _ := json.Marshal(call.ExtraFields)
+			h = hashBytes(h, b)
+		} else {
+			h = hashInt(h, 0)
+		}
+	}
+	return h
+}
+
 // TraceWorkflow traces the workflow.
 func TraceWorkflow(span trace.Span, workflow *Workflow) {
 	if !span.IsRecording() {
@@ -457,6 +756,14 @@ func NewSummarizeTaskType(name string) string {
 
 // TraceChat traces the invocation of an LLM call.
 func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
+	traceChat(span, attributes, nil)
+}
+
+func traceChat(
+	span trace.Span,
+	attributes *TraceChatAttributes,
+	requestAttrs *chatRequestAttributes,
+) {
 	if !span.IsRecording() {
 		return
 	}
@@ -483,7 +790,7 @@ func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
 	attrs = append(attrs, buildInvocationAttributes(attributes.Invocation)...)
 
 	// Add request attributes
-	attrs = append(attrs, buildRequestAttributes(attributes.Request)...)
+	attrs = requestAttrs.appendTo(attrs, attributes.Request)
 
 	// Add response attributes
 	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType)...)
@@ -523,67 +830,8 @@ func buildInvocationAttributes(invoke *agent.Invocation) []attribute.KeyValue {
 
 // buildRequestAttributes builds request-related attributes.
 func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
-	if req == nil {
-		return nil
-	}
-
-	attrs := []attribute.KeyValue{
-		attribute.StringSlice(semconvtrace.KeyGenAIRequestStopSequences, req.GenerationConfig.Stop),
-		attribute.Int(semconvtrace.KeyGenAIRequestChoiceCount, 1),
-	}
-
-	// Add generation config attributes
-	genConfig := req.GenerationConfig
-	// Add stream attribute only when it's true
-	if genConfig.Stream {
-		attrs = append(attrs, attribute.Bool(semconvtrace.KeyGenAIRequestIsStream, true))
-	}
-	if fp := genConfig.FrequencyPenalty; fp != nil {
-		attrs = append(attrs, attribute.Float64(semconvtrace.KeyGenAIRequestFrequencyPenalty, *fp))
-	}
-	if mt := genConfig.MaxTokens; mt != nil {
-		attrs = append(attrs, attribute.Int(semconvtrace.KeyGenAIRequestMaxTokens, *mt))
-	}
-	if pp := genConfig.PresencePenalty; pp != nil {
-		attrs = append(attrs, attribute.Float64(semconvtrace.KeyGenAIRequestPresencePenalty, *pp))
-	}
-	if tp := genConfig.Temperature; tp != nil {
-		attrs = append(attrs, attribute.Float64(semconvtrace.KeyGenAIRequestTemperature, *tp))
-	}
-	if tp := genConfig.TopP; tp != nil {
-		attrs = append(attrs, attribute.Float64(semconvtrace.KeyGenAIRequestTopP, *tp))
-	}
-	if te := genConfig.ThinkingEnabled; te != nil {
-		attrs = append(attrs, attribute.Bool(semconvtrace.KeyGenAIRequestThinkingEnabled, *te))
-	}
-
-	// Add request body
-	attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyLLMRequest, "<not json serializable>", func() ([]byte, error) {
-		return json.Marshal(req)
-	})
-
-	// Add tool definitions as best-effort structured array (JSON string fallback)
-	if len(req.Tools) > 0 {
-		definitions := make([]*tool.Declaration, 0, len(req.Tools))
-		for _, t := range toolorder.SortedTools(req.Tools) {
-			definitions = append(definitions, t.Declaration())
-		}
-		if len(definitions) > 0 {
-			attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIRequestToolDefinitions, "", func() ([]byte, error) {
-				return json.Marshal(definitions)
-			})
-		}
-	}
-
-	// Add messages
-	attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIInputMessages, "<not json serializable>", func() ([]byte, error) {
-		return marshalTelemetryMessages(req.Messages)
-	})
-	attrs = appendStringAttribute(attrs, OperationChat, semconvtrace.KeyGenAIInputMessagesOTel, "<not json serializable>", func() ([]byte, error) {
-		return marshalOTelTelemetryMessages(req.Messages)
-	})
-
-	return attrs
+	var requestAttrs chatRequestAttributes
+	return requestAttrs.appendTo(nil, req)
 }
 
 // buildResponseAttributes builds response-related attributes.

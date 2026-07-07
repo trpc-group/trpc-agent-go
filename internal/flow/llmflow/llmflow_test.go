@@ -11,6 +11,7 @@ package llmflow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -152,6 +153,15 @@ func flowHasAttr(attrs []attribute.KeyValue, key string, want any) bool {
 		}
 	}
 	return false
+}
+
+func lastFlowAttrStringValue(attrs []attribute.KeyValue, key string) (string, bool) {
+	for i := len(attrs) - 1; i >= 0; i-- {
+		if string(attrs[i].Key) == key {
+			return attrs[i].Value.AsString(), true
+		}
+	}
+	return "", false
 }
 
 func TestLatencyDiagnosticHelpers(t *testing.T) {
@@ -1195,6 +1205,63 @@ func TestProcessStreamingResponses_UsesUpdatedInvocationForResponseUsageTiming(t
 	require.NotNil(t, lastEvent)
 	require.NotNil(t, response1.Usage)
 	require.Nil(t, response2.Usage)
+}
+
+func TestProcessStreamingResponses_RequestAttributeStateInvalidatesAfterModelMutation(t *testing.T) {
+	var callbackCount int
+	f := New(nil, nil, Options{
+		ModelCallbacks: model.NewCallbacks().RegisterAfterModel(
+			func(ctx context.Context, args *model.AfterModelArgs) (*model.AfterModelResult, error) {
+				callbackCount++
+				if callbackCount == 2 {
+					args.Request.Messages[0].Content = "bbbb" // Same length, different bytes.
+				}
+				return &model.AfterModelResult{}, nil
+			},
+		),
+	})
+	invocation := agent.NewInvocation(agent.WithInvocationID("inv-request-attribute-state"))
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("aaaa")},
+	}
+	responseSeq := func(yield func(*model.Response) bool) {
+		yield(&model.Response{
+			IsPartial: true,
+			Choices: []model.Choice{{
+				Delta: model.Message{Role: model.RoleAssistant, Content: "partial"},
+			}},
+		})
+		yield(&model.Response{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("done"),
+			}},
+		})
+	}
+	eventChan := make(chan *event.Event, 10)
+	span := newFlowRecordingSpan()
+
+	lastEvent, err := f.processStreamingResponses(
+		context.Background(),
+		invocation,
+		nil,
+		req,
+		responseSeq,
+		eventChan,
+		span,
+		true,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+
+	inputJSON, ok := lastFlowAttrStringValue(span.attrs, semconvtrace.KeyGenAIInputMessages)
+	require.True(t, ok, "missing input message trace attribute")
+	var messages []struct {
+		Content string `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(inputJSON), &messages))
+	require.Len(t, messages, 1)
+	require.Equal(t, "bbbb", messages[0].Content)
 }
 
 func TestProcessStreamingResponses_AttachesTimingInfoBeforeAfterModelCallbacks(t *testing.T) {
