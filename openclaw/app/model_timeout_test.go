@@ -11,6 +11,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -40,6 +41,63 @@ func TestModelTimeoutModel_StopsBlockedCreation(t *testing.T) {
 	resp := readTimeoutResponse(t, ch)
 	require.Equal(t, model.ErrorTypeCancelled, resp.Error.Type)
 	require.Contains(t, resp.Error.Message, "model request timeout")
+}
+
+func TestModelTimeoutModel_ForwardsImmediateResponse(t *testing.T) {
+	t.Parallel()
+
+	wrapped := newModelTimeoutModel(
+		&timeoutImmediateModel{},
+		time.Second,
+	)
+
+	ch, err := wrapped.GenerateContent(context.Background(), &model.Request{})
+	require.NoError(t, err)
+
+	resp := readResponse(t, ch)
+	require.True(t, resp.Done)
+	require.Nil(t, resp.Error)
+}
+
+func TestModelTimeoutModel_ForwardsInfo(t *testing.T) {
+	t.Parallel()
+
+	wrapped := newModelTimeoutModel(
+		&timeoutImmediateModel{},
+		time.Second,
+	)
+
+	require.Equal(t, "timeout-immediate", wrapped.Info().Name)
+}
+
+func TestModelTimeoutModel_ReturnsCreationError(t *testing.T) {
+	t.Parallel()
+
+	wrapped := newModelTimeoutModel(
+		&timeoutErrorModel{err: errTimeoutModel},
+		time.Second,
+	)
+
+	ch, err := wrapped.GenerateContent(context.Background(), &model.Request{})
+	require.ErrorIs(t, err, errTimeoutModel)
+	require.Nil(t, ch)
+}
+
+func TestModelTimeoutModel_ReportsContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	underlying := newBlockingCreationModel()
+	wrapped := newModelTimeoutModel(underlying, time.Second)
+	defer close(underlying.release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ch, err := wrapped.GenerateContent(ctx, &model.Request{})
+	require.NoError(t, err)
+
+	resp := readTimeoutResponse(t, ch)
+	require.Contains(t, resp.Error.Message, "model request canceled")
 }
 
 func TestModelTimeoutModel_StopsBlockedStream(t *testing.T) {
@@ -81,6 +139,49 @@ func TestModelTimeoutIterModel_StopsBlockedCreation(t *testing.T) {
 	require.Equal(t, model.ErrorTypeCancelled, resp.Error.Type)
 }
 
+func TestModelTimeoutIterModel_ForwardsImmediateSeq(t *testing.T) {
+	t.Parallel()
+
+	wrapped := newModelTimeoutModel(
+		&timeoutImmediateIterModel{},
+		time.Second,
+	)
+	iter, ok := wrapped.(model.IterModel)
+	require.True(t, ok)
+
+	seq, err := iter.GenerateContentIter(
+		context.Background(),
+		&model.Request{},
+	)
+	require.NoError(t, err)
+
+	var responses []*model.Response
+	seq(func(r *model.Response) bool {
+		responses = append(responses, r)
+		return true
+	})
+	require.Len(t, responses, 1)
+	require.True(t, responses[0].Done)
+}
+
+func TestModelTimeoutIterModel_ReturnsCreationError(t *testing.T) {
+	t.Parallel()
+
+	wrapped := newModelTimeoutModel(
+		&timeoutErrorIterModel{err: errTimeoutModel},
+		time.Second,
+	)
+	iter, ok := wrapped.(model.IterModel)
+	require.True(t, ok)
+
+	seq, err := iter.GenerateContentIter(
+		context.Background(),
+		&model.Request{},
+	)
+	require.ErrorIs(t, err, errTimeoutModel)
+	require.Nil(t, seq)
+}
+
 func TestModelTimeoutIterModel_StopsBlockedSeq(t *testing.T) {
 	t.Parallel()
 
@@ -103,6 +204,23 @@ func TestModelTimeoutIterModel_StopsBlockedSeq(t *testing.T) {
 	})
 	require.NotNil(t, resp)
 	require.Equal(t, model.ErrorTypeCancelled, resp.Error.Type)
+}
+
+func readResponse(
+	t *testing.T,
+	ch <-chan *model.Response,
+) *model.Response {
+	t.Helper()
+
+	select {
+	case resp, ok := <-ch:
+		require.True(t, ok)
+		require.NotNil(t, resp)
+		return resp
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for model response")
+	}
+	return nil
 }
 
 func readTimeoutResponse(
@@ -137,6 +255,45 @@ func (m *timeoutImmediateModel) GenerateContent(
 
 func (m *timeoutImmediateModel) Info() model.Info {
 	return model.Info{Name: "timeout-immediate"}
+}
+
+var errTimeoutModel = errors.New("timeout model failed")
+
+type timeoutErrorModel struct {
+	timeoutImmediateModel
+	err error
+}
+
+func (m *timeoutErrorModel) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	return nil, m.err
+}
+
+type timeoutImmediateIterModel struct {
+	timeoutImmediateModel
+}
+
+func (m *timeoutImmediateIterModel) GenerateContentIter(
+	context.Context,
+	*model.Request,
+) (model.Seq[*model.Response], error) {
+	return func(yield func(*model.Response) bool) {
+		yield(&model.Response{Done: true})
+	}, nil
+}
+
+type timeoutErrorIterModel struct {
+	timeoutImmediateModel
+	err error
+}
+
+func (m *timeoutErrorIterModel) GenerateContentIter(
+	context.Context,
+	*model.Request,
+) (model.Seq[*model.Response], error) {
+	return nil, m.err
 }
 
 type blockingCreationModel struct {
