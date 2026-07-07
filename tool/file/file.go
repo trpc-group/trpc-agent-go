@@ -300,7 +300,7 @@ func (f *fileToolSet) resolveReadPath(requestPath string) (string, error) {
 		return f.resolvePath(requestPath)
 	}
 	clean := filepath.Clean(raw)
-	if _, ok := f.matchExtraReadRoot(clean); ok {
+	if _, ok := f.matchReadRoot(clean); ok {
 		return clean, nil
 	}
 	return "", fmt.Errorf(
@@ -310,6 +310,42 @@ func (f *fileToolSet) resolveReadPath(requestPath string) (string, error) {
 		extraReadRootGuidance,
 		relativePathGuidance,
 	)
+}
+
+func (f *fileToolSet) matchReadRoot(absPath string) (string, bool) {
+	if root, ok := f.matchBaseReadRoot(absPath); ok {
+		return root, true
+	}
+	return f.matchExtraReadRoot(absPath)
+}
+
+func (f *fileToolSet) matchBaseReadRoot(absPath string) (string, bool) {
+	if f == nil || strings.TrimSpace(f.baseDir) == "" {
+		return "", false
+	}
+	root := filepath.Clean(f.baseDir)
+	if !filepath.IsAbs(root) {
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			return "", false
+		}
+		root = absRoot
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = filepath.Clean(resolved)
+	}
+	candidate := filepath.Clean(absPath)
+	evaluatedCandidate, resolvedPath := evalPathWithExistingParent(candidate)
+	candidateInRoot := isPathWithinRoot(candidate, root)
+	evaluatedInRoot := resolvedPath &&
+		isPathWithinRoot(evaluatedCandidate, root)
+	if candidateInRoot && (!resolvedPath || evaluatedInRoot) {
+		return root, true
+	}
+	if !candidateInRoot && evaluatedInRoot {
+		return root, true
+	}
+	return "", false
 }
 
 func (f *fileToolSet) matchExtraReadRoot(absPath string) (string, bool) {
