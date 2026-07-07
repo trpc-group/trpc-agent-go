@@ -5907,6 +5907,33 @@ func TestInProcGatewayClient_SendMessage_StatusError(t *testing.T) {
 	require.Equal(t, wantErr, err.Error())
 }
 
+func TestMakeGatewayOptions_MaxBodyBytes(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(
+		&inProcGWTestRunner{},
+		makeGatewayOptions(nil, false, nil, 64)...,
+	)
+	require.NoError(t, err)
+
+	body, err := json.Marshal(gwproto.MessageRequest{
+		From: "u1",
+		Text: strings.Repeat("x", 128),
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesPath(),
+		bytes.NewReader(body),
+	)
+	srv.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "request body exceeds max_body_bytes")
+}
+
 func TestInProcGatewayClient_StreamMessage_OK(t *testing.T) {
 	t.Parallel()
 
