@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
@@ -785,31 +786,61 @@ func replaceFold(s, old, new string) string {
 	}
 }
 
+var dangerousCommandTextSubstrings = []string{
+	"rm -rf",
+	"rm -fr",
+	"sudo ",
+	"curl ",
+	"wget ",
+	" nc ",
+	"netcat ",
+	"ssh ",
+	"scp ",
+	"format ",
+}
+
+var dangerousCommandTextTokens = map[string]struct{}{
+	"rm":     {},
+	"sudo":   {},
+	"curl":   {},
+	"wget":   {},
+	"nc":     {},
+	"netcat": {},
+	"ssh":    {},
+	"scp":    {},
+	"format": {},
+}
+
 func containsDangerousCommandText(lower string) bool {
-	if strings.Contains(lower, "rm -rf") ||
-		strings.Contains(lower, "rm -fr") ||
-		strings.Contains(lower, "sudo ") ||
-		strings.Contains(lower, "curl ") ||
-		strings.Contains(lower, "wget ") ||
-		strings.Contains(lower, " nc ") ||
-		strings.Contains(lower, "netcat ") ||
-		strings.Contains(lower, "ssh ") ||
-		strings.Contains(lower, "scp ") ||
-		strings.Contains(lower, "format ") {
-		return true
-	}
-	for _, token := range strings.FieldsFunc(lower, func(r rune) bool {
-		return !(r == '_' || r == '-' || r == '.' ||
-			r == '/' || r == '\\' ||
-			(r >= 'a' && r <= 'z') ||
-			(r >= '0' && r <= '9'))
-	}) {
-		switch token {
-		case "rm", "sudo", "curl", "wget", "nc", "netcat", "ssh", "scp", "format":
+	return containsAnySubstring(lower, dangerousCommandTextSubstrings) ||
+		containsDangerousCommandToken(lower)
+}
+
+func containsAnySubstring(text string, substrings []string) bool {
+	for _, substring := range substrings {
+		if strings.Contains(text, substring) {
 			return true
 		}
 	}
 	return false
+}
+
+func containsDangerousCommandToken(lower string) bool {
+	for _, token := range strings.FieldsFunc(lower, isCommandTextSeparator) {
+		if _, ok := dangerousCommandTextTokens[token]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func isCommandTextSeparator(r rune) bool {
+	switch r {
+	case '_', '-', '.', '/', '\\':
+		return false
+	default:
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}
 }
 
 func isDependencyInstall(cmd string, argv []string) bool {
